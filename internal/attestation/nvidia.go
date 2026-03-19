@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,11 @@ import (
 
 // nvidiaJWKSURL is NVIDIA's public JWKS endpoint for attestation JWT verification.
 const nvidiaJWKSURL = "https://nras.attestation.nvidia.com/.well-known/jwks.json"
+
+// nrasAttestURL is NVIDIA's Remote Attestation Service endpoint for GPU
+// attestation. POST raw EAT JSON to receive a signed JWT with measurement
+// comparison results against NVIDIA's Reference Integrity Manifest (RIM).
+const nrasAttestURL = "https://nras.attestation.nvidia.com/v3/attest/gpu"
 
 // nvidiaJWKSTTL is how long to cache the NVIDIA JWKS before re-fetching.
 const nvidiaJWKSTTL = time.Hour
@@ -41,7 +47,7 @@ type NvidiaVerifyResult struct {
 	Algorithm string
 
 	// OverallResult is the x-nvidia-overall-att-result claim value (JWT only).
-	OverallResult string
+	OverallResult bool
 
 	// Nonce is the nonce from the payload.
 	Nonce string
@@ -62,7 +68,7 @@ type NvidiaVerifyResult struct {
 // nvidiaClaims extends jwt.RegisteredClaims with NVIDIA-specific fields.
 type nvidiaClaims struct {
 	jwt.RegisteredClaims
-	OverallResult string `json:"x-nvidia-overall-att-result"`
+	OverallResult bool   `json:"x-nvidia-overall-att-result"`
 	Nonce         string `json:"nonce"`
 }
 
@@ -126,8 +132,9 @@ type jwksJSON struct {
 type jwkKeyJSON struct {
 	Kty string `json:"kty"`
 	Kid string `json:"kid"`
-	N   string `json:"n"`
-	E   string `json:"e"`
+	Crv string `json:"crv"`
+	X   string `json:"x"`
+	Y   string `json:"y"`
 	Alg string `json:"alg"`
 	Use string `json:"use"`
 }
@@ -164,7 +171,7 @@ func fetchFromURL(ctx context.Context, client *http.Client, url string) ([]cache
 }
 
 // parseJWKS converts raw JWKS JSON bytes into a slice of cachedJWKSKey.
-// Only RSA keys are supported (the type NVIDIA uses for attestation JWTs).
+// Only EC keys are supported (NVIDIA NRAS uses ES384).
 func parseJWKS(data []byte) ([]cachedJWKSKey, error) {
 	var raw jwksJSON
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -173,46 +180,28 @@ func parseJWKS(data []byte) ([]cachedJWKSKey, error) {
 
 	var keys []cachedJWKSKey
 	for _, k := range raw.Keys {
-		if k.Kty != "RSA" {
+		if k.Kty != "EC" {
 			continue
 		}
-		pub, err := rsaPublicKeyFromJWK(k.N, k.E)
+		pub, err := ecPublicKeyFromJWK(k.Crv, k.X, k.Y)
 		if err != nil {
-			// Skip malformed keys; do not fail the entire keyset.
+			slog.Debug("JWKS: skipping malformed EC key", "kid", k.Kid, "err", err)
 			continue
 		}
 		keys = append(keys, cachedJWKSKey{kid: k.Kid, key: pub})
 	}
 
 	if len(keys) == 0 {
-		return nil, fmt.Errorf("JWKS contains no usable RSA keys")
+		return nil, fmt.Errorf("JWKS contains no usable EC keys")
 	}
 	return keys, nil
 }
 
-// rsaPublicKeyFromJWK builds an *rsa.PublicKey from the base64url-encoded
-// modulus and exponent strings used in JWK format.
-func rsaPublicKeyFromJWK(nB64, eB64 string) (any, error) {
-	nBytes, err := decodeBase64URL(nB64)
-	if err != nil {
-		return nil, fmt.Errorf("decode modulus: %w", err)
-	}
-	eBytes, err := decodeBase64URL(eB64)
-	if err != nil {
-		return nil, fmt.Errorf("decode exponent: %w", err)
-	}
-	return buildRSAPublicKey(nBytes, eBytes)
-}
-
-// VerifyNVIDIAPayload detects the NVIDIA attestation payload format and
-// dispatches to the appropriate verifier:
-//   - JSON starting with '{' containing evidence_list → EAT (local SPDM verification)
-//   - JWT string starting with "ey" → NRAS JWT (cloud signature verification)
-//
-// ctx controls HTTP requests (JWKS fetching for JWT path). client is the HTTP
-// client; pass nil for a default 30s timeout client. expectedNonce is required
-// for EAT verification; it may be zero for the JWT path (nonce checked in report).
-func VerifyNVIDIAPayload(ctx context.Context, payload string, expectedNonce Nonce, client *http.Client) *NvidiaVerifyResult {
+// VerifyNVIDIAPayload verifies the NVIDIA attestation payload via local SPDM
+// certificate chain and signature verification. The payload must be EAT JSON
+// (starting with '{'). NRAS cloud verification is handled separately by
+// VerifyNVIDIANRAS.
+func VerifyNVIDIAPayload(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
 	if len(payload) == 0 {
 		return &NvidiaVerifyResult{SignatureErr: fmt.Errorf("empty NVIDIA payload")}
 	}
@@ -223,13 +212,13 @@ func VerifyNVIDIAPayload(ctx context.Context, payload string, expectedNonce Nonc
 	}
 	slog.Debug("NVIDIA payload received", "length", len(payload), "prefix", prefix)
 
-	if payload[0] == '{' {
-		slog.Debug("NVIDIA payload is EAT JSON, using local SPDM verification")
-		return verifyNVIDIAEAT(payload, expectedNonce)
+	if payload[0] != '{' {
+		return &NvidiaVerifyResult{
+			SignatureErr: fmt.Errorf("NVIDIA payload is not EAT JSON (starts with %q)", payload[:min(10, len(payload))]),
+		}
 	}
 
-	slog.Debug("NVIDIA payload appears to be JWT, using NRAS verification")
-	return verifyNVIDIAJWT(ctx, payload, client)
+	return verifyNVIDIAEAT(payload, expectedNonce)
 }
 
 // verifyNVIDIAJWT verifies an NVIDIA NRAS attestation JWT. It fetches (and
@@ -245,7 +234,7 @@ func verifyNVIDIAJWT(ctx context.Context, jwtPayload string, client *http.Client
 
 	claims := &nvidiaClaims{}
 	token, err := jwt.ParseWithClaims(jwtPayload, claims, keyFunc,
-		jwt.WithValidMethods([]string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS512"}),
+		jwt.WithValidMethods([]string{"ES256", "ES384", "ES512"}),
 		jwt.WithExpirationRequired(),
 	)
 
@@ -255,7 +244,7 @@ func verifyNVIDIAJWT(ctx context.Context, jwtPayload string, client *http.Client
 		} else {
 			result.ClaimsErr = fmt.Errorf("JWT claims validation failed: %w", err)
 		}
-		if token != nil {
+		if token != nil && token.Method != nil {
 			result.Algorithm = token.Method.Alg()
 		}
 		extractPartialClaims(claims, result)
@@ -269,11 +258,6 @@ func verifyNVIDIAJWT(ctx context.Context, jwtPayload string, client *http.Client
 
 	result.Algorithm = token.Method.Alg()
 	extractPartialClaims(claims, result)
-
-	if result.OverallResult == "" {
-		result.ClaimsErr = fmt.Errorf("x-nvidia-overall-att-result claim is missing")
-	}
-
 	return result
 }
 
@@ -293,4 +277,102 @@ func isSignatureError(err error) bool {
 	return errors.Is(err, jwt.ErrTokenSignatureInvalid) ||
 		errors.Is(err, jwt.ErrTokenUnverifiable) ||
 		errors.Is(err, jwt.ErrTokenMalformed)
+}
+
+// VerifyNVIDIANRAS posts the raw EAT payload to NVIDIA's Remote Attestation
+// Service for RIM-based measurement comparison and verifies the returned JWT.
+// This provides defense-in-depth: local SPDM verification proves evidence is
+// well-formed; NRAS compares GPU firmware measurements against NVIDIA's golden
+// Reference Integrity Manifest values.
+func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Client) *NvidiaVerifyResult {
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, nrasAttestURL, strings.NewReader(eatPayload))
+	if err != nil {
+		return &NvidiaVerifyResult{
+			Format:       "JWT",
+			SignatureErr: fmt.Errorf("build NRAS request: %w", err),
+		}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return &NvidiaVerifyResult{
+			Format:       "JWT",
+			SignatureErr: fmt.Errorf("NRAS POST: %w", err),
+		}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB max
+	if err != nil {
+		return &NvidiaVerifyResult{
+			Format:       "JWT",
+			SignatureErr: fmt.Errorf("read NRAS response: %w", err),
+		}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return &NvidiaVerifyResult{
+			Format:    "JWT",
+			ClaimsErr: fmt.Errorf("NRAS returned HTTP %d: %s", resp.StatusCode, truncate(string(body), 200)),
+		}
+	}
+
+	jwtStr := strings.TrimSpace(string(body))
+	if jwtStr == "" {
+		return &NvidiaVerifyResult{
+			Format:       "JWT",
+			SignatureErr: fmt.Errorf("NRAS returned empty response"),
+		}
+	}
+
+	slog.Debug("NRAS response", "status", resp.StatusCode,
+		"content_type", resp.Header.Get("Content-Type"),
+		"body_len", len(jwtStr),
+		"body_prefix", truncate(jwtStr, 200))
+
+	// NRAS returns a JSON array of [type, token] pairs: [["JWT","eyJ..."]].
+	// Extract the first JWT from this structure.
+	extracted, err := extractNRASJWT(jwtStr)
+	if err != nil {
+		return &NvidiaVerifyResult{
+			Format:       "JWT",
+			SignatureErr: fmt.Errorf("parse NRAS response: %w", err),
+		}
+	}
+
+	return verifyNVIDIAJWT(ctx, extracted, client)
+}
+
+// extractNRASJWT parses the NRAS response body. NRAS returns a JSON array
+// whose elements may be [type, token] pairs or other structures. This extracts
+// the first JWT from any ["JWT","eyJ..."] pair.
+func extractNRASJWT(body string) (string, error) {
+	var elements []json.RawMessage
+	if err := json.Unmarshal([]byte(body), &elements); err != nil {
+		return "", fmt.Errorf("NRAS response is not a JSON array: %w (prefix: %s)", err, truncate(body, 100))
+	}
+	for _, elem := range elements {
+		var pair []string
+		if err := json.Unmarshal(elem, &pair); err != nil {
+			continue // skip non-array elements
+		}
+		if len(pair) == 2 && pair[0] == "JWT" {
+			return strings.TrimSpace(pair[1]), nil
+		}
+	}
+	return "", fmt.Errorf("no JWT entry found in NRAS response (%d elements)", len(elements))
+}
+
+// truncate returns s truncated to maxLen characters with "..." appended if truncated.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

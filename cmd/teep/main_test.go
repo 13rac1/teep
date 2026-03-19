@@ -12,7 +12,7 @@ import (
 // formatReport tests
 // --------------------------------------------------------------------------
 
-// buildTestReport constructs a VerificationReport with exactly 20 factors
+// buildTestReport constructs a VerificationReport with exactly 21 factors
 // using the given per-factor inputs so we can verify formatting precisely.
 func buildTestReport(provider, model string) *attestation.VerificationReport {
 	factors := []attestation.FactorResult{
@@ -24,16 +24,17 @@ func buildTestReport(provider, model string) *attestation.VerificationReport {
 		{Name: "tdx_quote_signature", Status: attestation.Pass, Detail: "Quote signature verified", Enforced: false},
 		{Name: "tdx_debug_disabled", Status: attestation.Pass, Detail: "Debug bit is 0", Enforced: true},
 		{Name: "signing_key_present", Status: attestation.Pass, Detail: "Signing key: 04a3b2...", Enforced: true},
-		// Tier 2 (7-14)
+		// Tier 2 (7-15)
 		{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "REPORTDATA binds signing key + nonce", Enforced: true},
 		{Name: "attestation_freshness", Status: attestation.Skip, Detail: "Quote age not determinable", Enforced: false},
 		{Name: "tdx_tcb_current", Status: attestation.Pass, Detail: "TCB SVN: 03000000000000000000000000000000", Enforced: false},
-		{Name: "nvidia_jwt_present", Status: attestation.Pass, Detail: "NVIDIA payload present (512 chars)", Enforced: false},
-		{Name: "nvidia_jwt_signature", Status: attestation.Pass, Detail: "JWT signature valid (RS256)", Enforced: false},
-		{Name: "nvidia_jwt_claims", Status: attestation.Pass, Detail: "Claims valid", Enforced: false},
+		{Name: "nvidia_payload_present", Status: attestation.Pass, Detail: "NVIDIA payload present (512 chars)", Enforced: false},
+		{Name: "nvidia_signature", Status: attestation.Pass, Detail: "JWT signature valid (RS256)", Enforced: false},
+		{Name: "nvidia_claims", Status: attestation.Pass, Detail: "Claims valid", Enforced: false},
 		{Name: "nvidia_nonce_match", Status: attestation.Skip, Detail: "Nonce field not found in NVIDIA payload", Enforced: false},
+		{Name: "nvidia_nras_verified", Status: attestation.Skip, Detail: "offline mode; NRAS verification skipped", Enforced: false},
 		{Name: "e2ee_capable", Status: attestation.Pass, Detail: "E2EE key exchange possible", Enforced: false},
-		// Tier 3 (15-19)
+		// Tier 3 (16-20)
 		{Name: "tls_key_binding", Status: attestation.Fail, Detail: "no TLS key in attestation", Enforced: false},
 		{Name: "cpu_gpu_chain", Status: attestation.Fail, Detail: "CPU-GPU attestation not bound", Enforced: false},
 		{Name: "measured_model_weights", Status: attestation.Fail, Detail: "no model weight hashes", Enforced: false},
@@ -127,16 +128,16 @@ func TestFormatReport_ScoreLine(t *testing.T) {
 	r := buildTestReport("venice", "some-model")
 	out := formatReport(r)
 
-	// Expect the score line: "Score: 12/20 passed, 2 skipped, 5 failed"
-	// Our test report: 13 pass, 5 fail, 2 skip = 20 total.
+	// Expect the score line: "Score: 13/21 passed, 3 skipped, 5 failed"
+	// Our test report: 13 pass, 5 fail, 3 skip = 21 total.
 	if !strings.Contains(out, "Score:") {
 		t.Errorf("Score line not found; output:\n%s", out)
 	}
-	if !strings.Contains(out, "13/20 passed") {
-		t.Errorf("expected '13/20 passed' in score line; output:\n%s", out)
+	if !strings.Contains(out, "13/21 passed") {
+		t.Errorf("expected '13/21 passed' in score line; output:\n%s", out)
 	}
-	if !strings.Contains(out, "2 skipped") {
-		t.Errorf("expected '2 skipped' in score line; output:\n%s", out)
+	if !strings.Contains(out, "3 skipped") {
+		t.Errorf("expected '3 skipped' in score line; output:\n%s", out)
 	}
 	if !strings.Contains(out, "5 failed") {
 		t.Errorf("expected '5 failed' in score line; output:\n%s", out)
@@ -262,13 +263,13 @@ func TestStatusIcon(t *testing.T) {
 
 func TestTierBoundaries(t *testing.T) {
 	for _, tb := range tierBoundaries {
-		if tb.end > 20 {
-			t.Errorf("tier boundary end %d exceeds 20", tb.end)
+		if tb.end > 21 {
+			t.Errorf("tier boundary end %d exceeds 21", tb.end)
 		}
 	}
 	last := tierBoundaries[len(tierBoundaries)-1].end
-	if last != 20 {
-		t.Errorf("final tier boundary end = %d, want 20", last)
+	if last != 21 {
+		t.Errorf("final tier boundary end = %d, want 21", last)
 	}
 }
 

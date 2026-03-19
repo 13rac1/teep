@@ -3,8 +3,10 @@ package attestation
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/google/go-tdx-guest/pcs"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
 )
 
@@ -77,21 +79,21 @@ var DefaultEnforced = []string{
 	"tdx_reportdata_binding",
 }
 
-// BuildReport runs all 20 verification factors against raw and returns a
+// BuildReport runs all 21 verification factors against raw and returns a
 // complete VerificationReport. The enforced parameter controls which factor
 // names result in Enforced=true. Pass DefaultEnforced for production use.
 //
 // TDX quote verification (factors 3-6, 8, 10) uses the parsed quote from
-// VerifyTDXQuote. NVIDIA JWT verification (factors 12-14) uses VerifyNVIDIAJWT.
-// Tier 3 factors (16-20) always Fail because no vendor currently provides the
-// required supply-chain data.
-func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult *NvidiaVerifyResult, pocResult *PoCResult) *VerificationReport {
+// VerifyTDXQuote. NVIDIA verification (factors 12-15) uses VerifyNVIDIAPayload
+// and VerifyNVIDIANRAS. Tier 3 factors (17-21) always Fail because no vendor
+// currently provides the required supply-chain data.
+func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult *NvidiaVerifyResult, nrasResult *NvidiaVerifyResult, pocResult *PoCResult) *VerificationReport {
 	enforcedSet := make(map[string]bool, len(enforced))
 	for _, name := range enforced {
 		enforcedSet[name] = true
 	}
 
-	factors := make([]FactorResult, 0, 20)
+	factors := make([]FactorResult, 0, 21)
 
 	addFactor := func(name string, status Status, detail string) {
 		factors = append(factors, FactorResult{
@@ -198,16 +200,48 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	}
 
 	// Factor 9: attestation_freshness
-	// We cannot determine quote generation time from the quote bytes alone
-	// without Intel PCS collateral; skip rather than fail.
-	addFactor("attestation_freshness", Skip, "quote generation time not determinable from quote bytes alone; requires Intel PCS TCB info collateral")
+	if tdxResult == nil || tdxResult.ParseErr != nil {
+		addFactor("attestation_freshness", Skip, "no parseable TDX quote")
+	} else if tdxResult.TcbStatus != "" {
+		addFactor("attestation_freshness", Pass,
+			fmt.Sprintf("TCB level current per Intel PCS (status: %s)", tdxResult.TcbStatus))
+	} else if tdxResult.CollateralErr != nil {
+		addFactor("attestation_freshness", Skip,
+			fmt.Sprintf("Intel PCS collateral fetch failed: %v", tdxResult.CollateralErr))
+	} else {
+		addFactor("attestation_freshness", Skip,
+			"offline mode; Intel PCS collateral not fetched")
+	}
 
 	// Factor 10: tdx_tcb_current
 	if tdxResult == nil || tdxResult.ParseErr != nil {
 		addFactor("tdx_tcb_current", Skip, "no parseable TDX quote; TCB SVN not extracted")
+	} else if tdxResult.TcbStatus == pcs.TcbComponentStatusUpToDate {
+		detail := "TCB is UpToDate per Intel PCS"
+		if len(tdxResult.AdvisoryIDs) > 0 {
+			detail += fmt.Sprintf(" (advisories: %s)", strings.Join(tdxResult.AdvisoryIDs, ", "))
+		}
+		addFactor("tdx_tcb_current", Pass, detail)
+	} else if tdxResult.TcbStatus == pcs.TcbComponentStatusSwHardeningNeeded || tdxResult.TcbStatus == pcs.TcbComponentStatusConfigurationAndSWHardeningNeeded {
+		detail := fmt.Sprintf("TCB status: %s", tdxResult.TcbStatus)
+		if len(tdxResult.AdvisoryIDs) > 0 {
+			detail += fmt.Sprintf(" (advisories: %s)", strings.Join(tdxResult.AdvisoryIDs, ", "))
+		}
+		addFactor("tdx_tcb_current", Pass, detail)
+	} else if tdxResult.TcbStatus == pcs.TcbComponentStatusOutOfDate || tdxResult.TcbStatus == pcs.TcbComponentStatusRevoked || tdxResult.TcbStatus == pcs.TcbComponentStatusOutOfDateConfigurationNeeded {
+		detail := fmt.Sprintf("TCB status: %s — firmware has known vulnerabilities", tdxResult.TcbStatus)
+		if len(tdxResult.AdvisoryIDs) > 0 {
+			detail += fmt.Sprintf(" (%s)", strings.Join(tdxResult.AdvisoryIDs, ", "))
+		}
+		addFactor("tdx_tcb_current", Fail, detail)
+	} else if tdxResult.CollateralErr != nil {
+		svnHex := hex.EncodeToString(tdxResult.TeeTCBSVN)
+		addFactor("tdx_tcb_current", Skip,
+			fmt.Sprintf("TEE_TCB_SVN: %s (Intel PCS collateral fetch failed: %v)", svnHex, tdxResult.CollateralErr))
 	} else {
 		svnHex := hex.EncodeToString(tdxResult.TeeTCBSVN)
-		addFactor("tdx_tcb_current", Pass, fmt.Sprintf("TEE_TCB_SVN: %s (full collateral check requires Intel PCS fetch)", svnHex))
+		addFactor("tdx_tcb_current", Pass,
+			fmt.Sprintf("TEE_TCB_SVN: %s (offline; full check requires Intel PCS)", svnHex))
 	}
 
 	// Factor 11: nvidia_payload_present
@@ -258,7 +292,26 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		addFactor("nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", nvidiaResult.Nonce, nonce.Hex()))
 	}
 
-	// Factor 15: e2ee_capable
+	// Factor 15: nvidia_nras_verified
+	if nrasResult == nil {
+		if raw.NvidiaPayload == "" || raw.NvidiaPayload[0] != '{' {
+			addFactor("nvidia_nras_verified", Skip, "no EAT payload; NRAS not applicable")
+		} else {
+			addFactor("nvidia_nras_verified", Skip, "offline mode; NRAS verification skipped")
+		}
+	} else if nrasResult.SignatureErr != nil {
+		addFactor("nvidia_nras_verified", Fail,
+			fmt.Sprintf("NRAS JWT signature invalid: %v", nrasResult.SignatureErr))
+	} else if nrasResult.ClaimsErr != nil {
+		addFactor("nvidia_nras_verified", Fail,
+			fmt.Sprintf("NRAS JWT claims invalid: %v", nrasResult.ClaimsErr))
+	} else if !nrasResult.OverallResult {
+		addFactor("nvidia_nras_verified", Fail, "NRAS result: false")
+	} else {
+		addFactor("nvidia_nras_verified", Pass, "NRAS: true (JWT verified)")
+	}
+
+	// Factor 16: e2ee_capable
 	if raw.SigningKey == "" {
 		addFactor("e2ee_capable", Fail, "signing_key absent; E2EE key exchange not possible")
 	} else {
@@ -382,7 +435,7 @@ func nvidiaClaimsDetail(r *NvidiaVerifyResult) string {
 	case "EAT":
 		return fmt.Sprintf("EAT: arch=%s, %d GPUs, nonce verified", r.Arch, r.GPUCount)
 	case "JWT":
-		return fmt.Sprintf("JWT claims valid (overall result: %s)", r.OverallResult)
+		return fmt.Sprintf("JWT claims valid (overall result: %t)", r.OverallResult)
 	default:
 		return "claims valid"
 	}

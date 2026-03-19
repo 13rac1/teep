@@ -2,12 +2,12 @@ package attestation
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,18 +17,19 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// generateTestRSAKey generates a 2048-bit RSA key pair for test JWTs.
-func generateTestRSAKey(t *testing.T) *rsa.PrivateKey {
+// generateTestECKey generates a P-384 ECDSA key pair for test JWTs,
+// matching what NVIDIA NRAS uses in production.
+func generateTestECKey(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 	return key
 }
 
-// makeTestJWT creates a signed JWT with the given claims using the provided RSA key.
-func makeTestJWT(t *testing.T, key *rsa.PrivateKey, kid, overallResult, nonce, issuer string, exp time.Time) string {
+// makeTestJWT creates a signed JWT with the given claims using the provided EC key.
+func makeTestJWT(t *testing.T, key *ecdsa.PrivateKey, kid string, overallResult bool, nonce, issuer string, exp time.Time) string {
 	t.Helper()
 	claims := &nvidiaClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -39,7 +40,7 @@ func makeTestJWT(t *testing.T, key *rsa.PrivateKey, kid, overallResult, nonce, i
 		OverallResult: overallResult,
 		Nonce:         nonce,
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token := jwt.NewWithClaims(jwt.SigningMethodES384, claims)
 	if kid != "" {
 		token.Header["kid"] = kid
 	}
@@ -50,19 +51,28 @@ func makeTestJWT(t *testing.T, key *rsa.PrivateKey, kid, overallResult, nonce, i
 	return signed
 }
 
-// makeJWKSBody returns JSON for a JWKS containing the given RSA public key.
-func makeJWKSBody(t *testing.T, key *rsa.PublicKey, kid string) []byte {
+// makeJWKSBody returns JSON for a JWKS containing the given EC public key.
+func makeJWKSBody(t *testing.T, key *ecdsa.PublicKey, kid string) []byte {
 	t.Helper()
-	nBytes := key.N.Bytes()
-	eBytes := big.NewInt(int64(key.E)).Bytes()
+	byteLen := (key.Curve.Params().BitSize + 7) / 8
+	xBytes := key.X.Bytes()
+	yBytes := key.Y.Bytes()
+	// Pad to full curve byte length.
+	for len(xBytes) < byteLen {
+		xBytes = append([]byte{0}, xBytes...)
+	}
+	for len(yBytes) < byteLen {
+		yBytes = append([]byte{0}, yBytes...)
+	}
 	jwks := jwksJSON{
 		Keys: []jwkKeyJSON{
 			{
-				Kty: "RSA",
+				Kty: "EC",
 				Kid: kid,
-				N:   base64.RawURLEncoding.EncodeToString(nBytes),
-				E:   base64.RawURLEncoding.EncodeToString(eBytes),
-				Alg: "RS256",
+				Crv: "P-384",
+				X:   base64.RawURLEncoding.EncodeToString(xBytes),
+				Y:   base64.RawURLEncoding.EncodeToString(yBytes),
+				Alg: "ES384",
 				Use: "sig",
 			},
 		},
@@ -75,7 +85,7 @@ func makeJWKSBody(t *testing.T, key *rsa.PublicKey, kid string) []byte {
 }
 
 // makeTestJWKSServer starts an httptest.Server serving a JWKS for the given key.
-func makeTestJWKSServer(t *testing.T, key *rsa.PublicKey, kid string) *httptest.Server {
+func makeTestJWKSServer(t *testing.T, key *ecdsa.PublicKey, kid string) *httptest.Server {
 	t.Helper()
 	body := makeJWKSBody(t, key, kid)
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,9 +118,9 @@ func keyfuncFromURL(ctx context.Context, client *http.Client, url string) jwt.Ke
 	}
 }
 
-// TestParseJWKS_RSAKey verifies that parseJWKS correctly loads an RSA key.
-func TestParseJWKS_RSAKey(t *testing.T) {
-	key := generateTestRSAKey(t)
+// TestParseJWKS_ECKey verifies that parseJWKS correctly loads an EC key.
+func TestParseJWKS_ECKey(t *testing.T) {
+	key := generateTestECKey(t)
 	body := makeJWKSBody(t, &key.PublicKey, "test-kid")
 
 	keys, err := parseJWKS(body)
@@ -125,17 +135,31 @@ func TestParseJWKS_RSAKey(t *testing.T) {
 	}
 }
 
-// TestParseJWKS_SkipsNonRSA verifies that non-RSA keys are silently skipped.
-func TestParseJWKS_SkipsNonRSA(t *testing.T) {
+// TestParseJWKS_SkipsNonEC verifies that non-EC keys are silently skipped.
+func TestParseJWKS_SkipsNonEC(t *testing.T) {
 	raw, _ := json.Marshal(jwksJSON{
 		Keys: []jwkKeyJSON{
-			{Kty: "EC", Kid: "ec-key", N: "not-rsa"},
+			{Kty: "RSA", Kid: "rsa-key"},
 		},
 	})
 
 	_, err := parseJWKS(raw)
 	if err == nil {
-		t.Error("parseJWKS with only EC keys: expected error (no usable RSA keys), got nil")
+		t.Error("parseJWKS with only RSA keys: expected error (no usable EC keys), got nil")
+	}
+}
+
+// TestParseJWKS_SkipsMalformedEC verifies that malformed EC keys are skipped.
+func TestParseJWKS_SkipsMalformedEC(t *testing.T) {
+	raw, _ := json.Marshal(jwksJSON{
+		Keys: []jwkKeyJSON{
+			{Kty: "EC", Kid: "bad-key", Crv: "P-384"}, // missing X, Y
+		},
+	})
+
+	_, err := parseJWKS(raw)
+	if err == nil {
+		t.Error("parseJWKS with malformed EC key: expected error, got nil")
 	}
 }
 
@@ -158,11 +182,11 @@ func TestParseJWKS_InvalidJSON(t *testing.T) {
 
 // TestVerifyJWT_ValidToken verifies a correctly-signed JWT passes all checks.
 func TestVerifyJWT_ValidToken(t *testing.T) {
-	key := generateTestRSAKey(t)
+	key := generateTestECKey(t)
 	kid := "test-kid-1"
 	nonce := NewNonce()
 
-	tokenStr := makeTestJWT(t, key, kid, "OVERALL_SUCCESS", nonce.Hex(), "https://test.nvidia.com", time.Now().Add(time.Hour))
+	tokenStr := makeTestJWT(t, key, kid, true, nonce.Hex(), "https://test.nvidia.com", time.Now().Add(time.Hour))
 
 	srv := makeTestJWKSServer(t, &key.PublicKey, kid)
 	defer srv.Close()
@@ -171,7 +195,7 @@ func TestVerifyJWT_ValidToken(t *testing.T) {
 
 	claims := &nvidiaClaims{}
 	token, err := jwt.ParseWithClaims(tokenStr, claims, keyFunc,
-		jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithValidMethods([]string{"ES384"}),
 		jwt.WithExpirationRequired(),
 	)
 	if err != nil {
@@ -180,8 +204,8 @@ func TestVerifyJWT_ValidToken(t *testing.T) {
 	if !token.Valid {
 		t.Error("token is not valid")
 	}
-	if claims.OverallResult != "OVERALL_SUCCESS" {
-		t.Errorf("OverallResult: got %q, want %q", claims.OverallResult, "OVERALL_SUCCESS")
+	if !claims.OverallResult {
+		t.Error("OverallResult: got false, want true")
 	}
 	if claims.Nonce != nonce.Hex() {
 		t.Errorf("Nonce: got %q, want %q", claims.Nonce, nonce.Hex())
@@ -190,11 +214,11 @@ func TestVerifyJWT_ValidToken(t *testing.T) {
 
 // TestVerifyJWT_ExpiredToken verifies an expired JWT fails claims validation.
 func TestVerifyJWT_ExpiredToken(t *testing.T) {
-	key := generateTestRSAKey(t)
+	key := generateTestECKey(t)
 	kid := "test-kid-2"
 
 	// Expired 1 hour ago.
-	tokenStr := makeTestJWT(t, key, kid, "OVERALL_SUCCESS", "", "https://test.nvidia.com", time.Now().Add(-time.Hour))
+	tokenStr := makeTestJWT(t, key, kid, true, "", "https://test.nvidia.com", time.Now().Add(-time.Hour))
 
 	srv := makeTestJWKSServer(t, &key.PublicKey, kid)
 	defer srv.Close()
@@ -203,7 +227,7 @@ func TestVerifyJWT_ExpiredToken(t *testing.T) {
 
 	claims := &nvidiaClaims{}
 	_, err := jwt.ParseWithClaims(tokenStr, claims, keyFunc,
-		jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithValidMethods([]string{"ES384"}),
 		jwt.WithExpirationRequired(),
 	)
 	if err == nil {
@@ -217,11 +241,11 @@ func TestVerifyJWT_ExpiredToken(t *testing.T) {
 
 // TestVerifyJWT_WrongKey verifies that a JWT signed with a different key fails.
 func TestVerifyJWT_WrongKey(t *testing.T) {
-	signingKey := generateTestRSAKey(t)
-	verifyKey := generateTestRSAKey(t) // different key
+	signingKey := generateTestECKey(t)
+	verifyKey := generateTestECKey(t) // different key
 	kid := "test-kid-3"
 
-	tokenStr := makeTestJWT(t, signingKey, kid, "OVERALL_SUCCESS", "", "test", time.Now().Add(time.Hour))
+	tokenStr := makeTestJWT(t, signingKey, kid, true, "", "test", time.Now().Add(time.Hour))
 
 	// Serve verifyKey (not signingKey) as the JWKS.
 	srv := makeTestJWKSServer(t, &verifyKey.PublicKey, kid)
@@ -231,7 +255,7 @@ func TestVerifyJWT_WrongKey(t *testing.T) {
 
 	claims := &nvidiaClaims{}
 	_, err := jwt.ParseWithClaims(tokenStr, claims, keyFunc,
-		jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithValidMethods([]string{"ES384"}),
 	)
 	if err == nil {
 		t.Error("wrong key: expected error, got nil")
@@ -243,10 +267,10 @@ func TestVerifyJWT_WrongKey(t *testing.T) {
 
 // TestVerifyJWT_UnknownKid verifies error when kid is not in JWKS.
 func TestVerifyJWT_UnknownKid(t *testing.T) {
-	key := generateTestRSAKey(t)
+	key := generateTestECKey(t)
 
 	// Sign with kid "key-A" but serve JWKS with kid "key-B".
-	tokenStr := makeTestJWT(t, key, "key-A", "OVERALL_SUCCESS", "", "test", time.Now().Add(time.Hour))
+	tokenStr := makeTestJWT(t, key, "key-A", true, "", "test", time.Now().Add(time.Hour))
 
 	srv := makeTestJWKSServer(t, &key.PublicKey, "key-B")
 	defer srv.Close()
@@ -255,7 +279,7 @@ func TestVerifyJWT_UnknownKid(t *testing.T) {
 
 	claims := &nvidiaClaims{}
 	_, err := jwt.ParseWithClaims(tokenStr, claims, keyFunc,
-		jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithValidMethods([]string{"ES384"}),
 	)
 	if err == nil {
 		t.Error("unknown kid: expected error, got nil")
@@ -287,32 +311,6 @@ func TestIsSignatureError(t *testing.T) {
 	}
 }
 
-// TestBuildRSAPublicKey verifies RSA key construction from raw bytes.
-func TestBuildRSAPublicKey(t *testing.T) {
-	key := generateTestRSAKey(t)
-	nBytes := key.N.Bytes()
-	eBytes := big.NewInt(int64(key.E)).Bytes()
-
-	pub, err := buildRSAPublicKey(nBytes, eBytes)
-	if err != nil {
-		t.Fatalf("buildRSAPublicKey: %v", err)
-	}
-	if pub.N.Cmp(key.N) != 0 {
-		t.Error("modulus mismatch")
-	}
-	if pub.E != key.E {
-		t.Error("exponent mismatch")
-	}
-}
-
-// TestBuildRSAPublicKey_EmptyN verifies error on empty modulus.
-func TestBuildRSAPublicKey_EmptyN(t *testing.T) {
-	_, err := buildRSAPublicKey([]byte{}, big.NewInt(65537).Bytes())
-	if err == nil {
-		t.Error("empty modulus: expected error, got nil")
-	}
-}
-
 // TestDecodeBase64URL verifies standard base64url decoding.
 func TestDecodeBase64URL(t *testing.T) {
 	got, err := decodeBase64URL("aGVsbG8") // "hello"
@@ -334,7 +332,7 @@ func TestDecodeBase64URL_Invalid(t *testing.T) {
 
 // TestJWKSCacheExpiry verifies that the cache is re-fetched after TTL expires.
 func TestJWKSCacheExpiry(t *testing.T) {
-	key := generateTestRSAKey(t)
+	key := generateTestECKey(t)
 	fetchCount := 0
 
 	body := makeJWKSBody(t, &key.PublicKey, "k1")
@@ -348,8 +346,6 @@ func TestJWKSCacheExpiry(t *testing.T) {
 	client := srv.Client()
 	ctx := context.Background()
 
-	// Use keyfuncWithURL (only defined in tests through fetchFromURL).
-	// We'll call fetchFromURL directly to simulate the cache behaviour.
 	keys, err := fetchFromURL(ctx, client, srv.URL)
 	if err != nil {
 		t.Fatalf("fetchFromURL: %v", err)
@@ -364,7 +360,7 @@ func TestJWKSCacheExpiry(t *testing.T) {
 	c.fetchedAt = time.Now()
 	c.mu.Unlock()
 
-	// Cache is still fresh; manually check.
+	// Cache is still fresh.
 	c.mu.Lock()
 	expired := time.Since(c.fetchedAt) > nvidiaJWKSTTL
 	c.mu.Unlock()
@@ -405,7 +401,7 @@ func TestExtractPartialClaims(t *testing.T) {
 			Issuer:    "test-issuer",
 			ExpiresAt: nil,
 		},
-		OverallResult: "pass",
+		OverallResult: true,
 		Nonce:         "abc123",
 	}
 	result := &NvidiaVerifyResult{}
@@ -414,8 +410,8 @@ func TestExtractPartialClaims(t *testing.T) {
 	if result.Issuer != "test-issuer" {
 		t.Errorf("Issuer: got %q, want %q", result.Issuer, "test-issuer")
 	}
-	if result.OverallResult != "pass" {
-		t.Errorf("OverallResult: got %q, want %q", result.OverallResult, "pass")
+	if !result.OverallResult {
+		t.Error("OverallResult: got false, want true")
 	}
 	if result.Nonce != "abc123" {
 		t.Errorf("Nonce: got %q, want %q", result.Nonce, "abc123")
@@ -428,26 +424,35 @@ func TestExtractPartialClaims(t *testing.T) {
 // TestJWKSMultipleKeysNoKid verifies that a JWT without a kid header fails
 // when the JWKS contains multiple keys (cannot determine which to use).
 func TestJWKSMultipleKeysNoKid(t *testing.T) {
-	key1 := generateTestRSAKey(t)
-	key2 := generateTestRSAKey(t)
+	key1 := generateTestECKey(t)
+	key2 := generateTestECKey(t)
 
-	// Build JWKS with two keys
+	byteLen := (elliptic.P384().Params().BitSize + 7) / 8
+	padEC := func(b []byte) []byte {
+		for len(b) < byteLen {
+			b = append([]byte{0}, b...)
+		}
+		return b
+	}
+
 	jwks := jwksJSON{
 		Keys: []jwkKeyJSON{
 			{
-				Kty: "RSA",
+				Kty: "EC",
 				Kid: "key-1",
-				N:   base64.RawURLEncoding.EncodeToString(key1.PublicKey.N.Bytes()),
-				E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key1.PublicKey.E)).Bytes()),
-				Alg: "RS256",
+				Crv: "P-384",
+				X:   base64.RawURLEncoding.EncodeToString(padEC(key1.PublicKey.X.Bytes())),
+				Y:   base64.RawURLEncoding.EncodeToString(padEC(key1.PublicKey.Y.Bytes())),
+				Alg: "ES384",
 				Use: "sig",
 			},
 			{
-				Kty: "RSA",
+				Kty: "EC",
 				Kid: "key-2",
-				N:   base64.RawURLEncoding.EncodeToString(key2.PublicKey.N.Bytes()),
-				E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key2.PublicKey.E)).Bytes()),
-				Alg: "RS256",
+				Crv: "P-384",
+				X:   base64.RawURLEncoding.EncodeToString(padEC(key2.PublicKey.X.Bytes())),
+				Y:   base64.RawURLEncoding.EncodeToString(padEC(key2.PublicKey.Y.Bytes())),
+				Alg: "ES384",
 				Use: "sig",
 			},
 		},
@@ -460,14 +465,126 @@ func TestJWKSMultipleKeysNoKid(t *testing.T) {
 	defer srv.Close()
 
 	// Sign JWT with key1 but omit kid header
-	jwtStr := makeTestJWT(t, key1, "", "pass", "", "nvidia", time.Now().Add(time.Hour))
+	jwtStr := makeTestJWT(t, key1, "", true, "", "nvidia", time.Now().Add(time.Hour))
 
 	kf := keyfuncFromURL(context.Background(), srv.Client(), srv.URL)
-	_, err := jwt.Parse(jwtStr, kf, jwt.WithValidMethods([]string{"RS256"}))
+	_, err := jwt.Parse(jwtStr, kf, jwt.WithValidMethods([]string{"ES384"}))
 	if err == nil {
 		t.Fatal("expected error for JWT without kid when JWKS has multiple keys, got nil")
 	}
 	if !strings.Contains(err.Error(), "missing kid") {
 		t.Errorf("error should mention missing kid, got: %v", err)
+	}
+}
+
+// TestVerifyNVIDIAJWT_Success verifies the full verifyNVIDIAJWT flow with
+// a mock JWKS server.
+func TestVerifyNVIDIAJWT_Success(t *testing.T) {
+	key := generateTestECKey(t)
+	kid := "nras-test-kid"
+
+	jwksSrv := makeTestJWKSServer(t, &key.PublicKey, kid)
+	defer jwksSrv.Close()
+
+	jwtStr := makeTestJWT(t, key, kid, true, "", "https://nras.attestation.nvidia.com", time.Now().Add(time.Hour))
+
+	// Temporarily override the JWKS cache.
+	oldCache := jwksCache
+	jwksCache = &nvidiaJWKSCache{}
+	defer func() { jwksCache = oldCache }()
+
+	keys, err := fetchFromURL(context.Background(), jwksSrv.Client(), jwksSrv.URL)
+	if err != nil {
+		t.Fatalf("fetchFromURL: %v", err)
+	}
+	jwksCache.mu.Lock()
+	jwksCache.keys = keys
+	jwksCache.fetchedAt = time.Now()
+	jwksCache.mu.Unlock()
+
+	result := verifyNVIDIAJWT(context.Background(), jwtStr, jwksSrv.Client())
+	if result.SignatureErr != nil {
+		t.Errorf("SignatureErr: %v", result.SignatureErr)
+	}
+	if result.ClaimsErr != nil {
+		t.Errorf("ClaimsErr: %v", result.ClaimsErr)
+	}
+	if !result.OverallResult {
+		t.Error("OverallResult: got false, want true")
+	}
+	if result.Format != "JWT" {
+		t.Errorf("Format: got %q, want %q", result.Format, "JWT")
+	}
+}
+
+// TestVerifyNVIDIAJWT_EmptyToken verifies error on empty JWT string.
+func TestVerifyNVIDIAJWT_EmptyToken(t *testing.T) {
+	result := verifyNVIDIAJWT(context.Background(), "", &http.Client{})
+	if result.SignatureErr == nil && result.ClaimsErr == nil {
+		t.Error("expected error for empty JWT, got nil")
+	}
+}
+
+// TestExtractNRASJWT verifies the NRAS response parsing.
+func TestExtractNRASJWT(t *testing.T) {
+	// Valid: array of [type, token] pairs.
+	jwt, err := extractNRASJWT(`[["JWT","eyJhbGciOi.payload.sig"]]`)
+	if err != nil {
+		t.Fatalf("extractNRASJWT valid: %v", err)
+	}
+	if jwt != "eyJhbGciOi.payload.sig" {
+		t.Errorf("got %q, want %q", jwt, "eyJhbGciOi.payload.sig")
+	}
+
+	// Multiple entries: takes the JWT one.
+	jwt, err = extractNRASJWT(`[["OTHER","foo"],["JWT","eyJhbGciOi.p.s"]]`)
+	if err != nil {
+		t.Fatalf("extractNRASJWT multi: %v", err)
+	}
+	if jwt != "eyJhbGciOi.p.s" {
+		t.Errorf("got %q", jwt)
+	}
+
+	// No JWT entry.
+	_, err = extractNRASJWT(`[["OTHER","foo"]]`)
+	if err == nil {
+		t.Error("expected error for no JWT entry, got nil")
+	}
+
+	// Not JSON.
+	_, err = extractNRASJWT(`not-json`)
+	if err == nil {
+		t.Error("expected error for non-JSON, got nil")
+	}
+
+	// Empty array.
+	_, err = extractNRASJWT(`[]`)
+	if err == nil {
+		t.Error("expected error for empty array, got nil")
+	}
+}
+
+// TestECPublicKeyFromJWK verifies EC key construction.
+func TestECPublicKeyFromJWK(t *testing.T) {
+	// Invalid curve.
+	_, err := ecPublicKeyFromJWK("P-999", "AAAA", "AAAA")
+	if err == nil {
+		t.Error("expected error for unsupported curve, got nil")
+	}
+
+	// Empty x coordinate.
+	_, err = ecPublicKeyFromJWK("P-384", "", "AAAA")
+	if err == nil {
+		t.Error("expected error for empty x, got nil")
+	}
+}
+
+// TestTruncate verifies the truncate helper.
+func TestTruncate(t *testing.T) {
+	if got := truncate("hello", 10); got != "hello" {
+		t.Errorf("truncate short: got %q, want %q", got, "hello")
+	}
+	if got := truncate("hello world", 5); got != "hello..." {
+		t.Errorf("truncate long: got %q, want %q", got, "hello...")
 	}
 }

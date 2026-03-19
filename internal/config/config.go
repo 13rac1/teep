@@ -92,6 +92,10 @@ type Config struct {
 	// Enforced is the list of attestation factor names that block the proxy
 	// when they fail. Defaults to DefaultEnforced.
 	Enforced []string
+
+	// Offline skips external verification calls (Intel PCS collateral,
+	// Proof of Cloud registry). Set via --offline flag at runtime.
+	Offline bool
 }
 
 // Load reads configuration from the optional TOML file (path from $TEEP_CONFIG)

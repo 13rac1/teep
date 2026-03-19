@@ -22,8 +22,8 @@ type tierInfo struct {
 	Description string
 }
 
-// factorRegistry contains all 20 verification factors in report order.
-var factorRegistry = [20]factorInfo{
+// factorRegistry contains all 21 verification factors in report order.
+var factorRegistry = [21]factorInfo{
 	// Tier 1: Core Attestation
 	{
 		Name:    "nonce_match",
@@ -106,22 +106,23 @@ var factorRegistry = [20]factorInfo{
 	{
 		Name:    "attestation_freshness",
 		Tier:    2,
-		Summary: "Quote generation time is recent",
-		Description: "Checks that the TDX quote was generated recently, preventing " +
-			"use of old attestations from decommissioned or compromised " +
-			"enclaves. Currently always skipped because determining quote " +
-			"generation time requires Intel PCS TCB info collateral, which " +
-			"is not yet fetched.",
+		Summary: "TCB level current per Intel PCS",
+		Description: "Checks whether the TDX quote's TCB level is current by " +
+			"fetching collateral from the Intel Provisioning Certification " +
+			"Service (PCS). A current TCB level implies the firmware is " +
+			"within Intel's validity window. Skipped in --offline mode or " +
+			"when the Intel PCS is unreachable.",
 	},
 	{
 		Name:    "tdx_tcb_current",
 		Tier:    2,
-		Summary: "TEE TCB SVN is current",
-		Description: "Reports the TEE_TCB_SVN (Trusted Computing Base Security " +
-			"Version Number) from the TDX quote. A current TCB SVN indicates " +
-			"the enclave firmware has the latest security patches. Full " +
-			"verification requires fetching Intel PCS collateral to compare " +
-			"against the latest known-good SVN.",
+		Summary: "TEE TCB status from Intel PCS",
+		Description: "Evaluates the TCB status returned by Intel PCS collateral " +
+			"against the TDX quote. Passes for UpToDate and SWHardeningNeeded " +
+			"(software mitigations applied). Fails for OutOfDate or Revoked " +
+			"(firmware has known vulnerabilities). Also reports Intel Security " +
+			"Advisory IDs (e.g. INTEL-SA-00837) when applicable. In --offline " +
+			"mode, shows only the raw TEE_TCB_SVN bytes.",
 	},
 	{
 		Name:    "nvidia_payload_present",
@@ -158,6 +159,21 @@ var factorRegistry = [20]factorInfo{
 			"payload matches the nonce submitted by the client. This proves " +
 			"the GPU attestation is fresh and was generated for this specific " +
 			"verification session.",
+	},
+	{
+		Name:    "nvidia_nras_verified",
+		Tier:    2,
+		Summary: "NVIDIA NRAS RIM measurement verification",
+		Description: "Posts the GPU attestation evidence (EAT) to NVIDIA's Remote " +
+			"Attestation Service (NRAS) for server-side measurement comparison " +
+			"against NVIDIA's Reference Integrity Manifest (RIM). The RIM " +
+			"contains known-good firmware hashes for each GPU model. NRAS " +
+			"returns a signed JWT with the overall attestation result, which " +
+			"is verified using NVIDIA's JWKS. This complements local SPDM " +
+			"verification: local catches compromised evidence without trusting " +
+			"NVIDIA's cloud; NRAS catches firmware measurement mismatches " +
+			"that local verification cannot detect without the RIM. Skipped " +
+			"in --offline mode or when the payload is JWT (already NRAS-verified).",
 	},
 	{
 		Name:    "e2ee_capable",
@@ -246,18 +262,19 @@ var tierRegistry = [3]tierInfo{
 		Number: 2,
 		Name:   "Binding & Crypto",
 		Label:  "Tier 2: Binding & Crypto",
-		Description: "Factors 8-15. Validates cross-component binding: the signing " +
+		Description: "Factors 8-16. Validates cross-component binding: the signing " +
 			"key is bound to the TDX REPORTDATA (preventing key substitution " +
-			"attacks), NVIDIA GPU attestation is present and valid, and the " +
-			"signing key supports E2EE key exchange. A Tier 2 failure means " +
-			"the attestation is structurally valid but may not provide the " +
+			"attacks), NVIDIA GPU attestation is present and locally verified, " +
+			"NVIDIA NRAS RIM measurement comparison passes, and the signing " +
+			"key supports E2EE key exchange. A Tier 2 failure means the " +
+			"attestation is structurally valid but may not provide the " +
 			"security guarantees needed for encrypted inference.",
 	},
 	{
 		Number: 3,
 		Name:   "Supply Chain & Channel Integrity",
 		Label:  "Tier 3: Supply Chain & Channel Integrity",
-		Description: "Factors 16-20. The gold standard for TEE verification. " +
+		Description: "Factors 17-21. The gold standard for TEE verification. " +
 			"Covers TLS key binding, CPU-GPU attestation chain, measured " +
 			"model weights, build transparency logs, and hardware identity " +
 			"registry. No vendor passes any of these today. These represent " +
@@ -316,7 +333,7 @@ Help topics:
   serve       Detailed documentation for the serve command.
   verify      Detailed documentation for the verify command.
   tiers       Explain the 3-tier verification scoring system.
-  factors     List all 20 verification factors with full descriptions.
+  factors     List all 21 verification factors with full descriptions.
   <factor>    Show details for a single factor (e.g. teep help tls_key_binding).
 
 Environment variables:
@@ -332,7 +349,7 @@ func printServeHelp() {
 	fmt.Print(`teep serve — Start the HTTP proxy server
 
 Usage:
-  teep serve [--log-level LEVEL]
+  teep serve [--offline] [--log-level LEVEL]
 
 The proxy intercepts OpenAI-compatible chat completion requests, performs TEE
 attestation verification against the upstream provider, and optionally enables
@@ -364,6 +381,7 @@ Example TOML:
   "gpt-4" = "e2ee-qwen3-32b"
 
 Flags:
+  --offline           Skip external verification (Intel PCS, Proof of Cloud).
   --log-level LEVEL   Set log verbosity: debug, info, warn, error (default: info).
 `)
 }
@@ -376,7 +394,7 @@ Usage:
   teep verify --provider NAME --model MODEL [flags]
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
-attestation for the given model, and runs all 20 verification factors. The
+attestation for the given model, and runs all 21 verification factors. The
 report is printed to stdout; log messages go to stderr.
 
 Required flags:
@@ -386,8 +404,8 @@ Required flags:
 Optional flags:
   --save-dir DIR    Save raw attestation data to DIR (JSON, TDX quote,
                     NVIDIA payload). Useful for debugging and offline analysis.
-  --offline         Skip external verification (Proof of Cloud registry).
-                    PPID is still extracted from the TDX quote locally.
+  --offline         Skip external verification (Intel PCS collateral,
+                    Proof of Cloud registry). PPID is still extracted locally.
   --log-level LEVEL Set log verbosity: debug, info, warn, error (default: info).
 
 Exit codes:
@@ -400,7 +418,7 @@ Examples:
   teep verify --provider venice --model e2ee-qwen3-32b --log-level debug
 
 See 'teep help tiers' for how factors are scored, or 'teep help factors'
-for descriptions of all 20 verification factors.
+for descriptions of all 21 verification factors.
 `)
 }
 
@@ -409,7 +427,7 @@ func printTiersHelp() {
 	fmt.Print("Verification Tiers\n")
 	fmt.Print(strings.Repeat("=", 19) + "\n\n")
 
-	fmt.Print(`teep evaluates TEE attestation using 20 factors organized into 3 tiers.
+	fmt.Print(`teep evaluates TEE attestation using 21 factors organized into 3 tiers.
 Each factor produces a result: PASS, FAIL, or SKIP. Factors marked
 [ENFORCED] in the report will cause the proxy to refuse requests when
 they fail.
@@ -417,7 +435,7 @@ they fail.
 `)
 
 	start := 0
-	bounds := [3]int{7, 15, 20}
+	bounds := [3]int{7, 16, 21}
 	for i, tier := range tierRegistry {
 		fmt.Printf("%s\n", tier.Label)
 		fmt.Print(strings.Repeat("-", len(tier.Label)) + "\n")

@@ -165,7 +165,7 @@ func reportdataBindingPassed(report *attestation.VerificationReport) bool {
 	return false
 }
 
-// fetchAndVerify fetches attestation from the provider and runs all 20
+// fetchAndVerify fetches attestation from the provider and runs all 21
 // verification factors. On failure it records the provider/model in the
 // negative cache. Returns nil on fetch error.
 func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, upstreamModel string) *attestation.VerificationReport {
@@ -190,7 +190,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	if raw.IntelQuote != "" {
 		slog.Debug("TDX verification starting", "provider", prov.Name)
 		tdxStart := time.Now()
-		tdxResult = attestation.VerifyTDXQuote(raw.IntelQuote, raw.SigningKey, nonce)
+		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, raw.SigningKey, nonce, s.cfg.Offline)
 		slog.Debug("TDX verification complete", "provider", prov.Name, "elapsed", time.Since(tdxStart))
 	}
 
@@ -198,11 +198,29 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	if raw.NvidiaPayload != "" {
 		slog.Debug("NVIDIA verification starting", "provider", prov.Name)
 		nvidiaStart := time.Now()
-		nvidiaResult = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce, nil)
+		nvidiaResult = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
 		slog.Debug("NVIDIA verification complete", "provider", prov.Name, "elapsed", time.Since(nvidiaStart))
 	}
 
-	return attestation.BuildReport(prov.Name, upstreamModel, raw, nonce, s.cfg.Enforced, tdxResult, nvidiaResult, nil)
+	var nrasResult *attestation.NvidiaVerifyResult
+	if !s.cfg.Offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
+		slog.Debug("NVIDIA NRAS verification starting", "provider", prov.Name)
+		nrasStart := time.Now()
+		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, s.attestClient)
+		slog.Debug("NVIDIA NRAS verification complete", "provider", prov.Name, "elapsed", time.Since(nrasStart))
+	}
+
+	var pocResult *attestation.PoCResult
+	if !s.cfg.Offline && raw.IntelQuote != "" {
+		slog.Debug("Proof of Cloud check starting", "provider", prov.Name)
+		pocStart := time.Now()
+		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient)
+		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
+		slog.Debug("Proof of Cloud check complete", "provider", prov.Name, "elapsed", time.Since(pocStart),
+			"registered", pocResult != nil && pocResult.Registered)
+	}
+
+	return attestation.BuildReport(prov.Name, upstreamModel, raw, nonce, s.cfg.Enforced, tdxResult, nvidiaResult, nrasResult, pocResult)
 }
 
 // handleChatCompletions is the core proxy handler for POST /v1/chat/completions.
@@ -353,7 +371,7 @@ func (s *Server) buildUpstreamBody(
 	if raw.IntelQuote == "" {
 		return nil, nil, fmt.Errorf("fresh attestation missing TDX quote; cannot verify signing key binding")
 	}
-	tdxResult := attestation.VerifyTDXQuote(raw.IntelQuote, raw.SigningKey, nonce)
+	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, raw.SigningKey, nonce, true)
 	if tdxResult.ParseErr != nil {
 		return nil, nil, fmt.Errorf("fresh TDX quote parse failed: %w", tdxResult.ParseErr)
 	}

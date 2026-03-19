@@ -140,7 +140,7 @@ func TestBuildReportWithPoCRegistered(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	pocResult := &PoCResult{Registered: true, Label: "test-machine"}
 
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, pocResult)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, pocResult)
 	f := findFactor(t, report, "cpu_id_registry")
 	if f.Status != Pass {
 		t.Errorf("cpu_id_registry with PoC registered: got %s, want PASS; detail: %s", f.Status, f.Detail)
@@ -156,7 +156,7 @@ func TestBuildReportWithPoCNotRegistered(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	pocResult := &PoCResult{Registered: false}
 
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, pocResult)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, pocResult)
 	f := findFactor(t, report, "cpu_id_registry")
 	if f.Status != Fail {
 		t.Errorf("cpu_id_registry with PoC not registered: got %s, want FAIL", f.Status)
@@ -169,7 +169,7 @@ func TestBuildReportWithPoCError(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	pocResult := &PoCResult{Err: http.ErrHandlerTimeout}
 
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, pocResult)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, pocResult)
 	f := findFactor(t, report, "cpu_id_registry")
 	if f.Status != Skip {
 		t.Errorf("cpu_id_registry with PoC error: got %s, want SKIP", f.Status)
@@ -185,7 +185,7 @@ func TestBuildReportWithPPIDOffline(t *testing.T) {
 		TeeTCBSVN: make([]byte, 16),
 	}
 
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
 	f := findFactor(t, report, "cpu_id_registry")
 	if f.Status != Skip {
 		t.Errorf("cpu_id_registry with PPID offline: got %s, want SKIP", f.Status)

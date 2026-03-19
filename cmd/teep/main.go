@@ -83,6 +83,7 @@ func parseLogLevel(args []string) slog.Level {
 // runServe loads config, creates the proxy, and starts listening.
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 	fs.Usage = func() { printServeHelp() }
 	fs.Parse(args)
@@ -92,6 +93,7 @@ func runServe(args []string) {
 		slog.Error("load config failed", "err", err)
 		os.Exit(1)
 	}
+	cfg.Offline = *offline
 
 	srv := proxy.New(cfg)
 	if err := srv.ListenAndServe(); err != nil {
@@ -174,7 +176,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	if raw.IntelQuote != "" {
 		slog.Debug("TDX verification starting", "quote_len", len(raw.IntelQuote))
 		tdxStart := time.Now()
-		tdxResult = attestation.VerifyTDXQuote(raw.IntelQuote, raw.SigningKey, nonce)
+		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, raw.SigningKey, nonce, offline)
 		slog.Debug("TDX verification complete", "elapsed", time.Since(tdxStart))
 	}
 
@@ -182,8 +184,16 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	if raw.NvidiaPayload != "" {
 		slog.Debug("NVIDIA verification starting", "payload_len", len(raw.NvidiaPayload))
 		nvidiaStart := time.Now()
-		nvidiaResult = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce, client)
+		nvidiaResult = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
 		slog.Debug("NVIDIA verification complete", "elapsed", time.Since(nvidiaStart))
+	}
+
+	var nrasResult *attestation.NvidiaVerifyResult
+	if !offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
+		slog.Debug("NVIDIA NRAS verification starting")
+		nrasStart := time.Now()
+		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, client)
+		slog.Debug("NVIDIA NRAS verification complete", "elapsed", time.Since(nrasStart))
 	}
 
 	var pocResult *attestation.PoCResult
@@ -196,7 +206,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 			"registered", pocResult != nil && pocResult.Registered)
 	}
 
-	return attestation.BuildReport(providerName, modelName, raw, nonce, cfg.Enforced, tdxResult, nvidiaResult, pocResult)
+	return attestation.BuildReport(providerName, modelName, raw, nonce, cfg.Enforced, tdxResult, nvidiaResult, nrasResult, pocResult)
 }
 
 // newAttester returns the appropriate Attester for the named provider.
@@ -229,8 +239,8 @@ var tierBoundaries = [3]struct {
 	end  int
 }{
 	{"Tier 1: Core Attestation", 7},
-	{"Tier 2: Binding & Crypto", 15},
-	{"Tier 3: Supply Chain & Channel Integrity", 20},
+	{"Tier 2: Binding & Crypto", 16},
+	{"Tier 3: Supply Chain & Channel Integrity", 21},
 }
 
 // formatReport renders a VerificationReport as a human-readable string,

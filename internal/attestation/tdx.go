@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"context"
 	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
@@ -8,11 +9,13 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"time"
 
 	tdxabi "github.com/google/go-tdx-guest/abi"
 	"github.com/google/go-tdx-guest/pcs"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
 	tdxverify "github.com/google/go-tdx-guest/verify"
+	"github.com/google/go-tdx-guest/verify/trust"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -73,6 +76,17 @@ type TDXVerifyResult struct {
 	// the PCK cert, encoded as 12 hex chars. Empty if extraction fails.
 	FMSPC string
 
+	// CollateralErr is non-nil if Intel PCS collateral fetch or validation failed.
+	// When set, TcbStatus and AdvisoryIDs are empty.
+	CollateralErr error
+
+	// TcbStatus is the Intel-determined TCB level: UpToDate, SWHardeningNeeded,
+	// OutOfDate, Revoked, etc. Empty when collateral is not fetched.
+	TcbStatus pcs.TcbComponentStatus
+
+	// AdvisoryIDs lists Intel Security Advisory IDs applicable to this TCB level.
+	AdvisoryIDs []string
+
 	// quote is the successfully parsed quote proto (QuoteV4 or QuoteV5).
 	quote any
 }
@@ -82,15 +96,19 @@ type TDXVerifyResult struct {
 const tdxDebugBit = 0x01
 
 // VerifyTDXQuote decodes the base64-encoded intel_quote, parses it as a TDX
-// QuoteV4, checks the certificate chain and signature (without fetching Intel
-// PCS collateral — that would require a network call), checks the debug flag,
-// and validates REPORTDATA binding to the signing key and nonce.
+// QuoteV4, checks the certificate chain and signature, optionally fetches Intel
+// PCS collateral for TCB currency checks, checks the debug flag, and validates
+// REPORTDATA binding to the signing key.
+//
+// When offline is false, collateral is fetched from api.trustedservices.intel.com
+// in a second verification pass. This populates TcbStatus and AdvisoryIDs.
+// When offline is true, collateral is not fetched and those fields remain empty.
 //
 // signingKeyHex is the raw.SigningKey value (130 hex chars, uncompressed
 // secp256k1 public key). It is used to compute the expected REPORTDATA binding.
 //
 // This function never panics. All errors are captured in the returned result.
-func VerifyTDXQuote(base64Quote, signingKeyHex string, nonce Nonce) *TDXVerifyResult {
+func VerifyTDXQuote(ctx context.Context, base64Quote, signingKeyHex string, nonce Nonce, offline bool) *TDXVerifyResult {
 	result := &TDXVerifyResult{}
 
 	raw, err := decodeQuoteBytes(base64Quote)
@@ -197,9 +215,7 @@ func VerifyTDXQuote(base64Quote, signingKeyHex string, nonce Nonce) *TDXVerifyRe
 	}
 
 	// Factors 4 + 5: certificate chain and signature verification.
-	// We use verify.TdxQuote without collateral fetching (GetCollateral=false).
-	// This checks the PCK cert chain against Intel's embedded root CA and
-	// verifies the quote signature, but does not fetch CRLs or TCB info.
+	// Pass 1: verify cert chain + signature without collateral (no network).
 	opts := &tdxverify.Options{
 		GetCollateral:    false,
 		CheckRevocations: false,
@@ -209,6 +225,35 @@ func VerifyTDXQuote(base64Quote, signingKeyHex string, nonce Nonce) *TDXVerifyRe
 		// Record both as failed; they share the same root cause.
 		result.CertChainErr = verifyErr
 		result.SignatureErr = verifyErr
+	}
+
+	// Pass 2 (online only): fetch Intel PCS collateral for TCB currency checks.
+	// This is a separate pass so a collateral network error doesn't mask
+	// a successful cert chain / signature verification from pass 1.
+	if !offline {
+		collateralOpts := &tdxverify.Options{
+			GetCollateral:    true,
+			CheckRevocations: false,
+			Getter: &trust.RetryHTTPSGetter{
+				Timeout:       30 * time.Second,
+				MaxRetryDelay: 5 * time.Second,
+				Getter:        &trust.SimpleHTTPSGetter{},
+			},
+		}
+		if err := tdxverify.TdxQuoteContext(ctx, quoteAny, collateralOpts); err != nil {
+			result.CollateralErr = fmt.Errorf("Intel PCS collateral: %w", err)
+			slog.Debug("TDX collateral verification failed (non-fatal for cert chain)", "err", err)
+		} else {
+			tcbLevel, _, err := tdxverify.SupportedTcbLevelsFromCollateral(quoteAny, collateralOpts)
+			if err != nil {
+				result.CollateralErr = fmt.Errorf("TCB level extraction: %w", err)
+				slog.Debug("TCB level extraction failed", "err", err)
+			} else {
+				result.TcbStatus = tcbLevel.TcbStatus
+				result.AdvisoryIDs = tcbLevel.AdvisoryIDs
+				slog.Debug("TCB level extracted", "status", tcbLevel.TcbStatus, "date", tcbLevel.TcbDate, "advisories", tcbLevel.AdvisoryIDs)
+			}
+		}
 	}
 
 	// Extract PPID/FMSPC from PCK certificate (informational, non-fatal).
