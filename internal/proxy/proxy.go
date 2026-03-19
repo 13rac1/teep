@@ -202,7 +202,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		slog.Debug("NVIDIA verification complete", "provider", prov.Name, "elapsed", time.Since(nvidiaStart))
 	}
 
-	return attestation.BuildReport(prov.Name, upstreamModel, raw, nonce, s.cfg.Enforced, tdxResult, nvidiaResult)
+	return attestation.BuildReport(prov.Name, upstreamModel, raw, nonce, s.cfg.Enforced, tdxResult, nvidiaResult, nil)
 }
 
 // handleChatCompletions is the core proxy handler for POST /v1/chat/completions.

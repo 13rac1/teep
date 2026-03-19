@@ -85,7 +85,7 @@ var DefaultEnforced = []string{
 // VerifyTDXQuote. NVIDIA JWT verification (factors 12-14) uses VerifyNVIDIAJWT.
 // Tier 3 factors (16-20) always Fail because no vendor currently provides the
 // required supply-chain data.
-func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult *NvidiaVerifyResult) *VerificationReport {
+func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult *NvidiaVerifyResult, pocResult *PoCResult) *VerificationReport {
 	enforcedSet := make(map[string]bool, len(enforced))
 	for _, name := range enforced {
 		enforcedSet[name] = true
@@ -300,7 +300,20 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 			"no build transparency log")
 	}
 
-	if raw.DeviceID != "" {
+	if pocResult != nil && pocResult.Registered {
+		addFactor("cpu_id_registry", Pass,
+			fmt.Sprintf("Proof of Cloud: registered (%s)", pocResult.Label))
+	} else if pocResult != nil && pocResult.Err != nil {
+		addFactor("cpu_id_registry", Skip,
+			fmt.Sprintf("Proof of Cloud query failed: %v", pocResult.Err))
+	} else if pocResult != nil && !pocResult.Registered {
+		addFactor("cpu_id_registry", Fail,
+			"hardware not found in Proof of Cloud registry; paste intel_quote from --save-dir at proofofcloud.org to verify")
+	} else if tdxResult != nil && tdxResult.PPID != "" {
+		addFactor("cpu_id_registry", Skip,
+			fmt.Sprintf("PPID extracted (%s...) but offline; use default mode to check Proof of Cloud",
+				tdxResult.PPID[:min(8, len(tdxResult.PPID))]))
+	} else if raw.DeviceID != "" {
 		idPreview := raw.DeviceID
 		if len(idPreview) > 8 {
 			idPreview = idPreview[:8] + "..."
@@ -325,7 +338,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		}
 	}
 
-	metadata := buildMetadata(raw)
+	metadata := buildMetadata(raw, tdxResult)
 
 	return &VerificationReport{
 		Provider:  provider,
@@ -388,7 +401,7 @@ func nvidiaNonceDetail(r *NvidiaVerifyResult) string {
 // buildMetadata extracts display metadata from raw into an ordered key-value
 // map. Only non-empty values are included. The map is used by formatReport
 // to render the metadata block between the header and Tier 1.
-func buildMetadata(raw *RawAttestation) map[string]string {
+func buildMetadata(raw *RawAttestation, tdxResult *TDXVerifyResult) map[string]string {
 	m := make(map[string]string)
 
 	if raw.TEEHardware != "" {
@@ -408,6 +421,9 @@ func buildMetadata(raw *RawAttestation) map[string]string {
 	}
 	if raw.DeviceID != "" {
 		m["device"] = raw.DeviceID
+	}
+	if tdxResult != nil && tdxResult.PPID != "" {
+		m["ppid"] = tdxResult.PPID
 	}
 	if raw.NonceSource != "" {
 		m["nonce_source"] = raw.NonceSource

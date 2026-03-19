@@ -294,3 +294,35 @@ func TestVerifyTDXQuoteReportDataBindingRealQuoteFails(t *testing.T) {
 		t.Logf("ReportDataBindingErr (expected): %v", result.ReportDataBindingErr)
 	}
 }
+
+// TestPPIDExtraction verifies PPID and FMSPC are extracted from the real
+// production quote's PCK certificate chain.
+func TestPPIDExtraction(t *testing.T) {
+	nonce := NewNonce()
+	result := VerifyTDXQuote(realTDXQuoteBase64(), "", nonce)
+
+	if result.ParseErr != nil {
+		t.Fatalf("parse failed: %v", result.ParseErr)
+	}
+
+	// The real SPR_E4 quote should have a PCK cert with PPID.
+	if result.PPID == "" {
+		t.Error("PPID is empty; expected extraction from PCK cert")
+	} else {
+		// PPID should be 32 hex chars (16 bytes).
+		if len(result.PPID) != 32 {
+			t.Errorf("PPID length: got %d, want 32 hex chars", len(result.PPID))
+		}
+		t.Logf("PPID: %s", result.PPID)
+	}
+
+	if result.FMSPC == "" {
+		t.Error("FMSPC is empty; expected extraction from PCK cert")
+	} else {
+		// FMSPC should be 12 hex chars (6 bytes).
+		if len(result.FMSPC) != 12 {
+			t.Errorf("FMSPC length: got %d, want 12 hex chars", len(result.FMSPC))
+		}
+		t.Logf("FMSPC: %s", result.FMSPC)
+	}
+}

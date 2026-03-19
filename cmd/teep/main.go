@@ -110,6 +110,7 @@ func runVerify(args []string) {
 	providerName := fs.String("provider", "", "provider name (required, e.g. venice, nearai)")
 	modelName := fs.String("model", "", "model name as known to the provider (required)")
 	saveDir := fs.String("save-dir", "", "directory to save raw attestation data (EAT, TDX quote)")
+	offline := fs.Bool("offline", false, "skip external verification (Proof of Cloud registry)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 
 	fs.Parse(args)
@@ -125,7 +126,7 @@ func runVerify(args []string) {
 		os.Exit(1)
 	}
 
-	report := runVerification(*providerName, *modelName, *saveDir)
+	report := runVerification(*providerName, *modelName, *saveDir, *offline)
 	fmt.Print(formatReport(report))
 
 	if report.Blocked() {
@@ -136,7 +137,7 @@ func runVerify(args []string) {
 // runVerification loads config, builds the appropriate attester, fetches
 // attestation, runs TDX and NVIDIA verification, and returns the report.
 // If saveDir is non-empty, raw attestation data is saved to files there.
-func runVerification(providerName, modelName, saveDir string) *attestation.VerificationReport {
+func runVerification(providerName, modelName, saveDir string, offline bool) *attestation.VerificationReport {
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load config failed", "err", err)
@@ -185,7 +186,17 @@ func runVerification(providerName, modelName, saveDir string) *attestation.Verif
 		slog.Debug("NVIDIA verification complete", "elapsed", time.Since(nvidiaStart))
 	}
 
-	return attestation.BuildReport(providerName, modelName, raw, nonce, cfg.Enforced, tdxResult, nvidiaResult)
+	var pocResult *attestation.PoCResult
+	if !offline && raw.IntelQuote != "" {
+		slog.Debug("Proof of Cloud check starting")
+		pocStart := time.Now()
+		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, client)
+		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
+		slog.Debug("Proof of Cloud check complete", "elapsed", time.Since(pocStart),
+			"registered", pocResult != nil && pocResult.Registered)
+	}
+
+	return attestation.BuildReport(providerName, modelName, raw, nonce, cfg.Enforced, tdxResult, nvidiaResult, pocResult)
 }
 
 // newAttester returns the appropriate Attester for the named provider.
@@ -297,6 +308,7 @@ var metadataDisplayOrder = []struct {
 	{"compose_hash", "Compose hash"},
 	{"os_image", "OS image"},
 	{"device", "Device"},
+	{"ppid", "PPID"},
 	{"nonce_source", "Nonce source"},
 	{"candidates", "Candidates"},
 	{"event_log", "Event log"},
@@ -312,7 +324,7 @@ func writeMetadataBlock(b *strings.Builder, meta map[string]string) {
 			continue
 		}
 		// Truncate long hex hashes for display.
-		if (entry.key == "compose_hash" || entry.key == "os_image" || entry.key == "device") && len(val) > 16 {
+		if (entry.key == "compose_hash" || entry.key == "os_image" || entry.key == "device" || entry.key == "ppid") && len(val) > 16 {
 			val = val[:16] + "..."
 		}
 		fmt.Fprintf(b, "  %-14s %s\n", entry.label+":", val)
@@ -339,7 +351,7 @@ func saveAttestationData(dir, provider string, raw *attestation.RawAttestation) 
 	}
 
 	if raw.IntelQuote != "" {
-		saveFile(filepath.Join(dir, fmt.Sprintf("%s_intel_quote_%s.b64", provider, ts)), []byte(raw.IntelQuote))
+		saveFile(filepath.Join(dir, fmt.Sprintf("%s_intel_quote_%s.hex", provider, ts)), []byte(raw.IntelQuote))
 	}
 }
 

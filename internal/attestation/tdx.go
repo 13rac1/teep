@@ -2,12 +2,15 @@ package attestation
 
 import (
 	"crypto/subtle"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 
 	tdxabi "github.com/google/go-tdx-guest/abi"
+	"github.com/google/go-tdx-guest/pcs"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
 	tdxverify "github.com/google/go-tdx-guest/verify"
 	"golang.org/x/crypto/sha3"
@@ -61,6 +64,14 @@ type TDXVerifyResult struct {
 
 	// MROwnerConfig is the 48-byte TD owner configuration.
 	MROwnerConfig []byte
+
+	// PPID is the 16-byte Platform Provisioning ID from the PCK cert's
+	// x509v3 extensions, encoded as 32 hex chars. Empty if extraction fails.
+	PPID string
+
+	// FMSPC is the 6-byte Family-Model-Stepping-Platform-CustomSKU from
+	// the PCK cert, encoded as 12 hex chars. Empty if extraction fails.
+	FMSPC string
 
 	// quote is the successfully parsed quote proto (QuoteV4 or QuoteV5).
 	quote any
@@ -200,6 +211,16 @@ func VerifyTDXQuote(base64Quote, signingKeyHex string, nonce Nonce) *TDXVerifyRe
 		result.SignatureErr = verifyErr
 	}
 
+	// Extract PPID/FMSPC from PCK certificate (informational, non-fatal).
+	ppid, fmspc, err := extractPCKExtensions(quoteAny)
+	if err != nil {
+		slog.Debug("PPID extraction failed (non-fatal)", "err", err)
+	} else {
+		result.PPID = ppid
+		result.FMSPC = fmspc
+		slog.Debug("PCK extensions extracted", "ppid", ppid, "fmspc", fmspc)
+	}
+
 	// Factor 8: REPORTDATA binding.
 	// Venice's scheme: REPORTDATA[0:20] = Ethereum address of the signing key
 	// (keccak256 of the uncompressed public key without 04 prefix, last 20 bytes).
@@ -209,6 +230,55 @@ func VerifyTDXQuote(base64Quote, signingKeyHex string, nonce Nonce) *TDXVerifyRe
 	}
 
 	return result
+}
+
+// extractPCKExtensions navigates from a parsed TDX quote to the PCK leaf
+// certificate and extracts PPID and FMSPC from its x509v3 extensions.
+// Returns (ppid, fmspc, error). Both are lowercase hex strings.
+func extractPCKExtensions(quoteAny any) (string, string, error) {
+	var signedData *pb.Ecdsa256BitQuoteV4AuthData
+	switch q := quoteAny.(type) {
+	case *pb.QuoteV4:
+		signedData = q.GetSignedData()
+	case *pb.QuoteV5:
+		signedData = q.GetSignedData()
+	default:
+		return "", "", fmt.Errorf("unsupported quote type %T", quoteAny)
+	}
+
+	certData := signedData.GetCertificationData()
+	if certData == nil {
+		return "", "", fmt.Errorf("CertificationData is nil")
+	}
+	qeReport := certData.GetQeReportCertificationData()
+	if qeReport == nil {
+		return "", "", fmt.Errorf("QeReportCertificationData is nil")
+	}
+	pckChainData := qeReport.GetPckCertificateChainData()
+	if pckChainData == nil {
+		return "", "", fmt.Errorf("PckCertificateChainData is nil")
+	}
+	pemBytes := pckChainData.GetPckCertChain()
+	if len(pemBytes) == 0 {
+		return "", "", fmt.Errorf("PckCertChain is empty")
+	}
+
+	// Parse the first (leaf) certificate from the PEM chain.
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return "", "", fmt.Errorf("no PEM block found in PckCertChain")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", "", fmt.Errorf("parse PCK leaf cert: %w", err)
+	}
+
+	ext, err := pcs.PckCertificateExtensions(cert)
+	if err != nil {
+		return "", "", fmt.Errorf("extract PCK extensions: %w", err)
+	}
+
+	return ext.PPID, ext.FMSPC, nil
 }
 
 // safeSlice returns s[i] if i is within bounds, or nil otherwise.

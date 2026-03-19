@@ -218,14 +218,15 @@ var factorRegistry = [20]factorInfo{
 	{
 		Name:    "cpu_id_registry",
 		Tier:    3,
-		Summary: "No CPU ID registry check",
-		Description: "The CPU PPID/CHIP_ID has not been verified against a known-good " +
-			"hardware registry. Venice provides a TDX device ID via dstack, " +
-			"but no public registry exists to verify it against. Without " +
-			"this, a TEE.fail-style physical attack (replacing a CPU with " +
-			"a modified chip that forges attestation) cannot be detected. " +
-			"Proof of Cloud or an equivalent registry maps hardware " +
-			"identifiers to verified physical deployments.",
+		Summary: "CPU ID verified against Proof of Cloud",
+		Description: "The CPU PPID is extracted from the PCK certificate embedded in " +
+			"the TDX quote and verified against the Proof of Cloud registry " +
+			"— a vendor-neutral, append-only log of hardware identities " +
+			"independently verified by alliance members. When online " +
+			"(default), the quote is submitted to trust-servers operated by " +
+			"Secret Labs, Nillion, and iEx.ec using threshold multisig. " +
+			"Use --offline to skip the registry check and show only the " +
+			"extracted PPID.",
 	},
 }
 
@@ -385,6 +386,8 @@ Required flags:
 Optional flags:
   --save-dir DIR    Save raw attestation data to DIR (JSON, TDX quote,
                     NVIDIA payload). Useful for debugging and offline analysis.
+  --offline         Skip external verification (Proof of Cloud registry).
+                    PPID is still extracted from the TDX quote locally.
   --log-level LEVEL Set log verbosity: debug, info, warn, error (default: info).
 
 Exit codes:

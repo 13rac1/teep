@@ -38,7 +38,7 @@ func TestFactorRegistryNamesMatchReport(t *testing.T) {
 		IntelQuote: "dGVzdA==",
 		SigningKey: "04" + strings.Repeat("ab", 64), // dummy uncompressed key
 	}
-	report := attestation.BuildReport("test", "test", raw, nonce, nil, nil, nil)
+	report := attestation.BuildReport("test", "test", raw, nonce, nil, nil, nil, nil)
 
 	if len(report.Factors) != len(factorRegistry) {
 		t.Fatalf("report has %d factors, registry has %d", len(report.Factors), len(factorRegistry))
