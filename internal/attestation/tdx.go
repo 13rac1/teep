@@ -60,15 +60,10 @@ const tdxDebugBit = 0x01
 func VerifyTDXQuote(base64Quote, signingKeyHex string, nonce Nonce) *TDXVerifyResult {
 	result := &TDXVerifyResult{}
 
-	// Decode base64 → raw quote bytes.
-	raw, err := base64.StdEncoding.DecodeString(base64Quote)
+	raw, err := decodeQuoteBytes(base64Quote)
 	if err != nil {
-		// Try URL-safe base64 in case the provider uses it.
-		raw, err = base64.URLEncoding.DecodeString(base64Quote)
-		if err != nil {
-			result.ParseErr = fmt.Errorf("base64 decode failed: %w", err)
-			return result
-		}
+		result.ParseErr = err
+		return result
 	}
 
 	slog.Debug("TDX quote decoded", "raw_bytes", len(raw))
@@ -149,6 +144,21 @@ func VerifyTDXQuote(base64Quote, signingKeyHex string, nonce Nonce) *TDXVerifyRe
 	}
 
 	return result
+}
+
+// decodeQuoteBytes tries hex, base64, and base64url decoding.
+// Venice returns hex-encoded quotes; other providers may use base64.
+func decodeQuoteBytes(s string) ([]byte, error) {
+	if raw, err := hex.DecodeString(s); err == nil {
+		return raw, nil
+	}
+	if raw, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return raw, nil
+	}
+	if raw, err := base64.URLEncoding.DecodeString(s); err == nil {
+		return raw, nil
+	}
+	return nil, fmt.Errorf("quote decode failed (tried hex, base64, base64url)")
 }
 
 // verifyReportDataBinding checks whether reportData (64 bytes) contains the

@@ -65,7 +65,7 @@ type RawAttestation struct {
 	// Present for Venice; may be empty for other providers.
 	SigningAddress string
 
-	// IntelQuote is the raw Intel TDX quote, base64-encoded.
+	// IntelQuote is the raw Intel TDX quote, hex or base64-encoded.
 	IntelQuote string
 
 	// NvidiaPayload is the NVIDIA GPU attestation JWT or raw payload.

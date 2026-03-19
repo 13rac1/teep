@@ -96,6 +96,21 @@ func TestVerifyTDXQuoteDebugFlagRealQuote(t *testing.T) {
 	}
 }
 
+// TestVerifyTDXQuoteHexEncoded verifies that a hex-encoded quote (as Venice
+// returns) is decoded and parsed correctly.
+func TestVerifyTDXQuoteHexEncoded(t *testing.T) {
+	nonce := NewNonce()
+	hexQuote := hex.EncodeToString(realTDXQuoteRaw)
+	result := VerifyTDXQuote(hexQuote, "", nonce)
+
+	if result.ParseErr != nil {
+		t.Fatalf("VerifyTDXQuote with hex-encoded input: unexpected parse error: %v", result.ParseErr)
+	}
+	if len(result.TeeTCBSVN) != 16 {
+		t.Errorf("TeeTCBSVN length: got %d, want 16", len(result.TeeTCBSVN))
+	}
+}
+
 // TestVerifyTDXQuoteInvalidBase64 verifies parse error on garbage input.
 func TestVerifyTDXQuoteInvalidBase64(t *testing.T) {
 	nonce := NewNonce()
