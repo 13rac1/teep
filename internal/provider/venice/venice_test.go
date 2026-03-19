@@ -11,9 +11,10 @@ import (
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
-// validAttestationJSON is a minimal but structurally complete Venice attestation
-// response. The signing_key and intel_quote are intentionally short placeholder
-// values — real attestation verification happens in the attestation package.
+// validAttestationJSON is a structurally complete Venice attestation response
+// covering all 20 fields. The signing_key and intel_quote are intentionally
+// short placeholder values — real attestation verification happens in the
+// attestation package.
 const validAttestationJSON = `{
 	"verified": true,
 	"nonce": "aabbccddeeff00112233445566778899aabbccddeeff001122334455667788990000000000000000000000000000000000000000000000000000000000000000",
@@ -22,7 +23,34 @@ const validAttestationJSON = `{
 	"signing_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	"signing_address": "0xdeadbeef",
 	"intel_quote": "dGVzdHF1b3Rl",
-	"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test.payload"
+	"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test.payload",
+	"event_log": [
+		{"digest": "d6d8d853b6454f838d98c5573d6a098c", "event": "", "event_payload": "095464785461626c65", "event_type": 2147483659, "imr": 0},
+		{"digest": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "event": "", "event_payload": "0a1b2c3d4e5f", "event_type": 2147483649, "imr": 1}
+	],
+	"info": {
+		"app_cert": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		"app_id": "test-app-id",
+		"app_name": "dstack-nvidia-0.5.5",
+		"compose_hash": "242a6272abcdef01",
+		"device_id": "aa781567bbccddee",
+		"instance_id": "inst-12345678",
+		"key_provider_info": "kms",
+		"mr_aggregated": "aabbccdd",
+		"os_image_hash": "9b69bb16aabbccdd",
+		"tcb_info": {},
+		"vm_config": "tdx-vm"
+	},
+	"server_verification": {"tdx": {"verified": true}},
+	"model_name": "Qwen/Qwen3.5-122B-A10B",
+	"upstream_model": "Qwen/Qwen3.5-122B-A10B",
+	"signing_algo": "ecdsa",
+	"tee_hardware": "intel-tdx",
+	"nonce_source": "client",
+	"candidates_available": 6,
+	"candidates_evaluated": 1,
+	"signing_public_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	"request_nonce": "aabbccddeeff00112233445566778899aabbccddeeff001122334455667788990000000000000000000000000000000000000000000000000000000000000000"
 }`
 
 // makeAttestationServer starts an httptest server that serves body as the
@@ -68,6 +96,49 @@ func TestAttester_FetchAttestation_Success(t *testing.T) {
 	}
 	if raw.SigningAddress != "0xdeadbeef" {
 		t.Errorf("SigningAddress = %q, want %q", raw.SigningAddress, "0xdeadbeef")
+	}
+}
+
+func TestAttester_FetchAttestation_ExtendedFields(t *testing.T) {
+	srv := makeAttestationServer(t, http.StatusOK, validAttestationJSON)
+	defer srv.Close()
+
+	a := venice.NewAttester(srv.URL, "test-api-key")
+	raw, err := a.FetchAttestation(context.Background(), "e2ee-qwen3-5-122b-a10b", attestation.NewNonce())
+	if err != nil {
+		t.Fatalf("FetchAttestation: %v", err)
+	}
+
+	checks := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"TEEHardware", raw.TEEHardware, "intel-tdx"},
+		{"SigningAlgo", raw.SigningAlgo, "ecdsa"},
+		{"UpstreamModel", raw.UpstreamModel, "Qwen/Qwen3.5-122B-A10B"},
+		{"AppName", raw.AppName, "dstack-nvidia-0.5.5"},
+		{"ComposeHash", raw.ComposeHash, "242a6272abcdef01"},
+		{"OSImageHash", raw.OSImageHash, "9b69bb16aabbccdd"},
+		{"DeviceID", raw.DeviceID, "aa781567bbccddee"},
+		{"NonceSource", raw.NonceSource, "client"},
+	}
+	for _, tc := range checks {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+	if raw.EventLogCount != 2 {
+		t.Errorf("EventLogCount = %d, want 2", raw.EventLogCount)
+	}
+	if raw.CandidatesAvail != 6 {
+		t.Errorf("CandidatesAvail = %d, want 6", raw.CandidatesAvail)
+	}
+	if raw.CandidatesEval != 1 {
+		t.Errorf("CandidatesEval = %d, want 1", raw.CandidatesEval)
+	}
+	if raw.ServerVerification == nil {
+		t.Error("ServerVerification is nil, want non-nil")
 	}
 }
 

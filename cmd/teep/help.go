@@ -208,22 +208,24 @@ var factorRegistry = [20]factorInfo{
 		Tier:    3,
 		Summary: "No build transparency log",
 		Description: "No Sigstore bundle or equivalent build transparency log entry " +
-			"was found in the attestation. Without this, you can confirm " +
-			"that a TEE is running, but not that it runs a specific audited " +
-			"build of the inference server. Runtime measurements should " +
-			"match reproducibly-built artifacts committed to an immutable " +
-			"transparency log.",
+			"was found in the attestation. Venice provides a docker-compose " +
+			"hash via dstack, which proves the deployment manifest hasn't " +
+			"changed, but this is not an independent transparency log. " +
+			"Without a reproducible build pipeline committed to an " +
+			"immutable log, you cannot verify that the running code " +
+			"matches a specific audited source revision.",
 	},
 	{
 		Name:    "cpu_id_registry",
 		Tier:    3,
 		Summary: "No CPU ID registry check",
 		Description: "The CPU PPID/CHIP_ID has not been verified against a known-good " +
-			"hardware registry. Without this, a TEE.fail-style physical " +
-			"attack (replacing a CPU with a modified chip that forges " +
-			"attestation) cannot be detected. Proof of Cloud or an " +
-			"equivalent registry maps hardware identifiers to verified " +
-			"physical deployments.",
+			"hardware registry. Venice provides a TDX device ID via dstack, " +
+			"but no public registry exists to verify it against. Without " +
+			"this, a TEE.fail-style physical attack (replacing a CPU with " +
+			"a modified chip that forges attestation) cannot be detected. " +
+			"Proof of Cloud or an equivalent registry maps hardware " +
+			"identifiers to verified physical deployments.",
 	},
 }
 

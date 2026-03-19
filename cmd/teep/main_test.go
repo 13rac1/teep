@@ -290,6 +290,80 @@ func TestFormatReport_LineWidth(t *testing.T) {
 	}
 }
 
+func TestFormatReport_MetadataBlock(t *testing.T) {
+	r := buildTestReport("venice", "e2ee-qwen3")
+	r.Metadata = map[string]string{
+		"hardware":     "intel-tdx",
+		"upstream":     "Qwen/Qwen3.5-122B-A10B",
+		"app":          "dstack-nvidia-0.5.5",
+		"compose_hash": "242a6272abcdef0123456789",
+		"nonce_source": "client",
+		"candidates":   "1/6 evaluated",
+		"event_log":    "30 entries",
+	}
+	out := formatReport(r)
+
+	for _, want := range []string{
+		"Hardware:",
+		"intel-tdx",
+		"Upstream:",
+		"Qwen/Qwen3.5-122B-A10B",
+		"App:",
+		"dstack-nvidia-0.5.5",
+		"Compose hash:",
+		"242a6272abcdef01...", // truncated to 16 chars
+		"Nonce source:",
+		"client",
+		"Candidates:",
+		"1/6 evaluated",
+		"Event log:",
+		"30 entries",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metadata %q not found in output:\n%s", want, out)
+		}
+	}
+
+	// Ensure metadata appears before Tier 1.
+	metaIdx := strings.Index(out, "Hardware:")
+	tier1Idx := strings.Index(out, "Tier 1:")
+	if metaIdx < 0 || tier1Idx < 0 || metaIdx > tier1Idx {
+		t.Errorf("metadata should appear before Tier 1; meta=%d, tier1=%d", metaIdx, tier1Idx)
+	}
+}
+
+func TestFormatReport_NoMetadataBlock(t *testing.T) {
+	r := buildTestReport("nearai", "some-model")
+	// No metadata set.
+	out := formatReport(r)
+
+	// "Hardware:" should not appear when metadata is nil/empty.
+	if strings.Contains(out, "Hardware:") {
+		t.Errorf("metadata block should not appear for empty metadata; output:\n%s", out)
+	}
+}
+
+func TestFormatReport_MetadataLineWidth(t *testing.T) {
+	r := buildTestReport("venice", "e2ee-qwen3")
+	r.Metadata = map[string]string{
+		"hardware":     "intel-tdx",
+		"upstream":     "Qwen/Qwen3.5-122B-A10B",
+		"app":          "dstack-nvidia-0.5.5",
+		"compose_hash": "242a6272abcdef0123456789abcdef0123456789",
+		"os_image":     "9b69bb16aabbccddaabbccddaabbccddaabbccdd",
+		"device":       "aa781567bbccddeeffaabbccddeeffaabbccddeeff",
+		"nonce_source": "client",
+		"candidates":   "1/6 evaluated",
+		"event_log":    "30 entries",
+	}
+	out := formatReport(r)
+	for i, line := range strings.Split(out, "\n") {
+		if len([]rune(line)) > 80 {
+			t.Errorf("line %d exceeds 80 chars (%d runes): %q", i+1, len([]rune(line)), line)
+		}
+	}
+}
+
 // TestFormatReport_SeparatorLength verifies the separator is as long as the header.
 func TestFormatReport_SeparatorLength(t *testing.T) {
 	r := buildTestReport("venice", "some-model")

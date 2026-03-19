@@ -16,8 +16,10 @@ package venice
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -29,9 +31,36 @@ import (
 // attestationPath is the Venice API path for TEE attestation.
 const attestationPath = "/api/v1/tee/attestation"
 
+// eventLogEntry is one entry in Venice's event_log array — a TDX RTMR
+// measurement extend event.
+type eventLogEntry struct {
+	Digest       string `json:"digest"`
+	Event        string `json:"event"`
+	EventPayload string `json:"event_payload"`
+	EventType    int    `json:"event_type"`
+	IMR          int    `json:"imr"`
+}
+
+// veniceInfo holds the nested "info" object from Venice's attestation
+// response, containing dstack environment metadata.
+type veniceInfo struct {
+	AppCert      string          `json:"app_cert"`
+	AppID        string          `json:"app_id"`
+	AppName      string          `json:"app_name"`
+	ComposeHash  string          `json:"compose_hash"`
+	DeviceID     string          `json:"device_id"`
+	InstanceID   string          `json:"instance_id"`
+	KeyProvider  string          `json:"key_provider_info"`
+	MRAggregated string          `json:"mr_aggregated"`
+	OSImageHash  string          `json:"os_image_hash"`
+	TCBInfo      json.RawMessage `json:"tcb_info"`
+	VMConfig     string          `json:"vm_config"`
+}
+
 // attestationResponse is the JSON shape returned by Venice's attestation
-// endpoint. Fields are unmarshalled directly from the API response.
+// endpoint. All 20 fields are parsed to eliminate jsonstrict warnings.
 type attestationResponse struct {
+	// Core fields (original 8).
 	Verified       bool   `json:"verified"`
 	Nonce          string `json:"nonce"`
 	Model          string `json:"model"`
@@ -40,6 +69,22 @@ type attestationResponse struct {
 	SigningAddress string `json:"signing_address"`
 	IntelQuote     string `json:"intel_quote"`
 	NvidiaPayload  string `json:"nvidia_payload"`
+
+	// Extended fields (10 propagated to RawAttestation).
+	EventLog           []eventLogEntry `json:"event_log"`
+	Info               veniceInfo      `json:"info"`
+	ServerVerification json.RawMessage `json:"server_verification"`
+	ModelName          string          `json:"model_name"`
+	UpstreamModel      string          `json:"upstream_model"`
+	SigningAlgo        string          `json:"signing_algo"`
+	TEEHardware        string          `json:"tee_hardware"`
+	NonceSource        string          `json:"nonce_source"`
+	CandidatesAvail    int             `json:"candidates_available"`
+	CandidatesEval     int             `json:"candidates_evaluated"`
+
+	// Duplicate fields (parsed to silence jsonstrict, not propagated).
+	SigningPublicKey string `json:"signing_public_key"`
+	RequestNonce     string `json:"request_nonce"`
 }
 
 // Attester fetches attestation data from Venice's /api/v1/tee/attestation
@@ -105,6 +150,16 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 		return nil, fmt.Errorf("venice: unmarshal attestation response: %w", err)
 	}
 
+	slog.Debug("venice event log", "entries", len(ar.EventLog))
+	for i, e := range ar.EventLog {
+		digest := e.Digest
+		if len(digest) > 16 {
+			digest = digest[:16] + "..."
+		}
+		slog.Debug("event log entry", "index", i, "imr", e.IMR,
+			"event", e.Event, "type", e.EventType, "digest", digest)
+	}
+
 	return &attestation.RawAttestation{
 		Verified:       ar.Verified,
 		Nonce:          ar.Nonce,
@@ -114,7 +169,21 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 		SigningAddress: ar.SigningAddress,
 		IntelQuote:     ar.IntelQuote,
 		NvidiaPayload:  ar.NvidiaPayload,
-		RawBody:        body,
+
+		TEEHardware:        ar.TEEHardware,
+		SigningAlgo:        ar.SigningAlgo,
+		UpstreamModel:      ar.UpstreamModel,
+		AppName:            ar.Info.AppName,
+		ComposeHash:        ar.Info.ComposeHash,
+		OSImageHash:        ar.Info.OSImageHash,
+		DeviceID:           ar.Info.DeviceID,
+		EventLogCount:      len(ar.EventLog),
+		NonceSource:        ar.NonceSource,
+		CandidatesAvail:    ar.CandidatesAvail,
+		CandidatesEval:     ar.CandidatesEval,
+		ServerVerification: ar.ServerVerification,
+
+		RawBody: body,
 	}, nil
 }
 

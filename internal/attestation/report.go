@@ -45,13 +45,14 @@ type FactorResult struct {
 // VerificationReport holds the factor-by-factor results of an attestation
 // verification run. Produced by BuildReport.
 type VerificationReport struct {
-	Provider  string         `json:"provider"`
-	Model     string         `json:"model"`
-	Timestamp time.Time      `json:"timestamp"`
-	Factors   []FactorResult `json:"factors"`
-	Passed    int            `json:"passed"`
-	Failed    int            `json:"failed"`
-	Skipped   int            `json:"skipped"`
+	Provider  string            `json:"provider"`
+	Model     string            `json:"model"`
+	Timestamp time.Time         `json:"timestamp"`
+	Factors   []FactorResult    `json:"factors"`
+	Passed    int               `json:"passed"`
+	Failed    int               `json:"failed"`
+	Skipped   int               `json:"skipped"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
 // Blocked returns true if any enforced factor has failed. When Blocked is true,
@@ -107,7 +108,11 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	if raw.Nonce == "" {
 		addFactor("nonce_match", Fail, "nonce field absent from attestation response")
 	} else if raw.Nonce == nonce.Hex() {
-		addFactor("nonce_match", Pass, fmt.Sprintf("nonce matches (%d hex chars)", len(raw.Nonce)))
+		detail := fmt.Sprintf("nonce matches (%d hex chars)", len(raw.Nonce))
+		if raw.NonceSource != "" {
+			detail += fmt.Sprintf(" (%s-supplied)", raw.NonceSource)
+		}
+		addFactor("nonce_match", Pass, detail)
 	} else {
 		addFactor("nonce_match", Fail, fmt.Sprintf("nonce mismatch: got %q, want %q", raw.Nonce, nonce.Hex()))
 	}
@@ -261,7 +266,11 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		if err := s.SetModelKey(raw.SigningKey); err != nil {
 			addFactor("e2ee_capable", Fail, fmt.Sprintf("signing_key is not a valid secp256k1 public key: %v", err))
 		} else {
-			addFactor("e2ee_capable", Pass, "signing key is valid secp256k1 uncompressed point; E2EE key exchange possible")
+			detail := "signing key is valid secp256k1 uncompressed point; E2EE key exchange possible"
+			if raw.SigningAlgo != "" {
+				detail += fmt.Sprintf(" (%s)", raw.SigningAlgo)
+			}
+			addFactor("e2ee_capable", Pass, detail)
 		}
 	}
 
@@ -279,11 +288,29 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	addFactor("measured_model_weights", Fail,
 		"no model weight hashes")
 
-	addFactor("build_transparency_log", Fail,
-		"no build transparency log")
+	if raw.ComposeHash != "" {
+		hashPreview := raw.ComposeHash
+		if len(hashPreview) > 8 {
+			hashPreview = hashPreview[:8] + "..."
+		}
+		addFactor("build_transparency_log", Skip,
+			fmt.Sprintf("compose hash present (%s) but not an independent transparency log", hashPreview))
+	} else {
+		addFactor("build_transparency_log", Fail,
+			"no build transparency log")
+	}
 
-	addFactor("cpu_id_registry", Fail,
-		"no CPU ID registry check")
+	if raw.DeviceID != "" {
+		idPreview := raw.DeviceID
+		if len(idPreview) > 8 {
+			idPreview = idPreview[:8] + "..."
+		}
+		addFactor("cpu_id_registry", Skip,
+			fmt.Sprintf("device ID present (%s) but no registry to verify against", idPreview))
+	} else {
+		addFactor("cpu_id_registry", Fail,
+			"no CPU ID registry check")
+	}
 
 	// Tally results.
 	passed, failed, skipped := 0, 0, 0
@@ -298,6 +325,8 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		}
 	}
 
+	metadata := buildMetadata(raw)
+
 	return &VerificationReport{
 		Provider:  provider,
 		Model:     model,
@@ -306,6 +335,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		Passed:    passed,
 		Failed:    failed,
 		Skipped:   skipped,
+		Metadata:  metadata,
 	}
 }
 
@@ -353,4 +383,44 @@ func nvidiaNonceDetail(r *NvidiaVerifyResult) string {
 	default:
 		return "nonce in NVIDIA payload matches submitted nonce"
 	}
+}
+
+// buildMetadata extracts display metadata from raw into an ordered key-value
+// map. Only non-empty values are included. The map is used by formatReport
+// to render the metadata block between the header and Tier 1.
+func buildMetadata(raw *RawAttestation) map[string]string {
+	m := make(map[string]string)
+
+	if raw.TEEHardware != "" {
+		m["hardware"] = raw.TEEHardware
+	}
+	if raw.UpstreamModel != "" {
+		m["upstream"] = raw.UpstreamModel
+	}
+	if raw.AppName != "" {
+		m["app"] = raw.AppName
+	}
+	if raw.ComposeHash != "" {
+		m["compose_hash"] = raw.ComposeHash
+	}
+	if raw.OSImageHash != "" {
+		m["os_image"] = raw.OSImageHash
+	}
+	if raw.DeviceID != "" {
+		m["device"] = raw.DeviceID
+	}
+	if raw.NonceSource != "" {
+		m["nonce_source"] = raw.NonceSource
+	}
+	if raw.CandidatesAvail > 0 || raw.CandidatesEval > 0 {
+		m["candidates"] = fmt.Sprintf("%d/%d evaluated", raw.CandidatesEval, raw.CandidatesAvail)
+	}
+	if raw.EventLogCount > 0 {
+		m["event_log"] = fmt.Sprintf("%d entries", raw.EventLogCount)
+	}
+
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }

@@ -235,6 +235,11 @@ func formatReport(r *attestation.VerificationReport) string {
 	b.WriteString(separator)
 	b.WriteString("\n\n")
 
+	if len(r.Metadata) > 0 {
+		writeMetadataBlock(&b, r.Metadata)
+		b.WriteString("\n")
+	}
+
 	start := 0
 	for _, tb := range tierBoundaries {
 		end := tb.end
@@ -278,6 +283,39 @@ func statusIcon(s attestation.Status) string {
 		return "\u2717" // ✗
 	default:
 		return "?"
+	}
+}
+
+// metadataDisplayOrder defines the order and labels for the metadata block.
+var metadataDisplayOrder = []struct {
+	key   string
+	label string
+}{
+	{"hardware", "Hardware"},
+	{"upstream", "Upstream"},
+	{"app", "App"},
+	{"compose_hash", "Compose hash"},
+	{"os_image", "OS image"},
+	{"device", "Device"},
+	{"nonce_source", "Nonce source"},
+	{"candidates", "Candidates"},
+	{"event_log", "Event log"},
+}
+
+// writeMetadataBlock renders the metadata key-value pairs into b. Only keys
+// present in the metadata map are printed, in the order defined above. Long
+// hash values are truncated to keep lines under 80 columns.
+func writeMetadataBlock(b *strings.Builder, meta map[string]string) {
+	for _, entry := range metadataDisplayOrder {
+		val, ok := meta[entry.key]
+		if !ok {
+			continue
+		}
+		// Truncate long hex hashes for display.
+		if (entry.key == "compose_hash" || entry.key == "os_image" || entry.key == "device") && len(val) > 16 {
+			val = val[:16] + "..."
+		}
+		fmt.Fprintf(b, "  %-14s %s\n", entry.label+":", val)
 	}
 }
 
