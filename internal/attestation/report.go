@@ -183,9 +183,9 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	} else if raw.SigningKey == "" {
 		addFactor("tdx_reportdata_binding", Fail, "signing_key absent; REPORTDATA binding cannot be verified")
 	} else if tdxResult.ReportDataBindingErr != nil {
-		addFactor("tdx_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind signing key + nonce: %v", tdxResult.ReportDataBindingErr))
+		addFactor("tdx_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind signing key: %v", tdxResult.ReportDataBindingErr))
 	} else {
-		addFactor("tdx_reportdata_binding", Pass, fmt.Sprintf("REPORTDATA binds signing key + nonce (SHA-256: %s...)", hex.EncodeToString(tdxResult.ReportData[:8])))
+		addFactor("tdx_reportdata_binding", Pass, fmt.Sprintf("REPORTDATA binds signing key via Ethereum address (%s)", hex.EncodeToString(tdxResult.ReportData[:20])))
 	}
 
 	// Factor 9: attestation_freshness

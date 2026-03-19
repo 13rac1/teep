@@ -312,6 +312,19 @@ func saveAttestationData(dir, provider string, raw *attestation.RawAttestation) 
 		return
 	}
 
+	// Save full attestation response as JSON (includes signing_address, nonce, etc.).
+	rawJSON, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		slog.Error("marshal attestation JSON failed", "err", err)
+	} else {
+		path := filepath.Join(dir, provider+"_attestation.json")
+		if err := os.WriteFile(path, rawJSON, 0o600); err != nil {
+			slog.Error("save attestation JSON failed", "path", path, "err", err)
+		} else {
+			slog.Info("saved attestation JSON", "path", path, "bytes", len(rawJSON))
+		}
+	}
+
 	if raw.NvidiaPayload != "" {
 		path := filepath.Join(dir, provider+"_nvidia_payload.json")
 		// Pretty-print if it's JSON; write raw otherwise.

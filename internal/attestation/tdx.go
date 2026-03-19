@@ -1,7 +1,6 @@
 package attestation
 
 import (
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -11,6 +10,7 @@ import (
 	tdxabi "github.com/google/go-tdx-guest/abi"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
 	tdxverify "github.com/google/go-tdx-guest/verify"
+	"golang.org/x/crypto/sha3"
 )
 
 // TDXVerifyResult holds the structured outcome of TDX quote parsing and
@@ -34,7 +34,7 @@ type TDXVerifyResult struct {
 	ReportData [64]byte
 
 	// ReportDataBindingErr is non-nil if REPORTDATA does not match the expected
-	// binding of SHA-256(signing_key_bytes || nonce_bytes).
+	// Ethereum address binding of the signing key.
 	ReportDataBindingErr error
 
 	// TeeTCBSVN is the raw 16-byte TEE_TCB_SVN field for TCB currency checks.
@@ -136,11 +136,11 @@ func VerifyTDXQuote(base64Quote, signingKeyHex string, nonce Nonce) *TDXVerifyRe
 	}
 
 	// Factor 8: REPORTDATA binding.
-	// Expected: SHA-256(signing_key_bytes || nonce_bytes) in the first 32 bytes,
-	// with the remaining 32 bytes zero-padded.
-	// This is the binding scheme documented in Venice's attestation design.
+	// Venice's scheme: REPORTDATA[0:20] = Ethereum address of the signing key
+	// (keccak256 of the uncompressed public key without 04 prefix, last 20 bytes).
+	// The nonce is NOT included in Venice's REPORTDATA binding.
 	if signingKeyHex != "" {
-		result.ReportDataBindingErr = verifyReportDataBinding(result.ReportData[:], signingKeyHex, nonce)
+		result.ReportDataBindingErr = verifyReportDataBinding(result.ReportData[:], signingKeyHex)
 	}
 
 	return result
@@ -161,30 +161,34 @@ func decodeQuoteBytes(s string) ([]byte, error) {
 	return nil, fmt.Errorf("quote decode failed (tried hex, base64, base64url)")
 }
 
-// verifyReportDataBinding checks whether reportData (64 bytes) contains the
-// expected binding of SHA-256(signing_key_bytes || nonce_bytes).
+// verifyReportDataBinding checks whether reportData (64 bytes) binds the
+// signing key via its Ethereum address.
 //
-// Venice's scheme: REPORTDATA[0:32] = SHA-256(signingKey || nonce)
-// REPORTDATA[32:64] may be zeros or additional data — we only check the first half.
-func verifyReportDataBinding(reportData []byte, signingKeyHex string, nonce Nonce) error {
-	if len(reportData) < 32 {
-		return fmt.Errorf("REPORTDATA too short: %d bytes, expected at least 32", len(reportData))
+// Venice's scheme: REPORTDATA[0:20] = keccak256(pubkey_bytes_without_04_prefix)[12:32]
+// This is the standard Ethereum address derivation from an uncompressed secp256k1 key.
+func verifyReportDataBinding(reportData []byte, signingKeyHex string) error {
+	if len(reportData) < 20 {
+		return fmt.Errorf("REPORTDATA too short: %d bytes, expected at least 20", len(reportData))
 	}
 
 	signingKeyBytes, err := hex.DecodeString(signingKeyHex)
 	if err != nil {
 		return fmt.Errorf("signing key is not valid hex: %w", err)
 	}
+	if len(signingKeyBytes) != 65 || signingKeyBytes[0] != 0x04 {
+		return fmt.Errorf("signing key is not an uncompressed secp256k1 public key (got %d bytes, first byte 0x%02x)",
+			len(signingKeyBytes), signingKeyBytes[0])
+	}
 
-	// Compute SHA-256(signing_key_bytes || nonce_bytes).
-	h := sha256.New()
-	h.Write(signingKeyBytes)
-	h.Write(nonce[:])
-	expected := h.Sum(nil) // 32 bytes
+	// Ethereum address = keccak256(pubkey_without_04_prefix)[12:32]
+	h := sha3.NewLegacyKeccak256()
+	h.Write(signingKeyBytes[1:]) // skip 04 prefix
+	hash := h.Sum(nil)
+	ethAddr := hash[12:32] // last 20 bytes
 
-	if subtle.ConstantTimeCompare(expected, reportData[:32]) != 1 {
-		return fmt.Errorf("REPORTDATA[0:32] = %s, expected SHA-256(signing_key||nonce) = %s",
-			hex.EncodeToString(reportData[:32]), hex.EncodeToString(expected))
+	if subtle.ConstantTimeCompare(ethAddr, reportData[:20]) != 1 {
+		return fmt.Errorf("REPORTDATA[0:20] = %s, expected Ethereum address %s (keccak256 of signing key)",
+			hex.EncodeToString(reportData[:20]), hex.EncodeToString(ethAddr))
 	}
 	return nil
 }

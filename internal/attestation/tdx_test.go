@@ -1,13 +1,13 @@
 package attestation
 
 import (
-	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
 	"testing"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"golang.org/x/crypto/sha3"
 )
 
 // realTDXQuoteRaw is the raw bytes of a real TDX production quote from Intel
@@ -20,6 +20,15 @@ var realTDXQuoteRaw []byte
 // how Venice returns it in the intel_quote field.
 func realTDXQuoteBase64() string {
 	return base64.StdEncoding.EncodeToString(realTDXQuoteRaw)
+}
+
+// ethAddress computes the Ethereum address (20 bytes) from an uncompressed
+// secp256k1 public key (65 bytes starting with 0x04).
+func ethAddress(pubKeyUncompressed []byte) []byte {
+	h := sha3.NewLegacyKeccak256()
+	h.Write(pubKeyUncompressed[1:]) // skip 04 prefix
+	hash := h.Sum(nil)
+	return hash[12:32]
 }
 
 // TestVerifyTDXQuoteParseRealQuote verifies that the real TDX fixture quote
@@ -37,20 +46,9 @@ func TestVerifyTDXQuoteParseRealQuote(t *testing.T) {
 		t.Errorf("TeeTCBSVN length: got %d, want 16", len(result.TeeTCBSVN))
 	}
 
-	// ReportData should be non-nil (64 bytes).
-	allZero := true
-	for _, b := range result.ReportData {
-		if b != 0 {
-			allZero = false
-			break
-		}
-	}
-	// The real production quote has a non-zero REPORTDATA.
-	// We log it but don't fail on all-zero since we don't know the real content.
 	t.Logf("REPORTDATA (hex): %s", hex.EncodeToString(result.ReportData[:]))
 	t.Logf("debug enabled: %v", result.DebugEnabled)
 	t.Logf("TEE_TCB_SVN (hex): %s", hex.EncodeToString(result.TeeTCBSVN))
-	_ = allZero
 }
 
 // TestVerifyTDXQuoteCertChain verifies the cert chain and signature verification
@@ -65,9 +63,6 @@ func TestVerifyTDXQuoteCertChain(t *testing.T) {
 		t.Fatalf("parse failed, cannot test cert chain: %v", result.ParseErr)
 	}
 
-	// We expect ParseErr = nil (quote structure is valid).
-	// CertChainErr may be non-nil if the cert has expired — that's acceptable
-	// for a 2023 fixture in 2026. Log it.
 	if result.CertChainErr != nil {
 		t.Logf("CertChainErr (expected for expired test fixture): %v", result.CertChainErr)
 	} else {
@@ -142,56 +137,24 @@ func TestVerifyTDXQuoteEmptyString(t *testing.T) {
 	}
 }
 
-// TestReportDataBindingCorrect verifies that verifyReportDataBinding passes
-// when REPORTDATA[0:32] = SHA-256(signingKey || nonce).
-func TestReportDataBindingCorrect(t *testing.T) {
+// TestReportDataBindingEthereumAddress verifies that verifyReportDataBinding
+// passes when REPORTDATA[0:20] = Ethereum address of the signing key.
+func TestReportDataBindingEthereumAddress(t *testing.T) {
 	priv, err := secp256k1.GeneratePrivateKey()
 	if err != nil {
 		t.Fatalf("GeneratePrivateKey: %v", err)
 	}
-	signingKeyHex := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
-	signingKeyBytes, _ := hex.DecodeString(signingKeyHex)
+	pubKeyBytes := priv.PubKey().SerializeUncompressed()
+	signingKeyHex := hex.EncodeToString(pubKeyBytes)
 
-	nonce := NewNonce()
+	addr := ethAddress(pubKeyBytes)
 
-	h := sha256.New()
-	h.Write(signingKeyBytes)
-	h.Write(nonce[:])
-	expected := h.Sum(nil)
-
-	// Build a 64-byte REPORTDATA with the binding in the first 32 bytes.
+	// Build a 64-byte REPORTDATA with Ethereum address in the first 20 bytes.
 	reportData := make([]byte, 64)
-	copy(reportData[:32], expected)
+	copy(reportData[:20], addr)
 
-	if err := verifyReportDataBinding(reportData, signingKeyHex, nonce); err != nil {
-		t.Errorf("verifyReportDataBinding with correct binding: unexpected error: %v", err)
-	}
-}
-
-// TestReportDataBindingWrongNonce verifies the binding fails with a different nonce.
-func TestReportDataBindingWrongNonce(t *testing.T) {
-	priv, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatalf("GeneratePrivateKey: %v", err)
-	}
-	signingKeyHex := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
-	signingKeyBytes, _ := hex.DecodeString(signingKeyHex)
-
-	nonce := NewNonce()
-	wrongNonce := NewNonce()
-
-	// Build REPORTDATA with the correct nonce.
-	h := sha256.New()
-	h.Write(signingKeyBytes)
-	h.Write(nonce[:])
-	expected := h.Sum(nil)
-
-	reportData := make([]byte, 64)
-	copy(reportData[:32], expected)
-
-	// Verify with a different nonce — should fail.
-	if err := verifyReportDataBinding(reportData, signingKeyHex, wrongNonce); err == nil {
-		t.Error("verifyReportDataBinding with wrong nonce: expected error, got nil")
+	if err := verifyReportDataBinding(reportData, signingKeyHex); err != nil {
+		t.Errorf("verifyReportDataBinding with correct Ethereum address: unexpected error: %v", err)
 	}
 }
 
@@ -206,58 +169,55 @@ func TestReportDataBindingWrongKey(t *testing.T) {
 		t.Fatalf("GeneratePrivateKey B: %v", err)
 	}
 
-	signingKeyAHex := hex.EncodeToString(privA.PubKey().SerializeUncompressed())
 	signingKeyBHex := hex.EncodeToString(privB.PubKey().SerializeUncompressed())
-	signingKeyABytes, _ := hex.DecodeString(signingKeyAHex)
 
-	nonce := NewNonce()
-
-	// Build REPORTDATA binding key A.
-	h := sha256.New()
-	h.Write(signingKeyABytes)
-	h.Write(nonce[:])
-	expected := h.Sum(nil)
-
+	// Build REPORTDATA with key A's Ethereum address.
+	addrA := ethAddress(privA.PubKey().SerializeUncompressed())
 	reportData := make([]byte, 64)
-	copy(reportData[:32], expected)
+	copy(reportData[:20], addrA)
 
 	// Verify with key B — should fail.
-	if err := verifyReportDataBinding(reportData, signingKeyBHex, nonce); err == nil {
+	if err := verifyReportDataBinding(reportData, signingKeyBHex); err == nil {
 		t.Error("verifyReportDataBinding with wrong key: expected error, got nil")
 	}
 }
 
 // TestReportDataBindingInvalidHex verifies error on non-hex signing key.
 func TestReportDataBindingInvalidHex(t *testing.T) {
-	nonce := NewNonce()
 	reportData := make([]byte, 64)
 
-	if err := verifyReportDataBinding(reportData, "not-hex-!!!", nonce); err == nil {
+	if err := verifyReportDataBinding(reportData, "not-hex-!!!"); err == nil {
 		t.Error("verifyReportDataBinding with invalid hex: expected error, got nil")
 	}
 }
 
 // TestReportDataBindingTooShort verifies error on too-short REPORTDATA.
 func TestReportDataBindingTooShort(t *testing.T) {
-	nonce := NewNonce()
 	priv, _ := secp256k1.GeneratePrivateKey()
 	signingKeyHex := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
 
 	// Only 16 bytes — too short.
 	shortReportData := make([]byte, 16)
-	if err := verifyReportDataBinding(shortReportData, signingKeyHex, nonce); err == nil {
+	if err := verifyReportDataBinding(shortReportData, signingKeyHex); err == nil {
 		t.Error("verifyReportDataBinding with short REPORTDATA: expected error, got nil")
 	}
 }
 
-// TestVerifyTDXQuoteReportDataBinding exercises the full VerifyTDXQuote path
-// for REPORTDATA binding, using a fabricated binding rather than the real
-// quote's REPORTDATA (which is unknown).
-//
-// We synthesize the correct REPORTDATA in the quote fixture by manually
-// constructing a TDXVerifyResult and exercising verifyReportDataBinding.
-// The real fixture quote's REPORTDATA will fail binding (expected — it was
-// generated by Intel hardware with different data).
+// TestReportDataBindingNotUncompressed verifies error when key is not 65-byte uncompressed.
+func TestReportDataBindingNotUncompressed(t *testing.T) {
+	priv, _ := secp256k1.GeneratePrivateKey()
+	// Compressed key (33 bytes, starts with 02 or 03) — should fail.
+	compressedHex := hex.EncodeToString(priv.PubKey().SerializeCompressed())
+
+	reportData := make([]byte, 64)
+	if err := verifyReportDataBinding(reportData, compressedHex); err == nil {
+		t.Error("verifyReportDataBinding with compressed key: expected error, got nil")
+	}
+}
+
+// TestVerifyTDXQuoteReportDataBindingRealQuoteFails exercises the full
+// VerifyTDXQuote path. The real fixture quote's REPORTDATA will fail binding
+// because it was generated by Intel hardware with a different signing key.
 func TestVerifyTDXQuoteReportDataBindingRealQuoteFails(t *testing.T) {
 	priv, err := secp256k1.GeneratePrivateKey()
 	if err != nil {
@@ -272,10 +232,10 @@ func TestVerifyTDXQuoteReportDataBindingRealQuoteFails(t *testing.T) {
 		t.Fatalf("parse error: %v", result.ParseErr)
 	}
 
-	// The real quote was not generated with our signing key and nonce.
+	// The real quote was not generated with our signing key.
 	// ReportDataBindingErr should be non-nil.
 	if result.ReportDataBindingErr == nil {
-		t.Error("expected ReportDataBindingErr for mismatched signing key/nonce, got nil")
+		t.Error("expected ReportDataBindingErr for mismatched signing key, got nil")
 	} else {
 		t.Logf("ReportDataBindingErr (expected): %v", result.ReportDataBindingErr)
 	}
