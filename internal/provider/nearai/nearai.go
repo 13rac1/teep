@@ -131,6 +131,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 			SigningKey:    selected.SigningKey,
 			IntelQuote:    selected.IntelQuote,
 			NvidiaPayload: selected.NvidiaPayload,
+			RawBody:       body,
 		}, nil
 	}
 
@@ -143,6 +144,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 		SigningKey:    ar.SigningKey,
 		IntelQuote:    ar.IntelQuote,
 		NvidiaPayload: ar.NvidiaPayload,
+		RawBody:       body,
 	}, nil
 }
 

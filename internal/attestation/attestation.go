@@ -70,6 +70,10 @@ type RawAttestation struct {
 
 	// NvidiaPayload is the NVIDIA GPU attestation JWT or raw payload.
 	NvidiaPayload string
+
+	// RawBody is the unmodified HTTP response body from the provider.
+	// Used by --save-dir to write the original JSON as-is.
+	RawBody []byte `json:"-"`
 }
 
 // cacheKey identifies a provider/model pair for cache lookups.

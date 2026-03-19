@@ -11,7 +11,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -282,35 +281,27 @@ func statusIcon(s attestation.Status) string {
 	}
 }
 
-// saveAttestationData writes raw attestation fields to files in dir.
+// saveAttestationData writes the raw provider response and extracted fields to dir.
+// Filenames include a timestamp so multiple runs do not overwrite each other.
 func saveAttestationData(dir, provider string, raw *attestation.RawAttestation) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		slog.Error("create save dir failed", "dir", dir, "err", err)
 		return
 	}
 
-	// Save full attestation response as JSON (includes signing_address, nonce, etc.).
-	rawJSON, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		slog.Error("marshal attestation JSON failed", "err", err)
-	} else {
-		saveFile(filepath.Join(dir, provider+"_attestation.json"), rawJSON)
+	ts := time.Now().UTC().Format("20060102T150405Z")
+
+	// Save the unmodified HTTP response body from the provider.
+	if len(raw.RawBody) > 0 {
+		saveFile(filepath.Join(dir, fmt.Sprintf("%s_attestation_%s.json", provider, ts)), raw.RawBody)
 	}
 
 	if raw.NvidiaPayload != "" {
-		// Pretty-print if it's JSON; write raw otherwise.
-		data := []byte(raw.NvidiaPayload)
-		var obj any
-		if json.Unmarshal(data, &obj) == nil {
-			if pretty, err := json.MarshalIndent(obj, "", "  "); err == nil {
-				data = pretty
-			}
-		}
-		saveFile(filepath.Join(dir, provider+"_nvidia_payload.json"), data)
+		saveFile(filepath.Join(dir, fmt.Sprintf("%s_nvidia_payload_%s.json", provider, ts)), []byte(raw.NvidiaPayload))
 	}
 
 	if raw.IntelQuote != "" {
-		saveFile(filepath.Join(dir, provider+"_intel_quote.b64"), []byte(raw.IntelQuote))
+		saveFile(filepath.Join(dir, fmt.Sprintf("%s_intel_quote_%s.b64", provider, ts)), []byte(raw.IntelQuote))
 	}
 }
 
