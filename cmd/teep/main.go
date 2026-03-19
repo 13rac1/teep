@@ -195,7 +195,7 @@ func runVerification(providerName, modelName, saveDir string) *attestation.Verif
 
 	var nvidiaResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" {
-		nvidiaResult = attestation.VerifyNVIDIAJWT(ctx, raw.NvidiaPayload, client)
+		nvidiaResult = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce, client)
 	}
 
 	return attestation.BuildReport(providerName, modelName, raw, nonce, cfg.Enforced, tdxResult, nvidiaResult)

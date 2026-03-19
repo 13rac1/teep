@@ -334,7 +334,7 @@ func TestBuildReportWithTDXDebugEnabled(t *testing.T) {
 	}
 }
 
-// TestBuildReportNvidiaPresent tests nvidia_jwt_present Pass/Fail.
+// TestBuildReportNvidiaPresent tests nvidia_payload_present Pass/Fail.
 func TestBuildReportNvidiaPresent(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
@@ -342,17 +342,17 @@ func TestBuildReportNvidiaPresent(t *testing.T) {
 	// Fail: no payload.
 	raw.NvidiaPayload = ""
 	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil)
-	f := findFactor(t, report, "nvidia_jwt_present")
+	f := findFactor(t, report, "nvidia_payload_present")
 	if f.Status != Fail {
-		t.Errorf("nvidia_jwt_present with empty payload: got %s, want FAIL", f.Status)
+		t.Errorf("nvidia_payload_present with empty payload: got %s, want FAIL", f.Status)
 	}
 
 	// Pass: payload present.
 	raw.NvidiaPayload = "some.jwt.token"
 	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil)
-	f = findFactor(t, report, "nvidia_jwt_present")
+	f = findFactor(t, report, "nvidia_payload_present")
 	if f.Status != Pass {
-		t.Errorf("nvidia_jwt_present with payload: got %s, want PASS", f.Status)
+		t.Errorf("nvidia_payload_present with payload: got %s, want PASS", f.Status)
 	}
 }
 

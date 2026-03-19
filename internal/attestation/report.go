@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"time"
+
+	pb "github.com/google/go-tdx-guest/proto/tdx"
 )
 
 // Status is the result of a single verification factor check.
@@ -132,7 +134,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		if tdxResult.ParseErr != nil {
 			addFactor("tdx_quote_structure", Fail, fmt.Sprintf("TDX quote parse failed: %v", tdxResult.ParseErr))
 		} else {
-			addFactor("tdx_quote_structure", Pass, "valid QuoteV4 structure")
+			addFactor("tdx_quote_structure", Pass, fmt.Sprintf("valid %s structure", tdxQuoteVersion(tdxResult)))
 		}
 
 		// Factor 4: tdx_cert_chain
@@ -199,37 +201,37 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		addFactor("tdx_tcb_current", Pass, fmt.Sprintf("TEE_TCB_SVN: %s (full collateral check requires Intel PCS fetch)", svnHex))
 	}
 
-	// Factor 11: nvidia_jwt_present
+	// Factor 11: nvidia_payload_present
 	if raw.NvidiaPayload == "" {
-		addFactor("nvidia_jwt_present", Fail, "nvidia_payload field is absent from attestation response")
+		addFactor("nvidia_payload_present", Fail, "nvidia_payload field is absent from attestation response")
 	} else {
-		addFactor("nvidia_jwt_present", Pass, fmt.Sprintf("NVIDIA payload present (%d chars)", len(raw.NvidiaPayload)))
+		addFactor("nvidia_payload_present", Pass, fmt.Sprintf("NVIDIA payload present (%d chars)", len(raw.NvidiaPayload)))
 	}
 
-	// Factor 12: nvidia_jwt_signature
+	// Factor 12: nvidia_signature
 	if nvidiaResult == nil {
 		if raw.NvidiaPayload == "" {
-			addFactor("nvidia_jwt_signature", Skip, "no NVIDIA payload to verify")
+			addFactor("nvidia_signature", Skip, "no NVIDIA payload to verify")
 		} else {
-			addFactor("nvidia_jwt_signature", Fail, "NVIDIA JWT verification was not attempted")
+			addFactor("nvidia_signature", Fail, "NVIDIA verification was not attempted")
 		}
 	} else if nvidiaResult.SignatureErr != nil {
-		addFactor("nvidia_jwt_signature", Fail, fmt.Sprintf("JWT signature invalid: %v", nvidiaResult.SignatureErr))
+		addFactor("nvidia_signature", Fail, fmt.Sprintf("signature invalid: %v", nvidiaResult.SignatureErr))
 	} else {
-		addFactor("nvidia_jwt_signature", Pass, fmt.Sprintf("JWT signature valid (%s)", nvidiaResult.Algorithm))
+		addFactor("nvidia_signature", Pass, nvidiaSignatureDetail(nvidiaResult))
 	}
 
-	// Factor 13: nvidia_jwt_claims
+	// Factor 13: nvidia_claims
 	if nvidiaResult == nil {
 		if raw.NvidiaPayload == "" {
-			addFactor("nvidia_jwt_claims", Skip, "no NVIDIA payload to check claims")
+			addFactor("nvidia_claims", Skip, "no NVIDIA payload to check")
 		} else {
-			addFactor("nvidia_jwt_claims", Fail, "NVIDIA JWT verification was not attempted")
+			addFactor("nvidia_claims", Fail, "NVIDIA verification was not attempted")
 		}
 	} else if nvidiaResult.ClaimsErr != nil {
-		addFactor("nvidia_jwt_claims", Fail, fmt.Sprintf("JWT claims invalid: %v", nvidiaResult.ClaimsErr))
+		addFactor("nvidia_claims", Fail, fmt.Sprintf("claims invalid: %v", nvidiaResult.ClaimsErr))
 	} else {
-		addFactor("nvidia_jwt_claims", Pass, fmt.Sprintf("JWT claims valid (overall result: %s)", nvidiaResult.OverallResult))
+		addFactor("nvidia_claims", Pass, nvidiaClaimsDetail(nvidiaResult))
 	}
 
 	// Factor 14: nvidia_nonce_match
@@ -237,12 +239,12 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		if raw.NvidiaPayload == "" {
 			addFactor("nvidia_nonce_match", Skip, "no NVIDIA payload; nonce not checked")
 		} else {
-			addFactor("nvidia_nonce_match", Skip, "NVIDIA JWT verification not attempted")
+			addFactor("nvidia_nonce_match", Skip, "NVIDIA verification not attempted")
 		}
 	} else if nvidiaResult.Nonce == "" {
-		addFactor("nvidia_nonce_match", Skip, "nonce field not found in NVIDIA JWT payload")
+		addFactor("nvidia_nonce_match", Skip, "nonce field not found in NVIDIA payload")
 	} else if nvidiaResult.Nonce == nonce.Hex() {
-		addFactor("nvidia_nonce_match", Pass, "nonce in NVIDIA payload matches submitted nonce")
+		addFactor("nvidia_nonce_match", Pass, nvidiaNonceDetail(nvidiaResult))
 	} else {
 		addFactor("nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", nvidiaResult.Nonce, nonce.Hex()))
 	}
@@ -316,6 +318,52 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		Passed:    passed,
 		Failed:    failed,
 		Skipped:   skipped,
+	}
+}
+
+// tdxQuoteVersion returns a human-readable version string for the parsed TDX quote.
+func tdxQuoteVersion(r *TDXVerifyResult) string {
+	switch r.quote.(type) {
+	case *pb.QuoteV4:
+		return "QuoteV4"
+	case *pb.QuoteV5:
+		return "QuoteV5"
+	default:
+		return "Quote (unknown version)"
+	}
+}
+
+// nvidiaSignatureDetail returns the detail string for the nvidia_signature factor.
+func nvidiaSignatureDetail(r *NvidiaVerifyResult) string {
+	switch r.Format {
+	case "EAT":
+		return fmt.Sprintf("EAT: %d GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: %s)", r.GPUCount, r.Arch)
+	case "JWT":
+		return fmt.Sprintf("JWT signature valid (%s)", r.Algorithm)
+	default:
+		return "signature valid"
+	}
+}
+
+// nvidiaClaimsDetail returns the detail string for the nvidia_claims factor.
+func nvidiaClaimsDetail(r *NvidiaVerifyResult) string {
+	switch r.Format {
+	case "EAT":
+		return fmt.Sprintf("EAT: arch=%s, %d GPUs, nonce verified", r.Arch, r.GPUCount)
+	case "JWT":
+		return fmt.Sprintf("JWT claims valid (overall result: %s)", r.OverallResult)
+	default:
+		return "claims valid"
+	}
+}
+
+// nvidiaNonceDetail returns the detail string for a passing nvidia_nonce_match.
+func nvidiaNonceDetail(r *NvidiaVerifyResult) string {
+	switch r.Format {
+	case "EAT":
+		return fmt.Sprintf("EAT nonce + %d GPU SPDM requester nonces match submitted nonce", r.GPUCount)
+	default:
+		return "nonce in NVIDIA payload matches submitted nonce"
 	}
 }
 

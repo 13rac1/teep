@@ -189,11 +189,9 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		tdxResult = attestation.VerifyTDXQuote(raw.IntelQuote, raw.SigningKey, nonce)
 	}
 
-	// NVIDIA JWT verification requires a network call to NVIDIA's JWKS endpoint.
-	// Pass nil for the HTTP client to use the default 30-second timeout client.
 	var nvidiaResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" {
-		nvidiaResult = attestation.VerifyNVIDIAJWT(ctx, raw.NvidiaPayload, nil)
+		nvidiaResult = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce, nil)
 	}
 
 	return attestation.BuildReport(prov.Name, upstreamModel, raw, nonce, s.cfg.Enforced, tdxResult, nvidiaResult)

@@ -20,29 +20,43 @@ const nvidiaJWKSURL = "https://nras.attestation.nvidia.com/.well-known/jwks.json
 // nvidiaJWKSTTL is how long to cache the NVIDIA JWKS before re-fetching.
 const nvidiaJWKSTTL = time.Hour
 
-// NvidiaVerifyResult holds the structured outcome of NVIDIA JWT parsing and
-// verification. Fields are populated even on partial failure.
+// NvidiaVerifyResult holds the structured outcome of NVIDIA payload verification.
+// Fields are populated even on partial failure. Supports both EAT (local SPDM
+// verification) and JWT (NRAS cloud verification) formats.
 type NvidiaVerifyResult struct {
-	// SignatureErr is non-nil if the JWT signature could not be verified.
+	// SignatureErr is non-nil if signature verification failed.
+	// For EAT: cert chain or SPDM ECDSA signature failure.
+	// For JWT: JWT signature verification failure.
 	SignatureErr error
 
-	// ClaimsErr is non-nil if the JWT claims are invalid (expired, wrong issuer, etc.).
+	// ClaimsErr is non-nil if claims/metadata are invalid.
+	// For EAT: nonce mismatch or missing fields.
+	// For JWT: expired, wrong issuer, etc.
 	ClaimsErr error
 
-	// Algorithm is the JWT signature algorithm (e.g. "RS256").
+	// Format is "EAT" or "JWT" depending on the payload type.
+	Format string
+
+	// Algorithm is the signature algorithm (e.g. "RS256" for JWT, "ECDSA-P384" for EAT).
 	Algorithm string
 
-	// OverallResult is the x-nvidia-overall-att-result claim value.
+	// OverallResult is the x-nvidia-overall-att-result claim value (JWT only).
 	OverallResult string
 
-	// Nonce is the nonce claim from the JWT payload (may be empty if absent).
+	// Nonce is the nonce from the payload.
 	Nonce string
 
-	// Issuer is the iss claim from the JWT payload.
+	// Issuer is the iss claim from the JWT payload (JWT only).
 	Issuer string
 
-	// ExpiresAt is the exp claim from the JWT payload.
+	// ExpiresAt is the exp claim from the JWT payload (JWT only).
 	ExpiresAt time.Time
+
+	// Arch is the GPU architecture family (e.g. "HOPPER") (EAT only).
+	Arch string
+
+	// GPUCount is the number of GPUs in the evidence list (EAT only).
+	GPUCount int
 }
 
 // nvidiaClaims extends jwt.RegisteredClaims with NVIDIA-specific fields.
@@ -194,47 +208,52 @@ func rsaPublicKeyFromJWK(nB64, eB64 string) (any, error) {
 	return buildRSAPublicKey(nBytes, eBytes)
 }
 
-// VerifyNVIDIAJWT verifies the NVIDIA attestation JWT payload string. It
-// fetches (and caches) the NVIDIA JWKS, verifies the JWT signature, and
-// extracts the claims.
+// VerifyNVIDIAPayload detects the NVIDIA attestation payload format and
+// dispatches to the appropriate verifier:
+//   - JSON starting with '{' containing evidence_list → EAT (local SPDM verification)
+//   - JWT string starting with "ey" → NRAS JWT (cloud signature verification)
 //
-// ctx controls the HTTP request for JWKS fetching. client is the HTTP client
-// to use; pass nil to use a default client with a 30s timeout.
-func VerifyNVIDIAJWT(ctx context.Context, jwtPayload string, client *http.Client) *NvidiaVerifyResult {
-	result := &NvidiaVerifyResult{}
+// ctx controls HTTP requests (JWKS fetching for JWT path). client is the HTTP
+// client; pass nil for a default 30s timeout client. expectedNonce is required
+// for EAT verification; it may be zero for the JWT path (nonce checked in report).
+func VerifyNVIDIAPayload(ctx context.Context, payload string, expectedNonce Nonce, client *http.Client) *NvidiaVerifyResult {
+	if len(payload) == 0 {
+		return &NvidiaVerifyResult{SignatureErr: fmt.Errorf("empty NVIDIA payload")}
+	}
 
-	prefix := jwtPayload
+	prefix := payload
 	if len(prefix) > 200 {
 		prefix = prefix[:200]
 	}
-	slog.Debug("NVIDIA payload received", "length", len(jwtPayload), "prefix", prefix)
+	slog.Debug("NVIDIA payload received", "length", len(payload), "prefix", prefix)
+
+	if payload[0] == '{' {
+		slog.Debug("NVIDIA payload is EAT JSON, using local SPDM verification")
+		return verifyNVIDIAEAT(payload, expectedNonce)
+	}
+
+	slog.Debug("NVIDIA payload appears to be JWT, using NRAS verification")
+	return verifyNVIDIAJWT(ctx, payload, client)
+}
+
+// verifyNVIDIAJWT verifies an NVIDIA NRAS attestation JWT. It fetches (and
+// caches) the NVIDIA JWKS, verifies the JWT signature, and extracts claims.
+func verifyNVIDIAJWT(ctx context.Context, jwtPayload string, client *http.Client) *NvidiaVerifyResult {
+	result := &NvidiaVerifyResult{Format: "JWT"}
 
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
-	// Detect payload format: raw JWT starts with "ey", JSON starts with "{".
-	jwtString := jwtPayload
-	if len(jwtPayload) > 0 && jwtPayload[0] == '{' {
-		slog.Debug("NVIDIA payload is JSON, looking for nested JWT")
-		jwtString = extractJWTFromJSON(jwtPayload)
-		if jwtString == "" {
-			result.SignatureErr = fmt.Errorf("NVIDIA payload is JSON but contains no recognizable nested JWT field")
-			return result
-		}
-		slog.Debug("extracted nested JWT from NVIDIA JSON payload", "length", len(jwtString))
-	}
-
 	keyFunc := jwksCache.keyfunc(ctx, client)
 
 	claims := &nvidiaClaims{}
-	token, err := jwt.ParseWithClaims(jwtString, claims, keyFunc,
+	token, err := jwt.ParseWithClaims(jwtPayload, claims, keyFunc,
 		jwt.WithValidMethods([]string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS512"}),
 		jwt.WithExpirationRequired(),
 	)
 
 	if err != nil {
-		// Categorise the error: signature/key problems vs claims problems.
 		if isSignatureError(err) {
 			result.SignatureErr = fmt.Errorf("JWT signature verification failed: %w", err)
 		} else {
@@ -255,7 +274,6 @@ func VerifyNVIDIAJWT(ctx context.Context, jwtPayload string, client *http.Client
 	result.Algorithm = token.Method.Alg()
 	extractPartialClaims(claims, result)
 
-	// Validate NVIDIA-specific claims.
 	if result.OverallResult == "" {
 		result.ClaimsErr = fmt.Errorf("x-nvidia-overall-att-result claim is missing")
 	}
@@ -279,59 +297,4 @@ func isSignatureError(err error) bool {
 	return errors.Is(err, jwt.ErrTokenSignatureInvalid) ||
 		errors.Is(err, jwt.ErrTokenUnverifiable) ||
 		errors.Is(err, jwt.ErrTokenMalformed)
-}
-
-// extractJWTFromJSON attempts to find a JWT string inside a JSON payload.
-// Some attestation providers wrap the JWT inside a JSON object. This function
-// tries known field names and falls back to scanning all string values for
-// JWT-shaped content (three dot-separated segments starting with "ey").
-func extractJWTFromJSON(payload string) string {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(payload), &obj); err != nil {
-		slog.Debug("NVIDIA JSON payload parse failed", "err", err)
-		return ""
-	}
-
-	// Log top-level keys for debugging.
-	keys := make([]string, 0, len(obj))
-	for k := range obj {
-		keys = append(keys, k)
-	}
-	slog.Debug("NVIDIA JSON payload keys", "keys", keys)
-
-	// Try known field names first.
-	for _, field := range []string{"jwt", "token", "eat_token", "nvidia_token", "attestation_token"} {
-		if raw, ok := obj[field]; ok {
-			var s string
-			if json.Unmarshal(raw, &s) == nil && looksLikeJWT(s) {
-				return s
-			}
-		}
-	}
-
-	// Fall back: scan all string values for JWT-shaped content.
-	for k, raw := range obj {
-		var s string
-		if json.Unmarshal(raw, &s) == nil && looksLikeJWT(s) {
-			slog.Debug("found JWT in NVIDIA JSON field", "field", k)
-			return s
-		}
-	}
-
-	return ""
-}
-
-// looksLikeJWT returns true if s has three dot-separated segments and starts
-// with "ey" (base64url-encoded JSON starting with '{').
-func looksLikeJWT(s string) bool {
-	if len(s) < 10 || s[0] != 'e' || s[1] != 'y' {
-		return false
-	}
-	dots := 0
-	for _, c := range s {
-		if c == '.' {
-			dots++
-		}
-	}
-	return dots == 2
 }
