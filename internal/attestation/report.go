@@ -1,0 +1,327 @@
+package attestation
+
+import (
+	"encoding/hex"
+	"fmt"
+	"time"
+)
+
+// Status is the result of a single verification factor check.
+type Status uint8
+
+const (
+	// Pass means the factor was checked and the check succeeded.
+	Pass Status = iota
+	// Fail means the factor was checked and the check failed.
+	Fail
+	// Skip means the factor was not applicable or data was unavailable.
+	Skip
+)
+
+// String returns a human-readable label for the status.
+func (s Status) String() string {
+	switch s {
+	case Pass:
+		return "PASS"
+	case Fail:
+		return "FAIL"
+	case Skip:
+		return "SKIP"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// FactorResult records the outcome of one verification factor.
+type FactorResult struct {
+	Name     string `json:"name"`
+	Status   Status `json:"status"`
+	Detail   string `json:"detail"`
+	Enforced bool   `json:"enforced"` // from policy config
+}
+
+// VerificationReport holds the factor-by-factor results of an attestation
+// verification run. Produced by BuildReport.
+type VerificationReport struct {
+	Provider  string         `json:"provider"`
+	Model     string         `json:"model"`
+	Timestamp time.Time      `json:"timestamp"`
+	Factors   []FactorResult `json:"factors"`
+	Passed    int            `json:"passed"`
+	Failed    int            `json:"failed"`
+	Skipped   int            `json:"skipped"`
+}
+
+// Blocked returns true if any enforced factor has failed. When Blocked is true,
+// the proxy must refuse to forward the request or perform E2EE.
+func (r *VerificationReport) Blocked() bool {
+	for _, f := range r.Factors {
+		if f.Status == Fail && f.Enforced {
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultEnforced lists the factor names that block the proxy on failure.
+// These are the minimum checks required for E2EE security. See the plan for
+// rationale; notably tdx_reportdata_binding is critical — without it, a MITM
+// can substitute the signing key and intercept all E2EE traffic.
+var DefaultEnforced = []string{
+	"nonce_match",
+	"tdx_debug_disabled",
+	"signing_key_present",
+	"tdx_reportdata_binding",
+}
+
+// BuildReport runs all 20 verification factors against raw and returns a
+// complete VerificationReport. The enforced parameter controls which factor
+// names result in Enforced=true. Pass DefaultEnforced for production use.
+//
+// TDX quote verification (factors 3-6, 8, 10) uses the parsed quote from
+// VerifyTDXQuote. NVIDIA JWT verification (factors 12-14) uses VerifyNVIDIAJWT.
+// Tier 3 factors (16-20) always Fail because no vendor currently provides the
+// required supply-chain data.
+func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult *NvidiaVerifyResult) *VerificationReport {
+	enforcedSet := make(map[string]bool, len(enforced))
+	for _, name := range enforced {
+		enforcedSet[name] = true
+	}
+
+	factors := make([]FactorResult, 0, 20)
+
+	addFactor := func(name string, status Status, detail string) {
+		factors = append(factors, FactorResult{
+			Name:     name,
+			Status:   status,
+			Detail:   detail,
+			Enforced: enforcedSet[name],
+		})
+	}
+
+	// --- Tier 1: Core Attestation ---
+
+	// Factor 1: nonce_match
+	if raw.Nonce == "" {
+		addFactor("nonce_match", Fail, "nonce field absent from attestation response")
+	} else if raw.Nonce == nonce.Hex() {
+		addFactor("nonce_match", Pass, fmt.Sprintf("nonce matches (%d hex chars)", len(raw.Nonce)))
+	} else {
+		addFactor("nonce_match", Fail, fmt.Sprintf("nonce mismatch: got %q, want %q", raw.Nonce, nonce.Hex()))
+	}
+
+	// Factor 2: tdx_quote_present
+	if raw.IntelQuote == "" {
+		addFactor("tdx_quote_present", Fail, "intel_quote field is absent from attestation response")
+	} else {
+		// Base64 length → approximate raw bytes
+		addFactor("tdx_quote_present", Pass, fmt.Sprintf("TDX quote present (%d base64 chars)", len(raw.IntelQuote)))
+	}
+
+	// Factors 3–6, 8, 10 come from TDX quote parsing.
+	// tdxResult is nil when the quote is absent or could not be decoded for
+	// a network/decode reason prior to parsing.
+	if tdxResult == nil {
+		// All TDX parse/verify factors are Fail because we have no quote to check.
+		addFactor("tdx_quote_structure", Fail, "no TDX quote available to parse")
+		addFactor("tdx_cert_chain", Fail, "no TDX quote available; cannot verify cert chain")
+		addFactor("tdx_quote_signature", Fail, "no TDX quote available; cannot verify signature")
+		addFactor("tdx_debug_disabled", Fail, "no TDX quote available; cannot check debug flag")
+	} else {
+		// Factor 3: tdx_quote_structure
+		if tdxResult.ParseErr != nil {
+			addFactor("tdx_quote_structure", Fail, fmt.Sprintf("TDX quote parse failed: %v", tdxResult.ParseErr))
+		} else {
+			addFactor("tdx_quote_structure", Pass, "valid QuoteV4 structure")
+		}
+
+		// Factor 4: tdx_cert_chain
+		if tdxResult.ParseErr != nil {
+			addFactor("tdx_cert_chain", Skip, "quote parse failed; cert chain not extracted")
+		} else if tdxResult.CertChainErr != nil {
+			addFactor("tdx_cert_chain", Fail, fmt.Sprintf("cert chain verification failed: %v", tdxResult.CertChainErr))
+		} else {
+			addFactor("tdx_cert_chain", Pass, "certificate chain valid (Intel root CA)")
+		}
+
+		// Factor 5: tdx_quote_signature
+		if tdxResult.ParseErr != nil {
+			addFactor("tdx_quote_signature", Skip, "quote parse failed; signature not verified")
+		} else if tdxResult.SignatureErr != nil {
+			addFactor("tdx_quote_signature", Fail, fmt.Sprintf("quote signature invalid: %v", tdxResult.SignatureErr))
+		} else {
+			addFactor("tdx_quote_signature", Pass, "quote signature verified")
+		}
+
+		// Factor 6: tdx_debug_disabled
+		if tdxResult.ParseErr != nil {
+			addFactor("tdx_debug_disabled", Skip, "quote parse failed; debug flag not checked")
+		} else if tdxResult.DebugEnabled {
+			addFactor("tdx_debug_disabled", Fail, "TD_ATTRIBUTES debug bit is set — this is a debug enclave; do not trust for production")
+		} else {
+			addFactor("tdx_debug_disabled", Pass, "debug bit is 0 (production enclave)")
+		}
+	}
+
+	// Factor 7: signing_key_present
+	if raw.SigningKey == "" {
+		addFactor("signing_key_present", Fail, "signing_key field absent from attestation response")
+	} else {
+		addFactor("signing_key_present", Pass, fmt.Sprintf("signing key present (%s...)", raw.SigningKey[:min(10, len(raw.SigningKey))]))
+	}
+
+	// --- Tier 2: Binding & Crypto ---
+
+	// Factor 8: tdx_reportdata_binding
+	// REPORTDATA (64 bytes) must bind the signing key to the nonce so a MITM
+	// cannot swap the key while leaving the quote intact. Without this check,
+	// E2EE is security theater.
+	if tdxResult == nil || tdxResult.ParseErr != nil {
+		addFactor("tdx_reportdata_binding", Fail, "no parseable TDX quote; REPORTDATA binding cannot be verified")
+	} else if raw.SigningKey == "" {
+		addFactor("tdx_reportdata_binding", Fail, "signing_key absent; REPORTDATA binding cannot be verified")
+	} else if tdxResult.ReportDataBindingErr != nil {
+		addFactor("tdx_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind signing key + nonce: %v", tdxResult.ReportDataBindingErr))
+	} else {
+		addFactor("tdx_reportdata_binding", Pass, fmt.Sprintf("REPORTDATA binds signing key + nonce (SHA-256: %s...)", hex.EncodeToString(tdxResult.ReportData[:8])))
+	}
+
+	// Factor 9: attestation_freshness
+	// We cannot determine quote generation time from the quote bytes alone
+	// without Intel PCS collateral; skip rather than fail.
+	addFactor("attestation_freshness", Skip, "quote generation time not determinable from quote bytes alone; requires Intel PCS TCB info collateral")
+
+	// Factor 10: tdx_tcb_current
+	if tdxResult == nil || tdxResult.ParseErr != nil {
+		addFactor("tdx_tcb_current", Skip, "no parseable TDX quote; TCB SVN not extracted")
+	} else {
+		svnHex := hex.EncodeToString(tdxResult.TeeTCBSVN)
+		addFactor("tdx_tcb_current", Pass, fmt.Sprintf("TEE_TCB_SVN: %s (full collateral check requires Intel PCS fetch)", svnHex))
+	}
+
+	// Factor 11: nvidia_jwt_present
+	if raw.NvidiaPayload == "" {
+		addFactor("nvidia_jwt_present", Fail, "nvidia_payload field is absent from attestation response")
+	} else {
+		addFactor("nvidia_jwt_present", Pass, fmt.Sprintf("NVIDIA payload present (%d chars)", len(raw.NvidiaPayload)))
+	}
+
+	// Factor 12: nvidia_jwt_signature
+	if nvidiaResult == nil {
+		if raw.NvidiaPayload == "" {
+			addFactor("nvidia_jwt_signature", Skip, "no NVIDIA payload to verify")
+		} else {
+			addFactor("nvidia_jwt_signature", Fail, "NVIDIA JWT verification was not attempted")
+		}
+	} else if nvidiaResult.SignatureErr != nil {
+		addFactor("nvidia_jwt_signature", Fail, fmt.Sprintf("JWT signature invalid: %v", nvidiaResult.SignatureErr))
+	} else {
+		addFactor("nvidia_jwt_signature", Pass, fmt.Sprintf("JWT signature valid (%s)", nvidiaResult.Algorithm))
+	}
+
+	// Factor 13: nvidia_jwt_claims
+	if nvidiaResult == nil {
+		if raw.NvidiaPayload == "" {
+			addFactor("nvidia_jwt_claims", Skip, "no NVIDIA payload to check claims")
+		} else {
+			addFactor("nvidia_jwt_claims", Fail, "NVIDIA JWT verification was not attempted")
+		}
+	} else if nvidiaResult.ClaimsErr != nil {
+		addFactor("nvidia_jwt_claims", Fail, fmt.Sprintf("JWT claims invalid: %v", nvidiaResult.ClaimsErr))
+	} else {
+		addFactor("nvidia_jwt_claims", Pass, fmt.Sprintf("JWT claims valid (overall result: %s)", nvidiaResult.OverallResult))
+	}
+
+	// Factor 14: nvidia_nonce_match
+	if nvidiaResult == nil {
+		if raw.NvidiaPayload == "" {
+			addFactor("nvidia_nonce_match", Skip, "no NVIDIA payload; nonce not checked")
+		} else {
+			addFactor("nvidia_nonce_match", Skip, "NVIDIA JWT verification not attempted")
+		}
+	} else if nvidiaResult.Nonce == "" {
+		addFactor("nvidia_nonce_match", Skip, "nonce field not found in NVIDIA JWT payload")
+	} else if nvidiaResult.Nonce == nonce.Hex() {
+		addFactor("nvidia_nonce_match", Pass, "nonce in NVIDIA payload matches submitted nonce")
+	} else {
+		addFactor("nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", nvidiaResult.Nonce, nonce.Hex()))
+	}
+
+	// Factor 15: e2ee_capable
+	if raw.SigningKey == "" {
+		addFactor("e2ee_capable", Fail, "signing_key absent; E2EE key exchange not possible")
+	} else {
+		s := &Session{}
+		if err := s.SetModelKey(raw.SigningKey); err != nil {
+			addFactor("e2ee_capable", Fail, fmt.Sprintf("signing_key is not a valid secp256k1 public key: %v", err))
+		} else {
+			addFactor("e2ee_capable", Pass, "signing key is valid secp256k1 uncompressed point; E2EE key exchange possible")
+		}
+	}
+
+	// --- Tier 3: Supply Chain & Channel Integrity ---
+	// These represent the Tinfoil gold standard. Both Venice and NEAR are
+	// expected to fail all of these today. The detail strings explain what is
+	// missing and why it matters for users evaluating vendor security posture.
+
+	addFactor("tls_key_binding", Fail,
+		"no TLS certificate public key embedded in attestation document. "+
+			"Without this, a MITM at the vendor's load balancer can intercept traffic "+
+			"even if a genuine TEE is running. This is the single most critical gap for "+
+			"end-to-end security. The TLS termination point is outside the attested boundary.")
+
+	addFactor("cpu_gpu_chain", Fail,
+		"attestation does not cryptographically bind the CPU TDX quote to the NVIDIA GPU attestation. "+
+			"The two attestations are checked in isolation: the CPU attestation proves a trusted enclave "+
+			"exists, and the GPU attestation proves a trusted GPU exists, but there is no proof both "+
+			"are part of the same confidential VM. A sophisticated attacker could mix and match attestations.")
+
+	addFactor("measured_model_weights", Fail,
+		"attestation does not include hashes of the model weight files. "+
+			"The TDX quote proves the hardware is genuine and the firmware is trusted, "+
+			"but it does not prove which model is actually loaded into memory. "+
+			"Without weight measurement, a compromised provider could load a backdoored model "+
+			"while presenting valid hardware attestation.")
+
+	addFactor("build_transparency_log", Fail,
+		"no Sigstore bundle or equivalent build transparency log entry found in attestation. "+
+			"Without this, you can confirm that *a* TEE is running, but not that it runs a "+
+			"specific audited build of the inference server. Runtime measurements should match "+
+			"reproducibly-built artifacts committed to an immutable transparency log.")
+
+	addFactor("cpu_id_registry", Fail,
+		"CPU PPID/CHIP_ID not verified against a known-good hardware registry. "+
+			"Without this, a TEE.fail-style physical attack (replacing a CPU with a modified "+
+			"chip that forges attestation) cannot be detected. Proof of Cloud or an equivalent "+
+			"registry maps hardware identifiers to verified physical deployments.")
+
+	// Tally results.
+	passed, failed, skipped := 0, 0, 0
+	for _, f := range factors {
+		switch f.Status {
+		case Pass:
+			passed++
+		case Fail:
+			failed++
+		case Skip:
+			skipped++
+		}
+	}
+
+	return &VerificationReport{
+		Provider:  provider,
+		Model:     model,
+		Timestamp: time.Now(),
+		Factors:   factors,
+		Passed:    passed,
+		Failed:    failed,
+		Skipped:   skipped,
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
