@@ -180,7 +180,12 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	if raw.IntelQuote != "" {
 		slog.Debug("TDX verification starting", "quote_len", len(raw.IntelQuote))
 		tdxStart := time.Now()
-		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, raw.SigningKey, nonce, offline)
+		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, offline)
+		if verifier := newReportDataVerifier(providerName); verifier != nil && tdxResult.ParseErr == nil {
+			detail, err := verifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
+			tdxResult.ReportDataBindingErr = err
+			tdxResult.ReportDataBindingDetail = detail
+		}
 		slog.Debug("TDX verification complete", "elapsed", time.Since(tdxStart))
 	}
 
@@ -224,6 +229,17 @@ func newAttester(name string, cp *config.Provider) provider.Attester {
 		slog.Error("unknown provider", "provider", name, "supported", "venice, nearai")
 		os.Exit(1)
 		return nil // unreachable
+	}
+}
+
+func newReportDataVerifier(name string) provider.ReportDataVerifier {
+	switch name {
+	case "venice":
+		return venice.ReportDataVerifier{}
+	case "nearai":
+		return nearai.ReportDataVerifier{}
+	default:
+		return nil
 	}
 }
 

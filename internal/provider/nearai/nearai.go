@@ -1,17 +1,17 @@
 // Package nearai implements the Attester and RequestPreparer interfaces for
 // NEAR AI's TEE attestation API.
 //
-// NEAR AI attestation endpoint (based on nearai/verified-proxy research):
+// NEAR AI attestation endpoint:
 //
-//	GET {base_url}/attestation/report
+//	GET {base_url}/v1/attestation/report?nonce={nonce}&include_tls_fingerprint=true&signing_algo=ecdsa
 //	Authorization: Bearer {api_key}
 //
 // The response contains a model_attestations array, where each element holds
-// TDX and NVIDIA attestation payloads for one inference node.
+// TDX and NVIDIA attestation payloads for one inference node, plus
+// signing_address, tls_cert_fingerprint, and the echoed nonce.
 //
-// NEAR AI E2EE is less documented than Venice. PrepareRequest injects the
-// Authorization header; additional E2EE headers will be added when the NEAR AI
-// E2EE protocol is fully specified.
+// NEAR AI does not use E2EE; it relies on TLS certificate pinning via
+// attestation. PrepareRequest injects the Authorization header only.
 package nearai
 
 import (
@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
@@ -26,16 +27,19 @@ import (
 )
 
 // attestationPath is the NEAR AI API path for TEE attestation reports.
-const attestationPath = "/attestation/report"
+const attestationPath = "/v1/attestation/report"
 
 // modelAttestation represents one element of the model_attestations array
 // returned by NEAR AI's attestation endpoint.
 type modelAttestation struct {
-	Model         string `json:"model"`
-	IntelQuote    string `json:"intel_quote"`
-	NvidiaPayload string `json:"nvidia_payload"`
-	SigningKey    string `json:"signing_key"`
-	Nonce         string `json:"nonce"`
+	Model              string `json:"model"`
+	IntelQuote         string `json:"intel_quote"`
+	NvidiaPayload      string `json:"nvidia_payload"`
+	SigningKey         string `json:"signing_key"`
+	SigningAddress     string `json:"signing_address"`
+	SigningAlgo        string `json:"signing_algo"`
+	TLSCertFingerprint string `json:"tls_cert_fingerprint"`
+	Nonce              string `json:"nonce"`
 }
 
 // attestationResponse is the JSON shape returned by NEAR AI's attestation
@@ -48,17 +52,19 @@ type attestationResponse struct {
 
 	// Top-level fields are present when the server returns a flat response
 	// rather than the array form. Both forms are tolerated.
-	Model         string `json:"model"`
-	IntelQuote    string `json:"intel_quote"`
-	NvidiaPayload string `json:"nvidia_payload"`
-	SigningKey    string `json:"signing_key"`
-	Nonce         string `json:"nonce"`
-	Verified      bool   `json:"verified"`
+	Model              string `json:"model"`
+	IntelQuote         string `json:"intel_quote"`
+	NvidiaPayload      string `json:"nvidia_payload"`
+	SigningKey         string `json:"signing_key"`
+	SigningAddress     string `json:"signing_address"`
+	SigningAlgo        string `json:"signing_algo"`
+	TLSCertFingerprint string `json:"tls_cert_fingerprint"`
+	Nonce              string `json:"nonce"`
+	Verified           bool   `json:"verified"`
 }
 
-// Attester fetches attestation data from NEAR AI's /attestation/report
-// endpoint. NEAR AI's attestation protocol does not currently echo a
-// client-supplied nonce, so nonce_match will Skip for NEAR AI.
+// Attester fetches attestation data from NEAR AI's /v1/attestation/report
+// endpoint. The nonce is sent as a query parameter and echoed back.
 type Attester struct {
 	baseURL string
 	apiKey  string
@@ -75,15 +81,23 @@ func NewAttester(baseURL, apiKey string) *Attester {
 	}
 }
 
-// FetchAttestation fetches TEE attestation from NEAR AI. The model parameter
-// selects which attestation to use when the response contains multiple
-// model_attestations entries. The nonce is stored as-is in the returned
-// RawAttestation.Nonce only when NEAR AI echoes it; if absent, the Nonce
-// field is left empty (which causes nonce_match to Fail in the report).
+// FetchAttestation fetches TEE attestation from NEAR AI. The nonce is sent as
+// a query parameter; NEAR AI echoes it back in the response. Query parameters
+// include_tls_fingerprint=true and signing_algo=ecdsa are also sent so the
+// response includes TLS certificate binding data. The model parameter selects
+// which attestation to use when the response contains multiple entries.
 func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
-	endpoint := a.baseURL + attestationPath
+	endpoint, err := url.Parse(a.baseURL + attestationPath)
+	if err != nil {
+		return nil, fmt.Errorf("nearai: parse base URL %q: %w", a.baseURL, err)
+	}
+	q := endpoint.Query()
+	q.Set("nonce", nonce.Hex())
+	q.Set("include_tls_fingerprint", "true")
+	q.Set("signing_algo", "ecdsa")
+	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("nearai: build attestation request: %w", err)
 	}
@@ -91,7 +105,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("nearai: GET %s: %w", endpoint, err)
+		return nil, fmt.Errorf("nearai: GET %s: %w", endpoint.String(), err)
 	}
 	defer resp.Body.Close()
 
@@ -124,27 +138,33 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 			}
 		}
 		return &attestation.RawAttestation{
-			Verified:      ar.Verified,
-			Nonce:         selected.Nonce,
-			Model:         selected.Model,
-			TEEProvider:   "TDX+NVIDIA",
-			SigningKey:    selected.SigningKey,
-			IntelQuote:    selected.IntelQuote,
-			NvidiaPayload: selected.NvidiaPayload,
-			RawBody:       body,
+			Verified:       ar.Verified,
+			Nonce:          selected.Nonce,
+			Model:          selected.Model,
+			TEEProvider:    "TDX+NVIDIA",
+			SigningKey:     selected.SigningKey,
+			SigningAddress: selected.SigningAddress,
+			SigningAlgo:    selected.SigningAlgo,
+			TLSFingerprint: selected.TLSCertFingerprint,
+			IntelQuote:     selected.IntelQuote,
+			NvidiaPayload:  selected.NvidiaPayload,
+			RawBody:        body,
 		}, nil
 	}
 
 	// Flat response form: use top-level fields directly.
 	return &attestation.RawAttestation{
-		Verified:      ar.Verified,
-		Nonce:         ar.Nonce,
-		Model:         ar.Model,
-		TEEProvider:   "TDX+NVIDIA",
-		SigningKey:    ar.SigningKey,
-		IntelQuote:    ar.IntelQuote,
-		NvidiaPayload: ar.NvidiaPayload,
-		RawBody:       body,
+		Verified:       ar.Verified,
+		Nonce:          ar.Nonce,
+		Model:          ar.Model,
+		TEEProvider:    "TDX+NVIDIA",
+		SigningKey:     ar.SigningKey,
+		SigningAddress: ar.SigningAddress,
+		SigningAlgo:    ar.SigningAlgo,
+		TLSFingerprint: ar.TLSCertFingerprint,
+		IntelQuote:     ar.IntelQuote,
+		NvidiaPayload:  ar.NvidiaPayload,
+		RawBody:        body,
 	}, nil
 }
 

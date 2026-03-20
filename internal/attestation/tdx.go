@@ -2,7 +2,6 @@ package attestation
 
 import (
 	"context"
-	"crypto/subtle"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -15,7 +14,6 @@ import (
 	pb "github.com/google/go-tdx-guest/proto/tdx"
 	tdxverify "github.com/google/go-tdx-guest/verify"
 	"github.com/google/go-tdx-guest/verify/trust"
-	"golang.org/x/crypto/sha3"
 )
 
 // TDXVerifyResult holds the structured outcome of TDX quote parsing and
@@ -39,8 +37,13 @@ type TDXVerifyResult struct {
 	ReportData [64]byte
 
 	// ReportDataBindingErr is non-nil if REPORTDATA does not match the expected
-	// Ethereum address binding of the signing key.
+	// binding. Set by the provider's ReportDataVerifier after VerifyTDXQuote.
 	ReportDataBindingErr error
+
+	// ReportDataBindingDetail is a human-readable description of the binding
+	// that was verified (e.g. "REPORTDATA binds signing key via Ethereum address").
+	// Set by the provider's ReportDataVerifier on success.
+	ReportDataBindingDetail string
 
 	// TeeTCBSVN is the raw 16-byte TEE_TCB_SVN field for TCB currency checks.
 	TeeTCBSVN []byte
@@ -96,18 +99,17 @@ const tdxDebugBit = 0x01
 
 // VerifyTDXQuote decodes the hex-encoded intel_quote, parses it as a TDX
 // QuoteV4, checks the certificate chain and signature, optionally fetches Intel
-// PCS collateral for TCB currency checks, checks the debug flag, and validates
-// REPORTDATA binding to the signing key.
+// PCS collateral for TCB currency checks, and checks the debug flag.
+//
+// REPORTDATA binding is NOT checked here — it is provider-specific and must be
+// performed by the provider's ReportDataVerifier after this function returns.
 //
 // When offline is false, collateral is fetched from api.trustedservices.intel.com
 // in a second verification pass. This populates TcbStatus and AdvisoryIDs.
 // When offline is true, collateral is not fetched and those fields remain empty.
 //
-// signingKeyHex is the raw.SigningKey value (130 hex chars, uncompressed
-// secp256k1 public key). It is used to compute the expected REPORTDATA binding.
-//
 // This function never panics. All errors are captured in the returned result.
-func VerifyTDXQuote(ctx context.Context, hexQuote, signingKeyHex string, nonce Nonce, offline bool) *TDXVerifyResult {
+func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline bool) *TDXVerifyResult {
 	result := &TDXVerifyResult{}
 
 	raw, err := decodeQuoteBytes(hexQuote)
@@ -265,14 +267,6 @@ func VerifyTDXQuote(ctx context.Context, hexQuote, signingKeyHex string, nonce N
 		slog.Debug("PCK extensions extracted", "ppid", ppid, "fmspc", fmspc)
 	}
 
-	// Factor 8: REPORTDATA binding.
-	// Venice's scheme: REPORTDATA[0:20] = Ethereum address of the signing key
-	// (keccak256 of the uncompressed public key without 04 prefix, last 20 bytes).
-	// The nonce is NOT included in Venice's REPORTDATA binding.
-	if signingKeyHex != "" {
-		result.ReportDataBindingErr = verifyReportDataBinding(result.ReportData[:], signingKeyHex)
-	}
-
 	return result
 }
 
@@ -340,36 +334,4 @@ func decodeQuoteBytes(s string) ([]byte, error) {
 		return nil, fmt.Errorf("TDX quote hex decode failed: %w", err)
 	}
 	return raw, nil
-}
-
-// verifyReportDataBinding checks whether reportData (64 bytes) binds the
-// signing key via its Ethereum address.
-//
-// Venice's scheme: REPORTDATA[0:20] = keccak256(pubkey_bytes_without_04_prefix)[12:32]
-// This is the standard Ethereum address derivation from an uncompressed secp256k1 key.
-func verifyReportDataBinding(reportData []byte, signingKeyHex string) error {
-	if len(reportData) < 20 {
-		return fmt.Errorf("REPORTDATA too short: %d bytes, expected at least 20", len(reportData))
-	}
-
-	signingKeyBytes, err := hex.DecodeString(signingKeyHex)
-	if err != nil {
-		return fmt.Errorf("signing key is not valid hex: %w", err)
-	}
-	if len(signingKeyBytes) != 65 || signingKeyBytes[0] != 0x04 {
-		return fmt.Errorf("signing key is not an uncompressed secp256k1 public key (got %d bytes, first byte 0x%02x)",
-			len(signingKeyBytes), signingKeyBytes[0])
-	}
-
-	// Ethereum address = keccak256(pubkey_without_04_prefix)[12:32]
-	h := sha3.NewLegacyKeccak256()
-	h.Write(signingKeyBytes[1:]) // skip 04 prefix
-	hash := h.Sum(nil)
-	ethAddr := hash[12:32] // last 20 bytes
-
-	if subtle.ConstantTimeCompare(ethAddr, reportData[:20]) != 1 {
-		return fmt.Errorf("REPORTDATA[0:20] = %s, expected Ethereum address %s (keccak256 of signing key)",
-			hex.EncodeToString(reportData[:20]), hex.EncodeToString(ethAddr))
-	}
-	return nil
 }

@@ -148,10 +148,12 @@ func fromConfig(cp *config.Provider) (*provider.Provider, error) {
 		p.ChatPath = "/api/v1/chat/completions"
 		p.Attester = venice.NewAttester(cp.BaseURL, cp.APIKey)
 		p.Preparer = venice.NewPreparer(cp.APIKey)
+		p.ReportDataVerifier = venice.ReportDataVerifier{}
 	case "nearai":
 		p.ChatPath = "/v1/chat/completions"
 		p.Attester = nearai.NewAttester(cp.BaseURL, cp.APIKey)
 		p.Preparer = nearai.NewPreparer(cp.APIKey)
+		p.ReportDataVerifier = nearai.ReportDataVerifier{}
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, nearai)", cp.Name)
 	}
@@ -205,7 +207,12 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	if raw.IntelQuote != "" {
 		slog.Debug("TDX verification starting", "provider", prov.Name)
 		tdxStart := time.Now()
-		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, raw.SigningKey, nonce, s.cfg.Offline)
+		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, s.cfg.Offline)
+		if prov.ReportDataVerifier != nil && tdxResult.ParseErr == nil {
+			detail, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
+			tdxResult.ReportDataBindingErr = err
+			tdxResult.ReportDataBindingDetail = detail
+		}
 		slog.Debug("TDX verification complete", "provider", prov.Name, "elapsed", time.Since(tdxStart))
 	}
 
@@ -388,12 +395,15 @@ func (s *Server) buildUpstreamBody(
 	if raw.IntelQuote == "" {
 		return nil, nil, fmt.Errorf("fresh attestation missing TDX quote; cannot verify signing key binding")
 	}
-	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, raw.SigningKey, nonce, true)
+	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, true)
 	if tdxResult.ParseErr != nil {
 		return nil, nil, fmt.Errorf("fresh TDX quote parse failed: %w", tdxResult.ParseErr)
 	}
-	if tdxResult.ReportDataBindingErr != nil {
-		return nil, nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", tdxResult.ReportDataBindingErr)
+	if prov.ReportDataVerifier != nil {
+		_, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
+		if err != nil {
+			return nil, nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", err)
+		}
 	}
 
 	session, err := attestation.NewSession()

@@ -24,6 +24,13 @@ type RequestPreparer interface {
 	PrepareRequest(req *http.Request, session *attestation.Session) error
 }
 
+// ReportDataVerifier validates that TDX REPORTDATA binds the expected identity.
+// Each provider implements its own binding scheme (e.g. Venice uses Ethereum
+// address derivation, NEAR uses sha256(signing_address + tls_fingerprint)).
+type ReportDataVerifier interface {
+	VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, nonce attestation.Nonce) (detail string, err error)
+}
+
 // Provider is a fully wired TEE-capable AI backend. It combines the data from
 // config.Provider with the behavioral interfaces Attester and Preparer.
 //
@@ -56,6 +63,10 @@ type Provider struct {
 	// Preparer injects provider-specific headers into outgoing requests.
 	// May be nil if no special headers are needed.
 	Preparer RequestPreparer
+
+	// ReportDataVerifier validates REPORTDATA binding for this provider.
+	// May be nil if the provider does not support REPORTDATA verification.
+	ReportDataVerifier ReportDataVerifier
 }
 
 // MapModel translates a client-facing model name to the upstream model name.

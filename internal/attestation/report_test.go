@@ -223,6 +223,37 @@ func TestBuildReportTier3AlwaysFail(t *testing.T) {
 	}
 }
 
+// TestBuildReportTLSKeyBindingPass verifies tls_key_binding passes when
+// TLSFingerprint is set on the RawAttestation.
+func TestBuildReportTLSKeyBindingPass(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	raw.TLSFingerprint = "aabbccddee112233445566778899aabb"
+
+	report := BuildReport("nearai", "m", raw, nonce, nil, nil, nil, nil, nil)
+	f := findFactor(t, report, "tls_key_binding")
+	if f.Status != Pass {
+		t.Errorf("tls_key_binding with TLSFingerprint: got %s (%s), want PASS", f.Status, f.Detail)
+	}
+	if !strings.Contains(f.Detail, "aabbccddee112233") {
+		t.Errorf("detail should contain fingerprint preview: %s", f.Detail)
+	}
+}
+
+// TestBuildReportTLSKeyBindingFail verifies tls_key_binding fails when
+// TLSFingerprint is absent.
+func TestBuildReportTLSKeyBindingFail(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	// TLSFingerprint is empty by default
+
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	f := findFactor(t, report, "tls_key_binding")
+	if f.Status != Fail {
+		t.Errorf("tls_key_binding without TLSFingerprint: got %s (%s), want FAIL", f.Status, f.Detail)
+	}
+}
+
 // TestBlockedReturnsTrue verifies Blocked is true when an enforced factor fails.
 func TestBlockedReturnsTrue(t *testing.T) {
 	nonce := NewNonce()
@@ -314,10 +345,46 @@ func TestBuildReportWithTDXPassResult(t *testing.T) {
 		}
 	}
 
-	// Check reportdata binding passes.
+	// Check reportdata binding passes when detail is set.
+	f := findFactor(t, report, "tdx_reportdata_binding")
+	if f.Status != Skip {
+		t.Errorf("tdx_reportdata_binding with no verifier detail: got %s (%s), want SKIP", f.Status, f.Detail)
+	}
+}
+
+// TestBuildReportReportDataBindingPassWithDetail verifies tdx_reportdata_binding
+// passes when ReportDataBindingDetail is set (provider verifier succeeded).
+func TestBuildReportReportDataBindingPassWithDetail(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	tdxResult := &TDXVerifyResult{
+		TeeTCBSVN:               make([]byte, 16),
+		ReportDataBindingDetail: "REPORTDATA binds signing key via Ethereum address (0xabc123)",
+	}
+
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
 	f := findFactor(t, report, "tdx_reportdata_binding")
 	if f.Status != Pass {
-		t.Errorf("tdx_reportdata_binding with passing result: got %s (%s), want PASS", f.Status, f.Detail)
+		t.Errorf("tdx_reportdata_binding with detail: got %s (%s), want PASS", f.Status, f.Detail)
+	}
+	if f.Detail != "REPORTDATA binds signing key via Ethereum address (0xabc123)" {
+		t.Errorf("unexpected detail: %s", f.Detail)
+	}
+}
+
+// TestBuildReportReportDataBindingSkipNoVerifier verifies tdx_reportdata_binding
+// is Skip when no provider verifier is configured (ReportDataBindingDetail empty).
+func TestBuildReportReportDataBindingSkipNoVerifier(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	tdxResult := &TDXVerifyResult{
+		TeeTCBSVN: make([]byte, 16),
+	}
+
+	report := BuildReport("nearai", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	f := findFactor(t, report, "tdx_reportdata_binding")
+	if f.Status != Skip {
+		t.Errorf("tdx_reportdata_binding without verifier: got %s (%s), want SKIP", f.Status, f.Detail)
 	}
 }
 

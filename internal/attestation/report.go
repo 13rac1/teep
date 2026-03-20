@@ -207,8 +207,10 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		addFactor("tdx_reportdata_binding", Fail, "signing_key absent; REPORTDATA binding cannot be verified")
 	} else if tdxResult.ReportDataBindingErr != nil {
 		addFactor("tdx_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind signing key: %v", tdxResult.ReportDataBindingErr))
+	} else if tdxResult.ReportDataBindingDetail != "" {
+		addFactor("tdx_reportdata_binding", Pass, tdxResult.ReportDataBindingDetail)
 	} else {
-		addFactor("tdx_reportdata_binding", Pass, fmt.Sprintf("REPORTDATA binds signing key via Ethereum address (%s)", hex.EncodeToString(tdxResult.ReportData[:20])))
+		addFactor("tdx_reportdata_binding", Skip, "no REPORTDATA verifier configured for this provider")
 	}
 
 	// Factor 9: intel_pcs_collateral
@@ -344,8 +346,17 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	// expected to fail all of these today. The detail strings explain what is
 	// missing and why it matters for users evaluating vendor security posture.
 
-	addFactor("tls_key_binding", Fail,
-		"no TLS key in attestation")
+	if raw.TLSFingerprint != "" {
+		fpPreview := raw.TLSFingerprint
+		if len(fpPreview) > 16 {
+			fpPreview = fpPreview[:16] + "..."
+		}
+		addFactor("tls_key_binding", Pass,
+			fmt.Sprintf("TLS certificate SPKI bound to attestation (%s)", fpPreview))
+	} else {
+		addFactor("tls_key_binding", Fail,
+			"no TLS certificate binding in attestation")
+	}
 
 	addFactor("cpu_gpu_chain", Fail,
 		"CPU-GPU attestation not bound")

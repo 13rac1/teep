@@ -72,6 +72,11 @@ type RawAttestation struct {
 	// NvidiaPayload is the NVIDIA GPU attestation JWT or raw payload.
 	NvidiaPayload string
 
+	// TLSFingerprint is the hex SHA-256 of the backend's TLS certificate SPKI.
+	// Set by providers that perform connection-level attestation (NEAR AI).
+	// Empty for E2EE providers (Venice).
+	TLSFingerprint string
+
 	// TEE environment metadata. Populated by Venice; empty for other providers.
 	TEEHardware        string          // e.g. "intel-tdx"
 	SigningAlgo        string          // e.g. "ecdsa"

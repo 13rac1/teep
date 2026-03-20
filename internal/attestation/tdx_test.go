@@ -5,9 +5,6 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"testing"
-
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"golang.org/x/crypto/sha3"
 )
 
 // realTDXQuoteRaw is the raw bytes of a real TDX production quote from Intel
@@ -22,20 +19,11 @@ func realTDXQuoteHex() string {
 	return hex.EncodeToString(realTDXQuoteRaw)
 }
 
-// ethAddress computes the Ethereum address (20 bytes) from an uncompressed
-// secp256k1 public key (65 bytes starting with 0x04).
-func ethAddress(pubKeyUncompressed []byte) []byte {
-	h := sha3.NewLegacyKeccak256()
-	h.Write(pubKeyUncompressed[1:]) // skip 04 prefix
-	hash := h.Sum(nil)
-	return hash[12:32]
-}
-
 // TestVerifyTDXQuoteParseRealQuote verifies that the real TDX fixture quote
 // parses successfully as a QuoteV4.
 func TestVerifyTDXQuoteParseRealQuote(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("VerifyTDXQuote: unexpected parse error: %v", result.ParseErr)
@@ -55,7 +43,7 @@ func TestVerifyTDXQuoteParseRealQuote(t *testing.T) {
 // measurement registers are extracted from the real production quote.
 func TestVerifyTDXQuoteMeasurements(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed: %v", result.ParseErr)
@@ -111,7 +99,7 @@ func TestVerifyTDXQuoteMeasurements(t *testing.T) {
 // is from 2023 hardware and its cert chain TTL may have lapsed).
 func TestVerifyTDXQuoteCertChain(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed, cannot test cert chain: %v", result.ParseErr)
@@ -134,7 +122,7 @@ func TestVerifyTDXQuoteCertChain(t *testing.T) {
 // debug disabled (it's a production quote, not a debug quote).
 func TestVerifyTDXQuoteDebugFlagRealQuote(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed: %v", result.ParseErr)
@@ -148,7 +136,7 @@ func TestVerifyTDXQuoteDebugFlagRealQuote(t *testing.T) {
 // TestVerifyTDXQuoteInvalidHex verifies parse error on garbage input.
 func TestVerifyTDXQuoteInvalidHex(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), "not-hex!@#$%", "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), "not-hex!@#$%", nonce, true)
 
 	if result.ParseErr == nil {
 		t.Error("expected ParseErr for invalid hex input, got nil")
@@ -159,7 +147,7 @@ func TestVerifyTDXQuoteInvalidHex(t *testing.T) {
 func TestVerifyTDXQuoteTooShort(t *testing.T) {
 	nonce := NewNonce()
 	short := hex.EncodeToString([]byte("too short"))
-	result := VerifyTDXQuote(context.Background(), short, "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), short, nonce, true)
 
 	if result.ParseErr == nil {
 		t.Error("expected ParseErr for too-short quote bytes, got nil")
@@ -169,114 +157,10 @@ func TestVerifyTDXQuoteTooShort(t *testing.T) {
 // TestVerifyTDXQuoteEmptyString verifies parse error on empty input.
 func TestVerifyTDXQuoteEmptyString(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), "", "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), "", nonce, true)
 
 	if result.ParseErr == nil {
 		t.Error("expected ParseErr for empty quote string, got nil")
-	}
-}
-
-// TestReportDataBindingEthereumAddress verifies that verifyReportDataBinding
-// passes when REPORTDATA[0:20] = Ethereum address of the signing key.
-func TestReportDataBindingEthereumAddress(t *testing.T) {
-	priv, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatalf("GeneratePrivateKey: %v", err)
-	}
-	pubKeyBytes := priv.PubKey().SerializeUncompressed()
-	signingKeyHex := hex.EncodeToString(pubKeyBytes)
-
-	addr := ethAddress(pubKeyBytes)
-
-	// Build a 64-byte REPORTDATA with Ethereum address in the first 20 bytes.
-	reportData := make([]byte, 64)
-	copy(reportData[:20], addr)
-
-	if err := verifyReportDataBinding(reportData, signingKeyHex); err != nil {
-		t.Errorf("verifyReportDataBinding with correct Ethereum address: unexpected error: %v", err)
-	}
-}
-
-// TestReportDataBindingWrongKey verifies the binding fails with a different signing key.
-func TestReportDataBindingWrongKey(t *testing.T) {
-	privA, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatalf("GeneratePrivateKey A: %v", err)
-	}
-	privB, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatalf("GeneratePrivateKey B: %v", err)
-	}
-
-	signingKeyBHex := hex.EncodeToString(privB.PubKey().SerializeUncompressed())
-
-	// Build REPORTDATA with key A's Ethereum address.
-	addrA := ethAddress(privA.PubKey().SerializeUncompressed())
-	reportData := make([]byte, 64)
-	copy(reportData[:20], addrA)
-
-	// Verify with key B — should fail.
-	if err := verifyReportDataBinding(reportData, signingKeyBHex); err == nil {
-		t.Error("verifyReportDataBinding with wrong key: expected error, got nil")
-	}
-}
-
-// TestReportDataBindingInvalidHex verifies error on non-hex signing key.
-func TestReportDataBindingInvalidHex(t *testing.T) {
-	reportData := make([]byte, 64)
-
-	if err := verifyReportDataBinding(reportData, "not-hex-!!!"); err == nil {
-		t.Error("verifyReportDataBinding with invalid hex: expected error, got nil")
-	}
-}
-
-// TestReportDataBindingTooShort verifies error on too-short REPORTDATA.
-func TestReportDataBindingTooShort(t *testing.T) {
-	priv, _ := secp256k1.GeneratePrivateKey()
-	signingKeyHex := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
-
-	// Only 16 bytes — too short.
-	shortReportData := make([]byte, 16)
-	if err := verifyReportDataBinding(shortReportData, signingKeyHex); err == nil {
-		t.Error("verifyReportDataBinding with short REPORTDATA: expected error, got nil")
-	}
-}
-
-// TestReportDataBindingNotUncompressed verifies error when key is not 65-byte uncompressed.
-func TestReportDataBindingNotUncompressed(t *testing.T) {
-	priv, _ := secp256k1.GeneratePrivateKey()
-	// Compressed key (33 bytes, starts with 02 or 03) — should fail.
-	compressedHex := hex.EncodeToString(priv.PubKey().SerializeCompressed())
-
-	reportData := make([]byte, 64)
-	if err := verifyReportDataBinding(reportData, compressedHex); err == nil {
-		t.Error("verifyReportDataBinding with compressed key: expected error, got nil")
-	}
-}
-
-// TestVerifyTDXQuoteReportDataBindingRealQuoteFails exercises the full
-// VerifyTDXQuote path. The real fixture quote's REPORTDATA will fail binding
-// because it was generated by Intel hardware with a different signing key.
-func TestVerifyTDXQuoteReportDataBindingRealQuoteFails(t *testing.T) {
-	priv, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatalf("GeneratePrivateKey: %v", err)
-	}
-	signingKeyHex := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
-
-	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), signingKeyHex, nonce, true)
-
-	if result.ParseErr != nil {
-		t.Fatalf("parse error: %v", result.ParseErr)
-	}
-
-	// The real quote was not generated with our signing key.
-	// ReportDataBindingErr should be non-nil.
-	if result.ReportDataBindingErr == nil {
-		t.Error("expected ReportDataBindingErr for mismatched signing key, got nil")
-	} else {
-		t.Logf("ReportDataBindingErr (expected): %v", result.ReportDataBindingErr)
 	}
 }
 
@@ -284,7 +168,7 @@ func TestVerifyTDXQuoteReportDataBindingRealQuoteFails(t *testing.T) {
 // production quote's PCK certificate chain.
 func TestPPIDExtraction(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed: %v", result.ParseErr)

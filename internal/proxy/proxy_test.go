@@ -999,7 +999,7 @@ func TestModelResolutionAcrossProviders(t *testing.T) {
 	defer venice.Close()
 
 	nearai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/attestation/report") {
+		if strings.HasPrefix(r.URL.Path, "/v1/attestation/report") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(fmt.Sprintf(`{
 				"verified": true,

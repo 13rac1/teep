@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -137,23 +138,46 @@ func TestAttester_FetchAttestation_FlatResponse(t *testing.T) {
 	}
 }
 
-func TestAttester_FetchAttestation_SetsAuthHeader(t *testing.T) {
+func TestAttester_FetchAttestation_SetsAuthHeaderAndQueryParams(t *testing.T) {
 	var capturedAuth string
+	var capturedQuery string
+	var capturedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedAuth = r.Header.Get("Authorization")
+		capturedQuery = r.URL.RawQuery
+		capturedPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(validFlatResponseJSON))
 	}))
 	defer srv.Close()
 
+	nonce := attestation.NewNonce()
 	a := nearai.NewAttester(srv.URL, "nearai-secret")
-	_, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
+	_, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", nonce)
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
 	}
 
 	if capturedAuth != "Bearer nearai-secret" {
 		t.Errorf("Authorization = %q, want %q", capturedAuth, "Bearer nearai-secret")
+	}
+	if capturedPath != "/v1/attestation/report" {
+		t.Errorf("Path = %q, want %q", capturedPath, "/v1/attestation/report")
+	}
+
+	// Parse query params to verify each one is set correctly.
+	params, err := url.ParseQuery(capturedQuery)
+	if err != nil {
+		t.Fatalf("ParseQuery(%q): %v", capturedQuery, err)
+	}
+	if got := params.Get("nonce"); got != nonce.Hex() {
+		t.Errorf("nonce param = %q, want %q", got, nonce.Hex())
+	}
+	if got := params.Get("include_tls_fingerprint"); got != "true" {
+		t.Errorf("include_tls_fingerprint param = %q, want %q", got, "true")
+	}
+	if got := params.Get("signing_algo"); got != "ecdsa" {
+		t.Errorf("signing_algo param = %q, want %q", got, "ecdsa")
 	}
 }
 
@@ -218,6 +242,77 @@ func TestAttester_FetchAttestation_TEEProviderIsSet(t *testing.T) {
 	}
 	if raw.TEEProvider != "TDX+NVIDIA" {
 		t.Errorf("TEEProvider = %q, want %q", raw.TEEProvider, "TDX+NVIDIA")
+	}
+}
+
+func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
+	body := `{
+		"verified": true,
+		"model_attestations": [
+			{
+				"model": "llama-3.1-70b",
+				"intel_quote": "cXVvdGUx",
+				"nvidia_payload": "jwt1",
+				"signing_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"signing_address": "0xdeadbeef01020304050607080910111213141516",
+				"signing_algo": "ecdsa",
+				"tls_cert_fingerprint": "aabbccdd",
+				"nonce": "abc123"
+			}
+		]
+	}`
+	srv := makeServer(t, http.StatusOK, body)
+	defer srv.Close()
+
+	a := nearai.NewAttester(srv.URL, "key")
+	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
+	if err != nil {
+		t.Fatalf("FetchAttestation: %v", err)
+	}
+
+	if raw.SigningAddress != "0xdeadbeef01020304050607080910111213141516" {
+		t.Errorf("SigningAddress = %q, want 0xdeadbeef...", raw.SigningAddress)
+	}
+	if raw.SigningAlgo != "ecdsa" {
+		t.Errorf("SigningAlgo = %q, want %q", raw.SigningAlgo, "ecdsa")
+	}
+	if raw.TLSFingerprint != "aabbccdd" {
+		t.Errorf("TLSFingerprint = %q, want %q", raw.TLSFingerprint, "aabbccdd")
+	}
+	if raw.Nonce != "abc123" {
+		t.Errorf("Nonce = %q, want %q", raw.Nonce, "abc123")
+	}
+}
+
+func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
+	body := `{
+		"verified": true,
+		"model": "llama-3.1-70b",
+		"intel_quote": "dGVzdA==",
+		"nvidia_payload": "jwt",
+		"signing_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"signing_address": "0x1234",
+		"signing_algo": "ecdsa",
+		"tls_cert_fingerprint": "deadbeef",
+		"nonce": "test-nonce"
+	}`
+	srv := makeServer(t, http.StatusOK, body)
+	defer srv.Close()
+
+	a := nearai.NewAttester(srv.URL, "key")
+	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
+	if err != nil {
+		t.Fatalf("FetchAttestation: %v", err)
+	}
+
+	if raw.SigningAddress != "0x1234" {
+		t.Errorf("SigningAddress = %q, want %q", raw.SigningAddress, "0x1234")
+	}
+	if raw.TLSFingerprint != "deadbeef" {
+		t.Errorf("TLSFingerprint = %q, want %q", raw.TLSFingerprint, "deadbeef")
+	}
+	if raw.Nonce != "test-nonce" {
+		t.Errorf("Nonce = %q, want %q", raw.Nonce, "test-nonce")
 	}
 }
 
