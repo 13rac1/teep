@@ -1,0 +1,142 @@
+package nearai
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/13rac1/teep/internal/jsonstrict"
+)
+
+const (
+	// defaultEndpointsURL is the NEAR AI endpoint discovery URL.
+	defaultEndpointsURL = "https://completions.near.ai/endpoints"
+
+	// endpointsTTL is how long endpoint mappings are cached before refresh.
+	endpointsTTL = 5 * time.Minute
+)
+
+// endpointsResponse is the JSON shape returned by the endpoints URL.
+type endpointsResponse struct {
+	Endpoints []endpointEntry `json:"endpoints"`
+}
+
+// endpointEntry is one element of the endpoints array.
+type endpointEntry struct {
+	Domain string   `json:"domain"`
+	Models []string `json:"models"`
+}
+
+// EndpointResolver maps model names to backend domains via the NEAR AI
+// endpoint discovery API. Results are cached with a 5-minute TTL and
+// refreshed lazily on the next Resolve call after expiry.
+//
+// Thread-safe for concurrent use.
+type EndpointResolver struct {
+	endpointsURL string
+	client       *http.Client
+
+	mu        sync.RWMutex
+	mapping   map[string]string // model → domain
+	fetchedAt time.Time
+}
+
+// NewEndpointResolver returns a resolver that discovers endpoints from
+// the default NEAR AI URL (https://completions.near.ai/endpoints).
+func NewEndpointResolver() *EndpointResolver {
+	return &EndpointResolver{
+		endpointsURL: defaultEndpointsURL,
+		client:       &http.Client{Timeout: 30 * time.Second},
+		mapping:      make(map[string]string),
+	}
+}
+
+// newEndpointResolverForTest returns a resolver pointing at a custom URL.
+func newEndpointResolverForTest(url string) *EndpointResolver {
+	return &EndpointResolver{
+		endpointsURL: url,
+		client:       &http.Client{Timeout: 10 * time.Second},
+		mapping:      make(map[string]string),
+	}
+}
+
+// Resolve returns the backend domain for the given model. If the cached
+// mapping is stale (older than 5 minutes), it refreshes from the endpoints
+// API first. Returns an error if the model is not found after refresh.
+func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, error) {
+	r.mu.RLock()
+	domain, ok := r.mapping[model]
+	stale := time.Since(r.fetchedAt) > endpointsTTL
+	r.mu.RUnlock()
+
+	if ok && !stale {
+		return domain, nil
+	}
+
+	if err := r.refresh(ctx); err != nil {
+		return "", fmt.Errorf("endpoint discovery: %w", err)
+	}
+
+	r.mu.RLock()
+	domain, ok = r.mapping[model]
+	r.mu.RUnlock()
+
+	if !ok {
+		return "", fmt.Errorf("unknown model %q (not in endpoint discovery)", model)
+	}
+	return domain, nil
+}
+
+// refresh fetches the endpoint mapping from the discovery URL and replaces
+// the cached mapping. Holds the write lock only for the swap.
+func (r *EndpointResolver) refresh(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.endpointsURL, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("GET %s: %w", r.endpointsURL, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 256))
+	}
+
+	var er endpointsResponse
+	if err := jsonstrict.UnmarshalWarn(body, &er, "nearai endpoints"); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+
+	mapping := make(map[string]string)
+	for _, ep := range er.Endpoints {
+		for _, m := range ep.Models {
+			mapping[m] = ep.Domain
+		}
+	}
+
+	r.mu.Lock()
+	r.mapping = mapping
+	r.fetchedAt = time.Now()
+	r.mu.Unlock()
+
+	return nil
+}
+
+// truncate returns s truncated to n characters with "..." appended if needed.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}

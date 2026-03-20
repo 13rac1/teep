@@ -1023,7 +1023,15 @@ func TestModelResolutionAcrossProviders(t *testing.T) {
 	cfg := buildConfigMultiProvider(venice.URL, nearai.URL)
 	cfg.Enforced = []string{}
 
-	proxySrv := newProxyServer(t, cfg)
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+	// Disable pinned handler for this routing test — the NEAR AI backend is
+	// a plain HTTP test server, not TLS with endpoint discovery.
+	srv.ProviderByName("nearai").PinnedHandler = nil
+
+	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
 
 	// Request the Venice model.

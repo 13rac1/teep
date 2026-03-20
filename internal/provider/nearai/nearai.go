@@ -122,6 +122,13 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 		return nil, fmt.Errorf("nearai: attestation endpoint returned HTTP %d: %s", resp.StatusCode, msg)
 	}
 
+	return parseAttestationResponse(body, model)
+}
+
+// parseAttestationResponse unmarshals a NEAR AI attestation JSON response body
+// and selects the entry matching model. Used by both FetchAttestation (HTTP
+// client path) and PinnedHandler (raw connection path).
+func parseAttestationResponse(body []byte, model string) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
 	if err := jsonstrict.UnmarshalWarn(body, &ar, "nearai attestation response"); err != nil {
 		return nil, fmt.Errorf("nearai: unmarshal attestation response: %w", err)

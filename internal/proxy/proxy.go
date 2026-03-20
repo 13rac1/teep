@@ -69,6 +69,7 @@ type Server struct {
 	providers      map[string]*provider.Provider // provider name → Provider
 	cache          *attestation.Cache
 	negCache       *attestation.NegativeCache
+	spkiCache      *attestation.SPKICache
 	mux            *http.ServeMux
 	attestClient   *http.Client // for attestation fetches
 	upstreamClient *http.Client // for chat completions forwards
@@ -77,11 +78,13 @@ type Server struct {
 // New builds a Server from cfg. Providers are wired with their Attester and
 // Preparer implementations based on provider name.
 func New(cfg *config.Config) (*Server, error) {
+	spkiCache := attestation.NewSPKICache()
 	s := &Server{
 		cfg:          cfg,
 		providers:    make(map[string]*provider.Provider, len(cfg.Providers)),
 		cache:        attestation.NewCache(attestationCacheTTL),
 		negCache:     attestation.NewNegativeCache(negativeCacheTTL),
+		spkiCache:    spkiCache,
 		mux:          http.NewServeMux(),
 		attestClient: config.NewAttestationClient(),
 		upstreamClient: &http.Client{
@@ -93,7 +96,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	modelOwner := make(map[string]string) // client model → provider name
 	for name, cp := range cfg.Providers {
-		p, err := fromConfig(cp)
+		p, err := fromConfig(cp, spkiCache, cfg.Offline, cfg.Enforced)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
@@ -134,8 +137,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // fromConfig constructs a provider.Provider from a config.Provider, attaching
-// the correct Attester and Preparer for the known provider names.
-func fromConfig(cp *config.Provider) (*provider.Provider, error) {
+// the correct Attester, Preparer, and PinnedHandler for the known provider names.
+func fromConfig(cp *config.Provider, spkiCache *attestation.SPKICache, offline bool, enforced []string) (*provider.Provider, error) {
 	p := &provider.Provider{
 		Name:     cp.Name,
 		BaseURL:  cp.BaseURL,
@@ -151,9 +154,18 @@ func fromConfig(cp *config.Provider) (*provider.Provider, error) {
 		p.ReportDataVerifier = venice.ReportDataVerifier{}
 	case "nearai":
 		p.ChatPath = "/v1/chat/completions"
+		rdVerifier := nearai.ReportDataVerifier{}
 		p.Attester = nearai.NewAttester(cp.BaseURL, cp.APIKey)
 		p.Preparer = nearai.NewPreparer(cp.APIKey)
-		p.ReportDataVerifier = nearai.ReportDataVerifier{}
+		p.ReportDataVerifier = rdVerifier
+		p.PinnedHandler = nearai.NewPinnedHandler(
+			nearai.NewEndpointResolver(),
+			spkiCache,
+			cp.APIKey,
+			offline,
+			enforced,
+			rdVerifier,
+		)
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, nearai)", cp.Name)
 	}
@@ -278,6 +290,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Connection-pinned providers (NEAR AI) handle attestation + chat on a
+	// single TLS connection. No separate attestation cache or E2EE needed.
+	if prov.PinnedHandler != nil {
+		s.handlePinnedChat(w, r, prov, upstreamModel, body, req)
+		return
+	}
+
 	report, cached := s.cache.Get(prov.Name, upstreamModel)
 	if !cached {
 		report = s.fetchAndVerify(r.Context(), prov, upstreamModel)
@@ -351,6 +370,74 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.relayNonStream(w, resp.Body, session)
+}
+
+// handlePinnedChat handles chat completions for connection-pinned providers.
+// Attestation and chat happen on the same TLS connection via PinnedHandler.
+func (s *Server) handlePinnedChat(
+	w http.ResponseWriter, r *http.Request,
+	prov *provider.Provider, upstreamModel string,
+	body []byte, req chatRequest,
+) {
+	// Rewrite the model field to the upstream name.
+	rewritten, err := rewriteModelField(body, upstreamModel)
+	if err != nil {
+		slog.Error("rewrite model field failed", "provider", prov.Name, "err", err)
+		http.Error(w, "failed to prepare request", http.StatusInternalServerError)
+		return
+	}
+
+	// Build forwarded headers.
+	headers := make(http.Header)
+	headers.Set("Content-Type", "application/json")
+	// Forward Authorization from client if present.
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		headers.Set("Authorization", auth)
+	}
+
+	pinnedReq := provider.PinnedRequest{
+		Method:  http.MethodPost,
+		Path:    prov.ChatPath,
+		Headers: headers,
+		Body:    rewritten,
+		Model:   upstreamModel,
+	}
+
+	ctx := r.Context()
+	var cancel context.CancelFunc
+	if req.Stream {
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Minute)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, 120*time.Second)
+	}
+	defer cancel()
+
+	pinnedResp, err := prov.PinnedHandler.HandlePinned(ctx, pinnedReq)
+	if err != nil {
+		slog.Error("pinned chat failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+		http.Error(w, fmt.Sprintf("pinned connection failed: %v", err), http.StatusBadGateway)
+		return
+	}
+	defer pinnedResp.Body.Close()
+
+	// Cache the verification report if one was produced (SPKI cache miss).
+	if pinnedResp.Report != nil {
+		s.cache.Put(prov.Name, upstreamModel, pinnedResp.Report)
+	}
+
+	// Relay the response.
+	if pinnedResp.StatusCode != http.StatusOK {
+		w.WriteHeader(pinnedResp.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(pinnedResp.Body, 10<<20))
+		return
+	}
+
+	// No E2EE session for pinned providers (they use TLS pinning).
+	if req.Stream {
+		s.relayStream(w, pinnedResp.Body, nil)
+		return
+	}
+	s.relayNonStream(w, pinnedResp.Body, nil)
 }
 
 // buildUpstreamBody constructs the body to forward upstream. If e2eeActive is
