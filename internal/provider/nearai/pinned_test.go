@@ -25,7 +25,9 @@ func TestWriteHTTPRequest_GET(t *testing.T) {
 	headers.Set("Authorization", "Bearer key")
 	headers.Set("Connection", "keep-alive")
 
-	if err := writeHTTPRequest(bw, "GET", "/v1/attestation/report?nonce=abc", "example.com", headers, nil); err != nil {
+	headers.Set("Host", "example.com")
+
+	if err := writeHTTPRequest(bw, "GET", "/v1/attestation/report?nonce=abc", headers, nil); err != nil {
 		t.Fatalf("writeHTTPRequest: %v", err)
 	}
 
@@ -54,8 +56,10 @@ func TestWriteHTTPRequest_POST(t *testing.T) {
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
 
+	headers.Set("Host", "api.near.ai")
+
 	body := []byte(`{"model":"test"}`)
-	if err := writeHTTPRequest(bw, "POST", "/v1/chat/completions", "api.near.ai", headers, body); err != nil {
+	if err := writeHTTPRequest(bw, "POST", "/v1/chat/completions", headers, body); err != nil {
 		t.Fatalf("writeHTTPRequest: %v", err)
 	}
 
@@ -80,8 +84,10 @@ func TestWriteHTTPRequest_ValidHTTP(t *testing.T) {
 	headers.Set("Authorization", "Bearer test")
 	headers.Set("Content-Type", "application/json")
 
+	headers.Set("Host", "host.com")
+
 	body := []byte(`{"model":"x"}`)
-	if err := writeHTTPRequest(bw, "POST", "/v1/chat", "host.com", headers, body); err != nil {
+	if err := writeHTTPRequest(bw, "POST", "/v1/chat", headers, body); err != nil {
 		t.Fatalf("writeHTTPRequest: %v", err)
 	}
 
@@ -186,7 +192,7 @@ func TestPinnedHandler_SPKICacheHit(t *testing.T) {
 // handlePinnedWithTestDial works around the fact that test TLS servers use
 // localhost addresses, not real domains. It patches the handler's tlsDial
 // to connect to the test server directly.
-func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Server, req provider.PinnedRequest) (*provider.PinnedResponse, error) {
+func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Server, req provider.PinnedRequest) (_ *provider.PinnedResponse, err error) {
 	t.Helper()
 
 	// We can't use the handler's tlsDial because it resolves domain:443.
@@ -203,10 +209,8 @@ func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Serv
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
-
-	success := false
 	defer func() {
-		if !success {
+		if err != nil {
 			conn.Close()
 		}
 	}()
@@ -229,7 +233,7 @@ func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Serv
 	headers.Set("Authorization", "Bearer "+h.apiKey)
 	headers.Set("Connection", "close")
 
-	if err := writeHTTPRequest(bw, req.Method, req.Path, domain, headers, req.Body); err != nil {
+	if err := writeHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
@@ -239,7 +243,6 @@ func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Serv
 	}
 
 	wrappedBody := &connClosingReader{ReadCloser: resp.Body, conn: conn}
-	success = true
 	return &provider.PinnedResponse{
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,

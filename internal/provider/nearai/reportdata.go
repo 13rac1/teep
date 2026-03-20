@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
 )
@@ -28,10 +29,7 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	}
 
 	// Decode signing address — strip optional "0x" prefix.
-	addrHex := raw.SigningAddress
-	if len(addrHex) >= 2 && addrHex[:2] == "0x" {
-		addrHex = addrHex[2:]
-	}
+	addrHex := strings.TrimPrefix(raw.SigningAddress, "0x")
 	addrBytes, err := hex.DecodeString(addrHex)
 	if err != nil {
 		return "", fmt.Errorf("signing_address is not valid hex: %w", err)
@@ -57,5 +55,5 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 			hex.EncodeToString(reportData[32:64]), hex.EncodeToString(nonceBytes[:]))
 	}
 
-	return fmt.Sprintf("REPORTDATA binds sha256(signing_address + tls_fingerprint) + nonce"), nil
+	return "REPORTDATA binds sha256(signing_address + tls_fingerprint) + nonce", nil
 }

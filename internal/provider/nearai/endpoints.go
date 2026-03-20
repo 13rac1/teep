@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -42,6 +43,8 @@ type EndpointResolver struct {
 	mu        sync.RWMutex
 	mapping   map[string]string // model → domain
 	fetchedAt time.Time
+
+	sf singleflight.Group
 }
 
 // NewEndpointResolver returns a resolver that discovers endpoints from
@@ -76,7 +79,13 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 		return domain, nil
 	}
 
-	if err := r.refresh(ctx); err != nil {
+	// Collapse concurrent refreshes into a single HTTP call.
+	// Use a detached context so one caller's cancellation doesn't
+	// fail the refresh for all collapsed callers.
+	_, err, _ := r.sf.Do("refresh", func() (any, error) {
+		return nil, r.refresh(context.WithoutCancel(ctx))
+	})
+	if err != nil {
 		return "", fmt.Errorf("endpoint discovery: %w", err)
 	}
 

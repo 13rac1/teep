@@ -9,11 +9,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -41,6 +41,8 @@ type PinnedHandler struct {
 	enforced   []string
 	rdVerifier provider.ReportDataVerifier
 	dialFn     func(ctx context.Context, domain string) (*tls.Conn, error) // nil → use default tlsDial
+
+	verifySF singleflight.Group
 }
 
 // NewPinnedHandler returns a PinnedHandler for NEAR AI.
@@ -72,7 +74,7 @@ func (h *PinnedHandler) SetDialer(fn func(ctx context.Context, domain string) (*
 // HandlePinned opens a TLS connection to the backend, verifies its certificate
 // via TDX attestation (or SPKI cache), sends the chat request, and returns the
 // raw HTTP response. The caller is responsible for closing PinnedResponse.Body.
-func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedRequest) (*provider.PinnedResponse, error) {
+func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedRequest) (_ *provider.PinnedResponse, err error) {
 	// 1. Resolve model → backend domain.
 	domain, err := h.resolver.Resolve(ctx, req.Model)
 	if err != nil {
@@ -90,9 +92,8 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedReq
 	}
 
 	// On any error after this point, close the connection.
-	success := false
 	defer func() {
-		if !success {
+		if err != nil {
 			conn.Close()
 		}
 	}()
@@ -106,16 +107,30 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedReq
 	br := bufio.NewReader(conn)
 	bw := bufio.NewWriter(conn)
 
-	// 4. Check SPKI cache. On miss, fetch attestation on the same connection.
+	// 4. Check SPKI cache. On miss, collapse concurrent attestation fetches
+	//    for the same domain via singleflight (prevents thundering herd).
 	var report *attestation.VerificationReport
 	if !h.spkiCache.Contains(domain, liveSPKI) {
 		slog.Info("SPKI cache miss, fetching attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
-		report, err = h.attestOnConn(ctx, conn, br, bw, domain, liveSPKI, req.Model)
-		if err != nil {
-			return nil, fmt.Errorf("attestation on %s: %w", domain, err)
+		v, sfErr, _ := h.verifySF.Do(domain+"\x00"+liveSPKI, func() (any, error) {
+			// Double-check after winning the singleflight race.
+			if h.spkiCache.Contains(domain, liveSPKI) {
+				return nil, nil
+			}
+			r, err := h.attestOnConn(ctx, conn, br, bw, domain, liveSPKI, req.Model)
+			if err != nil {
+				return nil, err
+			}
+			h.spkiCache.Add(domain, liveSPKI)
+			slog.Info("SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
+			return r, nil
+		})
+		if sfErr != nil {
+			return nil, fmt.Errorf("attestation on %s: %w", domain, sfErr)
 		}
-		h.spkiCache.Add(domain, liveSPKI)
-		slog.Info("SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
+		if v != nil {
+			report = v.(*attestation.VerificationReport)
+		}
 	} else {
 		slog.Debug("SPKI cache hit, skipping attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
 	}
@@ -126,7 +141,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedReq
 	headers.Set("Authorization", "Bearer "+h.apiKey)
 	headers.Set("Connection", "close")
 
-	if err := writeHTTPRequest(bw, req.Method, req.Path, domain, headers, req.Body); err != nil {
+	if err := writeHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
 		return nil, fmt.Errorf("write chat request: %w", err)
 	}
 
@@ -139,7 +154,6 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedReq
 	// Wrap the response body so closing it also closes the underlying connection.
 	wrappedBody := &connClosingReader{ReadCloser: resp.Body, conn: conn}
 
-	success = true
 	return &provider.PinnedResponse{
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
@@ -151,21 +165,19 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedReq
 // tlsDial opens a TLS connection to domain:443 with InsecureSkipVerify.
 // The certificate is verified via TDX attestation, not the standard CA chain.
 func (h *PinnedHandler) tlsDial(ctx context.Context, domain string) (*tls.Conn, error) {
-	dialer := &net.Dialer{Timeout: dialTimeout}
-	tlsConf := &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // Verified via TDX attestation.
-		ServerName:         domain,
+	d := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: dialTimeout},
+		Config: &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec // Verified via TDX attestation.
+			ServerName:         domain,
+		},
 	}
-	conn, err := tls.DialWithDialer(dialer, "tcp", domain+":443", tlsConf)
+	conn, err := d.DialContext(ctx, "tcp", domain+":443")
 	if err != nil {
 		return nil, err
 	}
-	// Respect context cancellation.
-	if ctx.Err() != nil {
-		conn.Close()
-		return nil, ctx.Err()
-	}
-	return conn, nil
+	// tls.Dialer.DialContext always returns *tls.Conn when err == nil.
+	return conn.(*tls.Conn), nil
 }
 
 // extractSPKI computes the SPKI hash of the peer certificate from a TLS connection.
@@ -196,9 +208,10 @@ func (h *PinnedHandler) attestOnConn(
 
 	// Write the GET request on the existing connection.
 	attestHeaders := make(http.Header)
+	attestHeaders.Set("Host", domain)
 	attestHeaders.Set("Authorization", "Bearer "+h.apiKey)
 	attestHeaders.Set("Connection", "keep-alive")
-	if err := writeHTTPRequest(bw, http.MethodGet, path, domain, attestHeaders, nil); err != nil {
+	if err := writeHTTPRequest(bw, http.MethodGet, path, attestHeaders, nil); err != nil {
 		return nil, fmt.Errorf("write attestation request: %w", err)
 	}
 
@@ -260,28 +273,34 @@ func (h *PinnedHandler) attestOnConn(
 // writeHTTPRequest writes an HTTP/1.1 request (request line + headers + body)
 // to w. Used instead of http.Request.Write to maintain control over the exact
 // connection (no connection pooling, no automatic redirects).
-func writeHTTPRequest(w *bufio.Writer, method, path, host string, headers http.Header, body []byte) error {
+//
+// Host is derived from headers; Content-Length is derived from body.
+func writeHTTPRequest(w *bufio.Writer, method, path string, headers http.Header, body []byte) error {
 	// Request line.
 	if _, err := fmt.Fprintf(w, "%s %s HTTP/1.1\r\n", method, path); err != nil {
 		return err
 	}
 
-	// Host header (must come first per convention).
+	// Host must come first per RFC 7230 §5.4.
+	host := headers.Get("Host")
+	if host == "" {
+		return fmt.Errorf("headers missing required Host field")
+	}
 	if _, err := fmt.Fprintf(w, "Host: %s\r\n", host); err != nil {
 		return err
 	}
 
-	// Content-Length for requests with a body.
+	// Content-Length derived from body; caller must not also set it.
 	if body != nil {
-		if _, err := fmt.Fprintf(w, "Content-Length: %s\r\n", strconv.Itoa(len(body))); err != nil {
+		if _, err := fmt.Fprintf(w, "Content-Length: %d\r\n", len(body)); err != nil {
 			return err
 		}
 	}
 
 	// Other headers.
 	for key, vals := range headers {
-		if key == "Host" {
-			continue // Already written above.
+		if key == "Host" || key == "Content-Length" {
+			continue
 		}
 		for _, val := range vals {
 			if _, err := fmt.Fprintf(w, "%s: %s\r\n", key, val); err != nil {

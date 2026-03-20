@@ -425,6 +425,19 @@ func (s *Server) handlePinnedChat(
 		s.cache.Put(prov.Name, upstreamModel, pinnedResp.Report)
 	}
 
+	// Copy response headers, excluding hop-by-hop headers that Go's
+	// HTTP stack manages (matching proxy.py's filtering).
+	// net/http canonicalizes keys, so compare against canonical forms.
+	for key, vals := range pinnedResp.Header {
+		switch key {
+		case "Transfer-Encoding", "Content-Encoding", "Content-Length", "Connection":
+			continue
+		}
+		for _, v := range vals {
+			w.Header().Add(key, v)
+		}
+	}
+
 	// Relay the response.
 	if pinnedResp.StatusCode != http.StatusOK {
 		w.WriteHeader(pinnedResp.StatusCode)
