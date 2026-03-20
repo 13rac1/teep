@@ -2,7 +2,7 @@
 
 A local TEE (Trusted Execution Environment) proxy for AI APIs. Teep sits between OpenAI-compatible clients and TEE-capable providers, handling attestation verification, end-to-end encryption, and streaming decryption transparently.
 
-It also benchmarks vendor attestation against a 20-factor verification framework, exposing gaps in TEE implementations.
+It also benchmarks vendor attestation against a 21-factor verification framework, exposing gaps in TEE implementations.
 
 ```
 Client (OpenAI SDK) --> 127.0.0.1:8080 (teep)
@@ -50,32 +50,33 @@ Attestation Report: venice / e2ee-qwen3-5-122b-a10b
 ════════════════════════════════════════════════════
 
 Tier 1: Core Attestation
-  ✓ nonce_match                Nonce matches (64 hex chars)
-  ✓ tdx_quote_present          TDX quote present (1,247 bytes)
-  ✓ tdx_quote_structure        Valid QuoteV4 structure
-  ✓ tdx_cert_chain             Certificate chain valid (Intel root CA)
-  ✓ tdx_quote_signature        Quote signature verified
-  ✓ tdx_debug_disabled         Debug bit is 0
-  ✓ signing_key_present        Signing key: 04a3b2...
+  ✓ nonce_match                nonce matches (64 hex chars) (client-supplied)
+  ✓ tdx_quote_present          TDX quote present (10012 hex chars)
+  ✓ tdx_quote_structure        QuoteV4 (648 header + 4358 signed data bytes)
+  ✓ tdx_cert_chain             certificate chain valid (Intel root CA)
+  ✓ tdx_quote_signature        quote signature verified
+  ✓ tdx_debug_disabled         debug bit is 0 (production enclave)
+  ✓ signing_key_present        signing key present (04e3a1c5b2...)
 
 Tier 2: Binding & Crypto
-  ✓ tdx_reportdata_binding     REPORTDATA binds signing key + nonce  [ENFORCED]
-  ? attestation_freshness      Quote age not determinable from response
-  ✓ tdx_tcb_current            TCB SVN: 03000000000000000000000000000000
-  ✓ nvidia_jwt_present         NVIDIA payload present
-  ✓ nvidia_jwt_signature       JWT signature valid (RS256, NVIDIA JWKS)
-  ✓ nvidia_jwt_claims          Claims valid (exp: 2026-03-18T21:00:00Z)
-  ? nvidia_nonce_match         Nonce field not found in NVIDIA payload
-  ✓ e2ee_capable               E2EE key exchange possible
+  ✓ tdx_reportdata_binding     REPORTDATA binds signing key via Ethereum address  [ENFORCED]
+  ✓ intel_pcs_collateral       Intel PCS collateral fetched (TCB status: UpToDate)
+  ✓ tdx_tcb_current            TCB status UpToDate (TEE_TCB_SVN: 03000500...)
+  ✓ nvidia_payload_present     NVIDIA payload present (97782 chars)
+  ✓ nvidia_signature            signature valid (ECDSA-P384, NVIDIA Device Identity CA)
+  ✓ nvidia_claims              EAT claims valid (arch: HOPPER, GPUs: 8)
+  ✓ nvidia_nonce_match         nonce matches in EAT (64 hex chars, HOPPER)
+  ✓ nvidia_nras_verified       NRAS: true (JWT verified)
+  ✓ e2ee_capable               secp256k1 key valid; E2EE key exchange possible
 
 Tier 3: Supply Chain & Channel Integrity
-  ✗ tls_key_binding            No TLS key in attestation document
-  ✗ cpu_gpu_chain              No CPU->GPU binding in attestation
-  ✗ measured_model_weights     No model weight hashes in attestation
-  ✗ build_transparency_log     No Sigstore bundle or equivalent
-  ✗ cpu_id_registry            No CPU ID registry verification
+  ✗ tls_key_binding            not yet implemented
+  ✗ cpu_gpu_chain              not yet implemented
+  ✗ measured_model_weights     not yet implemented
+  ✗ build_transparency_log     not yet implemented
+  ✓ cpu_id_registry            registered (machine: ..., label: ...)
 
-Score: 12/20 passed, 2 skipped, 6 failed
+Score: 17/21 passed, 0 skipped, 4 failed
 ```
 
 Exits with code 1 if any enforced factor fails.
@@ -131,24 +132,25 @@ Config file should have `0600` permissions. Teep warns on startup if it is group
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 8 | `tdx_reportdata_binding` | REPORTDATA cryptographically binds signing key + nonce |
-| 9 | `attestation_freshness` | TDX quote was generated recently |
+| 8 | `tdx_reportdata_binding` | REPORTDATA cryptographically binds signing key via Ethereum address |
+| 9 | `intel_pcs_collateral` | Intel PCS collateral fetched for TCB status |
 | 10 | `tdx_tcb_current` | TCB SVN meets minimum threshold |
-| 11 | `nvidia_jwt_present` | NVIDIA GPU attestation payload present |
-| 12 | `nvidia_jwt_signature` | NVIDIA JWT signature valid against JWKS |
-| 13 | `nvidia_jwt_claims` | JWT claims valid (expiry, issuer) |
-| 14 | `nvidia_nonce_match` | Nonce in NVIDIA payload matches submitted nonce |
-| 15 | `e2ee_capable` | Provider returned enough info for E2EE key exchange |
+| 11 | `nvidia_payload_present` | NVIDIA GPU attestation payload present |
+| 12 | `nvidia_signature` | NVIDIA EAT SPDM signature valid (ECDSA-P384) |
+| 13 | `nvidia_claims` | NVIDIA EAT claims valid (architecture, GPU count) |
+| 14 | `nvidia_nonce_match` | Nonce in NVIDIA EAT payload matches submitted nonce |
+| 15 | `nvidia_nras_verified` | NVIDIA NRAS RIM measurement comparison passed |
+| 16 | `e2ee_capable` | Provider returned enough info for E2EE key exchange |
 
 ### Tier 3: Supply Chain & Channel Integrity
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 16 | `tls_key_binding` | TLS certificate key matches attestation document |
-| 17 | `cpu_gpu_chain` | CPU attestation cryptographically binds GPU attestation |
-| 18 | `measured_model_weights` | Attestation proves specific model weights by hash |
-| 19 | `build_transparency_log` | Runtime measurements match an immutable transparency log |
-| 20 | `cpu_id_registry` | CPU ID verified against a known-good hardware registry |
+| 17 | `tls_key_binding` | TLS certificate key matches attestation document |
+| 18 | `cpu_gpu_chain` | CPU attestation cryptographically binds GPU attestation |
+| 19 | `measured_model_weights` | Attestation proves specific model weights by hash |
+| 20 | `build_transparency_log` | Runtime measurements match an immutable transparency log |
+| 21 | `cpu_id_registry` | CPU ID verified against a known-good hardware registry |
 
 ## Supported Providers
 
@@ -156,6 +158,14 @@ Config file should have `0600` permissions. Teep warns on startup if it is group
 |----------|-------------|------|--------|
 | Venice AI | TDX + NVIDIA | Yes | Supported |
 | NEAR AI | TDX + NVIDIA | No | Attestation only |
+
+## Development
+
+```bash
+make        # build
+make test   # run tests with race detector
+make check  # fmt + vet + test
+```
 
 ## License
 
