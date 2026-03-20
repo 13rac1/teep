@@ -35,19 +35,24 @@ const attestationPath = "/v1/attestation/report"
 // modelAttestation represents one element of the model_attestations array
 // returned by NEAR AI's attestation endpoint.
 type modelAttestation struct {
-	Model              string `json:"model"`
-	ModelName          string `json:"model_name"`
-	IntelQuote         string `json:"intel_quote"`
-	NvidiaPayload      string `json:"nvidia_payload"`
-	SigningKey         string `json:"signing_key"`
-	SigningPublicKey   string `json:"signing_public_key"`
-	SigningAddress     string `json:"signing_address"`
-	SigningAlgo        string `json:"signing_algo"`
-	TLSCertFingerprint string `json:"tls_cert_fingerprint"`
-	Nonce              string `json:"nonce"`
-	RequestNonce       string `json:"request_nonce"`
+	Model              string            `json:"model"`
+	ModelName          string            `json:"model_name"`
+	IntelQuote         string            `json:"intel_quote"`
+	NvidiaPayload      string            `json:"nvidia_payload"`
+	SigningKey         string            `json:"signing_key"`
+	SigningPublicKey   string            `json:"signing_public_key"`
+	SigningAddress     string            `json:"signing_address"`
+	SigningAlgo        string            `json:"signing_algo"`
+	TLSCertFingerprint string            `json:"tls_cert_fingerprint"`
+	Nonce              string            `json:"nonce"`
+	RequestNonce       string            `json:"request_nonce"`
+	EventLog           []json.RawMessage `json:"event_log"`
 	Info               struct {
-		TCBInfo json.RawMessage `json:"tcb_info"`
+		AppName     string          `json:"app_name"`
+		ComposeHash string          `json:"compose_hash"`
+		OSImageHash string          `json:"os_image_hash"`
+		DeviceID    string          `json:"device_id"`
+		TCBInfo     json.RawMessage `json:"tcb_info"`
 	} `json:"info"`
 }
 
@@ -62,20 +67,25 @@ type attestationResponse struct {
 
 	// Top-level fields are present when the server returns a flat response
 	// rather than the array form. Both forms are tolerated.
-	Model              string `json:"model"`
-	ModelName          string `json:"model_name"`
-	IntelQuote         string `json:"intel_quote"`
-	NvidiaPayload      string `json:"nvidia_payload"`
-	SigningKey         string `json:"signing_key"`
-	SigningPublicKey   string `json:"signing_public_key"`
-	SigningAddress     string `json:"signing_address"`
-	SigningAlgo        string `json:"signing_algo"`
-	TLSCertFingerprint string `json:"tls_cert_fingerprint"`
-	Nonce              string `json:"nonce"`
-	RequestNonce       string `json:"request_nonce"`
-	Verified           bool   `json:"verified"`
+	Model              string            `json:"model"`
+	ModelName          string            `json:"model_name"`
+	IntelQuote         string            `json:"intel_quote"`
+	NvidiaPayload      string            `json:"nvidia_payload"`
+	SigningKey         string            `json:"signing_key"`
+	SigningPublicKey   string            `json:"signing_public_key"`
+	SigningAddress     string            `json:"signing_address"`
+	SigningAlgo        string            `json:"signing_algo"`
+	TLSCertFingerprint string            `json:"tls_cert_fingerprint"`
+	Nonce              string            `json:"nonce"`
+	RequestNonce       string            `json:"request_nonce"`
+	Verified           bool              `json:"verified"`
+	EventLog           []json.RawMessage `json:"event_log"`
 	Info               struct {
-		TCBInfo json.RawMessage `json:"tcb_info"`
+		AppName     string          `json:"app_name"`
+		ComposeHash string          `json:"compose_hash"`
+		OSImageHash string          `json:"os_image_hash"`
+		DeviceID    string          `json:"device_id"`
+		TCBInfo     json.RawMessage `json:"tcb_info"`
 	} `json:"info"`
 }
 
@@ -192,7 +202,7 @@ func parseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 	}
 
 	// Flat response form: use top-level fields directly.
-	return &attestation.RawAttestation{
+	raw := &attestation.RawAttestation{
 		Verified:       ar.Verified,
 		Nonce:          firstNonEmpty(ar.Nonce, ar.RequestNonce),
 		Model:          firstNonEmpty(ar.Model, ar.ModelName),
@@ -204,8 +214,17 @@ func parseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 		IntelQuote:     ar.IntelQuote,
 		NvidiaPayload:  ar.NvidiaPayload,
 		AppCompose:     extractAppCompose(ar.Info.TCBInfo),
+		AppName:        ar.Info.AppName,
+		ComposeHash:    ar.Info.ComposeHash,
+		OSImageHash:    ar.Info.OSImageHash,
+		DeviceID:       ar.Info.DeviceID,
+		EventLogCount:  len(ar.EventLog),
 		RawBody:        body,
-	}, nil
+	}
+	if raw.IntelQuote != "" {
+		raw.TEEHardware = "intel-tdx"
+	}
+	return raw, nil
 }
 
 func selectByModel(list []modelAttestation, model string) *modelAttestation {
@@ -221,7 +240,7 @@ func selectByModel(list []modelAttestation, model string) *modelAttestation {
 }
 
 func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) *attestation.RawAttestation {
-	return &attestation.RawAttestation{
+	raw := &attestation.RawAttestation{
 		Verified:       verified,
 		Nonce:          firstNonEmpty(m.Nonce, m.RequestNonce),
 		Model:          firstNonEmpty(m.Model, m.ModelName),
@@ -233,8 +252,17 @@ func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) *a
 		IntelQuote:     m.IntelQuote,
 		NvidiaPayload:  m.NvidiaPayload,
 		AppCompose:     extractAppCompose(m.Info.TCBInfo),
+		AppName:        m.Info.AppName,
+		ComposeHash:    m.Info.ComposeHash,
+		OSImageHash:    m.Info.OSImageHash,
+		DeviceID:       m.Info.DeviceID,
+		EventLogCount:  len(m.EventLog),
 		RawBody:        body,
 	}
+	if raw.IntelQuote != "" {
+		raw.TEEHardware = "intel-tdx"
+	}
+	return raw
 }
 
 // extractAppCompose parses a tcb_info JSON payload and returns the app_compose

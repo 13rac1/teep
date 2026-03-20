@@ -77,7 +77,7 @@ type RawAttestation struct {
 	// Empty for E2EE providers (Venice).
 	TLSFingerprint string
 
-	// TEE environment metadata. Populated by Venice; empty for other providers.
+	// TEE environment metadata from the provider's attestation response.
 	TEEHardware        string          // e.g. "intel-tdx"
 	SigningAlgo        string          // e.g. "ecdsa"
 	UpstreamModel      string          // HuggingFace model ID
