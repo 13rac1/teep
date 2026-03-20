@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/config"
 )
 
 // --------------------------------------------------------------------------
@@ -385,5 +386,38 @@ func TestFormatReport_SeparatorLength(t *testing.T) {
 	if len(headerRunes) != len(sepRunes) {
 		t.Errorf("separator rune length %d != header rune length %d",
 			len(sepRunes), len(headerRunes))
+	}
+}
+
+func TestFilterProviders_KeepNamedProvider(t *testing.T) {
+	cfg := &config.Config{
+		Providers: map[string]*config.Provider{
+			"venice": {Name: "venice"},
+			"nearai": {Name: "nearai"},
+		},
+	}
+
+	if err := filterProviders(cfg, "nearai"); err != nil {
+		t.Fatalf("filterProviders: %v", err)
+	}
+
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("providers len = %d, want 1", len(cfg.Providers))
+	}
+	if _, ok := cfg.Providers["nearai"]; !ok {
+		t.Fatalf("nearai provider missing after filter")
+	}
+}
+
+func TestFilterProviders_UnknownProvider(t *testing.T) {
+	cfg := &config.Config{
+		Providers: map[string]*config.Provider{
+			"venice": {Name: "venice"},
+		},
+	}
+
+	err := filterProviders(cfg, "nearai")
+	if err == nil {
+		t.Fatal("expected error for unknown provider")
 	}
 }

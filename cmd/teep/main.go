@@ -83,6 +83,7 @@ func parseLogLevel(args []string) slog.Level {
 // runServe loads config, creates the proxy, and starts listening.
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	providerName := fs.String("provider", "", "run proxy with a single provider (optional, e.g. venice, nearai)")
 	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 	fs.Usage = func() { printServeHelp() }
@@ -95,6 +96,13 @@ func runServe(args []string) {
 	}
 	cfg.Offline = *offline
 
+	if *providerName != "" {
+		if err := filterProviders(cfg, *providerName); err != nil {
+			slog.Error("provider filter failed", "err", err)
+			os.Exit(1)
+		}
+	}
+
 	srv, err := proxy.New(cfg)
 	if err != nil {
 		slog.Error("proxy init failed", "err", err)
@@ -104,6 +112,16 @@ func runServe(args []string) {
 		slog.Error("server failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// filterProviders narrows cfg.Providers to a single named provider.
+func filterProviders(cfg *config.Config, providerName string) error {
+	cp, ok := cfg.Providers[providerName]
+	if !ok {
+		return fmt.Errorf("provider %q not found (known: %s)", providerName, knownProviders(cfg))
+	}
+	cfg.Providers = map[string]*config.Provider{providerName: cp}
+	return nil
 }
 
 // runVerify parses flags, fetches attestation from the named provider, builds

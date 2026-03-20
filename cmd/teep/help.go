@@ -348,7 +348,7 @@ func printServeHelp() {
 	fmt.Print(`teep serve — Start the HTTP proxy server
 
 Usage:
-  teep serve [--offline] [--log-level LEVEL]
+  teep serve [--provider NAME] [--offline] [--log-level LEVEL]
 
 The proxy intercepts OpenAI-compatible chat completion requests, performs TEE
 attestation verification against the upstream provider, and optionally enables
@@ -380,6 +380,7 @@ Example TOML:
   "gpt-4" = "e2ee-qwen3-32b"
 
 Flags:
+  --provider NAME     Run proxy with a single provider (e.g. venice, nearai).
   --offline           Skip external verification (Intel PCS, Proof of Cloud).
   --log-level LEVEL   Set log verbosity: debug, info, warn, error (default: info).
 `)
