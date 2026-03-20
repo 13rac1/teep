@@ -200,19 +200,19 @@ func parseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 	}, nil
 }
 
-func selectByModel(list []modelAttestation, model string) modelAttestation {
-	selected := list[0]
+func selectByModel(list []modelAttestation, model string) *modelAttestation {
+	selected := &list[0]
 	for i := range list {
 		candidateModel := firstNonEmpty(list[i].Model, list[i].ModelName)
 		if candidateModel == model {
-			selected = list[i]
+			selected = &list[i]
 			break
 		}
 	}
 	return selected
 }
 
-func rawFromModelAttestation(m modelAttestation, verified bool, body []byte) *attestation.RawAttestation {
+func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) *attestation.RawAttestation {
 	return &attestation.RawAttestation{
 		Verified:       verified,
 		Nonce:          firstNonEmpty(m.Nonce, m.RequestNonce),

@@ -189,7 +189,8 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 	if len(s.providers) == 1 {
 		for _, p := range s.providers {
 			if p.PinnedHandler != nil {
-				return p, p.MapModel(clientModel), true
+				mapped := p.MapModel(clientModel)
+				return p, mapped, true
 			}
 		}
 	}

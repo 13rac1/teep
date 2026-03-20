@@ -33,6 +33,20 @@ func (stubPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedReque
 	}, nil
 }
 
+type capturePinnedHandler struct {
+	gotModel string
+}
+
+func (h *capturePinnedHandler) HandlePinned(_ context.Context, req *provider.PinnedRequest) (*provider.PinnedResponse, error) {
+	h.gotModel = req.Model
+	body := io.NopCloser(strings.NewReader(nonStreamResponse("ok")))
+	return &provider.PinnedResponse{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       body,
+	}, nil
+}
+
 // --------------------------------------------------------------------------
 // Test helpers
 // --------------------------------------------------------------------------
@@ -1068,6 +1082,55 @@ func TestSinglePinnedProvider_AllowsDynamicModelName(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+}
+
+func TestSinglePinnedProvider_ResolveModelFallbackPreservesMapModel(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"nearai": {
+				Name:    "nearai",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+				E2EE:    false,
+				ModelMap: map[string]string{
+					"client-model": "mapped-upstream-model",
+				},
+			},
+		},
+		Enforced: []string{},
+	}
+
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+
+	prov := srv.ProviderByName("nearai")
+	if prov == nil {
+		t.Fatal("nearai provider missing")
+	}
+
+	h := &capturePinnedHandler{}
+	prov.PinnedHandler = h
+
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	resp, err := postChat(t, proxySrv.URL, "client-model", false)
+	if err != nil {
+		t.Fatalf("POST chat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+
+	if h.gotModel != "mapped-upstream-model" {
+		t.Errorf("pinned request model = %q, want %q", h.gotModel, "mapped-upstream-model")
 	}
 }
 
