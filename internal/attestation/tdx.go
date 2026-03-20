@@ -42,7 +42,7 @@ type TDXVerifyResult struct {
 	ReportDataBindingErr error
 
 	// ReportDataBindingDetail is a human-readable description of the binding
-	// that was verified (e.g. "REPORTDATA binds signing key via Ethereum address").
+	// that was verified (e.g. "REPORTDATA binds signing key via keccak256-derived address").
 	// Set by the provider's ReportDataVerifier on success.
 	ReportDataBindingDetail string
 

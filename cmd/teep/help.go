@@ -96,12 +96,13 @@ var factorRegistry = [23]factorInfo{
 		Name:    "tdx_reportdata_binding",
 		Tier:    2,
 		Summary: "REPORTDATA binds signing key to enclave",
-		Description: "Verifies that the TDX REPORTDATA field contains the Ethereum " +
-			"address derived from the signing key (keccak256 of the uncompressed " +
-			"secp256k1 public key). This cryptographically binds the signing key " +
-			"to the attested enclave, preventing a man-in-the-middle from " +
-			"substituting the key while leaving the TDX quote intact. Without " +
-			"this binding, E2EE is security theater.",
+		Description: "Verifies that the TDX REPORTDATA field contains a " +
+			"keccak256-derived address of the signing key (last 20 bytes of " +
+			"keccak256 of the uncompressed secp256k1 public key). This " +
+			"cryptographically binds the signing key to the attested enclave, " +
+			"preventing a man-in-the-middle from substituting the key while " +
+			"leaving the TDX quote intact. Without this binding, E2EE is " +
+			"security theater.",
 	},
 	{
 		Name:    "intel_pcs_collateral",

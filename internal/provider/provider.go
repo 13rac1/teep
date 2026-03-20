@@ -54,8 +54,8 @@ type PinnedResponse struct {
 }
 
 // ReportDataVerifier validates that TDX REPORTDATA binds the expected identity.
-// Each provider implements its own binding scheme (e.g. Venice uses Ethereum
-// address derivation, NEAR uses sha256(signing_address + tls_fingerprint)).
+// Each provider implements its own binding scheme (e.g. Venice uses
+// keccak256-derived address, NEAR uses sha256(signing_address + tls_fingerprint)).
 type ReportDataVerifier interface {
 	VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, nonce attestation.Nonce) (detail string, err error)
 }

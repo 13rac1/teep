@@ -10,9 +10,9 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-// ethAddress computes the Ethereum address (20 bytes) from an uncompressed
-// secp256k1 public key (65 bytes starting with 0x04).
-func ethAddress(pubKeyUncompressed []byte) []byte {
+// keccakAddress computes the keccak256-derived address (20 bytes) from an
+// uncompressed secp256k1 public key (65 bytes starting with 0x04).
+func keccakAddress(pubKeyUncompressed []byte) []byte {
 	h := sha3.NewLegacyKeccak256()
 	h.Write(pubKeyUncompressed[1:]) // skip 04 prefix
 	hash := h.Sum(nil)
@@ -25,7 +25,7 @@ func TestReportDataVerifier_CorrectBinding(t *testing.T) {
 		t.Fatalf("GeneratePrivateKey: %v", err)
 	}
 	pubKeyBytes := priv.PubKey().SerializeUncompressed()
-	addr := ethAddress(pubKeyBytes)
+	addr := keccakAddress(pubKeyBytes)
 
 	var reportData [64]byte
 	copy(reportData[:20], addr)
@@ -45,6 +45,53 @@ func TestReportDataVerifier_CorrectBinding(t *testing.T) {
 	t.Logf("detail: %s", detail)
 }
 
+func TestReportDataVerifier_SigningAddressMatch(t *testing.T) {
+	priv, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey: %v", err)
+	}
+	pubKeyBytes := priv.PubKey().SerializeUncompressed()
+	addr := keccakAddress(pubKeyBytes)
+
+	var reportData [64]byte
+	copy(reportData[:20], addr)
+
+	raw := &attestation.RawAttestation{
+		SigningKey:     hex.EncodeToString(pubKeyBytes),
+		SigningAddress: "0x" + hex.EncodeToString(addr),
+	}
+
+	v := venice.ReportDataVerifier{}
+	_, err = v.VerifyReportData(reportData, raw, attestation.Nonce{})
+	if err != nil {
+		t.Fatalf("unexpected error with matching signing_address: %v", err)
+	}
+}
+
+func TestReportDataVerifier_SigningAddressMismatch(t *testing.T) {
+	priv, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey: %v", err)
+	}
+	pubKeyBytes := priv.PubKey().SerializeUncompressed()
+	addr := keccakAddress(pubKeyBytes)
+
+	var reportData [64]byte
+	copy(reportData[:20], addr)
+
+	raw := &attestation.RawAttestation{
+		SigningKey:     hex.EncodeToString(pubKeyBytes),
+		SigningAddress: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+	}
+
+	v := venice.ReportDataVerifier{}
+	_, err = v.VerifyReportData(reportData, raw, attestation.Nonce{})
+	if err == nil {
+		t.Error("expected error for mismatched signing_address, got nil")
+	}
+	t.Logf("expected error: %v", err)
+}
+
 func TestReportDataVerifier_WrongKey(t *testing.T) {
 	privA, err := secp256k1.GeneratePrivateKey()
 	if err != nil {
@@ -55,7 +102,7 @@ func TestReportDataVerifier_WrongKey(t *testing.T) {
 		t.Fatalf("GeneratePrivateKey B: %v", err)
 	}
 
-	addrA := ethAddress(privA.PubKey().SerializeUncompressed())
+	addrA := keccakAddress(privA.PubKey().SerializeUncompressed())
 	var reportData [64]byte
 	copy(reportData[:20], addrA)
 

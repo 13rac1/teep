@@ -62,7 +62,7 @@ type RawAttestation struct {
 	// starts with "04"). Used for E2EE key exchange.
 	SigningKey string
 
-	// SigningAddress is the Ethereum-style address derived from SigningKey.
+	// SigningAddress is the keccak256-derived address of SigningKey.
 	// Present for Venice; may be empty for other providers.
 	SigningAddress string
 
