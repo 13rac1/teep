@@ -75,10 +75,6 @@ type Provider struct {
 	// config.RedactKey.
 	APIKey string
 
-	// ModelMap translates client-facing model names to upstream model names.
-	// If a model name is absent, MapModel returns it unchanged.
-	ModelMap map[string]string
-
 	// ChatPath is the API path for chat completions (e.g. "/api/v1/chat/completions").
 	ChatPath string
 
@@ -102,13 +98,4 @@ type Provider struct {
 	// (e.g. NEAR AI). When non-nil, the proxy uses this instead of the
 	// standard http.Client path.
 	PinnedHandler PinnedHandler
-}
-
-// MapModel translates a client-facing model name to the upstream model name.
-// Returns the input unchanged if no mapping exists.
-func (p *Provider) MapModel(clientModel string) string {
-	if mapped, ok := p.ModelMap[clientModel]; ok {
-		return mapped
-	}
-	return clientModel
 }

@@ -117,11 +117,8 @@ base_url = "https://api.venice.ai"
 api_key_env = "VENICE_API_KEY"
 e2ee = true
 
-[providers.venice.models]
-"qwen-e2ee" = "e2ee-qwen3-5-122b-a10b"
-
 [providers.nearai]
-base_url = "https://api.near.ai"
+base_url = "https://completions.near.ai"
 api_key_env = "NEARAI_API_KEY"
 e2ee = false
 

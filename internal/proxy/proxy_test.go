@@ -33,20 +33,6 @@ func (stubPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedReque
 	}, nil
 }
 
-type capturePinnedHandler struct {
-	gotModel string
-}
-
-func (h *capturePinnedHandler) HandlePinned(_ context.Context, req *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	h.gotModel = req.Model
-	body := io.NopCloser(strings.NewReader(nonStreamResponse("ok")))
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       body,
-	}, nil
-}
-
 // --------------------------------------------------------------------------
 // Test helpers
 // --------------------------------------------------------------------------
@@ -110,7 +96,7 @@ func makeAttestationServer(t *testing.T, echoNonce bool) *httptest.Server {
 }
 
 // buildConfig returns a *config.Config wired to the given attestation server
-// URL, with a single "venice" provider and two model mappings.
+// URL, with a single "venice" provider.
 func buildConfig(attestBaseURL string, _ bool) *config.Config {
 	return &config.Config{
 		ListenAddr: "127.0.0.1:0",
@@ -120,42 +106,9 @@ func buildConfig(attestBaseURL string, _ bool) *config.Config {
 				BaseURL: attestBaseURL,
 				APIKey:  "test-key",
 				E2EE:    false,
-				ModelMap: map[string]string{
-					"test-model":  "upstream-model",
-					"other-model": "upstream-other",
-				},
 			},
 		},
 		Enforced: []string{"nonce_match", "tdx_debug_disabled", "signing_key_present", "tdx_reportdata_binding"},
-	}
-}
-
-// buildConfigMultiProvider returns a config with two providers for model
-// resolution tests.
-func buildConfigMultiProvider(veniceBase, nearaiBase string) *config.Config {
-	return &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"venice": {
-				Name:    "venice",
-				BaseURL: veniceBase,
-				APIKey:  "venice-key",
-				E2EE:    false,
-				ModelMap: map[string]string{
-					"venice-model": "upstream-venice",
-				},
-			},
-			"nearai": {
-				Name:    "nearai",
-				BaseURL: nearaiBase,
-				APIKey:  "nearai-key",
-				E2EE:    false,
-				ModelMap: map[string]string{
-					"nearai-model": "upstream-nearai",
-				},
-			},
-		},
-		Enforced: []string{},
 	}
 }
 
@@ -282,24 +235,6 @@ func TestUnknownRoute404(t *testing.T) {
 	}
 }
 
-func TestUnknownModel400(t *testing.T) {
-	attestSrv := makeAttestationServer(t, false)
-	defer attestSrv.Close()
-
-	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
-	defer proxySrv.Close()
-
-	resp, err := postChat(t, proxySrv.URL, "no-such-model", false)
-	if err != nil {
-		t.Fatalf("POST chat: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
-}
-
 func TestMissingModelField400(t *testing.T) {
 	attestSrv := makeAttestationServer(t, false)
 	defer attestSrv.Close()
@@ -361,11 +296,7 @@ func TestHandleModels(t *testing.T) {
 
 	var result struct {
 		Object string `json:"object"`
-		Data   []struct {
-			ID      string `json:"id"`
-			Object  string `json:"object"`
-			OwnedBy string `json:"owned_by"`
-		} `json:"data"`
+		Data   []any  `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("decode models response: %v", err)
@@ -374,53 +305,8 @@ func TestHandleModels(t *testing.T) {
 	if result.Object != "list" {
 		t.Errorf("object = %q, want %q", result.Object, "list")
 	}
-	// Config has two models: test-model and other-model.
-	if len(result.Data) != 2 {
-		t.Errorf("data len = %d, want 2", len(result.Data))
-	}
-	ids := make(map[string]bool)
-	for _, m := range result.Data {
-		ids[m.ID] = true
-		if m.Object != "model" {
-			t.Errorf("model %q: object = %q, want %q", m.ID, m.Object, "model")
-		}
-		if m.OwnedBy != "venice" {
-			t.Errorf("model %q: owned_by = %q, want %q", m.ID, m.OwnedBy, "venice")
-		}
-	}
-	if !ids["test-model"] {
-		t.Error("test-model not in models list")
-	}
-	if !ids["other-model"] {
-		t.Error("other-model not in models list")
-	}
-}
-
-func TestHandleModelsMultiProvider(t *testing.T) {
-	// Two providers, each with one model. Both should appear.
-	attestSrv := makeAttestationServer(t, false)
-	defer attestSrv.Close()
-
-	cfg := buildConfigMultiProvider(attestSrv.URL, attestSrv.URL)
-	proxySrv := newProxyServer(t, cfg)
-	defer proxySrv.Close()
-
-	resp, err := http.Get(proxySrv.URL + "/v1/models")
-	if err != nil {
-		t.Fatalf("GET /v1/models: %v", err)
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(result.Data) != 2 {
-		t.Errorf("data len = %d, want 2", len(result.Data))
+	if len(result.Data) != 0 {
+		t.Errorf("data len = %d, want 0 (no model map)", len(result.Data))
 	}
 }
 
@@ -453,7 +339,7 @@ func TestHandleReport_NotFound(t *testing.T) {
 	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
 	defer proxySrv.Close()
 
-	resp, err := http.Get(proxySrv.URL + "/v1/tee/report?provider=venice&model=upstream-model")
+	resp, err := http.Get(proxySrv.URL + "/v1/tee/report?provider=venice&model=test-model")
 	if err != nil {
 		t.Fatalf("GET /v1/tee/report: %v", err)
 	}
@@ -517,9 +403,6 @@ func TestHandleReport_ReturnsCachedReport(t *testing.T) {
 				BaseURL: combined.URL,
 				APIKey:  "key",
 				E2EE:    false,
-				ModelMap: map[string]string{
-					"test-model": "upstream-model",
-				},
 			},
 		},
 		Enforced: []string{},
@@ -539,8 +422,8 @@ func TestHandleReport_ReturnsCachedReport(t *testing.T) {
 		t.Fatal("upstream was not called")
 	}
 
-	// Now the cache should have a report for venice/upstream-model.
-	reportResp, err := http.Get(proxySrv.URL + "/v1/tee/report?provider=venice&model=upstream-model")
+	// Now the cache should have a report for venice/test-model (no mapping).
+	reportResp, err := http.Get(proxySrv.URL + "/v1/tee/report?provider=venice&model=test-model")
 	if err != nil {
 		t.Fatalf("GET /v1/tee/report: %v", err)
 	}
@@ -558,8 +441,8 @@ func TestHandleReport_ReturnsCachedReport(t *testing.T) {
 	if report.Provider != "venice" {
 		t.Errorf("report.Provider = %q, want %q", report.Provider, "venice")
 	}
-	if report.Model != "upstream-model" {
-		t.Errorf("report.Model = %q, want %q", report.Model, "upstream-model")
+	if report.Model != "test-model" {
+		t.Errorf("report.Model = %q, want %q", report.Model, "test-model")
 	}
 }
 
@@ -634,11 +517,10 @@ func TestBlockedAttestation502(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     false,
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    false,
 			},
 		},
 		Enforced: []string{"nonce_match"},
@@ -697,11 +579,10 @@ func TestPlaintextNonStream(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     false, // plaintext
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    false, // plaintext
 			},
 		},
 		Enforced: []string{},
@@ -755,11 +636,10 @@ func TestPlaintextStreaming(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     false,
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    false,
 			},
 		},
 		Enforced: []string{},
@@ -863,11 +743,10 @@ func TestE2EEFallbackToPlaintext(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     true, // E2EE requested but reportdata binding will fail
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    true, // E2EE requested but reportdata binding will fail
 			},
 		},
 		// tdx_reportdata_binding is not enforced → proxy continues but falls back
@@ -923,11 +802,10 @@ func TestUpstreamNon200Forwarded(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     false,
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    false,
 			},
 		},
 		Enforced: []string{},
@@ -951,107 +829,15 @@ func TestUpstreamNon200Forwarded(t *testing.T) {
 // Model resolution across providers
 // --------------------------------------------------------------------------
 
-func TestModelResolutionAcrossProviders(t *testing.T) {
-	// Each provider serves its own chat completions with distinct content.
-	veniceContent := "from venice"
-	nearaiContent := "from nearai"
-
-	venice := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/v1/tee/attestation") {
-			nonceHex := r.URL.Query().Get("nonce")
-			var n attestation.Nonce
-			b, _ := hex.DecodeString(nonceHex)
-			copy(n[:], b)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(attestationJSON(n, true)))
-			return
-		}
-		if r.URL.Path == "/api/v1/chat/completions" {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(nonStreamResponse(veniceContent)))
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer venice.Close()
-
-	nearai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v1/attestation/report") {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{
-				"verified": true,
-				"model": "upstream-nearai",
-				"intel_quote": "",
-				"nvidia_payload": "",
-				"signing_key": %q,
-				"nonce": ""
-			}`, modelPubKeyHex())
-			return
-		}
-		if r.URL.Path == "/v1/chat/completions" {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(nonStreamResponse(nearaiContent)))
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer nearai.Close()
-
-	cfg := buildConfigMultiProvider(venice.URL, nearai.URL)
-	cfg.Enforced = []string{}
-
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-	// Disable pinned handler for this routing test — the NEAR AI backend is
-	// a plain HTTP test server, not TLS with endpoint discovery.
-	srv.ProviderByName("nearai").PinnedHandler = nil
-
-	proxySrv := httptest.NewServer(srv)
-	defer proxySrv.Close()
-
-	// Request the Venice model.
-	resp1, err := postChat(t, proxySrv.URL, "venice-model", false)
-	if err != nil {
-		t.Fatalf("venice request: %v", err)
-	}
-	defer resp1.Body.Close()
-	if resp1.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp1.Body)
-		t.Fatalf("venice status = %d; body=%s", resp1.StatusCode, body)
-	}
-	body1, _ := io.ReadAll(resp1.Body)
-	if got := extractMessageContent(t, body1); got != veniceContent {
-		t.Errorf("venice content = %q, want %q", got, veniceContent)
-	}
-
-	// Request the NEAR AI model.
-	resp2, err := postChat(t, proxySrv.URL, "nearai-model", false)
-	if err != nil {
-		t.Fatalf("nearai request: %v", err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp2.Body)
-		t.Fatalf("nearai status = %d; body=%s", resp2.StatusCode, body)
-	}
-	body2, _ := io.ReadAll(resp2.Body)
-	if got := extractMessageContent(t, body2); got != nearaiContent {
-		t.Errorf("nearai content = %q, want %q", got, nearaiContent)
-	}
-}
-
 func TestSinglePinnedProvider_AllowsDynamicModelName(t *testing.T) {
 	cfg := &config.Config{
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"nearai": {
-				Name:     "nearai",
-				BaseURL:  "https://completions.near.ai",
-				APIKey:   "key",
-				E2EE:     false,
-				ModelMap: map[string]string{},
+				Name:    "nearai",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+				E2EE:    false,
 			},
 		},
 		Enforced: []string{},
@@ -1082,55 +868,6 @@ func TestSinglePinnedProvider_AllowsDynamicModelName(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
-	}
-}
-
-func TestSinglePinnedProvider_ResolveModelFallbackPreservesMapModel(t *testing.T) {
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"nearai": {
-				Name:    "nearai",
-				BaseURL: "https://completions.near.ai",
-				APIKey:  "key",
-				E2EE:    false,
-				ModelMap: map[string]string{
-					"client-model": "mapped-upstream-model",
-				},
-			},
-		},
-		Enforced: []string{},
-	}
-
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-
-	prov := srv.ProviderByName("nearai")
-	if prov == nil {
-		t.Fatal("nearai provider missing")
-	}
-
-	h := &capturePinnedHandler{}
-	prov.PinnedHandler = h
-
-	proxySrv := httptest.NewServer(srv)
-	defer proxySrv.Close()
-
-	resp, err := postChat(t, proxySrv.URL, "client-model", false)
-	if err != nil {
-		t.Fatalf("POST chat: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
-	}
-
-	if h.gotModel != "mapped-upstream-model" {
-		t.Errorf("pinned request model = %q, want %q", h.gotModel, "mapped-upstream-model")
 	}
 }
 
@@ -1172,11 +909,10 @@ func TestSSEMultipleChunks(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     false,
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    false,
 			},
 		},
 		Enforced: []string{},
@@ -1238,11 +974,10 @@ func TestAttestationCacheHit(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     false,
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    false,
 			},
 		},
 		Enforced: []string{},
@@ -1268,69 +1003,6 @@ func TestAttestationCacheHit(t *testing.T) {
 // --------------------------------------------------------------------------
 // Model name rewriting
 // --------------------------------------------------------------------------
-
-func TestModelNameRewrittenUpstream(t *testing.T) {
-	// Verify the proxy rewrites the model name in the upstream request body.
-	var upstreamModel string
-	combined := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/v1/tee/attestation") {
-			nonceHex := r.URL.Query().Get("nonce")
-			var n attestation.Nonce
-			b, _ := hex.DecodeString(nonceHex)
-			copy(n[:], b)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(attestationJSON(n, true)))
-			return
-		}
-		if r.URL.Path == "/api/v1/chat/completions" {
-			body, _ := io.ReadAll(r.Body)
-			var req struct {
-				Model string `json:"model"`
-			}
-			_ = json.Unmarshal(body, &req)
-			upstreamModel = req.Model
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(nonStreamResponse("ok")))
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer combined.Close()
-
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"venice": {
-				Name:    "venice",
-				BaseURL: combined.URL,
-				APIKey:  "key",
-				E2EE:    false,
-				ModelMap: map[string]string{
-					"client-facing-model": "internal-model-name",
-				},
-			},
-		},
-		Enforced: []string{},
-	}
-
-	proxySrv := newProxyServer(t, cfg)
-	defer proxySrv.Close()
-
-	resp, err := postChat(t, proxySrv.URL, "client-facing-model", false)
-	if err != nil {
-		t.Fatalf("POST chat: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d; body=%s", resp.StatusCode, body)
-	}
-
-	if upstreamModel != "internal-model-name" {
-		t.Errorf("upstream saw model %q, want %q", upstreamModel, "internal-model-name")
-	}
-}
 
 // --------------------------------------------------------------------------
 // Decryption unit tests (decrypt.go)
@@ -1366,11 +1038,10 @@ func TestE2EEStreamingRoundTrip(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     true, // E2EE requested; will fall back due to no real TDX
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    true, // E2EE requested; will fall back due to no real TDX
 			},
 		},
 		Enforced: []string{}, // no enforced factors → proxy won't block
@@ -1447,11 +1118,10 @@ func TestPlaintextPassthrough_PreservesCiphertext(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     false, // plaintext mode
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    false, // plaintext mode
 			},
 		},
 		Enforced: []string{},
@@ -1550,11 +1220,10 @@ func TestUpstreamBodyDrained(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     false,
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    false,
 			},
 		},
 		Enforced: []string{},
@@ -1612,11 +1281,10 @@ func TestSSELargeChunk(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "key",
-				E2EE:     false,
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "key",
+				E2EE:    false,
 			},
 		},
 		Enforced: []string{},
@@ -1682,11 +1350,10 @@ func TestAuthorizationHeaderSetViaVenicePreparer(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  combined.URL,
-				APIKey:   "secret-key",
-				E2EE:     false, // plaintext path
-				ModelMap: map[string]string{"test-model": "upstream-model"},
+				Name:    "venice",
+				BaseURL: combined.URL,
+				APIKey:  "secret-key",
+				E2EE:    false, // plaintext path
 			},
 		},
 		Enforced: []string{},
@@ -1718,10 +1385,9 @@ func TestNewUnknownProviderError(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
 			"badprovider": {
-				Name:     "badprovider",
-				BaseURL:  "http://localhost",
-				APIKey:   "key",
-				ModelMap: map[string]string{"m": "m"},
+				Name:    "badprovider",
+				BaseURL: "http://localhost",
+				APIKey:  "key",
 			},
 		},
 	}
@@ -1731,32 +1397,5 @@ func TestNewUnknownProviderError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown provider") {
 		t.Errorf("error should mention unknown provider: %v", err)
-	}
-}
-
-func TestNewDuplicateModelError(t *testing.T) {
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"venice": {
-				Name:     "venice",
-				BaseURL:  "http://localhost",
-				APIKey:   "key",
-				ModelMap: map[string]string{"shared-model": "upstream-a"},
-			},
-			"nearai": {
-				Name:     "nearai",
-				BaseURL:  "http://localhost",
-				APIKey:   "key",
-				ModelMap: map[string]string{"shared-model": "upstream-b"},
-			},
-		},
-	}
-	_, err := proxy.New(cfg)
-	if err == nil {
-		t.Fatal("expected error for duplicate model, got nil")
-	}
-	if !strings.Contains(err.Error(), "shared-model") {
-		t.Errorf("error should mention the duplicate model name: %v", err)
 	}
 }

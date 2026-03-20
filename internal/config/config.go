@@ -13,7 +13,6 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -40,11 +39,10 @@ var DefaultEnforced = attestation.DefaultEnforced
 // Either APIKey or APIKeyEnv must be set; APIKeyEnv takes precedence if both
 // are present. The resolved key is exposed via the Provider struct, not here.
 type ProviderConfig struct {
-	APIKey    string            `toml:"api_key"`
-	APIKeyEnv string            `toml:"api_key_env"`
-	BaseURL   string            `toml:"base_url"`
-	E2EE      bool              `toml:"e2ee"`
-	Models    map[string]string `toml:"models"`
+	APIKey    string `toml:"api_key"`
+	APIKeyEnv string `toml:"api_key_env"`
+	BaseURL   string `toml:"base_url"`
+	E2EE      bool   `toml:"e2ee"`
 }
 
 // PolicyConfig holds the optional [policy] section from the TOML file.
@@ -61,20 +59,10 @@ type tomlFile struct {
 // Provider is a fully resolved provider configuration, ready for use by the
 // proxy and attestation verifier. Attester and Preparer are populated in Phase 4.
 type Provider struct {
-	Name     string
-	BaseURL  string
-	APIKey   string
-	ModelMap map[string]string // client model → upstream model
-	E2EE     bool
-}
-
-// MapModel translates a client-facing model name to the upstream model name.
-// Returns the input unchanged if no mapping exists.
-func (p *Provider) MapModel(clientModel string) string {
-	if mapped, ok := p.ModelMap[clientModel]; ok {
-		return mapped
-	}
-	return clientModel
+	Name    string
+	BaseURL string
+	APIKey  string
+	E2EE    bool
 }
 
 // Config is the fully resolved runtime configuration for the teep proxy.
@@ -161,15 +149,11 @@ func resolveProvider(name string, pc ProviderConfig) *Provider {
 		}
 	}
 
-	models := make(map[string]string, len(pc.Models))
-	maps.Copy(models, pc.Models)
-
 	return &Provider{
-		Name:     name,
-		BaseURL:  pc.BaseURL,
-		APIKey:   apiKey,
-		ModelMap: models,
-		E2EE:     pc.E2EE,
+		Name:    name,
+		BaseURL: pc.BaseURL,
+		APIKey:  apiKey,
+		E2EE:    pc.E2EE,
 	}
 }
 
@@ -197,10 +181,9 @@ func applyAPIKeyEnv(cfg *Config, name, envVar, defaultBaseURL string, defaultE2E
 	p, ok := cfg.Providers[name]
 	if !ok {
 		p = &Provider{
-			Name:     name,
-			BaseURL:  defaultBaseURL,
-			E2EE:     defaultE2EE,
-			ModelMap: make(map[string]string),
+			Name:    name,
+			BaseURL: defaultBaseURL,
+			E2EE:    defaultE2EE,
 		}
 		cfg.Providers[name] = p
 	}

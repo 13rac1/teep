@@ -44,21 +44,18 @@ func integrationModel() string {
 
 // integrationPlaintextConfig returns a config pointing at the live Venice API
 // with E2EE disabled and Offline true (skips Intel PCS, NRAS, PoC network
-// calls). The model maps to itself (identity mapping) so the cache key
-// matches the model name used in the report endpoint.
+// calls).
 func integrationPlaintextConfig(t *testing.T) *config.Config {
 	t.Helper()
-	model := integrationModel()
 	return &config.Config{
 		ListenAddr: "127.0.0.1:0",
 		Offline:    true,
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  "https://api.venice.ai",
-				APIKey:   os.Getenv("VENICE_API_KEY"),
-				E2EE:     false,
-				ModelMap: map[string]string{model: model},
+				Name:    "venice",
+				BaseURL: "https://api.venice.ai",
+				APIKey:  os.Getenv("VENICE_API_KEY"),
+				E2EE:    false,
 			},
 		},
 		Enforced: []string{},
@@ -71,17 +68,15 @@ func integrationPlaintextConfig(t *testing.T) *config.Config {
 // fresh TDX check).
 func integrationE2EEConfig(t *testing.T) *config.Config {
 	t.Helper()
-	model := integrationModel()
 	return &config.Config{
 		ListenAddr: "127.0.0.1:0",
 		Offline:    true,
 		Providers: map[string]*config.Provider{
 			"venice": {
-				Name:     "venice",
-				BaseURL:  "https://api.venice.ai",
-				APIKey:   os.Getenv("VENICE_API_KEY"),
-				E2EE:     true,
-				ModelMap: map[string]string{model: model},
+				Name:    "venice",
+				BaseURL: "https://api.venice.ai",
+				APIKey:  os.Getenv("VENICE_API_KEY"),
+				E2EE:    true,
 			},
 		},
 		Enforced: []string{},

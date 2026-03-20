@@ -95,20 +95,13 @@ func New(cfg *config.Config) (*Server, error) {
 		},
 	}
 
-	modelOwner := make(map[string]string) // client model → provider name
 	for name, cp := range cfg.Providers {
 		p, err := fromConfig(cp, spkiCache, cfg.Offline, cfg.Enforced)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
-		for model := range p.ModelMap {
-			if prev, ok := modelOwner[model]; ok {
-				return nil, fmt.Errorf("model %q mapped by both %q and %q", model, prev, name)
-			}
-			modelOwner[model] = name
-		}
 		s.providers[name] = p
-		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE, "models", len(cp.ModelMap))
+		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE)
 	}
 
 	s.mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
@@ -141,11 +134,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // the correct Attester, Preparer, and PinnedHandler for the known provider names.
 func fromConfig(cp *config.Provider, spkiCache *attestation.SPKICache, offline bool, enforced []string) (*provider.Provider, error) {
 	p := &provider.Provider{
-		Name:     cp.Name,
-		BaseURL:  cp.BaseURL,
-		APIKey:   cp.APIKey,
-		ModelMap: cp.ModelMap,
-		E2EE:     cp.E2EE,
+		Name:    cp.Name,
+		BaseURL: cp.BaseURL,
+		APIKey:  cp.APIKey,
+		E2EE:    cp.E2EE,
 	}
 	switch cp.Name {
 	case "venice":
@@ -173,28 +165,13 @@ func fromConfig(cp *config.Provider, spkiCache *attestation.SPKICache, offline b
 	return p, nil
 }
 
-// resolveModel finds the provider and upstream model name for a client model.
-// It returns (nil, "", false) when no provider has the model.
+// resolveModel finds the provider for a client model. The model name is passed
+// through to the upstream unchanged. Returns (nil, "", false) when no providers
+// are configured.
 func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, bool) {
 	for _, p := range s.providers {
-		if _, ok := p.ModelMap[clientModel]; ok {
-			mapped := p.MapModel(clientModel)
-			return p, mapped, true
-		}
+		return p, clientModel, true
 	}
-
-	// Fallback for single-provider pinned backends (e.g. NEAR AI) where model
-	// names are discovered dynamically at request time rather than pre-mapped in
-	// config. Let the pinned handler's resolver validate/resolve the model.
-	if len(s.providers) == 1 {
-		for _, p := range s.providers {
-			if p.PinnedHandler != nil {
-				mapped := p.MapModel(clientModel)
-				return p, mapped, true
-			}
-		}
-	}
-
 	return nil, "", false
 }
 
@@ -394,14 +371,6 @@ func (s *Server) handlePinnedChat(
 	prov *provider.Provider, upstreamModel string,
 	body []byte, req chatRequest,
 ) {
-	// Rewrite the model field to the upstream name.
-	rewritten, err := rewriteModelField(body, upstreamModel)
-	if err != nil {
-		slog.Error("rewrite model field failed", "provider", prov.Name, "err", err)
-		http.Error(w, "failed to prepare request", http.StatusInternalServerError)
-		return
-	}
-
 	// Build forwarded headers.
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
@@ -414,7 +383,7 @@ func (s *Server) handlePinnedChat(
 		Method:  http.MethodPost,
 		Path:    prov.ChatPath,
 		Headers: headers,
-		Body:    rewritten,
+		Body:    body,
 		Model:   upstreamModel,
 	}
 
@@ -484,11 +453,7 @@ func (s *Server) buildUpstreamBody(
 		if prov.E2EE {
 			slog.Warn("E2EE disabled — tdx_reportdata_binding not verified; forwarding plaintext over HTTPS", "provider", prov.Name, "model", upstreamModel)
 		}
-		rewritten, err := rewriteModelField(rawBody, upstreamModel)
-		if err != nil {
-			return nil, nil, fmt.Errorf("rewrite model field: %w", err)
-		}
-		return rewritten, nil, nil
+		return rawBody, nil, nil
 	}
 
 	// Fetch a fresh attestation to get the current signing key.
@@ -547,13 +512,6 @@ func (s *Server) buildUpstreamBody(
 		return nil, nil, fmt.Errorf("re-parse body for E2EE rewrite: %w", err)
 	}
 
-	modelJSON, err := json.Marshal(upstreamModel)
-	if err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("marshal model name: %w", err)
-	}
-	full["model"] = modelJSON
-
 	messagesJSON, err := json.Marshal(encMessages)
 	if err != nil {
 		session.Zero()
@@ -587,21 +545,6 @@ func prepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session 
 		req.Header.Set("Authorization", "Bearer "+prov.APIKey)
 	}
 	return nil
-}
-
-// rewriteModelField replaces the "model" field in a JSON body with upstreamModel.
-// All other fields are preserved exactly.
-func rewriteModelField(body []byte, upstreamModel string) ([]byte, error) {
-	var full map[string]json.RawMessage
-	if err := json.Unmarshal(body, &full); err != nil {
-		return nil, err
-	}
-	modelJSON, err := json.Marshal(upstreamModel)
-	if err != nil {
-		return nil, err
-	}
-	full["model"] = modelJSON
-	return json.Marshal(full)
 }
 
 // relayStream reads an SSE stream from body, decrypts chunks when session is
@@ -714,32 +657,15 @@ func (s *Server) relayNonStream(w http.ResponseWriter, body io.Reader, session *
 	_, _ = w.Write(decrypted)
 }
 
-// handleModels returns the list of client-facing model names available across
-// all configured providers.
-func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	type modelEntry struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		OwnedBy string `json:"owned_by"`
-	}
+// handleModels returns an empty model list. Model names are not mapped by the
+// proxy; clients should use the provider's real model names directly.
+func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
 	type response struct {
-		Object string       `json:"object"`
-		Data   []modelEntry `json:"data"`
+		Object string `json:"object"`
+		Data   []any  `json:"data"`
 	}
-
-	var models []modelEntry
-	for _, prov := range s.providers {
-		for clientModel := range prov.ModelMap {
-			models = append(models, modelEntry{
-				ID:      clientModel,
-				Object:  "model",
-				OwnedBy: prov.Name,
-			})
-		}
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(response{Object: "list", Data: models}) //nolint:errchkjson // response body already committed
+	_ = json.NewEncoder(w).Encode(response{Object: "list", Data: []any{}}) //nolint:errchkjson // static struct, encoding cannot fail
 }
 
 // handleReport returns the cached VerificationReport for the given provider

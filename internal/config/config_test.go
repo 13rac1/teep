@@ -68,9 +68,6 @@ api_key = "test-venice-key"
 base_url = "https://api.venice.ai"
 e2ee = true
 
-[providers.venice.models]
-"gpt-4" = "e2ee-llama-3"
-
 [providers.nearai]
 api_key = "test-nearai-key"
 base_url = "https://api.near.ai"
@@ -99,9 +96,6 @@ e2ee = false
 	}
 	if !venice.E2EE {
 		t.Error("venice E2EE: got false, want true")
-	}
-	if venice.MapModel("gpt-4") != "e2ee-llama-3" {
-		t.Errorf("venice MapModel(gpt-4): got %q, want %q", venice.MapModel("gpt-4"), "e2ee-llama-3")
 	}
 
 	nearai, ok := cfg.Providers["nearai"]
@@ -345,40 +339,6 @@ e2ee = true
 	venice := cfg.Providers["venice"]
 	if venice.APIKey != "env-override-key" {
 		t.Errorf("VENICE_API_KEY env should override TOML api_key: got %q, want %q", venice.APIKey, "env-override-key")
-	}
-}
-
-// --- Model map ---
-
-func TestMapModelHit(t *testing.T) {
-	p := &Provider{
-		ModelMap: map[string]string{
-			"qwen-2.5-vl": "e2ee-qwen3-5-122b-a10b",
-		},
-	}
-	got := p.MapModel("qwen-2.5-vl")
-	if got != "e2ee-qwen3-5-122b-a10b" {
-		t.Errorf("MapModel hit: got %q, want %q", got, "e2ee-qwen3-5-122b-a10b")
-	}
-}
-
-func TestMapModelMiss(t *testing.T) {
-	p := &Provider{
-		ModelMap: map[string]string{
-			"qwen-2.5-vl": "e2ee-qwen3-5-122b-a10b",
-		},
-	}
-	got := p.MapModel("gpt-4")
-	if got != "gpt-4" {
-		t.Errorf("MapModel miss: got %q, want %q (passthrough)", got, "gpt-4")
-	}
-}
-
-func TestMapModelEmpty(t *testing.T) {
-	p := &Provider{ModelMap: map[string]string{}}
-	got := p.MapModel("any-model")
-	if got != "any-model" {
-		t.Errorf("MapModel empty map: got %q, want %q", got, "any-model")
 	}
 }
 

@@ -376,9 +376,6 @@ Example TOML:
   api_key_env = "VENICE_API_KEY"
   e2ee = true
 
-  [providers.venice.model_map]
-  "gpt-4" = "e2ee-qwen3-32b"
-
 Flags:
   --provider NAME     Run proxy with a single provider (e.g. venice, nearai).
   --offline           Skip external verification (Intel PCS, Proof of Cloud).
