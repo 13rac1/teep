@@ -83,12 +83,14 @@ var jwksInstances sync.Map // URL string → *jwksEntry
 
 // getOrCreateKeyfunc returns a keyfunc.Keyfunc for the given JWKS URL.
 // Instances are created once per URL and cached for the process lifetime.
-func getOrCreateKeyfunc(ctx context.Context, jwksURL string) (keyfunc.Keyfunc, error) {
+func getOrCreateKeyfunc(_ context.Context, jwksURL string) (keyfunc.Keyfunc, error) {
 	if v, ok := jwksInstances.Load(jwksURL); ok {
-		return v.(*jwksEntry).kf, nil
+		entry := v.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
+		return entry.kf, nil
 	}
 	kfCtx, cancel := context.WithCancel(context.Background())
-	k, err := keyfunc.NewDefaultCtx(kfCtx, []string{jwksURL})
+	k, err := keyfunc.NewDefaultCtx(kfCtx, []string{jwksURL}) //nolint:contextcheck // keyfunc manages its own context lifecycle
+
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("initialize JWKS for %s: %w", jwksURL, err)
@@ -98,7 +100,8 @@ func getOrCreateKeyfunc(ctx context.Context, jwksURL string) (keyfunc.Keyfunc, e
 	if loaded {
 		// Another goroutine won the race; shut down ours.
 		cancel()
-		return actual.(*jwksEntry).kf, nil
+		winner := actual.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
+		return winner.kf, nil
 	}
 	return k, nil
 }
@@ -106,7 +109,8 @@ func getOrCreateKeyfunc(ctx context.Context, jwksURL string) (keyfunc.Keyfunc, e
 // resetJWKS shuts down and removes all cached JWKS instances. Used by tests.
 func resetJWKS() {
 	jwksInstances.Range(func(key, value any) bool {
-		value.(*jwksEntry).cancel()
+		entry := value.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
+		entry.cancel()
 		jwksInstances.Delete(key)
 		return true
 	})
@@ -117,8 +121,8 @@ func resetJWKS() {
 // (starting with '{'). NRAS cloud verification is handled separately by
 // VerifyNVIDIANRAS.
 func VerifyNVIDIAPayload(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
-	if len(payload) == 0 {
-		return &NvidiaVerifyResult{SignatureErr: fmt.Errorf("empty NVIDIA payload")}
+	if payload == "" {
+		return &NvidiaVerifyResult{SignatureErr: errors.New("empty NVIDIA payload")}
 	}
 
 	prefix := payload
@@ -169,7 +173,7 @@ func verifyNVIDIAJWT(ctx context.Context, jwtPayload, jwksURL string) *NvidiaVer
 	}
 
 	if !token.Valid {
-		result.ClaimsErr = fmt.Errorf("JWT is not valid after parsing")
+		result.ClaimsErr = errors.New("JWT is not valid after parsing")
 		return result
 	}
 
@@ -244,7 +248,7 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 	if jwtStr == "" {
 		return &NvidiaVerifyResult{
 			Format:       "JWT",
-			SignatureErr: fmt.Errorf("NRAS returned empty response"),
+			SignatureErr: errors.New("NRAS returned empty response"),
 		}
 	}
 

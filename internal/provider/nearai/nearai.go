@@ -97,7 +97,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("signing_algo", "ecdsa")
 	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("nearai: build attestation request: %w", err)
 	}
@@ -137,10 +137,10 @@ func parseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 	// If the response contains model_attestations, pick the best match for the
 	// requested model. Fall back to the first entry if no exact match.
 	if len(ar.ModelAttestations) > 0 {
-		selected := ar.ModelAttestations[0]
-		for _, ma := range ar.ModelAttestations {
-			if ma.Model == model {
-				selected = ma
+		selected := &ar.ModelAttestations[0]
+		for i := range ar.ModelAttestations {
+			if ar.ModelAttestations[i].Model == model {
+				selected = &ar.ModelAttestations[i]
 				break
 			}
 		}

@@ -1,0 +1,116 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: all
+  disable:
+    # Too noisy / not useful for this project:
+    - cyclop             # cyclomatic complexity — redundant with gocognit
+    - depguard           # no import allow/blocklist needed
+    - dogsled            # too many blanks — we have legitimate multi-blank assigns in test handlers
+    - dupl               # duplicate detection too aggressive for test code
+    - exhaustruct        # requiring all struct fields initialized is too strict
+    - funlen             # function length limits are arbitrary
+    - gochecknoglobals   # we have legitimate package-level vars
+    - gochecknoinits     # we don't use init() but no need to lint for it
+    - gocognit           # cognitive complexity limits are arbitrary
+    - gocyclo            # cyclomatic complexity limits are arbitrary
+    - godox              # we allow TODO/FIXME comments
+    - gomoddirectives    # no go.mod directive restrictions needed
+    - gomodguard         # no module allow/blocklist needed
+    - ireturn            # returning interfaces is fine
+    - lll                # line length limits are arbitrary
+    - maintidx           # maintainability index is arbitrary
+    - mnd                # magic number detection too aggressive
+    - nakedret           # naked returns are fine in short functions
+    - nlreturn           # blank-line-before-return is too opinionated
+    - nonamedreturns     # we use named returns for defer cleanup
+    - paralleltest       # not all tests benefit from t.Parallel
+    - testpackage        # we use same-package tests for internal access
+    - varnamelen         # variable name length limits are arbitrary
+    - wrapcheck          # wrapping every external error is too verbose
+    - wsl_v5             # whitespace style is too opinionated
+    - wsl               # deprecated, replaced by wsl_v5
+    - noinlineerr        # disallowing `if err := ...; err != nil` is too opinionated
+    - err113             # requiring wrapped static errors everywhere is too strict
+    - tagliatelle        # struct tag naming style is project-specific
+    - forbidigo          # CLI tool legitimately uses fmt.Print for user output
+    - nestif             # nested if limits are arbitrary
+    - goconst            # repeated strings as constants is too aggressive
+    - embeddedstructfieldcheck # blank line before embedded fields is too opinionated
+    # Irrelevant to this project:
+    - arangolint         # no arangodb
+    - ginkgolinter       # no ginkgo
+    - gosmopolitan       # no i18n
+    - inamedparam        # too strict for interfaces
+    - promlinter         # no prometheus
+    - rowserrcheck       # no database/sql
+    - spancheck          # no opentelemetry
+    - sqlclosecheck      # no database/sql
+    - testifylint        # no testify
+    - unqueryvet         # no SQL
+    - zerologlint        # no zerolog
+
+  settings:
+    errcheck:
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - io.Copy
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Closer).Close
+        - (*encoding/json.Encoder).Encode
+    gosec:
+      excludes:
+        - G104  # unhandled errors — covered by errcheck with better exclusion control
+        - G117  # struct fields matching "secret" patterns — false positives on APIKey config fields
+        - G402  # TLS InsecureSkipVerify — handled by nolint directives where needed
+        - G602  # slice bounds — false positives on well-bounded iterations
+        - G703  # path traversal taint — config file paths are trusted input
+        - G704  # SSRF taint — URLs come from config, not user input
+        - G705  # XSS taint — CLI tool, no web output
+        - G706  # log injection taint — slog structured logging is safe
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: var-declaration
+        - name: var-naming
+    exhaustive:
+      default-signifies-exhaustive: true
+
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling
+    rules:
+      # Test files get relaxed rules.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - errchkjson
+          - forcetypeassert
+          - noctx
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

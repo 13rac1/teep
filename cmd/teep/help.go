@@ -283,7 +283,7 @@ var tierRegistry = [3]tierInfo{
 
 // findFactorByName returns the factorInfo for the given name.
 func findFactorByName(name string) (factorInfo, bool) {
-	for _, f := range factorRegistry {
+	for _, f := range &factorRegistry {
 		if f.Name == name {
 			return f, true
 		}
@@ -463,7 +463,7 @@ func printFactorsHelp() {
 	fmt.Print(strings.Repeat("=", 20) + "\n\n")
 
 	currentTier := 0
-	for i, f := range factorRegistry {
+	for i, f := range &factorRegistry {
 		if f.Tier != currentTier {
 			currentTier = f.Tier
 			tier := tierRegistry[currentTier-1]

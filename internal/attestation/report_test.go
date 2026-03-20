@@ -2,7 +2,7 @@ package attestation
 
 import (
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -640,7 +640,7 @@ func TestBuildReportNRASFailSignature(t *testing.T) {
 	raw.NvidiaPayload = `{"evidence_list":[]}`
 	nrasResult := &NvidiaVerifyResult{
 		Format:       "JWT",
-		SignatureErr: fmt.Errorf("bad sig"),
+		SignatureErr: errors.New("bad sig"),
 	}
 	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nrasResult, nil)
 

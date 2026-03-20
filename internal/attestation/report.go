@@ -99,7 +99,7 @@ var KnownFactors = []string{
 // VerifyTDXQuote. NVIDIA verification (factors 12-15) uses VerifyNVIDIAPayload
 // and VerifyNVIDIANRAS. Tier 3 factors (17-21) always Fail because no vendor
 // currently provides the required supply-chain data.
-func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult *NvidiaVerifyResult, nrasResult *NvidiaVerifyResult, pocResult *PoCResult) *VerificationReport {
+func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult, nrasResult *NvidiaVerifyResult, pocResult *PoCResult) *VerificationReport {
 	enforcedSet := make(map[string]bool, len(enforced))
 	for _, name := range enforced {
 		enforcedSet[name] = true
@@ -119,7 +119,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	// --- Tier 1: Core Attestation ---
 
 	// Factor 1: nonce_match
-	if raw.Nonce == "" {
+	if raw.Nonce == "" { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("nonce_match", Fail, "nonce field absent from attestation response")
 	} else if subtle.ConstantTimeCompare([]byte(raw.Nonce), []byte(nonce.Hex())) == 1 {
 		detail := fmt.Sprintf("nonce matches (%d hex chars)", len(raw.Nonce))
@@ -161,7 +161,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		}
 
 		// Factor 4: tdx_cert_chain
-		if tdxResult.ParseErr != nil {
+		if tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 			addFactor("tdx_cert_chain", Skip, "quote parse failed; cert chain not extracted")
 		} else if tdxResult.CertChainErr != nil {
 			addFactor("tdx_cert_chain", Fail, fmt.Sprintf("cert chain verification failed: %v", tdxResult.CertChainErr))
@@ -170,7 +170,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		}
 
 		// Factor 5: tdx_quote_signature
-		if tdxResult.ParseErr != nil {
+		if tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 			addFactor("tdx_quote_signature", Skip, "quote parse failed; signature not verified")
 		} else if tdxResult.SignatureErr != nil {
 			addFactor("tdx_quote_signature", Fail, fmt.Sprintf("quote signature invalid: %v", tdxResult.SignatureErr))
@@ -179,7 +179,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		}
 
 		// Factor 6: tdx_debug_disabled
-		if tdxResult.ParseErr != nil {
+		if tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 			addFactor("tdx_debug_disabled", Skip, "quote parse failed; debug flag not checked")
 		} else if tdxResult.DebugEnabled {
 			addFactor("tdx_debug_disabled", Fail, "TD_ATTRIBUTES debug bit is set — this is a debug enclave; do not trust for production")
@@ -201,7 +201,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	// REPORTDATA (64 bytes) must bind the signing key to the nonce so a MITM
 	// cannot swap the key while leaving the quote intact. Without this check,
 	// E2EE is security theater.
-	if tdxResult == nil || tdxResult.ParseErr != nil {
+	if tdxResult == nil || tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("tdx_reportdata_binding", Fail, "no parseable TDX quote; REPORTDATA binding cannot be verified")
 	} else if raw.SigningKey == "" {
 		addFactor("tdx_reportdata_binding", Fail, "signing_key absent; REPORTDATA binding cannot be verified")
@@ -214,7 +214,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	}
 
 	// Factor 9: intel_pcs_collateral
-	if tdxResult == nil || tdxResult.ParseErr != nil {
+	if tdxResult == nil || tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("intel_pcs_collateral", Skip, "no parseable TDX quote")
 	} else if tdxResult.TcbStatus != "" {
 		addFactor("intel_pcs_collateral", Pass,
@@ -228,7 +228,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	}
 
 	// Factor 10: tdx_tcb_current
-	if tdxResult == nil || tdxResult.ParseErr != nil {
+	if tdxResult == nil || tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("tdx_tcb_current", Skip, "no parseable TDX quote; TCB SVN not extracted")
 	} else if tdxResult.TcbStatus == pcs.TcbComponentStatusUpToDate {
 		detail := "TCB is UpToDate per Intel PCS"
@@ -266,7 +266,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	}
 
 	// Factor 12: nvidia_signature
-	if nvidiaResult == nil {
+	if nvidiaResult == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		if raw.NvidiaPayload == "" {
 			addFactor("nvidia_signature", Skip, "no NVIDIA payload to verify")
 		} else {
@@ -279,7 +279,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	}
 
 	// Factor 13: nvidia_claims
-	if nvidiaResult == nil {
+	if nvidiaResult == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		if raw.NvidiaPayload == "" {
 			addFactor("nvidia_claims", Skip, "no NVIDIA payload to check")
 		} else {
@@ -292,7 +292,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	}
 
 	// Factor 14: nvidia_nonce_match
-	if nvidiaResult == nil {
+	if nvidiaResult == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		if raw.NvidiaPayload == "" {
 			addFactor("nvidia_nonce_match", Skip, "no NVIDIA payload; nonce not checked")
 		} else {
@@ -307,7 +307,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	}
 
 	// Factor 15: nvidia_nras_verified
-	if nrasResult == nil {
+	if nrasResult == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		if raw.NvidiaPayload == "" || raw.NvidiaPayload[0] != '{' {
 			addFactor("nvidia_nras_verified", Skip, "no EAT payload; NRAS not applicable")
 		} else {
@@ -376,7 +376,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 			"no build transparency log")
 	}
 
-	if pocResult != nil && pocResult.Registered {
+	if pocResult != nil && pocResult.Registered { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("cpu_id_registry", Pass,
 			fmt.Sprintf("Proof of Cloud: registered (%s)", pocResult.Label))
 	} else if pocResult != nil && pocResult.Err != nil {

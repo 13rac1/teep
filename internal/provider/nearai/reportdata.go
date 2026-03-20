@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,10 +23,10 @@ type ReportDataVerifier struct{}
 // VerifyReportData checks that reportData matches the NEAR binding scheme.
 func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, nonce attestation.Nonce) (string, error) {
 	if raw.SigningAddress == "" {
-		return "", fmt.Errorf("signing_address absent from attestation response")
+		return "", errors.New("signing_address absent from attestation response")
 	}
 	if raw.TLSFingerprint == "" {
-		return "", fmt.Errorf("tls_cert_fingerprint absent from attestation response")
+		return "", errors.New("tls_cert_fingerprint absent from attestation response")
 	}
 
 	// Decode signing address — strip optional "0x" prefix.

@@ -50,7 +50,7 @@ type recordingHandler struct {
 func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
 func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler       { return h }
 func (h *recordingHandler) WithGroup(string) slog.Handler            { return h }
-func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error { //nolint:gocritic // hugeParam: slog.Handler interface requires value receiver
 	h.records = append(h.records, r)
 	return nil
 }
@@ -69,16 +69,16 @@ func withRecorder(t *testing.T) *recordingHandler {
 // warns returns records at Warn level.
 func warns(h *recordingHandler) []slog.Record {
 	var out []slog.Record
-	for _, r := range h.records {
-		if r.Level == slog.LevelWarn {
-			out = append(out, r)
+	for i := range h.records {
+		if h.records[i].Level == slog.LevelWarn {
+			out = append(out, h.records[i])
 		}
 	}
 	return out
 }
 
 // recordFields extracts the "fields" attribute from a record as a string slice.
-func recordFields(r slog.Record) []string {
+func recordFields(r *slog.Record) []string {
 	var fields []string
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Key == "fields" {
@@ -124,7 +124,7 @@ func TestUnmarshalWarn_UnknownFields(t *testing.T) {
 	if len(w) != 1 {
 		t.Fatalf("expected 1 warning, got %d", len(w))
 	}
-	fields := recordFields(w[0])
+	fields := recordFields(&w[0])
 	if !slices.Contains(fields, "extra") {
 		t.Errorf("warning should mention 'extra', got fields=%v", fields)
 	}
@@ -142,7 +142,7 @@ func TestUnmarshalWarn_MultipleUnknownFields(t *testing.T) {
 	if len(w) != 1 {
 		t.Fatalf("expected 1 warning (not one per field), got %d", len(w))
 	}
-	fields := recordFields(w[0])
+	fields := recordFields(&w[0])
 	if len(fields) != 3 {
 		t.Errorf("expected 3 unknown fields, got %d: %v", len(fields), fields)
 	}

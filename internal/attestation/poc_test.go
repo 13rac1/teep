@@ -25,7 +25,7 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var body map[string]json.RawMessage
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				http.Error(w, "bad body", 400)
+				http.Error(w, "bad body", http.StatusBadRequest)
 				return
 			}
 
@@ -63,11 +63,15 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 
 	servers := make([]*httptest.Server, 3)
 	peers := make([]string, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		servers[i] = makePeer(i)
 		peers[i] = servers[i].URL
-		defer servers[i].Close()
 	}
+	defer func() {
+		for _, s := range servers {
+			s.Close()
+		}
+	}()
 
 	client := &http.Client{}
 	poc := NewPoCClient(peers, PoCQuorum, client)
@@ -93,7 +97,7 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 // TestCheckQuoteNotWhitelisted verifies 403 handling.
 func TestCheckQuoteNotWhitelisted(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(403)
+		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Machine is not whitelisted."})
 	}))
 	defer server.Close()

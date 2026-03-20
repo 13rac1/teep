@@ -102,7 +102,7 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 // refresh fetches the endpoint mapping from the discovery URL and replaces
 // the cached mapping. Holds the write lock only for the swap.
 func (r *EndpointResolver) refresh(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.endpointsURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.endpointsURL, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}

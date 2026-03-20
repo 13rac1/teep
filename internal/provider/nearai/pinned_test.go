@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -97,7 +98,7 @@ func TestWriteHTTPRequest_ValidHTTP(t *testing.T) {
 	}
 	defer req.Body.Close()
 
-	if req.Method != "POST" {
+	if req.Method != http.MethodPost {
 		t.Errorf("Method = %q, want POST", req.Method)
 	}
 	if req.URL.Path != "/v1/chat" {
@@ -107,7 +108,7 @@ func TestWriteHTTPRequest_ValidHTTP(t *testing.T) {
 		t.Errorf("Host = %q, want host.com", req.Host)
 	}
 	reqBody, _ := io.ReadAll(req.Body)
-	if string(reqBody) != string(body) {
+	if !bytes.Equal(reqBody, body) {
 		t.Errorf("body = %q, want %q", reqBody, body)
 	}
 }
@@ -136,7 +137,7 @@ func TestPinnedHandler_SPKICacheHit(t *testing.T) {
 	domain := hostFromURL(t, srv.URL)
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)))
+		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
 	}))
 	defer endpointSrv.Close()
 
@@ -155,7 +156,7 @@ func TestPinnedHandler_SPKICacheHit(t *testing.T) {
 	}
 
 	// Override tlsDial to connect to the test server.
-	resp, err := handlePinnedWithTestDial(t, handler, srv, provider.PinnedRequest{
+	resp, err := handlePinnedWithTestDial(t, handler, srv, &provider.PinnedRequest{
 		Method:  "POST",
 		Path:    "/v1/chat/completions",
 		Headers: http.Header{"Content-Type": {"application/json"}},
@@ -192,7 +193,7 @@ func TestPinnedHandler_SPKICacheHit(t *testing.T) {
 // handlePinnedWithTestDial works around the fact that test TLS servers use
 // localhost addresses, not real domains. It patches the handler's tlsDial
 // to connect to the test server directly.
-func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Server, req provider.PinnedRequest) (_ *provider.PinnedResponse, err error) {
+func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Server, req *provider.PinnedRequest) (_ *provider.PinnedResponse, err error) {
 	t.Helper()
 
 	// We can't use the handler's tlsDial because it resolves domain:443.
@@ -225,7 +226,7 @@ func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Serv
 
 	var report *attestation.VerificationReport
 	if !h.spkiCache.Contains(domain, liveSPKI) {
-		return nil, fmt.Errorf("SPKI not in cache (test expects cache hit)")
+		return nil, errors.New("SPKI not in cache (test expects cache hit)")
 	}
 
 	headers := req.Headers.Clone()
@@ -237,7 +238,7 @@ func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Serv
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	resp, err := http.ReadResponse(br, nil)
+	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body is closed via connClosingReader wrapping below
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
 	}
@@ -251,10 +252,10 @@ func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Serv
 	}, nil
 }
 
-func testTLSConfig(srv *httptest.Server) *tls.Config {
+func testTLSConfig(_ *httptest.Server) *tls.Config {
 	// httptest.NewTLSServer provides a TLS config with the server's cert pool
 	// but we need InsecureSkipVerify for direct dialing.
-	return &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+	return &tls.Config{InsecureSkipVerify: true}
 }
 
 func computeTestServerSPKI(t *testing.T, srv *httptest.Server) string {

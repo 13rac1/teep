@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -177,7 +178,8 @@ func fromConfig(cp *config.Provider, spkiCache *attestation.SPKICache, offline b
 func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, bool) {
 	for _, p := range s.providers {
 		if _, ok := p.ModelMap[clientModel]; ok {
-			return p, p.MapModel(clientModel), true
+			mapped := p.MapModel(clientModel)
+			return p, mapped, true
 		}
 	}
 	return nil, "", false
@@ -310,7 +312,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if report.Blocked() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		_ = json.NewEncoder(w).Encode(report)
+		_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
 		return
 	}
 
@@ -412,7 +414,7 @@ func (s *Server) handlePinnedChat(
 	}
 	defer cancel()
 
-	pinnedResp, err := prov.PinnedHandler.HandlePinned(ctx, pinnedReq)
+	pinnedResp, err := prov.PinnedHandler.HandlePinned(ctx, &pinnedReq)
 	if err != nil {
 		slog.Error("pinned chat failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		http.Error(w, fmt.Sprintf("pinned connection failed: %v", err), http.StatusBadGateway)
@@ -490,10 +492,10 @@ func (s *Server) buildUpstreamBody(
 		return nil, nil, fmt.Errorf("fetch signing key: %w", err)
 	}
 	if raw.SigningKey == "" {
-		return nil, nil, fmt.Errorf("attestation response missing signing_key")
+		return nil, nil, errors.New("attestation response missing signing_key")
 	}
 	if raw.IntelQuote == "" {
-		return nil, nil, fmt.Errorf("fresh attestation missing TDX quote; cannot verify signing key binding")
+		return nil, nil, errors.New("fresh attestation missing TDX quote; cannot verify signing key binding")
 	}
 	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, true)
 	if tdxResult.ParseErr != nil {
@@ -724,7 +726,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(response{Object: "list", Data: models})
+	_ = json.NewEncoder(w).Encode(response{Object: "list", Data: models}) //nolint:errchkjson // response body already committed
 }
 
 // handleReport returns the cached VerificationReport for the given provider
@@ -745,5 +747,5 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(report)
+	_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
 }

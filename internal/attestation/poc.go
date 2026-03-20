@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -59,11 +60,6 @@ type stage2Response struct {
 	MachineID string `json:"machineId,omitempty"`
 	Label     string `json:"label,omitempty"`
 	JWT       string `json:"jwt,omitempty"`
-}
-
-// errorResponse is the error JSON returned by trust-servers.
-type errorResponse struct {
-	Error string `json:"error"`
 }
 
 // CheckQuote runs the full multisig protocol against the trust-server
@@ -168,7 +164,7 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 		slog.Debug("PoC: partial sig collected", "peer", n.peerURL, "signer", i+1, "of", c.quorum)
 	}
 
-	return &PoCResult{Err: fmt.Errorf("stage 2 completed without final JWT")}
+	return &PoCResult{Err: errors.New("stage 2 completed without final JWT")}
 }
 
 type httpResult struct {

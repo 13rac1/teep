@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -137,7 +138,7 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 		slog.Debug("TDX quote version", "version", 4)
 		body := q.GetTdQuoteBody()
 		if body == nil {
-			result.ParseErr = fmt.Errorf("TDX QuoteV4 body is nil after parse")
+			result.ParseErr = errors.New("TDX QuoteV4 body is nil after parse")
 			return result
 		}
 		reportData = body.GetReportData()
@@ -154,12 +155,12 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 		slog.Debug("TDX quote version", "version", 5)
 		desc := q.GetTdQuoteBodyDescriptor()
 		if desc == nil {
-			result.ParseErr = fmt.Errorf("TDX QuoteV5 body descriptor is nil after parse")
+			result.ParseErr = errors.New("TDX QuoteV5 body descriptor is nil after parse")
 			return result
 		}
 		body := desc.GetTdQuoteBodyV5()
 		if body == nil {
-			result.ParseErr = fmt.Errorf("TDX QuoteV5 body is nil after parse")
+			result.ParseErr = errors.New("TDX QuoteV5 body is nil after parse")
 			return result
 		}
 		reportData = body.GetReportData()
@@ -242,7 +243,7 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 			},
 		}
 		if err := tdxverify.TdxQuoteContext(ctx, quoteAny, collateralOpts); err != nil {
-			result.CollateralErr = fmt.Errorf("Intel PCS collateral: %w", err)
+			result.CollateralErr = fmt.Errorf("intel PCS collateral: %w", err)
 			slog.Debug("TDX collateral verification failed (non-fatal for cert chain)", "err", err)
 		} else {
 			tcbLevel, _, err := tdxverify.SupportedTcbLevelsFromCollateral(quoteAny, collateralOpts)
@@ -273,7 +274,7 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 // extractPCKExtensions navigates from a parsed TDX quote to the PCK leaf
 // certificate and extracts PPID and FMSPC from its x509v3 extensions.
 // Returns (ppid, fmspc, error). Both are lowercase hex strings.
-func extractPCKExtensions(quoteAny any) (string, string, error) {
+func extractPCKExtensions(quoteAny any) (ppid, fmspc string, err error) {
 	var signedData *pb.Ecdsa256BitQuoteV4AuthData
 	switch q := quoteAny.(type) {
 	case *pb.QuoteV4:
@@ -286,25 +287,25 @@ func extractPCKExtensions(quoteAny any) (string, string, error) {
 
 	certData := signedData.GetCertificationData()
 	if certData == nil {
-		return "", "", fmt.Errorf("CertificationData is nil")
+		return "", "", errors.New("CertificationData is nil")
 	}
 	qeReport := certData.GetQeReportCertificationData()
 	if qeReport == nil {
-		return "", "", fmt.Errorf("QeReportCertificationData is nil")
+		return "", "", errors.New("QeReportCertificationData is nil")
 	}
 	pckChainData := qeReport.GetPckCertificateChainData()
 	if pckChainData == nil {
-		return "", "", fmt.Errorf("PckCertificateChainData is nil")
+		return "", "", errors.New("PckCertificateChainData is nil")
 	}
 	pemBytes := pckChainData.GetPckCertChain()
 	if len(pemBytes) == 0 {
-		return "", "", fmt.Errorf("PckCertChain is empty")
+		return "", "", errors.New("PckCertChain is empty")
 	}
 
 	// Parse the first (leaf) certificate from the PEM chain.
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
-		return "", "", fmt.Errorf("no PEM block found in PckCertChain")
+		return "", "", errors.New("no PEM block found in PckCertChain")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {

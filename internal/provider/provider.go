@@ -30,7 +30,7 @@ type RequestPreparer interface {
 // providers like NEAR AI where the TLS cert is verified via attestation
 // rather than a traditional CA chain.
 type PinnedHandler interface {
-	HandlePinned(ctx context.Context, req PinnedRequest) (*PinnedResponse, error)
+	HandlePinned(ctx context.Context, req *PinnedRequest) (*PinnedResponse, error)
 }
 
 // PinnedRequest is the input to a pinned chat handler.

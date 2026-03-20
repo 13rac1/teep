@@ -27,7 +27,7 @@ func generateTestECKey(t *testing.T) *ecdsa.PrivateKey {
 }
 
 // makeTestJWT creates a signed JWT with the given claims using the provided EC key.
-func makeTestJWT(t *testing.T, key *ecdsa.PrivateKey, kid string, overallResult bool, nonce, issuer string, exp time.Time) string {
+func makeTestJWT(t *testing.T, key *ecdsa.PrivateKey, kid string, _ bool, nonce, issuer string, exp time.Time) string {
 	t.Helper()
 	claims := &nvidiaClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -35,7 +35,7 @@ func makeTestJWT(t *testing.T, key *ecdsa.PrivateKey, kid string, overallResult 
 			ExpiresAt: jwt.NewNumericDate(exp),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
-		OverallResult: overallResult,
+		OverallResult: true,
 		Nonce:         nonce,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodES384, claims)
@@ -300,21 +300,21 @@ func TestVerifyNVIDIAJWT_EmptyToken(t *testing.T) {
 // TestExtractNRASJWT verifies the NRAS response parsing.
 func TestExtractNRASJWT(t *testing.T) {
 	// Valid: array of [type, token] pairs.
-	jwt, err := extractNRASJWT(`[["JWT","eyJhbGciOi.payload.sig"]]`)
+	extracted, err := extractNRASJWT(`[["JWT","eyJhbGciOi.payload.sig"]]`)
 	if err != nil {
 		t.Fatalf("extractNRASJWT valid: %v", err)
 	}
-	if jwt != "eyJhbGciOi.payload.sig" {
-		t.Errorf("got %q, want %q", jwt, "eyJhbGciOi.payload.sig")
+	if extracted != "eyJhbGciOi.payload.sig" {
+		t.Errorf("got %q, want %q", extracted, "eyJhbGciOi.payload.sig")
 	}
 
 	// Multiple entries: takes the JWT one.
-	jwt, err = extractNRASJWT(`[["OTHER","foo"],["JWT","eyJhbGciOi.p.s"]]`)
+	extracted, err = extractNRASJWT(`[["OTHER","foo"],["JWT","eyJhbGciOi.p.s"]]`)
 	if err != nil {
 		t.Fatalf("extractNRASJWT multi: %v", err)
 	}
-	if jwt != "eyJhbGciOi.p.s" {
-		t.Errorf("got %q", jwt)
+	if extracted != "eyJhbGciOi.p.s" {
+		t.Errorf("got %q", extracted)
 	}
 
 	// No JWT entry.

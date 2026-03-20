@@ -13,6 +13,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -161,9 +162,7 @@ func resolveProvider(name string, pc ProviderConfig) *Provider {
 	}
 
 	models := make(map[string]string, len(pc.Models))
-	for k, v := range pc.Models {
-		models[k] = v
-	}
+	maps.Copy(models, pc.Models)
 
 	return &Provider{
 		Name:     name,

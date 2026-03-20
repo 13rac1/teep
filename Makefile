@@ -1,4 +1,4 @@
-.PHONY: build test vet fmt check clean
+.PHONY: build test vet fmt lint check clean
 
 build:
 	go build -o teep ./cmd/teep
@@ -12,7 +12,10 @@ vet:
 fmt:
 	@test -z "$$(gofmt -l cmd/ internal/)" || { gofmt -l cmd/ internal/; exit 1; }
 
-check: fmt vet test
+lint:
+	golangci-lint run ./cmd/... ./internal/...
+
+check: fmt vet lint test
 
 clean:
 	rm -f teep

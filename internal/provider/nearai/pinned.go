@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -74,7 +75,7 @@ func (h *PinnedHandler) SetDialer(fn func(ctx context.Context, domain string) (*
 // HandlePinned opens a TLS connection to the backend, verifies its certificate
 // via TDX attestation (or SPKI cache), sends the chat request, and returns the
 // raw HTTP response. The caller is responsible for closing PinnedResponse.Body.
-func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedRequest) (_ *provider.PinnedResponse, err error) {
+func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRequest) (_ *provider.PinnedResponse, err error) {
 	// 1. Resolve model → backend domain.
 	domain, err := h.resolver.Resolve(ctx, req.Model)
 	if err != nil {
@@ -115,7 +116,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedReq
 		v, sfErr, _ := h.verifySF.Do(domain+"\x00"+liveSPKI, func() (any, error) {
 			// Double-check after winning the singleflight race.
 			if h.spkiCache.Contains(domain, liveSPKI) {
-				return nil, nil
+				return nil, nil //nolint:nilnil // singleflight: nil,nil means cache was already populated
 			}
 			r, err := h.attestOnConn(ctx, conn, br, bw, domain, liveSPKI, req.Model)
 			if err != nil {
@@ -129,7 +130,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedReq
 			return nil, fmt.Errorf("attestation on %s: %w", domain, sfErr)
 		}
 		if v != nil {
-			report = v.(*attestation.VerificationReport)
+			report = v.(*attestation.VerificationReport) //nolint:forcetypeassert // singleflight callback only returns *VerificationReport
 		}
 	} else {
 		slog.Debug("SPKI cache hit, skipping attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
@@ -146,7 +147,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req provider.PinnedReq
 	}
 
 	// 6. Read the response.
-	resp, err := http.ReadResponse(br, nil)
+	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body is closed via connClosingReader wrapping below
 	if err != nil {
 		return nil, fmt.Errorf("read chat response: %w", err)
 	}
@@ -168,7 +169,7 @@ func (h *PinnedHandler) tlsDial(ctx context.Context, domain string) (*tls.Conn, 
 	d := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: dialTimeout},
 		Config: &tls.Config{
-			InsecureSkipVerify: true, //nolint:gosec // Verified via TDX attestation.
+			InsecureSkipVerify: true,
 			ServerName:         domain,
 		},
 	}
@@ -177,14 +178,14 @@ func (h *PinnedHandler) tlsDial(ctx context.Context, domain string) (*tls.Conn, 
 		return nil, err
 	}
 	// tls.Dialer.DialContext always returns *tls.Conn when err == nil.
-	return conn.(*tls.Conn), nil
+	return conn.(*tls.Conn), nil //nolint:forcetypeassert // tls.Dialer.DialContext guarantees *tls.Conn
 }
 
 // extractSPKI computes the SPKI hash of the peer certificate from a TLS connection.
 func (h *PinnedHandler) extractSPKI(conn *tls.Conn) (string, error) {
 	state := conn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
-		return "", fmt.Errorf("no peer certificate from server")
+		return "", errors.New("no peer certificate from server")
 	}
 	return attestation.ComputeSPKIHash(state.PeerCertificates[0].Raw)
 }
@@ -260,7 +261,7 @@ func (h *PinnedHandler) attestOnConn(
 
 	// Verify live SPKI matches the attested TLS fingerprint.
 	if raw.TLSFingerprint == "" {
-		return nil, fmt.Errorf("attestation response missing tls_cert_fingerprint")
+		return nil, errors.New("attestation response missing tls_cert_fingerprint")
 	}
 	if liveSPKI != raw.TLSFingerprint {
 		return nil, fmt.Errorf("live SPKI %s != attested TLS fingerprint %s", liveSPKI[:16]+"...", raw.TLSFingerprint[:16]+"...")
@@ -284,7 +285,7 @@ func writeHTTPRequest(w *bufio.Writer, method, path string, headers http.Header,
 	// Host must come first per RFC 7230 §5.4.
 	host := headers.Get("Host")
 	if host == "" {
-		return fmt.Errorf("headers missing required Host field")
+		return errors.New("headers missing required Host field")
 	}
 	if _, err := fmt.Fprintf(w, "Host: %s\r\n", host); err != nil {
 		return err

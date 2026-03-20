@@ -19,31 +19,15 @@ func writeConfigFile(t *testing.T, content string, perm os.FileMode) string {
 	return path
 }
 
-// setenv sets an environment variable for the duration of the test and
-// restores the original value (or unsets it) on cleanup.
+// setenv sets an environment variable for the duration of the test.
 func setenv(t *testing.T, key, value string) {
 	t.Helper()
-	old, existed := os.LookupEnv(key)
-	t.Cleanup(func() {
-		if existed {
-			os.Setenv(key, old)
-		} else {
-			os.Unsetenv(key)
-		}
-	})
-	os.Setenv(key, value)
+	t.Setenv(key, value)
 }
 
 func unsetenv(t *testing.T, key string) {
 	t.Helper()
-	old, existed := os.LookupEnv(key)
-	t.Cleanup(func() {
-		if existed {
-			os.Setenv(key, old)
-		} else {
-			os.Unsetenv(key)
-		}
-	})
+	t.Setenv(key, "")
 	os.Unsetenv(key)
 }
 

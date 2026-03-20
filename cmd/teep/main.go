@@ -58,8 +58,8 @@ func parseLogLevel(args []string) slog.Level {
 		var val string
 		if arg == "--log-level" && i+1 < len(args) {
 			val = args[i+1]
-		} else if strings.HasPrefix(arg, "--log-level=") {
-			val = strings.TrimPrefix(arg, "--log-level=")
+		} else if after, ok := strings.CutPrefix(arg, "--log-level="); ok {
+			val = after
 		} else {
 			continue
 		}
@@ -86,7 +86,7 @@ func runServe(args []string) {
 	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 	fs.Usage = func() { printServeHelp() }
-	fs.Parse(args)
+	fs.Parse(args) //nolint:errcheck // fs.Parse calls os.Exit on error per flag.ExitOnError
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -119,7 +119,7 @@ func runVerify(args []string) {
 	offline := fs.Bool("offline", false, "skip external verification (Proof of Cloud registry)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 
-	fs.Parse(args)
+	fs.Parse(args) //nolint:errcheck // fs.Parse calls os.Exit on error per flag.ExitOnError
 
 	if *providerName == "" {
 		fmt.Fprintf(os.Stderr, "teep verify: --provider is required\n")
@@ -283,10 +283,7 @@ func formatReport(r *attestation.VerificationReport) string {
 
 	start := 0
 	for _, tb := range tierBoundaries {
-		end := tb.end
-		if end > len(r.Factors) {
-			end = len(r.Factors)
-		}
+		end := min(tb.end, len(r.Factors))
 		if start >= len(r.Factors) {
 			break
 		}
@@ -363,7 +360,7 @@ func writeMetadataBlock(b *strings.Builder, meta map[string]string) {
 
 // saveAttestationData writes the raw provider response and extracted fields to dir.
 // Filenames include a timestamp so multiple runs do not overwrite each other.
-func saveAttestationData(dir, provider string, raw *attestation.RawAttestation) {
+func saveAttestationData(dir, provName string, raw *attestation.RawAttestation) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		slog.Error("create save dir failed", "dir", dir, "err", err)
 		return
@@ -373,15 +370,15 @@ func saveAttestationData(dir, provider string, raw *attestation.RawAttestation) 
 
 	// Save the unmodified HTTP response body from the provider.
 	if len(raw.RawBody) > 0 {
-		saveFile(filepath.Join(dir, fmt.Sprintf("%s_attestation_%s.json", provider, ts)), raw.RawBody)
+		saveFile(filepath.Join(dir, fmt.Sprintf("%s_attestation_%s.json", provName, ts)), raw.RawBody)
 	}
 
 	if raw.NvidiaPayload != "" {
-		saveFile(filepath.Join(dir, fmt.Sprintf("%s_nvidia_payload_%s.json", provider, ts)), []byte(raw.NvidiaPayload))
+		saveFile(filepath.Join(dir, fmt.Sprintf("%s_nvidia_payload_%s.json", provName, ts)), []byte(raw.NvidiaPayload))
 	}
 
 	if raw.IntelQuote != "" {
-		saveFile(filepath.Join(dir, fmt.Sprintf("%s_intel_quote_%s.hex", provider, ts)), []byte(raw.IntelQuote))
+		saveFile(filepath.Join(dir, fmt.Sprintf("%s_intel_quote_%s.hex", provName, ts)), []byte(raw.IntelQuote))
 	}
 }
 

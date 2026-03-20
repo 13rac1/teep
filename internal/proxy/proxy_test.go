@@ -84,7 +84,7 @@ func makeAttestationServer(t *testing.T, echoNonce bool) *httptest.Server {
 
 // buildConfig returns a *config.Config wired to the given attestation server
 // URL, with a single "venice" provider and two model mappings.
-func buildConfig(attestBaseURL string, e2ee bool) *config.Config {
+func buildConfig(attestBaseURL string, _ bool) *config.Config {
 	return &config.Config{
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
@@ -92,7 +92,7 @@ func buildConfig(attestBaseURL string, e2ee bool) *config.Config {
 				Name:    "venice",
 				BaseURL: attestBaseURL,
 				APIKey:  "test-key",
-				E2EE:    e2ee,
+				E2EE:    false,
 				ModelMap: map[string]string{
 					"test-model":  "upstream-model",
 					"other-model": "upstream-other",
@@ -167,29 +167,6 @@ func nonStreamResponse(content string) string {
 func streamSSE(content string) string {
 	chunk := fmt.Sprintf(`{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"upstream-model","choices":[{"index":0,"delta":{"role":"assistant","content":%q},"finish_reason":null}]}`, content)
 	return fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", chunk)
-}
-
-// encryptForSession encrypts plaintext using the session public key embedded
-// in the X-Venice-TEE-Client-Pub-Key header. Used by mock upstream handlers.
-func encryptForSession(t *testing.T, r *http.Request, plaintext string) string {
-	t.Helper()
-	pubHex := r.Header.Get("X-Venice-TEE-Client-Pub-Key")
-	if pubHex == "" {
-		t.Fatal("X-Venice-TEE-Client-Pub-Key header not set")
-	}
-	pubBytes, err := hex.DecodeString(pubHex)
-	if err != nil {
-		t.Fatalf("decode client pub key: %v", err)
-	}
-	pub, err := secp256k1.ParsePubKey(pubBytes)
-	if err != nil {
-		t.Fatalf("parse client pub key: %v", err)
-	}
-	enc, err := attestation.Encrypt([]byte(plaintext), pub)
-	if err != nil {
-		t.Fatalf("encrypt for session: %v", err)
-	}
-	return enc
 }
 
 // readSSEChunks reads all "data: ..." lines from an SSE response body,
@@ -408,7 +385,9 @@ func TestHandleModelsMultiProvider(t *testing.T) {
 	defer resp.Body.Close()
 
 	var result struct {
-		Data []struct{ ID string } `json:"data"`
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -609,7 +588,7 @@ func TestBlockedAttestation502(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/tee/attestation") {
 			// Return a mismatched nonce → nonce_match Fail.
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(fmt.Sprintf(`{
+			_, _ = fmt.Fprintf(w, `{
 				"verified": false,
 				"nonce": "0000000000000000000000000000000000000000000000000000000000000000",
 				"model": "upstream-model",
@@ -617,7 +596,7 @@ func TestBlockedAttestation502(t *testing.T) {
 				"signing_key": %q,
 				"intel_quote": "",
 				"nvidia_payload": ""
-			}`, modelPubKeyHex())))
+			}`, modelPubKeyHex())
 			return
 		}
 		http.NotFound(w, r)
@@ -779,9 +758,11 @@ func TestPlaintextStreaming(t *testing.T) {
 	}
 	// The first chunk has role only; the second has content.
 	var got string
+	var gotSb782 strings.Builder
 	for _, c := range chunks {
-		got += extractDeltaContent(t, c)
+		gotSb782.WriteString(extractDeltaContent(t, c))
 	}
+	got += gotSb782.String()
 	if got != wantContent {
 		t.Errorf("aggregated content = %q, want %q", got, wantContent)
 	}
@@ -790,37 +771,6 @@ func TestPlaintextStreaming(t *testing.T) {
 // --------------------------------------------------------------------------
 // E2EE streaming (happy path)
 // --------------------------------------------------------------------------
-
-// makeE2EECombinedServer creates a combined server that:
-//   - handles /api/v1/tee/attestation returning modelPubKeyHex
-//   - handles /api/v1/chat/completions by reading X-Venice-TEE-Client-Pub-Key,
-//     encrypting the response content with that key, and streaming it as SSE.
-func makeE2EECombinedServer(t *testing.T, plaintext string, streaming bool) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/v1/tee/attestation") {
-			nonceHex := r.URL.Query().Get("nonce")
-			var n attestation.Nonce
-			b, _ := hex.DecodeString(nonceHex)
-			copy(n[:], b)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(attestationJSON(n, true)))
-			return
-		}
-		if r.URL.Path == "/api/v1/chat/completions" {
-			enc := encryptForSession(t, r, plaintext)
-			if streaming {
-				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = w.Write([]byte(streamSSE(enc)))
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(nonStreamResponse(enc)))
-			}
-			return
-		}
-		http.NotFound(w, r)
-	}))
-}
 
 // makeE2EEConfig returns a config pointing at the given base URL with E2EE
 // enabled. tdx_reportdata_binding is NOT in Enforced (it will Fail since we
@@ -1001,14 +951,14 @@ func TestModelResolutionAcrossProviders(t *testing.T) {
 	nearai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v1/attestation/report") {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(fmt.Sprintf(`{
+			_, _ = fmt.Fprintf(w, `{
 				"verified": true,
 				"model": "upstream-nearai",
 				"intel_quote": "",
 				"nvidia_payload": "",
 				"signing_key": %q,
 				"nonce": ""
-			}`, modelPubKeyHex())))
+			}`, modelPubKeyHex())
 			return
 		}
 		if r.URL.Path == "/v1/chat/completions" {
@@ -1128,9 +1078,11 @@ func TestSSEMultipleChunks(t *testing.T) {
 
 	chunks := readSSEChunks(t, resp.Body)
 	var got string
+	var gotSb1131 strings.Builder
 	for _, c := range chunks {
-		got += extractDeltaContent(t, c)
+		gotSb1131.WriteString(extractDeltaContent(t, c))
 	}
+	got += gotSb1131.String()
 	want := "Hello, world!"
 	if got != want {
 		t.Errorf("aggregated content = %q, want %q", got, want)
@@ -1323,9 +1275,11 @@ func TestE2EEStreamingRoundTrip(t *testing.T) {
 
 	chunks := readSSEChunks(t, resp.Body)
 	var got string
+	var gotSb1326 strings.Builder
 	for _, c := range chunks {
-		got += extractDeltaContent(t, c)
+		gotSb1326.WriteString(extractDeltaContent(t, c))
 	}
+	got += gotSb1326.String()
 	if got != wantContent {
 		t.Errorf("content = %q, want %q", got, wantContent)
 	}
@@ -1565,9 +1519,11 @@ func TestSSELargeChunk(t *testing.T) {
 
 	chunks := readSSEChunks(t, resp.Body)
 	var got string
+	var gotSb1568 strings.Builder
 	for _, c := range chunks {
-		got += extractDeltaContent(t, c)
+		gotSb1568.WriteString(extractDeltaContent(t, c))
 	}
+	got += gotSb1568.String()
 	if got != largeContent {
 		t.Errorf("content length = %d, want %d", len(got), len(largeContent))
 	}

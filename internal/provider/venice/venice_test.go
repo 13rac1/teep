@@ -147,7 +147,7 @@ func TestAttester_FetchAttestation_EchoesNonce(t *testing.T) {
 	var capturedNonce string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedNonce = r.URL.Query().Get("nonce")
-		resp := map[string]interface{}{
+		resp := map[string]any{
 			"verified":       true,
 			"nonce":          capturedNonce,
 			"model":          "e2ee-test",
@@ -297,18 +297,18 @@ func TestPreparer_PrepareRequest_SetsHeaders(t *testing.T) {
 		t.Fatalf("SetModelKey: %v", err)
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/api/v1/chat/completions", nil)
+	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/api/v1/chat/completions", http.NoBody)
 	if err := p.PrepareRequest(req, clientSession); err != nil {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
 
-	if got := req.Header.Get("X-Venice-TEE-Client-Pub-Key"); got != clientSession.PublicKeyHex {
+	if got := req.Header.Get("X-Venice-Tee-Client-Pub-Key"); got != clientSession.PublicKeyHex {
 		t.Errorf("X-Venice-TEE-Client-Pub-Key = %q, want %q", got, clientSession.PublicKeyHex)
 	}
-	if got := req.Header.Get("X-Venice-TEE-Model-Pub-Key"); got != modelKey {
+	if got := req.Header.Get("X-Venice-Tee-Model-Pub-Key"); got != modelKey {
 		t.Errorf("X-Venice-TEE-Model-Pub-Key = %q, want %q", got, modelKey)
 	}
-	if got := req.Header.Get("X-Venice-TEE-Signing-Algo"); got != "ecdsa" {
+	if got := req.Header.Get("X-Venice-Tee-Signing-Algo"); got != "ecdsa" {
 		t.Errorf("X-Venice-TEE-Signing-Algo = %q, want %q", got, "ecdsa")
 	}
 	if got := req.Header.Get("Authorization"); got != "Bearer test-api-key" {
@@ -324,7 +324,7 @@ func TestPreparer_PrepareRequest_EmptyModelKey(t *testing.T) {
 	}
 	// Do NOT call SetModelKey — ModelKeyHex is empty.
 
-	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/", nil)
+	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/", http.NoBody)
 	err = p.PrepareRequest(req, session)
 	if err == nil {
 		t.Fatal("expected error for empty ModelKeyHex, got nil")
@@ -345,7 +345,7 @@ func TestPreparer_PrepareRequest_EmptyPublicKeyHex(t *testing.T) {
 		PublicKeyHex: "",                        // deliberately empty
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/", nil)
+	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/", http.NoBody)
 	err = p.PrepareRequest(req, session)
 	if err == nil {
 		t.Fatal("expected error for empty PublicKeyHex, got nil")

@@ -11,27 +11,6 @@ import (
 	"github.com/13rac1/teep/internal/provider/nearai"
 )
 
-// validArrayResponseJSON simulates the model_attestations array form.
-const validArrayResponseJSON = `{
-	"verified": true,
-	"model_attestations": [
-		{
-			"model": "llama-3.1-70b",
-			"intel_quote": "dGVzdHF1b3Rl",
-			"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test.sig",
-			"signing_key": "04" + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			"nonce": ""
-		},
-		{
-			"model": "llama-3.1-405b",
-			"intel_quote": "dGVzdHF1b3RlMg==",
-			"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test2.sig2",
-			"signing_key": "04" + "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-			"nonce": ""
-		}
-	]
-}`
-
 // validFlatResponseJSON simulates the flat (non-array) response form.
 const validFlatResponseJSON = `{
 	"verified": true,
@@ -320,7 +299,7 @@ func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
 
 func TestPreparer_PrepareRequest_SetsAuthHeader(t *testing.T) {
 	p := nearai.NewPreparer("nearai-key")
-	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/v1/chat/completions", nil)
+	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/v1/chat/completions", http.NoBody)
 
 	session, err := attestation.NewSession()
 	if err != nil {
@@ -339,7 +318,7 @@ func TestPreparer_PrepareRequest_SetsAuthHeader(t *testing.T) {
 func TestPreparer_PrepareRequest_NoSessionRequired(t *testing.T) {
 	// NEAR AI's PrepareRequest should not error when session has no model key.
 	p := nearai.NewPreparer("key")
-	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/", nil)
+	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/", http.NoBody)
 	session, err := attestation.NewSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)

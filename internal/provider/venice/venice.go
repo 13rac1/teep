@@ -17,6 +17,7 @@ package venice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -120,7 +121,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("nonce", nonce.Hex())
 	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("venice: build attestation request: %w", err)
 	}
@@ -203,15 +204,15 @@ func NewPreparer(apiKey string) *Preparer {
 // have its ModelKeyHex set (via SetModelKey) before calling this function.
 func (p *Preparer) PrepareRequest(req *http.Request, session *attestation.Session) error {
 	if session.ModelKeyHex == "" {
-		return fmt.Errorf("venice: PrepareRequest called with empty session.ModelKeyHex; call SetModelKey first")
+		return errors.New("venice: PrepareRequest called with empty session.ModelKeyHex; call SetModelKey first")
 	}
 	if session.PublicKeyHex == "" {
-		return fmt.Errorf("venice: PrepareRequest called with empty session.PublicKeyHex; session may not be initialised")
+		return errors.New("venice: PrepareRequest called with empty session.PublicKeyHex; session may not be initialised")
 	}
 
-	req.Header.Set("X-Venice-TEE-Client-Pub-Key", session.PublicKeyHex)
-	req.Header.Set("X-Venice-TEE-Model-Pub-Key", session.ModelKeyHex)
-	req.Header.Set("X-Venice-TEE-Signing-Algo", "ecdsa")
+	req.Header.Set("X-Venice-Tee-Client-Pub-Key", session.PublicKeyHex)
+	req.Header.Set("X-Venice-Tee-Model-Pub-Key", session.ModelKeyHex)
+	req.Header.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	return nil
 }

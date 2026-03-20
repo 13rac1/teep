@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -62,7 +63,7 @@ func verifyNVIDIAEAT(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
 	}
 
 	if len(eat.EvidenceList) == 0 {
-		result.SignatureErr = fmt.Errorf("EAT evidence_list is empty")
+		result.SignatureErr = errors.New("EAT evidence_list is empty")
 		return result
 	}
 
@@ -103,7 +104,7 @@ func verifyNVIDIAEAT(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
 func loadPinnedNVIDIARootCA() (*x509.Certificate, error) {
 	block, _ := pem.Decode(nvidiaRootCAPEM)
 	if block == nil {
-		return nil, fmt.Errorf("no PEM block found in embedded NVIDIA root CA")
+		return nil, errors.New("no PEM block found in embedded NVIDIA root CA")
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
@@ -188,7 +189,7 @@ func parseCertChain(b64PEM string) ([]*x509.Certificate, error) {
 	}
 
 	if len(certs) == 0 {
-		return nil, fmt.Errorf("no certificates found in PEM bundle")
+		return nil, errors.New("no certificates found in PEM bundle")
 	}
 	return certs, nil
 }
@@ -314,7 +315,7 @@ func verifySPDMEvidence(evidence []byte, expectedNonce Nonce, leafKey *ecdsa.Pub
 	s := new(big.Int).SetBytes(sigBytes[48:])
 
 	if !ecdsa.Verify(leafKey, hash[:], r, s) {
-		return fmt.Errorf("ECDSA P-384 signature verification failed")
+		return errors.New("ECDSA P-384 signature verification failed")
 	}
 
 	slog.Debug("SPDM evidence verified",
