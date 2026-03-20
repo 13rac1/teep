@@ -22,8 +22,8 @@ type tierInfo struct {
 	Description string
 }
 
-// factorRegistry contains all 21 verification factors in report order.
-var factorRegistry = [21]factorInfo{
+// factorRegistry contains all 23 verification factors in report order.
+var factorRegistry = [23]factorInfo{
 	// Tier 1: Core Attestation
 	{
 		Name:    "nonce_match",
@@ -243,6 +243,27 @@ var factorRegistry = [21]factorInfo{
 			"Use --offline to skip the registry check and show only the " +
 			"extracted PPID.",
 	},
+	{
+		Name:    "compose_binding",
+		Tier:    3,
+		Summary: "app_compose hash matches MRConfigID",
+		Description: "Verifies that the SHA-256 hash of the app_compose manifest " +
+			"(from info.tcb_info in the attestation response) matches the " +
+			"MR_CONFIG_ID field in the TDX quote. The MRConfigID encodes " +
+			"0x01 + sha256(app_compose), cryptographically binding the " +
+			"docker-compose deployment manifest to the hardware attestation. " +
+			"This proves the TEE is running the declared container images.",
+	},
+	{
+		Name:    "sigstore_verification",
+		Tier:    3,
+		Summary: "Container images in Sigstore transparency log",
+		Description: "Extracts container image sha256 digests from the docker-compose " +
+			"manifest inside app_compose and checks each against the Sigstore " +
+			"transparency log (search.sigstore.dev). Sigstore entries prove " +
+			"the images were built through a verifiable CI/CD pipeline with " +
+			"signed provenance. Skipped when no image digests are found.",
+	},
 }
 
 // tierRegistry describes the three verification tiers.
@@ -273,11 +294,11 @@ var tierRegistry = [3]tierInfo{
 		Number: 3,
 		Name:   "Supply Chain & Channel Integrity",
 		Label:  "Tier 3: Supply Chain & Channel Integrity",
-		Description: "Factors 17-21. The gold standard for TEE verification. " +
+		Description: "Factors 17-23. The gold standard for TEE verification. " +
 			"Covers TLS key binding, CPU-GPU attestation chain, measured " +
-			"model weights, build transparency logs, and hardware identity " +
-			"registry. No vendor passes any of these today. These represent " +
-			"the future state needed for complete supply-chain verification.",
+			"model weights, build transparency logs, hardware identity " +
+			"registry, compose manifest binding, and Sigstore verification. " +
+			"These represent the supply-chain verification frontier.",
 	},
 }
 
@@ -332,7 +353,7 @@ Help topics:
   serve       Detailed documentation for the serve command.
   verify      Detailed documentation for the verify command.
   tiers       Explain the 3-tier verification scoring system.
-  factors     List all 21 verification factors with full descriptions.
+  factors     List all 23 verification factors with full descriptions.
   <factor>    Show details for a single factor (e.g. teep help tls_key_binding).
 
 Environment variables:
@@ -391,7 +412,7 @@ Usage:
   teep verify --provider NAME --model MODEL [flags]
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
-attestation for the given model, and runs all 21 verification factors. The
+attestation for the given model, and runs all 23 verification factors. The
 report is printed to stdout; log messages go to stderr.
 
 Required flags:
@@ -415,7 +436,7 @@ Examples:
   teep verify --provider venice --model e2ee-qwen3-32b --log-level debug
 
 See 'teep help tiers' for how factors are scored, or 'teep help factors'
-for descriptions of all 21 verification factors.
+for descriptions of all 23 verification factors.
 `)
 }
 
@@ -424,7 +445,7 @@ func printTiersHelp() {
 	fmt.Print("Verification Tiers\n")
 	fmt.Print(strings.Repeat("=", 19) + "\n\n")
 
-	fmt.Print(`teep evaluates TEE attestation using 21 factors organized into 3 tiers.
+	fmt.Print(`teep evaluates TEE attestation using 23 factors organized into 3 tiers.
 Each factor produces a result: PASS, FAIL, or SKIP. Factors marked
 [ENFORCED] in the report will cause the proxy to refuse requests when
 they fail.
@@ -432,7 +453,7 @@ they fail.
 `)
 
 	start := 0
-	bounds := [3]int{7, 16, 21}
+	bounds := [3]int{7, 16, 23}
 	for i, tier := range tierRegistry {
 		fmt.Printf("%s\n", tier.Label)
 		fmt.Print(strings.Repeat("-", len(tier.Label)) + "\n")

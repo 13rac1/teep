@@ -8,8 +8,8 @@ import (
 )
 
 func TestFactorRegistryCount(t *testing.T) {
-	if len(factorRegistry) != 21 {
-		t.Errorf("factor registry has %d entries, want 21", len(factorRegistry))
+	if len(factorRegistry) != 23 {
+		t.Errorf("factor registry has %d entries, want 23", len(factorRegistry))
 	}
 }
 
@@ -21,7 +21,7 @@ func TestFactorRegistryTiers(t *testing.T) {
 			wantTier = 1
 		case i < 16:
 			wantTier = 2
-		default:
+		default: // 16..22 = Tier 3
 			wantTier = 3
 		}
 		if f.Tier != wantTier {
@@ -38,7 +38,7 @@ func TestFactorRegistryNamesMatchReport(t *testing.T) {
 		IntelQuote: "dGVzdA==",
 		SigningKey: "04" + strings.Repeat("ab", 64), // dummy uncompressed key
 	}
-	report := attestation.BuildReport("test", "test", raw, nonce, nil, nil, nil, nil, nil)
+	report := attestation.BuildReport("test", "test", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 
 	if len(report.Factors) != len(factorRegistry) {
 		t.Fatalf("report has %d factors, registry has %d", len(report.Factors), len(factorRegistry))

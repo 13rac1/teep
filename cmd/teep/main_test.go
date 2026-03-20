@@ -264,13 +264,13 @@ func TestStatusIcon(t *testing.T) {
 
 func TestTierBoundaries(t *testing.T) {
 	for _, tb := range tierBoundaries {
-		if tb.end > 21 {
-			t.Errorf("tier boundary end %d exceeds 21", tb.end)
+		if tb.end > 23 {
+			t.Errorf("tier boundary end %d exceeds 23", tb.end)
 		}
 	}
 	last := tierBoundaries[len(tierBoundaries)-1].end
-	if last != 21 {
-		t.Errorf("final tier boundary end = %d, want 21", last)
+	if last != 23 {
+		t.Errorf("final tier boundary end = %d, want 23", last)
 	}
 }
 

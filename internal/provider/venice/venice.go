@@ -178,6 +178,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 		ComposeHash:        ar.Info.ComposeHash,
 		OSImageHash:        ar.Info.OSImageHash,
 		DeviceID:           ar.Info.DeviceID,
+		AppCompose:         extractAppCompose(ar.Info.TCBInfo),
 		EventLogCount:      len(ar.EventLog),
 		NonceSource:        ar.NonceSource,
 		CandidatesAvail:    ar.CandidatesAvail,
@@ -186,6 +187,31 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 
 		RawBody: body,
 	}, nil
+}
+
+// extractAppCompose parses a tcb_info JSON payload and returns the app_compose
+// string field. Returns "" if tcb_info is nil, not an object, or lacks app_compose.
+func extractAppCompose(tcbInfo json.RawMessage) string {
+	if len(tcbInfo) == 0 {
+		return ""
+	}
+	// tcb_info may be a JSON string containing escaped JSON, or a direct object.
+	var raw json.RawMessage
+	if err := json.Unmarshal(tcbInfo, &raw); err != nil {
+		return ""
+	}
+	// If tcb_info is a JSON string, unwrap it.
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		raw = json.RawMessage(str)
+	}
+	var obj struct {
+		AppCompose string `json:"app_compose"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	return obj.AppCompose
 }
 
 // Preparer injects Venice E2EE headers into an outgoing chat completions

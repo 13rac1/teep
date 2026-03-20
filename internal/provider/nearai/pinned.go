@@ -267,7 +267,30 @@ func (h *PinnedHandler) attestOnConn(
 		return nil, fmt.Errorf("live SPKI %s != attested TLS fingerprint %s", liveSPKI[:16]+"...", raw.TLSFingerprint[:16]+"...")
 	}
 
-	report := attestation.BuildReport("nearai", model, raw, nonce, h.enforced, tdxResult, nil, nil, nil)
+	var composeResult *attestation.ComposeBindingResult
+	var sigstoreResults []attestation.SigstoreResult
+	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
+		composeResult = &attestation.ComposeBindingResult{Checked: true}
+		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+
+		dockerCompose, err := attestation.ExtractDockerCompose(raw.AppCompose)
+		if err != nil {
+			slog.Debug("extract docker_compose_file failed", "domain", domain, "err", err)
+		}
+		if dockerCompose != "" {
+			slog.Debug("attested docker compose manifest", "domain", domain, "content", dockerCompose)
+		}
+		source := dockerCompose
+		if source == "" {
+			source = raw.AppCompose
+		}
+		digests := attestation.ExtractImageDigests(source)
+		if len(digests) > 0 && !h.offline {
+			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, &http.Client{Timeout: 10 * time.Second})
+		}
+	}
+
+	report := attestation.BuildReport("nearai", model, raw, nonce, h.enforced, tdxResult, nil, nil, nil, composeResult, sigstoreResults)
 	return report, nil
 }
 

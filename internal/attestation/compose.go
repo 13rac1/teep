@@ -1,0 +1,78 @@
+package attestation
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+)
+
+// VerifyComposeBinding checks that sha256(appCompose) matches the MRConfigID
+// from the TDX quote. MRConfigID is expected to start with the byte 0x01
+// followed by the sha256 hash of appCompose (big-endian).
+func VerifyComposeBinding(appCompose string, mrConfigID []byte) error {
+	if len(mrConfigID) == 0 {
+		return errors.New("MRConfigID is empty")
+	}
+
+	hash := sha256.Sum256([]byte(appCompose))
+	// Expected: 01 + sha256(appCompose) in first 33 bytes of MRConfigID.
+	expectedPrefix := make([]byte, 0, 33)
+	expectedPrefix = append(expectedPrefix, 0x01)
+	expectedPrefix = append(expectedPrefix, hash[:]...)
+
+	if len(mrConfigID) < len(expectedPrefix) {
+		return fmt.Errorf("MRConfigID too short (%d bytes), need at least %d", len(mrConfigID), len(expectedPrefix))
+	}
+
+	actual := mrConfigID[:len(expectedPrefix)]
+	for i := range expectedPrefix {
+		if actual[i] != expectedPrefix[i] {
+			return fmt.Errorf(
+				"MRConfigID does not match app_compose hash (expected prefix=%s, actual=%s)",
+				hex.EncodeToString(expectedPrefix),
+				hex.EncodeToString(mrConfigID),
+			)
+		}
+	}
+
+	return nil
+}
+
+// appComposePayload is the JSON structure for the app_compose field.
+type appComposePayload struct {
+	DockerComposeFile string `json:"docker_compose_file"`
+}
+
+// ExtractDockerCompose extracts the docker_compose_file string from an
+// app_compose JSON payload. Returns ("", nil) if the field is absent.
+func ExtractDockerCompose(appCompose string) (string, error) {
+	var payload appComposePayload
+	if err := json.Unmarshal([]byte(appCompose), &payload); err != nil {
+		return "", fmt.Errorf("parse app_compose JSON: %w", err)
+	}
+	return payload.DockerComposeFile, nil
+}
+
+// imageDigestRe matches @sha256:<64 hex chars> in image references.
+var imageDigestRe = regexp.MustCompile(`@sha256:([0-9a-f]{64})`)
+
+// ExtractImageDigests returns deduplicated sha256 digests from image references
+// in the given text (e.g. docker-compose content). Each digest is the 64-char
+// hex string after @sha256:.
+func ExtractImageDigests(text string) []string {
+	matches := imageDigestRe.FindAllStringSubmatch(text, -1)
+	seen := make(map[string]struct{}, len(matches))
+	var digests []string
+	for _, m := range matches {
+		digest := m[1]
+		if _, ok := seen[digest]; ok {
+			continue
+		}
+		seen[digest] = struct{}{}
+		digests = append(digests, digest)
+	}
+	return digests
+}

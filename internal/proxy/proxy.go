@@ -186,7 +186,7 @@ func reportdataBindingPassed(report *attestation.VerificationReport) bool {
 	return false
 }
 
-// fetchAndVerify fetches attestation from the provider and runs all 21
+// fetchAndVerify fetches attestation from the provider and runs all 23
 // verification factors. On failure it records the provider/model in the
 // negative cache. Returns nil on fetch error.
 func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, upstreamModel string) *attestation.VerificationReport {
@@ -246,7 +246,30 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 			"registered", pocResult != nil && pocResult.Registered)
 	}
 
-	return attestation.BuildReport(prov.Name, upstreamModel, raw, nonce, s.cfg.Enforced, tdxResult, nvidiaResult, nrasResult, pocResult)
+	var composeResult *attestation.ComposeBindingResult
+	var sigstoreResults []attestation.SigstoreResult
+	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
+		composeResult = &attestation.ComposeBindingResult{Checked: true}
+		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+
+		dockerCompose, err := attestation.ExtractDockerCompose(raw.AppCompose)
+		if err != nil {
+			slog.Debug("extract docker_compose_file failed", "provider", prov.Name, "err", err)
+		}
+		if dockerCompose != "" {
+			slog.Debug("attested docker compose manifest", "provider", prov.Name, "content", dockerCompose)
+		}
+		source := dockerCompose
+		if source == "" {
+			source = raw.AppCompose
+		}
+		digests := attestation.ExtractImageDigests(source)
+		if len(digests) > 0 && !s.cfg.Offline {
+			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, s.attestClient)
+		}
+	}
+
+	return attestation.BuildReport(prov.Name, upstreamModel, raw, nonce, s.cfg.Enforced, tdxResult, nvidiaResult, nrasResult, pocResult, composeResult, sigstoreResults)
 }
 
 // handleChatCompletions is the core proxy handler for POST /v1/chat/completions.

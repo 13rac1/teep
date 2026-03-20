@@ -16,6 +16,7 @@ package nearai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,6 +46,9 @@ type modelAttestation struct {
 	TLSCertFingerprint string `json:"tls_cert_fingerprint"`
 	Nonce              string `json:"nonce"`
 	RequestNonce       string `json:"request_nonce"`
+	Info               struct {
+		TCBInfo json.RawMessage `json:"tcb_info"`
+	} `json:"info"`
 }
 
 // attestationResponse is the JSON shape returned by NEAR AI's attestation
@@ -70,6 +74,9 @@ type attestationResponse struct {
 	Nonce              string `json:"nonce"`
 	RequestNonce       string `json:"request_nonce"`
 	Verified           bool   `json:"verified"`
+	Info               struct {
+		TCBInfo json.RawMessage `json:"tcb_info"`
+	} `json:"info"`
 }
 
 // Attester fetches attestation data from NEAR AI's /v1/attestation/report
@@ -196,6 +203,7 @@ func parseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 		TLSFingerprint: ar.TLSCertFingerprint,
 		IntelQuote:     ar.IntelQuote,
 		NvidiaPayload:  ar.NvidiaPayload,
+		AppCompose:     extractAppCompose(ar.Info.TCBInfo),
 		RawBody:        body,
 	}, nil
 }
@@ -224,8 +232,34 @@ func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) *a
 		TLSFingerprint: m.TLSCertFingerprint,
 		IntelQuote:     m.IntelQuote,
 		NvidiaPayload:  m.NvidiaPayload,
+		AppCompose:     extractAppCompose(m.Info.TCBInfo),
 		RawBody:        body,
 	}
+}
+
+// extractAppCompose parses a tcb_info JSON payload and returns the app_compose
+// string field. Returns "" if tcb_info is nil, not an object, or lacks app_compose.
+func extractAppCompose(tcbInfo json.RawMessage) string {
+	if len(tcbInfo) == 0 {
+		return ""
+	}
+	// tcb_info may be a JSON string containing escaped JSON, or a direct object.
+	var raw json.RawMessage
+	if err := json.Unmarshal(tcbInfo, &raw); err != nil {
+		return ""
+	}
+	// If tcb_info is a JSON string, unwrap it.
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		raw = json.RawMessage(str)
+	}
+	var obj struct {
+		AppCompose string `json:"app_compose"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	return obj.AppCompose
 }
 
 func firstNonEmpty(vals ...string) string {

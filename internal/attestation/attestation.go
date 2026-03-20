@@ -83,6 +83,7 @@ type RawAttestation struct {
 	UpstreamModel      string          // HuggingFace model ID
 	AppName            string          // dstack app name
 	ComposeHash        string          // docker-compose hash
+	AppCompose         string          // raw app_compose JSON from info.tcb_info
 	OSImageHash        string          // OS image hash
 	DeviceID           string          // TDX device ID
 	EventLogCount      int             // number of event log entries

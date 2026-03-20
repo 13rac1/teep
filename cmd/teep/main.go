@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -233,7 +234,49 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 			"registered", pocResult != nil && pocResult.Registered)
 	}
 
-	return attestation.BuildReport(providerName, modelName, raw, nonce, cfg.Enforced, tdxResult, nvidiaResult, nrasResult, pocResult)
+	// Check compose binding and Sigstore if app_compose is available.
+	var composeResult *attestation.ComposeBindingResult
+	var sigstoreResults []attestation.SigstoreResult
+	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
+		composeResult = &attestation.ComposeBindingResult{Checked: true}
+		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+		if composeResult.Err == nil {
+			slog.Info("compose binding verified", "mr_config_id", hex.EncodeToString(tdxResult.MRConfigID[:min(33, len(tdxResult.MRConfigID))]))
+		} else {
+			slog.Warn("compose binding failed", "err", composeResult.Err)
+		}
+
+		dockerCompose, err := attestation.ExtractDockerCompose(raw.AppCompose)
+		if err != nil {
+			slog.Debug("extract docker_compose_file failed", "err", err)
+		}
+		source := dockerCompose
+		if source == "" {
+			source = raw.AppCompose
+		}
+		if dockerCompose != "" {
+			slog.Debug("attested docker compose manifest", "content", dockerCompose)
+		}
+		digests := attestation.ExtractImageDigests(source)
+		for _, d := range digests {
+			slog.Info("checking Sigstore for image digest", "digest", "sha256:"+d[:min(16, len(d))]+"...")
+		}
+		if len(digests) > 0 && !cfg.Offline {
+			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, client)
+			for _, r := range sigstoreResults {
+				switch {
+				case r.OK:
+					slog.Info("Sigstore check passed", "digest", "sha256:"+r.Digest[:min(16, len(r.Digest))]+"...", "status", r.Status)
+				case r.Err != nil:
+					slog.Warn("Sigstore check failed", "digest", "sha256:"+r.Digest[:min(16, len(r.Digest))]+"...", "err", r.Err)
+				default:
+					slog.Warn("Sigstore check failed", "digest", "sha256:"+r.Digest[:min(16, len(r.Digest))]+"...", "status", r.Status)
+				}
+			}
+		}
+	}
+
+	return attestation.BuildReport(providerName, modelName, raw, nonce, cfg.Enforced, tdxResult, nvidiaResult, nrasResult, pocResult, composeResult, sigstoreResults)
 }
 
 // newAttester returns the appropriate Attester for the named provider.
@@ -271,14 +314,14 @@ func knownProviders(cfg *config.Config) string {
 }
 
 // tierBoundaries defines the exclusive upper index (0-based) for each tier.
-// Factors 0-6 = Tier 1, 7-14 = Tier 2, 15-19 = Tier 3.
+// Factors 0-6 = Tier 1, 7-15 = Tier 2, 16-22 = Tier 3.
 var tierBoundaries = [3]struct {
 	name string
 	end  int
 }{
 	{"Tier 1: Core Attestation", 7},
 	{"Tier 2: Binding & Crypto", 16},
-	{"Tier 3: Supply Chain & Channel Integrity", 21},
+	{"Tier 3: Supply Chain & Channel Integrity", 23},
 }
 
 // formatReport renders a VerificationReport as a human-readable string,

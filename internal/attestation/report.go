@@ -89,23 +89,33 @@ var KnownFactors = []string{
 	"nvidia_payload_present", "nvidia_signature", "nvidia_claims", "nvidia_nonce_match",
 	"nvidia_nras_verified", "e2ee_capable", "tls_key_binding", "cpu_gpu_chain",
 	"measured_model_weights", "build_transparency_log", "cpu_id_registry",
+	"compose_binding", "sigstore_verification",
 }
 
-// BuildReport runs all 21 verification factors against raw and returns a
+// ComposeBindingResult holds the outcome of verifying the app_compose → MRConfigID binding.
+type ComposeBindingResult struct {
+	// Checked is true when AppCompose was present and verification was attempted.
+	Checked bool
+	// Err is non-nil when the binding check failed.
+	Err error
+}
+
+// BuildReport runs all 23 verification factors against raw and returns a
 // complete VerificationReport. The enforced parameter controls which factor
 // names result in Enforced=true. Pass DefaultEnforced for production use.
 //
 // TDX quote verification (factors 3-6, 8, 10) uses the parsed quote from
 // VerifyTDXQuote. NVIDIA verification (factors 12-15) uses VerifyNVIDIAPayload
-// and VerifyNVIDIANRAS. Tier 3 factors (17-21) always Fail because no vendor
-// currently provides the required supply-chain data.
-func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult, nrasResult *NvidiaVerifyResult, pocResult *PoCResult) *VerificationReport {
+// and VerifyNVIDIANRAS. Tier 3 factors (17-21) check supply-chain data.
+// Factors 22-23 (compose_binding, sigstore_verification) check the app_compose
+// manifest binding to the TDX quote and Sigstore transparency log presence.
+func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult, nrasResult *NvidiaVerifyResult, pocResult *PoCResult, composeResult *ComposeBindingResult, sigstoreResults []SigstoreResult) *VerificationReport {
 	enforcedSet := make(map[string]bool, len(enforced))
 	for _, name := range enforced {
 		enforcedSet[name] = true
 	}
 
-	factors := make([]FactorResult, 0, 21)
+	factors := make([]FactorResult, 0, 23)
 
 	addFactor := func(name string, status Status, detail string) {
 		factors = append(factors, FactorResult{
@@ -399,6 +409,44 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	} else {
 		addFactor("cpu_id_registry", Fail,
 			"no CPU ID registry check")
+	}
+
+	// Factor 22: compose_binding
+	switch {
+	case composeResult == nil || !composeResult.Checked:
+		addFactor("compose_binding", Skip, "no app_compose in attestation response")
+	case composeResult.Err != nil:
+		addFactor("compose_binding", Fail, fmt.Sprintf("compose binding failed: %v", composeResult.Err))
+	default:
+		addFactor("compose_binding", Pass, "sha256(app_compose) matches MRConfigID")
+	}
+
+	// Factor 23: sigstore_verification
+	if len(sigstoreResults) == 0 {
+		addFactor("sigstore_verification", Skip, "no image digests to verify")
+	} else {
+		allOK := true
+		var failDigest string
+		var failDetail string
+		for _, r := range sigstoreResults {
+			if !r.OK {
+				allOK = false
+				failDigest = r.Digest
+				if r.Err != nil {
+					failDetail = r.Err.Error()
+				} else {
+					failDetail = fmt.Sprintf("HTTP %d", r.Status)
+				}
+				break
+			}
+		}
+		if allOK {
+			addFactor("sigstore_verification", Pass,
+				fmt.Sprintf("%d image digest(s) found in Sigstore transparency log", len(sigstoreResults)))
+		} else {
+			addFactor("sigstore_verification", Fail,
+				fmt.Sprintf("Sigstore check failed for sha256:%s (%s)", failDigest[:min(16, len(failDigest))], failDetail))
+		}
 	}
 
 	// Tally results.

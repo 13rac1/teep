@@ -37,10 +37,10 @@ func validSigningKey(t *testing.T) string {
 func TestBuildReportFactorCount(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport("venice", "test-model", raw, nonce, DefaultEnforced, nil, nil, nil, nil)
+	report := BuildReport("venice", "test-model", raw, nonce, DefaultEnforced, nil, nil, nil, nil, nil, nil)
 
-	if len(report.Factors) != 21 {
-		t.Errorf("factor count: got %d, want 21", len(report.Factors))
+	if len(report.Factors) != 23 {
+		t.Errorf("factor count: got %d, want 23", len(report.Factors))
 	}
 }
 
@@ -48,7 +48,7 @@ func TestBuildReportFactorCount(t *testing.T) {
 func TestBuildReportTotals(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport("venice", "test-model", raw, nonce, DefaultEnforced, nil, nil, nil, nil)
+	report := BuildReport("venice", "test-model", raw, nonce, DefaultEnforced, nil, nil, nil, nil, nil, nil)
 
 	total := report.Passed + report.Failed + report.Skipped
 	if total != len(report.Factors) {
@@ -80,7 +80,7 @@ func TestBuildReportNonceMatch(t *testing.T) {
 
 	// Pass: nonces match.
 	raw := buildMinimalRaw(nonce, sigKey)
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor := findFactor(t, report, "nonce_match")
 	if factor.Status != Pass {
 		t.Errorf("nonce_match with matching nonce: got %s, want PASS; detail: %s", factor.Status, factor.Detail)
@@ -89,7 +89,7 @@ func TestBuildReportNonceMatch(t *testing.T) {
 	// Fail: nonce mismatch.
 	otherNonce := NewNonce()
 	raw.Nonce = otherNonce.Hex()
-	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor = findFactor(t, report, "nonce_match")
 	if factor.Status != Fail {
 		t.Errorf("nonce_match with mismatched nonce: got %s, want FAIL", factor.Status)
@@ -97,7 +97,7 @@ func TestBuildReportNonceMatch(t *testing.T) {
 
 	// Fail: empty nonce.
 	raw.Nonce = ""
-	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor = findFactor(t, report, "nonce_match")
 	if factor.Status != Fail {
 		t.Errorf("nonce_match with empty nonce: got %s, want FAIL", factor.Status)
@@ -111,14 +111,14 @@ func TestBuildReportTDXQuotePresent(t *testing.T) {
 
 	raw := buildMinimalRaw(nonce, sigKey)
 	raw.IntelQuote = "dGVzdA=="
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor := findFactor(t, report, "tdx_quote_present")
 	if factor.Status != Pass {
 		t.Errorf("tdx_quote_present with quote: got %s, want PASS", factor.Status)
 	}
 
 	raw.IntelQuote = ""
-	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor = findFactor(t, report, "tdx_quote_present")
 	if factor.Status != Fail {
 		t.Errorf("tdx_quote_present with empty quote: got %s, want FAIL", factor.Status)
@@ -130,14 +130,14 @@ func TestBuildReportSigningKeyPresent(t *testing.T) {
 	nonce := NewNonce()
 
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor := findFactor(t, report, "signing_key_present")
 	if factor.Status != Pass {
 		t.Errorf("signing_key_present with key: got %s, want PASS", factor.Status)
 	}
 
 	raw.SigningKey = ""
-	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor = findFactor(t, report, "signing_key_present")
 	if factor.Status != Fail {
 		t.Errorf("signing_key_present with empty key: got %s, want FAIL", factor.Status)
@@ -150,7 +150,7 @@ func TestBuildReportE2EECapable(t *testing.T) {
 
 	// Pass: valid secp256k1 uncompressed key.
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor := findFactor(t, report, "e2ee_capable")
 	if factor.Status != Pass {
 		t.Errorf("e2ee_capable with valid key: got %s, want PASS; detail: %s", factor.Status, factor.Detail)
@@ -158,7 +158,7 @@ func TestBuildReportE2EECapable(t *testing.T) {
 
 	// Fail: empty key.
 	raw.SigningKey = ""
-	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor = findFactor(t, report, "e2ee_capable")
 	if factor.Status != Fail {
 		t.Errorf("e2ee_capable with empty key: got %s, want FAIL", factor.Status)
@@ -166,7 +166,7 @@ func TestBuildReportE2EECapable(t *testing.T) {
 
 	// Fail: malformed key.
 	raw.SigningKey = strings.Repeat("0", 130)
-	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	factor = findFactor(t, report, "e2ee_capable")
 	if factor.Status != Fail {
 		t.Errorf("e2ee_capable with zero key: got %s, want FAIL", factor.Status)
@@ -177,7 +177,7 @@ func TestBuildReportE2EECapable(t *testing.T) {
 func TestBuildReportEnforcedFlags(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport("venice", "m", raw, nonce, DefaultEnforced, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, DefaultEnforced, nil, nil, nil, nil, nil, nil)
 
 	enforcedSet := make(map[string]bool)
 	for _, name := range DefaultEnforced {
@@ -197,7 +197,7 @@ func TestBuildReportEnforcedFlags(t *testing.T) {
 func TestBuildReportTier3AlwaysFail(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport("venice", "m", raw, nonce, DefaultEnforced, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, DefaultEnforced, nil, nil, nil, nil, nil, nil)
 
 	tier3AlwaysFail := []string{
 		"tls_key_binding",
@@ -230,7 +230,7 @@ func TestBuildReportTLSKeyBindingPass(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	raw.TLSFingerprint = "aabbccddee112233445566778899aabb"
 
-	report := BuildReport("nearai", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("nearai", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	f := findFactor(t, report, "tls_key_binding")
 	if f.Status != Pass {
 		t.Errorf("tls_key_binding with TLSFingerprint: got %s (%s), want PASS", f.Status, f.Detail)
@@ -247,7 +247,7 @@ func TestBuildReportTLSKeyBindingFail(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	// TLSFingerprint is empty by default
 
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	f := findFactor(t, report, "tls_key_binding")
 	if f.Status != Fail {
 		t.Errorf("tls_key_binding without TLSFingerprint: got %s (%s), want FAIL", f.Status, f.Detail)
@@ -261,7 +261,7 @@ func TestBlockedReturnsTrue(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	raw.Nonce = "" // force nonce_match to fail
 
-	report := BuildReport("venice", "m", raw, nonce, DefaultEnforced, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, DefaultEnforced, nil, nil, nil, nil, nil, nil)
 
 	if !report.Blocked() {
 		t.Error("Blocked() returned false when enforced nonce_match is failing")
@@ -279,7 +279,7 @@ func TestBlockedReturnsFalse(t *testing.T) {
 	// We need to pass a tdxResult with DebugEnabled=false to get debug_disabled to pass.
 	// And tdx_reportdata_binding also needs a passing tdxResult.
 	// For this test, use an empty enforced list so nothing is enforced.
-	report := BuildReport("venice", "m", raw, nonce, []string{}, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, []string{}, nil, nil, nil, nil, nil, nil)
 
 	if report.Blocked() {
 		t.Error("Blocked() returned true with empty enforced list")
@@ -291,7 +291,7 @@ func TestVerificationReportMetadata(t *testing.T) {
 	before := time.Now()
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport("venice", "e2ee-qwen3", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "e2ee-qwen3", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	after := time.Now()
 
 	if report.Provider != "venice" {
@@ -310,7 +310,7 @@ func TestVerificationReportMetadata(t *testing.T) {
 func TestBuildReportNilTDXResultFailsParseFactors(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 
 	for _, name := range []string{"tdx_quote_structure", "tdx_cert_chain", "tdx_quote_signature", "tdx_debug_disabled"} {
 		f := findFactor(t, report, name)
@@ -336,7 +336,7 @@ func TestBuildReportWithTDXPassResult(t *testing.T) {
 		TeeTCBSVN:            []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 	}
 
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 
 	for _, name := range []string{"tdx_quote_structure", "tdx_cert_chain", "tdx_quote_signature", "tdx_debug_disabled"} {
 		f := findFactor(t, report, name)
@@ -362,7 +362,7 @@ func TestBuildReportReportDataBindingPassWithDetail(t *testing.T) {
 		ReportDataBindingDetail: "REPORTDATA binds signing key via Ethereum address (0xabc123)",
 	}
 
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 	f := findFactor(t, report, "tdx_reportdata_binding")
 	if f.Status != Pass {
 		t.Errorf("tdx_reportdata_binding with detail: got %s (%s), want PASS", f.Status, f.Detail)
@@ -381,7 +381,7 @@ func TestBuildReportReportDataBindingSkipNoVerifier(t *testing.T) {
 		TeeTCBSVN: make([]byte, 16),
 	}
 
-	report := BuildReport("nearai", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("nearai", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 	f := findFactor(t, report, "tdx_reportdata_binding")
 	if f.Status != Skip {
 		t.Errorf("tdx_reportdata_binding without verifier: got %s (%s), want SKIP", f.Status, f.Detail)
@@ -398,7 +398,7 @@ func TestBuildReportWithTDXDebugEnabled(t *testing.T) {
 		TeeTCBSVN:    make([]byte, 16),
 	}
 
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 	f := findFactor(t, report, "tdx_debug_disabled")
 	if f.Status != Fail {
 		t.Errorf("tdx_debug_disabled with debug set: got %s, want FAIL", f.Status)
@@ -415,7 +415,7 @@ func TestBuildReportNvidiaPresent(t *testing.T) {
 
 	// Fail: no payload.
 	raw.NvidiaPayload = ""
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	f := findFactor(t, report, "nvidia_payload_present")
 	if f.Status != Fail {
 		t.Errorf("nvidia_payload_present with empty payload: got %s, want FAIL", f.Status)
@@ -423,7 +423,7 @@ func TestBuildReportNvidiaPresent(t *testing.T) {
 
 	// Pass: payload present.
 	raw.NvidiaPayload = "some.jwt.token"
-	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report = BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 	f = findFactor(t, report, "nvidia_payload_present")
 	if f.Status != Pass {
 		t.Errorf("nvidia_payload_present with payload: got %s, want PASS", f.Status)
@@ -435,7 +435,7 @@ func TestBuildReportNvidiaPresent(t *testing.T) {
 func TestBuildReportAttestationFreshnessSkipNilTDX(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "intel_pcs_collateral")
 	if f.Status != Skip {
@@ -452,7 +452,7 @@ func TestBuildReportAttestationFreshnessPassWithTcbStatus(t *testing.T) {
 		TeeTCBSVN: make([]byte, 16),
 		TcbStatus: "UpToDate",
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "intel_pcs_collateral")
 	if f.Status != Pass {
@@ -468,7 +468,7 @@ func TestBuildReportAttestationFreshnessSkipOffline(t *testing.T) {
 	tdxResult := &TDXVerifyResult{
 		TeeTCBSVN: make([]byte, 16),
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "intel_pcs_collateral")
 	if f.Status != Skip {
@@ -485,7 +485,7 @@ func TestBuildReportTdxTcbCurrentUpToDate(t *testing.T) {
 		TcbStatus:   "UpToDate",
 		AdvisoryIDs: []string{"INTEL-SA-00837"},
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "tdx_tcb_current")
 	if f.Status != Pass {
@@ -505,7 +505,7 @@ func TestBuildReportTdxTcbCurrentSWHardening(t *testing.T) {
 		TcbStatus:   "SWHardeningNeeded",
 		AdvisoryIDs: []string{"INTEL-SA-00960"},
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "tdx_tcb_current")
 	if f.Status != Pass {
@@ -521,7 +521,7 @@ func TestBuildReportTdxTcbCurrentOutOfDate(t *testing.T) {
 		TeeTCBSVN: make([]byte, 16),
 		TcbStatus: "OutOfDate",
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "tdx_tcb_current")
 	if f.Status != Fail {
@@ -537,7 +537,7 @@ func TestBuildReportTdxTcbCurrentRevoked(t *testing.T) {
 		TeeTCBSVN: make([]byte, 16),
 		TcbStatus: "Revoked",
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "tdx_tcb_current")
 	if f.Status != Fail {
@@ -552,7 +552,7 @@ func TestBuildReportTdxTcbCurrentOffline(t *testing.T) {
 	tdxResult := &TDXVerifyResult{
 		TeeTCBSVN: []byte{0x07, 0x01, 0x03, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "tdx_tcb_current")
 	if f.Status != Skip {
@@ -572,7 +572,7 @@ func TestBuildReportNRASPassWithSuccess(t *testing.T) {
 		Format:        "JWT",
 		OverallResult: true,
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nrasResult, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nrasResult, nil, nil, nil)
 
 	f := findFactor(t, report, "nvidia_nras_verified")
 	if f.Status != Pass {
@@ -592,7 +592,7 @@ func TestBuildReportNRASFailNotSuccess(t *testing.T) {
 		Format:        "JWT",
 		OverallResult: false,
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nrasResult, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nrasResult, nil, nil, nil)
 
 	f := findFactor(t, report, "nvidia_nras_verified")
 	if f.Status != Fail {
@@ -606,7 +606,7 @@ func TestBuildReportNRASSkipOffline(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	raw.NvidiaPayload = `{"evidence_list":[]}`
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "nvidia_nras_verified")
 	if f.Status != Skip {
@@ -622,7 +622,7 @@ func TestBuildReportNRASSkipNoEAT(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	raw.NvidiaPayload = "eyJhbGciOi..." // JWT format
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
 
 	f := findFactor(t, report, "nvidia_nras_verified")
 	if f.Status != Skip {
@@ -642,7 +642,7 @@ func TestBuildReportNRASFailSignature(t *testing.T) {
 		Format:       "JWT",
 		SignatureErr: errors.New("bad sig"),
 	}
-	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nrasResult, nil)
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nrasResult, nil, nil, nil)
 
 	f := findFactor(t, report, "nvidia_nras_verified")
 	if f.Status != Fail {
@@ -687,4 +687,80 @@ func factorNames(r *VerificationReport) []string {
 		names[i] = f.Name
 	}
 	return names
+}
+
+// TestBuildReportComposeBindingPass verifies compose_binding passes with valid result.
+func TestBuildReportComposeBindingPass(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	composeResult := &ComposeBindingResult{Checked: true}
+	report := BuildReport("nearai", "m", raw, nonce, nil, nil, nil, nil, nil, composeResult, nil)
+	f := findFactor(t, report, "compose_binding")
+	if f.Status != Pass {
+		t.Errorf("compose_binding with valid binding: got %s (%s), want PASS", f.Status, f.Detail)
+	}
+}
+
+// TestBuildReportComposeBindingFail verifies compose_binding fails on error.
+func TestBuildReportComposeBindingFail(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	composeResult := &ComposeBindingResult{Checked: true, Err: errors.New("hash mismatch")}
+	report := BuildReport("nearai", "m", raw, nonce, nil, nil, nil, nil, nil, composeResult, nil)
+	f := findFactor(t, report, "compose_binding")
+	if f.Status != Fail {
+		t.Errorf("compose_binding with error: got %s (%s), want FAIL", f.Status, f.Detail)
+	}
+}
+
+// TestBuildReportComposeBindingSkip verifies compose_binding skips without data.
+func TestBuildReportComposeBindingSkip(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	report := BuildReport("venice", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
+	f := findFactor(t, report, "compose_binding")
+	if f.Status != Skip {
+		t.Errorf("compose_binding without data: got %s (%s), want SKIP", f.Status, f.Detail)
+	}
+}
+
+// TestBuildReportSigstorePass verifies sigstore_verification passes when all digests are OK.
+func TestBuildReportSigstorePass(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	sigResults := []SigstoreResult{
+		{Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", OK: true, Status: 200},
+		{Digest: "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", OK: true, Status: 200},
+	}
+	report := BuildReport("nearai", "m", raw, nonce, nil, nil, nil, nil, nil, nil, sigResults)
+	f := findFactor(t, report, "sigstore_verification")
+	if f.Status != Pass {
+		t.Errorf("sigstore_verification all OK: got %s (%s), want PASS", f.Status, f.Detail)
+	}
+}
+
+// TestBuildReportSigstoreFail verifies sigstore_verification fails when a digest is not found.
+func TestBuildReportSigstoreFail(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	sigResults := []SigstoreResult{
+		{Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", OK: true, Status: 200},
+		{Digest: "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", OK: false, Status: 404},
+	}
+	report := BuildReport("nearai", "m", raw, nonce, nil, nil, nil, nil, nil, nil, sigResults)
+	f := findFactor(t, report, "sigstore_verification")
+	if f.Status != Fail {
+		t.Errorf("sigstore_verification with 404: got %s (%s), want FAIL", f.Status, f.Detail)
+	}
+}
+
+// TestBuildReportSigstoreSkip verifies sigstore_verification skips without digests.
+func TestBuildReportSigstoreSkip(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	report := BuildReport("nearai", "m", raw, nonce, nil, nil, nil, nil, nil, nil, nil)
+	f := findFactor(t, report, "sigstore_verification")
+	if f.Status != Skip {
+		t.Errorf("sigstore_verification without digests: got %s (%s), want SKIP", f.Status, f.Detail)
+	}
 }
