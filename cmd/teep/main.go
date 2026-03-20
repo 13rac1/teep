@@ -95,7 +95,11 @@ func runServe(args []string) {
 	}
 	cfg.Offline = *offline
 
-	srv := proxy.New(cfg)
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		slog.Error("proxy init failed", "err", err)
+		os.Exit(1)
+	}
 	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("server failed", "err", err)
 		os.Exit(1)

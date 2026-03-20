@@ -133,10 +133,22 @@ func (c *Cache) Get(provider, model string) (*VerificationReport, bool) {
 	return e.report, true
 }
 
+// maxCacheEntries is the threshold above which expired entries are evicted
+// during Put/Record to prevent unbounded memory growth.
+const maxCacheEntries = 1000
+
 // Put stores a VerificationReport for the given provider and model.
 func (c *Cache) Put(provider, model string, report *VerificationReport) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(c.entries) > maxCacheEntries {
+		now := time.Now()
+		for k, e := range c.entries {
+			if now.Sub(e.fetchedAt) > c.ttl {
+				delete(c.entries, k)
+			}
+		}
+	}
 	c.entries[cacheKey{provider, model}] = &cacheEntry{
 		report:    report,
 		fetchedAt: time.Now(),
@@ -172,5 +184,13 @@ func (c *NegativeCache) IsBlocked(provider, model string) bool {
 func (c *NegativeCache) Record(provider, model string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(c.entries) > maxCacheEntries {
+		now := time.Now()
+		for k, t := range c.entries {
+			if now.Sub(t) > c.ttl {
+				delete(c.entries, k)
+			}
+		}
+	}
 	c.entries[cacheKey{provider, model}] = time.Now()
 }

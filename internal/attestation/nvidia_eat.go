@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"crypto/x509"
 	_ "embed"
 	"encoding/base64"
@@ -73,7 +74,7 @@ func verifyNVIDIAEAT(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
 	slog.Debug("NVIDIA EAT parsed", "arch", eat.Arch, "gpu_count", len(eat.EvidenceList), "nonce_len", len(eat.Nonce))
 
 	// Check top-level nonce.
-	if eat.Nonce != expectedNonce.Hex() {
+	if subtle.ConstantTimeCompare([]byte(eat.Nonce), []byte(expectedNonce.Hex())) != 1 {
 		result.ClaimsErr = fmt.Errorf("EAT nonce mismatch: got %q, want %q", eat.Nonce, expectedNonce.Hex())
 		return result
 	}
@@ -247,7 +248,7 @@ func verifySPDMEvidence(evidence []byte, expectedNonce Nonce, leafKey *ecdsa.Pub
 	// Extract requester nonce from request[4:36].
 	var requestNonce [32]byte
 	copy(requestNonce[:], evidence[4:36])
-	if requestNonce != expectedNonce {
+	if subtle.ConstantTimeCompare(requestNonce[:], expectedNonce[:]) != 1 {
 		return fmt.Errorf("requester nonce mismatch: got %s, want %s",
 			hex.EncodeToString(requestNonce[:]), expectedNonce.Hex())
 	}

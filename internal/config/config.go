@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/13rac1/teep/internal/attestation"
 )
 
 const (
@@ -31,14 +33,7 @@ const (
 )
 
 // DefaultEnforced lists the factor names that block the proxy on failure.
-// These match attestation.DefaultEnforced; duplicated here so the config
-// package does not import the attestation package (keeps the dependency graph acyclic).
-var DefaultEnforced = []string{
-	"nonce_match",
-	"tdx_debug_disabled",
-	"signing_key_present",
-	"tdx_reportdata_binding",
-}
+var DefaultEnforced = attestation.DefaultEnforced
 
 // ProviderConfig holds the TOML-parsed configuration for one provider.
 // Either APIKey or APIKeyEnv must be set; APIKeyEnv takes precedence if both
@@ -140,6 +135,15 @@ func loadTOML(cfg *Config, path string) error {
 	}
 
 	if len(f.Policy.Enforce) > 0 {
+		known := make(map[string]bool, len(attestation.KnownFactors))
+		for _, name := range attestation.KnownFactors {
+			known[name] = true
+		}
+		for _, name := range f.Policy.Enforce {
+			if !known[name] {
+				return fmt.Errorf("unknown enforce factor %q", name)
+			}
+		}
 		cfg.Enforced = f.Policy.Enforce
 	}
 

@@ -3,7 +3,6 @@ package attestation
 import (
 	"context"
 	_ "embed"
-	"encoding/base64"
 	"encoding/hex"
 	"testing"
 
@@ -17,10 +16,10 @@ import (
 //go:embed testdata/tdx_prod_quote_SPR_E4.dat
 var realTDXQuoteRaw []byte
 
-// realTDXQuoteBase64 is the real quote encoded as standard base64, matching
+// realTDXQuoteHex is the real quote encoded as lowercase hex, matching
 // how Venice returns it in the intel_quote field.
-func realTDXQuoteBase64() string {
-	return base64.StdEncoding.EncodeToString(realTDXQuoteRaw)
+func realTDXQuoteHex() string {
+	return hex.EncodeToString(realTDXQuoteRaw)
 }
 
 // ethAddress computes the Ethereum address (20 bytes) from an uncompressed
@@ -36,7 +35,7 @@ func ethAddress(pubKeyUncompressed []byte) []byte {
 // parses successfully as a QuoteV4.
 func TestVerifyTDXQuoteParseRealQuote(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteBase64(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("VerifyTDXQuote: unexpected parse error: %v", result.ParseErr)
@@ -56,7 +55,7 @@ func TestVerifyTDXQuoteParseRealQuote(t *testing.T) {
 // measurement registers are extracted from the real production quote.
 func TestVerifyTDXQuoteMeasurements(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteBase64(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed: %v", result.ParseErr)
@@ -112,7 +111,7 @@ func TestVerifyTDXQuoteMeasurements(t *testing.T) {
 // is from 2023 hardware and its cert chain TTL may have lapsed).
 func TestVerifyTDXQuoteCertChain(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteBase64(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed, cannot test cert chain: %v", result.ParseErr)
@@ -135,7 +134,7 @@ func TestVerifyTDXQuoteCertChain(t *testing.T) {
 // debug disabled (it's a production quote, not a debug quote).
 func TestVerifyTDXQuoteDebugFlagRealQuote(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteBase64(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed: %v", result.ParseErr)
@@ -146,35 +145,20 @@ func TestVerifyTDXQuoteDebugFlagRealQuote(t *testing.T) {
 	}
 }
 
-// TestVerifyTDXQuoteHexEncoded verifies that a hex-encoded quote (as Venice
-// returns) is decoded and parsed correctly.
-func TestVerifyTDXQuoteHexEncoded(t *testing.T) {
+// TestVerifyTDXQuoteInvalidHex verifies parse error on garbage input.
+func TestVerifyTDXQuoteInvalidHex(t *testing.T) {
 	nonce := NewNonce()
-	hexQuote := hex.EncodeToString(realTDXQuoteRaw)
-	result := VerifyTDXQuote(context.Background(), hexQuote, "", nonce, true)
-
-	if result.ParseErr != nil {
-		t.Fatalf("VerifyTDXQuote with hex-encoded input: unexpected parse error: %v", result.ParseErr)
-	}
-	if len(result.TeeTCBSVN) != 16 {
-		t.Errorf("TeeTCBSVN length: got %d, want 16", len(result.TeeTCBSVN))
-	}
-}
-
-// TestVerifyTDXQuoteInvalidBase64 verifies parse error on garbage input.
-func TestVerifyTDXQuoteInvalidBase64(t *testing.T) {
-	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), "not-base64!@#$%", "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), "not-hex!@#$%", "", nonce, true)
 
 	if result.ParseErr == nil {
-		t.Error("expected ParseErr for invalid base64 input, got nil")
+		t.Error("expected ParseErr for invalid hex input, got nil")
 	}
 }
 
 // TestVerifyTDXQuoteTooShort verifies parse error when bytes are too short to be a quote.
 func TestVerifyTDXQuoteTooShort(t *testing.T) {
 	nonce := NewNonce()
-	short := base64.StdEncoding.EncodeToString([]byte("too short"))
+	short := hex.EncodeToString([]byte("too short"))
 	result := VerifyTDXQuote(context.Background(), short, "", nonce, true)
 
 	if result.ParseErr == nil {
@@ -281,7 +265,7 @@ func TestVerifyTDXQuoteReportDataBindingRealQuoteFails(t *testing.T) {
 	signingKeyHex := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
 
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteBase64(), signingKeyHex, nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), signingKeyHex, nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse error: %v", result.ParseErr)
@@ -300,7 +284,7 @@ func TestVerifyTDXQuoteReportDataBindingRealQuoteFails(t *testing.T) {
 // production quote's PCK certificate chain.
 func TestPPIDExtraction(t *testing.T) {
 	nonce := NewNonce()
-	result := VerifyTDXQuote(context.Background(), realTDXQuoteBase64(), "", nonce, true)
+	result := VerifyTDXQuote(context.Background(), realTDXQuoteHex(), "", nonce, true)
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed: %v", result.ParseErr)

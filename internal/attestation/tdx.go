@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
@@ -23,7 +22,7 @@ import (
 // verification. Fields are populated even on partial failure so the report
 // builder can produce precise per-factor results.
 type TDXVerifyResult struct {
-	// ParseErr is non-nil if the base64 decode or quote parse step failed.
+	// ParseErr is non-nil if the hex decode or quote parse step failed.
 	// When ParseErr is set, all downstream fields are zero/nil.
 	ParseErr error
 
@@ -95,7 +94,7 @@ type TDXVerifyResult struct {
 // debug mode and its memory can be inspected by the host.
 const tdxDebugBit = 0x01
 
-// VerifyTDXQuote decodes the base64-encoded intel_quote, parses it as a TDX
+// VerifyTDXQuote decodes the hex-encoded intel_quote, parses it as a TDX
 // QuoteV4, checks the certificate chain and signature, optionally fetches Intel
 // PCS collateral for TCB currency checks, checks the debug flag, and validates
 // REPORTDATA binding to the signing key.
@@ -108,10 +107,10 @@ const tdxDebugBit = 0x01
 // secp256k1 public key). It is used to compute the expected REPORTDATA binding.
 //
 // This function never panics. All errors are captured in the returned result.
-func VerifyTDXQuote(ctx context.Context, base64Quote, signingKeyHex string, nonce Nonce, offline bool) *TDXVerifyResult {
+func VerifyTDXQuote(ctx context.Context, hexQuote, signingKeyHex string, nonce Nonce, offline bool) *TDXVerifyResult {
 	result := &TDXVerifyResult{}
 
-	raw, err := decodeQuoteBytes(base64Quote)
+	raw, err := decodeQuoteBytes(hexQuote)
 	if err != nil {
 		result.ParseErr = err
 		return result
@@ -334,19 +333,13 @@ func safeSlice(s [][]byte, i int) []byte {
 	return nil
 }
 
-// decodeQuoteBytes tries hex, base64, and base64url decoding.
-// Venice returns hex-encoded quotes; other providers may use base64.
+// decodeQuoteBytes decodes a hex-encoded TDX quote.
 func decodeQuoteBytes(s string) ([]byte, error) {
-	if raw, err := hex.DecodeString(s); err == nil {
-		return raw, nil
+	raw, err := hex.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("TDX quote hex decode failed: %w", err)
 	}
-	if raw, err := base64.StdEncoding.DecodeString(s); err == nil {
-		return raw, nil
-	}
-	if raw, err := base64.URLEncoding.DecodeString(s); err == nil {
-		return raw, nil
-	}
-	return nil, fmt.Errorf("quote decode failed (tried hex, base64, base64url)")
+	return raw, nil
 }
 
 // verifyReportDataBinding checks whether reportData (64 bytes) binds the

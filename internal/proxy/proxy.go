@@ -76,7 +76,7 @@ type Server struct {
 
 // New builds a Server from cfg. Providers are wired with their Attester and
 // Preparer implementations based on provider name.
-func New(cfg *config.Config) *Server {
+func New(cfg *config.Config) (*Server, error) {
 	s := &Server{
 		cfg:          cfg,
 		providers:    make(map[string]*provider.Provider, len(cfg.Providers)),
@@ -91,8 +91,19 @@ func New(cfg *config.Config) *Server {
 		},
 	}
 
+	modelOwner := make(map[string]string) // client model → provider name
 	for name, cp := range cfg.Providers {
-		s.providers[name] = fromConfig(cp)
+		p, err := fromConfig(cp)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: %w", name, err)
+		}
+		for model := range p.ModelMap {
+			if prev, ok := modelOwner[model]; ok {
+				return nil, fmt.Errorf("model %q mapped by both %q and %q", model, prev, name)
+			}
+			modelOwner[model] = name
+		}
+		s.providers[name] = p
 		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE, "models", len(cp.ModelMap))
 	}
 
@@ -100,7 +111,7 @@ func New(cfg *config.Config) *Server {
 	s.mux.HandleFunc("GET /v1/models", s.handleModels)
 	s.mux.HandleFunc("GET /v1/tee/report", s.handleReport)
 
-	return s
+	return s, nil
 }
 
 // ListenAndServe starts the proxy HTTP server on the configured listen address.
@@ -109,6 +120,8 @@ func (s *Server) ListenAndServe() error {
 		Addr:              s.cfg.ListenAddr,
 		Handler:           s.mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 	}
 	slog.Info("teep proxy listening", "addr", s.cfg.ListenAddr)
@@ -122,7 +135,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // fromConfig constructs a provider.Provider from a config.Provider, attaching
 // the correct Attester and Preparer for the known provider names.
-func fromConfig(cp *config.Provider) *provider.Provider {
+func fromConfig(cp *config.Provider) (*provider.Provider, error) {
 	p := &provider.Provider{
 		Name:     cp.Name,
 		BaseURL:  cp.BaseURL,
@@ -139,8 +152,10 @@ func fromConfig(cp *config.Provider) *provider.Provider {
 		p.ChatPath = "/v1/chat/completions"
 		p.Attester = nearai.NewAttester(cp.BaseURL, cp.APIKey)
 		p.Preparer = nearai.NewPreparer(cp.APIKey)
+	default:
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, nearai)", cp.Name)
 	}
-	return p
+	return p, nil
 }
 
 // resolveModel finds the provider and upstream model name for a client model.
@@ -287,11 +302,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	upstreamURL := prov.BaseURL + prov.ChatPath
 	ctx := r.Context()
+	var cancel context.CancelFunc
 	if !req.Stream {
-		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 120*time.Second)
-		defer cancel()
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Minute)
 	}
+	defer cancel()
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
 	if err != nil {
 		http.Error(w, "failed to build upstream request", http.StatusInternalServerError)
@@ -312,13 +329,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
 	}()
 
 	if resp.StatusCode != http.StatusOK {
 		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		_, _ = io.Copy(w, io.LimitReader(resp.Body, 10<<20))
 		return
 	}
 
@@ -547,7 +564,7 @@ func (s *Server) relaySSELine(w http.ResponseWriter, flusher http.Flusher, line 
 // relayNonStream reads a non-streaming JSON response from body, decrypts the
 // content field if session is non-nil, and writes the result to w.
 func (s *Server) relayNonStream(w http.ResponseWriter, body io.Reader, session *attestation.Session) {
-	responseBody, err := io.ReadAll(body)
+	responseBody, err := io.ReadAll(io.LimitReader(body, 10<<20))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return

@@ -137,7 +137,10 @@ func buildConfigMultiProvider(veniceBase, nearaiBase string) *config.Config {
 // returns both an httptest.Server wrapping the proxy and the proxy itself.
 func newProxyServer(t *testing.T, cfg *config.Config) *httptest.Server {
 	t.Helper()
-	srv := proxy.New(cfg)
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
 	return httptest.NewServer(srv)
 }
 
@@ -1624,5 +1627,53 @@ func TestAuthorizationHeaderSetViaVenicePreparer(t *testing.T) {
 	// session), so the proxy sets Authorization directly from prov.APIKey.
 	if gotAuth != "Bearer secret-key" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer secret-key")
+	}
+}
+
+func TestNewUnknownProviderError(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"badprovider": {
+				Name:     "badprovider",
+				BaseURL:  "http://localhost",
+				APIKey:   "key",
+				ModelMap: map[string]string{"m": "m"},
+			},
+		},
+	}
+	_, err := proxy.New(cfg)
+	if err == nil {
+		t.Fatal("expected error for unknown provider, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown provider") {
+		t.Errorf("error should mention unknown provider: %v", err)
+	}
+}
+
+func TestNewDuplicateModelError(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"venice": {
+				Name:     "venice",
+				BaseURL:  "http://localhost",
+				APIKey:   "key",
+				ModelMap: map[string]string{"shared-model": "upstream-a"},
+			},
+			"nearai": {
+				Name:     "nearai",
+				BaseURL:  "http://localhost",
+				APIKey:   "key",
+				ModelMap: map[string]string{"shared-model": "upstream-b"},
+			},
+		},
+	}
+	_, err := proxy.New(cfg)
+	if err == nil {
+		t.Fatal("expected error for duplicate model, got nil")
+	}
+	if !strings.Contains(err.Error(), "shared-model") {
+		t.Errorf("error should mention the duplicate model name: %v", err)
 	}
 }

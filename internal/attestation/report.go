@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -79,6 +80,17 @@ var DefaultEnforced = []string{
 	"tdx_reportdata_binding",
 }
 
+// KnownFactors is the complete set of factor names produced by BuildReport.
+// Used by config validation to reject typos in the enforce policy.
+var KnownFactors = []string{
+	"nonce_match", "tdx_quote_present", "tdx_quote_structure", "tdx_cert_chain",
+	"tdx_quote_signature", "tdx_debug_disabled", "signing_key_present",
+	"tdx_reportdata_binding", "intel_pcs_collateral", "tdx_tcb_current",
+	"nvidia_payload_present", "nvidia_signature", "nvidia_claims", "nvidia_nonce_match",
+	"nvidia_nras_verified", "e2ee_capable", "tls_key_binding", "cpu_gpu_chain",
+	"measured_model_weights", "build_transparency_log", "cpu_id_registry",
+}
+
 // BuildReport runs all 21 verification factors against raw and returns a
 // complete VerificationReport. The enforced parameter controls which factor
 // names result in Enforced=true. Pass DefaultEnforced for production use.
@@ -109,7 +121,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	// Factor 1: nonce_match
 	if raw.Nonce == "" {
 		addFactor("nonce_match", Fail, "nonce field absent from attestation response")
-	} else if raw.Nonce == nonce.Hex() {
+	} else if subtle.ConstantTimeCompare([]byte(raw.Nonce), []byte(nonce.Hex())) == 1 {
 		detail := fmt.Sprintf("nonce matches (%d hex chars)", len(raw.Nonce))
 		if raw.NonceSource != "" {
 			detail += fmt.Sprintf(" (%s-supplied)", raw.NonceSource)
@@ -124,7 +136,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		addFactor("tdx_quote_present", Fail, "intel_quote field is absent from attestation response")
 	} else {
 		// Base64 length → approximate raw bytes
-		addFactor("tdx_quote_present", Pass, fmt.Sprintf("TDX quote present (%d base64 chars)", len(raw.IntelQuote)))
+		addFactor("tdx_quote_present", Pass, fmt.Sprintf("TDX quote present (%d hex chars)", len(raw.IntelQuote)))
 	}
 
 	// Factors 3–6, 8, 10 come from TDX quote parsing.
@@ -286,7 +298,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		}
 	} else if nvidiaResult.Nonce == "" {
 		addFactor("nvidia_nonce_match", Skip, "nonce field not found in NVIDIA payload")
-	} else if nvidiaResult.Nonce == nonce.Hex() {
+	} else if subtle.ConstantTimeCompare([]byte(nvidiaResult.Nonce), []byte(nonce.Hex())) == 1 {
 		addFactor("nvidia_nonce_match", Pass, nvidiaNonceDetail(nvidiaResult))
 	} else {
 		addFactor("nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", nvidiaResult.Nonce, nonce.Hex()))

@@ -158,6 +158,26 @@ enforce = ["nonce_match", "tls_key_binding"]
 	}
 }
 
+func TestLoadTOMLUnknownEnforceFactor(t *testing.T) {
+	toml := `
+[policy]
+enforce = ["nonce_match", "typo_factor"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for unknown enforce factor, got nil")
+	}
+	if !strings.Contains(err.Error(), "typo_factor") {
+		t.Errorf("error should mention the unknown factor: %v", err)
+	}
+}
+
 func TestLoadTOMLEmptyPolicyKeepsDefaults(t *testing.T) {
 	// An [policy] section with no enforce list must keep the built-in defaults.
 	toml := `
