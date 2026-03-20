@@ -1,10 +1,13 @@
-.PHONY: build test vet fmt lint check clean
+.PHONY: build test integration vet fmt lint check clean
 
 build:
 	go build -o teep ./cmd/teep
 
 test:
-	go test -race ./cmd/... ./internal/...
+	go test -short -race ./cmd/... ./internal/...
+
+integration:
+	go test -v -race -timeout 120s -run TestIntegration ./internal/proxy/
 
 vet:
 	go vet ./cmd/... ./internal/...
