@@ -12,18 +12,18 @@ import (
 // ReportDataVerifier validates Venice's REPORTDATA binding scheme:
 // REPORTDATA[0:20] = keccak256(pubkey_bytes_without_04_prefix)[12:32]
 // This is the keccak256-derived address of the uncompressed secp256k1 public
-// key — the same derivation used by dstack to identify enclave signing keys.
+// key — the same derivation used by dstack to identify enclave keys.
 type ReportDataVerifier struct{}
 
 // VerifyReportData checks that reportData[0:20] matches the keccak256-derived
-// address of the signing key in raw.SigningKey.
+// address of the enclave public key in raw.SigningKey.
 func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, _ attestation.Nonce) (string, error) {
 	signingKeyBytes, err := hex.DecodeString(raw.SigningKey)
 	if err != nil {
-		return "", fmt.Errorf("signing key is not valid hex: %w", err)
+		return "", fmt.Errorf("enclave public key is not valid hex: %w", err)
 	}
 	if len(signingKeyBytes) != 65 || signingKeyBytes[0] != 0x04 {
-		return "", fmt.Errorf("signing key is not an uncompressed secp256k1 public key (got %d bytes, first byte 0x%02x)",
+		return "", fmt.Errorf("enclave public key is not an uncompressed secp256k1 point (got %d bytes, first byte 0x%02x)",
 			len(signingKeyBytes), signingKeyBytes[0])
 	}
 
@@ -46,5 +46,5 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 			raw.SigningAddress, derived)
 	}
 
-	return fmt.Sprintf("REPORTDATA binds signing key via keccak256-derived address (%s)", derived), nil
+	return fmt.Sprintf("REPORTDATA binds enclave public key via keccak256-derived address (%s)", derived), nil
 }

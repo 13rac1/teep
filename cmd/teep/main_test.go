@@ -24,7 +24,7 @@ func buildTestReport(provider, model string) *attestation.VerificationReport {
 		{Name: "tdx_cert_chain", Status: attestation.Pass, Detail: "Certificate chain valid (Intel root CA)", Enforced: false},
 		{Name: "tdx_quote_signature", Status: attestation.Pass, Detail: "Quote signature verified", Enforced: false},
 		{Name: "tdx_debug_disabled", Status: attestation.Pass, Detail: "Debug bit is 0", Enforced: true},
-		{Name: "signing_key_present", Status: attestation.Pass, Detail: "Signing key: 04a3b2...", Enforced: true},
+		{Name: "signing_key_present", Status: attestation.Pass, Detail: "enclave pubkey present (04a3b2...)", Enforced: true},
 		// Tier 2 (7-15)
 		{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "REPORTDATA binds signing key + nonce", Enforced: true},
 		{Name: "intel_pcs_collateral", Status: attestation.Skip, Detail: "Quote age not determinable", Enforced: false},

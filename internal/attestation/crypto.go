@@ -44,23 +44,24 @@ func NewSession() (*Session, error) {
 	}, nil
 }
 
-// SetModelKey parses and validates the model's public key from the attestation
-// response. The key must be 130 hex chars, start with "04" (uncompressed),
-// represent a point on the secp256k1 curve, and not be the identity element.
+// SetModelKey parses and validates the enclave's public key from the
+// attestation response. The key must be 130 hex chars, start with "04"
+// (uncompressed), represent a point on the secp256k1 curve, and not be the
+// identity element.
 func (s *Session) SetModelKey(pubKeyHex string) error {
 	if len(pubKeyHex) != 130 {
-		return fmt.Errorf("model public key must be 130 hex chars, got %d", len(pubKeyHex))
+		return fmt.Errorf("enclave public key must be 130 hex chars, got %d", len(pubKeyHex))
 	}
 	if pubKeyHex[:2] != "04" {
-		return fmt.Errorf("model public key must start with '04' (uncompressed), got %q", pubKeyHex[:2])
+		return fmt.Errorf("enclave public key must start with '04' (uncompressed), got %q", pubKeyHex[:2])
 	}
 	b, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
-		return fmt.Errorf("model public key is not valid hex: %w", err)
+		return fmt.Errorf("enclave public key is not valid hex: %w", err)
 	}
 	pub, err := secp256k1.ParsePubKey(b)
 	if err != nil {
-		return fmt.Errorf("model public key is not a valid secp256k1 point: %w", err)
+		return fmt.Errorf("enclave public key is not a valid secp256k1 point: %w", err)
 	}
 	// ParsePubKey already validates the point is on the curve and not the
 	// identity element. We store both representations for later use.

@@ -72,7 +72,7 @@ func (r *VerificationReport) Blocked() bool {
 // DefaultEnforced lists the factor names that block the proxy on failure.
 // These are the minimum checks required for E2EE security. See the plan for
 // rationale; notably tdx_reportdata_binding is critical — without it, a MITM
-// can substitute the signing key and intercept all E2EE traffic.
+// can substitute the enclave public key and intercept all E2EE traffic.
 var DefaultEnforced = []string{
 	"nonce_match",
 	"tdx_debug_disabled",
@@ -199,24 +199,26 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	}
 
 	// Factor 7: signing_key_present
+	// The API field is called "signing_key" but it's an ECDH public key used
+	// for key exchange, not for signing.
 	if raw.SigningKey == "" {
 		addFactor("signing_key_present", Fail, "signing_key field absent from attestation response")
 	} else {
-		addFactor("signing_key_present", Pass, fmt.Sprintf("signing key present (%s...)", raw.SigningKey[:min(10, len(raw.SigningKey))]))
+		addFactor("signing_key_present", Pass, fmt.Sprintf("enclave pubkey present (%s...)", raw.SigningKey[:min(10, len(raw.SigningKey))]))
 	}
 
 	// --- Tier 2: Binding & Crypto ---
 
 	// Factor 8: tdx_reportdata_binding
-	// REPORTDATA (64 bytes) must bind the signing key to the nonce so a MITM
-	// cannot swap the key while leaving the quote intact. Without this check,
-	// E2EE is security theater.
+	// REPORTDATA (64 bytes) must bind the enclave public key to the nonce so a
+	// MITM cannot swap the key while leaving the quote intact. Without this
+	// check, E2EE is security theater.
 	if tdxResult == nil || tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("tdx_reportdata_binding", Fail, "no parseable TDX quote; REPORTDATA binding cannot be verified")
 	} else if raw.SigningKey == "" {
-		addFactor("tdx_reportdata_binding", Fail, "signing_key absent; REPORTDATA binding cannot be verified")
+		addFactor("tdx_reportdata_binding", Fail, "enclave public key absent; REPORTDATA binding cannot be verified")
 	} else if tdxResult.ReportDataBindingErr != nil {
-		addFactor("tdx_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind signing key: %v", tdxResult.ReportDataBindingErr))
+		addFactor("tdx_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind enclave public key: %v", tdxResult.ReportDataBindingErr))
 	} else if tdxResult.ReportDataBindingDetail != "" {
 		addFactor("tdx_reportdata_binding", Pass, tdxResult.ReportDataBindingDetail)
 	} else {
@@ -337,13 +339,13 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 
 	// Factor 16: e2ee_capable
 	if raw.SigningKey == "" {
-		addFactor("e2ee_capable", Fail, "signing_key absent; E2EE key exchange not possible")
+		addFactor("e2ee_capable", Fail, "enclave public key absent; E2EE key exchange not possible")
 	} else {
 		s := &Session{}
 		if err := s.SetModelKey(raw.SigningKey); err != nil {
-			addFactor("e2ee_capable", Fail, fmt.Sprintf("signing_key is not a valid secp256k1 public key: %v", err))
+			addFactor("e2ee_capable", Fail, fmt.Sprintf("enclave public key is not a valid secp256k1 point: %v", err))
 		} else {
-			detail := "signing key is valid secp256k1 uncompressed point; E2EE key exchange possible"
+			detail := "enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible"
 			if raw.SigningAlgo != "" {
 				detail += fmt.Sprintf(" (%s)", raw.SigningAlgo)
 			}

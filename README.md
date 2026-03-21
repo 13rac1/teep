@@ -82,10 +82,10 @@ Tier 1: Core Attestation
   ✓ tdx_cert_chain             certificate chain valid (Intel root CA)
   ✓ tdx_quote_signature        quote signature verified
   ✓ tdx_debug_disabled         debug bit is 0 (production enclave)  [ENFORCED]
-  ✓ signing_key_present        signing key present (041d9bbc96...)  [ENFORCED]
+  ✓ signing_key_present        enclave pubkey present (041d9bbc96...)  [ENFORCED]
 
 Tier 2: Binding & Crypto
-  ✓ tdx_reportdata_binding     REPORTDATA binds signing key via Ethereum address  [ENFORCED]
+  ✓ tdx_reportdata_binding     REPORTDATA binds enclave pubkey via keccak256-derived address  [ENFORCED]
   ✓ intel_pcs_collateral       Intel PCS collateral fetched (TCB status: UpToDate)
   ✓ tdx_tcb_current            TCB is UpToDate per Intel PCS
   ✓ nvidia_payload_present     NVIDIA payload present (97494 chars)
@@ -93,7 +93,7 @@ Tier 2: Binding & Crypto
   ✓ nvidia_claims              EAT: arch=HOPPER, 8 GPUs, nonce verified
   ✓ nvidia_nonce_match         EAT nonce + 8 GPU SPDM requester nonces match submitted nonce
   ✓ nvidia_nras_verified       NRAS: true (JWT verified)
-  ✓ e2ee_capable               signing key is valid secp256k1 uncompressed point; E2EE key exchange possible (ecdsa)
+  ✓ e2ee_capable               enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible (ecdsa)
 
 Tier 3: Supply Chain & Channel Integrity
   ✗ tls_key_binding            no TLS certificate binding in attestation
@@ -153,13 +153,13 @@ Config file should have `0600` permissions. Teep warns on startup if it is group
 | 4 | `tdx_cert_chain` | Certificate chain verifies against Intel root CA |
 | 5 | `tdx_quote_signature` | Quote signature valid under attestation key |
 | 6 | `tdx_debug_disabled` | TD_ATTRIBUTES debug bit is 0 (production enclave) |
-| 7 | `signing_key_present` | Attestation includes a signing public key |
+| 7 | `signing_key_present` | Enclave ECDH public key present (API field: `signing_key`) |
 
 ### Tier 2: Binding & Crypto
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 8 | `tdx_reportdata_binding` | REPORTDATA cryptographically binds signing key to TDX quote (vendor-specific scheme) |
+| 8 | `tdx_reportdata_binding` | REPORTDATA cryptographically binds enclave public key to TDX quote (vendor-specific scheme) |
 | 9 | `intel_pcs_collateral` | Intel PCS collateral fetched for TCB status |
 | 10 | `tdx_tcb_current` | TCB SVN meets minimum threshold |
 | 11 | `nvidia_payload_present` | NVIDIA GPU attestation payload present |
@@ -185,10 +185,10 @@ Config file should have `0600` permissions. Teep warns on startup if it is group
 
 | Provider | Attestation | Channel Security | REPORTDATA Binding |
 |----------|-------------|-----------------|-------------------|
-| Venice AI | TDX + NVIDIA | E2EE (ECDH + AES-256-GCM) | `sha256(signing_key)` + nonce |
+| Venice AI | TDX + NVIDIA | E2EE (ECDH + AES-256-GCM) | `keccak256(enclave_pubkey)` + nonce |
 | NEAR AI | TDX + NVIDIA | TLS pinning via attestation | `sha256(signing_address ‖ tls_fingerprint)` + nonce |
 
-**Venice AI** uses end-to-end encryption: the proxy negotiates an ECDH shared secret with the TEE's attested signing key, encrypts the request with AES-256-GCM, and decrypts the streaming response.
+**Venice AI** uses end-to-end encryption: the proxy negotiates an ECDH shared secret with the TEE's attested enclave public key, encrypts the request with AES-256-GCM, and decrypts the streaming response.
 
 **NEAR AI** uses connection pinning: attestation and the chat request happen on the same TLS connection. The proxy verifies the server's TLS certificate SPKI matches the `tls_cert_fingerprint` in the attestation response, which is itself bound to the TDX quote via REPORTDATA. This ensures no MITM between attestation and chat. NEAR AI models are resolved dynamically via an endpoint discovery API (`completions.near.ai/endpoints`), and verified SPKI hashes are cached per-domain to avoid repeated attestation for subsequent requests.
 

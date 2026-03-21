@@ -85,24 +85,24 @@ var factorRegistry = [23]factorInfo{
 	{
 		Name:    "signing_key_present",
 		Tier:    1,
-		Summary: "Signing key present in response",
+		Summary: "Enclave public key present in response",
 		Description: "Checks that the signing_key field exists in the attestation " +
-			"response. The signing key is the public key generated inside the " +
-			"TEE that is used for E2EE key exchange. Without it, encrypted " +
-			"communication with the enclave is not possible.",
+			"response. Despite the field name, this is an ECDH public key " +
+			"generated inside the TEE for key exchange, not for signing. " +
+			"Without it, E2EE communication with the enclave is not possible.",
 	},
 	// Tier 2: Binding & Crypto
 	{
 		Name:    "tdx_reportdata_binding",
 		Tier:    2,
-		Summary: "REPORTDATA binds signing key to enclave",
+		Summary: "REPORTDATA binds enclave key to quote",
 		Description: "Verifies that the TDX REPORTDATA field contains a " +
-			"keccak256-derived address of the signing key (last 20 bytes of " +
-			"keccak256 of the uncompressed secp256k1 public key). This " +
-			"cryptographically binds the signing key to the attested enclave, " +
-			"preventing a man-in-the-middle from substituting the key while " +
-			"leaving the TDX quote intact. Without this binding, E2EE is " +
-			"security theater.",
+			"keccak256-derived address of the enclave public key (last 20 " +
+			"bytes of keccak256 of the uncompressed secp256k1 public key). " +
+			"This cryptographically binds the ECDH key exchange key to the " +
+			"attested enclave, preventing a man-in-the-middle from " +
+			"substituting the key while leaving the TDX quote intact. " +
+			"Without this binding, E2EE is security theater.",
 	},
 	{
 		Name:    "intel_pcs_collateral",
@@ -178,12 +178,12 @@ var factorRegistry = [23]factorInfo{
 	{
 		Name:    "e2ee_capable",
 		Tier:    2,
-		Summary: "Signing key supports E2EE key exchange",
-		Description: "Validates that the signing key is a well-formed secp256k1 " +
-			"uncompressed public key suitable for ECDH key exchange. When " +
-			"this passes, the proxy can establish an encrypted channel with " +
-			"the enclave using ECIES (Elliptic Curve Integrated Encryption " +
-			"Scheme).",
+		Summary: "Enclave key supports E2EE key exchange",
+		Description: "Validates that the enclave public key is a well-formed " +
+			"secp256k1 uncompressed point suitable for ECDH key exchange. " +
+			"When this passes, the proxy can establish an encrypted channel " +
+			"with the enclave using ECIES (Elliptic Curve Integrated " +
+			"Encryption Scheme).",
 	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
@@ -276,20 +276,21 @@ var tierRegistry = [3]tierInfo{
 		Description: "Factors 1-7. Validates that a TDX quote is present, " +
 			"structurally valid, properly signed by Intel hardware, and not " +
 			"from a debug enclave. Also checks the nonce for replay protection " +
-			"and that a signing key exists for E2EE. A Tier 1 failure means " +
+			"and that an enclave public key exists for E2EE. A Tier 1 failure means " +
 			"the attestation cannot be trusted at all.",
 	},
 	{
 		Number: 2,
 		Name:   "Binding & Crypto",
 		Label:  "Tier 2: Binding & Crypto",
-		Description: "Factors 8-16. Validates cross-component binding: the signing " +
-			"key is bound to the TDX REPORTDATA (preventing key substitution " +
-			"attacks), NVIDIA GPU attestation is present and locally verified, " +
-			"NVIDIA NRAS RIM measurement comparison passes, and the signing " +
-			"key supports E2EE key exchange. A Tier 2 failure means the " +
-			"attestation is structurally valid but may not provide the " +
-			"security guarantees needed for encrypted inference.",
+		Description: "Factors 8-16. Validates cross-component binding: the enclave " +
+			"public key is bound to the TDX REPORTDATA (preventing key " +
+			"substitution attacks), NVIDIA GPU attestation is present and " +
+			"locally verified, NVIDIA NRAS RIM measurement comparison " +
+			"passes, and the enclave key supports E2EE key exchange. A " +
+			"Tier 2 failure means the attestation is structurally valid but " +
+			"may not provide the security guarantees needed for encrypted " +
+			"inference.",
 	},
 	{
 		Number: 3,
@@ -385,7 +386,7 @@ The proxy:
   3. Caches passing attestation reports (TTL configurable).
   4. If E2EE is supported and attestation passes, encrypts the request
      body and decrypts the response using ECIES with the enclave's
-     attested signing key.
+     attested enclave public key.
   5. Forwards the request to the provider's API endpoint.
 
 Configuration is loaded from the TOML file at $TEEP_CONFIG. Each provider

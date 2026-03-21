@@ -359,7 +359,7 @@ func TestBuildReportReportDataBindingPassWithDetail(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	tdxResult := &TDXVerifyResult{
 		TeeTCBSVN:               make([]byte, 16),
-		ReportDataBindingDetail: "REPORTDATA binds signing key via keccak256-derived address (0xabc123)",
+		ReportDataBindingDetail: "REPORTDATA binds enclave public key via keccak256-derived address (0xabc123)",
 	}
 
 	report := BuildReport("venice", "m", raw, nonce, nil, tdxResult, nil, nil, nil, nil, nil)
@@ -367,7 +367,7 @@ func TestBuildReportReportDataBindingPassWithDetail(t *testing.T) {
 	if f.Status != Pass {
 		t.Errorf("tdx_reportdata_binding with detail: got %s (%s), want PASS", f.Status, f.Detail)
 	}
-	if f.Detail != "REPORTDATA binds signing key via keccak256-derived address (0xabc123)" {
+	if f.Detail != "REPORTDATA binds enclave public key via keccak256-derived address (0xabc123)" {
 		t.Errorf("unexpected detail: %s", f.Detail)
 	}
 }
