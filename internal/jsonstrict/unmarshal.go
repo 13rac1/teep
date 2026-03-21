@@ -13,7 +13,12 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 )
+
+// warned tracks (context, sorted-fields) pairs that have already been logged,
+// so each unique combination produces at most one warning per process lifetime.
+var warned sync.Map
 
 // UnmarshalWarn unmarshals data into v and logs a slog.Warn for every JSON key
 // not represented by a json struct tag on v's type. Unknown fields never cause
@@ -35,10 +40,13 @@ func UnmarshalWarn(data []byte, v any, context string) error {
 		}
 		if len(unknown) > 0 {
 			sort.Strings(unknown)
-			slog.Warn("unknown JSON fields in response",
-				"context", context,
-				"fields", unknown,
-			)
+			key := context + "\x00" + strings.Join(unknown, "\x00")
+			if _, loaded := warned.LoadOrStore(key, struct{}{}); !loaded {
+				slog.Warn("unknown JSON fields in response",
+					"context", context,
+					"fields", unknown,
+				)
+			}
 		}
 	}
 

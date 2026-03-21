@@ -59,6 +59,7 @@ func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error { //no
 // duration of the test and returns the handler for inspection.
 func withRecorder(t *testing.T) *recordingHandler {
 	t.Helper()
+	jsonstrict.ResetWarned()
 	h := &recordingHandler{}
 	prev := slog.Default()
 	slog.SetDefault(slog.New(h))
@@ -238,5 +239,29 @@ func TestUnmarshalWarn_UntaggedField(t *testing.T) {
 	}
 	if v.GoName != "val" {
 		t.Errorf("decode wrong: got %+v", v)
+	}
+}
+
+func TestUnmarshalWarn_DedupsSameFields(t *testing.T) {
+	h := withRecorder(t)
+	var v testStruct
+	data := []byte(`{"name":"x","extra":"y"}`)
+	_ = jsonstrict.UnmarshalWarn(data, &v, "dedup-test")
+	_ = jsonstrict.UnmarshalWarn(data, &v, "dedup-test")
+	_ = jsonstrict.UnmarshalWarn(data, &v, "dedup-test")
+	w := warns(h)
+	if len(w) != 1 {
+		t.Errorf("expected 1 deduplicated warning, got %d", len(w))
+	}
+}
+
+func TestUnmarshalWarn_DifferentContextWarnsAgain(t *testing.T) {
+	h := withRecorder(t)
+	var v testStruct
+	_ = jsonstrict.UnmarshalWarn([]byte(`{"name":"x","extra":"y"}`), &v, "ctx-a")
+	_ = jsonstrict.UnmarshalWarn([]byte(`{"name":"x","extra":"y"}`), &v, "ctx-b")
+	w := warns(h)
+	if len(w) != 2 {
+		t.Errorf("expected 2 warnings (different contexts), got %d", len(w))
 	}
 }

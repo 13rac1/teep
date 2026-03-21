@@ -195,12 +195,8 @@ func extractAppCompose(tcbInfo json.RawMessage) string {
 	if len(tcbInfo) == 0 {
 		return ""
 	}
-	// tcb_info may be a JSON string containing escaped JSON, or a direct object.
-	var raw json.RawMessage
-	if err := json.Unmarshal(tcbInfo, &raw); err != nil {
-		return ""
-	}
-	// If tcb_info is a JSON string, unwrap it.
+	raw := tcbInfo
+	// tcb_info may be a JSON string containing escaped JSON; unwrap it.
 	var str string
 	if err := json.Unmarshal(raw, &str); err == nil {
 		raw = json.RawMessage(str)

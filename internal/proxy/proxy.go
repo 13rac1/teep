@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -49,6 +50,14 @@ const (
 	// Encrypted chunks can be large; 1 MiB is sufficient.
 	sseScannerBufSize = 1 << 20 // 1 MiB
 )
+
+// sseScannerBufPool reuses 1 MiB scanner buffers across SSE requests.
+var sseScannerBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, sseScannerBufSize)
+		return &buf
+	},
+}
 
 // chatRequest is a minimal parse of an OpenAI chat completions request.
 // Only fields the proxy needs to inspect or rewrite are decoded here.
@@ -607,8 +616,9 @@ func (s *Server) relayStream(w http.ResponseWriter, body io.Reader, session *att
 	}
 
 	scanner := bufio.NewScanner(body)
-	buf := make([]byte, sseScannerBufSize)
-	scanner.Buffer(buf, sseScannerBufSize)
+	bufp := sseScannerBufPool.Get().(*[]byte) //nolint:forcetypeassert // pool always stores *[]byte
+	defer sseScannerBufPool.Put(bufp)
+	scanner.Buffer((*bufp)[:cap(*bufp)], sseScannerBufSize)
 
 	// Read the first line before committing a 200 status. If the upstream
 	// body is empty or immediately errors, return a proper HTTP error.

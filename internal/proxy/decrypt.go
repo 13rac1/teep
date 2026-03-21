@@ -206,8 +206,9 @@ func decryptNonStreamResponse(body []byte, session *attestation.Session) ([]byte
 // buildUpstreamBody forced stream=true for per-chunk decryption.
 func reassembleNonStream(body io.Reader, session *attestation.Session) ([]byte, error) {
 	scanner := bufio.NewScanner(body)
-	buf := make([]byte, sseScannerBufSize)
-	scanner.Buffer(buf, sseScannerBufSize)
+	bufp := sseScannerBufPool.Get().(*[]byte) //nolint:forcetypeassert // pool always stores *[]byte
+	defer sseScannerBufPool.Put(bufp)
+	scanner.Buffer((*bufp)[:cap(*bufp)], sseScannerBufSize)
 
 	var content strings.Builder
 	var lastData string // last raw SSE data line for metadata extraction
