@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -129,6 +131,10 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 
 	mapping := make(map[string]string)
 	for _, ep := range er.Endpoints {
+		if !isValidDomain(ep.Domain) {
+			slog.Warn("nearai: endpoint discovery: skipping invalid domain", "domain", ep.Domain)
+			continue
+		}
 		for _, m := range ep.Models {
 			mapping[m] = ep.Domain
 		}
@@ -140,6 +146,16 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 	r.mu.Unlock()
 
 	return nil
+}
+
+// isValidDomain rejects domain strings that are empty, contain schemes,
+// spaces, or path separators, or lack a dot (not a qualified hostname).
+// Accepts host:port (e.g. "192.168.1.1:8080") but rejects URLs with "://".
+func isValidDomain(d string) bool {
+	return d != "" &&
+		!strings.ContainsAny(d, " /") &&
+		!strings.Contains(d, "://") &&
+		strings.Contains(d, ".")
 }
 
 // truncate returns s truncated to n characters with "..." appended if needed.

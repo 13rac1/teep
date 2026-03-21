@@ -29,8 +29,15 @@ import (
 	"github.com/13rac1/teep/internal/jsonstrict"
 )
 
-// attestationPath is the NEAR AI API path for TEE attestation reports.
-const attestationPath = "/v1/attestation/report"
+const (
+	// attestationPath is the NEAR AI API path for TEE attestation reports.
+	attestationPath = "/v1/attestation/report"
+
+	// maxAttestationEntries caps the number of entries in all_attestations
+	// and model_attestations arrays to prevent memory exhaustion from a
+	// malicious response.
+	maxAttestationEntries = 256
+)
 
 // modelAttestation represents one element of the model_attestations array
 // returned by NEAR AI's attestation endpoint.
@@ -189,15 +196,28 @@ func parseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 		return nil, fmt.Errorf("nearai: unmarshal attestation response: %w", err)
 	}
 
+	if len(ar.AllAttestations) > maxAttestationEntries {
+		return nil, fmt.Errorf("nearai: all_attestations has %d entries, max %d", len(ar.AllAttestations), maxAttestationEntries)
+	}
+	if len(ar.ModelAttestations) > maxAttestationEntries {
+		return nil, fmt.Errorf("nearai: model_attestations has %d entries, max %d", len(ar.ModelAttestations), maxAttestationEntries)
+	}
+
 	if len(ar.AllAttestations) > 0 {
-		selected := selectByModel(ar.AllAttestations, model)
+		selected, err := selectByModel(ar.AllAttestations, model)
+		if err != nil {
+			return nil, err
+		}
 		return rawFromModelAttestation(selected, ar.Verified, body), nil
 	}
 
-	// If the response contains model_attestations, pick the best match for the
-	// requested model. Fall back to the first entry if no exact match.
+	// If the response contains model_attestations, pick the entry matching
+	// the requested model. Returns an error if no entry matches.
 	if len(ar.ModelAttestations) > 0 {
-		selected := selectByModel(ar.ModelAttestations, model)
+		selected, err := selectByModel(ar.ModelAttestations, model)
+		if err != nil {
+			return nil, err
+		}
 		return rawFromModelAttestation(selected, ar.Verified, body), nil
 	}
 
@@ -227,16 +247,13 @@ func parseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 	return raw, nil
 }
 
-func selectByModel(list []modelAttestation, model string) *modelAttestation {
-	selected := &list[0]
+func selectByModel(list []modelAttestation, model string) (*modelAttestation, error) {
 	for i := range list {
-		candidateModel := firstNonEmpty(list[i].Model, list[i].ModelName)
-		if candidateModel == model {
-			selected = &list[i]
-			break
+		if firstNonEmpty(list[i].Model, list[i].ModelName) == model {
+			return &list[i], nil
 		}
 	}
-	return selected
+	return nil, fmt.Errorf("nearai: model %q not found in %d attestation entries", model, len(list))
 }
 
 func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) *attestation.RawAttestation {

@@ -2,9 +2,11 @@ package nearai_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -68,9 +70,9 @@ func TestAttester_FetchAttestation_ArrayResponse_ExactMatch(t *testing.T) {
 	}
 }
 
-func TestAttester_FetchAttestation_ArrayResponse_FallsBackToFirst(t *testing.T) {
+func TestAttester_FetchAttestation_ArrayResponse_NoMatch(t *testing.T) {
 	// Array response, but we request a model not in the list.
-	// The first entry should be returned as fallback.
+	// Should return an error instead of silently falling back.
 	body := `{
 		"verified": true,
 		"model_attestations": [
@@ -86,14 +88,11 @@ func TestAttester_FetchAttestation_ArrayResponse_FallsBackToFirst(t *testing.T) 
 	defer srv.Close()
 
 	a := nearai.NewAttester(srv.URL, "key")
-	raw, err := a.FetchAttestation(context.Background(), "unknown-model", attestation.NewNonce())
-	if err != nil {
-		t.Fatalf("FetchAttestation: %v", err)
+	_, err := a.FetchAttestation(context.Background(), "unknown-model", attestation.NewNonce())
+	if err == nil {
+		t.Fatal("expected error for model not in attestation list")
 	}
-
-	if raw.Model != "llama-3.1-70b" {
-		t.Errorf("Model = %q, want %q (first-entry fallback)", raw.Model, "llama-3.1-70b")
-	}
+	t.Logf("got expected error: %v", err)
 }
 
 func TestAttester_FetchAttestation_FlatResponse(t *testing.T) {
@@ -328,6 +327,29 @@ func TestAttester_FetchAttestation_AllAttestations_UsesNewFieldNames(t *testing.
 	if raw.Nonce != "abc123" {
 		t.Errorf("Nonce = %q, want %q", raw.Nonce, "abc123")
 	}
+}
+
+func TestAttester_FetchAttestation_TooManyAttestations(t *testing.T) {
+	// Build a response with more entries than maxAttestationEntries (256).
+	var sb strings.Builder
+	for i := range 257 {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		fmt.Fprintf(&sb, `{"model":"m-%d","intel_quote":"q","signing_key":"04%s"}`,
+			i, "aa"+fmt.Sprintf("%0126d", i))
+	}
+	body := fmt.Sprintf(`{"verified":true,"model_attestations":[%s]}`, sb.String())
+
+	srv := makeServer(t, http.StatusOK, body)
+	defer srv.Close()
+
+	a := nearai.NewAttester(srv.URL, "key")
+	_, err := a.FetchAttestation(context.Background(), "m-0", attestation.NewNonce())
+	if err == nil {
+		t.Fatal("expected error for too many attestation entries")
+	}
+	t.Logf("got expected error: %v", err)
 }
 
 func TestAttester_FetchAttestation_NormalizesUnprefixedKey(t *testing.T) {

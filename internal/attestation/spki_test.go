@@ -100,6 +100,35 @@ func TestSPKICache_ContainsAdd(t *testing.T) {
 	}
 }
 
+func TestSPKICache_Expiry(t *testing.T) {
+	c := NewSPKICache()
+
+	c.Add("example.com", "aabbccdd")
+	if !c.Contains("example.com", "aabbccdd") {
+		t.Fatal("entry should be present immediately after Add")
+	}
+
+	// Backdate the entry beyond the TTL.
+	c.mu.Lock()
+	c.domains["example.com"]["aabbccdd"] = spkiEntry{
+		addedAt: time.Now().Add(-2 * defaultSPKITTL),
+	}
+	c.mu.Unlock()
+
+	if c.Contains("example.com", "aabbccdd") {
+		t.Fatal("expired entry should not be found by Contains")
+	}
+
+	// Adding a new entry should prune the expired one.
+	c.Add("example.com", "11223344")
+	c.mu.RLock()
+	_, stalePresent := c.domains["example.com"]["aabbccdd"]
+	c.mu.RUnlock()
+	if stalePresent {
+		t.Fatal("expired entry should be pruned on Add")
+	}
+}
+
 func TestSPKICache_ConcurrentAccess(t *testing.T) {
 	c := NewSPKICache()
 	var wg sync.WaitGroup

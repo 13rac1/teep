@@ -112,6 +112,43 @@ func TestEndpointResolver_HTTP500(t *testing.T) {
 	}
 }
 
+func TestEndpointResolver_InvalidDomain(t *testing.T) {
+	// Domains that fail isValidDomain should be silently skipped.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"endpoints": [
+				{"domain": "", "models": ["m-empty"]},
+				{"domain": "has spaces", "models": ["m-spaces"]},
+				{"domain": "http://evil.com", "models": ["m-scheme"]},
+				{"domain": "nodot", "models": ["m-nodot"]},
+				{"domain": "path/slash", "models": ["m-slash"]},
+				{"domain": "valid.near.ai", "models": ["m-good"]}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	r := newEndpointResolverForTest(srv.URL)
+
+	// The only valid domain should resolve.
+	domain, err := r.Resolve(context.Background(), "m-good")
+	if err != nil {
+		t.Fatalf("Resolve m-good: %v", err)
+	}
+	if domain != "valid.near.ai" {
+		t.Errorf("domain = %q, want %q", domain, "valid.near.ai")
+	}
+
+	// All invalid-domain models should fail.
+	for _, model := range []string{"m-empty", "m-spaces", "m-scheme", "m-nodot", "m-slash"} {
+		_, err := r.Resolve(context.Background(), model)
+		if err == nil {
+			t.Errorf("Resolve(%q) should fail (invalid domain), but got nil error", model)
+		}
+	}
+}
+
 func TestEndpointResolver_ContextCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
