@@ -1638,3 +1638,90 @@ func TestNewUnknownProviderError(t *testing.T) {
 		t.Errorf("error should mention unknown provider: %v", err)
 	}
 }
+
+// --------------------------------------------------------------------------
+// PrepareUpstreamHeaders
+// --------------------------------------------------------------------------
+
+type mockPreparer struct {
+	called bool
+	apiKey string
+}
+
+func (m *mockPreparer) PrepareRequest(req *http.Request, _ *attestation.Session) error {
+	m.called = true
+	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	return nil
+}
+
+func TestPrepareUpstreamHeaders_NilSession(t *testing.T) {
+	prov := &provider.Provider{
+		Name:   "test",
+		APIKey: "secret-key",
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat", http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	if err := proxy.PrepareUpstreamHeaders(req, prov, nil); err != nil {
+		t.Fatalf("PrepareUpstreamHeaders: %v", err)
+	}
+
+	got := req.Header.Get("Authorization")
+	if got != "Bearer secret-key" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer secret-key")
+	}
+}
+
+func TestPrepareUpstreamHeaders_NilSessionEmptyKey(t *testing.T) {
+	prov := &provider.Provider{
+		Name: "test",
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat", http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	if err := proxy.PrepareUpstreamHeaders(req, prov, nil); err != nil {
+		t.Fatalf("PrepareUpstreamHeaders: %v", err)
+	}
+
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Errorf("Authorization should be empty with no APIKey, got %q", got)
+	}
+}
+
+func TestPrepareUpstreamHeaders_WithSession(t *testing.T) {
+	mock := &mockPreparer{apiKey: "prepared-key"}
+	prov := &provider.Provider{
+		Name:     "test",
+		APIKey:   "fallback-key",
+		Preparer: mock,
+	}
+
+	session, err := attestation.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat", http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	if err := proxy.PrepareUpstreamHeaders(req, prov, session); err != nil {
+		t.Fatalf("PrepareUpstreamHeaders: %v", err)
+	}
+
+	if !mock.called {
+		t.Error("Preparer.PrepareRequest was not called")
+	}
+
+	got := req.Header.Get("Authorization")
+	if got != "Bearer prepared-key" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer prepared-key")
+	}
+}

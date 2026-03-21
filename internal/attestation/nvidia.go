@@ -17,12 +17,16 @@ import (
 )
 
 // nvidiaJWKSURL is NVIDIA's public JWKS endpoint for attestation JWT verification.
-const nvidiaJWKSURL = "https://nras.attestation.nvidia.com/.well-known/jwks.json"
+//
+//nolint:gochecknoglobals // var instead of const to allow test overrides
+var nvidiaJWKSURL = "https://nras.attestation.nvidia.com/.well-known/jwks.json"
 
 // nrasAttestURL is NVIDIA's Remote Attestation Service endpoint for GPU
 // attestation. POST raw EAT JSON to receive a signed JWT with measurement
 // comparison results against NVIDIA's Reference Integrity Manifest (RIM).
-const nrasAttestURL = "https://nras.attestation.nvidia.com/v3/attest/gpu"
+//
+//nolint:gochecknoglobals // var instead of const to allow test overrides
+var nrasAttestURL = "https://nras.attestation.nvidia.com/v3/attest/gpu"
 
 // NvidiaVerifyResult holds the structured outcome of NVIDIA payload verification.
 // Fields are populated even on partial failure. Supports both EAT (local SPDM

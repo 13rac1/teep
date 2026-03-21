@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"io"
+	"net/http"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
@@ -31,4 +32,9 @@ func DecryptNonStreamResponse(body []byte, session *attestation.Session) ([]byte
 // SafePrefix exposes safePrefix for external tests.
 func SafePrefix(s string, n int) string {
 	return safePrefix(s, n)
+}
+
+// PrepareUpstreamHeaders exposes prepareUpstreamHeaders for external tests.
+func PrepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session *attestation.Session) error {
+	return prepareUpstreamHeaders(req, prov, session)
 }

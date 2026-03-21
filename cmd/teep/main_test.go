@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/venice"
 )
 
 // --------------------------------------------------------------------------
@@ -419,5 +425,155 @@ func TestFilterProviders_UnknownProvider(t *testing.T) {
 	err := filterProviders(cfg, "nearai")
 	if err == nil {
 		t.Fatal("expected error for unknown provider")
+	}
+}
+
+// --------------------------------------------------------------------------
+// parseLogLevel tests
+// --------------------------------------------------------------------------
+
+func TestParseLogLevel(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want slog.Level
+	}{
+		{"default", []string{}, slog.LevelInfo},
+		{"debug_flag", []string{"--log-level", "debug"}, slog.LevelDebug},
+		{"info_flag", []string{"--log-level", "info"}, slog.LevelInfo},
+		{"warn_flag", []string{"--log-level", "warn"}, slog.LevelWarn},
+		{"error_flag", []string{"--log-level", "error"}, slog.LevelError},
+		{"equals_syntax", []string{"--log-level=warn"}, slog.LevelWarn},
+		{"among_other_args", []string{"--provider", "venice", "--log-level", "debug"}, slog.LevelDebug},
+		{"case_insensitive", []string{"--log-level", "DEBUG"}, slog.LevelDebug},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseLogLevel(tc.args)
+			if got != tc.want {
+				t.Errorf("parseLogLevel(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+// --------------------------------------------------------------------------
+// newAttester / newReportDataVerifier tests
+// --------------------------------------------------------------------------
+
+func TestNewAttester(t *testing.T) {
+	cp := &config.Provider{BaseURL: "http://localhost", APIKey: "key"}
+
+	t.Run("venice", func(t *testing.T) {
+		a := newAttester("venice", cp)
+		if _, ok := a.(*venice.Attester); !ok {
+			t.Errorf("newAttester(venice) returned %T, want *venice.Attester", a)
+		}
+	})
+
+	t.Run("nearai", func(t *testing.T) {
+		a := newAttester("nearai", cp)
+		if _, ok := a.(*nearai.Attester); !ok {
+			t.Errorf("newAttester(nearai) returned %T, want *nearai.Attester", a)
+		}
+	})
+}
+
+func TestNewReportDataVerifier(t *testing.T) {
+	tests := []struct {
+		name     string
+		wantType string
+		wantNil  bool
+	}{
+		{"venice", "venice.ReportDataVerifier", false},
+		{"nearai", "nearai.ReportDataVerifier", false},
+		{"unknown", "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := newReportDataVerifier(tc.name)
+			if tc.wantNil {
+				if got != nil {
+					t.Errorf("newReportDataVerifier(%q) = %v, want nil", tc.name, got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("newReportDataVerifier(%q) = nil, want non-nil", tc.name)
+			}
+		})
+	}
+}
+
+// --------------------------------------------------------------------------
+// saveFile / saveAttestationData tests
+// --------------------------------------------------------------------------
+
+func TestSaveFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	data := []byte("hello world")
+
+	saveFile(path, data)
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("content = %q, want %q", got, data)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0o600 {
+		t.Errorf("permissions = %o, want 600", perm)
+	}
+}
+
+func TestSaveAttestationData(t *testing.T) {
+	dir := t.TempDir()
+	raw := &attestation.RawAttestation{
+		RawBody:       []byte(`{"test":"body"}`),
+		NvidiaPayload: `{"nvidia":"payload"}`,
+		IntelQuote:    "AABBCCDD",
+	}
+
+	saveAttestationData(dir, "venice", raw)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	t.Logf("saved %d files:", len(entries))
+	for _, e := range entries {
+		t.Logf("  %s", e.Name())
+	}
+
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 files, got %d", len(entries))
+	}
+
+	// Check each file exists with the correct prefix.
+	gotPrefixes := make([]string, 0, len(entries))
+	for _, e := range entries {
+		gotPrefixes = append(gotPrefixes, e.Name())
+	}
+
+	wantPrefixes := []string{"venice_attestation_", "venice_nvidia_payload_", "venice_intel_quote_"}
+	for _, want := range wantPrefixes {
+		found := false
+		for _, got := range gotPrefixes {
+			if strings.HasPrefix(got, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no file with prefix %q found in %v", want, gotPrefixes)
+		}
 	}
 }

@@ -990,3 +990,71 @@ func TestBuildReportSigstoreSkip(t *testing.T) {
 		t.Errorf("sigstore_verification without digests: got %s (%s), want SKIP", f.Status, f.Detail)
 	}
 }
+
+// --------------------------------------------------------------------------
+// buildMetadata tests
+// --------------------------------------------------------------------------
+
+func TestBuildMetadata_AllFields(t *testing.T) {
+	raw := &RawAttestation{
+		TEEHardware:     "intel-tdx",
+		UpstreamModel:   "Qwen/Qwen3.5-122B",
+		AppName:         "dstack-nvidia-0.5.5",
+		ComposeHash:     "242a6272abcdef0123456789",
+		OSImageHash:     "9b69bb16aabbccddaabbccdd",
+		DeviceID:        "aa781567bbccddee",
+		NonceSource:     "client",
+		CandidatesAvail: 6,
+		CandidatesEval:  1,
+		EventLogCount:   30,
+	}
+	m := buildMetadata(raw, nil)
+
+	wantKeys := map[string]string{
+		"hardware":     "intel-tdx",
+		"upstream":     "Qwen/Qwen3.5-122B",
+		"app":          "dstack-nvidia-0.5.5",
+		"compose_hash": "242a6272abcdef0123456789",
+		"os_image":     "9b69bb16aabbccddaabbccdd",
+		"device":       "aa781567bbccddee",
+		"nonce_source": "client",
+		"candidates":   "1/6 evaluated",
+		"event_log":    "30 entries",
+	}
+	for key, want := range wantKeys {
+		got, ok := m[key]
+		if !ok {
+			t.Errorf("missing key %q", key)
+			continue
+		}
+		if got != want {
+			t.Errorf("m[%q] = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestBuildMetadata_EmptyRaw(t *testing.T) {
+	raw := &RawAttestation{}
+	m := buildMetadata(raw, nil)
+	if m != nil {
+		t.Errorf("buildMetadata with empty raw: got %v, want nil", m)
+	}
+}
+
+func TestBuildMetadata_WithPPID(t *testing.T) {
+	raw := &RawAttestation{
+		TEEHardware: "intel-tdx",
+	}
+	tdxResult := &TDXVerifyResult{
+		PPID: "abcdef1234567890",
+	}
+	m := buildMetadata(raw, tdxResult)
+
+	ppid, ok := m["ppid"]
+	if !ok {
+		t.Fatal("ppid not in metadata")
+	}
+	if ppid != "abcdef1234567890" {
+		t.Errorf("ppid = %q, want %q", ppid, "abcdef1234567890")
+	}
+}

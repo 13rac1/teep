@@ -346,3 +346,52 @@ func hostFromURL(t *testing.T, rawURL string) string {
 	}
 	return addr
 }
+
+// TestNewPinnedHandler verifies constructor sets all fields correctly.
+func TestNewPinnedHandler(t *testing.T) {
+	spkiCache := attestation.NewSPKICache()
+	resolver := newEndpointResolverForTest("http://localhost")
+	rdVerifier := ReportDataVerifier{}
+	enforced := []string{"nonce_match", "tdx_debug_disabled"}
+
+	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, enforced, rdVerifier)
+
+	if h.apiKey != "test-api-key" {
+		t.Errorf("apiKey = %q, want %q", h.apiKey, "test-api-key")
+	}
+	if !h.offline {
+		t.Error("offline = false, want true")
+	}
+	if len(h.enforced) != 2 {
+		t.Errorf("enforced len = %d, want 2", len(h.enforced))
+	}
+	if h.spkiCache == nil {
+		t.Error("spkiCache is nil")
+	}
+	if h.resolver == nil {
+		t.Error("resolver is nil")
+	}
+}
+
+// TestSetDialer verifies SetDialer installs a custom dial function.
+func TestSetDialer(t *testing.T) {
+	h := &PinnedHandler{}
+	if h.dialFn != nil {
+		t.Fatal("dialFn should be nil by default")
+	}
+
+	called := false
+	h.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+		called = true
+		return nil, errors.New("test dialer")
+	})
+
+	if h.dialFn == nil {
+		t.Fatal("dialFn should be set after SetDialer")
+	}
+
+	_, err := h.dialFn(context.Background(), "example.com")
+	if err == nil || !called {
+		t.Error("custom dialer was not invoked")
+	}
+}

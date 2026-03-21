@@ -395,3 +395,106 @@ func TestTruncate(t *testing.T) {
 		t.Errorf("truncate long: got %q, want %q", got, "hello...")
 	}
 }
+
+// --------------------------------------------------------------------------
+// VerifyNVIDIANRAS tests (mock NRAS server)
+// --------------------------------------------------------------------------
+
+func TestVerifyNVIDIANRAS_MockSuccess(t *testing.T) {
+	key := generateTestECKey(t)
+	kid := "nras-mock-kid"
+	nonce := NewNonce()
+
+	// Start a JWKS server for JWT verification.
+	jwksSrv := makeTestJWKSServer(t, &key.PublicKey, kid)
+	defer jwksSrv.Close()
+
+	// Override the JWKS URL to point to our test server.
+	origJWKS := nvidiaJWKSURL
+	overrideJWKSURL(jwksSrv.URL)
+	t.Cleanup(func() {
+		restoreJWKSURL(origJWKS)
+		resetJWKS()
+	})
+
+	// Create a signed JWT that NRAS would return.
+	jwtStr := makeTestJWT(t, key, kid, true, nonce.Hex(), "https://nras.attestation.nvidia.com", time.Now().Add(time.Hour))
+
+	// Build the NRAS response: a JSON array of [type, token] pairs.
+	nrasBody, err := json.Marshal([][]string{{"JWT", jwtStr}})
+	if err != nil {
+		t.Fatalf("marshal NRAS response: %v", err)
+	}
+
+	// Start a mock NRAS server.
+	nrasSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("NRAS mock: %s %s", r.Method, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(nrasBody)
+	}))
+	defer nrasSrv.Close()
+
+	origNRAS := nrasAttestURL
+	overrideNRASURL(nrasSrv.URL)
+	t.Cleanup(func() { restoreNRASURL(origNRAS) })
+
+	result := VerifyNVIDIANRAS(context.Background(), `{"arch":"HOPPER"}`, nil)
+
+	t.Logf("result: Format=%s SignatureErr=%v ClaimsErr=%v OverallResult=%v",
+		result.Format, result.SignatureErr, result.ClaimsErr, result.OverallResult)
+
+	if result.SignatureErr != nil {
+		t.Errorf("SignatureErr: %v", result.SignatureErr)
+	}
+	if result.ClaimsErr != nil {
+		t.Errorf("ClaimsErr: %v", result.ClaimsErr)
+	}
+	if result.Format != "JWT" {
+		t.Errorf("Format = %q, want JWT", result.Format)
+	}
+	if !result.OverallResult {
+		t.Error("OverallResult = false, want true")
+	}
+}
+
+func TestVerifyNVIDIANRAS_ServerError(t *testing.T) {
+	nrasSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("NRAS mock: %s %s → 500", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"internal server error"}`))
+	}))
+	defer nrasSrv.Close()
+
+	origNRAS := nrasAttestURL
+	overrideNRASURL(nrasSrv.URL)
+	t.Cleanup(func() { restoreNRASURL(origNRAS) })
+
+	result := VerifyNVIDIANRAS(context.Background(), `{"arch":"HOPPER"}`, nil)
+
+	t.Logf("result: Format=%s SignatureErr=%v ClaimsErr=%v", result.Format, result.SignatureErr, result.ClaimsErr)
+
+	if result.ClaimsErr == nil {
+		t.Error("expected ClaimsErr for 500 response, got nil")
+	}
+}
+
+func TestVerifyNVIDIANRAS_EmptyResponse(t *testing.T) {
+	nrasSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("NRAS mock: %s %s → 200 empty", r.Method, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		// Empty body.
+	}))
+	defer nrasSrv.Close()
+
+	origNRAS := nrasAttestURL
+	overrideNRASURL(nrasSrv.URL)
+	t.Cleanup(func() { restoreNRASURL(origNRAS) })
+
+	result := VerifyNVIDIANRAS(context.Background(), `{"arch":"HOPPER"}`, nil)
+
+	t.Logf("result: Format=%s SignatureErr=%v ClaimsErr=%v", result.Format, result.SignatureErr, result.ClaimsErr)
+
+	if result.SignatureErr == nil {
+		t.Error("expected SignatureErr for empty response, got nil")
+	}
+}

@@ -441,3 +441,30 @@ func TestEncryptDecryptViaSession(t *testing.T) {
 
 	session.Zero()
 }
+
+// TestModelPubKey verifies ModelPubKey returns nil before SetModelKey and
+// the correct key after SetModelKey.
+func TestModelPubKey(t *testing.T) {
+	s := &Session{}
+	if got := s.ModelPubKey(); got != nil {
+		t.Fatalf("ModelPubKey before SetModelKey: got %v, want nil", got)
+	}
+
+	keyA := mustPrivKey(t, testKeyAScalar())
+	validKey := hex.EncodeToString(keyA.PubKey().SerializeUncompressed())
+
+	if err := s.SetModelKey(validKey); err != nil {
+		t.Fatalf("SetModelKey: %v", err)
+	}
+
+	got := s.ModelPubKey()
+	if got == nil {
+		t.Fatal("ModelPubKey after SetModelKey: got nil, want non-nil")
+	}
+
+	// Verify the returned key matches the input.
+	gotHex := hex.EncodeToString(got.SerializeUncompressed())
+	if gotHex != validKey {
+		t.Errorf("ModelPubKey hex mismatch:\n got  %s\n want %s", gotHex, validKey)
+	}
+}
