@@ -78,8 +78,8 @@ pass "binary built"
 
 # --- verify (standalone, no server) ---
 status "verify"
-printf "  > %s verify --provider venice --model %s --offline --save-dir %s\n" "$BIN" "$MODEL" "$WORK" >&2
-OUTPUT=$("$BIN" verify --provider venice --model "$MODEL" --offline --save-dir "$WORK" 2>&1)
+printf "  > %s verify venice --model %s --offline --save-dir %s\n" "$BIN" "$MODEL" "$WORK" >&2
+OUTPUT=$("$BIN" verify venice --model "$MODEL" --offline --save-dir "$WORK" 2>&1)
 SCORE=$(echo "$OUTPUT" | grep "^Score:" || true)
 if [[ -z "$SCORE" ]]; then
 	echo "  output: $OUTPUT" >&2

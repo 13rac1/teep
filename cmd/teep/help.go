@@ -344,8 +344,8 @@ func printOverview() {
 	fmt.Print(`teep — TEE attestation verifier and E2EE proxy for AI providers
 
 Usage:
-  teep serve   [flags]                             Start the HTTP proxy server.
-  teep verify  --provider NAME --model M [flags]   Fetch and print attestation report.
+  teep serve   PROVIDER [flags]                    Start the HTTP proxy server.
+  teep verify  PROVIDER --model M [flags]          Fetch and print attestation report.
   teep help    [topic]                             Show detailed help for a topic.
 
 Global flags:
@@ -371,7 +371,10 @@ func printServeHelp() {
 	fmt.Print(`teep serve — Start the HTTP proxy server
 
 Usage:
-  teep serve [--provider NAME] [--offline] [--log-level LEVEL]
+  teep serve PROVIDER [--offline] [--log-level LEVEL]
+
+Arguments:
+  PROVIDER   Provider name (venice, nearai).
 
 The proxy intercepts OpenAI-compatible chat completion requests, performs TEE
 attestation verification against the upstream provider, and optionally enables
@@ -400,7 +403,6 @@ Example TOML:
   e2ee = true
 
 Flags:
-  --provider NAME     Run proxy with a single provider (e.g. venice, nearai).
   --offline           Skip external verification (Intel PCS, Proof of Cloud).
   --log-level LEVEL   Set log verbosity: debug, info, warn, error (default: info).
 `)
@@ -411,14 +413,16 @@ func printVerifyHelp() {
 	fmt.Print(`teep verify — Fetch and print a TEE attestation verification report
 
 Usage:
-  teep verify --provider NAME --model MODEL [flags]
+  teep verify PROVIDER --model MODEL [flags]
+
+Arguments:
+  PROVIDER   Provider name (venice, nearai).
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
 attestation for the given model, and runs all 23 verification factors. The
 report is printed to stdout; log messages go to stderr.
 
 Required flags:
-  --provider NAME   Provider name (e.g. venice, nearai).
   --model MODEL     Model name as known to the provider.
 
 Optional flags:
@@ -433,9 +437,9 @@ Exit codes:
   1   At least one enforced factor failed, or a fatal error occurred.
 
 Examples:
-  teep verify --provider venice --model e2ee-deepseek-r1-0528
-  teep verify --provider nearai --model qwen2.5-72b-instruct --save-dir ./attestation-data
-  teep verify --provider venice --model e2ee-qwen3-32b --log-level debug
+  teep verify venice --model e2ee-deepseek-r1-0528
+  teep verify nearai --model qwen2.5-72b-instruct --save-dir ./attestation-data
+  teep verify venice --model e2ee-qwen3-32b --log-level debug
 
 See 'teep help tiers' for how factors are scored, or 'teep help factors'
 for descriptions of all 23 verification factors.

@@ -149,7 +149,7 @@ func TestPrintServeHelp(t *testing.T) {
 	out := captureStdout(t, printServeHelp)
 	t.Logf("output length: %d", len(out))
 
-	for _, want := range []string{"teep serve", "--provider", "--offline"} {
+	for _, want := range []string{"teep serve", "PROVIDER", "--offline"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printServeHelp missing %q", want)
 		}
@@ -160,7 +160,7 @@ func TestPrintVerifyHelp(t *testing.T) {
 	out := captureStdout(t, printVerifyHelp)
 	t.Logf("output length: %d", len(out))
 
-	for _, want := range []string{"teep verify", "--provider", "--model"} {
+	for _, want := range []string{"teep verify", "PROVIDER", "--model"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printVerifyHelp missing %q", want)
 		}

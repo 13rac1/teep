@@ -2,8 +2,8 @@
 //
 // Usage:
 //
-//	teep serve                              Start the proxy server.
-//	teep verify --provider NAME --model M  Fetch and verify attestation, print report.
+//	teep serve   PROVIDER                Start the proxy server.
+//	teep verify  PROVIDER --model M      Fetch and verify attestation, print report.
 //
 // Configuration is loaded from $TEEP_CONFIG (TOML) and environment variables.
 // See the config package for full documentation.
@@ -87,8 +87,14 @@ func parseLogLevel(args []string) slog.Level {
 
 // runServe loads config, creates the proxy, and starts listening.
 func runServe(args []string) {
+	providerName, args := extractProvider(args)
+	if providerName == "" {
+		fmt.Fprintf(os.Stderr, "teep serve: provider is required\n\n")
+		printServeHelp()
+		os.Exit(1)
+	}
+
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	providerName := fs.String("provider", "", "run proxy with a single provider (optional, e.g. venice, nearai)")
 	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 	fs.Usage = func() { printServeHelp() }
@@ -101,11 +107,9 @@ func runServe(args []string) {
 	}
 	cfg.Offline = *offline
 
-	if *providerName != "" {
-		if err := filterProviders(cfg, *providerName); err != nil {
-			slog.Error("provider filter failed", "err", err)
-			os.Exit(1)
-		}
+	if err := filterProviders(cfg, providerName); err != nil {
+		slog.Error("provider filter failed", "err", err)
+		os.Exit(1)
 	}
 
 	srv, err := proxy.New(cfg)
@@ -129,20 +133,52 @@ func runServe(args []string) {
 func filterProviders(cfg *config.Config, providerName string) error {
 	cp, ok := cfg.Providers[providerName]
 	if !ok {
-		return fmt.Errorf("provider %q not found (known: %s)", providerName, knownProviders(cfg))
+		return providerNotFoundError(providerName, cfg)
 	}
 	cfg.Providers = map[string]*config.Provider{providerName: cp}
 	return nil
+}
+
+// providerEnvVars maps provider names to their API key environment variables.
+var providerEnvVars = map[string]string{
+	"venice": "VENICE_API_KEY",
+	"nearai": "NEARAI_API_KEY",
+}
+
+// providerNotFoundError returns a descriptive error when a provider is not configured.
+func providerNotFoundError(name string, cfg *config.Config) error {
+	if envVar, ok := providerEnvVars[name]; ok && len(cfg.Providers) == 0 {
+		return fmt.Errorf("provider '%s' not configured (set %s or add [providers.%s] to config)", name, envVar, name)
+	}
+	if envVar, ok := providerEnvVars[name]; ok {
+		return fmt.Errorf("provider '%s' not configured (set %s or add [providers.%s] to config; known: %s)", name, envVar, name, knownProviders(cfg))
+	}
+	return fmt.Errorf("provider '%s' not found (known: %s)", name, knownProviders(cfg))
+}
+
+// extractProvider returns the first arg as a provider name if it doesn't look
+// like a flag, plus the remaining args for flag.Parse.
+func extractProvider(args []string) (name string, rest []string) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return "", args
+	}
+	return args[0], args[1:]
 }
 
 // runVerify parses flags, fetches attestation from the named provider, builds
 // the 20-factor report, prints it to stdout, and exits with code 1 if any
 // enforced factor failed.
 func runVerify(args []string) {
+	providerName, args := extractProvider(args)
+	if providerName == "" {
+		fmt.Fprintf(os.Stderr, "teep verify: provider is required\n\n")
+		printVerifyHelp()
+		os.Exit(1)
+	}
+
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	fs.Usage = func() { printVerifyHelp() }
 
-	providerName := fs.String("provider", "", "provider name (required, e.g. venice, nearai)")
 	modelName := fs.String("model", "", "model name as known to the provider (required)")
 	saveDir := fs.String("save-dir", "", "directory to save raw attestation data (EAT, TDX quote)")
 	offline := fs.Bool("offline", false, "skip external verification (Proof of Cloud registry)")
@@ -150,18 +186,13 @@ func runVerify(args []string) {
 
 	fs.Parse(args) //nolint:errcheck // fs.Parse calls os.Exit on error per flag.ExitOnError
 
-	if *providerName == "" {
-		fmt.Fprintf(os.Stderr, "teep verify: --provider is required\n")
-		fs.Usage()
-		os.Exit(1)
-	}
 	if *modelName == "" {
 		fmt.Fprintf(os.Stderr, "teep verify: --model is required\n")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	report := runVerification(*providerName, *modelName, *saveDir, *offline)
+	report := runVerification(providerName, *modelName, *saveDir, *offline)
 	fmt.Print(formatReport(report))
 
 	if report.Blocked() {
@@ -181,7 +212,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 
 	cp, ok := cfg.Providers[providerName]
 	if !ok {
-		slog.Error("provider not found", "provider", providerName, "known", knownProviders(cfg))
+		slog.Error(providerNotFoundError(providerName, cfg).Error())
 		os.Exit(1)
 	}
 

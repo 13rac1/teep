@@ -33,11 +33,11 @@ go build -o teep ./cmd/teep
 
 # Venice AI (E2EE)
 export VENICE_API_KEY="your-key-here"
-./teep serve
+./teep serve venice
 
 # NEAR AI (TLS pinning)
 export NEARAI_API_KEY="your-key-here"
-./teep serve --provider nearai
+./teep serve nearai
 ```
 
 Point any OpenAI-compatible client at `http://127.0.0.1:8080`:
@@ -59,7 +59,7 @@ print(resp.choices[0].message.content)
 Run a standalone attestation check against any configured provider:
 
 ```bash
-./teep verify --provider venice --model e2ee-qwen3-5-122b-a10b
+./teep verify venice --model e2ee-qwen3-5-122b-a10b
 ```
 
 Example output (Venice AI):

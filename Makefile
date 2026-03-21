@@ -31,10 +31,10 @@ check: fmt vet lint test ## Run fmt + vet + lint + test
 reports: report-venice report-near ## Run all attestation reports
 
 report-venice: build ## Verify Venice attestation (requires VENICE_API_KEY)
-	./teep verify --provider venice --model e2ee-qwen3-5-122b-a10b --log-level debug --save-dir /tmp/teep-attestation-venice
+	./teep verify venice --model e2ee-qwen3-5-122b-a10b --log-level debug --save-dir /tmp/teep-attestation-venice
 
 report-near: build ## Verify NEAR AI attestation (requires NEARAI_API_KEY)
-	./teep verify --provider nearai --model Qwen/Qwen3.5-122B-A10B --log-level debug --save-dir /tmp/teep-attestation-nearai
+	./teep verify nearai --model Qwen/Qwen3.5-122B-A10B --log-level debug --save-dir /tmp/teep-attestation-nearai
 
 e2e-venice: ## Run Venice E2E test (requires VENICE_API_KEY)
 	./test/e2e-venice.sh

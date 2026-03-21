@@ -444,7 +444,7 @@ func TestParseLogLevel(t *testing.T) {
 		{"warn_flag", []string{"--log-level", "warn"}, slog.LevelWarn},
 		{"error_flag", []string{"--log-level", "error"}, slog.LevelError},
 		{"equals_syntax", []string{"--log-level=warn"}, slog.LevelWarn},
-		{"among_other_args", []string{"--provider", "venice", "--log-level", "debug"}, slog.LevelDebug},
+		{"among_other_args", []string{"venice", "--log-level", "debug"}, slog.LevelDebug},
 		{"case_insensitive", []string{"--log-level", "DEBUG"}, slog.LevelDebug},
 	}
 	for _, tc := range tests {
