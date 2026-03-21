@@ -94,6 +94,38 @@ func decryptSSEChunk(data string, session *attestation.Session) (string, error) 
 	return string(out), nil
 }
 
+// decryptSSEChunkContent decrypts the delta content from one SSE JSON chunk
+// and returns just the plaintext string. Unlike decryptSSEChunk, it does not
+// rewrite the full JSON — intended for reassembleNonStream where only the
+// content text is needed. Returns ("", nil) for chunks with no content
+// (role announcements, finish_reason, usage-only).
+func decryptSSEChunkContent(data string, session *attestation.Session) (string, error) {
+	var chunk sseChunk
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return "", fmt.Errorf("parse SSE chunk JSON: %w", err)
+	}
+
+	if len(chunk.Choices) == 0 {
+		return "", nil
+	}
+
+	content := chunk.Choices[0].Delta.Content
+	if content == "" {
+		return "", nil
+	}
+
+	if !attestation.IsEncryptedChunk(content) {
+		return "", fmt.Errorf("expected encrypted chunk but content does not look encrypted (len=%d prefix=%q)", len(content), safePrefix(content, 8))
+	}
+
+	plaintext, err := attestation.Decrypt(content, session.PrivateKey)
+	if err != nil {
+		return "", fmt.Errorf("decrypt chunk: %w", err)
+	}
+
+	return string(plaintext), nil
+}
+
 // decryptNonStreamResponse decrypts the content field in each choice's message
 // of an OpenAI-format non-streaming response body. Returns an error if any
 // non-empty content field is not a recognised encrypted chunk or fails to
@@ -178,7 +210,7 @@ func reassembleNonStream(body io.Reader, session *attestation.Session) ([]byte, 
 	scanner.Buffer(buf, sseScannerBufSize)
 
 	var content strings.Builder
-	var lastChunk string // last non-empty decrypted SSE JSON for metadata
+	var lastData string // last raw SSE data line for metadata extraction
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -190,35 +222,31 @@ func reassembleNonStream(body io.Reader, session *attestation.Session) ([]byte, 
 			break
 		}
 
-		decrypted, err := decryptSSEChunk(data, session)
+		plaintext, err := decryptSSEChunkContent(data, session)
 		if err != nil {
 			return nil, fmt.Errorf("reassemble: %w", err)
 		}
-
-		var chunk sseChunk
-		if err := json.Unmarshal([]byte(decrypted), &chunk); err != nil {
-			return nil, fmt.Errorf("reassemble: parse decrypted chunk: %w", err)
+		if plaintext != "" {
+			content.WriteString(plaintext)
 		}
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-			content.WriteString(chunk.Choices[0].Delta.Content)
-		}
-		lastChunk = decrypted
+		lastData = data
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reassemble: scanner: %w", err)
 	}
 
-	if lastChunk == "" {
+	if lastData == "" {
 		return nil, errors.New("reassemble: no SSE chunks received")
 	}
 
-	// Extract metadata (id, model, created) from the last chunk.
+	// Extract metadata (id, model, created) from the last raw SSE chunk.
+	// These fields are not encrypted, so we parse the original data directly.
 	var meta struct {
 		ID      string `json:"id"`
 		Model   string `json:"model"`
 		Created int64  `json:"created"`
 	}
-	if err := json.Unmarshal([]byte(lastChunk), &meta); err != nil {
+	if err := json.Unmarshal([]byte(lastData), &meta); err != nil {
 		return nil, fmt.Errorf("reassemble: parse metadata from last chunk: %w", err)
 	}
 
