@@ -207,7 +207,7 @@ func parseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 		Nonce:          firstNonEmpty(ar.Nonce, ar.RequestNonce),
 		Model:          firstNonEmpty(ar.Model, ar.ModelName),
 		TEEProvider:    "TDX+NVIDIA",
-		SigningKey:     firstNonEmpty(ar.SigningKey, ar.SigningPublicKey),
+		SigningKey:     normalizeUncompressedKey(firstNonEmpty(ar.SigningKey, ar.SigningPublicKey)),
 		SigningAddress: ar.SigningAddress,
 		SigningAlgo:    ar.SigningAlgo,
 		TLSFingerprint: ar.TLSCertFingerprint,
@@ -245,7 +245,7 @@ func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) *a
 		Nonce:          firstNonEmpty(m.Nonce, m.RequestNonce),
 		Model:          firstNonEmpty(m.Model, m.ModelName),
 		TEEProvider:    "TDX+NVIDIA",
-		SigningKey:     firstNonEmpty(m.SigningKey, m.SigningPublicKey),
+		SigningKey:     normalizeUncompressedKey(firstNonEmpty(m.SigningKey, m.SigningPublicKey)),
 		SigningAddress: m.SigningAddress,
 		SigningAlgo:    m.SigningAlgo,
 		TLSFingerprint: m.TLSCertFingerprint,
@@ -288,6 +288,16 @@ func extractAppCompose(tcbInfo json.RawMessage) string {
 		return ""
 	}
 	return obj.AppCompose
+}
+
+// normalizeUncompressedKey prepends the "04" uncompressed point prefix if the
+// key is 128 hex chars (raw x||y without prefix). NEAR AI's signing_public_key
+// omits the prefix; SetModelKey and e2ee_capable require the standard 130-char form.
+func normalizeUncompressedKey(key string) string {
+	if len(key) == 128 {
+		return "04" + key
+	}
+	return key
 }
 
 func firstNonEmpty(vals ...string) string {

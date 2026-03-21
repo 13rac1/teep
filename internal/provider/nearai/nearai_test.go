@@ -330,6 +330,32 @@ func TestAttester_FetchAttestation_AllAttestations_UsesNewFieldNames(t *testing.
 	}
 }
 
+func TestAttester_FetchAttestation_NormalizesUnprefixedKey(t *testing.T) {
+	// NEAR AI may return signing_public_key without the "04" uncompressed prefix.
+	// The parser should normalize 128-char keys by prepending "04".
+	rawKey := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	body := `{
+		"verified": true,
+		"model": "test-model",
+		"intel_quote": "dGVzdA==",
+		"nvidia_payload": "jwt",
+		"signing_public_key": "` + rawKey + `",
+		"nonce": "abc"
+	}`
+	srv := makeServer(t, http.StatusOK, body)
+	defer srv.Close()
+
+	a := nearai.NewAttester(srv.URL, "key")
+	raw, err := a.FetchAttestation(context.Background(), "test-model", attestation.NewNonce())
+	if err != nil {
+		t.Fatalf("FetchAttestation: %v", err)
+	}
+
+	if raw.SigningKey != "04"+rawKey {
+		t.Errorf("SigningKey = %q (len %d), want '04' prefix + 128 chars (len 130)", raw.SigningKey, len(raw.SigningKey))
+	}
+}
+
 // --- Preparer tests ---
 
 func TestPreparer_PrepareRequest_SetsAuthHeader(t *testing.T) {
