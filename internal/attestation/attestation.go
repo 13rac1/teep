@@ -161,6 +161,38 @@ func (c *Cache) Put(provider, model string, report *VerificationReport) {
 	}
 }
 
+// Len returns the number of entries in the cache (including expired ones).
+func (c *Cache) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.entries)
+}
+
+// CacheInfo describes a single cached attestation entry for status reporting.
+type CacheInfo struct {
+	Provider  string
+	Model     string
+	FetchedAt time.Time
+}
+
+// Models returns (provider, model, fetchedAt) for all non-expired entries.
+func (c *Cache) Models() []CacheInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	now := time.Now()
+	var out []CacheInfo
+	for k, e := range c.entries {
+		if now.Sub(e.fetchedAt) <= c.ttl {
+			out = append(out, CacheInfo{
+				Provider:  k.provider,
+				Model:     k.model,
+				FetchedAt: e.fetchedAt,
+			})
+		}
+	}
+	return out
+}
+
 // NegativeCache records attestation failures to prevent repeated upstream
 // hammering when attestation has recently failed. Entries expire after TTL.
 type NegativeCache struct {
@@ -199,4 +231,11 @@ func (c *NegativeCache) Record(provider, model string) {
 		}
 	}
 	c.entries[cacheKey{provider, model}] = time.Now()
+}
+
+// Len returns the number of entries in the negative cache (including expired ones).
+func (c *NegativeCache) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.entries)
 }

@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -59,6 +60,36 @@ var sseScannerBufPool = sync.Pool{
 	},
 }
 
+// stats holds live operational counters for the status page.
+// All fields are read/written atomically — no mutex needed.
+type stats struct {
+	startTime   time.Time
+	requests    atomic.Int64
+	errors      atomic.Int64
+	streaming   atomic.Int64
+	nonStream   atomic.Int64
+	e2ee        atomic.Int64
+	plaintext   atomic.Int64
+	cacheHits   atomic.Int64
+	cacheMisses atomic.Int64
+	models      sync.Map // "provider/model" → *modelStats
+}
+
+// modelStats holds per-model counters.
+type modelStats struct {
+	requests      atomic.Int64
+	errors        atomic.Int64
+	lastVerifyMs  atomic.Int64 // last verification duration in ms
+	lastRequestAt atomic.Int64 // unix timestamp
+}
+
+// getModelStats returns (or creates) the modelStats for a provider/model key.
+func (st *stats) getModelStats(prov, model string) *modelStats {
+	key := prov + "/" + model
+	v, _ := st.models.LoadOrStore(key, &modelStats{})
+	return v.(*modelStats) //nolint:forcetypeassert // sync.Map always stores *modelStats
+}
+
 // chatRequest is a minimal parse of an OpenAI chat completions request.
 // Only fields the proxy needs to inspect or rewrite are decoded here.
 type chatRequest struct {
@@ -83,6 +114,7 @@ type Server struct {
 	mux            *http.ServeMux
 	attestClient   *http.Client // for attestation fetches
 	upstreamClient *http.Client // for chat completions forwards
+	stats          stats
 }
 
 // New builds a Server from cfg. Providers are wired with their Attester and
@@ -102,6 +134,7 @@ func New(cfg *config.Config) (*Server, error) {
 				IdleConnTimeout: 90 * time.Second,
 			},
 		},
+		stats: stats{startTime: time.Now()},
 	}
 
 	for name, cp := range cfg.Providers {
@@ -304,10 +337,11 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		composeDur = time.Since(composeStart)
 	}
 
+	totalDur := time.Since(totalStart)
 	slog.Info("verification complete",
 		"provider", prov.Name,
 		"model", upstreamModel,
-		"total", time.Since(totalStart),
+		"total", totalDur,
 		"fetch", fetchDur,
 		"tdx", tdxDur,
 		"nvidia", nvidiaDur,
@@ -315,6 +349,9 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		"poc", pocDur,
 		"compose", composeDur,
 	)
+
+	ms := s.stats.getModelStats(prov.Name, upstreamModel)
+	ms.lastVerifyMs.Store(totalDur.Milliseconds())
 
 	return attestation.BuildReport(prov.Name, upstreamModel, raw, nonce, s.cfg.Enforced, tdxResult, nvidiaResult, nrasResult, pocResult, composeResult, sigstoreResults)
 }
@@ -345,7 +382,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.stats.requests.Add(1)
+	ms := s.stats.getModelStats(prov.Name, upstreamModel)
+	ms.requests.Add(1)
+	ms.lastRequestAt.Store(time.Now().Unix())
+	if req.Stream {
+		s.stats.streaming.Add(1)
+	} else {
+		s.stats.nonStream.Add(1)
+	}
+
 	if s.negCache.IsBlocked(prov.Name, upstreamModel) {
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
 		http.Error(w,
 			fmt.Sprintf("attestation recently failed for %s/%s; try again later", prov.Name, upstreamModel),
 			http.StatusServiceUnavailable)
@@ -355,14 +404,20 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Connection-pinned providers (NEAR AI) handle attestation + chat on a
 	// single TLS connection. No separate attestation cache or E2EE needed.
 	if prov.PinnedHandler != nil {
+		s.stats.plaintext.Add(1)
 		s.handlePinnedChat(w, r, prov, upstreamModel, body, req)
 		return
 	}
 
 	report, cached := s.cache.Get(prov.Name, upstreamModel)
-	if !cached {
+	if cached {
+		s.stats.cacheHits.Add(1)
+	} else {
+		s.stats.cacheMisses.Add(1)
 		report = s.fetchAndVerify(r.Context(), prov, upstreamModel)
 		if report == nil {
+			s.stats.errors.Add(1)
+			ms.errors.Add(1)
 			http.Error(w, "attestation fetch failed; see server logs", http.StatusBadGateway)
 			return
 		}
@@ -370,6 +425,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if report.Blocked() {
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
@@ -377,9 +434,16 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	e2eeActive := prov.E2EE && reportdataBindingPassed(report)
+	if e2eeActive {
+		s.stats.e2ee.Add(1)
+	} else {
+		s.stats.plaintext.Add(1)
+	}
 
 	upstreamBody, session, err := s.buildUpstreamBody(r.Context(), body, req, upstreamModel, e2eeActive, prov)
 	if err != nil {
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
 		slog.Error("build upstream body failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		http.Error(w, "failed to prepare upstream request", http.StatusInternalServerError)
 		return
@@ -412,6 +476,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.upstreamClient.Do(upstreamReq)
 	if err != nil {
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
 		slog.Error("upstream request failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
@@ -786,7 +852,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
 }
 
-// handleIndex serves a status page at /.
+// handleIndex serves a live stats dashboard at /.
 func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	var provName, baseURL, e2ee string
 	for name, p := range s.providers {
@@ -799,26 +865,70 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
+	uptime := time.Since(s.stats.startTime).Truncate(time.Second)
+	requests := s.stats.requests.Load()
+	errCount := s.stats.errors.Load()
+	streaming := s.stats.streaming.Load()
+	nonStream := s.stats.nonStream.Load()
+	e2eeCount := s.stats.e2ee.Load()
+	plainCount := s.stats.plaintext.Load()
+	hits := s.stats.cacheHits.Load()
+	misses := s.stats.cacheMisses.Load()
+
+	var hitRate string
+	if total := hits + misses; total > 0 {
+		hitRate = fmt.Sprintf("%.0f%%", float64(hits)/float64(total)*100)
+	} else {
+		hitRate = "—"
+	}
+
+	// Per-model rows.
+	var modelRows strings.Builder
+	s.stats.models.Range(func(key, value any) bool {
+		k := key.(string)        //nolint:forcetypeassert // sync.Map key is always string
+		m := value.(*modelStats) //nolint:forcetypeassert // sync.Map value is always *modelStats
+		verifyMs := m.lastVerifyMs.Load()
+		var verifyStr string
+		if verifyMs > 0 {
+			verifyStr = fmt.Sprintf("%dms", verifyMs)
+		} else {
+			verifyStr = "—"
+		}
+		var agoStr string
+		if lastReq := m.lastRequestAt.Load(); lastReq > 0 {
+			agoStr = time.Since(time.Unix(lastReq, 0)).Truncate(time.Second).String() + " ago"
+		} else {
+			agoStr = "—"
+		}
+		fmt.Fprintf(&modelRows,
+			"  <tr><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td></tr>\n",
+			k, m.requests.Load(), m.errors.Load(), verifyStr, agoStr)
+		return true
+	})
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="refresh" content="5">
 <title>teep</title>
 <style>
-  body { font-family: -apple-system, system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #222; line-height: 1.6; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; color: #222; line-height: 1.6; }
   h1 { font-size: 1.4em; }
+  h2 { font-size: 1.1em; margin-top: 1.5em; }
   code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
-  pre { background: #f4f4f4; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 0.85em; }
   table { border-collapse: collapse; width: 100%%; }
   td, th { text-align: left; padding: 4px 12px 4px 0; }
   th { color: #666; font-weight: normal; }
-  .muted { color: #888; }
+  .muted { color: #888; font-size: 0.85em; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+  .stat-grid table { width: auto; }
 </style>
 </head>
 <body>
 <h1>teep</h1>
-<p>TEE attestation proxy running on <code>%s</code></p>
+<p>TEE attestation proxy on <code>%s</code> &mdash; up %s</p>
 
 <h2>Provider</h2>
 <table>
@@ -827,23 +937,48 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
   <tr><th>E2EE</th><td>%s</td></tr>
 </table>
 
-<h2>Endpoints</h2>
+<h2>Requests</h2>
+<div class="stat-grid">
 <table>
-  <tr><td><code>POST /v1/chat/completions</code></td><td>Proxy chat requests with TEE attestation</td></tr>
-  <tr><td><code>GET /v1/models</code></td><td>List models</td></tr>
-  <tr><td><code>GET /v1/tee/report</code></td><td>Cached attestation report <span class="muted">(after first request)</span></td></tr>
+  <tr><th>Total</th><td>%d</td></tr>
+  <tr><th>Streaming</th><td>%d</td></tr>
+  <tr><th>Non-stream</th><td>%d</td></tr>
+</table>
+<table>
+  <tr><th>E2EE</th><td>%d</td></tr>
+  <tr><th>Plaintext</th><td>%d</td></tr>
+  <tr><th>Errors</th><td>%d</td></tr>
+</table>
+</div>
+
+<h2>Attestation Cache</h2>
+<table>
+  <tr><th>Entries</th><td>%d</td></tr>
+  <tr><th>Negative</th><td>%d</td></tr>
+  <tr><th>Hit rate</th><td>%s (%d hit, %d miss)</td></tr>
 </table>
 
-<h2>Quick start</h2>
-<pre>curl http://%s/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "MODEL_NAME",
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'</pre>
+<h2>Models</h2>
+<table>
+  <tr><th>Model</th><th>Requests</th><th>Errors</th><th>Verify</th><th>Last request</th></tr>
+%s</table>
 
-<p class="muted">Or point any OpenAI-compatible client at <code>http://%s/v1</code></p>
+<h2>Endpoints</h2>
+<table>
+  <tr><td><code>POST /v1/chat/completions</code></td><td>Proxy with TEE attestation</td></tr>
+  <tr><td><code>GET /v1/models</code></td><td>List models</td></tr>
+  <tr><td><code>GET /v1/tee/report</code></td><td>Cached attestation report</td></tr>
+</table>
+
+<p class="muted">Auto-refreshes every 5s. Point any OpenAI-compatible client at <code>http://%s/v1</code></p>
 </body>
 </html>
-`, s.cfg.ListenAddr, provName, baseURL, e2ee, s.cfg.ListenAddr, s.cfg.ListenAddr)
+`, s.cfg.ListenAddr, uptime,
+		provName, baseURL, e2ee,
+		requests, streaming, nonStream,
+		e2eeCount, plainCount, errCount,
+		s.cache.Len(), s.negCache.Len(),
+		hitRate, hits, misses,
+		modelRows.String(),
+		s.cfg.ListenAddr)
 }
