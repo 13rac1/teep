@@ -1,4 +1,4 @@
-.PHONY: help build test integration integration-venice integration-near vet fmt lint check clean reports report-venice report-near
+.PHONY: help build test integration integration-venice integration-near vet fmt lint check clean reports report-venice report-near e2e-venice
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-22s %s\n", $$1, $$2}'
@@ -35,6 +35,9 @@ report-venice: build ## Verify Venice attestation (requires VENICE_API_KEY)
 
 report-near: build ## Verify NEAR AI attestation (requires NEARAI_API_KEY)
 	./teep verify --provider nearai --model Qwen/Qwen3.5-122B-A10B --log-level debug --save-dir /tmp/teep-attestation-nearai
+
+e2e-venice: ## Run Venice E2E test (requires VENICE_API_KEY)
+	./test/e2e-venice.sh
 
 clean: ## Remove built binary
 	rm -f teep

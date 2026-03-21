@@ -1189,6 +1189,80 @@ func TestAttestationEncryptDecryptRoundTrip(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// reassembleNonStream (E2EE non-streaming path)
+// --------------------------------------------------------------------------
+
+func TestReassembleNonStream(t *testing.T) {
+	session, err := attestation.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	// Encrypt two content chunks using the session's public key (simulating
+	// what the upstream TEE would do).
+	enc1, err := attestation.Encrypt([]byte("Hello, "), session.PrivateKey.PubKey())
+	if err != nil {
+		t.Fatalf("Encrypt chunk 1: %v", err)
+	}
+	enc2, err := attestation.Encrypt([]byte("world!"), session.PrivateKey.PubKey())
+	if err != nil {
+		t.Fatalf("Encrypt chunk 2: %v", err)
+	}
+
+	// Build an SSE body with encrypted content in each chunk.
+	var sse strings.Builder
+	fmt.Fprintf(&sse, "data: %s\n\n", fmt.Sprintf(
+		`{"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":%q},"finish_reason":null}]}`,
+		enc1,
+	))
+	fmt.Fprintf(&sse, "data: %s\n\n", fmt.Sprintf(
+		`{"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{"content":%q},"finish_reason":null}]}`,
+		enc2,
+	))
+	fmt.Fprintf(&sse, "data: [DONE]\n\n")
+
+	result, err := proxy.ReassembleNonStream(strings.NewReader(sse.String()), session)
+	if err != nil {
+		t.Fatalf("ReassembleNonStream: %v", err)
+	}
+
+	t.Logf("result: %s", result)
+
+	got := extractMessageContent(t, result)
+	want := "Hello, world!"
+	if got != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+
+	// Verify it's a proper non-streaming response shape.
+	var resp struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		Created int64  `json:"created"`
+		Model   string `json:"model"`
+		Choices []struct {
+			Index        int    `json:"index"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Object != "chat.completion" {
+		t.Errorf("object = %q, want %q", resp.Object, "chat.completion")
+	}
+	if resp.ID != "chatcmpl-abc" {
+		t.Errorf("id = %q, want %q", resp.ID, "chatcmpl-abc")
+	}
+	if resp.Model != "test-model" {
+		t.Errorf("model = %q, want %q", resp.Model, "test-model")
+	}
+	if len(resp.Choices) != 1 || resp.Choices[0].FinishReason != "stop" {
+		t.Errorf("choices = %+v, want 1 choice with finish_reason=stop", resp.Choices)
+	}
+}
+
+// --------------------------------------------------------------------------
 // Upstream body drain on non-200
 // --------------------------------------------------------------------------
 

@@ -1,8 +1,12 @@
 package proxy
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
 )
@@ -162,6 +166,81 @@ func decryptNonStreamResponse(body []byte, session *attestation.Session) ([]byte
 	full["choices"] = choicesOut
 
 	return json.Marshal(full)
+}
+
+// reassembleNonStream reads an SSE stream (forced by E2EE), decrypts each
+// chunk, and reassembles the result into a single non-streaming OpenAI
+// response. This handles the case where the client sent stream=false but
+// buildUpstreamBody forced stream=true for per-chunk decryption.
+func reassembleNonStream(body io.Reader, session *attestation.Session) ([]byte, error) {
+	scanner := bufio.NewScanner(body)
+	buf := make([]byte, sseScannerBufSize)
+	scanner.Buffer(buf, sseScannerBufSize)
+
+	var content strings.Builder
+	var lastChunk string // last non-empty decrypted SSE JSON for metadata
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[len("data: "):]
+		if data == "[DONE]" {
+			break
+		}
+
+		decrypted, err := decryptSSEChunk(data, session)
+		if err != nil {
+			return nil, fmt.Errorf("reassemble: %w", err)
+		}
+
+		var chunk sseChunk
+		if err := json.Unmarshal([]byte(decrypted), &chunk); err != nil {
+			return nil, fmt.Errorf("reassemble: parse decrypted chunk: %w", err)
+		}
+		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+			content.WriteString(chunk.Choices[0].Delta.Content)
+		}
+		lastChunk = decrypted
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reassemble: scanner: %w", err)
+	}
+
+	if lastChunk == "" {
+		return nil, errors.New("reassemble: no SSE chunks received")
+	}
+
+	// Extract metadata (id, model, created) from the last chunk.
+	var meta struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Created int64  `json:"created"`
+	}
+	if err := json.Unmarshal([]byte(lastChunk), &meta); err != nil {
+		return nil, fmt.Errorf("reassemble: parse metadata from last chunk: %w", err)
+	}
+
+	// Build a standard non-streaming response.
+	resp := map[string]any{
+		"id":      meta.ID,
+		"object":  "chat.completion",
+		"created": meta.Created,
+		"model":   meta.Model,
+		"choices": []map[string]any{
+			{
+				"index": 0,
+				"message": map[string]string{
+					"role":    "assistant",
+					"content": content.String(),
+				},
+				"finish_reason": "stop",
+			},
+		},
+	}
+
+	return json.Marshal(resp)
 }
 
 // safePrefix returns up to n characters of s for safe use in log messages.

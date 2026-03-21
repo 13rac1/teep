@@ -380,6 +380,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// E2EE forces stream=true upstream (buildUpstreamBody), so the response
+	// is always SSE. When the client requested non-streaming, reassemble the
+	// decrypted SSE chunks into a single JSON response.
+	if session != nil {
+		if req.Stream {
+			s.relayStream(w, resp.Body, session)
+		} else {
+			s.relayReassembledNonStream(w, resp.Body, session)
+		}
+		return
+	}
 	if req.Stream {
 		s.relayStream(w, resp.Body, session)
 		return
@@ -678,6 +689,21 @@ func (s *Server) relayNonStream(w http.ResponseWriter, body io.Reader, session *
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(decrypted)
+}
+
+// relayReassembledNonStream reads an SSE stream from the E2EE upstream,
+// decrypts each chunk, and writes a single non-streaming JSON response.
+func (s *Server) relayReassembledNonStream(w http.ResponseWriter, body io.Reader, session *attestation.Session) {
+	result, err := reassembleNonStream(body, session)
+	if err != nil {
+		slog.Error("E2EE non-stream reassembly failed", "err", err)
+		http.Error(w, "response decryption failed", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result)
 }
 
 // handleModels returns an empty model list. Model names are not mapped by the
