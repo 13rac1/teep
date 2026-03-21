@@ -208,3 +208,5 @@ make check  # fmt + vet + lint + test
 ## License
 
 AGPL-3.0. See [LICENSE](LICENSE).
+
+Dual licensing available.
