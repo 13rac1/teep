@@ -29,9 +29,9 @@ import (
 // The test mirrors runVerification() in cmd/teep/main.go (the "teep verify
 // nearai" CLI path), calling pipeline functions directly with offline=false.
 //
-// Skipped under -short. Requires fixtures captured by:
+// Requires fixtures captured by:
 //
-//	NEARAI_API_KEY=... go run ./test/cmd/capture_nearai
+//	NEARAI_API_KEY=... go run ./cmd/capture_nearai
 //
 // fixtureDir returns the directory containing NEAR AI fixture files.
 // Set via NEARAI_FIXTURE_DIR env var, or defaults to the most recent
