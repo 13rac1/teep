@@ -3,6 +3,7 @@ package nearai_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -68,44 +69,78 @@ func TestReportDataVerifier_0xPrefixedAddress(t *testing.T) {
 }
 
 func TestReportDataVerifier_WrongAddress(t *testing.T) {
-	addrBytes := []byte{0x01, 0x02, 0x03, 0x04}
-	fpBytes := []byte{0x0a, 0x0b}
+	addrBytes := make([]byte, 20)
+	for i := range addrBytes {
+		addrBytes[i] = byte(i + 1)
+	}
+	fpBytes := make([]byte, 32)
+	for i := range fpBytes {
+		fpBytes[i] = byte(0xa0 + i)
+	}
 	nonce := attestation.NewNonce()
 	reportData := buildNEARReportData(addrBytes, fpBytes, nonce)
 
+	wrongAddr := make([]byte, 20)
+	for i := range wrongAddr {
+		wrongAddr[i] = byte(0xff - i)
+	}
 	raw := &attestation.RawAttestation{
-		SigningAddress: hex.EncodeToString([]byte{0xff, 0xfe, 0xfd, 0xfc}), // different
+		SigningAddress: hex.EncodeToString(wrongAddr), // different 20-byte address
 		TLSFingerprint: hex.EncodeToString(fpBytes),
 	}
 
 	v := nearai.ReportDataVerifier{}
 	_, err := v.VerifyReportData(reportData, raw, nonce)
 	if err == nil {
-		t.Error("expected error for wrong signing address, got nil")
+		t.Fatal("expected error for wrong signing address, got nil")
+	}
+	t.Logf("got expected error: %v", err)
+	if !strings.Contains(err.Error(), "REPORTDATA[0:32]") {
+		t.Errorf("error should mention REPORTDATA[0:32] hash mismatch, got: %v", err)
 	}
 }
 
 func TestReportDataVerifier_WrongFingerprint(t *testing.T) {
-	addrBytes := []byte{0x01, 0x02}
-	fpBytes := []byte{0x0a, 0x0b}
+	addrBytes := make([]byte, 20)
+	for i := range addrBytes {
+		addrBytes[i] = byte(i + 1)
+	}
+	fpBytes := make([]byte, 32)
+	for i := range fpBytes {
+		fpBytes[i] = byte(0xa0 + i)
+	}
 	nonce := attestation.NewNonce()
 	reportData := buildNEARReportData(addrBytes, fpBytes, nonce)
 
+	wrongFP := make([]byte, 32)
+	for i := range wrongFP {
+		wrongFP[i] = byte(0xff - i)
+	}
 	raw := &attestation.RawAttestation{
 		SigningAddress: hex.EncodeToString(addrBytes),
-		TLSFingerprint: hex.EncodeToString([]byte{0xff, 0xff}), // different
+		TLSFingerprint: hex.EncodeToString(wrongFP), // different 32-byte fingerprint
 	}
 
 	v := nearai.ReportDataVerifier{}
 	_, err := v.VerifyReportData(reportData, raw, nonce)
 	if err == nil {
-		t.Error("expected error for wrong TLS fingerprint, got nil")
+		t.Fatal("expected error for wrong TLS fingerprint, got nil")
+	}
+	t.Logf("got expected error: %v", err)
+	if !strings.Contains(err.Error(), "REPORTDATA[0:32]") {
+		t.Errorf("error should mention REPORTDATA[0:32] hash mismatch, got: %v", err)
 	}
 }
 
 func TestReportDataVerifier_WrongNonce(t *testing.T) {
-	addrBytes := []byte{0x01}
-	fpBytes := []byte{0x02}
+	addrBytes := make([]byte, 20)
+	for i := range addrBytes {
+		addrBytes[i] = byte(i + 1)
+	}
+	fpBytes := make([]byte, 32)
+	for i := range fpBytes {
+		fpBytes[i] = byte(0xa0 + i)
+	}
 	nonce1 := attestation.NewNonce()
 	nonce2 := attestation.NewNonce()
 	reportData := buildNEARReportData(addrBytes, fpBytes, nonce1)
@@ -118,7 +153,11 @@ func TestReportDataVerifier_WrongNonce(t *testing.T) {
 	v := nearai.ReportDataVerifier{}
 	_, err := v.VerifyReportData(reportData, raw, nonce2) // different nonce
 	if err == nil {
-		t.Error("expected error for wrong nonce, got nil")
+		t.Fatal("expected error for wrong nonce, got nil")
+	}
+	t.Logf("got expected error: %v", err)
+	if !strings.Contains(err.Error(), "REPORTDATA[32:64]") {
+		t.Errorf("error should mention REPORTDATA[32:64] nonce mismatch, got: %v", err)
 	}
 }
 

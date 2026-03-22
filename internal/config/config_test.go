@@ -182,6 +182,27 @@ rtmr0_allow = ["` + valid48 + `"]
 	}
 }
 
+func TestLoadTOMLMeasurementPolicyExplicitlyEmpty(t *testing.T) {
+	tomlCfg := `
+[policy]
+mrtd_allow = []
+`
+	path := writeConfigFile(t, tomlCfg, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for explicitly empty mrtd_allow, got nil")
+	}
+	t.Logf("got expected error: %v", err)
+	if !strings.Contains(err.Error(), "mrtd_allow") {
+		t.Errorf("error should mention mrtd_allow, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error should mention 'empty', got: %v", err)
+	}
+}
+
 func TestLoadTOMLMeasurementPolicyInvalidLength(t *testing.T) {
 	toml := `
 [policy]

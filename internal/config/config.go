@@ -181,8 +181,11 @@ func buildMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPolicy, err
 }
 
 func normalizeAllowlist(values []string, expectedBytes int, field string) (map[string]struct{}, error) {
+	if values == nil {
+		return map[string]struct{}{}, nil // field absent from TOML — no policy
+	}
 	if len(values) == 0 {
-		return map[string]struct{}{}, nil
+		return nil, fmt.Errorf("%s is set but empty; remove the key to disable policy, or add at least one hex value", field)
 	}
 	norm := make(map[string]struct{}, len(values))
 	for _, v := range values {

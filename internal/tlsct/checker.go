@@ -200,6 +200,18 @@ func (c *Checker) CheckTLSState(ctx context.Context, host string, state *tls.Con
 					delete(c.entries, k)
 				}
 			}
+			// Hard cap: if still over limit after TTL sweep, evict oldest.
+			for len(c.entries) > 1024 {
+				var oldestKey string
+				var oldestTime time.Time
+				for k, e := range c.entries {
+					if oldestKey == "" || e.checkedAt.Before(oldestTime) {
+						oldestKey = k
+						oldestTime = e.checkedAt
+					}
+				}
+				delete(c.entries, oldestKey)
+			}
 		}
 		c.entries[cacheKey] = certCacheEntry{checkedAt: time.Now()}
 		c.mu.Unlock()
