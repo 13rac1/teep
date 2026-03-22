@@ -271,7 +271,19 @@ func TestIntegration_NearAI_Fixture(t *testing.T) {
 	// 5. Build report and assert factors
 	// ---------------------------------------------------------------
 	t.Log("--- BuildReport ---")
-	report := BuildReport("nearai", model, raw, nonce, nil, tdxResult, nvidiaResult, nrasResult, pocResult, composeResult, sigstoreResults, rekorResults)
+	report := BuildReport(&ReportInput{
+		Provider:   "nearai",
+		Model:      model,
+		Raw:        raw,
+		Nonce:      nonce,
+		TDX:        tdxResult,
+		Nvidia:     nvidiaResult,
+		NvidiaNRAS: nrasResult,
+		PoC:        pocResult,
+		Compose:    composeResult,
+		Sigstore:   sigstoreResults,
+		Rekor:      rekorResults,
+	})
 
 	total := report.Passed + report.Failed + report.Skipped
 	t.Logf("Score: %d/%d (passed=%d failed=%d skipped=%d)",

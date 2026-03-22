@@ -100,21 +100,31 @@ type ComposeBindingResult struct {
 	Err error
 }
 
-// BuildReport runs all 24 verification factors against raw and returns a
-// complete VerificationReport. The enforced parameter controls which factor
-// names result in Enforced=true. Pass DefaultEnforced for production use.
-//
-// TDX quote verification (factors 3-6, 8, 10) uses the parsed quote from
-// VerifyTDXQuote. NVIDIA verification (factors 12-15) uses VerifyNVIDIAPayload
-// and VerifyNVIDIANRAS. Tier 3 factors (17-21) check supply-chain data.
-// Factors 22-23 (compose_binding, sigstore_verification) check the app_compose
-// manifest binding to the TDX quote and Sigstore transparency log presence.
-// Factor 20 (build_transparency_log) uses rekorResults to check Fulcio cert
-// provenance from the Rekor transparency log. Factor 24 (event_log_integrity)
-// replays the TDX event log and compares the resulting RTMRs to the quote.
-func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enforced []string, tdxResult *TDXVerifyResult, nvidiaResult, nrasResult *NvidiaVerifyResult, pocResult *PoCResult, composeResult *ComposeBindingResult, sigstoreResults []SigstoreResult, rekorResults []RekorProvenance) *VerificationReport {
-	enforcedSet := make(map[string]bool, len(enforced))
-	for _, name := range enforced {
+// ReportInput bundles all inputs to BuildReport. Adding a new verification
+// result type (e.g. AMD SEV-SNP) means adding a field here — no existing
+// call sites change because unset fields default to nil.
+type ReportInput struct {
+	Provider string
+	Model    string
+	Raw      *RawAttestation
+	Nonce    Nonce
+	Enforced []string
+
+	TDX        *TDXVerifyResult
+	Nvidia     *NvidiaVerifyResult
+	NvidiaNRAS *NvidiaVerifyResult
+	PoC        *PoCResult
+	Compose    *ComposeBindingResult
+	Sigstore   []SigstoreResult
+	Rekor      []RekorProvenance
+}
+
+// BuildReport runs all 24 verification factors against the input and returns a
+// complete VerificationReport. The Enforced field controls which factor names
+// result in Enforced=true. Pass DefaultEnforced for production use.
+func BuildReport(in *ReportInput) *VerificationReport {
+	enforcedSet := make(map[string]bool, len(in.Enforced))
+	for _, name := range in.Enforced {
 		enforcedSet[name] = true
 	}
 
@@ -132,30 +142,30 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	// --- Tier 1: Core Attestation ---
 
 	// Factor 1: nonce_match
-	if raw.Nonce == "" { //nolint:gocritic // ifElseChain: conditions compare different fields
+	if in.Raw.Nonce == "" { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("nonce_match", Fail, "nonce field absent from attestation response")
-	} else if subtle.ConstantTimeCompare([]byte(raw.Nonce), []byte(nonce.Hex())) == 1 {
-		detail := fmt.Sprintf("nonce matches (%d hex chars)", len(raw.Nonce))
-		if raw.NonceSource != "" {
-			detail += fmt.Sprintf(" (%s-supplied)", raw.NonceSource)
+	} else if subtle.ConstantTimeCompare([]byte(in.Raw.Nonce), []byte(in.Nonce.Hex())) == 1 {
+		detail := fmt.Sprintf("nonce matches (%d hex chars)", len(in.Raw.Nonce))
+		if in.Raw.NonceSource != "" {
+			detail += fmt.Sprintf(" (%s-supplied)", in.Raw.NonceSource)
 		}
 		addFactor("nonce_match", Pass, detail)
 	} else {
-		addFactor("nonce_match", Fail, fmt.Sprintf("nonce mismatch: got %q, want %q", raw.Nonce, nonce.Hex()))
+		addFactor("nonce_match", Fail, fmt.Sprintf("nonce mismatch: got %q, want %q", in.Raw.Nonce, in.Nonce.Hex()))
 	}
 
 	// Factor 2: tdx_quote_present
-	if raw.IntelQuote == "" {
+	if in.Raw.IntelQuote == "" {
 		addFactor("tdx_quote_present", Fail, "intel_quote field is absent from attestation response")
 	} else {
 		// Base64 length → approximate raw bytes
-		addFactor("tdx_quote_present", Pass, fmt.Sprintf("TDX quote present (%d hex chars)", len(raw.IntelQuote)))
+		addFactor("tdx_quote_present", Pass, fmt.Sprintf("TDX quote present (%d hex chars)", len(in.Raw.IntelQuote)))
 	}
 
 	// Factors 3–6, 8, 10 come from TDX quote parsing.
-	// tdxResult is nil when the quote is absent or could not be decoded for
+	// in.TDX is nil when the quote is absent or could not be decoded for
 	// a network/decode reason prior to parsing.
-	if tdxResult == nil {
+	if in.TDX == nil {
 		// All TDX parse/verify factors are Fail because we have no quote to check.
 		addFactor("tdx_quote_structure", Fail, "no TDX quote available to parse")
 		addFactor("tdx_cert_chain", Fail, "no TDX quote available; cannot verify cert chain")
@@ -163,38 +173,38 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		addFactor("tdx_debug_disabled", Fail, "no TDX quote available; cannot check debug flag")
 	} else {
 		// Factor 3: tdx_quote_structure
-		if tdxResult.ParseErr != nil {
-			addFactor("tdx_quote_structure", Fail, fmt.Sprintf("TDX quote parse failed: %v", tdxResult.ParseErr))
+		if in.TDX.ParseErr != nil {
+			addFactor("tdx_quote_structure", Fail, fmt.Sprintf("TDX quote parse failed: %v", in.TDX.ParseErr))
 		} else {
-			detail := fmt.Sprintf("valid %s structure", tdxQuoteVersion(tdxResult))
-			if len(tdxResult.MRTD) > 0 {
-				detail = fmt.Sprintf("valid %s, MRTD: %s...", tdxQuoteVersion(tdxResult), hex.EncodeToString(tdxResult.MRTD)[:16])
+			detail := fmt.Sprintf("valid %s structure", tdxQuoteVersion(in.TDX))
+			if len(in.TDX.MRTD) > 0 {
+				detail = fmt.Sprintf("valid %s, MRTD: %s...", tdxQuoteVersion(in.TDX), hex.EncodeToString(in.TDX.MRTD)[:16])
 			}
 			addFactor("tdx_quote_structure", Pass, detail)
 		}
 
 		// Factor 4: tdx_cert_chain
-		if tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+		if in.TDX.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 			addFactor("tdx_cert_chain", Skip, "quote parse failed; cert chain not extracted")
-		} else if tdxResult.CertChainErr != nil {
-			addFactor("tdx_cert_chain", Fail, fmt.Sprintf("cert chain verification failed: %v", tdxResult.CertChainErr))
+		} else if in.TDX.CertChainErr != nil {
+			addFactor("tdx_cert_chain", Fail, fmt.Sprintf("cert chain verification failed: %v", in.TDX.CertChainErr))
 		} else {
 			addFactor("tdx_cert_chain", Pass, "certificate chain valid (Intel root CA)")
 		}
 
 		// Factor 5: tdx_quote_signature
-		if tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+		if in.TDX.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 			addFactor("tdx_quote_signature", Skip, "quote parse failed; signature not verified")
-		} else if tdxResult.SignatureErr != nil {
-			addFactor("tdx_quote_signature", Fail, fmt.Sprintf("quote signature invalid: %v", tdxResult.SignatureErr))
+		} else if in.TDX.SignatureErr != nil {
+			addFactor("tdx_quote_signature", Fail, fmt.Sprintf("quote signature invalid: %v", in.TDX.SignatureErr))
 		} else {
 			addFactor("tdx_quote_signature", Pass, "quote signature verified")
 		}
 
 		// Factor 6: tdx_debug_disabled
-		if tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+		if in.TDX.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 			addFactor("tdx_debug_disabled", Skip, "quote parse failed; debug flag not checked")
-		} else if tdxResult.DebugEnabled {
+		} else if in.TDX.DebugEnabled {
 			addFactor("tdx_debug_disabled", Fail, "TD_ATTRIBUTES debug bit is set — this is a debug enclave; do not trust for production")
 		} else {
 			addFactor("tdx_debug_disabled", Pass, "debug bit is 0 (production enclave)")
@@ -204,10 +214,10 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	// Factor 7: signing_key_present
 	// The API field is called "signing_key" but it's an ECDH public key used
 	// for key exchange, not for signing.
-	if raw.SigningKey == "" {
+	if in.Raw.SigningKey == "" {
 		addFactor("signing_key_present", Fail, "signing_key field absent from attestation response")
 	} else {
-		addFactor("signing_key_present", Pass, fmt.Sprintf("enclave pubkey present (%s...)", raw.SigningKey[:min(10, len(raw.SigningKey))]))
+		addFactor("signing_key_present", Pass, fmt.Sprintf("enclave pubkey present (%s...)", in.Raw.SigningKey[:min(10, len(in.Raw.SigningKey))]))
 	}
 
 	// --- Tier 2: Binding & Crypto ---
@@ -216,141 +226,141 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	// REPORTDATA (64 bytes) must bind the enclave public key to the nonce so a
 	// MITM cannot swap the key while leaving the quote intact. Without this
 	// check, E2EE is security theater.
-	if tdxResult == nil || tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+	if in.TDX == nil || in.TDX.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("tdx_reportdata_binding", Fail, "no parseable TDX quote; REPORTDATA binding cannot be verified")
-	} else if raw.SigningKey == "" {
+	} else if in.Raw.SigningKey == "" {
 		addFactor("tdx_reportdata_binding", Fail, "enclave public key absent; REPORTDATA binding cannot be verified")
-	} else if tdxResult.ReportDataBindingErr != nil {
-		addFactor("tdx_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind enclave public key: %v", tdxResult.ReportDataBindingErr))
-	} else if tdxResult.ReportDataBindingDetail != "" {
-		addFactor("tdx_reportdata_binding", Pass, tdxResult.ReportDataBindingDetail)
+	} else if in.TDX.ReportDataBindingErr != nil {
+		addFactor("tdx_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind enclave public key: %v", in.TDX.ReportDataBindingErr))
+	} else if in.TDX.ReportDataBindingDetail != "" {
+		addFactor("tdx_reportdata_binding", Pass, in.TDX.ReportDataBindingDetail)
 	} else {
 		addFactor("tdx_reportdata_binding", Skip, "no REPORTDATA verifier configured for this provider")
 	}
 
 	// Factor 9: intel_pcs_collateral
-	if tdxResult == nil || tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+	if in.TDX == nil || in.TDX.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("intel_pcs_collateral", Skip, "no parseable TDX quote")
-	} else if tdxResult.TcbStatus != "" {
+	} else if in.TDX.TcbStatus != "" {
 		addFactor("intel_pcs_collateral", Pass,
-			fmt.Sprintf("Intel PCS collateral fetched (TCB status: %s)", tdxResult.TcbStatus))
-	} else if tdxResult.CollateralErr != nil {
+			fmt.Sprintf("Intel PCS collateral fetched (TCB status: %s)", in.TDX.TcbStatus))
+	} else if in.TDX.CollateralErr != nil {
 		addFactor("intel_pcs_collateral", Skip,
-			fmt.Sprintf("Intel PCS collateral fetch failed: %v", tdxResult.CollateralErr))
+			fmt.Sprintf("Intel PCS collateral fetch failed: %v", in.TDX.CollateralErr))
 	} else {
 		addFactor("intel_pcs_collateral", Skip,
 			"offline mode; Intel PCS collateral not fetched")
 	}
 
 	// Factor 10: tdx_tcb_current
-	if tdxResult == nil || tdxResult.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+	if in.TDX == nil || in.TDX.ParseErr != nil { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("tdx_tcb_current", Skip, "no parseable TDX quote; TCB SVN not extracted")
-	} else if tdxResult.TcbStatus == pcs.TcbComponentStatusUpToDate {
+	} else if in.TDX.TcbStatus == pcs.TcbComponentStatusUpToDate {
 		detail := "TCB is UpToDate per Intel PCS"
-		if len(tdxResult.AdvisoryIDs) > 0 {
-			detail += fmt.Sprintf(" (advisories: %s)", strings.Join(tdxResult.AdvisoryIDs, ", "))
+		if len(in.TDX.AdvisoryIDs) > 0 {
+			detail += fmt.Sprintf(" (advisories: %s)", strings.Join(in.TDX.AdvisoryIDs, ", "))
 		}
 		addFactor("tdx_tcb_current", Pass, detail)
-	} else if tdxResult.TcbStatus == pcs.TcbComponentStatusSwHardeningNeeded || tdxResult.TcbStatus == pcs.TcbComponentStatusConfigurationAndSWHardeningNeeded {
-		detail := fmt.Sprintf("TCB status: %s", tdxResult.TcbStatus)
-		if len(tdxResult.AdvisoryIDs) > 0 {
-			detail += fmt.Sprintf(" (advisories: %s)", strings.Join(tdxResult.AdvisoryIDs, ", "))
+	} else if in.TDX.TcbStatus == pcs.TcbComponentStatusSwHardeningNeeded || in.TDX.TcbStatus == pcs.TcbComponentStatusConfigurationAndSWHardeningNeeded {
+		detail := fmt.Sprintf("TCB status: %s", in.TDX.TcbStatus)
+		if len(in.TDX.AdvisoryIDs) > 0 {
+			detail += fmt.Sprintf(" (advisories: %s)", strings.Join(in.TDX.AdvisoryIDs, ", "))
 		}
 		addFactor("tdx_tcb_current", Pass, detail)
-	} else if tdxResult.TcbStatus == pcs.TcbComponentStatusOutOfDate || tdxResult.TcbStatus == pcs.TcbComponentStatusRevoked || tdxResult.TcbStatus == pcs.TcbComponentStatusOutOfDateConfigurationNeeded {
-		detail := fmt.Sprintf("TCB status: %s — firmware has known vulnerabilities", tdxResult.TcbStatus)
-		if len(tdxResult.AdvisoryIDs) > 0 {
-			detail += fmt.Sprintf(" (%s)", strings.Join(tdxResult.AdvisoryIDs, ", "))
+	} else if in.TDX.TcbStatus == pcs.TcbComponentStatusOutOfDate || in.TDX.TcbStatus == pcs.TcbComponentStatusRevoked || in.TDX.TcbStatus == pcs.TcbComponentStatusOutOfDateConfigurationNeeded {
+		detail := fmt.Sprintf("TCB status: %s — firmware has known vulnerabilities", in.TDX.TcbStatus)
+		if len(in.TDX.AdvisoryIDs) > 0 {
+			detail += fmt.Sprintf(" (%s)", strings.Join(in.TDX.AdvisoryIDs, ", "))
 		}
 		addFactor("tdx_tcb_current", Fail, detail)
-	} else if tdxResult.CollateralErr != nil {
-		svnHex := hex.EncodeToString(tdxResult.TeeTCBSVN)
+	} else if in.TDX.CollateralErr != nil {
+		svnHex := hex.EncodeToString(in.TDX.TeeTCBSVN)
 		addFactor("tdx_tcb_current", Skip,
-			fmt.Sprintf("TEE_TCB_SVN: %s (Intel PCS collateral fetch failed: %v)", svnHex, tdxResult.CollateralErr))
+			fmt.Sprintf("TEE_TCB_SVN: %s (Intel PCS collateral fetch failed: %v)", svnHex, in.TDX.CollateralErr))
 	} else {
-		svnHex := hex.EncodeToString(tdxResult.TeeTCBSVN)
+		svnHex := hex.EncodeToString(in.TDX.TeeTCBSVN)
 		addFactor("tdx_tcb_current", Skip,
 			fmt.Sprintf("TEE_TCB_SVN: %s (offline; full check requires Intel PCS)", svnHex))
 	}
 
 	// Factor 11: nvidia_payload_present
-	if raw.NvidiaPayload == "" {
+	if in.Raw.NvidiaPayload == "" {
 		addFactor("nvidia_payload_present", Fail, "nvidia_payload field is absent from attestation response")
 	} else {
-		addFactor("nvidia_payload_present", Pass, fmt.Sprintf("NVIDIA payload present (%d chars)", len(raw.NvidiaPayload)))
+		addFactor("nvidia_payload_present", Pass, fmt.Sprintf("NVIDIA payload present (%d chars)", len(in.Raw.NvidiaPayload)))
 	}
 
 	// Factor 12: nvidia_signature
-	if nvidiaResult == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
-		if raw.NvidiaPayload == "" {
+	if in.Nvidia == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+		if in.Raw.NvidiaPayload == "" {
 			addFactor("nvidia_signature", Skip, "no NVIDIA payload to verify")
 		} else {
 			addFactor("nvidia_signature", Fail, "NVIDIA verification was not attempted")
 		}
-	} else if nvidiaResult.SignatureErr != nil {
-		addFactor("nvidia_signature", Fail, fmt.Sprintf("signature invalid: %v", nvidiaResult.SignatureErr))
+	} else if in.Nvidia.SignatureErr != nil {
+		addFactor("nvidia_signature", Fail, fmt.Sprintf("signature invalid: %v", in.Nvidia.SignatureErr))
 	} else {
-		addFactor("nvidia_signature", Pass, nvidiaSignatureDetail(nvidiaResult))
+		addFactor("nvidia_signature", Pass, nvidiaSignatureDetail(in.Nvidia))
 	}
 
 	// Factor 13: nvidia_claims
-	if nvidiaResult == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
-		if raw.NvidiaPayload == "" {
+	if in.Nvidia == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+		if in.Raw.NvidiaPayload == "" {
 			addFactor("nvidia_claims", Skip, "no NVIDIA payload to check")
 		} else {
 			addFactor("nvidia_claims", Fail, "NVIDIA verification was not attempted")
 		}
-	} else if nvidiaResult.ClaimsErr != nil {
-		addFactor("nvidia_claims", Fail, fmt.Sprintf("claims invalid: %v", nvidiaResult.ClaimsErr))
+	} else if in.Nvidia.ClaimsErr != nil {
+		addFactor("nvidia_claims", Fail, fmt.Sprintf("claims invalid: %v", in.Nvidia.ClaimsErr))
 	} else {
-		addFactor("nvidia_claims", Pass, nvidiaClaimsDetail(nvidiaResult))
+		addFactor("nvidia_claims", Pass, nvidiaClaimsDetail(in.Nvidia))
 	}
 
 	// Factor 14: nvidia_nonce_match
-	if nvidiaResult == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
-		if raw.NvidiaPayload == "" {
+	if in.Nvidia == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+		if in.Raw.NvidiaPayload == "" {
 			addFactor("nvidia_nonce_match", Skip, "no NVIDIA payload; nonce not checked")
 		} else {
 			addFactor("nvidia_nonce_match", Skip, "NVIDIA verification not attempted")
 		}
-	} else if nvidiaResult.Nonce == "" {
+	} else if in.Nvidia.Nonce == "" {
 		addFactor("nvidia_nonce_match", Skip, "nonce field not found in NVIDIA payload")
-	} else if subtle.ConstantTimeCompare([]byte(nvidiaResult.Nonce), []byte(nonce.Hex())) == 1 {
-		addFactor("nvidia_nonce_match", Pass, nvidiaNonceDetail(nvidiaResult))
+	} else if subtle.ConstantTimeCompare([]byte(in.Nvidia.Nonce), []byte(in.Nonce.Hex())) == 1 {
+		addFactor("nvidia_nonce_match", Pass, nvidiaNonceDetail(in.Nvidia))
 	} else {
-		addFactor("nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", nvidiaResult.Nonce, nonce.Hex()))
+		addFactor("nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", in.Nvidia.Nonce, in.Nonce.Hex()))
 	}
 
 	// Factor 15: nvidia_nras_verified
-	if nrasResult == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
-		if raw.NvidiaPayload == "" || raw.NvidiaPayload[0] != '{' {
+	if in.NvidiaNRAS == nil { //nolint:gocritic // ifElseChain: conditions compare different fields
+		if in.Raw.NvidiaPayload == "" || in.Raw.NvidiaPayload[0] != '{' {
 			addFactor("nvidia_nras_verified", Skip, "no EAT payload; NRAS not applicable")
 		} else {
 			addFactor("nvidia_nras_verified", Skip, "offline mode; NRAS verification skipped")
 		}
-	} else if nrasResult.SignatureErr != nil {
+	} else if in.NvidiaNRAS.SignatureErr != nil {
 		addFactor("nvidia_nras_verified", Fail,
-			fmt.Sprintf("NRAS JWT signature invalid: %v", nrasResult.SignatureErr))
-	} else if nrasResult.ClaimsErr != nil {
+			fmt.Sprintf("NRAS JWT signature invalid: %v", in.NvidiaNRAS.SignatureErr))
+	} else if in.NvidiaNRAS.ClaimsErr != nil {
 		addFactor("nvidia_nras_verified", Fail,
-			fmt.Sprintf("NRAS JWT claims invalid: %v", nrasResult.ClaimsErr))
-	} else if !nrasResult.OverallResult {
+			fmt.Sprintf("NRAS JWT claims invalid: %v", in.NvidiaNRAS.ClaimsErr))
+	} else if !in.NvidiaNRAS.OverallResult {
 		addFactor("nvidia_nras_verified", Fail, "NRAS result: false")
 	} else {
 		addFactor("nvidia_nras_verified", Pass, "NRAS: true (JWT verified)")
 	}
 
 	// Factor 16: e2ee_capable
-	if raw.SigningKey == "" {
+	if in.Raw.SigningKey == "" {
 		addFactor("e2ee_capable", Fail, "enclave public key absent; E2EE key exchange not possible")
 	} else {
 		s := &Session{}
-		if err := s.SetModelKey(raw.SigningKey); err != nil {
+		if err := s.SetModelKey(in.Raw.SigningKey); err != nil {
 			addFactor("e2ee_capable", Fail, fmt.Sprintf("enclave public key is not a valid secp256k1 point: %v", err))
 		} else {
 			detail := "enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible"
-			if raw.SigningAlgo != "" {
-				detail += fmt.Sprintf(" (%s)", raw.SigningAlgo)
+			if in.Raw.SigningAlgo != "" {
+				detail += fmt.Sprintf(" (%s)", in.Raw.SigningAlgo)
 			}
 			addFactor("e2ee_capable", Pass, detail)
 		}
@@ -361,8 +371,8 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	// expected to fail all of these today. The detail strings explain what is
 	// missing and why it matters for users evaluating vendor security posture.
 
-	if raw.TLSFingerprint != "" {
-		fpPreview := raw.TLSFingerprint
+	if in.Raw.TLSFingerprint != "" {
+		fpPreview := in.Raw.TLSFingerprint
 		if len(fpPreview) > 16 {
 			fpPreview = fpPreview[:16] + "..."
 		}
@@ -379,9 +389,9 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	addFactor("measured_model_weights", Fail,
 		"no model weight hashes")
 
-	if len(rekorResults) == 0 {
-		if raw.ComposeHash != "" {
-			hashPreview := raw.ComposeHash
+	if len(in.Rekor) == 0 {
+		if in.Raw.ComposeHash != "" {
+			hashPreview := in.Raw.ComposeHash
 			if len(hashPreview) > 8 {
 				hashPreview = hashPreview[:8] + "..."
 			}
@@ -395,8 +405,8 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		var verified int
 		var detail string
 		var failed bool
-		for i := range rekorResults {
-			r := &rekorResults[i]
+		for i := range in.Rekor {
+			r := &in.Rekor[i]
 			if r.Err != nil || !r.HasCert {
 				continue // third-party image or fetch error — skip, don't fail
 			}
@@ -420,28 +430,28 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 			addFactor("build_transparency_log", Fail, detail)
 		case verified > 0:
 			addFactor("build_transparency_log", Pass,
-				fmt.Sprintf("%d/%d image(s) have Sigstore build provenance (%s)", verified, len(rekorResults), detail))
+				fmt.Sprintf("%d/%d image(s) have Sigstore build provenance (%s)", verified, len(in.Rekor), detail))
 		default:
 			addFactor("build_transparency_log", Skip,
 				"all images signed with raw keys (no Fulcio build provenance)")
 		}
 	}
 
-	if pocResult != nil && pocResult.Registered { //nolint:gocritic // ifElseChain: conditions compare different fields
+	if in.PoC != nil && in.PoC.Registered { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("cpu_id_registry", Pass,
-			fmt.Sprintf("Proof of Cloud: registered (%s)", pocResult.Label))
-	} else if pocResult != nil && pocResult.Err != nil {
+			fmt.Sprintf("Proof of Cloud: registered (%s)", in.PoC.Label))
+	} else if in.PoC != nil && in.PoC.Err != nil {
 		addFactor("cpu_id_registry", Skip,
-			fmt.Sprintf("Proof of Cloud query failed: %v", pocResult.Err))
-	} else if pocResult != nil && !pocResult.Registered {
+			fmt.Sprintf("Proof of Cloud query failed: %v", in.PoC.Err))
+	} else if in.PoC != nil && !in.PoC.Registered {
 		addFactor("cpu_id_registry", Fail,
 			"hardware not found in Proof of Cloud registry; paste intel_quote from --save-dir at proofofcloud.org to verify")
-	} else if tdxResult != nil && tdxResult.PPID != "" {
+	} else if in.TDX != nil && in.TDX.PPID != "" {
 		addFactor("cpu_id_registry", Skip,
 			fmt.Sprintf("PPID extracted (%s...) but offline; use default mode to check Proof of Cloud",
-				tdxResult.PPID[:min(8, len(tdxResult.PPID))]))
-	} else if raw.DeviceID != "" {
-		idPreview := raw.DeviceID
+				in.TDX.PPID[:min(8, len(in.TDX.PPID))]))
+	} else if in.Raw.DeviceID != "" {
+		idPreview := in.Raw.DeviceID
 		if len(idPreview) > 8 {
 			idPreview = idPreview[:8] + "..."
 		}
@@ -454,22 +464,22 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 
 	// Factor 22: compose_binding
 	switch {
-	case composeResult == nil || !composeResult.Checked:
+	case in.Compose == nil || !in.Compose.Checked:
 		addFactor("compose_binding", Skip, "no app_compose in attestation response")
-	case composeResult.Err != nil:
-		addFactor("compose_binding", Fail, fmt.Sprintf("compose binding failed: %v", composeResult.Err))
+	case in.Compose.Err != nil:
+		addFactor("compose_binding", Fail, fmt.Sprintf("compose binding failed: %v", in.Compose.Err))
 	default:
 		addFactor("compose_binding", Pass, "sha256(app_compose) matches MRConfigID")
 	}
 
 	// Factor 23: sigstore_verification
-	if len(sigstoreResults) == 0 {
+	if len(in.Sigstore) == 0 {
 		addFactor("sigstore_verification", Skip, "no image digests to verify")
 	} else {
 		allOK := true
 		var failDigest string
 		var failDetail string
-		for _, r := range sigstoreResults {
+		for _, r := range in.Sigstore {
 			if !r.OK {
 				allOK = false
 				failDigest = r.Digest
@@ -483,7 +493,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		}
 		if allOK {
 			addFactor("sigstore_verification", Pass,
-				fmt.Sprintf("%d image digest(s) found in Sigstore transparency log", len(sigstoreResults)))
+				fmt.Sprintf("%d image digest(s) found in Sigstore transparency log", len(in.Sigstore)))
 		} else {
 			addFactor("sigstore_verification", Fail,
 				fmt.Sprintf("Sigstore check failed for sha256:%s (%s)", failDigest[:min(16, len(failDigest))], failDetail))
@@ -491,23 +501,23 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 	}
 
 	// Factor 24: event_log_integrity
-	if len(raw.EventLog) == 0 { //nolint:gocritic // ifElseChain: conditions compare different fields
+	if len(in.Raw.EventLog) == 0 { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("event_log_integrity", Skip, "no event log entries in attestation response")
-	} else if tdxResult == nil || tdxResult.ParseErr != nil {
+	} else if in.TDX == nil || in.TDX.ParseErr != nil {
 		addFactor("event_log_integrity", Skip, "no parseable TDX quote; cannot compare RTMRs")
 	} else {
-		replayed, err := ReplayEventLog(raw.EventLog)
+		replayed, err := ReplayEventLog(in.Raw.EventLog)
 		if err != nil {
 			addFactor("event_log_integrity", Fail, fmt.Sprintf("event log replay failed: %v", err))
 		} else {
 			mismatch := false
 			var detail string
 			for i := range 4 {
-				if replayed[i] != tdxResult.RTMRs[i] {
+				if replayed[i] != in.TDX.RTMRs[i] {
 					mismatch = true
 					detail = fmt.Sprintf("RTMR[%d] mismatch: replayed %s, quote %s",
 						i, hex.EncodeToString(replayed[i][:])[:16]+"...",
-						hex.EncodeToString(tdxResult.RTMRs[i][:])[:16]+"...")
+						hex.EncodeToString(in.TDX.RTMRs[i][:])[:16]+"...")
 					break
 				}
 			}
@@ -515,7 +525,7 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 				addFactor("event_log_integrity", Fail, detail)
 			} else {
 				addFactor("event_log_integrity", Pass,
-					fmt.Sprintf("event log replayed (%d entries), all 4 RTMRs match quote", len(raw.EventLog)))
+					fmt.Sprintf("event log replayed (%d entries), all 4 RTMRs match quote", len(in.Raw.EventLog)))
 			}
 		}
 	}
@@ -533,11 +543,11 @@ func BuildReport(provider, model string, raw *RawAttestation, nonce Nonce, enfor
 		}
 	}
 
-	metadata := buildMetadata(raw, tdxResult)
+	metadata := buildMetadata(in)
 
 	return &VerificationReport{
-		Provider:  provider,
-		Model:     model,
+		Provider:  in.Provider,
+		Model:     in.Model,
 		Timestamp: time.Now(),
 		Factors:   factors,
 		Passed:    passed,
@@ -596,38 +606,38 @@ func nvidiaNonceDetail(r *NvidiaVerifyResult) string {
 // buildMetadata extracts display metadata from raw into an ordered key-value
 // map. Only non-empty values are included. The map is used by formatReport
 // to render the metadata block between the header and Tier 1.
-func buildMetadata(raw *RawAttestation, tdxResult *TDXVerifyResult) map[string]string {
+func buildMetadata(in *ReportInput) map[string]string {
 	m := make(map[string]string)
 
-	if raw.TEEHardware != "" {
-		m["hardware"] = raw.TEEHardware
+	if in.Raw.TEEHardware != "" {
+		m["hardware"] = in.Raw.TEEHardware
 	}
-	if raw.UpstreamModel != "" {
-		m["upstream"] = raw.UpstreamModel
+	if in.Raw.UpstreamModel != "" {
+		m["upstream"] = in.Raw.UpstreamModel
 	}
-	if raw.AppName != "" {
-		m["app"] = raw.AppName
+	if in.Raw.AppName != "" {
+		m["app"] = in.Raw.AppName
 	}
-	if raw.ComposeHash != "" {
-		m["compose_hash"] = raw.ComposeHash
+	if in.Raw.ComposeHash != "" {
+		m["compose_hash"] = in.Raw.ComposeHash
 	}
-	if raw.OSImageHash != "" {
-		m["os_image"] = raw.OSImageHash
+	if in.Raw.OSImageHash != "" {
+		m["os_image"] = in.Raw.OSImageHash
 	}
-	if raw.DeviceID != "" {
-		m["device"] = raw.DeviceID
+	if in.Raw.DeviceID != "" {
+		m["device"] = in.Raw.DeviceID
 	}
-	if tdxResult != nil && tdxResult.PPID != "" {
-		m["ppid"] = tdxResult.PPID
+	if in.TDX != nil && in.TDX.PPID != "" {
+		m["ppid"] = in.TDX.PPID
 	}
-	if raw.NonceSource != "" {
-		m["nonce_source"] = raw.NonceSource
+	if in.Raw.NonceSource != "" {
+		m["nonce_source"] = in.Raw.NonceSource
 	}
-	if raw.CandidatesAvail > 0 || raw.CandidatesEval > 0 {
-		m["candidates"] = fmt.Sprintf("%d/%d evaluated", raw.CandidatesEval, raw.CandidatesAvail)
+	if in.Raw.CandidatesAvail > 0 || in.Raw.CandidatesEval > 0 {
+		m["candidates"] = fmt.Sprintf("%d/%d evaluated", in.Raw.CandidatesEval, in.Raw.CandidatesAvail)
 	}
-	if raw.EventLogCount > 0 {
-		m["event_log"] = fmt.Sprintf("%d entries", raw.EventLogCount)
+	if in.Raw.EventLogCount > 0 {
+		m["event_log"] = fmt.Sprintf("%d entries", in.Raw.EventLogCount)
 	}
 
 	if len(m) == 0 {

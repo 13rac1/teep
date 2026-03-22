@@ -342,7 +342,20 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		}
 	}
 
-	return attestation.BuildReport(providerName, modelName, raw, nonce, cfg.Enforced, tdxResult, nvidiaResult, nrasResult, pocResult, composeResult, sigstoreResults, rekorResults)
+	return attestation.BuildReport(&attestation.ReportInput{
+		Provider:   providerName,
+		Model:      modelName,
+		Raw:        raw,
+		Nonce:      nonce,
+		Enforced:   cfg.Enforced,
+		TDX:        tdxResult,
+		Nvidia:     nvidiaResult,
+		NvidiaNRAS: nrasResult,
+		PoC:        pocResult,
+		Compose:    composeResult,
+		Sigstore:   sigstoreResults,
+		Rekor:      rekorResults,
+	})
 }
 
 // newAttester returns the appropriate Attester for the named provider.

@@ -299,7 +299,17 @@ func (h *PinnedHandler) attestOnConn(
 		}
 	}
 
-	report := attestation.BuildReport("nearai", model, raw, nonce, h.enforced, tdxResult, nil, nil, nil, composeResult, sigstoreResults, rekorResults)
+	report := attestation.BuildReport(&attestation.ReportInput{
+		Provider: "nearai",
+		Model:    model,
+		Raw:      raw,
+		Nonce:    nonce,
+		Enforced: h.enforced,
+		TDX:      tdxResult,
+		Compose:  composeResult,
+		Sigstore: sigstoreResults,
+		Rekor:    rekorResults,
+	})
 	return report, nil
 }
 

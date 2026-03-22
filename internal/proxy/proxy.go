@@ -381,7 +381,20 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	ms := s.stats.getModelStats(prov.Name, upstreamModel)
 	ms.lastVerifyMs.Store(totalDur.Milliseconds())
 
-	report := attestation.BuildReport(prov.Name, upstreamModel, raw, nonce, s.cfg.Enforced, tdxResult, nvidiaResult, nrasResult, pocResult, composeResult, sigstoreResults, rekorResults)
+	report := attestation.BuildReport(&attestation.ReportInput{
+		Provider:   prov.Name,
+		Model:      upstreamModel,
+		Raw:        raw,
+		Nonce:      nonce,
+		Enforced:   s.cfg.Enforced,
+		TDX:        tdxResult,
+		Nvidia:     nvidiaResult,
+		NvidiaNRAS: nrasResult,
+		PoC:        pocResult,
+		Compose:    composeResult,
+		Sigstore:   sigstoreResults,
+		Rekor:      rekorResults,
+	})
 	return report, raw
 }
 
