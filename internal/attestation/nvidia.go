@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/13rac1/teep/internal/tlsct"
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -212,7 +213,7 @@ func isSignatureError(err error) bool {
 // Reference Integrity Manifest values.
 func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Client, opts ...jwt.ParserOption) *NvidiaVerifyResult {
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = tlsct.NewHTTPClient(30 * time.Second)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, nrasAttestURL, strings.NewReader(eatPayload))

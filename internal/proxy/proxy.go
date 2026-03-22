@@ -38,6 +38,7 @@ import (
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nearai"
 	"github.com/13rac1/teep/internal/provider/venice"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
@@ -137,19 +138,15 @@ type Server struct {
 func New(cfg *config.Config) (*Server, error) {
 	spkiCache := attestation.NewSPKICache()
 	s := &Server{
-		cfg:          cfg,
-		providers:    make(map[string]*provider.Provider, len(cfg.Providers)),
-		cache:        attestation.NewCache(attestationCacheTTL),
-		negCache:     attestation.NewNegativeCache(negativeCacheTTL),
-		spkiCache:    spkiCache,
-		mux:          http.NewServeMux(),
-		attestClient: config.NewAttestationClient(),
-		upstreamClient: &http.Client{
-			Transport: &http.Transport{
-				IdleConnTimeout: 90 * time.Second,
-			},
-		},
-		stats: stats{startTime: time.Now()},
+		cfg:            cfg,
+		providers:      make(map[string]*provider.Provider, len(cfg.Providers)),
+		cache:          attestation.NewCache(attestationCacheTTL),
+		negCache:       attestation.NewNegativeCache(negativeCacheTTL),
+		spkiCache:      spkiCache,
+		mux:            http.NewServeMux(),
+		attestClient:   config.NewAttestationClient(),
+		upstreamClient: tlsct.NewHTTPClientWithTransport(0, &http.Transport{IdleConnTimeout: 90 * time.Second}),
+		stats:          stats{startTime: time.Now()},
 	}
 
 	for name, cp := range cfg.Providers {

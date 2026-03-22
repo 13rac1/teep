@@ -15,6 +15,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/tlsct"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -115,7 +116,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	}
 	if h.ctChecker != nil {
 		state := conn.ConnectionState()
-		if err := h.ctChecker.CheckTLSState(domain, &state); err != nil {
+		if err := h.ctChecker.CheckTLSState(ctx, domain, &state); err != nil {
 			return nil, fmt.Errorf("certificate transparency check failed: %w", err)
 		}
 	}
@@ -297,12 +298,12 @@ func (h *PinnedHandler) attestOnConn(
 
 	var nrasResult *attestation.NvidiaVerifyResult
 	if !h.offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
-		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, &http.Client{Timeout: 30 * time.Second})
+		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, tlsct.NewHTTPClient(30*time.Second))
 	}
 
 	var pocResult *attestation.PoCResult
 	if !h.offline && raw.IntelQuote != "" {
-		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, &http.Client{Timeout: 30 * time.Second})
+		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second))
 		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
 	}
 
@@ -333,7 +334,7 @@ func (h *PinnedHandler) attestOnConn(
 		}
 		digests := attestation.ExtractImageDigests(source)
 		if len(digests) > 0 && !h.offline {
-			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, &http.Client{Timeout: 10 * time.Second})
+			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, tlsct.NewHTTPClient(10*time.Second))
 		}
 	}
 
@@ -341,7 +342,7 @@ func (h *PinnedHandler) attestOnConn(
 	if len(sigstoreResults) > 0 && !h.offline {
 		for _, sr := range sigstoreResults {
 			if sr.OK {
-				rekorResults = append(rekorResults, attestation.FetchRekorProvenance(ctx, sr.Digest, &http.Client{Timeout: 10 * time.Second}))
+				rekorResults = append(rekorResults, attestation.FetchRekorProvenance(ctx, sr.Digest, tlsct.NewHTTPClient(10*time.Second)))
 			}
 		}
 	}

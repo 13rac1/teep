@@ -7,6 +7,7 @@ require (
 	github.com/MicahParks/keyfunc/v3 v3.8.0
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/google/certificate-transparency-go v1.3.3
 	github.com/google/go-tdx-guest v0.3.2-0.20260305110651-91f9a52f36c7
 	golang.org/x/crypto v0.49.0
 	golang.org/x/sync v0.20.0
@@ -14,10 +15,12 @@ require (
 
 require (
 	github.com/MicahParks/jwkset v0.11.0 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/google/logger v1.1.1 // indirect
+	github.com/transparency-dev/merkle v0.0.2 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/time v0.9.0 // indirect
-	google.golang.org/protobuf v1.34.2 // indirect
+	golang.org/x/time v0.14.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
+	k8s.io/klog/v2 v2.130.1 // indirect
 )

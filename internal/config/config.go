@@ -21,6 +21,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
@@ -236,11 +237,8 @@ func RedactKey(key string) string {
 // endpoints. The default MaxIdleConnsPerHost (2) is too low for providers
 // that serve multiple models from the same host.
 func NewAttestationClient() *http.Client {
-	return &http.Client{
-		Timeout: AttestationTimeout,
-		Transport: &http.Transport{
-			MaxIdleConnsPerHost: 10,
-			IdleConnTimeout:     90 * time.Second,
-		},
-	}
+	return tlsct.NewHTTPClientWithTransport(AttestationTimeout, &http.Transport{
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	})
 }

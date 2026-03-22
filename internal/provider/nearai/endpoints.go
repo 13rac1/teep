@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/tlsct"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -42,7 +43,6 @@ type endpointEntry struct {
 type EndpointResolver struct {
 	endpointsURL string
 	client       *http.Client
-	ctChecker    *CTChecker
 
 	mu        sync.RWMutex
 	mapping   map[string]string // model → domain
@@ -56,8 +56,7 @@ type EndpointResolver struct {
 func NewEndpointResolver() *EndpointResolver {
 	return &EndpointResolver{
 		endpointsURL: defaultEndpointsURL,
-		client:       &http.Client{Timeout: 30 * time.Second},
-		ctChecker:    NewCTChecker(),
+		client:       tlsct.NewHTTPClient(30 * time.Second),
 		mapping:      make(map[string]string),
 	}
 }
@@ -66,8 +65,7 @@ func NewEndpointResolver() *EndpointResolver {
 func newEndpointResolverForTest(url string) *EndpointResolver {
 	return &EndpointResolver{
 		endpointsURL: url,
-		client:       &http.Client{Timeout: 10 * time.Second},
-		ctChecker:    NewCTChecker(),
+		client:       tlsct.NewHTTPClient(10 * time.Second),
 		mapping:      make(map[string]string),
 	}
 }
@@ -126,12 +124,6 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 		return fmt.Errorf("GET %s: %w", r.endpointsURL, err)
 	}
 	defer resp.Body.Close()
-
-	if req.URL.Scheme == "https" && r.ctChecker != nil {
-		if err := r.ctChecker.CheckTLSState(req.URL.Hostname(), resp.TLS); err != nil {
-			return fmt.Errorf("certificate transparency check failed: %w", err)
-		}
-	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
