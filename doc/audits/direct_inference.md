@@ -49,6 +49,28 @@ Signatures over the Intel TEE attestation MUST be verified for the entire certif
 
 Document how trust roots are obtained (embedded/provisioned), and how third-party verification libraries are called and interpreted.
 
+### TDX Measurement Fields and Policy Expectations
+
+The audit MUST explicitly cover the following TDX fields from the parsed quote body:
+- MRTD,
+- RTMR0, RTMR1, RTMR2, RTMR3,
+- MRSEAM,
+- MRSIGNERSEAM,
+- MROWNER,
+- MROWNERCONFIG,
+- MRCONFIGID,
+- REPORTDATA.
+
+For each field, the report MUST distinguish between:
+- extraction/visibility only (field parsed and logged),
+- structural integrity checks (length/format/consistency), and
+- policy enforcement (allowlist/denylist or expected value matching).
+
+Current direct-provider expectation:
+- MRCONFIGID is expected to be cryptographically checked via compose binding,
+- RTMR fields are expected to be consistency-checked via event log replay when event logs are present,
+- all other TDX measurement fields MUST be documented as either policy-checked or currently informational-only, with residual risk called out.
+
 ### CVM Image Verification
 
 The attestation API will provide a full docker compose stanza, or equivalent podman/cloud config image description, as an auxiliary portion of the attestation API response.
@@ -76,16 +98,6 @@ However, the docker compose hash MUST be verified against either cached or live 
 If the docker compose hash is not present in the cache, or any of the sub-images are not present in the cache, these must be validated against Sigstore and Rekor before proceeding.
 
 The audit MUST explicitly document cache keys, TTLs, expiry/pruning behavior, and whether each verification datum is actually cached in the current implementation.
-
-### TODO: Other TDX fields
-
-- mrtd, rtmr0, rtmr1, rtmr2, rtmr3
-
-- mrseam, mrsignerseam, mrowner, mrownerconfig
-
-- event log replay consistency against RTMR values
-
-- report data layout and provider-specific binding rules
 
 ### Encryption Binding
 
@@ -124,6 +136,8 @@ If offline mode exists, the audit MUST state which NVIDIA checks remain active a
 If event logs are present in provider attestation payloads, the code MUST replay them and verify recomputed RTMR values against quote RTMR fields.
 
 The audit MUST describe replay algorithm details and failure handling.
+
+The audit MUST also state the exact security boundary of this check: event log replay validates internal consistency of event-log-derived RTMR values with quoted RTMR values, but does not by itself prove that RTMR values match an approved software baseline. If no baseline policy is enforced for MRTD/RTMR/MRSEAM-class measurements, that gap MUST be reported explicitly.
 
 ## Connection Lifetime Safety
 
