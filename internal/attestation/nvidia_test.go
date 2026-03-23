@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -102,6 +103,38 @@ func setupTestKeyfunc(t *testing.T, key *ecdsa.PublicKey, kid string) string {
 		resetJWKS()
 	})
 	return srv.URL
+}
+
+func TestGetOrCreateKeyfunc_RefreshesAfterTTL(t *testing.T) {
+	key := generateTestECKey(t)
+	kid := "ttl-kid"
+	body := makeJWKSBody(t, &key.PublicKey, kid)
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	origTTL := jwksCacheTTL
+	jwksCacheTTL = 0
+	t.Cleanup(func() {
+		jwksCacheTTL = origTTL
+		resetJWKS()
+	})
+
+	if _, err := getOrCreateKeyfunc(context.Background(), srv.URL); err != nil {
+		t.Fatalf("first getOrCreateKeyfunc: %v", err)
+	}
+	if _, err := getOrCreateKeyfunc(context.Background(), srv.URL); err != nil {
+		t.Fatalf("second getOrCreateKeyfunc: %v", err)
+	}
+
+	if got := calls.Load(); got < 2 {
+		t.Fatalf("expected at least 2 JWKS fetches after forced refresh, got %d", got)
+	}
 }
 
 // TestVerifyJWT_ValidToken verifies a correctly-signed JWT passes all checks.

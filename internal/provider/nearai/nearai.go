@@ -107,17 +107,17 @@ type Attester struct {
 
 // NewAttester returns a NEAR AI Attester configured with the given base URL
 // and API key. It uses a 30-second HTTP timeout via config.NewAttestationClient.
-func NewAttester(baseURL, apiKey string) *Attester {
-	return NewAttesterWithResolver(baseURL, apiKey, NewEndpointResolver())
+func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
+	return NewAttesterWithResolver(baseURL, apiKey, NewEndpointResolver(offline...), offline...)
 }
 
 // NewAttesterWithResolver returns a NEAR AI Attester configured with the given
 // base URL, API key, and model->domain resolver.
-func NewAttesterWithResolver(baseURL, apiKey string, resolver DomainResolver) *Attester {
+func NewAttesterWithResolver(baseURL, apiKey string, resolver DomainResolver, offline ...bool) *Attester {
 	return &Attester{
 		baseURL:  baseURL,
 		apiKey:   apiKey,
-		client:   config.NewAttestationClient(),
+		client:   config.NewAttestationClient(offline...),
 		resolver: resolver,
 	}
 }

@@ -63,6 +63,9 @@ func NewPinnedHandler(
 	policy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
 ) *PinnedHandler {
+	checker := NewCTChecker()
+	checker.SetEnabled(!offline)
+
 	return &PinnedHandler{
 		resolver:   resolver,
 		spkiCache:  spkiCache,
@@ -71,7 +74,7 @@ func NewPinnedHandler(
 		enforced:   enforced,
 		policy:     policy,
 		rdVerifier: rdVerifier,
-		ctChecker:  NewCTChecker(),
+		ctChecker:  checker,
 	}
 }
 
@@ -327,6 +330,7 @@ func (h *PinnedHandler) attestOnConn(
 
 	var composeResult *attestation.ComposeBindingResult
 	var sigstoreResults []attestation.SigstoreResult
+	var imageRepos []string
 	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
 		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
@@ -342,6 +346,7 @@ func (h *PinnedHandler) attestOnConn(
 		if source == "" {
 			source = raw.AppCompose
 		}
+		imageRepos = attestation.ExtractImageRepositories(source)
 		digests := attestation.ExtractImageDigests(source)
 		if len(digests) > 0 && !h.offline {
 			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, tlsct.NewHTTPClient(10*time.Second))
@@ -364,6 +369,7 @@ func (h *PinnedHandler) attestOnConn(
 		Nonce:      nonce,
 		Enforced:   h.enforced,
 		Policy:     h.policy,
+		ImageRepos: imageRepos,
 		TDX:        tdxResult,
 		Nvidia:     nvidiaResult,
 		NvidiaNRAS: nrasResult,

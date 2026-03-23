@@ -90,7 +90,8 @@ type Config struct {
 	MeasurementPolicy attestation.MeasurementPolicy
 
 	// Offline skips external verification calls (Intel PCS collateral,
-	// Proof of Cloud registry). Set via --offline flag at runtime.
+	// Proof of Cloud registry, and Certificate Transparency checks).
+	// Set via --offline flag at runtime.
 	Offline bool
 }
 
@@ -297,10 +298,12 @@ func RedactKey(key string) string {
 // NewAttestationClient returns an *http.Client with a 30-second timeout and
 // tuned transport, suitable for fetching attestation data from TEE provider
 // endpoints. The default MaxIdleConnsPerHost (2) is too low for providers
-// that serve multiple models from the same host.
-func NewAttestationClient() *http.Client {
+// that serve multiple models from the same host. In offline mode, CT checks
+// are disabled to avoid external CT log list downloads.
+func NewAttestationClient(offline ...bool) *http.Client {
+	ctEnabled := len(offline) == 0 || !offline[0]
 	return tlsct.NewHTTPClientWithTransport(AttestationTimeout, &http.Transport{
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
-	})
+	}, ctEnabled)
 }

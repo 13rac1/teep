@@ -83,6 +83,8 @@ var DefaultEnforced = []string{
 	"compose_binding",
 	"nvidia_signature",
 	"nvidia_nonce_match",
+	"build_transparency_log",
+	"sigstore_verification",
 	"event_log_integrity",
 }
 
@@ -110,12 +112,13 @@ type ComposeBindingResult struct {
 // result type (e.g. AMD SEV-SNP) means adding a field here — no existing
 // call sites change because unset fields default to nil.
 type ReportInput struct {
-	Provider string
-	Model    string
-	Raw      *RawAttestation
-	Nonce    Nonce
-	Enforced []string
-	Policy   MeasurementPolicy
+	Provider   string
+	Model      string
+	Raw        *RawAttestation
+	Nonce      Nonce
+	Enforced   []string
+	Policy     MeasurementPolicy
+	ImageRepos []string
 
 	TDX        *TDXVerifyResult
 	Nvidia     *NvidiaVerifyResult
@@ -417,7 +420,29 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	addFactor("measured_model_weights", Fail,
 		"no model weight hashes")
 
+	scPolicy := supplyChainPolicyForProvider(in.Provider)
+	if scPolicy != nil {
+		if len(in.ImageRepos) == 0 {
+			addFactor("build_transparency_log", Fail,
+				"No attested image repositories extracted from compose")
+			goto buildTransparencyDone
+		}
+		for _, repo := range in.ImageRepos {
+			if !containsFold(repo, scPolicy.AllowedImageRepos) {
+				addFactor("build_transparency_log", Fail,
+					fmt.Sprintf("Container allowlist policy: image repository %q is not in allowlist (%s)",
+						repo, strings.Join(scPolicy.AllowedImageRepos, ", ")))
+				goto buildTransparencyDone
+			}
+		}
+	}
+
 	if len(in.Rekor) == 0 {
+		if scPolicy != nil {
+			addFactor("build_transparency_log", Fail,
+				"Container check: no Rekor provenance fetched for attested image digests")
+			goto buildTransparencyDone
+		}
 		if in.Raw.ComposeHash != "" {
 			hashPreview := in.Raw.ComposeHash
 			if len(hashPreview) > 8 {
@@ -431,14 +456,36 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		}
 	} else {
 		var verified int
+		var fallbackOnly int
 		var detail string
 		var failed bool
 		for i := range in.Rekor {
 			r := &in.Rekor[i]
-			if r.Err != nil || !r.HasCert {
-				continue // third-party image or fetch error — skip, don't fail
+			if r.Err != nil {
+				fallbackOnly++
+				continue
 			}
-			if r.OIDCIssuer != "https://token.actions.githubusercontent.com" {
+			if !r.HasCert {
+				fallbackOnly++
+				continue // third-party image — skip, don't fail
+			}
+
+			if scPolicy != nil {
+				if !containsFold(r.OIDCIssuer, scPolicy.AllowedOIDCIssuers) {
+					failed = true
+					detail = "Container signer checks: unexpected OIDC issuer: " + r.OIDCIssuer
+					break
+				}
+
+				repoID := strings.TrimSpace(r.SourceRepo)
+				repoURL := strings.TrimSpace(r.SourceRepoURL)
+				if !containsFold(repoID, scPolicy.AllowedSourceRepos) &&
+					!containsFold(repoURL, scPolicy.AllowedSourceRepos) {
+					failed = true
+					detail = fmt.Sprintf("Container signer check: unexpected Sigstore signer identity (repo=%q repo_url=%q)", repoID, repoURL)
+					break
+				}
+			} else if r.OIDCIssuer != "https://token.actions.githubusercontent.com" {
 				failed = true
 				detail = "unexpected OIDC issuer: " + r.OIDCIssuer
 				break
@@ -456,6 +503,12 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		switch {
 		case failed:
 			addFactor("build_transparency_log", Fail, detail)
+		case scPolicy != nil && verified > 0 && fallbackOnly > 0:
+			addFactor("build_transparency_log", Pass,
+				fmt.Sprintf("Container policy check: %d image(s) have acceptable Rekor signer provenance; %d image(s) rely on repository allowlist + Sigstore presence", verified, fallbackOnly))
+		case scPolicy != nil && verified == 0 && fallbackOnly > 0:
+			addFactor("build_transparency_log", Pass,
+				fmt.Sprintf("Container policy check: no Fulcio provenance for %d image(s); repository allowlist + Sigstore presence accepted", fallbackOnly))
 		case verified > 0:
 			addFactor("build_transparency_log", Pass,
 				fmt.Sprintf("%d/%d image(s) have Sigstore build provenance (%s)", verified, len(in.Rekor), detail))
@@ -464,6 +517,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 				"all images signed with raw keys (no Fulcio build provenance)")
 		}
 	}
+buildTransparencyDone:
 
 	if in.PoC != nil && in.PoC.Registered { //nolint:gocritic // ifElseChain: conditions compare different fields
 		addFactor("cpu_id_registry", Pass,
@@ -595,6 +649,47 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		Skipped:   skipped,
 		Metadata:  metadata,
 	}
+}
+
+type supplyChainPolicy struct {
+	AllowedImageRepos  []string
+	AllowedOIDCIssuers []string
+	AllowedSourceRepos []string
+}
+
+func supplyChainPolicyForProvider(provider string) *supplyChainPolicy {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "nearai":
+		return &supplyChainPolicy{
+			// Exact image names currently attested in NearAI compose.
+			AllowedImageRepos: []string{
+				"datadog/agent",
+				"certbot/dns-cloudflare",
+				"nearaidev/compose-manager",
+			},
+			AllowedOIDCIssuers: []string{"https://token.actions.githubusercontent.com"},
+			// Exact Fulcio identities currently observed for NearAI-owned images.
+			AllowedSourceRepos: []string{
+				"nearai/compose-manager",
+				"https://github.com/nearai/compose-manager",
+			},
+		}
+	default:
+		return nil
+	}
+}
+
+func containsFold(value string, allowed []string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" {
+		return false
+	}
+	for _, entry := range allowed {
+		if v == strings.ToLower(strings.TrimSpace(entry)) {
+			return true
+		}
+	}
+	return false
 }
 
 func prefixHex(s string) string {

@@ -77,8 +77,9 @@ type nvidiaClaims struct {
 
 // jwksEntry pairs a keyfunc.Keyfunc with its cancel function for cleanup.
 type jwksEntry struct {
-	kf     keyfunc.Keyfunc
-	cancel context.CancelFunc
+	kf        keyfunc.Keyfunc
+	cancel    context.CancelFunc
+	createdAt time.Time
 }
 
 // jwksInstances caches keyfunc instances by JWKS URL. Production uses
@@ -86,13 +87,33 @@ type jwksEntry struct {
 // background refresh, rate-limited unknown-kid refresh, and alg/use validation.
 var jwksInstances sync.Map // URL string → *jwksEntry
 
+var (
+	// jwksCacheTTL bounds in-process JWKS cache lifetime.
+	// keyfunc still performs background refresh; this adds a hard max age.
+	jwksCacheTTL = time.Hour
+	jwksMu       sync.Mutex
+)
+
 // getOrCreateKeyfunc returns a keyfunc.Keyfunc for the given JWKS URL.
 // Instances are created once per URL and cached for the process lifetime.
 func getOrCreateKeyfunc(_ context.Context, jwksURL string) (keyfunc.Keyfunc, error) {
 	if v, ok := jwksInstances.Load(jwksURL); ok {
 		entry := v.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
-		return entry.kf, nil
+		if time.Since(entry.createdAt) < jwksCacheTTL {
+			return entry.kf, nil
+		}
 	}
+
+	jwksMu.Lock()
+	defer jwksMu.Unlock()
+
+	if v, ok := jwksInstances.Load(jwksURL); ok {
+		entry := v.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
+		if time.Since(entry.createdAt) < jwksCacheTTL {
+			return entry.kf, nil
+		}
+	}
+
 	kfCtx, cancel := context.WithCancel(context.Background())
 	k, err := keyfunc.NewDefaultCtx(kfCtx, []string{jwksURL}) //nolint:contextcheck // keyfunc manages its own context lifecycle
 
@@ -100,14 +121,12 @@ func getOrCreateKeyfunc(_ context.Context, jwksURL string) (keyfunc.Keyfunc, err
 		cancel()
 		return nil, fmt.Errorf("initialize JWKS for %s: %w", jwksURL, err)
 	}
-	entry := &jwksEntry{kf: k, cancel: cancel}
-	actual, loaded := jwksInstances.LoadOrStore(jwksURL, entry)
-	if loaded {
-		// Another goroutine won the race; shut down ours.
-		cancel()
-		winner := actual.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
-		return winner.kf, nil
+	entry := &jwksEntry{kf: k, cancel: cancel, createdAt: time.Now()}
+	if old, ok := jwksInstances.Load(jwksURL); ok {
+		prev := old.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
+		prev.cancel()
 	}
+	jwksInstances.Store(jwksURL, entry)
 	return k, nil
 }
 

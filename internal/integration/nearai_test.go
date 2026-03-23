@@ -191,6 +191,7 @@ func TestIntegration_NearAI_Fixture(t *testing.T) {
 
 	// 4f. Sigstore
 	t.Log("--- Sigstore ---")
+	var imageRepos []string
 	var sigstoreResults []attestation.SigstoreResult
 	if raw.AppCompose != "" {
 		dockerCompose, err := attestation.ExtractDockerCompose(raw.AppCompose)
@@ -200,6 +201,11 @@ func TestIntegration_NearAI_Fixture(t *testing.T) {
 		source := dockerCompose
 		if source == "" {
 			source = raw.AppCompose
+		}
+		imageRepos = attestation.ExtractImageRepositories(source)
+		t.Logf("image repos: %d", len(imageRepos))
+		for _, repo := range imageRepos {
+			t.Logf("  repo: %s", repo)
 		}
 		digests := attestation.ExtractImageDigests(source)
 		t.Logf("image digests: %d", len(digests))
@@ -248,6 +254,7 @@ func TestIntegration_NearAI_Fixture(t *testing.T) {
 		NvidiaNRAS: nrasResult,
 		PoC:        pocResult,
 		Compose:    composeResult,
+		ImageRepos: imageRepos,
 		Sigstore:   sigstoreResults,
 		Rekor:      rekorResults,
 	})

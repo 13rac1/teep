@@ -27,6 +27,8 @@ const (
 	logListCacheTTL = 24 * time.Hour
 )
 
+const ctEnabledDefault = true
+
 var defaultChecker = NewChecker()
 
 type certCacheEntry struct {
@@ -39,6 +41,7 @@ type certCacheEntry struct {
 type Checker struct {
 	mu      sync.Mutex
 	entries map[string]certCacheEntry
+	enabled bool
 
 	logListMu   sync.RWMutex
 	logList     *loglist3.LogList
@@ -55,6 +58,7 @@ func NewChecker() *Checker {
 
 	return &Checker{
 		entries: make(map[string]certCacheEntry),
+		enabled: ctEnabledDefault,
 		logListHTTP: &http.Client{
 			Timeout:   20 * time.Second,
 			Transport: base,
@@ -65,22 +69,41 @@ func NewChecker() *Checker {
 // DefaultChecker returns the shared process-wide CT checker.
 func DefaultChecker() *Checker { return defaultChecker }
 
+// SetEnabled controls whether CT verification is enforced by this checker.
+func (c *Checker) SetEnabled(enabled bool) {
+	if c == nil {
+		return
+	}
+	c.enabled = enabled
+}
+
 // NewHTTPClient returns an HTTP client that enforces CT for all HTTPS requests.
-func NewHTTPClient(timeout time.Duration) *http.Client {
+func NewHTTPClient(timeout time.Duration, ctEnabled ...bool) *http.Client {
 	base := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // Go stdlib default transport type is *http.Transport.
-	return NewHTTPClientWithTransport(timeout, base)
+	return NewHTTPClientWithTransport(timeout, base, ctEnabled...)
 }
 
 // NewHTTPClientWithTransport returns an HTTP client that enforces CT for all
 // HTTPS requests while using the provided base transport settings.
-func NewHTTPClientWithTransport(timeout time.Duration, base *http.Transport) *http.Client {
+func NewHTTPClientWithTransport(timeout time.Duration, base *http.Transport, ctEnabled ...bool) *http.Client {
 	if base == nil {
 		base = http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // Go stdlib default transport type is *http.Transport.
 	}
+	transport := http.RoundTripper(base)
+	if ctEnabledFromOpt(ctEnabled...) {
+		transport = WrapTransport(base)
+	}
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: WrapTransport(base),
+		Transport: transport,
 	}
+}
+
+func ctEnabledFromOpt(enabled ...bool) bool {
+	if len(enabled) == 0 {
+		return ctEnabledDefault
+	}
+	return enabled[0]
 }
 
 // WrapTransport wraps an existing transport with post-handshake CT checks.
@@ -118,6 +141,9 @@ func (t *ctRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 // CheckTLSState verifies that the peer cert chain provides valid SCT evidence
 // anchored to a known CT log in Google's public log list.
 func (c *Checker) CheckTLSState(ctx context.Context, host string, state *tls.ConnectionState) error {
+	if c == nil || !c.enabled {
+		return nil
+	}
 	if isPrivateHost(host) {
 		return nil
 	}

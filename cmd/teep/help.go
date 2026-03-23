@@ -430,7 +430,8 @@ Example TOML:
   e2ee = true
 
 Flags:
-  --offline           Skip external verification (Intel PCS, Proof of Cloud).
+	--offline           Skip external verification (Intel PCS, Proof of Cloud,
+											Certificate Transparency).
   --log-level LEVEL   Set log verbosity: debug, info, warn, error (default: info).
 `)
 }
@@ -455,8 +456,9 @@ Required flags:
 Optional flags:
   --save-dir DIR    Save raw attestation data to DIR (JSON, TDX quote,
                     NVIDIA payload). Useful for debugging and offline analysis.
-  --offline         Skip external verification (Intel PCS collateral,
-                    Proof of Cloud registry). PPID is still extracted locally.
+	--offline         Skip external verification (Intel PCS collateral,
+										Proof of Cloud registry, Certificate Transparency).
+										PPID is still extracted locally.
   --log-level LEVEL Set log verbosity: debug, info, warn, error (default: info).
 
 Exit codes:

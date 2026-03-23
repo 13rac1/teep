@@ -95,7 +95,7 @@ func runServe(args []string) {
 	}
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud)")
+	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 	fs.Usage = func() { printServeHelp() }
 	fs.Parse(args) //nolint:errcheck // fs.Parse calls os.Exit on error per flag.ExitOnError
@@ -181,7 +181,7 @@ func runVerify(args []string) {
 
 	modelName := fs.String("model", "", "model name as known to the provider (required)")
 	saveDir := fs.String("save-dir", "", "directory to save raw attestation data (EAT, TDX quote)")
-	offline := fs.Bool("offline", false, "skip external verification (Proof of Cloud registry)")
+	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 
 	fs.Parse(args) //nolint:errcheck // fs.Parse calls os.Exit on error per flag.ExitOnError
@@ -216,8 +216,8 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		os.Exit(1)
 	}
 
-	attester := newAttester(providerName, cp)
-	client := config.NewAttestationClient()
+	attester := newAttester(providerName, cp, offline)
+	client := config.NewAttestationClient(offline)
 
 	nonce := attestation.NewNonce()
 	slog.Debug("nonce generated", "provider", providerName, "model", modelName, "nonce", nonce.Hex()[:16]+"...")
@@ -277,6 +277,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 
 	// Check compose binding and Sigstore if app_compose is available.
 	var composeResult *attestation.ComposeBindingResult
+	var imageRepos []string
 	var sigstoreResults []attestation.SigstoreResult
 	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
@@ -298,6 +299,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		if dockerCompose != "" {
 			slog.Debug("attested docker compose manifest", "content", dockerCompose)
 		}
+		imageRepos = attestation.ExtractImageRepositories(source)
 		digests := attestation.ExtractImageDigests(source)
 		for _, d := range digests {
 			slog.Info("checking Sigstore for image digest", "digest", "sha256:"+d[:min(16, len(d))]+"...")
@@ -354,18 +356,23 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		NvidiaNRAS: nrasResult,
 		PoC:        pocResult,
 		Compose:    composeResult,
+		ImageRepos: imageRepos,
 		Sigstore:   sigstoreResults,
 		Rekor:      rekorResults,
 	})
 }
 
 // newAttester returns the appropriate Attester for the named provider.
-func newAttester(name string, cp *config.Provider) provider.Attester {
+func newAttester(name string, cp *config.Provider, offline ...bool) provider.Attester {
+	off := false
+	if len(offline) > 0 {
+		off = offline[0]
+	}
 	switch name {
 	case "venice":
-		return venice.NewAttester(cp.BaseURL, cp.APIKey)
+		return venice.NewAttester(cp.BaseURL, cp.APIKey, off)
 	case "nearai":
-		return nearai.NewAttester(cp.BaseURL, cp.APIKey)
+		return nearai.NewAttester(cp.BaseURL, cp.APIKey, off)
 	default:
 		slog.Error("unknown provider", "provider", name, "supported", "venice, nearai")
 		os.Exit(1)

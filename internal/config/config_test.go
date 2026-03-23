@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -506,6 +507,19 @@ func TestNewAttestationClient(t *testing.T) {
 	}
 	if client.Timeout != AttestationTimeout {
 		t.Errorf("client Timeout: got %v, want %v", client.Timeout, AttestationTimeout)
+	}
+}
+
+func TestNewAttestationClientOfflineDisablesCT(t *testing.T) {
+	client := NewAttestationClient(true)
+	if client == nil {
+		t.Fatal("NewAttestationClient returned nil")
+	}
+	if client.Timeout != AttestationTimeout {
+		t.Errorf("client Timeout: got %v, want %v", client.Timeout, AttestationTimeout)
+	}
+	if got := fmt.Sprintf("%T", client.Transport); strings.Contains(got, "ctRoundTripper") {
+		t.Fatalf("offline client transport unexpectedly wrapped with CT checker: %s", got)
 	}
 }
 

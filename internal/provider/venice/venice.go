@@ -194,11 +194,11 @@ type Attester struct {
 
 // NewAttester returns a Venice Attester configured with the given base URL and
 // API key. It uses a 30-second HTTP timeout via config.NewAttestationClient.
-func NewAttester(baseURL, apiKey string) *Attester {
+func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 	return &Attester{
 		baseURL: baseURL,
 		apiKey:  apiKey,
-		client:  config.NewAttestationClient(),
+		client:  config.NewAttestationClient(offline...),
 	}
 }
 
