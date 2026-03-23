@@ -413,6 +413,9 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		Rekor:      rekorResults,
 	})
 	if raw.SigningKey != "" {
+		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && prev != raw.SigningKey {
+			slog.Warn("signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
+		}
 		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
 	}
 	return report, raw
@@ -739,6 +742,10 @@ func (s *Server) buildUpstreamBody(
 			if raw.IntelQuote == "" {
 				return nil, nil, errors.New("fresh attestation missing TDX quote; cannot verify signing key binding")
 			}
+			// offline=true: only REPORTDATA binding is needed here, not full
+			// online verification (Intel PCS collateral). The primary
+			// fetchAndVerify() path already did online verification for
+			// the cached report.
 			tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, true)
 			if tdxResult.ParseErr != nil {
 				return nil, nil, fmt.Errorf("fresh TDX quote parse failed: %w", tdxResult.ParseErr)
