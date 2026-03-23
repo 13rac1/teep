@@ -342,6 +342,15 @@ var factorRegistry = []factorInfo{
 			"passing through the API gateway.",
 	},
 	{
+		Name:    "gateway_tdx_reportdata_binding",
+		Tier:    4,
+		Summary: "Gateway REPORTDATA binds TLS fingerprint + nonce",
+		Description: "Verifies the gateway TDX quote REPORTDATA field. " +
+			"Checks REPORTDATA[32:64] matches the client nonce and " +
+			"REPORTDATA[0:32] matches sha256(tls_cert_fingerprint). " +
+			"Fails if the gateway uses an unknown REPORTDATA scheme.",
+	},
+	{
 		Name:    "gateway_compose_binding",
 		Tier:    4,
 		Summary: "Gateway compose hash matches MRConfigID",

@@ -96,9 +96,12 @@ var DefaultEnforced = []string{
 	"sigstore_verification",
 	"event_log_integrity",
 	// Gateway factors (nearcloud only).
+	"gateway_nonce_match",
 	"gateway_tdx_cert_chain",
 	"gateway_tdx_quote_signature",
 	"gateway_tdx_debug_disabled",
+	"gateway_tdx_reportdata_binding",
+	"gateway_compose_binding",
 }
 
 // KnownFactors is the complete set of factor names produced by BuildReport.
@@ -114,7 +117,7 @@ var KnownFactors = []string{
 	// Gateway factors (nearcloud only).
 	"gateway_nonce_match", "gateway_tdx_quote_present", "gateway_tdx_quote_structure",
 	"gateway_tdx_cert_chain", "gateway_tdx_quote_signature", "gateway_tdx_debug_disabled",
-	"gateway_compose_binding",
+	"gateway_tdx_reportdata_binding", "gateway_compose_binding",
 }
 
 // ComposeBindingResult holds the outcome of verifying the app_compose → MRConfigID binding.
@@ -187,7 +190,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		}
 		addFactor(TierCore, "nonce_match", Pass, detail)
 	} else {
-		addFactor(TierCore, "nonce_match", Fail, fmt.Sprintf("nonce mismatch: got %q, want %q", in.Raw.Nonce, in.Nonce.Hex()))
+		addFactor(TierCore, "nonce_match", Fail, fmt.Sprintf("nonce mismatch: got %q, want %q", truncHex(in.Raw.Nonce), truncHex(in.Nonce.Hex())))
 	}
 
 	// Factor 2: tdx_quote_present
@@ -385,7 +388,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	} else if subtle.ConstantTimeCompare([]byte(in.Nvidia.Nonce), []byte(in.Nonce.Hex())) == 1 {
 		addFactor(TierBinding, "nvidia_nonce_match", Pass, nvidiaNonceDetail(in.Nvidia))
 	} else {
-		addFactor(TierBinding, "nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", in.Nvidia.Nonce, in.Nonce.Hex()))
+		addFactor(TierBinding, "nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", truncHex(in.Nvidia.Nonce), truncHex(in.Nonce.Hex())))
 	}
 
 	// Factor 15: nvidia_nras_verified
@@ -683,7 +686,7 @@ buildTransparencyDone:
 		case subtle.ConstantTimeCompare([]byte(in.GatewayNonceHex), []byte(in.GatewayNonce.Hex())) == 1:
 			addFactor(TierGateway, "gateway_nonce_match", Pass, fmt.Sprintf("gateway nonce matches (%d hex chars)", len(in.GatewayNonceHex)))
 		default:
-			addFactor(TierGateway, "gateway_nonce_match", Fail, fmt.Sprintf("gateway nonce mismatch: got %q, want %q", in.GatewayNonceHex, in.GatewayNonce.Hex()))
+			addFactor(TierGateway, "gateway_nonce_match", Fail, fmt.Sprintf("gateway nonce mismatch: got %q, want %q", truncHex(in.GatewayNonceHex), truncHex(in.GatewayNonce.Hex())))
 		}
 
 		// Factor 26: gateway_tdx_quote_present
@@ -722,7 +725,23 @@ buildTransparencyDone:
 			}
 		}
 
-		// Factor 30: gateway_compose_binding
+		// Factor: gateway_tdx_reportdata_binding
+		switch {
+		case in.GatewayTDX.ParseErr != nil:
+			addFactor(TierGateway, "gateway_tdx_reportdata_binding", Fail,
+				"gateway TDX quote parse failed; REPORTDATA binding cannot be verified")
+		case in.GatewayTDX.ReportDataBindingErr != nil:
+			addFactor(TierGateway, "gateway_tdx_reportdata_binding", Fail,
+				fmt.Sprintf("gateway REPORTDATA binding failed: %v", in.GatewayTDX.ReportDataBindingErr))
+		case in.GatewayTDX.ReportDataBindingDetail != "":
+			addFactor(TierGateway, "gateway_tdx_reportdata_binding", Pass,
+				in.GatewayTDX.ReportDataBindingDetail)
+		default:
+			addFactor(TierGateway, "gateway_tdx_reportdata_binding", Fail,
+				"no gateway REPORTDATA verifier ran")
+		}
+
+		// Factor: gateway_compose_binding
 		switch {
 		case in.GatewayCompose == nil || !in.GatewayCompose.Checked:
 			addFactor(TierGateway, "gateway_compose_binding", Skip, "no gateway app_compose in attestation response")
@@ -806,6 +825,13 @@ func prefixHex(s string) string {
 		return s
 	}
 	return s[:16]
+}
+
+func truncHex(s string) string {
+	if len(s) <= 16 {
+		return s
+	}
+	return s[:16] + "..."
 }
 
 func containsAllowlist(m map[string]struct{}, v string) bool {

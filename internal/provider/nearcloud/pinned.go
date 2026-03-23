@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -199,11 +200,9 @@ func extractSPKI(conn *tls.Conn) (string, error) {
 	return attestation.ComputeSPKIHash(state.PeerCertificates[0].Raw)
 }
 
-// attestOnConn sends two attestation requests on the same TLS connection:
-// 1. Gateway attestation (GET /v1/attestation/report?signing_algo=ecdsa&nonce=...)
-// 2. Model attestation (GET /v1/attestation/report?model=...&nonce=...&include_tls_fingerprint=true&signing_algo=ecdsa)
-//
-// The gateway and model use separate nonces. Both are verified independently.
+// attestOnConn sends a single attestation request on the TLS connection that
+// returns both gateway and model attestation. The gateway and model share the
+// same nonce — the client sends one nonce and both echo it back.
 func (h *PinnedHandler) attestOnConn(
 	ctx context.Context,
 	conn *tls.Conn,
@@ -214,11 +213,12 @@ func (h *PinnedHandler) attestOnConn(
 	modelNonce := attestation.NewNonce()
 
 	// Single request — the gateway returns both gateway and model attestation.
-	path := attestationPath +
-		"?model=" + model +
-		"&include_tls_fingerprint=true" +
-		"&nonce=" + modelNonce.Hex() +
-		"&signing_algo=ecdsa"
+	q := url.Values{}
+	q.Set("model", model)
+	q.Set("include_tls_fingerprint", "true")
+	q.Set("nonce", modelNonce.Hex())
+	q.Set("signing_algo", "ecdsa")
+	path := attestationPath + "?" + q.Encode()
 
 	attestHeaders := make(http.Header)
 	attestHeaders.Set("Host", domain)
@@ -334,23 +334,31 @@ func (h *PinnedHandler) attestOnConn(
 	var gatewayTDX *attestation.TDXVerifyResult
 	if gwRaw.IntelQuote != "" {
 		gatewayTDX = attestation.VerifyTDXQuote(ctx, gwRaw.IntelQuote, modelNonce, h.offline)
+		if gatewayTDX.ParseErr == nil {
+			detail, rdErr := GatewayReportDataVerifier{}.Verify(
+				gatewayTDX.ReportData, gwRaw.TLSCertFingerprint, modelNonce)
+			gatewayTDX.ReportDataBindingErr = rdErr
+			gatewayTDX.ReportDataBindingDetail = detail
+		}
 	}
 
 	// Verify gateway TLS fingerprint matches live SPKI.
-	if gwRaw.TLSCertFingerprint != "" {
-		match, matchErr := nearai.ConstantTimeHexEqual(liveSPKI, gwRaw.TLSCertFingerprint)
-		if matchErr != nil {
-			slog.Warn("gateway SPKI comparison error", "err", matchErr)
-		} else if !match {
-			return nil, fmt.Errorf("gateway SPKI %s != attested tls_cert_fingerprint %s",
-				truncate(liveSPKI, 16)+"...",
-				truncate(gwRaw.TLSCertFingerprint, 16)+"...")
-		}
-		slog.Debug("gateway TLS fingerprint matches live SPKI",
-			"spki", truncate(liveSPKI, 16)+"...",
-			"fp", truncate(gwRaw.TLSCertFingerprint, 16)+"...",
-		)
+	if gwRaw.TLSCertFingerprint == "" {
+		return nil, errors.New("gateway attestation response missing tls_cert_fingerprint")
 	}
+	match, matchErr := nearai.ConstantTimeHexEqual(liveSPKI, gwRaw.TLSCertFingerprint)
+	if matchErr != nil {
+		return nil, fmt.Errorf("gateway SPKI comparison: %w", matchErr)
+	}
+	if !match {
+		return nil, fmt.Errorf("gateway SPKI %s != attested tls_cert_fingerprint %s",
+			truncate(liveSPKI, 16)+"...",
+			truncate(gwRaw.TLSCertFingerprint, 16)+"...")
+	}
+	slog.Debug("gateway TLS fingerprint matches live SPKI",
+		"spki", truncate(liveSPKI, 16)+"...",
+		"fp", truncate(gwRaw.TLSCertFingerprint, 16)+"...",
+	)
 
 	// Gateway compose binding.
 	var gatewayCompose *attestation.ComposeBindingResult

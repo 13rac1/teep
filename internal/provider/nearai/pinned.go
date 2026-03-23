@@ -465,18 +465,18 @@ func ConstantTimeHexEqual(a, b string) (bool, error) {
 // underlying net.Conn. Used to tie the response body lifetime to the connection.
 type ConnClosingReader struct {
 	io.ReadCloser
-	Conn net.Conn
+	conn net.Conn
 }
 
 // NewConnClosingReader returns a ConnClosingReader wrapping rc and conn.
 func NewConnClosingReader(rc io.ReadCloser, conn net.Conn) *ConnClosingReader {
-	return &ConnClosingReader{ReadCloser: rc, Conn: conn}
+	return &ConnClosingReader{ReadCloser: rc, conn: conn}
 }
 
 // Close closes both the wrapped ReadCloser and the underlying net.Conn.
 func (r *ConnClosingReader) Close() error {
 	err := r.ReadCloser.Close()
-	connErr := r.Conn.Close()
+	connErr := r.conn.Close()
 	if err != nil {
 		return err
 	}

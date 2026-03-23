@@ -758,10 +758,7 @@ func (m *mockConn) Close() error {
 }
 
 func TestConnClosingReader_BothSucceed(t *testing.T) {
-	r := &ConnClosingReader{
-		ReadCloser: &mockReadCloser{},
-		Conn:       &mockConn{},
-	}
+	r := NewConnClosingReader(&mockReadCloser{}, &mockConn{})
 	err := r.Close()
 	t.Logf("Close error: %v", err)
 	if err != nil {
@@ -771,10 +768,7 @@ func TestConnClosingReader_BothSucceed(t *testing.T) {
 
 func TestConnClosingReader_ReaderFails(t *testing.T) {
 	readerErr := errors.New("reader close failed")
-	r := &ConnClosingReader{
-		ReadCloser: &mockReadCloser{closeErr: readerErr},
-		Conn:       &mockConn{},
-	}
+	r := NewConnClosingReader(&mockReadCloser{closeErr: readerErr}, &mockConn{})
 	err := r.Close()
 	t.Logf("Close error: %v", err)
 	if !errors.Is(err, readerErr) {
@@ -784,10 +778,7 @@ func TestConnClosingReader_ReaderFails(t *testing.T) {
 
 func TestConnClosingReader_ConnFails(t *testing.T) {
 	connErr := errors.New("conn close failed")
-	r := &ConnClosingReader{
-		ReadCloser: &mockReadCloser{},
-		Conn:       &mockConn{closeErr: connErr},
-	}
+	r := NewConnClosingReader(&mockReadCloser{}, &mockConn{closeErr: connErr})
 	err := r.Close()
 	t.Logf("Close error: %v", err)
 	if !errors.Is(err, connErr) {
@@ -798,10 +789,7 @@ func TestConnClosingReader_ConnFails(t *testing.T) {
 func TestConnClosingReader_BothFail(t *testing.T) {
 	readerErr := errors.New("reader close failed")
 	connErr := errors.New("conn close failed")
-	r := &ConnClosingReader{
-		ReadCloser: &mockReadCloser{closeErr: readerErr},
-		Conn:       &mockConn{closeErr: connErr},
-	}
+	r := NewConnClosingReader(&mockReadCloser{closeErr: readerErr}, &mockConn{closeErr: connErr})
 	err := r.Close()
 	t.Logf("Close error: %v", err)
 	// ReadCloser error takes priority.

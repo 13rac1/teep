@@ -370,6 +370,12 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	if raw.GatewayIntelQuote != "" {
 		slog.Debug("gateway TDX verification starting", "quote_len", len(raw.GatewayIntelQuote))
 		gwTDX := attestation.VerifyTDXQuote(ctx, raw.GatewayIntelQuote, nonce, offline)
+		if gwTDX.ParseErr == nil {
+			detail, rdErr := nearcloud.GatewayReportDataVerifier{}.Verify(
+				gwTDX.ReportData, raw.GatewayTLSFingerprint, nonce)
+			gwTDX.ReportDataBindingErr = rdErr
+			gwTDX.ReportDataBindingDetail = detail
+		}
 		reportInput.GatewayTDX = gwTDX
 		reportInput.GatewayNonceHex = raw.GatewayNonceHex
 		reportInput.GatewayNonce = nonce
