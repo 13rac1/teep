@@ -4,6 +4,10 @@
 
 Audit verification enforcement boundary and failure semantics, plus all cache layers that influence attestation and forwarding decisions.
 
+This section is required to prevent regressions where checks continue to be reported but are no longer security-enforcing.
+
+The necessary verification information MAY be cached locally so that Sigstore and Rekor do not need to be queried on every single connection attempt. However, the attestation report MUST be verified against either cached or live data, for EACH new TLS connection to the API provider.
+
 ## Primary Files
 
 - [`internal/attestation/report.go`](../../../internal/attestation/report.go)
@@ -43,10 +47,12 @@ Audit each cache layer and produce this table in your output:
 
 | Cache | Keys | TTL | Bounds/Eviction | Stale Behavior | Security-Critical Notes |
 |------|------|-----|-----------------|----------------|-------------------------|
-| Attestation report cache | provider, model | (actual code value) | ... | ... | Signing key freshness expectation |
-| Negative cache | provider, model | (actual code value) | ... | ... | Upstream hammering prevention |
-| SPKI pin cache | domain, spkiHash | (actual code value) | ... | ... | Must only populate after successful attestation |
-| Endpoint mapping cache | model→domain | (actual code value) | ... | ... | Stale mapping must not bypass attestation |
+| Attestation report cache | provider, model | ~minutes | ... | ... | Signing key MUST NOT be cached; must be fetched fresh for each E2EE session |
+| Negative cache | provider, model | ~seconds | ... | ... | Must prevent upstream hammering; must expire so recovery is possible |
+| SPKI pin cache | domain, spkiHash | ~hour | ... | ... | Must be populated only after successful attestation; eviction must force re-attestation |
+| Endpoint mapping cache | model→domain | ~minutes | ... | ... | Stale mapping must not bypass attestation |
+
+The audit MUST verify that cache eviction under memory pressure does not silently allow unattested connections. A cache miss MUST trigger re-attestation, never a pass-through.
 
 Verify and report:
 - cache miss semantics (must trigger re-attestation, never pass-through),
@@ -63,7 +69,11 @@ Verify and report:
 
 ### Offline Mode Safety
 
-If offline mode exists, produce an offline matrix with:
+If the system supports an offline mode, the audit MUST enumerate exactly which checks are skipped (for example, Intel PCS collateral, NRAS, Sigstore, Rekor, Proof-of-Cloud) and which checks still execute locally (for example, quote parsing/signature checks, report-data binding, event-log replay).
+
+For the pinned connection path, the audit MUST verify whether offline mode is honored (the PinnedHandler receives an `offline` flag). The offline flag must suppress only network-dependent checks — all local cryptographic verification must remain active.
+
+Produce an offline matrix with:
 - skipped network-dependent checks,
 - locally-executed checks that remain active,
 - pinned-handler offline flag propagation behavior,

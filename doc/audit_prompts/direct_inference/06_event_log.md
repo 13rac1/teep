@@ -4,6 +4,8 @@
 
 Audit event-log parsing and replay integrity checks that recompute RTMR values and compare them with quoted RTMR evidence.
 
+If event logs are present in provider attestation payloads, the code MUST replay them and verify recomputed RTMR values against quote RTMR fields.
+
 ## Primary Files
 
 - [`internal/attestation/eventlog.go`](../../../internal/attestation/eventlog.go)
@@ -23,10 +25,12 @@ Also verify pre-replay behavior:
 - whether malformed entries are silently dropped before replay,
 - whether parser behavior can mask integrity failures.
 
-You MUST define the check’s security boundary:
+The audit MUST separately verify pre-replay parsing behavior for event log entries, and flag any path that silently drops malformed entries before replay.
+
+You MUST define the check's security boundary:
 - event-log replay validates internal consistency of event-log-derived RTMR values with quoted RTMR values,
-- replay alone does not prove software baseline approval,
-- absence of MRTD/MRSEAM/RTMR baseline policy must be called out as a distinct residual risk.
+- replay alone does not prove software baseline approval — it does not by itself prove that RTMR values match an approved software baseline,
+- if no baseline policy is enforced for MRTD/RTMR/MRSEAM-class measurements, that gap MUST be reported explicitly as a distinct residual risk.
 
 ## Section Deliverable
 

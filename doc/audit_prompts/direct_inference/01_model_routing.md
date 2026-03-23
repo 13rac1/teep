@@ -4,6 +4,10 @@
 
 Audit model-to-domain discovery and routing safety for direct inference providers.
 
+In this direct inference model, the attestation covers a single model server. There is a model mapping routing API that the teep proxy consults to determine the destination host for a particular model identity string.
+
+Certificate Transparency MUST be consulted for the TLS certificate of this model router endpoint. This CT log report SHOULD be cached.
+
 ## Primary Files
 
 - [`internal/provider/nearai/endpoints.go`](../../../internal/provider/nearai/endpoints.go)
@@ -30,6 +34,8 @@ Verify and report:
 - CT check behavior for routing endpoint certificate,
 - CT cache keying and TTL behavior,
 - maximum response size limits for discovery payload.
+
+> NOTE: Even with all of these checks, ultimately nothing strongly authenticates this list of hostnames as belonging to the inference provider. This is a gap that can only be mitigated by ensuring that the docker images are those expected to be used by the inference provider (see CVM Image Component Verification in Section 08).
 
 ## Section Deliverable
 

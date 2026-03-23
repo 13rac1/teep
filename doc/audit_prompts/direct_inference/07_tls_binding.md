@@ -4,6 +4,10 @@
 
 Audit cryptographic channel binding (`REPORTDATA`), attestation-bound TLS pinning, pin-cache safety, and per-request connection lifecycle integrity.
 
+The attestation report must bind channel identity and key material in a way that prevents key-substitution attacks. For each provider, the audit MUST document the exact REPORTDATA scheme and verify it byte-for-byte.
+
+TLS connections to the model server MUST be closed after each request-response cycle (`Connection: close`) to ensure each new request triggers a fresh attestation or SPKI cache check. If the implementation reuses connections, the audit MUST verify that re-attestation is correctly triggered on every new request, not just on new connections.
+
 ## Primary Files
 
 - [`internal/provider/nearai/reportdata.go`](../../../internal/provider/nearai/reportdata.go)
@@ -49,13 +53,14 @@ Verify and report:
 ### Pin Cache & Connection Lifetime
 
 Verify and report:
-- pin-cache keys, TTL, max entries, and eviction strategy,
+- pin-cache keys, TTL, max entries, and eviction strategy (LRU, random, or oldest) and whether it is bounded,
 - cache miss behavior (must re-attest, never pass-through),
 - singleflight/concurrency collapse behavior with post-win double-check,
-- whether singleflight key includes both domain and SPKI,
+- whether singleflight key includes both domain and SPKI (so a certificate rotation triggers a new attestation rather than coalescing with the old one),
 - connection reuse policy (`Connection: close` expectations),
-- read/write timeout settings,
-- protection against reuse of half-closed/errored connections.
+- that the response body wrapper closes the underlying TCP connection when the body is consumed or closed,
+- read/write timeout settings (preventing indefinite hangs),
+- that a half-closed or errored connection cannot be mistakenly reused for a subsequent request.
 
 ## Section Deliverable
 

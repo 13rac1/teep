@@ -4,6 +4,8 @@
 
 Audit Proof-of-Cloud (PoC) identity verification flow and its enforcement semantics.
 
+Ensure that the code verifies that the machine ID from the attestation is covered in proof-of-cloud.
+
 ## Primary Files
 
 - [`internal/attestation/poc.go`](../../../internal/attestation/poc.go)
@@ -15,12 +17,14 @@ Audit Proof-of-Cloud (PoC) identity verification flow and its enforcement semant
 ## Required Checks
 
 Verify and report:
-- machine identity derivation inputs (for example PPID extraction from PCK-related material),
+- machine identity derivation inputs (for example, PPID from the PCK certificate),
 - remote PoC registry/trust-server verification flow,
-- quorum/threshold requirements if multiple trust servers are used,
+- quorum/threshold requirements if multiple trust servers are used (expected: 3-of-3 nonce collection, then chained partial signatures),
 - behavior when PoC backend is unavailable (hard fail vs advisory skip),
 - caching behavior for PoC results and re-query conditions,
 - whether PoC outcomes are wired into enforcement or reported informationally.
+
+Track future expansion items separately (for example, DCEA and TPM quote integration), but keep this audit focused on checks currently implemented and required for production security decisions.
 
 Also explicitly separate:
 - currently implemented PoC checks,

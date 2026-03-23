@@ -4,6 +4,12 @@
 
 Audit CVM image binding to TDX evidence and verification of compose-listed component images using Sigstore/Rekor trust signals.
 
+The attestation API will provide a full docker compose stanza, or equivalent podman/cloud config image description, as an auxiliary portion of the attestation API response. The code MUST calculate a hash of these contents, which MUST be verified to be properly attested in the TDX MRConfigID field.
+
+The docker compose file (or podman/cloud config) will list a series of sub-images. The teep code MUST provide an enforced allow-list of sub-images and/or sub-image repositories for a given inference provider that are allowed to appear in this docker-compose file. The hashes need not be included in the teep code, but each of these sub-images MUST be checked against Sigstore and Rekor (or equivalent systems) to establish that they are official builds and not custom variations.
+
+Additionally, the teep code MUST provide an expected Sigstore+Rekor Signer set (as OIDC or Fulcio certs). For Sigstore+Rekor checks, only this expected signer set is to be accepted.
+
 ## Primary Files
 
 - [`internal/attestation/compose.go`](../../../internal/attestation/compose.go)

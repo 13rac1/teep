@@ -4,6 +4,8 @@
 
 Audit NVIDIA evidence verification depth across both local evidence validation (EAT/SPDM) and remote NVIDIA NRAS validation.
 
+The audit MUST verify both layers when present: local NVIDIA evidence verification (EAT/SPDM) performs direct cryptographic validation of GPU attestation tokens, while remote NRAS verification delegates validation to NVIDIA's attestation service and verifies the resulting JWT.
+
 ## Primary Files
 
 - [`internal/attestation/nvidia_eat.go`](../../../internal/attestation/nvidia_eat.go)
@@ -22,20 +24,20 @@ Verify and report:
 - constant-time behavior for nonce comparison,
 - per-GPU certificate chain verification to pinned NVIDIA root CA,
 - root CA pinning method (embedded cert, fingerprint checks, trust-store bypass behavior),
-- SPDM message parse robustness (GET_MEASUREMENTS framing and variable-length field handling),
-- SPDM signature verification algorithm and parameter expectations,
-- signed-data construction (request + response-without-signature ordering),
+- SPDM message parse robustness (GET_MEASUREMENTS request/response structure, variable-length field handling),
+- SPDM signature verification algorithm (ECDSA P-384 with SHA-384 is expected),
+- signed-data construction (must include both request and response-minus-signature, in order),
 - all-or-nothing semantics when one GPU fails,
 - extraction/reporting of GPU count and architecture metadata.
 
 ### Remote NRAS Verification
 
 Verify and report:
-- JWT signature validation via JWKS (accepted algorithms must exclude HS256),
-- JWKS caching behavior, refresh policy, and unknown-kid fallback controls,
-- JWT claims checks (issuer, expiry, attestation result),
-- nonce forwarding and binding consistency,
-- NRAS endpoint configuration model (hardcoded vs configurable).
+- JWT signature verification using a cached JWKS endpoint (accepted algorithms: ES256, ES384, ES512 only — HS256 MUST be rejected),
+- JWKS caching behavior (auto-refresh, rate-limited unknown-kid fallback),
+- JWT claims validation (expiration, issuer, overall attestation result),
+- nonce forwarding to NRAS (is it the same client-generated nonce?),
+- the exact NRAS endpoint URL and whether it is configurable or hardcoded.
 
 ### Offline Behavior
 

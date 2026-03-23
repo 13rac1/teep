@@ -4,6 +4,8 @@
 
 Audit transport-layer request construction safety, bounded-resource handling, and sensitive-data hygiene in direct inference proxy paths.
 
+For direct inference providers that construct raw HTTP requests on the underlying TLS connection (bypassing Go's `http.Client` connection pooling), these checks are particularly important as the proxy takes responsibility for correct HTTP framing.
+
 ## Primary Files
 
 - [`internal/proxy/proxy.go`](../../../internal/proxy/proxy.go)
@@ -24,20 +26,20 @@ Verify and report:
 ### Response Size & Resource Bounds
 
 Verify and report explicit limits on all untrusted external data reads:
-- attestation responses,
-- endpoint discovery responses,
-- SSE streaming buffers (scanner bounds, pooling behavior),
+- attestation responses (recommended: ≤1 MiB),
+- endpoint discovery responses (recommended: ≤1 MiB),
+- SSE streaming buffers (bounded scanner buffer sizes with pooling),
 - Sigstore/Rekor/NRAS/PCS or other remote verification payloads.
 
-Flag any unbounded read path as a potential DoS vector.
+Unbounded reads from untrusted sources represent a denial-of-service vector and MUST be flagged.
 
 ### Sensitive Data Handling
 
 Verify and report:
-- API key redaction behavior in logs,
-- config-file permission check semantics (warning-only vs hard fail),
-- ephemeral key-material zeroing behavior and language/runtime caveats,
-- nonce reuse prevention.
+- that API keys are not logged in plaintext (redaction to first-N characters),
+- that the config file permission check behavior is clearly classified as warning-only or hard-fail,
+- that ephemeral cryptographic key material (E2EE session keys) is zeroed after use, with acknowledgment of language-level limitations (GC may copy),
+- that attestation nonces are not reused across requests.
 
 ## Section Deliverable
 
