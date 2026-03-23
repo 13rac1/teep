@@ -42,7 +42,7 @@ func (blockedPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRe
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       body,
 		Report: &attestation.VerificationReport{
-			Provider: "nearai",
+			Provider: "neardirect",
 			Model:    "test-model",
 			Factors: []attestation.FactorResult{
 				{Name: "nonce_match", Status: attestation.Fail, Enforced: true, Detail: "mismatch"},
@@ -851,8 +851,8 @@ func TestSinglePinnedProvider_AllowsDynamicModelName(t *testing.T) {
 	cfg := &config.Config{
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
-			"nearai": {
-				Name:    "nearai",
+			"neardirect": {
+				Name:    "neardirect",
 				BaseURL: "https://completions.near.ai",
 				APIKey:  "key",
 				E2EE:    false,
@@ -866,9 +866,9 @@ func TestSinglePinnedProvider_AllowsDynamicModelName(t *testing.T) {
 		t.Fatalf("proxy.New: %v", err)
 	}
 
-	prov := srv.ProviderByName("nearai")
+	prov := srv.ProviderByName("neardirect")
 	if prov == nil {
-		t.Fatal("nearai provider missing")
+		t.Fatal("neardirect provider missing")
 	}
 
 	// Avoid network dependency: stub pinned chat handler.
@@ -893,8 +893,8 @@ func TestPinnedProvider_BlockedReportReturns502(t *testing.T) {
 	cfg := &config.Config{
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{
-			"nearai": {
-				Name:    "nearai",
+			"neardirect": {
+				Name:    "neardirect",
 				BaseURL: "https://completions.near.ai",
 				APIKey:  "key",
 				E2EE:    false,
@@ -908,9 +908,9 @@ func TestPinnedProvider_BlockedReportReturns502(t *testing.T) {
 		t.Fatalf("proxy.New: %v", err)
 	}
 
-	prov := srv.ProviderByName("nearai")
+	prov := srv.ProviderByName("neardirect")
 	if prov == nil {
-		t.Fatal("nearai provider missing")
+		t.Fatal("neardirect provider missing")
 	}
 	prov.PinnedHandler = blockedPinnedHandler{}
 

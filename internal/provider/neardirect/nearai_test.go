@@ -1,4 +1,4 @@
-package nearai_test
+package neardirect_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
-	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
 // validFlatResponseJSON simulates the flat (non-array) response form.
@@ -55,7 +55,7 @@ func TestAttester_FetchAttestation_ArrayResponse_ExactMatch(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	nonce := attestation.NewNonce()
 
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-405b", nonce)
@@ -88,7 +88,7 @@ func TestAttester_FetchAttestation_ArrayResponse_NoMatch(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	_, err := a.FetchAttestation(context.Background(), "unknown-model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for model not in attestation list")
@@ -100,7 +100,7 @@ func TestAttester_FetchAttestation_FlatResponse(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, validFlatResponseJSON)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -131,7 +131,7 @@ func TestAttester_FetchAttestation_SetsAuthHeaderAndQueryParams(t *testing.T) {
 	defer srv.Close()
 
 	nonce := attestation.NewNonce()
-	a := nearai.NewAttester(srv.URL, "nearai-secret")
+	a := neardirect.NewAttester(srv.URL, "nearai-secret")
 	_, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", nonce)
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -164,7 +164,7 @@ func TestAttester_FetchAttestation_HTTP500(t *testing.T) {
 	srv := makeServer(t, http.StatusInternalServerError, `{"error":"server error"}`)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	_, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for HTTP 500, got nil")
@@ -175,7 +175,7 @@ func TestAttester_FetchAttestation_InvalidJSON(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, `not json`)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	_, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
@@ -188,7 +188,7 @@ func TestAttester_FetchAttestation_ContextCancelled(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -214,7 +214,7 @@ func TestAttester_FetchAttestation_TEEProviderIsSet(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	raw, err := a.FetchAttestation(context.Background(), "m", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -243,7 +243,7 @@ func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -278,7 +278,7 @@ func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -313,7 +313,7 @@ func TestAttester_FetchAttestation_AllAttestations_UsesNewFieldNames(t *testing.
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	raw, err := a.FetchAttestation(context.Background(), "openai/gpt-oss-120b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -345,7 +345,7 @@ func TestAttester_FetchAttestation_TooManyAttestations(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	_, err := a.FetchAttestation(context.Background(), "m-0", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for too many attestation entries")
@@ -365,7 +365,7 @@ func TestAttester_FetchAttestation_MalformedEventLogEntry(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	_, err := a.FetchAttestation(context.Background(), "test-model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for malformed event_log entry")
@@ -390,7 +390,7 @@ func TestAttester_FetchAttestation_NormalizesUnprefixedKey(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
-	a := nearai.NewAttester(srv.URL, "key")
+	a := neardirect.NewAttester(srv.URL, "key")
 	raw, err := a.FetchAttestation(context.Background(), "test-model", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -424,7 +424,7 @@ func TestExtractAppCompose(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := nearai.ExtractAppCompose(tc.tcbInfo)
+			got := neardirect.ExtractAppCompose(tc.tcbInfo)
 			if got != tc.want {
 				t.Errorf("ExtractAppCompose(%s) = %q, want %q", tc.tcbInfo, got, tc.want)
 			}
@@ -435,7 +435,7 @@ func TestExtractAppCompose(t *testing.T) {
 // --- Preparer tests ---
 
 func TestPreparer_PrepareRequest_SetsAuthHeader(t *testing.T) {
-	p := nearai.NewPreparer("nearai-key")
+	p := neardirect.NewPreparer("nearai-key")
 	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/v1/chat/completions", http.NoBody)
 
 	session, err := attestation.NewSession()
@@ -454,7 +454,7 @@ func TestPreparer_PrepareRequest_SetsAuthHeader(t *testing.T) {
 
 func TestPreparer_PrepareRequest_NoSessionRequired(t *testing.T) {
 	// NEAR AI's PrepareRequest should not error when session has no model key.
-	p := nearai.NewPreparer("key")
+	p := neardirect.NewPreparer("key")
 	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/", http.NoBody)
 	session, err := attestation.NewSession()
 	if err != nil {

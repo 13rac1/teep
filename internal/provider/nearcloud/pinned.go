@@ -16,14 +16,14 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
-	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct"
 	"golang.org/x/sync/singleflight"
 )
 
 const (
 	dialTimeout = 30 * time.Second
-	readTimeout = 60 * time.Second // longer than nearai — two attestation requests
+	readTimeout = 60 * time.Second // longer than neardirect — two attestation requests
 )
 
 // PinnedHandler implements provider.PinnedHandler for the NEAR AI cloud
@@ -37,7 +37,7 @@ type PinnedHandler struct {
 	enforced   []string
 	policy     attestation.MeasurementPolicy
 	rdVerifier provider.ReportDataVerifier
-	ctChecker  *nearai.CTChecker
+	ctChecker  *neardirect.CTChecker
 	dialFn     func(ctx context.Context, domain string) (*tls.Conn, error)
 
 	verifySF singleflight.Group
@@ -52,7 +52,7 @@ func NewPinnedHandler(
 	policy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
 ) *PinnedHandler {
-	checker := nearai.NewCTChecker()
+	checker := neardirect.NewCTChecker()
 	checker.SetEnabled(!offline)
 
 	return &PinnedHandler{
@@ -72,7 +72,7 @@ func (h *PinnedHandler) SetDialer(fn func(ctx context.Context, domain string) (*
 }
 
 // SetCTChecker overrides the certificate transparency checker. Intended for tests.
-func (h *PinnedHandler) SetCTChecker(checker *nearai.CTChecker) {
+func (h *PinnedHandler) SetCTChecker(checker *neardirect.CTChecker) {
 	h.ctChecker = checker
 }
 
@@ -158,7 +158,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	headers.Set("Authorization", "Bearer "+h.apiKey)
 	headers.Set("Connection", "close")
 
-	if err := nearai.WriteHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
+	if err := neardirect.WriteHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
 		return nil, fmt.Errorf("write chat request: %w", err)
 	}
 
@@ -167,7 +167,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		return nil, fmt.Errorf("read chat response: %w", err)
 	}
 
-	wrappedBody := nearai.NewConnClosingReader(resp.Body, conn)
+	wrappedBody := neardirect.NewConnClosingReader(resp.Body, conn)
 
 	return &provider.PinnedResponse{
 		StatusCode: resp.StatusCode,
@@ -224,7 +224,7 @@ func (h *PinnedHandler) attestOnConn(
 	attestHeaders.Set("Host", domain)
 	attestHeaders.Set("Authorization", "Bearer "+h.apiKey)
 	attestHeaders.Set("Connection", "keep-alive")
-	if err := nearai.WriteHTTPRequest(bw, http.MethodGet, path, attestHeaders, nil); err != nil {
+	if err := neardirect.WriteHTTPRequest(bw, http.MethodGet, path, attestHeaders, nil); err != nil {
 		return nil, fmt.Errorf("write attestation request: %w", err)
 	}
 
@@ -346,7 +346,7 @@ func (h *PinnedHandler) attestOnConn(
 	if gwRaw.TLSCertFingerprint == "" {
 		return nil, errors.New("gateway attestation response missing tls_cert_fingerprint")
 	}
-	match, matchErr := nearai.ConstantTimeHexEqual(liveSPKI, gwRaw.TLSCertFingerprint)
+	match, matchErr := neardirect.ConstantTimeHexEqual(liveSPKI, gwRaw.TLSCertFingerprint)
 	if matchErr != nil {
 		return nil, fmt.Errorf("gateway SPKI comparison: %w", matchErr)
 	}

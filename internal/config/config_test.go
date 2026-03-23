@@ -69,8 +69,8 @@ api_key = "test-venice-key"
 base_url = "https://api.venice.ai"
 e2ee = true
 
-[providers.nearai]
-api_key = "test-nearai-key"
+[providers.neardirect]
+api_key = "test-neardirect-key"
 base_url = "https://api.near.ai"
 e2ee = false
 `
@@ -99,15 +99,15 @@ e2ee = false
 		t.Error("venice E2EE: got false, want true")
 	}
 
-	nearai, ok := cfg.Providers["nearai"]
+	neardirect, ok := cfg.Providers["neardirect"]
 	if !ok {
-		t.Fatal("nearai provider missing from config")
+		t.Fatal("neardirect provider missing from config")
 	}
-	if nearai.APIKey != "test-nearai-key" {
-		t.Errorf("nearai APIKey: got %q, want %q", nearai.APIKey, "test-nearai-key")
+	if neardirect.APIKey != "test-neardirect-key" {
+		t.Errorf("neardirect APIKey: got %q, want %q", neardirect.APIKey, "test-neardirect-key")
 	}
-	if nearai.E2EE {
-		t.Error("nearai E2EE: got true, want false")
+	if neardirect.E2EE {
+		t.Error("neardirect E2EE: got true, want false")
 	}
 }
 
@@ -361,25 +361,25 @@ func TestEnvVeniceAPIKey(t *testing.T) {
 	}
 }
 
-func TestEnvNearAIAPIKey(t *testing.T) {
+func TestEnvNearDirectAPIKey(t *testing.T) {
 	unsetenv(t, "TEEP_CONFIG")
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
-	setenv(t, "NEARAI_API_KEY", "direct-nearai-key")
+	setenv(t, "NEARAI_API_KEY", "direct-neardirect-key")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	nearai, ok := cfg.Providers["nearai"]
+	neardirect, ok := cfg.Providers["neardirect"]
 	if !ok {
-		t.Fatal("nearai provider not created from NEARAI_API_KEY env var")
+		t.Fatal("neardirect provider not created from NEARAI_API_KEY env var")
 	}
-	if nearai.APIKey != "direct-nearai-key" {
-		t.Errorf("nearai APIKey: got %q, want %q", nearai.APIKey, "direct-nearai-key")
+	if neardirect.APIKey != "direct-neardirect-key" {
+		t.Errorf("neardirect APIKey: got %q, want %q", neardirect.APIKey, "direct-neardirect-key")
 	}
-	if nearai.BaseURL != "https://completions.near.ai" {
-		t.Errorf("nearai BaseURL default: got %q, want %q", nearai.BaseURL, "https://completions.near.ai")
+	if neardirect.BaseURL != "https://completions.near.ai" {
+		t.Errorf("neardirect BaseURL default: got %q, want %q", neardirect.BaseURL, "https://completions.near.ai")
 	}
 }
 

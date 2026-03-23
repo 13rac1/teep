@@ -1,11 +1,11 @@
-// capture_nearai fetches a NEAR AI attestation response and all related
+// capture_neardirect fetches a NEAR AI attestation response and all related
 // external service responses needed for the fixture-based integration test.
 //
-// It saves everything to internal/integration/testdata/nearai_YYYYMMDD_HHMMSS/.
+// It saves everything to internal/integration/testdata/neardirect_YYYYMMDD_HHMMSS/.
 //
 // Usage:
 //
-//	NEARAI_API_KEY=... go run ./cmd/capture_nearai [--model MODEL]
+//	NEARAI_API_KEY=... go run ./cmd/capture_neardirect [--model MODEL]
 //
 // Requires NEARAI_API_KEY. Run manually when fixtures need refreshing.
 package main
@@ -59,7 +59,7 @@ func main() {
 	}
 
 	captureTime := time.Now().UTC()
-	saveDir := filepath.Join(testdataDir, captureTime.Format("nearai_20060102_150405"))
+	saveDir := filepath.Join(testdataDir, captureTime.Format("neardirect_20060102_150405"))
 	if err := os.MkdirAll(saveDir, 0o750); err != nil {
 		log.Fatalf("mkdir %s: %v", saveDir, err)
 	}
@@ -87,8 +87,8 @@ func main() {
 	// 2. Fetch NEAR AI attestation from the resolved backend.
 	fmt.Println("--- fetching NEAR AI attestation ---")
 	attestBody := fetchAttestation(ctx, client, backendBaseURL, apiKey, nonceHex)
-	writeFile("nearai_attestation.json", attestBody)
-	writeFile("nearai_fixture_nonce.txt", []byte(nonceHex+"\n"))
+	writeFile("neardirect_attestation.json", attestBody)
+	writeFile("neardirect_fixture_nonce.txt", []byte(nonceHex+"\n"))
 	fmt.Printf("attestation response: %d bytes\n", len(attestBody))
 
 	// 3. Extract intel_quote and parse FMSPC.
@@ -113,7 +113,7 @@ func main() {
 		nrasReq.Header.Set("Content-Type", "application/json")
 		nrasReq.Header.Set("Accept", "application/json")
 		nrasBody := doRequest(client, nrasReq).body
-		writeFile("nearai_nras_response.json", nrasBody)
+		writeFile("neardirect_nras_response.json", nrasBody)
 		fmt.Printf("NRAS response: %d bytes\n", len(nrasBody))
 	} else {
 		fmt.Println("skipping NRAS: nvidia_payload is not EAT JSON")
@@ -122,7 +122,7 @@ func main() {
 	// 6. Fetch NVIDIA JWKS.
 	fmt.Println("--- fetching NVIDIA JWKS ---")
 	jwksBody := doGet(ctx, client, jwksURL)
-	writeFile("nearai_nras_jwks.json", jwksBody)
+	writeFile("neardirect_nras_jwks.json", jwksBody)
 	fmt.Printf("JWKS response: %d bytes\n", len(jwksBody))
 
 	// 7. Fetch PoC responses.
@@ -132,7 +132,7 @@ func main() {
 	fmt.Println("--- done ---")
 	fmt.Printf("Fixtures saved to %s/\n", saveDir)
 	fmt.Println("Run integration test with:")
-	fmt.Println("  go test -v -race -run TestIntegration_NearAI_Fixture ./internal/integration/")
+	fmt.Println("  go test -v -race -run TestIntegration_NearDirect_Fixture ./internal/integration/")
 	fmt.Println("(auto-discovers latest fixture dir; or override with NEARAI_FIXTURE_DIR=<absolute-path>)")
 }
 
@@ -253,7 +253,7 @@ func fetchAttestation(ctx context.Context, client *http.Client, baseURL, apiKey,
 	return doRequest(client, req).body
 }
 
-// attestationResponse mirrors nearai.attestationResponse for fixture parsing.
+// attestationResponse mirrors neardirect.attestationResponse for fixture parsing.
 type attestationResponse struct {
 	ModelAttestations []modelAttestation `json:"model_attestations"`
 	AllAttestations   []modelAttestation `json:"all_attestations"`
@@ -338,28 +338,28 @@ func fetchAndSavePCS(ctx context.Context, client *http.Client, fmspc, ca string)
 		{
 			name:       "TCB Info",
 			url:        pcs.TcbInfoURL(fmspc),
-			bodyFile:   "nearai_pcs_tcbinfo.json",
-			headerFile: "nearai_pcs_tcbinfo_headers.json",
+			bodyFile:   "neardirect_pcs_tcbinfo.json",
+			headerFile: "neardirect_pcs_tcbinfo_headers.json",
 			headerKey:  pcs.TcbInfoIssuerChainPhrase,
 		},
 		{
 			name:       "QE Identity",
 			url:        pcs.QeIdentityURL(),
-			bodyFile:   "nearai_pcs_qeidentity.json",
-			headerFile: "nearai_pcs_qeidentity_headers.json",
+			bodyFile:   "neardirect_pcs_qeidentity.json",
+			headerFile: "neardirect_pcs_qeidentity_headers.json",
 			headerKey:  pcs.SgxQeIdentityIssuerChainPhrase,
 		},
 		{
 			name:       "PCK CRL",
 			url:        pcs.PckCrlURL(ca),
-			bodyFile:   "nearai_pcs_pckcrl.der",
-			headerFile: "nearai_pcs_pckcrl_headers.json",
+			bodyFile:   "neardirect_pcs_pckcrl.der",
+			headerFile: "neardirect_pcs_pckcrl_headers.json",
 			headerKey:  pcs.SgxPckCrlIssuerChainPhrase,
 		},
 		{
 			name:     "Root CRL",
 			url:      "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der",
-			bodyFile: "nearai_pcs_rootcrl.der",
+			bodyFile: "neardirect_pcs_rootcrl.der",
 		},
 	}
 
@@ -410,17 +410,17 @@ func fetchPoC(ctx context.Context, client *http.Client, hexQuote string) {
 		u := strings.TrimRight(peer, "/") + "/get_jwt"
 		res := doPostJSON(ctx, client, u, map[string]string{"quote": hexQuote})
 
-		writeFile(fmt.Sprintf("nearai_poc_stage1_%d.json", i), res.body)
+		writeFile(fmt.Sprintf("neardirect_poc_stage1_%d.json", i), res.body)
 		fmt.Printf("  stage1 peer %d: %d bytes (HTTP %d)\n", i, len(res.body), res.statusCode)
 
 		if res.statusCode == http.StatusForbidden {
 			fmt.Println("  PoC peers returned 403 — machine not whitelisted, skipping stage 2")
 			// Write remaining stage1 + all stage2 files so the fixture directory is complete.
 			for j := i + 1; j < len(peers); j++ {
-				writeFile(fmt.Sprintf("nearai_poc_stage1_%d.json", j), res.body)
+				writeFile(fmt.Sprintf("neardirect_poc_stage1_%d.json", j), res.body)
 			}
 			for j := range peers {
-				writeFile(fmt.Sprintf("nearai_poc_stage2_%d.json", j), []byte(`{"error":"not whitelisted"}`))
+				writeFile(fmt.Sprintf("neardirect_poc_stage2_%d.json", j), []byte(`{"error":"not whitelisted"}`))
 			}
 			return
 		}
@@ -459,7 +459,7 @@ func fetchPoC(ctx context.Context, client *http.Client, hexQuote string) {
 		u := strings.TrimRight(n.peerURL, "/") + "/get_jwt"
 		res := doPostJSON(ctx, client, u, reqBody)
 
-		writeFile(fmt.Sprintf("nearai_poc_stage2_%d.json", i), res.body)
+		writeFile(fmt.Sprintf("neardirect_poc_stage2_%d.json", i), res.body)
 		fmt.Printf("  stage2 peer %d: %d bytes\n", i, len(res.body))
 
 		if res.statusCode != http.StatusOK {

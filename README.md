@@ -37,7 +37,7 @@ export VENICE_API_KEY="your-key-here"
 
 # NEAR AI (TLS pinning)
 export NEARAI_API_KEY="your-key-here"
-./teep serve nearai
+./teep serve neardirect
 ```
 
 Point any OpenAI-compatible client at `http://127.0.0.1:8337`:
@@ -135,7 +135,7 @@ base_url = "https://api.venice.ai"
 api_key_env = "VENICE_API_KEY"
 e2ee = true
 
-[providers.nearai]
+[providers.neardirect]
 base_url = "https://completions.near.ai"
 api_key_env = "NEARAI_API_KEY"
 e2ee = false

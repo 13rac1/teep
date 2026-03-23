@@ -1,5 +1,5 @@
-// Package nearai implements the Attester and RequestPreparer interfaces for
-// NEAR AI's TEE attestation API.
+// Package neardirect implements the Attester and RequestPreparer interfaces for
+// NEAR AI's direct TEE attestation API.
 //
 // NEAR AI attestation endpoint:
 //
@@ -12,7 +12,7 @@
 //
 // NEAR AI does not use E2EE; it relies on TLS certificate pinning via
 // attestation. PrepareRequest injects the Authorization header only.
-package nearai
+package neardirect
 
 import (
 	"context"

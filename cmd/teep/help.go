@@ -475,7 +475,7 @@ Environment variables:
   TEEP_CONFIG        Path to TOML config file.
   TEEP_LISTEN_ADDR   Override listen address (default: 127.0.0.1:8337).
   VENICE_API_KEY     Venice AI API key.
-  NEARAI_API_KEY     NEAR AI API key (used by nearai and nearcloud providers).
+  NEARAI_API_KEY     NEAR AI API key (used by neardirect and nearcloud providers).
 `)
 }
 
@@ -487,7 +487,7 @@ Usage:
   teep serve PROVIDER [--offline] [--log-level LEVEL]
 
 Arguments:
-  PROVIDER   Provider name (venice, nearai, nearcloud).
+  PROVIDER   Provider name (venice, neardirect, nearcloud).
 
 The proxy intercepts OpenAI-compatible chat completion requests, performs TEE
 attestation verification against the upstream provider, and optionally enables
@@ -530,7 +530,7 @@ Usage:
   teep verify PROVIDER --model MODEL [flags]
 
 Arguments:
-  PROVIDER   Provider name (venice, nearai, nearcloud).
+  PROVIDER   Provider name (venice, neardirect, nearcloud).
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
 attestation for the given model, and runs all verification factors. The
@@ -553,7 +553,7 @@ Exit codes:
 
 Examples:
   teep verify venice --model e2ee-deepseek-r1-0528
-  teep verify nearai --model qwen2.5-72b-instruct --save-dir ./attestation-data
+  teep verify neardirect --model qwen2.5-72b-instruct --save-dir ./attestation-data
   teep verify nearcloud --model Qwen/Qwen3.5-122B-A10B --log-level debug
   teep verify venice --model e2ee-qwen3-32b --log-level debug
 

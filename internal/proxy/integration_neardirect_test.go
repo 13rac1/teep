@@ -13,9 +13,9 @@ import (
 	"github.com/13rac1/teep/internal/config"
 )
 
-// skipNearAIIntegration skips the test if NEARAI_API_KEY is unset or if
+// skipNearDirectIntegration skips the test if NEARAI_API_KEY is unset or if
 // running under go test -short.
-func skipNearAIIntegration(t *testing.T) {
+func skipNearDirectIntegration(t *testing.T) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -25,25 +25,25 @@ func skipNearAIIntegration(t *testing.T) {
 	}
 }
 
-// nearAIIntegrationModel returns the NEAR AI model to use, defaulting to a
+// nearDirectIntegrationModel returns the NEAR AI model to use, defaulting to a
 // known-good model if NEARAI_E2EE_MODEL is unset.
-func nearAIIntegrationModel() string {
+func nearDirectIntegrationModel() string {
 	if m := os.Getenv("NEARAI_E2EE_MODEL"); m != "" {
 		return m
 	}
 	return "Qwen/Qwen3.5-122B-A10B"
 }
 
-// integrationNearAIConfig returns a config pointing at the live NEAR AI API
+// integrationNearDirectConfig returns a config pointing at the live NEAR AI API
 // with Offline true (skips Intel PCS, NRAS, PoC network calls).
-func integrationNearAIConfig(t *testing.T) *config.Config {
+func integrationNearDirectConfig(t *testing.T) *config.Config {
 	t.Helper()
 	return &config.Config{
 		ListenAddr: "127.0.0.1:0",
 		Offline:    true,
 		Providers: map[string]*config.Provider{
-			"nearai": {
-				Name:    "nearai",
+			"neardirect": {
+				Name:    "neardirect",
 				BaseURL: "https://completions.near.ai",
 				APIKey:  os.Getenv("NEARAI_API_KEY"),
 				E2EE:    false,
@@ -53,14 +53,14 @@ func integrationNearAIConfig(t *testing.T) *config.Config {
 	}
 }
 
-func TestIntegration_NearAI(t *testing.T) {
-	skipNearAIIntegration(t)
+func TestIntegration_NearDirect(t *testing.T) {
+	skipNearDirectIntegration(t)
 
 	t.Run("NonStream", func(t *testing.T) {
-		proxySrv := newProxyServer(t, integrationNearAIConfig(t))
+		proxySrv := newProxyServer(t, integrationNearDirectConfig(t))
 		defer proxySrv.Close()
 
-		resp := postChatIntegration(t, proxySrv.URL, nearAIIntegrationModel(), false)
+		resp := postChatIntegration(t, proxySrv.URL, nearDirectIntegrationModel(), false)
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -80,10 +80,10 @@ func TestIntegration_NearAI(t *testing.T) {
 	})
 
 	t.Run("Streaming", func(t *testing.T) {
-		proxySrv := newProxyServer(t, integrationNearAIConfig(t))
+		proxySrv := newProxyServer(t, integrationNearDirectConfig(t))
 		defer proxySrv.Close()
 
-		resp := postChatIntegration(t, proxySrv.URL, nearAIIntegrationModel(), true)
+		resp := postChatIntegration(t, proxySrv.URL, nearDirectIntegrationModel(), true)
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -109,12 +109,12 @@ func TestIntegration_NearAI(t *testing.T) {
 
 	t.Run("AttestationReport", func(t *testing.T) {
 		// Online mode so the report includes Intel PCS, NRAS, and PoC results.
-		cfg := integrationNearAIConfig(t)
+		cfg := integrationNearDirectConfig(t)
 		cfg.Offline = false
 		proxySrv := newProxyServer(t, cfg)
 		defer proxySrv.Close()
 
-		model := nearAIIntegrationModel()
+		model := nearDirectIntegrationModel()
 
 		// A chat request populates the report cache. For NEAR AI (a pinned
 		// provider), PinnedHandler.HandlePinned returns a non-nil Report only
@@ -132,7 +132,7 @@ func TestIntegration_NearAI(t *testing.T) {
 		io.Copy(io.Discard, chatResp.Body) // drain so the proxy's relayStream finishes cleanly
 		chatResp.Body.Close()
 
-		reportURL := fmt.Sprintf("%s/v1/tee/report?provider=nearai&model=%s", proxySrv.URL, model)
+		reportURL := fmt.Sprintf("%s/v1/tee/report?provider=neardirect&model=%s", proxySrv.URL, model)
 		reportResp, err := integrationClient.Get(reportURL)
 		if err != nil {
 			t.Fatalf("GET report: %v", err)

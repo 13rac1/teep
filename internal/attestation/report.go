@@ -820,7 +820,7 @@ type supplyChainPolicy struct {
 
 func supplyChainPolicyForProvider(provider string) *supplyChainPolicy {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "nearai", "nearcloud":
+	case "neardirect", "nearcloud":
 		return &supplyChainPolicy{
 			// Exact image names currently attested in NearAI compose.
 			AllowedImageRepos: []string{

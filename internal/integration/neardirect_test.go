@@ -12,11 +12,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/13rac1/teep/internal/attestation"
-	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
-// nearaiFixtureDir returns the directory containing NEAR AI fixture files.
-func nearaiFixtureDir(t *testing.T) string {
+// neardirectFixtureDir returns the directory containing NEAR AI fixture files.
+func neardirectFixtureDir(t *testing.T) string {
 	t.Helper()
 	if dir := os.Getenv("NEARAI_FIXTURE_DIR"); dir != "" {
 		return dir
@@ -29,22 +29,22 @@ func nearaiFixtureDir(t *testing.T) string {
 
 	var latest string
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "nearai_") {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "neardirect_") {
 			if e.Name() > latest {
 				latest = e.Name()
 			}
 		}
 	}
 	if latest == "" {
-		t.Fatal("no nearai fixture directory found in testdata/; run: go run ./cmd/capture_nearai")
+		t.Fatal("no neardirect fixture directory found in testdata/; run: go run ./cmd/capture_neardirect")
 	}
 	return filepath.Join("testdata", latest)
 }
 
-func parseNearAICaptureTime(t *testing.T, fdir string) time.Time {
+func parseNearDirectCaptureTime(t *testing.T, fdir string) time.Time {
 	t.Helper()
 	base := filepath.Base(fdir)
-	ct, err := time.Parse("nearai_20060102_150405", base)
+	ct, err := time.Parse("neardirect_20060102_150405", base)
 	if err != nil {
 		t.Fatalf("parse capture time from %q: %v", base, err)
 	}
@@ -90,18 +90,18 @@ func extractModel(t *testing.T, body []byte) string {
 	return ""
 }
 
-func TestIntegration_NearAI_Fixture(t *testing.T) {
+func TestIntegration_NearDirect_Fixture(t *testing.T) {
 	ctx := context.Background()
 
 	// ---------------------------------------------------------------
 	// 1. Load fixtures
 	// ---------------------------------------------------------------
-	fdir := nearaiFixtureDir(t)
-	captureTime := parseNearAICaptureTime(t, fdir)
+	fdir := neardirectFixtureDir(t)
+	captureTime := parseNearDirectCaptureTime(t, fdir)
 	t.Logf("loading fixtures from %s (captured %s)", fdir, captureTime.Format(time.RFC3339))
 
-	attestBody := readFixtureFrom(t, fdir, "nearai_attestation.json")
-	nonceHex := strings.TrimSpace(string(readFixtureFrom(t, fdir, "nearai_fixture_nonce.txt")))
+	attestBody := readFixtureFrom(t, fdir, "neardirect_attestation.json")
+	nonceHex := strings.TrimSpace(string(readFixtureFrom(t, fdir, "neardirect_fixture_nonce.txt")))
 	nonce, err := attestation.ParseNonce(nonceHex)
 	if err != nil {
 		t.Fatalf("parse nonce: %v", err)
@@ -114,7 +114,7 @@ func TestIntegration_NearAI_Fixture(t *testing.T) {
 	// ---------------------------------------------------------------
 	// 2. Parse fixture into RawAttestation
 	// ---------------------------------------------------------------
-	raw, err := nearai.ParseAttestationResponse(attestBody, model)
+	raw, err := neardirect.ParseAttestationResponse(attestBody, model)
 	if err != nil {
 		t.Fatalf("parse NEAR AI fixture: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestIntegration_NearAI_Fixture(t *testing.T) {
 	// ---------------------------------------------------------------
 	// 3. Set up mocks for ALL external services
 	// ---------------------------------------------------------------
-	pocPeers, client := setupMocks(t, fdir, "nearai", raw)
+	pocPeers, client := setupMocks(t, fdir, "neardirect", raw)
 
 	// ---------------------------------------------------------------
 	// 4. Run the pipeline (mirrors runVerification)
@@ -149,7 +149,7 @@ func TestIntegration_NearAI_Fixture(t *testing.T) {
 
 	// 4b. REPORTDATA binding (NEAR AI scheme)
 	t.Log("--- REPORTDATA binding ---")
-	verifier := nearai.ReportDataVerifier{}
+	verifier := neardirect.ReportDataVerifier{}
 	detail, rdErr := verifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
 	tdxResult.ReportDataBindingErr = rdErr
 	tdxResult.ReportDataBindingDetail = detail
@@ -245,7 +245,7 @@ func TestIntegration_NearAI_Fixture(t *testing.T) {
 	// ---------------------------------------------------------------
 	t.Log("--- BuildReport ---")
 	report := attestation.BuildReport(&attestation.ReportInput{
-		Provider:   "nearai",
+		Provider:   "neardirect",
 		Model:      model,
 		Raw:        raw,
 		Nonce:      nonce,

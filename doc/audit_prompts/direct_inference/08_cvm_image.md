@@ -19,7 +19,7 @@ Additionally, the teep code MUST provide an expected Sigstore+Rekor Signer set (
 ## Secondary Context Files
 
 - [`internal/attestation/report.go`](../../../internal/attestation/report.go)
-- [`internal/provider/nearai/nearai.go`](../../../internal/provider/nearai/nearai.go)
+- [`internal/provider/neardirect/nearai.go`](../../../internal/provider/neardirect/nearai.go)
 - [`internal/attestation/compose_test.go`](../../../internal/attestation/compose_test.go)
 - [`internal/attestation/sigstore_test.go`](../../../internal/attestation/sigstore_test.go)
 - [`internal/attestation/rekor_test.go`](../../../internal/attestation/rekor_test.go)

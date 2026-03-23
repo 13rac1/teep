@@ -1,4 +1,4 @@
-package nearai_test
+package neardirect_test
 
 import (
 	"crypto/sha256"
@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
-	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
 // buildNEARReportData constructs a valid NEAR-scheme REPORTDATA from
@@ -35,7 +35,7 @@ func TestReportDataVerifier_CorrectBinding(t *testing.T) {
 		TLSFingerprint: hex.EncodeToString(fpBytes),
 	}
 
-	v := nearai.ReportDataVerifier{}
+	v := neardirect.ReportDataVerifier{}
 	detail, err := v.VerifyReportData(reportData, raw, nonce)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -61,7 +61,7 @@ func TestReportDataVerifier_0xPrefixedAddress(t *testing.T) {
 		TLSFingerprint: hex.EncodeToString(fpBytes),
 	}
 
-	v := nearai.ReportDataVerifier{}
+	v := neardirect.ReportDataVerifier{}
 	_, err := v.VerifyReportData(reportData, raw, nonce)
 	if err != nil {
 		t.Fatalf("unexpected error with 0x prefix: %v", err)
@@ -89,7 +89,7 @@ func TestReportDataVerifier_WrongAddress(t *testing.T) {
 		TLSFingerprint: hex.EncodeToString(fpBytes),
 	}
 
-	v := nearai.ReportDataVerifier{}
+	v := neardirect.ReportDataVerifier{}
 	_, err := v.VerifyReportData(reportData, raw, nonce)
 	if err == nil {
 		t.Fatal("expected error for wrong signing address, got nil")
@@ -121,7 +121,7 @@ func TestReportDataVerifier_WrongFingerprint(t *testing.T) {
 		TLSFingerprint: hex.EncodeToString(wrongFP), // different 32-byte fingerprint
 	}
 
-	v := nearai.ReportDataVerifier{}
+	v := neardirect.ReportDataVerifier{}
 	_, err := v.VerifyReportData(reportData, raw, nonce)
 	if err == nil {
 		t.Fatal("expected error for wrong TLS fingerprint, got nil")
@@ -150,7 +150,7 @@ func TestReportDataVerifier_WrongNonce(t *testing.T) {
 		TLSFingerprint: hex.EncodeToString(fpBytes),
 	}
 
-	v := nearai.ReportDataVerifier{}
+	v := neardirect.ReportDataVerifier{}
 	_, err := v.VerifyReportData(reportData, raw, nonce2) // different nonce
 	if err == nil {
 		t.Fatal("expected error for wrong nonce, got nil")
@@ -166,7 +166,7 @@ func TestReportDataVerifier_MissingSigningAddress(t *testing.T) {
 		TLSFingerprint: "aabb",
 	}
 
-	v := nearai.ReportDataVerifier{}
+	v := neardirect.ReportDataVerifier{}
 	_, err := v.VerifyReportData([64]byte{}, raw, attestation.Nonce{})
 	if err == nil {
 		t.Error("expected error for missing signing_address, got nil")
@@ -178,7 +178,7 @@ func TestReportDataVerifier_MissingTLSFingerprint(t *testing.T) {
 		SigningAddress: "aabb",
 	}
 
-	v := nearai.ReportDataVerifier{}
+	v := neardirect.ReportDataVerifier{}
 	_, err := v.VerifyReportData([64]byte{}, raw, attestation.Nonce{})
 	if err == nil {
 		t.Error("expected error for missing tls_cert_fingerprint, got nil")

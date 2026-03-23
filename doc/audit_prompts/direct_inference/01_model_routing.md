@@ -10,15 +10,15 @@ Certificate Transparency MUST be consulted for the TLS certificate of this model
 
 ## Primary Files
 
-- [`internal/provider/nearai/endpoints.go`](../../../internal/provider/nearai/endpoints.go)
-- [`internal/provider/nearai/pinned.go`](../../../internal/provider/nearai/pinned.go)
+- [`internal/provider/neardirect/endpoints.go`](../../../internal/provider/neardirect/endpoints.go)
+- [`internal/provider/neardirect/pinned.go`](../../../internal/provider/neardirect/pinned.go)
 - [`internal/tlsct/checker.go`](../../../internal/tlsct/checker.go)
 
 ## Secondary Context Files
 
-- [`internal/provider/nearai/nearai.go`](../../../internal/provider/nearai/nearai.go)
-- [`internal/provider/nearai/endpoints_test.go`](../../../internal/provider/nearai/endpoints_test.go)
-- [`internal/provider/nearai/pinned_test.go`](../../../internal/provider/nearai/pinned_test.go)
+- [`internal/provider/neardirect/nearai.go`](../../../internal/provider/neardirect/nearai.go)
+- [`internal/provider/neardirect/endpoints_test.go`](../../../internal/provider/neardirect/endpoints_test.go)
+- [`internal/provider/neardirect/pinned_test.go`](../../../internal/provider/neardirect/pinned_test.go)
 
 ## Required Checks
 

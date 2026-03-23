@@ -1,4 +1,4 @@
-package nearai
+package neardirect
 
 import (
 	"bufio"
@@ -366,7 +366,7 @@ func (h *PinnedHandler) attestOnConn(
 	}
 
 	report := attestation.BuildReport(&attestation.ReportInput{
-		Provider:     "nearai",
+		Provider:     "neardirect",
 		Model:        model,
 		Raw:          raw,
 		Nonce:        nonce,

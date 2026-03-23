@@ -65,7 +65,7 @@ type ReportDataVerifier interface {
 //
 // The zero value is not useful; construct with New or fill fields directly.
 type Provider struct {
-	// Name is the canonical provider identifier (e.g. "venice", "nearai").
+	// Name is the canonical provider identifier (e.g. "venice", "neardirect").
 	Name string
 
 	// BaseURL is the upstream API root (e.g. "https://api.venice.ai").

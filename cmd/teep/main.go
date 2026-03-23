@@ -27,8 +27,8 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
-	"github.com/13rac1/teep/internal/provider/nearai"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/proxy"
 )
@@ -142,9 +142,9 @@ func filterProviders(cfg *config.Config, providerName string) error {
 
 // providerEnvVars maps provider names to their API key environment variables.
 var providerEnvVars = map[string]string{
-	"venice":    "VENICE_API_KEY",
-	"nearai":    "NEARAI_API_KEY",
-	"nearcloud": "NEARAI_API_KEY",
+	"venice":     "VENICE_API_KEY",
+	"neardirect": "NEARAI_API_KEY",
+	"nearcloud":  "NEARAI_API_KEY",
 }
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
@@ -401,12 +401,12 @@ func newAttester(name string, cp *config.Provider, offline ...bool) provider.Att
 	switch name {
 	case "venice":
 		return venice.NewAttester(cp.BaseURL, cp.APIKey, off)
-	case "nearai":
-		return nearai.NewAttester(cp.BaseURL, cp.APIKey, off)
+	case "neardirect":
+		return neardirect.NewAttester(cp.BaseURL, cp.APIKey, off)
 	case "nearcloud":
 		return nearcloud.NewAttester(cp.APIKey, off)
 	default:
-		slog.Error("unknown provider", "provider", name, "supported", "venice, nearai, nearcloud")
+		slog.Error("unknown provider", "provider", name, "supported", "venice, neardirect, nearcloud")
 		os.Exit(1)
 		return nil // unreachable
 	}
@@ -416,8 +416,8 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 	switch name {
 	case "venice":
 		return venice.ReportDataVerifier{}
-	case "nearai", "nearcloud":
-		return nearai.ReportDataVerifier{}
+	case "neardirect", "nearcloud":
+		return neardirect.ReportDataVerifier{}
 	default:
 		return nil
 	}

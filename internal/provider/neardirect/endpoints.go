@@ -1,4 +1,4 @@
-package nearai
+package neardirect
 
 import (
 	"context"

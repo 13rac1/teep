@@ -12,7 +12,7 @@ The attestation information is provided by an API endpoint as a JSON object that
 
 ## Primary Files
 
-- [`internal/provider/nearai/nearai.go`](../../../internal/provider/nearai/nearai.go)
+- [`internal/provider/neardirect/nearai.go`](../../../internal/provider/neardirect/nearai.go)
 - [`internal/attestation/attestation.go`](../../../internal/attestation/attestation.go)
 - [`internal/jsonstrict/unmarshal.go`](../../../internal/jsonstrict/unmarshal.go)
 

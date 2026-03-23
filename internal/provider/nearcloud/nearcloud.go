@@ -1,5 +1,5 @@
 // Package nearcloud implements the Attester and PinnedHandler for the NEAR AI
-// cloud gateway (cloud-api.near.ai). Unlike the nearai package which connects
+// cloud gateway (cloud-api.near.ai). Unlike the neardirect package which connects
 // to model-specific subdomains, nearcloud routes all traffic through a single
 // TEE-attested API gateway that itself runs in an Intel TDX enclave.
 //
@@ -19,7 +19,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/jsonstrict"
-	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
 const (
@@ -31,7 +31,7 @@ const (
 )
 
 // gatewayResponse is the top-level JSON shape returned by the gateway
-// attestation endpoint. It wraps the standard nearai model_attestations
+// attestation endpoint. It wraps the standard neardirect model_attestations
 // with an additional gateway_attestation section.
 type gatewayResponse struct {
 	GatewayAttestation gatewayAttestation `json:"gateway_attestation"`
@@ -58,7 +58,7 @@ type GatewayRaw struct {
 }
 
 // ParseGatewayResponse extracts gateway attestation fields and delegates model
-// attestation parsing to nearai.ParseAttestationResponse. Returns both the
+// attestation parsing to neardirect.ParseAttestationResponse. Returns both the
 // gateway-specific data and the model RawAttestation.
 func ParseGatewayResponse(body []byte, model string) (*GatewayRaw, *attestation.RawAttestation, error) {
 	var gr gatewayResponse
@@ -95,8 +95,8 @@ func ParseGatewayResponse(body []byte, model string) (*GatewayRaw, *attestation.
 		gw.EventLog = entries
 	}
 
-	// Model attestation parsed by the shared nearai parser.
-	raw, err := nearai.ParseAttestationResponse(body, model)
+	// Model attestation parsed by the shared neardirect parser.
+	raw, err := neardirect.ParseAttestationResponse(body, model)
 	if err != nil {
 		return nil, nil, fmt.Errorf("nearcloud: parse model attestation: %w", err)
 	}

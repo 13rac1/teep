@@ -47,7 +47,7 @@ func readHeadersFixture(t *testing.T, dir, name string) map[string][]string {
 // ---------------------------------------------------------------------------
 
 // buildPCSGetter builds a fixture-backed trust.HTTPSGetter for Intel PCS collateral.
-// prefix is the fixture filename prefix ("nearai" or "venice").
+// prefix is the fixture filename prefix ("neardirect" or "venice").
 func buildPCSGetter(t *testing.T, fdir, prefix string, raw *attestation.RawAttestation) trust.HTTPSGetter {
 	t.Helper()
 
@@ -109,7 +109,7 @@ func pocFixtureIs403(data []byte) bool {
 }
 
 // buildPoCMockPeers creates httptest servers from PoC fixture files.
-// prefix is "nearai" or "venice".
+// prefix is "neardirect" or "venice".
 func buildPoCMockPeers(t *testing.T, fdir, prefix string) []string {
 	t.Helper()
 

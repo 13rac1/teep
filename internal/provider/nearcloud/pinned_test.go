@@ -14,7 +14,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
-	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
 func testTLSConfig() *tls.Config {
@@ -999,5 +999,5 @@ func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// Suppress unused import warning for nearai package.
-var _ = nearai.NewCTChecker
+// Suppress unused import warning for neardirect package.
+var _ = neardirect.NewCTChecker

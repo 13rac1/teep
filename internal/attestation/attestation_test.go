@@ -135,7 +135,7 @@ func TestCacheGetPutMiss(t *testing.T) {
 	}
 
 	// Different provider key must miss.
-	if _, ok := c.Get("nearai", "test-model"); ok {
+	if _, ok := c.Get("neardirect", "test-model"); ok {
 		t.Error("Get for different provider returned ok=true")
 	}
 }
@@ -216,7 +216,7 @@ func TestCacheLen(t *testing.T) {
 		t.Errorf("Len after 1 Put = %d, want 1", c.Len())
 	}
 
-	c.Put("nearai", "model-b", &VerificationReport{})
+	c.Put("neardirect", "model-b", &VerificationReport{})
 	t.Logf("after 2 Puts, Len = %d", c.Len())
 	if c.Len() != 2 {
 		t.Errorf("Len after 2 Puts = %d, want 2", c.Len())
@@ -241,7 +241,7 @@ func TestCacheModels(t *testing.T) {
 	}
 
 	c.Put("venice", "qwen3", &VerificationReport{})
-	c.Put("nearai", "llama", &VerificationReport{})
+	c.Put("neardirect", "llama", &VerificationReport{})
 
 	models = c.Models()
 	t.Logf("after 2 Puts, Models = %v", models)
@@ -261,8 +261,8 @@ func TestCacheModels(t *testing.T) {
 	if !found["venice/qwen3"] {
 		t.Error("venice/qwen3 not in Models()")
 	}
-	if !found["nearai/llama"] {
-		t.Error("nearai/llama not in Models()")
+	if !found["neardirect/llama"] {
+		t.Error("neardirect/llama not in Models()")
 	}
 }
 
@@ -291,7 +291,7 @@ func TestNegativeCacheLen(t *testing.T) {
 		t.Errorf("Len after 1 Record = %d, want 1", c.Len())
 	}
 
-	c.Record("nearai", "model-b")
+	c.Record("neardirect", "model-b")
 	t.Logf("after 2 Records, Len = %d", c.Len())
 	if c.Len() != 2 {
 		t.Errorf("Len after 2 Records = %d, want 2", c.Len())
@@ -366,7 +366,7 @@ func TestSigningKeyCacheGetPutMiss(t *testing.T) {
 	}
 
 	// Different provider must miss.
-	if _, ok := c.Get("nearai", "test-model"); ok {
+	if _, ok := c.Get("neardirect", "test-model"); ok {
 		t.Error("Get for different provider returned ok=true")
 	}
 }

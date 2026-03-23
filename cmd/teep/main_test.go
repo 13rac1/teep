@@ -11,7 +11,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
-	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
@@ -188,7 +188,7 @@ func TestFormatReport_EmptyReport(t *testing.T) {
 
 func TestFormatReport_AllFactorsTier1(t *testing.T) {
 	// Verify the first 7 factors appear under Tier 1.
-	r := buildTestReport("nearai", "llama-model")
+	r := buildTestReport("neardirect", "llama-model")
 	out := formatReport(r)
 
 	tier1Idx := strings.Index(out, "Tier 1: Core Attestation")
@@ -217,7 +217,7 @@ func TestFormatReport_AllFactorsTier1(t *testing.T) {
 
 func TestFormatReport_AllFactorsTier3(t *testing.T) {
 	// Verify the last 5 factors appear under Tier 3.
-	r := buildTestReport("nearai", "llama-model")
+	r := buildTestReport("neardirect", "llama-model")
 	out := formatReport(r)
 
 	tier3Idx := strings.Index(out, "Tier 3: Supply Chain & Channel Integrity")
@@ -342,7 +342,7 @@ func TestFormatReport_MetadataBlock(t *testing.T) {
 }
 
 func TestFormatReport_NoMetadataBlock(t *testing.T) {
-	r := buildTestReport("nearai", "some-model")
+	r := buildTestReport("neardirect", "some-model")
 	// No metadata set.
 	out := formatReport(r)
 
@@ -399,20 +399,20 @@ func TestFormatReport_SeparatorLength(t *testing.T) {
 func TestFilterProviders_KeepNamedProvider(t *testing.T) {
 	cfg := &config.Config{
 		Providers: map[string]*config.Provider{
-			"venice": {Name: "venice"},
-			"nearai": {Name: "nearai"},
+			"venice":     {Name: "venice"},
+			"neardirect": {Name: "neardirect"},
 		},
 	}
 
-	if err := filterProviders(cfg, "nearai"); err != nil {
+	if err := filterProviders(cfg, "neardirect"); err != nil {
 		t.Fatalf("filterProviders: %v", err)
 	}
 
 	if len(cfg.Providers) != 1 {
 		t.Fatalf("providers len = %d, want 1", len(cfg.Providers))
 	}
-	if _, ok := cfg.Providers["nearai"]; !ok {
-		t.Fatalf("nearai provider missing after filter")
+	if _, ok := cfg.Providers["neardirect"]; !ok {
+		t.Fatalf("neardirect provider missing after filter")
 	}
 }
 
@@ -423,7 +423,7 @@ func TestFilterProviders_UnknownProvider(t *testing.T) {
 		},
 	}
 
-	err := filterProviders(cfg, "nearai")
+	err := filterProviders(cfg, "neardirect")
 	if err == nil {
 		t.Fatal("expected error for unknown provider")
 	}
@@ -443,7 +443,7 @@ func TestExtractProvider(t *testing.T) {
 		{"empty", []string{}, "", []string{}},
 		{"flag_first", []string{"--offline"}, "", []string{"--offline"}},
 		{"provider_only", []string{"venice"}, "venice", []string{}},
-		{"provider_plus_flags", []string{"nearai", "--model", "x"}, "nearai", []string{"--model", "x"}},
+		{"provider_plus_flags", []string{"neardirect", "--model", "x"}, "neardirect", []string{"--model", "x"}},
 		{"dash_flag_first", []string{"-v"}, "", []string{"-v"}},
 	}
 	for _, tc := range tests {
@@ -484,15 +484,15 @@ func TestProviderNotFoundError_KnownNoConfig(t *testing.T) {
 
 func TestProviderNotFoundError_KnownWithOtherProviders(t *testing.T) {
 	cfg := &config.Config{Providers: map[string]*config.Provider{
-		"nearai": {Name: "nearai"},
+		"neardirect": {Name: "neardirect"},
 	}}
 	err := providerNotFoundError("venice", cfg)
 	t.Logf("error: %v", err)
 	if !strings.Contains(err.Error(), "VENICE_API_KEY") {
 		t.Errorf("error should mention VENICE_API_KEY: %v", err)
 	}
-	if !strings.Contains(err.Error(), "nearai") {
-		t.Errorf("error should mention existing provider 'nearai': %v", err)
+	if !strings.Contains(err.Error(), "neardirect") {
+		t.Errorf("error should mention existing provider 'neardirect': %v", err)
 	}
 }
 
@@ -553,10 +553,10 @@ func TestNewAttester(t *testing.T) {
 		}
 	})
 
-	t.Run("nearai", func(t *testing.T) {
-		a := newAttester("nearai", cp)
-		if _, ok := a.(*nearai.Attester); !ok {
-			t.Errorf("newAttester(nearai) returned %T, want *nearai.Attester", a)
+	t.Run("neardirect", func(t *testing.T) {
+		a := newAttester("neardirect", cp)
+		if _, ok := a.(*neardirect.Attester); !ok {
+			t.Errorf("newAttester(neardirect) returned %T, want *neardirect.Attester", a)
 		}
 	})
 }
@@ -568,7 +568,7 @@ func TestNewReportDataVerifier(t *testing.T) {
 		wantNil  bool
 	}{
 		{"venice", "venice.ReportDataVerifier", false},
-		{"nearai", "nearai.ReportDataVerifier", false},
+		{"neardirect", "neardirect.ReportDataVerifier", false},
 		{"unknown", "", true},
 	}
 	for _, tc := range tests {

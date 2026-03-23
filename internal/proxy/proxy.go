@@ -36,8 +36,8 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
-	"github.com/13rac1/teep/internal/provider/nearai"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -231,14 +231,14 @@ func fromConfig(
 		p.Attester = venice.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = venice.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = venice.ReportDataVerifier{}
-	case "nearai":
+	case "neardirect":
 		p.ChatPath = "/v1/chat/completions"
-		rdVerifier := nearai.ReportDataVerifier{}
-		p.Attester = nearai.NewAttester(cp.BaseURL, cp.APIKey, offline)
-		p.Preparer = nearai.NewPreparer(cp.APIKey)
+		rdVerifier := neardirect.ReportDataVerifier{}
+		p.Attester = neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		p.Preparer = neardirect.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
-		p.PinnedHandler = nearai.NewPinnedHandler(
-			nearai.NewEndpointResolver(),
+		p.PinnedHandler = neardirect.NewPinnedHandler(
+			neardirect.NewEndpointResolver(),
 			spkiCache,
 			cp.APIKey,
 			offline,
@@ -248,9 +248,9 @@ func fromConfig(
 		)
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
-		rdVerifier := nearai.ReportDataVerifier{}
+		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
-		p.Preparer = nearai.NewPreparer(cp.APIKey)
+		p.Preparer = neardirect.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
 		p.PinnedHandler = nearcloud.NewPinnedHandler(
 			spkiCache,
@@ -261,7 +261,7 @@ func fromConfig(
 			rdVerifier,
 		)
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, nearai, nearcloud)", cp.Name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud)", cp.Name)
 	}
 	return p, nil
 }

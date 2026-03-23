@@ -12,14 +12,14 @@ Certificate Transparency MUST be consulted for the TLS certificate of the model 
 
 ## Primary Files
 
-- [`internal/provider/nearai/reportdata.go`](../../../internal/provider/nearai/reportdata.go)
+- [`internal/provider/neardirect/reportdata.go`](../../../internal/provider/neardirect/reportdata.go)
 - [`internal/attestation/spki.go`](../../../internal/attestation/spki.go)
 - [`internal/proxy/proxy.go`](../../../internal/proxy/proxy.go)
 
 ## Secondary Context Files
 
-- [`internal/provider/nearai/pinned.go`](../../../internal/provider/nearai/pinned.go)
-- [`internal/provider/nearai/ct.go`](../../../internal/provider/nearai/ct.go)
+- [`internal/provider/neardirect/pinned.go`](../../../internal/provider/neardirect/pinned.go)
+- [`internal/provider/neardirect/ct.go`](../../../internal/provider/neardirect/ct.go)
 - [`internal/tlsct/checker.go`](../../../internal/tlsct/checker.go)
 - [`internal/attestation/spki_test.go`](../../../internal/attestation/spki_test.go)
 

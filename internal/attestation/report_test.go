@@ -235,7 +235,7 @@ func TestBuildReportTLSKeyBindingPass(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	raw.TLSFingerprint = "aabbccddee112233445566778899aabb"
 
-	report := BuildReport(&ReportInput{Provider: "nearai", Model: "m", Raw: raw, Nonce: nonce})
+	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce})
 	f := findFactor(t, report, "tls_key_binding")
 	if f.Status != Pass {
 		t.Errorf("tls_key_binding with TLSFingerprint: got %s (%s), want PASS", f.Status, f.Detail)
@@ -400,7 +400,7 @@ func TestBuildReportReportDataBindingSkipNoVerifier(t *testing.T) {
 		TeeTCBSVN: make([]byte, 16),
 	}
 
-	report := BuildReport(&ReportInput{Provider: "nearai", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
+	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
 	f := findFactor(t, report, "tdx_reportdata_binding")
 	if f.Status != Skip {
 		t.Errorf("tdx_reportdata_binding without verifier: got %s (%s), want SKIP", f.Status, f.Detail)
@@ -713,7 +713,7 @@ func TestBuildReportComposeBindingPass(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	composeResult := &ComposeBindingResult{Checked: true}
-	report := BuildReport(&ReportInput{Provider: "nearai", Model: "m", Raw: raw, Nonce: nonce, Compose: composeResult})
+	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, Compose: composeResult})
 	f := findFactor(t, report, "compose_binding")
 	if f.Status != Pass {
 		t.Errorf("compose_binding with valid binding: got %s (%s), want PASS", f.Status, f.Detail)
@@ -725,7 +725,7 @@ func TestBuildReportComposeBindingFail(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	composeResult := &ComposeBindingResult{Checked: true, Err: errors.New("hash mismatch")}
-	report := BuildReport(&ReportInput{Provider: "nearai", Model: "m", Raw: raw, Nonce: nonce, Compose: composeResult})
+	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, Compose: composeResult})
 	f := findFactor(t, report, "compose_binding")
 	if f.Status != Fail {
 		t.Errorf("compose_binding with error: got %s (%s), want FAIL", f.Status, f.Detail)
@@ -752,7 +752,7 @@ func TestBuildReportTDXQuoteStructureFailsMRTDPolicy(t *testing.T) {
 	}
 
 	report := BuildReport(&ReportInput{
-		Provider: "nearai",
+		Provider: "neardirect",
 		Model:    "m",
 		Raw:      raw,
 		Nonce:    nonce,
@@ -785,7 +785,7 @@ func TestBuildReportEventLogIntegrityFailsRTMRPolicy(t *testing.T) {
 	tdxResult.RTMRs = replayed
 
 	report := BuildReport(&ReportInput{
-		Provider: "nearai",
+		Provider: "neardirect",
 		Model:    "m",
 		Raw:      raw,
 		Nonce:    nonce,
@@ -817,7 +817,7 @@ func TestBuildReportSigstorePass(t *testing.T) {
 		{Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", OK: true, Status: 200},
 		{Digest: "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", OK: true, Status: 200},
 	}
-	report := BuildReport(&ReportInput{Provider: "nearai", Model: "m", Raw: raw, Nonce: nonce, Sigstore: sigResults})
+	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, Sigstore: sigResults})
 	f := findFactor(t, report, "sigstore_verification")
 	if f.Status != Pass {
 		t.Errorf("sigstore_verification all OK: got %s (%s), want PASS", f.Status, f.Detail)
@@ -841,7 +841,7 @@ func TestBuildReportSigstoreFail(t *testing.T) {
 		{Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", OK: true, Status: 200},
 		{Digest: "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", OK: false, Status: 404},
 	}
-	report := BuildReport(&ReportInput{Provider: "nearai", Model: "m", Raw: raw, Nonce: nonce, Sigstore: sigResults})
+	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, Sigstore: sigResults})
 	f := findFactor(t, report, "sigstore_verification")
 	if f.Status != Fail {
 		t.Errorf("sigstore_verification with 404 and unknown repo: got %s (%s), want FAIL", f.Status, f.Detail)
@@ -856,18 +856,18 @@ func TestBuildReportSigstoreFail(t *testing.T) {
 func TestBuildReportSigstorePassForAllowlistedNonRekorImage(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	nearaiDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+	neardirectDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
 	certbotDigest := "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
 	sigResults := []SigstoreResult{
-		{Digest: nearaiDigest, OK: true, Status: 200},
+		{Digest: neardirectDigest, OK: true, Status: 200},
 		{Digest: certbotDigest, OK: false, Status: 404}, // certbot not in Rekor
 	}
 	digestToRepo := map[string]string{
-		nearaiDigest:  "nearaidev/compose-manager",
-		certbotDigest: "certbot/dns-cloudflare",
+		neardirectDigest: "nearaidev/compose-manager",
+		certbotDigest:    "certbot/dns-cloudflare",
 	}
 	report := BuildReport(&ReportInput{
-		Provider:     "nearai",
+		Provider:     "neardirect",
 		Model:        "m",
 		Raw:          raw,
 		Nonce:        nonce,
@@ -897,7 +897,7 @@ func TestBuildReportSigstoreFailForUnknownNonRekorImage(t *testing.T) {
 		unknownDigest: "attacker/evil-image",
 	}
 	report := BuildReport(&ReportInput{
-		Provider:     "nearai",
+		Provider:     "neardirect",
 		Model:        "m",
 		Raw:          raw,
 		Nonce:        nonce,
@@ -924,7 +924,7 @@ func TestDefaultEnforcedIncludesSupplyChainFactors(t *testing.T) {
 	}
 }
 
-func TestBuildReportNearAISupplyChainPolicyPass(t *testing.T) {
+func TestBuildReportNearDirectSupplyChainPolicyPass(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	sigResults := []SigstoreResult{{
@@ -943,7 +943,7 @@ func TestBuildReportNearAISupplyChainPolicyPass(t *testing.T) {
 	}}
 
 	report := BuildReport(&ReportInput{
-		Provider:   "nearai",
+		Provider:   "neardirect",
 		Model:      "m",
 		Raw:        raw,
 		Nonce:      nonce,
@@ -958,12 +958,12 @@ func TestBuildReportNearAISupplyChainPolicyPass(t *testing.T) {
 	}
 }
 
-func TestBuildReportNearAISupplyChainPolicyRejectsImageRepo(t *testing.T) {
+func TestBuildReportNearDirectSupplyChainPolicyRejectsImageRepo(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 
 	report := BuildReport(&ReportInput{
-		Provider:   "nearai",
+		Provider:   "neardirect",
 		Model:      "m",
 		Raw:        raw,
 		Nonce:      nonce,
@@ -979,7 +979,7 @@ func TestBuildReportNearAISupplyChainPolicyRejectsImageRepo(t *testing.T) {
 	}
 }
 
-func TestBuildReportNearAISupplyChainPolicyRejectsSigner(t *testing.T) {
+func TestBuildReportNearDirectSupplyChainPolicyRejectsSigner(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	sigResults := []SigstoreResult{{
@@ -996,7 +996,7 @@ func TestBuildReportNearAISupplyChainPolicyRejectsSigner(t *testing.T) {
 	}}
 
 	report := BuildReport(&ReportInput{
-		Provider:   "nearai",
+		Provider:   "neardirect",
 		Model:      "m",
 		Raw:        raw,
 		Nonce:      nonce,
@@ -1244,7 +1244,7 @@ func TestBuildReportNvidiaNonceMismatch(t *testing.T) {
 func TestBuildReportSigstoreSkip(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "nearai", Model: "m", Raw: raw, Nonce: nonce})
+	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce})
 	f := findFactor(t, report, "sigstore_verification")
 	if f.Status != Skip {
 		t.Errorf("sigstore_verification without digests: got %s (%s), want SKIP", f.Status, f.Detail)

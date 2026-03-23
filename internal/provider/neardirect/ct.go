@@ -1,4 +1,4 @@
-package nearai
+package neardirect
 
 import (
 	"github.com/13rac1/teep/internal/tlsct"
