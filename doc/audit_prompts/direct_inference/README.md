@@ -14,7 +14,7 @@ Preferred mode is grouped handoff to reduce sub-agent count while keeping strong
 
 ## Recommended Grouped Handoff (Fewer Sub-Agents)
 
-Use 5 sub-agents with these bundles:
+Use 4 sub-agents with these bundles:
 
 1. Baseline Input Surface
 	- [`01_model_routing.md`](01_model_routing.md)
@@ -22,22 +22,19 @@ Use 5 sub-agents with these bundles:
 	- [`03_transport_safety.md`](03_transport_safety.md)
 	- Why grouped: endpoint/domain selection, attestation fetch/parse, and request-surface/resource bounds are evaluated on the same ingress path.
 
-2. TDX Core Integrity
+2. TDX Core Integrity & Binding
 	- [`04_tdx_quote.md`](04_tdx_quote.md)
 	- [`05_tdx_measurements.md`](05_tdx_measurements.md)
 	- [`06_event_log.md`](06_event_log.md)
+	- [`07_tls_binding.md`](07_tls_binding.md)
 	- Why grouped: quote parsing feeds measurement fields and RTMR replay checks; findings overlap on baseline integrity and fail-closed semantics.
 
-3. Binding & Runtime Enforcement
-	- [`07_tls_binding.md`](07_tls_binding.md)
-	- [`09_policy_caching.md`](09_policy_caching.md)
-	- Why grouped: REPORTDATA/TLS pinning outputs are enforced through factor gating, cache behavior, and offline-mode policy decisions.
-
-4. Supply-Chain Provenance
+3. Supply-Chain Provenance
 	- [`08_cvm_image.md`](08_cvm_image.md)
-	- Why grouped: compose-to-MRCONFIGID binding and Sigstore/Rekor provenance form one supply-chain verification chain.
+	- [`09_policy_caching.md`](09_policy_caching.md)
+	- Why grouped: compose-to-MRCONFIGID binding and Sigstore/Rekor provenance form one supply-chain verification chain. The cache operation is key to usage integrity.
 
-5. Auxiliary Attestation Signals
+4. Auxiliary Attestation Signals
 	- [`10_nvidia_tee.md`](10_nvidia_tee.md)
 	- [`11_proof_of_cloud.md`](11_proof_of_cloud.md)
 	- Why grouped: both are auxiliary/adjacent trust signals with weaker coupling to the core TDX+binding enforcement path.
