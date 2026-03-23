@@ -192,6 +192,54 @@ func TestEndpointResolver_StaleOnRefreshError(t *testing.T) {
 	}
 }
 
+func TestEndpointResolver_Models(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"endpoints": [
+				{"domain": "a.completions.near.ai", "models": ["zeta", "alpha"]},
+				{"domain": "b.completions.near.ai", "models": ["beta"]}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	r := newEndpointResolverForTest(srv.URL)
+
+	models, err := r.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models: %v", err)
+	}
+
+	t.Logf("got %d models: %v", len(models), models)
+	if len(models) != 3 {
+		t.Fatalf("got %d models, want 3", len(models))
+	}
+
+	// Models should be sorted.
+	want := []string{"alpha", "beta", "zeta"}
+	for i, m := range models {
+		if m != want[i] {
+			t.Errorf("models[%d] = %q, want %q", i, m, want[i])
+		}
+	}
+}
+
+func TestEndpointResolver_Models_RefreshError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	r := newEndpointResolverForTest(srv.URL)
+
+	_, err := r.Models(context.Background())
+	t.Logf("error: %v", err)
+	if err == nil {
+		t.Error("expected error for HTTP 500")
+	}
+}
+
 func TestEndpointResolver_ContextCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()

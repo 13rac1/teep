@@ -231,14 +231,16 @@ func fromConfig(
 		p.Attester = venice.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = venice.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = venice.ReportDataVerifier{}
+		p.ModelLister = venice.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "neardirect":
 		p.ChatPath = "/v1/chat/completions"
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
+		resolver := neardirect.NewEndpointResolver(offline)
 		p.PinnedHandler = neardirect.NewPinnedHandler(
-			neardirect.NewEndpointResolver(),
+			resolver,
 			spkiCache,
 			cp.APIKey,
 			offline,
@@ -246,6 +248,7 @@ func fromConfig(
 			policy,
 			rdVerifier,
 		)
+		p.ModelLister = neardirect.NewModelLister(resolver, "neardirect")
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
 		rdVerifier := neardirect.ReportDataVerifier{}
@@ -260,6 +263,7 @@ func fromConfig(
 			policy,
 			rdVerifier,
 		)
+		p.ModelLister = nearcloud.NewModelLister(offline)
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud)", cp.Name)
 	}
@@ -971,15 +975,33 @@ func (s *Server) relayReassembledNonStream(w http.ResponseWriter, body io.Reader
 	_, _ = w.Write(result)
 }
 
-// handleModels returns an empty model list. Model names are not mapped by the
-// proxy; clients should use the provider's real model names directly.
-func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
-	type response struct {
-		Object string `json:"object"`
-		Data   []any  `json:"data"`
+// handleModels returns available models from all configured providers.
+// Each provider's model entries are relayed as raw JSON to preserve all
+// upstream fields (pricing, capabilities, constraints, etc.).
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	var all []json.RawMessage
+	for _, p := range s.providers {
+		if p.ModelLister == nil {
+			continue
+		}
+		models, err := p.ModelLister.ListModels(r.Context())
+		if err != nil {
+			slog.Warn("model listing failed", "provider", p.Name, "err", err)
+			continue
+		}
+		all = append(all, models...)
 	}
+	if all == nil {
+		all = []json.RawMessage{} // ensure JSON "data": [] not null
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(response{Object: "list", Data: []any{}}) //nolint:errchkjson // static struct, encoding cannot fail
+	if err := json.NewEncoder(w).Encode(struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}{Object: "list", Data: all}); err != nil {
+		slog.Error("encoding models response", "err", err)
+	}
 }
 
 // handleReport returns the cached VerificationReport for the given provider

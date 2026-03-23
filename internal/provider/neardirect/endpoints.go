@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,6 +116,32 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 		return "", fmt.Errorf("unknown model %q (not in endpoint discovery)", model)
 	}
 	return domain, nil
+}
+
+// Models returns a sorted list of all model names from the endpoint mapping.
+// Refreshes from the discovery API if the cache is stale.
+func (r *EndpointResolver) Models(ctx context.Context) ([]string, error) {
+	r.mu.RLock()
+	stale := time.Since(r.fetchedAt) > endpointsTTL || len(r.mapping) == 0
+	r.mu.RUnlock()
+
+	if stale {
+		_, err, _ := r.sf.Do("refresh", func() (any, error) {
+			return nil, r.refresh(context.WithoutCancel(ctx))
+		})
+		if err != nil {
+			return nil, fmt.Errorf("endpoint discovery: %w", err)
+		}
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	models := make([]string, 0, len(r.mapping))
+	for m := range r.mapping {
+		models = append(models, m)
+	}
+	sort.Strings(models)
+	return models, nil
 }
 
 // refresh fetches the endpoint mapping from the discovery URL and replaces
