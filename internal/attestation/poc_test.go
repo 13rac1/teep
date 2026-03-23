@@ -20,6 +20,7 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 
 	monikers := []string{"alice", "bob", "carol"}
 	nonces := []string{"nonce_alice", "nonce_bob", "nonce_carol"}
+	testJWT := "header.payload.signature"
 
 	makePeer := func(idx int) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +56,7 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]string{
 					"machineId": "deadbeef",
 					"label":     "test-machine",
-					"jwt":       "header.payload.signature",
+					"jwt":       testJWT,
 				})
 			}
 		}))
@@ -75,6 +76,9 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 
 	client := &http.Client{}
 	poc := NewPoCClient(peers, PoCQuorum, client)
+	// Override JWT verification because the test uses a synthetic non-JWT token.
+	// Production code uses verifyPoCJWTClaims by default (F-39).
+	poc.jwtVerifyFn = func(jwtStr, machineID string) error { return nil }
 	result := poc.CheckQuote(context.Background(), hexQuote)
 
 	if result.Err != nil {
@@ -89,8 +93,8 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 	if result.Label != "test-machine" {
 		t.Errorf("Label: got %q, want %q", result.Label, "test-machine")
 	}
-	if result.JWT != "header.payload.signature" {
-		t.Errorf("JWT: got %q, want %q", result.JWT, "header.payload.signature")
+	if result.JWT != testJWT {
+		t.Errorf("JWT: got %q, want %q", result.JWT, testJWT)
 	}
 }
 

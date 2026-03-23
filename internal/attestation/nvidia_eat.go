@@ -112,10 +112,11 @@ func loadPinnedNVIDIARootCA() (*x509.Certificate, error) {
 		return nil, fmt.Errorf("parse NVIDIA root CA: %w", err)
 	}
 
-	// Verify fingerprint.
+	// Verify fingerprint using constant-time comparison to prevent timing
+	// side-channels on the pinned root CA value (F-36).
 	fingerprint := sha256.Sum256(block.Bytes)
 	fpHex := hex.EncodeToString(fingerprint[:])
-	if fpHex != nvidiaRootCAFingerprint {
+	if subtle.ConstantTimeCompare([]byte(fpHex), []byte(nvidiaRootCAFingerprint)) != 1 {
 		return nil, fmt.Errorf("NVIDIA root CA fingerprint mismatch: got %s, want %s", fpHex, nvidiaRootCAFingerprint)
 	}
 

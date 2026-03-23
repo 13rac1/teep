@@ -6,11 +6,6 @@ import (
 	"net/http"
 )
 
-// SigstoreSearchBase is the base URL for Sigstore transparency log searches.
-//
-//nolint:gochecknoglobals // var instead of const to allow test overrides
-var SigstoreSearchBase = "https://search.sigstore.dev/?hash="
-
 // SigstoreResult records the outcome of checking one container image digest
 // against the Sigstore transparency log.
 type SigstoreResult struct {
@@ -20,47 +15,33 @@ type SigstoreResult struct {
 	Err    error
 }
 
-// CheckSigstoreDigests verifies each sha256 digest against search.sigstore.dev.
-// A digest is considered OK if the HTTP response status is < 400.
-// HEAD is tried first; if the server returns 405, a GET fallback is used.
+// CheckSigstoreDigests verifies that each sha256 digest is present in the
+// Sigstore/Rekor transparency log using the Rekor search API
+// (POST /api/v1/index/retrieve). A digest is considered OK when at least one
+// log entry is returned; an empty result means the digest is absent.
+//
+// Using the Rekor API instead of the search.sigstore.dev HTML endpoint (F-22)
+// provides access to actual log entry UUIDs rather than relying solely on an
+// HTTP status code from a non-machine-readable endpoint (F-24).
+//
+// NOTE: This check confirms the digest is recorded in the transparency log.
+// It does not verify the cosign bundle signature on each entry. Full bundle
+// signature verification would additionally confirm the signing identity.
 func CheckSigstoreDigests(ctx context.Context, digests []string, client *http.Client) []SigstoreResult {
 	results := make([]SigstoreResult, len(digests))
 	for i, digest := range digests {
-		results[i] = checkOneDigest(ctx, digest, client)
+		results[i] = checkDigestViaRekor(ctx, digest, client)
 	}
 	return results
 }
 
-func checkOneDigest(ctx context.Context, digest string, client *http.Client) SigstoreResult {
-	url := fmt.Sprintf("%ssha256:%s", SigstoreSearchBase, digest)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, http.NoBody)
+func checkDigestViaRekor(ctx context.Context, digest string, client *http.Client) SigstoreResult {
+	uuids, err := fetchRekorUUIDs(ctx, digest, client)
 	if err != nil {
-		return SigstoreResult{Digest: digest, Err: fmt.Errorf("build HEAD request: %w", err)}
+		return SigstoreResult{Digest: digest, Err: fmt.Errorf("rekor transparency log search: %w", err)}
 	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return SigstoreResult{Digest: digest, Err: fmt.Errorf("HEAD %s: %w", url, err)}
+	if len(uuids) == 0 {
+		return SigstoreResult{Digest: digest, OK: false, Status: http.StatusNotFound}
 	}
-	resp.Body.Close()
-
-	// Some endpoints disallow HEAD; retry with GET.
-	if resp.StatusCode == http.StatusMethodNotAllowed {
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
-		if err != nil {
-			return SigstoreResult{Digest: digest, Status: resp.StatusCode, Err: fmt.Errorf("build GET request: %w", err)}
-		}
-		resp, err = client.Do(req)
-		if err != nil {
-			return SigstoreResult{Digest: digest, Err: fmt.Errorf("GET %s: %w", url, err)}
-		}
-		resp.Body.Close()
-	}
-
-	return SigstoreResult{
-		Digest: digest,
-		OK:     resp.StatusCode < 400,
-		Status: resp.StatusCode,
-	}
+	return SigstoreResult{Digest: digest, OK: true, Status: http.StatusOK}
 }

@@ -289,16 +289,6 @@ func setupMocks(t *testing.T, fdir, prefix string, raw *attestation.RawAttestati
 	attestation.NvidiaJWKSURL = jwksSrv.URL
 	t.Cleanup(func() { attestation.NvidiaJWKSURL = origJWKS })
 
-	// Sigstore
-	sigstoreSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Logf("Sigstore mock: %s %s", r.Method, r.URL.String())
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(sigstoreSrv.Close)
-	origSigstore := attestation.SigstoreSearchBase
-	attestation.SigstoreSearchBase = sigstoreSrv.URL + "/?hash="
-	t.Cleanup(func() { attestation.SigstoreSearchBase = origSigstore })
-
 	// Rekor
 	testUUID := "24296fb24b8ad77a1234567890abcdef"
 	dsseBody := buildMockDSSEBody(realFulcioCertPEM)

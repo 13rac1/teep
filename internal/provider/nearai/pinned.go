@@ -210,8 +210,9 @@ func (h *PinnedHandler) tlsDial(ctx context.Context, domain string) (*tls.Conn, 
 	d := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: dialTimeout},
 		Config: &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: true, // CA chain verification is replaced by TEE-attested SPKI pinning
 			ServerName:         domain,
+			MinVersion:         tls.VersionTLS12, // defence-in-depth: explicitly require TLS 1.2+
 		},
 	}
 	conn, err := d.DialContext(ctx, "tcp", domain+":443")
@@ -331,6 +332,7 @@ func (h *PinnedHandler) attestOnConn(
 	var composeResult *attestation.ComposeBindingResult
 	var sigstoreResults []attestation.SigstoreResult
 	var imageRepos []string
+	var digestToRepo map[string]string
 	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
 		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
@@ -347,6 +349,7 @@ func (h *PinnedHandler) attestOnConn(
 			source = raw.AppCompose
 		}
 		imageRepos = attestation.ExtractImageRepositories(source)
+		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
 		digests := attestation.ExtractImageDigests(source)
 		if len(digests) > 0 && !h.offline {
 			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, tlsct.NewHTTPClient(10*time.Second))
@@ -363,20 +366,21 @@ func (h *PinnedHandler) attestOnConn(
 	}
 
 	report := attestation.BuildReport(&attestation.ReportInput{
-		Provider:   "nearai",
-		Model:      model,
-		Raw:        raw,
-		Nonce:      nonce,
-		Enforced:   h.enforced,
-		Policy:     h.policy,
-		ImageRepos: imageRepos,
-		TDX:        tdxResult,
-		Nvidia:     nvidiaResult,
-		NvidiaNRAS: nrasResult,
-		PoC:        pocResult,
-		Compose:    composeResult,
-		Sigstore:   sigstoreResults,
-		Rekor:      rekorResults,
+		Provider:     "nearai",
+		Model:        model,
+		Raw:          raw,
+		Nonce:        nonce,
+		Enforced:     h.enforced,
+		Policy:       h.policy,
+		ImageRepos:   imageRepos,
+		DigestToRepo: digestToRepo,
+		TDX:          tdxResult,
+		Nvidia:       nvidiaResult,
+		NvidiaNRAS:   nrasResult,
+		PoC:          pocResult,
+		Compose:      composeResult,
+		Sigstore:     sigstoreResults,
+		Rekor:        rekorResults,
 	})
 	return report, nil
 }

@@ -6,12 +6,15 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"unicode/utf8"
 )
 
 // RekorAPIBase is the base URL for the Rekor transparency log API.
@@ -50,6 +53,11 @@ type RekorProvenance struct {
 
 // FetchRekorProvenance queries the Rekor API for a digest's log entry and
 // parses Fulcio certificate provenance if present.
+//
+// All returned UUIDs are tried in order. The function prefers an entry backed
+// by a Fulcio certificate (which carries OIDC build-provenance metadata) over
+// a raw-public-key entry (F-23: mitigates front-running where an attacker
+// inserts a raw-key entry before the legitimate Fulcio-signed entry).
 func FetchRekorProvenance(ctx context.Context, digest string, client *http.Client) RekorProvenance {
 	uuids, err := fetchRekorUUIDs(ctx, digest, client)
 	if err != nil {
@@ -59,36 +67,63 @@ func FetchRekorProvenance(ctx context.Context, digest string, client *http.Clien
 		return RekorProvenance{Digest: digest, Err: fmt.Errorf("no Rekor entries for sha256:%s", digest)}
 	}
 
-	body, err := fetchRekorEntry(ctx, uuids[0], client)
-	if err != nil {
-		return RekorProvenance{Digest: digest, Err: fmt.Errorf("fetch Rekor entry: %w", err)}
+	// Try each UUID; prefer one whose verifier is a Fulcio certificate.
+	// This prevents a front-running attack where an adversary inserts a
+	// raw-key entry first, causing us to skip build-provenance verification.
+	var rawKeyFallback *RekorProvenance
+	var lastErr error
+	for _, uuid := range uuids {
+		body, err := fetchRekorEntry(ctx, uuid, client)
+		if err != nil {
+			lastErr = fmt.Errorf("fetch Rekor entry %s: %w", uuid, err)
+			continue
+		}
+
+		verifierPEM, err := extractVerifierPEM(body)
+		if err != nil {
+			lastErr = fmt.Errorf("extract verifier from %s: %w", uuid, err)
+			continue
+		}
+
+		block, _ := pem.Decode(verifierPEM)
+		if block == nil {
+			lastErr = fmt.Errorf("invalid PEM in verifier for %s", uuid)
+			continue
+		}
+
+		if block.Type == "PUBLIC KEY" {
+			// Raw public key — no Fulcio provenance. Keep as fallback and
+			// continue looking for an entry with a Fulcio certificate.
+			if rawKeyFallback == nil {
+				p := RekorProvenance{Digest: digest, HasCert: false}
+				rawKeyFallback = &p
+			}
+			continue
+		}
+
+		if block.Type != "CERTIFICATE" {
+			lastErr = fmt.Errorf("unexpected PEM type %q in entry %s", block.Type, uuid)
+			continue
+		}
+
+		prov, err := parseFulcioProvenance(verifierPEM)
+		if err != nil {
+			lastErr = fmt.Errorf("parse Fulcio cert in entry %s: %w", uuid, err)
+			continue
+		}
+		prov.Digest = digest
+		return *prov
 	}
 
-	verifierPEM, err := extractVerifierPEM(body)
-	if err != nil {
-		return RekorProvenance{Digest: digest, Err: fmt.Errorf("extract verifier: %w", err)}
+	// No Fulcio-backed entry found; return raw-key fallback if available.
+	if rawKeyFallback != nil {
+		return *rawKeyFallback
 	}
 
-	block, _ := pem.Decode(verifierPEM)
-	if block == nil {
-		return RekorProvenance{Digest: digest, Err: errors.New("invalid PEM in verifier")}
+	if lastErr != nil {
+		return RekorProvenance{Digest: digest, Err: lastErr}
 	}
-
-	if block.Type == "PUBLIC KEY" {
-		// Raw public key — no Fulcio provenance available (e.g. datadog/agent).
-		return RekorProvenance{Digest: digest, HasCert: false}
-	}
-
-	if block.Type != "CERTIFICATE" {
-		return RekorProvenance{Digest: digest, Err: fmt.Errorf("unexpected PEM type: %s", block.Type)}
-	}
-
-	prov, err := parseFulcioProvenance(verifierPEM)
-	if err != nil {
-		return RekorProvenance{Digest: digest, Err: fmt.Errorf("parse Fulcio cert: %w", err)}
-	}
-	prov.Digest = digest
-	return *prov
+	return RekorProvenance{Digest: digest, Err: fmt.Errorf("no usable Rekor entry for sha256:%s", digest)}
 }
 
 // fetchRekorUUIDs calls POST /api/v1/index/retrieve to search for log entries
@@ -277,13 +312,22 @@ func hasFulcioPrefix(oid asn1.ObjectIdentifier) bool {
 
 // decodeExtensionValue decodes a Fulcio extension value. These are ASN.1
 // UTF8String encoded (tag 0x0C). Some older entries may use raw bytes.
+//
+// The fallback to raw bytes is logged at Warn level to avoid silently masking
+// ASN.1 encoding errors in Rekor entries (F-26).
 func decodeExtensionValue(raw []byte) string {
 	var s string
 	if _, err := asn1.Unmarshal(raw, &s); err == nil {
 		return s
 	}
-	// Fallback: treat as raw UTF-8 bytes (some Rekor entries pre-date
-	// the ASN.1 encoding convention).
+	// Fallback: some older Rekor entries store the value as raw UTF-8
+	// (pre-ASN.1 encoding convention). Validate it's valid UTF-8 before using.
+	if !utf8.Valid(raw) {
+		slog.Warn("Rekor extension value is neither valid ASN.1 UTF8String nor valid UTF-8; skipping",
+			"oid_hex", hex.EncodeToString(raw))
+		return ""
+	}
+	slog.Debug("Rekor extension: using raw UTF-8 fallback (not ASN.1 encoded)")
 	return string(raw)
 }
 

@@ -140,6 +140,13 @@ func resetJWKS() {
 	})
 }
 
+// ShutdownJWKS cancels all background JWKS refresh goroutines and removes
+// all cached instances. Call this during graceful shutdown to prevent goroutine
+// leaks from the background keyfunc refresh loops (F-35).
+func ShutdownJWKS() {
+	resetJWKS()
+}
+
 // VerifyNVIDIAPayload verifies the NVIDIA attestation payload via local SPDM
 // certificate chain and signature verification. The payload must be EAT JSON
 // (starting with '{'). NRAS cloud verification is handled separately by

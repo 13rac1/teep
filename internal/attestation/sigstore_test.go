@@ -2,22 +2,39 @@ package attestation
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-func TestCheckSigstoreDigests_AllOK(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Logf("Sigstore mock: %s %s", r.Method, r.URL.String())
-		w.WriteHeader(http.StatusOK)
+// makeRekorMock returns a test server that acts as the Rekor search API.
+// When found=true, it returns a UUID list for all retrieve requests;
+// when found=false, it returns an empty list.
+func makeRekorMock(t *testing.T, found bool) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("Rekor mock: %s %s", r.Method, r.URL.Path)
+		if r.URL.Path != "/api/v1/index/retrieve" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if found {
+			json.NewEncoder(w).Encode([]string{"test-uuid-1234"})
+		} else {
+			json.NewEncoder(w).Encode([]string{})
+		}
 	}))
+}
+
+func TestCheckSigstoreDigests_AllOK(t *testing.T) {
+	ts := makeRekorMock(t, true)
 	defer ts.Close()
 
-	// Override the search base for testing.
-	origBase := SigstoreSearchBase
-	defer func() { SigstoreSearchBase = origBase }()
-	SigstoreSearchBase = ts.URL + "/?hash="
+	origBase := RekorAPIBase
+	defer func() { RekorAPIBase = origBase }()
+	RekorAPIBase = ts.URL
 
 	digests := []string{
 		"abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
@@ -40,15 +57,12 @@ func TestCheckSigstoreDigests_AllOK(t *testing.T) {
 }
 
 func TestCheckSigstoreDigests_NotFound(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Logf("Sigstore mock: %s %s → 404", r.Method, r.URL.String())
-		w.WriteHeader(http.StatusNotFound)
-	}))
+	ts := makeRekorMock(t, false)
 	defer ts.Close()
 
-	origBase := SigstoreSearchBase
-	defer func() { SigstoreSearchBase = origBase }()
-	SigstoreSearchBase = ts.URL + "/?hash="
+	origBase := RekorAPIBase
+	defer func() { RekorAPIBase = origBase }()
+	RekorAPIBase = ts.URL
 
 	digests := []string{"abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"}
 	results := CheckSigstoreDigests(context.Background(), digests, ts.Client())
@@ -57,27 +71,22 @@ func TestCheckSigstoreDigests_NotFound(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	if results[0].OK {
-		t.Error("expected not OK for 404")
+		t.Error("expected not OK for empty UUID list")
 	}
 	if results[0].Status != http.StatusNotFound {
 		t.Errorf("status: got %d, want %d", results[0].Status, http.StatusNotFound)
 	}
 }
 
-func TestCheckSigstoreDigests_HEADFallbackToGET(t *testing.T) {
+func TestCheckSigstoreDigests_RekorError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Logf("Sigstore mock: %s %s", r.Method, r.URL.String())
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer ts.Close()
 
-	origBase := SigstoreSearchBase
-	defer func() { SigstoreSearchBase = origBase }()
-	SigstoreSearchBase = ts.URL + "/?hash="
+	origBase := RekorAPIBase
+	defer func() { RekorAPIBase = origBase }()
+	RekorAPIBase = ts.URL
 
 	digests := []string{"abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"}
 	results := CheckSigstoreDigests(context.Background(), digests, ts.Client())
@@ -85,8 +94,11 @@ func TestCheckSigstoreDigests_HEADFallbackToGET(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if !results[0].OK {
-		t.Errorf("expected OK after GET fallback, got status=%d err=%v", results[0].Status, results[0].Err)
+	if results[0].OK {
+		t.Error("expected not OK for server error")
+	}
+	if results[0].Err == nil {
+		t.Error("expected non-nil Err for server error")
 	}
 }
 

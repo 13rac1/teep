@@ -63,14 +63,26 @@ var imageDigestRe = regexp.MustCompile(`@sha256:([0-9a-f]{64})`)
 // is a container image reference that may include registry, namespace, and tag.
 var imageRefDigestRe = regexp.MustCompile(`([A-Za-z0-9._/:-]+)@sha256:[0-9a-f]{64}`)
 
+// imageRefAndDigestRe captures both image reference and digest in two groups.
+var imageRefAndDigestRe = regexp.MustCompile(`([A-Za-z0-9._/:-]+)@sha256:([0-9a-f]{64})`)
+
+// maxImageDigests caps the number of distinct digests returned by
+// ExtractImageDigests, bounding the number of sequential Sigstore/Rekor API
+// calls that can be triggered by a single attested compose manifest (F-25).
+const maxImageDigests = 64
+
 // ExtractImageDigests returns deduplicated sha256 digests from image references
 // in the given text (e.g. docker-compose content). Each digest is the 64-char
-// hex string after @sha256:.
+// hex string after @sha256:. At most maxImageDigests distinct digests are
+// returned; additional matches are silently discarded.
 func ExtractImageDigests(text string) []string {
 	matches := imageDigestRe.FindAllStringSubmatch(text, -1)
 	seen := make(map[string]struct{}, len(matches))
 	var digests []string
 	for _, m := range matches {
+		if len(digests) >= maxImageDigests {
+			break
+		}
 		digest := m[1]
 		if _, ok := seen[digest]; ok {
 			continue
@@ -119,4 +131,22 @@ func normalizeImageRepository(ref string) string {
 		ref = ref[:lastColon]
 	}
 	return ref
+}
+
+// ExtractImageDigestToRepoMap returns a map from digest (64-char hex string) to
+// normalized image repository name. All @sha256:-pinned image references found
+// in text are included. Later duplicates for the same digest are ignored.
+func ExtractImageDigestToRepoMap(text string) map[string]string {
+	matches := imageRefAndDigestRe.FindAllStringSubmatch(text, -1)
+	result := make(map[string]string, len(matches))
+	for _, m := range matches {
+		repo := normalizeImageRepository(m[1])
+		digest := m[2]
+		if repo != "" {
+			if _, exists := result[digest]; !exists {
+				result[digest] = repo
+			}
+		}
+	}
+	return result
 }

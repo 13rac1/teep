@@ -2,6 +2,7 @@ package attestation
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
@@ -25,6 +26,11 @@ const (
 	// maxSPKIsPerDomain limits the number of SPKI hashes stored per domain.
 	// When exceeded, the oldest entry is evicted.
 	maxSPKIsPerDomain = 16
+
+	// maxDomains caps the total number of distinct domains in the cache,
+	// preventing unbounded memory growth under a stream of unique domains.
+	// When exceeded, the domain with the oldest SPKI entry is evicted first.
+	maxDomains = 1024
 
 	// defaultSPKITTL is how long a cached SPKI hash is trusted before
 	// re-attestation is required. This limits the window during which a
@@ -59,6 +65,9 @@ func NewSPKICache() *SPKICache {
 
 // Contains reports whether the given SPKI hash has been verified for domain
 // and has not expired.
+//
+// The SPKI hex comparison is performed with subtle.ConstantTimeCompare to
+// eliminate timing side-channels on cache membership (F-20).
 func (c *SPKICache) Contains(domain, spkiHex string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -66,20 +75,28 @@ func (c *SPKICache) Contains(domain, spkiHex string) bool {
 	if !ok {
 		return false
 	}
-	entry, found := hashes[spkiHex]
-	if !found {
-		return false
+	spkiBytes := []byte(spkiHex)
+	now := time.Now()
+	for k, e := range hashes {
+		if subtle.ConstantTimeCompare([]byte(k), spkiBytes) == 1 {
+			return now.Sub(e.addedAt) <= c.ttl
+		}
 	}
-	return time.Since(entry.addedAt) <= c.ttl
+	return false
 }
 
 // Add records a verified SPKI hash for domain. Expired entries for the domain
 // are pruned first. If the per-domain limit is still exceeded after pruning,
-// the oldest entry is evicted.
+// the oldest entry is evicted. If the total domain count exceeds maxDomains,
+// the domain with the globally oldest SPKI entry is evicted first (F-21).
 func (c *SPKICache) Add(domain, spkiHex string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.domains[domain] == nil {
+		// Enforce the overall domain cap before allocating a new bucket.
+		if len(c.domains) >= maxDomains {
+			c.evictOldestDomain()
+		}
 		c.domains[domain] = make(map[string]spkiEntry)
 	}
 	// Prune expired entries.
@@ -102,4 +119,22 @@ func (c *SPKICache) Add(domain, spkiHex string) {
 		}
 	}
 	c.domains[domain][spkiHex] = spkiEntry{addedAt: time.Now()}
+}
+
+// evictOldestDomain removes the domain whose oldest SPKI entry was
+// added earliest. Called under the write lock.
+func (c *SPKICache) evictOldestDomain() {
+	var victim string
+	var victimOldest time.Time
+	for d, hashes := range c.domains {
+		for _, e := range hashes {
+			if victim == "" || e.addedAt.Before(victimOldest) {
+				victim = d
+				victimOldest = e.addedAt
+			}
+		}
+	}
+	if victim != "" {
+		delete(c.domains, victim)
+	}
 }

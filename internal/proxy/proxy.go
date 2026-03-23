@@ -347,6 +347,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	var composeResult *attestation.ComposeBindingResult
 	var sigstoreResults []attestation.SigstoreResult
 	var imageRepos []string
+	var digestToRepo map[string]string
 	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
 		composeStart := time.Now()
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
@@ -364,6 +365,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 			source = raw.AppCompose
 		}
 		imageRepos = attestation.ExtractImageRepositories(source)
+		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
 		digests := attestation.ExtractImageDigests(source)
 		if len(digests) > 0 && !s.cfg.Offline {
 			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, s.attestClient)
@@ -397,20 +399,21 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	ms.lastVerifyMs.Store(totalDur.Milliseconds())
 
 	report := attestation.BuildReport(&attestation.ReportInput{
-		Provider:   prov.Name,
-		Model:      upstreamModel,
-		Raw:        raw,
-		Nonce:      nonce,
-		Enforced:   s.cfg.Enforced,
-		Policy:     s.cfg.MeasurementPolicy,
-		ImageRepos: imageRepos,
-		TDX:        tdxResult,
-		Nvidia:     nvidiaResult,
-		NvidiaNRAS: nrasResult,
-		PoC:        pocResult,
-		Compose:    composeResult,
-		Sigstore:   sigstoreResults,
-		Rekor:      rekorResults,
+		Provider:     prov.Name,
+		Model:        upstreamModel,
+		Raw:          raw,
+		Nonce:        nonce,
+		Enforced:     s.cfg.Enforced,
+		Policy:       s.cfg.MeasurementPolicy,
+		ImageRepos:   imageRepos,
+		DigestToRepo: digestToRepo,
+		TDX:          tdxResult,
+		Nvidia:       nvidiaResult,
+		NvidiaNRAS:   nrasResult,
+		PoC:          pocResult,
+		Compose:      composeResult,
+		Sigstore:     sigstoreResults,
+		Rekor:        rekorResults,
 	})
 	if raw.SigningKey != "" {
 		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && prev != raw.SigningKey {

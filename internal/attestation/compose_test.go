@@ -141,3 +141,22 @@ image: ghcr.io/nearai/router:v2@sha256:0000111122223333444455556666777788889999a
 		t.Fatalf("unexpected repository: %s", repos[0])
 	}
 }
+
+func TestExtractImageDigestToRepoMap(t *testing.T) {
+	text := `services:
+  api:
+    image: ghcr.io/nearai/router:v1@sha256:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
+  db:
+    image: certbot/dns-cloudflare@sha256:0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff
+`
+	m := ExtractImageDigestToRepoMap(text)
+	if len(m) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(m), m)
+	}
+	if m["abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"] != "ghcr.io/nearai/router" {
+		t.Errorf("router digest mapped to wrong repo: %q", m["abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"])
+	}
+	if m["0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"] != "certbot/dns-cloudflare" {
+		t.Errorf("certbot digest mapped to wrong repo: %q", m["0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"])
+	}
+}

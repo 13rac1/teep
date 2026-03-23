@@ -112,13 +112,14 @@ type ComposeBindingResult struct {
 // result type (e.g. AMD SEV-SNP) means adding a field here — no existing
 // call sites change because unset fields default to nil.
 type ReportInput struct {
-	Provider   string
-	Model      string
-	Raw        *RawAttestation
-	Nonce      Nonce
-	Enforced   []string
-	Policy     MeasurementPolicy
-	ImageRepos []string
+	Provider     string
+	Model        string
+	Raw          *RawAttestation
+	Nonce        Nonce
+	Enforced     []string
+	Policy       MeasurementPolicy
+	ImageRepos   []string
+	DigestToRepo map[string]string // digest hex → normalized image repo, for policy checks
 
 	TDX        *TDXVerifyResult
 	Nvidia     *NvidiaVerifyResult
@@ -289,11 +290,15 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		}
 		addFactor("tdx_tcb_current", Pass, detail)
 	} else if in.TDX.TcbStatus == pcs.TcbComponentStatusSwHardeningNeeded || in.TDX.TcbStatus == pcs.TcbComponentStatusConfigurationAndSWHardeningNeeded {
-		detail := fmt.Sprintf("TCB status: %s", in.TDX.TcbStatus)
+		// F-17: SWHardeningNeeded / ConfigurationAndSWHardeningNeeded indicate that known
+		// firmware vulnerabilities require software mitigations. Treat as Fail so operators
+		// see the advisory; tdx_tcb_current is not in DefaultEnforced so this does not
+		// block the proxy unless explicitly configured.
+		detail := fmt.Sprintf("TCB status: %s — software/config mitigations required for known advisories", in.TDX.TcbStatus)
 		if len(in.TDX.AdvisoryIDs) > 0 {
-			detail += fmt.Sprintf(" (advisories: %s)", strings.Join(in.TDX.AdvisoryIDs, ", "))
+			detail += fmt.Sprintf(" (%s)", strings.Join(in.TDX.AdvisoryIDs, ", "))
 		}
-		addFactor("tdx_tcb_current", Pass, detail)
+		addFactor("tdx_tcb_current", Fail, detail)
 	} else if in.TDX.TcbStatus == pcs.TcbComponentStatusOutOfDate || in.TDX.TcbStatus == pcs.TcbComponentStatusRevoked || in.TDX.TcbStatus == pcs.TcbComponentStatusOutOfDateConfigurationNeeded {
 		detail := fmt.Sprintf("TCB status: %s — firmware has known vulnerabilities", in.TDX.TcbStatus)
 		if len(in.TDX.AdvisoryIDs) > 0 {
@@ -558,27 +563,46 @@ buildTransparencyDone:
 	if len(in.Sigstore) == 0 {
 		addFactor("sigstore_verification", Skip, "no image digests to verify")
 	} else {
+		sigsPolicy := supplyChainPolicyForProvider(in.Provider)
 		allOK := true
 		var failDigest string
 		var failDetail string
+		var allowlisted int
 		for _, r := range in.Sigstore {
-			if !r.OK {
-				allOK = false
-				failDigest = r.Digest
-				if r.Err != nil {
-					failDetail = r.Err.Error()
-				} else {
-					failDetail = fmt.Sprintf("HTTP %d", r.Status)
-				}
-				break
+			if r.OK {
+				continue
 			}
+			// A 404 for an explicitly allowlisted image is acceptable: its
+			// digest is pinned in the attested compose manifest (bound to
+			// MRConfigID), and the repo is covered by the provider supply
+			// chain policy. Not every image is signed with Sigstore.
+			if sigsPolicy != nil && len(in.DigestToRepo) > 0 {
+				repo := in.DigestToRepo[r.Digest]
+				if containsFold(repo, sigsPolicy.AllowedImageRepos) {
+					allowlisted++
+					continue
+				}
+			}
+			allOK = false
+			failDigest = r.Digest
+			if r.Err != nil {
+				failDetail = r.Err.Error()
+			} else {
+				failDetail = fmt.Sprintf("HTTP %d", r.Status)
+			}
+			break
 		}
-		if allOK {
-			addFactor("sigstore_verification", Pass,
-				fmt.Sprintf("%d image digest(s) found in Sigstore transparency log", len(in.Sigstore)))
-		} else {
+		inRekor := len(in.Sigstore) - allowlisted
+		switch {
+		case !allOK:
 			addFactor("sigstore_verification", Fail,
 				fmt.Sprintf("Sigstore check failed for sha256:%s (%s)", failDigest[:min(16, len(failDigest))], failDetail))
+		case allowlisted > 0:
+			addFactor("sigstore_verification", Pass,
+				fmt.Sprintf("%d image digest(s) found in Sigstore transparency log; %d allowlisted (not Sigstore-signed)", inRekor, allowlisted))
+		default:
+			addFactor("sigstore_verification", Pass,
+				fmt.Sprintf("%d image digest(s) found in Sigstore transparency log", len(in.Sigstore)))
 		}
 	}
 
