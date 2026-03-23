@@ -4,40 +4,39 @@
 [![codecov](https://codecov.io/gh/13rac1/teep/graph/badge.svg)](https://codecov.io/gh/13rac1/teep)
 [![License: AGPL](https://img.shields.io/badge/License-AGPL-green.svg)](https://opensource.org/license/agpl-3-0)
 
-A local TEE (Trusted Execution Environment) proxy for AI APIs. Teep sits between OpenAI-compatible clients and TEE-capable providers, handling attestation verification and channel security transparently.
+**Verify that AI providers can't read your prompts — even if they wanted to.**
 
-It also benchmarks vendor attestation against a 24-factor verification framework, exposing gaps in TEE implementations.
+When you send a prompt to an AI API, the provider can see everything: your questions, your data, the responses. Teep changes that. It's a local proxy that cryptographically proves the AI model is running inside tamper-proof hardware (a Trusted Execution Environment), then encrypts your conversation so only that hardware can read it.
+
+Teep also scores each provider against a 24-point checklist covering hardware authenticity, encryption strength, and supply-chain integrity — so you can see exactly where the security guarantees hold and where they don't.
 
 ```
-Client (OpenAI SDK) --> 127.0.0.1:8337 (teep)
-                          |
-                          |-- Verify attestation (TDX + NVIDIA GPU)
-                          |
-                          |-- Venice AI path:
-                          |     E2EE encrypt (ECDH + AES-256-GCM)
-                          |     Forward to upstream
-                          |     Decrypt streaming response
-                          |
-                          |-- NEAR AI path:
-                          |     TLS connection pinning via attestation
-                          |     Verify SPKI matches attested TLS fingerprint
-                          |     Chat on same verified connection
-                          |
-                          '-- Return plaintext to client
+Client (any OpenAI SDK) ──► localhost:8337 (teep)
+                                │
+                                ├── Prove the server is genuine hardware
+                                ├── Encrypt so only that hardware can read it
+                                └── Return plaintext to your app
 ```
 
 ## Quick Start
 
+Binary releases coming soon. For now, requires Go 1.23+.
+
 ```bash
-go build -o teep ./cmd/teep
+# Install
+go install github.com/13rac1/teep/cmd/teep@latest
 
-# Venice AI (E2EE)
+# Venice AI
 export VENICE_API_KEY="your-key-here"
-./teep serve venice
+teep serve venice
 
-# NEAR AI (TLS pinning)
+# NEAR AI (direct to inference nodes)
 export NEARAI_API_KEY="your-key-here"
-./teep serve neardirect
+teep serve neardirect
+
+# NEAR AI (via cloud gateway)
+export NEARAI_API_KEY="your-key-here"
+teep serve nearcloud
 ```
 
 Point any OpenAI-compatible client at `http://127.0.0.1:8337`:
@@ -54,15 +53,27 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 ```
 
+## How It Works
+
+Before forwarding your request, teep asks three questions about the server:
+
+1. **Is the hardware real?** — Verifies Intel TDX and NVIDIA GPU attestation signatures chain back to the manufacturer. A fake server can't forge these.
+
+2. **Is the encryption real?** — Confirms the encryption key was generated inside the verified hardware and is cryptographically bound to the attestation proof. No one — not even the provider — can intercept the key.
+
+3. **Is the software supply chain trustworthy?** — Checks container image signatures against Sigstore transparency logs, verifies the deployment manifest is bound to the hardware attestation, and replays the runtime event log to detect tampering.
+
+Each check produces a pass/fail/skip result. Run `teep verify` to see the full report, or see [Verification Factors](#verification-factors) for details on all 24 checks.
+
 ## Attestation Verification
 
 Run a standalone attestation check against any configured provider:
 
 ```bash
-./teep verify venice --model e2ee-qwen3-5-122b-a10b
+teep verify venice --model e2ee-qwen3-5-122b-a10b
 ```
 
-Example output (Venice AI):
+Each line is an independent check — teep verifies these directly against hardware proofs, not provider claims:
 
 ```
 Attestation Report: venice / e2ee-qwen3-5-122b-a10b
@@ -112,74 +123,18 @@ Tier 3: Supply Chain & Channel Integrity
 Score: 19/24 passed, 1 skipped, 4 failed
 ```
 
-NEAR AI scores differently — it passes `tls_key_binding` (TLS certificate SPKI bound to attestation) but does not yet support `e2ee_capable` or `cpu_id_registry`.
+NEAR AI (`neardirect` / `nearcloud`) scores differently — it passes `tls_key_binding` (TLS certificate SPKI bound to attestation) but does not yet support `e2ee_capable` or `cpu_id_registry`.
 
 Exits with code 1 if any enforced factor fails.
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `VENICE_API_KEY` | Venice AI API key |
-| `NEARAI_API_KEY` | NEAR AI API key |
-| `TEEP_LISTEN_ADDR` | Listen address (default `127.0.0.1:8337`) |
-| `TEEP_CONFIG` | Path to optional TOML config file |
-
-### TOML Config File
-
-```toml
-[providers.venice]
-base_url = "https://api.venice.ai"
-api_key_env = "VENICE_API_KEY"
-e2ee = true
-
-[providers.neardirect]
-base_url = "https://completions.near.ai"
-api_key_env = "NEARAI_API_KEY"
-e2ee = false
-
-[policy]
-enforce = [
-  "nonce_match",
-  "tdx_cert_chain",
-  "tdx_quote_signature",
-  "tdx_debug_disabled",
-  "signing_key_present",
-  "tdx_reportdata_binding",
-  "compose_binding",
-  "nvidia_signature",
-  "nvidia_nonce_match",
-  "event_log_integrity",
-]
-
-# Optional measurement allowlists (96 hex chars each, no 0x required)
-mrtd_allow = [
-  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-]
-mrseam_allow = [
-  "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-]
-rtmr0_allow = [
-  "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
-]
-rtmr1_allow = []
-rtmr2_allow = []
-rtmr3_allow = []
-```
-
-Config file should have `0600` permissions. Teep warns on startup if it is group- or world-readable.
-
-When allowlists are configured:
-- `mrtd_allow` and `mrseam_allow` are enforced in `tdx_quote_structure`.
-- `rtmr*_allow` values are enforced in `event_log_integrity` after event-log replay matches quote RTMRs.
-
-Empty allowlists disable policy for that measurement.
 
 ## Verification Factors
 
 ### Tier 1: Core Attestation
+
+Is the hardware genuine? These checks verify the TDX quote is present, properly signed by Intel, and not from a debug enclave.
+
+<details>
+<summary>7 factors</summary>
 
 | # | Factor | Description |
 |---|--------|-------------|
@@ -191,7 +146,14 @@ Empty allowlists disable policy for that measurement.
 | 6 | `tdx_debug_disabled` | TD_ATTRIBUTES debug bit is 0 (production enclave) |
 | 7 | `signing_key_present` | Enclave ECDH public key present (API field: `signing_key`) |
 
+</details>
+
 ### Tier 2: Binding & Crypto
+
+Is the encryption bound to the hardware? These checks verify the encryption key can't be swapped out, GPU attestation is valid, and E2EE key exchange is possible.
+
+<details>
+<summary>9 factors</summary>
 
 | # | Factor | Description |
 |---|--------|-------------|
@@ -205,7 +167,14 @@ Empty allowlists disable policy for that measurement.
 | 15 | `nvidia_nras_verified` | NVIDIA NRAS RIM measurement comparison passed |
 | 16 | `e2ee_capable` | Provider returned enough info for E2EE key exchange |
 
+</details>
+
 ### Tier 3: Supply Chain & Channel Integrity
+
+Is the software what it claims to be? These checks verify container provenance, deployment manifests, TLS binding, and runtime integrity.
+
+<details>
+<summary>8 factors</summary>
 
 | # | Factor | Description |
 |---|--------|-------------|
@@ -218,16 +187,32 @@ Empty allowlists disable policy for that measurement.
 | 23 | `sigstore_verification` | Container image digests found in Sigstore transparency log, proving verifiable CI/CD provenance |
 | 24 | `event_log_integrity` | Event log replayed against TDX RTMRs — proves log is authentic and complete |
 
+</details>
+
+For full factor descriptions, run `teep help factors` or see [README_ADVANCED.md](README_ADVANCED.md).
+
 ## Supported Providers
 
-| Provider | Attestation | Channel Security | REPORTDATA Binding |
-|----------|-------------|-----------------|-------------------|
-| Venice AI | TDX + NVIDIA | E2EE (ECDH + AES-256-GCM) | `keccak256(enclave_pubkey)` + nonce |
-| NEAR AI | TDX + NVIDIA | TLS pinning via attestation | `sha256(signing_address ‖ tls_fingerprint)` + nonce |
+| Provider | What teep does |
+|----------|---------------|
+| [Venice AI](https://venice.ai) | End-to-end encryption (ECDH + AES-256-GCM) |
+| [NEAR AI Direct](https://near.ai) | TLS connection pinning to model-specific TEE nodes |
+| [NEAR AI Cloud](https://near.ai) | TLS connection pinning through TEE-attested gateway |
 
-**Venice AI** uses end-to-end encryption: the proxy negotiates an ECDH shared secret with the TEE's attested enclave public key, encrypts the request with AES-256-GCM, and decrypts the streaming response.
+See [README_ADVANCED.md](README_ADVANCED.md) for cryptographic details (ECDH key exchange, REPORTDATA binding schemes, SPKI pinning).
 
-**NEAR AI** uses connection pinning: attestation and the chat request happen on the same TLS connection. The proxy verifies the server's TLS certificate SPKI matches the `tls_cert_fingerprint` in the attestation response, which is itself bound to the TDX quote via REPORTDATA. This ensures no MITM between attestation and chat. NEAR AI models are resolved dynamically via an endpoint discovery API (`completions.near.ai/endpoints`), and verified SPKI hashes are cached per-domain to avoid repeated attestation for subsequent requests.
+## Configuration
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `VENICE_API_KEY` | Venice AI API key |
+| `NEARAI_API_KEY` | NEAR AI API key |
+| `TEEP_LISTEN_ADDR` | Listen address (default `127.0.0.1:8337`) |
+| `TEEP_CONFIG` | Path to optional TOML config file |
+
+For TOML configuration, enforcement policies, and measurement allowlists, see [README_ADVANCED.md](README_ADVANCED.md#toml-configuration).
 
 ## Development
 
