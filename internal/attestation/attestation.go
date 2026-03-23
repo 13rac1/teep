@@ -101,6 +101,14 @@ type RawAttestation struct {
 	CandidatesAvail int             // node pool size
 	CandidatesEval  int             // nodes evaluated
 
+	// Gateway fields — populated by providers with TEE-attested API gateways.
+	// Empty for providers without a gateway (e.g. Venice, NEAR AI direct).
+	GatewayIntelQuote     string          `json:"-"`
+	GatewayNonceHex       string          `json:"-"`
+	GatewayAppCompose     string          `json:"-"`
+	GatewayEventLog       []EventLogEntry `json:"-"`
+	GatewayTLSFingerprint string          `json:"-"`
+
 	// RawBody is the unmodified HTTP response body from the provider.
 	// Used by --save-dir to write the original JSON as-is.
 	RawBody []byte `json:"-"`

@@ -28,6 +28,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/proxy"
 )
@@ -141,8 +142,9 @@ func filterProviders(cfg *config.Config, providerName string) error {
 
 // providerEnvVars maps provider names to their API key environment variables.
 var providerEnvVars = map[string]string{
-	"venice": "VENICE_API_KEY",
-	"nearai": "NEARAI_API_KEY",
+	"venice":    "VENICE_API_KEY",
+	"nearai":    "NEARAI_API_KEY",
+	"nearcloud": "NEARAI_API_KEY",
 }
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
@@ -346,7 +348,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		}
 	}
 
-	return attestation.BuildReport(&attestation.ReportInput{
+	reportInput := &attestation.ReportInput{
 		Provider:     providerName,
 		Model:        modelName,
 		Raw:          raw,
@@ -362,7 +364,25 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		DigestToRepo: digestToRepo,
 		Sigstore:     sigstoreResults,
 		Rekor:        rekorResults,
-	})
+	}
+
+	// Gateway TDX verification — any provider that populates GatewayIntelQuote.
+	if raw.GatewayIntelQuote != "" {
+		slog.Debug("gateway TDX verification starting", "quote_len", len(raw.GatewayIntelQuote))
+		gwTDX := attestation.VerifyTDXQuote(ctx, raw.GatewayIntelQuote, nonce, offline)
+		reportInput.GatewayTDX = gwTDX
+		reportInput.GatewayNonceHex = raw.GatewayNonceHex
+		reportInput.GatewayNonce = nonce
+
+		if raw.GatewayAppCompose != "" && gwTDX.ParseErr == nil {
+			gwCompose := &attestation.ComposeBindingResult{Checked: true}
+			gwCompose.Err = attestation.VerifyComposeBinding(raw.GatewayAppCompose, gwTDX.MRConfigID)
+			reportInput.GatewayCompose = gwCompose
+		}
+		slog.Debug("gateway TDX verification complete")
+	}
+
+	return attestation.BuildReport(reportInput)
 }
 
 // newAttester returns the appropriate Attester for the named provider.
@@ -376,8 +396,10 @@ func newAttester(name string, cp *config.Provider, offline ...bool) provider.Att
 		return venice.NewAttester(cp.BaseURL, cp.APIKey, off)
 	case "nearai":
 		return nearai.NewAttester(cp.BaseURL, cp.APIKey, off)
+	case "nearcloud":
+		return nearcloud.NewAttester(cp.APIKey, off)
 	default:
-		slog.Error("unknown provider", "provider", name, "supported", "venice, nearai")
+		slog.Error("unknown provider", "provider", name, "supported", "venice, nearai, nearcloud")
 		os.Exit(1)
 		return nil // unreachable
 	}
@@ -387,7 +409,7 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 	switch name {
 	case "venice":
 		return venice.ReportDataVerifier{}
-	case "nearai":
+	case "nearai", "nearcloud":
 		return nearai.ReportDataVerifier{}
 	default:
 		return nil

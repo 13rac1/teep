@@ -457,7 +457,7 @@ Environment variables:
   TEEP_CONFIG        Path to TOML config file.
   TEEP_LISTEN_ADDR   Override listen address (default: 127.0.0.1:8337).
   VENICE_API_KEY     Venice AI API key.
-  NEARAI_API_KEY     NEAR AI API key.
+  NEARAI_API_KEY     NEAR AI API key (used by nearai and nearcloud providers).
 `)
 }
 
@@ -536,6 +536,7 @@ Exit codes:
 Examples:
   teep verify venice --model e2ee-deepseek-r1-0528
   teep verify nearai --model qwen2.5-72b-instruct --save-dir ./attestation-data
+  teep verify nearcloud --model Qwen/Qwen3.5-122B-A10B --log-level debug
   teep verify venice --model e2ee-qwen3-32b --log-level debug
 
 See 'teep help tiers' for how factors are scored, or 'teep help factors'

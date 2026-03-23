@@ -37,6 +37,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nearai"
+	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -245,8 +246,22 @@ func fromConfig(
 			policy,
 			rdVerifier,
 		)
+	case "nearcloud":
+		p.ChatPath = "/v1/chat/completions"
+		rdVerifier := nearai.ReportDataVerifier{}
+		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
+		p.Preparer = nearai.NewPreparer(cp.APIKey)
+		p.ReportDataVerifier = rdVerifier
+		p.PinnedHandler = nearcloud.NewPinnedHandler(
+			spkiCache,
+			cp.APIKey,
+			offline,
+			enforced,
+			policy,
+			rdVerifier,
+		)
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, nearai)", cp.Name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, nearai, nearcloud)", cp.Name)
 	}
 	return p, nil
 }
