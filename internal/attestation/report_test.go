@@ -844,7 +844,70 @@ func TestBuildReportSigstoreFail(t *testing.T) {
 	report := BuildReport(&ReportInput{Provider: "nearai", Model: "m", Raw: raw, Nonce: nonce, Sigstore: sigResults})
 	f := findFactor(t, report, "sigstore_verification")
 	if f.Status != Fail {
-		t.Errorf("sigstore_verification with 404: got %s (%s), want FAIL", f.Status, f.Detail)
+		t.Errorf("sigstore_verification with 404 and unknown repo: got %s (%s), want FAIL", f.Status, f.Detail)
+	}
+}
+
+// TestBuildReportSigstorePassForAllowlistedNonRekorImage verifies that a 404
+// from Rekor does not fail sigstore_verification when the image repo is in the
+// provider's AllowedImageRepos policy and a digest→repo mapping is provided.
+// This covers third-party images like certbot/dns-cloudflare that are
+// identified by pinned digest in the attested compose but are not Sigstore-signed.
+func TestBuildReportSigstorePassForAllowlistedNonRekorImage(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	nearaiDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+	certbotDigest := "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
+	sigResults := []SigstoreResult{
+		{Digest: nearaiDigest, OK: true, Status: 200},
+		{Digest: certbotDigest, OK: false, Status: 404}, // certbot not in Rekor
+	}
+	digestToRepo := map[string]string{
+		nearaiDigest:  "nearaidev/compose-manager",
+		certbotDigest: "certbot/dns-cloudflare",
+	}
+	report := BuildReport(&ReportInput{
+		Provider:     "nearai",
+		Model:        "m",
+		Raw:          raw,
+		Nonce:        nonce,
+		Sigstore:     sigResults,
+		DigestToRepo: digestToRepo,
+		ImageRepos:   []string{"nearaidev/compose-manager", "certbot/dns-cloudflare"},
+	})
+	f := findFactor(t, report, "sigstore_verification")
+	if f.Status != Pass {
+		t.Errorf("sigstore_verification for allowlisted non-Rekor image: got %s (%s), want PASS", f.Status, f.Detail)
+	}
+	if !strings.Contains(f.Detail, "allowlisted") {
+		t.Errorf("detail should mention allowlisted images: %s", f.Detail)
+	}
+}
+
+// TestBuildReportSigstoreFailForUnknownNonRekorImage verifies that a 404 still
+// fails if the image repo is NOT in AllowedImageRepos (unknown image).
+func TestBuildReportSigstoreFailForUnknownNonRekorImage(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	unknownDigest := "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
+	sigResults := []SigstoreResult{
+		{Digest: unknownDigest, OK: false, Status: 404},
+	}
+	digestToRepo := map[string]string{
+		unknownDigest: "attacker/evil-image",
+	}
+	report := BuildReport(&ReportInput{
+		Provider:     "nearai",
+		Model:        "m",
+		Raw:          raw,
+		Nonce:        nonce,
+		Sigstore:     sigResults,
+		DigestToRepo: digestToRepo,
+		ImageRepos:   []string{"attacker/evil-image"},
+	})
+	f := findFactor(t, report, "sigstore_verification")
+	if f.Status != Fail {
+		t.Errorf("sigstore_verification for unknown non-Rekor image: got %s (%s), want FAIL", f.Status, f.Detail)
 	}
 }
 

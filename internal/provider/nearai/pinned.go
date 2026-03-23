@@ -332,6 +332,7 @@ func (h *PinnedHandler) attestOnConn(
 	var composeResult *attestation.ComposeBindingResult
 	var sigstoreResults []attestation.SigstoreResult
 	var imageRepos []string
+	var digestToRepo map[string]string
 	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
 		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
@@ -348,6 +349,7 @@ func (h *PinnedHandler) attestOnConn(
 			source = raw.AppCompose
 		}
 		imageRepos = attestation.ExtractImageRepositories(source)
+		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
 		digests := attestation.ExtractImageDigests(source)
 		if len(digests) > 0 && !h.offline {
 			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, tlsct.NewHTTPClient(10*time.Second))
@@ -364,20 +366,21 @@ func (h *PinnedHandler) attestOnConn(
 	}
 
 	report := attestation.BuildReport(&attestation.ReportInput{
-		Provider:   "nearai",
-		Model:      model,
-		Raw:        raw,
-		Nonce:      nonce,
-		Enforced:   h.enforced,
-		Policy:     h.policy,
-		ImageRepos: imageRepos,
-		TDX:        tdxResult,
-		Nvidia:     nvidiaResult,
-		NvidiaNRAS: nrasResult,
-		PoC:        pocResult,
-		Compose:    composeResult,
-		Sigstore:   sigstoreResults,
-		Rekor:      rekorResults,
+		Provider:     "nearai",
+		Model:        model,
+		Raw:          raw,
+		Nonce:        nonce,
+		Enforced:     h.enforced,
+		Policy:       h.policy,
+		ImageRepos:   imageRepos,
+		DigestToRepo: digestToRepo,
+		TDX:          tdxResult,
+		Nvidia:       nvidiaResult,
+		NvidiaNRAS:   nrasResult,
+		PoC:          pocResult,
+		Compose:      composeResult,
+		Sigstore:     sigstoreResults,
+		Rekor:        rekorResults,
 	})
 	return report, nil
 }
