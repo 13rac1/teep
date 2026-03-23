@@ -1,6 +1,8 @@
 # Direct Inference Audit Prompt Pack
 
-This prompt pack decomposes [`direct_inference.md`](../direct_inference.md) into self-contained sections for delegated sub-agent review.
+This prompt pack defines the audit process for direct inference providers.
+
+It is intended to be delegated to sub-agents in self-contained sections.
 
 ## Dispatch Model (Orchestrator)
 
