@@ -126,6 +126,8 @@ func TestEndpointResolver_InvalidDomain(t *testing.T) {
 				{"domain": "http://evil.com", "models": ["m-scheme"]},
 				{"domain": "nodot", "models": ["m-nodot"]},
 				{"domain": "path/slash", "models": ["m-slash"]},
+				{"domain": "attacker.example.com", "models": ["m-wrong-suffix"]},
+				{"domain": "xn--near-8oa.ai", "models": ["m-punycode"]},
 				{"domain": "valid.near.ai", "models": ["m-good"]}
 			]
 		}`))
@@ -133,6 +135,7 @@ func TestEndpointResolver_InvalidDomain(t *testing.T) {
 	defer srv.Close()
 
 	r := newEndpointResolverForTest(srv.URL)
+	r.restrictToNearAI = true
 
 	// The only valid domain should resolve.
 	domain, err := r.Resolve(context.Background(), "m-good")
@@ -144,7 +147,7 @@ func TestEndpointResolver_InvalidDomain(t *testing.T) {
 	}
 
 	// All invalid-domain models should fail.
-	for _, model := range []string{"m-empty", "m-spaces", "m-tab", "m-lf", "m-cr", "m-scheme", "m-nodot", "m-slash"} {
+	for _, model := range []string{"m-empty", "m-spaces", "m-tab", "m-lf", "m-cr", "m-scheme", "m-nodot", "m-slash", "m-wrong-suffix", "m-punycode"} {
 		_, err := r.Resolve(context.Background(), model)
 		if err == nil {
 			t.Errorf("Resolve(%q) should fail (invalid domain), but got nil error", model)

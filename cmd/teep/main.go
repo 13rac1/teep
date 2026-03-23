@@ -277,6 +277,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 
 	// Check compose binding and Sigstore if app_compose is available.
 	var composeResult *attestation.ComposeBindingResult
+	var imageRepos []string
 	var sigstoreResults []attestation.SigstoreResult
 	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
@@ -298,6 +299,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		if dockerCompose != "" {
 			slog.Debug("attested docker compose manifest", "content", dockerCompose)
 		}
+		imageRepos = attestation.ExtractImageRepositories(source)
 		digests := attestation.ExtractImageDigests(source)
 		for _, d := range digests {
 			slog.Info("checking Sigstore for image digest", "digest", "sha256:"+d[:min(16, len(d))]+"...")
@@ -354,6 +356,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		NvidiaNRAS: nrasResult,
 		PoC:        pocResult,
 		Compose:    composeResult,
+		ImageRepos: imageRepos,
 		Sigstore:   sigstoreResults,
 		Rekor:      rekorResults,
 	})

@@ -301,10 +301,7 @@ func RedactKey(key string) string {
 // that serve multiple models from the same host. In offline mode, CT checks
 // are disabled to avoid external CT log list downloads.
 func NewAttestationClient(offline ...bool) *http.Client {
-	ctEnabled := true
-	if len(offline) > 0 && offline[0] {
-		ctEnabled = false
-	}
+	ctEnabled := len(offline) == 0 || !offline[0]
 	return tlsct.NewHTTPClientWithTransport(AttestationTimeout, &http.Transport{
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,

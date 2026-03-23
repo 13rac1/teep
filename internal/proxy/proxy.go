@@ -337,6 +337,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 
 	var composeResult *attestation.ComposeBindingResult
 	var sigstoreResults []attestation.SigstoreResult
+	var imageRepos []string
 	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
 		composeStart := time.Now()
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
@@ -353,6 +354,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		if source == "" {
 			source = raw.AppCompose
 		}
+		imageRepos = attestation.ExtractImageRepositories(source)
 		digests := attestation.ExtractImageDigests(source)
 		if len(digests) > 0 && !s.cfg.Offline {
 			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, s.attestClient)
@@ -392,6 +394,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		Nonce:      nonce,
 		Enforced:   s.cfg.Enforced,
 		Policy:     s.cfg.MeasurementPolicy,
+		ImageRepos: imageRepos,
 		TDX:        tdxResult,
 		Nvidia:     nvidiaResult,
 		NvidiaNRAS: nrasResult,

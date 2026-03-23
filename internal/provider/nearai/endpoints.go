@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,8 +43,9 @@ type endpointEntry struct {
 //
 // Thread-safe for concurrent use.
 type EndpointResolver struct {
-	endpointsURL string
-	client       *http.Client
+	endpointsURL     string
+	client           *http.Client
+	restrictToNearAI bool
 
 	mu        sync.RWMutex
 	mapping   map[string]string // model → domain
@@ -54,23 +57,22 @@ type EndpointResolver struct {
 // NewEndpointResolver returns a resolver that discovers endpoints from
 // the default NEAR AI URL (https://completions.near.ai/endpoints).
 func NewEndpointResolver(offline ...bool) *EndpointResolver {
-	ctEnabled := true
-	if len(offline) > 0 && offline[0] {
-		ctEnabled = false
-	}
+	ctEnabled := len(offline) == 0 || !offline[0]
 	return &EndpointResolver{
-		endpointsURL: defaultEndpointsURL,
-		client:       tlsct.NewHTTPClient(30*time.Second, ctEnabled),
-		mapping:      make(map[string]string),
+		endpointsURL:     defaultEndpointsURL,
+		client:           tlsct.NewHTTPClient(30*time.Second, ctEnabled),
+		restrictToNearAI: true,
+		mapping:          make(map[string]string),
 	}
 }
 
 // newEndpointResolverForTest returns a resolver pointing at a custom URL.
 func newEndpointResolverForTest(url string) *EndpointResolver {
 	return &EndpointResolver{
-		endpointsURL: url,
-		client:       tlsct.NewHTTPClient(10 * time.Second),
-		mapping:      make(map[string]string),
+		endpointsURL:     url,
+		client:           tlsct.NewHTTPClient(10 * time.Second),
+		restrictToNearAI: false,
+		mapping:          make(map[string]string),
 	}
 }
 
@@ -145,7 +147,7 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 
 	mapping := make(map[string]string)
 	for _, ep := range er.Endpoints {
-		if !isValidDomain(ep.Domain) {
+		if !isValidDomain(ep.Domain, r.restrictToNearAI) {
 			slog.Warn("nearai: endpoint discovery: skipping invalid domain", "domain", ep.Domain)
 			continue
 		}
@@ -170,9 +172,13 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 }
 
 // isValidDomain rejects domain strings that are empty, contain schemes,
-// spaces, or path separators, or lack a dot (not a qualified hostname).
-// Accepts host:port (e.g. "192.168.1.1:8080") but rejects URLs with "://".
-func isValidDomain(d string) bool {
+// spaces, path separators, punycode labels, or do not belong to near.ai.
+// Accepts host:port but only for near.ai hosts.
+func isValidDomain(d string, restrictToNearAI bool) bool {
+	if d == "" {
+		return false
+	}
+
 	for _, r := range d {
 		if unicode.IsSpace(r) || r < 0x20 || r == 0x7f {
 			return false
@@ -181,10 +187,35 @@ func isValidDomain(d string) bool {
 			return false
 		}
 	}
-	return d != "" &&
-		!strings.ContainsAny(d, "/\\") &&
-		!strings.Contains(d, "://") &&
-		strings.Contains(d, ".")
+	if strings.ContainsAny(d, "/\\") || strings.Contains(d, "://") {
+		return false
+	}
+
+	host := d
+	if strings.Count(d, ":") > 0 {
+		h, p, err := net.SplitHostPort(d)
+		if err != nil {
+			return false
+		}
+		port, err := strconv.Atoi(p)
+		if err != nil || port <= 0 || port > 65535 {
+			return false
+		}
+		host = h
+	}
+
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" || strings.Contains(host, "..") {
+		return false
+	}
+	if strings.HasPrefix(host, "xn--") || strings.Contains(host, ".xn--") {
+		return false
+	}
+
+	if !restrictToNearAI {
+		return true
+	}
+	return host == "near.ai" || strings.HasSuffix(host, ".near.ai")
 }
 
 // truncate returns s truncated to n characters with "..." appended if needed.

@@ -110,3 +110,34 @@ func TestExtractImageDigests_None(t *testing.T) {
 		t.Fatalf("expected 0 digests, got %d", len(digests))
 	}
 }
+
+func TestExtractImageRepositories_FoundAndNormalized(t *testing.T) {
+	text := `services:
+  api:
+    image: ghcr.io/nearai/router:v1.2.3@sha256:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
+  worker:
+    image: registry.example.com:5000/nearai/worker@sha256:0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff
+`
+	repos := ExtractImageRepositories(text)
+	if len(repos) != 2 {
+		t.Fatalf("expected 2 repositories, got %d: %v", len(repos), repos)
+	}
+	if repos[0] != "ghcr.io/nearai/router" {
+		t.Errorf("unexpected first repo: %s", repos[0])
+	}
+	if repos[1] != "registry.example.com:5000/nearai/worker" {
+		t.Errorf("unexpected second repo: %s", repos[1])
+	}
+}
+
+func TestExtractImageRepositories_Dedup(t *testing.T) {
+	text := `image: ghcr.io/nearai/router:v1@sha256:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
+image: ghcr.io/nearai/router:v2@sha256:0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff`
+	repos := ExtractImageRepositories(text)
+	if len(repos) != 1 {
+		t.Fatalf("expected 1 repository after dedup, got %d", len(repos))
+	}
+	if repos[0] != "ghcr.io/nearai/router" {
+		t.Fatalf("unexpected repository: %s", repos[0])
+	}
+}

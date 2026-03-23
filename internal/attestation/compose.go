@@ -2,11 +2,13 @@ package attestation
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // VerifyComposeBinding checks that sha256(appCompose) matches the MRConfigID
@@ -28,14 +30,12 @@ func VerifyComposeBinding(appCompose string, mrConfigID []byte) error {
 	}
 
 	actual := mrConfigID[:len(expectedPrefix)]
-	for i := range expectedPrefix {
-		if actual[i] != expectedPrefix[i] {
-			return fmt.Errorf(
-				"MRConfigID does not match app_compose hash (expected prefix=%s, actual=%s)",
-				hex.EncodeToString(expectedPrefix),
-				hex.EncodeToString(mrConfigID),
-			)
-		}
+	if subtle.ConstantTimeCompare(actual, expectedPrefix) != 1 {
+		return fmt.Errorf(
+			"MRConfigID does not match app_compose hash (expected prefix=%s, actual=%s)",
+			hex.EncodeToString(expectedPrefix),
+			hex.EncodeToString(mrConfigID),
+		)
 	}
 
 	return nil
@@ -59,6 +59,10 @@ func ExtractDockerCompose(appCompose string) (string, error) {
 // imageDigestRe matches @sha256:<64 hex chars> in image references.
 var imageDigestRe = regexp.MustCompile(`@sha256:([0-9a-f]{64})`)
 
+// imageRefDigestRe matches <image-ref>@sha256:<64 hex chars> where image-ref
+// is a container image reference that may include registry, namespace, and tag.
+var imageRefDigestRe = regexp.MustCompile(`([A-Za-z0-9._/:-]+)@sha256:[0-9a-f]{64}`)
+
 // ExtractImageDigests returns deduplicated sha256 digests from image references
 // in the given text (e.g. docker-compose content). Each digest is the 64-char
 // hex string after @sha256:.
@@ -75,4 +79,44 @@ func ExtractImageDigests(text string) []string {
 		digests = append(digests, digest)
 	}
 	return digests
+}
+
+// ExtractImageRepositories returns deduplicated normalized image repositories
+// extracted from image references that include a sha256 digest.
+//
+// Examples:
+//   - ghcr.io/nearai/router@sha256:... -> ghcr.io/nearai/router
+//   - ghcr.io/nearai/router:v1@sha256:... -> ghcr.io/nearai/router
+//   - registry.example.com:5000/ns/img@sha256:... -> registry.example.com:5000/ns/img
+func ExtractImageRepositories(text string) []string {
+	matches := imageRefDigestRe.FindAllStringSubmatch(text, -1)
+	seen := make(map[string]struct{}, len(matches))
+	var repos []string
+	for _, m := range matches {
+		repo := normalizeImageRepository(m[1])
+		if repo == "" {
+			continue
+		}
+		if _, ok := seen[repo]; ok {
+			continue
+		}
+		seen[repo] = struct{}{}
+		repos = append(repos, repo)
+	}
+	return repos
+}
+
+func normalizeImageRepository(ref string) string {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if ref == "" {
+		return ""
+	}
+	// Drop optional tag from the final path segment while preserving registry
+	// ports (e.g. registry:5000/ns/img:tag).
+	lastSlash := strings.LastIndex(ref, "/")
+	lastColon := strings.LastIndex(ref, ":")
+	if lastColon > lastSlash {
+		ref = ref[:lastColon]
+	}
+	return ref
 }

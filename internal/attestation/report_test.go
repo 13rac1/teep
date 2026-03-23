@@ -848,6 +848,109 @@ func TestBuildReportSigstoreFail(t *testing.T) {
 	}
 }
 
+func TestDefaultEnforcedIncludesSupplyChainFactors(t *testing.T) {
+	need := map[string]bool{
+		"sigstore_verification":  true,
+		"build_transparency_log": true,
+	}
+	for _, f := range DefaultEnforced {
+		delete(need, f)
+	}
+	if len(need) != 0 {
+		t.Fatalf("DefaultEnforced missing required factors: %v", need)
+	}
+}
+
+func TestBuildReportNearAISupplyChainPolicyPass(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	sigResults := []SigstoreResult{{
+		Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+		OK:     true,
+		Status: 200,
+	}}
+	rekor := []RekorProvenance{{
+		Digest:        sigResults[0].Digest,
+		HasCert:       true,
+		OIDCIssuer:    "https://token.actions.githubusercontent.com",
+		SourceRepo:    "nearai/router",
+		SourceRepoURL: "https://github.com/nearai/router",
+		SourceCommit:  "0123456789abcdef",
+		RunnerEnv:     "github-hosted",
+	}}
+
+	report := BuildReport(&ReportInput{
+		Provider:   "nearai",
+		Model:      "m",
+		Raw:        raw,
+		Nonce:      nonce,
+		ImageRepos: []string{"ghcr.io/nearai/router"},
+		Sigstore:   sigResults,
+		Rekor:      rekor,
+	})
+
+	f := findFactor(t, report, "build_transparency_log")
+	if f.Status != Pass {
+		t.Fatalf("build_transparency_log: got %s (%s), want PASS", f.Status, f.Detail)
+	}
+}
+
+func TestBuildReportNearAISupplyChainPolicyRejectsImageRepo(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+
+	report := BuildReport(&ReportInput{
+		Provider:   "nearai",
+		Model:      "m",
+		Raw:        raw,
+		Nonce:      nonce,
+		ImageRepos: []string{"ghcr.io/attacker/router"},
+	})
+
+	f := findFactor(t, report, "build_transparency_log")
+	if f.Status != Fail {
+		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
+	}
+	if !strings.Contains(f.Detail, "allowlist") {
+		t.Fatalf("expected allowlist detail, got: %s", f.Detail)
+	}
+}
+
+func TestBuildReportNearAISupplyChainPolicyRejectsSigner(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	sigResults := []SigstoreResult{{
+		Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+		OK:     true,
+		Status: 200,
+	}}
+	rekor := []RekorProvenance{{
+		Digest:        sigResults[0].Digest,
+		HasCert:       true,
+		OIDCIssuer:    "https://token.actions.githubusercontent.com",
+		SourceRepo:    "attacker/router",
+		SourceRepoURL: "https://github.com/attacker/router",
+	}}
+
+	report := BuildReport(&ReportInput{
+		Provider:   "nearai",
+		Model:      "m",
+		Raw:        raw,
+		Nonce:      nonce,
+		ImageRepos: []string{"ghcr.io/nearai/router"},
+		Sigstore:   sigResults,
+		Rekor:      rekor,
+	})
+
+	f := findFactor(t, report, "build_transparency_log")
+	if f.Status != Fail {
+		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
+	}
+	if !strings.Contains(f.Detail, "unexpected Sigstore signer identity") {
+		t.Fatalf("expected signer identity detail, got: %s", f.Detail)
+	}
+}
+
 // --------------------------------------------------------------------------
 // NVIDIA detail formatter tests
 // --------------------------------------------------------------------------
