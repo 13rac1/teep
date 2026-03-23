@@ -22,8 +22,8 @@ type tierInfo struct {
 	Description string
 }
 
-// factorRegistry contains all 24 verification factors in report order.
-var factorRegistry = [24]factorInfo{
+// factorRegistry contains all verification factors in report order.
+var factorRegistry = []factorInfo{
 	// Tier 1: Core Attestation
 	{
 		Name:    "nonce_match",
@@ -291,10 +291,68 @@ var factorRegistry = [24]factorInfo{
 			"complete — no entries were added, removed, or modified. Skipped " +
 			"when no event log entries are present in the attestation response.",
 	},
+	// Tier 4: Gateway Attestation (nearcloud only)
+	{
+		Name:    "gateway_nonce_match",
+		Tier:    4,
+		Summary: "Gateway nonce matches request",
+		Description: "Verifies that the nonce returned by the cloud-api.near.ai gateway " +
+			"matches the random nonce sent by the client. The gateway runs in its " +
+			"own TDX enclave and has a separate nonce from the model attestation.",
+	},
+	{
+		Name:    "gateway_tdx_quote_present",
+		Tier:    4,
+		Summary: "Gateway TDX quote present and parsed",
+		Description: "Checks that the gateway's intel_quote field exists in the " +
+			"gateway_attestation section and was successfully parsed. The gateway " +
+			"TDX quote proves cloud-api.near.ai itself runs in a genuine Intel " +
+			"TDX enclave.",
+	},
+	{
+		Name:    "gateway_tdx_quote_structure",
+		Tier:    4,
+		Summary: "Gateway TDX quote valid QuoteV4/V5",
+		Description: "Parses the gateway's TDX quote and verifies it conforms to " +
+			"the Intel QuoteV4 or QuoteV5 structure. Displays the gateway's MRTD " +
+			"prefix for comparison against published reference values.",
+	},
+	{
+		Name:    "gateway_tdx_cert_chain",
+		Tier:    4,
+		Summary: "Gateway Intel root CA chain valid",
+		Description: "Verifies the X.509 certificate chain in the gateway's TDX quote " +
+			"traces back to the Intel SGX/TDX root CA, proving the gateway " +
+			"attestation comes from genuine Intel hardware.",
+	},
+	{
+		Name:    "gateway_tdx_quote_signature",
+		Tier:    4,
+		Summary: "Gateway TDX quote signature verified",
+		Description: "Verifies the ECDSA signature on the gateway's TDX quote body " +
+			"using the attesting key from the certificate chain, ensuring the " +
+			"gateway quote has not been tampered with.",
+	},
+	{
+		Name:    "gateway_tdx_debug_disabled",
+		Tier:    4,
+		Summary: "Gateway debug bit is 0 (production)",
+		Description: "Checks that the gateway's TD_ATTRIBUTES debug bit is not set. " +
+			"A debug gateway enclave would allow the host to inspect all traffic " +
+			"passing through the API gateway.",
+	},
+	{
+		Name:    "gateway_compose_binding",
+		Tier:    4,
+		Summary: "Gateway compose hash matches MRConfigID",
+		Description: "Verifies that the SHA-256 hash of the gateway's app_compose " +
+			"manifest matches the MR_CONFIG_ID field in the gateway's TDX quote, " +
+			"binding the gateway's deployment manifest to its hardware attestation.",
+	},
 }
 
-// tierRegistry describes the three verification tiers.
-var tierRegistry = [3]tierInfo{
+// tierRegistry describes the verification tiers.
+var tierRegistry = []tierInfo{
 	{
 		Number: 1,
 		Name:   "Core Attestation",
@@ -329,11 +387,21 @@ var tierRegistry = [3]tierInfo{
 			"and event log integrity. " +
 			"These represent the supply-chain verification frontier.",
 	},
+	{
+		Number: 4,
+		Name:   "Gateway Attestation",
+		Label:  "Tier 4: Gateway Attestation",
+		Description: "Factors 25-31. Only applies to the nearcloud provider " +
+			"(cloud-api.near.ai). Verifies the API gateway itself runs in " +
+			"an Intel TDX enclave with its own TDX quote, certificate chain, " +
+			"and compose binding. This proves all traffic is routed through " +
+			"a TEE-attested gateway, not just that the model backend is attested.",
+	},
 }
 
 // findFactorByName returns the factorInfo for the given name.
 func findFactorByName(name string) (factorInfo, bool) {
-	for _, f := range &factorRegistry {
+	for _, f := range factorRegistry {
 		if f.Name == name {
 			return f, true
 		}
@@ -381,8 +449,8 @@ Global flags:
 Help topics:
   serve       Detailed documentation for the serve command.
   verify      Detailed documentation for the verify command.
-  tiers       Explain the 3-tier verification scoring system.
-  factors     List all 24 verification factors with full descriptions.
+  tiers       Explain the verification tier scoring system.
+  factors     List all verification factors with full descriptions.
   <factor>    Show details for a single factor (e.g. teep help tls_key_binding).
 
 Environment variables:
@@ -401,7 +469,7 @@ Usage:
   teep serve PROVIDER [--offline] [--log-level LEVEL]
 
 Arguments:
-  PROVIDER   Provider name (venice, nearai).
+  PROVIDER   Provider name (venice, nearai, nearcloud).
 
 The proxy intercepts OpenAI-compatible chat completion requests, performs TEE
 attestation verification against the upstream provider, and optionally enables
@@ -444,10 +512,10 @@ Usage:
   teep verify PROVIDER --model MODEL [flags]
 
 Arguments:
-  PROVIDER   Provider name (venice, nearai).
+  PROVIDER   Provider name (venice, nearai, nearcloud).
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
-attestation for the given model, and runs all 24 verification factors. The
+attestation for the given model, and runs all verification factors. The
 report is printed to stdout; log messages go to stderr.
 
 Required flags:
@@ -471,7 +539,7 @@ Examples:
   teep verify venice --model e2ee-qwen3-32b --log-level debug
 
 See 'teep help tiers' for how factors are scored, or 'teep help factors'
-for descriptions of all 24 verification factors.
+for descriptions of all verification factors.
 `)
 }
 
@@ -480,26 +548,25 @@ func printTiersHelp() {
 	fmt.Print("Verification Tiers\n")
 	fmt.Print(strings.Repeat("=", 19) + "\n\n")
 
-	fmt.Print(`teep evaluates TEE attestation using 24 factors organized into 3 tiers.
-Each factor produces a result: PASS, FAIL, or SKIP. Factors marked
+	fmt.Printf("teep evaluates TEE attestation using up to %d factors organized into %d tiers.\n", len(factorRegistry), len(tierRegistry))
+	fmt.Print(`Each factor produces a result: PASS, FAIL, or SKIP. Factors marked
 [ENFORCED] in the report will cause the proxy to refuse requests when
 they fail.
 
 `)
 
-	start := 0
-	bounds := [3]int{7, 16, 24}
-	for i, tier := range tierRegistry {
+	for _, tier := range tierRegistry {
 		fmt.Printf("%s\n", tier.Label)
 		fmt.Print(strings.Repeat("-", len(tier.Label)) + "\n")
 		fmt.Print(wrapText(tier.Description, 0, 76) + "\n\n")
 
 		fmt.Print("  Factors:\n")
-		for j := start; j < bounds[i]; j++ {
-			fmt.Printf("    %2d. %-26s %s\n", j+1, factorRegistry[j].Name, factorRegistry[j].Summary)
+		for i, f := range factorRegistry {
+			if f.Tier == tier.Number {
+				fmt.Printf("    %2d. %-30s %s\n", i+1, f.Name, f.Summary)
+			}
 		}
 		fmt.Println()
-		start = bounds[i]
 	}
 
 	fmt.Print(`Default enforced factors: nonce_match, tdx_debug_disabled,
@@ -517,7 +584,7 @@ func printFactorsHelp() {
 	fmt.Print(strings.Repeat("=", 20) + "\n\n")
 
 	currentTier := 0
-	for i, f := range &factorRegistry {
+	for i, f := range factorRegistry {
 		if f.Tier != currentTier {
 			currentTier = f.Tier
 			tier := tierRegistry[currentTier-1]

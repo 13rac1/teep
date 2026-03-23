@@ -403,17 +403,6 @@ func knownProviders(cfg *config.Config) string {
 	return strings.Join(names, ", ")
 }
 
-// tierBoundaries defines the exclusive upper index (0-based) for each tier.
-// Factors 0-6 = Tier 1, 7-15 = Tier 2, 16-22 = Tier 3.
-var tierBoundaries = [3]struct {
-	name string
-	end  int
-}{
-	{"Tier 1: Core Attestation", 7},
-	{"Tier 2: Binding & Crypto", 16},
-	{"Tier 3: Supply Chain & Channel Integrity", 23},
-}
-
 // formatReport renders a VerificationReport as a human-readable string,
 // matching the output format documented in the plan.
 func formatReport(r *attestation.VerificationReport) string {
@@ -432,29 +421,25 @@ func formatReport(r *attestation.VerificationReport) string {
 		b.WriteString("\n")
 	}
 
-	start := 0
-	for _, tb := range tierBoundaries {
-		end := min(tb.end, len(r.Factors))
-		if start >= len(r.Factors) {
-			break
-		}
-
-		b.WriteString(tb.name)
-		b.WriteString("\n")
-
-		for _, f := range r.Factors[start:end] {
-			icon := statusIcon(f.Status)
-			line := fmt.Sprintf("  %s %-26s %s", icon, f.Name, f.Detail)
-			if f.Enforced {
-				line += "  [ENFORCED]"
+	var currentTier string
+	for _, f := range r.Factors {
+		if f.Tier != currentTier {
+			if currentTier != "" {
+				b.WriteString("\n")
 			}
-			b.WriteString(line)
+			b.WriteString(f.Tier)
 			b.WriteString("\n")
+			currentTier = f.Tier
 		}
+		icon := statusIcon(f.Status)
+		line := fmt.Sprintf("  %s %-26s %s", icon, f.Name, f.Detail)
+		if f.Enforced {
+			line += "  [ENFORCED]"
+		}
+		b.WriteString(line)
 		b.WriteString("\n")
-
-		start = end
 	}
+	b.WriteString("\n")
 
 	fmt.Fprintf(&b, "Score: %d/%d passed, %d skipped, %d failed\n",
 		r.Passed, r.Passed+r.Failed+r.Skipped, r.Skipped, r.Failed)

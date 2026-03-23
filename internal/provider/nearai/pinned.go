@@ -183,18 +183,18 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	headers.Set("Authorization", "Bearer "+h.apiKey)
 	headers.Set("Connection", "close")
 
-	if err := writeHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
+	if err := WriteHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
 		return nil, fmt.Errorf("write chat request: %w", err)
 	}
 
 	// 6. Read the response.
-	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body is closed via connClosingReader wrapping below
+	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body is closed via ConnClosingReader wrapping below
 	if err != nil {
 		return nil, fmt.Errorf("read chat response: %w", err)
 	}
 
 	// Wrap the response body so closing it also closes the underlying connection.
-	wrappedBody := &connClosingReader{ReadCloser: resp.Body, conn: conn}
+	wrappedBody := NewConnClosingReader(resp.Body, conn)
 
 	return &provider.PinnedResponse{
 		StatusCode: resp.StatusCode,
@@ -254,7 +254,7 @@ func (h *PinnedHandler) attestOnConn(
 	attestHeaders.Set("Host", domain)
 	attestHeaders.Set("Authorization", "Bearer "+h.apiKey)
 	attestHeaders.Set("Connection", "keep-alive")
-	if err := writeHTTPRequest(bw, http.MethodGet, path, attestHeaders, nil); err != nil {
+	if err := WriteHTTPRequest(bw, http.MethodGet, path, attestHeaders, nil); err != nil {
 		return nil, fmt.Errorf("write attestation request: %w", err)
 	}
 
@@ -321,7 +321,7 @@ func (h *PinnedHandler) attestOnConn(
 	if raw.TLSFingerprint == "" {
 		return nil, errors.New("attestation response missing tls_cert_fingerprint")
 	}
-	match, err := constantTimeHexEqual(liveSPKI, raw.TLSFingerprint)
+	match, err := ConstantTimeHexEqual(liveSPKI, raw.TLSFingerprint)
 	if err != nil {
 		return nil, fmt.Errorf("compare live SPKI vs attested TLS fingerprint: %w", err)
 	}
@@ -385,12 +385,12 @@ func (h *PinnedHandler) attestOnConn(
 	return report, nil
 }
 
-// writeHTTPRequest writes an HTTP/1.1 request (request line + headers + body)
+// WriteHTTPRequest writes an HTTP/1.1 request (request line + headers + body)
 // to w. Used instead of http.Request.Write to maintain control over the exact
 // connection (no connection pooling, no automatic redirects).
 //
 // Host is derived from headers; Content-Length is derived from body.
-func writeHTTPRequest(w *bufio.Writer, method, path string, headers http.Header, body []byte) error {
+func WriteHTTPRequest(w *bufio.Writer, method, path string, headers http.Header, body []byte) error {
 	// Request line.
 	if _, err := fmt.Fprintf(w, "%s %s HTTP/1.1\r\n", method, path); err != nil {
 		return err
@@ -445,7 +445,8 @@ func writeHTTPRequest(w *bufio.Writer, method, path string, headers http.Header,
 	return w.Flush()
 }
 
-func constantTimeHexEqual(a, b string) (bool, error) {
+// ConstantTimeHexEqual compares two hex strings in constant time.
+func ConstantTimeHexEqual(a, b string) (bool, error) {
 	aBytes, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(a)), "0x"))
 	if err != nil {
 		return false, fmt.Errorf("first value is not valid hex: %w", err)
@@ -460,16 +461,22 @@ func constantTimeHexEqual(a, b string) (bool, error) {
 	return subtle.ConstantTimeCompare(aBytes, bBytes) == 1, nil
 }
 
-// connClosingReader wraps an io.ReadCloser so that closing it also closes the
+// ConnClosingReader wraps an io.ReadCloser so that closing it also closes the
 // underlying net.Conn. Used to tie the response body lifetime to the connection.
-type connClosingReader struct {
+type ConnClosingReader struct {
 	io.ReadCloser
-	conn net.Conn
+	Conn net.Conn
 }
 
-func (r *connClosingReader) Close() error {
+// NewConnClosingReader returns a ConnClosingReader wrapping rc and conn.
+func NewConnClosingReader(rc io.ReadCloser, conn net.Conn) *ConnClosingReader {
+	return &ConnClosingReader{ReadCloser: rc, Conn: conn}
+}
+
+// Close closes both the wrapped ReadCloser and the underlying net.Conn.
+func (r *ConnClosingReader) Close() error {
 	err := r.ReadCloser.Close()
-	connErr := r.conn.Close()
+	connErr := r.Conn.Close()
 	if err != nil {
 		return err
 	}

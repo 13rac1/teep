@@ -8,30 +8,31 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 )
 
-func TestFactorRegistryCount(t *testing.T) {
-	if len(factorRegistry) != 24 {
-		t.Errorf("factor registry has %d entries, want 24", len(factorRegistry))
+func TestFactorRegistryMatchesKnownFactors(t *testing.T) {
+	if len(factorRegistry) != len(attestation.KnownFactors) {
+		t.Errorf("factor registry has %d entries, KnownFactors has %d", len(factorRegistry), len(attestation.KnownFactors))
+	}
+	for i, f := range factorRegistry {
+		if i < len(attestation.KnownFactors) && f.Name != attestation.KnownFactors[i] {
+			t.Errorf("factor[%d]: registry=%q, KnownFactors=%q", i, f.Name, attestation.KnownFactors[i])
+		}
 	}
 }
 
 func TestFactorRegistryTiers(t *testing.T) {
+	tierNumbers := make(map[int]bool)
+	for _, tier := range tierRegistry {
+		tierNumbers[tier.Number] = true
+	}
 	for i, f := range factorRegistry {
-		var wantTier int
-		switch {
-		case i < 7:
-			wantTier = 1
-		case i < 16:
-			wantTier = 2
-		default: // 16..22 = Tier 3
-			wantTier = 3
-		}
-		if f.Tier != wantTier {
-			t.Errorf("factor[%d] %q: tier=%d, want %d", i, f.Name, f.Tier, wantTier)
+		if !tierNumbers[f.Tier] {
+			t.Errorf("factor[%d] %q: tier=%d is not in tierRegistry", i, f.Name, f.Tier)
 		}
 	}
 }
 
 func TestFactorRegistryNamesMatchReport(t *testing.T) {
+	// Base report (no gateway) should match the first 24 factors.
 	nonce := attestation.NewNonce()
 	raw := &attestation.RawAttestation{
 		Nonce:      nonce.Hex(),
@@ -41,14 +42,18 @@ func TestFactorRegistryNamesMatchReport(t *testing.T) {
 	}
 	report := attestation.BuildReport(&attestation.ReportInput{Provider: "test", Model: "test", Raw: raw, Nonce: nonce})
 
-	if len(report.Factors) != len(factorRegistry) {
-		t.Fatalf("report has %d factors, registry has %d", len(report.Factors), len(factorRegistry))
-	}
-	for i, f := range factorRegistry {
-		if f.Name != report.Factors[i].Name {
-			t.Errorf("factor[%d]: registry=%q, report=%q", i, f.Name, report.Factors[i].Name)
+	// Base factors are the first 24 in both factorRegistry and KnownFactors.
+	baseFactorCount := len(report.Factors)
+	for i, rf := range report.Factors {
+		if i >= len(factorRegistry) {
+			t.Errorf("report factor[%d] %q has no registry entry", i, rf.Name)
+			continue
+		}
+		if factorRegistry[i].Name != rf.Name {
+			t.Errorf("factor[%d]: registry=%q, report=%q", i, factorRegistry[i].Name, rf.Name)
 		}
 	}
+	t.Logf("base report has %d factors", baseFactorCount)
 }
 
 func TestFactorRegistryDescriptions(t *testing.T) {
@@ -62,9 +67,17 @@ func TestFactorRegistryDescriptions(t *testing.T) {
 	}
 }
 
-func TestTierRegistryCount(t *testing.T) {
-	if len(tierRegistry) != 3 {
-		t.Errorf("tier registry has %d entries, want 3", len(tierRegistry))
+func TestTierRegistryHasEntries(t *testing.T) {
+	if len(tierRegistry) == 0 {
+		t.Error("tier registry is empty")
+	}
+	for i, tier := range tierRegistry {
+		if tier.Number != i+1 {
+			t.Errorf("tier[%d]: Number=%d, want %d", i, tier.Number, i+1)
+		}
+		if tier.Label == "" {
+			t.Errorf("tier[%d]: Label is empty", i)
+		}
 	}
 }
 

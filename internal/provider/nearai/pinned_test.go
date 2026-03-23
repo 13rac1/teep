@@ -28,8 +28,8 @@ func TestWriteHTTPRequest_GET(t *testing.T) {
 
 	headers.Set("Host", "example.com")
 
-	if err := writeHTTPRequest(bw, "GET", "/v1/attestation/report?nonce=abc", headers, nil); err != nil {
-		t.Fatalf("writeHTTPRequest: %v", err)
+	if err := WriteHTTPRequest(bw, "GET", "/v1/attestation/report?nonce=abc", headers, nil); err != nil {
+		t.Fatalf("WriteHTTPRequest: %v", err)
 	}
 
 	got := buf.String()
@@ -60,8 +60,8 @@ func TestWriteHTTPRequest_POST(t *testing.T) {
 	headers.Set("Host", "api.near.ai")
 
 	body := []byte(`{"model":"test"}`)
-	if err := writeHTTPRequest(bw, "POST", "/v1/chat/completions", headers, body); err != nil {
-		t.Fatalf("writeHTTPRequest: %v", err)
+	if err := WriteHTTPRequest(bw, "POST", "/v1/chat/completions", headers, body); err != nil {
+		t.Fatalf("WriteHTTPRequest: %v", err)
 	}
 
 	got := buf.String()
@@ -88,8 +88,8 @@ func TestWriteHTTPRequest_ValidHTTP(t *testing.T) {
 	headers.Set("Host", "host.com")
 
 	body := []byte(`{"model":"x"}`)
-	if err := writeHTTPRequest(bw, "POST", "/v1/chat", headers, body); err != nil {
-		t.Fatalf("writeHTTPRequest: %v", err)
+	if err := WriteHTTPRequest(bw, "POST", "/v1/chat", headers, body); err != nil {
+		t.Fatalf("WriteHTTPRequest: %v", err)
 	}
 
 	req, err := http.ReadRequest(bufio.NewReader(&buf))
@@ -121,7 +121,7 @@ func TestWriteHTTPRequest_MissingHost(t *testing.T) {
 	headers.Set("Authorization", "Bearer key")
 	// No Host header set.
 
-	err := writeHTTPRequest(bw, "GET", "/path", headers, nil)
+	err := WriteHTTPRequest(bw, "GET", "/path", headers, nil)
 	if err == nil {
 		t.Fatal("expected error for missing Host header")
 	}
@@ -138,7 +138,7 @@ func TestWriteHTTPRequest_RejectsCRLFInHeaderValue(t *testing.T) {
 	headers.Set("Host", "example.com")
 	headers.Set("Authorization", "Bearer good\r\nX-Injected: bad")
 
-	err := writeHTTPRequest(bw, "GET", "/path", headers, nil)
+	err := WriteHTTPRequest(bw, "GET", "/path", headers, nil)
 	if err == nil {
 		t.Fatal("expected error for CRLF header injection")
 	}
@@ -306,16 +306,16 @@ func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Serv
 	headers.Set("Authorization", "Bearer "+h.apiKey)
 	headers.Set("Connection", "close")
 
-	if err := writeHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
+	if err := WriteHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body is closed via connClosingReader wrapping below
+	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body is closed via ConnClosingReader wrapping below
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
 	}
 
-	wrappedBody := &connClosingReader{ReadCloser: resp.Body, conn: conn}
+	wrappedBody := NewConnClosingReader(resp.Body, conn)
 	return &provider.PinnedResponse{
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
@@ -733,7 +733,7 @@ func TestHandlePinned_DomainResolveError(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// connClosingReader tests
+// ConnClosingReader tests
 // --------------------------------------------------------------------------
 
 type mockReadCloser struct {
@@ -758,9 +758,9 @@ func (m *mockConn) Close() error {
 }
 
 func TestConnClosingReader_BothSucceed(t *testing.T) {
-	r := &connClosingReader{
+	r := &ConnClosingReader{
 		ReadCloser: &mockReadCloser{},
-		conn:       &mockConn{},
+		Conn:       &mockConn{},
 	}
 	err := r.Close()
 	t.Logf("Close error: %v", err)
@@ -771,9 +771,9 @@ func TestConnClosingReader_BothSucceed(t *testing.T) {
 
 func TestConnClosingReader_ReaderFails(t *testing.T) {
 	readerErr := errors.New("reader close failed")
-	r := &connClosingReader{
+	r := &ConnClosingReader{
 		ReadCloser: &mockReadCloser{closeErr: readerErr},
-		conn:       &mockConn{},
+		Conn:       &mockConn{},
 	}
 	err := r.Close()
 	t.Logf("Close error: %v", err)
@@ -784,9 +784,9 @@ func TestConnClosingReader_ReaderFails(t *testing.T) {
 
 func TestConnClosingReader_ConnFails(t *testing.T) {
 	connErr := errors.New("conn close failed")
-	r := &connClosingReader{
+	r := &ConnClosingReader{
 		ReadCloser: &mockReadCloser{},
-		conn:       &mockConn{closeErr: connErr},
+		Conn:       &mockConn{closeErr: connErr},
 	}
 	err := r.Close()
 	t.Logf("Close error: %v", err)
@@ -798,9 +798,9 @@ func TestConnClosingReader_ConnFails(t *testing.T) {
 func TestConnClosingReader_BothFail(t *testing.T) {
 	readerErr := errors.New("reader close failed")
 	connErr := errors.New("conn close failed")
-	r := &connClosingReader{
+	r := &ConnClosingReader{
 		ReadCloser: &mockReadCloser{closeErr: readerErr},
-		conn:       &mockConn{closeErr: connErr},
+		Conn:       &mockConn{closeErr: connErr},
 	}
 	err := r.Close()
 	t.Logf("Close error: %v", err)

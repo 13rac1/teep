@@ -19,34 +19,34 @@ import (
 // formatReport tests
 // --------------------------------------------------------------------------
 
-// buildTestReport constructs a VerificationReport with exactly 21 factors
+// buildTestReport constructs a VerificationReport with test factors
 // using the given per-factor inputs so we can verify formatting precisely.
 func buildTestReport(provider, model string) *attestation.VerificationReport {
 	factors := []attestation.FactorResult{
-		// Tier 1 (0-6)
-		{Name: "nonce_match", Status: attestation.Pass, Detail: "Nonce matches (64 hex chars)", Enforced: true},
-		{Name: "tdx_quote_present", Status: attestation.Pass, Detail: "TDX quote present (1247 base64 chars)", Enforced: false},
-		{Name: "tdx_quote_structure", Status: attestation.Pass, Detail: "Valid QuoteV4 structure", Enforced: false},
-		{Name: "tdx_cert_chain", Status: attestation.Pass, Detail: "Certificate chain valid (Intel root CA)", Enforced: false},
-		{Name: "tdx_quote_signature", Status: attestation.Pass, Detail: "Quote signature verified", Enforced: false},
-		{Name: "tdx_debug_disabled", Status: attestation.Pass, Detail: "Debug bit is 0", Enforced: true},
-		{Name: "signing_key_present", Status: attestation.Pass, Detail: "enclave pubkey present (04a3b2...)", Enforced: true},
-		// Tier 2 (7-15)
-		{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "REPORTDATA binds signing key + nonce", Enforced: true},
-		{Name: "intel_pcs_collateral", Status: attestation.Skip, Detail: "Quote age not determinable", Enforced: false},
-		{Name: "tdx_tcb_current", Status: attestation.Pass, Detail: "TCB SVN: 03000000000000000000000000000000", Enforced: false},
-		{Name: "nvidia_payload_present", Status: attestation.Pass, Detail: "NVIDIA payload present (512 chars)", Enforced: false},
-		{Name: "nvidia_signature", Status: attestation.Pass, Detail: "JWT signature valid (RS256)", Enforced: false},
-		{Name: "nvidia_claims", Status: attestation.Pass, Detail: "Claims valid", Enforced: false},
-		{Name: "nvidia_nonce_match", Status: attestation.Skip, Detail: "Nonce field not found in NVIDIA payload", Enforced: false},
-		{Name: "nvidia_nras_verified", Status: attestation.Skip, Detail: "offline mode; NRAS verification skipped", Enforced: false},
-		{Name: "e2ee_capable", Status: attestation.Pass, Detail: "E2EE key exchange possible", Enforced: false},
-		// Tier 3 (16-20)
-		{Name: "tls_key_binding", Status: attestation.Fail, Detail: "no TLS key in attestation", Enforced: false},
-		{Name: "cpu_gpu_chain", Status: attestation.Fail, Detail: "CPU-GPU attestation not bound", Enforced: false},
-		{Name: "measured_model_weights", Status: attestation.Fail, Detail: "no model weight hashes", Enforced: false},
-		{Name: "build_transparency_log", Status: attestation.Fail, Detail: "no build transparency log", Enforced: false},
-		{Name: "cpu_id_registry", Status: attestation.Fail, Detail: "no CPU ID registry check", Enforced: false},
+		// Tier 1
+		{Name: "nonce_match", Status: attestation.Pass, Detail: "Nonce matches (64 hex chars)", Enforced: true, Tier: attestation.TierCore},
+		{Name: "tdx_quote_present", Status: attestation.Pass, Detail: "TDX quote present (1247 base64 chars)", Tier: attestation.TierCore},
+		{Name: "tdx_quote_structure", Status: attestation.Pass, Detail: "Valid QuoteV4 structure", Tier: attestation.TierCore},
+		{Name: "tdx_cert_chain", Status: attestation.Pass, Detail: "Certificate chain valid (Intel root CA)", Tier: attestation.TierCore},
+		{Name: "tdx_quote_signature", Status: attestation.Pass, Detail: "Quote signature verified", Tier: attestation.TierCore},
+		{Name: "tdx_debug_disabled", Status: attestation.Pass, Detail: "Debug bit is 0", Enforced: true, Tier: attestation.TierCore},
+		{Name: "signing_key_present", Status: attestation.Pass, Detail: "enclave pubkey present (04a3b2...)", Enforced: true, Tier: attestation.TierCore},
+		// Tier 2
+		{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "REPORTDATA binds signing key + nonce", Enforced: true, Tier: attestation.TierBinding},
+		{Name: "intel_pcs_collateral", Status: attestation.Skip, Detail: "Quote age not determinable", Tier: attestation.TierBinding},
+		{Name: "tdx_tcb_current", Status: attestation.Pass, Detail: "TCB SVN: 03000000000000000000000000000000", Tier: attestation.TierBinding},
+		{Name: "nvidia_payload_present", Status: attestation.Pass, Detail: "NVIDIA payload present (512 chars)", Tier: attestation.TierBinding},
+		{Name: "nvidia_signature", Status: attestation.Pass, Detail: "JWT signature valid (RS256)", Tier: attestation.TierBinding},
+		{Name: "nvidia_claims", Status: attestation.Pass, Detail: "Claims valid", Tier: attestation.TierBinding},
+		{Name: "nvidia_nonce_match", Status: attestation.Skip, Detail: "Nonce field not found in NVIDIA payload", Tier: attestation.TierBinding},
+		{Name: "nvidia_nras_verified", Status: attestation.Skip, Detail: "offline mode; NRAS verification skipped", Tier: attestation.TierBinding},
+		{Name: "e2ee_capable", Status: attestation.Pass, Detail: "E2EE key exchange possible", Tier: attestation.TierBinding},
+		// Tier 3
+		{Name: "tls_key_binding", Status: attestation.Fail, Detail: "no TLS key in attestation", Tier: attestation.TierSupplyChain},
+		{Name: "cpu_gpu_chain", Status: attestation.Fail, Detail: "CPU-GPU attestation not bound", Tier: attestation.TierSupplyChain},
+		{Name: "measured_model_weights", Status: attestation.Fail, Detail: "no model weight hashes", Tier: attestation.TierSupplyChain},
+		{Name: "build_transparency_log", Status: attestation.Fail, Detail: "no build transparency log", Tier: attestation.TierSupplyChain},
+		{Name: "cpu_id_registry", Status: attestation.Fail, Detail: "no CPU ID registry check", Tier: attestation.TierSupplyChain},
 	}
 
 	passed, failed, skipped := 0, 0, 0
@@ -265,18 +265,19 @@ func TestStatusIcon(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// Tier boundary correctness
+// Tier consistency checks
 // --------------------------------------------------------------------------
 
-func TestTierBoundaries(t *testing.T) {
-	for _, tb := range tierBoundaries {
-		if tb.end > 23 {
-			t.Errorf("tier boundary end %d exceeds 23", tb.end)
-		}
+func TestFactorTiersMatchRegistry(t *testing.T) {
+	// Every factor's Tier must have a corresponding tierRegistry entry.
+	tierNumbers := make(map[int]bool)
+	for _, tier := range tierRegistry {
+		tierNumbers[tier.Number] = true
 	}
-	last := tierBoundaries[len(tierBoundaries)-1].end
-	if last != 23 {
-		t.Errorf("final tier boundary end = %d, want 23", last)
+	for _, f := range factorRegistry {
+		if !tierNumbers[f.Tier] {
+			t.Errorf("factor %q has tier %d which is not in tierRegistry", f.Name, f.Tier)
+		}
 	}
 }
 
