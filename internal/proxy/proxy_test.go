@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -376,6 +377,200 @@ func TestHandleModels(t *testing.T) {
 	}
 	if !ids["tee-test-model"] {
 		t.Error("tee-test-model not in response")
+	}
+}
+
+// stubModelLister returns canned models.
+type stubModelLister struct {
+	models []json.RawMessage
+}
+
+func (s stubModelLister) ListModels(_ context.Context) ([]json.RawMessage, error) {
+	return s.models, nil
+}
+
+// errorModelLister always returns an error.
+type errorModelLister struct{}
+
+func (errorModelLister) ListModels(_ context.Context) ([]json.RawMessage, error) {
+	return nil, errors.New("model listing unavailable")
+}
+
+func TestHandleModels_ProviderError(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+			},
+		},
+		Enforced: []string{},
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+	prov := srv.ProviderByName("neardirect")
+	prov.ModelLister = errorModelLister{}
+	prov.PinnedHandler = stubPinnedHandler{}
+
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	resp, err := http.Get(proxySrv.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var result struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	t.Logf("object=%q data_len=%d", result.Object, len(result.Data))
+	if result.Object != "list" {
+		t.Errorf("object = %q, want %q", result.Object, "list")
+	}
+	if len(result.Data) != 0 {
+		t.Errorf("data len = %d, want 0 (provider errored)", len(result.Data))
+	}
+}
+
+func TestHandleModels_NilModelLister(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+			},
+		},
+		Enforced: []string{},
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+	prov := srv.ProviderByName("neardirect")
+	prov.ModelLister = nil
+	prov.PinnedHandler = stubPinnedHandler{}
+
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	resp, err := http.Get(proxySrv.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var result struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	t.Logf("object=%q data_len=%d", result.Object, len(result.Data))
+	if result.Object != "list" {
+		t.Errorf("object = %q, want %q", result.Object, "list")
+	}
+	if len(result.Data) != 0 {
+		t.Errorf("data len = %d, want 0 (nil ModelLister)", len(result.Data))
+	}
+}
+
+func TestHandleModels_MultipleProviders(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+			},
+			"nearcloud": {
+				Name:    "nearcloud",
+				BaseURL: "https://cloud-api.near.ai",
+				APIKey:  "key",
+			},
+		},
+		Enforced: []string{},
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+
+	// Stub both providers with different models.
+	direct := srv.ProviderByName("neardirect")
+	direct.PinnedHandler = stubPinnedHandler{}
+	direct.ModelLister = stubModelLister{
+		models: []json.RawMessage{json.RawMessage(`{"id":"model-a","object":"model","owned_by":"near-ai"}`)},
+	}
+
+	cloud := srv.ProviderByName("nearcloud")
+	cloud.PinnedHandler = stubPinnedHandler{}
+	cloud.ModelLister = stubModelLister{
+		models: []json.RawMessage{json.RawMessage(`{"id":"model-b","object":"model","owned_by":"near-ai"}`)},
+	}
+
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	resp, err := http.Get(proxySrv.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var result struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	t.Logf("object=%q data_len=%d", result.Object, len(result.Data))
+	if len(result.Data) != 2 {
+		t.Fatalf("data len = %d, want 2 (one from each provider)", len(result.Data))
+	}
+
+	ids := map[string]bool{}
+	for _, raw := range result.Data {
+		var m struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		t.Logf("  model: %s", m.ID)
+		ids[m.ID] = true
+	}
+	if !ids["model-a"] {
+		t.Error("model-a missing from response")
+	}
+	if !ids["model-b"] {
+		t.Error("model-b missing from response")
 	}
 }
 
