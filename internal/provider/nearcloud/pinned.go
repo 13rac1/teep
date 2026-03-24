@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -31,14 +32,17 @@ const (
 // cache miss, two attestation requests are sent on the same TLS connection:
 // one for the gateway and one for the model.
 type PinnedHandler struct {
-	spkiCache  *attestation.SPKICache
-	apiKey     string
-	offline    bool
-	enforced   []string
-	policy     attestation.MeasurementPolicy
-	rdVerifier provider.ReportDataVerifier
-	ctChecker  *neardirect.CTChecker
-	dialFn     func(ctx context.Context, domain string) (*tls.Conn, error)
+	spkiCache     *attestation.SPKICache
+	apiKey        string
+	offline       bool
+	enforced      []string
+	policy        attestation.MeasurementPolicy
+	gatewayPolicy attestation.MeasurementPolicy
+	rdVerifier    provider.ReportDataVerifier
+	rekorClient   *attestation.RekorClient
+	pocSigningKey ed25519.PublicKey // optional EdDSA key for PoC JWT verification (GW-M-11)
+	ctChecker     *neardirect.CTChecker
+	dialFn        func(ctx context.Context, domain string) (*tls.Conn, error)
 
 	verifySF singleflight.Group
 }
@@ -50,25 +54,26 @@ func NewPinnedHandler(
 	offline bool,
 	enforced []string,
 	policy attestation.MeasurementPolicy,
+	gatewayPolicy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
+	rekorClient *attestation.RekorClient,
+	pocSigningKey ed25519.PublicKey,
 ) *PinnedHandler {
 	checker := neardirect.NewCTChecker()
 	checker.SetEnabled(!offline)
 
 	return &PinnedHandler{
-		spkiCache:  spkiCache,
-		apiKey:     apiKey,
-		offline:    offline,
-		enforced:   enforced,
-		policy:     policy,
-		rdVerifier: rdVerifier,
-		ctChecker:  checker,
+		spkiCache:     spkiCache,
+		apiKey:        apiKey,
+		offline:       offline,
+		enforced:      enforced,
+		policy:        policy,
+		gatewayPolicy: gatewayPolicy,
+		rdVerifier:    rdVerifier,
+		rekorClient:   rekorClient,
+		pocSigningKey: pocSigningKey,
+		ctChecker:     checker,
 	}
-}
-
-// SetDialer overrides the TLS dial function. Intended for testing.
-func (h *PinnedHandler) SetDialer(fn func(ctx context.Context, domain string) (*tls.Conn, error)) {
-	h.dialFn = fn
 }
 
 // SetCTChecker overrides the certificate transparency checker. Intended for tests.
@@ -166,7 +171,33 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	headers.Set("Authorization", "Bearer "+h.apiKey)
 	headers.Set("Connection", "close")
 
-	if err := neardirect.WriteHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
+	// E2EE: encrypt message contents for the model backend so the
+	// gateway CVM cannot read plaintext. The signing key from attestation
+	// is the model's public key for ECDH key exchange.
+	chatBody := req.Body
+	var session *attestation.Session
+	if req.E2EE {
+		sk := signingKey
+		if sk == "" {
+			// SPKI cache hit — use the caller-provided signing key.
+			sk = req.SigningKey
+		}
+		if sk == "" {
+			return nil, errors.New("E2EE requested but no signing key available")
+		}
+		encBody, sess, err := attestation.EncryptChatMessages(chatBody, sk)
+		if err != nil {
+			return nil, fmt.Errorf("E2EE encrypt: %w", err)
+		}
+		chatBody = encBody
+		session = sess
+		headers.Set("X-Session-Public-Key", session.PublicKeyHex)
+	}
+
+	if err := neardirect.WriteHTTPRequest(bw, req.Method, req.Path, headers, chatBody); err != nil {
+		if session != nil {
+			session.Zero()
+		}
 		return nil, fmt.Errorf("write chat request: %w", err)
 	}
 
@@ -183,7 +214,15 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		Body:       wrappedBody,
 		Report:     report,
 		SigningKey: signingKey,
+		Session:    session,
 	}, nil
+}
+
+// setDialer overrides the TLS dial function. Only accessible from tests
+// within this package — unexported to prevent supply-chain redirection of
+// gateway connections in production.
+func (h *PinnedHandler) setDialer(fn func(ctx context.Context, domain string) (*tls.Conn, error)) {
+	h.dialFn = fn
 }
 
 func (h *PinnedHandler) tlsDial(ctx context.Context, domain string) (*tls.Conn, error) {
@@ -289,13 +328,13 @@ func (h *PinnedHandler) attestOnConn(
 
 	var pocResult *attestation.PoCResult
 	if !h.offline && raw.IntelQuote != "" {
-		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second))
+		poc := attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second), h.pocSigningKey)
 		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
 	}
 
 	var gatewayPoCResult *attestation.PoCResult
 	if !h.offline && gwRaw.IntelQuote != "" {
-		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second))
+		poc := attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second), h.pocSigningKey)
 		gatewayPoCResult = poc.CheckQuote(ctx, gwRaw.IntelQuote)
 	}
 
@@ -408,10 +447,10 @@ func (h *PinnedHandler) attestOnConn(
 	}
 
 	if len(allDigests) > 0 && !h.offline {
-		sigstoreResults = attestation.CheckSigstoreDigests(ctx, allDigests, tlsct.NewHTTPClient(10*time.Second))
+		sigstoreResults = h.rekorClient.CheckSigstoreDigests(ctx, allDigests)
 		for _, sr := range sigstoreResults {
 			if sr.OK {
-				rekorResults = append(rekorResults, attestation.FetchRekorProvenance(ctx, sr.Digest, tlsct.NewHTTPClient(10*time.Second)))
+				rekorResults = append(rekorResults, h.rekorClient.FetchRekorProvenance(ctx, sr.Digest))
 			}
 		}
 	}
@@ -439,6 +478,7 @@ func (h *PinnedHandler) attestOnConn(
 		GatewayNonce:      modelNonce, // gateway echoes the same nonce
 		GatewayCompose:    gatewayCompose,
 		GatewayEventLog:   gwRaw.EventLog,
+		GatewayPolicy:     h.gatewayPolicy,
 	})
 	return report, raw.SigningKey, nil
 }

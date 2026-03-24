@@ -41,6 +41,12 @@ type PinnedRequest struct {
 	Headers http.Header // forwarded headers (Authorization, Content-Type, etc.)
 	Body    []byte      // raw request body
 	Model   string      // upstream model name (for endpoint resolution)
+	E2EE    bool        // encrypt message contents for the model backend
+
+	// SigningKey is the model's attested public key, provided by the caller
+	// from its signing key cache. Used on SPKI cache hits when E2EE is
+	// active and no fresh attestation provides a signing key.
+	SigningKey string
 }
 
 // PinnedResponse is a raw HTTP response from a pinned connection.
@@ -56,6 +62,10 @@ type PinnedResponse struct {
 	// SigningKey is the attested model key returned on cache misses. It allows
 	// callers to refresh signing-key caches without a second attestation fetch.
 	SigningKey string
+
+	// Session is the E2EE session established during the pinned request.
+	// Non-nil when E2EE was active; callers use it for response decryption.
+	Session *attestation.Session
 }
 
 // ModelLister fetches the list of available models from a provider.

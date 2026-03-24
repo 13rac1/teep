@@ -372,7 +372,7 @@ func TestNewPinnedHandler(t *testing.T) {
 	rdVerifier := ReportDataVerifier{}
 	enforced := []string{"nonce_match", "tdx_debug_disabled"}
 
-	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, enforced, attestation.MeasurementPolicy{}, rdVerifier)
+	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, enforced, attestation.MeasurementPolicy{}, rdVerifier, nil)
 
 	if h.apiKey != "test-api-key" {
 		t.Errorf("apiKey = %q, want %q", h.apiKey, "test-api-key")
@@ -473,7 +473,7 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 		true, // offline — skip Sigstore/Rekor
 		[]string{},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{},
+		ReportDataVerifier{}, nil,
 	)
 
 	// Inject dialer that connects to our test TLS server.
@@ -545,7 +545,7 @@ func TestHandlePinned_CacheHitViaSetDialer(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{},
+		ReportDataVerifier{}, nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -611,7 +611,7 @@ func TestHandlePinned_MismatchedFingerprint(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{},
+		ReportDataVerifier{}, nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -664,7 +664,7 @@ func TestHandlePinned_BlockedReportDoesNotPopulateSPKICache(t *testing.T) {
 		true,
 		[]string{"nonce_match"},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{},
+		ReportDataVerifier{}, nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -713,7 +713,7 @@ func TestHandlePinned_DomainResolveError(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{},
+		ReportDataVerifier{}, nil,
 	)
 
 	_, err := handler.HandlePinned(context.Background(), &provider.PinnedRequest{

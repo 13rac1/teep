@@ -368,7 +368,8 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	}
 
 	if len(allDigests) > 0 && !cfg.Offline {
-		sigstoreResults = attestation.CheckSigstoreDigests(ctx, allDigests, client)
+		rc := attestation.NewRekorClient(client)
+		sigstoreResults = rc.CheckSigstoreDigests(ctx, allDigests)
 		for _, r := range sigstoreResults {
 			switch {
 			case r.OK:
@@ -383,10 +384,11 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 
 	var rekorResults []attestation.RekorProvenance
 	if len(sigstoreResults) > 0 && !cfg.Offline {
+		rc := attestation.NewRekorClient(client)
 		for _, sr := range sigstoreResults {
 			if sr.OK {
 				slog.Info("fetching Rekor provenance", "digest", "sha256:"+sr.Digest[:min(16, len(sr.Digest))]+"...")
-				prov := attestation.FetchRekorProvenance(ctx, sr.Digest, client)
+				prov := rc.FetchRekorProvenance(ctx, sr.Digest)
 				switch {
 				case prov.Err != nil:
 					slog.Warn("Rekor provenance fetch failed", "digest", "sha256:"+sr.Digest[:min(16, len(sr.Digest))]+"...", "err", prov.Err)

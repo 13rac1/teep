@@ -22,6 +22,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -133,6 +135,8 @@ type Server struct {
 	negCache        *attestation.NegativeCache
 	signingKeyCache *attestation.SigningKeyCache
 	spkiCache       *attestation.SPKICache
+	rekorClient     *attestation.RekorClient
+	pocSigningKey   ed25519.PublicKey // optional EdDSA key for PoC JWT verification (GW-M-11)
 	mux             *http.ServeMux
 	attestClient    *http.Client // for attestation fetches
 	upstreamClient  *http.Client // for chat completions forwards
@@ -143,6 +147,7 @@ type Server struct {
 // Preparer implementations based on provider name.
 func New(cfg *config.Config) (*Server, error) {
 	spkiCache := attestation.NewSPKICache()
+	attestClient := config.NewAttestationClient(cfg.Offline)
 	s := &Server{
 		cfg:             cfg,
 		providers:       make(map[string]*provider.Provider, len(cfg.Providers)),
@@ -150,8 +155,9 @@ func New(cfg *config.Config) (*Server, error) {
 		negCache:        attestation.NewNegativeCache(negativeCacheTTL),
 		signingKeyCache: attestation.NewSigningKeyCache(signingKeyCacheTTL),
 		spkiCache:       spkiCache,
+		rekorClient:     attestation.NewRekorClient(attestClient),
 		mux:             http.NewServeMux(),
-		attestClient:    config.NewAttestationClient(cfg.Offline),
+		attestClient:    attestClient,
 		upstreamClient: tlsct.NewHTTPClientWithTransport(0, &http.Transport{
 			MaxIdleConnsPerHost: 10,
 			IdleConnTimeout:     90 * time.Second,
@@ -159,8 +165,21 @@ func New(cfg *config.Config) (*Server, error) {
 		stats: stats{startTime: time.Now()},
 	}
 
+	// Parse optional PoC EdDSA signing key (GW-M-11).
+	if cfg.PoCSigningKey != "" {
+		keyBytes, err := base64.StdEncoding.DecodeString(cfg.PoCSigningKey)
+		if err != nil {
+			return nil, fmt.Errorf("poc_signing_key: invalid base64: %w", err)
+		}
+		if len(keyBytes) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("poc_signing_key: expected %d bytes, got %d", ed25519.PublicKeySize, len(keyBytes))
+		}
+		s.pocSigningKey = ed25519.PublicKey(keyBytes)
+		slog.Info("PoC JWT EdDSA signature verification enabled")
+	}
+
 	for name, cp := range cfg.Providers {
-		p, err := fromConfig(cp, spkiCache, cfg.Offline, cfg.Enforced, cfg.MeasurementPolicy)
+		p, err := fromConfig(cp, spkiCache, cfg.Offline, cfg.Enforced, cfg.MeasurementPolicy, cfg.GatewayMeasurementPolicy, s.rekorClient, s.pocSigningKey)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
@@ -218,6 +237,9 @@ func fromConfig(
 	offline bool,
 	enforced []string,
 	policy attestation.MeasurementPolicy,
+	gatewayPolicy attestation.MeasurementPolicy,
+	rekorClient *attestation.RekorClient,
+	pocSigningKey ed25519.PublicKey,
 ) (*provider.Provider, error) {
 	p := &provider.Provider{
 		Name:    cp.Name,
@@ -247,6 +269,7 @@ func fromConfig(
 			enforced,
 			policy,
 			rdVerifier,
+			rekorClient,
 		)
 		p.ModelLister = neardirect.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nearcloud":
@@ -261,7 +284,10 @@ func fromConfig(
 			offline,
 			enforced,
 			policy,
+			gatewayPolicy,
 			rdVerifier,
+			rekorClient,
+			pocSigningKey,
 		)
 		p.ModelLister = neardirect.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	default:
@@ -356,7 +382,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	if !s.cfg.Offline && raw.IntelQuote != "" {
 		slog.Debug("Proof of Cloud check starting", "provider", prov.Name)
 		pocStart := time.Now()
-		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient)
+		poc := attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient, s.pocSigningKey)
 		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
 		pocDur = time.Since(pocStart)
 		slog.Debug("Proof of Cloud check complete", "provider", prov.Name, "elapsed", pocDur,
@@ -387,7 +413,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
 		digests := attestation.ExtractImageDigests(source)
 		if len(digests) > 0 && !s.cfg.Offline {
-			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, s.attestClient)
+			sigstoreResults = s.rekorClient.CheckSigstoreDigests(ctx, digests)
 		}
 		composeDur = time.Since(composeStart)
 	}
@@ -396,7 +422,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	if len(sigstoreResults) > 0 && !s.cfg.Offline {
 		for _, sr := range sigstoreResults {
 			if sr.OK {
-				rekorResults = append(rekorResults, attestation.FetchRekorProvenance(ctx, sr.Digest, s.attestClient))
+				rekorResults = append(rekorResults, s.rekorClient.FetchRekorProvenance(ctx, sr.Digest))
 			}
 		}
 	}
@@ -656,6 +682,13 @@ func (s *Server) handlePinnedChat(
 		Headers: headers,
 		Body:    body,
 		Model:   upstreamModel,
+		E2EE:    prov.E2EE,
+	}
+	// Supply the cached signing key for E2EE on SPKI cache hits.
+	if prov.E2EE {
+		if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok {
+			pinnedReq.SigningKey = cachedKey
+		}
 	}
 
 	ctx := r.Context()
@@ -716,7 +749,19 @@ func (s *Server) handlePinnedChat(
 		return
 	}
 
-	// No E2EE session for pinned providers (they use TLS pinning).
+	// E2EE: use the session from the pinned response for decryption.
+	// When E2EE is active, upstream was forced to stream=true so the response
+	// is always SSE, matching the non-pinned E2EE path.
+	session := pinnedResp.Session
+	if session != nil {
+		defer session.Zero()
+		if req.Stream {
+			s.relayStream(w, pinnedResp.Body, session)
+		} else {
+			s.relayReassembledNonStream(w, pinnedResp.Body, session)
+		}
+		return
+	}
 	if req.Stream {
 		s.relayStream(w, pinnedResp.Body, nil)
 		return

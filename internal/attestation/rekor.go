@@ -3,6 +3,7 @@ package attestation
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
@@ -18,10 +19,27 @@ import (
 	"unicode/utf8"
 )
 
-// RekorAPIBase is the base URL for the Rekor transparency log API.
-//
-//nolint:gochecknoglobals // var instead of const to allow test overrides
-var RekorAPIBase = "https://rekor.sigstore.dev"
+// defaultRekorBase is the production Rekor transparency log API URL.
+const defaultRekorBase = "https://rekor.sigstore.dev"
+
+// RekorClient is an HTTP client for the Rekor transparency log API.
+// The base URL is set at construction time and cannot be changed,
+// preventing runtime redirection of Rekor lookups.
+type RekorClient struct {
+	baseURL    string
+	httpClient *http.Client
+}
+
+// NewRekorClient returns a RekorClient pointing at the production Rekor API.
+func NewRekorClient(httpClient *http.Client) *RekorClient {
+	return &RekorClient{baseURL: defaultRekorBase, httpClient: httpClient}
+}
+
+// NewRekorClientWithBase returns a RekorClient with a custom base URL.
+// Intended for tests and environments with a private Rekor instance.
+func NewRekorClientWithBase(baseURL string, httpClient *http.Client) *RekorClient {
+	return &RekorClient{baseURL: baseURL, httpClient: httpClient}
+}
 
 // Fulcio OIDC extension OID prefix: 1.3.6.1.4.1.57264.1.
 var (
@@ -52,6 +70,13 @@ type RekorProvenance struct {
 	RunnerEnv      string // 1.3.6.1.4.1.57264.1.11
 	RunURL         string // 1.3.6.1.4.1.57264.1.21
 	Err            error  // non-fatal: provenance unavailable but digest exists
+
+	// SignatureVerified is true when the DSSE envelope signature was
+	// successfully verified against the Fulcio certificate's public key.
+	SignatureVerified bool
+
+	// SignatureErr is set when signature verification was attempted but failed.
+	SignatureErr error
 }
 
 // FetchRekorProvenance queries the Rekor API for a digest's log entry and
@@ -61,8 +86,8 @@ type RekorProvenance struct {
 // by a Fulcio certificate (which carries OIDC build-provenance metadata) over
 // a raw-public-key entry (F-23: mitigates front-running where an attacker
 // inserts a raw-key entry before the legitimate Fulcio-signed entry).
-func FetchRekorProvenance(ctx context.Context, digest string, client *http.Client) RekorProvenance {
-	uuids, err := fetchRekorUUIDs(ctx, digest, client)
+func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) RekorProvenance {
+	uuids, err := rc.fetchRekorUUIDs(ctx, digest)
 	if err != nil {
 		return RekorProvenance{Digest: digest, Err: fmt.Errorf("search Rekor: %w", err)}
 	}
@@ -76,7 +101,7 @@ func FetchRekorProvenance(ctx context.Context, digest string, client *http.Clien
 	var rawKeyFallback *RekorProvenance
 	var lastErr error
 	for _, uuid := range uuids {
-		body, err := fetchRekorEntry(ctx, uuid, client)
+		body, err := rc.fetchRekorEntry(ctx, uuid)
 		if err != nil {
 			lastErr = fmt.Errorf("fetch Rekor entry %s: %w", uuid, err)
 			continue
@@ -136,6 +161,12 @@ func FetchRekorProvenance(ctx context.Context, digest string, client *http.Clien
 			}
 			continue
 		}
+		// Verify the DSSE envelope signature against the Fulcio cert.
+		if err := verifyDSSESignature(body, verifierPEM); err != nil {
+			prov.SignatureErr = fmt.Errorf("DSSE signature verification: %w", err)
+		} else {
+			prov.SignatureVerified = true
+		}
 		return *prov
 	}
 
@@ -152,19 +183,19 @@ func FetchRekorProvenance(ctx context.Context, digest string, client *http.Clien
 
 // fetchRekorUUIDs calls POST /api/v1/index/retrieve to search for log entries
 // matching a digest.
-func fetchRekorUUIDs(ctx context.Context, digest string, client *http.Client) ([]string, error) {
+func (rc *RekorClient) fetchRekorUUIDs(ctx context.Context, digest string) ([]string, error) {
 	payload, err := json.Marshal(map[string]string{"hash": "sha256:" + digest})
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, RekorAPIBase+"/api/v1/index/retrieve", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rc.baseURL+"/api/v1/index/retrieve", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := rc.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -187,19 +218,19 @@ func fetchRekorUUIDs(ctx context.Context, digest string, client *http.Client) ([
 
 // fetchRekorEntry calls POST /api/v1/log/entries/retrieve to fetch a log entry
 // by UUID and returns the decoded entry body.
-func fetchRekorEntry(ctx context.Context, uuid string, client *http.Client) ([]byte, error) {
+func (rc *RekorClient) fetchRekorEntry(ctx context.Context, uuid string) ([]byte, error) {
 	payload, err := json.Marshal(map[string][]string{"entryUUIDs": {uuid}})
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, RekorAPIBase+"/api/v1/log/entries/retrieve", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rc.baseURL+"/api/v1/log/entries/retrieve", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := rc.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -362,6 +393,89 @@ func decodeExtensionValue(raw []byte) string {
 	}
 	slog.Debug("Rekor extension: using raw UTF-8 fallback (not ASN.1 encoded)")
 	return string(raw)
+}
+
+// verifyDSSESignature verifies the DSSE envelope signature in a Rekor entry
+// body against the provided verifier certificate. The DSSE Pre-Authentication
+// Encoding (PAE) is: "DSSEv1" SP LEN(payloadType) SP payloadType SP LEN(payload) SP payload
+// where payload is the raw (base64-decoded) content.
+func verifyDSSESignature(entryBody, verifierPEM []byte) error {
+	var entry struct {
+		Kind string `json:"kind"`
+		Spec struct {
+			Content struct {
+				Envelope struct {
+					Payload     string `json:"payload"`
+					PayloadType string `json:"payloadType"`
+					Signatures  []struct {
+						Sig string `json:"sig"`
+					} `json:"signatures"`
+				} `json:"envelope"`
+			} `json:"content"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(entryBody, &entry); err != nil {
+		return fmt.Errorf("decode entry: %w", err)
+	}
+	if entry.Kind != "dsse" {
+		return fmt.Errorf("signature verification not supported for entry kind %q", entry.Kind)
+	}
+
+	env := entry.Spec.Content.Envelope
+	if len(env.Signatures) == 0 {
+		return errors.New("no signatures in DSSE envelope")
+	}
+
+	// Decode the signature.
+	sigBytes, err := base64.StdEncoding.DecodeString(env.Signatures[0].Sig)
+	if err != nil {
+		return fmt.Errorf("decode signature: %w", err)
+	}
+
+	// Build the PAE (Pre-Authentication Encoding).
+	payloadBytes, err := base64.StdEncoding.DecodeString(env.Payload)
+	if err != nil {
+		return fmt.Errorf("decode payload: %w", err)
+	}
+	pae := buildPAE(env.PayloadType, payloadBytes)
+
+	// Parse the verifier certificate.
+	block, _ := pem.Decode(verifierPEM)
+	if block == nil {
+		return errors.New("no PEM block in verifier")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse verifier certificate: %w", err)
+	}
+
+	// Verify the signature over the PAE using the cert's public key.
+	digest := sha256.Sum256(pae)
+	switch pub := cert.PublicKey.(type) {
+	case *ecdsa.PublicKey:
+		if !ecdsa.VerifyASN1(pub, digest[:], sigBytes) {
+			return errors.New("ECDSA signature verification failed")
+		}
+	default:
+		return fmt.Errorf("unsupported public key type %T for DSSE verification", cert.PublicKey)
+	}
+	return nil
+}
+
+// buildPAE constructs the DSSE Pre-Authentication Encoding.
+// Format: "DSSEv1" SP LEN(payloadType) SP payloadType SP LEN(payload) SP payload.
+func buildPAE(payloadType string, payload []byte) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("DSSEv1")
+	buf.WriteByte(' ')
+	fmt.Fprintf(&buf, "%d", len(payloadType))
+	buf.WriteByte(' ')
+	buf.WriteString(payloadType)
+	buf.WriteByte(' ')
+	fmt.Fprintf(&buf, "%d", len(payload))
+	buf.WriteByte(' ')
+	buf.Write(payload)
+	return buf.Bytes()
 }
 
 // truncateStr truncates s to maxLen characters, appending "..." if truncated.

@@ -3,6 +3,7 @@ package attestation
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
@@ -16,6 +17,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // PoCPeers lists the Proof of Cloud trust-server endpoints operated by
@@ -46,6 +49,10 @@ type PoCClient struct {
 	peers  []string // trust-server base URLs
 	quorum int
 	client *http.Client
+	// signingKey is the EdDSA public key for JWT signature verification
+	// (GW-M-11). When set, the final JWT is cryptographically verified
+	// using this key. When nil, only claims are validated.
+	signingKey ed25519.PublicKey
 	// jwtVerifyFn validates the final JWT from the trust server. When nil,
 	// verifyPoCJWTClaims is used (validates expiry and machine ID consistency).
 	// Override for testing or when custom signature verification is desired.
@@ -55,6 +62,13 @@ type PoCClient struct {
 // NewPoCClient creates a PoCClient with the given trust-server peer URLs.
 func NewPoCClient(peers []string, quorum int, client *http.Client) *PoCClient {
 	return &PoCClient{peers: peers, quorum: quorum, client: client}
+}
+
+// NewPoCClientWithSigningKey creates a PoCClient that verifies EdDSA signatures
+// on PoC JWTs using the provided ed25519 public key (GW-M-11). When the key is
+// nil, behaviour is identical to NewPoCClient (claims-only validation).
+func NewPoCClientWithSigningKey(peers []string, quorum int, client *http.Client, key ed25519.PublicKey) *PoCClient {
+	return &PoCClient{peers: peers, quorum: quorum, client: client, signingKey: key}
 }
 
 // NewPoCClientWithCertPins creates a PoCClient with TLS certificate pinning.
@@ -138,10 +152,10 @@ type pocJWTClaims struct {
 //   - When expectedMachineID is non-empty, the machineId claim matches.
 //
 // SECURITY NOTE (F-39): This validates claims but does NOT verify the EdDSA
-// signature. Full signature verification requires the trust-server's public
-// key. Callers can provide a custom jwtVerifyFn on PoCClient to add signature
-// verification. The TLS transport (with CT checks) provides the primary
-// channel integrity guarantee in the current deployment.
+// signature. When a signing key is configured, PoCClient.verifyPoCJWT is used
+// instead, providing full cryptographic verification (GW-M-11). The TLS
+// transport (with CT checks) provides the primary channel integrity guarantee
+// when no signing key is available.
 func verifyPoCJWTClaims(jwtStr, expectedMachineID string) error {
 	parts := strings.Split(jwtStr, ".")
 	if len(parts) != 3 {
@@ -324,11 +338,15 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 			slog.Debug("PoC: final JWT received", "peer", n.peerURL, "label", s2.Label)
 
 			// Validate JWT claims (F-39): expiry + machine ID consistency.
-			// jwtVerifyFn can be overridden for testing or to add full
-			// EdDSA signature verification when public keys are available.
+			// When a signing key is configured, also verify the EdDSA
+			// signature (GW-M-11). jwtVerifyFn can be overridden for testing.
 			verifyFn := c.jwtVerifyFn
 			if verifyFn == nil {
-				verifyFn = verifyPoCJWTClaims
+				if c.signingKey != nil {
+					verifyFn = c.verifyPoCJWT
+				} else {
+					verifyFn = verifyPoCJWTClaims
+				}
 			}
 			if err := verifyFn(s2.JWT, expectedMachineID); err != nil {
 				slog.Warn("PoC JWT claims validation failed", "peer", n.peerURL, "err", err)
@@ -354,6 +372,39 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 	}
 
 	return &PoCResult{Err: errors.New("stage 2 completed without final JWT")}
+}
+
+// verifyPoCJWT cryptographically verifies the EdDSA signature on a PoC JWT
+// and validates claims (exp, machineId). This is used when PoCClient.signingKey
+// is configured, providing a cryptographic guarantee beyond TLS channel integrity.
+func (c *PoCClient) verifyPoCJWT(jwtStr, expectedMachineID string) error {
+	token, err := jwt.Parse(jwtStr, func(t *jwt.Token) (any, error) {
+		if t.Method != jwt.SigningMethodEdDSA {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return c.signingKey, nil
+	}, jwt.WithExpirationRequired())
+	if err != nil {
+		return fmt.Errorf("JWT EdDSA verification failed: %w", err)
+	}
+	if !token.Valid {
+		return errors.New("JWT is not valid")
+	}
+
+	// Cross-check machineId claim against stage-1 response.
+	if expectedMachineID != "" {
+		if mid, _ := token.Claims.GetSubject(); mid == "" {
+			// machineId is a custom claim — extract from map.
+			if mc, ok := token.Claims.(jwt.MapClaims); ok {
+				if mid, _ := mc["machineId"].(string); mid != "" && mid != expectedMachineID {
+					return fmt.Errorf("JWT machineId %q does not match stage-1 machineId %q",
+						mid, expectedMachineID)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 type httpResult struct {

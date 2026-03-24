@@ -11,6 +11,7 @@ package nearcloud
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,6 +69,12 @@ func ParseGatewayResponse(body []byte, model string) (*GatewayRaw, *attestation.
 	var gr gatewayResponse
 	if err := jsonstrict.UnmarshalWarn(body, &gr, "nearcloud gateway response"); err != nil {
 		return nil, nil, fmt.Errorf("nearcloud: unmarshal gateway response: %w", err)
+	}
+
+	// GW-M-01: Reject a missing or empty gateway_attestation section early so
+	// downstream checks don't silently operate on zero-value fields.
+	if gr.GatewayAttestation.IntelQuote == "" && gr.GatewayAttestation.TLSCertFingerprint == "" {
+		return nil, nil, errors.New("nearcloud: gateway_attestation section missing or empty")
 	}
 
 	appCompose, err := extractGatewayAppCompose(gr.GatewayAttestation.Info.TCBInfo)

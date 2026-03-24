@@ -84,7 +84,7 @@ func TestIntegration_Venice_Fixture(t *testing.T) {
 	// ---------------------------------------------------------------
 	// 3. Set up mocks for ALL external services
 	// ---------------------------------------------------------------
-	pocPeers, client := setupMocks(t, fdir, "venice", raw)
+	pocPeers, client, rekorClient := setupMocks(t, fdir, "venice", raw)
 
 	// ---------------------------------------------------------------
 	// 4. Run the pipeline
@@ -169,7 +169,7 @@ func TestIntegration_Venice_Fixture(t *testing.T) {
 			t.Logf("  sha256:%s...", d[:min(16, len(d))])
 		}
 		if len(digests) > 0 {
-			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, client)
+			sigstoreResults = rekorClient.CheckSigstoreDigests(ctx, digests)
 			for _, r := range sigstoreResults {
 				t.Logf("  sigstore: digest=%s ok=%v status=%d err=%v", r.Digest[:min(16, len(r.Digest))], r.OK, r.Status, r.Err)
 			}
@@ -181,7 +181,7 @@ func TestIntegration_Venice_Fixture(t *testing.T) {
 	var rekorResults []attestation.RekorProvenance
 	for _, sr := range sigstoreResults {
 		if sr.OK {
-			prov := attestation.FetchRekorProvenance(ctx, sr.Digest, client)
+			prov := rekorClient.FetchRekorProvenance(ctx, sr.Digest)
 			t.Logf("  rekor: digest=%s hasCert=%v err=%v", prov.Digest[:min(16, len(prov.Digest))], prov.HasCert, prov.Err)
 			rekorResults = append(rekorResults, prov)
 		}

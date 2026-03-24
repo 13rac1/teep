@@ -27,16 +27,16 @@ type SigstoreResult struct {
 // NOTE: This check confirms the digest is recorded in the transparency log.
 // It does not verify the cosign bundle signature on each entry. Full bundle
 // signature verification would additionally confirm the signing identity.
-func CheckSigstoreDigests(ctx context.Context, digests []string, client *http.Client) []SigstoreResult {
+func (rc *RekorClient) CheckSigstoreDigests(ctx context.Context, digests []string) []SigstoreResult {
 	results := make([]SigstoreResult, len(digests))
 	for i, digest := range digests {
-		results[i] = checkDigestViaRekor(ctx, digest, client)
+		results[i] = rc.checkDigestViaRekor(ctx, digest)
 	}
 	return results
 }
 
-func checkDigestViaRekor(ctx context.Context, digest string, client *http.Client) SigstoreResult {
-	uuids, err := fetchRekorUUIDs(ctx, digest, client)
+func (rc *RekorClient) checkDigestViaRekor(ctx context.Context, digest string) SigstoreResult {
+	uuids, err := rc.fetchRekorUUIDs(ctx, digest)
 	if err != nil {
 		return SigstoreResult{Digest: digest, Err: fmt.Errorf("rekor transparency log search: %w", err)}
 	}

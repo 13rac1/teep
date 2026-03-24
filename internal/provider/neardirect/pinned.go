@@ -40,15 +40,16 @@ type DomainResolver interface {
 // attestation on the same connection if needed, then sends the chat request
 // and returns the raw response.
 type PinnedHandler struct {
-	resolver   DomainResolver
-	spkiCache  *attestation.SPKICache
-	apiKey     string
-	offline    bool
-	enforced   []string
-	policy     attestation.MeasurementPolicy
-	rdVerifier provider.ReportDataVerifier
-	ctChecker  *CTChecker
-	dialFn     func(ctx context.Context, domain string) (*tls.Conn, error) // nil → use default tlsDial
+	resolver    DomainResolver
+	spkiCache   *attestation.SPKICache
+	apiKey      string
+	offline     bool
+	enforced    []string
+	policy      attestation.MeasurementPolicy
+	rdVerifier  provider.ReportDataVerifier
+	rekorClient *attestation.RekorClient
+	ctChecker   *CTChecker
+	dialFn      func(ctx context.Context, domain string) (*tls.Conn, error) // nil → use default tlsDial
 
 	verifySF singleflight.Group
 }
@@ -62,19 +63,21 @@ func NewPinnedHandler(
 	enforced []string,
 	policy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
+	rekorClient *attestation.RekorClient,
 ) *PinnedHandler {
 	checker := NewCTChecker()
 	checker.SetEnabled(!offline)
 
 	return &PinnedHandler{
-		resolver:   resolver,
-		spkiCache:  spkiCache,
-		apiKey:     apiKey,
-		offline:    offline,
-		enforced:   enforced,
-		policy:     policy,
-		rdVerifier: rdVerifier,
-		ctChecker:  checker,
+		resolver:    resolver,
+		spkiCache:   spkiCache,
+		apiKey:      apiKey,
+		offline:     offline,
+		enforced:    enforced,
+		policy:      policy,
+		rdVerifier:  rdVerifier,
+		rekorClient: rekorClient,
+		ctChecker:   checker,
 	}
 }
 
@@ -352,7 +355,7 @@ func (h *PinnedHandler) attestOnConn(
 		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
 		digests := attestation.ExtractImageDigests(source)
 		if len(digests) > 0 && !h.offline {
-			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, tlsct.NewHTTPClient(10*time.Second))
+			sigstoreResults = h.rekorClient.CheckSigstoreDigests(ctx, digests)
 		}
 	}
 
@@ -360,7 +363,7 @@ func (h *PinnedHandler) attestOnConn(
 	if len(sigstoreResults) > 0 && !h.offline {
 		for _, sr := range sigstoreResults {
 			if sr.OK {
-				rekorResults = append(rekorResults, attestation.FetchRekorProvenance(ctx, sr.Digest, tlsct.NewHTTPClient(10*time.Second)))
+				rekorResults = append(rekorResults, h.rekorClient.FetchRekorProvenance(ctx, sr.Digest))
 			}
 		}
 	}

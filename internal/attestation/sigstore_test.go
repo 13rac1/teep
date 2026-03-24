@@ -32,16 +32,14 @@ func TestCheckSigstoreDigests_AllOK(t *testing.T) {
 	ts := makeRekorMock(t, true)
 	defer ts.Close()
 
-	origBase := RekorAPIBase
-	defer func() { RekorAPIBase = origBase }()
-	RekorAPIBase = ts.URL
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
 
 	digests := []string{
 		"abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
 		"0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
 	}
 
-	results := CheckSigstoreDigests(context.Background(), digests, ts.Client())
+	results := rc.CheckSigstoreDigests(context.Background(), digests)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
@@ -60,12 +58,10 @@ func TestCheckSigstoreDigests_NotFound(t *testing.T) {
 	ts := makeRekorMock(t, false)
 	defer ts.Close()
 
-	origBase := RekorAPIBase
-	defer func() { RekorAPIBase = origBase }()
-	RekorAPIBase = ts.URL
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
 
 	digests := []string{"abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"}
-	results := CheckSigstoreDigests(context.Background(), digests, ts.Client())
+	results := rc.CheckSigstoreDigests(context.Background(), digests)
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -84,12 +80,10 @@ func TestCheckSigstoreDigests_RekorError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	origBase := RekorAPIBase
-	defer func() { RekorAPIBase = origBase }()
-	RekorAPIBase = ts.URL
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
 
 	digests := []string{"abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"}
-	results := CheckSigstoreDigests(context.Background(), digests, ts.Client())
+	results := rc.CheckSigstoreDigests(context.Background(), digests)
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -103,7 +97,8 @@ func TestCheckSigstoreDigests_RekorError(t *testing.T) {
 }
 
 func TestCheckSigstoreDigests_Empty(t *testing.T) {
-	results := CheckSigstoreDigests(context.Background(), nil, http.DefaultClient)
+	rc := NewRekorClient(http.DefaultClient)
+	results := rc.CheckSigstoreDigests(context.Background(), nil)
 	if len(results) != 0 {
 		t.Fatalf("expected 0 results for nil digests, got %d", len(results))
 	}

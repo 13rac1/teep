@@ -158,6 +158,7 @@ type ReportInput struct {
 	GatewayNonce    Nonce  // nonce we sent to the gateway
 	GatewayCompose  *ComposeBindingResult
 	GatewayEventLog []EventLogEntry
+	GatewayPolicy   MeasurementPolicy // separate measurement allowlists for gateway CVM (GW-M-04)
 }
 
 // BuildReport runs verification factors against the input and returns a
@@ -708,8 +709,13 @@ buildTransparencyDone:
 	}
 
 	// Factor 24: event_log_integrity
+	// GW-M-05: Absent event log yields Fail (not Skip) when the factor is enforced.
 	if len(in.Raw.EventLog) == 0 { //nolint:gocritic // ifElseChain: conditions compare different fields
-		addFactor(TierSupplyChain, "event_log_integrity", Skip, "no event log entries in attestation response")
+		if enforcedSet["event_log_integrity"] {
+			addFactor(TierSupplyChain, "event_log_integrity", Fail, "no event log entries in attestation response (enforced)")
+		} else {
+			addFactor(TierSupplyChain, "event_log_integrity", Skip, "no event log entries in attestation response")
+		}
 	} else if in.TDX == nil || in.TDX.ParseErr != nil {
 		addFactor(TierSupplyChain, "event_log_integrity", Skip, "no parseable TDX quote; cannot compare RTMRs")
 	} else {
@@ -773,11 +779,28 @@ buildTransparencyDone:
 			addFactor(TierGateway, "gateway_tdx_debug_disabled", Skip, "gateway quote parse failed; debug flag not checked")
 		} else {
 			mrtdHex := hex.EncodeToString(in.GatewayTDX.MRTD)
+			mrSeamHex := hex.EncodeToString(in.GatewayTDX.MRSeam)
 			detail := fmt.Sprintf("valid %s structure", tdxQuoteVersion(in.GatewayTDX))
 			if len(mrtdHex) >= 16 {
 				detail = fmt.Sprintf("valid %s, MRTD: %s...", tdxQuoteVersion(in.GatewayTDX), mrtdHex[:16])
 			}
-			addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail)
+
+			// GW-M-04: Apply gateway measurement policy allowlists.
+			gp := in.GatewayPolicy
+			switch {
+			case gp.HasMRTDPolicy() && !containsAllowlist(gp.MRTDAllow, mrtdHex):
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Fail, fmt.Sprintf("gateway MRTD not in policy allowlist: %s...", prefixHex(mrtdHex)))
+			case gp.HasMRSeamPolicy() && !containsAllowlist(gp.MRSeamAllow, mrSeamHex):
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Fail, fmt.Sprintf("gateway MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex)))
+			case gp.HasMRTDPolicy() && gp.HasMRSeamPolicy():
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail+" (gateway MRTD/MRSEAM policy matched)")
+			case gp.HasMRTDPolicy():
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail+" (gateway MRTD policy matched)")
+			case gp.HasMRSeamPolicy():
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail+" (gateway MRSEAM policy matched)")
+			default:
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail)
+			}
 
 			if in.GatewayTDX.CertChainErr != nil {
 				addFactor(TierGateway, "gateway_tdx_cert_chain", Fail, fmt.Sprintf("gateway cert chain verification failed: %v", in.GatewayTDX.CertChainErr))
@@ -845,8 +868,13 @@ buildTransparencyDone:
 		}
 
 		// Factor: gateway_event_log_integrity
+		// GW-M-05: Absent event log yields Fail (not Skip) when the factor is enforced.
 		if len(in.GatewayEventLog) == 0 { //nolint:gocritic // ifElseChain: conditions compare different fields
-			addFactor(TierGateway, "gateway_event_log_integrity", Skip, "no gateway event log entries in attestation response")
+			if enforcedSet["gateway_event_log_integrity"] {
+				addFactor(TierGateway, "gateway_event_log_integrity", Fail, "no gateway event log entries in attestation response (enforced)")
+			} else {
+				addFactor(TierGateway, "gateway_event_log_integrity", Skip, "no gateway event log entries in attestation response")
+			}
 		} else if in.GatewayTDX.ParseErr != nil {
 			addFactor(TierGateway, "gateway_event_log_integrity", Skip, "gateway TDX quote not parseable; cannot compare RTMRs")
 		} else {
@@ -868,10 +896,24 @@ buildTransparencyDone:
 				if mismatch {
 					addFactor(TierGateway, "gateway_event_log_integrity", Fail, detail)
 				} else {
+					// GW-M-06: Check RTMR policy allowlists using gateway-specific policy.
+					gp := in.GatewayPolicy
+					for i := range 4 {
+						if !gp.HasRTMRPolicy(i) {
+							continue
+						}
+						rtmrHex := hex.EncodeToString(in.GatewayTDX.RTMRs[i][:])
+						if _, ok := gp.RTMRAllow[i][rtmrHex]; !ok {
+							addFactor(TierGateway, "gateway_event_log_integrity", Fail,
+								fmt.Sprintf("gateway RTMR[%d] not in gateway policy allowlist: %s...", i, prefixHex(rtmrHex)))
+							goto gatewayEventLogDone
+						}
+					}
 					addFactor(TierGateway, "gateway_event_log_integrity", Pass,
 						fmt.Sprintf("gateway event log replayed (%d entries), all 4 RTMRs match quote", len(in.GatewayEventLog)))
 				}
 			}
+		gatewayEventLogDone:
 		}
 	}
 

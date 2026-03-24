@@ -256,7 +256,7 @@ func buildMockEntryResponse(uuid, dsseBodyB64 string) []byte {
 // setupMocks sets up all external service mocks (NRAS, JWKS, Sigstore, Rekor)
 // and returns PoC peer URLs + HTTP client. The caller must set up TDX getter
 // and call t.Cleanup for the returned overrides.
-func setupMocks(t *testing.T, fdir, prefix string, raw *attestation.RawAttestation) (pocPeers []string, client *http.Client) {
+func setupMocks(t *testing.T, fdir, prefix string, raw *attestation.RawAttestation) (pocPeers []string, client *http.Client, rekorClient *attestation.RekorClient) {
 	t.Helper()
 
 	// TDX collateral getter
@@ -308,13 +308,11 @@ func setupMocks(t *testing.T, fdir, prefix string, raw *attestation.RawAttestati
 		}
 	}))
 	t.Cleanup(rekorSrv.Close)
-	origRekor := attestation.RekorAPIBase
-	attestation.RekorAPIBase = rekorSrv.URL
-	t.Cleanup(func() { attestation.RekorAPIBase = origRekor })
+	rekorClient = attestation.NewRekorClientWithBase(rekorSrv.URL, &http.Client{})
 
 	// PoC
 	pocPeers = buildPoCMockPeers(t, fdir, prefix)
 	client = &http.Client{}
 
-	return pocPeers, client
+	return pocPeers, client, rekorClient
 }
