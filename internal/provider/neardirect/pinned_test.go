@@ -391,7 +391,7 @@ func TestNewPinnedHandler(t *testing.T) {
 	}
 }
 
-// TestSetDialer verifies SetDialer installs a custom dial function.
+// TestSetDialer verifies setDialer installs a custom dial function.
 func TestSetDialer(t *testing.T) {
 	h := &PinnedHandler{}
 	if h.dialFn != nil {
@@ -399,13 +399,13 @@ func TestSetDialer(t *testing.T) {
 	}
 
 	called := false
-	h.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	h.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		called = true
 		return nil, errors.New("test dialer")
 	})
 
 	if h.dialFn == nil {
-		t.Fatal("dialFn should be set after SetDialer")
+		t.Fatal("dialFn should be set after setDialer")
 	}
 
 	_, err := h.dialFn(context.Background(), "example.com")
@@ -477,7 +477,7 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 	)
 
 	// Inject dialer that connects to our test TLS server.
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		conn, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 		return conn, err
 	})
@@ -547,7 +547,7 @@ func TestHandlePinned_CacheHitViaSetDialer(t *testing.T) {
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 
@@ -613,7 +613,7 @@ func TestHandlePinned_MismatchedFingerprint(t *testing.T) {
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 
@@ -666,7 +666,7 @@ func TestHandlePinned_BlockedReportDoesNotPopulateSPKICache(t *testing.T) {
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 

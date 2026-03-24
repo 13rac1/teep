@@ -81,13 +81,6 @@ func NewPinnedHandler(
 	}
 }
 
-// SetDialer overrides the TLS dial function used by HandlePinned. This is
-// intended for testing only — it allows connecting to test servers instead
-// of resolving real domains.
-func (h *PinnedHandler) SetDialer(fn func(ctx context.Context, domain string) (*tls.Conn, error)) {
-	h.dialFn = fn
-}
-
 // SetCTChecker overrides the certificate transparency checker.
 // Intended for tests.
 func (h *PinnedHandler) SetCTChecker(checker *CTChecker) {
@@ -205,6 +198,13 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		Body:       wrappedBody,
 		Report:     report,
 	}, nil
+}
+
+// setDialer overrides the TLS dial function used by HandlePinned. Only
+// accessible from tests within this package — unexported to prevent
+// supply-chain redirection of backend connections in production.
+func (h *PinnedHandler) setDialer(fn func(ctx context.Context, domain string) (*tls.Conn, error)) {
+	h.dialFn = fn
 }
 
 // tlsDial opens a TLS connection to domain:443.
