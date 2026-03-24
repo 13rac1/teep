@@ -11,6 +11,31 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 )
 
+// nonEncryptedFields is the set of known string-valued fields in OpenAI chat
+// delta/message objects that are never encrypted by the E2EE layer. Expanding
+// this allowlist prevents false-positive IsEncryptedChunkV2 matches on
+// non-content hex-like fields (e.g. trace IDs).
+//
+// The upstream NEAR AI inference-proxy encrypts only: content,
+// reasoning_content, reasoning, and audio.data. All other string fields
+// pass through unencrypted.
+//
+// Source: https://github.com/nearai/inference-proxy/blob/main/src/encryption.rs
+//   - encrypt_chat_response_choices (server → client encryption)
+//   - decrypt_chat_message_fields   (client → server decryption)
+//
+// Protocol docs: https://github.com/nearai/docs/blob/main/docs/cloud/guides/e2ee-chat-completions.mdx
+var nonEncryptedFields = map[string]bool{
+	"role":          true,
+	"refusal":       true,
+	"name":          true,
+	"tool_call_id":  true,
+	"type":          true,
+	"finish_reason": true,
+	"function_call": true,
+	"id":            true,
+}
+
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
 // map, decrypts any that pass the version-appropriate IsEncryptedChunk check,
 // and returns true if any field was decrypted. Non-string fields and
@@ -24,8 +49,8 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session *attestation.
 		}
 		if !attestation.IsEncryptedChunkForSession(s, session) {
 			// Non-empty string that doesn't look encrypted — error in E2EE mode.
-			// Exception: known non-content fields like "role" are never encrypted.
-			if key == "role" || key == "refusal" {
+			// Exception: known non-content fields are never encrypted.
+			if nonEncryptedFields[key] {
 				continue
 			}
 			return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), safePrefix(s, 8))
@@ -146,7 +171,7 @@ func decryptSSEChunkContent(data string, session *attestation.Session) (map[stri
 			continue
 		}
 		if !attestation.IsEncryptedChunkForSession(s, session) {
-			if key == "role" || key == "refusal" {
+			if nonEncryptedFields[key] {
 				continue
 			}
 			return nil, fmt.Errorf("delta.%s: expected encrypted but not recognised (len=%d prefix=%q)", key, len(s), safePrefix(s, 8))
