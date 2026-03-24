@@ -317,8 +317,12 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 			}
 		}
 		for digest, repo := range attestation.ExtractImageDigestToRepoMap(source) {
-			if _, ok := digestToRepo[digest]; !ok {
+			if existing, ok := digestToRepo[digest]; !ok {
 				digestToRepo[digest] = repo
+			} else if existing != repo {
+				slog.Warn("digest maps to multiple repos; using first",
+					"digest", "sha256:"+digest[:min(16, len(digest))]+"...",
+					"kept", existing, "dropped", repo)
 			}
 		}
 		for _, d := range attestation.ExtractImageDigests(source) {
@@ -367,8 +371,10 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		slog.Debug("gateway TDX verification complete")
 	}
 
+	var rc *attestation.RekorClient
 	if len(allDigests) > 0 && !cfg.Offline {
-		sigstoreResults = attestation.CheckSigstoreDigests(ctx, allDigests, client)
+		rc = attestation.NewRekorClient(client)
+		sigstoreResults = rc.CheckSigstoreDigests(ctx, allDigests)
 		for _, r := range sigstoreResults {
 			switch {
 			case r.OK:
@@ -382,11 +388,11 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	}
 
 	var rekorResults []attestation.RekorProvenance
-	if len(sigstoreResults) > 0 && !cfg.Offline {
+	if len(sigstoreResults) > 0 && rc != nil {
 		for _, sr := range sigstoreResults {
 			if sr.OK {
 				slog.Info("fetching Rekor provenance", "digest", "sha256:"+sr.Digest[:min(16, len(sr.Digest))]+"...")
-				prov := attestation.FetchRekorProvenance(ctx, sr.Digest, client)
+				prov := rc.FetchRekorProvenance(ctx, sr.Digest)
 				switch {
 				case prov.Err != nil:
 					slog.Warn("Rekor provenance fetch failed", "digest", "sha256:"+sr.Digest[:min(16, len(sr.Digest))]+"...", "err", prov.Err)

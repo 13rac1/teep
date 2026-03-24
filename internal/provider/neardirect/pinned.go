@@ -40,15 +40,16 @@ type DomainResolver interface {
 // attestation on the same connection if needed, then sends the chat request
 // and returns the raw response.
 type PinnedHandler struct {
-	resolver   DomainResolver
-	spkiCache  *attestation.SPKICache
-	apiKey     string
-	offline    bool
-	enforced   []string
-	policy     attestation.MeasurementPolicy
-	rdVerifier provider.ReportDataVerifier
-	ctChecker  *CTChecker
-	dialFn     func(ctx context.Context, domain string) (*tls.Conn, error) // nil → use default tlsDial
+	resolver    DomainResolver
+	spkiCache   *attestation.SPKICache
+	apiKey      string
+	offline     bool
+	enforced    []string
+	policy      attestation.MeasurementPolicy
+	rdVerifier  provider.ReportDataVerifier
+	rekorClient *attestation.RekorClient
+	ctChecker   *CTChecker
+	dialFn      func(ctx context.Context, domain string) (*tls.Conn, error) // nil → use default tlsDial
 
 	verifySF singleflight.Group
 }
@@ -62,27 +63,22 @@ func NewPinnedHandler(
 	enforced []string,
 	policy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
+	rekorClient *attestation.RekorClient,
 ) *PinnedHandler {
 	checker := NewCTChecker()
 	checker.SetEnabled(!offline)
 
 	return &PinnedHandler{
-		resolver:   resolver,
-		spkiCache:  spkiCache,
-		apiKey:     apiKey,
-		offline:    offline,
-		enforced:   enforced,
-		policy:     policy,
-		rdVerifier: rdVerifier,
-		ctChecker:  checker,
+		resolver:    resolver,
+		spkiCache:   spkiCache,
+		apiKey:      apiKey,
+		offline:     offline,
+		enforced:    enforced,
+		policy:      policy,
+		rdVerifier:  rdVerifier,
+		rekorClient: rekorClient,
+		ctChecker:   checker,
 	}
-}
-
-// SetDialer overrides the TLS dial function used by HandlePinned. This is
-// intended for testing only — it allows connecting to test servers instead
-// of resolving real domains.
-func (h *PinnedHandler) SetDialer(fn func(ctx context.Context, domain string) (*tls.Conn, error)) {
-	h.dialFn = fn
 }
 
 // SetCTChecker overrides the certificate transparency checker.
@@ -202,6 +198,13 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		Body:       wrappedBody,
 		Report:     report,
 	}, nil
+}
+
+// setDialer overrides the TLS dial function used by HandlePinned. Only
+// accessible from tests within this package — unexported to prevent
+// supply-chain redirection of backend connections in production.
+func (h *PinnedHandler) setDialer(fn func(ctx context.Context, domain string) (*tls.Conn, error)) {
+	h.dialFn = fn
 }
 
 // tlsDial opens a TLS connection to domain:443.
@@ -351,16 +354,16 @@ func (h *PinnedHandler) attestOnConn(
 		imageRepos = attestation.ExtractImageRepositories(source)
 		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
 		digests := attestation.ExtractImageDigests(source)
-		if len(digests) > 0 && !h.offline {
-			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, tlsct.NewHTTPClient(10*time.Second))
+		if len(digests) > 0 && !h.offline && h.rekorClient != nil {
+			sigstoreResults = h.rekorClient.CheckSigstoreDigests(ctx, digests)
 		}
 	}
 
 	var rekorResults []attestation.RekorProvenance
-	if len(sigstoreResults) > 0 && !h.offline {
+	if len(sigstoreResults) > 0 && !h.offline && h.rekorClient != nil {
 		for _, sr := range sigstoreResults {
 			if sr.OK {
-				rekorResults = append(rekorResults, attestation.FetchRekorProvenance(ctx, sr.Digest, tlsct.NewHTTPClient(10*time.Second)))
+				rekorResults = append(rekorResults, h.rekorClient.FetchRekorProvenance(ctx, sr.Digest))
 			}
 		}
 	}

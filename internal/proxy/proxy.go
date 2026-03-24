@@ -22,6 +22,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,8 +52,10 @@ const (
 	negativeCacheTTL = 30 * time.Second
 
 	// signingKeyCacheTTL is how long a REPORTDATA-verified signing key is
-	// reused for E2EE without re-fetching attestation.
-	signingKeyCacheTTL = 1 * time.Minute
+	// reused for E2EE without re-fetching attestation. Must be ≥ the SPKI
+	// cache TTL (1 h) to avoid "no signing key available" errors on pinned
+	// connections where an SPKI cache hit skips attestation.
+	signingKeyCacheTTL = 1 * time.Hour
 
 	// upstreamNonStreamTimeout is the context deadline for non-streaming
 	// upstream requests. Must be generous — attestation + E2EE setup can
@@ -133,6 +137,8 @@ type Server struct {
 	negCache        *attestation.NegativeCache
 	signingKeyCache *attestation.SigningKeyCache
 	spkiCache       *attestation.SPKICache
+	rekorClient     *attestation.RekorClient
+	pocSigningKey   ed25519.PublicKey // optional EdDSA key for PoC JWT verification (GW-M-11)
 	mux             *http.ServeMux
 	attestClient    *http.Client // for attestation fetches
 	upstreamClient  *http.Client // for chat completions forwards
@@ -143,6 +149,7 @@ type Server struct {
 // Preparer implementations based on provider name.
 func New(cfg *config.Config) (*Server, error) {
 	spkiCache := attestation.NewSPKICache()
+	attestClient := config.NewAttestationClient(cfg.Offline)
 	s := &Server{
 		cfg:             cfg,
 		providers:       make(map[string]*provider.Provider, len(cfg.Providers)),
@@ -150,8 +157,9 @@ func New(cfg *config.Config) (*Server, error) {
 		negCache:        attestation.NewNegativeCache(negativeCacheTTL),
 		signingKeyCache: attestation.NewSigningKeyCache(signingKeyCacheTTL),
 		spkiCache:       spkiCache,
+		rekorClient:     attestation.NewRekorClient(attestClient),
 		mux:             http.NewServeMux(),
-		attestClient:    config.NewAttestationClient(cfg.Offline),
+		attestClient:    attestClient,
 		upstreamClient: tlsct.NewHTTPClientWithTransport(0, &http.Transport{
 			MaxIdleConnsPerHost: 10,
 			IdleConnTimeout:     90 * time.Second,
@@ -159,8 +167,21 @@ func New(cfg *config.Config) (*Server, error) {
 		stats: stats{startTime: time.Now()},
 	}
 
+	// Parse optional PoC EdDSA signing key (GW-M-11).
+	if cfg.PoCSigningKey != "" {
+		keyBytes, err := base64.StdEncoding.DecodeString(cfg.PoCSigningKey)
+		if err != nil {
+			return nil, fmt.Errorf("poc_signing_key: invalid base64: %w", err)
+		}
+		if len(keyBytes) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("poc_signing_key: expected %d bytes, got %d", ed25519.PublicKeySize, len(keyBytes))
+		}
+		s.pocSigningKey = ed25519.PublicKey(keyBytes)
+		slog.Info("PoC JWT EdDSA signature verification enabled")
+	}
+
 	for name, cp := range cfg.Providers {
-		p, err := fromConfig(cp, spkiCache, cfg.Offline, cfg.Enforced, cfg.MeasurementPolicy)
+		p, err := fromConfig(cp, spkiCache, cfg.Offline, cfg.Enforced, cfg.MeasurementPolicy, cfg.GatewayMeasurementPolicy, s.rekorClient, s.pocSigningKey)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
@@ -218,6 +239,9 @@ func fromConfig(
 	offline bool,
 	enforced []string,
 	policy attestation.MeasurementPolicy,
+	gatewayPolicy attestation.MeasurementPolicy,
+	rekorClient *attestation.RekorClient,
+	pocSigningKey ed25519.PublicKey,
 ) (*provider.Provider, error) {
 	p := &provider.Provider{
 		Name:    cp.Name,
@@ -247,10 +271,12 @@ func fromConfig(
 			enforced,
 			policy,
 			rdVerifier,
+			rekorClient,
 		)
 		p.ModelLister = neardirect.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
+		p.E2EEVersion = attestation.E2EEv2
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
@@ -261,7 +287,10 @@ func fromConfig(
 			offline,
 			enforced,
 			policy,
+			gatewayPolicy,
 			rdVerifier,
+			rekorClient,
+			pocSigningKey,
 		)
 		p.ModelLister = neardirect.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	default:
@@ -283,12 +312,7 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 // reportdataBindingPassed returns true if the tdx_reportdata_binding factor
 // passed in the report. If it is absent, Skipped, or Failed, E2EE is refused.
 func reportdataBindingPassed(report *attestation.VerificationReport) bool {
-	for _, f := range report.Factors {
-		if f.Name == "tdx_reportdata_binding" {
-			return f.Status == attestation.Pass
-		}
-	}
-	return false
+	return report.ReportDataBindingPassed()
 }
 
 // fetchAndVerify fetches attestation from the provider and runs all 23
@@ -356,7 +380,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	if !s.cfg.Offline && raw.IntelQuote != "" {
 		slog.Debug("Proof of Cloud check starting", "provider", prov.Name)
 		pocStart := time.Now()
-		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient)
+		poc := attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient, s.pocSigningKey)
 		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
 		pocDur = time.Since(pocStart)
 		slog.Debug("Proof of Cloud check complete", "provider", prov.Name, "elapsed", pocDur,
@@ -387,7 +411,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
 		digests := attestation.ExtractImageDigests(source)
 		if len(digests) > 0 && !s.cfg.Offline {
-			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, s.attestClient)
+			sigstoreResults = s.rekorClient.CheckSigstoreDigests(ctx, digests)
 		}
 		composeDur = time.Since(composeStart)
 	}
@@ -396,7 +420,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	if len(sigstoreResults) > 0 && !s.cfg.Offline {
 		for _, sr := range sigstoreResults {
 			if sr.OK {
-				rekorResults = append(rekorResults, attestation.FetchRekorProvenance(ctx, sr.Digest, s.attestClient))
+				rekorResults = append(rekorResults, s.rekorClient.FetchRekorProvenance(ctx, sr.Digest))
 			}
 		}
 	}
@@ -434,12 +458,6 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		Sigstore:     sigstoreResults,
 		Rekor:        rekorResults,
 	})
-	if raw.SigningKey != "" {
-		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && prev != raw.SigningKey {
-			slog.Warn("signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
-		}
-		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
-	}
 	return report, raw
 }
 
@@ -511,7 +529,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// single TLS connection. No separate attestation cache or E2EE needed.
 	if prov.PinnedHandler != nil {
 		status = "pinned"
-		s.stats.plaintext.Add(1)
 		s.handlePinnedChat(w, r, prov, upstreamModel, body, req)
 		return
 	}
@@ -543,6 +560,16 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
 		return
+	}
+
+	// Only cache the signing key after attestation passes. Caching before
+	// the Blocked() check would allow a key from a failed attestation to
+	// be reused for E2EE on a subsequent cache-hit request.
+	if raw != nil && raw.SigningKey != "" {
+		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && prev != raw.SigningKey {
+			slog.Warn("signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
+		}
+		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
 	}
 
 	e2eeActive := prov.E2EE && reportdataBindingPassed(report)
@@ -650,12 +677,32 @@ func (s *Server) handlePinnedChat(
 		headers.Set("Authorization", auth)
 	}
 
+	// E2EE providers must never send plaintext. On SPKI cache hit, verify
+	// that tdx_reportdata_binding passed in the cached report; refuse the
+	// request entirely if binding is unverified (cache miss is handled by
+	// the pinned handler itself, which will block internally).
+	if prov.E2EE {
+		if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok && !reportdataBindingPassed(cached) {
+			slog.Error("E2EE required but tdx_reportdata_binding not passed; refusing request",
+				"provider", prov.Name, "model", upstreamModel)
+			http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
+			return
+		}
+	}
+
 	pinnedReq := provider.PinnedRequest{
 		Method:  http.MethodPost,
 		Path:    prov.ChatPath,
 		Headers: headers,
 		Body:    body,
 		Model:   upstreamModel,
+		E2EE:    prov.E2EE,
+	}
+	// Supply the cached signing key for E2EE on SPKI cache hits.
+	if prov.E2EE {
+		if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok {
+			pinnedReq.SigningKey = cachedKey
+		}
 	}
 
 	ctx := r.Context()
@@ -684,16 +731,15 @@ func (s *Server) handlePinnedChat(
 	} else if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok {
 		report = cached
 	}
-	if pinnedResp.SigningKey != "" {
-		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
-	}
-
 	if report != nil && report.Blocked() {
 		s.negCache.Record(prov.Name, upstreamModel)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
 		return
+	}
+	if pinnedResp.SigningKey != "" {
+		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
 	}
 
 	// Copy response headers, excluding hop-by-hop headers that Go's
@@ -716,7 +762,21 @@ func (s *Server) handlePinnedChat(
 		return
 	}
 
-	// No E2EE session for pinned providers (they use TLS pinning).
+	// E2EE: use the session from the pinned response for decryption.
+	// When E2EE is active, upstream was forced to stream=true so the response
+	// is always SSE, matching the non-pinned E2EE path.
+	session := pinnedResp.Session
+	if session != nil {
+		s.stats.e2ee.Add(1)
+		defer session.Zero()
+		if req.Stream {
+			s.relayStream(w, pinnedResp.Body, session)
+		} else {
+			s.relayReassembledNonStream(w, pinnedResp.Body, session)
+		}
+		return
+	}
+	s.stats.plaintext.Add(1)
 	if req.Stream {
 		s.relayStream(w, pinnedResp.Body, nil)
 		return
@@ -744,7 +804,7 @@ func (s *Server) buildUpstreamBody(
 ) ([]byte, *attestation.Session, error) {
 	if !e2eeActive {
 		if prov.E2EE {
-			slog.Warn("E2EE disabled — tdx_reportdata_binding not verified; forwarding plaintext over HTTPS", "provider", prov.Name, "model", upstreamModel)
+			return nil, nil, fmt.Errorf("E2EE required for %s but tdx_reportdata_binding not passed; refusing plaintext", prov.Name)
 		}
 		return rawBody, nil, nil
 	}
@@ -789,6 +849,11 @@ func (s *Server) buildUpstreamBody(
 
 	if raw.SigningKey == "" {
 		return nil, nil, errors.New("attestation response missing signing_key")
+	}
+
+	// Dispatch E2EE version based on provider configuration.
+	if prov.E2EEVersion == attestation.E2EEv2 {
+		return attestation.EncryptChatMessagesV2(rawBody, raw.SigningKey)
 	}
 
 	session, err := attestation.NewSession()

@@ -57,12 +57,21 @@ type PolicyConfig struct {
 	RTMR1Allow  []string `toml:"rtmr1_allow"`
 	RTMR2Allow  []string `toml:"rtmr2_allow"`
 	RTMR3Allow  []string `toml:"rtmr3_allow"`
+
+	// Gateway-specific measurement allowlists (GW-M-04).
+	GatewayMRTDAllow   []string `toml:"gateway_mrtd_allow"`
+	GatewayMRSEAMAllow []string `toml:"gateway_mrseam_allow"`
+	GatewayRTMR0Allow  []string `toml:"gateway_rtmr0_allow"`
+	GatewayRTMR1Allow  []string `toml:"gateway_rtmr1_allow"`
+	GatewayRTMR2Allow  []string `toml:"gateway_rtmr2_allow"`
+	GatewayRTMR3Allow  []string `toml:"gateway_rtmr3_allow"`
 }
 
 // tomlFile mirrors the top-level structure of the optional TOML config file.
 type tomlFile struct {
-	Providers map[string]ProviderConfig `toml:"providers"`
-	Policy    PolicyConfig              `toml:"policy"`
+	Providers     map[string]ProviderConfig `toml:"providers"`
+	Policy        PolicyConfig              `toml:"policy"`
+	PoCSigningKey string                    `toml:"poc_signing_key"`
 }
 
 // Provider is a fully resolved provider configuration, ready for use by the
@@ -89,10 +98,19 @@ type Config struct {
 	// MeasurementPolicy defines optional allowlists for TDX measurements.
 	MeasurementPolicy attestation.MeasurementPolicy
 
+	// GatewayMeasurementPolicy defines optional allowlists for gateway CVM
+	// TDX measurements, separate from model backend measurements (GW-M-04).
+	GatewayMeasurementPolicy attestation.MeasurementPolicy
+
 	// Offline skips external verification calls (Intel PCS collateral,
 	// Proof of Cloud registry, and Certificate Transparency checks).
 	// Set via --offline flag at runtime.
 	Offline bool
+
+	// PoCSigningKey is the optional base64-encoded ed25519 public key for
+	// verifying EdDSA signatures on Proof of Cloud JWTs (GW-M-11).
+	// When empty, only JWT claims are validated (no signature verification).
+	PoCSigningKey string
 }
 
 // Load reads configuration from the optional TOML file (path from $TEEP_CONFIG)
@@ -155,6 +173,14 @@ func loadTOML(cfg *Config, path string) error {
 	}
 	cfg.MeasurementPolicy = policy
 
+	gatewayPolicy, err := buildGatewayMeasurementPolicy(&f.Policy)
+	if err != nil {
+		return err
+	}
+	cfg.GatewayMeasurementPolicy = gatewayPolicy
+
+	cfg.PoCSigningKey = f.PoCSigningKey
+
 	return nil
 }
 
@@ -162,17 +188,17 @@ func buildMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPolicy, err
 	var out attestation.MeasurementPolicy
 
 	var err error
-	out.MRTDAllow, err = normalizeAllowlist(p.MRTDAllow, 48, "policy.mrtd_allow")
+	out.MRTDAllow, err = normalizeAllowlist(p.MRTDAllow, "policy.mrtd_allow")
 	if err != nil {
 		return out, err
 	}
-	out.MRSeamAllow, err = normalizeAllowlist(p.MRSEAMAllow, 48, "policy.mrseam_allow")
+	out.MRSeamAllow, err = normalizeAllowlist(p.MRSEAMAllow, "policy.mrseam_allow")
 	if err != nil {
 		return out, err
 	}
 
 	for i, list := range [4][]string{p.RTMR0Allow, p.RTMR1Allow, p.RTMR2Allow, p.RTMR3Allow} {
-		out.RTMRAllow[i], err = normalizeAllowlist(list, 48, fmt.Sprintf("policy.rtmr%d_allow", i))
+		out.RTMRAllow[i], err = normalizeAllowlist(list, fmt.Sprintf("policy.rtmr%d_allow", i))
 		if err != nil {
 			return out, err
 		}
@@ -181,7 +207,34 @@ func buildMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPolicy, err
 	return out, nil
 }
 
-func normalizeAllowlist(values []string, expectedBytes int, field string) (map[string]struct{}, error) {
+func buildGatewayMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPolicy, error) {
+	var out attestation.MeasurementPolicy
+
+	var err error
+	out.MRTDAllow, err = normalizeAllowlist(p.GatewayMRTDAllow, "policy.gateway_mrtd_allow")
+	if err != nil {
+		return out, err
+	}
+	out.MRSeamAllow, err = normalizeAllowlist(p.GatewayMRSEAMAllow, "policy.gateway_mrseam_allow")
+	if err != nil {
+		return out, err
+	}
+
+	for i, list := range [4][]string{p.GatewayRTMR0Allow, p.GatewayRTMR1Allow, p.GatewayRTMR2Allow, p.GatewayRTMR3Allow} {
+		out.RTMRAllow[i], err = normalizeAllowlist(list, fmt.Sprintf("policy.gateway_rtmr%d_allow", i))
+		if err != nil {
+			return out, err
+		}
+	}
+
+	return out, nil
+}
+
+// tdxMeasurementBytes is the expected size (in bytes) of TDX measurement
+// values (MRTD, MRSEAM, RTMR0–3): 48 bytes = 384 bits (SHA-384).
+const tdxMeasurementBytes = 48
+
+func normalizeAllowlist(values []string, field string) (map[string]struct{}, error) {
 	if values == nil {
 		return map[string]struct{}{}, nil // field absent from TOML — no policy
 	}
@@ -195,8 +248,8 @@ func normalizeAllowlist(values []string, expectedBytes int, field string) (map[s
 		if err != nil {
 			return nil, fmt.Errorf("%s contains invalid hex %q: %w", field, v, err)
 		}
-		if len(b) != expectedBytes {
-			return nil, fmt.Errorf("%s entry %q decodes to %d bytes, want %d", field, v, len(b), expectedBytes)
+		if len(b) != tdxMeasurementBytes {
+			return nil, fmt.Errorf("%s entry %q decodes to %d bytes, want %d", field, v, len(b), tdxMeasurementBytes)
 		}
 		norm[s] = struct{}{}
 	}
@@ -231,7 +284,7 @@ func applyEnvOverrides(cfg *Config) {
 
 	applyAPIKeyEnv(cfg, "venice", "VENICE_API_KEY", "https://api.venice.ai", true)
 	applyAPIKeyEnv(cfg, "neardirect", "NEARAI_API_KEY", "https://completions.near.ai", false)
-	applyAPIKeyEnv(cfg, "nearcloud", "NEARAI_API_KEY", "https://cloud-api.near.ai", false)
+	applyAPIKeyEnv(cfg, "nearcloud", "NEARAI_API_KEY", "https://cloud-api.near.ai", true)
 }
 
 // applyAPIKeyEnv sets or updates the API key for the named provider from the

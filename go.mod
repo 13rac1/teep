@@ -3,6 +3,7 @@ module github.com/13rac1/teep
 go 1.25.0
 
 require (
+	filippo.io/edwards25519 v1.2.0
 	github.com/BurntSushi/toml v1.6.0
 	github.com/MicahParks/keyfunc/v3 v3.8.0
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1

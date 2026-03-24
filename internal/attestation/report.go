@@ -78,6 +78,19 @@ func (r *VerificationReport) Blocked() bool {
 	return false
 }
 
+// ReportDataBindingPassed returns true if the tdx_reportdata_binding factor
+// passed. Without this, a MITM can substitute the enclave public key and
+// E2EE becomes security theater. E2EE must never be activated unless this
+// returns true.
+func (r *VerificationReport) ReportDataBindingPassed() bool {
+	for _, f := range r.Factors {
+		if f.Name == "tdx_reportdata_binding" {
+			return f.Status == Pass
+		}
+	}
+	return false
+}
+
 // DefaultEnforced lists the factor names that block the proxy on failure.
 // These are the minimum checks required for E2EE security. See the plan for
 // rationale; notably tdx_reportdata_binding is critical — without it, a MITM
@@ -158,6 +171,7 @@ type ReportInput struct {
 	GatewayNonce    Nonce  // nonce we sent to the gateway
 	GatewayCompose  *ComposeBindingResult
 	GatewayEventLog []EventLogEntry
+	GatewayPolicy   MeasurementPolicy // separate measurement allowlists for gateway CVM (GW-M-04)
 }
 
 // BuildReport runs verification factors against the input and returns a
@@ -415,9 +429,18 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	}
 
 	// Factor 16: e2ee_capable
-	if in.Raw.SigningKey == "" {
+	switch {
+	case in.Raw.SigningKey == "":
 		addFactor(TierBinding, "e2ee_capable", Fail, "enclave public key absent; E2EE key exchange not possible")
-	} else {
+	case in.Raw.SigningAlgo == "ed25519" || len(in.Raw.SigningKey) == 64:
+		// V2: Ed25519 key (64 hex chars).
+		if err := ValidateModelKeyV2(in.Raw.SigningKey); err != nil {
+			addFactor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave ed25519 public key invalid: %v", err))
+		} else {
+			addFactor(TierBinding, "e2ee_capable", Pass, "enclave ed25519 public key valid; v2 E2EE key exchange possible (ed25519)")
+		}
+	default:
+		// V1: secp256k1 key (130 hex chars).
 		s := &Session{}
 		if err := s.SetModelKey(in.Raw.SigningKey); err != nil {
 			addFactor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave public key is not a valid secp256k1 point: %v", err))
@@ -486,6 +509,11 @@ func BuildReport(in *ReportInput) *VerificationReport {
 					goto buildTransparencyDone
 				}
 			}
+		} else if len(in.GatewayImageRepos) > 0 {
+			addFactor(TierSupplyChain, "build_transparency_log", Fail,
+				fmt.Sprintf("provider %q has no gateway images in supply chain policy but %d gateway image repos were extracted",
+					in.Provider, len(in.GatewayImageRepos)))
+			goto buildTransparencyDone
 		}
 	}
 
@@ -536,6 +564,12 @@ func BuildReport(in *ReportInput) *VerificationReport {
 			switch {
 			case img != nil && img.Provenance == FulcioSigned:
 				switch {
+				case r.SignatureErr != nil && !img.NoDSSE:
+					failed = true
+					detail = fmt.Sprintf("image %q: DSSE envelope signature verification failed: %v", imageRepo, r.SignatureErr)
+				case !r.HasCert && r.HasNonFulcioCert:
+					failed = true
+					detail = fmt.Sprintf("image %q: expected Fulcio certificate but entry has non-Fulcio X.509 cert (no OIDC issuer OID)", imageRepo)
 				case !r.HasCert:
 					failed = true
 					detail = fmt.Sprintf("image %q: expected Fulcio certificate but entry has raw key", imageRepo)
@@ -708,8 +742,13 @@ buildTransparencyDone:
 	}
 
 	// Factor 24: event_log_integrity
+	// GW-M-05: Absent event log yields Fail (not Skip) when the factor is enforced.
 	if len(in.Raw.EventLog) == 0 { //nolint:gocritic // ifElseChain: conditions compare different fields
-		addFactor(TierSupplyChain, "event_log_integrity", Skip, "no event log entries in attestation response")
+		if enforcedSet["event_log_integrity"] {
+			addFactor(TierSupplyChain, "event_log_integrity", Fail, "no event log entries in attestation response (enforced)")
+		} else {
+			addFactor(TierSupplyChain, "event_log_integrity", Skip, "no event log entries in attestation response")
+		}
 	} else if in.TDX == nil || in.TDX.ParseErr != nil {
 		addFactor(TierSupplyChain, "event_log_integrity", Skip, "no parseable TDX quote; cannot compare RTMRs")
 	} else {
@@ -773,11 +812,28 @@ buildTransparencyDone:
 			addFactor(TierGateway, "gateway_tdx_debug_disabled", Skip, "gateway quote parse failed; debug flag not checked")
 		} else {
 			mrtdHex := hex.EncodeToString(in.GatewayTDX.MRTD)
+			mrSeamHex := hex.EncodeToString(in.GatewayTDX.MRSeam)
 			detail := fmt.Sprintf("valid %s structure", tdxQuoteVersion(in.GatewayTDX))
 			if len(mrtdHex) >= 16 {
 				detail = fmt.Sprintf("valid %s, MRTD: %s...", tdxQuoteVersion(in.GatewayTDX), mrtdHex[:16])
 			}
-			addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail)
+
+			// GW-M-04: Apply gateway measurement policy allowlists.
+			gp := in.GatewayPolicy
+			switch {
+			case gp.HasMRTDPolicy() && !containsAllowlist(gp.MRTDAllow, mrtdHex):
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Fail, fmt.Sprintf("gateway MRTD not in policy allowlist: %s...", prefixHex(mrtdHex)))
+			case gp.HasMRSeamPolicy() && !containsAllowlist(gp.MRSeamAllow, mrSeamHex):
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Fail, fmt.Sprintf("gateway MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex)))
+			case gp.HasMRTDPolicy() && gp.HasMRSeamPolicy():
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail+" (gateway MRTD/MRSEAM policy matched)")
+			case gp.HasMRTDPolicy():
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail+" (gateway MRTD policy matched)")
+			case gp.HasMRSeamPolicy():
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail+" (gateway MRSEAM policy matched)")
+			default:
+				addFactor(TierGateway, "gateway_tdx_quote_structure", Pass, detail)
+			}
 
 			if in.GatewayTDX.CertChainErr != nil {
 				addFactor(TierGateway, "gateway_tdx_cert_chain", Fail, fmt.Sprintf("gateway cert chain verification failed: %v", in.GatewayTDX.CertChainErr))
@@ -845,8 +901,13 @@ buildTransparencyDone:
 		}
 
 		// Factor: gateway_event_log_integrity
+		// GW-M-05: Absent event log yields Fail (not Skip) when the factor is enforced.
 		if len(in.GatewayEventLog) == 0 { //nolint:gocritic // ifElseChain: conditions compare different fields
-			addFactor(TierGateway, "gateway_event_log_integrity", Skip, "no gateway event log entries in attestation response")
+			if enforcedSet["gateway_event_log_integrity"] {
+				addFactor(TierGateway, "gateway_event_log_integrity", Fail, "no gateway event log entries in attestation response (enforced)")
+			} else {
+				addFactor(TierGateway, "gateway_event_log_integrity", Skip, "no gateway event log entries in attestation response")
+			}
 		} else if in.GatewayTDX.ParseErr != nil {
 			addFactor(TierGateway, "gateway_event_log_integrity", Skip, "gateway TDX quote not parseable; cannot compare RTMRs")
 		} else {
@@ -868,10 +929,24 @@ buildTransparencyDone:
 				if mismatch {
 					addFactor(TierGateway, "gateway_event_log_integrity", Fail, detail)
 				} else {
+					// GW-M-06: Check RTMR policy allowlists using gateway-specific policy.
+					gp := in.GatewayPolicy
+					for i := range 4 {
+						if !gp.HasRTMRPolicy(i) {
+							continue
+						}
+						rtmrHex := hex.EncodeToString(in.GatewayTDX.RTMRs[i][:])
+						if _, ok := gp.RTMRAllow[i][rtmrHex]; !ok {
+							addFactor(TierGateway, "gateway_event_log_integrity", Fail,
+								fmt.Sprintf("gateway RTMR[%d] not in gateway policy allowlist: %s...", i, prefixHex(rtmrHex)))
+							goto gatewayEventLogDone
+						}
+					}
 					addFactor(TierGateway, "gateway_event_log_integrity", Pass,
 						fmt.Sprintf("gateway event log replayed (%d entries), all 4 RTMRs match quote", len(in.GatewayEventLog)))
 				}
 			}
+		gatewayEventLogDone:
 		}
 	}
 
@@ -943,6 +1018,7 @@ type ImageProvenance struct {
 	OIDCIssuer     string         // required when Provenance == FulcioSigned
 	OIDCIdentity   string         // SAN URI (workflow identity); checked for FulcioSigned
 	SourceRepos    []string       // required when Provenance == FulcioSigned (repo ID and/or URL)
+	NoDSSE         bool           // true = DSSE envelope lacks signatures; skip DSSE check
 }
 
 type supplyChainPolicy struct {
@@ -1014,6 +1090,7 @@ func supplyChainPolicyForProvider(provider string) *supplyChainPolicy {
 				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
 			{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: ComposeBindingOnly},
 			{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: FulcioSigned,
+				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
 				OIDCIssuer:   githubOIDC,
 				OIDCIdentity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
 				SourceRepos: []string{
@@ -1028,6 +1105,7 @@ func supplyChainPolicyForProvider(provider string) *supplyChainPolicy {
 				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
 			{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: ComposeBindingOnly},
 			{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: FulcioSigned,
+				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
 				OIDCIssuer:   githubOIDC,
 				OIDCIdentity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
 				SourceRepos: []string{

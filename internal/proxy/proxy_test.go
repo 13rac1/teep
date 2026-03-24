@@ -997,11 +997,9 @@ func TestPlaintextStreaming(t *testing.T) {
 // decrypt functions directly and test the proxy with E2EE disabled.
 // See TestDecryptSSEChunk and TestDecryptNonStreamResponse below.
 
-// TestE2EEFallbackToPlaintext verifies the proxy falls back to plaintext when
-// tdx_reportdata_binding fails (which it always will without real TDX hardware).
-func TestE2EEFallbackToPlaintext(t *testing.T) {
-	const wantContent = "fallback plaintext"
-
+// TestE2EERefusesPlaintextFallback verifies the proxy refuses to send a
+// plaintext request when E2EE is configured but tdx_reportdata_binding fails.
+func TestE2EERefusesPlaintextFallback(t *testing.T) {
 	combined := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/tee/attestation") {
 			nonceHex := r.URL.Query().Get("nonce")
@@ -1014,7 +1012,7 @@ func TestE2EEFallbackToPlaintext(t *testing.T) {
 		}
 		if r.URL.Path == "/api/v1/chat/completions" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(nonStreamResponse(wantContent)))
+			_, _ = w.Write([]byte(nonStreamResponse("should not reach here")))
 			return
 		}
 		http.NotFound(w, r)
@@ -1031,7 +1029,7 @@ func TestE2EEFallbackToPlaintext(t *testing.T) {
 				E2EE:    true, // E2EE requested but reportdata binding will fail
 			},
 		},
-		// tdx_reportdata_binding is not enforced → proxy continues but falls back
+		// tdx_reportdata_binding is not enforced, but E2EE must still refuse
 		Enforced: []string{},
 	}
 
@@ -1044,15 +1042,9 @@ func TestE2EEFallbackToPlaintext(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusInternalServerError {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	got := extractMessageContent(t, body)
-	if got != wantContent {
-		t.Errorf("content = %q, want %q", got, wantContent)
+		t.Fatalf("status = %d, want 500; body=%s", resp.StatusCode, body)
 	}
 }
 
@@ -1338,13 +1330,9 @@ func TestAttestationCacheHit(t *testing.T) {
 // Decryption unit tests (decrypt.go)
 // --------------------------------------------------------------------------
 
-// TestE2EEStreamingRoundTrip verifies that when E2EE falls back to plaintext
-// (because tdx_reportdata_binding cannot be verified without real TDX hardware),
-// the proxy still relays the streaming response correctly.
-func TestE2EEStreamingRoundTrip(t *testing.T) {
-	const wantContent = "Hello from proxy (plaintext fallback)!"
-
-	// On the plaintext fallback path, the upstream returns unencrypted content.
+// TestE2EEStreamingRefusesPlaintext verifies the proxy refuses to fall back to
+// plaintext streaming when E2EE is configured but binding fails.
+func TestE2EEStreamingRefusesPlaintext(t *testing.T) {
 	combined := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/tee/attestation") {
 			nonceHex := r.URL.Query().Get("nonce")
@@ -1357,7 +1345,7 @@ func TestE2EEStreamingRoundTrip(t *testing.T) {
 		}
 		if r.URL.Path == "/api/v1/chat/completions" {
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte(streamSSE(wantContent)))
+			_, _ = w.Write([]byte(streamSSE("should not reach here")))
 			return
 		}
 		http.NotFound(w, r)
@@ -1371,37 +1359,24 @@ func TestE2EEStreamingRoundTrip(t *testing.T) {
 				Name:    "venice",
 				BaseURL: combined.URL,
 				APIKey:  "key",
-				E2EE:    true, // E2EE requested; will fall back due to no real TDX
+				E2EE:    true, // E2EE requested; will refuse due to no real TDX
 			},
 		},
-		Enforced: []string{}, // no enforced factors → proxy won't block
+		Enforced: []string{}, // no enforced factors → but E2EE still refuses plaintext
 	}
 
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	// Since tdx_reportdata_binding will Fail (no real TDX), the proxy warns
-	// and falls back to plaintext forwarding.
 	resp, err := postChat(t, proxySrv.URL, "test-model", true)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusInternalServerError {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d; body=%s", resp.StatusCode, body)
-	}
-
-	chunks := readSSEChunks(t, resp.Body)
-	var got string
-	var gotSb1326 strings.Builder
-	for _, c := range chunks {
-		gotSb1326.WriteString(extractDeltaContent(t, c))
-	}
-	got += gotSb1326.String()
-	if got != wantContent {
-		t.Errorf("content = %q, want %q", got, wantContent)
+		t.Fatalf("status = %d, want 500; body=%s", resp.StatusCode, body)
 	}
 }
 

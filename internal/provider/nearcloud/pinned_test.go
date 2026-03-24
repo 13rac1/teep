@@ -114,9 +114,11 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 		true, // offline
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil, // no model RD verifier
+		attestation.MeasurementPolicy{},
+		nil /* no model RD verifier */, nil, /* no RekorClient */
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	// Disable CT checker for test server (self-signed cert).
@@ -180,9 +182,11 @@ func TestHandlePinned_CacheHit(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
@@ -221,12 +225,13 @@ func TestHandlePinned_MissingGatewayTLSFingerprint(t *testing.T) {
 		t.Logf("server received: %s %s", r.Method, r.URL.String())
 		if strings.HasPrefix(r.URL.Path, "/v1/attestation/report") {
 			nonceHex := r.URL.Query().Get("nonce")
-			// Return empty tls_cert_fingerprint for gateway.
+			// Return empty tls_cert_fingerprint for gateway but a non-empty
+			// intel_quote so GW-M-01 zero-value check passes.
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{
 				"gateway_attestation": {
 					"request_nonce": %q,
-					"intel_quote": "",
+					"intel_quote": "deadbeef",
 					"event_log": "",
 					"tls_cert_fingerprint": "",
 					"info": {"tcb_info": "{}"}
@@ -247,9 +252,11 @@ func TestHandlePinned_MissingGatewayTLSFingerprint(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
@@ -291,9 +298,11 @@ func TestHandlePinned_MismatchedGatewayFingerprint(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
@@ -339,9 +348,11 @@ func TestHandlePinned_BlockedReport(t *testing.T) {
 		true,
 		[]string{"nonce_match"},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
@@ -411,9 +422,11 @@ func TestHandlePinned_AttestationQueryParams(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
@@ -439,8 +452,8 @@ func TestHandlePinned_AttestationQueryParams(t *testing.T) {
 	if !strings.Contains(capturedQuery, "include_tls_fingerprint=true") {
 		t.Errorf("query should contain include_tls_fingerprint=true: %s", capturedQuery)
 	}
-	if !strings.Contains(capturedQuery, "signing_algo=ecdsa") {
-		t.Errorf("query should contain signing_algo=ecdsa: %s", capturedQuery)
+	if !strings.Contains(capturedQuery, "signing_algo=ed25519") {
+		t.Errorf("query should contain signing_algo=ed25519: %s", capturedQuery)
 	}
 	if !strings.Contains(capturedQuery, "nonce=") {
 		t.Errorf("query should contain nonce=: %s", capturedQuery)
@@ -454,7 +467,7 @@ func TestNewPinnedHandler(t *testing.T) {
 	spkiCache := attestation.NewSPKICache()
 	enforced := []string{"nonce_match", "tdx_debug_disabled"}
 
-	h := NewPinnedHandler(spkiCache, "test-key", true, enforced, attestation.MeasurementPolicy{}, nil)
+	h := NewPinnedHandler(spkiCache, "test-key", true, enforced, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{}, nil, nil, nil)
 
 	if h.apiKey != "test-key" {
 		t.Errorf("apiKey = %q, want %q", h.apiKey, "test-key")
@@ -478,7 +491,7 @@ func TestSetDialer(t *testing.T) {
 	}
 
 	called := false
-	h.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	h.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		called = true
 		return nil, errors.New("test dialer")
 	})
@@ -511,9 +524,11 @@ func TestHandlePinned_AttestationHTTPError(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
@@ -553,9 +568,11 @@ func TestHandlePinned_InvalidAttestationJSON(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
@@ -581,9 +598,11 @@ func TestHandlePinned_DialError(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return nil, errors.New("connection refused")
 	})
 	handler.SetCTChecker(nil)
@@ -661,9 +680,11 @@ func TestHandlePinned_ModelHasDifferentFingerprint(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
@@ -740,8 +761,8 @@ func TestFetchAttestation_HappyPath(t *testing.T) {
 	if !strings.Contains(capturedQuery, "include_tls_fingerprint=true") {
 		t.Errorf("query should contain include_tls_fingerprint: %s", capturedQuery)
 	}
-	if !strings.Contains(capturedQuery, "signing_algo=ecdsa") {
-		t.Errorf("query should contain signing_algo: %s", capturedQuery)
+	if !strings.Contains(capturedQuery, "signing_algo=ed25519") {
+		t.Errorf("query should contain signing_algo=ed25519: %s", capturedQuery)
 	}
 	if capturedAuth != "Bearer my-api-key" {
 		t.Errorf("Authorization = %q, want %q", capturedAuth, "Bearer my-api-key")
@@ -860,9 +881,11 @@ func TestHandlePinned_WithGatewayComposeAndModelFingerprint(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
@@ -940,9 +963,11 @@ func TestHandlePinned_WithNonEmptyQuotesAndPayload(t *testing.T) {
 		true, // offline — skips NRAS, PoC, Sigstore
 		[]string{},
 		attestation.MeasurementPolicy{},
-		nil,
+		attestation.MeasurementPolicy{},
+		nil, nil,
+		nil, // no PoC signing key
 	)
-	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
+	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)

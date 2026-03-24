@@ -110,11 +110,9 @@ func TestFetchRekorProvenance_FulcioCert(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	origBase := RekorAPIBase
-	defer func() { RekorAPIBase = origBase }()
-	RekorAPIBase = ts.URL
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
 
-	prov := FetchRekorProvenance(context.Background(), testDigest, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
 
 	t.Logf("Provenance result:")
 	t.Logf("  Digest:         %s", prov.Digest)
@@ -184,11 +182,9 @@ func TestFetchRekorProvenance_RawPublicKey(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	origBase := RekorAPIBase
-	defer func() { RekorAPIBase = origBase }()
-	RekorAPIBase = ts.URL
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
 
-	prov := FetchRekorProvenance(context.Background(), testDigest, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
 
 	t.Logf("Provenance result: HasCert=%v KeyFingerprint=%s Err=%v", prov.HasCert, prov.KeyFingerprint, prov.Err)
 
@@ -216,11 +212,9 @@ func TestFetchRekorProvenance_NoEntries(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	origBase := RekorAPIBase
-	defer func() { RekorAPIBase = origBase }()
-	RekorAPIBase = ts.URL
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
 
-	prov := FetchRekorProvenance(context.Background(), testDigest, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
 
 	t.Logf("Provenance result: HasCert=%v Err=%v", prov.HasCert, prov.Err)
 
@@ -281,11 +275,9 @@ func TestFetchRekorProvenance_IndexHTTPError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	origBase := RekorAPIBase
-	defer func() { RekorAPIBase = origBase }()
-	RekorAPIBase = ts.URL
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
 
-	prov := FetchRekorProvenance(context.Background(), testDigest, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
 	if prov.Err == nil {
 		t.Fatal("expected error for HTTP 500")
 	}
