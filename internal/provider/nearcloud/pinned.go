@@ -171,9 +171,9 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	headers.Set("Authorization", "Bearer "+h.apiKey)
 	headers.Set("Connection", "close")
 
-	// E2EE: encrypt message contents for the model backend so the
-	// gateway CVM cannot read plaintext. The signing key from attestation
-	// is the model's public key for ECDH key exchange.
+	// E2EE v2: encrypt message contents for the model backend using
+	// Ed25519/X25519 + XChaCha20-Poly1305. The signing key from attestation
+	// is the model's Ed25519 public key (64 hex chars).
 	chatBody := req.Body
 	var session *attestation.Session
 	if req.E2EE {
@@ -185,13 +185,17 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		if sk == "" {
 			return nil, errors.New("E2EE requested but no signing key available")
 		}
-		encBody, sess, err := attestation.EncryptChatMessages(chatBody, sk)
+		encBody, sess, err := attestation.EncryptChatMessagesV2(chatBody, sk)
 		if err != nil {
-			return nil, fmt.Errorf("E2EE encrypt: %w", err)
+			return nil, fmt.Errorf("E2EE v2 encrypt: %w", err)
 		}
 		chatBody = encBody
 		session = sess
-		headers.Set("X-Session-Public-Key", session.PublicKeyHex)
+		// V2 protocol headers per NEAR AI E2EE docs.
+		headers.Set("X-Signing-Algo", "ed25519")
+		headers.Set("X-Client-Pub-Key", session.Ed25519PubHex)
+		headers.Set("X-Model-Pub-Key", session.ModelEd25519Hex)
+		headers.Set("X-Encryption-Version", "2")
 	}
 
 	if err := neardirect.WriteHTTPRequest(bw, req.Method, req.Path, headers, chatBody); err != nil {
@@ -265,7 +269,7 @@ func (h *PinnedHandler) attestOnConn(
 	q.Set("model", model)
 	q.Set("include_tls_fingerprint", "true")
 	q.Set("nonce", modelNonce.Hex())
-	q.Set("signing_algo", "ecdsa")
+	q.Set("signing_algo", "ed25519")
 	path := attestationPath + "?" + q.Encode()
 
 	attestHeaders := make(http.Header)

@@ -67,8 +67,10 @@ type RawAttestation struct {
 	// TEEProvider identifies the TEE type (e.g. "TDX", "TDX+NVIDIA").
 	TEEProvider string
 
-	// SigningKey is the uncompressed secp256k1 public key in hex (130 chars,
-	// starts with "04"). Used for E2EE key exchange.
+	// SigningKey is the enclave's ECDH public key in hex, used for E2EE key
+	// exchange. For v1 (ECDSA/Venice): uncompressed secp256k1 (130 chars,
+	// starts with "04"). For v2 (Ed25519/nearcloud): Ed25519 public key
+	// (64 chars).
 	SigningKey string
 
 	// SigningAddress is the keccak256-derived address of SigningKey.
@@ -265,8 +267,9 @@ type signingKeyEntry struct {
 
 // SigningKeyCache caches REPORTDATA-verified signing keys by provider+model.
 // The signing key is bound to the TDX quote via REPORTDATA; it only changes
-// on VM restart (new TDX quote). A short TTL (e.g. 1 minute) avoids
-// re-fetching attestation on every E2EE request while remaining conservative.
+// on VM restart (new TDX quote). The TTL must be ≥ the SPKI cache TTL to
+// prevent "no signing key available" errors on pinned connections where an
+// SPKI cache hit skips attestation.
 type SigningKeyCache struct {
 	mu      sync.RWMutex
 	entries map[cacheKey]*signingKeyEntry

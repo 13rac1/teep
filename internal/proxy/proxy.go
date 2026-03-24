@@ -52,8 +52,10 @@ const (
 	negativeCacheTTL = 30 * time.Second
 
 	// signingKeyCacheTTL is how long a REPORTDATA-verified signing key is
-	// reused for E2EE without re-fetching attestation.
-	signingKeyCacheTTL = 1 * time.Minute
+	// reused for E2EE without re-fetching attestation. Must be ≥ the SPKI
+	// cache TTL (1 h) to avoid "no signing key available" errors on pinned
+	// connections where an SPKI cache hit skips attestation.
+	signingKeyCacheTTL = 1 * time.Hour
 
 	// upstreamNonStreamTimeout is the context deadline for non-streaming
 	// upstream requests. Must be generous — attestation + E2EE setup can

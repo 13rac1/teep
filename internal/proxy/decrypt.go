@@ -12,8 +12,9 @@ import (
 )
 
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
-// map, decrypts any that pass IsEncryptedChunk, and returns true if any field
-// was decrypted. Non-string fields and non-encrypted strings are left unchanged.
+// map, decrypts any that pass the version-appropriate IsEncryptedChunk check,
+// and returns true if any field was decrypted. Non-string fields and
+// non-encrypted strings are left unchanged.
 func decryptDeltaFields(fields map[string]json.RawMessage, session *attestation.Session, ctx string) (bool, error) {
 	changed := false
 	for key, raw := range fields {
@@ -21,7 +22,7 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session *attestation.
 		if json.Unmarshal(raw, &s) != nil || s == "" {
 			continue
 		}
-		if !attestation.IsEncryptedChunk(s) {
+		if !attestation.IsEncryptedChunkForSession(s, session) {
 			// Non-empty string that doesn't look encrypted — error in E2EE mode.
 			// Exception: known non-content fields like "role" are never encrypted.
 			if key == "role" || key == "refusal" {
@@ -29,7 +30,7 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session *attestation.
 			}
 			return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), safePrefix(s, 8))
 		}
-		plaintext, err := attestation.Decrypt(s, session.PrivateKey)
+		plaintext, err := attestation.DecryptForSession(s, session)
 		if err != nil {
 			return false, fmt.Errorf("decrypt %s.%s: %w", ctx, key, err)
 		}
@@ -144,13 +145,13 @@ func decryptSSEChunkContent(data string, session *attestation.Session) (map[stri
 		if json.Unmarshal(raw, &s) != nil || s == "" {
 			continue
 		}
-		if !attestation.IsEncryptedChunk(s) {
+		if !attestation.IsEncryptedChunkForSession(s, session) {
 			if key == "role" || key == "refusal" {
 				continue
 			}
 			return nil, fmt.Errorf("delta.%s: expected encrypted but not recognised (len=%d prefix=%q)", key, len(s), safePrefix(s, 8))
 		}
-		plaintext, err := attestation.Decrypt(s, session.PrivateKey)
+		plaintext, err := attestation.DecryptForSession(s, session)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt delta.%s: %w", key, err)
 		}

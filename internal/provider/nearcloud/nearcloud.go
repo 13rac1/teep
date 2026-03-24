@@ -165,7 +165,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("model", model)
 	q.Set("nonce", nonce.Hex())
 	q.Set("include_tls_fingerprint", "true")
-	q.Set("signing_algo", "ecdsa")
+	q.Set("signing_algo", "ed25519")
 	endpoint.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)

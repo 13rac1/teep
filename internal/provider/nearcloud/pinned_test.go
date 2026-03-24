@@ -452,8 +452,8 @@ func TestHandlePinned_AttestationQueryParams(t *testing.T) {
 	if !strings.Contains(capturedQuery, "include_tls_fingerprint=true") {
 		t.Errorf("query should contain include_tls_fingerprint=true: %s", capturedQuery)
 	}
-	if !strings.Contains(capturedQuery, "signing_algo=ecdsa") {
-		t.Errorf("query should contain signing_algo=ecdsa: %s", capturedQuery)
+	if !strings.Contains(capturedQuery, "signing_algo=ed25519") {
+		t.Errorf("query should contain signing_algo=ed25519: %s", capturedQuery)
 	}
 	if !strings.Contains(capturedQuery, "nonce=") {
 		t.Errorf("query should contain nonce=: %s", capturedQuery)
@@ -761,8 +761,8 @@ func TestFetchAttestation_HappyPath(t *testing.T) {
 	if !strings.Contains(capturedQuery, "include_tls_fingerprint=true") {
 		t.Errorf("query should contain include_tls_fingerprint: %s", capturedQuery)
 	}
-	if !strings.Contains(capturedQuery, "signing_algo=ecdsa") {
-		t.Errorf("query should contain signing_algo: %s", capturedQuery)
+	if !strings.Contains(capturedQuery, "signing_algo=ed25519") {
+		t.Errorf("query should contain signing_algo=ed25519: %s", capturedQuery)
 	}
 	if capturedAuth != "Bearer my-api-key" {
 		t.Errorf("Authorization = %q, want %q", capturedAuth, "Bearer my-api-key")

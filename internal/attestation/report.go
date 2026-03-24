@@ -418,7 +418,15 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	// Factor 16: e2ee_capable
 	if in.Raw.SigningKey == "" {
 		addFactor(TierBinding, "e2ee_capable", Fail, "enclave public key absent; E2EE key exchange not possible")
+	} else if in.Raw.SigningAlgo == "ed25519" || len(in.Raw.SigningKey) == 64 {
+		// V2: Ed25519 key (64 hex chars).
+		if err := ValidateModelKeyV2(in.Raw.SigningKey); err != nil {
+			addFactor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave ed25519 public key invalid: %v", err))
+		} else {
+			addFactor(TierBinding, "e2ee_capable", Pass, "enclave ed25519 public key valid; v2 E2EE key exchange possible (ed25519)")
+		}
 	} else {
+		// V1: secp256k1 key (130 hex chars).
 		s := &Session{}
 		if err := s.SetModelKey(in.Raw.SigningKey); err != nil {
 			addFactor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave public key is not a valid secp256k1 point: %v", err))

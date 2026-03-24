@@ -35,8 +35,10 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	if err != nil {
 		return "", fmt.Errorf("signing_address is not valid hex: %w", err)
 	}
-	if len(addrBytes) != 20 {
-		return "", fmt.Errorf("signing_address must decode to 20 bytes, got %d", len(addrBytes))
+	// Accept 20 bytes (keccak256 Ethereum address for ECDSA) or 32 bytes
+	// (Ed25519 public key hash for v2 protocol).
+	if len(addrBytes) != 20 && len(addrBytes) != 32 {
+		return "", fmt.Errorf("signing_address must decode to 20 or 32 bytes, got %d", len(addrBytes))
 	}
 
 	fpBytes, err := hex.DecodeString(raw.TLSFingerprint)
