@@ -1,6 +1,8 @@
 package attestation
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -32,6 +34,72 @@ func validSigningKey(t *testing.T) string {
 	}
 	return hex.EncodeToString(priv.PubKey().SerializeUncompressed())
 }
+
+func bytesFromHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatalf("hex.DecodeString(%q): %v", s, err)
+	}
+	return b
+}
+
+// assertSingleFactor asserts that results has exactly 1 element with the expected status.
+// Returns the FactorResult for further checks.
+func assertSingleFactor(t *testing.T, results []FactorResult, want Status) FactorResult {
+	t.Helper()
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Status != want {
+		t.Errorf("status = %s, want %s; detail: %s", results[0].Status, want, results[0].Detail)
+	}
+	return results[0]
+}
+
+// assertFactor finds a factor by name in a multi-result slice and asserts its status.
+func assertFactor(t *testing.T, results []FactorResult, name string, want Status) FactorResult {
+	t.Helper()
+	for _, f := range results {
+		if f.Name == name {
+			if f.Status != want {
+				t.Errorf("factor %q: status = %s, want %s; detail: %s", name, f.Status, want, f.Detail)
+			}
+			return f
+		}
+	}
+	names := make([]string, len(results))
+	for i, f := range results {
+		names[i] = f.Name
+	}
+	t.Fatalf("factor %q not found in results (have: %v)", name, names)
+	return FactorResult{}
+}
+
+// findFactor is a test helper that locates a factor by name in the report.
+// It fails the test if the factor is not found.
+func findFactor(t *testing.T, report *VerificationReport, name string) FactorResult {
+	t.Helper()
+	for _, f := range report.Factors {
+		if f.Name == name {
+			return f
+		}
+	}
+	t.Fatalf("factor %q not found in report (factors: %v)", name, factorNames(report))
+	return FactorResult{}
+}
+
+func factorNames(r *VerificationReport) []string {
+	names := make([]string, len(r.Factors))
+	for i, f := range r.Factors {
+		names[i] = f.Name
+	}
+	return names
+}
+
+// ---------------------------------------------------------------------------
+// BuildReport-level tests (cross-cutting concerns)
+// ---------------------------------------------------------------------------
 
 // TestBuildReportFactorCount ensures exactly 24 factors are produced.
 func TestBuildReportFactorCount(t *testing.T) {
@@ -73,106 +141,6 @@ func TestBuildReportTotals(t *testing.T) {
 	}
 }
 
-// TestBuildReportNonceMatch verifies nonce_match Pass/Fail paths.
-func TestBuildReportNonceMatch(t *testing.T) {
-	nonce := NewNonce()
-	sigKey := validSigningKey(t)
-
-	// Pass: nonces match.
-	raw := buildMinimalRaw(nonce, sigKey)
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor := findFactor(t, report, "nonce_match")
-	if factor.Status != Pass {
-		t.Errorf("nonce_match with matching nonce: got %s, want PASS; detail: %s", factor.Status, factor.Detail)
-	}
-
-	// Fail: nonce mismatch.
-	otherNonce := NewNonce()
-	raw.Nonce = otherNonce.Hex()
-	report = BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor = findFactor(t, report, "nonce_match")
-	if factor.Status != Fail {
-		t.Errorf("nonce_match with mismatched nonce: got %s, want FAIL", factor.Status)
-	}
-
-	// Fail: empty nonce.
-	raw.Nonce = ""
-	report = BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor = findFactor(t, report, "nonce_match")
-	if factor.Status != Fail {
-		t.Errorf("nonce_match with empty nonce: got %s, want FAIL", factor.Status)
-	}
-}
-
-// TestBuildReportTDXQuotePresent verifies tdx_quote_present Pass/Fail.
-func TestBuildReportTDXQuotePresent(t *testing.T) {
-	nonce := NewNonce()
-	sigKey := validSigningKey(t)
-
-	raw := buildMinimalRaw(nonce, sigKey)
-	raw.IntelQuote = "dGVzdA=="
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor := findFactor(t, report, "tdx_quote_present")
-	if factor.Status != Pass {
-		t.Errorf("tdx_quote_present with quote: got %s, want PASS", factor.Status)
-	}
-
-	raw.IntelQuote = ""
-	report = BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor = findFactor(t, report, "tdx_quote_present")
-	if factor.Status != Fail {
-		t.Errorf("tdx_quote_present with empty quote: got %s, want FAIL", factor.Status)
-	}
-}
-
-// TestBuildReportSigningKeyPresent verifies signing_key_present Pass/Fail.
-func TestBuildReportSigningKeyPresent(t *testing.T) {
-	nonce := NewNonce()
-
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor := findFactor(t, report, "signing_key_present")
-	if factor.Status != Pass {
-		t.Errorf("signing_key_present with key: got %s, want PASS", factor.Status)
-	}
-
-	raw.SigningKey = ""
-	report = BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor = findFactor(t, report, "signing_key_present")
-	if factor.Status != Fail {
-		t.Errorf("signing_key_present with empty key: got %s, want FAIL", factor.Status)
-	}
-}
-
-// TestBuildReportE2EECapable verifies e2ee_capable with valid and invalid keys.
-func TestBuildReportE2EECapable(t *testing.T) {
-	nonce := NewNonce()
-
-	// Pass: valid secp256k1 uncompressed key.
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor := findFactor(t, report, "e2ee_capable")
-	if factor.Status != Pass {
-		t.Errorf("e2ee_capable with valid key: got %s, want PASS; detail: %s", factor.Status, factor.Detail)
-	}
-
-	// Fail: empty key.
-	raw.SigningKey = ""
-	report = BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor = findFactor(t, report, "e2ee_capable")
-	if factor.Status != Fail {
-		t.Errorf("e2ee_capable with empty key: got %s, want FAIL", factor.Status)
-	}
-
-	// Fail: malformed key.
-	raw.SigningKey = strings.Repeat("0", 130)
-	report = BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	factor = findFactor(t, report, "e2ee_capable")
-	if factor.Status != Fail {
-		t.Errorf("e2ee_capable with zero key: got %s, want FAIL", factor.Status)
-	}
-}
-
 // TestBuildReportEnforcedFlags verifies Enforced is set only for factors in the list.
 func TestBuildReportEnforcedFlags(t *testing.T) {
 	nonce := NewNonce()
@@ -192,91 +160,9 @@ func TestBuildReportEnforcedFlags(t *testing.T) {
 	}
 }
 
-// TestBuildReportTier3AlwaysFail verifies Tier 3 factors (except cpu_id_registry) Fail
-// without external data. cpu_id_registry depends on PoC result.
-func TestBuildReportTier3AlwaysFail(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
-
-	tier3AlwaysFail := []string{
-		"cpu_gpu_chain",
-		"measured_model_weights",
-		"build_transparency_log",
-	}
-
-	for _, name := range tier3AlwaysFail {
-		f := findFactor(t, report, name)
-		if f.Status != Fail {
-			t.Errorf("Tier 3 factor %q: got %s, want FAIL", name, f.Status)
-		}
-		if f.Detail == "" {
-			t.Errorf("Tier 3 factor %q: Detail is empty; should explain what is missing", name)
-		}
-	}
-
-	// tls_key_binding skips when SigningKey is present (E2EE replaces TLS binding).
-	tlsF := findFactor(t, report, "tls_key_binding")
-	if tlsF.Status != Skip {
-		t.Errorf("tls_key_binding with SigningKey (E2EE): got %s, want Skip", tlsF.Status)
-	}
-
-	// cpu_id_registry should Fail when no pocResult, no PPID, no DeviceID.
-	f := findFactor(t, report, "cpu_id_registry")
-	if f.Status != Fail {
-		t.Errorf("cpu_id_registry without PoC or PPID: got %s, want FAIL", f.Status)
-	}
-}
-
-// TestBuildReportTLSKeyBindingPass verifies tls_key_binding passes when
-// TLSFingerprint is set on the RawAttestation.
-func TestBuildReportTLSKeyBindingPass(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.TLSFingerprint = "aabbccddee112233445566778899aabb"
-
-	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce})
-	f := findFactor(t, report, "tls_key_binding")
-	if f.Status != Pass {
-		t.Errorf("tls_key_binding with TLSFingerprint: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "aabbccddee112233") {
-		t.Errorf("detail should contain fingerprint preview: %s", f.Detail)
-	}
-}
-
-// TestBuildReportTLSKeyBindingSkip verifies tls_key_binding skips when
-// TLSFingerprint is absent but SigningKey is present (E2EE provider).
-func TestBuildReportTLSKeyBindingSkip(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	// TLSFingerprint is empty by default; SigningKey is set → E2EE provider
-
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	f := findFactor(t, report, "tls_key_binding")
-	if f.Status != Skip {
-		t.Errorf("tls_key_binding with E2EE (no TLS): got %s (%s), want SKIP", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportTLSKeyBindingFail verifies tls_key_binding fails when
-// neither TLSFingerprint nor SigningKey is present.
-func TestBuildReportTLSKeyBindingFail(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, "")
-	// No TLSFingerprint, no SigningKey → neither channel binding method
-
-	report := BuildReport(&ReportInput{Provider: "test", Model: "m", Raw: raw, Nonce: nonce})
-	f := findFactor(t, report, "tls_key_binding")
-	if f.Status != Fail {
-		t.Errorf("tls_key_binding without TLS or E2EE: got %s (%s), want FAIL", f.Status, f.Detail)
-	}
-}
-
 // TestBlockedReturnsTrue verifies Blocked is true when an enforced factor fails.
 func TestBlockedReturnsTrue(t *testing.T) {
 	nonce := NewNonce()
-	// Missing nonce in response → nonce_match Fail (which is enforced by default).
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	raw.Nonce = "" // force nonce_match to fail
 
@@ -291,13 +177,6 @@ func TestBlockedReturnsTrue(t *testing.T) {
 func TestBlockedReturnsFalse(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-
-	// None of the enforced factors should fail when we have valid nonce,
-	// signing_key, and no TDX result (which causes tdx_debug_disabled to
-	// be a Fail — but wait, debug_disabled is enforced).
-	// We need to pass a tdxResult with DebugEnabled=false to get debug_disabled to pass.
-	// And tdx_reportdata_binding also needs a passing tdxResult.
-	// For this test, use an empty enforced list so nothing is enforced.
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: []string{}})
 
 	if report.Blocked() {
@@ -324,352 +203,895 @@ func TestVerificationReportMetadata(t *testing.T) {
 	}
 }
 
-// TestBuildReportNilTDXResultFailsParseFactors verifies that when tdxResult is nil,
-// the TDX-dependent factors are Fail (not panic).
-func TestBuildReportNilTDXResultFailsParseFactors(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-
-	for _, name := range []string{"tdx_quote_structure", "tdx_cert_chain", "tdx_quote_signature", "tdx_debug_disabled"} {
-		f := findFactor(t, report, name)
-		if f.Status != Fail {
-			t.Errorf("factor %q with nil tdxResult: got %s, want FAIL", name, f.Status)
-		}
+func TestDefaultEnforcedIncludesSupplyChainFactors(t *testing.T) {
+	need := map[string]bool{
+		"sigstore_verification":  true,
+		"build_transparency_log": true,
+	}
+	for _, f := range DefaultEnforced {
+		delete(need, f)
+	}
+	if len(need) != 0 {
+		t.Fatalf("DefaultEnforced missing required factors: %v", need)
 	}
 }
 
-// TestBuildReportWithTDXPassResult verifies TDX factors pass when given a clean result.
-func TestBuildReportWithTDXPassResult(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Direct evaluator tests
+// ---------------------------------------------------------------------------
+
+func TestEvalNonceMatch(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)
-	raw := buildMinimalRaw(nonce, sigKey)
 
-	// Build a fake "everything passed" TDX result.
-	tdxResult := &TDXVerifyResult{
-		ParseErr:             nil,
-		CertChainErr:         nil,
-		SignatureErr:         nil,
-		DebugEnabled:         false,
-		ReportDataBindingErr: nil,
-		TeeTCBSVN:            []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	tests := []struct {
+		name string
+		raw  *RawAttestation
+		want Status
+	}{
+		{"pass", buildMinimalRaw(nonce, sigKey), Pass},
+		{"mismatch", func() *RawAttestation { r := buildMinimalRaw(nonce, sigKey); r.Nonce = NewNonce().Hex(); return r }(), Fail},
+		{"absent", func() *RawAttestation { r := buildMinimalRaw(nonce, sigKey); r.Nonce = ""; return r }(), Fail},
 	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertSingleFactor(t, evalNonceMatch(&ReportInput{Raw: tc.raw, Nonce: nonce}), tc.want)
+		})
+	}
+}
 
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
+func TestEvalTDXQuotePresent(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
 
-	for _, name := range []string{"tdx_quote_structure", "tdx_cert_chain", "tdx_quote_signature", "tdx_debug_disabled"} {
+	tests := []struct {
+		name  string
+		quote string
+		want  Status
+	}{
+		{"present", "dGVzdA==", Pass},
+		{"absent", "", Fail},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			raw.IntelQuote = tc.quote
+			assertSingleFactor(t, evalTDXQuotePresent(&ReportInput{Raw: raw}), tc.want)
+		})
+	}
+}
+
+func TestEvalSigningKeyPresent(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name string
+		key  string
+		want Status
+	}{
+		{"present", sigKey, Pass},
+		{"absent", "", Fail},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, tc.key)
+			assertSingleFactor(t, evalSigningKeyPresent(&ReportInput{Raw: raw}), tc.want)
+		})
+	}
+}
+
+func TestEvalTDXParseDependent(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	t.Run("nil_tdx_all_fail", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		results := evalTDXParseDependent(&ReportInput{Raw: raw})
+		if len(results) != 4 {
+			t.Fatalf("got %d results, want 4", len(results))
+		}
+		for _, name := range []string{"tdx_quote_structure", "tdx_cert_chain", "tdx_quote_signature", "tdx_debug_disabled"} {
+			assertFactor(t, results, name, Fail)
+		}
+	})
+
+	t.Run("all_pass", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{TeeTCBSVN: make([]byte, 16)}
+		results := evalTDXParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
+		if len(results) != 4 {
+			t.Fatalf("got %d results, want 4", len(results))
+		}
+		for _, name := range []string{"tdx_quote_structure", "tdx_cert_chain", "tdx_quote_signature", "tdx_debug_disabled"} {
+			assertFactor(t, results, name, Pass)
+		}
+	})
+
+	t.Run("debug_enabled", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{DebugEnabled: true, TeeTCBSVN: make([]byte, 16)}
+		results := evalTDXParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
+		f := assertFactor(t, results, "tdx_debug_disabled", Fail)
+		if !strings.Contains(f.Detail, "debug") {
+			t.Errorf("detail should mention debug: %s", f.Detail)
+		}
+	})
+
+	t.Run("cert_chain_err", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{CertChainErr: errors.New("expired"), TeeTCBSVN: make([]byte, 16)}
+		results := evalTDXParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
+		assertFactor(t, results, "tdx_cert_chain", Fail)
+	})
+
+	t.Run("signature_err", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{SignatureErr: errors.New("bad sig"), TeeTCBSVN: make([]byte, 16)}
+		results := evalTDXParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
+		assertFactor(t, results, "tdx_quote_signature", Fail)
+	})
+
+	t.Run("parse_err_skips_chain_sig_debug", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{ParseErr: errors.New("bad quote")}
+		results := evalTDXParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
+		assertFactor(t, results, "tdx_quote_structure", Fail)
+		assertFactor(t, results, "tdx_cert_chain", Skip)
+		assertFactor(t, results, "tdx_quote_signature", Skip)
+		assertFactor(t, results, "tdx_debug_disabled", Skip)
+	})
+}
+
+func TestEvalTDXQuoteStructure(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	t.Run("mrtd_policy_mismatch", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		results := evalTDXParseDependent(&ReportInput{
+			Raw:   raw,
+			Nonce: nonce,
+			TDX:   tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow: map[string]struct{}{strings.Repeat("aa", 48): {}},
+			},
+		})
+		f := assertFactor(t, results, "tdx_quote_structure", Fail)
+		if !strings.Contains(f.Detail, "MRTD") {
+			t.Errorf("detail should mention MRTD: %s", f.Detail)
+		}
+	})
+}
+
+func TestEvalTDXReportDataBinding(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name       string
+		tdx        *TDXVerifyResult
+		wantStatus Status
+		wantDetail string
+	}{
+		{
+			"pass_with_detail",
+			&TDXVerifyResult{
+				TeeTCBSVN:               make([]byte, 16),
+				ReportDataBindingDetail: "REPORTDATA binds enclave public key via keccak256-derived address (0xabc123)",
+			},
+			Pass, "keccak256",
+		},
+		{
+			"skip_no_verifier",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16)},
+			Skip, "no REPORTDATA verifier",
+		},
+		{
+			"fail_nil_tdx",
+			nil,
+			Fail, "no parseable TDX",
+		},
+		{
+			"fail_binding_err",
+			&TDXVerifyResult{
+				TeeTCBSVN:            make([]byte, 16),
+				ReportDataBindingErr: errors.New("mismatch"),
+			},
+			Fail, "does not bind",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			f := assertSingleFactor(t, evalTDXReportDataBinding(&ReportInput{
+				Raw: raw, Nonce: nonce, TDX: tc.tdx,
+			}), tc.wantStatus)
+			if tc.wantDetail != "" && !strings.Contains(f.Detail, tc.wantDetail) {
+				t.Errorf("detail %q should contain %q", f.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+func TestEvalIntelPCSCollateral(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name string
+		tdx  *TDXVerifyResult
+		want Status
+	}{
+		{"skip_nil_tdx", nil, Skip},
+		{"pass_with_tcb_status", &TDXVerifyResult{TeeTCBSVN: make([]byte, 16), TcbStatus: "UpToDate"}, Pass},
+		{"skip_offline", &TDXVerifyResult{TeeTCBSVN: make([]byte, 16)}, Skip},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			assertSingleFactor(t, evalIntelPCSCollateral(&ReportInput{
+				Raw: raw, Nonce: nonce, TDX: tc.tdx,
+			}), tc.want)
+		})
+	}
+}
+
+func TestEvalTDXTCBCurrent(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name       string
+		tdx        *TDXVerifyResult
+		want       Status
+		wantDetail string
+	}{
+		{
+			"up_to_date",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16), TcbStatus: "UpToDate", AdvisoryIDs: []string{"INTEL-SA-00837"}},
+			Pass, "UpToDate",
+		},
+		{
+			"sw_hardening_needed",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16), TcbStatus: "SWHardeningNeeded", AdvisoryIDs: []string{"INTEL-SA-00960"}},
+			Fail, "",
+		},
+		{
+			"out_of_date",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16), TcbStatus: "OutOfDate"},
+			Fail, "",
+		},
+		{
+			"revoked",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16), TcbStatus: "Revoked"},
+			Fail, "",
+		},
+		{
+			"offline_shows_svn",
+			&TDXVerifyResult{TeeTCBSVN: []byte{0x07, 0x01, 0x03, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+			Skip, "TEE_TCB_SVN",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			f := assertSingleFactor(t, evalTDXTCBCurrent(&ReportInput{
+				Raw: raw, Nonce: nonce, TDX: tc.tdx,
+			}), tc.want)
+			if tc.wantDetail != "" && !strings.Contains(f.Detail, tc.wantDetail) {
+				t.Errorf("detail %q should contain %q", f.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+func TestEvalNvidiaPayloadPresent(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name    string
+		payload string
+		want    Status
+	}{
+		{"absent", "", Fail},
+		{"present", "some.jwt.token", Pass},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			raw.NvidiaPayload = tc.payload
+			assertSingleFactor(t, evalNvidiaPayloadPresent(&ReportInput{Raw: raw}), tc.want)
+		})
+	}
+}
+
+func TestEvalNvidiaSignature(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	t.Run("pass", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.NvidiaPayload = `{"evidence_list":[]}`
+		nv := &NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 8, Nonce: nonce.Hex()}
+		f := assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw, Nvidia: nv}), Pass)
+		if !strings.Contains(f.Detail, "HOPPER") || !strings.Contains(f.Detail, "8 GPU") {
+			t.Errorf("detail should mention HOPPER and 8 GPU: %s", f.Detail)
+		}
+	})
+
+	t.Run("fail_sig_err", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.NvidiaPayload = `{"evidence_list":[]}`
+		nv := &NvidiaVerifyResult{Format: "EAT", SignatureErr: errors.New("bad cert chain")}
+		f := assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw, Nvidia: nv}), Fail)
+		if !strings.Contains(f.Detail, "bad cert chain") {
+			t.Errorf("detail should mention error: %s", f.Detail)
+		}
+	})
+
+	t.Run("skip_no_payload", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw}), Skip)
+	})
+}
+
+func TestEvalNvidiaClaims(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	t.Run("pass", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.NvidiaPayload = `{"evidence_list":[]}`
+		nv := &NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 4, Nonce: nonce.Hex()}
+		f := assertSingleFactor(t, evalNvidiaClaims(&ReportInput{Raw: raw, Nvidia: nv}), Pass)
+		if !strings.Contains(f.Detail, "arch=HOPPER") {
+			t.Errorf("detail should mention arch=HOPPER: %s", f.Detail)
+		}
+	})
+
+	t.Run("fail_claims_err", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.NvidiaPayload = `{"evidence_list":[]}`
+		nv := &NvidiaVerifyResult{Format: "EAT", ClaimsErr: errors.New("invalid arch")}
+		assertSingleFactor(t, evalNvidiaClaims(&ReportInput{Raw: raw, Nvidia: nv}), Fail)
+	})
+}
+
+func TestEvalNvidiaNonceMatch(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	t.Run("pass", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.NvidiaPayload = `{"evidence_list":[]}`
+		nv := &NvidiaVerifyResult{Format: "EAT", GPUCount: 8, Nonce: nonce.Hex()}
+		f := assertSingleFactor(t, evalNvidiaNonceMatch(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
+		if !strings.Contains(f.Detail, "8 GPU") {
+			t.Errorf("detail should mention 8 GPU: %s", f.Detail)
+		}
+	})
+
+	t.Run("mismatch", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.NvidiaPayload = `{"evidence_list":[]}`
+		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: "wrong-nonce"}
+		assertSingleFactor(t, evalNvidiaNonceMatch(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Fail)
+	})
+}
+
+func TestEvalNvidiaNRASVerified(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name       string
+		payload    string
+		nras       *NvidiaVerifyResult
+		want       Status
+		wantDetail string
+	}{
+		{
+			"pass",
+			`{"evidence_list":[]}`,
+			&NvidiaVerifyResult{Format: "JWT", OverallResult: true},
+			Pass, "true",
+		},
+		{
+			"fail_not_success",
+			`{"evidence_list":[]}`,
+			&NvidiaVerifyResult{Format: "JWT", OverallResult: false},
+			Fail, "",
+		},
+		{
+			"skip_offline",
+			`{"evidence_list":[]}`,
+			nil,
+			Skip, "offline",
+		},
+		{
+			"skip_no_eat",
+			"eyJhbGciOi...",
+			nil,
+			Skip, "no EAT",
+		},
+		{
+			"fail_sig_err",
+			`{"evidence_list":[]}`,
+			&NvidiaVerifyResult{Format: "JWT", SignatureErr: errors.New("bad sig")},
+			Fail, "",
+		},
+		{
+			"fail_claims_err",
+			`{"evidence_list":[]}`,
+			&NvidiaVerifyResult{Format: "JWT", ClaimsErr: errors.New("bad claims")},
+			Fail, "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			raw.NvidiaPayload = tc.payload
+			f := assertSingleFactor(t, evalNvidiaNRASVerified(&ReportInput{
+				Raw: raw, Nonce: nonce, NvidiaNRAS: tc.nras,
+			}), tc.want)
+			if tc.wantDetail != "" && !strings.Contains(f.Detail, tc.wantDetail) {
+				t.Errorf("detail %q should contain %q", f.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+func TestEvalE2EECapable(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name string
+		key  string
+		want Status
+	}{
+		{"pass_valid_key", sigKey, Pass},
+		{"fail_empty", "", Fail},
+		{"fail_malformed", strings.Repeat("0", 130), Fail},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, tc.key)
+			assertSingleFactor(t, evalE2EECapable(&ReportInput{Raw: raw}), tc.want)
+		})
+	}
+}
+
+func TestEvalTLSKeyBinding(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name       string
+		fp         string
+		key        string
+		want       Status
+		wantDetail string
+	}{
+		{"pass_with_fingerprint", "aabbccddee112233445566778899aabb", sigKey, Pass, "aabbccddee112233"},
+		{"skip_e2ee", "", sigKey, Skip, ""},
+		{"fail_neither", "", "", Fail, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, tc.key)
+			raw.TLSFingerprint = tc.fp
+			f := assertSingleFactor(t, evalTLSKeyBinding(&ReportInput{Raw: raw}), tc.want)
+			if tc.wantDetail != "" && !strings.Contains(f.Detail, tc.wantDetail) {
+				t.Errorf("detail %q should contain %q", f.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+func TestEvalCPUGPUChain(t *testing.T) {
+	assertSingleFactor(t, evalCPUGPUChain(&ReportInput{Raw: &RawAttestation{}}), Fail)
+}
+
+func TestEvalMeasuredModelWeights(t *testing.T) {
+	assertSingleFactor(t, evalMeasuredModelWeights(&ReportInput{Raw: &RawAttestation{}}), Fail)
+}
+
+func TestEvalComposeBinding(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name    string
+		compose *ComposeBindingResult
+		want    Status
+	}{
+		{"pass", &ComposeBindingResult{Checked: true}, Pass},
+		{"fail_err", &ComposeBindingResult{Checked: true, Err: errors.New("hash mismatch")}, Fail},
+		{"skip_nil", nil, Skip},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			assertSingleFactor(t, evalComposeBinding(&ReportInput{
+				Raw: raw, Compose: tc.compose,
+			}), tc.want)
+		})
+	}
+}
+
+func TestEvalSigstoreVerification(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	t.Run("pass_all_ok", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		sig := []SigstoreResult{
+			{Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", OK: true, Status: 200},
+			{Digest: "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", OK: true, Status: 200},
+		}
+		assertSingleFactor(t, evalSigstoreVerification(&ReportInput{
+			Provider: "neardirect", Raw: raw, Sigstore: sig,
+		}), Pass)
+	})
+
+	t.Run("fail_not_found", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		sig := []SigstoreResult{
+			{Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", OK: true, Status: 200},
+			{Digest: "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", OK: false, Status: 404},
+		}
+		assertSingleFactor(t, evalSigstoreVerification(&ReportInput{
+			Provider: "neardirect", Raw: raw, Sigstore: sig,
+		}), Fail)
+	})
+
+	t.Run("pass_allowlisted_non_rekor", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		neardirectDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+		certbotDigest := "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
+		sig := []SigstoreResult{
+			{Digest: neardirectDigest, OK: true, Status: 200},
+			{Digest: certbotDigest, OK: false, Status: 404},
+		}
+		f := assertSingleFactor(t, evalSigstoreVerification(&ReportInput{
+			Provider:     "neardirect",
+			Raw:          raw,
+			Sigstore:     sig,
+			DigestToRepo: map[string]string{neardirectDigest: "nearaidev/compose-manager", certbotDigest: "certbot/dns-cloudflare"},
+			ImageRepos:   []string{"nearaidev/compose-manager", "certbot/dns-cloudflare"},
+		}), Pass)
+		if !strings.Contains(f.Detail, "compose-pinned") {
+			t.Errorf("detail should mention compose-pinned: %s", f.Detail)
+		}
+	})
+
+	t.Run("fail_unknown_non_rekor", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		unknownDigest := "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
+		sig := []SigstoreResult{{Digest: unknownDigest, OK: false, Status: 404}}
+		assertSingleFactor(t, evalSigstoreVerification(&ReportInput{
+			Provider:     "neardirect",
+			Raw:          raw,
+			Sigstore:     sig,
+			DigestToRepo: map[string]string{unknownDigest: "attacker/evil-image"},
+			ImageRepos:   []string{"attacker/evil-image"},
+		}), Fail)
+	})
+
+	t.Run("skip_no_digests", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		assertSingleFactor(t, evalSigstoreVerification(&ReportInput{
+			Provider: "neardirect", Raw: raw,
+		}), Skip)
+	})
+}
+
+func TestEvalEventLogIntegrity(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	t.Run("rtmr_policy_mismatch", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.EventLog = []EventLogEntry{{IMR: 0, Digest: strings.Repeat("ab", 48)}}
+
+		replayed, err := ReplayEventLog(raw.EventLog)
+		if err != nil {
+			t.Fatalf("ReplayEventLog: %v", err)
+		}
+
+		tdx := &TDXVerifyResult{RTMRs: replayed}
+		f := assertSingleFactor(t, evalEventLogIntegrity(&ReportInput{
+			Raw:   raw,
+			Nonce: nonce,
+			TDX:   tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					{strings.Repeat("00", 48): {}},
+					nil,
+					nil,
+					nil,
+				},
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "RTMR[0]") {
+			t.Errorf("detail should mention RTMR[0]: %s", f.Detail)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Build transparency log (supply chain policy) tests
+// ---------------------------------------------------------------------------
+
+func TestEvalBuildTransparencyLog(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	t.Run("pass_neardirect", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		sig := []SigstoreResult{{
+			Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+			OK:     true, Status: 200,
+		}}
+		rekor := []RekorProvenance{{
+			Digest:        sig[0].Digest,
+			HasCert:       true,
+			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+			OIDCIssuer:    "https://token.actions.githubusercontent.com",
+			SourceRepo:    "nearai/compose-manager",
+			SourceRepoURL: "https://github.com/nearai/compose-manager",
+			SourceCommit:  "0123456789abcdef",
+			RunnerEnv:     "github-hosted",
+		}}
+		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider:     "neardirect",
+			Raw:          raw,
+			ImageRepos:   []string{"nearaidev/compose-manager"},
+			DigestToRepo: map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
+			Sigstore:     sig,
+			Rekor:        rekor,
+		}), Pass)
+	})
+
+	t.Run("rejects_image_repo", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider:   "neardirect",
+			Raw:        raw,
+			ImageRepos: []string{"ghcr.io/attacker/router"},
+		}), Fail)
+		if !strings.Contains(f.Detail, "supply chain policy") {
+			t.Errorf("detail should mention supply chain policy: %s", f.Detail)
+		}
+	})
+
+	t.Run("nearcloud_separate_allowlists", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		sig := []SigstoreResult{{
+			Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+			OK:     true, Status: 200,
+		}}
+		rekor := []RekorProvenance{{
+			Digest:        sig[0].Digest,
+			HasCert:       true,
+			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+			OIDCIssuer:    "https://token.actions.githubusercontent.com",
+			SourceRepo:    "nearai/compose-manager",
+			SourceRepoURL: "https://github.com/nearai/compose-manager",
+			SourceCommit:  "0123456789abcdef",
+			RunnerEnv:     "github-hosted",
+		}}
+		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider:          "nearcloud",
+			Raw:               raw,
+			ImageRepos:        []string{"nearaidev/compose-manager"},
+			GatewayImageRepos: []string{"nearaidev/dstack-vpc-client"},
+			DigestToRepo:      map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
+			Sigstore:          sig,
+			Rekor:             rekor,
+		}), Pass)
+	})
+
+	t.Run("rejects_gateway_only_image", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider:   "neardirect",
+			Raw:        raw,
+			ImageRepos: []string{"nearaidev/dstack-vpc-client"},
+		}), Fail)
+		if !strings.Contains(strings.ToLower(f.Detail), "model container policy") {
+			t.Errorf("detail should mention model policy rejection: %s", f.Detail)
+		}
+	})
+
+	t.Run("rejects_signer", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		sig := []SigstoreResult{{
+			Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+			OK:     true, Status: 200,
+		}}
+		rekor := []RekorProvenance{{
+			Digest:        sig[0].Digest,
+			HasCert:       true,
+			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+			OIDCIssuer:    "https://token.actions.githubusercontent.com",
+			SourceRepo:    "attacker/router",
+			SourceRepoURL: "https://github.com/attacker/router",
+		}}
+		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider:     "neardirect",
+			Raw:          raw,
+			ImageRepos:   []string{"nearaidev/compose-manager"},
+			DigestToRepo: map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
+			Sigstore:     sig,
+			Rekor:        rekor,
+		}), Fail)
+		if !strings.Contains(f.Detail, "unexpected source repo") {
+			t.Errorf("detail should mention source repo rejection: %s", f.Detail)
+		}
+	})
+
+	t.Run("fulcio_oidc_identity_mismatch", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		sig := []SigstoreResult{{
+			Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+			OK:     true, Status: 200,
+		}}
+		rekor := []RekorProvenance{{
+			Digest:        sig[0].Digest,
+			HasCert:       true,
+			SubjectURI:    "https://github.com/attacker/evil-repo/.github/workflows/evil.yml@refs/heads/main",
+			OIDCIssuer:    "https://token.actions.githubusercontent.com",
+			SourceRepo:    "nearai/compose-manager",
+			SourceRepoURL: "https://github.com/nearai/compose-manager",
+			SourceCommit:  "0123456789abcdef",
+			RunnerEnv:     "github-hosted",
+		}}
+		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider:     "neardirect",
+			Raw:          raw,
+			ImageRepos:   []string{"nearaidev/compose-manager"},
+			DigestToRepo: map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
+			Sigstore:     sig,
+			Rekor:        rekor,
+		}), Fail)
+		if !strings.Contains(f.Detail, "unexpected OIDC identity") {
+			t.Errorf("detail should mention OIDC identity mismatch: %s", f.Detail)
+		}
+	})
+
+	t.Run("key_fingerprint_mismatch", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+		datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
+		sig := []SigstoreResult{
+			{Digest: composeManagerDigest, OK: true, Status: 200},
+			{Digest: datadogDigest, OK: true, Status: 200},
+		}
+		rekor := []RekorProvenance{
+			{
+				Digest:        composeManagerDigest,
+				HasCert:       true,
+				SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+				OIDCIssuer:    "https://token.actions.githubusercontent.com",
+				SourceRepo:    "nearai/compose-manager",
+				SourceRepoURL: "https://github.com/nearai/compose-manager",
+				SourceCommit:  "0123456789abcdef",
+				RunnerEnv:     "github-hosted",
+			},
+			{
+				Digest:         datadogDigest,
+				HasCert:        false,
+				KeyFingerprint: "0000000000000000000000000000000000000000000000000000000000000000",
+			},
+		}
+		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider:   "neardirect",
+			Raw:        raw,
+			ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
+			DigestToRepo: map[string]string{
+				composeManagerDigest: "nearaidev/compose-manager",
+				datadogDigest:        "datadog/agent",
+			},
+			Sigstore: sig,
+			Rekor:    rekor,
+		}), Fail)
+		if !strings.Contains(f.Detail, "unexpected signing key fingerprint") {
+			t.Errorf("detail should mention key fingerprint mismatch: %s", f.Detail)
+		}
+	})
+
+	t.Run("key_fingerprint_pass", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+		datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
+		sig := []SigstoreResult{
+			{Digest: composeManagerDigest, OK: true, Status: 200},
+			{Digest: datadogDigest, OK: true, Status: 200},
+		}
+		rekor := []RekorProvenance{
+			{
+				Digest:        composeManagerDigest,
+				HasCert:       true,
+				SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+				OIDCIssuer:    "https://token.actions.githubusercontent.com",
+				SourceRepo:    "nearai/compose-manager",
+				SourceRepoURL: "https://github.com/nearai/compose-manager",
+				SourceCommit:  "0123456789abcdef",
+				RunnerEnv:     "github-hosted",
+			},
+			{
+				Digest:         datadogDigest,
+				HasCert:        false,
+				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b",
+			},
+		}
+		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider:   "neardirect",
+			Raw:        raw,
+			ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
+			DigestToRepo: map[string]string{
+				composeManagerDigest: "nearaidev/compose-manager",
+				datadogDigest:        "datadog/agent",
+			},
+			Sigstore: sig,
+			Rekor:    rekor,
+		}), Pass)
+	})
+
+	t.Run("no_rekor_no_policy", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		// Unknown provider → no supply chain policy → no Rekor → Fail
+		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider: "unknown",
+			Raw:      raw,
+		}), Fail)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Tier 3 always-fail factors via BuildReport (quick sanity check)
+// ---------------------------------------------------------------------------
+
+func TestBuildReportTier3AlwaysFail(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
+
+	for _, name := range []string{"cpu_gpu_chain", "measured_model_weights", "build_transparency_log"} {
 		f := findFactor(t, report, name)
-		if f.Status != Pass {
-			t.Errorf("factor %q with passing TDX result: got %s (%s), want PASS", name, f.Status, f.Detail)
+		if f.Status != Fail {
+			t.Errorf("Tier 3 factor %q: got %s, want FAIL", name, f.Status)
+		}
+		if f.Detail == "" {
+			t.Errorf("Tier 3 factor %q: Detail is empty", name)
 		}
 	}
 
-	// Check reportdata binding passes when detail is set.
-	f := findFactor(t, report, "tdx_reportdata_binding")
-	if f.Status != Skip {
-		t.Errorf("tdx_reportdata_binding with no verifier detail: got %s (%s), want SKIP", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportReportDataBindingPassWithDetail verifies tdx_reportdata_binding
-// passes when ReportDataBindingDetail is set (provider verifier succeeded).
-func TestBuildReportReportDataBindingPassWithDetail(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		TeeTCBSVN:               make([]byte, 16),
-		ReportDataBindingDetail: "REPORTDATA binds enclave public key via keccak256-derived address (0xabc123)",
+	// tls_key_binding skips when SigningKey is present (E2EE replaces TLS binding).
+	tlsF := findFactor(t, report, "tls_key_binding")
+	if tlsF.Status != Skip {
+		t.Errorf("tls_key_binding with SigningKey (E2EE): got %s, want Skip", tlsF.Status)
 	}
 
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-	f := findFactor(t, report, "tdx_reportdata_binding")
-	if f.Status != Pass {
-		t.Errorf("tdx_reportdata_binding with detail: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-	if f.Detail != "REPORTDATA binds enclave public key via keccak256-derived address (0xabc123)" {
-		t.Errorf("unexpected detail: %s", f.Detail)
-	}
-}
-
-// TestBuildReportReportDataBindingSkipNoVerifier verifies tdx_reportdata_binding
-// is Skip when no provider verifier is configured (ReportDataBindingDetail empty).
-func TestBuildReportReportDataBindingSkipNoVerifier(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		TeeTCBSVN: make([]byte, 16),
-	}
-
-	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-	f := findFactor(t, report, "tdx_reportdata_binding")
-	if f.Status != Skip {
-		t.Errorf("tdx_reportdata_binding without verifier: got %s (%s), want SKIP", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportWithTDXDebugEnabled verifies tdx_debug_disabled fails when debug is set.
-func TestBuildReportWithTDXDebugEnabled(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-
-	tdxResult := &TDXVerifyResult{
-		DebugEnabled: true,
-		TeeTCBSVN:    make([]byte, 16),
-	}
-
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-	f := findFactor(t, report, "tdx_debug_disabled")
+	// cpu_id_registry should Fail when no pocResult, no PPID, no DeviceID.
+	f := findFactor(t, report, "cpu_id_registry")
 	if f.Status != Fail {
-		t.Errorf("tdx_debug_disabled with debug set: got %s, want FAIL", f.Status)
-	}
-	if !strings.Contains(f.Detail, "debug") {
-		t.Errorf("tdx_debug_disabled detail should mention 'debug': %s", f.Detail)
+		t.Errorf("cpu_id_registry without PoC or PPID: got %s, want FAIL", f.Status)
 	}
 }
 
-// TestBuildReportNvidiaPresent tests nvidia_payload_present Pass/Fail.
-func TestBuildReportNvidiaPresent(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
+// ---------------------------------------------------------------------------
+// Status string test
+// ---------------------------------------------------------------------------
 
-	// Fail: no payload.
-	raw.NvidiaPayload = ""
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	f := findFactor(t, report, "nvidia_payload_present")
-	if f.Status != Fail {
-		t.Errorf("nvidia_payload_present with empty payload: got %s, want FAIL", f.Status)
-	}
-
-	// Pass: payload present.
-	raw.NvidiaPayload = "some.jwt.token"
-	report = BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	f = findFactor(t, report, "nvidia_payload_present")
-	if f.Status != Pass {
-		t.Errorf("nvidia_payload_present with payload: got %s, want PASS", f.Status)
-	}
-}
-
-// TestBuildReportAttestationFreshnessSkipNilTDX verifies intel_pcs_collateral
-// is Skip when no TDX result is available.
-func TestBuildReportAttestationFreshnessSkipNilTDX(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-
-	f := findFactor(t, report, "intel_pcs_collateral")
-	if f.Status != Skip {
-		t.Errorf("intel_pcs_collateral with nil tdxResult: got %s, want SKIP", f.Status)
-	}
-}
-
-// TestBuildReportAttestationFreshnessPassWithTcbStatus verifies intel_pcs_collateral
-// passes when TcbStatus is set.
-func TestBuildReportAttestationFreshnessPassWithTcbStatus(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		TeeTCBSVN: make([]byte, 16),
-		TcbStatus: "UpToDate",
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-
-	f := findFactor(t, report, "intel_pcs_collateral")
-	if f.Status != Pass {
-		t.Errorf("intel_pcs_collateral with TcbStatus: got %s, want PASS; detail: %s", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportAttestationFreshnessSkipOffline verifies intel_pcs_collateral
-// is Skip when TDX result exists but no collateral was fetched (offline).
-func TestBuildReportAttestationFreshnessSkipOffline(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		TeeTCBSVN: make([]byte, 16),
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-
-	f := findFactor(t, report, "intel_pcs_collateral")
-	if f.Status != Skip {
-		t.Errorf("intel_pcs_collateral offline: got %s, want SKIP; detail: %s", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportTdxTcbCurrentUpToDate verifies tdx_tcb_current Pass for UpToDate.
-func TestBuildReportTdxTcbCurrentUpToDate(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		TeeTCBSVN:   make([]byte, 16),
-		TcbStatus:   "UpToDate",
-		AdvisoryIDs: []string{"INTEL-SA-00837"},
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-
-	f := findFactor(t, report, "tdx_tcb_current")
-	if f.Status != Pass {
-		t.Errorf("tdx_tcb_current UpToDate: got %s, want PASS; detail: %s", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "UpToDate") {
-		t.Errorf("detail should contain UpToDate: %s", f.Detail)
-	}
-}
-
-// TestBuildReportTdxTcbCurrentSWHardening verifies tdx_tcb_current Fail for SWHardeningNeeded (F-17).
-func TestBuildReportTdxTcbCurrentSWHardening(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		TeeTCBSVN:   make([]byte, 16),
-		TcbStatus:   "SWHardeningNeeded",
-		AdvisoryIDs: []string{"INTEL-SA-00960"},
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-
-	f := findFactor(t, report, "tdx_tcb_current")
-	if f.Status != Fail {
-		t.Errorf("tdx_tcb_current SWHardeningNeeded: got %s, want FAIL; detail: %s", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportTdxTcbCurrentOutOfDate verifies tdx_tcb_current Fail for OutOfDate.
-func TestBuildReportTdxTcbCurrentOutOfDate(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		TeeTCBSVN: make([]byte, 16),
-		TcbStatus: "OutOfDate",
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-
-	f := findFactor(t, report, "tdx_tcb_current")
-	if f.Status != Fail {
-		t.Errorf("tdx_tcb_current OutOfDate: got %s, want FAIL; detail: %s", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportTdxTcbCurrentRevoked verifies tdx_tcb_current Fail for Revoked.
-func TestBuildReportTdxTcbCurrentRevoked(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		TeeTCBSVN: make([]byte, 16),
-		TcbStatus: "Revoked",
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-
-	f := findFactor(t, report, "tdx_tcb_current")
-	if f.Status != Fail {
-		t.Errorf("tdx_tcb_current Revoked: got %s, want FAIL; detail: %s", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportTdxTcbCurrentOffline verifies tdx_tcb_current shows TEE_TCB_SVN when offline.
-func TestBuildReportTdxTcbCurrentOffline(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		TeeTCBSVN: []byte{0x07, 0x01, 0x03, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdxResult})
-
-	f := findFactor(t, report, "tdx_tcb_current")
-	if f.Status != Skip {
-		t.Errorf("tdx_tcb_current offline: got %s, want SKIP; detail: %s", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "TEE_TCB_SVN") {
-		t.Errorf("detail should contain TEE_TCB_SVN: %s", f.Detail)
-	}
-}
-
-// TestBuildReportNRASPassWithSuccess verifies nvidia_nras_verified Pass with OVERALL_SUCCESS.
-func TestBuildReportNRASPassWithSuccess(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	nrasResult := &NvidiaVerifyResult{
-		Format:        "JWT",
-		OverallResult: true,
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, NvidiaNRAS: nrasResult})
-
-	f := findFactor(t, report, "nvidia_nras_verified")
-	if f.Status != Pass {
-		t.Errorf("nvidia_nras_verified with true: got %s, want PASS; detail: %s", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "true") {
-		t.Errorf("detail should contain true: %s", f.Detail)
-	}
-}
-
-// TestBuildReportNRASFailNotSuccess verifies nvidia_nras_verified Fail when result is false.
-func TestBuildReportNRASFailNotSuccess(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	nrasResult := &NvidiaVerifyResult{
-		Format:        "JWT",
-		OverallResult: false,
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, NvidiaNRAS: nrasResult})
-
-	f := findFactor(t, report, "nvidia_nras_verified")
-	if f.Status != Fail {
-		t.Errorf("nvidia_nras_verified with false: got %s, want FAIL; detail: %s", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportNRASSkipOffline verifies nvidia_nras_verified Skip when nrasResult is nil
-// and EAT payload is present (offline mode).
-func TestBuildReportNRASSkipOffline(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-
-	f := findFactor(t, report, "nvidia_nras_verified")
-	if f.Status != Skip {
-		t.Errorf("nvidia_nras_verified offline: got %s, want SKIP; detail: %s", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "offline") {
-		t.Errorf("detail should mention offline: %s", f.Detail)
-	}
-}
-
-// TestBuildReportNRASSkipNoEAT verifies nvidia_nras_verified Skip when payload is JWT (not EAT).
-func TestBuildReportNRASSkipNoEAT(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = "eyJhbGciOi..." // JWT format
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-
-	f := findFactor(t, report, "nvidia_nras_verified")
-	if f.Status != Skip {
-		t.Errorf("nvidia_nras_verified with JWT payload: got %s, want SKIP; detail: %s", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "no EAT") {
-		t.Errorf("detail should mention no EAT: %s", f.Detail)
-	}
-}
-
-// TestBuildReportNRASFailSignature verifies nvidia_nras_verified Fail on signature error.
-func TestBuildReportNRASFailSignature(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	nrasResult := &NvidiaVerifyResult{
-		Format:       "JWT",
-		SignatureErr: errors.New("bad sig"),
-	}
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, NvidiaNRAS: nrasResult})
-
-	f := findFactor(t, report, "nvidia_nras_verified")
-	if f.Status != Fail {
-		t.Errorf("nvidia_nras_verified with sig error: got %s, want FAIL; detail: %s", f.Status, f.Detail)
-	}
-}
-
-// TestStatusString tests the Status.String method.
 func TestStatusString(t *testing.T) {
 	tests := []struct {
 		status Status
@@ -687,534 +1109,9 @@ func TestStatusString(t *testing.T) {
 	}
 }
 
-// findFactor is a test helper that locates a factor by name in the report.
-// It fails the test if the factor is not found.
-func findFactor(t *testing.T, report *VerificationReport, name string) FactorResult {
-	t.Helper()
-	for _, f := range report.Factors {
-		if f.Name == name {
-			return f
-		}
-	}
-	t.Fatalf("factor %q not found in report (factors: %v)", name, factorNames(report))
-	return FactorResult{}
-}
-
-func factorNames(r *VerificationReport) []string {
-	names := make([]string, len(r.Factors))
-	for i, f := range r.Factors {
-		names[i] = f.Name
-	}
-	return names
-}
-
-// TestBuildReportComposeBindingPass verifies compose_binding passes with valid result.
-func TestBuildReportComposeBindingPass(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	composeResult := &ComposeBindingResult{Checked: true}
-	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, Compose: composeResult})
-	f := findFactor(t, report, "compose_binding")
-	if f.Status != Pass {
-		t.Errorf("compose_binding with valid binding: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportComposeBindingFail verifies compose_binding fails on error.
-func TestBuildReportComposeBindingFail(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	composeResult := &ComposeBindingResult{Checked: true, Err: errors.New("hash mismatch")}
-	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, Compose: composeResult})
-	f := findFactor(t, report, "compose_binding")
-	if f.Status != Fail {
-		t.Errorf("compose_binding with error: got %s (%s), want FAIL", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportComposeBindingSkip verifies compose_binding skips without data.
-func TestBuildReportComposeBindingSkip(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce})
-	f := findFactor(t, report, "compose_binding")
-	if f.Status != Skip {
-		t.Errorf("compose_binding without data: got %s (%s), want SKIP", f.Status, f.Detail)
-	}
-}
-
-func TestBuildReportTDXQuoteStructureFailsMRTDPolicy(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	tdxResult := &TDXVerifyResult{
-		MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
-		MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
-	}
-
-	report := BuildReport(&ReportInput{
-		Provider: "neardirect",
-		Model:    "m",
-		Raw:      raw,
-		Nonce:    nonce,
-		TDX:      tdxResult,
-		Policy: MeasurementPolicy{
-			MRTDAllow: map[string]struct{}{strings.Repeat("aa", 48): {}},
-		},
-	})
-
-	f := findFactor(t, report, "tdx_quote_structure")
-	if f.Status != Fail {
-		t.Fatalf("tdx_quote_structure should fail on MRTD policy mismatch, got %s (%s)", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "MRTD") {
-		t.Fatalf("detail should mention MRTD policy mismatch, got: %s", f.Detail)
-	}
-}
-
-func TestBuildReportEventLogIntegrityFailsRTMRPolicy(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.EventLog = []EventLogEntry{{IMR: 0, Digest: strings.Repeat("ab", 48)}}
-
-	replayed, err := ReplayEventLog(raw.EventLog)
-	if err != nil {
-		t.Fatalf("ReplayEventLog: %v", err)
-	}
-
-	tdxResult := &TDXVerifyResult{}
-	tdxResult.RTMRs = replayed
-
-	report := BuildReport(&ReportInput{
-		Provider: "neardirect",
-		Model:    "m",
-		Raw:      raw,
-		Nonce:    nonce,
-		TDX:      tdxResult,
-		Policy: MeasurementPolicy{
-			RTMRAllow: [4]map[string]struct{}{
-				{strings.Repeat("00", 48): {}},
-				nil,
-				nil,
-				nil,
-			},
-		},
-	})
-
-	f := findFactor(t, report, "event_log_integrity")
-	if f.Status != Fail {
-		t.Fatalf("event_log_integrity should fail on RTMR policy mismatch, got %s (%s)", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "RTMR[0]") {
-		t.Fatalf("detail should mention RTMR policy mismatch, got: %s", f.Detail)
-	}
-}
-
-// TestBuildReportSigstorePass verifies sigstore_verification passes when all digests are OK.
-func TestBuildReportSigstorePass(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	sigResults := []SigstoreResult{
-		{Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", OK: true, Status: 200},
-		{Digest: "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", OK: true, Status: 200},
-	}
-	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, Sigstore: sigResults})
-	f := findFactor(t, report, "sigstore_verification")
-	if f.Status != Pass {
-		t.Errorf("sigstore_verification all OK: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-}
-
-func bytesFromHex(t *testing.T, s string) []byte {
-	t.Helper()
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		t.Fatalf("hex.DecodeString(%q): %v", s, err)
-	}
-	return b
-}
-
-// TestBuildReportSigstoreFail verifies sigstore_verification fails when a digest is not found.
-func TestBuildReportSigstoreFail(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	sigResults := []SigstoreResult{
-		{Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", OK: true, Status: 200},
-		{Digest: "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", OK: false, Status: 404},
-	}
-	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce, Sigstore: sigResults})
-	f := findFactor(t, report, "sigstore_verification")
-	if f.Status != Fail {
-		t.Errorf("sigstore_verification with 404 and unknown repo: got %s (%s), want FAIL", f.Status, f.Detail)
-	}
-}
-
-// TestBuildReportSigstorePassForAllowlistedNonRekorImage verifies that a 404
-// from Rekor does not fail sigstore_verification when the image repo is in the
-// provider's AllowedImageRepos policy and a digest→repo mapping is provided.
-// This covers third-party images like certbot/dns-cloudflare that are
-// identified by pinned digest in the attested compose but are not Sigstore-signed.
-func TestBuildReportSigstorePassForAllowlistedNonRekorImage(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	neardirectDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
-	certbotDigest := "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
-	sigResults := []SigstoreResult{
-		{Digest: neardirectDigest, OK: true, Status: 200},
-		{Digest: certbotDigest, OK: false, Status: 404}, // certbot not in Rekor
-	}
-	digestToRepo := map[string]string{
-		neardirectDigest: "nearaidev/compose-manager",
-		certbotDigest:    "certbot/dns-cloudflare",
-	}
-	report := BuildReport(&ReportInput{
-		Provider:     "neardirect",
-		Model:        "m",
-		Raw:          raw,
-		Nonce:        nonce,
-		Sigstore:     sigResults,
-		DigestToRepo: digestToRepo,
-		ImageRepos:   []string{"nearaidev/compose-manager", "certbot/dns-cloudflare"},
-	})
-	f := findFactor(t, report, "sigstore_verification")
-	if f.Status != Pass {
-		t.Errorf("sigstore_verification for allowlisted non-Rekor image: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "compose-pinned") {
-		t.Errorf("detail should mention compose-pinned images: %s", f.Detail)
-	}
-}
-
-// TestBuildReportSigstoreFailForUnknownNonRekorImage verifies that a 404 still
-// fails if the image repo is NOT in AllowedImageRepos (unknown image).
-func TestBuildReportSigstoreFailForUnknownNonRekorImage(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	unknownDigest := "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
-	sigResults := []SigstoreResult{
-		{Digest: unknownDigest, OK: false, Status: 404},
-	}
-	digestToRepo := map[string]string{
-		unknownDigest: "attacker/evil-image",
-	}
-	report := BuildReport(&ReportInput{
-		Provider:     "neardirect",
-		Model:        "m",
-		Raw:          raw,
-		Nonce:        nonce,
-		Sigstore:     sigResults,
-		DigestToRepo: digestToRepo,
-		ImageRepos:   []string{"attacker/evil-image"},
-	})
-	f := findFactor(t, report, "sigstore_verification")
-	if f.Status != Fail {
-		t.Errorf("sigstore_verification for unknown non-Rekor image: got %s (%s), want FAIL", f.Status, f.Detail)
-	}
-}
-
-func TestDefaultEnforcedIncludesSupplyChainFactors(t *testing.T) {
-	need := map[string]bool{
-		"sigstore_verification":  true,
-		"build_transparency_log": true,
-	}
-	for _, f := range DefaultEnforced {
-		delete(need, f)
-	}
-	if len(need) != 0 {
-		t.Fatalf("DefaultEnforced missing required factors: %v", need)
-	}
-}
-
-func TestBuildReportNearDirectSupplyChainPolicyPass(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	sigResults := []SigstoreResult{{
-		Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-		OK:     true,
-		Status: 200,
-	}}
-	rekor := []RekorProvenance{{
-		Digest:        sigResults[0].Digest,
-		HasCert:       true,
-		SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-		OIDCIssuer:    "https://token.actions.githubusercontent.com",
-		SourceRepo:    "nearai/compose-manager",
-		SourceRepoURL: "https://github.com/nearai/compose-manager",
-		SourceCommit:  "0123456789abcdef",
-		RunnerEnv:     "github-hosted",
-	}}
-
-	report := BuildReport(&ReportInput{
-		Provider:     "neardirect",
-		Model:        "m",
-		Raw:          raw,
-		Nonce:        nonce,
-		ImageRepos:   []string{"nearaidev/compose-manager"},
-		DigestToRepo: map[string]string{sigResults[0].Digest: "nearaidev/compose-manager"},
-		Sigstore:     sigResults,
-		Rekor:        rekor,
-	})
-
-	f := findFactor(t, report, "build_transparency_log")
-	if f.Status != Pass {
-		t.Fatalf("build_transparency_log: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-}
-
-func TestBuildReportNearDirectSupplyChainPolicyRejectsImageRepo(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-
-	report := BuildReport(&ReportInput{
-		Provider:   "neardirect",
-		Model:      "m",
-		Raw:        raw,
-		Nonce:      nonce,
-		ImageRepos: []string{"ghcr.io/attacker/router"},
-	})
-
-	f := findFactor(t, report, "build_transparency_log")
-	if f.Status != Fail {
-		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "supply chain policy") {
-		t.Fatalf("expected supply chain policy detail, got: %s", f.Detail)
-	}
-}
-
-func TestBuildReportNearCloudSeparateModelGatewayAllowlists(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	sigResults := []SigstoreResult{{
-		Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-		OK:     true,
-		Status: 200,
-	}}
-	rekor := []RekorProvenance{{
-		Digest:        sigResults[0].Digest,
-		HasCert:       true,
-		SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-		OIDCIssuer:    "https://token.actions.githubusercontent.com",
-		SourceRepo:    "nearai/compose-manager",
-		SourceRepoURL: "https://github.com/nearai/compose-manager",
-		SourceCommit:  "0123456789abcdef",
-		RunnerEnv:     "github-hosted",
-	}}
-
-	report := BuildReport(&ReportInput{
-		Provider:          "nearcloud",
-		Model:             "m",
-		Raw:               raw,
-		Nonce:             nonce,
-		ImageRepos:        []string{"nearaidev/compose-manager"},
-		GatewayImageRepos: []string{"nearaidev/dstack-vpc-client"},
-		DigestToRepo:      map[string]string{sigResults[0].Digest: "nearaidev/compose-manager"},
-		Sigstore:          sigResults,
-		Rekor:             rekor,
-	})
-
-	f := findFactor(t, report, "build_transparency_log")
-	if f.Status != Pass {
-		t.Fatalf("build_transparency_log: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-}
-
-func TestBuildReportNearDirectRejectsGatewayOnlyImage(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-
-	report := BuildReport(&ReportInput{
-		Provider:   "neardirect",
-		Model:      "m",
-		Raw:        raw,
-		Nonce:      nonce,
-		ImageRepos: []string{"nearaidev/dstack-vpc-client"},
-	})
-
-	f := findFactor(t, report, "build_transparency_log")
-	if f.Status != Fail {
-		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
-	}
-	if !strings.Contains(strings.ToLower(f.Detail), "model container policy") {
-		t.Fatalf("expected model policy rejection detail, got: %s", f.Detail)
-	}
-}
-
-func TestBuildReportNearDirectSupplyChainPolicyRejectsSigner(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	sigResults := []SigstoreResult{{
-		Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-		OK:     true,
-		Status: 200,
-	}}
-	rekor := []RekorProvenance{{
-		Digest:        sigResults[0].Digest,
-		HasCert:       true,
-		SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-		OIDCIssuer:    "https://token.actions.githubusercontent.com",
-		SourceRepo:    "attacker/router",
-		SourceRepoURL: "https://github.com/attacker/router",
-	}}
-
-	report := BuildReport(&ReportInput{
-		Provider:     "neardirect",
-		Model:        "m",
-		Raw:          raw,
-		Nonce:        nonce,
-		ImageRepos:   []string{"nearaidev/compose-manager"},
-		DigestToRepo: map[string]string{sigResults[0].Digest: "nearaidev/compose-manager"},
-		Sigstore:     sigResults,
-		Rekor:        rekor,
-	})
-
-	f := findFactor(t, report, "build_transparency_log")
-	if f.Status != Fail {
-		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "unexpected source repo") {
-		t.Fatalf("expected source repo rejection detail, got: %s", f.Detail)
-	}
-}
-
-func TestBuildReportFulcioSignedOIDCIdentityMismatch(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	sigResults := []SigstoreResult{{
-		Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-		OK:     true,
-		Status: 200,
-	}}
-	rekor := []RekorProvenance{{
-		Digest:        sigResults[0].Digest,
-		HasCert:       true,
-		SubjectURI:    "https://github.com/attacker/evil-repo/.github/workflows/evil.yml@refs/heads/main",
-		OIDCIssuer:    "https://token.actions.githubusercontent.com",
-		SourceRepo:    "nearai/compose-manager",
-		SourceRepoURL: "https://github.com/nearai/compose-manager",
-		SourceCommit:  "0123456789abcdef",
-		RunnerEnv:     "github-hosted",
-	}}
-
-	report := BuildReport(&ReportInput{
-		Provider:     "neardirect",
-		Model:        "m",
-		Raw:          raw,
-		Nonce:        nonce,
-		ImageRepos:   []string{"nearaidev/compose-manager"},
-		DigestToRepo: map[string]string{sigResults[0].Digest: "nearaidev/compose-manager"},
-		Sigstore:     sigResults,
-		Rekor:        rekor,
-	})
-
-	f := findFactor(t, report, "build_transparency_log")
-	if f.Status != Fail {
-		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "unexpected OIDC identity") {
-		t.Fatalf("expected OIDC identity mismatch detail, got: %s", f.Detail)
-	}
-}
-
-func TestBuildReportSigstorePresentKeyFingerprintMismatch(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
-	datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
-	sigResults := []SigstoreResult{
-		{Digest: composeManagerDigest, OK: true, Status: 200},
-		{Digest: datadogDigest, OK: true, Status: 200},
-	}
-	rekor := []RekorProvenance{
-		{
-			Digest:        composeManagerDigest,
-			HasCert:       true,
-			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-			OIDCIssuer:    "https://token.actions.githubusercontent.com",
-			SourceRepo:    "nearai/compose-manager",
-			SourceRepoURL: "https://github.com/nearai/compose-manager",
-			SourceCommit:  "0123456789abcdef",
-			RunnerEnv:     "github-hosted",
-		},
-		{
-			Digest:         datadogDigest,
-			HasCert:        false,
-			KeyFingerprint: "0000000000000000000000000000000000000000000000000000000000000000",
-		},
-	}
-
-	report := BuildReport(&ReportInput{
-		Provider:   "neardirect",
-		Model:      "m",
-		Raw:        raw,
-		Nonce:      nonce,
-		ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
-		DigestToRepo: map[string]string{
-			composeManagerDigest: "nearaidev/compose-manager",
-			datadogDigest:        "datadog/agent",
-		},
-		Sigstore: sigResults,
-		Rekor:    rekor,
-	})
-
-	f := findFactor(t, report, "build_transparency_log")
-	if f.Status != Fail {
-		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "unexpected signing key fingerprint") {
-		t.Fatalf("expected key fingerprint mismatch detail, got: %s", f.Detail)
-	}
-}
-
-func TestBuildReportSigstorePresentKeyFingerprintPass(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
-	datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
-	sigResults := []SigstoreResult{
-		{Digest: composeManagerDigest, OK: true, Status: 200},
-		{Digest: datadogDigest, OK: true, Status: 200},
-	}
-	rekor := []RekorProvenance{
-		{
-			Digest:        composeManagerDigest,
-			HasCert:       true,
-			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-			OIDCIssuer:    "https://token.actions.githubusercontent.com",
-			SourceRepo:    "nearai/compose-manager",
-			SourceRepoURL: "https://github.com/nearai/compose-manager",
-			SourceCommit:  "0123456789abcdef",
-			RunnerEnv:     "github-hosted",
-		},
-		{
-			Digest:         datadogDigest,
-			HasCert:        false,
-			KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b",
-		},
-	}
-
-	report := BuildReport(&ReportInput{
-		Provider:   "neardirect",
-		Model:      "m",
-		Raw:        raw,
-		Nonce:      nonce,
-		ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
-		DigestToRepo: map[string]string{
-			composeManagerDigest: "nearaidev/compose-manager",
-			datadogDigest:        "datadog/agent",
-		},
-		Sigstore: sigResults,
-		Rekor:    rekor,
-	})
-
-	f := findFactor(t, report, "build_transparency_log")
-	if f.Status != Pass {
-		t.Fatalf("build_transparency_log: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-}
-
-// --------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // NVIDIA detail formatter tests
-// --------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 func TestNvidiaSignatureDetail(t *testing.T) {
 	tests := []struct {
@@ -1317,141 +1214,9 @@ func TestNvidiaNonceDetail(t *testing.T) {
 	}
 }
 
-// --------------------------------------------------------------------------
-// BuildReport: NVIDIA factor pass paths with NvidiaVerifyResult
-// --------------------------------------------------------------------------
-
-func TestBuildReportNvidiaSignaturePass(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	nvidiaResult := &NvidiaVerifyResult{
-		Format:   "EAT",
-		Arch:     "HOPPER",
-		GPUCount: 8,
-		Nonce:    nonce.Hex(),
-	}
-
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Nvidia: nvidiaResult})
-	f := findFactor(t, report, "nvidia_signature")
-	if f.Status != Pass {
-		t.Errorf("nvidia_signature with passing result: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "HOPPER") {
-		t.Errorf("detail should mention HOPPER: %s", f.Detail)
-	}
-	if !strings.Contains(f.Detail, "8 GPU") {
-		t.Errorf("detail should mention 8 GPU: %s", f.Detail)
-	}
-}
-
-func TestBuildReportNvidiaClaimsPass(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	nvidiaResult := &NvidiaVerifyResult{
-		Format:   "EAT",
-		Arch:     "HOPPER",
-		GPUCount: 4,
-		Nonce:    nonce.Hex(),
-	}
-
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Nvidia: nvidiaResult})
-	f := findFactor(t, report, "nvidia_claims")
-	if f.Status != Pass {
-		t.Errorf("nvidia_claims with passing result: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "arch=HOPPER") {
-		t.Errorf("detail should mention arch=HOPPER: %s", f.Detail)
-	}
-}
-
-func TestBuildReportNvidiaNoncePass(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	nvidiaResult := &NvidiaVerifyResult{
-		Format:   "EAT",
-		Arch:     "HOPPER",
-		GPUCount: 8,
-		Nonce:    nonce.Hex(),
-	}
-
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Nvidia: nvidiaResult})
-	f := findFactor(t, report, "nvidia_nonce_match")
-	if f.Status != Pass {
-		t.Errorf("nvidia_nonce_match with matching nonce: got %s (%s), want PASS", f.Status, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "8 GPU") {
-		t.Errorf("detail should mention 8 GPU: %s", f.Detail)
-	}
-}
-
-func TestBuildReportNvidiaSignatureFail(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	nvidiaResult := &NvidiaVerifyResult{
-		Format:       "EAT",
-		SignatureErr: errors.New("bad cert chain"),
-	}
-
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Nvidia: nvidiaResult})
-	f := findFactor(t, report, "nvidia_signature")
-	if f.Status != Fail {
-		t.Errorf("nvidia_signature with error: got %s, want FAIL", f.Status)
-	}
-	if !strings.Contains(f.Detail, "bad cert chain") {
-		t.Errorf("detail should mention error: %s", f.Detail)
-	}
-}
-
-func TestBuildReportNvidiaClaimsFail(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	nvidiaResult := &NvidiaVerifyResult{
-		Format:    "EAT",
-		ClaimsErr: errors.New("invalid arch"),
-	}
-
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Nvidia: nvidiaResult})
-	f := findFactor(t, report, "nvidia_claims")
-	if f.Status != Fail {
-		t.Errorf("nvidia_claims with error: got %s, want FAIL", f.Status)
-	}
-}
-
-func TestBuildReportNvidiaNonceMismatch(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	raw.NvidiaPayload = `{"evidence_list":[]}`
-	nvidiaResult := &NvidiaVerifyResult{
-		Format: "EAT",
-		Nonce:  "wrong-nonce",
-	}
-
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Nvidia: nvidiaResult})
-	f := findFactor(t, report, "nvidia_nonce_match")
-	if f.Status != Fail {
-		t.Errorf("nvidia_nonce_match with mismatch: got %s, want FAIL", f.Status)
-	}
-}
-
-// TestBuildReportSigstoreSkip verifies sigstore_verification skips without digests.
-func TestBuildReportSigstoreSkip(t *testing.T) {
-	nonce := NewNonce()
-	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "neardirect", Model: "m", Raw: raw, Nonce: nonce})
-	f := findFactor(t, report, "sigstore_verification")
-	if f.Status != Skip {
-		t.Errorf("sigstore_verification without digests: got %s (%s), want SKIP", f.Status, f.Detail)
-	}
-}
-
-// --------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // buildMetadata tests
-// --------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 func TestBuildMetadata_AllFields(t *testing.T) {
 	raw := &RawAttestation{
@@ -1514,5 +1279,226 @@ func TestBuildMetadata_WithPPID(t *testing.T) {
 	}
 	if ppid != "abcdef1234567890" {
 		t.Errorf("ppid = %q, want %q", ppid, "abcdef1234567890")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature A: ReportDataBindingPassed
+// ---------------------------------------------------------------------------
+
+func TestReportDataBindingPassed(t *testing.T) {
+	t.Run("pass", func(t *testing.T) {
+		r := &VerificationReport{Factors: []FactorResult{
+			{Name: "tdx_reportdata_binding", Status: Pass},
+		}}
+		if !r.ReportDataBindingPassed() {
+			t.Error("expected true")
+		}
+	})
+	t.Run("fail", func(t *testing.T) {
+		r := &VerificationReport{Factors: []FactorResult{
+			{Name: "tdx_reportdata_binding", Status: Fail},
+		}}
+		if r.ReportDataBindingPassed() {
+			t.Error("expected false")
+		}
+	})
+	t.Run("absent", func(t *testing.T) {
+		r := &VerificationReport{Factors: []FactorResult{
+			{Name: "some_other_factor", Status: Pass},
+		}}
+		if r.ReportDataBindingPassed() {
+			t.Error("expected false when factor absent")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Feature C: Ed25519 support in evalE2EECapable
+// ---------------------------------------------------------------------------
+
+// validEd25519Key generates a fresh ed25519 public key as 64-char hex.
+func validEd25519Key(t *testing.T) string {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	return hex.EncodeToString(pub)
+}
+
+func TestEvalE2EECapable_Ed25519(t *testing.T) {
+	nonce := NewNonce()
+
+	t.Run("valid_ed25519_64hex", func(t *testing.T) {
+		key := validEd25519Key(t)
+		raw := buildMinimalRaw(nonce, key)
+		f := assertSingleFactor(t, evalE2EECapable(&ReportInput{Raw: raw}), Pass)
+		if !strings.Contains(f.Detail, "ed25519") {
+			t.Errorf("detail should mention ed25519: %s", f.Detail)
+		}
+	})
+
+	t.Run("valid_ed25519_with_algo", func(t *testing.T) {
+		key := validEd25519Key(t)
+		raw := buildMinimalRaw(nonce, key)
+		raw.SigningAlgo = "ed25519"
+		f := assertSingleFactor(t, evalE2EECapable(&ReportInput{Raw: raw}), Pass)
+		if !strings.Contains(f.Detail, "ed25519") {
+			t.Errorf("detail should mention ed25519: %s", f.Detail)
+		}
+	})
+
+	t.Run("invalid_hex_64chars", func(t *testing.T) {
+		// 64 chars but not valid hex
+		raw := buildMinimalRaw(nonce, strings.Repeat("zz", 32))
+		assertSingleFactor(t, evalE2EECapable(&ReportInput{Raw: raw}), Fail)
+	})
+
+	t.Run("wrong_length_63chars", func(t *testing.T) {
+		// 63 hex chars — wrong length for Ed25519 (needs exactly 64)
+		raw := buildMinimalRaw(nonce, strings.Repeat("aa", 31)+"a")
+		// 63 chars goes to secp256k1 path (default), which also fails.
+		assertSingleFactor(t, evalE2EECapable(&ReportInput{Raw: raw}), Fail)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Feature D: DSSE signature verification
+// ---------------------------------------------------------------------------
+
+func TestVerifyFulcioEntry_DSSE(t *testing.T) {
+	img := &ImageProvenance{
+		Repo:        "example/app",
+		Provenance:  FulcioSigned,
+		OIDCIssuer:  "https://token.actions.githubusercontent.com",
+		SourceRepos: []string{"example/app"},
+	}
+	goodEntry := &RekorProvenance{
+		HasCert:       true,
+		OIDCIssuer:    "https://token.actions.githubusercontent.com",
+		SourceRepo:    "example/app",
+		SourceRepoURL: "https://github.com/example/app",
+	}
+
+	t.Run("sig_err_fails", func(t *testing.T) {
+		r := *goodEntry
+		r.SignatureErr = errors.New("DSSE verification failed")
+		detail, failed := verifyFulcioEntry(&r, img, "example/app")
+		if !failed {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(detail, "DSSE") {
+			t.Errorf("detail should mention DSSE: %s", detail)
+		}
+	})
+
+	t.Run("sig_err_skipped_with_nodsse", func(t *testing.T) {
+		imgNoDSSE := *img
+		imgNoDSSE.NoDSSE = true
+		r := *goodEntry
+		r.SignatureErr = errors.New("DSSE verification failed")
+		_, failed := verifyFulcioEntry(&r, &imgNoDSSE, "example/app")
+		if failed {
+			t.Fatal("NoDSSE should skip DSSE check")
+		}
+	})
+
+	t.Run("no_sig_err_passes", func(t *testing.T) {
+		_, failed := verifyFulcioEntry(goodEntry, img, "example/app")
+		if failed {
+			t.Fatal("expected pass")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Feature E: Enforced event log → Fail
+// ---------------------------------------------------------------------------
+
+func TestEvalEventLogIntegrity_EmptySkips(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+	// No event log entries — evaluator always returns Skip (enforcement is BuildReport's job).
+	assertSingleFactor(t, evalEventLogIntegrity(&ReportInput{Raw: raw, Nonce: nonce}), Skip)
+}
+
+func TestEvalGatewayEventLogIntegrity_EmptySkips(t *testing.T) {
+	// No gateway event log entries — evaluator always returns Skip.
+	assertSingleFactor(t, evalGatewayEventLogIntegrity(&ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{},
+	}), Skip)
+}
+
+func TestBuildReport_EnforcedPromotion(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+
+	t.Run("skip_promoted_to_fail", func(t *testing.T) {
+		report := BuildReport(&ReportInput{
+			Provider: "venice",
+			Model:    "test-model",
+			Raw:      raw,
+			Nonce:    nonce,
+			Enforced: []string{"event_log_integrity"},
+		})
+		f := findFactor(t, report, "event_log_integrity")
+		if f.Status != Fail {
+			t.Errorf("event_log_integrity: got %s, want Fail (enforced promotion)", f.Status)
+		}
+		if !f.Enforced {
+			t.Error("event_log_integrity: Enforced flag should be true")
+		}
+		if !strings.Contains(f.Detail, "enforced") {
+			t.Errorf("detail should mention enforced: %s", f.Detail)
+		}
+	})
+
+	t.Run("skip_unchanged_without_enforcement", func(t *testing.T) {
+		report := BuildReport(&ReportInput{
+			Provider: "venice",
+			Model:    "test-model",
+			Raw:      raw,
+			Nonce:    nonce,
+		})
+		f := findFactor(t, report, "event_log_integrity")
+		if f.Status != Skip {
+			t.Errorf("event_log_integrity: got %s, want Skip (not enforced)", f.Status)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Gateway factor count test (Features B/F/G)
+// ---------------------------------------------------------------------------
+
+func TestBuildReportGatewayFactorCount(t *testing.T) {
+	nonce := NewNonce()
+	gatewayNonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	report := BuildReport(&ReportInput{
+		Provider:        "nearcloud",
+		Model:           "test-model",
+		Raw:             raw,
+		Nonce:           nonce,
+		Enforced:        DefaultEnforced,
+		GatewayTDX:      &TDXVerifyResult{TeeTCBSVN: make([]byte, 16)},
+		GatewayNonceHex: gatewayNonce.Hex(),
+		GatewayNonce:    gatewayNonce,
+	})
+
+	// Base 24 + 10 gateway factors = 34
+	// Gateway factors: gateway_nonce_match, gateway_tdx_quote_present,
+	// gateway_tdx_quote_structure, gateway_tdx_cert_chain, gateway_tdx_quote_signature,
+	// gateway_tdx_debug_disabled, gateway_tdx_reportdata_binding,
+	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
+	if len(report.Factors) != 34 {
+		t.Errorf("factor count with gateway: got %d, want 34", len(report.Factors))
+		for _, f := range report.Factors {
+			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
+		}
 	}
 }
