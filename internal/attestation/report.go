@@ -551,6 +551,9 @@ func BuildReport(in *ReportInput) *VerificationReport {
 			switch {
 			case img != nil && img.Provenance == FulcioSigned:
 				switch {
+				case r.SignatureErr != nil:
+					failed = true
+					detail = fmt.Sprintf("image %q: DSSE envelope signature verification failed: %v", imageRepo, r.SignatureErr)
 				case !r.HasCert && r.HasNonFulcioCert:
 					failed = true
 					detail = fmt.Sprintf("image %q: expected Fulcio certificate but entry has non-Fulcio X.509 cert (no OIDC issuer OID)", imageRepo)
