@@ -317,8 +317,12 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 			}
 		}
 		for digest, repo := range attestation.ExtractImageDigestToRepoMap(source) {
-			if _, ok := digestToRepo[digest]; !ok {
+			if existing, ok := digestToRepo[digest]; !ok {
 				digestToRepo[digest] = repo
+			} else if existing != repo {
+				slog.Warn("digest maps to multiple repos; using first",
+					"digest", "sha256:"+digest[:min(16, len(digest))]+"...",
+					"kept", existing, "dropped", repo)
 			}
 		}
 		for _, d := range attestation.ExtractImageDigests(source) {

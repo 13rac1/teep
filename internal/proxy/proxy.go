@@ -463,12 +463,6 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		Sigstore:     sigstoreResults,
 		Rekor:        rekorResults,
 	})
-	if raw.SigningKey != "" {
-		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && prev != raw.SigningKey {
-			slog.Warn("signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
-		}
-		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
-	}
 	return report, raw
 }
 
@@ -572,6 +566,16 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
 		return
+	}
+
+	// Only cache the signing key after attestation passes. Caching before
+	// the Blocked() check would allow a key from a failed attestation to
+	// be reused for E2EE on a subsequent cache-hit request.
+	if raw != nil && raw.SigningKey != "" {
+		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && prev != raw.SigningKey {
+			slog.Warn("signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
+		}
+		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
 	}
 
 	e2eeActive := prov.E2EE && reportdataBindingPassed(report)
@@ -720,16 +724,15 @@ func (s *Server) handlePinnedChat(
 	} else if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok {
 		report = cached
 	}
-	if pinnedResp.SigningKey != "" {
-		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
-	}
-
 	if report != nil && report.Blocked() {
 		s.negCache.Record(prov.Name, upstreamModel)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
 		return
+	}
+	if pinnedResp.SigningKey != "" {
+		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
 	}
 
 	// Copy response headers, excluding hop-by-hop headers that Go's

@@ -57,19 +57,20 @@ var (
 // RekorProvenance holds the build provenance metadata extracted from a Rekor
 // transparency log entry's Fulcio certificate.
 type RekorProvenance struct {
-	Digest         string
-	HasCert        bool   // false = raw public key, no Fulcio provenance
-	KeyFingerprint string // SHA-256 hex of the PKIX public key bytes
-	SubjectURI     string // SAN URI from Fulcio cert (OIDC identity)
-	OIDCIssuer     string // 1.3.6.1.4.1.57264.1.1
-	Trigger        string // 1.3.6.1.4.1.57264.1.2
-	SourceCommit   string // 1.3.6.1.4.1.57264.1.3
-	SourceRepo     string // 1.3.6.1.4.1.57264.1.5
-	SourceRef      string // 1.3.6.1.4.1.57264.1.6
-	SourceRepoURL  string // 1.3.6.1.4.1.57264.1.12
-	RunnerEnv      string // 1.3.6.1.4.1.57264.1.11
-	RunURL         string // 1.3.6.1.4.1.57264.1.21
-	Err            error  // non-fatal: provenance unavailable but digest exists
+	Digest           string
+	HasCert          bool   // false = raw public key or non-Fulcio cert
+	HasNonFulcioCert bool   // true = X.509 cert present but missing Fulcio OIDC extensions
+	KeyFingerprint   string // SHA-256 hex of the PKIX public key bytes
+	SubjectURI       string // SAN URI from Fulcio cert (OIDC identity)
+	OIDCIssuer       string // 1.3.6.1.4.1.57264.1.1
+	Trigger          string // 1.3.6.1.4.1.57264.1.2
+	SourceCommit     string // 1.3.6.1.4.1.57264.1.3
+	SourceRepo       string // 1.3.6.1.4.1.57264.1.5
+	SourceRef        string // 1.3.6.1.4.1.57264.1.6
+	SourceRepoURL    string // 1.3.6.1.4.1.57264.1.12
+	RunnerEnv        string // 1.3.6.1.4.1.57264.1.11
+	RunURL           string // 1.3.6.1.4.1.57264.1.21
+	Err              error  // non-fatal: provenance unavailable but digest exists
 
 	// SignatureVerified is true when the DSSE envelope signature was
 	// successfully verified against the Fulcio certificate's public key.
@@ -153,9 +154,10 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 		if prov.OIDCIssuer == "" {
 			if rawKeyFallback == nil {
 				p := RekorProvenance{
-					Digest:         digest,
-					HasCert:        false,
-					KeyFingerprint: prov.KeyFingerprint,
+					Digest:           digest,
+					HasCert:          false,
+					HasNonFulcioCert: true,
+					KeyFingerprint:   prov.KeyFingerprint,
 				}
 				rawKeyFallback = &p
 			}

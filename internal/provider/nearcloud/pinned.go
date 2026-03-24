@@ -392,8 +392,12 @@ func (h *PinnedHandler) attestOnConn(
 			}
 		}
 		for digest, repo := range attestation.ExtractImageDigestToRepoMap(source) {
-			if _, ok := digestToRepo[digest]; !ok {
+			if existing, ok := digestToRepo[digest]; !ok {
 				digestToRepo[digest] = repo
+			} else if existing != repo {
+				slog.Warn("digest maps to multiple repos; using first",
+					"digest", "sha256:"+digest[:min(16, len(digest))]+"...",
+					"kept", existing, "dropped", repo)
 			}
 		}
 		for _, digest := range attestation.ExtractImageDigests(source) {

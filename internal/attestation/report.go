@@ -496,6 +496,11 @@ func BuildReport(in *ReportInput) *VerificationReport {
 					goto buildTransparencyDone
 				}
 			}
+		} else if len(in.GatewayImageRepos) > 0 {
+			addFactor(TierSupplyChain, "build_transparency_log", Fail,
+				fmt.Sprintf("provider %q has no gateway images in supply chain policy but %d gateway image repos were extracted",
+					in.Provider, len(in.GatewayImageRepos)))
+			goto buildTransparencyDone
 		}
 	}
 
@@ -546,6 +551,9 @@ func BuildReport(in *ReportInput) *VerificationReport {
 			switch {
 			case img != nil && img.Provenance == FulcioSigned:
 				switch {
+				case !r.HasCert && r.HasNonFulcioCert:
+					failed = true
+					detail = fmt.Sprintf("image %q: expected Fulcio certificate but entry has non-Fulcio X.509 cert (no OIDC issuer OID)", imageRepo)
 				case !r.HasCert:
 					failed = true
 					detail = fmt.Sprintf("image %q: expected Fulcio certificate but entry has raw key", imageRepo)
