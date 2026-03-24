@@ -359,6 +359,14 @@ var factorRegistry = []factorInfo{
 			"binding the gateway's deployment manifest to its hardware attestation.",
 	},
 	{
+		Name:    "gateway_cpu_id_registry",
+		Tier:    4,
+		Summary: "Gateway CPU registered in Proof of Cloud",
+		Description: "Checks whether the gateway host machine is registered in the " +
+			"Proof of Cloud registry using the gateway's TDX quote. Validates " +
+			"hardware provenance for the gateway CVM when online checks are enabled.",
+	},
+	{
 		Name:    "gateway_event_log_integrity",
 		Tier:    4,
 		Summary: "Gateway event log replayed, RTMRs match quote",

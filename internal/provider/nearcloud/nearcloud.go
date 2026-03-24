@@ -28,6 +28,10 @@ const (
 
 	// attestationPath is the API path for TEE attestation reports.
 	attestationPath = "/v1/attestation/report"
+
+	// maxGatewayEventLogEntries bounds gateway event log entries to avoid
+	// memory amplification from oversized attestation responses.
+	maxGatewayEventLogEntries = 10_000
 )
 
 // gatewayResponse is the top-level JSON shape returned by the gateway
@@ -83,6 +87,9 @@ func ParseGatewayResponse(body []byte, model string) (*GatewayRaw, *attestation.
 		var rawEntries []json.RawMessage
 		if err := json.Unmarshal([]byte(gr.GatewayAttestation.EventLog), &rawEntries); err != nil {
 			return nil, nil, fmt.Errorf("nearcloud: parse gateway event_log string: %w", err)
+		}
+		if len(rawEntries) > maxGatewayEventLogEntries {
+			return nil, nil, fmt.Errorf("nearcloud: gateway event_log has %d entries, max %d", len(rawEntries), maxGatewayEventLogEntries)
 		}
 		entries := make([]attestation.EventLogEntry, 0, len(rawEntries))
 		for i, r := range rawEntries {

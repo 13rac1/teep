@@ -55,6 +55,7 @@ func NewChecker() *Checker {
 	base := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // Go stdlib default transport type is *http.Transport.
 	base.MaxIdleConnsPerHost = 4
 	base.IdleConnTimeout = 90 * time.Second
+	base.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 
 	return &Checker{
 		entries: make(map[string]certCacheEntry),
@@ -88,6 +89,11 @@ func NewHTTPClient(timeout time.Duration, ctEnabled ...bool) *http.Client {
 func NewHTTPClientWithTransport(timeout time.Duration, base *http.Transport, ctEnabled ...bool) *http.Client {
 	if base == nil {
 		base = http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // Go stdlib default transport type is *http.Transport.
+	}
+	if base.TLSClientConfig == nil {
+		base.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
+	} else if base.TLSClientConfig.MinVersion < tls.VersionTLS13 {
+		base.TLSClientConfig.MinVersion = tls.VersionTLS13
 	}
 	transport := http.RoundTripper(base)
 	if ctEnabledFromOpt(ctEnabled...) {

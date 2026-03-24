@@ -117,17 +117,19 @@ func TestFetchRekorProvenance_FulcioCert(t *testing.T) {
 	prov := FetchRekorProvenance(context.Background(), testDigest, ts.Client())
 
 	t.Logf("Provenance result:")
-	t.Logf("  Digest:        %s", prov.Digest)
-	t.Logf("  HasCert:       %v", prov.HasCert)
-	t.Logf("  OIDCIssuer:    %s", prov.OIDCIssuer)
-	t.Logf("  Trigger:       %s", prov.Trigger)
-	t.Logf("  SourceCommit:  %s", prov.SourceCommit)
-	t.Logf("  SourceRepo:    %s", prov.SourceRepo)
-	t.Logf("  SourceRef:     %s", prov.SourceRef)
-	t.Logf("  RunnerEnv:     %s", prov.RunnerEnv)
-	t.Logf("  SourceRepoURL: %s", prov.SourceRepoURL)
-	t.Logf("  RunURL:        %s", prov.RunURL)
-	t.Logf("  Err:           %v", prov.Err)
+	t.Logf("  Digest:         %s", prov.Digest)
+	t.Logf("  HasCert:        %v", prov.HasCert)
+	t.Logf("  KeyFingerprint: %s", prov.KeyFingerprint)
+	t.Logf("  SubjectURI:     %s", prov.SubjectURI)
+	t.Logf("  OIDCIssuer:     %s", prov.OIDCIssuer)
+	t.Logf("  Trigger:        %s", prov.Trigger)
+	t.Logf("  SourceCommit:   %s", prov.SourceCommit)
+	t.Logf("  SourceRepo:     %s", prov.SourceRepo)
+	t.Logf("  SourceRef:      %s", prov.SourceRef)
+	t.Logf("  RunnerEnv:      %s", prov.RunnerEnv)
+	t.Logf("  SourceRepoURL:  %s", prov.SourceRepoURL)
+	t.Logf("  RunURL:         %s", prov.RunURL)
+	t.Logf("  Err:            %v", prov.Err)
 
 	if prov.Err != nil {
 		t.Fatalf("unexpected error: %v", prov.Err)
@@ -188,7 +190,7 @@ func TestFetchRekorProvenance_RawPublicKey(t *testing.T) {
 
 	prov := FetchRekorProvenance(context.Background(), testDigest, ts.Client())
 
-	t.Logf("Provenance result: HasCert=%v Err=%v", prov.HasCert, prov.Err)
+	t.Logf("Provenance result: HasCert=%v KeyFingerprint=%s Err=%v", prov.HasCert, prov.KeyFingerprint, prov.Err)
 
 	if prov.Err != nil {
 		t.Fatalf("unexpected error: %v", prov.Err)

@@ -3,6 +3,7 @@ package attestation
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
@@ -38,17 +39,19 @@ var (
 // RekorProvenance holds the build provenance metadata extracted from a Rekor
 // transparency log entry's Fulcio certificate.
 type RekorProvenance struct {
-	Digest        string
-	HasCert       bool   // false = raw public key, no Fulcio provenance
-	OIDCIssuer    string // 1.3.6.1.4.1.57264.1.1
-	Trigger       string // 1.3.6.1.4.1.57264.1.2
-	SourceCommit  string // 1.3.6.1.4.1.57264.1.3
-	SourceRepo    string // 1.3.6.1.4.1.57264.1.5
-	SourceRef     string // 1.3.6.1.4.1.57264.1.6
-	SourceRepoURL string // 1.3.6.1.4.1.57264.1.12
-	RunnerEnv     string // 1.3.6.1.4.1.57264.1.11
-	RunURL        string // 1.3.6.1.4.1.57264.1.21
-	Err           error  // non-fatal: provenance unavailable but digest exists
+	Digest         string
+	HasCert        bool   // false = raw public key, no Fulcio provenance
+	KeyFingerprint string // SHA-256 hex of the PKIX public key bytes
+	SubjectURI     string // SAN URI from Fulcio cert (OIDC identity)
+	OIDCIssuer     string // 1.3.6.1.4.1.57264.1.1
+	Trigger        string // 1.3.6.1.4.1.57264.1.2
+	SourceCommit   string // 1.3.6.1.4.1.57264.1.3
+	SourceRepo     string // 1.3.6.1.4.1.57264.1.5
+	SourceRef      string // 1.3.6.1.4.1.57264.1.6
+	SourceRepoURL  string // 1.3.6.1.4.1.57264.1.12
+	RunnerEnv      string // 1.3.6.1.4.1.57264.1.11
+	RunURL         string // 1.3.6.1.4.1.57264.1.21
+	Err            error  // non-fatal: provenance unavailable but digest exists
 }
 
 // FetchRekorProvenance queries the Rekor API for a digest's log entry and
@@ -95,7 +98,12 @@ func FetchRekorProvenance(ctx context.Context, digest string, client *http.Clien
 			// Raw public key — no Fulcio provenance. Keep as fallback and
 			// continue looking for an entry with a Fulcio certificate.
 			if rawKeyFallback == nil {
-				p := RekorProvenance{Digest: digest, HasCert: false}
+				h := sha256.Sum256(block.Bytes)
+				p := RekorProvenance{
+					Digest:         digest,
+					HasCert:        false,
+					KeyFingerprint: hex.EncodeToString(h[:]),
+				}
 				rawKeyFallback = &p
 			}
 			continue
@@ -112,6 +120,22 @@ func FetchRekorProvenance(ctx context.Context, digest string, client *http.Clien
 			continue
 		}
 		prov.Digest = digest
+
+		// Distinguish genuine Fulcio certs (with OIDC issuer) from non-Fulcio
+		// X.509 certs that happen to be used for signing. A non-Fulcio cert
+		// has no build-provenance OIDs so OIDCIssuer is empty. Treat it like
+		// a raw-key fallback and keep looking for a real Fulcio entry.
+		if prov.OIDCIssuer == "" {
+			if rawKeyFallback == nil {
+				p := RekorProvenance{
+					Digest:         digest,
+					HasCert:        false,
+					KeyFingerprint: prov.KeyFingerprint,
+				}
+				rawKeyFallback = &p
+			}
+			continue
+		}
 		return *prov
 	}
 
@@ -267,6 +291,15 @@ func parseFulcioProvenance(certPEM []byte) (*RekorProvenance, error) {
 	}
 
 	prov := &RekorProvenance{HasCert: true}
+
+	// Extract the OIDC identity from the certificate SAN (URI type).
+	if len(cert.URIs) > 0 {
+		prov.SubjectURI = cert.URIs[0].String()
+	}
+
+	// Compute the public key fingerprint (SHA-256 of SPKI DER bytes).
+	h := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	prov.KeyFingerprint = hex.EncodeToString(h[:])
 
 	for _, ext := range cert.Extensions {
 		if !hasFulcioPrefix(ext.Id) {

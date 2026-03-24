@@ -101,7 +101,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		return nil, fmt.Errorf("resolve domain: %w", err)
 	}
 
-	// 2. TLS dial with InsecureSkipVerify — cert is verified via attestation.
+	// 2. TLS dial — cert is verified via CA chain and attestation-based SPKI pinning.
 	dialFn := h.tlsDial
 	if h.dialFn != nil {
 		dialFn = h.dialFn
@@ -204,15 +204,15 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	}, nil
 }
 
-// tlsDial opens a TLS connection to domain:443 with InsecureSkipVerify.
-// The certificate is verified via TDX attestation, not the standard CA chain.
+// tlsDial opens a TLS connection to domain:443.
+// The certificate is verified via both standard CA validation and TDX
+// attestation-based SPKI pinning.
 func (h *PinnedHandler) tlsDial(ctx context.Context, domain string) (*tls.Conn, error) {
 	d := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: dialTimeout},
 		Config: &tls.Config{
-			InsecureSkipVerify: true, // CA chain verification is replaced by TEE-attested SPKI pinning
-			ServerName:         domain,
-			MinVersion:         tls.VersionTLS12, // defence-in-depth: explicitly require TLS 1.2+
+			ServerName: domain,
+			MinVersion: tls.VersionTLS13,
 		},
 	}
 	conn, err := d.DialContext(ctx, "tcp", domain+":443")

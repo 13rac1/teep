@@ -112,13 +112,18 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	bw := bufio.NewWriter(conn)
 
 	var report *attestation.VerificationReport
+	var signingKey string
 	if !h.spkiCache.Contains(domain, liveSPKI) {
+		type attestResult struct {
+			report     *attestation.VerificationReport
+			signingKey string
+		}
 		slog.Info("SPKI cache miss, fetching gateway+model attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
 		v, sfErr, _ := h.verifySF.Do(domain+"\x00"+liveSPKI, func() (any, error) {
 			if h.spkiCache.Contains(domain, liveSPKI) {
 				return nil, nil //nolint:nilnil // singleflight: nil,nil means cache was already populated
 			}
-			r, err := h.attestOnConn(ctx, conn, br, bw, domain, liveSPKI, req.Model)
+			r, key, err := h.attestOnConn(ctx, conn, br, bw, domain, liveSPKI, req.Model)
 			if err != nil {
 				return nil, err
 			}
@@ -127,17 +132,19 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 					"domain", domain,
 					"model", req.Model,
 				)
-				return r, nil
+				return attestResult{report: r, signingKey: key}, nil
 			}
 			h.spkiCache.Add(domain, liveSPKI)
 			slog.Info("SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
-			return r, nil
+			return attestResult{report: r, signingKey: key}, nil
 		})
 		if sfErr != nil {
 			return nil, fmt.Errorf("attestation on %s: %w", domain, sfErr)
 		}
 		if v != nil {
-			report = v.(*attestation.VerificationReport) //nolint:forcetypeassert // singleflight callback only returns *VerificationReport
+			res := v.(attestResult) //nolint:forcetypeassert // singleflight callback only returns attestResult
+			report = res.report
+			signingKey = res.signingKey
 		}
 	} else {
 		slog.Debug("SPKI cache hit, skipping attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
@@ -149,6 +156,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 			Header:     make(http.Header),
 			Body:       io.NopCloser(bytes.NewReader(nil)),
 			Report:     report,
+			SigningKey: signingKey,
 		}, nil
 	}
 
@@ -174,6 +182,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		Header:     resp.Header,
 		Body:       wrappedBody,
 		Report:     report,
+		SigningKey: signingKey,
 	}, nil
 }
 
@@ -181,8 +190,8 @@ func (h *PinnedHandler) tlsDial(ctx context.Context, domain string) (*tls.Conn, 
 	d := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: dialTimeout},
 		Config: &tls.Config{
-			InsecureSkipVerify: true,
-			ServerName:         domain,
+			ServerName: domain,
+			MinVersion: tls.VersionTLS13,
 		},
 	}
 	conn, err := d.DialContext(ctx, "tcp", domain+":443")
@@ -209,7 +218,7 @@ func (h *PinnedHandler) attestOnConn(
 	br *bufio.Reader,
 	bw *bufio.Writer,
 	domain, liveSPKI, model string,
-) (*attestation.VerificationReport, error) {
+) (*attestation.VerificationReport, string, error) {
 	modelNonce := attestation.NewNonce()
 
 	// Single request — the gateway returns both gateway and model attestation.
@@ -225,36 +234,36 @@ func (h *PinnedHandler) attestOnConn(
 	attestHeaders.Set("Authorization", "Bearer "+h.apiKey)
 	attestHeaders.Set("Connection", "keep-alive")
 	if err := neardirect.WriteHTTPRequest(bw, http.MethodGet, path, attestHeaders, nil); err != nil {
-		return nil, fmt.Errorf("write attestation request: %w", err)
+		return nil, "", fmt.Errorf("write attestation request: %w", err)
 	}
 
 	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
-		return nil, fmt.Errorf("set read deadline: %w", err)
+		return nil, "", fmt.Errorf("set read deadline: %w", err)
 	}
 
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
-		return nil, fmt.Errorf("read attestation response: %w", err)
+		return nil, "", fmt.Errorf("read attestation response: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {
-		return nil, fmt.Errorf("clear read deadline: %w", err)
+		return nil, "", fmt.Errorf("clear read deadline: %w", err)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MiB
 	if err != nil {
-		return nil, fmt.Errorf("read attestation body: %w", err)
+		return nil, "", fmt.Errorf("read attestation body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("attestation HTTP %d: %s", resp.StatusCode, truncate(string(body), 256))
+		return nil, "", fmt.Errorf("attestation HTTP %d: %s", resp.StatusCode, truncate(string(body), 256))
 	}
 
 	// Parse both gateway and model attestation from the combined response.
 	gwRaw, raw, err := ParseGatewayResponse(body, model)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// --- Verify model TDX ---
@@ -284,6 +293,12 @@ func (h *PinnedHandler) attestOnConn(
 		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
 	}
 
+	var gatewayPoCResult *attestation.PoCResult
+	if !h.offline && gwRaw.IntelQuote != "" {
+		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second))
+		gatewayPoCResult = poc.CheckQuote(ctx, gwRaw.IntelQuote)
+	}
+
 	// Verify model TLS fingerprint matches the live SPKI of the model backend.
 	// Note: the model's tls_cert_fingerprint is for the model backend, which is
 	// different from the gateway's. The live SPKI here is the gateway's, so we
@@ -295,40 +310,64 @@ func (h *PinnedHandler) attestOnConn(
 		)
 	}
 
-	// Model compose binding.
+	// Compose binding + supply-chain evidence for model and gateway compose manifests.
 	var composeResult *attestation.ComposeBindingResult
 	var sigstoreResults []attestation.SigstoreResult
-	var imageRepos []string
-	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
-		composeResult = &attestation.ComposeBindingResult{Checked: true}
-		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
-
-		dockerCompose, err := attestation.ExtractDockerCompose(raw.AppCompose)
+	var modelImageRepos []string
+	var gatewayImageRepos []string
+	var allDigests []string
+	digestToRepo := make(map[string]string)
+	modelRepoSeen := make(map[string]struct{})
+	gatewayRepoSeen := make(map[string]struct{})
+	digestSeen := make(map[string]struct{})
+	appendComposeEvidence := func(kind, appCompose string) {
+		dockerCompose, err := attestation.ExtractDockerCompose(appCompose)
 		if err != nil {
-			slog.Debug("extract docker_compose_file failed", "domain", domain, "err", err)
+			slog.Debug("extract docker_compose_file failed", "domain", domain, "kind", kind, "err", err)
 		}
 		if dockerCompose != "" {
-			slog.Debug("attested docker compose manifest", "domain", domain, "content", dockerCompose)
+			slog.Debug("attested docker compose manifest", "domain", domain, "kind", kind, "content", dockerCompose)
 		}
 		source := dockerCompose
 		if source == "" {
-			source = raw.AppCompose
+			source = appCompose
 		}
-		imageRepos = attestation.ExtractImageRepositories(source)
-		digests := attestation.ExtractImageDigests(source)
-		if len(digests) > 0 && !h.offline {
-			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, tlsct.NewHTTPClient(10*time.Second))
+		for _, repo := range attestation.ExtractImageRepositories(source) {
+			switch kind {
+			case "gateway":
+				if _, ok := gatewayRepoSeen[repo]; ok {
+					continue
+				}
+				gatewayRepoSeen[repo] = struct{}{}
+				gatewayImageRepos = append(gatewayImageRepos, repo)
+			default:
+				if _, ok := modelRepoSeen[repo]; ok {
+					continue
+				}
+				modelRepoSeen[repo] = struct{}{}
+				modelImageRepos = append(modelImageRepos, repo)
+			}
 		}
+		for digest, repo := range attestation.ExtractImageDigestToRepoMap(source) {
+			if _, ok := digestToRepo[digest]; !ok {
+				digestToRepo[digest] = repo
+			}
+		}
+		for _, digest := range attestation.ExtractImageDigests(source) {
+			if _, ok := digestSeen[digest]; ok {
+				continue
+			}
+			digestSeen[digest] = struct{}{}
+			allDigests = append(allDigests, digest)
+		}
+	}
+	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
+		composeResult = &attestation.ComposeBindingResult{Checked: true}
+		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+		appendComposeEvidence("model", raw.AppCompose)
 	}
 
 	var rekorResults []attestation.RekorProvenance
-	if len(sigstoreResults) > 0 && !h.offline {
-		for _, sr := range sigstoreResults {
-			if sr.OK {
-				rekorResults = append(rekorResults, attestation.FetchRekorProvenance(ctx, sr.Digest, tlsct.NewHTTPClient(10*time.Second)))
-			}
-		}
-	}
 
 	// --- Verify gateway TDX ---
 	var gatewayTDX *attestation.TDXVerifyResult
@@ -344,14 +383,14 @@ func (h *PinnedHandler) attestOnConn(
 
 	// Verify gateway TLS fingerprint matches live SPKI.
 	if gwRaw.TLSCertFingerprint == "" {
-		return nil, errors.New("gateway attestation response missing tls_cert_fingerprint")
+		return nil, "", errors.New("gateway attestation response missing tls_cert_fingerprint")
 	}
 	match, matchErr := neardirect.ConstantTimeHexEqual(liveSPKI, gwRaw.TLSCertFingerprint)
 	if matchErr != nil {
-		return nil, fmt.Errorf("gateway SPKI comparison: %w", matchErr)
+		return nil, "", fmt.Errorf("gateway SPKI comparison: %w", matchErr)
 	}
 	if !match {
-		return nil, fmt.Errorf("gateway SPKI %s != attested tls_cert_fingerprint %s",
+		return nil, "", fmt.Errorf("gateway SPKI %s != attested tls_cert_fingerprint %s",
 			truncate(liveSPKI, 16)+"...",
 			truncate(gwRaw.TLSCertFingerprint, 16)+"...")
 	}
@@ -365,30 +404,43 @@ func (h *PinnedHandler) attestOnConn(
 	if gwRaw.AppCompose != "" && gatewayTDX != nil && gatewayTDX.ParseErr == nil {
 		gatewayCompose = &attestation.ComposeBindingResult{Checked: true}
 		gatewayCompose.Err = attestation.VerifyComposeBinding(gwRaw.AppCompose, gatewayTDX.MRConfigID)
+		appendComposeEvidence("gateway", gwRaw.AppCompose)
+	}
+
+	if len(allDigests) > 0 && !h.offline {
+		sigstoreResults = attestation.CheckSigstoreDigests(ctx, allDigests, tlsct.NewHTTPClient(10*time.Second))
+		for _, sr := range sigstoreResults {
+			if sr.OK {
+				rekorResults = append(rekorResults, attestation.FetchRekorProvenance(ctx, sr.Digest, tlsct.NewHTTPClient(10*time.Second)))
+			}
+		}
 	}
 
 	report := attestation.BuildReport(&attestation.ReportInput{
-		Provider:        "nearcloud",
-		Model:           model,
-		Raw:             raw,
-		Nonce:           modelNonce,
-		Enforced:        h.enforced,
-		Policy:          h.policy,
-		ImageRepos:      imageRepos,
-		TDX:             tdxResult,
-		Nvidia:          nvidiaResult,
-		NvidiaNRAS:      nrasResult,
-		PoC:             pocResult,
-		Compose:         composeResult,
-		Sigstore:        sigstoreResults,
-		Rekor:           rekorResults,
-		GatewayTDX:      gatewayTDX,
-		GatewayNonceHex: gwRaw.NonceHex,
-		GatewayNonce:    modelNonce, // gateway echoes the same nonce
-		GatewayCompose:  gatewayCompose,
-		GatewayEventLog: gwRaw.EventLog,
+		Provider:          "nearcloud",
+		Model:             model,
+		Raw:               raw,
+		Nonce:             modelNonce,
+		Enforced:          h.enforced,
+		Policy:            h.policy,
+		ImageRepos:        modelImageRepos,
+		GatewayImageRepos: gatewayImageRepos,
+		DigestToRepo:      digestToRepo,
+		TDX:               tdxResult,
+		Nvidia:            nvidiaResult,
+		NvidiaNRAS:        nrasResult,
+		PoC:               pocResult,
+		Compose:           composeResult,
+		Sigstore:          sigstoreResults,
+		Rekor:             rekorResults,
+		GatewayTDX:        gatewayTDX,
+		GatewayPoC:        gatewayPoCResult,
+		GatewayNonceHex:   gwRaw.NonceHex,
+		GatewayNonce:      modelNonce, // gateway echoes the same nonce
+		GatewayCompose:    gatewayCompose,
+		GatewayEventLog:   gwRaw.EventLog,
 	})
-	return report, nil
+	return report, raw.SigningKey, nil
 }
 
 func truncate(s string, n int) string {

@@ -684,6 +684,9 @@ func (s *Server) handlePinnedChat(
 	} else if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok {
 		report = cached
 	}
+	if pinnedResp.SigningKey != "" {
+		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
+	}
 
 	if report != nil && report.Blocked() {
 		s.negCache.Record(prov.Name, upstreamModel)

@@ -100,7 +100,6 @@ var DefaultEnforced = []string{
 	"gateway_tdx_cert_chain",
 	"gateway_tdx_quote_signature",
 	"gateway_tdx_debug_disabled",
-	"gateway_tdx_reportdata_binding",
 	"gateway_compose_binding",
 	"gateway_event_log_integrity",
 }
@@ -118,7 +117,7 @@ var KnownFactors = []string{
 	// Gateway factors (nearcloud only).
 	"gateway_nonce_match", "gateway_tdx_quote_present", "gateway_tdx_quote_structure",
 	"gateway_tdx_cert_chain", "gateway_tdx_quote_signature", "gateway_tdx_debug_disabled",
-	"gateway_tdx_reportdata_binding", "gateway_compose_binding",
+	"gateway_tdx_reportdata_binding", "gateway_compose_binding", "gateway_cpu_id_registry",
 	"gateway_event_log_integrity",
 }
 
@@ -134,14 +133,15 @@ type ComposeBindingResult struct {
 // result type (e.g. AMD SEV-SNP) means adding a field here — no existing
 // call sites change because unset fields default to nil.
 type ReportInput struct {
-	Provider     string
-	Model        string
-	Raw          *RawAttestation
-	Nonce        Nonce
-	Enforced     []string
-	Policy       MeasurementPolicy
-	ImageRepos   []string
-	DigestToRepo map[string]string // digest hex → normalized image repo, for policy checks
+	Provider          string
+	Model             string
+	Raw               *RawAttestation
+	Nonce             Nonce
+	Enforced          []string
+	Policy            MeasurementPolicy
+	ImageRepos        []string
+	GatewayImageRepos []string
+	DigestToRepo      map[string]string // digest hex → normalized image repo, for policy checks
 
 	TDX        *TDXVerifyResult
 	Nvidia     *NvidiaVerifyResult
@@ -153,6 +153,7 @@ type ReportInput struct {
 
 	// Gateway fields — only populated for nearcloud provider.
 	GatewayTDX      *TDXVerifyResult
+	GatewayPoC      *PoCResult
 	GatewayNonceHex string // echoed request_nonce from gateway response
 	GatewayNonce    Nonce  // nonce we sent to the gateway
 	GatewayCompose  *ComposeBindingResult
@@ -460,15 +461,30 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	if scPolicy != nil {
 		if len(in.ImageRepos) == 0 {
 			addFactor(TierSupplyChain, "build_transparency_log", Fail,
-				"No attested image repositories extracted from compose")
+				"no attested model image repositories extracted from compose")
 			goto buildTransparencyDone
 		}
 		for _, repo := range in.ImageRepos {
-			if !containsFold(repo, scPolicy.AllowedImageRepos) {
+			if !scPolicy.allowedInModel(repo) {
 				addFactor(TierSupplyChain, "build_transparency_log", Fail,
-					fmt.Sprintf("Container allowlist policy: image repository %q is not in allowlist (%s)",
-						repo, strings.Join(scPolicy.AllowedImageRepos, ", ")))
+					fmt.Sprintf("model container policy: image %q not in supply chain policy (%s)",
+						repo, strings.Join(scPolicy.modelRepoNames(), ", ")))
 				goto buildTransparencyDone
+			}
+		}
+		if scPolicy.hasGatewayImages() {
+			if len(in.GatewayImageRepos) == 0 {
+				addFactor(TierSupplyChain, "build_transparency_log", Fail,
+					"no attested gateway image repositories extracted from compose")
+				goto buildTransparencyDone
+			}
+			for _, repo := range in.GatewayImageRepos {
+				if !scPolicy.allowedInGateway(repo) {
+					addFactor(TierSupplyChain, "build_transparency_log", Fail,
+						fmt.Sprintf("gateway container policy: image %q not in supply chain policy (%s)",
+							repo, strings.Join(scPolicy.gatewayRepoNames(), ", ")))
+					goto buildTransparencyDone
+				}
 			}
 		}
 	}
@@ -476,7 +492,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	if len(in.Rekor) == 0 {
 		if scPolicy != nil {
 			addFactor(TierSupplyChain, "build_transparency_log", Fail,
-				"Container check: no Rekor provenance fetched for attested image digests")
+				"no Rekor provenance fetched for attested image digests")
 			goto buildTransparencyDone
 		}
 		if in.Raw.ComposeHash != "" {
@@ -491,63 +507,118 @@ func BuildReport(in *ReportInput) *VerificationReport {
 				"no build transparency log")
 		}
 	} else {
-		var verified int
-		var fallbackOnly int
+		var fulcioVerified int
+		var sigstorePresent int
 		var detail string
 		var failed bool
+	rekorLoop:
 		for i := range in.Rekor {
 			r := &in.Rekor[i]
+			imageRepo := in.DigestToRepo[r.Digest]
+			var img *ImageProvenance
+			if scPolicy != nil {
+				img = scPolicy.lookup(imageRepo)
+			}
+
 			if r.Err != nil {
-				fallbackOnly++
+				if img != nil && img.Provenance == FulcioSigned {
+					failed = true
+					detail = fmt.Sprintf("image %q: Rekor provenance fetch failed: %v", imageRepo, r.Err)
+				} else {
+					sigstorePresent++
+				}
+				if failed {
+					break rekorLoop
+				}
 				continue
 			}
-			if !r.HasCert {
-				fallbackOnly++
-				continue // third-party image — skip, don't fail
-			}
 
-			if scPolicy != nil {
-				if !containsFold(r.OIDCIssuer, scPolicy.AllowedOIDCIssuers) {
+			switch {
+			case img != nil && img.Provenance == FulcioSigned:
+				switch {
+				case !r.HasCert:
 					failed = true
-					detail = "Container signer checks: unexpected OIDC issuer: " + r.OIDCIssuer
-					break
-				}
-
-				repoID := strings.TrimSpace(r.SourceRepo)
-				repoURL := strings.TrimSpace(r.SourceRepoURL)
-				if !containsFold(repoID, scPolicy.AllowedSourceRepos) &&
-					!containsFold(repoURL, scPolicy.AllowedSourceRepos) {
+					detail = fmt.Sprintf("image %q: expected Fulcio certificate but entry has raw key", imageRepo)
+				case !strings.EqualFold(strings.TrimSpace(r.OIDCIssuer), strings.TrimSpace(img.OIDCIssuer)):
 					failed = true
-					detail = fmt.Sprintf("Container signer check: unexpected Sigstore signer identity (repo=%q repo_url=%q)", repoID, repoURL)
-					break
+					detail = fmt.Sprintf("image %q: unexpected OIDC issuer %q (expected %q)", imageRepo, r.OIDCIssuer, img.OIDCIssuer)
+				case img.OIDCIdentity != "" && !strings.EqualFold(strings.TrimSpace(r.SubjectURI), strings.TrimSpace(img.OIDCIdentity)):
+					failed = true
+					detail = fmt.Sprintf("image %q: unexpected OIDC identity %q (expected %q)", imageRepo, r.SubjectURI, img.OIDCIdentity)
+				default:
+					repoID := strings.TrimSpace(r.SourceRepo)
+					repoURL := strings.TrimSpace(r.SourceRepoURL)
+					if !containsFold(repoID, img.SourceRepos) && !containsFold(repoURL, img.SourceRepos) {
+						failed = true
+						detail = fmt.Sprintf("image %q: unexpected source repo %q (expected %v)", imageRepo, repoID, img.SourceRepos)
+					}
 				}
-			} else if r.OIDCIssuer != "https://token.actions.githubusercontent.com" {
+				if failed {
+					break rekorLoop
+				}
+				fulcioVerified++
+				if detail == "" {
+					commit := r.SourceCommit
+					if len(commit) > 7 {
+						commit = commit[:7]
+					}
+					detail = fmt.Sprintf("%s@%s, %s", r.SourceRepo, commit, r.RunnerEnv)
+				}
+			case img != nil:
+				// SigstorePresent or ComposeBindingOnly — presence in Rekor suffices.
+				// If policy declares a key fingerprint, verify it matches.
+				if img.Provenance == SigstorePresent && img.KeyFingerprint != "" && r.KeyFingerprint != "" {
+					if !strings.EqualFold(r.KeyFingerprint, img.KeyFingerprint) {
+						failed = true
+						detail = fmt.Sprintf("image %q: unexpected signing key fingerprint %s (expected %s)",
+							imageRepo, truncHex(r.KeyFingerprint), truncHex(img.KeyFingerprint))
+						break rekorLoop
+					}
+				}
+				sigstorePresent++
+			case scPolicy == nil:
+				// No provider policy: fall back to generic GitHub Actions check.
+				if !r.HasCert {
+					sigstorePresent++
+					continue
+				}
+				if r.OIDCIssuer != "https://token.actions.githubusercontent.com" {
+					failed = true
+					detail = "unexpected OIDC issuer: " + r.OIDCIssuer
+					break rekorLoop
+				}
+				fulcioVerified++
+				if detail == "" {
+					commit := r.SourceCommit
+					if len(commit) > 7 {
+						commit = commit[:7]
+					}
+					detail = fmt.Sprintf("%s@%s, %s", r.SourceRepo, commit, r.RunnerEnv)
+				}
+			default:
+				// Policy exists but image not in policy — should have been
+				// caught by the tier check above.
 				failed = true
-				detail = "unexpected OIDC issuer: " + r.OIDCIssuer
-				break
-			}
-			verified++
-			if detail == "" {
-				repo := r.SourceRepo
-				commit := r.SourceCommit
-				if len(commit) > 7 {
-					commit = commit[:7]
-				}
-				detail = fmt.Sprintf("%s@%s, %s", repo, commit, r.RunnerEnv)
+				detail = fmt.Sprintf("image %q: not in supply chain policy", imageRepo)
+				break rekorLoop
 			}
 		}
 		switch {
 		case failed:
 			addFactor(TierSupplyChain, "build_transparency_log", Fail, detail)
-		case scPolicy != nil && verified > 0 && fallbackOnly > 0:
+		case scPolicy != nil && fulcioVerified > 0 && sigstorePresent > 0:
 			addFactor(TierSupplyChain, "build_transparency_log", Pass,
-				fmt.Sprintf("Container policy check: %d image(s) have acceptable Rekor signer provenance; %d image(s) rely on repository allowlist + Sigstore presence", verified, fallbackOnly))
-		case scPolicy != nil && verified == 0 && fallbackOnly > 0:
+				fmt.Sprintf("%d image(s) verified by Fulcio provenance; %d present in Sigstore (%s)",
+					fulcioVerified, sigstorePresent, detail))
+		case scPolicy != nil && fulcioVerified > 0:
 			addFactor(TierSupplyChain, "build_transparency_log", Pass,
-				fmt.Sprintf("Container policy check: no Fulcio provenance for %d image(s); repository allowlist + Sigstore presence accepted", fallbackOnly))
-		case verified > 0:
+				fmt.Sprintf("%d image(s) verified by Fulcio provenance (%s)", fulcioVerified, detail))
+		case scPolicy != nil && sigstorePresent > 0:
 			addFactor(TierSupplyChain, "build_transparency_log", Pass,
-				fmt.Sprintf("%d/%d image(s) have Sigstore build provenance (%s)", verified, len(in.Rekor), detail))
+				fmt.Sprintf("%d image(s) present in Sigstore (no Fulcio provenance)", sigstorePresent))
+		case fulcioVerified > 0:
+			addFactor(TierSupplyChain, "build_transparency_log", Pass,
+				fmt.Sprintf("%d/%d image(s) have Sigstore build provenance (%s)", fulcioVerified, len(in.Rekor), detail))
 		default:
 			addFactor(TierSupplyChain, "build_transparency_log", Skip,
 				"all images signed with raw keys (no Fulcio build provenance)")
@@ -594,23 +665,22 @@ buildTransparencyDone:
 	if len(in.Sigstore) == 0 {
 		addFactor(TierSupplyChain, "sigstore_verification", Skip, "no image digests to verify")
 	} else {
-		sigsPolicy := supplyChainPolicyForProvider(in.Provider)
 		allOK := true
 		var failDigest string
 		var failDetail string
-		var allowlisted int
+		var composeOnly int
 		for _, r := range in.Sigstore {
 			if r.OK {
 				continue
 			}
-			// A 404 for an explicitly allowlisted image is acceptable: its
-			// digest is pinned in the attested compose manifest (bound to
-			// MRConfigID), and the repo is covered by the provider supply
-			// chain policy. Not every image is signed with Sigstore.
-			if sigsPolicy != nil && len(in.DigestToRepo) > 0 {
+			// Images declared ComposeBindingOnly are expected to be absent
+			// from Sigstore; their security relies on the pinned digest in
+			// the attested compose manifest.
+			if scPolicy != nil && len(in.DigestToRepo) > 0 {
 				repo := in.DigestToRepo[r.Digest]
-				if containsFold(repo, sigsPolicy.AllowedImageRepos) {
-					allowlisted++
+				img := scPolicy.lookup(repo)
+				if img != nil && img.Provenance == ComposeBindingOnly {
+					composeOnly++
 					continue
 				}
 			}
@@ -623,14 +693,14 @@ buildTransparencyDone:
 			}
 			break
 		}
-		inRekor := len(in.Sigstore) - allowlisted
+		inSigstore := len(in.Sigstore) - composeOnly
 		switch {
 		case !allOK:
 			addFactor(TierSupplyChain, "sigstore_verification", Fail,
 				fmt.Sprintf("Sigstore check failed for sha256:%s (%s)", failDigest[:min(16, len(failDigest))], failDetail))
-		case allowlisted > 0:
+		case composeOnly > 0:
 			addFactor(TierSupplyChain, "sigstore_verification", Pass,
-				fmt.Sprintf("%d image digest(s) found in Sigstore transparency log; %d allowlisted (not Sigstore-signed)", inRekor, allowlisted))
+				fmt.Sprintf("%d image digest(s) found in Sigstore transparency log; %d not Sigstore-signed (compose-pinned)", inSigstore, composeOnly))
 		default:
 			addFactor(TierSupplyChain, "sigstore_verification", Pass,
 				fmt.Sprintf("%d image digest(s) found in Sigstore transparency log", len(in.Sigstore)))
@@ -754,6 +824,26 @@ buildTransparencyDone:
 			addFactor(TierGateway, "gateway_compose_binding", Pass, "gateway sha256(app_compose) matches MRConfigID")
 		}
 
+		// Factor: gateway_cpu_id_registry
+		switch {
+		case in.GatewayPoC != nil && in.GatewayPoC.Registered:
+			addFactor(TierGateway, "gateway_cpu_id_registry", Pass,
+				fmt.Sprintf("gateway Proof of Cloud: registered (%s)", in.GatewayPoC.Label))
+		case in.GatewayPoC != nil && in.GatewayPoC.Err != nil:
+			addFactor(TierGateway, "gateway_cpu_id_registry", Skip,
+				fmt.Sprintf("gateway Proof of Cloud query failed: %v", in.GatewayPoC.Err))
+		case in.GatewayPoC != nil && !in.GatewayPoC.Registered:
+			addFactor(TierGateway, "gateway_cpu_id_registry", Fail,
+				"gateway hardware not found in Proof of Cloud registry; paste gateway intel_quote from --save-dir at proofofcloud.org to verify")
+		case in.GatewayTDX != nil && in.GatewayTDX.PPID != "":
+			addFactor(TierGateway, "gateway_cpu_id_registry", Skip,
+				fmt.Sprintf("gateway PPID extracted (%s...) but offline; use default mode to check Proof of Cloud",
+					in.GatewayTDX.PPID[:min(8, len(in.GatewayTDX.PPID))]))
+		default:
+			addFactor(TierGateway, "gateway_cpu_id_registry", Skip,
+				"gateway CPU ID registry check not available")
+		}
+
 		// Factor: gateway_event_log_integrity
 		if len(in.GatewayEventLog) == 0 { //nolint:gocritic // ifElseChain: conditions compare different fields
 			addFactor(TierGateway, "gateway_event_log_integrity", Skip, "no gateway event log entries in attestation response")
@@ -812,29 +902,172 @@ buildTransparencyDone:
 	}
 }
 
+// ProvenanceType describes the expected level of Sigstore/Rekor evidence for
+// a container image.
+type ProvenanceType int
+
+const (
+	// FulcioSigned means the image must have a Fulcio-issued certificate in
+	// Rekor with a matching OIDC issuer and source repository.
+	FulcioSigned ProvenanceType = iota
+	// SigstorePresent means the image has an entry in the Sigstore
+	// transparency log but specific signer identity is not checked (raw-key
+	// signatures or third-party Fulcio certs such as alpine or datadog/agent).
+	SigstorePresent
+	// ComposeBindingOnly means the image is not expected to be in Sigstore.
+	// Security relies on the pinned digest in the attested compose manifest.
+	ComposeBindingOnly
+)
+
+func (p ProvenanceType) String() string {
+	switch p {
+	case FulcioSigned:
+		return "fulcio-signed"
+	case SigstorePresent:
+		return "sigstore-present"
+	case ComposeBindingOnly:
+		return "compose-binding-only"
+	default:
+		return "unknown"
+	}
+}
+
+// ImageProvenance declares the expected supply chain evidence for a single
+// container image repository.
+type ImageProvenance struct {
+	Repo           string         // normalised image repo (e.g. "datadog/agent")
+	ModelTier      bool           // allowed in model compose
+	GatewayTier    bool           // allowed in gateway compose
+	Provenance     ProvenanceType // expected evidence level
+	KeyFingerprint string         // SHA-256 hex of PKIX public key; checked for SigstorePresent
+	OIDCIssuer     string         // required when Provenance == FulcioSigned
+	OIDCIdentity   string         // SAN URI (workflow identity); checked for FulcioSigned
+	SourceRepos    []string       // required when Provenance == FulcioSigned (repo ID and/or URL)
+}
+
 type supplyChainPolicy struct {
-	AllowedImageRepos  []string
-	AllowedOIDCIssuers []string
-	AllowedSourceRepos []string
+	Images []ImageProvenance
+}
+
+// lookup returns the ImageProvenance entry for repo, or nil.
+func (p *supplyChainPolicy) lookup(repo string) *ImageProvenance {
+	v := strings.ToLower(strings.TrimSpace(repo))
+	for i := range p.Images {
+		if strings.ToLower(strings.TrimSpace(p.Images[i].Repo)) == v {
+			return &p.Images[i]
+		}
+	}
+	return nil
+}
+
+// allowedInModel reports whether repo has a policy entry permitting model tier.
+func (p *supplyChainPolicy) allowedInModel(repo string) bool {
+	img := p.lookup(repo)
+	return img != nil && img.ModelTier
+}
+
+// allowedInGateway reports whether repo has a policy entry permitting gateway tier.
+func (p *supplyChainPolicy) allowedInGateway(repo string) bool {
+	img := p.lookup(repo)
+	return img != nil && img.GatewayTier
+}
+
+// hasGatewayImages reports whether any image in the policy allows gateway tier.
+func (p *supplyChainPolicy) hasGatewayImages() bool {
+	for i := range p.Images {
+		if p.Images[i].GatewayTier {
+			return true
+		}
+	}
+	return false
+}
+
+// modelRepoNames returns model-tier image repository names.
+func (p *supplyChainPolicy) modelRepoNames() []string {
+	var out []string
+	for i := range p.Images {
+		if p.Images[i].ModelTier {
+			out = append(out, p.Images[i].Repo)
+		}
+	}
+	return out
+}
+
+// gatewayRepoNames returns gateway-tier image repository names.
+func (p *supplyChainPolicy) gatewayRepoNames() []string {
+	var out []string
+	for i := range p.Images {
+		if p.Images[i].GatewayTier {
+			out = append(out, p.Images[i].Repo)
+		}
+	}
+	return out
 }
 
 func supplyChainPolicyForProvider(provider string) *supplyChainPolicy {
+	const githubOIDC = "https://token.actions.githubusercontent.com"
+
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "neardirect", "nearcloud":
-		return &supplyChainPolicy{
-			// Exact image names currently attested in NearAI compose.
-			AllowedImageRepos: []string{
-				"datadog/agent",
-				"certbot/dns-cloudflare",
-				"nearaidev/compose-manager",
-			},
-			AllowedOIDCIssuers: []string{"https://token.actions.githubusercontent.com"},
-			// Exact Fulcio identities currently observed for NearAI-owned images.
-			AllowedSourceRepos: []string{
-				"nearai/compose-manager",
-				"https://github.com/nearai/compose-manager",
-			},
-		}
+	case "venice", "neardirect":
+		return &supplyChainPolicy{Images: []ImageProvenance{
+			{Repo: "datadog/agent", ModelTier: true, Provenance: SigstorePresent,
+				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
+			{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: ComposeBindingOnly},
+			{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: FulcioSigned,
+				OIDCIssuer:   githubOIDC,
+				OIDCIdentity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+				SourceRepos: []string{
+					"nearai/compose-manager",
+					"https://github.com/nearai/compose-manager",
+				}},
+		}}
+	case "nearcloud":
+		return &supplyChainPolicy{Images: []ImageProvenance{
+			// Model tier.
+			{Repo: "datadog/agent", ModelTier: true, GatewayTier: true, Provenance: SigstorePresent,
+				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
+			{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: ComposeBindingOnly},
+			{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: FulcioSigned,
+				OIDCIssuer:   githubOIDC,
+				OIDCIdentity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+				SourceRepos: []string{
+					"nearai/compose-manager",
+					"https://github.com/nearai/compose-manager",
+				}},
+			// Gateway tier.
+			{Repo: "nearaidev/dstack-vpc-client", GatewayTier: true, Provenance: FulcioSigned,
+				OIDCIssuer:   githubOIDC,
+				OIDCIdentity: "https://github.com/nearai/dstack-vpc-client/.github/workflows/build.yml@refs/heads/main",
+				SourceRepos: []string{
+					"nearai/dstack-vpc-client",
+					"https://github.com/nearai/dstack-vpc-client",
+				}},
+			{Repo: "nearaidev/dstack-vpc", GatewayTier: true, Provenance: FulcioSigned,
+				OIDCIssuer:   githubOIDC,
+				OIDCIdentity: "https://github.com/nearai/dstack-vpc/.github/workflows/build.yml@refs/heads/main",
+				SourceRepos: []string{
+					"nearai/dstack-vpc",
+					"https://github.com/nearai/dstack-vpc",
+				}},
+			{Repo: "alpine", GatewayTier: true, Provenance: SigstorePresent},
+			// alpine: third-party image built by Docker across varying CI
+			// systems (GitHub Actions, Google Cloud Build) with unstable
+			// branch refs. Only transparency-log presence is verifiable.
+			{Repo: "nearaidev/cloud-api", GatewayTier: true, Provenance: FulcioSigned,
+				OIDCIssuer:   githubOIDC,
+				OIDCIdentity: "https://github.com/nearai/cloud-api/.github/workflows/build.yml@refs/heads/main",
+				SourceRepos: []string{
+					"nearai/cloud-api",
+					"https://github.com/nearai/cloud-api",
+				}},
+			{Repo: "nearaidev/cvm-ingress", GatewayTier: true, Provenance: FulcioSigned,
+				OIDCIssuer:   githubOIDC,
+				OIDCIdentity: "https://github.com/nearai/cvm-ingress/.github/workflows/build-push.yml@refs/heads/main",
+				SourceRepos: []string{
+					"nearai/cvm-ingress",
+					"https://github.com/nearai/cvm-ingress",
+				}},
+		}}
 	default:
 		return nil
 	}

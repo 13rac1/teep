@@ -879,8 +879,8 @@ func TestBuildReportSigstorePassForAllowlistedNonRekorImage(t *testing.T) {
 	if f.Status != Pass {
 		t.Errorf("sigstore_verification for allowlisted non-Rekor image: got %s (%s), want PASS", f.Status, f.Detail)
 	}
-	if !strings.Contains(f.Detail, "allowlisted") {
-		t.Errorf("detail should mention allowlisted images: %s", f.Detail)
+	if !strings.Contains(f.Detail, "compose-pinned") {
+		t.Errorf("detail should mention compose-pinned images: %s", f.Detail)
 	}
 }
 
@@ -935,6 +935,7 @@ func TestBuildReportNearDirectSupplyChainPolicyPass(t *testing.T) {
 	rekor := []RekorProvenance{{
 		Digest:        sigResults[0].Digest,
 		HasCert:       true,
+		SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
 		OIDCIssuer:    "https://token.actions.githubusercontent.com",
 		SourceRepo:    "nearai/compose-manager",
 		SourceRepoURL: "https://github.com/nearai/compose-manager",
@@ -943,13 +944,14 @@ func TestBuildReportNearDirectSupplyChainPolicyPass(t *testing.T) {
 	}}
 
 	report := BuildReport(&ReportInput{
-		Provider:   "neardirect",
-		Model:      "m",
-		Raw:        raw,
-		Nonce:      nonce,
-		ImageRepos: []string{"nearaidev/compose-manager"},
-		Sigstore:   sigResults,
-		Rekor:      rekor,
+		Provider:     "neardirect",
+		Model:        "m",
+		Raw:          raw,
+		Nonce:        nonce,
+		ImageRepos:   []string{"nearaidev/compose-manager"},
+		DigestToRepo: map[string]string{sigResults[0].Digest: "nearaidev/compose-manager"},
+		Sigstore:     sigResults,
+		Rekor:        rekor,
 	})
 
 	f := findFactor(t, report, "build_transparency_log")
@@ -974,8 +976,66 @@ func TestBuildReportNearDirectSupplyChainPolicyRejectsImageRepo(t *testing.T) {
 	if f.Status != Fail {
 		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
 	}
-	if !strings.Contains(f.Detail, "allowlist") {
-		t.Fatalf("expected allowlist detail, got: %s", f.Detail)
+	if !strings.Contains(f.Detail, "supply chain policy") {
+		t.Fatalf("expected supply chain policy detail, got: %s", f.Detail)
+	}
+}
+
+func TestBuildReportNearCloudSeparateModelGatewayAllowlists(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	sigResults := []SigstoreResult{{
+		Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+		OK:     true,
+		Status: 200,
+	}}
+	rekor := []RekorProvenance{{
+		Digest:        sigResults[0].Digest,
+		HasCert:       true,
+		SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+		OIDCIssuer:    "https://token.actions.githubusercontent.com",
+		SourceRepo:    "nearai/compose-manager",
+		SourceRepoURL: "https://github.com/nearai/compose-manager",
+		SourceCommit:  "0123456789abcdef",
+		RunnerEnv:     "github-hosted",
+	}}
+
+	report := BuildReport(&ReportInput{
+		Provider:          "nearcloud",
+		Model:             "m",
+		Raw:               raw,
+		Nonce:             nonce,
+		ImageRepos:        []string{"nearaidev/compose-manager"},
+		GatewayImageRepos: []string{"nearaidev/dstack-vpc-client"},
+		DigestToRepo:      map[string]string{sigResults[0].Digest: "nearaidev/compose-manager"},
+		Sigstore:          sigResults,
+		Rekor:             rekor,
+	})
+
+	f := findFactor(t, report, "build_transparency_log")
+	if f.Status != Pass {
+		t.Fatalf("build_transparency_log: got %s (%s), want PASS", f.Status, f.Detail)
+	}
+}
+
+func TestBuildReportNearDirectRejectsGatewayOnlyImage(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+
+	report := BuildReport(&ReportInput{
+		Provider:   "neardirect",
+		Model:      "m",
+		Raw:        raw,
+		Nonce:      nonce,
+		ImageRepos: []string{"nearaidev/dstack-vpc-client"},
+	})
+
+	f := findFactor(t, report, "build_transparency_log")
+	if f.Status != Fail {
+		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
+	}
+	if !strings.Contains(strings.ToLower(f.Detail), "model container policy") {
+		t.Fatalf("expected model policy rejection detail, got: %s", f.Detail)
 	}
 }
 
@@ -990,27 +1050,165 @@ func TestBuildReportNearDirectSupplyChainPolicyRejectsSigner(t *testing.T) {
 	rekor := []RekorProvenance{{
 		Digest:        sigResults[0].Digest,
 		HasCert:       true,
+		SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
 		OIDCIssuer:    "https://token.actions.githubusercontent.com",
 		SourceRepo:    "attacker/router",
 		SourceRepoURL: "https://github.com/attacker/router",
 	}}
 
 	report := BuildReport(&ReportInput{
-		Provider:   "neardirect",
-		Model:      "m",
-		Raw:        raw,
-		Nonce:      nonce,
-		ImageRepos: []string{"nearaidev/compose-manager"},
-		Sigstore:   sigResults,
-		Rekor:      rekor,
+		Provider:     "neardirect",
+		Model:        "m",
+		Raw:          raw,
+		Nonce:        nonce,
+		ImageRepos:   []string{"nearaidev/compose-manager"},
+		DigestToRepo: map[string]string{sigResults[0].Digest: "nearaidev/compose-manager"},
+		Sigstore:     sigResults,
+		Rekor:        rekor,
 	})
 
 	f := findFactor(t, report, "build_transparency_log")
 	if f.Status != Fail {
 		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
 	}
-	if !strings.Contains(f.Detail, "unexpected Sigstore signer identity") {
-		t.Fatalf("expected signer identity detail, got: %s", f.Detail)
+	if !strings.Contains(f.Detail, "unexpected source repo") {
+		t.Fatalf("expected source repo rejection detail, got: %s", f.Detail)
+	}
+}
+
+func TestBuildReportFulcioSignedOIDCIdentityMismatch(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	sigResults := []SigstoreResult{{
+		Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+		OK:     true,
+		Status: 200,
+	}}
+	rekor := []RekorProvenance{{
+		Digest:        sigResults[0].Digest,
+		HasCert:       true,
+		SubjectURI:    "https://github.com/attacker/evil-repo/.github/workflows/evil.yml@refs/heads/main",
+		OIDCIssuer:    "https://token.actions.githubusercontent.com",
+		SourceRepo:    "nearai/compose-manager",
+		SourceRepoURL: "https://github.com/nearai/compose-manager",
+		SourceCommit:  "0123456789abcdef",
+		RunnerEnv:     "github-hosted",
+	}}
+
+	report := BuildReport(&ReportInput{
+		Provider:     "neardirect",
+		Model:        "m",
+		Raw:          raw,
+		Nonce:        nonce,
+		ImageRepos:   []string{"nearaidev/compose-manager"},
+		DigestToRepo: map[string]string{sigResults[0].Digest: "nearaidev/compose-manager"},
+		Sigstore:     sigResults,
+		Rekor:        rekor,
+	})
+
+	f := findFactor(t, report, "build_transparency_log")
+	if f.Status != Fail {
+		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
+	}
+	if !strings.Contains(f.Detail, "unexpected OIDC identity") {
+		t.Fatalf("expected OIDC identity mismatch detail, got: %s", f.Detail)
+	}
+}
+
+func TestBuildReportSigstorePresentKeyFingerprintMismatch(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+	datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
+	sigResults := []SigstoreResult{
+		{Digest: composeManagerDigest, OK: true, Status: 200},
+		{Digest: datadogDigest, OK: true, Status: 200},
+	}
+	rekor := []RekorProvenance{
+		{
+			Digest:        composeManagerDigest,
+			HasCert:       true,
+			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+			OIDCIssuer:    "https://token.actions.githubusercontent.com",
+			SourceRepo:    "nearai/compose-manager",
+			SourceRepoURL: "https://github.com/nearai/compose-manager",
+			SourceCommit:  "0123456789abcdef",
+			RunnerEnv:     "github-hosted",
+		},
+		{
+			Digest:         datadogDigest,
+			HasCert:        false,
+			KeyFingerprint: "0000000000000000000000000000000000000000000000000000000000000000",
+		},
+	}
+
+	report := BuildReport(&ReportInput{
+		Provider:   "neardirect",
+		Model:      "m",
+		Raw:        raw,
+		Nonce:      nonce,
+		ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
+		DigestToRepo: map[string]string{
+			composeManagerDigest: "nearaidev/compose-manager",
+			datadogDigest:        "datadog/agent",
+		},
+		Sigstore: sigResults,
+		Rekor:    rekor,
+	})
+
+	f := findFactor(t, report, "build_transparency_log")
+	if f.Status != Fail {
+		t.Fatalf("build_transparency_log: got %s (%s), want FAIL", f.Status, f.Detail)
+	}
+	if !strings.Contains(f.Detail, "unexpected signing key fingerprint") {
+		t.Fatalf("expected key fingerprint mismatch detail, got: %s", f.Detail)
+	}
+}
+
+func TestBuildReportSigstorePresentKeyFingerprintPass(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+	datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
+	sigResults := []SigstoreResult{
+		{Digest: composeManagerDigest, OK: true, Status: 200},
+		{Digest: datadogDigest, OK: true, Status: 200},
+	}
+	rekor := []RekorProvenance{
+		{
+			Digest:        composeManagerDigest,
+			HasCert:       true,
+			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+			OIDCIssuer:    "https://token.actions.githubusercontent.com",
+			SourceRepo:    "nearai/compose-manager",
+			SourceRepoURL: "https://github.com/nearai/compose-manager",
+			SourceCommit:  "0123456789abcdef",
+			RunnerEnv:     "github-hosted",
+		},
+		{
+			Digest:         datadogDigest,
+			HasCert:        false,
+			KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b",
+		},
+	}
+
+	report := BuildReport(&ReportInput{
+		Provider:   "neardirect",
+		Model:      "m",
+		Raw:        raw,
+		Nonce:      nonce,
+		ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
+		DigestToRepo: map[string]string{
+			composeManagerDigest: "nearaidev/compose-manager",
+			datadogDigest:        "datadog/agent",
+		},
+		Sigstore: sigResults,
+		Rekor:    rekor,
+	})
+
+	f := findFactor(t, report, "build_transparency_log")
+	if f.Status != Pass {
+		t.Fatalf("build_transparency_log: got %s (%s), want PASS", f.Status, f.Detail)
 	}
 }
 

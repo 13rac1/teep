@@ -277,11 +277,59 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 			"registered", pocResult != nil && pocResult.Registered)
 	}
 
-	// Check compose binding and Sigstore if app_compose is available.
+	// Check compose binding and supply-chain evidence from both model and
+	// gateway app_compose manifests (nearcloud has two attested tiers).
 	var composeResult *attestation.ComposeBindingResult
-	var imageRepos []string
-	var digestToRepo map[string]string
+	var modelImageRepos []string
+	var gatewayImageRepos []string
+	digestToRepo := make(map[string]string)
 	var sigstoreResults []attestation.SigstoreResult
+	var allDigests []string
+	modelRepoSeen := make(map[string]struct{})
+	gatewayRepoSeen := make(map[string]struct{})
+	digestSeen := make(map[string]struct{})
+	appendComposeEvidence := func(kind, appCompose string) {
+		dockerCompose, err := attestation.ExtractDockerCompose(appCompose)
+		if err != nil {
+			slog.Debug("extract docker_compose_file failed", "kind", kind, "err", err)
+		}
+		source := dockerCompose
+		if source == "" {
+			source = appCompose
+		}
+		if dockerCompose != "" {
+			slog.Debug("attested docker compose manifest", "kind", kind, "content", dockerCompose)
+		}
+		for _, repo := range attestation.ExtractImageRepositories(source) {
+			switch kind {
+			case "gateway":
+				if _, ok := gatewayRepoSeen[repo]; ok {
+					continue
+				}
+				gatewayRepoSeen[repo] = struct{}{}
+				gatewayImageRepos = append(gatewayImageRepos, repo)
+			default:
+				if _, ok := modelRepoSeen[repo]; ok {
+					continue
+				}
+				modelRepoSeen[repo] = struct{}{}
+				modelImageRepos = append(modelImageRepos, repo)
+			}
+		}
+		for digest, repo := range attestation.ExtractImageDigestToRepoMap(source) {
+			if _, ok := digestToRepo[digest]; !ok {
+				digestToRepo[digest] = repo
+			}
+		}
+		for _, d := range attestation.ExtractImageDigests(source) {
+			if _, ok := digestSeen[d]; ok {
+				continue
+			}
+			digestSeen[d] = struct{}{}
+			allDigests = append(allDigests, d)
+			slog.Info("checking Sigstore for image digest", "kind", kind, "digest", "sha256:"+d[:min(16, len(d))]+"...")
+		}
+	}
 	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
 		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
@@ -290,35 +338,45 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		} else {
 			slog.Warn("compose binding failed", "err", composeResult.Err)
 		}
+		appendComposeEvidence("model", raw.AppCompose)
+	}
 
-		dockerCompose, err := attestation.ExtractDockerCompose(raw.AppCompose)
-		if err != nil {
-			slog.Debug("extract docker_compose_file failed", "err", err)
+	// Gateway TDX verification — any provider that populates GatewayIntelQuote.
+	var gatewayTDX *attestation.TDXVerifyResult
+	var gatewayCompose *attestation.ComposeBindingResult
+	var gatewayPoCResult *attestation.PoCResult
+	if raw.GatewayIntelQuote != "" {
+		slog.Debug("gateway TDX verification starting", "quote_len", len(raw.GatewayIntelQuote))
+		gatewayTDX = attestation.VerifyTDXQuote(ctx, raw.GatewayIntelQuote, nonce, offline)
+		if gatewayTDX.ParseErr == nil {
+			detail, rdErr := nearcloud.GatewayReportDataVerifier{}.Verify(
+				gatewayTDX.ReportData, raw.GatewayTLSFingerprint, nonce)
+			gatewayTDX.ReportDataBindingErr = rdErr
+			gatewayTDX.ReportDataBindingDetail = detail
 		}
-		source := dockerCompose
-		if source == "" {
-			source = raw.AppCompose
+
+		if raw.GatewayAppCompose != "" && gatewayTDX.ParseErr == nil {
+			gatewayCompose = &attestation.ComposeBindingResult{Checked: true}
+			gatewayCompose.Err = attestation.VerifyComposeBinding(raw.GatewayAppCompose, gatewayTDX.MRConfigID)
+			appendComposeEvidence("gateway", raw.GatewayAppCompose)
 		}
-		if dockerCompose != "" {
-			slog.Debug("attested docker compose manifest", "content", dockerCompose)
+		if !offline {
+			poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, client)
+			gatewayPoCResult = poc.CheckQuote(ctx, raw.GatewayIntelQuote)
 		}
-		imageRepos = attestation.ExtractImageRepositories(source)
-		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
-		digests := attestation.ExtractImageDigests(source)
-		for _, d := range digests {
-			slog.Info("checking Sigstore for image digest", "digest", "sha256:"+d[:min(16, len(d))]+"...")
-		}
-		if len(digests) > 0 && !cfg.Offline {
-			sigstoreResults = attestation.CheckSigstoreDigests(ctx, digests, client)
-			for _, r := range sigstoreResults {
-				switch {
-				case r.OK:
-					slog.Info("Sigstore check passed", "digest", "sha256:"+r.Digest[:min(16, len(r.Digest))]+"...", "status", r.Status)
-				case r.Err != nil:
-					slog.Warn("Sigstore check failed", "digest", "sha256:"+r.Digest[:min(16, len(r.Digest))]+"...", "err", r.Err)
-				default:
-					slog.Warn("Sigstore check failed", "digest", "sha256:"+r.Digest[:min(16, len(r.Digest))]+"...", "status", r.Status)
-				}
+		slog.Debug("gateway TDX verification complete")
+	}
+
+	if len(allDigests) > 0 && !cfg.Offline {
+		sigstoreResults = attestation.CheckSigstoreDigests(ctx, allDigests, client)
+		for _, r := range sigstoreResults {
+			switch {
+			case r.OK:
+				slog.Info("Sigstore check passed", "digest", "sha256:"+r.Digest[:min(16, len(r.Digest))]+"...", "status", r.Status)
+			case r.Err != nil:
+				slog.Warn("Sigstore check failed", "digest", "sha256:"+r.Digest[:min(16, len(r.Digest))]+"...", "err", r.Err)
+			default:
+				slog.Warn("Sigstore check failed", "digest", "sha256:"+r.Digest[:min(16, len(r.Digest))]+"...", "status", r.Status)
 			}
 		}
 	}
@@ -349,44 +407,28 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	}
 
 	reportInput := &attestation.ReportInput{
-		Provider:     providerName,
-		Model:        modelName,
-		Raw:          raw,
-		Nonce:        nonce,
-		Enforced:     cfg.Enforced,
-		Policy:       cfg.MeasurementPolicy,
-		TDX:          tdxResult,
-		Nvidia:       nvidiaResult,
-		NvidiaNRAS:   nrasResult,
-		PoC:          pocResult,
-		Compose:      composeResult,
-		ImageRepos:   imageRepos,
-		DigestToRepo: digestToRepo,
-		Sigstore:     sigstoreResults,
-		Rekor:        rekorResults,
-	}
-
-	// Gateway TDX verification — any provider that populates GatewayIntelQuote.
-	if raw.GatewayIntelQuote != "" {
-		slog.Debug("gateway TDX verification starting", "quote_len", len(raw.GatewayIntelQuote))
-		gwTDX := attestation.VerifyTDXQuote(ctx, raw.GatewayIntelQuote, nonce, offline)
-		if gwTDX.ParseErr == nil {
-			detail, rdErr := nearcloud.GatewayReportDataVerifier{}.Verify(
-				gwTDX.ReportData, raw.GatewayTLSFingerprint, nonce)
-			gwTDX.ReportDataBindingErr = rdErr
-			gwTDX.ReportDataBindingDetail = detail
-		}
-		reportInput.GatewayTDX = gwTDX
-		reportInput.GatewayNonceHex = raw.GatewayNonceHex
-		reportInput.GatewayNonce = nonce
-		reportInput.GatewayEventLog = raw.GatewayEventLog
-
-		if raw.GatewayAppCompose != "" && gwTDX.ParseErr == nil {
-			gwCompose := &attestation.ComposeBindingResult{Checked: true}
-			gwCompose.Err = attestation.VerifyComposeBinding(raw.GatewayAppCompose, gwTDX.MRConfigID)
-			reportInput.GatewayCompose = gwCompose
-		}
-		slog.Debug("gateway TDX verification complete")
+		Provider:          providerName,
+		Model:             modelName,
+		Raw:               raw,
+		Nonce:             nonce,
+		Enforced:          cfg.Enforced,
+		Policy:            cfg.MeasurementPolicy,
+		TDX:               tdxResult,
+		Nvidia:            nvidiaResult,
+		NvidiaNRAS:        nrasResult,
+		PoC:               pocResult,
+		Compose:           composeResult,
+		ImageRepos:        modelImageRepos,
+		GatewayImageRepos: gatewayImageRepos,
+		DigestToRepo:      digestToRepo,
+		Sigstore:          sigstoreResults,
+		Rekor:             rekorResults,
+		GatewayTDX:        gatewayTDX,
+		GatewayPoC:        gatewayPoCResult,
+		GatewayNonceHex:   raw.GatewayNonceHex,
+		GatewayNonce:      nonce,
+		GatewayCompose:    gatewayCompose,
+		GatewayEventLog:   raw.GatewayEventLog,
 	}
 
 	return attestation.BuildReport(reportInput)

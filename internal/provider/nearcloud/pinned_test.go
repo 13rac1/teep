@@ -3,6 +3,7 @@ package nearcloud
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -17,8 +18,10 @@ import (
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
-func testTLSConfig() *tls.Config {
-	return &tls.Config{InsecureSkipVerify: true}
+func testTLSConfig(srv *httptest.Server) *tls.Config {
+	certPool := x509.NewCertPool()
+	certPool.AddCert(srv.Certificate())
+	return &tls.Config{RootCAs: certPool, MinVersion: tls.VersionTLS13}
 }
 
 func hostFromURL(t *testing.T, rawURL string) string {
@@ -36,7 +39,7 @@ func hostFromURL(t *testing.T, rawURL string) string {
 
 func computeTestServerSPKI(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
-	conn, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+	conn, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	if err != nil {
 		t.Fatalf("dial for SPKI: %v", err)
 	}
@@ -114,7 +117,7 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 		nil, // no model RD verifier
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	// Disable CT checker for test server (self-signed cert).
 	handler.SetCTChecker(nil)
@@ -180,7 +183,7 @@ func TestHandlePinned_CacheHit(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 
@@ -247,7 +250,7 @@ func TestHandlePinned_MissingGatewayTLSFingerprint(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 
@@ -291,7 +294,7 @@ func TestHandlePinned_MismatchedGatewayFingerprint(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 
@@ -339,7 +342,7 @@ func TestHandlePinned_BlockedReport(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 
@@ -411,7 +414,7 @@ func TestHandlePinned_AttestationQueryParams(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 
@@ -511,7 +514,7 @@ func TestHandlePinned_AttestationHTTPError(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 
@@ -553,7 +556,7 @@ func TestHandlePinned_InvalidAttestationJSON(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 
@@ -661,7 +664,7 @@ func TestHandlePinned_ModelHasDifferentFingerprint(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 
@@ -860,7 +863,7 @@ func TestHandlePinned_WithGatewayComposeAndModelFingerprint(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 
@@ -940,7 +943,7 @@ func TestHandlePinned_WithNonEmptyQuotesAndPayload(t *testing.T) {
 		nil,
 	)
 	handler.SetDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
-		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig())
+		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 	handler.SetCTChecker(nil)
 

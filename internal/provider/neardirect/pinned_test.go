@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -277,7 +278,7 @@ func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Serv
 		return nil, fmt.Errorf("resolve: %w", err)
 	}
 
-	// Connect to test server with InsecureSkipVerify (self-signed cert).
+	// Connect to test server using the server's own CA cert pool.
 	conn, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
@@ -324,10 +325,10 @@ func handlePinnedWithTestDial(t *testing.T, h *PinnedHandler, srv *httptest.Serv
 	}, nil
 }
 
-func testTLSConfig(_ *httptest.Server) *tls.Config {
-	// httptest.NewTLSServer provides a TLS config with the server's cert pool
-	// but we need InsecureSkipVerify for direct dialing.
-	return &tls.Config{InsecureSkipVerify: true}
+func testTLSConfig(srv *httptest.Server) *tls.Config {
+	certPool := x509.NewCertPool()
+	certPool.AddCert(srv.Certificate())
+	return &tls.Config{RootCAs: certPool, MinVersion: tls.VersionTLS13}
 }
 
 func computeTestServerSPKI(t *testing.T, srv *httptest.Server) string {

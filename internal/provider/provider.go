@@ -52,6 +52,10 @@ type PinnedResponse struct {
 	// Report is the verification report from attestation, if attestation was
 	// performed on this connection. Nil on SPKI cache hits.
 	Report *attestation.VerificationReport
+
+	// SigningKey is the attested model key returned on cache misses. It allows
+	// callers to refresh signing-key caches without a second attestation fetch.
+	SigningKey string
 }
 
 // ModelLister fetches the list of available models from a provider.

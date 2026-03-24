@@ -159,6 +159,39 @@ func TestParseGatewayResponse_MalformedEventLogEntry(t *testing.T) {
 	}
 }
 
+func TestParseGatewayResponse_EventLogTooManyEntries(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("[")
+	for i := range 10001 {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(`{"imr":0,"digest":"abc123","event_type":1,"event":"","event_payload":""}`)
+	}
+	sb.WriteString("]")
+
+	body := fmt.Appendf(nil, `{
+		"gateway_attestation": {
+			"request_nonce": "abc",
+			"intel_quote": "",
+			"event_log": %q,
+			"tls_cert_fingerprint": "fp",
+			"info": {"tcb_info": "{}"}
+		},
+		"model_attestations": [
+			{"model": "m", "nonce": "abc", "signing_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
+		]
+	}`, sb.String())
+
+	_, _, err := nearcloud.ParseGatewayResponse(body, "m")
+	if err == nil {
+		t.Fatal("expected error for oversized gateway event_log")
+	}
+	if !strings.Contains(err.Error(), "event_log has") {
+		t.Errorf("error should mention event_log entry limit: %v", err)
+	}
+}
+
 func TestParseGatewayResponse_MalformedJSON(t *testing.T) {
 	_, _, err := nearcloud.ParseGatewayResponse([]byte(`{{{`), "m")
 	t.Logf("error: %v", err)
