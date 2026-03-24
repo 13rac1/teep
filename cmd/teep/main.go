@@ -367,8 +367,9 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		slog.Debug("gateway TDX verification complete")
 	}
 
+	var rc *attestation.RekorClient
 	if len(allDigests) > 0 && !cfg.Offline {
-		rc := attestation.NewRekorClient(client)
+		rc = attestation.NewRekorClient(client)
 		sigstoreResults = rc.CheckSigstoreDigests(ctx, allDigests)
 		for _, r := range sigstoreResults {
 			switch {
@@ -383,8 +384,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	}
 
 	var rekorResults []attestation.RekorProvenance
-	if len(sigstoreResults) > 0 && !cfg.Offline {
-		rc := attestation.NewRekorClient(client)
+	if len(sigstoreResults) > 0 && rc != nil {
 		for _, sr := range sigstoreResults {
 			if sr.OK {
 				slog.Info("fetching Rekor provenance", "digest", "sha256:"+sr.Digest[:min(16, len(sr.Digest))]+"...")
