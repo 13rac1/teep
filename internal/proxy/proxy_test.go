@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -97,11 +98,13 @@ func attestationJSON(nonce attestation.Nonce, echoNonce bool) string {
 	}`, nonceField, modelPubKeyHex())
 }
 
-// makeAttestationServer starts an httptest server for the attestation endpoint.
-// When echoNonce is true the server echoes back the nonce query param.
+// makeAttestationServer starts an httptest server for the attestation and
+// models endpoints. When echoNonce is true the server echoes back the nonce
+// query param.
 func makeAttestationServer(t *testing.T, echoNonce bool) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/tee/attestation", func(w http.ResponseWriter, r *http.Request) {
 		nonceHex := r.URL.Query().Get("nonce")
 		var n attestation.Nonce
 		if echoNonce && nonceHex != "" {
@@ -110,8 +113,22 @@ func makeAttestationServer(t *testing.T, echoNonce bool) *httptest.Server {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(attestationJSON(n, echoNonce)))
-	}))
+	})
+	mux.HandleFunc("/api/v1/models", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(veniceModelsJSON))
+	})
+	return httptest.NewServer(mux)
 }
+
+// veniceModelsJSON is a minimal Venice /api/v1/models response for tests.
+const veniceModelsJSON = `{
+	"data": [
+		{"id": "e2ee-test-model", "created": 1727966436, "object": "model", "owned_by": "venice.ai", "type": "text", "model_spec": {"capabilities": {"supportsE2EE": true, "supportsTeeAttestation": true}}},
+		{"id": "tee-test-model", "created": 1727966436, "object": "model", "owned_by": "venice.ai", "type": "text", "model_spec": {"capabilities": {"supportsE2EE": false, "supportsTeeAttestation": true}}},
+		{"id": "plain-model", "created": 1727966436, "object": "model", "owned_by": "venice.ai", "type": "text", "model_spec": {"capabilities": {"supportsE2EE": false, "supportsTeeAttestation": false}}}
+	]
+}`
 
 // buildConfig returns a *config.Config wired to the given attestation server
 // URL, with a single "venice" provider.
@@ -313,8 +330,8 @@ func TestHandleModels(t *testing.T) {
 	}
 
 	var result struct {
-		Object string `json:"object"`
-		Data   []any  `json:"data"`
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("decode models response: %v", err)
@@ -323,8 +340,255 @@ func TestHandleModels(t *testing.T) {
 	if result.Object != "list" {
 		t.Errorf("object = %q, want %q", result.Object, "list")
 	}
+
+	// Venice mock returns 2 TEE/E2EE models (plain-model is filtered out).
+	if len(result.Data) != 2 {
+		t.Fatalf("data len = %d, want 2", len(result.Data))
+	}
+
+	// Verify all upstream fields are relayed through.
+	type modelEntry struct {
+		ID      string `json:"id"`
+		Created int64  `json:"created"`
+		Object  string `json:"object"`
+		OwnedBy string `json:"owned_by"`
+		Type    string `json:"type"`
+	}
+	ids := map[string]bool{}
+	for _, raw := range result.Data {
+		var m modelEntry
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("unmarshal model entry: %v", err)
+		}
+		ids[m.ID] = true
+		t.Logf("  model: id=%q created=%d object=%q owned_by=%q type=%q", m.ID, m.Created, m.Object, m.OwnedBy, m.Type)
+		if m.Object != "model" {
+			t.Errorf("model %q: object = %q, want %q", m.ID, m.Object, "model")
+		}
+		if m.OwnedBy != "venice.ai" {
+			t.Errorf("model %q: owned_by = %q, want %q", m.ID, m.OwnedBy, "venice.ai")
+		}
+		if m.Created != 1727966436 {
+			t.Errorf("model %q: created = %d, want 1727966436", m.ID, m.Created)
+		}
+	}
+	if !ids["e2ee-test-model"] {
+		t.Error("e2ee-test-model not in response")
+	}
+	if !ids["tee-test-model"] {
+		t.Error("tee-test-model not in response")
+	}
+}
+
+// stubModelLister returns canned models.
+type stubModelLister struct {
+	models []json.RawMessage
+}
+
+func (s stubModelLister) ListModels(_ context.Context) ([]json.RawMessage, error) {
+	return s.models, nil
+}
+
+// errorModelLister always returns an error.
+type errorModelLister struct{}
+
+func (errorModelLister) ListModels(_ context.Context) ([]json.RawMessage, error) {
+	return nil, errors.New("model listing unavailable")
+}
+
+// slowModelLister blocks until the context is cancelled.
+type slowModelLister struct{}
+
+func (slowModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestHandleModels_ProviderError(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+			},
+		},
+		Enforced: []string{},
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+	prov := srv.ProviderByName("neardirect")
+	prov.ModelLister = errorModelLister{}
+	prov.PinnedHandler = stubPinnedHandler{}
+
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	resp, err := http.Get(proxySrv.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var result struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	t.Logf("object=%q data_len=%d", result.Object, len(result.Data))
+	if result.Object != "list" {
+		t.Errorf("object = %q, want %q", result.Object, "list")
+	}
 	if len(result.Data) != 0 {
-		t.Errorf("data len = %d, want 0 (no model map)", len(result.Data))
+		t.Errorf("data len = %d, want 0 (provider errored)", len(result.Data))
+	}
+}
+
+func TestHandleModels_MultipleProviders(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+			},
+			"nearcloud": {
+				Name:    "nearcloud",
+				BaseURL: "https://cloud-api.near.ai",
+				APIKey:  "key",
+			},
+		},
+		Enforced: []string{},
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+
+	// Stub both providers with different models.
+	direct := srv.ProviderByName("neardirect")
+	direct.PinnedHandler = stubPinnedHandler{}
+	direct.ModelLister = stubModelLister{
+		models: []json.RawMessage{json.RawMessage(`{"id":"model-a","object":"model","owned_by":"near-ai"}`)},
+	}
+
+	cloud := srv.ProviderByName("nearcloud")
+	cloud.PinnedHandler = stubPinnedHandler{}
+	cloud.ModelLister = stubModelLister{
+		models: []json.RawMessage{json.RawMessage(`{"id":"model-b","object":"model","owned_by":"near-ai"}`)},
+	}
+
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	resp, err := http.Get(proxySrv.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var result struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	t.Logf("object=%q data_len=%d", result.Object, len(result.Data))
+	if len(result.Data) != 2 {
+		t.Fatalf("data len = %d, want 2 (one from each provider)", len(result.Data))
+	}
+
+	ids := map[string]bool{}
+	for _, raw := range result.Data {
+		var m struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		t.Logf("  model: %s", m.ID)
+		ids[m.ID] = true
+	}
+	if !ids["model-a"] {
+		t.Error("model-a missing from response")
+	}
+	if !ids["model-b"] {
+		t.Error("model-b missing from response")
+	}
+}
+
+func TestHandleModels_SlowProvider(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+			},
+		},
+		Enforced: []string{},
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+	prov := srv.ProviderByName("neardirect")
+	prov.ModelLister = slowModelLister{}
+	prov.PinnedHandler = stubPinnedHandler{}
+
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	// Use a short client timeout; the handler's 30s modelsTimeout will also
+	// fire eventually, but we don't want to wait that long. A client-side
+	// cancellation propagates through r.Context() → the 30s child context →
+	// the slowModelLister, exercising the timeout/cancellation path.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxySrv.URL+"/v1/models", http.NoBody)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		// Client timeout is expected — the slow lister never returns.
+		t.Logf("client error (expected): %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// If the handler managed to respond before the client timed out,
+	// it should have returned an empty list (the slow lister was cancelled).
+	t.Logf("status=%d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var result struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	t.Logf("data_len=%d", len(result.Data))
+	if len(result.Data) != 0 {
+		t.Errorf("data len = %d, want 0 (slow provider should be skipped)", len(result.Data))
 	}
 }
 

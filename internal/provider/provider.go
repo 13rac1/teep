@@ -7,6 +7,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -51,6 +52,13 @@ type PinnedResponse struct {
 	// Report is the verification report from attestation, if attestation was
 	// performed on this connection. Nil on SPKI cache hits.
 	Report *attestation.VerificationReport
+}
+
+// ModelLister fetches the list of available models from a provider.
+// Each entry is a json.RawMessage conforming to the OpenAI model object schema.
+// Implementations may cache results internally.
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]json.RawMessage, error)
 }
 
 // ReportDataVerifier validates that TDX REPORTDATA binds the expected identity.
@@ -98,4 +106,8 @@ type Provider struct {
 	// (e.g. NEAR AI). When non-nil, the proxy uses this instead of the
 	// standard http.Client path.
 	PinnedHandler PinnedHandler
+
+	// ModelLister fetches available models from the provider's discovery API.
+	// May be nil if the provider does not support model listing.
+	ModelLister ModelLister
 }
