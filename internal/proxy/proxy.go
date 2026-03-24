@@ -276,6 +276,7 @@ func fromConfig(
 		p.ModelLister = neardirect.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
+		p.E2EEVersion = attestation.E2EEv2
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
@@ -836,6 +837,11 @@ func (s *Server) buildUpstreamBody(
 
 	if raw.SigningKey == "" {
 		return nil, nil, errors.New("attestation response missing signing_key")
+	}
+
+	// Dispatch E2EE version based on provider configuration.
+	if prov.E2EEVersion == attestation.E2EEv2 {
+		return attestation.EncryptChatMessagesV2(rawBody, raw.SigningKey)
 	}
 
 	session, err := attestation.NewSession()

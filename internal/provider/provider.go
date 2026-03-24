@@ -103,6 +103,10 @@ type Provider struct {
 	// E2EE indicates whether this provider supports end-to-end encryption.
 	E2EE bool
 
+	// E2EEVersion selects the E2EE protocol version (attestation.E2EEv1 or
+	// attestation.E2EEv2). Defaults to E2EEv1 when zero.
+	E2EEVersion int
+
 	// Attester fetches raw attestation from the provider's attestation endpoint.
 	// May be nil if the provider does not support attestation.
 	Attester Attester
