@@ -12,7 +12,61 @@ The report MUST also distinguish between:
 - checks that are computed but do not block traffic, and
 - checks that are enforced fail-closed (request rejected on failure).
 
-## Quality Bar and Deliverables
+---
+
+## Part 1 — Repository Security Rules
+
+This is **critical infrastructure security software**. Protecting confidential traffic is more important than providing service. Failing closed is a feature, not a bug.
+
+The auditor MUST evaluate every code path against these rules. Any violation is a finding.
+
+### Fail-Closed Policy (highest priority)
+
+Every validation check MUST block the request on failure. Flag any code that:
+
+- Returns a nil error, default value, or falls through on a validation failure.
+- Catches an error and continues instead of aborting (error fallback).
+- Uses a fallback, default, or degraded mode when a security check fails.
+- Introduces a "best-effort", "soft-fail", or "skip-on-error" code path.
+- Adds backwards-compatible shims that weaken validation.
+- Silently drops malformed elements instead of rejecting the whole input.
+- Allows an unattested or partially-attested request to be forwarded.
+- Serves stale or cached data when re-validation fails, without blocking.
+
+If an error path does anything other than return/propagate an error, it is a defect.
+
+There are **NO** acceptable workarounds, fallbacks, or error recoveries for security validation.
+
+### Cryptographic Safety
+
+- All comparisons of secrets, keys, fingerprints, nonces, or hashes MUST use `subtle.ConstantTimeCompare`. Flag any use of `==`, `!=`, `bytes.Equal`, or `strings.EqualFold` on security-sensitive values.
+- Encryption MUST be authenticated (AES-GCM, not AES-CTR/CBC alone).
+- Encryption keys MUST be bound to TEE attestation.
+- Nonce generation MUST use `crypto/rand`. If randomness fails, the code MUST panic or return an error — never use a weak source.
+
+### Sensitive Data Handling
+
+- NEVER log or print API keys, inference request bodies, or response bodies.
+- API keys in logs must be redacted (first few characters only).
+- Ephemeral key material should be zeroed after use (with acknowledgment of GC limitations).
+- Config files containing secrets should have permission checks.
+- Attestation nonces MUST NOT be reused across requests.
+
+### Error Handling and Configuration
+
+- Error returns MUST block the request — no silent swallowing.
+- Unknown or misspelled config values MUST be rejected at startup (not silently ignored).
+- JSON unmarshalling SHOULD use strict mode (reject unknown fields).
+- Malformed attestation data MUST fail the entire response, not skip elements.
+
+### Input Bounds
+
+- All reads from untrusted sources (HTTP bodies, JSON arrays, external API responses) MUST be bounded.
+- Unbounded reads from untrusted sources represent a denial-of-service vector and MUST be flagged.
+
+---
+
+## Part 2 — Quality Bar and Deliverables
 
 Future direct-provider audits MUST meet the following quality bar:
 - include an executive summary with severity counts and a one-paragraph overall risk statement,
@@ -30,87 +84,13 @@ The final report MUST include all of the following artifacts:
 - offline-mode matrix (active checks vs skipped checks),
 - explicit "open questions / assumptions" section when behavior cannot be proven from code.
 
-## Model Routing
+---
 
-In this direct inference model, the attestation covers a single model server. There is a model mapping routing API that the teep proxy consults to determine the destination host for a particular model identity string.
+## Part 3 — Attestation Architecture Reference
 
-Certificate Transparency MUST be consulted for the TLS certificate of this model router endpoint. This CT log report SHOULD be cached.
+This section provides background for auditors on the TDX attestation model used by direct inference providers. This is reference material — the audit checklist follows in Part 4.
 
-The audit MUST verify model routing safety controls, including:
-- model-to-domain mapping cache TTL and refresh behavior,
-- rejection of malformed endpoint domains (scheme/path/whitespace injection),
-- rejection of domains without a dot (non-qualified hostnames),
-- rejection of domains that do not end in the same subdomain as the API endpoint (eg completions.near.ai),
-- exact model selection behavior when multiple endpoint entries map different models to different domains (last-wins, first-wins, or explicit conflict handling),
-- behavior when duplicate model entries map to different domains in a single refresh (and whether this emits operator-visible warning),
-- concurrency behavior for refreshes (singleflight or equivalent anti-stampede control),
-- behavior when the discovery endpoint is unreachable (stale-on-error vs hard failure),
-- whether first-use behavior is fail-closed when no stale mapping exists,
-- whether IDN/punycode domains are normalized or accepted as-is, and residual homograph risk,
-- CT cache keying and TTL behavior for discovery endpoint checks,
-- maximum response size limits to prevent memory exhaustion from a malicious discovery response.
-
-> NOTE: Even with all of these checks, ultimately nothing strongly authenticates this list of hostnames as belonging to the inference provider. This is a gap that that can only be mitigated only by ensuring that the docker images are those expected to be used by the inference provider (see CVM Image Component Verification below).
-
-## Attestation Fetch and Response Parsing
-
-Upon connection to the model server, the attestation API of this model server MUST be queried and fully validated before any inference request is sent to the model server.
-
-Certificate Transparency MUST be consulted for the TLS certificate of this model endpoint. This CT log report SHOULD be cached.
-
-The attestation information is provided by an API endpoint as a JSON object that includes the Intel TEE attestation, NVIDIA TEE attestation, and auxiliary information such as docker compose contents and event log metadata.
-
-The audit MUST verify the attestation response parsing path, including:
-- maximum response body size limit (to prevent memory exhaustion),
-- JSON strict unmarshalling behavior (unknown fields rejection or warning),
-- whether unknown-field warnings are rate-limited/deduplicated,
-- handling of polymorphic response formats (array vs flat object),
-- bounds checking on array lengths (model_attestations, all_attestations) to cap iteration,
-- model selection logic when the response contains multiple attestation entries (exact match, prefix, or fuzzy), and whether failure to find a matching model is a hard error,
-- malformed-element behavior for event-log or nested arrays (fail-whole-response vs silently drop element),
-- that no provider-asserted "verified" field is trusted without independent verification.
-
-### Nonce Freshness and Replay Resistance
-
-The verifier MUST generate a fresh 32-byte cryptographic nonce per attestation attempt.
-
-The code MUST verify nonce equality using constant-time comparison and fail closed on mismatch.
-
-If cryptographic randomness fails, nonce generation MUST fail closed (no weak fallback mode). The recommended behavior is to panic or abort — never fall back to a weaker entropy source.
-
-The nonce MUST be transmitted to the attestation endpoint by the proxy, not delegated to the server. The auditor must verify that the nonce originates solely from the client and is not sourced from or influenced by the server response.
-
-### TDX Quote Verification
-
-Signatures over the Intel TEE attestation MUST be verified for the entire certificate chain, including:
-- quote structure parsing (supported quote versions),
-- PCK chain validation back to Intel trust roots,
-- quote signature verification,
-- debug bit check (debug enclaves rejected for production trust),
-- TCB collateral and currency classification when online.
-
-Document how trust roots are obtained (embedded/provisioned), and how third-party verification libraries are called and interpreted.
-
-The audit MUST explicitly describe the two-pass verification architecture if present (offline first, online collateral second), and whether a Pass-1-only result (no collateral) is still treated as blocking or advisory.
-
-### TDX Measurement Fields and Policy Expectations
-
-The audit MUST explicitly cover the following TDX fields from the parsed quote body:
-- MRTD,
-- RTMR0, RTMR1, RTMR2, RTMR3,
-- MRSEAM,
-- MRSIGNERSEAM,
-- MROWNER,
-- MROWNERCONFIG,
-- MRCONFIGID,
-- REPORTDATA.
-
-For each field, the report MUST distinguish between:
-- extraction/visibility only (field parsed and logged),
-- structural integrity checks (length/format/consistency), and
-- policy enforcement (allowlist/denylist or expected value matching).
-
-#### What Each Register Measures
+### What Each TDX Register Measures
 
 Understanding the security semantics of each register is critical for assessing attestation completeness. The following describes the trust-chain role of each register, based on Intel TDX architecture and the dstack CVM implementation used by inference providers:
 
@@ -126,7 +106,7 @@ Understanding the security semantics of each register is critical for assessing 
 
 **RTMR3** — Application-specific runtime measurement. In dstack's implementation, RTMR3 records application-level details including the compose hash, instance ID, app ID, and key provider. Unlike RTMR0-2, RTMR3 cannot be pre-calculated from the image alone because it contains runtime information. It is verified by replaying the event log: if replayed RTMR3 matches the quoted RTMR3, the event log content is authentic, and the compose hash, key provider, and other details can be extracted and verified from the event log entries. The existing compose binding check (MRConfigID) partially overlaps with RTMR3 for compose hash verification.
 
-#### How Thorough Verification Should Work
+### How Thorough Verification Should Work
 
 For complete attestation of a dstack-based CVM, the verification process should:
 
@@ -140,7 +120,7 @@ For complete attestation of a dstack-based CVM, the verification process should:
 
 5. **Verify MRSEAM + MRTD + RTMR0-2 as a set**: These five values together form a complete chain-of-trust from the TDX module through firmware, kernel, and OS components. Verifying only a subset (e.g., only compose binding via MRConfigID + RTMR3 event log replay) leaves significant gaps where the base system could be substituted.
 
-#### Current Gap: Inference Provider Has Not Published Golden Values
+### Current Gap: No Published Golden Values
 
 The code currently supports an allowlist-based `MeasurementPolicy` for MRTD, MRSEAM, and RTMR0-3, but the current direct inference provider (NearAI) does not publish:
 - reproducible build instructions or pre-built images for their CVM,
@@ -165,6 +145,91 @@ Because these reference values are unavailable, the code does not currently enfo
 
 Until this information is provided, the attestation provides application-layer assurance (compose hash and RTMR3) but not full system-level assurance. The auditor MUST quantify this gap by noting that an attacker with hypervisor-level access could substitute the firmware/kernel/initrd while preserving compose binding, and report it as a high-severity residual risk.
 
+---
+
+## Part 4 — Verification Stage Audit Checklist
+
+Each subsection below is an audit stage. For every stage, the auditor MUST classify each check as `enforced fail-closed`, `computed but non-blocking`, or `skipped/advisory`, and verify that enforcement matches the fail-closed policy from Part 1.
+
+### 4.1 Model Routing
+
+In this direct inference model, the attestation covers a single model server. There is a model mapping routing API that the teep proxy consults to determine the destination host for a particular model identity string.
+
+Certificate Transparency MUST be consulted for the TLS certificate of this model router endpoint. This CT log report SHOULD be cached.
+
+The audit MUST verify model routing safety controls, including:
+- model-to-domain mapping cache TTL and refresh behavior,
+- rejection of malformed endpoint domains (scheme/path/whitespace injection),
+- rejection of domains without a dot (non-qualified hostnames),
+- rejection of domains that do not end in the same subdomain as the API endpoint (eg completions.near.ai),
+- exact model selection behavior when multiple endpoint entries map different models to different domains (last-wins, first-wins, or explicit conflict handling),
+- behavior when duplicate model entries map to different domains in a single refresh (and whether this emits operator-visible warning),
+- concurrency behavior for refreshes (singleflight or equivalent anti-stampede control),
+- behavior when the discovery endpoint is unreachable (stale-on-error vs hard failure — per fail-closed policy, first-use MUST hard-fail when no stale mapping exists),
+- whether IDN/punycode domains are normalized or accepted as-is, and residual homograph risk,
+- CT cache keying and TTL behavior for discovery endpoint checks,
+- maximum response size limits to prevent memory exhaustion from a malicious discovery response.
+
+> NOTE: Even with all of these checks, ultimately nothing strongly authenticates this list of hostnames as belonging to the inference provider. This is a gap that can only be mitigated by ensuring that the docker images are those expected to be used by the inference provider (see CVM Image Component Verification below).
+
+### 4.2 Attestation Fetch and Response Parsing
+
+Upon connection to the model server, the attestation API of this model server MUST be queried and fully validated before any inference request is sent to the model server.
+
+Certificate Transparency MUST be consulted for the TLS certificate of this model endpoint. This CT log report SHOULD be cached.
+
+The attestation information is provided by an API endpoint as a JSON object that includes the Intel TEE attestation, NVIDIA TEE attestation, and auxiliary information such as docker compose contents and event log metadata.
+
+The audit MUST verify the attestation response parsing path, including:
+- maximum response body size limit (to prevent memory exhaustion — per Part 1 input bounds rules),
+- JSON strict unmarshalling behavior (unknown fields rejection or warning — per Part 1 error handling rules),
+- whether unknown-field warnings are rate-limited/deduplicated,
+- handling of polymorphic response formats (array vs flat object),
+- bounds checking on array lengths (model_attestations, all_attestations) to cap iteration,
+- model selection logic when the response contains multiple attestation entries (exact match, prefix, or fuzzy), and whether failure to find a matching model is a hard error,
+- malformed-element behavior for event-log or nested arrays (fail-whole-response vs silently drop element — per fail-closed policy, dropping is a defect),
+- that no provider-asserted "verified" field is trusted without independent verification.
+
+### 4.3 Nonce Freshness and Replay Resistance
+
+The verifier MUST generate a fresh 32-byte cryptographic nonce per attestation attempt.
+
+The code MUST verify nonce equality using constant-time comparison (`subtle.ConstantTimeCompare`) and fail closed on mismatch.
+
+If cryptographic randomness fails, nonce generation MUST fail closed (no weak fallback mode). The recommended behavior is to panic or abort — never fall back to a weaker entropy source. Per Part 1 cryptographic safety rules, `crypto/rand` is the only acceptable source.
+
+The nonce MUST be transmitted to the attestation endpoint by the proxy, not delegated to the server. The auditor must verify that the nonce originates solely from the client and is not sourced from or influenced by the server response.
+
+### 4.4 TDX Quote Verification
+
+Signatures over the Intel TEE attestation MUST be verified for the entire certificate chain, including:
+- quote structure parsing (supported quote versions),
+- PCK chain validation back to Intel trust roots,
+- quote signature verification,
+- debug bit check (debug enclaves rejected for production trust),
+- TCB collateral and currency classification when online.
+
+Document how trust roots are obtained (embedded/provisioned), and how third-party verification libraries are called and interpreted.
+
+The audit MUST explicitly describe the two-pass verification architecture if present (offline first, online collateral second), and whether a Pass-1-only result (no collateral) is still treated as blocking or advisory.
+
+### 4.5 TDX Measurement Fields and Policy
+
+The audit MUST explicitly cover the following TDX fields from the parsed quote body:
+- MRTD,
+- RTMR0, RTMR1, RTMR2, RTMR3,
+- MRSEAM,
+- MRSIGNERSEAM,
+- MROWNER,
+- MROWNERCONFIG,
+- MRCONFIGID,
+- REPORTDATA.
+
+For each field, the report MUST distinguish between:
+- extraction/visibility only (field parsed and logged),
+- structural integrity checks (length/format/consistency), and
+- policy enforcement (allowlist/denylist or expected value matching).
+
 #### Current direct-provider expectation summary
 
 - MRCONFIGID is expected to be cryptographically checked via compose binding,
@@ -178,7 +243,7 @@ When allowlist policy exists (i.e., when the inference provider eventually publi
 - input validation rules for allowlist values (length/encoding),
 - whether allowlist mismatches are enforced fail-closed or informational.
 
-### CVM Image Verification
+### 4.6 CVM Image Verification (Compose Binding)
 
 The attestation API will provide a full docker compose stanza, or equivalent podman/cloud config image description, as an auxiliary portion of the attestation API response.
 
@@ -190,11 +255,11 @@ The audit MUST also verify the extraction path for the app_compose field, includ
 - whether the tcb_info field supports double-encoded JSON (string-within-JSON),
 - that the extracted compose content is the raw value that was hashed, not a re-serialized version that could differ in whitespace or key ordering.
 
-### CVM Image Component Verification
+### 4.7 CVM Image Component Verification (Sigstore/Rekor)
 
 The docker compose file (or podman/cloud config) will list a series of sub-images.
 
-The teep code MUST provide an enforced allow-list list of sub-images and/or sub-image repositories for a given inference provider that are allowed to appear in this docker-compose file. The hashes need not be included in the teep code, but each of these sub-images MUST be checked against Sigstore and Rekor (or equivalent systems) to establish that they are official builds and not custom variations.
+The teep code MUST provide an enforced allow-list of sub-images and/or sub-image repositories for a given inference provider that are allowed to appear in this docker-compose file. The hashes need not be included in the teep code, but each of these sub-images MUST be checked against Sigstore and Rekor (or equivalent systems) to establish that they are official builds and not custom variations.
 
 Additionally, the teep code MUST provide an expected Sigstore+Rekor Signer set (as OIDC or Fulcio certs). For Sigstore+Rekor checks, only this expected signer set is to be accepted.
 
@@ -202,31 +267,30 @@ The audit MUST verify:
 - extraction logic for image digests from compose content (regex vs structured parsing, and whether non-sha256 digest algorithms are handled or rejected),
 - deduplication of extracted digests,
 - all sub-images of the docker compose are in the provider's allow-list,
-- Sigstore query behavior and failure handling (is a Sigstore timeout a hard fail or a skip?),
+- Sigstore query behavior and failure handling (is a Sigstore timeout a hard fail or a skip? — per fail-closed policy, a skip is a defect unless explicitly documented as an accepted offline-mode risk),
 - Rekor provenance extraction logic,
 - issuer/identity checks used to classify provenance as trusted (what OIDC issuer values are accepted?),
 - behavior when a digest appears in Sigstore but has no Fulcio certificate (raw key signature — is this treated as passing provenance or only presence?).
 
 The audit MUST explicitly state if Sigstore/Rekor are soft-fail in default policy and what traffic is still allowed during outage conditions.
 
-### Verification Cache Safety
+### 4.8 Event Log Integrity
 
-The necessary verification information MAY be cached locally so that Sigstore and Rekor do not need to be queried on every single connection attempt.
+If event logs are present in provider attestation payloads, the code MUST replay them and verify recomputed RTMR values against quote RTMR fields.
 
-However, the attestation report MUST be verified against either cached or live data, for EACH new TLS connection to the API provider.
+The audit MUST describe replay algorithm details, including:
+- hash algorithm used for extend operations (SHA-384 is expected for TDX RTMRs),
+- initial RTMR state (48 zero bytes),
+- extend formula: `RTMR_new = SHA-384(RTMR_old || digest)`,
+- handling of short digests (padding to 48 bytes),
+- IMR index validation (must be within [0, 3]),
+- failure semantics: does a malformed event log entry skip the entry or fail the entire replay? Per fail-closed policy, skipping is a defect.
 
-The audit MUST explicitly document each cache layer, its keys, TTLs, expiry/pruning behavior, maximum entry limits, and whether stale data is ever served. Specifically:
+The audit MUST separately verify pre-replay parsing behavior for event log entries, and flag any path that silently drops malformed entries before replay.
 
-| Cache | Expected Keys | Expected TTL | Security-Critical Properties |
-|-------|--------------|-------------|------------------------------|
-| Attestation report cache | (provider, model) | ~minutes | Signing key MUST NOT be cached; must be fetched fresh for each E2EE session |
-| Negative cache | (provider, model) | ~seconds | Must prevent upstream hammering; must expire so recovery is possible |
-| SPKI pin cache | (domain, spkiHash) | ~hour | Must be populated only after successful attestation; eviction must force re-attestation |
-| Endpoint mapping cache | model→domain | ~minutes | Stale mapping must not bypass attestation |
+The audit MUST also state the exact security boundary of this check: event log replay validates internal consistency of event-log-derived RTMR values with quoted RTMR values, but does not by itself prove that RTMR values match an approved software baseline. If no baseline policy is enforced for MRTD/RTMR/MRSEAM-class measurements, that gap MUST be reported explicitly.
 
-The audit MUST verify that cache eviction under memory pressure does not silently allow unattested connections. A cache miss MUST trigger re-attestation, never a pass-through.
-
-### Encryption Binding (REPORTDATA)
+### 4.9 Encryption Binding (REPORTDATA)
 
 The attestation report must bind channel identity and key material in a way that prevents key-substitution attacks.
 
@@ -242,12 +306,12 @@ The audit MUST verify:
 - that decoded input lengths are validated where applicable (or residual collision/ambiguity risk is documented),
 - that the concatenation order is strictly `(address || fingerprint)` with no separator or length prefix,
 - that both halves of the 64-byte REPORTDATA are verified (not just the first half),
-- that the binding comparison uses constant-time comparison (`subtle.ConstantTimeCompare` or equivalent),
+- that the binding comparison uses constant-time comparison (`subtle.ConstantTimeCompare`),
 - that failure of this check is enforced (blocks forwarding), not merely logged.
 
-The audit MUST also verify that the REPORTDATA verifier is pluggable per provider (so different providers can use different binding schemes) and that a missing or unconfigured verifier fails safely (no default pass-through).
+The audit MUST also verify that the REPORTDATA verifier is pluggable per provider (so different providers can use different binding schemes) and that a missing or unconfigured verifier fails safely (no default pass-through — per fail-closed policy).
 
-### TLS Pinning and Connection-Bound Attestation
+### 4.10 TLS Pinning and Connection-Bound Attestation
 
 For direct inference providers that use attestation-bound TLS pinning:
 - the live TLS certificate SPKI hash MUST be extracted from the same active TLS connection used for attestation,
@@ -262,11 +326,11 @@ For direct inference providers that use attestation-bound TLS pinning:
 The audit MUST verify pin-cache behavior:
 - TTL and maximum entries per domain,
 - eviction strategy (LRU, random, or oldest) and whether it is bounded,
-- that a cache miss always triggers full re-attestation (never a pass-through),
+- that a cache miss always triggers full re-attestation (never a pass-through — per fail-closed policy),
 - that concurrent attestation attempts for the same (domain, SPKI) are collapsed (singleflight) with a double-check-after-winning pattern,
 - that the singleflight key includes both domain and SPKI (so a certificate rotation triggers a new attestation rather than coalescing with the old one).
 
-### NVIDIA TEE Verification Depth
+### 4.11 NVIDIA TEE Verification Depth
 
 The audit MUST verify both layers when present:
 
@@ -277,7 +341,7 @@ The audit MUST verify both layers when present:
 - SPDM message parsing (GET_MEASUREMENTS request/response structure, variable-length field handling),
 - SPDM signature verification algorithm (ECDSA P-384 with SHA-384 is expected),
 - the signed-data construction (must include both request and response-minus-signature, in order),
-- all-or-nothing semantics (one GPU failure must fail the entire check),
+- all-or-nothing semantics (one GPU failure must fail the entire check — per fail-closed policy),
 - extraction of GPU count and architecture for reporting.
 
 **Remote NVIDIA NRAS verification:**
@@ -289,34 +353,11 @@ The audit MUST verify both layers when present:
 
 If offline mode exists, the audit MUST state which NVIDIA checks remain active and which are skipped.
 
-### Event Log Integrity
+---
 
-If event logs are present in provider attestation payloads, the code MUST replay them and verify recomputed RTMR values against quote RTMR fields.
+## Part 5 — Operational Safety
 
-The audit MUST describe replay algorithm details, including:
-- hash algorithm used for extend operations (SHA-384 is expected for TDX RTMRs),
-- initial RTMR state (48 zero bytes),
-- extend formula: `RTMR_new = SHA-384(RTMR_old || digest)`,
-- handling of short digests (padding to 48 bytes),
-- IMR index validation (must be within [0, 3]),
-- failure semantics: does a malformed event log entry skip the entry or fail the entire replay?
-
-The audit MUST separately verify pre-replay parsing behavior for event log entries, and flag any path that silently drops malformed entries before replay.
-
-The audit MUST also state the exact security boundary of this check: event log replay validates internal consistency of event-log-derived RTMR values with quoted RTMR values, but does not by itself prove that RTMR values match an approved software baseline. If no baseline policy is enforced for MRTD/RTMR/MRSEAM-class measurements, that gap MUST be reported explicitly.
-
-## Connection Lifetime Safety
-
-TLS connections to the model server MUST be closed after each request-response cycle (Connection: close) to ensure each new request triggers a fresh attestation or SPKI cache check.
-
-If the implementation reuses connections, the audit MUST verify that re-attestation is correctly triggered on every new request, not just on new connections.
-
-The audit MUST verify:
-- that the response body wrapper closes the underlying TCP connection when the body is consumed or closed,
-- that connection read/write timeouts are set and reasonable (preventing indefinite hangs),
-- that a half-closed or errored connection cannot be mistakenly reused for a subsequent request.
-
-## Enforcement Policy and Failure Semantics
+### 5.1 Enforcement Policy and Failure Semantics
 
 The audit report MUST include a table of verification factors with:
 - pass/fail/skip semantics,
@@ -328,7 +369,7 @@ This section is required to prevent regressions where checks continue to be repo
 
 The audit MUST also verify:
 - the mechanism by which the enforced factor list is configured (hardcoded defaults, config file, environment),
-- that misspelled or unknown factor names in the enforcement config are rejected at startup (not silently ignored),
+- that misspelled or unknown factor names in the enforcement config are rejected at startup (not silently ignored — per Part 1 error handling rules),
 - that there is a code path (`Blocked()` or equivalent) that inspects the report before every forwarded request and returns an error response to the client when any enforced factor has failed.
 
 The current expected default enforced factors are:
@@ -345,7 +386,24 @@ The current expected default enforced factors are:
 
 The audit MUST evaluate whether additional factors should be enforced by default (for example, `tdx_tcb_current`, `sigstore_verification`, or `build_transparency_log`), and document the rationale for the current enforcement boundary.
 
-## Negative Cache and Failure Recovery
+### 5.2 Verification Cache Safety
+
+The necessary verification information MAY be cached locally so that Sigstore and Rekor do not need to be queried on every single connection attempt.
+
+However, the attestation report MUST be verified against either cached or live data, for EACH new TLS connection to the API provider.
+
+The audit MUST explicitly document each cache layer, its keys, TTLs, expiry/pruning behavior, maximum entry limits, and whether stale data is ever served. Specifically:
+
+| Cache | Expected Keys | Expected TTL | Security-Critical Properties |
+|-------|--------------|-------------|------------------------------|
+| Attestation report cache | (provider, model) | ~minutes | Signing key MUST NOT be cached; must be fetched fresh for each E2EE session |
+| Negative cache | (provider, model) | ~seconds | Must prevent upstream hammering; must expire so recovery is possible |
+| SPKI pin cache | (domain, spkiHash) | ~hour | Must be populated only after successful attestation; eviction must force re-attestation |
+| Endpoint mapping cache | model→domain | ~minutes | Stale mapping must not bypass attestation |
+
+The audit MUST verify that cache eviction under memory pressure does not silently allow unattested connections. A cache miss MUST trigger re-attestation, never a pass-through. Per the fail-closed policy, any cache failure path that allows forwarding is a defect.
+
+### 5.3 Negative Cache and Failure Recovery
 
 The audit MUST verify the negative cache behavior:
 - that a failed attestation attempt records a negative entry preventing repeated upstream requests,
@@ -353,7 +411,18 @@ The audit MUST verify the negative cache behavior:
 - that the negative cache has bounded size with eviction of expired entries under pressure,
 - that a negative cache hit returns a clear error to the client (for example, HTTP 503) rather than silently failing open or forwarding unauthenticated.
 
-## Offline Mode Safety
+### 5.4 Connection Lifetime Safety
+
+TLS connections to the model server MUST be closed after each request-response cycle (Connection: close) to ensure each new request triggers a fresh attestation or SPKI cache check.
+
+If the implementation reuses connections, the audit MUST verify that re-attestation is correctly triggered on every new request, not just on new connections.
+
+The audit MUST verify:
+- that the response body wrapper closes the underlying TCP connection when the body is consumed or closed,
+- that connection read/write timeouts are set and reasonable (preventing indefinite hangs),
+- that a half-closed or errored connection cannot be mistakenly reused for a subsequent request.
+
+### 5.5 Offline Mode Safety
 
 If the system supports an offline mode, the audit MUST enumerate exactly which checks are skipped (for example, Intel PCS collateral, NRAS, Sigstore, Rekor, Proof-of-Cloud) and which checks still execute locally (for example, quote parsing/signature checks, report-data binding, event-log replay).
 
@@ -361,7 +430,7 @@ For the pinned connection path, the audit MUST verify whether offline mode is ho
 
 The report MUST include residual risk of running in offline mode.
 
-## Proof-of-Cloud
+### 5.6 Proof-of-Cloud
 
 Ensure that the code verifies that the machine ID from the attestation is covered in proof-of-cloud.
 
@@ -374,7 +443,11 @@ The audit MUST document:
 
 Track future expansion items separately (for example, DCEA and TPM quote integration), but keep this audit focused on checks currently implemented and required for production security decisions.
 
-## HTTP Request Construction Safety
+---
+
+## Part 6 — Input/Output Safety
+
+### 6.1 HTTP Request Construction Safety
 
 For direct inference providers that construct raw HTTP requests on the underlying TLS connection (bypassing Go's http.Client connection pooling), the audit MUST verify:
 - that the Host header is always set and matches the attested domain,
@@ -383,7 +456,7 @@ For direct inference providers that construct raw HTTP requests on the underlyin
 - that header values reject CR/LF characters (or equivalent canonicalization/sanitization is applied),
 - that the request path is constructed from trusted constants plus URL-encoded query parameters.
 
-## Response Size and Resource Limits
+### 6.2 Response Size and Resource Limits
 
 The audit MUST verify that all HTTP response bodies read by the proxy are bounded:
 - attestation responses (recommended: ≤1 MiB),
@@ -391,17 +464,13 @@ The audit MUST verify that all HTTP response bodies read by the proxy are bounde
 - SSE streaming buffers (bounded scanner buffer sizes with pooling),
 - any other external data read during verification (Sigstore, Rekor, NRAS, PCS).
 
-Unbounded reads from untrusted sources represent a denial-of-service vector and MUST be flagged.
+Per Part 1 input bounds rules, unbounded reads from untrusted sources represent a denial-of-service vector and MUST be flagged.
 
-## Sensitive Data Handling
+---
 
-The audit MUST verify:
-- that API keys are not logged in plaintext (redaction to first-N characters),
-- that the config file permission check behavior is clearly classified as warning-only or hard-fail,
-- that ephemeral cryptographic key material (E2EE session keys) is zeroed after use, with acknowledgment of language-level limitations (GC may copy),
-- that attestation nonces are not reused across requests.
+## Part 7 — Report Requirements
 
-## Report Writing Requirements
+### Report Writing
 
 The report MUST avoid vague language such as "looks secure" without code-backed evidence.
 
@@ -413,3 +482,7 @@ Each finding MUST include:
 - at least one source citation proving current behavior.
 
 When no findings are present for a section, the report MUST explicitly state "no issues found in this section" and still note any residual risk or testing gap.
+
+### Fail-Closed Verification Summary
+
+The report MUST include a dedicated section confirming that every error path in the attestation and forwarding pipeline was checked against the fail-closed policy from Part 1. For each code path where an error is caught, the report MUST state whether the error results in request blocking or whether it falls through — and flag any fall-through as a critical finding.

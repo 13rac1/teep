@@ -16,7 +16,62 @@ The report MUST also distinguish between:
 - checks that are computed but do not block traffic, and
 - checks that are enforced fail-closed (request rejected on failure).
 
-## Quality Bar and Deliverables
+---
+
+## Part 1 — Repository Security Rules
+
+This is **critical infrastructure security software**. Protecting confidential traffic is more important than providing service. Failing closed is a feature, not a bug.
+
+The auditor MUST evaluate every code path against these rules. Any violation is a finding.
+
+### Fail-Closed Policy (highest priority)
+
+Every validation check MUST block the request on failure. Flag any code that:
+
+- Returns a nil error, default value, or falls through on a validation failure.
+- Catches an error and continues instead of aborting (error fallback).
+- Uses a fallback, default, or degraded mode when a security check fails.
+- Introduces a "best-effort", "soft-fail", or "skip-on-error" code path.
+- Adds backwards-compatible shims that weaken validation.
+- Silently drops malformed elements instead of rejecting the whole input.
+- Allows an unattested or partially-attested request to be forwarded.
+- Serves stale or cached data when re-validation fails, without blocking.
+
+If an error path does anything other than return/propagate an error, it is a defect.
+
+There are **NO** acceptable workarounds, fallbacks, or error recoveries for security validation.
+
+### Cryptographic Safety
+
+- All comparisons of secrets, keys, fingerprints, nonces, or hashes MUST use `subtle.ConstantTimeCompare`. Flag any use of `==`, `!=`, `bytes.Equal`, or `strings.EqualFold` on security-sensitive values.
+- Encryption MUST be authenticated (AES-GCM, not AES-CTR/CBC alone).
+- Encryption keys MUST be bound to TEE attestation.
+- Nonce generation MUST use `crypto/rand`. If randomness fails, the code MUST panic or return an error — never use a weak source.
+
+### Sensitive Data Handling
+
+- NEVER log or print API keys, inference request bodies, or response bodies.
+- API keys in logs must be redacted (first few characters only).
+- Ephemeral key material should be zeroed after use (with acknowledgment of GC limitations).
+- Config files containing secrets should have permission checks.
+- Attestation nonces MUST NOT be reused across requests.
+- The model backend's signing key MUST only be used for ECDH key exchange after REPORTDATA binding verification.
+
+### Error Handling and Configuration
+
+- Error returns MUST block the request — no silent swallowing.
+- Unknown or misspelled config values MUST be rejected at startup (not silently ignored).
+- JSON unmarshalling SHOULD use strict mode (reject unknown fields).
+- Malformed attestation data MUST fail the entire response, not skip elements.
+
+### Input Bounds
+
+- All reads from untrusted sources (HTTP bodies, JSON arrays, external API responses) MUST be bounded.
+- Unbounded reads from untrusted sources represent a denial-of-service vector and MUST be flagged.
+
+---
+
+## Part 2 — Quality Bar and Deliverables
 
 Gateway-provider audits MUST meet the following quality bar:
 - include an executive summary with severity counts and a one-paragraph overall risk statement,
@@ -34,7 +89,13 @@ The final report MUST include all of the following artifacts:
 - offline-mode matrix (active checks vs skipped checks),
 - explicit "open questions / assumptions" section when behavior cannot be proven from code.
 
-## Gateway Architecture Overview
+---
+
+## Part 3 — Attestation Architecture Reference
+
+This section provides background for auditors on the TDX attestation model used by gateway inference providers. This is reference material — the audit checklist follows in Part 4.
+
+### Gateway Architecture Overview
 
 Unlike direct inference providers where the proxy connects directly to the model server, the gateway architecture interposes a TEE-attested load balancer (the "gateway") between the proxy and the model backend:
 
@@ -46,89 +107,7 @@ Client → teep proxy → cloud-api.near.ai (gateway CVM) → model backend CVM
 
 The gateway host is fixed (not resolved via a model routing API). The proxy opens a single TLS connection to the gateway, performs attestation on that connection (receiving both gateway and model attestation in a single response), and then sends the chat request on the same connection.
 
-The audit MUST verify:
-- that the gateway host is a hardcoded constant (no DNS-based routing indirection),
-- that no model routing / endpoint resolution is performed (unlike direct inference providers),
-- that the gateway attestation endpoint returns both gateway and model attestation in a single response,
-- that there is no code path that allows connecting to an unattested alternate host.
-
-## Attestation Fetch and Response Parsing
-
-Upon connection to the gateway, the attestation API MUST be queried and fully validated before any inference request is sent. A single attestation request returns a combined response containing both the gateway attestation and the model attestation.
-
-Certificate Transparency MUST be consulted for the TLS certificate of the gateway endpoint. This CT log report SHOULD be cached.
-
-The attestation response is a JSON object that includes:
-- a `gateway_attestation` section with the gateway's own TDX quote, event log, TLS certificate fingerprint, and tcb_info (containing app_compose), and
-- a `model_attestations` array with per-model Intel TDX attestation, NVIDIA TEE attestation, signing key, and auxiliary information.
-
-The audit MUST verify the attestation response parsing path, including:
-- maximum response body size limit (to prevent memory exhaustion) — note that gateway responses are expected to be larger than direct inference responses due to the presence of two attestation payloads,
-- JSON strict unmarshalling behavior (unknown fields rejection or warning) — this applies to BOTH the top-level gateway response AND the inner model attestation,
-- whether unknown-field warnings are rate-limited/deduplicated,
-- handling of polymorphic response formats for the model attestation (array vs flat object),
-- bounds checking on array lengths (model_attestations, all_attestations) to cap iteration,
-- model selection logic when the response contains multiple attestation entries (exact match, prefix, or fuzzy), and whether failure to find a matching model is a hard error,
-- that the gateway event_log field is a JSON string (not a native array) and is correctly double-parsed,
-- that the gateway tcb_info field supports double-encoded JSON (string-within-JSON) for app_compose extraction,
-- malformed-element behavior for event-log or nested arrays (fail-whole-response vs silently drop element),
-- that no provider-asserted "verified" field is trusted without independent verification.
-
-### Nonce Freshness and Replay Resistance
-
-The verifier MUST generate a fresh 32-byte cryptographic nonce per attestation attempt.
-
-In the gateway model, a single nonce is sent to the gateway, which shares it with the model backend. Both the gateway and the model backend echo the same nonce back. The audit MUST verify:
-- that exactly one nonce is generated per attestation attempt (not separate nonces for gateway and model),
-- that the single nonce is transmitted to the gateway endpoint by the proxy, not delegated to the server,
-- that the gateway's echoed nonce is verified using constant-time comparison against the client-generated nonce,
-- that the model's echoed nonce is verified using constant-time comparison against the same client-generated nonce,
-- that both nonce checks fail closed on mismatch,
-- that the nonce originates solely from the client and is not sourced from or influenced by the server response.
-
-If cryptographic randomness fails, nonce generation MUST fail closed (no weak fallback mode). The recommended behavior is to panic or abort — never fall back to a weaker entropy source.
-
-### TDX Quote Verification (Model Backend)
-
-Signatures over the model backend's Intel TEE attestation MUST be verified for the entire certificate chain, including:
-- quote structure parsing (supported quote versions),
-- PCK chain validation back to Intel trust roots,
-- quote signature verification,
-- debug bit check (debug enclaves rejected for production trust),
-- TCB collateral and currency classification when online.
-
-Document how trust roots are obtained (embedded/provisioned), and how third-party verification libraries are called and interpreted.
-
-The audit MUST explicitly describe the two-pass verification architecture if present (offline first, online collateral second), and whether a Pass-1-only result (no collateral) is still treated as blocking or advisory.
-
-### TDX Quote Verification (Gateway)
-
-The gateway's TDX quote MUST undergo the same verification as the model backend's quote. The audit MUST verify that all of the following are checked for the gateway quote:
-- quote structure parsing,
-- PCK chain validation back to Intel trust roots,
-- quote signature verification,
-- debug bit check.
-
-The audit MUST verify that the gateway TDX verification uses the same code path / library as the model TDX verification (to avoid diverging security standards).
-
-### TDX Measurement Fields and Policy Expectations
-
-The audit MUST explicitly cover the following TDX fields from the parsed quote body, for BOTH the model backend AND the gateway:
-- MRTD,
-- RTMR0, RTMR1, RTMR2, RTMR3,
-- MRSEAM,
-- MRSIGNERSEAM,
-- MROWNER,
-- MROWNERCONFIG,
-- MRCONFIGID,
-- REPORTDATA.
-
-For each field, the report MUST distinguish between:
-- extraction/visibility only (field parsed and logged),
-- structural integrity checks (length/format/consistency), and
-- policy enforcement (allowlist/denylist or expected value matching).
-
-#### What Each Register Measures
+### What Each TDX Register Measures
 
 Understanding the security semantics of each register is critical for assessing attestation completeness. The following describes the trust-chain role of each register, based on Intel TDX architecture and the dstack CVM implementation used by inference providers:
 
@@ -144,7 +123,7 @@ Understanding the security semantics of each register is critical for assessing 
 
 **RTMR3** — Application-specific runtime measurement. In dstack's implementation, RTMR3 records application-level details including the compose hash, instance ID, app ID, and key provider. Unlike RTMR0-2, RTMR3 cannot be pre-calculated from the image alone because it contains runtime information. It is verified by replaying the event log: if replayed RTMR3 matches the quoted RTMR3, the event log content is authentic, and the compose hash, key provider, and other details can be extracted and verified from the event log entries. The existing compose binding check (MRConfigID) partially overlaps with RTMR3 for compose hash verification.
 
-#### How Thorough Verification Should Work
+### How Thorough Verification Should Work
 
 For complete attestation of a dstack-based CVM — applicable to BOTH the gateway CVM and the model backend CVM — the verification process should:
 
@@ -158,7 +137,7 @@ For complete attestation of a dstack-based CVM — applicable to BOTH the gatewa
 
 5. **Verify MRSEAM + MRTD + RTMR0-2 as a set**: These five values together form a complete chain-of-trust from the TDX module through firmware, kernel, and OS components. Verifying only a subset (e.g., only compose binding via MRConfigID + RTMR3 event log replay) leaves significant gaps where the base system could be substituted.
 
-#### Current Gap: Inference Provider Has Not Published Golden Values
+### Current Gap: No Published Golden Values
 
 The code currently supports an allowlist-based `MeasurementPolicy` for MRTD, MRSEAM, and RTMR0-3, but the current gateway inference provider (NearCloud / NEAR AI) does not publish:
 - reproducible build instructions or pre-built images for their gateway CVM or model backend CVM,
@@ -183,6 +162,96 @@ Because these reference values are unavailable, the code does not currently enfo
 
 Until this information is provided, the attestation provides application-layer assurance (compose hash and RTMR3) but not full system-level assurance. The auditor MUST quantify this gap by noting that an attacker with hypervisor-level access could substitute the firmware/kernel/initrd while preserving compose binding, and report it as a high-severity residual risk. This applies independently to both the gateway CVM and the model backend CVM.
 
+---
+
+## Part 4 — Verification Stage Audit Checklist
+
+Each subsection below is an audit stage. For every stage, the auditor MUST classify each check as `enforced fail-closed`, `computed but non-blocking`, or `skipped/advisory`, and verify that enforcement matches the fail-closed policy from Part 1.
+
+### 4.1 Gateway Architecture Verification
+
+The audit MUST verify:
+- that the gateway host is a hardcoded constant (no DNS-based routing indirection),
+- that no model routing / endpoint resolution is performed (unlike direct inference providers),
+- that the gateway attestation endpoint returns both gateway and model attestation in a single response,
+- that there is no code path that allows connecting to an unattested alternate host.
+
+### 4.2 Attestation Fetch and Response Parsing
+
+Upon connection to the gateway, the attestation API MUST be queried and fully validated before any inference request is sent. A single attestation request returns a combined response containing both the gateway attestation and the model attestation.
+
+Certificate Transparency MUST be consulted for the TLS certificate of the gateway endpoint. This CT log report SHOULD be cached.
+
+The attestation response is a JSON object that includes:
+- a `gateway_attestation` section with the gateway's own TDX quote, event log, TLS certificate fingerprint, and tcb_info (containing app_compose), and
+- a `model_attestations` array with per-model Intel TDX attestation, NVIDIA TEE attestation, signing key, and auxiliary information.
+
+The audit MUST verify the attestation response parsing path, including:
+- maximum response body size limit (to prevent memory exhaustion — per Part 1 input bounds rules; note that gateway responses are larger due to dual payloads),
+- JSON strict unmarshalling behavior (unknown fields rejection or warning — per Part 1 error handling rules) for BOTH the top-level gateway response AND the inner model attestation,
+- whether unknown-field warnings are rate-limited/deduplicated,
+- handling of polymorphic response formats for the model attestation (array vs flat object),
+- bounds checking on array lengths (model_attestations, all_attestations) to cap iteration,
+- model selection logic when the response contains multiple attestation entries (exact match, prefix, or fuzzy), and whether failure to find a matching model is a hard error,
+- that the gateway event_log field is a JSON string (not a native array) and is correctly double-parsed,
+- that the gateway tcb_info field supports double-encoded JSON (string-within-JSON) for app_compose extraction,
+- malformed-element behavior for event-log or nested arrays (fail-whole-response vs silently drop element — per fail-closed policy, dropping is a defect),
+- that no provider-asserted "verified" field is trusted without independent verification.
+
+### 4.3 Nonce Freshness and Replay Resistance
+
+The verifier MUST generate a fresh 32-byte cryptographic nonce per attestation attempt.
+
+In the gateway model, a single nonce is sent to the gateway, which shares it with the model backend. Both the gateway and the model backend echo the same nonce back. The audit MUST verify:
+- that exactly one nonce is generated per attestation attempt (not separate nonces for gateway and model),
+- that the single nonce is transmitted to the gateway endpoint by the proxy, not delegated to the server,
+- that the gateway's echoed nonce is verified using constant-time comparison (`subtle.ConstantTimeCompare`) against the client-generated nonce,
+- that the model's echoed nonce is verified using constant-time comparison against the same client-generated nonce,
+- that both nonce checks fail closed on mismatch,
+- that the nonce originates solely from the client and is not sourced from or influenced by the server response.
+
+If cryptographic randomness fails, nonce generation MUST fail closed (no weak fallback mode). The recommended behavior is to panic or abort — never fall back to a weaker entropy source. Per Part 1 cryptographic safety rules, `crypto/rand` is the only acceptable source.
+
+### 4.4 TDX Quote Verification (Model Backend)
+
+Signatures over the model backend's Intel TEE attestation MUST be verified for the entire certificate chain, including:
+- quote structure parsing (supported quote versions),
+- PCK chain validation back to Intel trust roots,
+- quote signature verification,
+- debug bit check (debug enclaves rejected for production trust),
+- TCB collateral and currency classification when online.
+
+Document how trust roots are obtained (embedded/provisioned), and how third-party verification libraries are called and interpreted.
+
+The audit MUST explicitly describe the two-pass verification architecture if present (offline first, online collateral second), and whether a Pass-1-only result (no collateral) is still treated as blocking or advisory.
+
+### 4.5 TDX Quote Verification (Gateway)
+
+The gateway's TDX quote MUST undergo the same verification as the model backend's quote. The audit MUST verify that all of the following are checked for the gateway quote:
+- quote structure parsing,
+- PCK chain validation back to Intel trust roots,
+- quote signature verification,
+- debug bit check.
+
+The audit MUST verify that the gateway TDX verification uses the same code path / library as the model TDX verification (to avoid diverging security standards).
+
+### 4.6 TDX Measurement Fields and Policy
+
+The audit MUST explicitly cover the following TDX fields from the parsed quote body, for BOTH the model backend AND the gateway:
+- MRTD,
+- RTMR0, RTMR1, RTMR2, RTMR3,
+- MRSEAM,
+- MRSIGNERSEAM,
+- MROWNER,
+- MROWNERCONFIG,
+- MRCONFIGID,
+- REPORTDATA.
+
+For each field, the report MUST distinguish between:
+- extraction/visibility only (field parsed and logged),
+- structural integrity checks (length/format/consistency), and
+- policy enforcement (allowlist/denylist or expected value matching).
+
 #### Current gateway-provider expectation summary
 
 **Model backend attestation (Tier 1–3):**
@@ -204,7 +273,7 @@ When allowlist policy exists (i.e., when the inference provider eventually publi
 - input validation rules for allowlist values (length/encoding),
 - whether allowlist mismatches are enforced fail-closed or informational.
 
-### CVM Image Verification (Model Backend)
+### 4.7 CVM Image Verification — Model Backend (Compose Binding)
 
 The model backend attestation API provides a full docker compose stanza, or equivalent podman/cloud config image description, as an auxiliary portion of the attestation API response.
 
@@ -216,7 +285,7 @@ The audit MUST also verify the extraction path for the app_compose field, includ
 - whether the tcb_info field supports double-encoded JSON (string-within-JSON),
 - that the extracted compose content is the raw value that was hashed, not a re-serialized version that could differ in whitespace or key ordering.
 
-### CVM Image Verification (Gateway)
+### 4.8 CVM Image Verification — Gateway (Compose Binding)
 
 The gateway attestation also provides an app_compose via its tcb_info field. The code MUST calculate a hash of the gateway's app_compose and verify it matches the gateway's TDX MRConfigID field.
 
@@ -225,7 +294,7 @@ The audit MUST verify:
 - that the gateway compose binding uses the same verification function as the model compose binding,
 - that the gateway compose binding check is a separate enforced factor from the model compose binding check.
 
-### CVM Image Component Verification
+### 4.9 CVM Image Component Verification (Sigstore/Rekor)
 
 The docker compose files (or podman/cloud configs) for BOTH the gateway and model backend will list a series of sub-images.
 
@@ -237,7 +306,7 @@ The audit MUST verify:
 - extraction logic for image digests from compose content (regex vs structured parsing, and whether non-sha256 digest algorithms are handled or rejected),
 - deduplication of extracted digests,
 - all sub-images of BOTH the model backend and gateway docker compose files are in the provider's allow-list,
-- Sigstore query behavior and failure handling (is a Sigstore timeout a hard fail or a skip?),
+- Sigstore query behavior and failure handling (is a Sigstore timeout a hard fail or a skip? — per fail-closed policy, a skip is a defect unless explicitly documented as an accepted offline-mode risk),
 - Rekor provenance extraction logic,
 - issuer/identity checks used to classify provenance as trusted (what OIDC issuer values are accepted?),
 - behavior when a digest appears in Sigstore but has no Fulcio certificate (raw key signature — is this treated as passing provenance or only presence?).
@@ -246,26 +315,31 @@ The audit MUST explicitly state if Sigstore/Rekor are soft-fail in default polic
 
 > NOTE: The current implementation performs Sigstore/Rekor checks only on the model backend's compose images. The audit MUST flag whether gateway compose images are also subject to these checks, and if not, report this as a gap.
 
-### Verification Cache Safety
+### 4.10 Event Log Integrity (Model Backend)
 
-The necessary verification information MAY be cached locally so that Sigstore and Rekor do not need to be queried on every single connection attempt.
+If event logs are present in the model backend's attestation payload, the code MUST replay them and verify recomputed RTMR values against the model backend's quote RTMR fields.
 
-However, the attestation report MUST be verified against either cached or live data, for EACH new TLS connection to the gateway.
+The audit MUST describe replay algorithm details, including:
+- hash algorithm used for extend operations (SHA-384 is expected for TDX RTMRs),
+- initial RTMR state (48 zero bytes),
+- extend formula: `RTMR_new = SHA-384(RTMR_old || digest)`,
+- handling of short digests (padding to 48 bytes),
+- IMR index validation (must be within [0, 3]),
+- failure semantics: does a malformed event log entry skip the entry or fail the entire replay? Per fail-closed policy, skipping is a defect.
 
-The audit MUST explicitly document each cache layer, its keys, TTLs, expiry/pruning behavior, maximum entry limits, and whether stale data is ever served. Specifically:
+### 4.11 Event Log Integrity (Gateway)
 
-| Cache | Expected Keys | Expected TTL | Security-Critical Properties |
-|-------|--------------|-------------|------------------------------|
-| Attestation report cache | (provider, model) | ~minutes | Signing key MUST NOT be cached; must be fetched fresh for each E2EE session |
-| Negative cache | (provider, model) | ~seconds | Must prevent upstream hammering; must expire so recovery is possible |
-| SPKI pin cache | (domain, spkiHash) | ~hour | Must be populated only after successful attestation of BOTH gateway and model; eviction must force re-attestation |
-| Signing key cache | (provider, model) | ~minute | Shorter than attestation cache; holds REPORTDATA-verified signing key for E2EE key exchange |
+If event logs are present in the gateway's attestation payload, the code MUST replay them and verify recomputed RTMR values against the gateway's quote RTMR fields.
 
-The audit MUST verify that cache eviction under memory pressure does not silently allow unattested connections. A cache miss MUST trigger re-attestation of BOTH gateway and model, never a pass-through.
+The audit MUST verify:
+- that the gateway event log replay uses the same algorithm as the model backend event log replay,
+- that the gateway event log is correctly parsed from its string-encoded JSON format,
+- that gateway event log integrity is a separate enforced factor from model event log integrity,
+- that a malformed gateway event log entry fails the entire replay (not silently dropped — per fail-closed policy).
 
-The audit MUST also verify that the SPKI pin cache uses the gateway's domain and SPKI (since the proxy connects to the gateway, not the model backend directly).
+The audit MUST also state the exact security boundary of this check: event log replay validates internal consistency of event-log-derived RTMR values with quoted RTMR values, but does not by itself prove that RTMR values match an approved software baseline. If no baseline policy is enforced for MRTD/RTMR/MRSEAM-class measurements, that gap MUST be reported explicitly — for both gateway and model backend.
 
-### Encryption Binding — Model Backend REPORTDATA
+### 4.12 Encryption Binding — Model Backend REPORTDATA
 
 The model backend's attestation report must bind channel identity and key material in a way that prevents key-substitution attacks.
 
@@ -279,14 +353,14 @@ The audit MUST verify:
 - that decoded input lengths are validated where applicable (or residual collision/ambiguity risk is documented),
 - that the concatenation order is strictly `(address || fingerprint)` with no separator or length prefix,
 - that both halves of the 64-byte REPORTDATA are verified (not just the first half),
-- that the binding comparison uses constant-time comparison (`subtle.ConstantTimeCompare` or equivalent),
+- that the binding comparison uses constant-time comparison (`subtle.ConstantTimeCompare`),
 - that failure of this check is enforced (blocks forwarding), not merely logged.
 
-The audit MUST also verify that the model backend's REPORTDATA verifier is the shared nearai ReportDataVerifier (not a different implementation), and that a missing or unconfigured verifier fails safely (no default pass-through).
+The audit MUST also verify that the model backend's REPORTDATA verifier is the shared nearai ReportDataVerifier (not a different implementation), and that a missing or unconfigured verifier fails safely (no default pass-through — per fail-closed policy).
 
 > NOTE: The model backend's `tls_cert_fingerprint` in REPORTDATA refers to the model backend's own TLS certificate, not the gateway's. Since the proxy connects to the gateway (not the model backend), the proxy cannot directly verify the model backend's TLS fingerprint against a live connection. The model backend's REPORTDATA binding establishes that the signing key for E2EE is bound to the attested model backend — but the TLS channel pinning is handled separately by the gateway attestation. The audit MUST document this trust delegation and note that the gateway's TLS attestation is the link that binds the live TLS connection to the overall attestation chain.
 
-### Encryption Binding — Gateway REPORTDATA
+### 4.13 Encryption Binding — Gateway REPORTDATA
 
 The gateway's attestation report must bind the gateway's TLS certificate identity to its TDX quote.
 
@@ -296,14 +370,14 @@ For the gateway, REPORTDATA uses a different scheme from the model backend:
 
 The audit MUST verify:
 - that `tls_fingerprint` is decoded from hex before hashing (not hashed as ASCII),
-- that an absent `tls_cert_fingerprint` results in a hard failure (not a skip),
+- that an absent `tls_cert_fingerprint` results in a hard failure (not a skip — per fail-closed policy),
 - that both halves of the 64-byte REPORTDATA are verified,
-- that the binding comparison uses constant-time comparison,
+- that the binding comparison uses constant-time comparison (`subtle.ConstantTimeCompare`),
 - that failure of this check is enforced (blocks the request).
 
 The audit MUST also verify that the gateway REPORTDATA verifier is a separate implementation from the model REPORTDATA verifier (because the binding scheme differs), and that the correct verifier is used for each quote.
 
-### TLS Pinning and Connection-Bound Attestation (Gateway)
+### 4.14 TLS Pinning and Connection-Bound Attestation (Gateway)
 
 For the gateway inference provider:
 - the live TLS certificate SPKI hash MUST be extracted from the TLS connection to the gateway,
@@ -323,45 +397,11 @@ The audit MUST verify that:
 The audit MUST verify pin-cache behavior:
 - TTL and maximum entries per domain,
 - eviction strategy (LRU, random, or oldest) and whether it is bounded,
-- that a cache miss always triggers full re-attestation (including both gateway and model), never a pass-through,
+- that a cache miss always triggers full re-attestation (including both gateway and model), never a pass-through (per fail-closed policy),
 - that concurrent attestation attempts for the same (domain, SPKI) are collapsed (singleflight) with a double-check-after-winning pattern,
 - that the singleflight key includes both domain and SPKI (so a certificate rotation triggers a new attestation rather than coalescing with the old one).
 
-### E2EE: End-to-End Encryption via Model Signing Key
-
-In the gateway inference model, the model backend's attestation provides a secp256k1 public key (`signing_key`) that is bound to the model backend's TDX quote via REPORTDATA. The proxy uses this key for ECDH-based E2EE, encrypting request messages so that even the gateway cannot read them, and decrypting response messages that were encrypted by the model backend.
-
-The audit MUST verify:
-- that the `signing_key` is obtained from the model backend's attestation (not the gateway's attestation),
-- that the `signing_key` is present in the attestation response and validated as a 130-hex-character uncompressed secp256k1 public key starting with "04",
-- that the `signing_key` is bound to the model backend's TDX quote via `tdx_reportdata_binding` — without this binding, a MITM could substitute the key,
-- that the E2EE session is created with a fresh ephemeral key pair per request,
-- that the ephemeral public key is transmitted to the model backend (typically via HTTP headers),
-- that the ECDH shared secret derivation uses HKDF-SHA256 with the expected info string,
-- that AES-256-GCM is used for symmetric encryption/decryption with random nonces,
-- that the session private key is zeroed after use (`Session.Zero()`),
-- that E2EE is only activated when `tdx_reportdata_binding` has passed — if binding fails, E2EE is refused (not silently degraded to plaintext).
-
-#### E2EE Header Protection
-
-A key security benefit of the gateway inference model is that E2EE protects request and response content from the gateway. The audit MUST verify:
-- that request message content is encrypted before being sent through the gateway,
-- that response message content (both streaming SSE chunks and non-streaming JSON bodies) is decrypted by the proxy,
-- that non-encrypted content fields in an E2EE session are treated as errors (not silently accepted as plaintext),
-- that the "role" and "refusal" fields are correctly exempted from encryption expectations,
-- that streaming SSE decryption handles all encrypted delta fields (content, reasoning_content, etc.), not just a hardcoded subset.
-
-#### Signing Key Cache
-
-The signing key (model backend's public key) MAY be cached with a short TTL to avoid re-fetching attestation on every request.
-
-The audit MUST verify:
-- that the signing key cache has a shorter TTL than the attestation report cache,
-- that the signing key is only cached after successful REPORTDATA binding verification,
-- that a key rotation (different signing key from the same provider/model) emits a warning,
-- that the cached signing key is the one verified by REPORTDATA binding, not from a subsequent unverified response.
-
-### NVIDIA TEE Verification Depth
+### 4.15 NVIDIA TEE Verification Depth
 
 The audit MUST verify both layers when present:
 
@@ -372,7 +412,7 @@ The audit MUST verify both layers when present:
 - SPDM message parsing (GET_MEASUREMENTS request/response structure, variable-length field handling),
 - SPDM signature verification algorithm (ECDSA P-384 with SHA-384 is expected),
 - the signed-data construction (must include both request and response-minus-signature, in order),
-- all-or-nothing semantics (one GPU failure must fail the entire check),
+- all-or-nothing semantics (one GPU failure must fail the entire check — per fail-closed policy),
 - extraction of GPU count and architecture for reporting.
 
 **Remote NVIDIA NRAS verification:**
@@ -386,43 +426,45 @@ If offline mode exists, the audit MUST state which NVIDIA checks remain active a
 
 > NOTE: NVIDIA attestation is for the model backend only. The gateway is a CPU-only TEE and does not have GPU attestation. The audit MUST verify that the code does not expect or require NVIDIA attestation from the gateway.
 
-### Event Log Integrity (Model Backend)
+### 4.16 E2EE: End-to-End Encryption via Model Signing Key
 
-If event logs are present in the model backend's attestation payload, the code MUST replay them and verify recomputed RTMR values against the model backend's quote RTMR fields.
-
-The audit MUST describe replay algorithm details, including:
-- hash algorithm used for extend operations (SHA-384 is expected for TDX RTMRs),
-- initial RTMR state (48 zero bytes),
-- extend formula: `RTMR_new = SHA-384(RTMR_old || digest)`,
-- handling of short digests (padding to 48 bytes),
-- IMR index validation (must be within [0, 3]),
-- failure semantics: does a malformed event log entry skip the entry or fail the entire replay?
-
-### Event Log Integrity (Gateway)
-
-If event logs are present in the gateway's attestation payload, the code MUST replay them and verify recomputed RTMR values against the gateway's quote RTMR fields.
+In the gateway inference model, the model backend's attestation provides a secp256k1 public key (`signing_key`) that is bound to the model backend's TDX quote via REPORTDATA. The proxy uses this key for ECDH-based E2EE, encrypting request messages so that even the gateway cannot read them, and decrypting response messages that were encrypted by the model backend.
 
 The audit MUST verify:
-- that the gateway event log replay uses the same algorithm as the model backend event log replay,
-- that the gateway event log is correctly parsed from its string-encoded JSON format,
-- that gateway event log integrity is a separate enforced factor from model event log integrity,
-- that a malformed gateway event log entry fails the entire replay (not silently dropped).
+- that the `signing_key` is obtained from the model backend's attestation (not the gateway's attestation),
+- that the `signing_key` is present in the attestation response and validated as a 130-hex-character uncompressed secp256k1 public key starting with "04",
+- that the `signing_key` is bound to the model backend's TDX quote via `tdx_reportdata_binding` — without this binding, a MITM could substitute the key,
+- that the E2EE session is created with a fresh ephemeral key pair per request,
+- that the ephemeral public key is transmitted to the model backend (typically via HTTP headers),
+- that the ECDH shared secret derivation uses HKDF-SHA256 with the expected info string,
+- that AES-256-GCM is used for symmetric encryption/decryption with random nonces (per Part 1 cryptographic safety: authenticated encryption only),
+- that the session private key is zeroed after use (`Session.Zero()`) — per Part 1 sensitive data handling,
+- that E2EE is only activated when `tdx_reportdata_binding` has passed — if binding fails, E2EE is refused (not silently degraded to plaintext; per fail-closed policy, degradation is a defect).
 
-The audit MUST also state the exact security boundary of this check: event log replay validates internal consistency of event-log-derived RTMR values with quoted RTMR values, but does not by itself prove that RTMR values match an approved software baseline. If no baseline policy is enforced for MRTD/RTMR/MRSEAM-class measurements, that gap MUST be reported explicitly — for both gateway and model backend.
+#### E2EE Header Protection
 
-## Connection Lifetime Safety
+A key security benefit of the gateway inference model is that E2EE protects request and response content from the gateway. The audit MUST verify:
+- that request message content is encrypted before being sent through the gateway,
+- that response message content (both streaming SSE chunks and non-streaming JSON bodies) is decrypted by the proxy,
+- that non-encrypted content fields in an E2EE session are treated as errors (not silently accepted as plaintext — per fail-closed policy),
+- that the "role" and "refusal" fields are correctly exempted from encryption expectations,
+- that streaming SSE decryption handles all encrypted delta fields (content, reasoning_content, etc.), not just a hardcoded subset.
 
-TLS connections to the gateway MUST be closed after each request-response cycle (Connection: close) to ensure each new request triggers a fresh attestation or SPKI cache check.
+#### Signing Key Cache
 
-If the implementation reuses connections, the audit MUST verify that re-attestation is correctly triggered on every new request, not just on new connections.
+The signing key (model backend's public key) MAY be cached with a short TTL to avoid re-fetching attestation on every request.
 
 The audit MUST verify:
-- that the response body wrapper closes the underlying TCP connection when the body is consumed or closed,
-- that connection read/write timeouts are set and reasonable (noting that gateway connections may need longer timeouts due to two attestation payloads being fetched on a single connection),
-- that a half-closed or errored connection cannot be mistakenly reused for a subsequent request,
-- that the attestation request uses Connection: keep-alive (to allow the chat request on the same connection) while the chat request uses Connection: close.
+- that the signing key cache has a shorter TTL than the attestation report cache,
+- that the signing key is only cached after successful REPORTDATA binding verification,
+- that a key rotation (different signing key from the same provider/model) emits a warning,
+- that the cached signing key is the one verified by REPORTDATA binding, not from a subsequent unverified response.
 
-## Enforcement Policy and Failure Semantics
+---
+
+## Part 5 — Operational Safety
+
+### 5.1 Enforcement Policy and Failure Semantics
 
 The audit report MUST include a table of verification factors with:
 - pass/fail/skip semantics,
@@ -434,7 +476,7 @@ This section is required to prevent regressions where checks continue to be repo
 
 The audit MUST also verify:
 - the mechanism by which the enforced factor list is configured (hardcoded defaults, config file, environment),
-- that misspelled or unknown factor names in the enforcement config are rejected at startup (not silently ignored),
+- that misspelled or unknown factor names in the enforcement config are rejected at startup (not silently ignored — per Part 1 error handling rules),
 - that there is a code path (`Blocked()` or equivalent) that inspects the report before every forwarded request and returns an error response to the client when any enforced factor has failed.
 
 The current expected default enforced factors for gateway providers are:
@@ -464,7 +506,26 @@ The current expected default enforced factors for gateway providers are:
 
 The audit MUST evaluate whether additional factors should be enforced by default (for example, `tdx_tcb_current`, or gateway-specific Sigstore/Rekor checks), and document the rationale for the current enforcement boundary.
 
-## Negative Cache and Failure Recovery
+### 5.2 Verification Cache Safety
+
+The necessary verification information MAY be cached locally so that Sigstore and Rekor do not need to be queried on every single connection attempt.
+
+However, the attestation report MUST be verified against either cached or live data, for EACH new TLS connection to the gateway.
+
+The audit MUST explicitly document each cache layer, its keys, TTLs, expiry/pruning behavior, maximum entry limits, and whether stale data is ever served. Specifically:
+
+| Cache | Expected Keys | Expected TTL | Security-Critical Properties |
+|-------|--------------|-------------|------------------------------|
+| Attestation report cache | (provider, model) | ~minutes | Signing key MUST NOT be cached; must be fetched fresh for each E2EE session |
+| Negative cache | (provider, model) | ~seconds | Must prevent upstream hammering; must expire so recovery is possible |
+| SPKI pin cache | (domain, spkiHash) | ~hour | Must be populated only after successful attestation of BOTH gateway and model; eviction must force re-attestation |
+| Signing key cache | (provider, model) | ~minute | Shorter than attestation cache; holds REPORTDATA-verified signing key for E2EE key exchange |
+
+The audit MUST verify that cache eviction under memory pressure does not silently allow unattested connections. A cache miss MUST trigger re-attestation of BOTH gateway and model, never a pass-through. Per the fail-closed policy, any cache failure path that allows forwarding is a defect.
+
+The audit MUST also verify that the SPKI pin cache uses the gateway's domain and SPKI (since the proxy connects to the gateway, not the model backend directly).
+
+### 5.3 Negative Cache and Failure Recovery
 
 The audit MUST verify the negative cache behavior:
 - that a failed attestation attempt (for either gateway or model) records a negative entry preventing repeated upstream requests,
@@ -472,7 +533,19 @@ The audit MUST verify the negative cache behavior:
 - that the negative cache has bounded size with eviction of expired entries under pressure,
 - that a negative cache hit returns a clear error to the client (for example, HTTP 503) rather than silently failing open or forwarding unauthenticated.
 
-## Offline Mode Safety
+### 5.4 Connection Lifetime Safety
+
+TLS connections to the gateway MUST be closed after each request-response cycle (Connection: close) to ensure each new request triggers a fresh attestation or SPKI cache check.
+
+If the implementation reuses connections, the audit MUST verify that re-attestation is correctly triggered on every new request, not just on new connections.
+
+The audit MUST verify:
+- that the response body wrapper closes the underlying TCP connection when the body is consumed or closed,
+- that connection read/write timeouts are set and reasonable (noting that gateway connections may need longer timeouts due to two attestation payloads being fetched on a single connection),
+- that a half-closed or errored connection cannot be mistakenly reused for a subsequent request,
+- that the attestation request uses Connection: keep-alive (to allow the chat request on the same connection) while the chat request uses Connection: close.
+
+### 5.5 Offline Mode Safety
 
 If the system supports an offline mode, the audit MUST enumerate exactly which checks are skipped (for example, Intel PCS collateral, NRAS, Sigstore, Rekor, Proof-of-Cloud) and which checks still execute locally (for example, quote parsing/signature checks, report-data binding, event-log replay) — for BOTH the gateway and model backend attestation.
 
@@ -480,7 +553,7 @@ For the pinned connection path, the audit MUST verify whether offline mode is ho
 
 The report MUST include residual risk of running in offline mode.
 
-## Proof-of-Cloud
+### 5.6 Proof-of-Cloud
 
 Ensure that the code verifies that the machine ID from the model backend's attestation is covered in proof-of-cloud.
 
@@ -495,7 +568,11 @@ The audit MUST also document whether Proof-of-Cloud is checked for the gateway C
 
 Track future expansion items separately (for example, DCEA and TPM quote integration), but keep this audit focused on checks currently implemented and required for production security decisions.
 
-## HTTP Request Construction Safety
+---
+
+## Part 6 — Input/Output Safety
+
+### 6.1 HTTP Request Construction Safety
 
 For gateway providers that construct raw HTTP requests on the underlying TLS connection (bypassing Go's http.Client connection pooling), the audit MUST verify:
 - that the Host header is always set to the gateway domain,
@@ -506,25 +583,20 @@ For gateway providers that construct raw HTTP requests on the underlying TLS con
 - that the attestation request uses keep-alive while the chat request uses Connection: close,
 - that the Authorization header is set correctly for both the attestation and chat requests.
 
-## Response Size and Resource Limits
+### 6.2 Response Size and Resource Limits
 
 The audit MUST verify that all HTTP response bodies read by the proxy are bounded:
 - gateway attestation responses (recommended: ≤2 MiB, larger than direct inference due to dual payloads),
 - SSE streaming buffers (bounded scanner buffer sizes with pooling),
 - any other external data read during verification (Sigstore, Rekor, NRAS, PCS).
 
-Unbounded reads from untrusted sources represent a denial-of-service vector and MUST be flagged.
+Per Part 1 input bounds rules, unbounded reads from untrusted sources represent a denial-of-service vector and MUST be flagged.
 
-## Sensitive Data Handling
+---
 
-The audit MUST verify:
-- that API keys are not logged in plaintext (redaction to first-N characters),
-- that the config file permission check behavior is clearly classified as warning-only or hard-fail,
-- that ephemeral cryptographic key material (E2EE session keys) is zeroed after use, with acknowledgment of language-level limitations (GC may copy),
-- that attestation nonces are not reused across requests,
-- that the model backend's signing key is only used for ECDH key exchange after REPORTDATA binding verification.
+## Part 7 — Trust Model and Report Requirements
 
-## Trust Delegation and Gateway Compromise Resilience
+### 7.1 Trust Delegation and Gateway Compromise Resilience
 
 The gateway inference model introduces a trust delegation that does not exist in the direct inference model. The proxy trusts:
 1. the gateway's TLS certificate (pinned via gateway attestation REPORTDATA),
@@ -539,7 +611,7 @@ The audit MUST evaluate the security properties that survive a gateway compromis
 
 The audit MUST quantify the residual risk and clearly state which attack scenarios are mitigated by E2EE and which are not.
 
-## Report Writing Requirements
+### 7.2 Report Writing
 
 The report MUST avoid vague language such as "looks secure" without code-backed evidence.
 
@@ -551,3 +623,7 @@ Each finding MUST include:
 - at least one source citation proving current behavior.
 
 When no findings are present for a section, the report MUST explicitly state "no issues found in this section" and still note any residual risk or testing gap.
+
+### 7.3 Fail-Closed Verification Summary
+
+The report MUST include a dedicated section confirming that every error path in the attestation and forwarding pipeline was checked against the fail-closed policy from Part 1. For each code path where an error is caught, the report MUST state whether the error results in request blocking or whether it falls through — and flag any fall-through as a critical finding.
