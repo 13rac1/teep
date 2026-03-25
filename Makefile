@@ -66,7 +66,7 @@ report-nanogpt: build ## Verify NanoGPT attestation (requires NANOGPT_API_KEY)
 	./teep verify nanogpt --model TEE/gemma-3-27b-it --log-level debug --save-dir /tmp/teep-attestation-nanogpt
 
 report-phalacloud: build ## Verify Phala Cloud attestation (requires PHALA_API_KEY)
-	./teep verify phalacloud --model phala/deepseek-chat-v3-0324 --log-level debug --save-dir /tmp/teep-attestation-phalacloud
+	./teep verify phalacloud --model phala/deepseek-v3.2 --log-level debug --save-dir /tmp/teep-attestation-phalacloud
 
 e2e-venice: ## Run Venice E2E test (requires VENICE_API_KEY)
 	./test/e2e-venice.sh

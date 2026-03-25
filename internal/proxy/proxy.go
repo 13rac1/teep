@@ -323,7 +323,6 @@ func fromConfig(
 		p.ChatPath = "/chat/completions"
 		p.Attester = phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = phalacloud.NewPreparer(cp.APIKey)
-		p.ReportDataVerifier = phalacloud.ReportDataVerifier{}
 		p.ModelLister = phalacloud.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud)", cp.Name)

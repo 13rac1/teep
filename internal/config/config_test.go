@@ -40,6 +40,7 @@ func TestLoadDefaults(t *testing.T) {
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
 	unsetenv(t, "NANOGPT_API_KEY")
+	unsetenv(t, "PHALA_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
