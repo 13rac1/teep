@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1147,7 +1148,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 		}
 		fmt.Fprintf(&modelRows,
 			"  <tr><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td></tr>\n",
-			k, m.requests.Load(), m.errors.Load(), verifyStr, agoStr)
+			html.EscapeString(k), m.requests.Load(), m.errors.Load(), verifyStr, agoStr)
 		return true
 	})
 
