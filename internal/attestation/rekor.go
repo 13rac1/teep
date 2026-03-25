@@ -17,10 +17,47 @@ import (
 	"log/slog"
 	"net/http"
 	"unicode/utf8"
+
+	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
+	"github.com/transparency-dev/merkle/proof"
+	"github.com/transparency-dev/merkle/rfc6962"
 )
 
 // defaultRekorBase is the production Rekor transparency log API URL.
 const defaultRekorBase = "https://rekor.sigstore.dev"
+
+// rekorLogPublicKeyPEM is the production Rekor transparency log's signing key.
+// This key signs the Signed Entry Timestamp (SET) and checkpoints.
+// Source: https://rekor.sigstore.dev/api/v1/log/publicKey
+const rekorLogPublicKeyPEM = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr
+kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==
+-----END PUBLIC KEY-----`
+
+// rekorEntry holds the full data returned by the Rekor API for a single log
+// entry. The Verification fields are used for SET and inclusion proof checks.
+type rekorEntry struct {
+	Body           string // base64-encoded entry body
+	IntegratedTime int64
+	LogID          string
+	LogIndex       int64
+	Verification   *rekorVerification
+}
+
+// rekorVerification holds the cryptographic verification data from a Rekor entry.
+type rekorVerification struct {
+	SignedEntryTimestamp string // base64-encoded SET
+	InclusionProof       *rekorInclusionProof
+}
+
+// rekorInclusionProof holds the Merkle tree inclusion proof for a Rekor entry.
+type rekorInclusionProof struct {
+	Checkpoint string   // signed checkpoint (note format)
+	Hashes     []string // hex-encoded sibling hashes
+	LogIndex   int64
+	RootHash   string // hex-encoded root hash
+	TreeSize   int64
+}
 
 // RekorClient is an HTTP client for the Rekor transparency log API.
 // The base URL is set at construction time and cannot be changed,
@@ -78,6 +115,23 @@ type RekorProvenance struct {
 
 	// SignatureErr is set when signature verification was attempted but failed.
 	SignatureErr error
+
+	// SETVerified is true when the Rekor Signed Entry Timestamp was
+	// successfully verified against the Rekor log's public key.
+	SETVerified bool
+
+	// SETErr is set when SET verification was attempted but failed.
+	SETErr error
+
+	// InclusionVerified is true when the Merkle tree inclusion proof was
+	// successfully verified.
+	InclusionVerified bool
+
+	// InclusionErr is set when inclusion proof verification was attempted but failed.
+	InclusionErr error
+
+	// IntegratedTime is the Unix timestamp when Rekor integrated the entry.
+	IntegratedTime int64
 }
 
 // FetchRekorProvenance queries the Rekor API for a digest's log entry and
@@ -102,9 +156,15 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 	var rawKeyFallback *RekorProvenance
 	var lastErr error
 	for _, uuid := range uuids {
-		body, err := rc.fetchRekorEntry(ctx, uuid)
+		entry, err := rc.fetchRekorEntry(ctx, uuid)
 		if err != nil {
 			lastErr = fmt.Errorf("fetch Rekor entry %s: %w", uuid, err)
+			continue
+		}
+
+		body, err := base64.StdEncoding.DecodeString(entry.Body)
+		if err != nil {
+			lastErr = fmt.Errorf("base64 decode body for %s: %w", uuid, err)
 			continue
 		}
 
@@ -130,6 +190,7 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 					HasCert:        false,
 					KeyFingerprint: hex.EncodeToString(h[:]),
 				}
+				verifyRekorEntry(entry, &p)
 				rawKeyFallback = &p
 			}
 			continue
@@ -146,6 +207,7 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 			continue
 		}
 		prov.Digest = digest
+		prov.IntegratedTime = entry.IntegratedTime
 
 		// Distinguish genuine Fulcio certs (with OIDC issuer) from non-Fulcio
 		// X.509 certs that happen to be used for signing. A non-Fulcio cert
@@ -159,6 +221,7 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 					HasNonFulcioCert: true,
 					KeyFingerprint:   prov.KeyFingerprint,
 				}
+				verifyRekorEntry(entry, &p)
 				rawKeyFallback = &p
 			}
 			continue
@@ -169,6 +232,10 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 		} else {
 			prov.SignatureVerified = true
 		}
+
+		// Verify the Signed Entry Timestamp (SET) and inclusion proof.
+		verifyRekorEntry(entry, prov)
+
 		return *prov
 	}
 
@@ -219,8 +286,8 @@ func (rc *RekorClient) fetchRekorUUIDs(ctx context.Context, digest string) ([]st
 }
 
 // fetchRekorEntry calls POST /api/v1/log/entries/retrieve to fetch a log entry
-// by UUID and returns the decoded entry body.
-func (rc *RekorClient) fetchRekorEntry(ctx context.Context, uuid string) ([]byte, error) {
+// by UUID and returns the full entry including verification data.
+func (rc *RekorClient) fetchRekorEntry(ctx context.Context, uuid string) (*rekorEntry, error) {
 	payload, err := json.Marshal(map[string][]string{"entryUUIDs": {uuid}})
 	if err != nil {
 		return nil, err
@@ -263,17 +330,55 @@ func (rc *RekorClient) fetchRekorEntry(ctx context.Context, uuid string) ([]byte
 	}
 
 	var entryObj struct {
-		Body string `json:"body"`
+		Body           string `json:"body"`
+		IntegratedTime *int64 `json:"integratedTime"`
+		LogID          string `json:"logID"`
+		LogIndex       *int64 `json:"logIndex"`
+		Verification   *struct {
+			SignedEntryTimestamp string `json:"signedEntryTimestamp"`
+			InclusionProof       *struct {
+				Checkpoint string   `json:"checkpoint"`
+				Hashes     []string `json:"hashes"`
+				LogIndex   *int64   `json:"logIndex"`
+				RootHash   string   `json:"rootHash"`
+				TreeSize   *int64   `json:"treeSize"`
+			} `json:"inclusionProof"`
+		} `json:"verification"`
 	}
 	if err := json.Unmarshal(entryValue, &entryObj); err != nil {
 		return nil, fmt.Errorf("decode entry object: %w", err)
 	}
 
-	decoded, err := base64.StdEncoding.DecodeString(entryObj.Body)
-	if err != nil {
-		return nil, fmt.Errorf("base64 decode body: %w", err)
+	re := &rekorEntry{
+		Body:  entryObj.Body,
+		LogID: entryObj.LogID,
 	}
-	return decoded, nil
+	if entryObj.IntegratedTime != nil {
+		re.IntegratedTime = *entryObj.IntegratedTime
+	}
+	if entryObj.LogIndex != nil {
+		re.LogIndex = *entryObj.LogIndex
+	}
+	if entryObj.Verification != nil {
+		re.Verification = &rekorVerification{
+			SignedEntryTimestamp: entryObj.Verification.SignedEntryTimestamp,
+		}
+		if ip := entryObj.Verification.InclusionProof; ip != nil {
+			rip := &rekorInclusionProof{
+				Checkpoint: ip.Checkpoint,
+				Hashes:     ip.Hashes,
+				RootHash:   ip.RootHash,
+			}
+			if ip.LogIndex != nil {
+				rip.LogIndex = *ip.LogIndex
+			}
+			if ip.TreeSize != nil {
+				rip.TreeSize = *ip.TreeSize
+			}
+			re.Verification.InclusionProof = rip
+		}
+	}
+	return re, nil
 }
 
 // extractVerifierPEM extracts the verifier PEM from a decoded Rekor entry body
@@ -478,6 +583,165 @@ func buildPAE(payloadType string, payload []byte) []byte {
 	buf.WriteByte(' ')
 	buf.Write(payload)
 	return buf.Bytes()
+}
+
+// verifyRekorEntry verifies the Signed Entry Timestamp (SET) and Merkle tree
+// inclusion proof for a Rekor entry. Results are stored on the provided
+// RekorProvenance. Verification failures are non-fatal — the provenance is
+// still usable, but the report will reflect the verification status.
+func verifyRekorEntry(entry *rekorEntry, prov *RekorProvenance) {
+	// SET verification requires the Rekor public key; inclusion proof does not.
+	// Verify them independently so a key parse failure doesn't mask a working
+	// inclusion proof (or vice versa).
+	rekorKey, err := parseRekorPublicKey()
+	if err != nil {
+		prov.SETErr = fmt.Errorf("parse Rekor public key: %w", err)
+	} else {
+		if err := verifySET(entry, rekorKey); err != nil {
+			prov.SETErr = fmt.Errorf("SET verification: %w", err)
+		} else {
+			prov.SETVerified = true
+		}
+	}
+
+	// Verify the Merkle tree inclusion proof independently of SET.
+	if err := verifyInclusionProof(entry); err != nil {
+		prov.InclusionErr = fmt.Errorf("inclusion proof: %w", err)
+	} else {
+		prov.InclusionVerified = true
+	}
+}
+
+// verifySET verifies the Rekor Signed Entry Timestamp (SET). The SET is an
+// ECDSA signature over the JSON-canonicalized bundle {body, integratedTime,
+// logIndex, logID}. This proves Rekor's log server acknowledged the entry.
+func verifySET(entry *rekorEntry, rekorKey *ecdsa.PublicKey) error {
+	if entry.Verification == nil || entry.Verification.SignedEntryTimestamp == "" {
+		return errors.New("no signed entry timestamp in Rekor response")
+	}
+
+	setBytes, err := base64.StdEncoding.DecodeString(entry.Verification.SignedEntryTimestamp)
+	if err != nil {
+		return fmt.Errorf("decode SET: %w", err)
+	}
+
+	// The SET signs over {body, integratedTime, logIndex, logID}.
+	// body is the base64-encoded entry body (kept as-is, not decoded).
+	type setBundle struct {
+		Body           string `json:"body"`
+		IntegratedTime int64  `json:"integratedTime"`
+		LogIndex       int64  `json:"logIndex"`
+		LogID          string `json:"logID"`
+	}
+	bundle := setBundle{
+		Body:           entry.Body,
+		IntegratedTime: entry.IntegratedTime,
+		LogIndex:       entry.LogIndex,
+		LogID:          entry.LogID,
+	}
+	contents, err := json.Marshal(bundle)
+	if err != nil {
+		return fmt.Errorf("marshal bundle: %w", err)
+	}
+	canonicalized, err := jsoncanonicalizer.Transform(contents)
+	if err != nil {
+		return fmt.Errorf("canonicalize bundle: %w", err)
+	}
+
+	h := sha256.Sum256(canonicalized)
+	if !ecdsa.VerifyASN1(rekorKey, h[:], setBytes) {
+		return errors.New("SET signature does not match Rekor public key")
+	}
+	return nil
+}
+
+// verifyInclusionProof verifies a Rekor entry's Merkle tree inclusion proof.
+// The leaf hash is SHA-256(0x00 || entryBytes) per RFC 6962 §2.1.
+// This proves the entry is actually present in the append-only log at the
+// claimed position, preventing a MITM from fabricating entries.
+func verifyInclusionProof(entry *rekorEntry) error {
+	if entry.Verification == nil || entry.Verification.InclusionProof == nil {
+		return errors.New("no inclusion proof in Rekor response")
+	}
+
+	ip := entry.Verification.InclusionProof
+
+	// Validate bounds before casting int64 → uint64. A malicious or garbled
+	// Rekor response could produce negative values that wrap to huge uint64s.
+	if ip.LogIndex < 0 {
+		return fmt.Errorf("inclusion proof logIndex is negative: %d", ip.LogIndex)
+	}
+	if ip.TreeSize <= 0 {
+		return fmt.Errorf("inclusion proof treeSize is non-positive: %d", ip.TreeSize)
+	}
+	if ip.LogIndex >= ip.TreeSize {
+		return fmt.Errorf("inclusion proof logIndex (%d) >= treeSize (%d)", ip.LogIndex, ip.TreeSize)
+	}
+	// A Merkle tree of depth D has at most D sibling hashes. For a SHA-256
+	// tree, D ≤ 64 covers well beyond any realistic log size (~2^64 entries).
+	const maxProofHashes = 64
+	if len(ip.Hashes) > maxProofHashes {
+		return fmt.Errorf("inclusion proof has %d hashes, exceeds maximum %d", len(ip.Hashes), maxProofHashes)
+	}
+
+	entryBytes, err := base64.StdEncoding.DecodeString(entry.Body)
+	if err != nil {
+		return fmt.Errorf("decode entry body: %w", err)
+	}
+	leafHash := rfc6962.DefaultHasher.HashLeaf(entryBytes)
+
+	rootHash, err := hex.DecodeString(ip.RootHash)
+	if err != nil {
+		return fmt.Errorf("decode root hash: %w", err)
+	}
+
+	var hashes [][]byte
+	for _, h := range ip.Hashes {
+		hb, err := hex.DecodeString(h)
+		if err != nil {
+			return fmt.Errorf("decode proof hash: %w", err)
+		}
+		hashes = append(hashes, hb)
+	}
+
+	if err := proof.VerifyInclusion(rfc6962.DefaultHasher,
+		uint64(ip.LogIndex), uint64(ip.TreeSize), leafHash, hashes, rootHash); err != nil {
+		return fmt.Errorf("merkle inclusion proof invalid: %w", err)
+	}
+	return nil
+}
+
+// rekorPublicKeyOverride when non-empty replaces the embedded Rekor
+// transparency log public key for SET verification. Tests use this to
+// inject a key matching mock-signed entry timestamps.
+var rekorPublicKeyOverride string
+
+// SetRekorPublicKeyOverride replaces the embedded Rekor transparency log
+// public key for SET verification. Pass an empty string to restore the
+// default production key. This exists solely for test mocks.
+func SetRekorPublicKeyOverride(pemKey string) {
+	rekorPublicKeyOverride = pemKey
+}
+
+// parseRekorPublicKey parses the embedded Rekor transparency log public key.
+func parseRekorPublicKey() (*ecdsa.PublicKey, error) {
+	keyPEM := rekorLogPublicKeyPEM
+	if rekorPublicKeyOverride != "" {
+		keyPEM = rekorPublicKeyOverride
+	}
+	block, _ := pem.Decode([]byte(keyPEM))
+	if block == nil {
+		return nil, errors.New("no PEM block in Rekor public key")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse PKIX public key: %w", err)
+	}
+	ecKey, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("rekor public key is %T, expected *ecdsa.PublicKey", pub)
+	}
+	return ecKey, nil
 }
 
 // truncateStr truncates s to maxLen characters, appending "..." if truncated.

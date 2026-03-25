@@ -173,6 +173,48 @@ func TestBlockedReturnsTrue(t *testing.T) {
 	}
 }
 
+// TestBlockedFactorsReturnsFailingEnforced verifies BlockedFactors lists all
+// enforced factors that failed.
+func TestBlockedFactorsReturnsFailingEnforced(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	raw.Nonce = "" // force nonce_match to fail
+
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
+
+	blocked := report.BlockedFactors()
+	if len(blocked) == 0 {
+		t.Fatal("BlockedFactors() returned empty slice when Blocked() is true")
+	}
+	found := false
+	for _, f := range blocked {
+		if f.Name == "nonce_match" {
+			found = true
+		}
+		if f.Status != Fail {
+			t.Errorf("BlockedFactors() returned non-Fail factor %q (status=%v)", f.Name, f.Status)
+		}
+		if !f.Enforced {
+			t.Errorf("BlockedFactors() returned non-enforced factor %q", f.Name)
+		}
+	}
+	if !found {
+		t.Error("BlockedFactors() did not include nonce_match")
+	}
+}
+
+// TestBlockedFactorsReturnsNilWhenNotBlocked verifies BlockedFactors is nil
+// when no enforced factor fails.
+func TestBlockedFactorsReturnsNilWhenNotBlocked(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: []string{}})
+
+	if blocked := report.BlockedFactors(); blocked != nil {
+		t.Errorf("BlockedFactors() returned %v, want nil", blocked)
+	}
+}
+
 // TestBlockedReturnsFalse verifies Blocked is false when no enforced factor fails.
 func TestBlockedReturnsFalse(t *testing.T) {
 	nonce := NewNonce()
@@ -1028,9 +1070,11 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 				RunnerEnv:     "github-hosted",
 			},
 			{
-				Digest:         datadogDigest,
-				HasCert:        false,
-				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b",
+				Digest:            datadogDigest,
+				HasCert:           false,
+				KeyFingerprint:    "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b",
+				SETVerified:       true,
+				InclusionVerified: true,
 			},
 		}
 		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
@@ -1044,6 +1088,48 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 			Sigstore: sig,
 			Rekor:    rekor,
 		}), Pass)
+	})
+
+	t.Run("sigstore_entry_unverified_set_fails", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+		datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
+		sig := []SigstoreResult{
+			{Digest: composeManagerDigest, OK: true, Status: 200},
+			{Digest: datadogDigest, OK: true, Status: 200},
+		}
+		rekor := []RekorProvenance{
+			{
+				Digest:        composeManagerDigest,
+				HasCert:       true,
+				SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+				OIDCIssuer:    "https://token.actions.githubusercontent.com",
+				SourceRepo:    "nearai/compose-manager",
+				SourceRepoURL: "https://github.com/nearai/compose-manager",
+				SourceCommit:  "0123456789abcdef",
+				RunnerEnv:     "github-hosted",
+			},
+			{
+				// Sigstore entry without SET/inclusion verification must fail.
+				Digest:         datadogDigest,
+				HasCert:        false,
+				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b",
+			},
+		}
+		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
+			Provider:   "neardirect",
+			Raw:        raw,
+			ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
+			DigestToRepo: map[string]string{
+				composeManagerDigest: "nearaidev/compose-manager",
+				datadogDigest:        "datadog/agent",
+			},
+			Sigstore: sig,
+			Rekor:    rekor,
+		}), Fail)
+		if !strings.Contains(f.Detail, "SET verification did not succeed") {
+			t.Errorf("detail should mention SET verification failure: %s", f.Detail)
+		}
 	})
 
 	t.Run("no_rekor_no_policy", func(t *testing.T) {
@@ -1191,7 +1277,7 @@ func TestNvidiaNonceDetail(t *testing.T) {
 		{
 			"EAT format",
 			&NvidiaVerifyResult{Format: "EAT", GPUCount: 8},
-			"EAT nonce + 8 GPU SPDM requester nonces match submitted nonce",
+			"EAT nonce matches submitted nonce (8 GPUs)",
 		},
 		{
 			"JWT format",

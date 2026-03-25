@@ -372,7 +372,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	}
 
 	var rc *attestation.RekorClient
-	if len(allDigests) > 0 && !cfg.Offline {
+	if len(allDigests) > 0 && !offline {
 		rc = attestation.NewRekorClient(client)
 		sigstoreResults = rc.CheckSigstoreDigests(ctx, allDigests)
 		for _, r := range sigstoreResults {

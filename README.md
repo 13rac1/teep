@@ -106,7 +106,7 @@ Tier 2: Binding & Crypto
   ✓ nvidia_payload_present     NVIDIA payload present (97494 chars)
   ✓ nvidia_signature           EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)
   ✓ nvidia_claims              EAT: arch=HOPPER, 8 GPUs, nonce verified
-  ✓ nvidia_nonce_match         EAT nonce + 8 GPU SPDM requester nonces match submitted nonce
+  ✓ nvidia_nonce_match         EAT nonce matches submitted nonce (8 GPUs)
   ✓ nvidia_nras_verified       NRAS: true (JWT verified)
   ✓ e2ee_capable               enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible (ecdsa)
 

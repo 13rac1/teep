@@ -2,13 +2,21 @@ package attestation
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
+	"github.com/transparency-dev/merkle/rfc6962"
 )
 
 // testDigest is a fake sha256 digest used in Rekor tests.
@@ -284,5 +292,415 @@ func TestFetchRekorProvenance_IndexHTTPError(t *testing.T) {
 	t.Logf("Error: %v", prov.Err)
 	if !strings.Contains(prov.Err.Error(), "search Rekor") {
 		t.Errorf("error should mention search: %v", prov.Err)
+	}
+}
+
+// signSET signs a rekorEntry with the given key, producing a valid SET.
+func signSET(t *testing.T, entry *rekorEntry, key *ecdsa.PrivateKey) string {
+	t.Helper()
+	type setBundle struct {
+		Body           string `json:"body"`
+		IntegratedTime int64  `json:"integratedTime"`
+		LogIndex       int64  `json:"logIndex"`
+		LogID          string `json:"logID"`
+	}
+	b := setBundle{
+		Body:           entry.Body,
+		IntegratedTime: entry.IntegratedTime,
+		LogIndex:       entry.LogIndex,
+		LogID:          entry.LogID,
+	}
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("marshal SET bundle: %v", err)
+	}
+	canon, err := jsoncanonicalizer.Transform(data)
+	if err != nil {
+		t.Fatalf("canonicalize: %v", err)
+	}
+	h := sha256.Sum256(canon)
+	sig, err := ecdsa.SignASN1(rand.Reader, key, h[:])
+	if err != nil {
+		t.Fatalf("sign SET: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(sig)
+}
+
+func TestVerifySET_Valid(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	entry := &rekorEntry{
+		Body:           base64.StdEncoding.EncodeToString([]byte("test entry body")),
+		IntegratedTime: 1700000000,
+		LogIndex:       12345,
+		LogID:          "c0d23d6ad406973f9559f3ba2d1ca5f0e0c7f5e8b0c5a2e6d3b1e4f7a8b9c0d1",
+		Verification: &rekorVerification{
+			SignedEntryTimestamp: "", // filled below
+		},
+	}
+	entry.Verification.SignedEntryTimestamp = signSET(t, entry, key)
+
+	if err := verifySET(entry, &key.PublicKey); err != nil {
+		t.Fatalf("verifySET should pass: %v", err)
+	}
+}
+
+func TestVerifySET_Tampered(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	entry := &rekorEntry{
+		Body:           base64.StdEncoding.EncodeToString([]byte("test entry body")),
+		IntegratedTime: 1700000000,
+		LogIndex:       12345,
+		LogID:          "c0d23d6ad406973f9559f3ba2d1ca5f0e0c7f5e8b0c5a2e6d3b1e4f7a8b9c0d1",
+		Verification: &rekorVerification{
+			SignedEntryTimestamp: "", // filled below
+		},
+	}
+	entry.Verification.SignedEntryTimestamp = signSET(t, entry, key)
+
+	// Tamper with the body after signing.
+	entry.Body = base64.StdEncoding.EncodeToString([]byte("TAMPERED body"))
+
+	if err := verifySET(entry, &key.PublicKey); err == nil {
+		t.Fatal("verifySET should fail for tampered entry")
+	} else {
+		t.Logf("Expected error: %v", err)
+	}
+}
+
+func TestVerifySET_NoVerification(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	entry := &rekorEntry{Body: "dGVzdA=="}
+	if err := verifySET(entry, &key.PublicKey); err == nil {
+		t.Fatal("verifySET should fail when Verification is nil")
+	}
+}
+
+func TestVerifyInclusionProof_Valid(t *testing.T) {
+	// Build a tiny Merkle tree with 4 leaves and prove leaf 2.
+	leaves := [][]byte{
+		[]byte("leaf-0"),
+		[]byte("leaf-1"),
+		[]byte("leaf-2"),
+		[]byte("leaf-3"),
+	}
+
+	hasher := rfc6962.DefaultHasher
+	h := make([][]byte, len(leaves))
+	for i, l := range leaves {
+		h[i] = hasher.HashLeaf(l)
+	}
+
+	// Level 1: pairs
+	n01 := hasher.HashChildren(h[0], h[1])
+	n23 := hasher.HashChildren(h[2], h[3])
+	// Level 2: root
+	root := hasher.HashChildren(n01, n23)
+
+	// Inclusion proof for leaf index 2 (tree size 4):
+	// sibling = h[3], then n01
+	proofHashes := []string{
+		hex.EncodeToString(h[3]),
+		hex.EncodeToString(n01),
+	}
+
+	entry := &rekorEntry{
+		Body: base64.StdEncoding.EncodeToString(leaves[2]),
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 2,
+				TreeSize: 4,
+				Hashes:   proofHashes,
+				RootHash: hex.EncodeToString(root),
+			},
+		},
+	}
+
+	if err := verifyInclusionProof(entry); err != nil {
+		t.Fatalf("verifyInclusionProof should pass: %v", err)
+	}
+}
+
+func TestVerifyInclusionProof_Tampered(t *testing.T) {
+	leaves := [][]byte{
+		[]byte("leaf-0"),
+		[]byte("leaf-1"),
+		[]byte("leaf-2"),
+		[]byte("leaf-3"),
+	}
+
+	hasher := rfc6962.DefaultHasher
+	h := make([][]byte, len(leaves))
+	for i, l := range leaves {
+		h[i] = hasher.HashLeaf(l)
+	}
+
+	n01 := hasher.HashChildren(h[0], h[1])
+	n23 := hasher.HashChildren(h[2], h[3])
+	root := hasher.HashChildren(n01, n23)
+
+	proofHashes := []string{
+		hex.EncodeToString(h[3]),
+		hex.EncodeToString(n01),
+	}
+
+	entry := &rekorEntry{
+		// Tamper: use leaf-0 body instead of leaf-2.
+		Body: base64.StdEncoding.EncodeToString(leaves[0]),
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 2,
+				TreeSize: 4,
+				Hashes:   proofHashes,
+				RootHash: hex.EncodeToString(root),
+			},
+		},
+	}
+
+	if err := verifyInclusionProof(entry); err == nil {
+		t.Fatal("verifyInclusionProof should fail for tampered entry")
+	} else {
+		t.Logf("Expected error: %v", err)
+	}
+}
+
+func TestVerifyInclusionProof_NoProof(t *testing.T) {
+	entry := &rekorEntry{Body: "dGVzdA=="}
+	if err := verifyInclusionProof(entry); err == nil {
+		t.Fatal("verifyInclusionProof should fail when no inclusion proof")
+	}
+}
+
+func TestVerifyInclusionProof_NegativeLogIndex(t *testing.T) {
+	entry := &rekorEntry{
+		Body: "dGVzdA==",
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: -1,
+				TreeSize: 10,
+				RootHash: "abcd",
+			},
+		},
+	}
+	err := verifyInclusionProof(entry)
+	if err == nil {
+		t.Fatal("expected error for negative LogIndex")
+	}
+	if !strings.Contains(err.Error(), "negative") {
+		t.Errorf("error should mention negative: %v", err)
+	}
+}
+
+func TestVerifyInclusionProof_ZeroTreeSize(t *testing.T) {
+	entry := &rekorEntry{
+		Body: "dGVzdA==",
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 0,
+				TreeSize: 0,
+				RootHash: "abcd",
+			},
+		},
+	}
+	err := verifyInclusionProof(entry)
+	if err == nil {
+		t.Fatal("expected error for zero TreeSize")
+	}
+	if !strings.Contains(err.Error(), "non-positive") {
+		t.Errorf("error should mention non-positive: %v", err)
+	}
+}
+
+func TestVerifyInclusionProof_LogIndexGETreeSize(t *testing.T) {
+	entry := &rekorEntry{
+		Body: "dGVzdA==",
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 10,
+				TreeSize: 10,
+				RootHash: "abcd",
+			},
+		},
+	}
+	err := verifyInclusionProof(entry)
+	if err == nil {
+		t.Fatal("expected error when LogIndex >= TreeSize")
+	}
+	if !strings.Contains(err.Error(), ">=") {
+		t.Errorf("error should mention >= comparison: %v", err)
+	}
+}
+
+func TestVerifyInclusionProof_TooManyHashes(t *testing.T) {
+	hashes := make([]string, 65)
+	for i := range hashes {
+		hashes[i] = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+	}
+	entry := &rekorEntry{
+		Body: "dGVzdA==",
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 0,
+				TreeSize: 1,
+				Hashes:   hashes,
+				RootHash: "abcd",
+			},
+		},
+	}
+	err := verifyInclusionProof(entry)
+	if err == nil {
+		t.Fatal("expected error for too many hashes")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("error should mention exceeds maximum: %v", err)
+	}
+}
+
+func TestParseRekorPublicKey(t *testing.T) {
+	key, err := parseRekorPublicKey()
+	if err != nil {
+		t.Fatalf("parseRekorPublicKey: %v", err)
+	}
+	if key.Curve != elliptic.P256() {
+		t.Errorf("expected P-256 curve, got %v", key.Curve.Params().Name)
+	}
+}
+
+// TestVerifyRekorEntry_InclusionIndependentOfSET verifies that a Rekor public
+// key parse failure only prevents SET verification, not inclusion proof
+// verification. The two checks must be independent.
+func TestVerifyRekorEntry_InclusionIndependentOfSET(t *testing.T) {
+	// Build a valid single-leaf Merkle tree.
+	leafData := []byte("leaf-data")
+	hasher := rfc6962.DefaultHasher
+	leafHash := hasher.HashLeaf(leafData)
+	rootHash := hex.EncodeToString(leafHash) // single-leaf: root == leaf hash
+
+	entry := &rekorEntry{
+		Body:           base64.StdEncoding.EncodeToString(leafData),
+		IntegratedTime: 1700000000,
+		LogIndex:       0,
+		LogID:          "test-log-id",
+		Verification: &rekorVerification{
+			SignedEntryTimestamp: base64.StdEncoding.EncodeToString([]byte("invalid-sig")),
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 0,
+				TreeSize: 1,
+				Hashes:   []string{},
+				RootHash: rootHash,
+			},
+		},
+	}
+
+	// Temporarily override with an invalid key to force SET failure.
+	orig := rekorPublicKeyOverride
+	rekorPublicKeyOverride = "not-a-pem-key"
+	defer func() { rekorPublicKeyOverride = orig }()
+
+	prov := &RekorProvenance{}
+	verifyRekorEntry(entry, prov)
+
+	// SET should fail due to bad key.
+	if prov.SETErr == nil {
+		t.Error("expected SETErr when Rekor key is invalid")
+	}
+	if prov.SETVerified {
+		t.Error("expected SETVerified=false when Rekor key is invalid")
+	}
+
+	// Inclusion proof should still pass — it doesn't need the Rekor key.
+	if prov.InclusionErr != nil {
+		t.Errorf("expected InclusionErr=nil, got %v", prov.InclusionErr)
+	}
+	if !prov.InclusionVerified {
+		t.Error("expected InclusionVerified=true even when SET fails")
+	}
+}
+
+// buildMockEntryResponseWithVerification builds a mock Rekor entry response
+// that includes verification fields (SET and inclusion proof).
+func buildMockEntryResponseWithVerification(uuid, dsseBodyB64 string) []byte {
+	entry := []map[string]any{
+		{uuid: map[string]any{
+			"body":           dsseBodyB64,
+			"integratedTime": 1700000000,
+			"logID":          "c0d23d6ad406973f9559f3ba2d1ca5f0e0c7f5e8b0c5a2e6d3b1e4f7a8b9c0d1",
+			"logIndex":       42,
+			"verification": map[string]any{
+				"signedEntryTimestamp": base64.StdEncoding.EncodeToString([]byte("not-a-real-sig")),
+				"inclusionProof": map[string]any{
+					"checkpoint": "rekor.sigstore.dev - 1234\n42\nROOTHASH\n",
+					"hashes":     []string{"abcd1234"},
+					"logIndex":   42,
+					"rootHash":   "abcd1234",
+					"treeSize":   100,
+				},
+			},
+		}},
+	}
+	raw, _ := json.Marshal(entry)
+	return raw
+}
+
+func TestFetchRekorProvenance_SETAndInclusionErrors(t *testing.T) {
+	// Use an entry with invalid SET/inclusion data — verification should fail
+	// gracefully (non-fatal) and populate the error fields.
+	testUUID := "24296fb24b8ad77a1234567890abcdef"
+	dsseBody := buildMockDSSEBody(realFulcioCertPEM)
+	entryResp := buildMockEntryResponseWithVerification(testUUID, dsseBody)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/index/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			resp, _ := json.Marshal([]string{testUUID})
+			w.Write(resp)
+		case "/api/v1/log/entries/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(entryResp)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
+
+	if prov.Err != nil {
+		t.Fatalf("unexpected fatal error: %v", prov.Err)
+	}
+	// Fulcio cert parsing should still work.
+	if !prov.HasCert {
+		t.Error("expected HasCert=true")
+	}
+	// SET should fail — the signature is fake.
+	if prov.SETVerified {
+		t.Error("expected SETVerified=false for fake signature")
+	}
+	if prov.SETErr == nil {
+		t.Error("expected SETErr to be set for fake signature")
+	} else {
+		t.Logf("SETErr: %v", prov.SETErr)
+	}
+	// Inclusion proof should fail — the hashes are fake.
+	if prov.InclusionVerified {
+		t.Error("expected InclusionVerified=false for fake proof")
+	}
+	if prov.InclusionErr == nil {
+		t.Error("expected InclusionErr to be set for fake proof")
+	} else {
+		t.Logf("InclusionErr: %v", prov.InclusionErr)
+	}
+	// IntegratedTime should be populated.
+	if prov.IntegratedTime != 1700000000 {
+		t.Errorf("IntegratedTime: got %d, want 1700000000", prov.IntegratedTime)
 	}
 }

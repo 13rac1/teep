@@ -266,7 +266,23 @@ func (h *PinnedHandler) attestIfNeeded(
 			return nil, err
 		}
 		if r.Blocked() {
-			slog.Warn("attestation blocked by policy", "domain", domain, "model", model)
+			blocked := r.BlockedFactors()
+			names := make([]string, len(blocked))
+			for i, f := range blocked {
+				names[i] = f.Name
+			}
+			slog.Warn("attestation blocked by policy",
+				"domain", domain,
+				"model", model,
+				"blocked_factors", names,
+			)
+			for _, f := range blocked {
+				slog.Debug("blocked factor detail",
+					"factor", f.Name,
+					"detail", f.Detail,
+					"tier", f.Tier,
+				)
+			}
 			return attestResult{report: r, signingKey: key}, nil
 		}
 		h.spkiCache.Add(domain, liveSPKI)
@@ -294,6 +310,11 @@ func (h *PinnedHandler) attestOnConn(
 	domain, liveSPKI, model string,
 ) (*attestation.VerificationReport, string, error) {
 	modelNonce := attestation.NewNonce()
+	slog.Debug("nearcloud attestation nonce generated",
+		"nonce_prefix", modelNonce.HexPrefix(),
+		"domain", domain,
+		"model", model,
+	)
 
 	gwRaw, raw, err := h.sendAttestationRequest(conn, br, bw, domain, model, modelNonce)
 	if err != nil {
@@ -301,6 +322,13 @@ func (h *PinnedHandler) attestOnConn(
 	}
 
 	tdxResult := h.verifyModelTDX(ctx, raw, modelNonce)
+	if raw.NvidiaPayload != "" {
+		slog.Debug("verifying NVIDIA payload with nonce",
+			"nonce_prefix", modelNonce.HexPrefix(),
+			"domain", domain,
+			"model", model,
+		)
+	}
 	nvidiaResult, nrasResult := h.verifyModelNVIDIA(ctx, raw, modelNonce)
 	pocResult := h.checkPoC(ctx, raw.IntelQuote)
 

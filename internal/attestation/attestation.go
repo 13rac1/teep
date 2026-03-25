@@ -25,6 +25,18 @@ func NewNonce() Nonce {
 // Hex returns the nonce as a 64-character lowercase hex string.
 func (n Nonce) Hex() string { return hex.EncodeToString(n[:]) }
 
+// HexPrefix returns the first 8 hex characters of the nonce for safe logging.
+func (n Nonce) HexPrefix() string { return hex.EncodeToString(n[:4]) }
+
+// NoncePrefix returns the first 8 characters of a hex-encoded nonce string.
+// Used for safe logging of nonce values from untrusted sources.
+func NoncePrefix(hexNonce string) string {
+	if len(hexNonce) > 8 {
+		return hexNonce[:8]
+	}
+	return hexNonce
+}
+
 // ParseNonce decodes a 64-character hex string into a Nonce.
 func ParseNonce(s string) (Nonce, error) {
 	b, err := hex.DecodeString(s)

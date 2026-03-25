@@ -144,10 +144,23 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 				return nil, err
 			}
 			if r.Blocked() {
+				blocked := r.BlockedFactors()
+				names := make([]string, len(blocked))
+				for i, f := range blocked {
+					names[i] = f.Name
+				}
 				slog.Warn("attestation blocked by policy, refusing to cache SPKI",
 					"domain", domain,
 					"model", req.Model,
+					"blocked_factors", names,
 				)
+				for _, f := range blocked {
+					slog.Debug("blocked factor detail",
+						"factor", f.Name,
+						"detail", f.Detail,
+						"tier", f.Tier,
+					)
+				}
 				return r, nil
 			}
 			h.spkiCache.Add(domain, liveSPKI)
@@ -245,6 +258,11 @@ func (h *PinnedHandler) attestOnConn(
 	domain, liveSPKI, model string,
 ) (*attestation.VerificationReport, error) {
 	nonce := attestation.NewNonce()
+	slog.Debug("neardirect attestation nonce generated",
+		"nonce_prefix", nonce.HexPrefix(),
+		"domain", domain,
+		"model", model,
+	)
 
 	// Build the attestation request path with query parameters.
 	path := attestationPath +
@@ -306,6 +324,11 @@ func (h *PinnedHandler) attestOnConn(
 
 	var nvidiaResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" {
+		slog.Debug("verifying NVIDIA payload with nonce",
+			"nonce_prefix", nonce.HexPrefix(),
+			"domain", domain,
+			"model", model,
+		)
 		nvidiaResult = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
 	}
 

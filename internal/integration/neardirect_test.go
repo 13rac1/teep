@@ -288,6 +288,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 		{"tls_key_binding", attestation.Pass},
 		{"compose_binding", attestation.Pass},
 		{"sigstore_verification", attestation.Pass},
+		{"build_transparency_log", attestation.Pass},
 		{"event_log_integrity", attestation.Pass},
 	}
 
@@ -304,13 +305,6 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 		if f.Status == attestation.Fail {
 			t.Logf("WARNING: %s failed (likely PCK cert expiry, recapture fixtures): %s", name, f.Detail)
 		}
-	}
-
-	// build_transparency_log — may fail with stale fixtures due to pinned key
-	// fingerprints or OIDC identity mismatches. Re-capture fixtures to fix.
-	btlF := findFactor(t, report, "build_transparency_log")
-	if btlF.Status == attestation.Fail {
-		t.Logf("WARNING: build_transparency_log failed (stale fixture key fingerprint or OIDC identity, recapture fixtures): %s", btlF.Detail)
 	}
 
 	// Intel PCS collateral — expect pass with fixture data.

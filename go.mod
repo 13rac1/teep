@@ -16,6 +16,7 @@ require (
 
 require (
 	github.com/MicahParks/jwkset v0.11.0 // indirect
+	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/google/logger v1.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect

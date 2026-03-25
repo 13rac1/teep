@@ -72,7 +72,13 @@ func verifyNVIDIAEAT(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
 	result.Nonce = eat.Nonce
 	result.Format = "EAT"
 
-	slog.Debug("NVIDIA EAT parsed", "arch", eat.Arch, "gpu_count", len(eat.EvidenceList), "nonce_len", len(eat.Nonce))
+	slog.Debug("NVIDIA EAT parsed",
+		"arch", eat.Arch,
+		"gpu_count", len(eat.EvidenceList),
+		"eat_nonce_prefix", NoncePrefix(eat.Nonce),
+		"expected_nonce_prefix", expectedNonce.HexPrefix(),
+		"eat_nonce_matches", subtle.ConstantTimeCompare([]byte(eat.Nonce), []byte(expectedNonce.Hex())) == 1,
+	)
 
 	// Check top-level nonce.
 	if subtle.ConstantTimeCompare([]byte(eat.Nonce), []byte(expectedNonce.Hex())) != 1 {
@@ -250,9 +256,16 @@ func verifySPDMEvidence(evidence []byte, expectedNonce Nonce, leafKey *ecdsa.Pub
 	// Extract requester nonce from request[4:36].
 	var requestNonce [32]byte
 	copy(requestNonce[:], evidence[4:36])
+	gotHex := hex.EncodeToString(requestNonce[:])
+	wantHex := expectedNonce.Hex()
+	slog.Debug("SPDM requester nonce extracted",
+		"spdm_nonce_prefix", NoncePrefix(gotHex),
+		"expected_nonce_prefix", NoncePrefix(wantHex),
+		"match", subtle.ConstantTimeCompare(requestNonce[:], expectedNonce[:]) == 1,
+	)
 	if subtle.ConstantTimeCompare(requestNonce[:], expectedNonce[:]) != 1 {
 		return fmt.Errorf("requester nonce mismatch: got %s, want %s",
-			hex.EncodeToString(requestNonce[:]), expectedNonce.Hex())
+			gotHex, wantHex)
 	}
 
 	// --- Validate MEASUREMENTS response (bytes 37+) ---
