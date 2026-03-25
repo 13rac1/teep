@@ -231,11 +231,9 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
 		if composeResult.Err == nil {
 			slog.Info("compose binding verified", "mr_config_id", hex.EncodeToString(tdxResult.MRConfigID[:min(33, len(tdxResult.MRConfigID))]))
+			modelCD = attestation.ExtractComposeDigests(raw.AppCompose)
 		} else {
 			slog.Warn("compose binding failed", "err", composeResult.Err)
-		}
-		if composeResult.Err == nil {
-			modelCD = attestation.ExtractComposeDigests(raw.AppCompose)
 		}
 	}
 

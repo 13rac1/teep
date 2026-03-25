@@ -363,22 +363,13 @@ func (h *PinnedHandler) attestOnConn(
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
 		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
 
-		dockerCompose, err := attestation.ExtractDockerCompose(raw.AppCompose)
-		if err != nil {
-			slog.Debug("extract docker_compose_file failed", "domain", domain, "err", err)
-		}
-		if dockerCompose != "" {
-			slog.Debug("attested docker compose manifest", "domain", domain, "content", dockerCompose)
-		}
-		source := dockerCompose
-		if source == "" {
-			source = raw.AppCompose
-		}
-		imageRepos = attestation.ExtractImageRepositories(source)
-		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
-		digests := attestation.ExtractImageDigests(source)
-		if len(digests) > 0 && !h.offline && h.rekorClient != nil {
-			sigstoreResults = h.rekorClient.CheckSigstoreDigests(ctx, digests)
+		if composeResult.Err == nil {
+			cd := attestation.ExtractComposeDigests(raw.AppCompose)
+			imageRepos = cd.Repos
+			digestToRepo = cd.DigestToRepo
+			if len(cd.Digests) > 0 && !h.offline && h.rekorClient != nil {
+				sigstoreResults = h.rekorClient.CheckSigstoreDigests(ctx, cd.Digests)
+			}
 		}
 	}
 

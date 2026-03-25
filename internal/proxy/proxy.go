@@ -396,22 +396,14 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
 		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
 
-		dockerCompose, err := attestation.ExtractDockerCompose(raw.AppCompose)
-		if err != nil {
-			slog.Debug("extract docker_compose_file failed", "provider", prov.Name, "err", err)
-		}
-		if dockerCompose != "" {
-			slog.Debug("attested docker compose manifest", "provider", prov.Name, "content", dockerCompose)
-		}
-		source := dockerCompose
-		if source == "" {
-			source = raw.AppCompose
-		}
-		imageRepos = attestation.ExtractImageRepositories(source)
-		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
-		digests := attestation.ExtractImageDigests(source)
-		if len(digests) > 0 && !s.cfg.Offline {
-			sigstoreResults = s.rekorClient.CheckSigstoreDigests(ctx, digests)
+		if composeResult.Err == nil {
+			cd := attestation.ExtractComposeDigests(raw.AppCompose)
+			imageRepos = cd.Repos
+			digestToRepo = cd.DigestToRepo
+			digests := cd.Digests
+			if len(digests) > 0 && !s.cfg.Offline {
+				sigstoreResults = s.rekorClient.CheckSigstoreDigests(ctx, digests)
+			}
 		}
 		composeDur = time.Since(composeStart)
 	}
