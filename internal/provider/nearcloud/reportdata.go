@@ -23,6 +23,9 @@ type GatewayReportDataVerifier struct{}
 // VerifyReportData satisfies provider.ReportDataVerifier, extracting the
 // gateway TLS fingerprint from raw attestation data.
 func (GatewayReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, nonce attestation.Nonce) (string, error) {
+	if raw == nil {
+		return "", errors.New("raw attestation is nil; cannot verify REPORTDATA")
+	}
 	return GatewayReportDataVerifier{}.Verify(reportData, raw.GatewayTLSFingerprint, nonce)
 }
 
