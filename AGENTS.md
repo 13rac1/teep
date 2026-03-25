@@ -52,6 +52,7 @@ To ensure data privacy and integrity, adhere to the following rules:
 - If you can't make progress due to a failing validation, STOP and ask for advice.
 - All cryptographic comparisons MUST be constant-time (`subtle.ConstantTimeCompare`). Never use `==` or `bytes.Equal` on secrets or fingerprints.
 - NEVER log or print API keys, inference request data, or inference response data.
+- NEVER weaken or bypass validation behavior.
 - NO WORKAROUNDS.
 - NO ERROR FALLBACKS.
 - NO BACKWARDS COMPATIBILITY.
