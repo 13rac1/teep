@@ -310,6 +310,11 @@ func (h *PinnedHandler) attestOnConn(
 	domain, liveSPKI, model string,
 ) (*attestation.VerificationReport, string, error) {
 	modelNonce := attestation.NewNonce()
+	slog.Debug("nearcloud attestation nonce generated",
+		"nonce", modelNonce.Hex(),
+		"domain", domain,
+		"model", model,
+	)
 
 	gwRaw, raw, err := h.sendAttestationRequest(conn, br, bw, domain, model, modelNonce)
 	if err != nil {
@@ -317,6 +322,13 @@ func (h *PinnedHandler) attestOnConn(
 	}
 
 	tdxResult := h.verifyModelTDX(ctx, raw, modelNonce)
+	if raw.NvidiaPayload != "" {
+		slog.Debug("verifying NVIDIA payload with nonce",
+			"nonce", modelNonce.Hex(),
+			"domain", domain,
+			"model", model,
+		)
+	}
 	nvidiaResult, nrasResult := h.verifyModelNVIDIA(ctx, raw, modelNonce)
 	pocResult := h.checkPoC(ctx, raw.IntelQuote)
 

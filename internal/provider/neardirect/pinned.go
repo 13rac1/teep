@@ -258,6 +258,11 @@ func (h *PinnedHandler) attestOnConn(
 	domain, liveSPKI, model string,
 ) (*attestation.VerificationReport, error) {
 	nonce := attestation.NewNonce()
+	slog.Debug("neardirect attestation nonce generated",
+		"nonce", nonce.Hex(),
+		"domain", domain,
+		"model", model,
+	)
 
 	// Build the attestation request path with query parameters.
 	path := attestationPath +
@@ -319,6 +324,11 @@ func (h *PinnedHandler) attestOnConn(
 
 	var nvidiaResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" {
+		slog.Debug("verifying NVIDIA payload with nonce",
+			"nonce", nonce.Hex(),
+			"domain", domain,
+			"model", model,
+		)
 		nvidiaResult = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
 	}
 
