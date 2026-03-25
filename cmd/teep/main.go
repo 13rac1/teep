@@ -364,8 +364,8 @@ func verifyNearcloudGateway(
 	slog.Debug("gateway TDX verification starting", "quote_len", len(raw.GatewayIntelQuote))
 	tdx = attestation.VerifyTDXQuote(ctx, raw.GatewayIntelQuote, nonce, offline)
 	if tdx.ParseErr == nil {
-		detail, rdErr := nearcloud.GatewayReportDataVerifier{}.Verify(
-			tdx.ReportData, raw.GatewayTLSFingerprint, nonce)
+		detail, rdErr := nearcloud.GatewayReportDataVerifier{}.VerifyReportData(
+			tdx.ReportData, raw, nonce)
 		tdx.ReportDataBindingErr = rdErr
 		tdx.ReportDataBindingDetail = detail
 	}

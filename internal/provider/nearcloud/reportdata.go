@@ -20,6 +20,12 @@ import (
 // correct security behavior (unknown REPORTDATA = don't trust it).
 type GatewayReportDataVerifier struct{}
 
+// VerifyReportData satisfies provider.ReportDataVerifier, extracting the
+// gateway TLS fingerprint from raw attestation data.
+func (GatewayReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, nonce attestation.Nonce) (string, error) {
+	return GatewayReportDataVerifier{}.Verify(reportData, raw.GatewayTLSFingerprint, nonce)
+}
+
 // Verify checks that reportData matches the expected gateway binding scheme.
 func (GatewayReportDataVerifier) Verify(reportData [64]byte, tlsFingerprint string, nonce attestation.Nonce) (string, error) {
 	// Check nonce half: REPORTDATA[32:64] == nonce
