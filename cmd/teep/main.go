@@ -40,7 +40,11 @@ func main() {
 	}
 
 	// Parse --log-level before the subcommand. It can appear anywhere in os.Args.
-	level := parseLogLevel(os.Args[1:])
+	level, err := parseLogLevel(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "teep: %v\n", err)
+		os.Exit(1)
+	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
 	switch os.Args[1] {
@@ -59,7 +63,7 @@ func main() {
 
 // parseLogLevel extracts --log-level from args and returns the corresponding
 // slog.Level. Defaults to slog.LevelInfo.
-func parseLogLevel(args []string) slog.Level {
+func parseLogLevel(args []string) (slog.Level, error) {
 	for i, arg := range args {
 		var val string
 		if arg == "--log-level" && i+1 < len(args) {
@@ -71,19 +75,18 @@ func parseLogLevel(args []string) slog.Level {
 		}
 		switch strings.ToLower(val) {
 		case "debug":
-			return slog.LevelDebug
+			return slog.LevelDebug, nil
 		case "info":
-			return slog.LevelInfo
+			return slog.LevelInfo, nil
 		case "warn":
-			return slog.LevelWarn
+			return slog.LevelWarn, nil
 		case "error":
-			return slog.LevelError
+			return slog.LevelError, nil
 		default:
-			fmt.Fprintf(os.Stderr, "teep: unknown log level %q (valid: debug, info, warn, error)\n", val)
-			os.Exit(1)
+			return 0, fmt.Errorf("unknown log level %q (valid: debug, info, warn, error)", val)
 		}
 	}
-	return slog.LevelInfo
+	return slog.LevelInfo, nil
 }
 
 // runServe loads config, creates the proxy, and starts listening.
@@ -206,15 +209,27 @@ func runVerify(args []string) {
 // attestation, runs TDX and NVIDIA verification, and returns the report.
 // If saveDir is non-empty, raw attestation data is saved to files there.
 func runVerification(providerName, modelName, saveDir string, offline bool) *attestation.VerificationReport {
-	cfg, cp := loadConfig(providerName)
-	attester := newAttester(providerName, cp, offline)
+	cfg, cp, err := loadConfig(providerName)
+	if err != nil {
+		slog.Error("load config failed", "err", err)
+		os.Exit(1)
+	}
+	attester, err := newAttester(providerName, cp, offline)
+	if err != nil {
+		slog.Error("attester init failed", "err", err)
+		os.Exit(1)
+	}
 	client := config.NewAttestationClient(offline)
 
 	nonce := attestation.NewNonce()
 	slog.Debug("nonce generated", "provider", providerName, "model", modelName, "nonce", nonce.Hex()[:16]+"...")
 	ctx := context.Background()
 
-	raw := fetchAttestation(ctx, attester, providerName, modelName, nonce)
+	raw, err := fetchAttestation(ctx, attester, providerName, modelName, nonce)
+	if err != nil {
+		slog.Error("fetch attestation failed", "err", err)
+		os.Exit(1)
+	}
 	if saveDir != "" {
 		saveAttestationData(saveDir, providerName, raw)
 	}
@@ -274,31 +289,28 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 }
 
 // loadConfig loads the TOML config and looks up the named provider.
-func loadConfig(providerName string) (*config.Config, *config.Provider) {
+func loadConfig(providerName string) (*config.Config, *config.Provider, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		slog.Error("load config failed", "err", err)
-		os.Exit(1)
+		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
 	cp, ok := cfg.Providers[providerName]
 	if !ok {
-		slog.Error(providerNotFoundError(providerName, cfg).Error())
-		os.Exit(1)
+		return nil, nil, providerNotFoundError(providerName, cfg)
 	}
-	return cfg, cp
+	return cfg, cp, nil
 }
 
 // fetchAttestation fetches raw attestation data from the provider with timing log.
-func fetchAttestation(ctx context.Context, attester provider.Attester, providerName, modelName string, nonce attestation.Nonce) *attestation.RawAttestation {
+func fetchAttestation(ctx context.Context, attester provider.Attester, providerName, modelName string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	slog.Debug("attestation fetch starting", "provider", providerName, "model", modelName)
 	fetchStart := time.Now()
 	raw, err := attester.FetchAttestation(ctx, modelName, nonce)
 	if err != nil {
-		slog.Error("fetch attestation failed", "provider", providerName, "model", modelName, "err", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("fetch attestation from %s model %s: %w", providerName, modelName, err)
 	}
 	slog.Debug("attestation fetch complete", "provider", providerName, "elapsed", time.Since(fetchStart))
-	return raw
+	return raw, nil
 }
 
 // verifyTDX runs TDX quote verification and report data binding.
@@ -422,22 +434,16 @@ func checkSigstore(ctx context.Context, digests []string, client *http.Client, o
 }
 
 // newAttester returns the appropriate Attester for the named provider.
-func newAttester(name string, cp *config.Provider, offline ...bool) provider.Attester {
-	off := false
-	if len(offline) > 0 {
-		off = offline[0]
-	}
+func newAttester(name string, cp *config.Provider, offline bool) (provider.Attester, error) {
 	switch name {
 	case "venice":
-		return venice.NewAttester(cp.BaseURL, cp.APIKey, off)
+		return venice.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	case "neardirect":
-		return neardirect.NewAttester(cp.BaseURL, cp.APIKey, off)
+		return neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	case "nearcloud":
-		return nearcloud.NewAttester(cp.APIKey, off)
+		return nearcloud.NewAttester(cp.APIKey, offline), nil
 	default:
-		slog.Error("unknown provider", "provider", name, "supported", "venice, neardirect, nearcloud")
-		os.Exit(1)
-		return nil // unreachable
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud)", name)
 	}
 }
 

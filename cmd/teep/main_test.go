@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/venice"
 )
@@ -531,11 +534,25 @@ func TestParseLogLevel(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := parseLogLevel(tc.args)
+			got, err := parseLogLevel(tc.args)
+			if err != nil {
+				t.Fatalf("parseLogLevel(%v) unexpected error: %v", tc.args, err)
+			}
 			if got != tc.want {
 				t.Errorf("parseLogLevel(%v) = %v, want %v", tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseLogLevel_Invalid(t *testing.T) {
+	_, err := parseLogLevel([]string{"--log-level", "verbose"})
+	t.Logf("parseLogLevel(--log-level verbose) error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for invalid log level")
+	}
+	if !strings.Contains(err.Error(), "verbose") {
+		t.Errorf("error should mention the invalid level: %v", err)
 	}
 }
 
@@ -547,16 +564,43 @@ func TestNewAttester(t *testing.T) {
 	cp := &config.Provider{BaseURL: "http://localhost", APIKey: "key"}
 
 	t.Run("venice", func(t *testing.T) {
-		a := newAttester("venice", cp)
+		a, err := newAttester("venice", cp, false)
+		if err != nil {
+			t.Fatalf("newAttester(venice): %v", err)
+		}
 		if _, ok := a.(*venice.Attester); !ok {
 			t.Errorf("newAttester(venice) returned %T, want *venice.Attester", a)
 		}
 	})
 
 	t.Run("neardirect", func(t *testing.T) {
-		a := newAttester("neardirect", cp)
+		a, err := newAttester("neardirect", cp, false)
+		if err != nil {
+			t.Fatalf("newAttester(neardirect): %v", err)
+		}
 		if _, ok := a.(*neardirect.Attester); !ok {
 			t.Errorf("newAttester(neardirect) returned %T, want *neardirect.Attester", a)
+		}
+	})
+
+	t.Run("nearcloud", func(t *testing.T) {
+		a, err := newAttester("nearcloud", cp, false)
+		if err != nil {
+			t.Fatalf("newAttester(nearcloud): %v", err)
+		}
+		if _, ok := a.(*nearcloud.Attester); !ok {
+			t.Errorf("newAttester(nearcloud) returned %T, want *nearcloud.Attester", a)
+		}
+	})
+
+	t.Run("unknown", func(t *testing.T) {
+		_, err := newAttester("bogus", cp, false)
+		t.Logf("newAttester(bogus) error: %v", err)
+		if err == nil {
+			t.Fatal("expected error for unknown provider")
+		}
+		if !strings.Contains(err.Error(), "bogus") {
+			t.Errorf("error should mention the provider name: %v", err)
 		}
 	})
 }
@@ -658,4 +702,62 @@ func TestSaveAttestationData(t *testing.T) {
 			t.Errorf("no file with prefix %q found in %v", want, gotPrefixes)
 		}
 	}
+}
+
+// --------------------------------------------------------------------------
+// loadConfig tests
+// --------------------------------------------------------------------------
+
+func TestLoadConfig_UnknownProvider(t *testing.T) {
+	_, _, err := loadConfig("nonexistent_provider_xyz")
+	t.Logf("loadConfig(nonexistent) error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+}
+
+// --------------------------------------------------------------------------
+// fetchAttestation tests
+// --------------------------------------------------------------------------
+
+// failAttester is a mock that always returns an error.
+type failAttester struct{}
+
+func (failAttester) FetchAttestation(_ context.Context, _ string, _ attestation.Nonce) (*attestation.RawAttestation, error) {
+	return nil, errors.New("mock fetch error")
+}
+
+func TestFetchAttestation_Error(t *testing.T) {
+	ctx := context.Background()
+	nonce := attestation.NewNonce()
+
+	_, err := fetchAttestation(ctx, failAttester{}, "test", "model", nonce)
+	t.Logf("fetchAttestation error: %v", err)
+	if err == nil {
+		t.Fatal("expected error from failing attester")
+	}
+	if !strings.Contains(err.Error(), "mock fetch error") {
+		t.Errorf("error should wrap the mock error: %v", err)
+	}
+}
+
+func TestFetchAttestation_Success(t *testing.T) {
+	ctx := context.Background()
+	nonce := attestation.NewNonce()
+	want := &attestation.RawAttestation{IntelQuote: "test-quote"}
+
+	raw, err := fetchAttestation(ctx, successAttester{raw: want}, "test", "model", nonce)
+	if err != nil {
+		t.Fatalf("fetchAttestation unexpected error: %v", err)
+	}
+	if raw.IntelQuote != want.IntelQuote {
+		t.Errorf("IntelQuote = %q, want %q", raw.IntelQuote, want.IntelQuote)
+	}
+}
+
+// successAttester is a mock that returns a fixed RawAttestation.
+type successAttester struct{ raw *attestation.RawAttestation }
+
+func (a successAttester) FetchAttestation(_ context.Context, _ string, _ attestation.Nonce) (*attestation.RawAttestation, error) {
+	return a.raw, nil
 }
