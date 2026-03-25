@@ -488,6 +488,57 @@ func TestParseRekorPublicKey(t *testing.T) {
 	}
 }
 
+// TestVerifyRekorEntry_InclusionIndependentOfSET verifies that a Rekor public
+// key parse failure only prevents SET verification, not inclusion proof
+// verification. The two checks must be independent.
+func TestVerifyRekorEntry_InclusionIndependentOfSET(t *testing.T) {
+	// Build a valid single-leaf Merkle tree.
+	leafData := []byte("leaf-data")
+	hasher := rfc6962.DefaultHasher
+	leafHash := hasher.HashLeaf(leafData)
+	rootHash := hex.EncodeToString(leafHash) // single-leaf: root == leaf hash
+
+	entry := &rekorEntry{
+		Body:           base64.StdEncoding.EncodeToString(leafData),
+		IntegratedTime: 1700000000,
+		LogIndex:       0,
+		LogID:          "test-log-id",
+		Verification: &rekorVerification{
+			SignedEntryTimestamp: base64.StdEncoding.EncodeToString([]byte("invalid-sig")),
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 0,
+				TreeSize: 1,
+				Hashes:   []string{},
+				RootHash: rootHash,
+			},
+		},
+	}
+
+	// Temporarily override with an invalid key to force SET failure.
+	orig := rekorPublicKeyOverride
+	rekorPublicKeyOverride = "not-a-pem-key"
+	defer func() { rekorPublicKeyOverride = orig }()
+
+	prov := &RekorProvenance{}
+	verifyRekorEntry(entry, prov)
+
+	// SET should fail due to bad key.
+	if prov.SETErr == nil {
+		t.Error("expected SETErr when Rekor key is invalid")
+	}
+	if prov.SETVerified {
+		t.Error("expected SETVerified=false when Rekor key is invalid")
+	}
+
+	// Inclusion proof should still pass — it doesn't need the Rekor key.
+	if prov.InclusionErr != nil {
+		t.Errorf("expected InclusionErr=nil, got %v", prov.InclusionErr)
+	}
+	if !prov.InclusionVerified {
+		t.Error("expected InclusionVerified=true even when SET fails")
+	}
+}
+
 // buildMockEntryResponseWithVerification builds a mock Rekor entry response
 // that includes verification fields (SET and inclusion proof).
 func buildMockEntryResponseWithVerification(uuid, dsseBodyB64 string) []byte {

@@ -590,21 +590,21 @@ func buildPAE(payloadType string, payload []byte) []byte {
 // RekorProvenance. Verification failures are non-fatal — the provenance is
 // still usable, but the report will reflect the verification status.
 func verifyRekorEntry(entry *rekorEntry, prov *RekorProvenance) {
+	// SET verification requires the Rekor public key; inclusion proof does not.
+	// Verify them independently so a key parse failure doesn't mask a working
+	// inclusion proof (or vice versa).
 	rekorKey, err := parseRekorPublicKey()
 	if err != nil {
 		prov.SETErr = fmt.Errorf("parse Rekor public key: %w", err)
-		prov.InclusionErr = prov.SETErr
-		return
-	}
-
-	// Verify the Signed Entry Timestamp (SET).
-	if err := verifySET(entry, rekorKey); err != nil {
-		prov.SETErr = fmt.Errorf("SET verification: %w", err)
 	} else {
-		prov.SETVerified = true
+		if err := verifySET(entry, rekorKey); err != nil {
+			prov.SETErr = fmt.Errorf("SET verification: %w", err)
+		} else {
+			prov.SETVerified = true
+		}
 	}
 
-	// Verify the Merkle tree inclusion proof.
+	// Verify the Merkle tree inclusion proof independently of SET.
 	if err := verifyInclusionProof(entry); err != nil {
 		prov.InclusionErr = fmt.Errorf("inclusion proof: %w", err)
 	} else {
