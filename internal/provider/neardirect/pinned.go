@@ -155,7 +155,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 					"blocked_factors", names,
 				)
 				for _, f := range blocked {
-					slog.Info("blocked factor detail",
+					slog.Debug("blocked factor detail",
 						"factor", f.Name,
 						"detail", f.Detail,
 						"tier", f.Tier,

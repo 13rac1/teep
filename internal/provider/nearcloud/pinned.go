@@ -277,7 +277,7 @@ func (h *PinnedHandler) attestIfNeeded(
 				"blocked_factors", names,
 			)
 			for _, f := range blocked {
-				slog.Info("blocked factor detail",
+				slog.Debug("blocked factor detail",
 					"factor", f.Name,
 					"detail", f.Detail,
 					"tier", f.Tier,
