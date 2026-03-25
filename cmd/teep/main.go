@@ -159,6 +159,7 @@ var providerEnvVars = map[string]string{
 	"neardirect": "NEARAI_API_KEY",
 	"nearcloud":  "NEARAI_API_KEY",
 	"nanogpt":    "NANOGPT_API_KEY",
+	"phalacloud": "PHALA_API_KEY",
 }
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
