@@ -1,4 +1,4 @@
-.PHONY: help build test integration integration-venice integration-neardirect integration-nearcloud integration-neardirect-fixture integration-venice-fixture capture-neardirect capture-venice vet fmt lint check clean reports report-venice report-neardirect report-nearcloud e2e-venice
+.PHONY: help build test integration integration-venice integration-neardirect integration-nearcloud integration-neardirect-fixture integration-venice-fixture capture-neardirect capture-venice vet lint check clean reports report-venice report-neardirect report-nearcloud e2e-venice
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-22s %s\n", $$1, $$2}'
@@ -35,13 +35,12 @@ capture-venice: ## Capture Venice fixtures (requires VENICE_API_KEY)
 vet: ## Run go vet
 	go vet ./cmd/... ./internal/...
 
-fmt: ## Check gofmt formatting
+lint: vet ## Run gofmt + go vet + golangci-lint
+	@echo "gofmt check..."
 	@test -z "$$(gofmt -l cmd/ internal/)" || { gofmt -l cmd/ internal/; exit 1; }
-
-lint: ## Run golangci-lint (strict config)
 	golangci-lint run ./cmd/... ./internal/...
 
-check: fmt vet lint test ## Run fmt + vet + lint + test
+check: lint test ## Run lint + test
 
 reports: report-venice report-neardirect report-nearcloud ## Run all attestation reports
 
