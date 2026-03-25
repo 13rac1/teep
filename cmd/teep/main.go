@@ -32,6 +32,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/proxy"
 )
@@ -474,8 +475,10 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 		return nearcloud.NewAttester(cp.APIKey, offline), nil
 	case "nanogpt":
 		return nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
+	case "phalacloud":
+		return phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt)", name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud)", name)
 	}
 }
 
@@ -488,6 +491,9 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 	case "nanogpt":
 		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
 		return venice.ReportDataVerifier{}
+	case "phalacloud":
+		// Chutes format has no signing_address; REPORTDATA binding is unknown.
+		return nil
 	default:
 		return nil
 	}

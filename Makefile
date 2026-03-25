@@ -1,4 +1,4 @@
-.PHONY: help build test integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-neardirect-fixture integration-venice-fixture capture-neardirect capture-venice vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt e2e-venice
+.PHONY: help build test integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-neardirect-fixture integration-venice-fixture capture-neardirect capture-venice vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud e2e-venice
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-22s %s\n", $$1, $$2}'
@@ -9,7 +9,7 @@ build: ## Build the teep binary
 test: ## Run unit tests with race detector (-short skips integration)
 	go test -short -race ./cmd/... ./internal/...
 
-integration: integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-neardirect-fixture integration-venice-fixture ## Run all integration tests
+integration: integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-neardirect-fixture integration-venice-fixture ## Run all integration tests
 
 integration-venice: ## Run Venice integration tests (requires VENICE_API_KEY)
 	go test -v -race -timeout 120s -run TestIntegration_Venice ./internal/proxy/
@@ -22,6 +22,9 @@ integration-nearcloud: ## Run NearCloud gateway integration tests (requires NEAR
 
 integration-nanogpt: ## Run NanoGPT integration tests (requires NANOGPT_API_KEY)
 	go test -v -race -timeout 120s -run TestIntegration_NanoGPT ./internal/proxy/
+
+integration-phalacloud: ## Run Phala Cloud integration tests (requires PHALA_API_KEY)
+	go test -v -race -timeout 120s -run TestIntegration_PhalaCloud ./internal/proxy/
 
 integration-neardirect-fixture: ## Run NEAR Direct fixture integration test (no API key needed)
 	go test -v -race -timeout 60s -run TestIntegration_NearDirect_Fixture ./internal/integration/
@@ -48,7 +51,7 @@ lint: vet teeplint ## Run gofmt + go vet + golangci-lint + teeplint
 
 check: lint test ## Run lint + test
 
-reports: report-venice report-neardirect report-nearcloud report-nanogpt ## Run all attestation reports
+reports: report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud ## Run all attestation reports
 
 report-venice: build ## Verify Venice attestation (requires VENICE_API_KEY)
 	./teep verify venice --model e2ee-qwen3-5-122b-a10b --log-level debug --save-dir /tmp/teep-attestation-venice
@@ -61,6 +64,9 @@ report-nearcloud: build ## Verify NearCloud gateway attestation (requires NEARAI
 
 report-nanogpt: build ## Verify NanoGPT attestation (requires NANOGPT_API_KEY)
 	./teep verify nanogpt --model TEE/gemma-3-27b-it --log-level debug --save-dir /tmp/teep-attestation-nanogpt
+
+report-phalacloud: build ## Verify Phala Cloud attestation (requires PHALA_API_KEY)
+	./teep verify phalacloud --model phala/deepseek-chat-v3-0324 --log-level debug --save-dir /tmp/teep-attestation-phalacloud
 
 e2e-venice: ## Run Venice E2E test (requires VENICE_API_KEY)
 	./test/e2e-venice.sh
