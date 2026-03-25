@@ -123,7 +123,7 @@ func isPrintableUTF8(s string) bool {
 }
 
 // assertNonStreamResponse validates a non-streaming chat response has valid
-// printable UTF-8 content. Closes the response body.
+// printable UTF-8 content.
 func assertNonStreamResponse(t *testing.T, resp *http.Response) {
 	t.Helper()
 
@@ -144,7 +144,7 @@ func assertNonStreamResponse(t *testing.T, resp *http.Response) {
 }
 
 // assertStreamResponse validates a streaming chat response has valid printable
-// UTF-8 content across all SSE chunks. Closes the response body.
+// UTF-8 content across all SSE chunks.
 func assertStreamResponse(t *testing.T, resp *http.Response) {
 	t.Helper()
 

@@ -189,7 +189,7 @@ func factor(tier, name string, status Status, detail string) []FactorResult {
 // BuildReport runs verification factors against the input and returns a
 // complete VerificationReport. The Enforced field controls which factor names
 // result in Enforced=true. Pass DefaultEnforced for production use.
-// Base factors: 24 (all providers). Gateway factors: +10 (nearcloud only).
+// Gateway factors are included only for nearcloud.
 func BuildReport(in *ReportInput) *VerificationReport {
 	enforcedSet := make(map[string]bool, len(in.Enforced))
 	for _, name := range in.Enforced {
@@ -197,7 +197,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	}
 
 	evaluators := buildEvaluators(in.GatewayTDX != nil)
-	factors := make([]FactorResult, 0, 31)
+	var factors []FactorResult
 	for _, eval := range evaluators {
 		for _, f := range eval(in) {
 			f.Enforced = enforcedSet[f.Name]
@@ -662,7 +662,9 @@ func classifyRekorEntry(r *RekorProvenance, img *ImageProvenance, imageRepo stri
 
 	case img != nil:
 		if img.Provenance == SigstorePresent && img.KeyFingerprint != "" && r.KeyFingerprint != "" {
-			if !strings.EqualFold(r.KeyFingerprint, img.KeyFingerprint) {
+			fpGot, errG := hex.DecodeString(r.KeyFingerprint)
+			fpWant, errW := hex.DecodeString(img.KeyFingerprint)
+			if errG != nil || errW != nil || subtle.ConstantTimeCompare(fpGot, fpWant) != 1 {
 				return rekorFailed, fmt.Sprintf("image %q: unexpected signing key fingerprint %s (expected %s)",
 					imageRepo, truncHex(r.KeyFingerprint), truncHex(img.KeyFingerprint))
 			}
@@ -906,7 +908,7 @@ func evalGatewayTDXQuotePresent(in *ReportInput) []FactorResult {
 		return factor(TierGateway, "gateway_tdx_quote_present", Fail, "gateway TDX quote not available")
 	}
 	return factor(TierGateway, "gateway_tdx_quote_present", Pass,
-		fmt.Sprintf("gateway TDX quote present and parsed (%s)", tdxQuoteVersion(in.GatewayTDX)))
+		fmt.Sprintf("gateway TDX quote present (%d hex chars)", len(in.Raw.GatewayIntelQuote)))
 }
 
 // Precondition: in.GatewayTDX != nil (guaranteed by buildEvaluators).
