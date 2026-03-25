@@ -521,7 +521,7 @@ Usage:
   teep serve PROVIDER [--offline] [--log-level LEVEL]
 
 Arguments:
-  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt).
+  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt, phalacloud).
 
 The proxy intercepts OpenAI-compatible chat completion requests, performs TEE
 attestation verification against the upstream provider, and optionally enables
@@ -564,7 +564,7 @@ Usage:
   teep verify PROVIDER --model MODEL [flags]
 
 Arguments:
-  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt).
+  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt, phalacloud).
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
 attestation for the given model, and runs all verification factors. The

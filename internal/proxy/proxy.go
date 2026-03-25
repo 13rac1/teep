@@ -43,6 +43,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -319,8 +320,14 @@ func fromConfig(
 		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
 		p.ReportDataVerifier = venice.ReportDataVerifier{}
 		p.SupplyChainPolicy = nanogpt.SupplyChainPolicy()
+	case "phalacloud":
+		p.ChatPath = "/chat/completions"
+		p.Attester = phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		p.Preparer = phalacloud.NewPreparer(cp.APIKey)
+		p.ReportDataVerifier = phalacloud.ReportDataVerifier{}
+		p.ModelLister = phalacloud.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt)", cp.Name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud)", cp.Name)
 	}
 	return p, nil
 }
