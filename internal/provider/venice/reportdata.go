@@ -41,9 +41,11 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	derived := "0x" + hex.EncodeToString(derivedAddr)
 
 	// Verify the signing_address claimed in the response matches what we derived.
-	if raw.SigningAddress != "" && raw.SigningAddress != derived {
-		return "", fmt.Errorf("signing_address %s does not match keccak256-derived address %s",
-			raw.SigningAddress, derived)
+	if raw.SigningAddress != "" {
+		if subtle.ConstantTimeCompare([]byte(raw.SigningAddress), []byte(derived)) != 1 {
+			return "", fmt.Errorf("signing_address %s does not match keccak256-derived address %s",
+				raw.SigningAddress, derived)
+		}
 	}
 
 	// Venice REPORTDATA layout: [0:20] = keccak256 address, [20:32] = zero, [32:64] = nonce.
