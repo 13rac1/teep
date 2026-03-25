@@ -478,6 +478,91 @@ func TestVerifyInclusionProof_NoProof(t *testing.T) {
 	}
 }
 
+func TestVerifyInclusionProof_NegativeLogIndex(t *testing.T) {
+	entry := &rekorEntry{
+		Body: "dGVzdA==",
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: -1,
+				TreeSize: 10,
+				RootHash: "abcd",
+			},
+		},
+	}
+	err := verifyInclusionProof(entry)
+	if err == nil {
+		t.Fatal("expected error for negative LogIndex")
+	}
+	if !strings.Contains(err.Error(), "negative") {
+		t.Errorf("error should mention negative: %v", err)
+	}
+}
+
+func TestVerifyInclusionProof_ZeroTreeSize(t *testing.T) {
+	entry := &rekorEntry{
+		Body: "dGVzdA==",
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 0,
+				TreeSize: 0,
+				RootHash: "abcd",
+			},
+		},
+	}
+	err := verifyInclusionProof(entry)
+	if err == nil {
+		t.Fatal("expected error for zero TreeSize")
+	}
+	if !strings.Contains(err.Error(), "non-positive") {
+		t.Errorf("error should mention non-positive: %v", err)
+	}
+}
+
+func TestVerifyInclusionProof_LogIndexGETreeSize(t *testing.T) {
+	entry := &rekorEntry{
+		Body: "dGVzdA==",
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 10,
+				TreeSize: 10,
+				RootHash: "abcd",
+			},
+		},
+	}
+	err := verifyInclusionProof(entry)
+	if err == nil {
+		t.Fatal("expected error when LogIndex >= TreeSize")
+	}
+	if !strings.Contains(err.Error(), ">=") {
+		t.Errorf("error should mention >= comparison: %v", err)
+	}
+}
+
+func TestVerifyInclusionProof_TooManyHashes(t *testing.T) {
+	hashes := make([]string, 65)
+	for i := range hashes {
+		hashes[i] = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+	}
+	entry := &rekorEntry{
+		Body: "dGVzdA==",
+		Verification: &rekorVerification{
+			InclusionProof: &rekorInclusionProof{
+				LogIndex: 0,
+				TreeSize: 1,
+				Hashes:   hashes,
+				RootHash: "abcd",
+			},
+		},
+	}
+	err := verifyInclusionProof(entry)
+	if err == nil {
+		t.Fatal("expected error for too many hashes")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("error should mention exceeds maximum: %v", err)
+	}
+}
+
 func TestParseRekorPublicKey(t *testing.T) {
 	key, err := parseRekorPublicKey()
 	if err != nil {

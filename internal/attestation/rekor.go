@@ -666,6 +666,24 @@ func verifyInclusionProof(entry *rekorEntry) error {
 
 	ip := entry.Verification.InclusionProof
 
+	// Validate bounds before casting int64 → uint64. A malicious or garbled
+	// Rekor response could produce negative values that wrap to huge uint64s.
+	if ip.LogIndex < 0 {
+		return fmt.Errorf("inclusion proof logIndex is negative: %d", ip.LogIndex)
+	}
+	if ip.TreeSize <= 0 {
+		return fmt.Errorf("inclusion proof treeSize is non-positive: %d", ip.TreeSize)
+	}
+	if ip.LogIndex >= ip.TreeSize {
+		return fmt.Errorf("inclusion proof logIndex (%d) >= treeSize (%d)", ip.LogIndex, ip.TreeSize)
+	}
+	// A Merkle tree of depth D has at most D sibling hashes. For a SHA-256
+	// tree, D ≤ 64 covers well beyond any realistic log size (~2^64 entries).
+	const maxProofHashes = 64
+	if len(ip.Hashes) > maxProofHashes {
+		return fmt.Errorf("inclusion proof has %d hashes, exceeds maximum %d", len(ip.Hashes), maxProofHashes)
+	}
+
 	entryBytes, err := base64.StdEncoding.DecodeString(entry.Body)
 	if err != nil {
 		return fmt.Errorf("decode entry body: %w", err)
@@ -687,7 +705,7 @@ func verifyInclusionProof(entry *rekorEntry) error {
 	}
 
 	if err := proof.VerifyInclusion(rfc6962.DefaultHasher,
-		uint64(ip.LogIndex), uint64(ip.TreeSize), leafHash, hashes, rootHash); err != nil { //nolint:gosec // logIndex, treeSize are always non-negative from Rekor
+		uint64(ip.LogIndex), uint64(ip.TreeSize), leafHash, hashes, rootHash); err != nil {
 		return fmt.Errorf("merkle inclusion proof invalid: %w", err)
 	}
 	return nil
