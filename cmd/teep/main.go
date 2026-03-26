@@ -343,6 +343,9 @@ func verifyNVIDIA(ctx context.Context, raw *attestation.RawAttestation, nonce at
 		if raw.NvidiaNonce != "" {
 			if parsed, err := attestation.ParseNonce(raw.NvidiaNonce); err == nil {
 				nvidiaNonce = parsed
+			} else {
+				slog.Warn("failed to parse provider NvidiaNonce; using client nonce for GPU attestation",
+					"nvidia_nonce", raw.NvidiaNonce, "err", err)
 			}
 		}
 		slog.Debug("NVIDIA verification starting", "payload_len", len(raw.NvidiaPayload))
