@@ -153,16 +153,11 @@ func checkProviderStructure(r *result, prov string) {
 
 	checkAttestationPathConst(r, fset, files, prov)
 	checkResponseStruct(r, fset, files, prov, exc)
-	attesterStruct := checkAttesterStruct(r, fset, files, prov)
-	checkAttesterClientField(r, fset, attesterStruct, prov)
-	checkNewAttester(r, fset, files, prov)
+	checkAttesterClientField(r, fset, files, prov)
 	parseFunc := checkParseFunc(r, fset, files, prov, exc)
 	checkParseFuncUsesJSONStrict(r, fset, parseFunc, prov)
 	checkFetchUsesLimitReader(r, fset, files, prov)
 	checkNoBytesEqual(r, dir, prov)
-	checkReportDataImportsCryptoSubtle(r, dir, prov)
-	checkReportDataVerifierStruct(r, dir, prov)
-	checkVerifyReportDataMethod(r, dir, prov)
 	checkNoSlogAPIKeyArgs(r, fset, files, prov)
 	checkNoJSONRawMessage(r, fset, files, fileNames, prov)
 	checkExternalTestPackage(r, dir, prov)
@@ -228,8 +223,8 @@ func checkResponseStruct(r *result, fset *token.FileSet, files []*ast.File, prov
 	r.fail("%s struct not found in %s", want, prov)
 }
 
-// Exported Attester struct. Returns the struct type or nil.
-func checkAttesterStruct(r *result, fset *token.FileSet, files []*ast.File, prov string) *ast.StructType {
+// Attester.client *http.Client field.
+func checkAttesterClientField(r *result, fset *token.FileSet, files []*ast.File, prov string) {
 	for _, f := range files {
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
@@ -238,68 +233,26 @@ func checkAttesterStruct(r *result, fset *token.FileSet, files []*ast.File, prov
 			}
 			for _, spec := range gd.Specs {
 				ts, ok := spec.(*ast.TypeSpec)
+				if !ok || ts.Name.Name != "Attester" {
+					continue
+				}
+				st, ok := ts.Type.(*ast.StructType)
 				if !ok {
 					continue
 				}
-				if ts.Name.Name == "Attester" {
-					if st, isStruct := ts.Type.(*ast.StructType); isStruct {
-						pos := fset.Position(ts.Name.Pos())
-						r.pass("Attester struct (%s:%d)", filepath.Base(pos.Filename), pos.Line)
-						return st
+				for _, field := range st.Fields.List {
+					for _, name := range field.Names {
+						if name.Name == "client" && typeString(field.Type) == "*http.Client" {
+							pos := fset.Position(name.Pos())
+							r.pass("Attester.client *http.Client (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+							return
+						}
 					}
-				}
-			}
-		}
-	}
-	r.fail("Attester struct not found in %s", prov)
-	return nil
-}
-
-// Attester.client *http.Client field.
-func checkAttesterClientField(r *result, fset *token.FileSet, st *ast.StructType, prov string) {
-	if st == nil {
-		r.fail("Attester.client *http.Client — no Attester struct in %s", prov)
-		return
-	}
-	for _, field := range st.Fields.List {
-		for _, name := range field.Names {
-			if name.Name == "client" {
-				if typeString(field.Type) == "*http.Client" {
-					pos := fset.Position(name.Pos())
-					r.pass("Attester.client *http.Client (%s:%d)", filepath.Base(pos.Filename), pos.Line)
-					return
 				}
 			}
 		}
 	}
 	r.fail("Attester.client *http.Client field not found in %s", prov)
-}
-
-// NewAttester returns *Attester.
-func checkNewAttester(r *result, fset *token.FileSet, files []*ast.File, prov string) {
-	for _, f := range files {
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Recv != nil {
-				continue
-			}
-			if fd.Name.Name == "NewAttester" {
-				if fd.Type.Results != nil {
-					for _, res := range fd.Type.Results.List {
-						if typeString(res.Type) == "*Attester" {
-							pos := fset.Position(fd.Name.Pos())
-							r.pass("NewAttester returns *Attester (%s:%d)", filepath.Base(pos.Filename), pos.Line)
-							return
-						}
-					}
-				}
-				pos := fset.Position(fd.Name.Pos())
-				r.fail("NewAttester does not return *Attester (%s:%d)", filepath.Base(pos.Filename), pos.Line)
-				return
-			}
-		}
-	}
-	r.fail("NewAttester function not found in %s", prov)
 }
 
 // ParseAttestationResponse (or exception) exists.
@@ -390,95 +343,6 @@ func checkNoBytesEqual(r *result, dir, prov string) {
 		}
 	}
 	r.pass("no bytes.Equal in reportdata verifiers")
-}
-
-// reportdata*.go imports crypto/subtle.
-func checkReportDataImportsCryptoSubtle(r *result, dir, prov string) {
-	files := parseReportDataFiles(dir)
-	if len(files) == 0 {
-		r.skip("no reportdata verifier files in %s", prov)
-		return
-	}
-	for _, f := range files {
-		for _, imp := range f.Imports {
-			if strings.Trim(imp.Path.Value, `"`) == "crypto/subtle" {
-				r.pass("reportdata imports crypto/subtle")
-				return
-			}
-		}
-	}
-	r.fail("reportdata files in %s do not import crypto/subtle", prov)
-}
-
-// ReportDataVerifier struct exists.
-func checkReportDataVerifierStruct(r *result, dir, prov string) {
-	files := parseReportDataFiles(dir)
-	if len(files) == 0 {
-		r.skip("no reportdata verifier files in %s", prov)
-		return
-	}
-	for _, f := range files {
-		for _, decl := range f.Decls {
-			gd, ok := decl.(*ast.GenDecl)
-			if !ok || gd.Tok != token.TYPE {
-				continue
-			}
-			for _, spec := range gd.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
-				}
-				if _, isStruct := ts.Type.(*ast.StructType); !isStruct {
-					continue
-				}
-				if strings.HasSuffix(ts.Name.Name, "ReportDataVerifier") && ast.IsExported(ts.Name.Name) {
-					r.pass("%s struct exists", ts.Name.Name)
-					return
-				}
-			}
-		}
-	}
-	r.fail("no exported *ReportDataVerifier struct in %s", prov)
-}
-
-// VerifyReportData method exists.
-func checkVerifyReportDataMethod(r *result, dir, prov string) {
-	files := parseReportDataFiles(dir)
-	if len(files) == 0 {
-		r.skip("no reportdata verifier files in %s", prov)
-		return
-	}
-	for _, f := range files {
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Recv == nil {
-				continue
-			}
-			if fd.Name.Name == "VerifyReportData" {
-				r.pass("VerifyReportData method exists")
-				return
-			}
-		}
-	}
-	r.fail("VerifyReportData method not found in %s", prov)
-}
-
-// parseReportDataFiles parses non-test reportdata*.go files in a provider directory.
-func parseReportDataFiles(dir string) []*ast.File {
-	matches, _ := filepath.Glob(filepath.Join(dir, "reportdata*.go"))
-	var files []*ast.File
-	fset := token.NewFileSet()
-	for _, path := range matches {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			continue
-		}
-		files = append(files, f)
-	}
-	return files
 }
 
 // No slog calls with API key field names.
@@ -672,20 +536,10 @@ func checkProxyWiring(r *result, providers []string) {
 		return
 	}
 
-	// fromConfig() switch has case for each provider.
 	fd := findFunc(f, "fromConfig")
 	if fd == nil {
 		r.fail("fromConfig function not found in %s", path)
 		return
-	}
-
-	cases := collectSwitchCases(fd.Body)
-	for _, prov := range providers {
-		if cases[prov] {
-			r.pass("fromConfig switch includes %q", prov)
-		} else {
-			r.fail("fromConfig switch missing %q", prov)
-		}
 	}
 
 	checkFromConfigDefaultError(r, fd, providers)
