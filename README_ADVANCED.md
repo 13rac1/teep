@@ -115,6 +115,11 @@ base_url = "https://cloud-api.near.ai"
 api_key_env = "NEARAI_API_KEY"
 e2ee = false
 
+[providers.nanogpt]
+base_url = "https://nano-gpt.com/api"
+api_key_env = "NANOGPT_API_KEY"
+e2ee = false
+
 [policy]
 enforce = [
   "nonce_match",

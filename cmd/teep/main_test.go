@@ -13,6 +13,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/venice"
@@ -41,7 +42,7 @@ func buildTestReport(provider, model string) *attestation.VerificationReport {
 		{Name: "nvidia_payload_present", Status: attestation.Pass, Detail: "NVIDIA payload present (512 chars)", Tier: attestation.TierBinding},
 		{Name: "nvidia_signature", Status: attestation.Pass, Detail: "JWT signature valid (RS256)", Tier: attestation.TierBinding},
 		{Name: "nvidia_claims", Status: attestation.Pass, Detail: "Claims valid", Tier: attestation.TierBinding},
-		{Name: "nvidia_nonce_match", Status: attestation.Skip, Detail: "Nonce field not found in NVIDIA payload", Tier: attestation.TierBinding},
+		{Name: "nvidia_nonce_client_bound", Status: attestation.Skip, Detail: "nonce field not found in NVIDIA payload", Tier: attestation.TierBinding},
 		{Name: "nvidia_nras_verified", Status: attestation.Skip, Detail: "offline mode; NRAS verification skipped", Tier: attestation.TierBinding},
 		{Name: "e2ee_capable", Status: attestation.Pass, Detail: "E2EE key exchange possible", Tier: attestation.TierBinding},
 		// Tier 3
@@ -593,6 +594,16 @@ func TestNewAttester(t *testing.T) {
 		}
 	})
 
+	t.Run("nanogpt", func(t *testing.T) {
+		a, err := newAttester("nanogpt", cp, false)
+		if err != nil {
+			t.Fatalf("newAttester(nanogpt): %v", err)
+		}
+		if _, ok := a.(*nanogpt.Attester); !ok {
+			t.Errorf("newAttester(nanogpt) returned %T, want *nanogpt.Attester", a)
+		}
+	})
+
 	t.Run("unknown", func(t *testing.T) {
 		_, err := newAttester("bogus", cp, false)
 		t.Logf("newAttester(bogus) error: %v", err)
@@ -613,6 +624,7 @@ func TestNewReportDataVerifier(t *testing.T) {
 	}{
 		{"venice", "venice.ReportDataVerifier", false},
 		{"neardirect", "neardirect.ReportDataVerifier", false},
+		{"nanogpt", "venice.ReportDataVerifier", false},
 		{"unknown", "", true},
 	}
 	for _, tc := range tests {
@@ -760,4 +772,40 @@ type successAttester struct{ raw *attestation.RawAttestation }
 
 func (a successAttester) FetchAttestation(_ context.Context, _ string, _ attestation.Nonce) (*attestation.RawAttestation, error) {
 	return a.raw, nil
+}
+
+// --------------------------------------------------------------------------
+// supplyChainPolicy tests
+// --------------------------------------------------------------------------
+
+func TestSupplyChainPolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		wantNil  bool
+	}{
+		{"venice", "venice", false},
+		{"neardirect", "neardirect", false},
+		{"nearcloud", "nearcloud", false},
+		{"nanogpt", "nanogpt", false},
+		{"unknown", "bogus", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := supplyChainPolicy(tc.provider)
+			if tc.wantNil {
+				if p != nil {
+					t.Errorf("supplyChainPolicy(%q) = %v, want nil", tc.provider, p)
+				}
+				return
+			}
+			if p == nil {
+				t.Fatalf("supplyChainPolicy(%q) = nil, want non-nil", tc.provider)
+			}
+			if len(p.Images) == 0 {
+				t.Errorf("supplyChainPolicy(%q) returned policy with 0 images", tc.provider)
+			}
+			t.Logf("supplyChainPolicy(%q): %d images", tc.provider, len(p.Images))
+		})
+	}
 }

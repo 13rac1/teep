@@ -211,7 +211,7 @@ func assertVeniceReport(t *testing.T, report *attestation.VerificationReport) {
 		{"signing_key_present", attestation.Pass},
 		{"tdx_reportdata_binding", attestation.Pass},
 		{"nvidia_payload_present", attestation.Pass},
-		{"nvidia_nonce_match", attestation.Pass},
+		{"nvidia_nonce_client_bound", attestation.Pass},
 		{"e2ee_capable", attestation.Pass},
 		{"compose_binding", attestation.Pass},
 		{"sigstore_verification", attestation.Pass},

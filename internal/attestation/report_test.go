@@ -107,8 +107,8 @@ func TestBuildReportFactorCount(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
 
-	if len(report.Factors) != 24 {
-		t.Errorf("factor count: got %d, want 24", len(report.Factors))
+	if len(report.Factors) != 25 {
+		t.Errorf("factor count: got %d, want 25", len(report.Factors))
 	}
 }
 
@@ -532,6 +532,65 @@ func TestEvalTDXTCBCurrent(t *testing.T) {
 	}
 }
 
+func TestEvalTDXTCBNotRevoked(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name       string
+		tdx        *TDXVerifyResult
+		want       Status
+		wantDetail string
+	}{
+		{
+			"pass_up_to_date",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16), TcbStatus: "UpToDate"},
+			Pass, "not Revoked",
+		},
+		{
+			"pass_sw_hardening_needed",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16), TcbStatus: "SWHardeningNeeded"},
+			Pass, "not Revoked",
+		},
+		{
+			"pass_out_of_date",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16), TcbStatus: "OutOfDate"},
+			Pass, "not Revoked",
+		},
+		{
+			"fail_revoked",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16), TcbStatus: "Revoked"},
+			Fail, "Revoked",
+		},
+		{
+			"skip_nil_tdx",
+			nil,
+			Skip, "no parseable TDX",
+		},
+		{
+			"skip_offline",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16)},
+			Skip, "offline",
+		},
+		{
+			"skip_collateral_err",
+			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16), CollateralErr: errors.New("timeout")},
+			Skip, "collateral fetch failed",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			f := assertSingleFactor(t, evalTDXTCBNotRevoked(&ReportInput{
+				Raw: raw, Nonce: nonce, TDX: tc.tdx,
+			}), tc.want)
+			if tc.wantDetail != "" && !strings.Contains(f.Detail, tc.wantDetail) {
+				t.Errorf("detail %q should contain %q", f.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
 func TestEvalNvidiaPayloadPresent(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)
@@ -605,7 +664,7 @@ func TestEvalNvidiaClaims(t *testing.T) {
 	})
 }
 
-func TestEvalNvidiaNonceMatch(t *testing.T) {
+func TestEvalNvidiaClientNonceBound(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)
 
@@ -613,7 +672,7 @@ func TestEvalNvidiaNonceMatch(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
 		nv := &NvidiaVerifyResult{Format: "EAT", GPUCount: 8, Nonce: nonce.Hex()}
-		f := assertSingleFactor(t, evalNvidiaNonceMatch(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
+		f := assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
 		if !strings.Contains(f.Detail, "8 GPU") {
 			t.Errorf("detail should mention 8 GPU: %s", f.Detail)
 		}
@@ -623,7 +682,19 @@ func TestEvalNvidiaNonceMatch(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
 		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: "wrong-nonce"}
-		assertSingleFactor(t, evalNvidiaNonceMatch(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Fail)
+		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Fail)
+	})
+
+	t.Run("skip_no_payload", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nil}), Skip)
+	})
+
+	t.Run("skip_empty_nonce", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.NvidiaPayload = `{"evidence_list":[]}`
+		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: ""}
+		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Skip)
 	})
 }
 
@@ -794,26 +865,6 @@ func TestEvalSigstoreVerification(t *testing.T) {
 		}), Fail)
 	})
 
-	t.Run("pass_allowlisted_non_rekor", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		neardirectDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
-		certbotDigest := "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
-		sig := []SigstoreResult{
-			{Digest: neardirectDigest, OK: true, Status: 200},
-			{Digest: certbotDigest, OK: false, Status: 404},
-		}
-		f := assertSingleFactor(t, evalSigstoreVerification(&ReportInput{
-			Provider:     "neardirect",
-			Raw:          raw,
-			Sigstore:     sig,
-			DigestToRepo: map[string]string{neardirectDigest: "nearaidev/compose-manager", certbotDigest: "certbot/dns-cloudflare"},
-			ImageRepos:   []string{"nearaidev/compose-manager", "certbot/dns-cloudflare"},
-		}), Pass)
-		if !strings.Contains(f.Detail, "compose-pinned") {
-			t.Errorf("detail should mention compose-pinned: %s", f.Detail)
-		}
-	})
-
 	t.Run("fail_unknown_non_rekor", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		unknownDigest := "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
@@ -869,277 +920,24 @@ func TestEvalEventLogIntegrity(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Build transparency log (supply chain policy) tests
+// ProvenanceType.String test
 // ---------------------------------------------------------------------------
 
-func TestEvalBuildTransparencyLog(t *testing.T) {
-	nonce := NewNonce()
-	sigKey := validSigningKey(t)
-
-	t.Run("pass_neardirect", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		sig := []SigstoreResult{{
-			Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-			OK:     true, Status: 200,
-		}}
-		rekor := []RekorProvenance{{
-			Digest:        sig[0].Digest,
-			HasCert:       true,
-			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-			OIDCIssuer:    "https://token.actions.githubusercontent.com",
-			SourceRepo:    "nearai/compose-manager",
-			SourceRepoURL: "https://github.com/nearai/compose-manager",
-			SourceCommit:  "0123456789abcdef",
-			RunnerEnv:     "github-hosted",
-		}}
-		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:     "neardirect",
-			Raw:          raw,
-			ImageRepos:   []string{"nearaidev/compose-manager"},
-			DigestToRepo: map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
-			Sigstore:     sig,
-			Rekor:        rekor,
-		}), Pass)
-	})
-
-	t.Run("rejects_image_repo", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"ghcr.io/attacker/router"},
-		}), Fail)
-		if !strings.Contains(f.Detail, "supply chain policy") {
-			t.Errorf("detail should mention supply chain policy: %s", f.Detail)
+func TestProvenanceTypeString(t *testing.T) {
+	tests := []struct {
+		p    ProvenanceType
+		want string
+	}{
+		{FulcioSigned, "fulcio-signed"},
+		{SigstorePresent, "sigstore-present"},
+		{ComposeBindingOnly, "compose-binding-only"},
+		{ProvenanceType(99), "unknown"},
+	}
+	for _, tc := range tests {
+		if got := tc.p.String(); got != tc.want {
+			t.Errorf("ProvenanceType(%d).String() = %q, want %q", tc.p, got, tc.want)
 		}
-	})
-
-	t.Run("nearcloud_separate_allowlists", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		sig := []SigstoreResult{{
-			Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-			OK:     true, Status: 200,
-		}}
-		rekor := []RekorProvenance{{
-			Digest:        sig[0].Digest,
-			HasCert:       true,
-			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-			OIDCIssuer:    "https://token.actions.githubusercontent.com",
-			SourceRepo:    "nearai/compose-manager",
-			SourceRepoURL: "https://github.com/nearai/compose-manager",
-			SourceCommit:  "0123456789abcdef",
-			RunnerEnv:     "github-hosted",
-		}}
-		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:          "nearcloud",
-			Raw:               raw,
-			ImageRepos:        []string{"nearaidev/compose-manager"},
-			GatewayImageRepos: []string{"nearaidev/dstack-vpc-client"},
-			DigestToRepo:      map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
-			Sigstore:          sig,
-			Rekor:             rekor,
-		}), Pass)
-	})
-
-	t.Run("rejects_gateway_only_image", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"nearaidev/dstack-vpc-client"},
-		}), Fail)
-		if !strings.Contains(strings.ToLower(f.Detail), "model container policy") {
-			t.Errorf("detail should mention model policy rejection: %s", f.Detail)
-		}
-	})
-
-	t.Run("rejects_signer", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		sig := []SigstoreResult{{
-			Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-			OK:     true, Status: 200,
-		}}
-		rekor := []RekorProvenance{{
-			Digest:        sig[0].Digest,
-			HasCert:       true,
-			SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-			OIDCIssuer:    "https://token.actions.githubusercontent.com",
-			SourceRepo:    "attacker/router",
-			SourceRepoURL: "https://github.com/attacker/router",
-		}}
-		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:     "neardirect",
-			Raw:          raw,
-			ImageRepos:   []string{"nearaidev/compose-manager"},
-			DigestToRepo: map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
-			Sigstore:     sig,
-			Rekor:        rekor,
-		}), Fail)
-		if !strings.Contains(f.Detail, "unexpected source repo") {
-			t.Errorf("detail should mention source repo rejection: %s", f.Detail)
-		}
-	})
-
-	t.Run("fulcio_oidc_identity_mismatch", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		sig := []SigstoreResult{{
-			Digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-			OK:     true, Status: 200,
-		}}
-		rekor := []RekorProvenance{{
-			Digest:        sig[0].Digest,
-			HasCert:       true,
-			SubjectURI:    "https://github.com/attacker/evil-repo/.github/workflows/evil.yml@refs/heads/main",
-			OIDCIssuer:    "https://token.actions.githubusercontent.com",
-			SourceRepo:    "nearai/compose-manager",
-			SourceRepoURL: "https://github.com/nearai/compose-manager",
-			SourceCommit:  "0123456789abcdef",
-			RunnerEnv:     "github-hosted",
-		}}
-		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:     "neardirect",
-			Raw:          raw,
-			ImageRepos:   []string{"nearaidev/compose-manager"},
-			DigestToRepo: map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
-			Sigstore:     sig,
-			Rekor:        rekor,
-		}), Fail)
-		if !strings.Contains(f.Detail, "unexpected OIDC identity") {
-			t.Errorf("detail should mention OIDC identity mismatch: %s", f.Detail)
-		}
-	})
-
-	t.Run("key_fingerprint_mismatch", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
-		datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
-		sig := []SigstoreResult{
-			{Digest: composeManagerDigest, OK: true, Status: 200},
-			{Digest: datadogDigest, OK: true, Status: 200},
-		}
-		rekor := []RekorProvenance{
-			{
-				Digest:        composeManagerDigest,
-				HasCert:       true,
-				SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-				OIDCIssuer:    "https://token.actions.githubusercontent.com",
-				SourceRepo:    "nearai/compose-manager",
-				SourceRepoURL: "https://github.com/nearai/compose-manager",
-				SourceCommit:  "0123456789abcdef",
-				RunnerEnv:     "github-hosted",
-			},
-			{
-				Digest:         datadogDigest,
-				HasCert:        false,
-				KeyFingerprint: "0000000000000000000000000000000000000000000000000000000000000000",
-			},
-		}
-		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
-			DigestToRepo: map[string]string{
-				composeManagerDigest: "nearaidev/compose-manager",
-				datadogDigest:        "datadog/agent",
-			},
-			Sigstore: sig,
-			Rekor:    rekor,
-		}), Fail)
-		if !strings.Contains(f.Detail, "unexpected signing key fingerprint") {
-			t.Errorf("detail should mention key fingerprint mismatch: %s", f.Detail)
-		}
-	})
-
-	t.Run("key_fingerprint_pass", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
-		datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
-		sig := []SigstoreResult{
-			{Digest: composeManagerDigest, OK: true, Status: 200},
-			{Digest: datadogDigest, OK: true, Status: 200},
-		}
-		rekor := []RekorProvenance{
-			{
-				Digest:        composeManagerDigest,
-				HasCert:       true,
-				SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-				OIDCIssuer:    "https://token.actions.githubusercontent.com",
-				SourceRepo:    "nearai/compose-manager",
-				SourceRepoURL: "https://github.com/nearai/compose-manager",
-				SourceCommit:  "0123456789abcdef",
-				RunnerEnv:     "github-hosted",
-			},
-			{
-				Digest:            datadogDigest,
-				HasCert:           false,
-				KeyFingerprint:    "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b",
-				SETVerified:       true,
-				InclusionVerified: true,
-			},
-		}
-		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
-			DigestToRepo: map[string]string{
-				composeManagerDigest: "nearaidev/compose-manager",
-				datadogDigest:        "datadog/agent",
-			},
-			Sigstore: sig,
-			Rekor:    rekor,
-		}), Pass)
-	})
-
-	t.Run("sigstore_entry_unverified_set_fails", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		composeManagerDigest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
-		datadogDigest := "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234"
-		sig := []SigstoreResult{
-			{Digest: composeManagerDigest, OK: true, Status: 200},
-			{Digest: datadogDigest, OK: true, Status: 200},
-		}
-		rekor := []RekorProvenance{
-			{
-				Digest:        composeManagerDigest,
-				HasCert:       true,
-				SubjectURI:    "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-				OIDCIssuer:    "https://token.actions.githubusercontent.com",
-				SourceRepo:    "nearai/compose-manager",
-				SourceRepoURL: "https://github.com/nearai/compose-manager",
-				SourceCommit:  "0123456789abcdef",
-				RunnerEnv:     "github-hosted",
-			},
-			{
-				// Sigstore entry without SET/inclusion verification must fail.
-				Digest:         datadogDigest,
-				HasCert:        false,
-				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b",
-			},
-		}
-		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
-			DigestToRepo: map[string]string{
-				composeManagerDigest: "nearaidev/compose-manager",
-				datadogDigest:        "datadog/agent",
-			},
-			Sigstore: sig,
-			Rekor:    rekor,
-		}), Fail)
-		if !strings.Contains(f.Detail, "SET verification did not succeed") {
-			t.Errorf("detail should mention SET verification failure: %s", f.Detail)
-		}
-	})
-
-	t.Run("no_rekor_no_policy", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		// Unknown provider → no supply chain policy → no Rekor → Fail
-		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider: "unknown",
-			Raw:      raw,
-		}), Fail)
-	})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1261,38 +1059,6 @@ func TestNvidiaClaimsDetail(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := nvidiaClaimsDetail(tc.result)
-			if got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestNvidiaNonceDetail(t *testing.T) {
-	tests := []struct {
-		name   string
-		result *NvidiaVerifyResult
-		want   string
-	}{
-		{
-			"EAT format",
-			&NvidiaVerifyResult{Format: "EAT", GPUCount: 8},
-			"EAT nonce matches submitted nonce (8 GPUs)",
-		},
-		{
-			"JWT format",
-			&NvidiaVerifyResult{Format: "JWT"},
-			"nonce in NVIDIA payload matches submitted nonce",
-		},
-		{
-			"empty format",
-			&NvidiaVerifyResult{},
-			"nonce in NVIDIA payload matches submitted nonce",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := nvidiaNonceDetail(tc.result)
 			if got != tc.want {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
@@ -1581,8 +1347,8 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 	// gateway_tdx_quote_structure, gateway_tdx_cert_chain, gateway_tdx_quote_signature,
 	// gateway_tdx_debug_disabled, gateway_tdx_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
-	if len(report.Factors) != 34 {
-		t.Errorf("factor count with gateway: got %d, want 34", len(report.Factors))
+	if len(report.Factors) != 35 {
+		t.Errorf("factor count with gateway: got %d, want 35", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}

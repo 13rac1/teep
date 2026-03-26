@@ -116,7 +116,8 @@ var DefaultEnforced = []string{
 	"tdx_reportdata_binding",
 	"compose_binding",
 	"nvidia_signature",
-	"nvidia_nonce_match",
+	"nvidia_nonce_client_bound",
+	"tdx_tcb_not_revoked",
 	"build_transparency_log",
 	"sigstore_verification",
 	"event_log_integrity",
@@ -135,8 +136,8 @@ var KnownFactors = []string{
 	"nonce_match", "tdx_quote_present", "tdx_quote_structure", "tdx_cert_chain",
 	"tdx_quote_signature", "tdx_debug_disabled", "signing_key_present",
 	"tdx_reportdata_binding", "intel_pcs_collateral", "tdx_tcb_current",
-	"nvidia_payload_present", "nvidia_signature", "nvidia_claims", "nvidia_nonce_match",
-	"nvidia_nras_verified", "e2ee_capable", "tls_key_binding", "cpu_gpu_chain",
+	"tdx_tcb_not_revoked", "nvidia_payload_present", "nvidia_signature", "nvidia_claims",
+	"nvidia_nonce_client_bound", "nvidia_nras_verified", "e2ee_capable", "tls_key_binding", "cpu_gpu_chain",
 	"measured_model_weights", "build_transparency_log", "cpu_id_registry",
 	"compose_binding", "sigstore_verification", "event_log_integrity",
 	// Gateway factors (nearcloud only).
@@ -167,6 +168,7 @@ type ReportInput struct {
 	ImageRepos        []string
 	GatewayImageRepos []string
 	DigestToRepo      map[string]string // digest hex → normalized image repo, for policy checks
+	SupplyChainPolicy *SupplyChainPolicy
 
 	TDX        *TDXVerifyResult
 	Nvidia     *NvidiaVerifyResult
@@ -262,10 +264,11 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalTDXReportDataBinding,
 		evalIntelPCSCollateral,
 		evalTDXTCBCurrent,
+		evalTDXTCBNotRevoked,
 		evalNvidiaPayloadPresent,
 		evalNvidiaSignature,
 		evalNvidiaClaims,
-		evalNvidiaNonceMatch,
+		evalNvidiaClientNonceBound,
 		evalNvidiaNRASVerified,
 		evalE2EECapable,
 		// Tier 3: Supply Chain & Channel Integrity
@@ -458,6 +461,24 @@ func evalTDXTCBCurrent(in *ReportInput) []FactorResult {
 	return factor(TierBinding, "tdx_tcb_current", Skip,
 		fmt.Sprintf("TEE_TCB_SVN: %s (offline; full check requires Intel PCS)", svnHex))
 }
+func evalTDXTCBNotRevoked(in *ReportInput) []FactorResult {
+	if in.TDX == nil || in.TDX.ParseErr != nil {
+		return factor(TierBinding, "tdx_tcb_not_revoked", Skip, "no parseable TDX quote")
+	}
+	if in.TDX.TcbStatus == "" {
+		if in.TDX.CollateralErr != nil {
+			return factor(TierBinding, "tdx_tcb_not_revoked", Skip,
+				fmt.Sprintf("Intel PCS collateral fetch failed: %v", in.TDX.CollateralErr))
+		}
+		return factor(TierBinding, "tdx_tcb_not_revoked", Skip, "offline; Intel PCS collateral not fetched")
+	}
+	if in.TDX.TcbStatus == pcs.TcbComponentStatusRevoked {
+		return factor(TierBinding, "tdx_tcb_not_revoked", Fail,
+			"TCB status: Revoked — Intel has determined this firmware is fundamentally compromised")
+	}
+	return factor(TierBinding, "tdx_tcb_not_revoked", Pass,
+		fmt.Sprintf("TCB status %s is not Revoked", in.TDX.TcbStatus))
+}
 func evalNvidiaPayloadPresent(in *ReportInput) []FactorResult {
 	if in.Raw.NvidiaPayload == "" {
 		return factor(TierBinding, "nvidia_payload_present", Fail, "nvidia_payload field is absent from attestation response")
@@ -488,20 +509,22 @@ func evalNvidiaClaims(in *ReportInput) []FactorResult {
 	}
 	return factor(TierBinding, "nvidia_claims", Pass, nvidiaClaimsDetail(in.Nvidia))
 }
-func evalNvidiaNonceMatch(in *ReportInput) []FactorResult {
+func evalNvidiaClientNonceBound(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
 		if in.Raw.NvidiaPayload == "" {
-			return factor(TierBinding, "nvidia_nonce_match", Skip, "no NVIDIA payload; nonce not checked")
+			return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "no NVIDIA payload; nonce not checked")
 		}
-		return factor(TierBinding, "nvidia_nonce_match", Skip, "NVIDIA verification not attempted")
+		return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "NVIDIA verification not attempted")
 	}
 	if in.Nvidia.Nonce == "" {
-		return factor(TierBinding, "nvidia_nonce_match", Skip, "nonce field not found in NVIDIA payload")
+		return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "nonce field not found in NVIDIA payload")
 	}
 	if subtle.ConstantTimeCompare([]byte(in.Nvidia.Nonce), []byte(in.Nonce.Hex())) == 1 {
-		return factor(TierBinding, "nvidia_nonce_match", Pass, nvidiaNonceDetail(in.Nvidia))
+		return factor(TierBinding, "nvidia_nonce_client_bound", Pass, nvidiaClientNonceDetail(in.Nvidia))
 	}
-	return factor(TierBinding, "nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", truncHex(in.Nvidia.Nonce), truncHex(in.Nonce.Hex())))
+	return factor(TierBinding, "nvidia_nonce_client_bound", Fail, fmt.Sprintf(
+		"NVIDIA nonce mismatch: got %q, want %q",
+		truncHex(in.Nvidia.Nonce), truncHex(in.Nonce.Hex())))
 }
 func evalNvidiaNRASVerified(in *ReportInput) []FactorResult {
 	if in.NvidiaNRAS == nil {
@@ -575,7 +598,7 @@ func evalMeasuredModelWeights(_ *ReportInput) []FactorResult {
 	return factor(TierSupplyChain, "measured_model_weights", Fail, "no model weight hashes")
 }
 func evalBuildTransparencyLog(in *ReportInput) []FactorResult {
-	scPolicy := supplyChainPolicyForProvider(in.Provider)
+	scPolicy := in.SupplyChainPolicy
 
 	if scPolicy != nil {
 		if f, done := checkImageRepoPolicy(in, scPolicy); done {
@@ -592,7 +615,7 @@ func evalBuildTransparencyLog(in *ReportInput) []FactorResult {
 
 // checkImageRepoPolicy validates model and gateway image repos against the
 // supply chain policy. Returns (result, true) on policy violation.
-func checkImageRepoPolicy(in *ReportInput, scPolicy *supplyChainPolicy) (FactorResult, bool) {
+func checkImageRepoPolicy(in *ReportInput, scPolicy *SupplyChainPolicy) (FactorResult, bool) {
 	btlFail := FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Fail}
 
 	if len(in.ImageRepos) == 0 {
@@ -600,21 +623,21 @@ func checkImageRepoPolicy(in *ReportInput, scPolicy *supplyChainPolicy) (FactorR
 		return btlFail, true
 	}
 	for _, repo := range in.ImageRepos {
-		if !scPolicy.allowedInModel(repo) {
+		if !scPolicy.AllowedInModel(repo) {
 			btlFail.Detail = fmt.Sprintf("model container policy: image %q not in supply chain policy (%s)",
-				repo, strings.Join(scPolicy.modelRepoNames(), ", "))
+				repo, strings.Join(scPolicy.ModelRepoNames(), ", "))
 			return btlFail, true
 		}
 	}
-	if scPolicy.hasGatewayImages() {
+	if scPolicy.HasGatewayImages() {
 		if len(in.GatewayImageRepos) == 0 {
 			btlFail.Detail = "no attested gateway image repositories extracted from compose"
 			return btlFail, true
 		}
 		for _, repo := range in.GatewayImageRepos {
-			if !scPolicy.allowedInGateway(repo) {
+			if !scPolicy.AllowedInGateway(repo) {
 				btlFail.Detail = fmt.Sprintf("gateway container policy: image %q not in supply chain policy (%s)",
-					repo, strings.Join(scPolicy.gatewayRepoNames(), ", "))
+					repo, strings.Join(scPolicy.GatewayRepoNames(), ", "))
 				return btlFail, true
 			}
 		}
@@ -628,7 +651,7 @@ func checkImageRepoPolicy(in *ReportInput, scPolicy *supplyChainPolicy) (FactorR
 
 // buildTransparencyNoRekor handles the build_transparency_log factor when
 // no Rekor provenance is available.
-func buildTransparencyNoRekor(in *ReportInput, scPolicy *supplyChainPolicy) FactorResult {
+func buildTransparencyNoRekor(in *ReportInput, scPolicy *SupplyChainPolicy) FactorResult {
 	if scPolicy != nil {
 		return FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Fail,
 			Detail: "no Rekor provenance fetched for attested image digests"}
@@ -657,7 +680,7 @@ const (
 // classifyRekorEntry classifies a single Rekor entry against the supply chain
 // policy. On rekorFailed, failDetail is the error message. On rekorFulcio,
 // commitDetail is populated for the first verified entry.
-func classifyRekorEntry(r *RekorProvenance, img *ImageProvenance, imageRepo string, scPolicy *supplyChainPolicy) (kind rekorEntryKind, failDetail string) {
+func classifyRekorEntry(r *RekorProvenance, img *ImageProvenance, imageRepo string, scPolicy *SupplyChainPolicy) (kind rekorEntryKind, failDetail string) {
 	if r.Err != nil {
 		if img != nil && img.Provenance == FulcioSigned {
 			return rekorFailed, fmt.Sprintf("image %q: Rekor provenance fetch failed: %v", imageRepo, r.Err)
@@ -699,7 +722,7 @@ func classifyRekorEntry(r *RekorProvenance, img *ImageProvenance, imageRepo stri
 
 // rekorProvenanceResult verifies Rekor provenance entries against the supply
 // chain policy.
-func rekorProvenanceResult(in *ReportInput, scPolicy *supplyChainPolicy) FactorResult {
+func rekorProvenanceResult(in *ReportInput, scPolicy *SupplyChainPolicy) FactorResult {
 	var fulcioVerified int
 	var sigstorePresent int
 	var setVerified int
@@ -711,7 +734,7 @@ func rekorProvenanceResult(in *ReportInput, scPolicy *supplyChainPolicy) FactorR
 		imageRepo := in.DigestToRepo[r.Digest]
 		var img *ImageProvenance
 		if scPolicy != nil {
-			img = scPolicy.lookup(imageRepo)
+			img = scPolicy.Lookup(imageRepo)
 		}
 
 		kind, failDetail := classifyRekorEntry(r, img, imageRepo, scPolicy)
@@ -800,7 +823,7 @@ func formatRekorCommitDetail(r *RekorProvenance) string {
 
 // formatBuildTransparencyResult produces the final factor result for
 // build_transparency_log after processing all Rekor entries.
-func formatBuildTransparencyResult(scPolicy *supplyChainPolicy, fulcioVerified, sigstorePresent, setVerified, inclusionVerified, rekorCount int, detail string) FactorResult {
+func formatBuildTransparencyResult(scPolicy *SupplyChainPolicy, fulcioVerified, sigstorePresent, setVerified, inclusionVerified, rekorCount int, detail string) FactorResult {
 	f := FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log"}
 	logVerify := ""
 	if setVerified > 0 || inclusionVerified > 0 {
@@ -873,7 +896,7 @@ func evalSigstoreVerification(in *ReportInput) []FactorResult {
 		return factor(TierSupplyChain, "sigstore_verification", Skip, "no image digests to verify")
 	}
 
-	scPolicy := supplyChainPolicyForProvider(in.Provider)
+	scPolicy := in.SupplyChainPolicy
 	var composeOnly int
 	for _, r := range in.Sigstore {
 		if r.OK {
@@ -881,7 +904,7 @@ func evalSigstoreVerification(in *ReportInput) []FactorResult {
 		}
 		if scPolicy != nil && len(in.DigestToRepo) > 0 {
 			repo := in.DigestToRepo[r.Digest]
-			img := scPolicy.lookup(repo)
+			img := scPolicy.Lookup(repo)
 			if img != nil && img.Provenance == ComposeBindingOnly {
 				composeOnly++
 				continue
@@ -1165,12 +1188,13 @@ type ImageProvenance struct {
 	NoDSSE         bool           // true = DSSE envelope lacks signatures; skip DSSE check
 }
 
-type supplyChainPolicy struct {
+// SupplyChainPolicy defines the allowed container image repos for a provider.
+type SupplyChainPolicy struct {
 	Images []ImageProvenance
 }
 
-// lookup returns the ImageProvenance entry for repo, or nil.
-func (p *supplyChainPolicy) lookup(repo string) *ImageProvenance {
+// Lookup returns the ImageProvenance entry for repo, or nil.
+func (p *SupplyChainPolicy) Lookup(repo string) *ImageProvenance {
 	v := strings.ToLower(strings.TrimSpace(repo))
 	for i := range p.Images {
 		if strings.ToLower(strings.TrimSpace(p.Images[i].Repo)) == v {
@@ -1180,20 +1204,20 @@ func (p *supplyChainPolicy) lookup(repo string) *ImageProvenance {
 	return nil
 }
 
-// allowedInModel reports whether repo has a policy entry permitting model tier.
-func (p *supplyChainPolicy) allowedInModel(repo string) bool {
-	img := p.lookup(repo)
+// AllowedInModel reports whether repo has a policy entry permitting model tier.
+func (p *SupplyChainPolicy) AllowedInModel(repo string) bool {
+	img := p.Lookup(repo)
 	return img != nil && img.ModelTier
 }
 
-// allowedInGateway reports whether repo has a policy entry permitting gateway tier.
-func (p *supplyChainPolicy) allowedInGateway(repo string) bool {
-	img := p.lookup(repo)
+// AllowedInGateway reports whether repo has a policy entry permitting gateway tier.
+func (p *SupplyChainPolicy) AllowedInGateway(repo string) bool {
+	img := p.Lookup(repo)
 	return img != nil && img.GatewayTier
 }
 
-// hasGatewayImages reports whether any image in the policy allows gateway tier.
-func (p *supplyChainPolicy) hasGatewayImages() bool {
+// HasGatewayImages reports whether any image in the policy allows gateway tier.
+func (p *SupplyChainPolicy) HasGatewayImages() bool {
 	for i := range p.Images {
 		if p.Images[i].GatewayTier {
 			return true
@@ -1202,8 +1226,8 @@ func (p *supplyChainPolicy) hasGatewayImages() bool {
 	return false
 }
 
-// modelRepoNames returns model-tier image repository names.
-func (p *supplyChainPolicy) modelRepoNames() []string {
+// ModelRepoNames returns model-tier image repository names.
+func (p *SupplyChainPolicy) ModelRepoNames() []string {
 	var out []string
 	for i := range p.Images {
 		if p.Images[i].ModelTier {
@@ -1213,8 +1237,8 @@ func (p *supplyChainPolicy) modelRepoNames() []string {
 	return out
 }
 
-// gatewayRepoNames returns gateway-tier image repository names.
-func (p *supplyChainPolicy) gatewayRepoNames() []string {
+// GatewayRepoNames returns gateway-tier image repository names.
+func (p *SupplyChainPolicy) GatewayRepoNames() []string {
 	var out []string
 	for i := range p.Images {
 		if p.Images[i].GatewayTier {
@@ -1222,81 +1246,6 @@ func (p *supplyChainPolicy) gatewayRepoNames() []string {
 		}
 	}
 	return out
-}
-
-func supplyChainPolicyForProvider(provider string) *supplyChainPolicy {
-	const githubOIDC = "https://token.actions.githubusercontent.com"
-
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "venice", "neardirect":
-		return &supplyChainPolicy{Images: []ImageProvenance{
-			{Repo: "datadog/agent", ModelTier: true, Provenance: SigstorePresent,
-				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
-			{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-				SourceRepos: []string{
-					"nearai/compose-manager",
-					"https://github.com/nearai/compose-manager",
-				}},
-		}}
-	case "nearcloud":
-		return &supplyChainPolicy{Images: []ImageProvenance{
-			// Model tier.
-			{Repo: "datadog/agent", ModelTier: true, GatewayTier: true, Provenance: SigstorePresent,
-				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
-			{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-				SourceRepos: []string{
-					"nearai/compose-manager",
-					"https://github.com/nearai/compose-manager",
-				}},
-			// Gateway tier.
-			{Repo: "nearaidev/dstack-vpc-client", GatewayTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/dstack-vpc-client/.github/workflows/build.yml@refs/heads/main",
-				SourceRepos: []string{
-					"nearai/dstack-vpc-client",
-					"https://github.com/nearai/dstack-vpc-client",
-				}},
-			{Repo: "nearaidev/dstack-vpc", GatewayTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/dstack-vpc/.github/workflows/build.yml@refs/heads/main",
-				SourceRepos: []string{
-					"nearai/dstack-vpc",
-					"https://github.com/nearai/dstack-vpc",
-				}},
-			{Repo: "alpine", GatewayTier: true, Provenance: SigstorePresent},
-			// alpine: third-party image built by Docker across varying CI
-			// systems (GitHub Actions, Google Cloud Build) with unstable
-			// branch refs. Only transparency-log presence is verifiable.
-			{Repo: "nearaidev/cloud-api", GatewayTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/cloud-api/.github/workflows/build.yml@refs/heads/main",
-				SourceRepos: []string{
-					"nearai/cloud-api",
-					"https://github.com/nearai/cloud-api",
-				}},
-			{Repo: "nearaidev/cvm-ingress", GatewayTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/cvm-ingress/.github/workflows/build-push.yml@refs/heads/main",
-				SourceRepos: []string{
-					"nearai/cvm-ingress",
-					"https://github.com/nearai/cvm-ingress",
-				}},
-		}}
-	default:
-		return nil
-	}
 }
 
 func containsFold(value string, allowed []string) bool {
@@ -1367,13 +1316,13 @@ func nvidiaClaimsDetail(r *NvidiaVerifyResult) string {
 	}
 }
 
-// nvidiaNonceDetail returns the detail string for a passing nvidia_nonce_match.
-func nvidiaNonceDetail(r *NvidiaVerifyResult) string {
+// nvidiaClientNonceDetail returns the detail string for a passing nvidia_nonce_client_bound.
+func nvidiaClientNonceDetail(r *NvidiaVerifyResult) string {
 	switch r.Format {
 	case "EAT":
-		return fmt.Sprintf("EAT nonce matches submitted nonce (%d GPUs)", r.GPUCount)
+		return fmt.Sprintf("EAT nonce matches client nonce (%d GPUs)", r.GPUCount)
 	default:
-		return "nonce in NVIDIA payload matches submitted nonce"
+		return "NVIDIA nonce matches client nonce"
 	}
 }
 

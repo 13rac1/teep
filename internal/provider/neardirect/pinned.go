@@ -383,21 +383,22 @@ func (h *PinnedHandler) attestOnConn(
 	}
 
 	report := attestation.BuildReport(&attestation.ReportInput{
-		Provider:     "neardirect",
-		Model:        model,
-		Raw:          raw,
-		Nonce:        nonce,
-		Enforced:     h.enforced,
-		Policy:       h.policy,
-		ImageRepos:   imageRepos,
-		DigestToRepo: digestToRepo,
-		TDX:          tdxResult,
-		Nvidia:       nvidiaResult,
-		NvidiaNRAS:   nrasResult,
-		PoC:          pocResult,
-		Compose:      composeResult,
-		Sigstore:     sigstoreResults,
-		Rekor:        rekorResults,
+		Provider:          "neardirect",
+		Model:             model,
+		Raw:               raw,
+		Nonce:             nonce,
+		Enforced:          h.enforced,
+		Policy:            h.policy,
+		SupplyChainPolicy: SupplyChainPolicy(),
+		ImageRepos:        imageRepos,
+		DigestToRepo:      digestToRepo,
+		TDX:               tdxResult,
+		Nvidia:            nvidiaResult,
+		NvidiaNRAS:        nrasResult,
+		PoC:               pocResult,
+		Compose:           composeResult,
+		Sigstore:          sigstoreResults,
+		Rekor:             rekorResults,
 	})
 	return report, nil
 }

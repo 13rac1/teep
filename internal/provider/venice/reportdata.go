@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"golang.org/x/crypto/sha3"
@@ -41,15 +42,20 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	derived := "0x" + hex.EncodeToString(derivedAddr)
 
 	// Verify the signing_address claimed in the response matches what we derived.
-	if raw.SigningAddress != "" && raw.SigningAddress != derived {
-		return "", fmt.Errorf("signing_address %s does not match keccak256-derived address %s",
-			raw.SigningAddress, derived)
+	// Compare case-insensitively: providers may return EIP-55 checksummed addresses
+	// (mixed case) while we derive lowercase.
+	if raw.SigningAddress != "" {
+		if !strings.EqualFold(raw.SigningAddress, derived) {
+			return "", fmt.Errorf("signing_address %s does not match keccak256-derived address %s",
+				raw.SigningAddress, derived)
+		}
 	}
 
-	// Venice REPORTDATA layout: [0:20] = keccak256 address, [20:32] = zero, [32:64] = nonce.
-	if subtle.ConstantTimeCompare(nonce[:], reportData[32:64]) != 1 {
+	// REPORTDATA layout: [0:20] = keccak256 address, [20:32] = zero, [32:64] = nonce.
+	reportNonce := reportData[32:64]
+	if subtle.ConstantTimeCompare(nonce[:], reportNonce) != 1 {
 		return "", fmt.Errorf("REPORTDATA[32:64] = %s, expected nonce %s",
-			hex.EncodeToString(reportData[32:64]), nonce.Hex())
+			hex.EncodeToString(reportNonce), nonce.Hex())
 	}
 
 	return fmt.Sprintf("REPORTDATA binds enclave key (%s) and nonce", derived), nil

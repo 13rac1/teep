@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -38,6 +39,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/venice"
@@ -255,6 +257,7 @@ func fromConfig(
 		p.Attester = venice.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = venice.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = venice.ReportDataVerifier{}
+		p.SupplyChainPolicy = venice.SupplyChainPolicy()
 		p.ModelLister = venice.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "neardirect":
 		p.ChatPath = "/v1/chat/completions"
@@ -262,6 +265,7 @@ func fromConfig(
 		p.Attester = neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
+		p.SupplyChainPolicy = neardirect.SupplyChainPolicy()
 		resolver := neardirect.NewEndpointResolver(offline)
 		p.PinnedHandler = neardirect.NewPinnedHandler(
 			resolver,
@@ -281,6 +285,7 @@ func fromConfig(
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
+		p.SupplyChainPolicy = nearcloud.SupplyChainPolicy()
 		p.PinnedHandler = nearcloud.NewPinnedHandler(
 			spkiCache,
 			cp.APIKey,
@@ -293,8 +298,14 @@ func fromConfig(
 			pocSigningKey,
 		)
 		p.ModelLister = neardirect.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+	case "nanogpt":
+		p.ChatPath = "/v1/chat/completions"
+		p.Attester = nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
+		p.ReportDataVerifier = venice.ReportDataVerifier{}
+		p.SupplyChainPolicy = nanogpt.SupplyChainPolicy()
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud)", cp.Name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt)", cp.Name)
 	}
 	return p, nil
 }
@@ -309,13 +320,7 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 	return nil, "", false
 }
 
-// reportdataBindingPassed returns true if the tdx_reportdata_binding factor
-// passed in the report. If it is absent, Skipped, or Failed, E2EE is refused.
-func reportdataBindingPassed(report *attestation.VerificationReport) bool {
-	return report.ReportDataBindingPassed()
-}
-
-// fetchAndVerify fetches attestation from the provider and runs all 23
+// fetchAndVerify fetches attestation from the provider and runs all
 // verification factors. On failure it records the provider/model in the
 // negative cache. Returns (nil, nil) on fetch error.
 //
@@ -434,21 +439,22 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	ms.lastVerifyMs.Store(totalDur.Milliseconds())
 
 	report := attestation.BuildReport(&attestation.ReportInput{
-		Provider:     prov.Name,
-		Model:        upstreamModel,
-		Raw:          raw,
-		Nonce:        nonce,
-		Enforced:     s.cfg.Enforced,
-		Policy:       s.cfg.MeasurementPolicy,
-		ImageRepos:   imageRepos,
-		DigestToRepo: digestToRepo,
-		TDX:          tdxResult,
-		Nvidia:       nvidiaResult,
-		NvidiaNRAS:   nrasResult,
-		PoC:          pocResult,
-		Compose:      composeResult,
-		Sigstore:     sigstoreResults,
-		Rekor:        rekorResults,
+		Provider:          prov.Name,
+		Model:             upstreamModel,
+		Raw:               raw,
+		Nonce:             nonce,
+		Enforced:          s.cfg.Enforced,
+		Policy:            s.cfg.MeasurementPolicy,
+		SupplyChainPolicy: prov.SupplyChainPolicy,
+		ImageRepos:        imageRepos,
+		DigestToRepo:      digestToRepo,
+		TDX:               tdxResult,
+		Nvidia:            nvidiaResult,
+		NvidiaNRAS:        nrasResult,
+		PoC:               pocResult,
+		Compose:           composeResult,
+		Sigstore:          sigstoreResults,
+		Rekor:             rekorResults,
 	})
 	return report, raw
 }
@@ -564,7 +570,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
 	}
 
-	e2eeActive := prov.E2EE && reportdataBindingPassed(report)
+	e2eeActive := prov.E2EE && report.ReportDataBindingPassed()
 	if e2eeActive {
 		s.stats.e2ee.Add(1)
 	} else {
@@ -674,7 +680,7 @@ func (s *Server) handlePinnedChat(
 	// request entirely if binding is unverified (cache miss is handled by
 	// the pinned handler itself, which will block internally).
 	if prov.E2EE {
-		if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok && !reportdataBindingPassed(cached) {
+		if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok && !cached.ReportDataBindingPassed() {
 			slog.Error("E2EE required but tdx_reportdata_binding not passed; refusing request",
 				"provider", prov.Name, "model", upstreamModel)
 			http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
@@ -1141,7 +1147,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 		}
 		fmt.Fprintf(&modelRows,
 			"  <tr><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td></tr>\n",
-			k, m.requests.Load(), m.errors.Load(), verifyStr, agoStr)
+			html.EscapeString(k), m.requests.Load(), m.errors.Load(), verifyStr, agoStr)
 		return true
 	})
 

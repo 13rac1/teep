@@ -174,7 +174,7 @@ func VerifyNVIDIAPayload(payload string, expectedNonce Nonce) *NvidiaVerifyResul
 // verifyNVIDIAJWT verifies an NVIDIA NRAS attestation JWT. It fetches (and
 // caches) the NVIDIA JWKS via keyfunc/v3, verifies the JWT signature, and
 // extracts claims. Nonce freshness is verified separately via the EAT layer
-// (factor 14: nvidia_nonce_match).
+// (factor: nvidia_nonce_client_bound).
 func verifyNVIDIAJWT(ctx context.Context, jwtPayload, jwksURL string, opts ...jwt.ParserOption) *NvidiaVerifyResult {
 	result := &NvidiaVerifyResult{Format: "JWT"}
 

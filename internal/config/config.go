@@ -5,7 +5,7 @@
 //
 //  1. Built-in defaults (listen addr 127.0.0.1:8337, default enforced factors).
 //  2. TOML file at $TEEP_CONFIG, if set.
-//  3. Environment variables (TEEP_LISTEN_ADDR, VENICE_API_KEY, NEARAI_API_KEY).
+//  3. Environment variables (TEEP_LISTEN_ADDR, VENICE_API_KEY, NEARAI_API_KEY, NANOGPT_API_KEY).
 //
 // API keys are never logged; use RedactKey to produce a safe representation.
 package config
@@ -276,7 +276,7 @@ func resolveProvider(name string, pc ProviderConfig) *Provider {
 
 // applyEnvOverrides applies environment variable overrides to cfg.
 // TEEP_LISTEN_ADDR overrides the listen address.
-// VENICE_API_KEY and NEARAI_API_KEY inject or override provider API keys.
+// VENICE_API_KEY, NEARAI_API_KEY, and NANOGPT_API_KEY inject or override provider API keys.
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("TEEP_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
@@ -285,6 +285,7 @@ func applyEnvOverrides(cfg *Config) {
 	applyAPIKeyEnv(cfg, "venice", "VENICE_API_KEY", "https://api.venice.ai", true)
 	applyAPIKeyEnv(cfg, "neardirect", "NEARAI_API_KEY", "https://completions.near.ai", false)
 	applyAPIKeyEnv(cfg, "nearcloud", "NEARAI_API_KEY", "https://cloud-api.near.ai", true)
+	applyAPIKeyEnv(cfg, "nanogpt", "NANOGPT_API_KEY", "https://nano-gpt.com/api", false)
 }
 
 // applyAPIKeyEnv sets or updates the API key for the named provider from the

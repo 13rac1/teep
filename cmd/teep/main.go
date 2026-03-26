@@ -11,6 +11,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -27,6 +29,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/venice"
@@ -148,6 +151,7 @@ var providerEnvVars = map[string]string{
 	"venice":     "VENICE_API_KEY",
 	"neardirect": "NEARAI_API_KEY",
 	"nearcloud":  "NEARAI_API_KEY",
+	"nanogpt":    "NANOGPT_API_KEY",
 }
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
@@ -221,6 +225,21 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	}
 	client := config.NewAttestationClient(offline)
 
+	var pocSigningKey ed25519.PublicKey
+	if cfg.PoCSigningKey != "" {
+		keyBytes, err := base64.StdEncoding.DecodeString(cfg.PoCSigningKey)
+		if err != nil {
+			slog.Error("poc_signing_key: invalid base64", "err", err)
+			os.Exit(1)
+		}
+		if len(keyBytes) != ed25519.PublicKeySize {
+			slog.Error("poc_signing_key: wrong size", "expected", ed25519.PublicKeySize, "got", len(keyBytes))
+			os.Exit(1)
+		}
+		pocSigningKey = ed25519.PublicKey(keyBytes)
+		slog.Info("PoC JWT EdDSA signature verification enabled")
+	}
+
 	nonce := attestation.NewNonce()
 	slog.Debug("nonce generated", "provider", providerName, "model", modelName, "nonce", nonce.Hex()[:16]+"...")
 	ctx := context.Background()
@@ -236,7 +255,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 
 	tdxResult := verifyTDX(ctx, raw, nonce, providerName, offline)
 	nvidiaResult, nrasResult := verifyNVIDIA(ctx, raw, nonce, client, offline)
-	pocResult := checkPoC(ctx, raw.IntelQuote, client, offline)
+	pocResult := checkPoC(ctx, raw.IntelQuote, client, offline, pocSigningKey)
 
 	// Model compose evidence (gated on TDX).
 	var composeResult *attestation.ComposeBindingResult
@@ -253,7 +272,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	}
 
 	// Gateway verification (nearcloud-specific fields).
-	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyNearcloudGateway(ctx, raw, nonce, client, offline)
+	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyNearcloudGateway(ctx, raw, nonce, client, offline, pocSigningKey)
 	var gatewayCD attestation.ComposeDigests
 	if gatewayCompose != nil && gatewayCompose.Err == nil {
 		gatewayCD = attestation.ExtractComposeDigests(raw.GatewayAppCompose)
@@ -269,6 +288,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		Nonce:             nonce,
 		Enforced:          cfg.Enforced,
 		Policy:            cfg.MeasurementPolicy,
+		SupplyChainPolicy: supplyChainPolicy(providerName),
 		TDX:               tdxResult,
 		Nvidia:            nvidiaResult,
 		NvidiaNRAS:        nrasResult,
@@ -350,14 +370,20 @@ func verifyNVIDIA(ctx context.Context, raw *attestation.RawAttestation, nonce at
 }
 
 // checkPoC runs a Proof of Cloud check for the given intel_quote.
-// Returns nil if offline or quote is empty.
-func checkPoC(ctx context.Context, quote string, client *http.Client, offline bool) *attestation.PoCResult {
+// Returns nil if offline or quote is empty. When signingKey is non-nil,
+// PoC JWT EdDSA signatures are verified.
+func checkPoC(ctx context.Context, quote string, client *http.Client, offline bool, signingKey ed25519.PublicKey) *attestation.PoCResult {
 	if offline || quote == "" {
 		return nil
 	}
 	slog.Debug("Proof of Cloud check starting")
 	pocStart := time.Now()
-	poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, client)
+	var poc *attestation.PoCClient
+	if signingKey != nil {
+		poc = attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, client, signingKey)
+	} else {
+		poc = attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, client)
+	}
 	result := poc.CheckQuote(ctx, quote)
 	slog.Debug("Proof of Cloud check complete", "elapsed", time.Since(pocStart),
 		"registered", result != nil && result.Registered)
@@ -368,7 +394,7 @@ func checkPoC(ctx context.Context, quote string, client *http.Client, offline bo
 // providers that populate GatewayIntelQuote (nearcloud).
 func verifyNearcloudGateway(
 	ctx context.Context, raw *attestation.RawAttestation, nonce attestation.Nonce,
-	client *http.Client, offline bool,
+	client *http.Client, offline bool, pocSigningKey ed25519.PublicKey,
 ) (tdx *attestation.TDXVerifyResult, compose *attestation.ComposeBindingResult, poc *attestation.PoCResult) {
 	if raw.GatewayIntelQuote == "" {
 		return nil, nil, nil
@@ -385,7 +411,7 @@ func verifyNearcloudGateway(
 		compose = &attestation.ComposeBindingResult{Checked: true}
 		compose.Err = attestation.VerifyComposeBinding(raw.GatewayAppCompose, tdx.MRConfigID)
 	}
-	poc = checkPoC(ctx, raw.GatewayIntelQuote, client, offline)
+	poc = checkPoC(ctx, raw.GatewayIntelQuote, client, offline, pocSigningKey)
 	slog.Debug("gateway TDX verification complete")
 	return tdx, compose, poc
 }
@@ -442,8 +468,10 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 		return neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	case "nearcloud":
 		return nearcloud.NewAttester(cp.APIKey, offline), nil
+	case "nanogpt":
+		return nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud)", name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt)", name)
 	}
 }
 
@@ -453,6 +481,24 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 		return venice.ReportDataVerifier{}
 	case "neardirect", "nearcloud":
 		return neardirect.ReportDataVerifier{}
+	case "nanogpt":
+		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
+		return venice.ReportDataVerifier{}
+	default:
+		return nil
+	}
+}
+
+func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
+	switch name {
+	case "venice":
+		return venice.SupplyChainPolicy()
+	case "neardirect":
+		return neardirect.SupplyChainPolicy()
+	case "nearcloud":
+		return nearcloud.SupplyChainPolicy()
+	case "nanogpt":
+		return nanogpt.SupplyChainPolicy()
 	default:
 		return nil
 	}

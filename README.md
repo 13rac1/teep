@@ -37,6 +37,10 @@ teep serve neardirect
 # NEAR AI (via cloud gateway)
 export NEARAI_API_KEY="your-key-here"
 teep serve nearcloud
+
+# NanoGPT
+export NANOGPT_API_KEY="your-key-here"
+teep serve nanogpt
 ```
 
 Point any OpenAI-compatible client at `http://127.0.0.1:8337`:
@@ -48,6 +52,7 @@ client = OpenAI(base_url="http://127.0.0.1:8337/v1", api_key="unused")
 resp = client.chat.completions.create(
     model="e2ee-qwen3-5-122b-a10b",  # Venice
     # model="qwen3-235b-a22b",       # NEAR AI
+    # model="TEE/llama-3.3-70b-instruct",  # NanoGPT
     messages=[{"role": "user", "content": "Hello from a TEE"}],
 )
 print(resp.choices[0].message.content)
@@ -198,6 +203,7 @@ For full factor descriptions, run `teep help factors` or see [README_ADVANCED.md
 | [Venice AI](https://venice.ai) | End-to-end encryption (ECDH + AES-256-GCM) |
 | [NEAR AI Direct](https://near.ai) | TLS connection pinning to model-specific TEE nodes |
 | [NEAR AI Cloud](https://near.ai) | TLS connection pinning through TEE-attested gateway |
+| [NanoGPT](https://nano-gpt.com) | TEE attestation with Intel TDX + NVIDIA GPU |
 
 See [README_ADVANCED.md](README_ADVANCED.md) for cryptographic details (ECDH key exchange, REPORTDATA binding schemes, SPKI pinning).
 
@@ -209,6 +215,7 @@ See [README_ADVANCED.md](README_ADVANCED.md) for cryptographic details (ECDH key
 |----------|-------------|
 | `VENICE_API_KEY` | Venice AI API key |
 | `NEARAI_API_KEY` | NEAR AI API key |
+| `NANOGPT_API_KEY` | NanoGPT API key |
 | `TEEP_LISTEN_ADDR` | Listen address (default `127.0.0.1:8337`) |
 | `TEEP_CONFIG` | Path to optional TOML config file |
 

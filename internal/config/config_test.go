@@ -39,6 +39,7 @@ func TestLoadDefaults(t *testing.T) {
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -79,6 +80,7 @@ e2ee = false
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -121,6 +123,7 @@ enforce = ["nonce_match", "tls_key_binding"]
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -147,6 +150,7 @@ enforce = ["nonce_match", "typo_factor"]
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	_, err := Load()
 	if err == nil {
@@ -233,6 +237,7 @@ base_url = "https://api.venice.ai"
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -256,6 +261,7 @@ e2ee = true
 	setenv(t, "VENICE_API_KEY", "env-resolved-key")
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -283,6 +289,7 @@ base_url = "https://api.venice.ai"
 	setenv(t, "VENICE_API_KEY", "env-key")
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -300,6 +307,7 @@ func TestLoadTOMLInvalidFile(t *testing.T) {
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	_, err := Load()
 	if err == nil {
@@ -312,6 +320,7 @@ func TestLoadTOMLMissingFile(t *testing.T) {
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	_, err := Load()
 	if err == nil {
@@ -326,6 +335,7 @@ func TestEnvListenAddr(t *testing.T) {
 	setenv(t, "TEEP_LISTEN_ADDR", "127.0.0.1:9090")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -341,6 +351,7 @@ func TestEnvVeniceAPIKey(t *testing.T) {
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	setenv(t, "VENICE_API_KEY", "direct-venice-key")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -396,6 +407,7 @@ e2ee = true
 	setenv(t, "VENICE_API_KEY", "env-override-key")
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -553,6 +565,7 @@ func TestLoadNonLoopbackEnvAddrLoads(t *testing.T) {
 	setenv(t, "TEEP_LISTEN_ADDR", "0.0.0.0:8337")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {
@@ -578,6 +591,7 @@ base_url = "https://api.venice.ai"
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	// Load must succeed — bad permissions are a warning, not a hard error.
 	cfg, err := Load()
@@ -598,6 +612,7 @@ func TestDefaultEnforcedImmutable(t *testing.T) {
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
 	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
 
 	cfg, err := Load()
 	if err != nil {

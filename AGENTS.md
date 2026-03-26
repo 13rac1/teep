@@ -36,7 +36,9 @@ This repository is managed by git and hosted on github.
 
 Teep is *critical infrastructure security software* for handling *highly confidential data*.
 
-It is more important to protect confidential traffic than it is to provide service.
+**The measure of this software's correctness is how strictly it evaluates providers, not how many providers pass.**
+
+It is more important to protect confidential traffic than it is to provide service. Provider verification failures are not bugs. A provider that fails enforced factors does not meet security requirements. Never modify verification logic to accommodate a non-compliant provider.
 
 This means failing closed is a FEATURE, not a BUG.
 

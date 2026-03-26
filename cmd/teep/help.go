@@ -125,6 +125,18 @@ var factorRegistry = []factorInfo{
 			"mode, shows only the raw TEE_TCB_SVN bytes.",
 	},
 	{
+		Name:    "tdx_tcb_not_revoked",
+		Tier:    2,
+		Summary: "TCB firmware not revoked by Intel",
+		Description: "Checks that the TDX TCB status from Intel PCS collateral is " +
+			"not Revoked. Unlike tdx_tcb_current (which also fails on " +
+			"SWHardeningNeeded or OutOfDate), this factor only blocks on " +
+			"Revoked — meaning Intel has determined the firmware is " +
+			"fundamentally compromised with no available mitigation. This " +
+			"is enforced by default as a minimum safety check. Skipped in " +
+			"--offline mode or when Intel PCS collateral is unavailable.",
+	},
+	{
 		Name:    "nvidia_payload_present",
 		Tier:    2,
 		Summary: "NVIDIA attestation payload present",
@@ -152,13 +164,14 @@ var factorRegistry = []factorInfo{
 			"claims. For JWTs, checks the overall attestation result.",
 	},
 	{
-		Name:    "nvidia_nonce_match",
+		Name:    "nvidia_nonce_client_bound",
 		Tier:    2,
-		Summary: "NVIDIA payload nonce matches",
-		Description: "Verifies that the nonce embedded in the NVIDIA attestation " +
-			"payload matches the nonce submitted by the client. This proves " +
+		Summary: "NVIDIA nonce bound directly to client",
+		Description: "Verifies that the nonce embedded in the NVIDIA GPU attestation " +
+			"payload matches the client-supplied nonce directly. This proves " +
 			"the GPU attestation is fresh and was generated for this specific " +
-			"verification session.",
+			"verification session without depending on the provider to relay " +
+			"the nonce.",
 	},
 	{
 		Name:    "nvidia_nras_verified",
@@ -484,6 +497,7 @@ Environment variables:
   TEEP_LISTEN_ADDR   Override listen address (default: 127.0.0.1:8337).
   VENICE_API_KEY     Venice AI API key.
   NEARAI_API_KEY     NEAR AI API key (used by neardirect and nearcloud providers).
+  NANOGPT_API_KEY    NanoGPT API key.
 `)
 }
 
@@ -495,7 +509,7 @@ Usage:
   teep serve PROVIDER [--offline] [--log-level LEVEL]
 
 Arguments:
-  PROVIDER   Provider name (venice, neardirect, nearcloud).
+  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt).
 
 The proxy intercepts OpenAI-compatible chat completion requests, performs TEE
 attestation verification against the upstream provider, and optionally enables
@@ -538,7 +552,7 @@ Usage:
   teep verify PROVIDER --model MODEL [flags]
 
 Arguments:
-  PROVIDER   Provider name (venice, neardirect, nearcloud).
+  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt).
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
 attestation for the given model, and runs all verification factors. The
