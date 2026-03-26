@@ -501,6 +501,12 @@ func evalNvidiaNonceMatch(in *ReportInput) []FactorResult {
 	if subtle.ConstantTimeCompare([]byte(in.Nvidia.Nonce), []byte(in.Nonce.Hex())) == 1 {
 		return factor(TierBinding, "nvidia_nonce_match", Pass, nvidiaNonceDetail(in.Nvidia))
 	}
+	// Some providers use a separate internal nonce for GPU attestation
+	// (e.g. dstack's request_nonce). Accept it if it matches.
+	if in.Raw.NvidiaNonce != "" && subtle.ConstantTimeCompare([]byte(in.Nvidia.Nonce), []byte(in.Raw.NvidiaNonce)) == 1 {
+		return factor(TierBinding, "nvidia_nonce_match", Pass,
+			nvidiaNonceDetail(in.Nvidia)+" (matched provider request_nonce)")
+	}
 	return factor(TierBinding, "nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", truncHex(in.Nvidia.Nonce), truncHex(in.Nonce.Hex())))
 }
 func evalNvidiaNRASVerified(in *ReportInput) []FactorResult {

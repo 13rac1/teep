@@ -222,12 +222,21 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 		appCompose = ar.Info.TCBInfo.AppCompose
 	}
 
+	// NanoGPT returns the raw secp256k1 x||y point (64 bytes = 128 hex)
+	// without the 04 uncompressed-point prefix. Prepend it so downstream
+	// code (reportdata verifier, E2EE session) works unchanged.
+	signingKey := ar.SigningPublicKey
+	if len(signingKey) == 128 {
+		signingKey = "04" + signingKey
+	}
+
 	return &attestation.RawAttestation{
 		Nonce:          ar.Nonce,
-		SigningKey:     ar.SigningPublicKey,
+		SigningKey:     signingKey,
 		SigningAddress: ar.SigningAddress,
 		IntelQuote:     ar.IntelQuote,
 		NvidiaPayload:  ar.NvidiaPayload,
+		NvidiaNonce:    ar.RequestNonce,
 
 		SigningAlgo:   ar.SigningAlgo,
 		AppName:       ar.Info.AppName,

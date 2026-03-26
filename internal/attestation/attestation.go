@@ -95,6 +95,12 @@ type RawAttestation struct {
 	// NvidiaPayload is the NVIDIA GPU attestation JWT or raw payload.
 	NvidiaPayload string
 
+	// NvidiaNonce is the hex nonce the provider used when requesting GPU
+	// attestation from NVIDIA. When non-empty, the NVIDIA EAT nonce is
+	// compared against this instead of the client nonce. Populated from
+	// dstack's request_nonce when it differs from the client nonce.
+	NvidiaNonce string
+
 	// TLSFingerprint is the hex SHA-256 of the backend's TLS certificate SPKI.
 	// Set by providers that perform connection-level attestation (NEAR AI).
 	// Empty for E2EE providers (Venice).

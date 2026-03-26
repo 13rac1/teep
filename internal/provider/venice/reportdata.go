@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"golang.org/x/crypto/sha3"
@@ -41,17 +42,28 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	derived := "0x" + hex.EncodeToString(derivedAddr)
 
 	// Verify the signing_address claimed in the response matches what we derived.
+	// Compare case-insensitively: providers may return EIP-55 checksummed addresses
+	// (mixed case) while we derive lowercase.
 	if raw.SigningAddress != "" {
-		if subtle.ConstantTimeCompare([]byte(raw.SigningAddress), []byte(derived)) != 1 {
+		if !strings.EqualFold(raw.SigningAddress, derived) {
 			return "", fmt.Errorf("signing_address %s does not match keccak256-derived address %s",
 				raw.SigningAddress, derived)
 		}
 	}
 
-	// Venice REPORTDATA layout: [0:20] = keccak256 address, [20:32] = zero, [32:64] = nonce.
-	if subtle.ConstantTimeCompare(nonce[:], reportData[32:64]) != 1 {
+	// REPORTDATA layout: [0:20] = keccak256 address, [20:32] = zero, [32:64] = nonce.
+	// Some providers (NanoGPT dstack) use an internal request_nonce in TDX
+	// REPORTDATA rather than the client nonce. Accept either.
+	reportNonce := reportData[32:64]
+	nonceMatch := subtle.ConstantTimeCompare(nonce[:], reportNonce) == 1
+	if !nonceMatch && raw.NvidiaNonce != "" {
+		if providerNonce, err := attestation.ParseNonce(raw.NvidiaNonce); err == nil {
+			nonceMatch = subtle.ConstantTimeCompare(providerNonce[:], reportNonce) == 1
+		}
+	}
+	if !nonceMatch {
 		return "", fmt.Errorf("REPORTDATA[32:64] = %s, expected nonce %s",
-			hex.EncodeToString(reportData[32:64]), nonce.Hex())
+			hex.EncodeToString(reportNonce), nonce.Hex())
 	}
 
 	return fmt.Sprintf("REPORTDATA binds enclave key (%s) and nonce", derived), nil

@@ -337,9 +337,17 @@ func verifyTDX(ctx context.Context, raw *attestation.RawAttestation, nonce attes
 // Returns nil for either if not applicable.
 func verifyNVIDIA(ctx context.Context, raw *attestation.RawAttestation, nonce attestation.Nonce, client *http.Client, offline bool) (eat, nras *attestation.NvidiaVerifyResult) {
 	if raw.NvidiaPayload != "" {
+		// Some providers (NanoGPT dstack) use a separate internal nonce for
+		// GPU attestation. When NvidiaNonce is set, use it instead.
+		nvidiaNonce := nonce
+		if raw.NvidiaNonce != "" {
+			if parsed, err := attestation.ParseNonce(raw.NvidiaNonce); err == nil {
+				nvidiaNonce = parsed
+			}
+		}
 		slog.Debug("NVIDIA verification starting", "payload_len", len(raw.NvidiaPayload))
 		nvidiaStart := time.Now()
-		eat = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
+		eat = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nvidiaNonce)
 		slog.Debug("NVIDIA verification complete", "elapsed", time.Since(nvidiaStart))
 	}
 	if !offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {

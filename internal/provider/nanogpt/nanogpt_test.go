@@ -74,6 +74,12 @@ func TestAttester_FetchAttestation_Success(t *testing.T) {
 	if raw.SigningKey == "" {
 		t.Error("SigningKey is empty, want non-empty (mapped from signing_public_key)")
 	}
+	if len(raw.SigningKey) != 130 || raw.SigningKey[:2] != "04" {
+		t.Errorf("SigningKey should be 130 hex chars with 04 prefix, got len=%d prefix=%q", len(raw.SigningKey), raw.SigningKey[:2])
+	}
+	if raw.NvidiaNonce != "1122334455667788aabbccddeeff00111122334455667788aabbccddeeff0011" {
+		t.Errorf("NvidiaNonce = %q, want request_nonce value", raw.NvidiaNonce)
+	}
 	if raw.SigningAddress != "0x96a98Ca1F41a57c1911f08acAb8fdcE3C26c9E79" {
 		t.Errorf("SigningAddress = %q, want %q", raw.SigningAddress, "0x96a98Ca1F41a57c1911f08acAb8fdcE3C26c9E79")
 	}
