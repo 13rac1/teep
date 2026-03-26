@@ -48,9 +48,9 @@ func (r *result) skip(format string, args ...any) {
 
 // providerException encodes known structural deviations for specific providers.
 type providerException struct {
-	// responseStructName overrides "attestationResponse" for check 2.
+	// responseStructName overrides "attestationResponse" for checkResponseStruct.
 	responseStructName string
-	// parseFunc overrides "ParseAttestationResponse" for check 6.
+	// parseFunc overrides "ParseAttestationResponse" for checkParseFunc.
 	parseFunc string
 }
 
@@ -168,7 +168,7 @@ func checkProviderStructure(r *result, prov string) {
 	checkExternalTestPackage(r, dir, prov)
 }
 
-// Check 1: attestationPath string constant.
+// attestationPath string constant.
 func checkAttestationPathConst(r *result, fset *token.FileSet, files []*ast.File, prov string) {
 	for _, f := range files {
 		for _, decl := range f.Decls {
@@ -194,7 +194,7 @@ func checkAttestationPathConst(r *result, fset *token.FileSet, files []*ast.File
 	r.fail("attestationPath constant not found in %s", prov)
 }
 
-// Check 2: attestationResponse (or exception) unexported struct.
+// attestationResponse (or exception) unexported struct.
 func checkResponseStruct(r *result, fset *token.FileSet, files []*ast.File, prov string, exc providerException) {
 	want := "attestationResponse"
 	if exc.responseStructName != "" {
@@ -228,7 +228,7 @@ func checkResponseStruct(r *result, fset *token.FileSet, files []*ast.File, prov
 	r.fail("%s struct not found in %s", want, prov)
 }
 
-// Check 3: Exported Attester struct. Returns the struct type or nil.
+// Exported Attester struct. Returns the struct type or nil.
 func checkAttesterStruct(r *result, fset *token.FileSet, files []*ast.File, prov string) *ast.StructType {
 	for _, f := range files {
 		for _, decl := range f.Decls {
@@ -255,7 +255,7 @@ func checkAttesterStruct(r *result, fset *token.FileSet, files []*ast.File, prov
 	return nil
 }
 
-// Check 4: Attester.client *http.Client field.
+// Attester.client *http.Client field.
 func checkAttesterClientField(r *result, fset *token.FileSet, st *ast.StructType, prov string) {
 	if st == nil {
 		r.fail("Attester.client *http.Client — no Attester struct in %s", prov)
@@ -275,7 +275,7 @@ func checkAttesterClientField(r *result, fset *token.FileSet, st *ast.StructType
 	r.fail("Attester.client *http.Client field not found in %s", prov)
 }
 
-// Check 5: NewAttester returns *Attester.
+// NewAttester returns *Attester.
 func checkNewAttester(r *result, fset *token.FileSet, files []*ast.File, prov string) {
 	for _, f := range files {
 		for _, decl := range f.Decls {
@@ -302,7 +302,7 @@ func checkNewAttester(r *result, fset *token.FileSet, files []*ast.File, prov st
 	r.fail("NewAttester function not found in %s", prov)
 }
 
-// Check 6: ParseAttestationResponse (or exception) exists.
+// ParseAttestationResponse (or exception) exists.
 func checkParseFunc(r *result, fset *token.FileSet, files []*ast.File, prov string, exc providerException) *ast.FuncDecl {
 	want := "ParseAttestationResponse"
 	if exc.parseFunc != "" {
@@ -329,7 +329,7 @@ func checkParseFunc(r *result, fset *token.FileSet, files []*ast.File, prov stri
 	return nil
 }
 
-// Check 7: Parse function calls jsonstrict.UnmarshalWarn.
+// Parse function calls jsonstrict.UnmarshalWarn.
 func checkParseFuncUsesJSONStrict(r *result, fset *token.FileSet, fd *ast.FuncDecl, prov string) {
 	if fd == nil {
 		r.fail("%s uses jsonstrict.UnmarshalWarn — no parse function in %s", prov, prov)
@@ -344,7 +344,7 @@ func checkParseFuncUsesJSONStrict(r *result, fset *token.FileSet, fd *ast.FuncDe
 	r.fail("%s does not call jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 }
 
-// Check 8: FetchAttestation calls io.LimitReader.
+// FetchAttestation calls io.LimitReader.
 func checkFetchUsesLimitReader(r *result, fset *token.FileSet, files []*ast.File, prov string) {
 	for _, f := range files {
 		for _, decl := range f.Decls {
@@ -367,7 +367,7 @@ func checkFetchUsesLimitReader(r *result, fset *token.FileSet, files []*ast.File
 	r.fail("FetchAttestation method not found in %s", prov)
 }
 
-// Check 9: No bytes.Equal in reportdata verifier files.
+// No bytes.Equal in reportdata verifier files.
 func checkNoBytesEqual(r *result, dir, prov string) {
 	rdFiles, _ := filepath.Glob(filepath.Join(dir, "reportdata*.go"))
 	if len(rdFiles) == 0 {
@@ -392,7 +392,7 @@ func checkNoBytesEqual(r *result, dir, prov string) {
 	r.pass("no bytes.Equal in reportdata verifiers")
 }
 
-// Check 10: reportdata*.go imports crypto/subtle.
+// reportdata*.go imports crypto/subtle.
 func checkReportDataImportsCryptoSubtle(r *result, dir, prov string) {
 	files := parseReportDataFiles(dir)
 	if len(files) == 0 {
@@ -410,7 +410,7 @@ func checkReportDataImportsCryptoSubtle(r *result, dir, prov string) {
 	r.fail("reportdata files in %s do not import crypto/subtle", prov)
 }
 
-// Check 11: ReportDataVerifier struct exists.
+// ReportDataVerifier struct exists.
 func checkReportDataVerifierStruct(r *result, dir, prov string) {
 	files := parseReportDataFiles(dir)
 	if len(files) == 0 {
@@ -441,7 +441,7 @@ func checkReportDataVerifierStruct(r *result, dir, prov string) {
 	r.fail("no exported *ReportDataVerifier struct in %s", prov)
 }
 
-// Check 12: VerifyReportData method exists.
+// VerifyReportData method exists.
 func checkVerifyReportDataMethod(r *result, dir, prov string) {
 	files := parseReportDataFiles(dir)
 	if len(files) == 0 {
@@ -481,7 +481,7 @@ func parseReportDataFiles(dir string) []*ast.File {
 	return files
 }
 
-// Check 10: No slog calls with API key field names.
+// No slog calls with API key field names.
 func checkNoSlogAPIKeyArgs(r *result, fset *token.FileSet, files []*ast.File, prov string) {
 	badNames := []string{"apiKey", "api_key", "APIKey", "apikey"}
 	for _, f := range files {
@@ -523,7 +523,7 @@ func checkNoSlogAPIKeyArgs(r *result, fset *token.FileSet, files []*ast.File, pr
 	r.pass("no slog calls with API key args")
 }
 
-// Check 11: No json.RawMessage in provider response structs.
+// No json.RawMessage in provider response structs.
 // Skips models.go which uses json.RawMessage for pass-through relay (not attestation parsing).
 func checkNoJSONRawMessage(r *result, fset *token.FileSet, files []*ast.File, fileNames []string, prov string) {
 	var violations []string
@@ -582,7 +582,7 @@ func collectRawMessageViolations(fset *token.FileSet, st *ast.StructType, struct
 	}
 }
 
-// Check 12: At least one test file uses external package.
+// At least one test file uses external package.
 func checkExternalTestPackage(r *result, dir, prov string) {
 	testFiles, _ := filepath.Glob(filepath.Join(dir, "*_test.go"))
 	wantPkg := prov + "_test"
@@ -629,7 +629,7 @@ func checkMakefile(r *result, providers []string) {
 	}
 
 	for _, prov := range providers {
-		// Check 13: report-{provider}: target exists.
+		// report-{provider}: target exists.
 		targetRe := regexp.MustCompile(`(?m)^report-` + regexp.QuoteMeta(prov) + `:`)
 		if targetRe.MatchString(content) {
 			r.pass("report-%s target exists", prov)
@@ -637,14 +637,14 @@ func checkMakefile(r *result, providers []string) {
 			r.fail("report-%s target missing", prov)
 		}
 
-		// Check 14: reports: target includes report-{provider}.
+		// reports: target includes report-{provider}.
 		if strings.Contains(reportsLine, "report-"+prov) {
 			r.pass("reports: includes report-%s", prov)
 		} else {
 			r.fail("reports: missing report-%s", prov)
 		}
 
-		// Check 15: integration-{provider}: target exists.
+		// integration-{provider}: target exists.
 		intTargetRe := regexp.MustCompile(`(?m)^integration-` + regexp.QuoteMeta(prov) + `:`)
 		if intTargetRe.MatchString(content) {
 			r.pass("integration-%s target exists", prov)
@@ -652,7 +652,7 @@ func checkMakefile(r *result, providers []string) {
 			r.fail("integration-%s target missing", prov)
 		}
 
-		// Check 16: integration: target includes integration-{provider}.
+		// integration: target includes integration-{provider}.
 		if strings.Contains(integrationLine, "integration-"+prov) {
 			r.pass("integration: includes integration-%s", prov)
 		} else {
@@ -672,7 +672,7 @@ func checkProxyWiring(r *result, providers []string) {
 		return
 	}
 
-	// Check 17: fromConfig() switch has case for each provider.
+	// fromConfig() switch has case for each provider.
 	fd := findFunc(f, "fromConfig")
 	if fd == nil {
 		r.fail("fromConfig function not found in %s", path)
@@ -705,7 +705,7 @@ func checkCLIMain(r *result, providers []string) {
 		return
 	}
 
-	// Check 18: providerEnvVars map has key for each provider.
+	// providerEnvVars map has key for each provider.
 	envVarKeys := collectCompositeLitKeys(f, "providerEnvVars")
 	for _, prov := range providers {
 		if envVarKeys[prov] {
@@ -715,7 +715,7 @@ func checkCLIMain(r *result, providers []string) {
 		}
 	}
 
-	// Check 19: newAttester() switch has case for each provider.
+	// newAttester() switch has case for each provider.
 	newAttesterFunc := findFunc(f, "newAttester")
 	if newAttesterFunc == nil {
 		r.fail("newAttester function not found")
@@ -730,7 +730,7 @@ func checkCLIMain(r *result, providers []string) {
 		}
 	}
 
-	// Check 20: newReportDataVerifier() switch has case for each provider.
+	// newReportDataVerifier() switch has case for each provider.
 	rdvFunc := findFunc(f, "newReportDataVerifier")
 	if rdvFunc == nil {
 		r.fail("newReportDataVerifier function not found")
@@ -763,7 +763,7 @@ func checkHelpText(r *result, providers []string, envVars map[string]string) {
 	verifyText := extractFuncStringLiterals(f, "printVerifyHelp")
 
 	for _, prov := range providers {
-		// Check 21: printOverview environment section mentions provider env var.
+		// printOverview environment section mentions provider env var.
 		envVar := envVars[prov]
 		if envVar != "" {
 			if strings.Contains(overviewText, envVar) {
@@ -775,14 +775,14 @@ func checkHelpText(r *result, providers []string, envVars map[string]string) {
 			r.skip("no env var known for %s", prov)
 		}
 
-		// Check 22: printServeHelp PROVIDER line lists provider.
+		// printServeHelp PROVIDER line lists provider.
 		if strings.Contains(serveText, prov) {
 			r.pass("printServeHelp mentions %q", prov)
 		} else {
 			r.fail("printServeHelp missing %q", prov)
 		}
 
-		// Check 23: printVerifyHelp PROVIDER line lists provider.
+		// printVerifyHelp PROVIDER line lists provider.
 		if strings.Contains(verifyText, prov) {
 			r.pass("printVerifyHelp mentions %q", prov)
 		} else {
