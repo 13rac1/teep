@@ -74,7 +74,10 @@ func main() {
 	}
 
 	// Save model list.
-	modelsJSON, _ := json.MarshalIndent(teeModels, "", "  ")
+	modelsJSON, err := json.MarshalIndent(teeModels, "", "  ")
+	if err != nil {
+		log.Fatalf("marshal models: %v", err)
+	}
 	writeFile("models.json", modelsJSON)
 
 	// 2. Fetch attestation for each TEE model.
@@ -101,7 +104,10 @@ func main() {
 		writeFile(slug+"_attestation.json", res.body)
 		writeFile(slug+"_nonce.txt", []byte(nonce+"\n"))
 
-		headersJSON, _ := json.MarshalIndent(res.headers, "", "  ")
+		headersJSON, err := json.MarshalIndent(res.headers, "", "  ")
+		if err != nil {
+			log.Fatalf("marshal headers for %s: %v", model, err)
+		}
 		writeFile(slug+"_headers.json", headersJSON)
 
 		format := detectFormat(res.body)
@@ -133,9 +139,8 @@ func fetchModels(ctx context.Context, client *http.Client, apiKey string) []stri
 	if err != nil {
 		log.Fatalf("GET %s: %v", req.URL, err)
 	}
-	defer resp.Body.Close()
-
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
 	if err != nil {
 		log.Fatalf("read models response: %v", err)
 	}

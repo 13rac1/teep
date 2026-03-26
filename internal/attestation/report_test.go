@@ -97,6 +97,56 @@ func factorNames(r *VerificationReport) []string {
 	return names
 }
 
+// testNeardirectPolicy returns a neardirect supply chain policy for tests.
+// Duplicates the policy from internal/provider/neardirect/policy.go to avoid
+// circular imports (attestation cannot import provider).
+func testNeardirectPolicy() *SupplyChainPolicy {
+	return &SupplyChainPolicy{Images: []ImageProvenance{
+		{Repo: "datadog/agent", ModelTier: true, Provenance: SigstorePresent,
+			KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
+		{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: FulcioSigned,
+			NoDSSE:       true,
+			OIDCIssuer:   "https://token.actions.githubusercontent.com",
+			OIDCIdentity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
+			SourceRepos:  []string{"nearai/compose-manager", "https://github.com/nearai/compose-manager"}},
+	}}
+}
+
+// testNearcloudPolicy returns a nearcloud supply chain policy for tests.
+// Duplicates the policy from internal/provider/nearcloud/policy.go to avoid
+// circular imports (attestation cannot import provider).
+func testNearcloudPolicy() *SupplyChainPolicy {
+	p := testNeardirectPolicy()
+	// datadog/agent is also a gateway image in nearcloud.
+	for i := range p.Images {
+		if p.Images[i].Repo == "datadog/agent" {
+			p.Images[i].GatewayTier = true
+		}
+	}
+	ghOIDC := "https://token.actions.githubusercontent.com"
+	p.Images = append(p.Images,
+		ImageProvenance{Repo: "nearaidev/dstack-vpc-client", GatewayTier: true, Provenance: FulcioSigned,
+			NoDSSE: true, OIDCIssuer: ghOIDC,
+			OIDCIdentity: "https://github.com/nearai/dstack-vpc-client/.github/workflows/build.yml@refs/heads/main",
+			SourceRepos:  []string{"nearai/dstack-vpc-client", "https://github.com/nearai/dstack-vpc-client"}},
+		ImageProvenance{Repo: "nearaidev/dstack-vpc", GatewayTier: true, Provenance: FulcioSigned,
+			NoDSSE: true, OIDCIssuer: ghOIDC,
+			OIDCIdentity: "https://github.com/nearai/dstack-vpc/.github/workflows/build.yml@refs/heads/main",
+			SourceRepos:  []string{"nearai/dstack-vpc", "https://github.com/nearai/dstack-vpc"}},
+		ImageProvenance{Repo: "alpine", GatewayTier: true, Provenance: SigstorePresent},
+		ImageProvenance{Repo: "nearaidev/cloud-api", GatewayTier: true, Provenance: FulcioSigned,
+			NoDSSE: true, OIDCIssuer: ghOIDC,
+			OIDCIdentity: "https://github.com/nearai/cloud-api/.github/workflows/build.yml@refs/heads/main",
+			SourceRepos:  []string{"nearai/cloud-api", "https://github.com/nearai/cloud-api"}},
+		ImageProvenance{Repo: "nearaidev/cvm-ingress", GatewayTier: true, Provenance: FulcioSigned,
+			NoDSSE: true, OIDCIssuer: ghOIDC,
+			OIDCIdentity: "https://github.com/nearai/cvm-ingress/.github/workflows/build-push.yml@refs/heads/main",
+			SourceRepos:  []string{"nearai/cvm-ingress", "https://github.com/nearai/cvm-ingress"}},
+	)
+	return p
+}
+
 // ---------------------------------------------------------------------------
 // BuildReport-level tests (cross-cutting concerns)
 // ---------------------------------------------------------------------------
@@ -900,11 +950,12 @@ func TestEvalSigstoreVerification(t *testing.T) {
 			{Digest: certbotDigest, OK: false, Status: 404},
 		}
 		f := assertSingleFactor(t, evalSigstoreVerification(&ReportInput{
-			Provider:     "neardirect",
-			Raw:          raw,
-			Sigstore:     sig,
-			DigestToRepo: map[string]string{neardirectDigest: "nearaidev/compose-manager", certbotDigest: "certbot/dns-cloudflare"},
-			ImageRepos:   []string{"nearaidev/compose-manager", "certbot/dns-cloudflare"},
+			Provider:          "neardirect",
+			Raw:               raw,
+			SupplyChainPolicy: testNeardirectPolicy(),
+			Sigstore:          sig,
+			DigestToRepo:      map[string]string{neardirectDigest: "nearaidev/compose-manager", certbotDigest: "certbot/dns-cloudflare"},
+			ImageRepos:        []string{"nearaidev/compose-manager", "certbot/dns-cloudflare"},
 		}), Pass)
 		if !strings.Contains(f.Detail, "compose-pinned") {
 			t.Errorf("detail should mention compose-pinned: %s", f.Detail)
@@ -990,21 +1041,23 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 			RunnerEnv:     "github-hosted",
 		}}
 		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:     "neardirect",
-			Raw:          raw,
-			ImageRepos:   []string{"nearaidev/compose-manager"},
-			DigestToRepo: map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
-			Sigstore:     sig,
-			Rekor:        rekor,
+			Provider:          "neardirect",
+			Raw:               raw,
+			SupplyChainPolicy: testNeardirectPolicy(),
+			ImageRepos:        []string{"nearaidev/compose-manager"},
+			DigestToRepo:      map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
+			Sigstore:          sig,
+			Rekor:             rekor,
 		}), Pass)
 	})
 
 	t.Run("rejects_image_repo", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"ghcr.io/attacker/router"},
+			Provider:          "neardirect",
+			Raw:               raw,
+			SupplyChainPolicy: testNeardirectPolicy(),
+			ImageRepos:        []string{"ghcr.io/attacker/router"},
 		}), Fail)
 		if !strings.Contains(f.Detail, "supply chain policy") {
 			t.Errorf("detail should mention supply chain policy: %s", f.Detail)
@@ -1030,6 +1083,7 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
 			Provider:          "nearcloud",
 			Raw:               raw,
+			SupplyChainPolicy: testNearcloudPolicy(),
 			ImageRepos:        []string{"nearaidev/compose-manager"},
 			GatewayImageRepos: []string{"nearaidev/dstack-vpc-client"},
 			DigestToRepo:      map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
@@ -1041,9 +1095,10 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 	t.Run("rejects_gateway_only_image", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"nearaidev/dstack-vpc-client"},
+			Provider:          "neardirect",
+			Raw:               raw,
+			SupplyChainPolicy: testNearcloudPolicy(), // has dstack-vpc-client as gateway-only
+			ImageRepos:        []string{"nearaidev/dstack-vpc-client"},
 		}), Fail)
 		if !strings.Contains(strings.ToLower(f.Detail), "model container policy") {
 			t.Errorf("detail should mention model policy rejection: %s", f.Detail)
@@ -1065,12 +1120,13 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 			SourceRepoURL: "https://github.com/attacker/router",
 		}}
 		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:     "neardirect",
-			Raw:          raw,
-			ImageRepos:   []string{"nearaidev/compose-manager"},
-			DigestToRepo: map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
-			Sigstore:     sig,
-			Rekor:        rekor,
+			Provider:          "neardirect",
+			Raw:               raw,
+			SupplyChainPolicy: testNeardirectPolicy(),
+			ImageRepos:        []string{"nearaidev/compose-manager"},
+			DigestToRepo:      map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
+			Sigstore:          sig,
+			Rekor:             rekor,
 		}), Fail)
 		if !strings.Contains(f.Detail, "unexpected source repo") {
 			t.Errorf("detail should mention source repo rejection: %s", f.Detail)
@@ -1094,12 +1150,13 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 			RunnerEnv:     "github-hosted",
 		}}
 		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:     "neardirect",
-			Raw:          raw,
-			ImageRepos:   []string{"nearaidev/compose-manager"},
-			DigestToRepo: map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
-			Sigstore:     sig,
-			Rekor:        rekor,
+			Provider:          "neardirect",
+			Raw:               raw,
+			SupplyChainPolicy: testNeardirectPolicy(),
+			ImageRepos:        []string{"nearaidev/compose-manager"},
+			DigestToRepo:      map[string]string{sig[0].Digest: "nearaidev/compose-manager"},
+			Sigstore:          sig,
+			Rekor:             rekor,
 		}), Fail)
 		if !strings.Contains(f.Detail, "unexpected OIDC identity") {
 			t.Errorf("detail should mention OIDC identity mismatch: %s", f.Detail)
@@ -1132,9 +1189,10 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 			},
 		}
 		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
+			Provider:          "neardirect",
+			Raw:               raw,
+			SupplyChainPolicy: testNeardirectPolicy(),
+			ImageRepos:        []string{"nearaidev/compose-manager", "datadog/agent"},
 			DigestToRepo: map[string]string{
 				composeManagerDigest: "nearaidev/compose-manager",
 				datadogDigest:        "datadog/agent",
@@ -1175,9 +1233,10 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 			},
 		}
 		assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
+			Provider:          "neardirect",
+			Raw:               raw,
+			SupplyChainPolicy: testNeardirectPolicy(),
+			ImageRepos:        []string{"nearaidev/compose-manager", "datadog/agent"},
 			DigestToRepo: map[string]string{
 				composeManagerDigest: "nearaidev/compose-manager",
 				datadogDigest:        "datadog/agent",
@@ -1214,9 +1273,10 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 			},
 		}
 		f := assertSingleFactor(t, evalBuildTransparencyLog(&ReportInput{
-			Provider:   "neardirect",
-			Raw:        raw,
-			ImageRepos: []string{"nearaidev/compose-manager", "datadog/agent"},
+			Provider:          "neardirect",
+			Raw:               raw,
+			SupplyChainPolicy: testNeardirectPolicy(),
+			ImageRepos:        []string{"nearaidev/compose-manager", "datadog/agent"},
 			DigestToRepo: map[string]string{
 				composeManagerDigest: "nearaidev/compose-manager",
 				datadogDigest:        "datadog/agent",
@@ -1240,25 +1300,32 @@ func TestEvalBuildTransparencyLog(t *testing.T) {
 }
 
 func TestSupplyChainPolicyNanoGPT(t *testing.T) {
-	p := supplyChainPolicyForProvider("nanogpt")
-	if p == nil {
-		t.Fatal("supplyChainPolicyForProvider(\"nanogpt\") returned nil")
-	}
+	p := &SupplyChainPolicy{Images: []ImageProvenance{
+		{Repo: "alpine", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "dstacktee/dstack-ingress", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "dstacktee/vllm-proxy", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "haproxy", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "lmsysorg/sglang", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "mondaylord/vllm-openai", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "phalanetwork/vllm-proxy", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "python", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "redis", ModelTier: true, Provenance: ComposeBindingOnly},
+		{Repo: "vllm/vllm-openai", ModelTier: true, Provenance: ComposeBindingOnly},
+	}}
 
-	expectedRepos := []string{
+	for _, repo := range []string{
 		"alpine", "dstacktee/dstack-ingress", "dstacktee/vllm-proxy",
 		"haproxy", "lmsysorg/sglang", "mondaylord/vllm-openai",
 		"phalanetwork/vllm-proxy", "python", "redis", "vllm/vllm-openai",
-	}
-	for _, repo := range expectedRepos {
-		if !p.allowedInModel(repo) {
+	} {
+		if !p.AllowedInModel(repo) {
 			t.Errorf("repo %q should be allowed in model tier", repo)
 		}
 	}
-	if p.allowedInModel("attacker/evil-image") {
+	if p.AllowedInModel("attacker/evil-image") {
 		t.Error("unexpected repo should not be allowed")
 	}
-	if p.hasGatewayImages() {
+	if p.HasGatewayImages() {
 		t.Error("NanoGPT policy should have no gateway images")
 	}
 }

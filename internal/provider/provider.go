@@ -125,6 +125,10 @@ type Provider struct {
 	// standard http.Client path.
 	PinnedHandler PinnedHandler
 
+	// SupplyChainPolicy defines the allowed container image repos for this
+	// provider. May be nil if the provider has no policy.
+	SupplyChainPolicy *attestation.SupplyChainPolicy
+
 	// ModelLister fetches available models from the provider's discovery API.
 	// May be nil if the provider does not support model listing.
 	ModelLister ModelLister

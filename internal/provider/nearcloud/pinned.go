@@ -395,6 +395,7 @@ func (h *PinnedHandler) attestOnConn(
 		Nonce:             modelNonce,
 		Enforced:          h.enforced,
 		Policy:            h.policy,
+		SupplyChainPolicy: SupplyChainPolicy(),
 		ImageRepos:        modelCD.Repos,
 		GatewayImageRepos: gatewayCD.Repos,
 		DigestToRepo:      digestToRepo,

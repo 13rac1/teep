@@ -288,6 +288,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		Nonce:             nonce,
 		Enforced:          cfg.Enforced,
 		Policy:            cfg.MeasurementPolicy,
+		SupplyChainPolicy: supplyChainPolicy(providerName),
 		TDX:               tdxResult,
 		Nvidia:            nvidiaResult,
 		NvidiaNRAS:        nrasResult,
@@ -494,6 +495,21 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 	case "nanogpt":
 		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
 		return venice.ReportDataVerifier{}
+	default:
+		return nil
+	}
+}
+
+func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
+	switch name {
+	case "venice":
+		return venice.SupplyChainPolicy()
+	case "neardirect":
+		return neardirect.SupplyChainPolicy()
+	case "nearcloud":
+		return nearcloud.SupplyChainPolicy()
+	case "nanogpt":
+		return nanogpt.SupplyChainPolicy()
 	default:
 		return nil
 	}

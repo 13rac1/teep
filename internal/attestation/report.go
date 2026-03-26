@@ -168,6 +168,7 @@ type ReportInput struct {
 	ImageRepos        []string
 	GatewayImageRepos []string
 	DigestToRepo      map[string]string // digest hex → normalized image repo, for policy checks
+	SupplyChainPolicy *SupplyChainPolicy
 
 	TDX        *TDXVerifyResult
 	Nvidia     *NvidiaVerifyResult
@@ -613,7 +614,7 @@ func evalMeasuredModelWeights(_ *ReportInput) []FactorResult {
 	return factor(TierSupplyChain, "measured_model_weights", Fail, "no model weight hashes")
 }
 func evalBuildTransparencyLog(in *ReportInput) []FactorResult {
-	scPolicy := supplyChainPolicyForProvider(in.Provider)
+	scPolicy := in.SupplyChainPolicy
 
 	if scPolicy != nil {
 		if f, done := checkImageRepoPolicy(in, scPolicy); done {
@@ -630,7 +631,7 @@ func evalBuildTransparencyLog(in *ReportInput) []FactorResult {
 
 // checkImageRepoPolicy validates model and gateway image repos against the
 // supply chain policy. Returns (result, true) on policy violation.
-func checkImageRepoPolicy(in *ReportInput, scPolicy *supplyChainPolicy) (FactorResult, bool) {
+func checkImageRepoPolicy(in *ReportInput, scPolicy *SupplyChainPolicy) (FactorResult, bool) {
 	btlFail := FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Fail}
 
 	if len(in.ImageRepos) == 0 {
@@ -638,21 +639,21 @@ func checkImageRepoPolicy(in *ReportInput, scPolicy *supplyChainPolicy) (FactorR
 		return btlFail, true
 	}
 	for _, repo := range in.ImageRepos {
-		if !scPolicy.allowedInModel(repo) {
+		if !scPolicy.AllowedInModel(repo) {
 			btlFail.Detail = fmt.Sprintf("model container policy: image %q not in supply chain policy (%s)",
-				repo, strings.Join(scPolicy.modelRepoNames(), ", "))
+				repo, strings.Join(scPolicy.ModelRepoNames(), ", "))
 			return btlFail, true
 		}
 	}
-	if scPolicy.hasGatewayImages() {
+	if scPolicy.HasGatewayImages() {
 		if len(in.GatewayImageRepos) == 0 {
 			btlFail.Detail = "no attested gateway image repositories extracted from compose"
 			return btlFail, true
 		}
 		for _, repo := range in.GatewayImageRepos {
-			if !scPolicy.allowedInGateway(repo) {
+			if !scPolicy.AllowedInGateway(repo) {
 				btlFail.Detail = fmt.Sprintf("gateway container policy: image %q not in supply chain policy (%s)",
-					repo, strings.Join(scPolicy.gatewayRepoNames(), ", "))
+					repo, strings.Join(scPolicy.GatewayRepoNames(), ", "))
 				return btlFail, true
 			}
 		}
@@ -666,7 +667,7 @@ func checkImageRepoPolicy(in *ReportInput, scPolicy *supplyChainPolicy) (FactorR
 
 // buildTransparencyNoRekor handles the build_transparency_log factor when
 // no Rekor provenance is available.
-func buildTransparencyNoRekor(in *ReportInput, scPolicy *supplyChainPolicy) FactorResult {
+func buildTransparencyNoRekor(in *ReportInput, scPolicy *SupplyChainPolicy) FactorResult {
 	if scPolicy != nil {
 		return FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Fail,
 			Detail: "no Rekor provenance fetched for attested image digests"}
@@ -695,7 +696,7 @@ const (
 // classifyRekorEntry classifies a single Rekor entry against the supply chain
 // policy. On rekorFailed, failDetail is the error message. On rekorFulcio,
 // commitDetail is populated for the first verified entry.
-func classifyRekorEntry(r *RekorProvenance, img *ImageProvenance, imageRepo string, scPolicy *supplyChainPolicy) (kind rekorEntryKind, failDetail string) {
+func classifyRekorEntry(r *RekorProvenance, img *ImageProvenance, imageRepo string, scPolicy *SupplyChainPolicy) (kind rekorEntryKind, failDetail string) {
 	if r.Err != nil {
 		if img != nil && img.Provenance == FulcioSigned {
 			return rekorFailed, fmt.Sprintf("image %q: Rekor provenance fetch failed: %v", imageRepo, r.Err)
@@ -737,7 +738,7 @@ func classifyRekorEntry(r *RekorProvenance, img *ImageProvenance, imageRepo stri
 
 // rekorProvenanceResult verifies Rekor provenance entries against the supply
 // chain policy.
-func rekorProvenanceResult(in *ReportInput, scPolicy *supplyChainPolicy) FactorResult {
+func rekorProvenanceResult(in *ReportInput, scPolicy *SupplyChainPolicy) FactorResult {
 	var fulcioVerified int
 	var sigstorePresent int
 	var setVerified int
@@ -749,7 +750,7 @@ func rekorProvenanceResult(in *ReportInput, scPolicy *supplyChainPolicy) FactorR
 		imageRepo := in.DigestToRepo[r.Digest]
 		var img *ImageProvenance
 		if scPolicy != nil {
-			img = scPolicy.lookup(imageRepo)
+			img = scPolicy.Lookup(imageRepo)
 		}
 
 		kind, failDetail := classifyRekorEntry(r, img, imageRepo, scPolicy)
@@ -838,7 +839,7 @@ func formatRekorCommitDetail(r *RekorProvenance) string {
 
 // formatBuildTransparencyResult produces the final factor result for
 // build_transparency_log after processing all Rekor entries.
-func formatBuildTransparencyResult(scPolicy *supplyChainPolicy, fulcioVerified, sigstorePresent, setVerified, inclusionVerified, rekorCount int, detail string) FactorResult {
+func formatBuildTransparencyResult(scPolicy *SupplyChainPolicy, fulcioVerified, sigstorePresent, setVerified, inclusionVerified, rekorCount int, detail string) FactorResult {
 	f := FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log"}
 	logVerify := ""
 	if setVerified > 0 || inclusionVerified > 0 {
@@ -911,7 +912,7 @@ func evalSigstoreVerification(in *ReportInput) []FactorResult {
 		return factor(TierSupplyChain, "sigstore_verification", Skip, "no image digests to verify")
 	}
 
-	scPolicy := supplyChainPolicyForProvider(in.Provider)
+	scPolicy := in.SupplyChainPolicy
 	var composeOnly int
 	for _, r := range in.Sigstore {
 		if r.OK {
@@ -919,7 +920,7 @@ func evalSigstoreVerification(in *ReportInput) []FactorResult {
 		}
 		if scPolicy != nil && len(in.DigestToRepo) > 0 {
 			repo := in.DigestToRepo[r.Digest]
-			img := scPolicy.lookup(repo)
+			img := scPolicy.Lookup(repo)
 			if img != nil && img.Provenance == ComposeBindingOnly {
 				composeOnly++
 				continue
@@ -1203,12 +1204,13 @@ type ImageProvenance struct {
 	NoDSSE         bool           // true = DSSE envelope lacks signatures; skip DSSE check
 }
 
-type supplyChainPolicy struct {
+// SupplyChainPolicy defines the allowed container image repos for a provider.
+type SupplyChainPolicy struct {
 	Images []ImageProvenance
 }
 
-// lookup returns the ImageProvenance entry for repo, or nil.
-func (p *supplyChainPolicy) lookup(repo string) *ImageProvenance {
+// Lookup returns the ImageProvenance entry for repo, or nil.
+func (p *SupplyChainPolicy) Lookup(repo string) *ImageProvenance {
 	v := strings.ToLower(strings.TrimSpace(repo))
 	for i := range p.Images {
 		if strings.ToLower(strings.TrimSpace(p.Images[i].Repo)) == v {
@@ -1218,20 +1220,20 @@ func (p *supplyChainPolicy) lookup(repo string) *ImageProvenance {
 	return nil
 }
 
-// allowedInModel reports whether repo has a policy entry permitting model tier.
-func (p *supplyChainPolicy) allowedInModel(repo string) bool {
-	img := p.lookup(repo)
+// AllowedInModel reports whether repo has a policy entry permitting model tier.
+func (p *SupplyChainPolicy) AllowedInModel(repo string) bool {
+	img := p.Lookup(repo)
 	return img != nil && img.ModelTier
 }
 
-// allowedInGateway reports whether repo has a policy entry permitting gateway tier.
-func (p *supplyChainPolicy) allowedInGateway(repo string) bool {
-	img := p.lookup(repo)
+// AllowedInGateway reports whether repo has a policy entry permitting gateway tier.
+func (p *SupplyChainPolicy) AllowedInGateway(repo string) bool {
+	img := p.Lookup(repo)
 	return img != nil && img.GatewayTier
 }
 
-// hasGatewayImages reports whether any image in the policy allows gateway tier.
-func (p *supplyChainPolicy) hasGatewayImages() bool {
+// HasGatewayImages reports whether any image in the policy allows gateway tier.
+func (p *SupplyChainPolicy) HasGatewayImages() bool {
 	for i := range p.Images {
 		if p.Images[i].GatewayTier {
 			return true
@@ -1240,8 +1242,8 @@ func (p *supplyChainPolicy) hasGatewayImages() bool {
 	return false
 }
 
-// modelRepoNames returns model-tier image repository names.
-func (p *supplyChainPolicy) modelRepoNames() []string {
+// ModelRepoNames returns model-tier image repository names.
+func (p *SupplyChainPolicy) ModelRepoNames() []string {
 	var out []string
 	for i := range p.Images {
 		if p.Images[i].ModelTier {
@@ -1251,8 +1253,8 @@ func (p *supplyChainPolicy) modelRepoNames() []string {
 	return out
 }
 
-// gatewayRepoNames returns gateway-tier image repository names.
-func (p *supplyChainPolicy) gatewayRepoNames() []string {
+// GatewayRepoNames returns gateway-tier image repository names.
+func (p *SupplyChainPolicy) GatewayRepoNames() []string {
 	var out []string
 	for i := range p.Images {
 		if p.Images[i].GatewayTier {
@@ -1260,94 +1262,6 @@ func (p *supplyChainPolicy) gatewayRepoNames() []string {
 		}
 	}
 	return out
-}
-
-func supplyChainPolicyForProvider(provider string) *supplyChainPolicy {
-	const githubOIDC = "https://token.actions.githubusercontent.com"
-
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "venice", "neardirect":
-		return &supplyChainPolicy{Images: []ImageProvenance{
-			{Repo: "datadog/agent", ModelTier: true, Provenance: SigstorePresent,
-				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
-			{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-				SourceRepos: []string{
-					"nearai/compose-manager",
-					"https://github.com/nearai/compose-manager",
-				}},
-		}}
-	case "nearcloud":
-		return &supplyChainPolicy{Images: []ImageProvenance{
-			// Model tier.
-			{Repo: "datadog/agent", ModelTier: true, GatewayTier: true, Provenance: SigstorePresent,
-				KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
-			{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-				SourceRepos: []string{
-					"nearai/compose-manager",
-					"https://github.com/nearai/compose-manager",
-				}},
-			// Gateway tier.
-			{Repo: "nearaidev/dstack-vpc-client", GatewayTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/dstack-vpc-client/.github/workflows/build.yml@refs/heads/main",
-				SourceRepos: []string{
-					"nearai/dstack-vpc-client",
-					"https://github.com/nearai/dstack-vpc-client",
-				}},
-			{Repo: "nearaidev/dstack-vpc", GatewayTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/dstack-vpc/.github/workflows/build.yml@refs/heads/main",
-				SourceRepos: []string{
-					"nearai/dstack-vpc",
-					"https://github.com/nearai/dstack-vpc",
-				}},
-			{Repo: "alpine", GatewayTier: true, Provenance: SigstorePresent},
-			// alpine: third-party image built by Docker across varying CI
-			// systems (GitHub Actions, Google Cloud Build) with unstable
-			// branch refs. Only transparency-log presence is verifiable.
-			{Repo: "nearaidev/cloud-api", GatewayTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/cloud-api/.github/workflows/build.yml@refs/heads/main",
-				SourceRepos: []string{
-					"nearai/cloud-api",
-					"https://github.com/nearai/cloud-api",
-				}},
-			{Repo: "nearaidev/cvm-ingress", GatewayTier: true, Provenance: FulcioSigned,
-				NoDSSE:       true, // Rekor DSSE envelope has no signatures as of 2026-03
-				OIDCIssuer:   githubOIDC,
-				OIDCIdentity: "https://github.com/nearai/cvm-ingress/.github/workflows/build-push.yml@refs/heads/main",
-				SourceRepos: []string{
-					"nearai/cvm-ingress",
-					"https://github.com/nearai/cvm-ingress",
-				}},
-		}}
-	case "nanogpt":
-		return &supplyChainPolicy{Images: []ImageProvenance{
-			{Repo: "alpine", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "dstacktee/dstack-ingress", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "dstacktee/vllm-proxy", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "haproxy", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "lmsysorg/sglang", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "mondaylord/vllm-openai", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "phalanetwork/vllm-proxy", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "python", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "redis", ModelTier: true, Provenance: ComposeBindingOnly},
-			{Repo: "vllm/vllm-openai", ModelTier: true, Provenance: ComposeBindingOnly},
-		}}
-	default:
-		return nil
-	}
 }
 
 func containsFold(value string, allowed []string) bool {
