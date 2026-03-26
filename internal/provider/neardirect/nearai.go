@@ -42,16 +42,13 @@ const (
 // modelAttestation represents one element of the model_attestations array
 // returned by NEAR AI's attestation endpoint.
 type modelAttestation struct {
-	Model              string            `json:"model"`
 	ModelName          string            `json:"model_name"`
 	IntelQuote         string            `json:"intel_quote"`
 	NvidiaPayload      string            `json:"nvidia_payload"`
-	SigningKey         string            `json:"signing_key"`
 	SigningPublicKey   string            `json:"signing_public_key"`
 	SigningAddress     string            `json:"signing_address"`
 	SigningAlgo        string            `json:"signing_algo"`
 	TLSCertFingerprint string            `json:"tls_cert_fingerprint"`
-	Nonce              string            `json:"nonce"`
 	RequestNonce       string            `json:"request_nonce"`
 	EventLog           []json.RawMessage `json:"event_log"`
 	Info               struct {
@@ -74,16 +71,13 @@ type attestationResponse struct {
 
 	// Top-level fields are present when the server returns a flat response
 	// rather than the array form. Both forms are tolerated.
-	Model              string            `json:"model"`
 	ModelName          string            `json:"model_name"`
 	IntelQuote         string            `json:"intel_quote"`
 	NvidiaPayload      string            `json:"nvidia_payload"`
-	SigningKey         string            `json:"signing_key"`
 	SigningPublicKey   string            `json:"signing_public_key"`
 	SigningAddress     string            `json:"signing_address"`
 	SigningAlgo        string            `json:"signing_algo"`
 	TLSCertFingerprint string            `json:"tls_cert_fingerprint"`
-	Nonce              string            `json:"nonce"`
 	RequestNonce       string            `json:"request_nonce"`
 	Verified           bool              `json:"verified"`
 	EventLog           []json.RawMessage `json:"event_log"`
@@ -229,10 +223,10 @@ func ParseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 
 	raw := &attestation.RawAttestation{
 		Verified:       ar.Verified,
-		Nonce:          firstNonEmpty(ar.Nonce, ar.RequestNonce),
-		Model:          firstNonEmpty(ar.Model, ar.ModelName),
+		Nonce:          ar.RequestNonce,
+		Model:          ar.ModelName,
 		TEEProvider:    "TDX+NVIDIA",
-		SigningKey:     normalizeUncompressedKey(firstNonEmpty(ar.SigningKey, ar.SigningPublicKey)),
+		SigningKey:     normalizeUncompressedKey(ar.SigningPublicKey),
 		SigningAddress: ar.SigningAddress,
 		SigningAlgo:    ar.SigningAlgo,
 		TLSFingerprint: ar.TLSCertFingerprint,
@@ -255,7 +249,7 @@ func ParseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 
 func selectByModel(list []modelAttestation, model string) (*modelAttestation, error) {
 	for i := range list {
-		if firstNonEmpty(list[i].Model, list[i].ModelName) == model {
+		if list[i].ModelName == model {
 			return &list[i], nil
 		}
 	}
@@ -270,10 +264,10 @@ func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*
 
 	raw := &attestation.RawAttestation{
 		Verified:       verified,
-		Nonce:          firstNonEmpty(m.Nonce, m.RequestNonce),
-		Model:          firstNonEmpty(m.Model, m.ModelName),
+		Nonce:          m.RequestNonce,
+		Model:          m.ModelName,
 		TEEProvider:    "TDX+NVIDIA",
-		SigningKey:     normalizeUncompressedKey(firstNonEmpty(m.SigningKey, m.SigningPublicKey)),
+		SigningKey:     normalizeUncompressedKey(m.SigningPublicKey),
 		SigningAddress: m.SigningAddress,
 		SigningAlgo:    m.SigningAlgo,
 		TLSFingerprint: m.TLSCertFingerprint,
@@ -335,15 +329,6 @@ func parseEventLog(raw []json.RawMessage) ([]attestation.EventLogEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, nil
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // Preparer injects the NEAR AI Authorization header into an outgoing request.

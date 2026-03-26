@@ -164,25 +164,14 @@ var factorRegistry = []factorInfo{
 			"claims. For JWTs, checks the overall attestation result.",
 	},
 	{
-		Name:    "nvidia_nonce_match",
-		Tier:    2,
-		Summary: "NVIDIA payload nonce matches",
-		Description: "Verifies that the nonce embedded in the NVIDIA attestation " +
-			"payload matches the nonce submitted by the client. This proves " +
-			"the GPU attestation is fresh and was generated for this specific " +
-			"verification session.",
-	},
-	{
 		Name:    "nvidia_nonce_client_bound",
 		Tier:    2,
 		Summary: "NVIDIA nonce bound directly to client",
-		Description: "Advisory factor that checks whether the NVIDIA GPU attestation " +
-			"nonce matches the client-supplied nonce directly, rather than a " +
-			"provider-internal request_nonce. When the GPU nonce matches only " +
-			"via the provider's request_nonce, GPU attestation freshness depends " +
-			"on trusting the provider to relay the nonce honestly. This factor " +
-			"is not enforced by default — it provides observability into the " +
-			"nonce binding path.",
+		Description: "Verifies that the nonce embedded in the NVIDIA GPU attestation " +
+			"payload matches the client-supplied nonce directly. This proves " +
+			"the GPU attestation is fresh and was generated for this specific " +
+			"verification session without depending on the provider to relay " +
+			"the nonce.",
 	},
 	{
 		Name:    "nvidia_nras_verified",

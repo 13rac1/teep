@@ -73,14 +73,14 @@ func nearcloudAttestationJSON(spkiHash, nonceHex string) string {
 		},
 		"model_attestations": [
 			{
-				"model": "test-model",
+				"model_name": "test-model",
 				"intel_quote": "",
 				"nvidia_payload": "",
-				"signing_key": "04aaaa",
+				"signing_public_key": "04aaaa",
 				"signing_address": "0xtest",
 				"signing_algo": "ecdsa",
 				"tls_cert_fingerprint": %q,
-				"nonce": %q
+				"request_nonce": %q
 			}
 		]
 	}`, nonceHex, spkiHash, spkiHash, nonceHex)
@@ -238,7 +238,7 @@ func TestHandlePinned_MissingGatewayTLSFingerprint(t *testing.T) {
 					"info": {"tcb_info": "{}"}
 				},
 				"model_attestations": [
-					{"model": "test-model", "nonce": %q, "signing_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa", "tls_cert_fingerprint": "somefp"}
+					{"model_name": "test-model", "request_nonce": %q, "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa", "tls_cert_fingerprint": "somefp"}
 				]
 			}`, nonceHex, nonceHex)
 			return
@@ -640,14 +640,14 @@ func nearcloudAttestationWithModelFP(gatewayFP, modelFP, nonceHex string) string
 		},
 		"model_attestations": [
 			{
-				"model": "test-model",
+				"model_name": "test-model",
 				"intel_quote": "",
 				"nvidia_payload": "",
-				"signing_key": "04aaaa",
+				"signing_public_key": "04aaaa",
 				"signing_address": "0xtest",
 				"signing_algo": "ecdsa",
 				"tls_cert_fingerprint": %q,
-				"nonce": %q
+				"request_nonce": %q
 			}
 		]
 	}`, nonceHex, gatewayFP, modelFP, nonceHex)
@@ -853,14 +853,14 @@ func TestHandlePinned_WithGatewayComposeAndModelFingerprint(t *testing.T) {
 					"info": {"tcb_info": "{\"app_compose\":\"gateway-compose-data\"}"}
 				},
 				"model_attestations": [{
-					"model": "test-model",
+					"model_name": "test-model",
 					"intel_quote": "",
 					"nvidia_payload": "",
-					"signing_key": "04aaaa",
+					"signing_public_key": "04aaaa",
 					"signing_address": "0xtest",
 					"signing_algo": "ecdsa",
 					"tls_cert_fingerprint": "modelfp123",
-					"nonce": %q
+					"request_nonce": %q
 				}]
 			}`, nonceHex, spkiHash, nonceHex)
 			return
@@ -934,14 +934,14 @@ func TestHandlePinned_WithNonEmptyQuotesAndPayload(t *testing.T) {
 					"info": {"tcb_info": "{\"app_compose\":\"gw-compose-hash\"}"}
 				},
 				"model_attestations": [{
-					"model": "test-model",
+					"model_name": "test-model",
 					"intel_quote": "AQAAAA==",
 					"nvidia_payload": "not-a-real-jwt",
-					"signing_key": "04aaaa",
+					"signing_public_key": "04aaaa",
 					"signing_address": "0xtest",
 					"signing_algo": "ecdsa",
 					"tls_cert_fingerprint": "modelfp",
-					"nonce": %q,
+					"request_nonce": %q,
 					"info": {"tcb_info": "{\"app_compose\":\"model-compose\"}"}
 				}]
 			}`, nonceHex, spkiHash, nonceHex)

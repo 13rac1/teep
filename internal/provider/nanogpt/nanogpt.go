@@ -98,7 +98,6 @@ type dstackAttestation struct {
 // dstack-format attestation endpoint.
 type attestationResponse struct {
 	dstackAttestation
-	Nonce           string              `json:"nonce"`
 	AllAttestations []dstackAttestation `json:"all_attestations"`
 }
 
@@ -231,12 +230,11 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 	}
 
 	return &attestation.RawAttestation{
-		Nonce:          ar.Nonce,
+		Nonce:          ar.RequestNonce,
 		SigningKey:     signingKey,
 		SigningAddress: ar.SigningAddress,
 		IntelQuote:     ar.IntelQuote,
 		NvidiaPayload:  ar.NvidiaPayload,
-		NvidiaNonce:    ar.RequestNonce,
 
 		SigningAlgo:   ar.SigningAlgo,
 		AppName:       ar.Info.AppName,

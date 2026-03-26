@@ -42,7 +42,7 @@ func buildTestReport(provider, model string) *attestation.VerificationReport {
 		{Name: "nvidia_payload_present", Status: attestation.Pass, Detail: "NVIDIA payload present (512 chars)", Tier: attestation.TierBinding},
 		{Name: "nvidia_signature", Status: attestation.Pass, Detail: "JWT signature valid (RS256)", Tier: attestation.TierBinding},
 		{Name: "nvidia_claims", Status: attestation.Pass, Detail: "Claims valid", Tier: attestation.TierBinding},
-		{Name: "nvidia_nonce_match", Status: attestation.Skip, Detail: "Nonce field not found in NVIDIA payload", Tier: attestation.TierBinding},
+		{Name: "nvidia_nonce_client_bound", Status: attestation.Skip, Detail: "nonce field not found in NVIDIA payload", Tier: attestation.TierBinding},
 		{Name: "nvidia_nras_verified", Status: attestation.Skip, Detail: "offline mode; NRAS verification skipped", Tier: attestation.TierBinding},
 		{Name: "e2ee_capable", Status: attestation.Pass, Detail: "E2EE key exchange possible", Tier: attestation.TierBinding},
 		// Tier 3

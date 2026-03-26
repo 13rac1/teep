@@ -52,16 +52,8 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	}
 
 	// REPORTDATA layout: [0:20] = keccak256 address, [20:32] = zero, [32:64] = nonce.
-	// Some providers (NanoGPT dstack) use an internal request_nonce in TDX
-	// REPORTDATA rather than the client nonce. Accept either.
 	reportNonce := reportData[32:64]
-	nonceMatch := subtle.ConstantTimeCompare(nonce[:], reportNonce) == 1
-	if !nonceMatch && raw.NvidiaNonce != "" {
-		if providerNonce, err := attestation.ParseNonce(raw.NvidiaNonce); err == nil {
-			nonceMatch = subtle.ConstantTimeCompare(providerNonce[:], reportNonce) == 1
-		}
-	}
-	if !nonceMatch {
+	if subtle.ConstantTimeCompare(nonce[:], reportNonce) != 1 {
 		return "", fmt.Errorf("REPORTDATA[32:64] = %s, expected nonce %s",
 			hex.EncodeToString(reportNonce), nonce.Hex())
 	}

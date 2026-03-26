@@ -116,7 +116,7 @@ var DefaultEnforced = []string{
 	"tdx_reportdata_binding",
 	"compose_binding",
 	"nvidia_signature",
-	"nvidia_nonce_match",
+	"nvidia_nonce_client_bound",
 	"tdx_tcb_not_revoked",
 	"build_transparency_log",
 	"sigstore_verification",
@@ -136,7 +136,7 @@ var KnownFactors = []string{
 	"nonce_match", "tdx_quote_present", "tdx_quote_structure", "tdx_cert_chain",
 	"tdx_quote_signature", "tdx_debug_disabled", "signing_key_present",
 	"tdx_reportdata_binding", "intel_pcs_collateral", "tdx_tcb_current",
-	"tdx_tcb_not_revoked", "nvidia_payload_present", "nvidia_signature", "nvidia_claims", "nvidia_nonce_match",
+	"tdx_tcb_not_revoked", "nvidia_payload_present", "nvidia_signature", "nvidia_claims",
 	"nvidia_nonce_client_bound", "nvidia_nras_verified", "e2ee_capable", "tls_key_binding", "cpu_gpu_chain",
 	"measured_model_weights", "build_transparency_log", "cpu_id_registry",
 	"compose_binding", "sigstore_verification", "event_log_integrity",
@@ -268,7 +268,6 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalNvidiaPayloadPresent,
 		evalNvidiaSignature,
 		evalNvidiaClaims,
-		evalNvidiaNonceMatch,
 		evalNvidiaClientNonceBound,
 		evalNvidiaNRASVerified,
 		evalE2EECapable,
@@ -510,36 +509,21 @@ func evalNvidiaClaims(in *ReportInput) []FactorResult {
 	}
 	return factor(TierBinding, "nvidia_claims", Pass, nvidiaClaimsDetail(in.Nvidia))
 }
-func evalNvidiaNonceMatch(in *ReportInput) []FactorResult {
+func evalNvidiaClientNonceBound(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
 		if in.Raw.NvidiaPayload == "" {
-			return factor(TierBinding, "nvidia_nonce_match", Skip, "no NVIDIA payload; nonce not checked")
+			return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "no NVIDIA payload; nonce not checked")
 		}
-		return factor(TierBinding, "nvidia_nonce_match", Skip, "NVIDIA verification not attempted")
+		return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "NVIDIA verification not attempted")
 	}
 	if in.Nvidia.Nonce == "" {
-		return factor(TierBinding, "nvidia_nonce_match", Skip, "nonce field not found in NVIDIA payload")
+		return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "nonce field not found in NVIDIA payload")
 	}
 	if subtle.ConstantTimeCompare([]byte(in.Nvidia.Nonce), []byte(in.Nonce.Hex())) == 1 {
-		return factor(TierBinding, "nvidia_nonce_match", Pass, nvidiaNonceDetail(in.Nvidia))
-	}
-	// Some providers use a separate internal nonce for GPU attestation
-	// (e.g. dstack's request_nonce). Accept it if it matches.
-	if in.Raw.NvidiaNonce != "" && subtle.ConstantTimeCompare([]byte(in.Nvidia.Nonce), []byte(in.Raw.NvidiaNonce)) == 1 {
-		return factor(TierBinding, "nvidia_nonce_match", Pass,
-			nvidiaNonceDetail(in.Nvidia)+" (matched provider request_nonce)")
-	}
-	return factor(TierBinding, "nvidia_nonce_match", Fail, fmt.Sprintf("nonce mismatch in NVIDIA payload: got %q, want %q", truncHex(in.Nvidia.Nonce), truncHex(in.Nonce.Hex())))
-}
-func evalNvidiaClientNonceBound(in *ReportInput) []FactorResult {
-	if in.Nvidia == nil || in.Nvidia.Nonce == "" {
-		return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "no NVIDIA nonce to check")
-	}
-	if subtle.ConstantTimeCompare([]byte(in.Nvidia.Nonce), []byte(in.Nonce.Hex())) == 1 {
-		return factor(TierBinding, "nvidia_nonce_client_bound", Pass, "NVIDIA nonce matches client nonce directly")
+		return factor(TierBinding, "nvidia_nonce_client_bound", Pass, nvidiaClientNonceDetail(in.Nvidia))
 	}
 	return factor(TierBinding, "nvidia_nonce_client_bound", Fail, fmt.Sprintf(
-		"NVIDIA nonce does not match client nonce (matched via provider request_nonce); got %q, want %q",
+		"NVIDIA nonce mismatch: got %q, want %q",
 		truncHex(in.Nvidia.Nonce), truncHex(in.Nonce.Hex())))
 }
 func evalNvidiaNRASVerified(in *ReportInput) []FactorResult {
@@ -1332,13 +1316,13 @@ func nvidiaClaimsDetail(r *NvidiaVerifyResult) string {
 	}
 }
 
-// nvidiaNonceDetail returns the detail string for a passing nvidia_nonce_match.
-func nvidiaNonceDetail(r *NvidiaVerifyResult) string {
+// nvidiaClientNonceDetail returns the detail string for a passing nvidia_nonce_client_bound.
+func nvidiaClientNonceDetail(r *NvidiaVerifyResult) string {
 	switch r.Format {
 	case "EAT":
-		return fmt.Sprintf("EAT nonce matches submitted nonce (%d GPUs)", r.GPUCount)
+		return fmt.Sprintf("EAT nonce matches client nonce (%d GPUs)", r.GPUCount)
 	default:
-		return "nonce in NVIDIA payload matches submitted nonce"
+		return "NVIDIA nonce matches client nonce"
 	}
 }
 

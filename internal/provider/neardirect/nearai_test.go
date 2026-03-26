@@ -17,11 +17,11 @@ import (
 // validFlatResponseJSON simulates the flat (non-array) response form.
 const validFlatResponseJSON = `{
 	"verified": true,
-	"model": "llama-3.1-70b",
+	"model_name": "llama-3.1-70b",
 	"intel_quote": "dGVzdHF1b3Rl",
 	"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test.sig",
-	"signing_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-	"nonce": ""
+	"signing_public_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	"request_nonce": ""
 }`
 
 func makeServer(t *testing.T, status int, body string) *httptest.Server {
@@ -39,16 +39,16 @@ func TestAttester_FetchAttestation_ArrayResponse_ExactMatch(t *testing.T) {
 		"verified": true,
 		"model_attestations": [
 			{
-				"model": "llama-3.1-70b",
+				"model_name": "llama-3.1-70b",
 				"intel_quote": "cXVvdGUx",
 				"nvidia_payload": "jwt1",
-				"signing_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				"signing_public_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			},
 			{
-				"model": "llama-3.1-405b",
+				"model_name": "llama-3.1-405b",
 				"intel_quote": "cXVvdGUy",
 				"nvidia_payload": "jwt2",
-				"signing_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+				"signing_public_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 			}
 		]
 	}`
@@ -78,10 +78,10 @@ func TestAttester_FetchAttestation_ArrayResponse_NoMatch(t *testing.T) {
 		"verified": true,
 		"model_attestations": [
 			{
-				"model": "llama-3.1-70b",
+				"model_name": "llama-3.1-70b",
 				"intel_quote": "cXVvdGUx",
 				"nvidia_payload": "jwt1",
-				"signing_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				"signing_public_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			}
 		]
 	}`
@@ -204,10 +204,10 @@ func TestAttester_FetchAttestation_TEEProviderIsSet(t *testing.T) {
 		"verified": true,
 		"model_attestations": [
 			{
-				"model": "m",
+				"model_name": "m",
 				"intel_quote": "dA==",
 				"nvidia_payload": "j",
-				"signing_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				"signing_public_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			}
 		]
 	}`
@@ -229,14 +229,14 @@ func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
 		"verified": true,
 		"model_attestations": [
 			{
-				"model": "llama-3.1-70b",
+				"model_name": "llama-3.1-70b",
 				"intel_quote": "cXVvdGUx",
 				"nvidia_payload": "jwt1",
-				"signing_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"signing_public_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"signing_address": "0xdeadbeef01020304050607080910111213141516",
 				"signing_algo": "ecdsa",
 				"tls_cert_fingerprint": "aabbccdd",
-				"nonce": "abc123"
+				"request_nonce": "abc123"
 			}
 		]
 	}`
@@ -266,14 +266,14 @@ func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
 func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
 	body := `{
 		"verified": true,
-		"model": "llama-3.1-70b",
+		"model_name": "llama-3.1-70b",
 		"intel_quote": "dGVzdA==",
 		"nvidia_payload": "jwt",
-		"signing_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"signing_public_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		"signing_address": "0x1234",
 		"signing_algo": "ecdsa",
 		"tls_cert_fingerprint": "deadbeef",
-		"nonce": "test-nonce"
+		"request_nonce": "test-nonce"
 	}`
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
@@ -337,7 +337,7 @@ func TestAttester_FetchAttestation_TooManyAttestations(t *testing.T) {
 		if i > 0 {
 			sb.WriteByte(',')
 		}
-		fmt.Fprintf(&sb, `{"model":"m-%d","intel_quote":"q","signing_key":"04%s"}`,
+		fmt.Fprintf(&sb, `{"model_name":"m-%d","intel_quote":"q","signing_public_key":"04%s"}`,
 			i, "aa"+fmt.Sprintf("%0126d", i))
 	}
 	body := fmt.Sprintf(`{"verified":true,"model_attestations":[%s]}`, sb.String())
@@ -356,10 +356,10 @@ func TestAttester_FetchAttestation_TooManyAttestations(t *testing.T) {
 func TestAttester_FetchAttestation_MalformedEventLogEntry(t *testing.T) {
 	body := `{
 		"verified": true,
-		"model": "test-model",
+		"model_name": "test-model",
 		"intel_quote": "dGVzdA==",
 		"nvidia_payload": "jwt",
-		"signing_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"signing_public_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		"event_log": [123]
 	}`
 	srv := makeServer(t, http.StatusOK, body)
@@ -381,11 +381,11 @@ func TestAttester_FetchAttestation_NormalizesUnprefixedKey(t *testing.T) {
 	rawKey := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	body := `{
 		"verified": true,
-		"model": "test-model",
+		"model_name": "test-model",
 		"intel_quote": "dGVzdA==",
 		"nvidia_payload": "jwt",
 		"signing_public_key": "` + rawKey + `",
-		"nonce": "abc"
+		"request_nonce": "abc"
 	}`
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()

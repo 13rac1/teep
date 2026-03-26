@@ -26,14 +26,14 @@ func minimalGatewayJSON(model, nonceHex, spkiHash string) string {
 		},
 		"model_attestations": [
 			{
-				"model": %q,
+				"model_name": %q,
 				"intel_quote": "",
 				"nvidia_payload": "",
-				"signing_key": "04aaaa",
+				"signing_public_key": "04aaaa",
 				"signing_address": "0xtest",
 				"signing_algo": "ecdsa",
 				"tls_cert_fingerprint": %q,
-				"nonce": %q
+				"request_nonce": %q
 			}
 		]
 	}`, nonceHex, spkiHash, model, spkiHash, nonceHex)
@@ -78,7 +78,7 @@ func TestParseGatewayResponse_EventLog(t *testing.T) {
 			"info": {"tcb_info": "{}"}
 		},
 		"model_attestations": [
-			{"model": "m", "nonce": "abc", "signing_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
+			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
 		]
 	}`)
 
@@ -120,7 +120,7 @@ func TestParseGatewayResponse_MalformedEventLog(t *testing.T) {
 			"info": {"tcb_info": "{}"}
 		},
 		"model_attestations": [
-			{"model": "m", "nonce": "abc", "signing_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
+			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
 		]
 	}`)
 
@@ -145,7 +145,7 @@ func TestParseGatewayResponse_MalformedEventLogEntry(t *testing.T) {
 			"info": {"tcb_info": "{}"}
 		},
 		"model_attestations": [
-			{"model": "m", "nonce": "abc", "signing_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
+			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
 		]
 	}`)
 
@@ -179,7 +179,7 @@ func TestParseGatewayResponse_EventLogTooManyEntries(t *testing.T) {
 			"info": {"tcb_info": "{}"}
 		},
 		"model_attestations": [
-			{"model": "m", "nonce": "abc", "signing_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
+			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
 		]
 	}`, sb.String())
 
@@ -210,7 +210,7 @@ func TestParseGatewayResponse_MalformedTCBInfo(t *testing.T) {
 			"info": {"tcb_info": "{not valid json}"}
 		},
 		"model_attestations": [
-			{"model": "m", "nonce": "abc", "signing_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
+			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
 		]
 	}`)
 

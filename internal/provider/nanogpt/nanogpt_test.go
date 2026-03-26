@@ -16,8 +16,7 @@ import (
 // Field names match the real API: signing_public_key (not signing_key),
 // event_log as a JSON string (not array), quote duplicates intel_quote, etc.
 const validAttestationJSON = `{
-	"nonce": "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
-	"request_nonce": "1122334455667788aabbccddeeff00111122334455667788aabbccddeeff0011",
+	"request_nonce": "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
 	"signing_public_key": "a6c0596e48e124f9b567e41fe3968d74d0fb845140e47abc11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
 	"signing_address": "0x96a98Ca1F41a57c1911f08acAb8fdcE3C26c9E79",
 	"signing_algo": "ecdsa",
@@ -77,9 +76,6 @@ func TestAttester_FetchAttestation_Success(t *testing.T) {
 	if len(raw.SigningKey) != 130 || raw.SigningKey[:2] != "04" {
 		t.Errorf("SigningKey should be 130 hex chars with 04 prefix, got len=%d prefix=%q", len(raw.SigningKey), raw.SigningKey[:2])
 	}
-	if raw.NvidiaNonce != "1122334455667788aabbccddeeff00111122334455667788aabbccddeeff0011" {
-		t.Errorf("NvidiaNonce = %q, want request_nonce value", raw.NvidiaNonce)
-	}
 	if raw.SigningAddress != "0x96a98Ca1F41a57c1911f08acAb8fdcE3C26c9E79" {
 		t.Errorf("SigningAddress = %q, want %q", raw.SigningAddress, "0x96a98Ca1F41a57c1911f08acAb8fdcE3C26c9E79")
 	}
@@ -127,7 +123,7 @@ func TestAttester_FetchAttestation_EchoesNonce(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedNonce = r.URL.Query().Get("nonce")
 		resp := map[string]any{
-			"nonce":              capturedNonce,
+			"request_nonce":      capturedNonce,
 			"signing_public_key": "a6c0596e48e124f9aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0011",
 			"signing_address":    "0xdeadbeef",
 			"intel_quote":        "dGVzdA==",
@@ -254,7 +250,7 @@ func TestAttester_FetchAttestation_UnknownFields(t *testing.T) {
 	// Add an extra field not in the response struct. jsonstrict.UnmarshalWarn
 	// should log a warning but not return an error.
 	jsonWithExtra := `{
-		"nonce": "aabb",
+		"request_nonce": "aabb",
 		"signing_public_key": "a6c0596e48e124f9",
 		"intel_quote": "dGVzdA==",
 		"unknown_extra_field": "should not cause error"
@@ -293,7 +289,7 @@ func TestAttester_FetchAttestation_TCBInfoAsString(t *testing.T) {
 	// tcb_info as a JSON-encoded string (double-encoded), which some dstack
 	// versions produce.
 	jsonBody := `{
-		"nonce": "aabb",
+		"request_nonce": "aabb",
 		"signing_public_key": "a6c0596e48e124f9b567e41fe3968d74d0fb845140e47abc11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
 		"intel_quote": "dGVzdA==",
 		"info": {
@@ -321,7 +317,7 @@ func TestAttester_FetchAttestation_TCBInfoAsString(t *testing.T) {
 func TestAttester_FetchAttestation_EventLogAsArray(t *testing.T) {
 	// event_log as a direct JSON array (not string-encoded).
 	jsonBody := `{
-		"nonce": "aabb",
+		"request_nonce": "aabb",
 		"signing_public_key": "a6c0596e48e124f9b567e41fe3968d74d0fb845140e47abc11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
 		"intel_quote": "dGVzdA==",
 		"event_log": [
