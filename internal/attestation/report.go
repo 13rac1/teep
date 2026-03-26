@@ -798,10 +798,16 @@ func verifyFulcioEntry(r *RekorProvenance, img *ImageProvenance, imageRepo strin
 	if !r.HasCert {
 		return fmt.Sprintf("image %q: expected Fulcio certificate but entry has raw key", imageRepo), true
 	}
-	if !strings.EqualFold(strings.TrimSpace(r.OIDCIssuer), strings.TrimSpace(img.OIDCIssuer)) {
+	if subtle.ConstantTimeCompare(
+		[]byte(strings.ToLower(strings.TrimSpace(r.OIDCIssuer))),
+		[]byte(strings.ToLower(strings.TrimSpace(img.OIDCIssuer))),
+	) != 1 {
 		return fmt.Sprintf("image %q: unexpected OIDC issuer %q (expected %q)", imageRepo, r.OIDCIssuer, img.OIDCIssuer), true
 	}
-	if img.OIDCIdentity != "" && !strings.EqualFold(strings.TrimSpace(r.SubjectURI), strings.TrimSpace(img.OIDCIdentity)) {
+	if img.OIDCIdentity != "" && subtle.ConstantTimeCompare(
+		[]byte(strings.ToLower(strings.TrimSpace(r.SubjectURI))),
+		[]byte(strings.ToLower(strings.TrimSpace(img.OIDCIdentity))),
+	) != 1 {
 		return fmt.Sprintf("image %q: unexpected OIDC identity %q (expected %q)", imageRepo, r.SubjectURI, img.OIDCIdentity), true
 	}
 	repoID := strings.TrimSpace(r.SourceRepo)

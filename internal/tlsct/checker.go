@@ -130,7 +130,7 @@ func (t *ctRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	if req.URL == nil || !strings.EqualFold(req.URL.Scheme, "https") {
+	if req.URL == nil || req.URL.Scheme != "https" {
 		return resp, nil
 	}
 	if resp.TLS == nil {
@@ -334,7 +334,7 @@ func isPrivateHost(host string) bool {
 	if hostOnly, _, err := net.SplitHostPort(h); err == nil {
 		h = hostOnly
 	}
-	if strings.EqualFold(h, "localhost") {
+	if strings.ToLower(h) == "localhost" { //nolint:gocritic // strings.EqualFold banned by teeplint
 		return true
 	}
 	if ip := net.ParseIP(h); ip != nil {

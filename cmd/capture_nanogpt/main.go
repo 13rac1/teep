@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -41,13 +40,13 @@ var outDir string
 func main() {
 	apiKey := os.Getenv("NANOGPT_API_KEY")
 	if apiKey == "" {
-		log.Fatal("NANOGPT_API_KEY not set")
+		fatal("NANOGPT_API_KEY not set")
 	}
 
 	captureTime := time.Now().UTC()
 	saveDir := filepath.Join(testdataDir, captureTime.Format("nanogpt_20060102_150405"))
 	if err := os.MkdirAll(saveDir, 0o750); err != nil {
-		log.Fatalf("mkdir %s: %v", saveDir, err)
+		fatalf("mkdir %s: %v", saveDir, err)
 	}
 	outDir = saveDir
 	fmt.Printf("save directory: %s\n", saveDir)
@@ -70,13 +69,13 @@ func main() {
 	fmt.Printf("found %d TEE models (of %d total)\n", len(teeModels), len(models))
 
 	if len(teeModels) == 0 {
-		log.Fatal("no TEE models found")
+		fatal("no TEE models found")
 	}
 
 	// Save model list.
 	modelsJSON, err := json.MarshalIndent(teeModels, "", "  ")
 	if err != nil {
-		log.Fatalf("marshal models: %v", err)
+		fatalf("marshal models: %v", err)
 	}
 	writeFile("models.json", modelsJSON)
 
@@ -106,7 +105,7 @@ func main() {
 
 		headersJSON, err := json.MarshalIndent(res.headers, "", "  ")
 		if err != nil {
-			log.Fatalf("marshal headers for %s: %v", model, err)
+			fatalf("marshal headers for %s: %v", model, err)
 		}
 		writeFile(slug+"_headers.json", headersJSON)
 
@@ -130,22 +129,22 @@ func main() {
 func fetchModels(ctx context.Context, client *http.Client, apiKey string) []string {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+modelsPath, http.NoBody)
 	if err != nil {
-		log.Fatalf("build models request: %v", err)
+		fatalf("build models request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	fmt.Printf("  > GET %s\n", req.URL)
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatalf("GET %s: %v", req.URL, err)
+		fatalf("GET %s: %v", req.URL, err)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	resp.Body.Close()
 	if err != nil {
-		log.Fatalf("read models response: %v", err)
+		fatalf("read models response: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("models endpoint HTTP %d: %s", resp.StatusCode, truncate(string(body)))
+		fatalf("models endpoint HTTP %d: %s", resp.StatusCode, truncate(string(body)))
 	}
 	fmt.Printf("  models response: %d bytes\n", len(body))
 
@@ -155,7 +154,7 @@ func fetchModels(ctx context.Context, client *http.Client, apiKey string) []stri
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &openAIResp); err != nil {
-		log.Fatalf("parse models response: %v", err)
+		fatalf("parse models response: %v", err)
 	}
 	ids := make([]string, len(openAIResp.Data))
 	for i, m := range openAIResp.Data {
@@ -256,7 +255,7 @@ func modelSlug(model string) string {
 func randomHexNonce() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		log.Fatalf("generate nonce: %v", err)
+		fatalf("generate nonce: %v", err)
 	}
 	return hex.EncodeToString(b)
 }
@@ -264,7 +263,7 @@ func randomHexNonce() string {
 func writeFile(name string, data []byte) {
 	path := filepath.Join(outDir, name)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		log.Fatalf("write %s: %v", path, err)
+		fatalf("write %s: %v", path, err)
 	}
 }
 
@@ -274,4 +273,14 @@ func truncate(s string) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func fatal(args ...any) {
+	fmt.Fprintln(os.Stderr, args...)
+	os.Exit(1)
+}
+
+func fatalf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	os.Exit(1)
 }

@@ -81,7 +81,12 @@ func main() {
 		fmt.Println()
 	}
 
-	// Category 2: Architectural completeness.
+	// Category 2: Project-wide security bans.
+	fmt.Println("teeplint: checking project-wide security bans...")
+	fmt.Println()
+	checkProjectWideBans(&r)
+
+	// Category 3: Architectural completeness.
 	fmt.Println("teeplint: checking architectural completeness...")
 	fmt.Println()
 
@@ -157,8 +162,6 @@ func checkProviderStructure(r *result, prov string) {
 	parseFunc := checkParseFunc(r, fset, files, prov, exc)
 	checkParseFuncUsesJSONStrict(r, fset, parseFunc, prov)
 	checkFetchUsesLimitReader(r, fset, files, prov)
-	checkNoBytesEqual(r, fset, files)
-	checkNoLogImport(r, files, prov)
 	checkNoSlogAPIKeyArgs(r, fset, files, prov)
 	checkNoJSONRawMessage(r, fset, files, fileNames, prov)
 	checkExternalTestPackage(r, dir, prov)
@@ -321,31 +324,6 @@ func checkFetchUsesLimitReader(r *result, fset *token.FileSet, files []*ast.File
 	r.fail("FetchAttestation method not found in %s", prov)
 }
 
-// No bytes.Equal anywhere in provider package (use subtle.ConstantTimeCompare).
-func checkNoBytesEqual(r *result, fset *token.FileSet, files []*ast.File) {
-	for _, f := range files {
-		if containsCall(f, "bytes", "Equal") {
-			pos := fset.Position(f.Pos())
-			r.fail("bytes.Equal found in %s (use subtle.ConstantTimeCompare)", filepath.Base(pos.Filename))
-			return
-		}
-	}
-	r.pass("no bytes.Equal in provider package")
-}
-
-// No "log" package import (use log/slog).
-func checkNoLogImport(r *result, files []*ast.File, prov string) {
-	for _, f := range files {
-		for _, imp := range f.Imports {
-			if strings.Trim(imp.Path.Value, `"`) == "log" {
-				r.fail("\"log\" imported in %s (use log/slog)", prov)
-				return
-			}
-		}
-	}
-	r.pass("no \"log\" import (uses log/slog)")
-}
-
 // No slog calls with API key field names.
 func checkNoSlogAPIKeyArgs(r *result, fset *token.FileSet, files []*ast.File, prov string) {
 	badNames := []string{"apiKey", "api_key", "APIKey", "apikey"}
@@ -469,7 +447,125 @@ func checkExternalTestPackage(r *result, dir, prov string) {
 }
 
 // =============================================================================
-// Category 2: Architectural completeness checks
+// Category 2: Project-wide security bans
+// =============================================================================
+
+// checkProjectWideBans parses all non-test Go files under internal/ and cmd/
+// and runs security ban checks across the full codebase.
+func checkProjectWideBans(r *result) {
+	dirs := []string{"internal", "cmd"}
+	var files []*ast.File
+	var names []string
+	fset := token.NewFileSet()
+
+	for _, root := range dirs {
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			f, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				return fmt.Errorf("parse %s: %w", path, err)
+			}
+			files = append(files, f)
+			names = append(names, path)
+			return nil
+		})
+		if err != nil {
+			r.fail("walk %s: %v", root, err)
+			return
+		}
+	}
+
+	checkNoBytesEqualProject(r, files, names)
+	checkNoStringsEqualFold(r, files, names)
+	checkNoLogImportProject(r, files, names)
+	checkNoMathRand(r, files, names)
+	fmt.Println()
+}
+
+// No bytes.Equal anywhere in the project (use subtle.ConstantTimeCompare).
+func checkNoBytesEqualProject(r *result, files []*ast.File, names []string) {
+	var violations []string
+	for i, f := range files {
+		if containsCall(f, "bytes", "Equal") {
+			violations = append(violations, names[i])
+		}
+	}
+	if len(violations) == 0 {
+		r.pass("no bytes.Equal (use subtle.ConstantTimeCompare)")
+		return
+	}
+	for _, v := range violations {
+		r.fail("bytes.Equal in %s (use subtle.ConstantTimeCompare)", v)
+	}
+}
+
+// No strings.EqualFold anywhere in the project (use constant-time comparison).
+func checkNoStringsEqualFold(r *result, files []*ast.File, names []string) {
+	var violations []string
+	for i, f := range files {
+		if containsCall(f, "strings", "EqualFold") {
+			violations = append(violations, names[i])
+		}
+	}
+	if len(violations) == 0 {
+		r.pass("no strings.EqualFold (use constant-time comparison)")
+		return
+	}
+	for _, v := range violations {
+		r.fail("strings.EqualFold in %s (use constant-time comparison)", v)
+	}
+}
+
+// No "log" package import (use log/slog).
+func checkNoLogImportProject(r *result, files []*ast.File, names []string) {
+	var violations []string
+	for i, f := range files {
+		for _, imp := range f.Imports {
+			if strings.Trim(imp.Path.Value, `"`) == "log" {
+				violations = append(violations, names[i])
+				break
+			}
+		}
+	}
+	if len(violations) == 0 {
+		r.pass("no \"log\" import (use log/slog)")
+		return
+	}
+	for _, v := range violations {
+		r.fail("\"log\" imported in %s (use log/slog)", v)
+	}
+}
+
+// No math/rand import (use crypto/rand).
+func checkNoMathRand(r *result, files []*ast.File, names []string) {
+	var violations []string
+	for i, f := range files {
+		for _, imp := range f.Imports {
+			if strings.Trim(imp.Path.Value, `"`) == "math/rand" {
+				violations = append(violations, names[i])
+				break
+			}
+		}
+	}
+	if len(violations) == 0 {
+		r.pass("no math/rand import (use crypto/rand)")
+		return
+	}
+	for _, v := range violations {
+		r.fail("math/rand imported in %s (use crypto/rand)", v)
+	}
+}
+
+// =============================================================================
+// Category 3: Architectural completeness checks
 // =============================================================================
 
 func checkMakefile(r *result, providers []string) {
