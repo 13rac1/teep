@@ -160,6 +160,9 @@ func checkProviderStructure(r *result, prov string) {
 	checkParseFuncUsesJSONStrict(r, fset, parseFunc, prov)
 	checkFetchUsesLimitReader(r, fset, files, prov)
 	checkNoBytesEqual(r, dir, prov)
+	checkReportDataImportsCryptoSubtle(r, dir, prov)
+	checkReportDataVerifierStruct(r, dir, prov)
+	checkVerifyReportDataMethod(r, dir, prov)
 	checkNoSlogAPIKeyArgs(r, fset, files, prov)
 	checkNoJSONRawMessage(r, fset, files, fileNames, prov)
 	checkExternalTestPackage(r, dir, prov)
@@ -389,6 +392,95 @@ func checkNoBytesEqual(r *result, dir, prov string) {
 	r.pass("no bytes.Equal in reportdata verifiers")
 }
 
+// Check 10: reportdata*.go imports crypto/subtle.
+func checkReportDataImportsCryptoSubtle(r *result, dir, prov string) {
+	files := parseReportDataFiles(dir)
+	if len(files) == 0 {
+		r.skip("no reportdata verifier files in %s", prov)
+		return
+	}
+	for _, f := range files {
+		for _, imp := range f.Imports {
+			if strings.Trim(imp.Path.Value, `"`) == "crypto/subtle" {
+				r.pass("reportdata imports crypto/subtle")
+				return
+			}
+		}
+	}
+	r.fail("reportdata files in %s do not import crypto/subtle", prov)
+}
+
+// Check 11: ReportDataVerifier struct exists.
+func checkReportDataVerifierStruct(r *result, dir, prov string) {
+	files := parseReportDataFiles(dir)
+	if len(files) == 0 {
+		r.skip("no reportdata verifier files in %s", prov)
+		return
+	}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if _, isStruct := ts.Type.(*ast.StructType); !isStruct {
+					continue
+				}
+				if strings.HasSuffix(ts.Name.Name, "ReportDataVerifier") && ast.IsExported(ts.Name.Name) {
+					r.pass("%s struct exists", ts.Name.Name)
+					return
+				}
+			}
+		}
+	}
+	r.fail("no exported *ReportDataVerifier struct in %s", prov)
+}
+
+// Check 12: VerifyReportData method exists.
+func checkVerifyReportDataMethod(r *result, dir, prov string) {
+	files := parseReportDataFiles(dir)
+	if len(files) == 0 {
+		r.skip("no reportdata verifier files in %s", prov)
+		return
+	}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv == nil {
+				continue
+			}
+			if fd.Name.Name == "VerifyReportData" {
+				r.pass("VerifyReportData method exists")
+				return
+			}
+		}
+	}
+	r.fail("VerifyReportData method not found in %s", prov)
+}
+
+// parseReportDataFiles parses non-test reportdata*.go files in a provider directory.
+func parseReportDataFiles(dir string) []*ast.File {
+	matches, _ := filepath.Glob(filepath.Join(dir, "reportdata*.go"))
+	var files []*ast.File
+	fset := token.NewFileSet()
+	for _, path := range matches {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			continue
+		}
+		files = append(files, f)
+	}
+	return files
+}
+
 // Check 10: No slog calls with API key field names.
 func checkNoSlogAPIKeyArgs(r *result, fset *token.FileSet, files []*ast.File, prov string) {
 	badNames := []string{"apiKey", "api_key", "APIKey", "apikey"}
@@ -595,6 +687,11 @@ func checkProxyWiring(r *result, providers []string) {
 			r.fail("fromConfig switch missing %q", prov)
 		}
 	}
+
+	checkFromConfigDefaultError(r, fd, providers)
+	checkFromConfigFieldAssignment(r, fd, providers, "ChatPath")
+	checkFromConfigFieldAssignment(r, fd, providers, "Attester")
+	checkFromConfigFieldAssignment(r, fd, providers, "ReportDataVerifier")
 	fmt.Println()
 }
 
@@ -786,6 +883,124 @@ func collectSwitchCases(body *ast.BlockStmt) map[string]bool {
 		return true
 	})
 	return cases
+}
+
+// checkFromConfigDefaultError finds the default case in fromConfig's switch and
+// verifies its fmt.Errorf format string mentions every provider name.
+func checkFromConfigDefaultError(r *result, fd *ast.FuncDecl, providers []string) {
+	var defaultClause *ast.CaseClause
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		cc, ok := n.(*ast.CaseClause)
+		if !ok {
+			return true
+		}
+		if cc.List == nil { // default case
+			defaultClause = cc
+		}
+		return true
+	})
+	if defaultClause == nil {
+		r.fail("fromConfig switch has no default case")
+		return
+	}
+
+	// Find the fmt.Errorf format string in the default body.
+	var fmtStr string
+	ast.Inspect(defaultClause, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		x, ok := sel.X.(*ast.Ident)
+		if !ok || x.Name != "fmt" || sel.Sel.Name != "Errorf" {
+			return true
+		}
+		if len(call.Args) > 0 {
+			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				fmtStr = strings.Trim(lit.Value, `"`)
+			}
+		}
+		return true
+	})
+	if fmtStr == "" {
+		r.fail("fromConfig default case has no fmt.Errorf with string literal")
+		return
+	}
+
+	for _, prov := range providers {
+		if strings.Contains(fmtStr, prov) {
+			r.pass("fromConfig default error mentions %q", prov)
+		} else {
+			r.fail("fromConfig default error missing %q (update the error message)", prov)
+		}
+	}
+}
+
+// checkFromConfigFieldAssignment verifies that each provider's case clause in
+// fromConfig assigns p.{field}.
+func checkFromConfigFieldAssignment(r *result, fd *ast.FuncDecl, providers []string, field string) {
+	// Build a map of provider name → whether p.{field} is assigned.
+	assigned := make(map[string]bool)
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		sw, ok := n.(*ast.SwitchStmt)
+		if !ok {
+			return true
+		}
+		for _, stmt := range sw.Body.List {
+			cc, ok := stmt.(*ast.CaseClause)
+			if !ok || cc.List == nil {
+				continue
+			}
+			// Extract the provider name from the case literal.
+			var provName string
+			for _, expr := range cc.List {
+				lit, ok := expr.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				provName = strings.Trim(lit.Value, `"`)
+			}
+			if provName == "" {
+				continue
+			}
+			// Walk the case body for p.{field} assignment.
+			for _, s := range cc.Body {
+				ast.Inspect(s, func(n ast.Node) bool {
+					assign, ok := n.(*ast.AssignStmt)
+					if !ok {
+						return true
+					}
+					for _, lhs := range assign.Lhs {
+						sel, ok := lhs.(*ast.SelectorExpr)
+						if !ok {
+							continue
+						}
+						x, ok := sel.X.(*ast.Ident)
+						if !ok {
+							continue
+						}
+						if x.Name == "p" && sel.Sel.Name == field {
+							assigned[provName] = true
+						}
+					}
+					return true
+				})
+			}
+		}
+		return false // don't recurse into nested switches
+	})
+
+	for _, prov := range providers {
+		if assigned[prov] {
+			r.pass("fromConfig %q sets p.%s", prov, field)
+		} else {
+			r.fail("fromConfig %q missing p.%s assignment", prov, field)
+		}
+	}
 }
 
 // collectCompositeLitKeys finds a top-level var with the given name and collects
