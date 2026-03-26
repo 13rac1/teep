@@ -94,7 +94,8 @@ type stats struct {
 	plaintext   atomic.Int64
 	cacheHits   atomic.Int64
 	cacheMisses atomic.Int64
-	models      sync.Map // "provider/model" → *modelStats
+	modelsMu    sync.RWMutex
+	models      map[string]*modelStats
 }
 
 // modelStats holds per-model counters.
@@ -108,8 +109,21 @@ type modelStats struct {
 // getModelStats returns (or creates) the modelStats for a provider/model key.
 func (st *stats) getModelStats(prov, model string) *modelStats {
 	key := prov + "/" + model
-	v, _ := st.models.LoadOrStore(key, &modelStats{})
-	return v.(*modelStats) //nolint:forcetypeassert // sync.Map always stores *modelStats
+	st.modelsMu.RLock()
+	if ms, ok := st.models[key]; ok {
+		st.modelsMu.RUnlock()
+		return ms
+	}
+	st.modelsMu.RUnlock()
+
+	st.modelsMu.Lock()
+	defer st.modelsMu.Unlock()
+	if ms, ok := st.models[key]; ok {
+		return ms
+	}
+	ms := &modelStats{}
+	st.models[key] = ms
+	return ms
 }
 
 // fmtDur formats a duration as seconds with 3 decimal places (e.g. "4.200s").
@@ -166,7 +180,7 @@ func New(cfg *config.Config) (*Server, error) {
 			MaxIdleConnsPerHost: 10,
 			IdleConnTimeout:     90 * time.Second,
 		}, !cfg.Offline),
-		stats: stats{startTime: time.Now()},
+		stats: stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 	}
 
 	// Parse optional PoC EdDSA signing key (GW-M-11).
@@ -222,9 +236,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		slog.Info("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx) //nolint:contextcheck // parent ctx is cancelled; need a fresh deadline for graceful drain
+		return srv.Shutdown(shutdownCtx)
 	}
 }
 
@@ -556,7 +570,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		ms.errors.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
+		if err := json.NewEncoder(w).Encode(report); err != nil {
+			slog.Error("encode response", "error", err)
+		}
 		return
 	}
 
@@ -733,7 +749,9 @@ func (s *Server) handlePinnedChat(
 		s.negCache.Record(prov.Name, upstreamModel)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
+		if err := json.NewEncoder(w).Encode(report); err != nil {
+			slog.Error("encode response", "error", err)
+		}
 		return
 	}
 	if pinnedResp.SigningKey != "" {
@@ -926,7 +944,10 @@ func (s *Server) relayStream(w http.ResponseWriter, body io.Reader, session *att
 	}
 
 	scanner := bufio.NewScanner(body)
-	bufp := sseScannerBufPool.Get().(*[]byte) //nolint:forcetypeassert // pool always stores *[]byte
+	bufp, ok := sseScannerBufPool.Get().(*[]byte)
+	if !ok {
+		panic("sseScannerBufPool: unexpected type")
+	}
 	defer sseScannerBufPool.Put(bufp)
 	scanner.Buffer((*bufp)[:cap(*bufp)], sseScannerBufSize)
 
@@ -1094,7 +1115,9 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(report) //nolint:errchkjson // response body already committed
+	if err := json.NewEncoder(w).Encode(report); err != nil {
+		slog.Error("encode response", "error", err)
+	}
 }
 
 // handleIndex serves a live stats dashboard at /.
@@ -1129,9 +1152,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 
 	// Per-model rows.
 	var modelRows strings.Builder
-	s.stats.models.Range(func(key, value any) bool {
-		k := key.(string)        //nolint:forcetypeassert // sync.Map key is always string
-		m := value.(*modelStats) //nolint:forcetypeassert // sync.Map value is always *modelStats
+	s.stats.modelsMu.RLock()
+	for k, m := range s.stats.models {
 		verifyMs := m.lastVerifyMs.Load()
 		var verifyStr string
 		if verifyMs > 0 {
@@ -1148,8 +1170,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(&modelRows,
 			"  <tr><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td></tr>\n",
 			html.EscapeString(k), m.requests.Load(), m.errors.Load(), verifyStr, agoStr)
-		return true
-	})
+	}
+	s.stats.modelsMu.RUnlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>

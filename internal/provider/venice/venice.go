@@ -140,17 +140,17 @@ func toEventLogEntries(local []eventLogEntry) []attestation.EventLogEntry {
 // veniceInfo holds the nested "info" object from Venice's attestation
 // response, containing dstack environment metadata.
 type veniceInfo struct {
-	AppCert      string   `json:"app_cert"`
-	AppID        string   `json:"app_id"`
-	AppName      string   `json:"app_name"`
-	ComposeHash  string   `json:"compose_hash"`
-	DeviceID     string   `json:"device_id"`
-	InstanceID   string   `json:"instance_id"`
-	KeyProvider  string   `json:"key_provider_info"`
-	MRAggregated string   `json:"mr_aggregated"`
-	OSImageHash  string   `json:"os_image_hash"`
+	AppCert      string  `json:"app_cert"`
+	AppID        string  `json:"app_id"`
+	AppName      string  `json:"app_name"`
+	ComposeHash  string  `json:"compose_hash"`
+	DeviceID     string  `json:"device_id"`
+	InstanceID   string  `json:"instance_id"`
+	KeyProvider  string  `json:"key_provider_info"`
+	MRAggregated string  `json:"mr_aggregated"`
+	OSImageHash  string  `json:"os_image_hash"`
 	TCBInfo      tcbInfo `json:"tcb_info"`
-	VMConfig     string   `json:"vm_config"`
+	VMConfig     string  `json:"vm_config"`
 }
 
 // attestationResponse is the JSON shape returned by Venice's attestation

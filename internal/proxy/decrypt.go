@@ -143,7 +143,7 @@ func decryptSSEChunkContent(data string, session *attestation.Session) (map[stri
 
 	choicesRaw, ok := full["choices"]
 	if !ok {
-		return nil, nil //nolint:nilnil // nil map = no decrypted fields; callers iterate with range
+		return map[string]string{}, nil
 	}
 
 	var choices []map[string]json.RawMessage
@@ -151,12 +151,12 @@ func decryptSSEChunkContent(data string, session *attestation.Session) (map[stri
 		return nil, fmt.Errorf("parse choices array: %w", err)
 	}
 	if len(choices) == 0 {
-		return nil, nil //nolint:nilnil // nil map = no decrypted fields
+		return map[string]string{}, nil
 	}
 
 	deltaRaw, ok := choices[0]["delta"]
 	if !ok {
-		return nil, nil //nolint:nilnil // nil map = no decrypted fields
+		return map[string]string{}, nil
 	}
 
 	var delta map[string]json.RawMessage
@@ -184,7 +184,7 @@ func decryptSSEChunkContent(data string, session *attestation.Session) (map[stri
 	}
 
 	if len(result) == 0 {
-		return nil, nil //nolint:nilnil // nil map = no decrypted fields
+		return map[string]string{}, nil
 	}
 	return result, nil
 }
@@ -250,7 +250,10 @@ func decryptNonStreamResponse(body []byte, session *attestation.Session) ([]byte
 // are accumulated independently and included in the final message.
 func reassembleNonStream(body io.Reader, session *attestation.Session) ([]byte, error) {
 	scanner := bufio.NewScanner(body)
-	bufp := sseScannerBufPool.Get().(*[]byte) //nolint:forcetypeassert // pool always stores *[]byte
+	bufp, ok := sseScannerBufPool.Get().(*[]byte)
+	if !ok {
+		panic("sseScannerBufPool: unexpected type")
+	}
 	defer sseScannerBufPool.Put(bufp)
 	scanner.Buffer((*bufp)[:cap(*bufp)], sseScannerBufSize)
 

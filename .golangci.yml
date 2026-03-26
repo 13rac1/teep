@@ -61,7 +61,6 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
         - (io.Closer).Close
-        - (*encoding/json.Encoder).Encode
     gosec:
       excludes:
         - G104  # unhandled errors — covered by errcheck with better exclusion control

@@ -69,10 +69,10 @@ type modelAttestation struct {
 	RequestNonce       string                      `json:"request_nonce"`
 	EventLog           []attestation.EventLogEntry `json:"event_log"`
 	Info               struct {
-		AppName     string   `json:"app_name"`
-		ComposeHash string   `json:"compose_hash"`
-		OSImageHash string   `json:"os_image_hash"`
-		DeviceID    string   `json:"device_id"`
+		AppName     string  `json:"app_name"`
+		ComposeHash string  `json:"compose_hash"`
+		OSImageHash string  `json:"os_image_hash"`
+		DeviceID    string  `json:"device_id"`
 		TCBInfo     tcbInfo `json:"tcb_info"`
 	} `json:"info"`
 }

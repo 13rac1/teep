@@ -28,20 +28,17 @@ type result struct {
 	skipped int
 }
 
-//nolint:goprintffuncname // pass/fail/skip read better than passf/failf/skipf for linter output
-func (r *result) pass(format string, args ...any) {
+func (r *result) passf(format string, args ...any) {
 	r.passed++
 	fmt.Printf("    [PASS] %s\n", fmt.Sprintf(format, args...))
 }
 
-//nolint:goprintffuncname // see pass() above
-func (r *result) fail(format string, args ...any) {
+func (r *result) failf(format string, args ...any) {
 	r.failed++
 	fmt.Printf("    [FAIL] %s\n", fmt.Sprintf(format, args...))
 }
 
-//nolint:goprintffuncname // see pass() above
-func (r *result) skip(format string, args ...any) {
+func (r *result) skipf(format string, args ...any) {
 	r.skipped++
 	fmt.Printf("    [SKIP] %s\n", fmt.Sprintf(format, args...))
 }
@@ -136,22 +133,25 @@ func checkProviderStructure(r *result, prov string) {
 	fmt.Printf("  %s/\n", dir)
 
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool { //nolint:staticcheck // ParseDir is fine for our use
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, parser.ParseComments)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		r.fail("parse package: %v", err)
+		r.failf("read %s: %v", dir, err)
 		return
 	}
-
-	// Collect all files from all packages in the directory.
 	var files []*ast.File
 	var fileNames []string
-	for _, pkg := range pkgs {
-		for name, f := range pkg.Files {
-			files = append(files, f)
-			fileNames = append(fileNames, name)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
 		}
+		path := filepath.Join(dir, e.Name())
+		f, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if parseErr != nil {
+			r.failf("parse %s: %v", path, parseErr)
+			return
+		}
+		files = append(files, f)
+		fileNames = append(fileNames, path)
 	}
 
 	exc := exceptions[prov]
@@ -183,14 +183,14 @@ func checkAttestationPathConst(r *result, fset *token.FileSet, files []*ast.File
 				for _, name := range vs.Names {
 					if name.Name == "attestationPath" {
 						pos := fset.Position(name.Pos())
-						r.pass("attestationPath constant (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+						r.passf("attestationPath constant (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 						return
 					}
 				}
 			}
 		}
 	}
-	r.fail("attestationPath constant not found in %s", prov)
+	r.failf("attestationPath constant not found in %s", prov)
 }
 
 // attestationResponse (or exception) unexported struct.
@@ -214,9 +214,9 @@ func checkResponseStruct(r *result, fset *token.FileSet, files []*ast.File, prov
 					if _, isStruct := ts.Type.(*ast.StructType); isStruct {
 						pos := fset.Position(ts.Name.Pos())
 						if exc.responseStructName != "" {
-							r.pass("%s struct — %s uses %s (%s:%d)", want, prov, want, filepath.Base(pos.Filename), pos.Line)
+							r.passf("%s struct — %s uses %s (%s:%d)", want, prov, want, filepath.Base(pos.Filename), pos.Line)
 						} else {
-							r.pass("%s struct (%s:%d)", want, filepath.Base(pos.Filename), pos.Line)
+							r.passf("%s struct (%s:%d)", want, filepath.Base(pos.Filename), pos.Line)
 						}
 						return
 					}
@@ -224,7 +224,7 @@ func checkResponseStruct(r *result, fset *token.FileSet, files []*ast.File, prov
 			}
 		}
 	}
-	r.fail("%s struct not found in %s", want, prov)
+	r.failf("%s struct not found in %s", want, prov)
 }
 
 // Attester.client *http.Client field.
@@ -248,7 +248,7 @@ func checkAttesterClientField(r *result, fset *token.FileSet, files []*ast.File,
 					for _, name := range field.Names {
 						if name.Name == "client" && typeString(field.Type) == "*http.Client" {
 							pos := fset.Position(name.Pos())
-							r.pass("Attester.client *http.Client (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+							r.passf("Attester.client *http.Client (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 							return
 						}
 					}
@@ -256,7 +256,7 @@ func checkAttesterClientField(r *result, fset *token.FileSet, files []*ast.File,
 			}
 		}
 	}
-	r.fail("Attester.client *http.Client field not found in %s", prov)
+	r.failf("Attester.client *http.Client field not found in %s", prov)
 }
 
 // ParseAttestationResponse (or exception) exists.
@@ -274,31 +274,31 @@ func checkParseFunc(r *result, fset *token.FileSet, files []*ast.File, prov stri
 			if fd.Name.Name == want {
 				pos := fset.Position(fd.Name.Pos())
 				if exc.parseFunc != "" {
-					r.pass("%s exists — %s uses %s (%s:%d)", want, prov, want, filepath.Base(pos.Filename), pos.Line)
+					r.passf("%s exists — %s uses %s (%s:%d)", want, prov, want, filepath.Base(pos.Filename), pos.Line)
 				} else {
-					r.pass("%s exists (%s:%d)", want, filepath.Base(pos.Filename), pos.Line)
+					r.passf("%s exists (%s:%d)", want, filepath.Base(pos.Filename), pos.Line)
 				}
 				return fd
 			}
 		}
 	}
-	r.fail("%s function not found in %s", want, prov)
+	r.failf("%s function not found in %s", want, prov)
 	return nil
 }
 
 // Parse function calls jsonstrict.UnmarshalWarn.
 func checkParseFuncUsesJSONStrict(r *result, fset *token.FileSet, fd *ast.FuncDecl, prov string) {
 	if fd == nil {
-		r.fail("%s uses jsonstrict.UnmarshalWarn — no parse function in %s", prov, prov)
+		r.failf("%s uses jsonstrict.UnmarshalWarn — no parse function in %s", prov, prov)
 		return
 	}
 	if containsCall(fd.Body, "jsonstrict", "UnmarshalWarn") {
 		pos := fset.Position(fd.Name.Pos())
-		r.pass("%s uses jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+		r.passf("%s uses jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 		return
 	}
 	pos := fset.Position(fd.Name.Pos())
-	r.fail("%s does not call jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+	r.failf("%s does not call jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 }
 
 // FetchAttestation calls io.LimitReader.
@@ -312,16 +312,16 @@ func checkFetchUsesLimitReader(r *result, fset *token.FileSet, files []*ast.File
 			if fd.Name.Name == "FetchAttestation" {
 				if containsCall(fd.Body, "io", "LimitReader") {
 					pos := fset.Position(fd.Name.Pos())
-					r.pass("FetchAttestation uses io.LimitReader (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+					r.passf("FetchAttestation uses io.LimitReader (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 					return
 				}
 				pos := fset.Position(fd.Name.Pos())
-				r.fail("FetchAttestation does not call io.LimitReader (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+				r.failf("FetchAttestation does not call io.LimitReader (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 				return
 			}
 		}
 	}
-	r.fail("FetchAttestation method not found in %s", prov)
+	r.failf("FetchAttestation method not found in %s", prov)
 }
 
 // No slog calls with API key field names.
@@ -351,7 +351,7 @@ func checkNoSlogAPIKeyArgs(r *result, fset *token.FileSet, files []*ast.File, pr
 				for _, bad := range badNames {
 					if val == bad {
 						pos := fset.Position(lit.Pos())
-						r.fail("slog call with %q arg in %s (%s:%d)", bad, prov, filepath.Base(pos.Filename), pos.Line)
+						r.failf("slog call with %q arg in %s (%s:%d)", bad, prov, filepath.Base(pos.Filename), pos.Line)
 						found = true
 						return false
 					}
@@ -363,7 +363,7 @@ func checkNoSlogAPIKeyArgs(r *result, fset *token.FileSet, files []*ast.File, pr
 			return
 		}
 	}
-	r.pass("no slog calls with API key args")
+	r.passf("no slog calls with API key args")
 }
 
 // No json.RawMessage in provider response structs.
@@ -393,11 +393,11 @@ func checkNoJSONRawMessage(r *result, fset *token.FileSet, files []*ast.File, fi
 		}
 	}
 	if len(violations) == 0 {
-		r.pass("no json.RawMessage in response structs")
+		r.passf("no json.RawMessage in response structs")
 		return
 	}
 	for _, v := range violations {
-		r.fail("json.RawMessage field %s in %s", v, prov)
+		r.failf("json.RawMessage field %s in %s", v, prov)
 	}
 }
 
@@ -439,11 +439,11 @@ func checkExternalTestPackage(r *result, dir, prov string) {
 			continue
 		}
 		if f.Name.Name == wantPkg {
-			r.pass("test file uses external package (%s)", filepath.Base(tf))
+			r.passf("test file uses external package (%s)", filepath.Base(tf))
 			return
 		}
 	}
-	r.fail("no test file uses external package %q in %s", wantPkg, prov)
+	r.failf("no test file uses external package %q in %s", wantPkg, prov)
 }
 
 // =============================================================================
@@ -478,7 +478,7 @@ func checkProjectWideBans(r *result) {
 			return nil
 		})
 		if err != nil {
-			r.fail("walk %s: %v", root, err)
+			r.failf("walk %s: %v", root, err)
 			return
 		}
 	}
@@ -499,11 +499,11 @@ func checkNoBytesEqualProject(r *result, files []*ast.File, names []string) {
 		}
 	}
 	if len(violations) == 0 {
-		r.pass("no bytes.Equal (use subtle.ConstantTimeCompare)")
+		r.passf("no bytes.Equal (use subtle.ConstantTimeCompare)")
 		return
 	}
 	for _, v := range violations {
-		r.fail("bytes.Equal in %s (use subtle.ConstantTimeCompare)", v)
+		r.failf("bytes.Equal in %s (use subtle.ConstantTimeCompare)", v)
 	}
 }
 
@@ -516,11 +516,11 @@ func checkNoStringsEqualFold(r *result, files []*ast.File, names []string) {
 		}
 	}
 	if len(violations) == 0 {
-		r.pass("no strings.EqualFold (use constant-time comparison)")
+		r.passf("no strings.EqualFold (use constant-time comparison)")
 		return
 	}
 	for _, v := range violations {
-		r.fail("strings.EqualFold in %s (use constant-time comparison)", v)
+		r.failf("strings.EqualFold in %s (use constant-time comparison)", v)
 	}
 }
 
@@ -536,11 +536,11 @@ func checkNoLogImportProject(r *result, files []*ast.File, names []string) {
 		}
 	}
 	if len(violations) == 0 {
-		r.pass("no \"log\" import (use log/slog)")
+		r.passf("no \"log\" import (use log/slog)")
 		return
 	}
 	for _, v := range violations {
-		r.fail("\"log\" imported in %s (use log/slog)", v)
+		r.failf("\"log\" imported in %s (use log/slog)", v)
 	}
 }
 
@@ -556,11 +556,11 @@ func checkNoMathRand(r *result, files []*ast.File, names []string) {
 		}
 	}
 	if len(violations) == 0 {
-		r.pass("no math/rand import (use crypto/rand)")
+		r.passf("no math/rand import (use crypto/rand)")
 		return
 	}
 	for _, v := range violations {
-		r.fail("math/rand imported in %s (use crypto/rand)", v)
+		r.failf("math/rand imported in %s (use crypto/rand)", v)
 	}
 }
 
@@ -572,7 +572,7 @@ func checkMakefile(r *result, providers []string) {
 	fmt.Println("  Makefile")
 	data, err := os.ReadFile("Makefile")
 	if err != nil {
-		r.fail("read Makefile: %v", err)
+		r.failf("read Makefile: %v", err)
 		return
 	}
 	content := string(data)
@@ -593,31 +593,31 @@ func checkMakefile(r *result, providers []string) {
 		// report-{provider}: target exists.
 		targetRe := regexp.MustCompile(`(?m)^report-` + regexp.QuoteMeta(prov) + `:`)
 		if targetRe.MatchString(content) {
-			r.pass("report-%s target exists", prov)
+			r.passf("report-%s target exists", prov)
 		} else {
-			r.fail("report-%s target missing", prov)
+			r.failf("report-%s target missing", prov)
 		}
 
 		// reports: target includes report-{provider}.
 		if strings.Contains(reportsLine, "report-"+prov) {
-			r.pass("reports: includes report-%s", prov)
+			r.passf("reports: includes report-%s", prov)
 		} else {
-			r.fail("reports: missing report-%s", prov)
+			r.failf("reports: missing report-%s", prov)
 		}
 
 		// integration-{provider}: target exists.
 		intTargetRe := regexp.MustCompile(`(?m)^integration-` + regexp.QuoteMeta(prov) + `:`)
 		if intTargetRe.MatchString(content) {
-			r.pass("integration-%s target exists", prov)
+			r.passf("integration-%s target exists", prov)
 		} else {
-			r.fail("integration-%s target missing", prov)
+			r.failf("integration-%s target missing", prov)
 		}
 
 		// integration: target includes integration-{provider}.
 		if strings.Contains(integrationLine, "integration-"+prov) {
-			r.pass("integration: includes integration-%s", prov)
+			r.passf("integration: includes integration-%s", prov)
 		} else {
-			r.fail("integration: missing integration-%s", prov)
+			r.failf("integration: missing integration-%s", prov)
 		}
 	}
 	fmt.Println()
@@ -629,13 +629,13 @@ func checkProxyWiring(r *result, providers []string) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
-		r.fail("parse %s: %v", path, err)
+		r.failf("parse %s: %v", path, err)
 		return
 	}
 
 	fd := findFunc(f, "fromConfig")
 	if fd == nil {
-		r.fail("fromConfig function not found in %s", path)
+		r.failf("fromConfig function not found in %s", path)
 		return
 	}
 
@@ -653,7 +653,7 @@ func checkCLIMain(r *result, providers []string) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
-		r.fail("parse %s: %v", path, err)
+		r.failf("parse %s: %v", path, err)
 		return
 	}
 
@@ -661,23 +661,23 @@ func checkCLIMain(r *result, providers []string) {
 	envVarKeys := collectCompositeLitKeys(f, "providerEnvVars")
 	for _, prov := range providers {
 		if envVarKeys[prov] {
-			r.pass("providerEnvVars has key %q", prov)
+			r.passf("providerEnvVars has key %q", prov)
 		} else {
-			r.fail("providerEnvVars missing key %q", prov)
+			r.failf("providerEnvVars missing key %q", prov)
 		}
 	}
 
 	// newAttester() switch has case for each provider.
 	newAttesterFunc := findFunc(f, "newAttester")
 	if newAttesterFunc == nil {
-		r.fail("newAttester function not found")
+		r.failf("newAttester function not found")
 	} else {
 		cases := collectSwitchCases(newAttesterFunc.Body)
 		for _, prov := range providers {
 			if cases[prov] {
-				r.pass("newAttester switch includes %q", prov)
+				r.passf("newAttester switch includes %q", prov)
 			} else {
-				r.fail("newAttester switch missing %q", prov)
+				r.failf("newAttester switch missing %q", prov)
 			}
 		}
 	}
@@ -685,14 +685,14 @@ func checkCLIMain(r *result, providers []string) {
 	// newReportDataVerifier() switch has case for each provider.
 	rdvFunc := findFunc(f, "newReportDataVerifier")
 	if rdvFunc == nil {
-		r.fail("newReportDataVerifier function not found")
+		r.failf("newReportDataVerifier function not found")
 	} else {
 		cases := collectSwitchCases(rdvFunc.Body)
 		for _, prov := range providers {
 			if cases[prov] {
-				r.pass("newReportDataVerifier switch includes %q", prov)
+				r.passf("newReportDataVerifier switch includes %q", prov)
 			} else {
-				r.fail("newReportDataVerifier switch missing %q", prov)
+				r.failf("newReportDataVerifier switch missing %q", prov)
 			}
 		}
 	}
@@ -700,14 +700,14 @@ func checkCLIMain(r *result, providers []string) {
 	// supplyChainPolicy() switch has case for each provider.
 	scpFunc := findFunc(f, "supplyChainPolicy")
 	if scpFunc == nil {
-		r.fail("supplyChainPolicy function not found")
+		r.failf("supplyChainPolicy function not found")
 	} else {
 		cases := collectSwitchCases(scpFunc.Body)
 		for _, prov := range providers {
 			if cases[prov] {
-				r.pass("supplyChainPolicy switch includes %q", prov)
+				r.passf("supplyChainPolicy switch includes %q", prov)
 			} else {
-				r.fail("supplyChainPolicy switch missing %q", prov)
+				r.failf("supplyChainPolicy switch missing %q", prov)
 			}
 		}
 	}
@@ -720,7 +720,7 @@ func checkHelpText(r *result, providers []string, envVars map[string]string) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
-		r.fail("parse %s: %v", path, err)
+		r.failf("parse %s: %v", path, err)
 		return
 	}
 
@@ -734,26 +734,26 @@ func checkHelpText(r *result, providers []string, envVars map[string]string) {
 		envVar := envVars[prov]
 		if envVar != "" {
 			if strings.Contains(overviewText, envVar) {
-				r.pass("printOverview mentions %s", envVar)
+				r.passf("printOverview mentions %s", envVar)
 			} else {
-				r.fail("printOverview missing %s for provider %s", envVar, prov)
+				r.failf("printOverview missing %s for provider %s", envVar, prov)
 			}
 		} else {
-			r.skip("no env var known for %s", prov)
+			r.skipf("no env var known for %s", prov)
 		}
 
 		// printServeHelp PROVIDER line lists provider.
 		if strings.Contains(serveText, prov) {
-			r.pass("printServeHelp mentions %q", prov)
+			r.passf("printServeHelp mentions %q", prov)
 		} else {
-			r.fail("printServeHelp missing %q", prov)
+			r.failf("printServeHelp missing %q", prov)
 		}
 
 		// printVerifyHelp PROVIDER line lists provider.
 		if strings.Contains(verifyText, prov) {
-			r.pass("printVerifyHelp mentions %q", prov)
+			r.passf("printVerifyHelp mentions %q", prov)
 		} else {
-			r.fail("printVerifyHelp missing %q", prov)
+			r.failf("printVerifyHelp missing %q", prov)
 		}
 	}
 	fmt.Println()
@@ -867,7 +867,7 @@ func checkFromConfigDefaultError(r *result, fd *ast.FuncDecl, providers []string
 		return true
 	})
 	if defaultClause == nil {
-		r.fail("fromConfig switch has no default case")
+		r.failf("fromConfig switch has no default case")
 		return
 	}
 
@@ -894,15 +894,15 @@ func checkFromConfigDefaultError(r *result, fd *ast.FuncDecl, providers []string
 		return true
 	})
 	if fmtStr == "" {
-		r.fail("fromConfig default case has no fmt.Errorf with string literal")
+		r.failf("fromConfig default case has no fmt.Errorf with string literal")
 		return
 	}
 
 	for _, prov := range providers {
 		if strings.Contains(fmtStr, prov) {
-			r.pass("fromConfig default error mentions %q", prov)
+			r.passf("fromConfig default error mentions %q", prov)
 		} else {
-			r.fail("fromConfig default error missing %q (update the error message)", prov)
+			r.failf("fromConfig default error missing %q (update the error message)", prov)
 		}
 	}
 }
@@ -963,9 +963,9 @@ func checkFromConfigFieldAssignment(r *result, fd *ast.FuncDecl, providers []str
 
 	for _, prov := range providers {
 		if assigned[prov] {
-			r.pass("fromConfig %q sets p.%s", prov, field)
+			r.passf("fromConfig %q sets p.%s", prov, field)
 		} else {
-			r.fail("fromConfig %q missing p.%s assignment", prov, field)
+			r.failf("fromConfig %q missing p.%s assignment", prov, field)
 		}
 	}
 }

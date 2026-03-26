@@ -21,8 +21,6 @@ import (
 // VerifyTDXQuote for collateral fetching. When nil (production), a
 // RetryHTTPSGetter wrapping SimpleHTTPSGetter is used. Tests set this
 // to a fixture-backed getter.
-//
-//nolint:gochecknoglobals // var instead of const to allow test overrides
 var TDXCollateralGetter trust.HTTPSGetter
 
 // TDXVerifyResult holds the structured outcome of TDX quote parsing and

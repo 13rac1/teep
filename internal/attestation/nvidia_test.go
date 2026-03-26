@@ -125,10 +125,10 @@ func TestGetOrCreateKeyfunc_RefreshesAfterTTL(t *testing.T) {
 		resetJWKS()
 	})
 
-	if _, err := getOrCreateKeyfunc(context.Background(), srv.URL); err != nil {
+	if _, err := getOrCreateKeyfunc(srv.URL); err != nil {
 		t.Fatalf("first getOrCreateKeyfunc: %v", err)
 	}
-	if _, err := getOrCreateKeyfunc(context.Background(), srv.URL); err != nil {
+	if _, err := getOrCreateKeyfunc(srv.URL); err != nil {
 		t.Fatalf("second getOrCreateKeyfunc: %v", err)
 	}
 
@@ -146,7 +146,7 @@ func TestVerifyJWT_ValidToken(t *testing.T) {
 	jwksURL := setupTestKeyfunc(t, &key.PublicKey, kid)
 	tokenStr := makeTestJWT(t, key, kid, true, nonce.Hex(), "https://test.nvidia.com", time.Now().Add(time.Hour))
 
-	kf, err := getOrCreateKeyfunc(context.Background(), jwksURL)
+	kf, err := getOrCreateKeyfunc(jwksURL)
 	if err != nil {
 		t.Fatalf("getOrCreateKeyfunc: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestVerifyJWT_ExpiredToken(t *testing.T) {
 	jwksURL := setupTestKeyfunc(t, &key.PublicKey, kid)
 	tokenStr := makeTestJWT(t, key, kid, true, "", "https://test.nvidia.com", time.Now().Add(-time.Hour))
 
-	kf, err := getOrCreateKeyfunc(context.Background(), jwksURL)
+	kf, err := getOrCreateKeyfunc(jwksURL)
 	if err != nil {
 		t.Fatalf("getOrCreateKeyfunc: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestVerifyJWT_WrongKey(t *testing.T) {
 	jwksURL := setupTestKeyfunc(t, &verifyKey.PublicKey, kid)
 	tokenStr := makeTestJWT(t, signingKey, kid, true, "", "test", time.Now().Add(time.Hour))
 
-	kf, err := getOrCreateKeyfunc(context.Background(), jwksURL)
+	kf, err := getOrCreateKeyfunc(jwksURL)
 	if err != nil {
 		t.Fatalf("getOrCreateKeyfunc: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestVerifyJWT_UnknownKid(t *testing.T) {
 	jwksURL := setupTestKeyfunc(t, &key.PublicKey, "key-B")
 	tokenStr := makeTestJWT(t, key, "key-A", true, "", "test", time.Now().Add(time.Hour))
 
-	kf, err := getOrCreateKeyfunc(context.Background(), jwksURL)
+	kf, err := getOrCreateKeyfunc(jwksURL)
 	if err != nil {
 		t.Fatalf("getOrCreateKeyfunc: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestVerifyNVIDIAJWT_Success(t *testing.T) {
 	jwksURL := setupTestKeyfunc(t, &key.PublicKey, kid)
 	jwtStr := makeTestJWT(t, key, kid, true, nonce.Hex(), "https://nras.attestation.nvidia.com", time.Now().Add(time.Hour))
 
-	result := verifyNVIDIAJWT(context.Background(), jwtStr, jwksURL)
+	result := verifyNVIDIAJWT(jwtStr, jwksURL)
 	if result.SignatureErr != nil {
 		t.Errorf("SignatureErr: %v", result.SignatureErr)
 	}
@@ -325,7 +325,7 @@ func TestVerifyNVIDIAJWT_EmptyToken(t *testing.T) {
 	key := generateTestECKey(t)
 	jwksURL := setupTestKeyfunc(t, &key.PublicKey, "empty-test-kid")
 
-	result := verifyNVIDIAJWT(context.Background(), "", jwksURL)
+	result := verifyNVIDIAJWT("", jwksURL)
 	if result.SignatureErr == nil && result.ClaimsErr == nil {
 		t.Error("expected error for empty JWT, got nil")
 	}
