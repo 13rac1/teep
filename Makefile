@@ -57,7 +57,7 @@ report-nearcloud: build ## Verify NearCloud gateway attestation (requires NEARAI
 	./teep verify nearcloud --model Qwen/Qwen3.5-122B-A10B --log-level debug --save-dir /tmp/teep-attestation-nearcloud
 
 report-nanogpt: build ## Verify NanoGPT attestation (requires NANOGPT_API_KEY)
-	./teep verify nanogpt --model TEE/llama-3.3-70b-instruct --log-level debug --save-dir /tmp/teep-attestation-nanogpt
+	./teep verify nanogpt --model TEE/gemma-3-27b-it --log-level debug --save-dir /tmp/teep-attestation-nanogpt
 
 e2e-venice: ## Run Venice E2E test (requires VENICE_API_KEY)
 	./test/e2e-venice.sh

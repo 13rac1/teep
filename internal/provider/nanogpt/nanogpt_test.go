@@ -11,23 +11,20 @@ import (
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 )
 
-// validAttestationJSON is a structurally complete NanoGPT attestation response
-// covering all fields. The signing_key and intel_quote are intentionally short
-// placeholder values — real attestation verification happens in the attestation
-// package.
+// validAttestationJSON is a structurally complete NanoGPT dstack attestation
+// response matching the actual format returned by models like TEE/gemma-3-27b-it.
+// Field names match the real API: signing_public_key (not signing_key),
+// event_log as a JSON string (not array), quote duplicates intel_quote, etc.
 const validAttestationJSON = `{
-	"verified": true,
-	"nonce": "aabbccddeeff00112233445566778899aabbccddeeff001122334455667788990000000000000000000000000000000000000000000000000000000000000000",
-	"model": "TEE/llama-3.3-70b-instruct",
-	"tee_provider": "TDX+NVIDIA",
-	"signing_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	"signing_address": "0xdeadbeef",
+	"nonce": "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+	"request_nonce": "1122334455667788aabbccddeeff00111122334455667788aabbccddeeff0011",
+	"signing_public_key": "a6c0596e48e124f9b567e41fe3968d74d0fb845140e47abc11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
+	"signing_address": "0x96a98Ca1F41a57c1911f08acAb8fdcE3C26c9E79",
+	"signing_algo": "ecdsa",
 	"intel_quote": "dGVzdHF1b3Rl",
+	"quote": "dGVzdHF1b3Rl",
 	"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test.payload",
-	"event_log": [
-		{"digest": "d6d8d853b6454f838d98c5573d6a098c", "event": "", "event_payload": "095464785461626c65", "event_type": 2147483659, "imr": 0},
-		{"digest": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "event": "", "event_payload": "0a1b2c3d4e5f", "event_type": 2147483649, "imr": 1}
-	],
+	"event_log": "[{\"digest\":\"d6d8d853b6454f838d98c5573d6a098c\",\"event\":\"\",\"event_payload\":\"095464785461626c65\",\"event_type\":2147483659,\"imr\":0},{\"digest\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4\",\"event\":\"\",\"event_payload\":\"0a1b2c3d4e5f\",\"event_type\":2147483649,\"imr\":1}]",
 	"info": {
 		"app_cert": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
 		"app_id": "test-app-id",
@@ -41,12 +38,8 @@ const validAttestationJSON = `{
 		"tcb_info": {},
 		"vm_config": "tdx-vm"
 	},
-	"upstream_model": "meta-llama/Llama-3.3-70B-Instruct",
-	"signing_algo": "ecdsa",
-	"tee_hardware": "intel-tdx",
-	"nonce_source": "client",
-	"candidates_available": 4,
-	"candidates_evaluated": 1
+	"vm_config": "{\"cpu\":8,\"mem\":32768}",
+	"all_attestations": [{}]
 }`
 
 // makeAttestationServer starts an httptest server that serves body as the
@@ -72,15 +65,6 @@ func TestAttester_FetchAttestation_Success(t *testing.T) {
 		t.Fatalf("FetchAttestation returned unexpected error: %v", err)
 	}
 
-	if !raw.Verified {
-		t.Error("Verified = false, want true")
-	}
-	if raw.Model != "TEE/llama-3.3-70b-instruct" {
-		t.Errorf("Model = %q, want %q", raw.Model, "TEE/llama-3.3-70b-instruct")
-	}
-	if raw.TEEProvider != "TDX+NVIDIA" {
-		t.Errorf("TEEProvider = %q, want %q", raw.TEEProvider, "TDX+NVIDIA")
-	}
 	if raw.IntelQuote == "" {
 		t.Error("IntelQuote is empty, want non-empty")
 	}
@@ -88,10 +72,10 @@ func TestAttester_FetchAttestation_Success(t *testing.T) {
 		t.Error("NvidiaPayload is empty, want non-empty")
 	}
 	if raw.SigningKey == "" {
-		t.Error("SigningKey is empty, want non-empty")
+		t.Error("SigningKey is empty, want non-empty (mapped from signing_public_key)")
 	}
-	if raw.SigningAddress != "0xdeadbeef" {
-		t.Errorf("SigningAddress = %q, want %q", raw.SigningAddress, "0xdeadbeef")
+	if raw.SigningAddress != "0x96a98Ca1F41a57c1911f08acAb8fdcE3C26c9E79" {
+		t.Errorf("SigningAddress = %q, want %q", raw.SigningAddress, "0x96a98Ca1F41a57c1911f08acAb8fdcE3C26c9E79")
 	}
 	if raw.RawBody == nil {
 		t.Error("RawBody is nil, want non-nil")
@@ -113,14 +97,11 @@ func TestAttester_FetchAttestation_ExtendedFields(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"TEEHardware", raw.TEEHardware, "intel-tdx"},
 		{"SigningAlgo", raw.SigningAlgo, "ecdsa"},
-		{"UpstreamModel", raw.UpstreamModel, "meta-llama/Llama-3.3-70B-Instruct"},
 		{"AppName", raw.AppName, "dstack-nvidia-0.5.5"},
 		{"ComposeHash", raw.ComposeHash, "242a6272abcdef01"},
 		{"OSImageHash", raw.OSImageHash, "9b69bb16aabbccdd"},
 		{"DeviceID", raw.DeviceID, "aa781567bbccddee"},
-		{"NonceSource", raw.NonceSource, "client"},
 	}
 	for _, tc := range checks {
 		if tc.got != tc.want {
@@ -133,12 +114,6 @@ func TestAttester_FetchAttestation_ExtendedFields(t *testing.T) {
 	if len(raw.EventLog) != 2 {
 		t.Errorf("len(EventLog) = %d, want 2", len(raw.EventLog))
 	}
-	if raw.CandidatesAvail != 4 {
-		t.Errorf("CandidatesAvail = %d, want 4", raw.CandidatesAvail)
-	}
-	if raw.CandidatesEval != 1 {
-		t.Errorf("CandidatesEval = %d, want 1", raw.CandidatesEval)
-	}
 }
 
 func TestAttester_FetchAttestation_EchoesNonce(t *testing.T) {
@@ -146,12 +121,10 @@ func TestAttester_FetchAttestation_EchoesNonce(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedNonce = r.URL.Query().Get("nonce")
 		resp := map[string]any{
-			"verified":     true,
-			"nonce":        capturedNonce,
-			"model":        "TEE/test",
-			"tee_provider": "TDX",
-			"signing_key":  "04aabbcc",
-			"intel_quote":  "dGVzdA==",
+			"nonce":              capturedNonce,
+			"signing_public_key": "a6c0596e48e124f9aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0011",
+			"signing_address":    "0xdeadbeef",
+			"intel_quote":        "dGVzdA==",
 		}
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
@@ -275,11 +248,8 @@ func TestAttester_FetchAttestation_UnknownFields(t *testing.T) {
 	// Add an extra field not in the response struct. jsonstrict.UnmarshalWarn
 	// should log a warning but not return an error.
 	jsonWithExtra := `{
-		"verified": true,
 		"nonce": "aabb",
-		"model": "TEE/test",
-		"tee_provider": "TDX",
-		"signing_key": "04aabbcc",
+		"signing_public_key": "a6c0596e48e124f9",
 		"intel_quote": "dGVzdA==",
 		"unknown_extra_field": "should not cause error"
 	}`
@@ -291,8 +261,8 @@ func TestAttester_FetchAttestation_UnknownFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchAttestation with unknown field returned error: %v", err)
 	}
-	if raw.Model != "TEE/test" {
-		t.Errorf("Model = %q, want %q", raw.Model, "TEE/test")
+	if raw.Nonce != "aabb" {
+		t.Errorf("Nonce = %q, want %q", raw.Nonce, "aabb")
 	}
 }
 
@@ -305,10 +275,10 @@ func TestAttester_FetchAttestation_EmptyResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchAttestation with empty body returned error: %v", err)
 	}
-	if raw.Verified {
-		t.Error("Verified = true for empty response, want false")
+	if raw.Nonce != "" {
+		t.Errorf("Nonce = %q for empty response, want empty", raw.Nonce)
 	}
-	if raw.Model != "" {
-		t.Errorf("Model = %q for empty response, want empty", raw.Model)
+	if raw.SigningKey != "" {
+		t.Errorf("SigningKey = %q for empty response, want empty", raw.SigningKey)
 	}
 }

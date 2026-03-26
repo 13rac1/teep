@@ -77,28 +77,48 @@ type nanogptInfo struct {
 	VMConfig     string   `json:"vm_config"`
 }
 
-// attestationResponse is the JSON shape returned by NanoGPT's attestation
-// endpoint. All fields are parsed to eliminate jsonstrict warnings.
-type attestationResponse struct {
-	// Core fields.
-	Verified       bool   `json:"verified"`
-	Nonce          string `json:"nonce"`
-	Model          string `json:"model"`
-	TEEProvider    string `json:"tee_provider"`
-	SigningKey     string `json:"signing_key"`
-	SigningAddress string `json:"signing_address"`
-	IntelQuote     string `json:"intel_quote"`
-	NvidiaPayload  string `json:"nvidia_payload"`
+// dstackAttestation holds the fields common to both the top-level dstack
+// response and each entry in the all_attestations array. NanoGPT uses
+// `signing_public_key` (not `signing_key`) and `event_log` may be either
+// a JSON array or a JSON-encoded string.
+type dstackAttestation struct {
+	SigningPublicKey string           `json:"signing_public_key"`
+	SigningAddress   string           `json:"signing_address"`
+	SigningAlgo      string           `json:"signing_algo"`
+	IntelQuote       string           `json:"intel_quote"`
+	Quote            string           `json:"quote"`
+	NvidiaPayload    string           `json:"nvidia_payload"`
+	EventLog         eventLogFlexible `json:"event_log"`
+	Info             nanogptInfo      `json:"info"`
+	RequestNonce     string           `json:"request_nonce"`
+	VMConfig         string           `json:"vm_config"`
+}
 
-	// Extended dstack fields.
-	EventLog        []eventLogEntry `json:"event_log"`
-	Info            nanogptInfo     `json:"info"`
-	UpstreamModel   string          `json:"upstream_model"`
-	SigningAlgo     string          `json:"signing_algo"`
-	TEEHardware     string          `json:"tee_hardware"`
-	NonceSource     string          `json:"nonce_source"`
-	CandidatesAvail int             `json:"candidates_available"`
-	CandidatesEval  int             `json:"candidates_evaluated"`
+// attestationResponse is the top-level JSON shape returned by NanoGPT's
+// dstack-format attestation endpoint.
+type attestationResponse struct {
+	dstackAttestation
+	Nonce           string              `json:"nonce"`
+	AllAttestations []dstackAttestation `json:"all_attestations"`
+}
+
+// eventLogFlexible handles event_log being either a JSON array of objects or a
+// JSON-encoded string containing the array.
+type eventLogFlexible []eventLogEntry
+
+func (e *eventLogFlexible) UnmarshalJSON(data []byte) error {
+	// Try direct array first.
+	var entries []eventLogEntry
+	if json.Unmarshal(data, &entries) == nil {
+		*e = entries
+		return nil
+	}
+	// Try JSON-encoded string containing the array.
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return fmt.Errorf("event_log: expected array or string, got: %.50s", data)
+	}
+	return json.Unmarshal([]byte(str), (*[]eventLogEntry)(e))
 }
 
 func toEventLogEntries(local []eventLogEntry) []attestation.EventLogEntry {
@@ -186,8 +206,9 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 		return nil, fmt.Errorf("nanogpt: unmarshal attestation response: %w", err)
 	}
 
-	slog.Debug("nanogpt event log", "entries", len(ar.EventLog))
-	for i, e := range ar.EventLog {
+	entries := []eventLogEntry(ar.EventLog)
+	slog.Debug("nanogpt event log", "entries", len(entries))
+	for i, e := range entries {
 		digest := e.Digest
 		if len(digest) > 16 {
 			digest = digest[:16] + "..."
@@ -202,28 +223,20 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 	}
 
 	return &attestation.RawAttestation{
-		Verified:       ar.Verified,
 		Nonce:          ar.Nonce,
-		Model:          ar.Model,
-		TEEProvider:    ar.TEEProvider,
-		SigningKey:     ar.SigningKey,
+		SigningKey:     ar.SigningPublicKey,
 		SigningAddress: ar.SigningAddress,
 		IntelQuote:     ar.IntelQuote,
 		NvidiaPayload:  ar.NvidiaPayload,
 
-		TEEHardware:     ar.TEEHardware,
-		SigningAlgo:     ar.SigningAlgo,
-		UpstreamModel:   ar.UpstreamModel,
-		AppName:         ar.Info.AppName,
-		ComposeHash:     ar.Info.ComposeHash,
-		OSImageHash:     ar.Info.OSImageHash,
-		DeviceID:        ar.Info.DeviceID,
-		AppCompose:      appCompose,
-		EventLog:        toEventLogEntries(ar.EventLog),
-		EventLogCount:   len(ar.EventLog),
-		NonceSource:     ar.NonceSource,
-		CandidatesAvail: ar.CandidatesAvail,
-		CandidatesEval:  ar.CandidatesEval,
+		SigningAlgo:   ar.SigningAlgo,
+		AppName:       ar.Info.AppName,
+		ComposeHash:   ar.Info.ComposeHash,
+		OSImageHash:   ar.Info.OSImageHash,
+		DeviceID:      ar.Info.DeviceID,
+		AppCompose:    appCompose,
+		EventLog:      toEventLogEntries(entries),
+		EventLogCount: len(entries),
 
 		RawBody: body,
 	}, nil
