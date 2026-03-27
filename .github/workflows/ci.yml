@@ -38,13 +38,12 @@ jobs:
       - name: Push coverage badge
         if: github.ref == 'refs/heads/main'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           BADGE_DIR=$(mktemp -d)
           cp docs/coverage.svg "$BADGE_DIR/"
           cd "$BADGE_DIR"
-          git init
-          git checkout --orphan badges
+          git init -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add coverage.svg
           git commit -m "Update coverage badge"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
