@@ -7,7 +7,9 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  actions: write
 
 jobs:
   check:
@@ -30,8 +32,20 @@ jobs:
       - name: Run tests with coverage
         run: go test -short -race -coverprofile=coverage.out ./cmd/... ./internal/...
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: coverage.out
-          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Run octocov
+        uses: k1LoW/octocov-action@v1
+
+      - name: Push coverage badge
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          BADGE_DIR=$(mktemp -d)
+          cp docs/coverage.svg "$BADGE_DIR/"
+          cd "$BADGE_DIR"
+          git init
+          git checkout --orphan badges
+          git add coverage.svg
+          git commit -m "Update coverage badge"
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git push -f origin badges

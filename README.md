@@ -1,7 +1,7 @@
 # Teep
 
 [![CI](https://github.com/13rac1/teep/actions/workflows/ci.yml/badge.svg)](https://github.com/13rac1/teep/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/13rac1/teep/graph/badge.svg)](https://codecov.io/gh/13rac1/teep)
+[![Coverage](https://raw.githubusercontent.com/13rac1/teep/badges/coverage.svg)](https://github.com/13rac1/teep/actions/workflows/ci.yml)
 [![License: AGPL](https://img.shields.io/badge/License-AGPL-green.svg)](https://opensource.org/license/agpl-3-0)
 
 **Verify that AI providers can't read your prompts — even if they wanted to.**

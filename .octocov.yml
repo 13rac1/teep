@@ -1,0 +1,20 @@
+coverage:
+  paths:
+    - coverage.out
+  badge:
+    path: docs/coverage.svg
+
+diff:
+  if: is_pull_request
+  datastores:
+    - artifact://${GITHUB_REPOSITORY}
+
+comment:
+  if: is_pull_request
+  datastores:
+    - artifact://${GITHUB_REPOSITORY}
+
+report:
+  if: is_default_branch
+  datastores:
+    - artifact://${GITHUB_REPOSITORY}
