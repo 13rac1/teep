@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -580,7 +581,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// the Blocked() check would allow a key from a failed attestation to
 	// be reused for E2EE on a subsequent cache-hit request.
 	if raw != nil && raw.SigningKey != "" {
-		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && prev != raw.SigningKey {
+		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && subtle.ConstantTimeCompare([]byte(prev), []byte(raw.SigningKey)) == 0 {
 			slog.Warn("signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
 		}
 		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
