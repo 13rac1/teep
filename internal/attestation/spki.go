@@ -57,10 +57,34 @@ type SPKICache struct {
 
 // NewSPKICache returns an empty SPKI cache with a 1-hour TTL.
 func NewSPKICache() *SPKICache {
+	return NewSPKICacheWithTTL(defaultSPKITTL)
+}
+
+// NewSPKICacheWithTTL returns an empty SPKI cache with the specified TTL.
+func NewSPKICacheWithTTL(ttl time.Duration) *SPKICache {
 	return &SPKICache{
-		ttl:     defaultSPKITTL,
+		ttl:     ttl,
 		domains: make(map[string]map[string]spkiEntry),
 	}
+}
+
+// Len returns the total number of SPKI entries across all domains
+// (including expired ones).
+func (c *SPKICache) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	n := 0
+	for _, hashes := range c.domains {
+		n += len(hashes)
+	}
+	return n
+}
+
+// DomainCount returns the number of distinct domains in the cache.
+func (c *SPKICache) DomainCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.domains)
 }
 
 // Contains reports whether the given SPKI hash has been verified for domain
