@@ -19,7 +19,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -55,13 +54,13 @@ func main() {
 
 	apiKey := os.Getenv("NEARAI_API_KEY")
 	if apiKey == "" {
-		log.Fatal("NEARAI_API_KEY not set")
+		fatal("NEARAI_API_KEY not set")
 	}
 
 	captureTime := time.Now().UTC()
 	saveDir := filepath.Join(testdataDir, captureTime.Format("neardirect_20060102_150405"))
 	if err := os.MkdirAll(saveDir, 0o750); err != nil {
-		log.Fatalf("mkdir %s: %v", saveDir, err)
+		fatalf("mkdir %s: %v", saveDir, err)
 	}
 	outDir = saveDir
 	fmt.Printf("save directory: %s\n", saveDir)
@@ -73,7 +72,7 @@ func main() {
 	// 1. Generate nonce.
 	var nonceBytes [32]byte
 	if _, err := rand.Read(nonceBytes[:]); err != nil {
-		log.Fatalf("generate nonce: %v", err)
+		fatalf("generate nonce: %v", err)
 	}
 	nonceHex := hex.EncodeToString(nonceBytes[:])
 	fmt.Printf("nonce: %s\n", nonceHex)
@@ -108,7 +107,7 @@ func main() {
 	if nvidiaPayload != "" && nvidiaPayload[0] == '{' {
 		nrasReq, err := http.NewRequestWithContext(ctx, http.MethodPost, nrasURL, strings.NewReader(nvidiaPayload))
 		if err != nil {
-			log.Fatalf("build NRAS request: %v", err)
+			fatalf("build NRAS request: %v", err)
 		}
 		nrasReq.Header.Set("Content-Type", "application/json")
 		nrasReq.Header.Set("Accept", "application/json")
@@ -154,7 +153,7 @@ type httpResult struct {
 func doRequest(client *http.Client, req *http.Request) httpResult {
 	res := doRequestRaw(client, req)
 	if res.statusCode != http.StatusOK {
-		log.Fatalf("%s %s: HTTP %d: %s", req.Method, req.URL, res.statusCode, truncate(string(res.body)))
+		fatalf("%s %s: HTTP %d: %s", req.Method, req.URL, res.statusCode, truncate(string(res.body)))
 	}
 	return res
 }
@@ -164,13 +163,13 @@ func doRequestRaw(client *http.Client, req *http.Request) httpResult {
 	fmt.Printf("  > %s %s\n", req.Method, req.URL)
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatalf("%s %s: %v", req.Method, req.URL, err)
+		fatalf("%s %s: %v", req.Method, req.URL, err)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	resp.Body.Close()
 	if err != nil {
-		log.Fatalf("%s %s: read body: %v", req.Method, req.URL, err)
+		fatalf("%s %s: read body: %v", req.Method, req.URL, err)
 	}
 	return httpResult{statusCode: resp.StatusCode, header: resp.Header, body: body}
 }
@@ -179,7 +178,7 @@ func doRequestRaw(client *http.Client, req *http.Request) httpResult {
 func doGet(ctx context.Context, client *http.Client, u string) []byte {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
 	if err != nil {
-		log.Fatalf("build GET %s: %v", u, err)
+		fatalf("build GET %s: %v", u, err)
 	}
 	return doRequest(client, req).body
 }
@@ -189,11 +188,11 @@ func doGet(ctx context.Context, client *http.Client, u string) []byte {
 func doPostJSON(ctx context.Context, client *http.Client, u string, payload any) httpResult {
 	jsonBody, err := json.Marshal(payload)
 	if err != nil {
-		log.Fatalf("marshal POST body for %s: %v", u, err)
+		fatalf("marshal POST body for %s: %v", u, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(jsonBody))
 	if err != nil {
-		log.Fatalf("build POST %s: %v", u, err)
+		fatalf("build POST %s: %v", u, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return doRequestRaw(client, req)
@@ -217,7 +216,7 @@ func resolveModelDomain(ctx context.Context, client *http.Client, model string) 
 
 	var er endpointsResponse
 	if err := json.Unmarshal(body, &er); err != nil {
-		log.Fatalf("parse endpoints JSON: %v", err)
+		fatalf("parse endpoints JSON: %v", err)
 	}
 
 	for _, ep := range er.Endpoints {
@@ -225,7 +224,7 @@ func resolveModelDomain(ctx context.Context, client *http.Client, model string) 
 			return ep.Domain
 		}
 	}
-	log.Fatalf("model %q not found in endpoint discovery response", model)
+	fatalf("model %q not found in endpoint discovery response", model)
 	return ""
 }
 
@@ -236,7 +235,7 @@ func resolveModelDomain(ctx context.Context, client *http.Client, model string) 
 func fetchAttestation(ctx context.Context, client *http.Client, baseURL, apiKey, nonce string) []byte {
 	endpoint, err := url.Parse(baseURL + attestationPath)
 	if err != nil {
-		log.Fatalf("parse URL: %v", err)
+		fatalf("parse URL: %v", err)
 	}
 	q := endpoint.Query()
 	q.Set("nonce", nonce)
@@ -246,7 +245,7 @@ func fetchAttestation(ctx context.Context, client *http.Client, baseURL, apiKey,
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)
 	if err != nil {
-		log.Fatalf("build attestation request: %v", err)
+		fatalf("build attestation request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
@@ -271,7 +270,7 @@ type modelAttestation struct {
 func extractQuoteAndPayload(body []byte, model string) (intelQuote, nvidiaPayload string) {
 	var ar attestationResponse
 	if err := json.Unmarshal(body, &ar); err != nil {
-		log.Fatalf("parse attestation JSON: %v", err)
+		fatalf("parse attestation JSON: %v", err)
 	}
 
 	// Try all_attestations first, then model_attestations, then top-level.
@@ -293,7 +292,7 @@ func extractQuoteAndPayload(body []byte, model string) (intelQuote, nvidiaPayloa
 		return ar.IntelQuote, ar.NvidiaPayload
 	}
 
-	log.Fatalf("model %q not found in attestation response", model)
+	fatalf("model %q not found in attestation response", model)
 	return "", ""
 }
 
@@ -304,22 +303,22 @@ func extractQuoteAndPayload(body []byte, model string) (intelQuote, nvidiaPayloa
 func extractFMSPC(hexQuote string) (fmspc, ca string) {
 	raw, err := hex.DecodeString(hexQuote)
 	if err != nil {
-		log.Fatalf("decode intel_quote hex: %v", err)
+		fatalf("decode intel_quote hex: %v", err)
 	}
 
 	quoteAny, err := tdxabi.QuoteToProto(raw)
 	if err != nil {
-		log.Fatalf("parse TDX quote: %v", err)
+		fatalf("parse TDX quote: %v", err)
 	}
 
 	chain, err := tdxverify.ExtractChainFromQuote(quoteAny)
 	if err != nil {
-		log.Fatalf("extract PCK chain from quote: %v", err)
+		fatalf("extract PCK chain from quote: %v", err)
 	}
 
 	ext, err := pcs.PckCertificateExtensions(chain.PCKCertificate)
 	if err != nil {
-		log.Fatalf("extract PCK extensions: %v", err)
+		fatalf("extract PCK extensions: %v", err)
 	}
 
 	return ext.FMSPC, "platform"
@@ -366,7 +365,7 @@ func fetchAndSavePCS(ctx context.Context, client *http.Client, fmspc, ca string)
 	for _, ep := range endpoints {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.url, http.NoBody)
 		if err != nil {
-			log.Fatalf("build %s request: %v", ep.name, err)
+			fatalf("build %s request: %v", ep.name, err)
 		}
 		res := doRequest(client, req)
 		writeFile(ep.bodyFile, res.body)
@@ -377,7 +376,7 @@ func fetchAndSavePCS(ctx context.Context, client *http.Client, fmspc, ca string)
 			headerMap := map[string][]string{ep.headerKey: headerVal}
 			headerJSON, err := json.MarshalIndent(headerMap, "", "  ")
 			if err != nil {
-				log.Fatalf("marshal %s headers: %v", ep.name, err)
+				fatalf("marshal %s headers: %v", ep.name, err)
 			}
 			writeFile(ep.headerFile, headerJSON)
 			fmt.Printf("  %s headers: %s=%d values\n", ep.name, ep.headerKey, len(headerVal))
@@ -425,15 +424,15 @@ func fetchPoC(ctx context.Context, client *http.Client, hexQuote string) {
 			return
 		}
 		if res.statusCode != http.StatusOK {
-			log.Fatalf("PoC stage1 peer %d HTTP %d: %s", i, res.statusCode, truncate(string(res.body)))
+			fatalf("PoC stage1 peer %d HTTP %d: %s", i, res.statusCode, truncate(string(res.body)))
 		}
 
 		var s1 pocStage1Response
 		if err := json.Unmarshal(res.body, &s1); err != nil {
-			log.Fatalf("parse PoC stage1 from %s: %v", peer, err)
+			fatalf("parse PoC stage1 from %s: %v", peer, err)
 		}
 		if s1.Moniker == "" || s1.Nonce == "" {
-			log.Fatalf("PoC stage1 from %s: missing moniker/nonce: %s", peer, string(res.body))
+			fatalf("PoC stage1 from %s: missing moniker/nonce: %s", peer, string(res.body))
 		}
 		fmt.Printf("  stage1 peer %d: moniker=%s\n", i, s1.Moniker)
 		nonces = append(nonces, nonceEntry{peerURL: peer, moniker: s1.Moniker, nonce: s1.Nonce})
@@ -463,7 +462,7 @@ func fetchPoC(ctx context.Context, client *http.Client, hexQuote string) {
 		fmt.Printf("  stage2 peer %d: %d bytes\n", i, len(res.body))
 
 		if res.statusCode != http.StatusOK {
-			log.Fatalf("PoC stage2 peer %d HTTP %d: %s", i, res.statusCode, truncate(string(res.body)))
+			fatalf("PoC stage2 peer %d HTTP %d: %s", i, res.statusCode, truncate(string(res.body)))
 		}
 
 		// Check if final response (has "jwt" field).
@@ -478,7 +477,7 @@ func fetchPoC(ctx context.Context, client *http.Client, hexQuote string) {
 		// Accumulate partial sigs.
 		var sigs map[string]string
 		if err := json.Unmarshal(res.body, &sigs); err != nil {
-			log.Fatalf("parse PoC stage2 partial sigs from %s: %v", n.peerURL, err)
+			fatalf("parse PoC stage2 partial sigs from %s: %v", n.peerURL, err)
 		}
 		partialSigs = sigs
 		fmt.Printf("  stage2 peer %d: partial sig collected\n", i)
@@ -492,7 +491,7 @@ func fetchPoC(ctx context.Context, client *http.Client, hexQuote string) {
 func writeFile(name string, data []byte) {
 	path := filepath.Join(outDir, name)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		log.Fatalf("write %s: %v", path, err)
+		fatalf("write %s: %v", path, err)
 	}
 }
 
@@ -502,4 +501,14 @@ func truncate(s string) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func fatal(args ...any) {
+	fmt.Fprintln(os.Stderr, args...)
+	os.Exit(1)
+}
+
+func fatalf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	os.Exit(1)
 }

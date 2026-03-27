@@ -42,10 +42,13 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	derived := "0x" + hex.EncodeToString(derivedAddr)
 
 	// Verify the signing_address claimed in the response matches what we derived.
-	// Compare case-insensitively: providers may return EIP-55 checksummed addresses
-	// (mixed case) while we derive lowercase.
+	// Lowercase both before constant-time comparison: providers may return
+	// EIP-55 checksummed addresses (mixed case) while we derive lowercase.
 	if raw.SigningAddress != "" {
-		if !strings.EqualFold(raw.SigningAddress, derived) {
+		if subtle.ConstantTimeCompare(
+			[]byte(strings.ToLower(raw.SigningAddress)),
+			[]byte(strings.ToLower(derived)),
+		) != 1 {
 			return "", fmt.Errorf("signing_address %s does not match keccak256-derived address %s",
 				raw.SigningAddress, derived)
 		}

@@ -64,17 +64,17 @@ func (t *tcbInfo) UnmarshalJSON(data []byte) error {
 // nanogptInfo holds the nested "info" object from NanoGPT's attestation
 // response, containing dstack environment metadata.
 type nanogptInfo struct {
-	AppCert      string   `json:"app_cert"`
-	AppID        string   `json:"app_id"`
-	AppName      string   `json:"app_name"`
-	ComposeHash  string   `json:"compose_hash"`
-	DeviceID     string   `json:"device_id"`
-	InstanceID   string   `json:"instance_id"`
-	KeyProvider  string   `json:"key_provider_info"`
-	MRAggregated string   `json:"mr_aggregated"`
-	OSImageHash  string   `json:"os_image_hash"`
-	TCBInfo      *tcbInfo `json:"tcb_info"`
-	VMConfig     string   `json:"vm_config"`
+	AppCert      string  `json:"app_cert"`
+	AppID        string  `json:"app_id"`
+	AppName      string  `json:"app_name"`
+	ComposeHash  string  `json:"compose_hash"`
+	DeviceID     string  `json:"device_id"`
+	InstanceID   string  `json:"instance_id"`
+	KeyProvider  string  `json:"key_provider_info"`
+	MRAggregated string  `json:"mr_aggregated"`
+	OSImageHash  string  `json:"os_image_hash"`
+	TCBInfo      tcbInfo `json:"tcb_info"`
+	VMConfig     string  `json:"vm_config"`
 }
 
 // dstackAttestation holds the fields common to both the top-level dstack
@@ -216,10 +216,7 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 			"event", e.Event, "type", e.EventType, "digest", digest)
 	}
 
-	var appCompose string
-	if ar.Info.TCBInfo != nil {
-		appCompose = ar.Info.TCBInfo.AppCompose
-	}
+	appCompose := ar.Info.TCBInfo.AppCompose
 
 	// NanoGPT returns the raw secp256k1 x||y point (64 bytes = 128 hex)
 	// without the 04 uncompressed-point prefix. Prepend it so downstream

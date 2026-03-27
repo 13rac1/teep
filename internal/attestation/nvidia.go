@@ -18,15 +18,11 @@ import (
 )
 
 // NvidiaJWKSURL is NVIDIA's public JWKS endpoint for attestation JWT verification.
-//
-//nolint:gochecknoglobals // var instead of const to allow test overrides
 var NvidiaJWKSURL = "https://nras.attestation.nvidia.com/.well-known/jwks.json"
 
 // NRASAttestURL is NVIDIA's Remote Attestation Service endpoint for GPU
 // attestation. POST raw EAT JSON to receive a signed JWT with measurement
 // comparison results against NVIDIA's Reference Integrity Manifest (RIM).
-//
-//nolint:gochecknoglobals // var instead of const to allow test overrides
 var NRASAttestURL = "https://nras.attestation.nvidia.com/v3/attest/gpu"
 
 // NvidiaVerifyResult holds the structured outcome of NVIDIA payload verification.
@@ -82,62 +78,50 @@ type jwksEntry struct {
 	createdAt time.Time
 }
 
-// jwksInstances caches keyfunc instances by JWKS URL. Production uses
-// NvidiaJWKSURL; tests use httptest server URLs. The keyfunc/v3 library handles
-// background refresh, rate-limited unknown-kid refresh, and alg/use validation.
-var jwksInstances sync.Map // URL string → *jwksEntry
-
 var (
 	// jwksCacheTTL bounds in-process JWKS cache lifetime.
 	// keyfunc still performs background refresh; this adds a hard max age.
 	jwksCacheTTL = time.Hour
 	jwksMu       sync.Mutex
+	// jwksInstances caches keyfunc instances by JWKS URL. Production uses
+	// NvidiaJWKSURL; tests use httptest server URLs. Protected by jwksMu.
+	jwksInstances = make(map[string]*jwksEntry)
 )
 
 // getOrCreateKeyfunc returns a keyfunc.Keyfunc for the given JWKS URL.
 // Instances are created once per URL and cached for the process lifetime.
-func getOrCreateKeyfunc(_ context.Context, jwksURL string) (keyfunc.Keyfunc, error) {
-	if v, ok := jwksInstances.Load(jwksURL); ok {
-		entry := v.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
-		if time.Since(entry.createdAt) < jwksCacheTTL {
-			return entry.kf, nil
-		}
-	}
-
+func getOrCreateKeyfunc(jwksURL string) (keyfunc.Keyfunc, error) {
 	jwksMu.Lock()
 	defer jwksMu.Unlock()
 
-	if v, ok := jwksInstances.Load(jwksURL); ok {
-		entry := v.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
+	if entry, ok := jwksInstances[jwksURL]; ok {
 		if time.Since(entry.createdAt) < jwksCacheTTL {
 			return entry.kf, nil
 		}
 	}
 
 	kfCtx, cancel := context.WithCancel(context.Background())
-	k, err := keyfunc.NewDefaultCtx(kfCtx, []string{jwksURL}) //nolint:contextcheck // keyfunc manages its own context lifecycle
-
+	k, err := keyfunc.NewDefaultCtx(kfCtx, []string{jwksURL})
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("initialize JWKS for %s: %w", jwksURL, err)
 	}
-	entry := &jwksEntry{kf: k, cancel: cancel, createdAt: time.Now()}
-	if old, ok := jwksInstances.Load(jwksURL); ok {
-		prev := old.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
+	if prev, ok := jwksInstances[jwksURL]; ok {
 		prev.cancel()
 	}
-	jwksInstances.Store(jwksURL, entry)
+	entry := &jwksEntry{kf: k, cancel: cancel, createdAt: time.Now()}
+	jwksInstances[jwksURL] = entry
 	return k, nil
 }
 
 // resetJWKS shuts down and removes all cached JWKS instances. Used by tests.
 func resetJWKS() {
-	jwksInstances.Range(func(key, value any) bool {
-		entry := value.(*jwksEntry) //nolint:forcetypeassert // sync.Map value is always *jwksEntry
+	jwksMu.Lock()
+	defer jwksMu.Unlock()
+	for url, entry := range jwksInstances {
 		entry.cancel()
-		jwksInstances.Delete(key)
-		return true
-	})
+		delete(jwksInstances, url)
+	}
 }
 
 // ShutdownJWKS cancels all background JWKS refresh goroutines and removes
@@ -175,10 +159,10 @@ func VerifyNVIDIAPayload(payload string, expectedNonce Nonce) *NvidiaVerifyResul
 // caches) the NVIDIA JWKS via keyfunc/v3, verifies the JWT signature, and
 // extracts claims. Nonce freshness is verified separately via the EAT layer
 // (factor: nvidia_nonce_client_bound).
-func verifyNVIDIAJWT(ctx context.Context, jwtPayload, jwksURL string, opts ...jwt.ParserOption) *NvidiaVerifyResult {
+func verifyNVIDIAJWT(jwtPayload, jwksURL string, opts ...jwt.ParserOption) *NvidiaVerifyResult {
 	result := &NvidiaVerifyResult{Format: "JWT"}
 
-	kf, err := getOrCreateKeyfunc(ctx, jwksURL)
+	kf, err := getOrCreateKeyfunc(jwksURL)
 	if err != nil {
 		result.SignatureErr = fmt.Errorf("JWKS initialization: %w", err)
 		return result
@@ -299,7 +283,7 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 		}
 	}
 
-	return verifyNVIDIAJWT(ctx, extracted, NvidiaJWKSURL, opts...)
+	return verifyNVIDIAJWT(extracted, NvidiaJWKSURL, opts...) //nolint:contextcheck // keyfunc manages its own background context for JWKS refresh
 }
 
 // extractNRASJWT parses the NRAS response body. NRAS returns a JSON array

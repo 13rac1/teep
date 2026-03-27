@@ -2,7 +2,6 @@ package neardirect_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -401,32 +400,32 @@ func TestAttester_FetchAttestation_NormalizesUnprefixedKey(t *testing.T) {
 	}
 }
 
-// --- extractAppCompose tests ---
+// --- tcbInfo / appCompose tests ---
 
 func TestExtractAppCompose(t *testing.T) {
 	tests := []struct {
-		name    string
-		tcbInfo json.RawMessage
-		want    string
+		name string
+		data []byte
+		want string
 	}{
 		{"nil", nil, ""},
-		{"empty", json.RawMessage(``), ""},
-		{"non_json", json.RawMessage(`not json`), ""},
-		{"object_with_app_compose", json.RawMessage(`{"app_compose":"version: '3'"}`), "version: '3'"},
-		{"object_missing_app_compose", json.RawMessage(`{"other_field":"value"}`), ""},
+		{"empty", []byte(``), ""},
+		{"non_json", []byte(`not json`), ""},
+		{"object_with_app_compose", []byte(`{"app_compose":"version: '3'"}`), "version: '3'"},
+		{"object_missing_app_compose", []byte(`{"other_field":"value"}`), ""},
 		{
 			"json_string_wrapping",
-			json.RawMessage(`"{\"app_compose\":\"wrapped content\"}"`),
+			[]byte(`"{\"app_compose\":\"wrapped content\"}"`),
 			"wrapped content",
 		},
-		{"number", json.RawMessage(`42`), ""},
-		{"array", json.RawMessage(`[1,2,3]`), ""},
+		{"number", []byte(`42`), ""},
+		{"array", []byte(`[1,2,3]`), ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := neardirect.ExtractAppCompose(tc.tcbInfo)
+			got := neardirect.ExtractAppCompose(tc.data)
 			if got != tc.want {
-				t.Errorf("ExtractAppCompose(%s) = %q, want %q", tc.tcbInfo, got, tc.want)
+				t.Errorf("ExtractAppCompose(%s) = %q, want %q", tc.data, got, tc.want)
 			}
 		})
 	}

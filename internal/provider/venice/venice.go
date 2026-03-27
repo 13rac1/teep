@@ -140,17 +140,17 @@ func toEventLogEntries(local []eventLogEntry) []attestation.EventLogEntry {
 // veniceInfo holds the nested "info" object from Venice's attestation
 // response, containing dstack environment metadata.
 type veniceInfo struct {
-	AppCert      string   `json:"app_cert"`
-	AppID        string   `json:"app_id"`
-	AppName      string   `json:"app_name"`
-	ComposeHash  string   `json:"compose_hash"`
-	DeviceID     string   `json:"device_id"`
-	InstanceID   string   `json:"instance_id"`
-	KeyProvider  string   `json:"key_provider_info"`
-	MRAggregated string   `json:"mr_aggregated"`
-	OSImageHash  string   `json:"os_image_hash"`
-	TCBInfo      *tcbInfo `json:"tcb_info"`
-	VMConfig     string   `json:"vm_config"`
+	AppCert      string  `json:"app_cert"`
+	AppID        string  `json:"app_id"`
+	AppName      string  `json:"app_name"`
+	ComposeHash  string  `json:"compose_hash"`
+	DeviceID     string  `json:"device_id"`
+	InstanceID   string  `json:"instance_id"`
+	KeyProvider  string  `json:"key_provider_info"`
+	MRAggregated string  `json:"mr_aggregated"`
+	OSImageHash  string  `json:"os_image_hash"`
+	TCBInfo      tcbInfo `json:"tcb_info"`
+	VMConfig     string  `json:"vm_config"`
 }
 
 // attestationResponse is the JSON shape returned by Venice's attestation
@@ -224,7 +224,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("venice: GET %s: %w", endpoint.String(), err)
+		return nil, fmt.Errorf("venice: GET %s%s: %w", endpoint.Host, endpoint.Path, err)
 	}
 	defer resp.Body.Close()
 
@@ -263,11 +263,6 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 			"event", e.Event, "type", e.EventType, "digest", digest)
 	}
 
-	var appCompose string
-	if ar.Info.TCBInfo != nil {
-		appCompose = ar.Info.TCBInfo.AppCompose
-	}
-
 	return &attestation.RawAttestation{
 		Verified:       ar.Verified,
 		Nonce:          ar.Nonce,
@@ -285,7 +280,7 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 		ComposeHash:     ar.Info.ComposeHash,
 		OSImageHash:     ar.Info.OSImageHash,
 		DeviceID:        ar.Info.DeviceID,
-		AppCompose:      appCompose,
+		AppCompose:      ar.Info.TCBInfo.AppCompose,
 		EventLog:        toEventLogEntries(ar.EventLog),
 		EventLogCount:   len(ar.EventLog),
 		NonceSource:     ar.NonceSource,

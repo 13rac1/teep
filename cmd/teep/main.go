@@ -101,11 +101,13 @@ func runServe(args []string) {
 		os.Exit(1)
 	}
 
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 	fs.Usage = func() { printServeHelp() }
-	fs.Parse(args) //nolint:errcheck // fs.Parse calls os.Exit on error per flag.ExitOnError
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -185,7 +187,7 @@ func runVerify(args []string) {
 		os.Exit(1)
 	}
 
-	fs := flag.NewFlagSet("verify", flag.ExitOnError)
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.Usage = func() { printVerifyHelp() }
 
 	modelName := fs.String("model", "", "model name as known to the provider (required)")
@@ -193,7 +195,9 @@ func runVerify(args []string) {
 	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 
-	fs.Parse(args) //nolint:errcheck // fs.Parse calls os.Exit on error per flag.ExitOnError
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
 
 	if *modelName == "" {
 		fmt.Fprintf(os.Stderr, "teep verify: --model is required\n")

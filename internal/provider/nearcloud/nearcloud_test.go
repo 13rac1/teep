@@ -1,7 +1,6 @@
 package nearcloud_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -219,9 +218,6 @@ func TestParseGatewayResponse_MalformedTCBInfo(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for malformed tcb_info")
 	}
-	if !strings.Contains(err.Error(), "tcb_info") {
-		t.Errorf("error should mention tcb_info: %v", err)
-	}
 }
 
 func TestParseGatewayResponse_NoModel(t *testing.T) {
@@ -240,7 +236,7 @@ func TestParseGatewayResponse_NoModel(t *testing.T) {
 func TestExtractGatewayAppCompose(t *testing.T) {
 	tests := []struct {
 		name    string
-		input   json.RawMessage
+		input   []byte
 		want    string
 		wantErr bool
 	}{
@@ -251,27 +247,27 @@ func TestExtractGatewayAppCompose(t *testing.T) {
 		},
 		{
 			name:  "empty input",
-			input: json.RawMessage{},
+			input: []byte{},
 			want:  "",
 		},
 		{
 			name:  "raw JSON object with app_compose",
-			input: json.RawMessage(`{"app_compose":"my-compose"}`),
+			input: []byte(`{"app_compose":"my-compose"}`),
 			want:  "my-compose",
 		},
 		{
 			name:  "JSON-string-wrapped object",
-			input: json.RawMessage(`"{\"app_compose\":\"wrapped-compose\"}"`),
+			input: []byte(`"{\"app_compose\":\"wrapped-compose\"}"`),
 			want:  "wrapped-compose",
 		},
 		{
 			name:  "object missing app_compose",
-			input: json.RawMessage(`{"other":"field"}`),
+			input: []byte(`{"other":"field"}`),
 			want:  "",
 		},
 		{
 			name:    "invalid JSON",
-			input:   json.RawMessage(`{not valid`),
+			input:   []byte(`{not valid`),
 			wantErr: true,
 		},
 	}

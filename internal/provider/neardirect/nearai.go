@@ -39,24 +39,41 @@ const (
 	maxAttestationEntries = 256
 )
 
+// tcbInfo holds the parsed info.tcb_info object from NEAR AI's attestation
+// response. Contains the docker-compose manifest needed for supply-chain checks.
+type tcbInfo struct {
+	AppCompose string `json:"app_compose"`
+}
+
+// UnmarshalJSON handles tcb_info being either a direct JSON object or a
+// JSON-encoded string containing JSON (double-encoded by some dstack versions).
+func (t *tcbInfo) UnmarshalJSON(data []byte) error {
+	var str string
+	if json.Unmarshal(data, &str) == nil {
+		data = []byte(str)
+	}
+	type alias tcbInfo // prevent recursion
+	return json.Unmarshal(data, (*alias)(t))
+}
+
 // modelAttestation represents one element of the model_attestations array
 // returned by NEAR AI's attestation endpoint.
 type modelAttestation struct {
-	ModelName          string            `json:"model_name"`
-	IntelQuote         string            `json:"intel_quote"`
-	NvidiaPayload      string            `json:"nvidia_payload"`
-	SigningPublicKey   string            `json:"signing_public_key"`
-	SigningAddress     string            `json:"signing_address"`
-	SigningAlgo        string            `json:"signing_algo"`
-	TLSCertFingerprint string            `json:"tls_cert_fingerprint"`
-	RequestNonce       string            `json:"request_nonce"`
-	EventLog           []json.RawMessage `json:"event_log"`
+	ModelName          string                      `json:"model_name"`
+	IntelQuote         string                      `json:"intel_quote"`
+	NvidiaPayload      string                      `json:"nvidia_payload"`
+	SigningPublicKey   string                      `json:"signing_public_key"`
+	SigningAddress     string                      `json:"signing_address"`
+	SigningAlgo        string                      `json:"signing_algo"`
+	TLSCertFingerprint string                      `json:"tls_cert_fingerprint"`
+	RequestNonce       string                      `json:"request_nonce"`
+	EventLog           []attestation.EventLogEntry `json:"event_log"`
 	Info               struct {
-		AppName     string          `json:"app_name"`
-		ComposeHash string          `json:"compose_hash"`
-		OSImageHash string          `json:"os_image_hash"`
-		DeviceID    string          `json:"device_id"`
-		TCBInfo     json.RawMessage `json:"tcb_info"`
+		AppName     string  `json:"app_name"`
+		ComposeHash string  `json:"compose_hash"`
+		OSImageHash string  `json:"os_image_hash"`
+		DeviceID    string  `json:"device_id"`
+		TCBInfo     tcbInfo `json:"tcb_info"`
 	} `json:"info"`
 }
 
@@ -71,22 +88,22 @@ type attestationResponse struct {
 
 	// Top-level fields are present when the server returns a flat response
 	// rather than the array form. Both forms are tolerated.
-	ModelName          string            `json:"model_name"`
-	IntelQuote         string            `json:"intel_quote"`
-	NvidiaPayload      string            `json:"nvidia_payload"`
-	SigningPublicKey   string            `json:"signing_public_key"`
-	SigningAddress     string            `json:"signing_address"`
-	SigningAlgo        string            `json:"signing_algo"`
-	TLSCertFingerprint string            `json:"tls_cert_fingerprint"`
-	RequestNonce       string            `json:"request_nonce"`
-	Verified           bool              `json:"verified"`
-	EventLog           []json.RawMessage `json:"event_log"`
+	ModelName          string                      `json:"model_name"`
+	IntelQuote         string                      `json:"intel_quote"`
+	NvidiaPayload      string                      `json:"nvidia_payload"`
+	SigningPublicKey   string                      `json:"signing_public_key"`
+	SigningAddress     string                      `json:"signing_address"`
+	SigningAlgo        string                      `json:"signing_algo"`
+	TLSCertFingerprint string                      `json:"tls_cert_fingerprint"`
+	RequestNonce       string                      `json:"request_nonce"`
+	Verified           bool                        `json:"verified"`
+	EventLog           []attestation.EventLogEntry `json:"event_log"`
 	Info               struct {
-		AppName     string          `json:"app_name"`
-		ComposeHash string          `json:"compose_hash"`
-		OSImageHash string          `json:"os_image_hash"`
-		DeviceID    string          `json:"device_id"`
-		TCBInfo     json.RawMessage `json:"tcb_info"`
+		AppName     string  `json:"app_name"`
+		ComposeHash string  `json:"compose_hash"`
+		OSImageHash string  `json:"os_image_hash"`
+		DeviceID    string  `json:"device_id"`
+		TCBInfo     tcbInfo `json:"tcb_info"`
 	} `json:"info"`
 }
 
@@ -216,11 +233,6 @@ func ParseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 	}
 
 	// Flat response form: use top-level fields directly.
-	eventLog, err := parseEventLog(ar.EventLog)
-	if err != nil {
-		return nil, fmt.Errorf("nearai: parse top-level event_log: %w", err)
-	}
-
 	raw := &attestation.RawAttestation{
 		Verified:       ar.Verified,
 		Nonce:          ar.RequestNonce,
@@ -232,12 +244,12 @@ func ParseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 		TLSFingerprint: ar.TLSCertFingerprint,
 		IntelQuote:     ar.IntelQuote,
 		NvidiaPayload:  ar.NvidiaPayload,
-		AppCompose:     extractAppCompose(ar.Info.TCBInfo),
+		AppCompose:     ar.Info.TCBInfo.AppCompose,
 		AppName:        ar.Info.AppName,
 		ComposeHash:    ar.Info.ComposeHash,
 		OSImageHash:    ar.Info.OSImageHash,
 		DeviceID:       ar.Info.DeviceID,
-		EventLog:       eventLog,
+		EventLog:       ar.EventLog,
 		EventLogCount:  len(ar.EventLog),
 		RawBody:        body,
 	}
@@ -257,11 +269,6 @@ func selectByModel(list []modelAttestation, model string) (*modelAttestation, er
 }
 
 func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*attestation.RawAttestation, error) {
-	eventLog, err := parseEventLog(m.EventLog)
-	if err != nil {
-		return nil, fmt.Errorf("parse model event_log: %w", err)
-	}
-
 	raw := &attestation.RawAttestation{
 		Verified:       verified,
 		Nonce:          m.RequestNonce,
@@ -273,12 +280,12 @@ func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*
 		TLSFingerprint: m.TLSCertFingerprint,
 		IntelQuote:     m.IntelQuote,
 		NvidiaPayload:  m.NvidiaPayload,
-		AppCompose:     extractAppCompose(m.Info.TCBInfo),
+		AppCompose:     m.Info.TCBInfo.AppCompose,
 		AppName:        m.Info.AppName,
 		ComposeHash:    m.Info.ComposeHash,
 		OSImageHash:    m.Info.OSImageHash,
 		DeviceID:       m.Info.DeviceID,
-		EventLog:       eventLog,
+		EventLog:       m.EventLog,
 		EventLogCount:  len(m.EventLog),
 		RawBody:        body,
 	}
@@ -286,27 +293,6 @@ func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*
 		raw.TEEHardware = "intel-tdx"
 	}
 	return raw, nil
-}
-
-// extractAppCompose parses a tcb_info JSON payload and returns the app_compose
-// string field. Returns "" if tcb_info is nil, not an object, or lacks app_compose.
-func extractAppCompose(tcbInfo json.RawMessage) string {
-	if len(tcbInfo) == 0 {
-		return ""
-	}
-	raw := tcbInfo
-	// tcb_info may be a JSON string containing escaped JSON; unwrap it.
-	var str string
-	if err := json.Unmarshal(raw, &str); err == nil {
-		raw = json.RawMessage(str)
-	}
-	var obj struct {
-		AppCompose string `json:"app_compose"`
-	}
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return ""
-	}
-	return obj.AppCompose
 }
 
 // normalizeUncompressedKey prepends the "04" uncompressed point prefix if the
@@ -317,18 +303,6 @@ func normalizeUncompressedKey(key string) string {
 		return "04" + key
 	}
 	return key
-}
-
-func parseEventLog(raw []json.RawMessage) ([]attestation.EventLogEntry, error) {
-	entries := make([]attestation.EventLogEntry, 0, len(raw))
-	for i, r := range raw {
-		var e attestation.EventLogEntry
-		if err := json.Unmarshal(r, &e); err != nil {
-			return nil, fmt.Errorf("entry %d: %w", i, err)
-		}
-		entries = append(entries, e)
-	}
-	return entries, nil
 }
 
 // Preparer injects the NEAR AI Authorization header into an outgoing request.

@@ -52,7 +52,11 @@ type Checker struct {
 
 // NewChecker creates a CT checker with in-memory caches.
 func NewChecker() *Checker {
-	base := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // Go stdlib default transport type is *http.Transport.
+	dt, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		panic("http.DefaultTransport is not *http.Transport")
+	}
+	base := dt.Clone()
 	base.MaxIdleConnsPerHost = 4
 	base.IdleConnTimeout = 90 * time.Second
 	base.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
@@ -80,15 +84,22 @@ func (c *Checker) SetEnabled(enabled bool) {
 
 // NewHTTPClient returns an HTTP client that enforces CT for all HTTPS requests.
 func NewHTTPClient(timeout time.Duration, ctEnabled ...bool) *http.Client {
-	base := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // Go stdlib default transport type is *http.Transport.
-	return NewHTTPClientWithTransport(timeout, base, ctEnabled...)
+	dt, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		panic("http.DefaultTransport is not *http.Transport")
+	}
+	return NewHTTPClientWithTransport(timeout, dt.Clone(), ctEnabled...)
 }
 
 // NewHTTPClientWithTransport returns an HTTP client that enforces CT for all
 // HTTPS requests while using the provided base transport settings.
 func NewHTTPClientWithTransport(timeout time.Duration, base *http.Transport, ctEnabled ...bool) *http.Client {
 	if base == nil {
-		base = http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // Go stdlib default transport type is *http.Transport.
+		dt, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			panic("http.DefaultTransport is not *http.Transport")
+		}
+		base = dt.Clone()
 	}
 	if base.TLSClientConfig == nil {
 		base.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
@@ -130,7 +141,7 @@ func (t *ctRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	if req.URL == nil || !strings.EqualFold(req.URL.Scheme, "https") {
+	if req.URL == nil || req.URL.Scheme != "https" {
 		return resp, nil
 	}
 	if resp.TLS == nil {
@@ -334,7 +345,7 @@ func isPrivateHost(host string) bool {
 	if hostOnly, _, err := net.SplitHostPort(h); err == nil {
 		h = hostOnly
 	}
-	if strings.EqualFold(h, "localhost") {
+	if h == "localhost" {
 		return true
 	}
 	if ip := net.ParseIP(h); ip != nil {

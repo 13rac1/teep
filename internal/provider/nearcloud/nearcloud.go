@@ -42,6 +42,22 @@ type gatewayResponse struct {
 	GatewayAttestation gatewayAttestation `json:"gateway_attestation"`
 }
 
+// tcbInfo holds the parsed info.tcb_info object from the gateway attestation.
+type tcbInfo struct {
+	AppCompose string `json:"app_compose"`
+}
+
+// UnmarshalJSON handles tcb_info being either a direct JSON object or a
+// JSON-encoded string containing JSON (double-encoded by some dstack versions).
+func (t *tcbInfo) UnmarshalJSON(data []byte) error {
+	var str string
+	if json.Unmarshal(data, &str) == nil {
+		data = []byte(str)
+	}
+	type alias tcbInfo // prevent recursion
+	return json.Unmarshal(data, (*alias)(t))
+}
+
 // gatewayAttestation holds the gateway's own TDX attestation data.
 type gatewayAttestation struct {
 	RequestNonce       string `json:"request_nonce"`
@@ -49,7 +65,7 @@ type gatewayAttestation struct {
 	EventLog           string `json:"event_log"` // JSON string, not array
 	TLSCertFingerprint string `json:"tls_cert_fingerprint"`
 	Info               struct {
-		TCBInfo json.RawMessage `json:"tcb_info"`
+		TCBInfo tcbInfo `json:"tcb_info"`
 	} `json:"info"`
 }
 
@@ -77,15 +93,10 @@ func ParseGatewayResponse(body []byte, model string) (*GatewayRaw, *attestation.
 		return nil, nil, errors.New("nearcloud: gateway_attestation section missing or empty")
 	}
 
-	appCompose, err := extractGatewayAppCompose(gr.GatewayAttestation.Info.TCBInfo)
-	if err != nil {
-		return nil, nil, fmt.Errorf("nearcloud: %w", err)
-	}
-
 	gw := &GatewayRaw{
 		NonceHex:           gr.GatewayAttestation.RequestNonce,
 		IntelQuote:         gr.GatewayAttestation.IntelQuote,
-		AppCompose:         appCompose,
+		AppCompose:         gr.GatewayAttestation.Info.TCBInfo.AppCompose,
 		TLSCertFingerprint: gr.GatewayAttestation.TLSCertFingerprint,
 	}
 
@@ -116,26 +127,6 @@ func ParseGatewayResponse(body []byte, model string) (*GatewayRaw, *attestation.
 	}
 
 	return gw, raw, nil
-}
-
-// extractGatewayAppCompose extracts app_compose from the gateway's tcb_info.
-func extractGatewayAppCompose(tcbInfo json.RawMessage) (string, error) {
-	if len(tcbInfo) == 0 {
-		return "", nil
-	}
-	raw := tcbInfo
-	// tcb_info may be a JSON string containing escaped JSON; unwrap it.
-	var str string
-	if err := json.Unmarshal(raw, &str); err == nil {
-		raw = json.RawMessage(str)
-	}
-	var obj struct {
-		AppCompose string `json:"app_compose"`
-	}
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return "", fmt.Errorf("parse gateway tcb_info: %w", err)
-	}
-	return obj.AppCompose, nil
 }
 
 // Attester fetches attestation from the NEAR AI cloud gateway for use by

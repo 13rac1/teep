@@ -22,6 +22,10 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// errAlreadyCached is returned by the singleflight callback when another
+// goroutine already populated the SPKI cache. Callers check errors.Is.
+var errAlreadyCached = errors.New("already cached")
+
 const (
 	dialTimeout = 30 * time.Second
 	readTimeout = 60 * time.Second // longer than neardirect — two attestation requests
@@ -151,17 +155,15 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		return nil, fmt.Errorf("write chat request: %w", err)
 	}
 
-	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body is closed via ConnClosingReader wrapping below
+	resp, err := readChatResponse(br) //nolint:bodyclose // body ownership transfers to NewConnClosingReader
 	if err != nil {
 		return nil, fmt.Errorf("read chat response: %w", err)
 	}
 
-	wrappedBody := neardirect.NewConnClosingReader(resp.Body, conn)
-
 	return &provider.PinnedResponse{
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
-		Body:       wrappedBody,
+		Body:       neardirect.NewConnClosingReader(resp.Body, conn),
 		Report:     report,
 		SigningKey: signingKey,
 		Session:    session,
@@ -207,6 +209,12 @@ func (h *PinnedHandler) encryptChat(
 	return encBody, sess, hdrs, nil
 }
 
+// readChatResponse reads an HTTP response from a buffered reader. The caller
+// is responsible for closing resp.Body (typically via NewConnClosingReader).
+func readChatResponse(br *bufio.Reader) (*http.Response, error) {
+	return http.ReadResponse(br, nil)
+}
+
 // setDialer overrides the TLS dial function. Only accessible from tests
 // within this package — unexported to prevent supply-chain redirection of
 // gateway connections in production.
@@ -226,7 +234,12 @@ func (h *PinnedHandler) tlsDial(ctx context.Context, domain string) (*tls.Conn, 
 	if err != nil {
 		return nil, err
 	}
-	return conn.(*tls.Conn), nil //nolint:forcetypeassert // tls.Dialer.DialContext guarantees *tls.Conn
+	tc, ok := conn.(*tls.Conn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("tls.Dialer returned %T, expected *tls.Conn", conn)
+	}
+	return tc, nil
 }
 
 func extractSPKI(conn *tls.Conn) (string, error) {
@@ -258,7 +271,7 @@ func (h *PinnedHandler) attestIfNeeded(
 	slog.Info("SPKI cache miss, fetching gateway+model attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
 	v, sfErr, _ := h.verifySF.Do(domain+"\x00"+liveSPKI, func() (any, error) {
 		if h.spkiCache.Contains(domain, liveSPKI) {
-			return nil, nil //nolint:nilnil // singleflight: nil,nil means cache was already populated
+			return nil, errAlreadyCached
 		}
 		r, key, err := h.attestOnConn(ctx, conn, br, bw, domain, liveSPKI, model)
 		if err != nil {
@@ -288,13 +301,16 @@ func (h *PinnedHandler) attestIfNeeded(
 		slog.Info("SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
 		return attestResult{report: r, signingKey: key}, nil
 	})
-	if sfErr != nil {
+	if sfErr != nil && !errors.Is(sfErr, errAlreadyCached) {
 		return nil, "", fmt.Errorf("attestation on %s: %w", domain, sfErr)
 	}
 	if v == nil {
 		return nil, "", nil
 	}
-	res := v.(attestResult) //nolint:forcetypeassert // singleflight callback only returns attestResult
+	res, ok := v.(attestResult)
+	if !ok {
+		return nil, "", fmt.Errorf("singleflight returned unexpected type %T", v)
+	}
 	return res.report, res.signingKey, nil
 }
 

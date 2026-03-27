@@ -22,6 +22,10 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// errAlreadyCached is returned by the singleflight callback when another
+// goroutine already populated the SPKI cache. Callers check errors.Is.
+var errAlreadyCached = errors.New("already cached")
+
 const (
 	// dialTimeout is the TCP+TLS handshake timeout for backend connections.
 	dialTimeout = 30 * time.Second
@@ -137,7 +141,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		v, sfErr, _ := h.verifySF.Do(domain+"\x00"+liveSPKI, func() (any, error) {
 			// Double-check after winning the singleflight race.
 			if h.spkiCache.Contains(domain, liveSPKI) {
-				return nil, nil //nolint:nilnil // singleflight: nil,nil means cache was already populated
+				return nil, errAlreadyCached
 			}
 			r, err := h.attestOnConn(ctx, conn, br, bw, domain, liveSPKI, req.Model)
 			if err != nil {
@@ -167,11 +171,15 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 			slog.Info("SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
 			return r, nil
 		})
-		if sfErr != nil {
+		if sfErr != nil && !errors.Is(sfErr, errAlreadyCached) {
 			return nil, fmt.Errorf("attestation on %s: %w", domain, sfErr)
 		}
 		if v != nil {
-			report = v.(*attestation.VerificationReport) //nolint:forcetypeassert // singleflight callback only returns *VerificationReport
+			var ok bool
+			report, ok = v.(*attestation.VerificationReport)
+			if !ok {
+				return nil, fmt.Errorf("singleflight returned unexpected type %T", v)
+			}
 		}
 	} else {
 		slog.Debug("SPKI cache hit, skipping attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
@@ -197,18 +205,15 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	}
 
 	// 6. Read the response.
-	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body is closed via ConnClosingReader wrapping below
+	resp, err := readChatResponse(br) //nolint:bodyclose // body ownership transfers to NewConnClosingReader
 	if err != nil {
 		return nil, fmt.Errorf("read chat response: %w", err)
 	}
 
-	// Wrap the response body so closing it also closes the underlying connection.
-	wrappedBody := NewConnClosingReader(resp.Body, conn)
-
 	return &provider.PinnedResponse{
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
-		Body:       wrappedBody,
+		Body:       NewConnClosingReader(resp.Body, conn),
 		Report:     report,
 	}, nil
 }
@@ -235,8 +240,12 @@ func (h *PinnedHandler) tlsDial(ctx context.Context, domain string) (*tls.Conn, 
 	if err != nil {
 		return nil, err
 	}
-	// tls.Dialer.DialContext always returns *tls.Conn when err == nil.
-	return conn.(*tls.Conn), nil //nolint:forcetypeassert // tls.Dialer.DialContext guarantees *tls.Conn
+	tc, ok := conn.(*tls.Conn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("tls.Dialer returned %T, expected *tls.Conn", conn)
+	}
+	return tc, nil
 }
 
 // extractSPKI computes the SPKI hash of the peer certificate from a TLS connection.
@@ -401,6 +410,12 @@ func (h *PinnedHandler) attestOnConn(
 		Rekor:             rekorResults,
 	})
 	return report, nil
+}
+
+// readChatResponse reads an HTTP response from a buffered reader. The caller
+// is responsible for closing resp.Body (typically via NewConnClosingReader).
+func readChatResponse(br *bufio.Reader) (*http.Response, error) {
+	return http.ReadResponse(br, nil)
 }
 
 // WriteHTTPRequest writes an HTTP/1.1 request (request line + headers + body)
