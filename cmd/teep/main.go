@@ -510,6 +510,8 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 		return nearcloud.SupplyChainPolicy()
 	case "nanogpt":
 		return nanogpt.SupplyChainPolicy()
+	case "phalacloud":
+		return nil // no supply chain policy yet
 	default:
 		return nil
 	}
