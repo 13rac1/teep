@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/13rac1/teep/internal/attestation"
 )
 
 // writeConfigFile creates a temporary TOML config file with the given content
@@ -293,6 +295,143 @@ mrtd_allow = ["` + valid48 + `"]
 	}
 	if cfg.MeasurementPolicy.WarnOnly {
 		t.Error("MeasurementPolicy.WarnOnly should default to false")
+	}
+}
+
+func TestLoadTOMLWarnMeasurementsExplicitFalse(t *testing.T) {
+	valid48 := strings.Repeat("ab", 48)
+	tomlCfg := `
+[policy]
+warn_measurements = false
+mrtd_allow = ["` + valid48 + `"]
+`
+	path := writeConfigFile(t, tomlCfg, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.MeasurementPolicy.WarnOnly {
+		t.Error("MeasurementPolicy.WarnOnly should be false when warn_measurements = false")
+	}
+	if !cfg.MeasurementPolicy.WarnOnlySet {
+		t.Error("MeasurementPolicy.WarnOnlySet should be true when warn_measurements is explicit")
+	}
+}
+
+func TestLoadTOMLPerProviderPolicy(t *testing.T) {
+	valid48a := strings.Repeat("ab", 48)
+	valid48b := strings.Repeat("cd", 48)
+	tomlCfg := `
+[policy]
+mrtd_allow = ["` + valid48a + `"]
+
+[providers.venice]
+api_key = "k"
+base_url = "https://api.venice.ai"
+
+[providers.venice.policy]
+mrtd_allow = ["` + valid48b + `"]
+`
+	path := writeConfigFile(t, tomlCfg, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	// Global policy should have valid48a.
+	if !cfg.MeasurementPolicy.HasMRTDPolicy() {
+		t.Fatal("global MeasurementPolicy should have MRTD allowlist")
+	}
+	// Per-provider policy should have valid48b.
+	pp, ok := cfg.ProviderPolicies["venice"]
+	if !ok {
+		t.Fatal("ProviderPolicies[venice] should be set")
+	}
+	if !pp.HasMRTDPolicy() {
+		t.Fatal("venice per-provider MRTD policy should be set")
+	}
+	if _, ok := pp.MRTDAllow[valid48b]; !ok {
+		t.Error("venice per-provider MRTD allowlist should contain " + valid48b[:16] + "...")
+	}
+}
+
+func TestMergedMeasurementPolicy(t *testing.T) {
+	valid48a := strings.Repeat("aa", 48)
+	valid48b := strings.Repeat("bb", 48)
+	valid48c := strings.Repeat("cc", 48)
+
+	goDefaults := attestation.MeasurementPolicy{
+		MRTDAllow:   map[string]struct{}{valid48a: {}},
+		MRSeamAllow: map[string]struct{}{valid48a: {}},
+	}
+	cfg := &Config{
+		MeasurementPolicy: attestation.MeasurementPolicy{
+			MRTDAllow: map[string]struct{}{valid48b: {}},
+		},
+		ProviderPolicies: map[string]attestation.MeasurementPolicy{
+			"venice": {MRTDAllow: map[string]struct{}{valid48c: {}}},
+		},
+		ProviderGatewayPolicies: make(map[string]attestation.MeasurementPolicy),
+	}
+
+	// Per-provider > global > Go defaults.
+	merged := MergedMeasurementPolicy("venice", cfg, goDefaults)
+	if _, ok := merged.MRTDAllow[valid48c]; !ok {
+		t.Error("per-provider MRTD should win over global and defaults")
+	}
+	// MRSeamAllow: no per-provider, no global → Go default.
+	if _, ok := merged.MRSeamAllow[valid48a]; !ok {
+		t.Error("Go default MRSeamAllow should be used when no per-provider or global override")
+	}
+
+	// For a provider without per-provider config, global > Go defaults.
+	merged2 := MergedMeasurementPolicy("neardirect", cfg, goDefaults)
+	if _, ok := merged2.MRTDAllow[valid48b]; !ok {
+		t.Error("global MRTD should override Go defaults for neardirect")
+	}
+}
+
+func TestMergedMeasurementPolicyWarnOnly(t *testing.T) {
+	goDefaults := attestation.MeasurementPolicy{WarnOnly: true}
+	cfg := &Config{
+		ProviderPolicies:        make(map[string]attestation.MeasurementPolicy),
+		ProviderGatewayPolicies: make(map[string]attestation.MeasurementPolicy),
+	}
+
+	// Go default WarnOnly should propagate.
+	merged := MergedMeasurementPolicy("venice", cfg, goDefaults)
+	if !merged.WarnOnly {
+		t.Error("Go default WarnOnly=true should propagate")
+	}
+}
+
+func TestMergedMeasurementPolicyExplicitFalse(t *testing.T) {
+	goDefaults := attestation.MeasurementPolicy{WarnOnly: true}
+	cfg := &Config{
+		// Global TOML has warn_measurements = false explicitly.
+		MeasurementPolicy: attestation.MeasurementPolicy{
+			WarnOnly:    false,
+			WarnOnlySet: true,
+		},
+		ProviderPolicies:        make(map[string]attestation.MeasurementPolicy),
+		ProviderGatewayPolicies: make(map[string]attestation.MeasurementPolicy),
+	}
+
+	// Explicit false in TOML should override Go default true.
+	merged := MergedMeasurementPolicy("venice", cfg, goDefaults)
+	if merged.WarnOnly {
+		t.Error("explicit warn_measurements=false in TOML should override Go default WarnOnly=true")
 	}
 }
 

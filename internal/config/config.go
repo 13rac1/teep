@@ -42,10 +42,11 @@ var DefaultEnforced = attestation.DefaultEnforced
 // Either APIKey or APIKeyEnv must be set; APIKeyEnv takes precedence if both
 // are present. The resolved key is exposed via the Provider struct, not here.
 type ProviderConfig struct {
-	APIKey    string `toml:"api_key"`
-	APIKeyEnv string `toml:"api_key_env"`
-	BaseURL   string `toml:"base_url"`
-	E2EE      bool   `toml:"e2ee"`
+	APIKey    string       `toml:"api_key"`
+	APIKeyEnv string       `toml:"api_key_env"`
+	BaseURL   string       `toml:"base_url"`
+	E2EE      bool         `toml:"e2ee"`
+	Policy    PolicyConfig `toml:"policy"`
 }
 
 // PolicyConfig holds the optional [policy] section from the TOML file.
@@ -107,6 +108,14 @@ type Config struct {
 	// TDX measurements, separate from model backend measurements (GW-M-04).
 	GatewayMeasurementPolicy attestation.MeasurementPolicy
 
+	// ProviderPolicies holds per-provider measurement allowlists parsed from
+	// [providers.X.policy] TOML sections. Keys are provider names.
+	ProviderPolicies map[string]attestation.MeasurementPolicy
+
+	// ProviderGatewayPolicies holds per-provider gateway measurement
+	// allowlists parsed from [providers.X.policy] gateway_ fields.
+	ProviderGatewayPolicies map[string]attestation.MeasurementPolicy
+
 	// Offline skips external verification calls (Intel PCS collateral,
 	// Proof of Cloud registry, and Certificate Transparency checks).
 	// Set via --offline flag at runtime.
@@ -124,9 +133,11 @@ type Config struct {
 // permissions, but does not return an error for either condition.
 func Load() (*Config, error) {
 	cfg := &Config{
-		ListenAddr: DefaultListenAddr,
-		Providers:  make(map[string]*Provider),
-		Enforced:   append([]string(nil), DefaultEnforced...),
+		ListenAddr:              DefaultListenAddr,
+		Providers:               make(map[string]*Provider),
+		Enforced:                append([]string(nil), DefaultEnforced...),
+		ProviderPolicies:        make(map[string]attestation.MeasurementPolicy),
+		ProviderGatewayPolicies: make(map[string]attestation.MeasurementPolicy),
 	}
 
 	configPath := os.Getenv("TEEP_CONFIG")
@@ -154,9 +165,26 @@ func loadTOML(cfg *Config, path string) error {
 		return fmt.Errorf("TOML decode: %w", err)
 	}
 
-	for name, pc := range f.Providers {
-		p := resolveProvider(name, pc)
+	for name := range f.Providers {
+		pc := f.Providers[name]
+		p := resolveProvider(name, &pc)
 		cfg.Providers[name] = p
+
+		// Parse per-provider [providers.X.policy] sections.
+		pp, err := buildMeasurementPolicy(&pc.Policy)
+		if err != nil {
+			return fmt.Errorf("providers.%s.policy: %w", name, err)
+		}
+		if hasMeasurementPolicy(pp) {
+			cfg.ProviderPolicies[name] = pp
+		}
+		gpp, err := buildGatewayMeasurementPolicy(&pc.Policy)
+		if err != nil {
+			return fmt.Errorf("providers.%s.policy (gateway): %w", name, err)
+		}
+		if hasMeasurementPolicy(gpp) {
+			cfg.ProviderGatewayPolicies[name] = gpp
+		}
 	}
 
 	if len(f.Policy.Enforce) > 0 {
@@ -243,6 +271,69 @@ func buildGatewayMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPoli
 	return out, nil
 }
 
+// hasMeasurementPolicy reports whether p has any configured allowlists or
+// an explicitly set WarnOnly value.
+func hasMeasurementPolicy(p attestation.MeasurementPolicy) bool {
+	return p.HasMRTDPolicy() || p.HasMRSeamPolicy() ||
+		p.HasRTMRPolicy(0) || p.HasRTMRPolicy(1) ||
+		p.HasRTMRPolicy(2) || p.HasRTMRPolicy(3) || p.WarnOnlySet
+}
+
+// MergedMeasurementPolicy returns a MeasurementPolicy that merges three layers:
+// per-provider TOML > global TOML > Go defaults. For each allowlist field, the
+// most specific non-empty layer wins. WarnOnly follows the same precedence
+// (per-provider > global > Go defaults).
+func MergedMeasurementPolicy(providerName string, cfg *Config, goDefaults attestation.MeasurementPolicy) attestation.MeasurementPolicy {
+	global := cfg.MeasurementPolicy
+	perProvider, hasPerProvider := cfg.ProviderPolicies[providerName]
+
+	out := goDefaults
+	out = mergeAllowlists(out, global)
+	if hasPerProvider {
+		out = mergeAllowlists(out, perProvider)
+	}
+	return out
+}
+
+// MergedGatewayMeasurementPolicy returns a gateway MeasurementPolicy with the
+// same three-layer merge: per-provider TOML > global TOML > Go defaults.
+func MergedGatewayMeasurementPolicy(providerName string, cfg *Config, goDefaults attestation.MeasurementPolicy) attestation.MeasurementPolicy {
+	global := cfg.GatewayMeasurementPolicy
+	perProvider, hasPerProvider := cfg.ProviderGatewayPolicies[providerName]
+
+	out := goDefaults
+	out = mergeAllowlists(out, global)
+	if hasPerProvider {
+		out = mergeAllowlists(out, perProvider)
+	}
+	return out
+}
+
+// mergeAllowlists applies overlay on top of base: for each field that has a
+// configured policy in overlay, it replaces the corresponding field in base.
+func mergeAllowlists(base, overlay attestation.MeasurementPolicy) attestation.MeasurementPolicy {
+	if overlay.HasMRTDPolicy() {
+		base.MRTDAllow = overlay.MRTDAllow
+	}
+	if overlay.HasMRSeamPolicy() {
+		base.MRSeamAllow = overlay.MRSeamAllow
+	}
+	for i := range overlay.RTMRAllow {
+		if overlay.HasRTMRPolicy(i) {
+			base.RTMRAllow[i] = overlay.RTMRAllow[i]
+		}
+	}
+	// WarnOnly in the overlay is authoritative when the overlay has any
+	// measurement policy configured or an explicitly set WarnOnly value.
+	// This allows explicit TOML configuration (e.g., warn_measurements=false)
+	// to override Go defaults, while a completely empty overlay (no allowlists,
+	// no warn setting) preserves the base layer's WarnOnly value.
+	if hasMeasurementPolicy(overlay) {
+		base.WarnOnly = overlay.WarnOnly
+	}
+	return base
+}
+
 // tdxMeasurementBytes is the expected size (in bytes) of TDX measurement
 // values (MRTD, MRSEAM, RTMR0–3): 48 bytes = 384 bits (SHA-384).
 const tdxMeasurementBytes = 48
@@ -271,7 +362,7 @@ func normalizeAllowlist(values []string, field string) (map[string]struct{}, err
 
 // resolveProvider builds a Provider from a ProviderConfig, resolving the API
 // key from the env var if APIKeyEnv is set.
-func resolveProvider(name string, pc ProviderConfig) *Provider {
+func resolveProvider(name string, pc *ProviderConfig) *Provider {
 	apiKey := pc.APIKey
 	if pc.APIKeyEnv != "" {
 		if v := os.Getenv(pc.APIKeyEnv); v != "" {
