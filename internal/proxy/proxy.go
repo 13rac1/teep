@@ -325,6 +325,8 @@ func fromConfig(
 		p.Attester = phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = phalacloud.NewPreparer(cp.APIKey)
 		p.ModelLister = phalacloud.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ReportDataVerifier = nil // chutes format has no signing_address
+		p.SupplyChainPolicy = nil  // no supply chain policy yet
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud)", cp.Name)
 	}
