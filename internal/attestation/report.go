@@ -2,6 +2,7 @@ package attestation
 
 import (
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -776,6 +777,10 @@ func buildTransparencyNoRekor(in *ReportInput, scPolicy *SupplyChainPolicy) Fact
 		return FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Skip,
 			Detail: fmt.Sprintf("compose hash present (%s) but no Rekor provenance fetched", hashPreview)}
 	}
+	if in.Raw.BackendFormat == FormatChutes {
+		return FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Skip,
+			Detail: "chutes attestation does not include container image metadata; supply chain verification is validator-side only"}
+	}
 	return FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Fail,
 		Detail: "no build transparency log"}
 }
@@ -1002,6 +1007,9 @@ func evalCPUIDRegistry(in *ReportInput) []FactorResult {
 func evalComposeBinding(in *ReportInput) []FactorResult {
 	switch {
 	case in.Compose == nil || !in.Compose.Checked:
+		if in.Raw.BackendFormat == FormatChutes {
+			return factor(TierSupplyChain, "compose_binding", Skip, "chutes uses cosign image admission + IMA, not docker-compose; compose binding not applicable")
+		}
 		return factor(TierSupplyChain, "compose_binding", Skip, "no app_compose in attestation response")
 	case in.Compose.Err != nil:
 		return factor(TierSupplyChain, "compose_binding", Fail, fmt.Sprintf("compose binding failed: %v", in.Compose.Err))
@@ -1011,6 +1019,9 @@ func evalComposeBinding(in *ReportInput) []FactorResult {
 }
 func evalSigstoreVerification(in *ReportInput) []FactorResult {
 	if len(in.Sigstore) == 0 {
+		if in.Raw.BackendFormat == FormatChutes {
+			return factor(TierSupplyChain, "sigstore_verification", Skip, "chutes attestation does not include container image digests; cosign verification is validator-side only")
+		}
 		return factor(TierSupplyChain, "sigstore_verification", Skip, "no image digests to verify")
 	}
 
@@ -1048,6 +1059,9 @@ func evalSigstoreVerification(in *ReportInput) []FactorResult {
 }
 func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 	if len(in.Raw.EventLog) == 0 {
+		if in.Raw.BackendFormat == FormatChutes {
+			return factor(TierSupplyChain, "event_log_integrity", Skip, "chutes performs RTMR verification validator-side against a golden baseline; event log not exposed to clients")
+		}
 		return factor(TierSupplyChain, "event_log_integrity", Skip, "no event log entries in attestation response")
 	}
 	if in.TDX == nil || in.TDX.ParseErr != nil {
