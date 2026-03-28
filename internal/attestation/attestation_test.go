@@ -441,6 +441,56 @@ func TestSigningKeyCachePutEviction_AllNonExpired(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// Update-at-capacity tests (I-2 regression tests)
+// --------------------------------------------------------------------------
+// Updating an existing key at capacity must not evict unrelated entries.
+
+func TestCachePut_UpdateAtCapacity(t *testing.T) {
+	c := NewCache(time.Hour)
+	for i := range maxCacheEntries {
+		c.Put("p", fmt.Sprintf("m-%d", i), &VerificationReport{})
+	}
+	if c.Len() != maxCacheEntries {
+		t.Fatalf("setup: Len = %d, want %d", c.Len(), maxCacheEntries)
+	}
+	// Update an existing key — should not evict anything.
+	c.Put("p", "m-0", &VerificationReport{})
+	if c.Len() != maxCacheEntries {
+		t.Errorf("update evicted entries: Len = %d, want %d", c.Len(), maxCacheEntries)
+	}
+}
+
+func TestNegativeCacheRecord_UpdateAtCapacity(t *testing.T) {
+	c := NewNegativeCache(time.Hour)
+	for i := range maxCacheEntries {
+		c.Record("p", fmt.Sprintf("m-%d", i))
+	}
+	if c.Len() != maxCacheEntries {
+		t.Fatalf("setup: Len = %d, want %d", c.Len(), maxCacheEntries)
+	}
+	// Update an existing key — should not evict anything.
+	c.Record("p", "m-0")
+	if c.Len() != maxCacheEntries {
+		t.Errorf("update evicted entries: Len = %d, want %d", c.Len(), maxCacheEntries)
+	}
+}
+
+func TestSigningKeyCachePut_UpdateAtCapacity(t *testing.T) {
+	c := NewSigningKeyCache(time.Hour)
+	for i := range maxCacheEntries {
+		c.Put("p", fmt.Sprintf("m-%d", i), "key")
+	}
+	if c.Len() != maxCacheEntries {
+		t.Fatalf("setup: Len = %d, want %d", c.Len(), maxCacheEntries)
+	}
+	// Update an existing key — should not evict anything.
+	c.Put("p", "m-0", "new-key")
+	if c.Len() != maxCacheEntries {
+		t.Errorf("update evicted entries: Len = %d, want %d", c.Len(), maxCacheEntries)
+	}
+}
+
+// --------------------------------------------------------------------------
 // Concurrent access tests
 // --------------------------------------------------------------------------
 

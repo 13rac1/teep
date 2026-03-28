@@ -184,8 +184,12 @@ const maxCacheEntries = 1000
 func (c *Cache) Put(provider, model string, report *VerificationReport) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) >= maxCacheEntries {
+	key := cacheKey{provider, model}
+	// Only evict when inserting a new key that would exceed the cap.
+	// Updates to existing keys don't grow the map.
+	if _, exists := c.entries[key]; !exists && len(c.entries) >= maxCacheEntries {
 		now := time.Now()
+		sizeBefore := len(c.entries)
 		for k, e := range c.entries {
 			if now.Sub(e.fetchedAt) > c.ttl {
 				delete(c.entries, k)
@@ -206,7 +210,7 @@ func (c *Cache) Put(provider, model string, report *VerificationReport) {
 				delete(c.entries, oldestKey)
 			}
 		}
-		if now.Sub(c.lastEvictWarn) > evictWarnInterval {
+		if len(c.entries) < sizeBefore && now.Sub(c.lastEvictWarn) > evictWarnInterval {
 			slog.Warn("attestation cache at capacity, evicting entries",
 				"cache", "attestation",
 				"size", len(c.entries),
@@ -215,7 +219,7 @@ func (c *Cache) Put(provider, model string, report *VerificationReport) {
 			c.lastEvictWarn = now
 		}
 	}
-	c.entries[cacheKey{provider, model}] = &cacheEntry{
+	c.entries[key] = &cacheEntry{
 		report:    report,
 		fetchedAt: time.Now(),
 	}
@@ -283,8 +287,12 @@ func (c *NegativeCache) IsBlocked(provider, model string) bool {
 func (c *NegativeCache) Record(provider, model string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) >= maxCacheEntries {
+	key := cacheKey{provider, model}
+	// Only evict when inserting a new key that would exceed the cap.
+	// Updates to existing keys don't grow the map.
+	if _, exists := c.entries[key]; !exists && len(c.entries) >= maxCacheEntries {
 		now := time.Now()
+		sizeBefore := len(c.entries)
 		for k, t := range c.entries {
 			if now.Sub(t) > c.ttl {
 				delete(c.entries, k)
@@ -305,7 +313,7 @@ func (c *NegativeCache) Record(provider, model string) {
 				delete(c.entries, oldestKey)
 			}
 		}
-		if now.Sub(c.lastEvictWarn) > evictWarnInterval {
+		if len(c.entries) < sizeBefore && now.Sub(c.lastEvictWarn) > evictWarnInterval {
 			slog.Warn("attestation cache at capacity, evicting entries",
 				"cache", "negative",
 				"size", len(c.entries),
@@ -314,7 +322,7 @@ func (c *NegativeCache) Record(provider, model string) {
 			c.lastEvictWarn = now
 		}
 	}
-	c.entries[cacheKey{provider, model}] = time.Now()
+	c.entries[key] = time.Now()
 }
 
 // Len returns the number of entries in the negative cache (including expired ones).
@@ -366,8 +374,12 @@ func (c *SigningKeyCache) Get(provider, model string) (string, bool) {
 func (c *SigningKeyCache) Put(provider, model, signingKey string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) >= maxCacheEntries {
+	key := cacheKey{provider, model}
+	// Only evict when inserting a new key that would exceed the cap.
+	// Updates to existing keys don't grow the map.
+	if _, exists := c.entries[key]; !exists && len(c.entries) >= maxCacheEntries {
 		now := time.Now()
+		sizeBefore := len(c.entries)
 		for k, e := range c.entries {
 			if now.Sub(e.fetchedAt) > c.ttl {
 				delete(c.entries, k)
@@ -388,7 +400,7 @@ func (c *SigningKeyCache) Put(provider, model, signingKey string) {
 				delete(c.entries, oldestKey)
 			}
 		}
-		if now.Sub(c.lastEvictWarn) > evictWarnInterval {
+		if len(c.entries) < sizeBefore && now.Sub(c.lastEvictWarn) > evictWarnInterval {
 			slog.Warn("attestation cache at capacity, evicting entries",
 				"cache", "signing_key",
 				"size", len(c.entries),
@@ -397,7 +409,7 @@ func (c *SigningKeyCache) Put(provider, model, signingKey string) {
 			c.lastEvictWarn = now
 		}
 	}
-	c.entries[cacheKey{provider, model}] = &signingKeyEntry{
+	c.entries[key] = &signingKeyEntry{
 		signingKey: signingKey,
 		fetchedAt:  time.Now(),
 	}
