@@ -259,7 +259,13 @@ func TestSPKICache_ContainsExpiredEntry(t *testing.T) {
 	c := NewSPKICacheWithTTL(time.Nanosecond)
 	c.Add("example.com", "aabbccdd")
 
-	// Any measurable time > 1ns passes between Add and Contains.
+	// Deterministically backdate the entry so it is past TTL, without relying
+	// on any actual time passing between Add and Contains.
+	c.mu.Lock()
+	entry := c.domains["example.com"]["aabbccdd"]
+	entry.addedAt = time.Now().Add(-time.Hour)
+	c.domains["example.com"]["aabbccdd"] = entry
+	c.mu.Unlock()
 	if c.Contains("example.com", "aabbccdd") {
 		t.Error("expired entry should not be found by Contains")
 	}
