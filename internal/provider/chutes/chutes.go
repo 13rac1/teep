@@ -142,6 +142,16 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 		intelQuoteHex = hex.EncodeToString(quoteBytes)
 	}
 
+	// Map per-GPU evidence for direct SPDM verification.
+	var gpuEvidence []attestation.GPUEvidence
+	for _, ge := range first.GPUEvidence {
+		gpuEvidence = append(gpuEvidence, attestation.GPUEvidence{
+			Certificate: ge.Certificate,
+			Evidence:    ge.Evidence,
+			Arch:        ge.Arch,
+		})
+	}
+
 	slog.Debug("chutes attestation parsed",
 		"type", ar.AttestationType,
 		"instances", len(ar.AllAttestations),
@@ -155,12 +165,15 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 		Nonce:         ar.Nonce,
 		TEEProvider:   "TDX+NVIDIA",
 		SigningKey:    first.E2EPubKey,
+		SigningAlgo:   "ml-kem-768",
 		IntelQuote:    intelQuoteHex,
+		GPUEvidence:   gpuEvidence,
 
 		TEEHardware: "intel-tdx",
 		NonceSource: "server",
 
 		CandidatesAvail: len(ar.AllAttestations),
+		CandidatesEval:  1,
 
 		RawBody: body,
 	}, nil

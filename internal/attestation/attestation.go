@@ -66,6 +66,15 @@ const (
 	FormatNear    BackendFormat = "near"
 )
 
+// GPUEvidence is a single GPU's NVIDIA attestation entry: an X.509 certificate
+// chain and SPDM 1.1 measurement signature. Used by chutes-format providers
+// that return per-GPU evidence instead of a single EAT envelope.
+type GPUEvidence struct {
+	Certificate string `json:"certificate"` // base64-encoded PEM certificate chain
+	Evidence    string `json:"evidence"`    // base64-encoded SPDM measurement blob
+	Arch        string `json:"arch"`        // GPU architecture (e.g. "HOPPER")
+}
+
 // EventLogEntry is one entry in the TDX event log — a RTMR extend event.
 // The JSON tags match both Venice and NEAR AI attestation response formats.
 type EventLogEntry struct {
@@ -113,7 +122,13 @@ type RawAttestation struct {
 	IntelQuote string
 
 	// NvidiaPayload is the NVIDIA GPU attestation JWT or raw payload.
+	// Used by dstack-based providers that return a single EAT envelope.
 	NvidiaPayload string
+
+	// GPUEvidence is per-GPU NVIDIA attestation evidence (certificate chain +
+	// SPDM measurement signature). Used by chutes-format providers that return
+	// individual GPU evidence entries instead of a single EAT envelope.
+	GPUEvidence []GPUEvidence
 
 	// TLSFingerprint is the hex SHA-256 of the backend's TLS certificate SPKI.
 	// Set by providers that perform connection-level attestation (NEAR AI).

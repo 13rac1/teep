@@ -61,6 +61,21 @@ func TestParseAttestationResponse_ChutesFormat(t *testing.T) {
 	if raw.NonceSource != "server" {
 		t.Errorf("NonceSource = %q, want server", raw.NonceSource)
 	}
+	if raw.SigningAlgo != "ml-kem-768" {
+		t.Errorf("SigningAlgo = %q, want ml-kem-768", raw.SigningAlgo)
+	}
+	if len(raw.GPUEvidence) != 1 {
+		t.Fatalf("GPUEvidence length = %d, want 1", len(raw.GPUEvidence))
+	}
+	if raw.GPUEvidence[0].Certificate != "cert1" {
+		t.Errorf("GPUEvidence[0].Certificate = %q, want cert1", raw.GPUEvidence[0].Certificate)
+	}
+	if raw.GPUEvidence[0].Evidence != "ev1" {
+		t.Errorf("GPUEvidence[0].Evidence = %q, want ev1", raw.GPUEvidence[0].Evidence)
+	}
+	if raw.GPUEvidence[0].Arch != "HOPPER" {
+		t.Errorf("GPUEvidence[0].Arch = %q, want HOPPER", raw.GPUEvidence[0].Arch)
+	}
 }
 
 func TestParseAttestationResponse_MultipleAttestations(t *testing.T) {
@@ -97,6 +112,9 @@ func TestParseAttestationResponse_MultipleAttestations(t *testing.T) {
 	}
 	if raw.CandidatesAvail != 2 {
 		t.Errorf("CandidatesAvail = %d, want 2", raw.CandidatesAvail)
+	}
+	if raw.CandidatesEval != 1 {
+		t.Errorf("CandidatesEval = %d, want 1", raw.CandidatesEval)
 	}
 }
 
@@ -163,5 +181,8 @@ func TestParseAttestationResponse_EmptyIntelQuote(t *testing.T) {
 	}
 	if raw.IntelQuote != "" {
 		t.Errorf("IntelQuote should be empty, got %q", raw.IntelQuote)
+	}
+	if len(raw.GPUEvidence) != 0 {
+		t.Errorf("GPUEvidence should be empty, got %d entries", len(raw.GPUEvidence))
 	}
 }
