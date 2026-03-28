@@ -4,7 +4,7 @@
 // RedPill is a multi-backend gateway that returns attestation in different
 // formats depending on the backend model. Supported formats:
 //
-//   - chutes:  "attestation_type" key present → delegates to chutes.ParseAttestationResponse
+//   - chutes:  "attestation_type" key present → provider.ParseChutesFormat
 //   - dstack:  "intel_quote" key present → delegates to nanogpt.ParseAttestationResponse
 //   - tinfoil: "format" key present → not yet supported
 //   - gateway: "gateway_attestation" key present → not yet supported
@@ -27,7 +27,6 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/provider"
-	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -93,7 +92,7 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 
 	switch format {
 	case attestation.FormatChutes:
-		return chutes.ParseAttestationResponse(body)
+		return provider.ParseChutesFormat(body, "phalacloud")
 	case attestation.FormatDstack:
 		return nanogpt.ParseAttestationResponse(body)
 	case attestation.FormatTinfoil:

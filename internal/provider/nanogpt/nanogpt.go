@@ -21,7 +21,6 @@ import (
 	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
-	"github.com/13rac1/teep/internal/provider/chutes"
 )
 
 // attestationPath is the NanoGPT API path for TEE attestation.
@@ -159,7 +158,7 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 	case attestation.FormatDstack:
 		return parseDstack(body)
 	case attestation.FormatChutes:
-		return chutes.ParseAttestationResponse(body)
+		return provider.ParseChutesFormat(body, "nanogpt")
 	case attestation.FormatTinfoil:
 		return nil, errors.New("nanogpt: tinfoil attestation format not yet supported")
 	case attestation.FormatGateway:
