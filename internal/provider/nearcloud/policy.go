@@ -5,6 +5,21 @@ import (
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
+// DefaultMeasurementPolicy returns the default TDX measurement allowlists for
+// the nearcloud model backend. The model backend runs the same dstack CVM
+// as neardirect. Ships WarnOnly: true.
+func DefaultMeasurementPolicy() attestation.MeasurementPolicy {
+	return neardirect.DefaultMeasurementPolicy()
+}
+
+// DefaultGatewayMeasurementPolicy returns the default TDX measurement
+// allowlists for the nearcloud gateway CVM. No gateway-specific RTMR values
+// have been captured yet; only the shared dstack MRSEAM/MRTD baselines are
+// included. Ships WarnOnly: true.
+func DefaultGatewayMeasurementPolicy() attestation.MeasurementPolicy {
+	return attestation.DstackBaseMeasurementPolicy()
+}
+
 // SupplyChainPolicy returns the supply chain policy for nearcloud.
 // Starts from the neardirect base (model tier) and adds gateway images.
 func SupplyChainPolicy() *attestation.SupplyChainPolicy {

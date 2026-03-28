@@ -82,6 +82,21 @@ type ReportDataVerifier interface {
 	VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, nonce attestation.Nonce) (detail string, err error)
 }
 
+// MeasurementDefaulter provides default TDX measurement allowlists for a
+// provider. Implementations live in each provider sub-package.
+type MeasurementDefaulter interface {
+	// DefaultMeasurementPolicy returns the Go-coded baseline allowlists
+	// (MRSEAM, MRTD, RTMR0-2) for the provider's model backend CVM.
+	DefaultMeasurementPolicy() attestation.MeasurementPolicy
+}
+
+// GatewayMeasurementDefaulter extends MeasurementDefaulter for providers
+// with a separate gateway CVM (e.g. nearcloud).
+type GatewayMeasurementDefaulter interface {
+	MeasurementDefaulter
+	DefaultGatewayMeasurementPolicy() attestation.MeasurementPolicy
+}
+
 // Provider is a fully wired TEE-capable AI backend. It combines the data from
 // config.Provider with the behavioral interfaces Attester and Preparer.
 //
@@ -128,6 +143,14 @@ type Provider struct {
 	// SupplyChainPolicy defines the allowed container image repos for this
 	// provider. May be nil if the provider has no policy.
 	SupplyChainPolicy *attestation.SupplyChainPolicy
+
+	// MeasurementPolicy is the merged TDX measurement allowlist for this
+	// provider's model backend CVM (Go defaults + global TOML + per-provider TOML).
+	MeasurementPolicy attestation.MeasurementPolicy
+
+	// GatewayMeasurementPolicy is the merged TDX measurement allowlist for
+	// this provider's gateway CVM. Zero value for non-gateway providers.
+	GatewayMeasurementPolicy attestation.MeasurementPolicy
 
 	// ModelLister fetches available models from the provider's discovery API.
 	// May be nil if the provider does not support model listing.

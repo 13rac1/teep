@@ -291,13 +291,18 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 
 	e2eeResult := testE2EE(ctx, raw, providerName, cp, modelName, offline)
 
+	mDefaults, gwDefaults := measurementDefaults(providerName)
+	mergedPolicy := config.MergedMeasurementPolicy(providerName, cfg, mDefaults)
+	mergedGWPolicy := config.MergedGatewayMeasurementPolicy(providerName, cfg, gwDefaults)
+
 	return attestation.BuildReport(&attestation.ReportInput{
 		Provider:          providerName,
 		Model:             modelName,
 		Raw:               raw,
 		Nonce:             nonce,
 		Enforced:          cfg.Enforced,
-		Policy:            cfg.MeasurementPolicy,
+		Policy:            mergedPolicy,
+		GatewayPolicy:     mergedGWPolicy,
 		SupplyChainPolicy: supplyChainPolicy(providerName),
 		TDX:               tdxResult,
 		Nvidia:            nvidiaResult,
@@ -512,6 +517,25 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 		return nanogpt.SupplyChainPolicy()
 	default:
 		return nil
+	}
+}
+
+// measurementDefaults returns the Go-coded default measurement policies for
+// the named provider. The first return is the model-backend policy; the second
+// is the gateway policy (zero value for non-gateway providers).
+func measurementDefaults(name string) (model, gateway attestation.MeasurementPolicy) {
+	var gw attestation.MeasurementPolicy
+	switch name {
+	case "venice":
+		return venice.DefaultMeasurementPolicy(), gw
+	case "neardirect":
+		return neardirect.DefaultMeasurementPolicy(), gw
+	case "nearcloud":
+		return nearcloud.DefaultMeasurementPolicy(), nearcloud.DefaultGatewayMeasurementPolicy()
+	case "nanogpt":
+		return nanogpt.DefaultMeasurementPolicy(), gw
+	default:
+		return attestation.MeasurementPolicy{}, gw
 	}
 }
 
