@@ -149,7 +149,9 @@ var KnownFactors = []string{
 
 // E2EETestResult holds the outcome of a live E2EE test inference.
 type E2EETestResult struct {
-	// Attempted is true when a test inference was sent and a response was received.
+	// Attempted is true when the E2EE test was started (encryption, request
+	// construction, or HTTP exchange was attempted). It does not imply a
+	// response was successfully received — check Err for the outcome.
 	Attempted bool
 	// NoAPIKey is true when the test was skipped because no API key was available.
 	NoAPIKey bool
