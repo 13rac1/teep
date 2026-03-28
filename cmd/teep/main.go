@@ -374,12 +374,31 @@ func verifyNVIDIA(ctx context.Context, raw *attestation.RawAttestation, nonce at
 		nvidiaStart := time.Now()
 		eat = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
 		slog.Debug("NVIDIA verification complete", "elapsed", time.Since(nvidiaStart))
+	} else if len(raw.GPUEvidence) > 0 {
+		serverNonce, err := attestation.ParseNonce(raw.Nonce)
+		if err != nil {
+			slog.Error("parse server nonce for GPU verification", "err", err)
+			eat = &attestation.NvidiaVerifyResult{
+				SignatureErr: fmt.Errorf("parse server nonce: %w", err),
+			}
+			return eat, nil
+		}
+		slog.Debug("NVIDIA GPU direct verification starting", "gpus", len(raw.GPUEvidence))
+		nvidiaStart := time.Now()
+		eat = attestation.VerifyNVIDIAGPUDirect(raw.GPUEvidence, serverNonce)
+		slog.Debug("NVIDIA GPU direct verification complete", "elapsed", time.Since(nvidiaStart))
 	}
 	if !offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
 		slog.Debug("NVIDIA NRAS verification starting")
 		nrasStart := time.Now()
 		nras = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, client)
 		slog.Debug("NVIDIA NRAS verification complete", "elapsed", time.Since(nrasStart))
+	} else if !offline && len(raw.GPUEvidence) > 0 {
+		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
+		slog.Debug("NVIDIA NRAS verification starting (synthesized EAT)")
+		nrasStart := time.Now()
+		nras = attestation.VerifyNVIDIANRAS(ctx, eatJSON, client)
+		slog.Debug("NVIDIA NRAS verification complete (synthesized EAT)", "elapsed", time.Since(nrasStart))
 	}
 	return eat, nras
 }
