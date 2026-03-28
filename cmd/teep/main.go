@@ -526,8 +526,7 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 		// Chutes format has no signing_address; REPORTDATA binding is unknown.
 		return nil
 	case "chutes":
-		// Chutes format REPORTDATA binding scheme unknown.
-		return nil
+		return chutes.ReportDataVerifier{}
 	default:
 		return nil
 	}

@@ -340,8 +340,8 @@ func fromConfig(
 		p.ChatPath = "/chat/completions"
 		p.Attester = chutes.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = chutes.NewPreparer(cp.APIKey)
-		p.ReportDataVerifier = nil // chutes REPORTDATA binding scheme unknown
-		p.SupplyChainPolicy = nil  // cosign+IMA model, no docker-compose
+		p.ReportDataVerifier = chutes.ReportDataVerifier{}
+		p.SupplyChainPolicy = nil // cosign+IMA model, no docker-compose
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", cp.Name)
 	}
