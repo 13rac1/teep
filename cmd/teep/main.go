@@ -611,8 +611,9 @@ func testE2EEv1(ctx context.Context, raw *attestation.RawAttestation, cp *config
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Signing-Algo", "ecdsa")
-	req.Header.Set("X-Client-Pub-Key", session.PublicKeyHex)
+	req.Header.Set("X-Venice-Tee-Client-Pub-Key", session.PublicKeyHex)
+	req.Header.Set("X-Venice-Tee-Model-Pub-Key", raw.SigningKey)
+	req.Header.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
 	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
 	req.Header.Set("Connection", "close")
 

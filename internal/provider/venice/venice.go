@@ -8,9 +8,10 @@
 //
 // Venice E2EE request headers (PrepareRequest):
 //
-//	X-Signing-Algo:  ecdsa
-//	X-Client-Pub-Key: {session_public_key_hex}
-//	Authorization:    Bearer {api_key}
+//	X-Venice-TEE-Client-Pub-Key: {session_public_key_hex}
+//	X-Venice-TEE-Model-Pub-Key:  {model_signing_key_hex}
+//	X-Venice-TEE-Signing-Algo:   ecdsa
+//	Authorization:               Bearer {api_key}
 package venice
 
 import (
@@ -302,10 +303,8 @@ func NewPreparer(apiKey string) *Preparer {
 	return &Preparer{apiKey: apiKey}
 }
 
-// PrepareRequest injects the E2EE headers into req using the Near AI
-// inference proxy header convention (X-Signing-Algo, X-Client-Pub-Key).
-// The session must have SetModelKey called before this (checked as a
-// defence-in-depth precondition that the session is fully initialised).
+// PrepareRequest injects the Venice E2EE headers into req. The session must
+// have its ModelKeyHex set (via SetModelKey) before calling this function.
 func (p *Preparer) PrepareRequest(req *http.Request, session *attestation.Session) error {
 	if session.ModelKeyHex == "" {
 		return errors.New("venice: PrepareRequest called with empty session.ModelKeyHex; call SetModelKey first")
@@ -314,8 +313,9 @@ func (p *Preparer) PrepareRequest(req *http.Request, session *attestation.Sessio
 		return errors.New("venice: PrepareRequest called with empty session.PublicKeyHex; session may not be initialised")
 	}
 
-	req.Header.Set("X-Signing-Algo", "ecdsa")
-	req.Header.Set("X-Client-Pub-Key", session.PublicKeyHex)
+	req.Header.Set("X-Venice-Tee-Client-Pub-Key", session.PublicKeyHex)
+	req.Header.Set("X-Venice-Tee-Model-Pub-Key", session.ModelKeyHex)
+	req.Header.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	return nil
 }

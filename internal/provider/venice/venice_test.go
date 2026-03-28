@@ -299,11 +299,14 @@ func TestPreparer_PrepareRequest_SetsHeaders(t *testing.T) {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
 
-	if got := req.Header.Get("X-Signing-Algo"); got != "ecdsa" {
-		t.Errorf("X-Signing-Algo = %q, want %q", got, "ecdsa")
+	if got := req.Header.Get("X-Venice-Tee-Client-Pub-Key"); got != clientSession.PublicKeyHex {
+		t.Errorf("X-Venice-TEE-Client-Pub-Key = %q, want %q", got, clientSession.PublicKeyHex)
 	}
-	if got := req.Header.Get("X-Client-Pub-Key"); got != clientSession.PublicKeyHex {
-		t.Errorf("X-Client-Pub-Key = %q, want %q", got, clientSession.PublicKeyHex)
+	if got := req.Header.Get("X-Venice-Tee-Model-Pub-Key"); got != modelKey {
+		t.Errorf("X-Venice-TEE-Model-Pub-Key = %q, want %q", got, modelKey)
+	}
+	if got := req.Header.Get("X-Venice-Tee-Signing-Algo"); got != "ecdsa" {
+		t.Errorf("X-Venice-TEE-Signing-Algo = %q, want %q", got, "ecdsa")
 	}
 	if got := req.Header.Get("Authorization"); got != "Bearer test-api-key" {
 		t.Errorf("Authorization = %q, want %q", got, "Bearer test-api-key")
