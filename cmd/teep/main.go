@@ -33,6 +33,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
@@ -160,6 +161,7 @@ var providerEnvVars = map[string]string{
 	"nearcloud":  "NEARAI_API_KEY",
 	"nanogpt":    "NANOGPT_API_KEY",
 	"phalacloud": "PHALA_API_KEY",
+	"chutes":     "CHUTES_API_KEY",
 }
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
@@ -485,8 +487,10 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 		return nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	case "phalacloud":
 		return phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
+	case "chutes":
+		return chutes.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud)", name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", name)
 	}
 }
 
@@ -501,6 +505,9 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 		return venice.ReportDataVerifier{}
 	case "phalacloud":
 		// Chutes format has no signing_address; REPORTDATA binding is unknown.
+		return nil
+	case "chutes":
+		// Chutes format REPORTDATA binding scheme unknown.
 		return nil
 	default:
 		return nil
@@ -519,6 +526,8 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 		return nanogpt.SupplyChainPolicy()
 	case "phalacloud":
 		return nil // no supply chain policy yet
+	case "chutes":
+		return nil // cosign+IMA model, no docker-compose
 	default:
 		return nil
 	}

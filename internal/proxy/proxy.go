@@ -39,7 +39,9 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
@@ -317,18 +319,31 @@ func fromConfig(
 	case "nanogpt":
 		p.ChatPath = "/v1/chat/completions"
 		p.Attester = nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline)
-		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
-		p.ReportDataVerifier = venice.ReportDataVerifier{}
+		p.ReportDataVerifier = multi.Verifier{
+			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
+				attestation.FormatDstack: venice.ReportDataVerifier{},
+			},
+		}
 		p.SupplyChainPolicy = nanogpt.SupplyChainPolicy()
 	case "phalacloud":
 		p.ChatPath = "/chat/completions"
 		p.Attester = phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = phalacloud.NewPreparer(cp.APIKey)
 		p.ModelLister = phalacloud.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
-		p.ReportDataVerifier = nil // chutes format has no signing_address
-		p.SupplyChainPolicy = nil  // no supply chain policy yet
+		p.ReportDataVerifier = multi.Verifier{
+			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
+				attestation.FormatDstack: venice.ReportDataVerifier{},
+			},
+		}
+		p.SupplyChainPolicy = nil // no supply chain policy yet
+	case "chutes":
+		p.ChatPath = "/chat/completions"
+		p.Attester = chutes.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		p.Preparer = chutes.NewPreparer(cp.APIKey)
+		p.ReportDataVerifier = nil // chutes REPORTDATA binding scheme unknown
+		p.SupplyChainPolicy = nil  // cosign+IMA model, no docker-compose
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud)", cp.Name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", cp.Name)
 	}
 	return p, nil
 }

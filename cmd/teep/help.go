@@ -511,6 +511,7 @@ Environment variables:
   NEARAI_API_KEY     NEAR AI API key (used by neardirect and nearcloud providers).
   NANOGPT_API_KEY    NanoGPT API key.
   PHALA_API_KEY      Phala Cloud API key.
+  CHUTES_API_KEY     Chutes API key.
 `)
 }
 
@@ -522,7 +523,7 @@ Usage:
   teep serve PROVIDER [--offline] [--log-level LEVEL]
 
 Arguments:
-  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt, phalacloud).
+  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt, phalacloud, chutes).
 
 The proxy intercepts OpenAI-compatible chat completion requests, performs TEE
 attestation verification against the upstream provider, and optionally enables
@@ -565,7 +566,7 @@ Usage:
   teep verify PROVIDER --model MODEL [flags]
 
 Arguments:
-  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt, phalacloud).
+  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt, phalacloud, chutes).
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
 attestation for the given model, and runs all verification factors. The

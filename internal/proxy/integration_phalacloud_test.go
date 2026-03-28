@@ -167,12 +167,12 @@ func TestIntegration_PhalaCloud(t *testing.T) {
 			t.Errorf("nonce_match: status = %v, want Fail (chutes server generates its own nonce); detail: %s", f.Status, f.Detail)
 		}
 
-		// REPORTDATA binding skips (no verifier for chutes format).
+		// REPORTDATA binding fails (no verifier for chutes format in MultiVerifier).
 		f, ok = findFactor(report.Factors, "tdx_reportdata_binding")
 		if !ok {
 			t.Error("factor tdx_reportdata_binding not found")
-		} else if f.Status != attestation.Skip {
-			t.Logf("tdx_reportdata_binding: status = %v, detail: %s", f.Status, f.Detail)
+		} else if f.Status != attestation.Fail {
+			t.Logf("tdx_reportdata_binding: status = %v, want Fail, detail: %s", f.Status, f.Detail)
 		}
 
 		// Log every non-Pass factor so failures are visible in test output.

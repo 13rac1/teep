@@ -39,6 +39,7 @@ func clearProviderEnv(t *testing.T) {
 	unsetenv(t, "NEARAI_API_KEY")
 	unsetenv(t, "NANOGPT_API_KEY")
 	unsetenv(t, "PHALA_API_KEY")
+	unsetenv(t, "CHUTES_API_KEY")
 }
 
 // --- Default values ---
