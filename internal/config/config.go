@@ -65,6 +65,11 @@ type PolicyConfig struct {
 	GatewayRTMR1Allow  []string `toml:"gateway_rtmr1_allow"`
 	GatewayRTMR2Allow  []string `toml:"gateway_rtmr2_allow"`
 	GatewayRTMR3Allow  []string `toml:"gateway_rtmr3_allow"`
+
+	// WarnMeasurements, when non-nil, explicitly sets whether measurement
+	// allowlist mismatches produce warnings instead of blocking. Tri-state:
+	// nil = not configured (preserve defaults), true = warn, false = enforce.
+	WarnMeasurements *bool `toml:"warn_measurements"`
 }
 
 // tomlFile mirrors the top-level structure of the optional TOML config file.
@@ -204,6 +209,10 @@ func buildMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPolicy, err
 		}
 	}
 
+	if p.WarnMeasurements != nil {
+		out.WarnOnly = *p.WarnMeasurements
+		out.WarnOnlySet = true
+	}
 	return out, nil
 }
 
@@ -227,6 +236,10 @@ func buildGatewayMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPoli
 		}
 	}
 
+	if p.WarnMeasurements != nil {
+		out.WarnOnly = *p.WarnMeasurements
+		out.WarnOnlySet = true
+	}
 	return out, nil
 }
 

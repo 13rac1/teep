@@ -248,6 +248,54 @@ base_url = "https://api.venice.ai"
 	}
 }
 
+func TestLoadTOMLWarnMeasurements(t *testing.T) {
+	valid48 := strings.Repeat("ab", 48)
+	tomlCfg := `
+[policy]
+warn_measurements = true
+mrtd_allow = ["` + valid48 + `"]
+`
+	path := writeConfigFile(t, tomlCfg, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.MeasurementPolicy.WarnOnly {
+		t.Error("MeasurementPolicy.WarnOnly should be true when warn_measurements = true")
+	}
+	if !cfg.GatewayMeasurementPolicy.WarnOnly {
+		t.Error("GatewayMeasurementPolicy.WarnOnly should be true when warn_measurements = true")
+	}
+}
+
+func TestLoadTOMLWarnMeasurementsDefault(t *testing.T) {
+	valid48 := strings.Repeat("ab", 48)
+	tomlCfg := `
+[policy]
+mrtd_allow = ["` + valid48 + `"]
+`
+	path := writeConfigFile(t, tomlCfg, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.MeasurementPolicy.WarnOnly {
+		t.Error("MeasurementPolicy.WarnOnly should default to false")
+	}
+}
+
 func TestLoadTOMLAPIKeyEnv(t *testing.T) {
 	// api_key_env resolves the API key from the named env var.
 	toml := `
