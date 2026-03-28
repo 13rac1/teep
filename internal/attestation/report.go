@@ -395,8 +395,14 @@ func tdxQuoteStructure(in *ReportInput) FactorResult {
 
 	switch {
 	case in.Policy.HasMRTDPolicy() && !containsAllowlist(in.Policy.MRTDAllow, mrtdHex):
+		if in.Policy.WarnOnly {
+			return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: fmt.Sprintf("WARN: MRTD not in policy allowlist: %s... (warn_measurements)", prefixHex(mrtdHex))}
+		}
 		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("MRTD not in policy allowlist: %s...", prefixHex(mrtdHex))}
 	case in.Policy.HasMRSeamPolicy() && !containsAllowlist(in.Policy.MRSeamAllow, mrSeamHex):
+		if in.Policy.WarnOnly {
+			return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: fmt.Sprintf("WARN: MRSEAM not in policy allowlist: %s... (warn_measurements)", prefixHex(mrSeamHex))}
+		}
 		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex))}
 	case in.Policy.HasMRTDPolicy() && in.Policy.HasMRSeamPolicy():
 		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: detail + " (MRTD/MRSEAM policy matched)"}
@@ -1012,6 +1018,10 @@ func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 		}
 		rtmrHex := hex.EncodeToString(in.TDX.RTMRs[i][:])
 		if _, ok := in.Policy.RTMRAllow[i][rtmrHex]; !ok {
+			if in.Policy.WarnOnly {
+				return factor(TierSupplyChain, "event_log_integrity", Pass,
+					fmt.Sprintf("WARN: RTMR[%d] not in policy allowlist: %s... (warn_measurements)", i, prefixHex(rtmrHex)))
+			}
 			return factor(TierSupplyChain, "event_log_integrity", Fail,
 				fmt.Sprintf("RTMR[%d] not in policy allowlist: %s...", i, prefixHex(rtmrHex)))
 		}
@@ -1096,8 +1106,14 @@ func gatewayTDXQuoteStructure(in *ReportInput) FactorResult {
 	gp := in.GatewayPolicy
 	switch {
 	case gp.HasMRTDPolicy() && !containsAllowlist(gp.MRTDAllow, mrtdHex):
+		if gp.WarnOnly {
+			return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: fmt.Sprintf("WARN: gateway MRTD not in policy allowlist: %s... (warn_measurements)", prefixHex(mrtdHex))}
+		}
 		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("gateway MRTD not in policy allowlist: %s...", prefixHex(mrtdHex))}
 	case gp.HasMRSeamPolicy() && !containsAllowlist(gp.MRSeamAllow, mrSeamHex):
+		if gp.WarnOnly {
+			return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: fmt.Sprintf("WARN: gateway MRSEAM not in policy allowlist: %s... (warn_measurements)", prefixHex(mrSeamHex))}
+		}
 		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("gateway MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex))}
 	case gp.HasMRTDPolicy() && gp.HasMRSeamPolicy():
 		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: detail + " (gateway MRTD/MRSEAM policy matched)"}
@@ -1187,6 +1203,10 @@ func evalGatewayEventLogIntegrity(in *ReportInput) []FactorResult {
 		}
 		rtmrHex := hex.EncodeToString(in.GatewayTDX.RTMRs[i][:])
 		if _, ok := gp.RTMRAllow[i][rtmrHex]; !ok {
+			if gp.WarnOnly {
+				return factor(TierGateway, "gateway_event_log_integrity", Pass,
+					fmt.Sprintf("WARN: gateway RTMR[%d] not in gateway policy allowlist: %s... (warn_measurements)", i, prefixHex(rtmrHex)))
+			}
 			return factor(TierGateway, "gateway_event_log_integrity", Fail,
 				fmt.Sprintf("gateway RTMR[%d] not in gateway policy allowlist: %s...", i, prefixHex(rtmrHex)))
 		}

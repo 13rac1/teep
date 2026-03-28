@@ -408,6 +408,54 @@ func TestEvalTDXQuoteStructure(t *testing.T) {
 			t.Errorf("detail should mention MRTD: %s", f.Detail)
 		}
 	})
+
+	t.Run("mrtd_policy_mismatch_warn_only", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		results := evalTDXParseDependent(&ReportInput{
+			Raw:   raw,
+			Nonce: nonce,
+			TDX:   tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow: map[string]struct{}{strings.Repeat("aa", 48): {}},
+				WarnOnly:  true,
+			},
+		})
+		f := assertFactor(t, results, "tdx_quote_structure", Pass)
+		if !strings.Contains(f.Detail, "WARN") {
+			t.Errorf("detail should contain WARN: %s", f.Detail)
+		}
+		if !strings.Contains(f.Detail, "warn_measurements") {
+			t.Errorf("detail should mention warn_measurements: %s", f.Detail)
+		}
+	})
+
+	t.Run("mrseam_policy_mismatch_warn_only", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		results := evalTDXParseDependent(&ReportInput{
+			Raw:   raw,
+			Nonce: nonce,
+			TDX:   tdx,
+			Policy: MeasurementPolicy{
+				MRSeamAllow: map[string]struct{}{strings.Repeat("aa", 48): {}},
+				WarnOnly:    true,
+			},
+		})
+		f := assertFactor(t, results, "tdx_quote_structure", Pass)
+		if !strings.Contains(f.Detail, "WARN") {
+			t.Errorf("detail should contain WARN: %s", f.Detail)
+		}
+		if !strings.Contains(f.Detail, "MRSEAM") {
+			t.Errorf("detail should mention MRSEAM: %s", f.Detail)
+		}
+	})
 }
 
 func TestEvalTDXReportDataBinding(t *testing.T) {
@@ -915,6 +963,41 @@ func TestEvalEventLogIntegrity(t *testing.T) {
 		}), Fail)
 		if !strings.Contains(f.Detail, "RTMR[0]") {
 			t.Errorf("detail should mention RTMR[0]: %s", f.Detail)
+		}
+	})
+
+	t.Run("rtmr_policy_mismatch_warn_only", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.EventLog = []EventLogEntry{{IMR: 0, Digest: strings.Repeat("ab", 48)}}
+
+		replayed, err := ReplayEventLog(raw.EventLog)
+		if err != nil {
+			t.Fatalf("ReplayEventLog: %v", err)
+		}
+
+		tdx := &TDXVerifyResult{RTMRs: replayed}
+		f := assertSingleFactor(t, evalEventLogIntegrity(&ReportInput{
+			Raw:   raw,
+			Nonce: nonce,
+			TDX:   tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					{strings.Repeat("00", 48): {}},
+					nil,
+					nil,
+					nil,
+				},
+				WarnOnly: true,
+			},
+		}), Pass)
+		if !strings.Contains(f.Detail, "WARN") {
+			t.Errorf("detail should contain WARN: %s", f.Detail)
+		}
+		if !strings.Contains(f.Detail, "RTMR[0]") {
+			t.Errorf("detail should mention RTMR[0]: %s", f.Detail)
+		}
+		if !strings.Contains(f.Detail, "warn_measurements") {
+			t.Errorf("detail should mention warn_measurements: %s", f.Detail)
 		}
 	})
 }
