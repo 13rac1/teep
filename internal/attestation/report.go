@@ -501,10 +501,13 @@ func evalTDXTCBNotRevoked(in *ReportInput) []FactorResult {
 		fmt.Sprintf("TCB status %s is not Revoked", in.TDX.TcbStatus))
 }
 func evalNvidiaPayloadPresent(in *ReportInput) []FactorResult {
-	if in.Raw.NvidiaPayload == "" {
-		return factor(TierBinding, "nvidia_payload_present", Fail, "nvidia_payload field is absent from attestation response")
+	if in.Raw.NvidiaPayload != "" {
+		return factor(TierBinding, "nvidia_payload_present", Pass, fmt.Sprintf("NVIDIA payload present (%d chars)", len(in.Raw.NvidiaPayload)))
 	}
-	return factor(TierBinding, "nvidia_payload_present", Pass, fmt.Sprintf("NVIDIA payload present (%d chars)", len(in.Raw.NvidiaPayload)))
+	if len(in.Raw.GPUEvidence) > 0 {
+		return factor(TierBinding, "nvidia_payload_present", Pass, fmt.Sprintf("GPU evidence present (%d GPUs, SPDM format)", len(in.Raw.GPUEvidence)))
+	}
+	return factor(TierBinding, "nvidia_payload_present", Fail, "nvidia_payload field is absent from attestation response")
 }
 func evalNvidiaSignature(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
@@ -563,14 +566,73 @@ func evalNvidiaNRASVerified(in *ReportInput) []FactorResult {
 			fmt.Sprintf("NRAS JWT claims invalid: %v", in.NvidiaNRAS.ClaimsErr))
 	}
 	if !in.NvidiaNRAS.OverallResult {
-		return factor(TierBinding, "nvidia_nras_verified", Fail, "NRAS result: false")
+		return factor(TierBinding, "nvidia_nras_verified", Fail, nrasDiagDetail(in.NvidiaNRAS))
 	}
 	return factor(TierBinding, "nvidia_nras_verified", Pass, "NRAS: true (JWT verified)")
 }
+
+// nrasDiagDetail formats per-GPU diagnostic claims when NRAS overall result is false.
+// When all GPUs report the same error, it deduplicates to avoid repetition.
+func nrasDiagDetail(r *NvidiaVerifyResult) string {
+	if len(r.GPUDiags) == 0 {
+		return "NRAS result: false"
+	}
+
+	// Check if all GPUs have the same error.
+	if allSameError(r.GPUDiags) {
+		d := r.GPUDiags[0]
+		if d.ErrorDetails != "" {
+			return fmt.Sprintf("NRAS result: false; all %d GPUs: %s", len(r.GPUDiags), d.ErrorDetails)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("NRAS result: false")
+	for i, d := range r.GPUDiags {
+		if i >= 8 {
+			fmt.Fprintf(&b, "; ... and %d more GPUs", len(r.GPUDiags)-8)
+			break
+		}
+		switch {
+		case d.ErrorDetails != "":
+			fmt.Fprintf(&b, "; %s: %s", d.GPUID, d.ErrorDetails)
+		case d.MeasRes != "":
+			fmt.Fprintf(&b, "; %s: measres=%s nonce=%t driver=%s hwmodel=%s",
+				d.GPUID, d.MeasRes, d.NonceMatch, d.DriverVersion, d.HWModel)
+		default:
+			fmt.Fprintf(&b, "; %s: no diagnostic claims", d.GPUID)
+		}
+	}
+	return b.String()
+}
+
+func allSameError(diags []NRASGPUDiag) bool {
+	if len(diags) < 2 {
+		return false
+	}
+	first := diags[0].ErrorDetails
+	for _, d := range diags[1:] {
+		if d.ErrorDetails != first {
+			return false
+		}
+	}
+	return first != ""
+}
+
 func evalE2EECapable(in *ReportInput) []FactorResult {
 	switch {
 	case in.Raw.SigningKey == "":
 		return factor(TierBinding, "e2ee_capable", Fail, "enclave public key absent; E2EE key exchange not possible")
+	case in.Raw.SigningAlgo == "ml-kem-768":
+		// ML-KEM-768 post-quantum key (1184 bytes, base64-encoded).
+		b, err := base64.StdEncoding.DecodeString(in.Raw.SigningKey)
+		if err != nil {
+			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("ML-KEM-768 public key invalid base64: %v", err))
+		}
+		if len(b) != 1184 {
+			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("ML-KEM-768 public key wrong size: %d bytes, want 1184", len(b)))
+		}
+		return factor(TierBinding, "e2ee_capable", Pass, "ML-KEM-768 public key valid (1184 bytes); post-quantum E2EE key exchange possible")
 	case in.Raw.SigningAlgo == "ed25519" || len(in.Raw.SigningKey) == 64:
 		// V2: Ed25519 key (64 hex chars).
 		if err := ValidateModelKeyV2(in.Raw.SigningKey); err != nil {
