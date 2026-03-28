@@ -234,6 +234,7 @@ func ParseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 
 	// Flat response form: use top-level fields directly.
 	raw := &attestation.RawAttestation{
+		BackendFormat:  attestation.FormatNear,
 		Verified:       ar.Verified,
 		Nonce:          ar.RequestNonce,
 		Model:          ar.ModelName,
@@ -270,6 +271,7 @@ func selectByModel(list []modelAttestation, model string) (*modelAttestation, er
 
 func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*attestation.RawAttestation, error) {
 	raw := &attestation.RawAttestation{
+		BackendFormat:  attestation.FormatNear,
 		Verified:       verified,
 		Nonce:          m.RequestNonce,
 		Model:          m.ModelName,

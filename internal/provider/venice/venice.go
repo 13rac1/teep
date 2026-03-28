@@ -264,6 +264,7 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 	}
 
 	return &attestation.RawAttestation{
+		BackendFormat:  attestation.FormatDstack,
 		Verified:       ar.Verified,
 		Nonce:          ar.Nonce,
 		Model:          ar.Model,

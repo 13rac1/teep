@@ -52,6 +52,19 @@ func ParseNonce(s string) (Nonce, error) {
 	return n, nil
 }
 
+// BackendFormat identifies which backend attestation format a response uses.
+// Set by Attesters during ParseAttestationResponse. Gateway providers use this
+// to dispatch to the correct ReportDataVerifier via multi.Verifier.
+type BackendFormat string
+
+const (
+	FormatDstack  BackendFormat = "dstack"
+	FormatChutes  BackendFormat = "chutes"
+	FormatTinfoil BackendFormat = "tinfoil"
+	FormatGateway BackendFormat = "gateway"
+	FormatNear    BackendFormat = "near"
+)
+
 // EventLogEntry is one entry in the TDX event log — a RTMR extend event.
 // The JSON tags match both Venice and NEAR AI attestation response formats.
 type EventLogEntry struct {
@@ -67,6 +80,11 @@ type EventLogEntry struct {
 // All fields are raw strings exactly as returned by the provider; higher layers
 // are responsible for validation.
 type RawAttestation struct {
+	// BackendFormat identifies which backend attestation format this response
+	// uses. Set by Attesters during ParseAttestationResponse. Gateway providers
+	// use this to dispatch to the correct ReportDataVerifier.
+	BackendFormat BackendFormat
+
 	// Verified is the server-side verification result. This is a convenience
 	// flag from the provider — clients must perform their own client-side checks.
 	Verified bool
