@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -810,10 +812,13 @@ func TestConnClosingReader_BothFail(t *testing.T) {
 // see the result.
 func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 	var spkiHash string
-	attestCalls := 0
+	var attestCalls atomic.Int32
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v1/attestation/report") {
-			attestCalls++
+			attestCalls.Add(1)
+			// Hold the attestation response long enough for all goroutines
+			// to pile into singleflight before the winner returns.
+			time.Sleep(100 * time.Millisecond)
 			nonceHex := r.URL.Query().Get("nonce")
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(nearaiAttestationJSON(spkiHash, nonceHex)))
@@ -850,9 +855,14 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 	})
 
 	const n = 5
+	// Barrier ensures all goroutines enter HandlePinned concurrently.
+	var ready sync.WaitGroup
+	ready.Add(n)
 	errs := make(chan error, n)
 	for range n {
 		go func() {
+			ready.Done()
+			ready.Wait()
 			resp, err := handler.HandlePinned(context.Background(), &provider.PinnedRequest{
 				Method:  "POST",
 				Path:    "/v1/chat/completions",
@@ -875,14 +885,13 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 		}
 	}
 
-	// Singleflight should collapse concurrent requests. The first request
-	// does the attestation; the rest either join it or find the SPKI cached.
-	// On the same TLS connection singleflight key, only 1 attestation should
-	// fire. Additional goroutines may get separate connections (different
-	// singleflight keys) so we allow ≤ n but expect << n in practice.
-	t.Logf("attestation calls: %d", attestCalls)
-	if attestCalls > n {
-		t.Errorf("attestation calls = %d, exceeds goroutine count %d", attestCalls, n)
+	// All goroutines share the same singleflight key (domain+SPKI) so
+	// exactly one attestation fetch should occur; the rest either join the
+	// in-flight call or find the SPKI already cached.
+	calls := attestCalls.Load()
+	t.Logf("attestation calls: %d", calls)
+	if calls != 1 {
+		t.Errorf("attestation calls = %d, want exactly 1 (singleflight dedup)", calls)
 	}
 }
 
