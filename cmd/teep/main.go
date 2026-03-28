@@ -10,13 +10,17 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -285,6 +289,8 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	allDigests, digestToRepo := attestation.MergeComposeDigests(modelCD, gatewayCD)
 	sigstoreResults, rekorResults := checkSigstore(ctx, allDigests, client, offline)
 
+	e2eeResult := testE2EE(ctx, raw, providerName, cp, modelName, offline)
+
 	return attestation.BuildReport(&attestation.ReportInput{
 		Provider:          providerName,
 		Model:             modelName,
@@ -309,6 +315,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		GatewayNonce:      nonce,
 		GatewayCompose:    gatewayCompose,
 		GatewayEventLog:   raw.GatewayEventLog,
+		E2EETest:          e2eeResult,
 	})
 }
 
@@ -506,6 +513,247 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 	default:
 		return nil
 	}
+}
+
+// e2eeEnabledByDefault reports whether the named provider has E2EE enabled
+// by default in config.go's applyAPIKeyEnv.
+func e2eeEnabledByDefault(name string) bool {
+	switch name {
+	case "venice", "nearcloud":
+		return true
+	default:
+		return false
+	}
+}
+
+// e2eeVersion returns the E2EE protocol version for the named provider.
+func e2eeVersion(name string) int {
+	switch name {
+	case "venice":
+		return attestation.E2EEv1
+	case "nearcloud":
+		return attestation.E2EEv2
+	default:
+		return 0
+	}
+}
+
+// chatPathForProvider returns the upstream chat completions path for the named provider.
+func chatPathForProvider(name string) string {
+	switch name {
+	case "venice":
+		return "/api/v1/chat/completions"
+	case "nearcloud", "neardirect", "nanogpt":
+		return "/v1/chat/completions"
+	default:
+		return ""
+	}
+}
+
+// testE2EE runs a live E2EE test inference if the provider is E2EE-capable.
+// Returns nil if the provider doesn't support E2EE, signalling evalE2EEUsable
+// to skip. Returns a result with NoAPIKey=true if the API key is missing, or
+// with Err set on any failure.
+func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName string, cp *config.Provider, model string, offline bool) *attestation.E2EETestResult {
+	if !e2eeEnabledByDefault(providerName) {
+		return nil
+	}
+	if raw.SigningKey == "" {
+		return nil // e2ee_capable will fail; no point testing
+	}
+	if offline {
+		return &attestation.E2EETestResult{Detail: "offline mode; E2EE test skipped"}
+	}
+	envVar := providerEnvVars[providerName]
+	if cp.APIKey == "" {
+		return &attestation.E2EETestResult{NoAPIKey: true, APIKeyEnv: envVar}
+	}
+
+	switch e2eeVersion(providerName) {
+	case attestation.E2EEv1:
+		return testE2EEv1(ctx, raw, cp, model)
+	case attestation.E2EEv2:
+		return testE2EEv2(ctx, raw, cp, model)
+	default:
+		return nil
+	}
+}
+
+// testE2EEv1 tests Venice v1 E2EE (secp256k1 ECDH + AES-256-GCM).
+func testE2EEv1(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
+	session, err := attestation.NewSession()
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("create session: %w", err)}
+	}
+	defer session.Zero()
+
+	if err := session.SetModelKey(raw.SigningKey); err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("set model key: %w", err)}
+	}
+
+	ct, err := attestation.Encrypt([]byte("Say hello"), session.ModelPubKey())
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("encrypt: %w", err)}
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model":    model,
+		"messages": []map[string]string{{"role": "user", "content": ct}},
+		"stream":   true,
+	})
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("marshal body: %w", err)}
+	}
+
+	chatURL := cp.BaseURL + chatPathForProvider("venice")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatURL, bytes.NewReader(body))
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Signing-Algo", "ecdsa")
+	req.Header.Set("X-Client-Pub-Key", session.PublicKeyHex)
+	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
+	req.Header.Set("Connection", "close")
+
+	return doE2EEStreamTest(req, session, "v1")
+}
+
+// testE2EEv2 tests nearcloud v2 E2EE (Ed25519/XChaCha20-Poly1305) via
+// direct HTTPS request with v2 headers.
+func testE2EEv2(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
+	body, err := json.Marshal(map[string]any{
+		"model":    model,
+		"messages": []map[string]string{{"role": "user", "content": "Say hello"}},
+		"stream":   true,
+	})
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("marshal body: %w", err)}
+	}
+
+	encBody, session, err := attestation.EncryptChatMessagesV2(body, raw.SigningKey)
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("encrypt v2: %w", err)}
+	}
+	defer session.Zero()
+
+	chatURL := cp.BaseURL + chatPathForProvider("nearcloud")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatURL, bytes.NewReader(encBody))
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Signing-Algo", "ed25519")
+	req.Header.Set("X-Client-Pub-Key", session.Ed25519PubHex)
+	req.Header.Set("X-Model-Pub-Key", session.ModelEd25519Hex)
+	req.Header.Set("X-Encryption-Version", "2")
+	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
+	req.Header.Set("Connection", "close")
+
+	return doE2EEStreamTest(req, session, "v2")
+}
+
+// doE2EEStreamTest sends an E2EE chat completions request and validates
+// that the SSE response contains properly encrypted content fields.
+func doE2EEStreamTest(req *http.Request, session *attestation.Session, version string) *attestation.E2EETestResult {
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP request: %w", err)}
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return &attestation.E2EETestResult{
+			Attempted: true,
+			Err:       fmt.Errorf("HTTP %d: %s", resp.StatusCode, body),
+		}
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+	encryptedCount := 0
+	chunkCount := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+		chunkCount++
+
+		var chunk struct {
+			Choices []struct {
+				Delta json.RawMessage `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue // skip malformed chunks (e.g. usage-only chunks)
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(chunk.Choices[0].Delta, &fields); err != nil {
+			continue
+		}
+
+		for key, raw := range fields {
+			var s string
+			if json.Unmarshal(raw, &s) != nil || s == "" {
+				continue
+			}
+			if proxy.NonEncryptedFields[key] {
+				continue
+			}
+			// This field should be encrypted.
+			if !attestation.IsEncryptedChunkForSession(s, session) {
+				return &attestation.E2EETestResult{
+					Attempted: true,
+					Err:       fmt.Errorf("field %q not encrypted (len=%d, prefix=%q)", key, len(s), safePrefix(s, 16)),
+				}
+			}
+			if _, err := attestation.DecryptForSession(s, session); err != nil {
+				return &attestation.E2EETestResult{
+					Attempted: true,
+					Err:       fmt.Errorf("decrypt field %q: %w", key, err),
+				}
+			}
+			encryptedCount++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("read SSE stream: %w", err)}
+	}
+
+	if encryptedCount == 0 {
+		return &attestation.E2EETestResult{
+			Attempted: true,
+			Err:       fmt.Errorf("no encrypted content fields received in %d chunks", chunkCount),
+		}
+	}
+
+	return &attestation.E2EETestResult{
+		Attempted: true,
+		Detail:    fmt.Sprintf("E2EE %s: %d encrypted fields decrypted across %d chunks", version, encryptedCount, chunkCount),
+	}
+}
+
+// safePrefix returns the first n characters of s, or s if shorter.
+func safePrefix(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // knownProviders returns the comma-separated list of provider names from cfg.
