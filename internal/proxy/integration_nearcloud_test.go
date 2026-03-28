@@ -52,6 +52,25 @@ func integrationNearCloudConfig(t *testing.T) *config.Config {
 	}
 }
 
+// integrationNearCloudE2EEConfig returns a config pointing at the live
+// cloud-api.near.ai gateway with E2EE enabled and Offline true.
+func integrationNearCloudE2EEConfig(t *testing.T) *config.Config {
+	t.Helper()
+	return &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Offline:    true,
+		Providers: map[string]*config.Provider{
+			"nearcloud": {
+				Name:    "nearcloud",
+				BaseURL: "https://cloud-api.near.ai",
+				APIKey:  os.Getenv("NEARAI_API_KEY"),
+				E2EE:    true,
+			},
+		},
+		Enforced: []string{},
+	}
+}
+
 func TestIntegration_NearCloud(t *testing.T) {
 	skipNearCloudIntegration(t)
 
@@ -104,6 +123,14 @@ func TestIntegration_NearCloud(t *testing.T) {
 			t.Errorf("aggregated content is not valid printable UTF-8: %q", content)
 		}
 		t.Logf("response (%d chunks): %q", len(chunks), content)
+	})
+
+	t.Run("E2EEStreaming", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatIntegration(t, proxySrv.URL, nearCloudIntegrationModel(), true)
+		defer resp.Body.Close()
+		assertStreamResponse(t, resp)
 	})
 
 	t.Run("AttestationReport", func(t *testing.T) {

@@ -241,8 +241,13 @@ func TestIntegration_Venice(t *testing.T) {
 		//
 		// The only Venice model compatible with our attestation code is
 		// e2ee-qwen3-5-122b-a10b, which always produces reasoning tokens.
-		// When Venice fixes their reasoning field encryption, remove this skip.
-		t.Skip("Venice E2EE: reasoning field not encrypted by inference proxy (server-side bug)")
+		// When Venice fixes their reasoning field encryption, this test
+		// should start passing.
+		proxySrv := newProxyServer(t, integrationE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatIntegration(t, proxySrv.URL, integrationModel(), true)
+		defer resp.Body.Close()
+		assertStreamResponse(t, resp)
 	})
 
 	t.Run("AttestationReport", func(t *testing.T) {
