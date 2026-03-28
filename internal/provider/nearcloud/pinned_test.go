@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
@@ -1486,6 +1488,9 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v1/attestation/report") {
 			attestCalls.Add(1)
+			// Hold the attestation response long enough for all goroutines
+			// to pile into singleflight before the winner returns.
+			time.Sleep(100 * time.Millisecond)
 			nonceHex := r.URL.Query().Get("nonce")
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(nearcloudAttestationJSON(spkiHash, nonceHex)))
@@ -1516,9 +1521,14 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 	handler.SetCTChecker(nil)
 
 	const N = 5
+	// Barrier ensures all goroutines enter HandlePinned concurrently.
+	var ready sync.WaitGroup
+	ready.Add(N)
 	errs := make(chan error, N)
 	for range N {
 		go func() {
+			ready.Done()
+			ready.Wait()
 			resp, err := handler.HandlePinned(context.Background(), &provider.PinnedRequest{
 				Method:  "POST",
 				Path:    "/v1/chat/completions",
@@ -1541,15 +1551,16 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 		}
 	}
 
+	// All goroutines share the same singleflight key (domain+SPKI) so
+	// exactly one attestation fetch should occur; the rest either join the
+	// in-flight call or find the SPKI already cached.
 	calls := attestCalls.Load()
 	t.Logf("attestation calls: %d", calls)
-	// Singleflight should coalesce — expect ≤ N. In practice, usually 1
-	// but exact count depends on scheduling. At minimum, verify SPKI cached.
+	if calls != 1 {
+		t.Errorf("attestation calls = %d, want exactly 1 (singleflight dedup)", calls)
+	}
 	if !spkiCache.Contains(gatewayHost, spkiHash) {
 		t.Error("SPKI should be cached after concurrent requests")
-	}
-	if calls > int32(N) {
-		t.Errorf("attestation calls = %d, want ≤ %d", calls, N)
 	}
 }
 
