@@ -1,4 +1,4 @@
-package neardirect_test
+package provider_test
 
 import (
 	"context"
@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider"
 )
 
-const testNEARModelsJSON = `{
+const testModelsJSON = `{
 	"object": "list",
 	"data": [
 		{
@@ -46,11 +46,11 @@ func TestModelLister_ListModels(t *testing.T) {
 			t.Errorf("Authorization = %q, want %q", auth, "Bearer test-key")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(testNEARModelsJSON))
+		_, _ = w.Write([]byte(testModelsJSON))
 	}))
 	defer srv.Close()
 
-	lister := neardirect.NewModelLister(srv.URL, "test-key", srv.Client())
+	lister := provider.NewModelLister(srv.URL, "test-key", srv.Client())
 	models, err := lister.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
@@ -107,7 +107,7 @@ func TestModelLister_EmptyResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lister := neardirect.NewModelLister(srv.URL, "test-key", srv.Client())
+	lister := provider.NewModelLister(srv.URL, "test-key", srv.Client())
 	models, err := lister.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
@@ -125,7 +125,7 @@ func TestModelLister_InvalidJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lister := neardirect.NewModelLister(srv.URL, "test-key", srv.Client())
+	lister := provider.NewModelLister(srv.URL, "test-key", srv.Client())
 	_, err := lister.ListModels(context.Background())
 	t.Logf("error: %v", err)
 	if err == nil {
@@ -143,7 +143,7 @@ func TestModelLister_CancelledContext(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lister := neardirect.NewModelLister(srv.URL, "test-key", srv.Client())
+	lister := provider.NewModelLister(srv.URL, "test-key", srv.Client())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := lister.ListModels(ctx)
@@ -160,7 +160,7 @@ func TestModelLister_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lister := neardirect.NewModelLister(srv.URL, "test-key", srv.Client())
+	lister := provider.NewModelLister(srv.URL, "test-key", srv.Client())
 	_, err := lister.ListModels(context.Background())
 	t.Logf("error: %v", err)
 	if err == nil {

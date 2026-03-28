@@ -295,7 +295,7 @@ func fromConfig(
 			rdVerifier,
 			rekorClient,
 		)
-		p.ModelLister = neardirect.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
 		p.E2EEVersion = attestation.E2EEv2
@@ -315,7 +315,7 @@ func fromConfig(
 			rekorClient,
 			pocSigningKey,
 		)
-		p.ModelLister = neardirect.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nanogpt":
 		p.ChatPath = "/v1/chat/completions"
 		p.Attester = nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline)
@@ -329,7 +329,7 @@ func fromConfig(
 		p.ChatPath = "/chat/completions"
 		p.Attester = phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = phalacloud.NewPreparer(cp.APIKey)
-		p.ModelLister = phalacloud.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 		p.ReportDataVerifier = multi.Verifier{
 			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
 				attestation.FormatDstack: venice.ReportDataVerifier{},

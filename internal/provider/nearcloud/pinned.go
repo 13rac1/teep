@@ -353,8 +353,8 @@ func (h *PinnedHandler) attestOnConn(
 	// Model TLS fingerprint is for the model backend, not the gateway.
 	if raw.TLSFingerprint != "" {
 		slog.Debug("model tls_cert_fingerprint present (model backend SPKI, not gateway)",
-			"model_fp", truncate(raw.TLSFingerprint, 16)+"...",
-			"gateway_spki", truncate(liveSPKI, 16)+"...",
+			"model_fp", provider.Truncate(raw.TLSFingerprint, 16),
+			"gateway_spki", provider.Truncate(liveSPKI, 16),
 		)
 	}
 
@@ -375,12 +375,12 @@ func (h *PinnedHandler) attestOnConn(
 	}
 	if !match {
 		return nil, "", fmt.Errorf("gateway SPKI %s != attested tls_cert_fingerprint %s",
-			truncate(liveSPKI, 16)+"...",
-			truncate(gwRaw.TLSCertFingerprint, 16)+"...")
+			provider.Truncate(liveSPKI, 16),
+			provider.Truncate(gwRaw.TLSCertFingerprint, 16))
 	}
 	slog.Debug("gateway TLS fingerprint matches live SPKI",
-		"spki", truncate(liveSPKI, 16)+"...",
-		"fp", truncate(gwRaw.TLSCertFingerprint, 16)+"...",
+		"spki", provider.Truncate(liveSPKI, 16),
+		"fp", provider.Truncate(gwRaw.TLSCertFingerprint, 16),
 	)
 
 	gatewayTDX := h.verifyGatewayTDX(ctx, gwRaw, modelNonce)
@@ -477,7 +477,7 @@ func (h *PinnedHandler) sendAttestationRequest(
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("attestation HTTP %d: %s", resp.StatusCode, truncate(string(body), 256))
+		return nil, nil, fmt.Errorf("attestation HTTP %d: %s", resp.StatusCode, provider.Truncate(string(body), 256))
 	}
 
 	return ParseGatewayResponse(body, model)
@@ -557,11 +557,4 @@ func (h *PinnedHandler) verifySigstore(
 		}
 	}
 	return sigstoreResults, rekorResults
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }

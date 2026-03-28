@@ -21,7 +21,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -29,6 +28,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider"
 )
 
 // attestationPath is the Chutes API path for TEE attestation reports.
@@ -92,37 +92,15 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	if err != nil {
 		return nil, fmt.Errorf("chutes: parse endpoint URL %q: %w", a.baseURL+attestationPath, err)
 	}
-
 	q := endpoint.Query()
 	q.Set("model", model)
 	q.Set("nonce", nonce.Hex())
 	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)
+	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
 	if err != nil {
-		return nil, fmt.Errorf("chutes: build attestation request: %w", err)
+		return nil, fmt.Errorf("chutes: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
-
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("chutes: GET %s%s: %w", endpoint.Host, endpoint.Path, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MiB max
-	if err != nil {
-		return nil, fmt.Errorf("chutes: read attestation response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		msg := string(body)
-		if len(msg) > 512 {
-			msg = msg[:512] + "...[truncated]"
-		}
-		return nil, fmt.Errorf("chutes: attestation endpoint returned HTTP %d: %s", resp.StatusCode, msg)
-	}
-
 	return ParseAttestationResponse(body)
 }
 

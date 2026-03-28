@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -27,9 +26,9 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/formatdetect"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
-	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -74,37 +73,15 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	if err != nil {
 		return nil, fmt.Errorf("phalacloud: parse endpoint URL %q: %w", a.baseURL+attestationPath, err)
 	}
-
 	q := endpoint.Query()
 	q.Set("model", model)
 	q.Set("nonce", nonce.Hex())
 	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)
+	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
 	if err != nil {
-		return nil, fmt.Errorf("phalacloud: build attestation request: %w", err)
+		return nil, fmt.Errorf("phalacloud: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
-
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("phalacloud: GET %s%s: %w", endpoint.Host, endpoint.Path, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MiB max
-	if err != nil {
-		return nil, fmt.Errorf("phalacloud: read attestation response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		msg := string(body)
-		if len(msg) > 512 {
-			msg = msg[:512] + "...[truncated]"
-		}
-		return nil, fmt.Errorf("phalacloud: attestation endpoint returned HTTP %d: %s", resp.StatusCode, msg)
-	}
-
 	return ParseAttestationResponse(body)
 }
 
@@ -143,11 +120,3 @@ func (p *Preparer) PrepareRequest(req *http.Request, _ *attestation.Session) err
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	return nil
 }
-
-// ModelLister fetches available models from the Phala Cloud /v1/models endpoint.
-// The response format is the standard OpenAI models list.
-type ModelLister = neardirect.ModelLister
-
-// NewModelLister returns a ModelLister that fetches from baseURL/v1/models.
-// Reuses the neardirect implementation since the endpoint format is identical.
-var NewModelLister = neardirect.NewModelLister

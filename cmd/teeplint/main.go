@@ -235,7 +235,7 @@ func checkProviderStructure(r *result, p *providerInfo) {
 	}
 
 	checkAttesterClientField(r, p)
-	checkFetchUsesLimitReader(r, p)
+	checkFetchUsesBoundedRead(r, p)
 	checkNoSlogAPIKeyArgs(r, p)
 	checkNoJSONRawMessage(r, p)
 	checkExternalTestPackage(r, p)
@@ -374,8 +374,8 @@ func checkUsesFormatDetect(r *result, p *providerInfo, fd *ast.FuncDecl) {
 	r.failf("%s does not call formatdetect.Detect (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 }
 
-// FetchAttestation calls io.LimitReader.
-func checkFetchUsesLimitReader(r *result, p *providerInfo) {
+// FetchAttestation calls provider.FetchAttestationJSON for bounded reads.
+func checkFetchUsesBoundedRead(r *result, p *providerInfo) {
 	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
@@ -383,13 +383,13 @@ func checkFetchUsesLimitReader(r *result, p *providerInfo) {
 				continue
 			}
 			if fd.Name.Name == "FetchAttestation" {
-				if containsCall(fd.Body, "io", "LimitReader") {
+				if containsCall(fd.Body, "provider", "FetchAttestationJSON") {
 					pos := p.fset.Position(fd.Name.Pos())
-					r.passf("FetchAttestation uses io.LimitReader (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+					r.passf("FetchAttestation uses provider.FetchAttestationJSON (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 					return
 				}
 				pos := p.fset.Position(fd.Name.Pos())
-				r.failf("FetchAttestation does not call io.LimitReader (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+				r.failf("FetchAttestation does not call provider.FetchAttestationJSON (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 				return
 			}
 		}
