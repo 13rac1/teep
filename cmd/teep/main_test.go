@@ -809,3 +809,127 @@ func TestSupplyChainPolicy(t *testing.T) {
 		})
 	}
 }
+
+// --------------------------------------------------------------------------
+// E2EE helper function tests
+// --------------------------------------------------------------------------
+
+func TestE2EEEnabledByDefault(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     bool
+	}{
+		{"venice", true},
+		{"nearcloud", true},
+		{"neardirect", false},
+		{"nanogpt", false},
+		{"unknown", false},
+	}
+	for _, tc := range tests {
+		if got := e2eeEnabledByDefault(tc.provider); got != tc.want {
+			t.Errorf("e2eeEnabledByDefault(%q) = %v, want %v", tc.provider, got, tc.want)
+		}
+	}
+}
+
+func TestE2EEVersion(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     int
+	}{
+		{"venice", attestation.E2EEv1},
+		{"nearcloud", attestation.E2EEv2},
+		{"neardirect", 0},
+		{"nanogpt", 0},
+		{"unknown", 0},
+	}
+	for _, tc := range tests {
+		if got := e2eeVersion(tc.provider); got != tc.want {
+			t.Errorf("e2eeVersion(%q) = %d, want %d", tc.provider, got, tc.want)
+		}
+	}
+}
+
+func TestChatPathForProvider(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     string
+	}{
+		{"venice", "/api/v1/chat/completions"},
+		{"nearcloud", "/v1/chat/completions"},
+		{"neardirect", "/v1/chat/completions"},
+		{"nanogpt", "/v1/chat/completions"},
+		{"unknown", ""},
+	}
+	for _, tc := range tests {
+		if got := chatPathForProvider(tc.provider); got != tc.want {
+			t.Errorf("chatPathForProvider(%q) = %q, want %q", tc.provider, got, tc.want)
+		}
+	}
+}
+
+func TestSafePrefix(t *testing.T) {
+	tests := []struct {
+		s    string
+		n    int
+		want string
+	}{
+		{"hello", 3, "hel"},
+		{"hi", 5, "hi"},
+		{"", 3, ""},
+		{"abcdef", 6, "abcdef"},
+	}
+	for _, tc := range tests {
+		if got := safePrefix(tc.s, tc.n); got != tc.want {
+			t.Errorf("safePrefix(%q, %d) = %q, want %q", tc.s, tc.n, got, tc.want)
+		}
+	}
+}
+
+func TestTestE2EE_SkipNonE2EEProvider(t *testing.T) {
+	raw := &attestation.RawAttestation{SigningKey: "04aabb"}
+	cp := &config.Provider{APIKey: "key"}
+	got := testE2EE(context.Background(), raw, "neardirect", cp, "model", false)
+	if got != nil {
+		t.Errorf("testE2EE for neardirect should return nil, got %+v", got)
+	}
+}
+
+func TestTestE2EE_SkipNoSigningKey(t *testing.T) {
+	raw := &attestation.RawAttestation{SigningKey: ""}
+	cp := &config.Provider{APIKey: "key"}
+	got := testE2EE(context.Background(), raw, "venice", cp, "model", false)
+	if got != nil {
+		t.Errorf("testE2EE with no signing key should return nil, got %+v", got)
+	}
+}
+
+func TestTestE2EE_SkipOffline(t *testing.T) {
+	raw := &attestation.RawAttestation{SigningKey: "04aabb"}
+	cp := &config.Provider{APIKey: "key"}
+	got := testE2EE(context.Background(), raw, "venice", cp, "model", true)
+	if got == nil {
+		t.Fatal("testE2EE in offline mode should return non-nil result")
+	}
+	if got.Attempted {
+		t.Error("should not be Attempted in offline mode")
+	}
+	if got.Detail == "" {
+		t.Error("should have Detail explaining offline skip")
+	}
+}
+
+func TestTestE2EE_NoAPIKey(t *testing.T) {
+	raw := &attestation.RawAttestation{SigningKey: "04aabb"}
+	cp := &config.Provider{APIKey: ""}
+	got := testE2EE(context.Background(), raw, "venice", cp, "model", false)
+	if got == nil {
+		t.Fatal("testE2EE with no API key should return non-nil result")
+	}
+	if !got.NoAPIKey {
+		t.Error("NoAPIKey should be true")
+	}
+	if got.APIKeyEnv != "VENICE_API_KEY" {
+		t.Errorf("APIKeyEnv = %q, want %q", got.APIKeyEnv, "VENICE_API_KEY")
+	}
+}
