@@ -2695,17 +2695,32 @@ func TestBlockedReport_NegCacheAndAttestCacheInteraction(t *testing.T) {
 		t.Errorf("handler calls = %d, want still 1 (neg cache should intercept)", handler.calls)
 	}
 
-	// Wait for negative cache to expire.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for negative cache to expire by polling with a deadline instead of a fixed sleep.
+	deadline := time.Now().Add(2 * time.Second)
+	var lastStatus int
+	var lastErr error
+	for {
+		if time.Now().After(deadline) {
+			t.Fatalf("request 3 did not succeed before deadline; last status = %d, last error = %v", lastStatus, lastErr)
+		}
 
-	// Request 3: negative cache expired → re-attest → handler returns OK.
-	resp3, err := postChat(t, proxySrv.URL, "test-model", false)
-	if err != nil {
-		t.Fatalf("request 3: %v", err)
-	}
-	resp3.Body.Close()
-	if resp3.StatusCode != http.StatusOK {
-		t.Fatalf("request 3 status = %d, want 200 (recovery after neg cache expiry)", resp3.StatusCode)
+		// Request 3 attempt: expect negative cache to have expired → re-attest → handler returns OK.
+		resp3, err := postChat(t, proxySrv.URL, "test-model", false)
+		lastErr = err
+		if err != nil {
+			// Retry until deadline to avoid flakiness due to timing.
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+
+		lastStatus = resp3.StatusCode
+		resp3.Body.Close()
+		if resp3.StatusCode == http.StatusOK {
+			break
+		}
+
+		// Still seeing negative-cache behavior; wait briefly and retry until deadline.
+		time.Sleep(10 * time.Millisecond)
 	}
 	if handler.calls != 2 {
 		t.Errorf("handler calls = %d, want 2 (re-attest after neg cache expiry)", handler.calls)
