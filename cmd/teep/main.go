@@ -637,7 +637,11 @@ func testE2EEv2(ctx context.Context, raw *attestation.RawAttestation, cp *config
 	}
 	defer session.Zero()
 
-	chatURL := cp.BaseURL + chatPathForProvider("nearcloud")
+	baseURL := cp.BaseURL
+	if baseURL == "" {
+		baseURL = "https://cloud-api.near.ai"
+	}
+	chatURL := baseURL + chatPathForProvider("nearcloud")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatURL, bytes.NewReader(encBody))
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
