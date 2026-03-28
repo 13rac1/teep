@@ -198,6 +198,18 @@ var factorRegistry = []factorInfo{
 			"with the enclave using ECIES (Elliptic Curve Integrated " +
 			"Encryption Scheme).",
 	},
+	{
+		Name:    "e2ee_usable",
+		Tier:    2,
+		Summary: "E2EE test inference succeeded",
+		Description: "Performs a live E2EE test inference using the attested " +
+			"signing key. Sends an encrypted request to the provider and " +
+			"validates that all response content fields (content, " +
+			"reasoning_content, reasoning, audio.data) are properly encrypted " +
+			"in the SSE stream. Any unencrypted content field or decryption " +
+			"failure causes this factor to fail. Skipped when offline, when " +
+			"the provider does not support E2EE, or when no API key is set.",
+	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
 		Name:    "tls_key_binding",

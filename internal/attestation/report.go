@@ -137,7 +137,7 @@ var KnownFactors = []string{
 	"tdx_quote_signature", "tdx_debug_disabled", "signing_key_present",
 	"tdx_reportdata_binding", "intel_pcs_collateral", "tdx_tcb_current",
 	"tdx_tcb_not_revoked", "nvidia_payload_present", "nvidia_signature", "nvidia_claims",
-	"nvidia_nonce_client_bound", "nvidia_nras_verified", "e2ee_capable", "tls_key_binding", "cpu_gpu_chain",
+	"nvidia_nonce_client_bound", "nvidia_nras_verified", "e2ee_capable", "e2ee_usable", "tls_key_binding", "cpu_gpu_chain",
 	"measured_model_weights", "build_transparency_log", "cpu_id_registry",
 	"compose_binding", "sigstore_verification", "event_log_integrity",
 	// Gateway factors (nearcloud only).
@@ -145,6 +145,20 @@ var KnownFactors = []string{
 	"gateway_tdx_cert_chain", "gateway_tdx_quote_signature", "gateway_tdx_debug_disabled",
 	"gateway_tdx_reportdata_binding", "gateway_compose_binding", "gateway_cpu_id_registry",
 	"gateway_event_log_integrity",
+}
+
+// E2EETestResult holds the outcome of a live E2EE test inference.
+type E2EETestResult struct {
+	// Attempted is true when a test inference was sent and a response was received.
+	Attempted bool
+	// NoAPIKey is true when the test was skipped because no API key was available.
+	NoAPIKey bool
+	// APIKeyEnv is the name of the environment variable for this provider's API key.
+	APIKeyEnv string
+	// Err is non-nil when the test failed (request error, unencrypted response fields, decryption error).
+	Err error
+	// Detail is a human-readable summary of the test outcome.
+	Detail string
 }
 
 // ComposeBindingResult holds the outcome of verifying the app_compose → MRConfigID binding.
@@ -186,6 +200,10 @@ type ReportInput struct {
 	GatewayCompose  *ComposeBindingResult
 	GatewayEventLog []EventLogEntry
 	GatewayPolicy   MeasurementPolicy // separate measurement allowlists for gateway CVM (GW-M-04)
+
+	// E2EETest is the result of a live E2EE test inference. Nil when
+	// the provider is not E2EE-capable or the test was not attempted.
+	E2EETest *E2EETestResult
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +289,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalNvidiaClientNonceBound,
 		evalNvidiaNRASVerified,
 		evalE2EECapable,
+		evalE2EEUsable,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -568,6 +587,35 @@ func evalE2EECapable(in *ReportInput) []FactorResult {
 		}
 		return factor(TierBinding, "e2ee_capable", Pass, detail)
 	}
+}
+
+func evalE2EEUsable(in *ReportInput) []FactorResult {
+	if in.E2EETest == nil {
+		return factor(TierBinding, "e2ee_usable", Skip, "E2EE not configured for this provider")
+	}
+	if in.E2EETest.NoAPIKey {
+		env := in.E2EETest.APIKeyEnv
+		if env == "" {
+			env = "<unknown>"
+		}
+		return factor(TierBinding, "e2ee_usable", Skip, fmt.Sprintf("API key required ($%s)", env))
+	}
+	if in.E2EETest.Err != nil {
+		return factor(TierBinding, "e2ee_usable", Fail, in.E2EETest.Err.Error())
+	}
+	if in.E2EETest.Attempted {
+		detail := in.E2EETest.Detail
+		if detail == "" {
+			detail = "E2EE test inference succeeded"
+		}
+		return factor(TierBinding, "e2ee_usable", Pass, detail)
+	}
+	// Not attempted but no error — offline or other skip.
+	detail := in.E2EETest.Detail
+	if detail == "" {
+		detail = "E2EE test not attempted"
+	}
+	return factor(TierBinding, "e2ee_usable", Skip, detail)
 }
 
 // ---------------------------------------------------------------------------

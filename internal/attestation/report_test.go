@@ -101,14 +101,14 @@ func factorNames(r *VerificationReport) []string {
 // BuildReport-level tests (cross-cutting concerns)
 // ---------------------------------------------------------------------------
 
-// TestBuildReportFactorCount ensures exactly 24 factors are produced.
+// TestBuildReportFactorCount ensures exactly 26 factors are produced.
 func TestBuildReportFactorCount(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
 
-	if len(report.Factors) != 25 {
-		t.Errorf("factor count: got %d, want 25", len(report.Factors))
+	if len(report.Factors) != 26 {
+		t.Errorf("factor count: got %d, want 26", len(report.Factors))
 	}
 }
 
@@ -1216,6 +1216,97 @@ func TestEvalE2EECapable_Ed25519(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// e2ee_usable evaluator tests
+// ---------------------------------------------------------------------------
+
+func TestEvalE2EEUsable(t *testing.T) {
+	t.Run("skip_nil", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEUsable(&ReportInput{
+			Raw: &RawAttestation{},
+		}), Skip)
+		if !strings.Contains(f.Detail, "not configured") {
+			t.Errorf("detail should mention not configured: %s", f.Detail)
+		}
+	})
+
+	t.Run("skip_no_api_key", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEUsable(&ReportInput{
+			Raw: &RawAttestation{},
+			E2EETest: &E2EETestResult{
+				NoAPIKey:  true,
+				APIKeyEnv: "VENICE_API_KEY",
+			},
+		}), Skip)
+		if !strings.Contains(f.Detail, "VENICE_API_KEY") {
+			t.Errorf("detail should mention env var: %s", f.Detail)
+		}
+	})
+
+	t.Run("fail_error", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEUsable(&ReportInput{
+			Raw: &RawAttestation{},
+			E2EETest: &E2EETestResult{
+				Attempted: true,
+				Err:       errors.New("delta.reasoning: expected encrypted but not recognised"),
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "reasoning") {
+			t.Errorf("detail should contain error: %s", f.Detail)
+		}
+	})
+
+	t.Run("pass_attempted", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEUsable(&ReportInput{
+			Raw: &RawAttestation{},
+			E2EETest: &E2EETestResult{
+				Attempted: true,
+				Detail:    "E2EE test inference: 5 chunks received, all content encrypted (v1 ecdsa)",
+			},
+		}), Pass)
+		if !strings.Contains(f.Detail, "5 chunks") {
+			t.Errorf("detail should contain chunk count: %s", f.Detail)
+		}
+	})
+
+	t.Run("skip_offline", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEUsable(&ReportInput{
+			Raw: &RawAttestation{},
+			E2EETest: &E2EETestResult{
+				Detail: "offline mode; E2EE usability test skipped",
+			},
+		}), Skip)
+		if !strings.Contains(f.Detail, "offline") {
+			t.Errorf("detail should mention offline: %s", f.Detail)
+		}
+	})
+
+	t.Run("enforced_no_api_key_promoted_to_fail", func(t *testing.T) {
+		// When e2ee_usable is enforced and there's no API key,
+		// the Skip should be promoted to Fail by BuildReport.
+		nonce := NewNonce()
+		raw := buildMinimalRaw(nonce, validSigningKey(t))
+		report := BuildReport(&ReportInput{
+			Provider: "venice",
+			Model:    "test-model",
+			Raw:      raw,
+			Nonce:    nonce,
+			Enforced: []string{"e2ee_usable"},
+			E2EETest: &E2EETestResult{
+				NoAPIKey:  true,
+				APIKeyEnv: "VENICE_API_KEY",
+			},
+		})
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Fail {
+			t.Errorf("enforced skip should be promoted to Fail, got %s", f.Status)
+		}
+		if !f.Enforced {
+			t.Error("should be marked enforced")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Feature D: DSSE signature verification
 // ---------------------------------------------------------------------------
 
@@ -1347,8 +1438,8 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 	// gateway_tdx_quote_structure, gateway_tdx_cert_chain, gateway_tdx_quote_signature,
 	// gateway_tdx_debug_disabled, gateway_tdx_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
-	if len(report.Factors) != 35 {
-		t.Errorf("factor count with gateway: got %d, want 35", len(report.Factors))
+	if len(report.Factors) != 36 {
+		t.Errorf("factor count with gateway: got %d, want 36", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}
