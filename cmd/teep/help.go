@@ -475,6 +475,8 @@ func runHelp(args []string) {
 		printTiersHelp()
 	case "factors":
 		printFactorsHelp()
+	case "measurements":
+		printMeasurementsHelp()
 	default:
 		if f, ok := findFactorByName(args[0]); ok {
 			printFactorHelp(f)
@@ -498,11 +500,12 @@ Global flags:
   --log-level LEVEL   Set log verbosity: debug, info, warn, error (default: info).
 
 Help topics:
-  serve       Detailed documentation for the serve command.
-  verify      Detailed documentation for the verify command.
-  tiers       Explain the verification tier scoring system.
-  factors     List all verification factors with full descriptions.
-  <factor>    Show details for a single factor (e.g. teep help tls_key_binding).
+  serve        Detailed documentation for the serve command.
+  verify       Detailed documentation for the verify command.
+  tiers        Explain the verification tier scoring system.
+  factors      List all verification factors with full descriptions.
+  measurements TDX measurement allowlist configuration guide.
+  <factor>     Show details for a single factor (e.g. teep help tls_key_binding).
 
 Environment variables:
   TEEP_CONFIG        Path to TOML config file.
@@ -579,6 +582,12 @@ Optional flags:
 	--offline         Skip external verification (Intel PCS collateral,
 										Proof of Cloud registry, Certificate Transparency).
 										PPID is still extracted locally.
+  --update-config   Write observed TDX measurements to the config file at
+                    $TEEP_CONFIG. Adds values to [providers.X.policy] with
+                    deduplication and sets warn_measurements = false. Creates
+                    a .bak backup of the original file.
+  --config-out PATH Write updated config to PATH instead of $TEEP_CONFIG.
+                    Implies --update-config behavior.
   --log-level LEVEL Set log verbosity: debug, info, warn, error (default: info).
 
 Exit codes:
@@ -590,9 +599,128 @@ Examples:
   teep verify neardirect --model qwen2.5-72b-instruct --save-dir ./attestation-data
   teep verify nearcloud --model Qwen/Qwen3.5-122B-A10B --log-level debug
   teep verify venice --model e2ee-qwen3-32b --log-level debug
+  teep verify venice --model e2ee-qwen3-32b --update-config
 
-See 'teep help tiers' for how factors are scored, or 'teep help factors'
-for descriptions of all verification factors.
+See 'teep help tiers' for how factors are scored, 'teep help factors'
+for descriptions of all verification factors, or 'teep help measurements'
+for TDX measurement allowlist configuration.
+`)
+}
+
+// printMeasurementsHelp prints documentation about TDX measurement allowlists.
+func printMeasurementsHelp() {
+	fmt.Print(`TDX Measurement Allowlists
+==========================
+
+Teep can enforce allowlists for TDX measurement registers: MRSEAM, MRTD, and
+RTMR0 through RTMR2. These registers identify the TDX module, virtual firmware,
+and measured boot chain of a CVM. Without allowlists, teep trusts the TDX
+quote structure without verifying that specific software was booted.
+
+RTMR3 is verified separately by replaying the event log and does not need an
+allowlist.
+
+Quickstart: Bootstrap Allowlists from Observed Values
+------------------------------------------------------
+
+  1. Run verification and save observed values to your config:
+
+       teep verify venice --model e2ee-qwen3-32b --update-config
+
+     This writes the observed MRSEAM, MRTD, and RTMR0-2 values to
+     [providers.venice.policy] in $TEEP_CONFIG, with deduplication. It also
+     sets warn_measurements = false to enforce the allowlists.
+
+  2. To write to a different file instead of $TEEP_CONFIG:
+
+       teep verify venice --model e2ee-qwen3-32b --config-out ./teep.toml
+
+  3. Run against additional models to capture all deployment classes:
+
+       teep verify venice --model e2ee-deepseek-r1-0528 --update-config
+
+     New values are appended and deduplicated.
+
+  4. Review the generated config and cross-check against canonical sources
+     (see below), then deploy.
+
+Configuration
+-------------
+
+Measurement allowlists are configured in TOML policy sections:
+
+  # Global policy (applies to all providers without per-provider overrides)
+  [policy]
+  warn_measurements = true
+  mrseam_allow = ["49b66faa..."]
+  mrtd_allow = ["b24d3b24..."]
+  rtmr0_allow = ["0cb94dba..."]
+  rtmr1_allow = ["c0445b70..."]
+  rtmr2_allow = ["56462c01..."]
+
+  # Per-provider policy (overrides global for this provider)
+  [providers.venice.policy]
+  warn_measurements = false
+  mrseam_allow = ["49b66faa..."]
+  mrtd_allow = ["b24d3b24..."]
+
+Merge order: per-provider TOML > global TOML > Go-coded defaults.
+Each allowlist field is resolved independently.
+
+Warn-Only Mode
+--------------
+
+When warn_measurements = true (the default for Go-coded defaults), measurement
+mismatches produce a PASS result annotated with "WARN:" instead of failing.
+This lets you observe measurement values before committing to enforcement.
+
+To transition to enforcement, set warn_measurements = false in your config or
+use --update-config (which sets it automatically).
+
+Register Reference
+------------------
+
+MRSEAM — Intel TDX Module Identity
+  Identifies the TDX module version. Values are published by Intel at:
+    github.com/intel/confidential-computing.tdx.tdx-module (release notes)
+  Also curated by Tinfoil at:
+    github.com/tinfoilsh/tinfoil-python
+  Does not vary with provider, hardware config, or guest image.
+
+MRTD — Virtual Firmware (TD) Image
+  Measures the guest firmware (OVMF) binary. Deterministic for a given dstack
+  OS image version. Does not vary with CPU count, memory, or GPU config.
+  Compute from source:
+    dstack-mr measure  (from github.com/Dstack-TEE/dstack)
+  Reproducible builds:
+    github.com/Dstack-TEE/meta-dstack
+    github.com/nearai/private-ml-sdk
+
+RTMR0 — Hardware Configuration
+  Measures vCPU count, memory size, GPU count, and PCI configuration.
+  Varies per deployment class. Must be either provider-published or observed
+  and pinned.
+  Compute with exact hardware params:
+    dstack-mr measure --cpu N --memory SIZE --num-gpus G
+
+RTMR1 — Kernel and Boot Loader
+  Measures the Linux kernel binary. Deterministic for a given dstack image
+  build, but may vary across fleet if multiple image versions are deployed.
+  Compute from source:
+    dstack-mr measure  (from github.com/Dstack-TEE/dstack)
+
+RTMR2 — Root Filesystem and Command Line
+  Measures the kernel command line, initrd, and rootfs. Varies with rootfs
+  configuration per deployment class.
+  Compute from source:
+    dstack-mr measure  (from github.com/Dstack-TEE/dstack)
+
+RTMR3 — Runtime Events (not allowlisted)
+  Computed from compose hash, instance ID, key provider, and other runtime
+  events. Verified by replaying the event log. No manual pinning needed.
+
+For full details see docs/measurement_allowlists.md and
+docs/attestation_gaps/dstack_integrity.md.
 `)
 }
 

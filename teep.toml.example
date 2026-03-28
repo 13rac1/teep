@@ -1,0 +1,109 @@
+# teep.toml.example — Example configuration for the teep TEE attestation proxy.
+#
+# Copy this file to ~/.config/teep/config.toml (or any path) and set:
+#   export TEEP_CONFIG=/path/to/config.toml
+#
+# API keys are resolved from environment variables (api_key_env) or can be
+# set directly (api_key). Environment variables take precedence.
+
+# ---------------------------------------------------------------------------
+# Provider Definitions
+# ---------------------------------------------------------------------------
+
+[providers.venice]
+base_url = "https://api.venice.ai"
+api_key_env = "VENICE_API_KEY"
+e2ee = true
+
+[providers.neardirect]
+base_url = "https://inference.near.ai"
+api_key_env = "NEARAI_API_KEY"
+
+[providers.nearcloud]
+base_url = "https://api.near.ai"
+api_key_env = "NEARAI_API_KEY"
+
+[providers.nanogpt]
+base_url = "https://nano-gpt.com"
+api_key_env = "NANOGPT_API_KEY"
+
+# ---------------------------------------------------------------------------
+# Global Policy
+# ---------------------------------------------------------------------------
+# Applies to all providers unless overridden by a per-provider [providers.X.policy].
+
+[policy]
+
+# Enforced factors: these block the proxy when they fail.
+# Default: nonce_match, tdx_debug_disabled, signing_key_present, tdx_reportdata_binding
+# Uncomment to add measurement enforcement:
+# enforce = [
+#   "nonce_match",
+#   "tdx_debug_disabled",
+#   "signing_key_present",
+#   "tdx_reportdata_binding",
+#   "tdx_quote_structure",
+#   "event_log_integrity",
+# ]
+
+# Warn-only mode for measurement allowlists.
+# When true, measurement mismatches produce warnings instead of failures.
+# Set to false after verifying observed values against canonical sources.
+# Default: true (from Go-coded defaults)
+warn_measurements = true
+
+# MRSEAM: Intel TDX module identity. Published by Intel at:
+#   github.com/intel/confidential-computing.tdx.tdx-module
+# mrseam_allow = [
+#   "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6",  # TDX 1.5.08
+#   "7bf063280e94fb051f5dd7b1fc59ce9aac42bb961df8d44b709c9b0ff87a7b4df648657ba6d1189589feab1d5a3c9a9d",  # TDX 1.5.16
+#   "476a2997c62bccc78370913d0a80b956e3721b24272bc66c4d6307ced4be2865c40e26afac75f12df3425b03eb59ea7c",  # TDX 2.0.08
+#   "685f891ea5c20e8fa27b151bf34bf3b50fbaf7143cc53662727cbdb167c0ad8385f1f6f3571539a91e104a1c96d75e04",  # TDX 2.0.02
+# ]
+
+# MRTD: Virtual firmware image. Compute via dstack-mr measure.
+# mrtd_allow = [
+#   "b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217",  # dstack-nvidia-0.5.4.1
+#   "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077",  # dstack-nvidia-0.5.5
+# ]
+
+# RTMR0-2: Boot chain measurements. Vary per deployment class.
+# Use 'teep verify --update-config' to populate from observed values.
+# rtmr0_allow = []
+# rtmr1_allow = []
+# rtmr2_allow = []
+
+# ---------------------------------------------------------------------------
+# Per-Provider Policy Overrides
+# ---------------------------------------------------------------------------
+# Each [providers.X.policy] section overrides the global [policy] for that
+# provider. Each allowlist field is resolved independently:
+#   per-provider TOML > global TOML > Go-coded defaults
+
+# Example: enforce measurements for venice only
+# [providers.venice.policy]
+# warn_measurements = false
+# mrseam_allow = [
+#   "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6",
+# ]
+# mrtd_allow = [
+#   "b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217",
+# ]
+# rtmr0_allow = [
+#   "0cb94dba1a97734107b9b3b29d0f12ee80f1c50feee3c2b28c8b07dda4b02a63e4b8de37bc5b2b0eebcb0b5c13af56a8",
+# ]
+# rtmr1_allow = [
+#   "c0445b704e4c4813a1a855d6aa2504bfe2c8f4f06d2c4df70cd655c64c7b92e13cfbafe91cf45d7e6e87db5b0bfb3d61",
+# ]
+# rtmr2_allow = [
+#   "56462c01c59a66c998fa23e18f3d78fb56e24eb0293a64c65d15a080dd24d3b9c6a1e98c01dccd70b94e98f53c2f9a35",
+# ]
+
+# Example: nearcloud gateway CVM measurements
+# [providers.nearcloud.policy]
+# warn_measurements = false
+# gateway_mrseam_allow = ["49b66faa..."]
+# gateway_mrtd_allow = ["b24d3b24..."]
+# gateway_rtmr0_allow = ["..."]
+# gateway_rtmr1_allow = ["..."]
+# gateway_rtmr2_allow = ["..."]
