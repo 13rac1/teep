@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -141,13 +142,18 @@ type cacheEntry struct {
 	fetchedAt time.Time
 }
 
+// evictWarnInterval throttles eviction warnings so that sustained cache
+// pressure does not flood the log.
+const evictWarnInterval = 10 * time.Second
+
 // Cache stores expensive attestation verification results keyed by
 // provider+model. The signing key is cached separately in SigningKeyCache
 // with a shorter TTL to avoid re-fetching attestation on every E2EE request.
 type Cache struct {
-	mu      sync.RWMutex
-	entries map[cacheKey]*cacheEntry
-	ttl     time.Duration
+	mu            sync.RWMutex
+	entries       map[cacheKey]*cacheEntry
+	ttl           time.Duration
+	lastEvictWarn time.Time
 }
 
 // NewCache returns a Cache with the specified TTL.
@@ -178,16 +184,16 @@ const maxCacheEntries = 1000
 func (c *Cache) Put(provider, model string, report *VerificationReport) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) > maxCacheEntries {
+	if len(c.entries) >= maxCacheEntries {
 		now := time.Now()
 		for k, e := range c.entries {
 			if now.Sub(e.fetchedAt) > c.ttl {
 				delete(c.entries, k)
 			}
 		}
-		// If still over capacity after pruning expired entries,
-		// evict the oldest entry to enforce a hard upper bound.
-		if len(c.entries) > maxCacheEntries {
+		// If still at capacity after pruning expired entries,
+		// evict the oldest entry to enforce the hard cap.
+		if len(c.entries) >= maxCacheEntries {
 			var oldestKey cacheKey
 			var oldestTime time.Time
 			for k, e := range c.entries {
@@ -199,6 +205,14 @@ func (c *Cache) Put(provider, model string, report *VerificationReport) {
 			if !oldestTime.IsZero() {
 				delete(c.entries, oldestKey)
 			}
+		}
+		if now.Sub(c.lastEvictWarn) > evictWarnInterval {
+			slog.Warn("attestation cache at capacity, evicting entries",
+				"cache", "attestation",
+				"size", len(c.entries),
+				"max", maxCacheEntries,
+			)
+			c.lastEvictWarn = now
 		}
 	}
 	c.entries[cacheKey{provider, model}] = &cacheEntry{
@@ -242,9 +256,10 @@ func (c *Cache) Models() []CacheInfo {
 // NegativeCache records attestation failures to prevent repeated upstream
 // hammering when attestation has recently failed. Entries expire after TTL.
 type NegativeCache struct {
-	mu      sync.RWMutex
-	entries map[cacheKey]time.Time
-	ttl     time.Duration
+	mu            sync.RWMutex
+	entries       map[cacheKey]time.Time
+	ttl           time.Duration
+	lastEvictWarn time.Time
 }
 
 // NewNegativeCache returns a NegativeCache with the specified TTL.
@@ -268,16 +283,16 @@ func (c *NegativeCache) IsBlocked(provider, model string) bool {
 func (c *NegativeCache) Record(provider, model string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) > maxCacheEntries {
+	if len(c.entries) >= maxCacheEntries {
 		now := time.Now()
 		for k, t := range c.entries {
 			if now.Sub(t) > c.ttl {
 				delete(c.entries, k)
 			}
 		}
-		// If still over capacity after pruning expired entries,
-		// evict the oldest entry to enforce a hard upper bound.
-		if len(c.entries) > maxCacheEntries {
+		// If still at capacity after pruning expired entries,
+		// evict the oldest entry to enforce the hard cap.
+		if len(c.entries) >= maxCacheEntries {
 			var oldestKey cacheKey
 			var oldestTime time.Time
 			for k, t := range c.entries {
@@ -289,6 +304,14 @@ func (c *NegativeCache) Record(provider, model string) {
 			if !oldestTime.IsZero() {
 				delete(c.entries, oldestKey)
 			}
+		}
+		if now.Sub(c.lastEvictWarn) > evictWarnInterval {
+			slog.Warn("attestation cache at capacity, evicting entries",
+				"cache", "negative",
+				"size", len(c.entries),
+				"max", maxCacheEntries,
+			)
+			c.lastEvictWarn = now
 		}
 	}
 	c.entries[cacheKey{provider, model}] = time.Now()
@@ -313,9 +336,10 @@ type signingKeyEntry struct {
 // prevent "no signing key available" errors on pinned connections where an
 // SPKI cache hit skips attestation.
 type SigningKeyCache struct {
-	mu      sync.RWMutex
-	entries map[cacheKey]*signingKeyEntry
-	ttl     time.Duration
+	mu            sync.RWMutex
+	entries       map[cacheKey]*signingKeyEntry
+	ttl           time.Duration
+	lastEvictWarn time.Time
 }
 
 // NewSigningKeyCache returns a SigningKeyCache with the specified TTL.
@@ -342,16 +366,16 @@ func (c *SigningKeyCache) Get(provider, model string) (string, bool) {
 func (c *SigningKeyCache) Put(provider, model, signingKey string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) > maxCacheEntries {
+	if len(c.entries) >= maxCacheEntries {
 		now := time.Now()
 		for k, e := range c.entries {
 			if now.Sub(e.fetchedAt) > c.ttl {
 				delete(c.entries, k)
 			}
 		}
-		// If still over capacity after pruning expired entries,
-		// evict the oldest entry to enforce a hard upper bound.
-		if len(c.entries) > maxCacheEntries {
+		// If still at capacity after pruning expired entries,
+		// evict the oldest entry to enforce the hard cap.
+		if len(c.entries) >= maxCacheEntries {
 			var oldestKey cacheKey
 			var oldestTime time.Time
 			for k, e := range c.entries {
@@ -363,6 +387,14 @@ func (c *SigningKeyCache) Put(provider, model, signingKey string) {
 			if !oldestTime.IsZero() {
 				delete(c.entries, oldestKey)
 			}
+		}
+		if now.Sub(c.lastEvictWarn) > evictWarnInterval {
+			slog.Warn("attestation cache at capacity, evicting entries",
+				"cache", "signing_key",
+				"size", len(c.entries),
+				"max", maxCacheEntries,
+			)
+			c.lastEvictWarn = now
 		}
 	}
 	c.entries[cacheKey{provider, model}] = &signingKeyEntry{
