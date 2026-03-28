@@ -92,8 +92,8 @@ func main() {
 	// Category 1: Provider package structure.
 	fmt.Println("teeplint: checking provider package structure...")
 	fmt.Println()
-	for _, p := range providers {
-		checkProviderStructure(&r, p)
+	for i := range providers {
+		checkProviderStructure(&r, &providers[i])
 		fmt.Println()
 	}
 
@@ -215,7 +215,7 @@ func detectArchetype(files []*ast.File) providerArchetype {
 // Category 1: Provider package structure checks
 // =============================================================================
 
-func checkProviderStructure(r *result, p providerInfo) {
+func checkProviderStructure(r *result, p *providerInfo) {
 	fmt.Printf("  %s/ (%s)\n", p.dir, p.archetype)
 
 	checkAttestationPathConst(r, p)
@@ -242,7 +242,7 @@ func checkProviderStructure(r *result, p providerInfo) {
 }
 
 // attestationPath string constant.
-func checkAttestationPathConst(r *result, p providerInfo) {
+func checkAttestationPathConst(r *result, p *providerInfo) {
 	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
@@ -268,7 +268,7 @@ func checkAttestationPathConst(r *result, p providerInfo) {
 }
 
 // Response struct check (attestationResponse or gatewayResponse).
-func checkResponseStruct(r *result, p providerInfo, want string) {
+func checkResponseStruct(r *result, p *providerInfo, want string) {
 	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
@@ -294,7 +294,7 @@ func checkResponseStruct(r *result, p providerInfo, want string) {
 }
 
 // Attester.client *http.Client field.
-func checkAttesterClientField(r *result, p providerInfo) {
+func checkAttesterClientField(r *result, p *providerInfo) {
 	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
@@ -326,7 +326,7 @@ func checkAttesterClientField(r *result, p providerInfo) {
 }
 
 // Parse function exists.
-func checkParseFunc(r *result, p providerInfo, want string) *ast.FuncDecl {
+func checkParseFunc(r *result, p *providerInfo, want string) *ast.FuncDecl {
 	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
@@ -345,7 +345,7 @@ func checkParseFunc(r *result, p providerInfo, want string) *ast.FuncDecl {
 }
 
 // Parse function calls jsonstrict.UnmarshalWarn.
-func checkParseFuncUsesJSONStrict(r *result, p providerInfo, fd *ast.FuncDecl) {
+func checkParseFuncUsesJSONStrict(r *result, p *providerInfo, fd *ast.FuncDecl) {
 	if fd == nil {
 		r.failf("jsonstrict.UnmarshalWarn — no parse function in %s", p.name)
 		return
@@ -360,7 +360,7 @@ func checkParseFuncUsesJSONStrict(r *result, p providerInfo, fd *ast.FuncDecl) {
 }
 
 // Parse function calls formatdetect.Detect.
-func checkUsesFormatDetect(r *result, p providerInfo, fd *ast.FuncDecl) {
+func checkUsesFormatDetect(r *result, p *providerInfo, fd *ast.FuncDecl) {
 	if fd == nil {
 		r.failf("formatdetect.Detect — no parse function in %s", p.name)
 		return
@@ -375,7 +375,7 @@ func checkUsesFormatDetect(r *result, p providerInfo, fd *ast.FuncDecl) {
 }
 
 // FetchAttestation calls io.LimitReader.
-func checkFetchUsesLimitReader(r *result, p providerInfo) {
+func checkFetchUsesLimitReader(r *result, p *providerInfo) {
 	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
@@ -398,7 +398,7 @@ func checkFetchUsesLimitReader(r *result, p providerInfo) {
 }
 
 // No slog calls with API key field names.
-func checkNoSlogAPIKeyArgs(r *result, p providerInfo) {
+func checkNoSlogAPIKeyArgs(r *result, p *providerInfo) {
 	badNames := []string{"apiKey", "api_key", "APIKey", "apikey"}
 	for _, f := range p.files {
 		found := false
@@ -441,7 +441,7 @@ func checkNoSlogAPIKeyArgs(r *result, p providerInfo) {
 
 // No json.RawMessage in provider response structs.
 // Skips models.go which uses json.RawMessage for pass-through relay (not attestation parsing).
-func checkNoJSONRawMessage(r *result, p providerInfo) {
+func checkNoJSONRawMessage(r *result, p *providerInfo) {
 	var violations []string
 	for i, f := range p.files {
 		if filepath.Base(p.fileNames[i]) == "models.go" {
@@ -499,7 +499,7 @@ func collectRawMessageViolations(fset *token.FileSet, st *ast.StructType, struct
 }
 
 // At least one test file uses external package.
-func checkExternalTestPackage(r *result, p providerInfo) {
+func checkExternalTestPackage(r *result, p *providerInfo) {
 	testFiles, _ := filepath.Glob(filepath.Join(p.dir, "*_test.go"))
 	wantPkg := p.name + "_test"
 	for _, tf := range testFiles {

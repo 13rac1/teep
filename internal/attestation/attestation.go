@@ -57,6 +57,7 @@ func ParseNonce(s string) (Nonce, error) {
 // to dispatch to the correct ReportDataVerifier via multi.Verifier.
 type BackendFormat string
 
+// BackendFormat constants for known attestation backends.
 const (
 	FormatDstack  BackendFormat = "dstack"
 	FormatChutes  BackendFormat = "chutes"

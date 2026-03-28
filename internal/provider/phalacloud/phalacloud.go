@@ -17,6 +17,7 @@ package phalacloud
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -119,11 +120,11 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 	case attestation.FormatDstack:
 		return nanogpt.ParseAttestationResponse(body)
 	case attestation.FormatTinfoil:
-		return nil, fmt.Errorf("phalacloud: tinfoil attestation format not yet supported")
+		return nil, errors.New("phalacloud: tinfoil attestation format not yet supported")
 	case attestation.FormatGateway:
-		return nil, fmt.Errorf("phalacloud: gateway attestation format not yet supported")
+		return nil, errors.New("phalacloud: gateway attestation format not yet supported")
 	default:
-		return nil, fmt.Errorf("phalacloud: unrecognized attestation format (no known format keys found)")
+		return nil, errors.New("phalacloud: unrecognized attestation format (no known format keys found)")
 	}
 }
 

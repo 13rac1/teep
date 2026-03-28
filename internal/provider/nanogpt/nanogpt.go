@@ -10,6 +10,7 @@ package nanogpt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -212,11 +213,11 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 	case attestation.FormatChutes:
 		return chutes.ParseAttestationResponse(body)
 	case attestation.FormatTinfoil:
-		return nil, fmt.Errorf("nanogpt: tinfoil attestation format not yet supported")
+		return nil, errors.New("nanogpt: tinfoil attestation format not yet supported")
 	case attestation.FormatGateway:
-		return nil, fmt.Errorf("nanogpt: gateway attestation format not yet supported")
+		return nil, errors.New("nanogpt: gateway attestation format not yet supported")
 	default:
-		return nil, fmt.Errorf("nanogpt: unrecognized attestation format (no known format keys found)")
+		return nil, errors.New("nanogpt: unrecognized attestation format (no known format keys found)")
 	}
 }
 
