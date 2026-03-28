@@ -432,7 +432,7 @@ func evalTDXReportDataBinding(in *ReportInput) []FactorResult {
 	if in.TDX.ReportDataBindingDetail != "" {
 		return factor(TierBinding, "tdx_reportdata_binding", Pass, in.TDX.ReportDataBindingDetail)
 	}
-	return factor(TierBinding, "tdx_reportdata_binding", Skip, "no REPORTDATA verifier configured for this provider")
+	return factor(TierBinding, "tdx_reportdata_binding", Fail, "no REPORTDATA verifier configured for this provider")
 }
 func evalIntelPCSCollateral(in *ReportInput) []FactorResult {
 	if in.TDX == nil || in.TDX.ParseErr != nil {

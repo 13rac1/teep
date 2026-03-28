@@ -429,9 +429,9 @@ func TestEvalTDXReportDataBinding(t *testing.T) {
 			Pass, "keccak256",
 		},
 		{
-			"skip_no_verifier",
+			"fail_no_verifier",
 			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16)},
-			Skip, "no REPORTDATA verifier",
+			Fail, "no REPORTDATA verifier",
 		},
 		{
 			"fail_nil_tdx",
