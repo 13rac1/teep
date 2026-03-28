@@ -411,8 +411,8 @@ func TestCachePutEviction_AllNonExpired(t *testing.T) {
 	for i := range maxCacheEntries + 2 {
 		c.Put("p", fmt.Sprintf("m-%d", i), &VerificationReport{})
 	}
-	if c.Len() > maxCacheEntries+1 {
-		t.Errorf("cache should be bounded; got Len = %d", c.Len())
+	if c.Len() > maxCacheEntries {
+		t.Errorf("cache should enforce hard cap; got Len = %d, want <= %d", c.Len(), maxCacheEntries)
 	}
 }
 
@@ -423,8 +423,8 @@ func TestNegativeCacheRecordEviction_AllNonExpired(t *testing.T) {
 	for i := range maxCacheEntries + 2 {
 		c.Record("p", fmt.Sprintf("m-%d", i))
 	}
-	if c.Len() > maxCacheEntries+1 {
-		t.Errorf("negative cache should be bounded; got Len = %d", c.Len())
+	if c.Len() > maxCacheEntries {
+		t.Errorf("negative cache should enforce hard cap; got Len = %d, want <= %d", c.Len(), maxCacheEntries)
 	}
 }
 
@@ -435,8 +435,8 @@ func TestSigningKeyCachePutEviction_AllNonExpired(t *testing.T) {
 	for i := range maxCacheEntries + 2 {
 		c.Put("p", fmt.Sprintf("m-%d", i), "key")
 	}
-	if c.Len() > maxCacheEntries+1 {
-		t.Errorf("signing key cache should be bounded; got Len = %d", c.Len())
+	if c.Len() > maxCacheEntries {
+		t.Errorf("signing key cache should enforce hard cap; got Len = %d, want <= %d", c.Len(), maxCacheEntries)
 	}
 }
 
