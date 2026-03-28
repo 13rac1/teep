@@ -72,7 +72,7 @@ report-phalacloud: build ## Verify Phala Cloud attestation (requires PHALA_API_K
 	./teep verify phalacloud --model phala/deepseek-v3.2 --log-level debug --save-dir /tmp/teep-attestation-phalacloud
 
 report-chutes: build ## Verify Chutes attestation (requires CHUTES_API_KEY)
-	./teep verify chutes --model deepseek-ai/DeepSeek-V3-0324 --log-level debug --save-dir /tmp/teep-attestation-chutes
+	./teep verify chutes --model 0df3133d-c477-56d2-b4db-f2093bb150a1 --log-level debug --save-dir /tmp/teep-attestation-chutes
 
 e2e-venice: ## Run Venice E2E test (requires VENICE_API_KEY)
 	./test/e2e-venice.sh

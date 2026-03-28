@@ -1,18 +1,17 @@
-// Package chutes implements the Attester for the Chutes TEE attestation format.
+// Package chutes implements the Attester and RequestPreparer interfaces for
+// the Chutes direct TEE attestation API.
 //
-// Chutes attestation responses use a distinct format from dstack/Venice:
-//   - intel_quote is base64-encoded (not hex)
-//   - No signing_address field; uses e2e_pubkey instead
-//   - GPU attestation is per-GPU evidence, not a single nvidia_payload JWT
-//   - The server generates its own nonce (does not echo the client nonce)
+// The Chutes API uses a two-step attestation protocol:
+//  1. GET /e2e/instances/{chute} → discover instances with ML-KEM-768 public keys
+//  2. GET /chutes/{chute}/evidence?nonce={hex} → fetch TDX quotes and GPU evidence
+//
+// REPORTDATA binding: SHA256(nonce + e2e_pubkey).
+// Model aliases: "default", "default:latency", "default:throughput".
 //
 // Chutes attestation endpoint:
 //
-//	GET {base_url}/attestation/report?model={model}&nonce={nonce}
+//	GET {base_url}/chutes/{chute}/evidence?nonce={hex}
 //	Authorization: Bearer {api_key}
-//
-// This package is used both directly (for the chutes provider) and by gateway
-// providers (nanogpt, phalacloud/RedPill) that detect chutes format and delegate.
 package chutes
 
 import (
@@ -31,44 +30,52 @@ import (
 	"github.com/13rac1/teep/internal/provider"
 )
 
-// attestationPath is the Chutes API path for TEE attestation reports.
-const attestationPath = "/attestation/report"
-
 const (
-	// maxAttestationEntries bounds the number of attestation entries we parse.
-	maxAttestationEntries = 256
+	// attestationPath is the Chutes API path for TEE evidence (with chute ID placeholder).
+	attestationPath = "/chutes/%s/evidence"
 
-	// maxGPUEvidence bounds the number of GPU evidence entries per attestation.
+	// instancesPath is the Chutes API path for discovering e2e instances.
+	instancesPath = "/e2e/instances/"
+
+	// maxEvidence bounds the number of evidence entries we parse.
+	maxEvidence = 256
+
+	// maxGPUEvidence bounds the number of GPU evidence entries per instance.
 	maxGPUEvidence = 64
+
+	// maxBodySize is the maximum response body size (2 MiB).
+	maxBodySize = 2 << 20
 )
 
-// gpuEvidence is a single GPU attestation entry from the chutes format.
-type gpuEvidence struct {
-	Certificate string `json:"certificate"`
-	Evidence    string `json:"evidence"`
-	Arch        string `json:"arch"`
+// e2eInstancesResponse is the JSON response from GET /e2e/instances/{chute}.
+type e2eInstancesResponse struct {
+	Instances []e2eInstance `json:"instances"`
 }
 
-// chutesAttestation is one entry in the chutes "all_attestations" array.
-type chutesAttestation struct {
-	InstanceID  string        `json:"instance_id"`
-	Nonce       string        `json:"nonce"`
-	E2EPubKey   string        `json:"e2e_pubkey"`
-	IntelQuote  string        `json:"intel_quote"` // base64-encoded TDX quote
-	GPUEvidence []gpuEvidence `json:"gpu_evidence"`
+// e2eInstance is one instance entry with its ML-KEM-768 public key.
+type e2eInstance struct {
+	InstanceID string   `json:"instance_id"`
+	E2EPubKey  string   `json:"e2e_pubkey"`
+	Nonces     []string `json:"nonces"`
+	NonceExpIn int      `json:"nonce_expires_in"`
+	NonceExpAt float64  `json:"nonce_expires_at"`
 }
 
-// attestationResponse is the top-level JSON shape returned by the chutes
-// attestation format.
+// attestationResponse is the JSON response from GET /chutes/{chute}/evidence.
 type attestationResponse struct {
-	AttestationType string              `json:"attestation_type"`
-	Nonce           string              `json:"nonce"`
-	AllAttestations []chutesAttestation `json:"all_attestations"`
+	Evidence          []instanceEvidence `json:"evidence"`
+	FailedInstanceIDs []string           `json:"failed_instance_ids"`
 }
 
-// Attester fetches attestation data from a Chutes-compatible attestation
-// endpoint. The nonce is sent as a query parameter; the server generates
-// its own nonce (does not echo the client nonce).
+// instanceEvidence is one instance's attestation evidence.
+type instanceEvidence struct {
+	Quote       string                    `json:"quote"` // base64-encoded TDX quote
+	GPUEvidence []attestation.GPUEvidence `json:"gpu_evidence"`
+	InstanceID  string                    `json:"instance_id"`
+	Certificate string                    `json:"certificate"` // base64 DER TLS cert
+}
+
+// Attester fetches attestation data from the Chutes direct API.
 type Attester struct {
 	baseURL string
 	apiKey  string
@@ -85,98 +92,128 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 	}
 }
 
-// FetchAttestation fetches TEE attestation from Chutes. The nonce is sent
-// as a query parameter. The server generates its own nonce.
+// FetchAttestation fetches TEE attestation from Chutes using the two-step
+// protocol: discover instances, then fetch evidence.
 func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
-	endpoint, err := url.Parse(a.baseURL + attestationPath)
+	// Step 1: Discover instances with e2e public keys.
+	instancesURL, err := url.Parse(a.baseURL + instancesPath + url.PathEscape(model))
 	if err != nil {
-		return nil, fmt.Errorf("chutes: parse endpoint URL %q: %w", a.baseURL+attestationPath, err)
+		return nil, fmt.Errorf("chutes: parse instances URL: %w", err)
 	}
-	q := endpoint.Query()
-	q.Set("model", model)
-	q.Set("nonce", nonce.Hex())
-	endpoint.RawQuery = q.Encode()
 
-	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
+	slog.Debug("chutes: fetching e2e instances", "url_path", instancesURL.Path)
+	instancesBody, err := provider.FetchAttestationJSON(ctx, a.client, instancesURL.String(), a.apiKey, maxBodySize)
 	if err != nil {
-		return nil, fmt.Errorf("chutes: %w", err)
+		return nil, fmt.Errorf("chutes: fetch instances: %w", err)
 	}
-	return ParseAttestationResponse(body)
+
+	// Step 2: Fetch evidence with our nonce.
+	evidencePath := fmt.Sprintf(attestationPath, url.PathEscape(model))
+	evidenceURL, err := url.Parse(a.baseURL + evidencePath)
+	if err != nil {
+		return nil, fmt.Errorf("chutes: parse evidence URL: %w", err)
+	}
+	q := evidenceURL.Query()
+	q.Set("nonce", nonce.Hex())
+	evidenceURL.RawQuery = q.Encode()
+
+	slog.Debug("chutes: fetching evidence", "url_path", evidenceURL.Path)
+	evidenceBody, err := provider.FetchAttestationJSON(ctx, a.client, evidenceURL.String(), a.apiKey, maxBodySize)
+	if err != nil {
+		return nil, fmt.Errorf("chutes: fetch evidence: %w", err)
+	}
+
+	return ParseAttestationResponse(instancesBody, evidenceBody, nonce)
 }
 
-// ParseAttestationResponse unmarshals a chutes-format attestation JSON response
-// body into a RawAttestation. The first attestation entry is used for TDX quote
-// verification. The base64-encoded intel_quote is converted to hex for
-// compatibility with the TDX verification pipeline.
-func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) {
+// ParseAttestationResponse parses the two Chutes API response bodies (instances
+// and evidence) into a RawAttestation. The first evidence entry is matched to
+// its e2e instance to obtain the ML-KEM-768 public key.
+func ParseAttestationResponse(instancesBody, evidenceBody []byte, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	var instances e2eInstancesResponse
+	if err := jsonstrict.UnmarshalWarn(instancesBody, &instances, "chutes e2e instances response"); err != nil {
+		return nil, fmt.Errorf("chutes: unmarshal instances response: %w", err)
+	}
+	if len(instances.Instances) == 0 {
+		return nil, errors.New("chutes: no instances available")
+	}
+
 	var ar attestationResponse
-	if err := jsonstrict.UnmarshalWarn(body, &ar, "chutes attestation response"); err != nil {
-		return nil, fmt.Errorf("chutes: unmarshal attestation response: %w", err)
+	if err := jsonstrict.UnmarshalWarn(evidenceBody, &ar, "chutes evidence response"); err != nil {
+		return nil, fmt.Errorf("chutes: unmarshal evidence response: %w", err)
+	}
+	if len(ar.Evidence) == 0 {
+		return nil, errors.New("chutes: no evidence entries returned")
+	}
+	if len(ar.Evidence) > maxEvidence {
+		return nil, fmt.Errorf("chutes: evidence has %d entries, max %d",
+			len(ar.Evidence), maxEvidence)
 	}
 
-	if len(ar.AllAttestations) == 0 {
-		return nil, errors.New("chutes: all_attestations is empty")
-	}
-	if len(ar.AllAttestations) > maxAttestationEntries {
-		return nil, fmt.Errorf("chutes: all_attestations has %d entries, max %d",
-			len(ar.AllAttestations), maxAttestationEntries)
-	}
+	slog.Debug("chutes: attestation received",
+		"instances", len(instances.Instances),
+		"evidence", len(ar.Evidence),
+		"failed", len(ar.FailedInstanceIDs),
+	)
 
-	// Use the first attestation entry for verification.
-	first := ar.AllAttestations[0]
+	// Use the first evidence entry.
+	first := ar.Evidence[0]
 
-	for i, a := range ar.AllAttestations {
-		if len(a.GPUEvidence) > maxGPUEvidence {
-			return nil, fmt.Errorf("chutes: attestation[%d] has %d GPU evidence entries, max %d",
-				i, len(a.GPUEvidence), maxGPUEvidence)
-		}
+	if len(first.GPUEvidence) > maxGPUEvidence {
+		return nil, fmt.Errorf("chutes: instance %s has %d GPU evidence entries, max %d",
+			first.InstanceID, len(first.GPUEvidence), maxGPUEvidence)
 	}
 
-	// Convert base64-encoded intel_quote to hex for TDX verification pipeline.
+	// Find matching e2e instance to get the public key.
+	e2ePubKey, err := findE2EPubKey(instances.Instances, first.InstanceID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert base64-encoded quote to hex for TDX verification pipeline.
 	var intelQuoteHex string
-	if first.IntelQuote != "" {
-		quoteBytes, err := base64.StdEncoding.DecodeString(first.IntelQuote)
+	if first.Quote != "" {
+		quoteBytes, err := base64.StdEncoding.DecodeString(first.Quote)
 		if err != nil {
-			return nil, fmt.Errorf("chutes: base64-decode intel_quote: %w", err)
+			return nil, fmt.Errorf("chutes: base64-decode quote: %w", err)
 		}
 		intelQuoteHex = hex.EncodeToString(quoteBytes)
 	}
 
-	// Map per-GPU evidence for direct SPDM verification.
-	var gpuEvidence []attestation.GPUEvidence
-	for _, ge := range first.GPUEvidence {
-		gpuEvidence = append(gpuEvidence, attestation.GPUEvidence{
-			Certificate: ge.Certificate,
-			Evidence:    ge.Evidence,
-			Arch:        ge.Arch,
-		})
-	}
-
-	slog.Debug("chutes attestation parsed",
-		"type", ar.AttestationType,
-		"instances", len(ar.AllAttestations),
+	slog.Debug("chutes: attestation parsed",
 		"instance_id", first.InstanceID,
 		"gpus", len(first.GPUEvidence),
-		"nonce_prefix", attestation.NoncePrefix(ar.Nonce),
+		"has_quote", first.Quote != "",
+		"has_e2e_pubkey", e2ePubKey != "",
 	)
 
 	return &attestation.RawAttestation{
 		BackendFormat: attestation.FormatChutes,
-		Nonce:         ar.Nonce,
+		Nonce:         nonce.Hex(),
 		TEEProvider:   "TDX+NVIDIA",
-		SigningKey:    first.E2EPubKey,
+		SigningKey:    e2ePubKey,
 		SigningAlgo:   "ml-kem-768",
 		IntelQuote:    intelQuoteHex,
-		GPUEvidence:   gpuEvidence,
+		GPUEvidence:   first.GPUEvidence,
 
 		TEEHardware: "intel-tdx",
-		NonceSource: "server",
+		NonceSource: "client",
 
-		CandidatesAvail: len(ar.AllAttestations),
+		CandidatesAvail: len(ar.Evidence),
 		CandidatesEval:  1,
 
-		RawBody: body,
+		RawBody: evidenceBody,
 	}, nil
+}
+
+// findE2EPubKey finds the e2e public key for the given instance ID.
+func findE2EPubKey(instances []e2eInstance, instanceID string) (string, error) {
+	for _, inst := range instances {
+		if inst.InstanceID == instanceID {
+			return inst.E2EPubKey, nil
+		}
+	}
+	return "", fmt.Errorf("chutes: instance %q not found in e2e instances", instanceID)
 }
 
 // Preparer injects the Chutes Authorization header into outgoing requests.
