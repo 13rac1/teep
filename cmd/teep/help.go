@@ -205,7 +205,7 @@ var factorRegistry = []factorInfo{
 		Description: "Performs a live E2EE test inference using the attested " +
 			"signing key. Sends an encrypted request to the provider and " +
 			"validates that all response content fields (content, " +
-			"reasoning_content, reasoning, audio.data) are properly encrypted " +
+			"reasoning_content, reasoning) are properly encrypted " +
 			"in the SSE stream. Any unencrypted content field or decryption " +
 			"failure causes this factor to fail. Skipped when offline, when " +
 			"the provider does not support E2EE, or when no API key is set.",
