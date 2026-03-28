@@ -1,39 +1,22 @@
 // Package phalacloud implements the Attester and RequestPreparer interfaces for
-// Phala Cloud's TEE attestation API (RedPill / Chutes infrastructure).
+// Phala Cloud's TEE attestation API (RedPill gateway).
+//
+// RedPill is a multi-backend gateway that returns attestation in different
+// formats depending on the backend model. Supported formats:
+//
+//   - chutes:  "attestation_type" key present → delegates to chutes.ParseAttestationResponse
+//   - dstack:  "intel_quote" key present → delegates to nanogpt.ParseAttestationResponse
+//   - tinfoil: "format" key present → not yet supported
+//   - gateway: "gateway_attestation" key present → not yet supported
 //
 // Phala Cloud attestation endpoint:
 //
 //	GET {base_url}/attestation/report?model={model}&nonce={nonce}
 //	Authorization: Bearer {api_key}
-//
-// The "chutes" attestation format returns:
-//
-//	{
-//	  "attestation_type": "chutes",
-//	  "nonce": "<server-generated 64-hex>",
-//	  "all_attestations": [
-//	    {
-//	      "instance_id": "...",
-//	      "nonce": "...",
-//	      "e2e_pubkey": "<base64 certificate>",
-//	      "intel_quote": "<base64 TDX quote>",
-//	      "gpu_evidence": [{"certificate":"...","evidence":"...","arch":"HOPPER"}]
-//	    }
-//	  ]
-//	}
-//
-// Key differences from NEAR AI / Venice formats:
-//   - intel_quote is base64-encoded (not hex)
-//   - No signing_address field; uses e2e_pubkey instead
-//   - GPU attestation is per-GPU evidence, not a single nvidia_payload JWT
-//   - The server generates its own nonce (does not echo the client nonce)
 package phalacloud
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -42,7 +25,9 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
-	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/formatdetect"
+	"github.com/13rac1/teep/internal/provider/chutes"
+	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -54,37 +39,7 @@ const (
 	// attestationTimeout is longer than the default because Phala Cloud's
 	// multi-instance attestation endpoint is slow (typically 30-60s).
 	attestationTimeout = 120 * time.Second
-
-	// maxAttestationEntries bounds the number of attestation entries we parse.
-	maxAttestationEntries = 256
-
-	// maxGPUEvidence bounds the number of GPU evidence entries per attestation.
-	maxGPUEvidence = 64
 )
-
-// gpuEvidence is a single GPU attestation entry from the chutes format.
-type gpuEvidence struct {
-	Certificate string `json:"certificate"`
-	Evidence    string `json:"evidence"`
-	Arch        string `json:"arch"`
-}
-
-// phalaAttestation is one entry in the chutes "all_attestations" array.
-type phalaAttestation struct {
-	InstanceID  string        `json:"instance_id"`
-	Nonce       string        `json:"nonce"`
-	E2EPubKey   string        `json:"e2e_pubkey"`
-	IntelQuote  string        `json:"intel_quote"` // base64-encoded TDX quote
-	GPUEvidence []gpuEvidence `json:"gpu_evidence"`
-}
-
-// attestationResponse is the top-level JSON shape returned by Phala Cloud's
-// "chutes" attestation format.
-type attestationResponse struct {
-	AttestationType string             `json:"attestation_type"`
-	Nonce           string             `json:"nonce"`
-	AllAttestations []phalaAttestation `json:"all_attestations"`
-}
 
 // Attester fetches attestation data from Phala Cloud's attestation endpoint.
 // The nonce is sent as a query parameter; the server may generate its own.
@@ -111,8 +66,8 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 }
 
 // FetchAttestation fetches TEE attestation from Phala Cloud. The nonce is sent
-// as a query parameter. In the chutes format, the server generates its own
-// nonce (does not echo the client nonce).
+// as a query parameter. Format detection is performed on the response body to
+// delegate to the correct backend parser.
 func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	endpoint, err := url.Parse(a.baseURL + attestationPath)
 	if err != nil {
@@ -152,65 +107,24 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	return ParseAttestationResponse(body)
 }
 
-// ParseAttestationResponse unmarshals a Phala Cloud "chutes" attestation JSON
-// response body into a RawAttestation. The first attestation entry is used for
-// TDX quote verification. The base64-encoded intel_quote is converted to hex
-// for compatibility with the TDX verification pipeline.
+// ParseAttestationResponse detects the attestation format from the JSON body
+// and delegates to the appropriate backend parser.
 func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) {
-	var ar attestationResponse
-	if err := jsonstrict.UnmarshalWarn(body, &ar, "phalacloud attestation response"); err != nil {
-		return nil, fmt.Errorf("phalacloud: unmarshal attestation response: %w", err)
+	format := formatdetect.Detect(body)
+	slog.Debug("phalacloud format detected", "format", format)
+
+	switch format {
+	case attestation.FormatChutes:
+		return chutes.ParseAttestationResponse(body)
+	case attestation.FormatDstack:
+		return nanogpt.ParseAttestationResponse(body)
+	case attestation.FormatTinfoil:
+		return nil, fmt.Errorf("phalacloud: tinfoil attestation format not yet supported")
+	case attestation.FormatGateway:
+		return nil, fmt.Errorf("phalacloud: gateway attestation format not yet supported")
+	default:
+		return nil, fmt.Errorf("phalacloud: unrecognized attestation format (no known format keys found)")
 	}
-
-	if len(ar.AllAttestations) == 0 {
-		return nil, errors.New("phalacloud: all_attestations is empty")
-	}
-	if len(ar.AllAttestations) > maxAttestationEntries {
-		return nil, fmt.Errorf("phalacloud: all_attestations has %d entries, max %d",
-			len(ar.AllAttestations), maxAttestationEntries)
-	}
-
-	// Use the first attestation entry for verification.
-	first := ar.AllAttestations[0]
-
-	for i, a := range ar.AllAttestations {
-		if len(a.GPUEvidence) > maxGPUEvidence {
-			return nil, fmt.Errorf("phalacloud: attestation[%d] has %d GPU evidence entries, max %d",
-				i, len(a.GPUEvidence), maxGPUEvidence)
-		}
-	}
-
-	// Convert base64-encoded intel_quote to hex for TDX verification pipeline.
-	var intelQuoteHex string
-	if first.IntelQuote != "" {
-		quoteBytes, err := base64.StdEncoding.DecodeString(first.IntelQuote)
-		if err != nil {
-			return nil, fmt.Errorf("phalacloud: base64-decode intel_quote: %w", err)
-		}
-		intelQuoteHex = hex.EncodeToString(quoteBytes)
-	}
-
-	slog.Debug("phalacloud attestation parsed",
-		"type", ar.AttestationType,
-		"instances", len(ar.AllAttestations),
-		"instance_id", first.InstanceID,
-		"gpus", len(first.GPUEvidence),
-		"nonce_prefix", attestation.NoncePrefix(ar.Nonce),
-	)
-
-	return &attestation.RawAttestation{
-		Nonce:       ar.Nonce,
-		TEEProvider: "TDX+NVIDIA",
-		SigningKey:  first.E2EPubKey,
-		IntelQuote:  intelQuoteHex,
-
-		TEEHardware: "intel-tdx",
-		NonceSource: "server",
-
-		CandidatesAvail: len(ar.AllAttestations),
-
-		RawBody: body,
-	}, nil
 }
 
 // Preparer injects the Phala Cloud Authorization header into outgoing requests.

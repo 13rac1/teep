@@ -18,7 +18,9 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider/chutes"
 )
 
 // attestationPath is the NanoGPT API path for TEE attestation.
@@ -196,10 +198,32 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	return ParseAttestationResponse(body)
 }
 
-// ParseAttestationResponse unmarshals a NanoGPT attestation JSON response body
-// into a RawAttestation. Exported so integration tests can parse fixture files
-// without making HTTP calls.
+// ParseAttestationResponse detects the attestation format from the JSON body
+// and delegates to the appropriate parser. For dstack format (the primary
+// NanoGPT backend), parsing is handled internally. Other formats (chutes)
+// are delegated to their respective packages.
 func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) {
+	format := formatdetect.Detect(body)
+	slog.Debug("nanogpt format detected", "format", format)
+
+	switch format {
+	case attestation.FormatDstack:
+		return parseDstack(body)
+	case attestation.FormatChutes:
+		return chutes.ParseAttestationResponse(body)
+	case attestation.FormatTinfoil:
+		return nil, fmt.Errorf("nanogpt: tinfoil attestation format not yet supported")
+	case attestation.FormatGateway:
+		return nil, fmt.Errorf("nanogpt: gateway attestation format not yet supported")
+	default:
+		return nil, fmt.Errorf("nanogpt: unrecognized attestation format (no known format keys found)")
+	}
+}
+
+// parseDstack handles the dstack attestation format with NanoGPT-specific
+// quirks (signing_public_key instead of signing_key, eventLogFlexible,
+// double-encoded tcb_info).
+func parseDstack(body []byte) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
 	if err := jsonstrict.UnmarshalWarn(body, &ar, "nanogpt attestation response"); err != nil {
 		return nil, fmt.Errorf("nanogpt: unmarshal attestation response: %w", err)
@@ -227,6 +251,7 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 	}
 
 	return &attestation.RawAttestation{
+		BackendFormat:  attestation.FormatDstack,
 		Nonce:          ar.RequestNonce,
 		SigningKey:     signingKey,
 		SigningAddress: ar.SigningAddress,

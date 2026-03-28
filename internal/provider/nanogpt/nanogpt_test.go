@@ -52,6 +52,46 @@ func makeAttestationServer(t *testing.T, status int, body string) *httptest.Serv
 	}))
 }
 
+// minimalDstack returns a minimal dstack-format JSON body that passes format
+// detection (has intel_quote key) and dstack parsing.
+func minimalDstack(nonce, signingKey string) string {
+	return `{
+		"signing_public_key": "` + signingKey + `",
+		"signing_address": "",
+		"signing_algo": "",
+		"intel_quote": "00",
+		"quote": "",
+		"nvidia_payload": "",
+		"event_log": "[]",
+		"info": {
+			"app_cert": "",
+			"app_id": "",
+			"app_name": "",
+			"compose_hash": "",
+			"device_id": "",
+			"instance_id": "",
+			"key_provider_info": "",
+			"mr_aggregated": "",
+			"os_image_hash": "",
+			"tcb_info": {
+				"app_compose": "",
+				"compose_hash": "",
+				"device_id": "",
+				"event_log": [],
+				"mrtd": "",
+				"os_image_hash": "",
+				"rtmr0": "",
+				"rtmr1": "",
+				"rtmr2": "",
+				"rtmr3": ""
+			},
+			"vm_config": ""
+		},
+		"request_nonce": "` + nonce + `",
+		"vm_config": ""
+	}`
+}
+
 func TestAttester_FetchAttestation_Success(t *testing.T) {
 	srv := makeAttestationServer(t, http.StatusOK, validAttestationJSON)
 	defer srv.Close()
@@ -269,19 +309,32 @@ func TestAttester_FetchAttestation_UnknownFields(t *testing.T) {
 }
 
 func TestAttester_FetchAttestation_EmptyResponse(t *testing.T) {
+	// An empty {} body has no format detection keys, so it should error.
 	srv := makeAttestationServer(t, http.StatusOK, `{}`)
+	defer srv.Close()
+
+	a := nanogpt.NewAttester(srv.URL, "key")
+	_, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
+	if err == nil {
+		t.Fatal("expected error for empty response with no format keys")
+	}
+}
+
+func TestAttester_FetchAttestation_MinimalDstack(t *testing.T) {
+	// Minimal dstack response — just enough for format detection + parse.
+	srv := makeAttestationServer(t, http.StatusOK, minimalDstack("", ""))
 	defer srv.Close()
 
 	a := nanogpt.NewAttester(srv.URL, "key")
 	raw, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
 	if err != nil {
-		t.Fatalf("FetchAttestation with empty body returned error: %v", err)
+		t.Fatalf("FetchAttestation with minimal dstack returned error: %v", err)
 	}
 	if raw.Nonce != "" {
-		t.Errorf("Nonce = %q for empty response, want empty", raw.Nonce)
+		t.Errorf("Nonce = %q for minimal response, want empty", raw.Nonce)
 	}
 	if raw.SigningKey != "" {
-		t.Errorf("SigningKey = %q for empty response, want empty", raw.SigningKey)
+		t.Errorf("SigningKey = %q for minimal response, want empty", raw.SigningKey)
 	}
 }
 
@@ -337,6 +390,31 @@ func TestAttester_FetchAttestation_EventLogAsArray(t *testing.T) {
 	}
 	if len(raw.EventLog) != 1 {
 		t.Errorf("len(EventLog) = %d, want 1", len(raw.EventLog))
+	}
+}
+
+func TestParseAttestationResponse_ChutesFormatDelegation(t *testing.T) {
+	// Verify that a chutes-format response is correctly delegated.
+	body := `{
+		"attestation_type": "chutes",
+		"nonce": "aabb000000000000000000000000000000000000000000000000000000000000",
+		"all_attestations": [{
+			"instance_id": "i",
+			"nonce": "aabb000000000000000000000000000000000000000000000000000000000000",
+			"e2e_pubkey": "test-key",
+			"intel_quote": "` + "dGVzdA==" + `",
+			"gpu_evidence": []
+		}]
+	}`
+	raw, err := nanogpt.ParseAttestationResponse([]byte(body))
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse: %v", err)
+	}
+	if raw.BackendFormat != attestation.FormatChutes {
+		t.Errorf("BackendFormat = %q, want %q", raw.BackendFormat, attestation.FormatChutes)
+	}
+	if raw.SigningKey != "test-key" {
+		t.Errorf("SigningKey = %q, want %q", raw.SigningKey, "test-key")
 	}
 }
 

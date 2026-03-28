@@ -23,7 +23,6 @@ func makeServer(t *testing.T, status int, body string) *httptest.Server {
 }
 
 // fakeQuoteBase64 returns a minimal base64-encoded TDX quote for tests.
-// The real TDX parser will fail on this, but it exercises the base64→hex path.
 func fakeQuoteBase64() string {
 	return base64.StdEncoding.EncodeToString([]byte("fake-tdx-quote-bytes"))
 }
@@ -60,6 +59,9 @@ func TestAttester_FetchAttestation_ChutesFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
 	}
+	if raw.BackendFormat != attestation.FormatChutes {
+		t.Errorf("BackendFormat = %q, want %q", raw.BackendFormat, attestation.FormatChutes)
+	}
 	if raw.IntelQuote != fakeQuoteHex() {
 		t.Errorf("IntelQuote = %q, want hex-decoded base64 = %q", raw.IntelQuote, fakeQuoteHex())
 	}
@@ -77,6 +79,78 @@ func TestAttester_FetchAttestation_ChutesFormat(t *testing.T) {
 	}
 	if raw.NonceSource != "server" {
 		t.Errorf("NonceSource = %q, want server", raw.NonceSource)
+	}
+}
+
+func TestParseAttestationResponse_DstackFormat(t *testing.T) {
+	// A dstack-format response (like Venice/NanoGPT backends return).
+	body := []byte(`{
+		"signing_public_key": "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+		"signing_address": "0xdeadbeef",
+		"signing_algo": "ecdsa",
+		"intel_quote": "deadbeef",
+		"nvidia_payload": "",
+		"event_log": [],
+		"info": {
+			"app_cert": "",
+			"app_id": "",
+			"app_name": "test-app",
+			"compose_hash": "abc123",
+			"device_id": "dev1",
+			"instance_id": "",
+			"key_provider_info": "",
+			"mr_aggregated": "",
+			"os_image_hash": "os123",
+			"tcb_info": {
+				"app_compose": "{}",
+				"compose_hash": "",
+				"device_id": "",
+				"event_log": [],
+				"mrtd": "",
+				"os_image_hash": "",
+				"rtmr0": "",
+				"rtmr1": "",
+				"rtmr2": "",
+				"rtmr3": ""
+			},
+			"vm_config": ""
+		},
+		"request_nonce": "aabb",
+		"quote": "",
+		"vm_config": ""
+	}`)
+
+	raw, err := phalacloud.ParseAttestationResponse(body)
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse: %v", err)
+	}
+	if raw.BackendFormat != attestation.FormatDstack {
+		t.Errorf("BackendFormat = %q, want %q", raw.BackendFormat, attestation.FormatDstack)
+	}
+	if raw.AppName != "test-app" {
+		t.Errorf("AppName = %q, want %q", raw.AppName, "test-app")
+	}
+}
+
+func TestParseAttestationResponse_UnsupportedTinfoil(t *testing.T) {
+	body := []byte(`{"format":"tinfoil","data":"stuff"}`)
+	_, err := phalacloud.ParseAttestationResponse(body)
+	if err == nil {
+		t.Fatal("expected error for tinfoil format")
+	}
+	if !strings.Contains(err.Error(), "tinfoil") {
+		t.Errorf("error should mention tinfoil, got: %v", err)
+	}
+}
+
+func TestParseAttestationResponse_UnrecognizedFormat(t *testing.T) {
+	body := []byte(`{"unknown_key":"value"}`)
+	_, err := phalacloud.ParseAttestationResponse(body)
+	if err == nil {
+		t.Fatal("expected error for unrecognized format")
+	}
+	if !strings.Contains(err.Error(), "unrecognized") {
+		t.Errorf("error should mention unrecognized, got: %v", err)
 	}
 }
 
@@ -111,7 +185,6 @@ func TestAttester_FetchAttestation_MultipleAttestations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
 	}
-	// Should use the first attestation entry.
 	wantHex := hex.EncodeToString([]byte("quote-one"))
 	if raw.IntelQuote != wantHex {
 		t.Errorf("IntelQuote = %q, want first entry hex = %q", raw.IntelQuote, wantHex)
@@ -228,27 +301,6 @@ func TestParseAttestationResponse_InvalidJSON(t *testing.T) {
 	_, err := phalacloud.ParseAttestationResponse([]byte(`not json`))
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
-	}
-}
-
-func TestParseAttestationResponse_EmptyIntelQuote(t *testing.T) {
-	body := []byte(`{
-		"attestation_type": "chutes",
-		"nonce": "0000000000000000000000000000000000000000000000000000000000000000",
-		"all_attestations": [{
-			"instance_id": "i",
-			"nonce": "0000000000000000000000000000000000000000000000000000000000000000",
-			"e2e_pubkey": "k",
-			"intel_quote": "",
-			"gpu_evidence": []
-		}]
-	}`)
-	raw, err := phalacloud.ParseAttestationResponse(body)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if raw.IntelQuote != "" {
-		t.Errorf("IntelQuote should be empty, got %q", raw.IntelQuote)
 	}
 }
 
