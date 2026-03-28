@@ -394,8 +394,12 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, s.cfg.Offline)
 		if prov.ReportDataVerifier != nil && tdxResult.ParseErr == nil {
 			detail, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
-			tdxResult.ReportDataBindingErr = err
-			tdxResult.ReportDataBindingDetail = detail
+			if errors.Is(err, multi.ErrNoVerifier) {
+				slog.Debug("no REPORTDATA verifier for backend format", "format", raw.BackendFormat)
+			} else {
+				tdxResult.ReportDataBindingErr = err
+				tdxResult.ReportDataBindingDetail = detail
+			}
 		}
 		tdxDur = time.Since(tdxStart)
 		slog.Debug("TDX verification complete", "provider", prov.Name, "elapsed", tdxDur)
@@ -887,7 +891,9 @@ func (s *Server) buildUpstreamBody(
 			}
 			if prov.ReportDataVerifier != nil {
 				_, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
-				if err != nil {
+				if errors.Is(err, multi.ErrNoVerifier) {
+					slog.Debug("no REPORTDATA verifier for backend format", "format", raw.BackendFormat)
+				} else if err != nil {
 					return nil, nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", err)
 				}
 			}

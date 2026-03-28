@@ -6,11 +6,17 @@
 package multi
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
 )
+
+// ErrNoVerifier is returned when no sub-verifier is registered for a
+// BackendFormat. Callers should check errors.Is(err, ErrNoVerifier) to
+// distinguish "no verifier exists" from "verification attempted and failed".
+var ErrNoVerifier = errors.New("no REPORTDATA verifier for backend format")
 
 // Verifier dispatches ReportData verification to format-specific sub-verifiers.
 // Gateway providers wire this with one sub-verifier per supported BackendFormat.
@@ -19,11 +25,11 @@ type Verifier struct {
 }
 
 // VerifyReportData dispatches to the sub-verifier matching raw.BackendFormat.
-// Returns an error if no verifier is registered for the format.
+// Returns ErrNoVerifier if no verifier is registered for the format.
 func (v Verifier) VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, nonce attestation.Nonce) (string, error) {
 	sub, ok := v.Verifiers[raw.BackendFormat]
 	if !ok {
-		return "", fmt.Errorf("no REPORTDATA verifier for backend format %q", raw.BackendFormat)
+		return "", fmt.Errorf("%w %q", ErrNoVerifier, raw.BackendFormat)
 	}
 	return sub.VerifyReportData(reportData, raw, nonce)
 }
