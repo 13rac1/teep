@@ -35,14 +35,26 @@ api_key_env = "NANOGPT_API_KEY"
 [policy]
 
 # Enforced factors: these block the proxy when they fail.
-# Default: nonce_match, tdx_debug_disabled, signing_key_present, tdx_reportdata_binding
-# Uncomment to add measurement enforcement:
+# See internal/attestation/report.go DefaultEnforced for the full default list.
+# Defaults include: nonce_match, tdx_cert_chain, tdx_quote_signature,
+# tdx_debug_disabled, signing_key_present, tdx_reportdata_binding,
+# compose_binding, nvidia_signature, nvidia_nonce_client_bound,
+# tdx_tcb_not_revoked, build_transparency_log, sigstore_verification,
+# event_log_integrity, plus gateway equivalents for nearcloud.
+# Uncomment to override:
 # enforce = [
 #   "nonce_match",
+#   "tdx_cert_chain",
+#   "tdx_quote_signature",
 #   "tdx_debug_disabled",
 #   "signing_key_present",
 #   "tdx_reportdata_binding",
-#   "tdx_quote_structure",
+#   "compose_binding",
+#   "nvidia_signature",
+#   "nvidia_nonce_client_bound",
+#   "tdx_tcb_not_revoked",
+#   "build_transparency_log",
+#   "sigstore_verification",
 #   "event_log_integrity",
 # ]
 
