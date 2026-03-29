@@ -191,3 +191,55 @@ func TestUpdateConfigOmitsRTMR3(t *testing.T) {
 		t.Error("gateway_rtmr3_allow should be empty (gateway RTMR3 is omitted by design)")
 	}
 }
+
+func TestUpdateConfigPreservesTopLevelAllowFail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "teep.toml")
+	existing := `allow_fail = ["tdx_quote_present", "tdx_boot_config"]
+
+[providers.venice]
+base_url = "https://api.venice.ai"
+`
+	os.WriteFile(path, []byte(existing), 0o600)
+
+	obs := ObservedMeasurements{MRSeam: strings.Repeat("ab", 48)}
+	if err := UpdateConfig(path, "venice", &obs); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	var f updateFile
+	toml.Decode(string(data), &f)
+	if len(f.AllowFail) != 2 {
+		t.Fatalf("top-level allow_fail lost: got %v", f.AllowFail)
+	}
+	if f.AllowFail[0] != "tdx_quote_present" || f.AllowFail[1] != "tdx_boot_config" {
+		t.Errorf("top-level allow_fail changed: got %v", f.AllowFail)
+	}
+}
+
+func TestUpdateConfigPreservesPerProviderAllowFail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "teep.toml")
+	existing := `[providers.venice]
+base_url = "https://api.venice.ai"
+allow_fail = ["cpu_gpu_chain", "measured_model_weights"]
+`
+	os.WriteFile(path, []byte(existing), 0o600)
+
+	obs := ObservedMeasurements{MRTD: strings.Repeat("cd", 48)}
+	if err := UpdateConfig(path, "venice", &obs); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	var f updateFile
+	toml.Decode(string(data), &f)
+	prov := f.Providers["venice"]
+	if len(prov.AllowFail) != 2 {
+		t.Fatalf("per-provider allow_fail lost: got %v", prov.AllowFail)
+	}
+	if prov.AllowFail[0] != "cpu_gpu_chain" || prov.AllowFail[1] != "measured_model_weights" {
+		t.Errorf("per-provider allow_fail changed: got %v", prov.AllowFail)
+	}
+}

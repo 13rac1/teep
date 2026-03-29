@@ -77,6 +77,7 @@ func UpdateConfig(path, providerName string, observed *ObservedMeasurements) err
 // the .bak backup preserves the original file for manual recovery.
 type updateFile struct {
 	Providers     map[string]updateProvider `toml:"providers,omitempty"`
+	AllowFail     []string                  `toml:"allow_fail,omitempty"`
 	Policy        updatePolicy              `toml:"policy,omitempty"`
 	PoCSigningKey string                    `toml:"poc_signing_key,omitempty"`
 }
@@ -86,6 +87,7 @@ type updateProvider struct {
 	APIKeyEnv string       `toml:"api_key_env,omitempty"`
 	BaseURL   string       `toml:"base_url,omitempty"`
 	E2EE      bool         `toml:"e2ee,omitempty"`
+	AllowFail []string     `toml:"allow_fail,omitempty"`
 	Policy    updatePolicy `toml:"policy,omitempty"`
 }
 
