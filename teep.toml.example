@@ -32,8 +32,13 @@ api_key_env = "NANOGPT_API_KEY"
 # Global Policy
 # ---------------------------------------------------------------------------
 # Measurement allowlists go under [policy] and can be overridden per-provider
-# in [providers.X.policy]. The allow_fail list is a top-level key (outside
-# [policy]) and can be overridden per-provider under [providers.X].
+# in [providers.X.policy].
+#
+# allow_fail precedence (first defined wins):
+#   1. Per-provider: [providers.X].allow_fail
+#   2. Top-level:    allow_fail (outside [policy], recommended)
+#   3. Legacy:       [policy].allow_fail
+#   4. Go defaults:  DefaultAllowFail (see internal/attestation/report.go)
 
 # Allow-fail factors: these are allowed to fail without blocking the proxy.
 # Every factor NOT in this list is enforced (blocks the proxy on failure).
