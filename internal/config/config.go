@@ -315,17 +315,28 @@ func validateAllowFail(names []string) error {
 //  2. Global TOML override        (top-level allow_fail)
 //  3. Per-provider Go defaults    (ProviderDefaultAllowFail)
 //  4. Global Go defaults          (DefaultAllowFail)
+//
+// When offline is true, factors that require network access (OnlineFactors)
+// are automatically added to the result so they cannot block requests.
 func MergedAllowFail(providerName string, cfg *Config) []string {
-	if af, ok := cfg.ProviderAllowFail[providerName]; ok {
-		return af
+	var af []string
+	switch {
+	case cfg.ProviderAllowFail[providerName] != nil:
+		// Use != nil (not ok) so that an explicitly empty slice is honored.
+		af = cfg.ProviderAllowFail[providerName]
+	case cfg.GlobalAllowFailDefined:
+		af = cfg.AllowFail
+	default:
+		if paf, ok := ProviderDefaultAllowFail[providerName]; ok {
+			af = paf
+		} else {
+			af = cfg.AllowFail
+		}
 	}
-	if cfg.GlobalAllowFailDefined {
-		return cfg.AllowFail
+	if cfg.Offline {
+		return attestation.WithOfflineAllowFail(af)
 	}
-	if af, ok := ProviderDefaultAllowFail[providerName]; ok {
-		return af
-	}
-	return cfg.AllowFail
+	return af
 }
 
 // hasMeasurementPolicy reports whether p has any configured allowlists.

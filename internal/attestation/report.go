@@ -183,6 +183,39 @@ var KnownFactors = []string{
 	"gateway_event_log_integrity",
 }
 
+// OnlineFactors lists factors that require network access to external services
+// (Intel PCS, NVIDIA NRAS, Proof of Cloud, Sigstore/Rekor, live E2EE test).
+// In --offline mode these factors are automatically added to allow_fail so
+// they cannot block requests.
+var OnlineFactors = []string{
+	"intel_pcs_collateral",
+	"tdx_tcb_current",
+	"tdx_tcb_not_revoked",
+	"nvidia_nras_verified",
+	"e2ee_usable",
+	"build_transparency_log",
+	"cpu_id_registry",
+	"sigstore_verification",
+	"gateway_cpu_id_registry",
+}
+
+// WithOfflineAllowFail returns a new allow_fail list that unions the given
+// list with OnlineFactors. Used when --offline mode is active to prevent
+// online-dependent factors from blocking requests.
+func WithOfflineAllowFail(allowFail []string) []string {
+	have := make(map[string]bool, len(allowFail))
+	for _, f := range allowFail {
+		have[f] = true
+	}
+	merged := append([]string(nil), allowFail...)
+	for _, f := range OnlineFactors {
+		if !have[f] {
+			merged = append(merged, f)
+		}
+	}
+	return merged
+}
+
 // E2EETestResult holds the outcome of a live E2EE test inference.
 type E2EETestResult struct {
 	// Attempted is true when the E2EE test was started (encryption, request

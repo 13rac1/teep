@@ -407,12 +407,17 @@ func (h *PinnedHandler) attestOnConn(
 
 	sigstoreResults, rekorResults := h.verifySigstore(ctx, allDigests)
 
+	allowFail := h.allowFail
+	if h.offline {
+		allowFail = attestation.WithOfflineAllowFail(allowFail)
+	}
+
 	report := attestation.BuildReport(&attestation.ReportInput{
 		Provider:          "nearcloud",
 		Model:             model,
 		Raw:               raw,
 		Nonce:             modelNonce,
-		AllowFail:         h.allowFail,
+		AllowFail:         allowFail,
 		Policy:            h.policy,
 		SupplyChainPolicy: SupplyChainPolicy(),
 		ImageRepos:        modelCD.Repos,

@@ -931,3 +931,91 @@ func TestMergedAllowFailNeardirectGoDefaults(t *testing.T) {
 		}
 	}
 }
+
+// --- Offline mode ---
+
+func TestMergedAllowFailOfflineAddsOnlineFactors(t *testing.T) {
+	// When cfg.Offline is true, MergedAllowFail should include all
+	// OnlineFactors in the returned list.
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "NEARAI_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	cfg.Offline = true
+
+	af := MergedAllowFail("nearcloud", cfg)
+	afSet := make(map[string]bool, len(af))
+	for _, name := range af {
+		afSet[name] = true
+	}
+	for _, name := range attestation.OnlineFactors {
+		if !afSet[name] {
+			t.Errorf("offline mode: factor %q should be in allow_fail but is not", name)
+		}
+	}
+}
+
+func TestMergedAllowFailOnlineDoesNotAddOnlineFactors(t *testing.T) {
+	// When cfg.Offline is false, nearcloud's tighter defaults should NOT
+	// include online factors that were removed.
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "NEARAI_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	// Offline is false by default.
+
+	af := MergedAllowFail("nearcloud", cfg)
+	afSet := make(map[string]bool, len(af))
+	for _, name := range af {
+		afSet[name] = true
+	}
+	// intel_pcs_collateral is an online factor that was removed from
+	// NearcloudDefaultAllowFail; it should NOT be in the list.
+	if afSet["intel_pcs_collateral"] {
+		t.Error("online mode: intel_pcs_collateral should not be in allow_fail for nearcloud")
+	}
+}
+
+func TestMergedAllowFailOfflinePerProviderTOML(t *testing.T) {
+	// Even with a per-provider TOML override (enforce all), offline mode
+	// should still add OnlineFactors.
+	toml := `
+[providers.venice]
+api_key = "k"
+base_url = "https://api.venice.ai"
+allow_fail = []
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	cfg.Offline = true
+
+	af := MergedAllowFail("venice", cfg)
+	if len(af) != len(attestation.OnlineFactors) {
+		t.Errorf("offline + empty TOML: got %d entries, want %d (OnlineFactors only)",
+			len(af), len(attestation.OnlineFactors))
+	}
+	afSet := make(map[string]bool, len(af))
+	for _, name := range af {
+		afSet[name] = true
+	}
+	for _, name := range attestation.OnlineFactors {
+		if !afSet[name] {
+			t.Errorf("offline mode: factor %q should be in allow_fail but is not", name)
+		}
+	}
+}

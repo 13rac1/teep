@@ -278,6 +278,73 @@ func TestDefaultAllowFailExcludesSupplyChainFactors(t *testing.T) {
 	}
 }
 
+func TestOnlineFactorsAreKnown(t *testing.T) {
+	known := make(map[string]bool, len(KnownFactors))
+	for _, f := range KnownFactors {
+		known[f] = true
+	}
+	for _, f := range OnlineFactors {
+		if !known[f] {
+			t.Errorf("OnlineFactors contains unknown factor %q", f)
+		}
+	}
+}
+
+func TestWithOfflineAllowFail(t *testing.T) {
+	// Starting from an empty list, should return exactly OnlineFactors.
+	result := WithOfflineAllowFail(nil)
+	if len(result) != len(OnlineFactors) {
+		t.Fatalf("WithOfflineAllowFail(nil): got %d entries, want %d", len(result), len(OnlineFactors))
+	}
+	resultSet := make(map[string]bool, len(result))
+	for _, f := range result {
+		resultSet[f] = true
+	}
+	for _, f := range OnlineFactors {
+		if !resultSet[f] {
+			t.Errorf("WithOfflineAllowFail(nil): missing %q", f)
+		}
+	}
+}
+
+func TestWithOfflineAllowFailNoDuplicates(t *testing.T) {
+	// If the input already contains some OnlineFactors, they should not
+	// be duplicated.
+	input := []string{"intel_pcs_collateral", "tdx_hardware_config"}
+	result := WithOfflineAllowFail(input)
+	seen := make(map[string]int, len(result))
+	for _, f := range result {
+		seen[f]++
+	}
+	for f, count := range seen {
+		if count > 1 {
+			t.Errorf("WithOfflineAllowFail duplicated %q (%d times)", f, count)
+		}
+	}
+	// Should contain both original entries and all OnlineFactors.
+	resultSet := make(map[string]bool, len(result))
+	for _, f := range result {
+		resultSet[f] = true
+	}
+	if !resultSet["tdx_hardware_config"] {
+		t.Error("original entry tdx_hardware_config missing")
+	}
+	for _, f := range OnlineFactors {
+		if !resultSet[f] {
+			t.Errorf("missing online factor %q", f)
+		}
+	}
+}
+
+func TestWithOfflineAllowFailDoesNotMutateInput(t *testing.T) {
+	input := []string{"tdx_hardware_config"}
+	inputCopy := append([]string(nil), input...)
+	_ = WithOfflineAllowFail(input)
+	if len(input) != len(inputCopy) || input[0] != inputCopy[0] {
+		t.Error("WithOfflineAllowFail mutated the input slice")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Direct evaluator tests
 // ---------------------------------------------------------------------------
