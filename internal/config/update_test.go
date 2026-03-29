@@ -161,3 +161,36 @@ func TestUpdateConfigMultipleProviders(t *testing.T) {
 		t.Error("nanogpt mrseam lost")
 	}
 }
+
+func TestUpdateConfigOmitsRTMR3(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "teep.toml")
+
+	val := strings.Repeat("ab", 48)
+	obs := ObservedMeasurements{
+		RTMR2:        val,
+		RTMR3:        val,
+		GatewayRTMR2: val,
+		GatewayRTMR3: val,
+	}
+	if err := UpdateConfig(path, "venice", &obs); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	var f updateFile
+	toml.Decode(string(data), &f)
+	prov := f.Providers["venice"]
+	if len(prov.Policy.RTMR2Allow) != 1 {
+		t.Errorf("rtmr2_allow should have 1 entry, got %d", len(prov.Policy.RTMR2Allow))
+	}
+	if len(prov.Policy.RTMR3Allow) != 0 {
+		t.Error("rtmr3_allow should be empty (RTMR3 is omitted by design)")
+	}
+	if len(prov.Policy.GatewayRTMR2Allow) != 1 {
+		t.Errorf("gateway_rtmr2_allow should have 1 entry, got %d", len(prov.Policy.GatewayRTMR2Allow))
+	}
+	if len(prov.Policy.GatewayRTMR3Allow) != 0 {
+		t.Error("gateway_rtmr3_allow should be empty (gateway RTMR3 is omitted by design)")
+	}
+}

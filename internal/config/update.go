@@ -107,7 +107,7 @@ type updatePolicy struct {
 	GatewayRTMR2Allow  []string `toml:"gateway_rtmr2_allow,omitempty"`
 	GatewayRTMR3Allow  []string `toml:"gateway_rtmr3_allow,omitempty"`
 
-	WarnMeasurements bool `toml:"warn_measurements,omitempty"`
+	WarnMeasurements bool `toml:"warn_measurements"`
 }
 
 // mergeObserved adds observed values into the provider policy, deduplicating.
@@ -117,14 +117,15 @@ func mergeObserved(p *updatePolicy, observed *ObservedMeasurements) {
 	p.RTMR0Allow = addUnique(p.RTMR0Allow, observed.RTMR0)
 	p.RTMR1Allow = addUnique(p.RTMR1Allow, observed.RTMR1)
 	p.RTMR2Allow = addUnique(p.RTMR2Allow, observed.RTMR2)
-	p.RTMR3Allow = addUnique(p.RTMR3Allow, observed.RTMR3)
+	// RTMR3 is omitted: it is verified via event log replay and varies
+	// across instances, so pinning it in allowlists is overly brittle.
 
 	p.GatewayMRSEAMAllow = addUnique(p.GatewayMRSEAMAllow, observed.GatewayMRSeam)
 	p.GatewayMRTDAllow = addUnique(p.GatewayMRTDAllow, observed.GatewayMRTD)
 	p.GatewayRTMR0Allow = addUnique(p.GatewayRTMR0Allow, observed.GatewayRTMR0)
 	p.GatewayRTMR1Allow = addUnique(p.GatewayRTMR1Allow, observed.GatewayRTMR1)
 	p.GatewayRTMR2Allow = addUnique(p.GatewayRTMR2Allow, observed.GatewayRTMR2)
-	p.GatewayRTMR3Allow = addUnique(p.GatewayRTMR3Allow, observed.GatewayRTMR3)
+	// Gateway RTMR3 omitted for the same reason as RTMR3.
 }
 
 // addUnique appends val to list if non-empty and not already present.
