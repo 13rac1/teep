@@ -354,14 +354,14 @@ func extractObserved(report *attestation.VerificationReport) config.ObservedMeas
 		RTMR0:  m["rtmr0"],
 		RTMR1:  m["rtmr1"],
 		RTMR2:  m["rtmr2"],
-		RTMR3:  m["rtmr3"],
+		// RTMR3 omitted: verified via event log replay, varies across instances.
 
 		GatewayMRSeam: m["gateway_mrseam"],
 		GatewayMRTD:   m["gateway_mrtd"],
 		GatewayRTMR0:  m["gateway_rtmr0"],
 		GatewayRTMR1:  m["gateway_rtmr1"],
 		GatewayRTMR2:  m["gateway_rtmr2"],
-		GatewayRTMR3:  m["gateway_rtmr3"],
+		// Gateway RTMR3 omitted for the same reason as RTMR3.
 	}
 }
 
