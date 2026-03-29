@@ -396,12 +396,12 @@ func tdxQuoteStructure(in *ReportInput) FactorResult {
 	switch {
 	case in.Policy.HasMRTDPolicy() && !containsAllowlist(in.Policy.MRTDAllow, mrtdHex):
 		if in.Policy.WarnOnly {
-			return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: fmt.Sprintf("WARN: MRTD not in policy allowlist: %s... (warn_measurements)", prefixHex(mrtdHex))}
+			return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("WARN: MRTD not in policy allowlist: %s... (warn_measurements)", prefixHex(mrtdHex))}
 		}
 		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("MRTD not in policy allowlist: %s...", prefixHex(mrtdHex))}
 	case in.Policy.HasMRSeamPolicy() && !containsAllowlist(in.Policy.MRSeamAllow, mrSeamHex):
 		if in.Policy.WarnOnly {
-			return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: fmt.Sprintf("WARN: MRSEAM not in policy allowlist: %s... (warn_measurements)", prefixHex(mrSeamHex))}
+			return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("WARN: MRSEAM not in policy allowlist: %s... (warn_measurements)", prefixHex(mrSeamHex))}
 		}
 		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex))}
 	case in.Policy.HasMRTDPolicy() && in.Policy.HasMRSeamPolicy():
