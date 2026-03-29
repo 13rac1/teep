@@ -150,6 +150,11 @@ type RawAttestation struct {
 	CandidatesAvail int             // node pool size
 	CandidatesEval  int             // nodes evaluated
 
+	// E2EE instance metadata — populated by providers that use instance-level
+	// key exchange (Chutes). Carried through to the Session for header injection.
+	InstanceID string `json:"-"` // selected instance for E2EE
+	E2ENonce   string `json:"-"` // single-use nonce token from instance discovery
+
 	// Gateway fields — populated by providers with TEE-attested API gateways.
 	// Empty for providers without a gateway (e.g. Venice, NEAR AI direct).
 	GatewayIntelQuote     string          `json:"-"`
