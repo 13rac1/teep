@@ -145,8 +145,12 @@ func loadTOML(cfg *Config, path string) error {
 	}
 
 	var f tomlFile
-	if _, err := toml.DecodeFile(path, &f); err != nil {
+	md, err := toml.DecodeFile(path, &f)
+	if err != nil {
 		return fmt.Errorf("TOML decode: %w", err)
+	}
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		return fmt.Errorf("unknown config keys: %v", undecoded)
 	}
 
 	for name, pc := range f.Providers {

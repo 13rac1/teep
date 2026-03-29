@@ -105,7 +105,8 @@ var (
 	jwksMu       sync.Mutex
 	// jwksInstances caches keyfunc instances by JWKS URL. Production uses
 	// NvidiaJWKSURL; tests use httptest server URLs. Protected by jwksMu.
-	jwksInstances = make(map[string]*jwksEntry)
+	jwksInstances    = make(map[string]*jwksEntry)
+	maxJWKSInstances = 16
 )
 
 // getOrCreateKeyfunc returns a keyfunc.Keyfunc for the given JWKS URL.
@@ -128,6 +129,18 @@ func getOrCreateKeyfunc(jwksURL string) (keyfunc.Keyfunc, error) {
 	}
 	if prev, ok := jwksInstances[jwksURL]; ok {
 		prev.cancel()
+	} else if len(jwksInstances) >= maxJWKSInstances {
+		// Evict the oldest entry to stay within the cap.
+		var oldestURL string
+		var oldestTime time.Time
+		for u, e := range jwksInstances {
+			if oldestURL == "" || e.createdAt.Before(oldestTime) {
+				oldestURL = u
+				oldestTime = e.createdAt
+			}
+		}
+		jwksInstances[oldestURL].cancel()
+		delete(jwksInstances, oldestURL)
 	}
 	entry := &jwksEntry{kf: k, cancel: cancel, createdAt: time.Now()}
 	jwksInstances[jwksURL] = entry

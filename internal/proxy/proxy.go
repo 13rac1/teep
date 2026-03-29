@@ -1300,12 +1300,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 <p class="muted">Auto-refreshes every 5s. Point any OpenAI-compatible client at <code>http://%s/v1</code></p>
 </body>
 </html>
-`, s.cfg.ListenAddr, uptime,
-		provName, baseURL, e2ee,
+`, html.EscapeString(s.cfg.ListenAddr), uptime,
+		html.EscapeString(provName), html.EscapeString(baseURL), e2ee,
 		requests, streaming, nonStream,
 		e2eeCount, plainCount, errCount,
 		s.cache.Len(), s.negCache.Len(),
 		hitRate, hits, misses,
 		modelRows.String(),
-		s.cfg.ListenAddr)
+		html.EscapeString(s.cfg.ListenAddr))
 }

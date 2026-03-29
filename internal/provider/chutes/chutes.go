@@ -37,6 +37,9 @@ const (
 	// instancesPath is the Chutes API path for discovering e2e instances.
 	instancesPath = "/e2e/instances/"
 
+	// maxInstances bounds the number of e2e instance entries we parse.
+	maxInstances = 256
+
 	// maxEvidence bounds the number of evidence entries we parse.
 	maxEvidence = 256
 
@@ -136,6 +139,10 @@ func ParseAttestationResponse(instancesBody, evidenceBody []byte, nonce attestat
 	}
 	if len(instances.Instances) == 0 {
 		return nil, errors.New("chutes: no instances available")
+	}
+	if len(instances.Instances) > maxInstances {
+		return nil, fmt.Errorf("chutes: instances has %d entries, max %d",
+			len(instances.Instances), maxInstances)
 	}
 
 	var ar attestationResponse

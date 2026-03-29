@@ -512,7 +512,7 @@ func evalNvidiaPayloadPresent(in *ReportInput) []FactorResult {
 }
 func evalNvidiaSignature(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
-		if in.Raw.NvidiaPayload == "" {
+		if in.Raw.NvidiaPayload == "" && len(in.Raw.GPUEvidence) == 0 {
 			return factor(TierBinding, "nvidia_signature", Skip, "no NVIDIA payload to verify")
 		}
 		return factor(TierBinding, "nvidia_signature", Fail, "NVIDIA verification was not attempted")
@@ -524,7 +524,7 @@ func evalNvidiaSignature(in *ReportInput) []FactorResult {
 }
 func evalNvidiaClaims(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
-		if in.Raw.NvidiaPayload == "" {
+		if in.Raw.NvidiaPayload == "" && len(in.Raw.GPUEvidence) == 0 {
 			return factor(TierBinding, "nvidia_claims", Skip, "no NVIDIA payload to check")
 		}
 		return factor(TierBinding, "nvidia_claims", Fail, "NVIDIA verification was not attempted")
@@ -536,7 +536,7 @@ func evalNvidiaClaims(in *ReportInput) []FactorResult {
 }
 func evalNvidiaClientNonceBound(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
-		if in.Raw.NvidiaPayload == "" {
+		if in.Raw.NvidiaPayload == "" && len(in.Raw.GPUEvidence) == 0 {
 			return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "no NVIDIA payload; nonce not checked")
 		}
 		return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "NVIDIA verification not attempted")
