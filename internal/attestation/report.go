@@ -1455,6 +1455,21 @@ func buildMetadata(in *ReportInput) map[string]string {
 		}
 	}
 
+	// Include gateway CVM measurements when present (nearcloud).
+	if in.GatewayTDX != nil && in.GatewayTDX.ParseErr == nil {
+		if v := hex.EncodeToString(in.GatewayTDX.MRSeam); v != "" {
+			m["gateway_mrseam"] = v
+		}
+		if v := hex.EncodeToString(in.GatewayTDX.MRTD); v != "" {
+			m["gateway_mrtd"] = v
+		}
+		for i, rtmr := range in.GatewayTDX.RTMRs {
+			if v := hex.EncodeToString(rtmr[:]); v != "" {
+				m[fmt.Sprintf("gateway_rtmr%d", i)] = v
+			}
+		}
+	}
+
 	if len(m) == 0 {
 		return nil
 	}
