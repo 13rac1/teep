@@ -1019,3 +1019,33 @@ allow_fail = []
 		}
 	}
 }
+
+func TestMergedAllowFailReturnsDefensiveCopy(t *testing.T) {
+	// MergedAllowFail must return a distinct slice so callers cannot
+	// mutate shared package-level defaults or Config fields.
+	toml := `
+[providers.nearcloud]
+api_key = "k"
+base_url = "https://api.near.ai"
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "NEARAI_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	a := MergedAllowFail("nearcloud", cfg)
+	b := MergedAllowFail("nearcloud", cfg)
+	if len(a) == 0 {
+		t.Fatal("expected non-empty allow_fail for nearcloud defaults")
+	}
+	// Mutate the first result and verify the second is unaffected.
+	a[0] = "MUTATED"
+	if b[0] == "MUTATED" {
+		t.Error("MergedAllowFail returned a shared slice; callers can mutate defaults")
+	}
+}

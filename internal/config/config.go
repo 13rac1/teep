@@ -337,7 +337,8 @@ func MergedAllowFail(providerName string, cfg *Config) []string {
 	if cfg.Offline {
 		return attestation.WithOfflineAllowFail(af)
 	}
-	return af
+	// Return a copy so callers cannot mutate shared defaults.
+	return append([]string(nil), af...)
 }
 
 // hasMeasurementPolicy reports whether p has any configured allowlists.
