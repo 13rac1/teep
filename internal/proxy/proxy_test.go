@@ -249,8 +249,24 @@ func buildConfig(attestBaseURL string, _ bool) *config.Config {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{"nonce_match", "tdx_debug_disabled", "signing_key_present", "tdx_reportdata_binding"},
+		AllowFail: allowFailExcept("nonce_match", "tdx_debug_disabled", "signing_key_present", "tdx_reportdata_binding"),
 	}
+}
+
+// allowFailExcept returns KnownFactors minus the given names, producing an
+// AllowFail list that enforces only the excluded factors.
+func allowFailExcept(exclude ...string) []string {
+	ex := make(map[string]bool, len(exclude))
+	for _, n := range exclude {
+		ex[n] = true
+	}
+	var out []string
+	for _, n := range attestation.KnownFactors {
+		if !ex[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // newProxy creates a proxy.Server using the given config, wires it to the
@@ -520,7 +536,7 @@ func TestHandleModels_ProviderError(t *testing.T) {
 				APIKey:  "key",
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 	srv, err := proxy.New(cfg)
 	if err != nil {
@@ -574,7 +590,7 @@ func TestHandleModels_MultipleProviders(t *testing.T) {
 				APIKey:  "key",
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 	srv, err := proxy.New(cfg)
 	if err != nil {
@@ -649,7 +665,7 @@ func TestHandleModels_SlowProvider(t *testing.T) {
 				APIKey:  "key",
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 	srv, err := proxy.New(cfg)
 	if err != nil {
@@ -793,7 +809,7 @@ func TestHandleReport_ReturnsCachedReport(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -881,7 +897,7 @@ func TestNegativeCache503(t *testing.T) {
 func TestBlockedAttestation502(t *testing.T) {
 	// Combined server handles both attestation and chat.
 	// nonce_match is enforced; the attestation server does NOT echo the nonce,
-	// so nonce_match will Fail. Since nonce_match is in Enforced, report.Blocked() = true.
+	// so nonce_match will Fail. Since nonce_match is not in AllowFail, report.Blocked() = true.
 	combined := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/tee/attestation") {
 			// Return a mismatched nonce → nonce_match Fail.
@@ -911,7 +927,7 @@ func TestBlockedAttestation502(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{"nonce_match"},
+		AllowFail: allowFailExcept("nonce_match"),
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -973,7 +989,7 @@ func TestPlaintextNonStream(t *testing.T) {
 				E2EE:    false, // plaintext
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1030,7 +1046,7 @@ func TestPlaintextStreaming(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1136,7 +1152,7 @@ func TestE2EERefusesPlaintextFallback(t *testing.T) {
 			},
 		},
 		// tdx_reportdata_binding is not enforced, but E2EE must still refuse
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1188,7 +1204,7 @@ func TestUpstreamNon200Forwarded(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1220,7 +1236,7 @@ func TestSinglePinnedProvider_AllowsDynamicModelName(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	srv, err := proxy.New(cfg)
@@ -1262,7 +1278,7 @@ func TestPinnedProvider_BlockedReportReturns502(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	srv, err := proxy.New(cfg)
@@ -1343,7 +1359,7 @@ func TestSSEMultipleChunks(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1408,7 +1424,7 @@ func TestAttestationCacheHit(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1468,7 +1484,7 @@ func TestE2EEStreamingRefusesPlaintext(t *testing.T) {
 				E2EE:    true, // E2EE requested; will refuse due to no real TDX
 			},
 		},
-		Enforced: []string{}, // no enforced factors → but E2EE still refuses plaintext
+		AllowFail: attestation.KnownFactors, // no enforced factors → but E2EE still refuses plaintext
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1535,7 +1551,7 @@ func TestPlaintextPassthrough_PreservesCiphertext(t *testing.T) {
 				E2EE:    false, // plaintext mode
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1782,7 +1798,7 @@ func TestUpstreamBodyDrained(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1843,7 +1859,7 @@ func TestSSELargeChunk(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -1912,7 +1928,7 @@ func TestAuthorizationHeaderSetViaVenicePreparer(t *testing.T) {
 				E2EE:    false, // plaintext path
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -2338,7 +2354,7 @@ func newMinimalServer(t *testing.T) *proxy.Server {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 	srv, err := proxy.New(cfg)
 	if err != nil {
@@ -2531,7 +2547,7 @@ func TestHandleIndex_AfterRequest(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	proxySrv := newProxyServer(t, cfg)
@@ -2585,7 +2601,7 @@ func TestSigningKeyCacheReuse(t *testing.T) {
 				E2EE:    true,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	srv, err := proxy.New(cfg)
@@ -2651,7 +2667,7 @@ func TestBlockedReport_NegCacheAndAttestCacheInteraction(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	srv, err := proxy.New(cfg)
@@ -2742,7 +2758,7 @@ func TestPinnedPath_E2EE_ReportDataBindingCacheCheck(t *testing.T) {
 				E2EE:    true,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 
 	srv, err := proxy.New(cfg)

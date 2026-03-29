@@ -58,7 +58,7 @@ func integrationPlaintextConfig(t *testing.T) *config.Config {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 }
 
@@ -79,7 +79,7 @@ func integrationE2EEConfig(t *testing.T) *config.Config {
 				E2EE:    true,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 }
 

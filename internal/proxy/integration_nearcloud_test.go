@@ -48,7 +48,7 @@ func integrationNearCloudConfig(t *testing.T) *config.Config {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 }
 
@@ -67,7 +67,7 @@ func integrationNearCloudE2EEConfig(t *testing.T) *config.Config {
 				E2EE:    true,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 }
 

@@ -116,7 +116,7 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 		spkiCache,
 		"test-key",
 		true, // offline
-		[]string{},
+		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil /* no model RD verifier */, nil, /* no RekorClient */
@@ -350,7 +350,7 @@ func TestHandlePinned_BlockedReport(t *testing.T) {
 		spkiCache,
 		"test-key",
 		true,
-		[]string{"nonce_match"},
+		[]string{}, // empty allow_fail → all factors enforced, including nonce_match
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil, nil,
@@ -424,7 +424,7 @@ func TestHandlePinned_AttestationQueryParams(t *testing.T) {
 		attestation.NewSPKICache(),
 		"my-secret-key",
 		true,
-		[]string{},
+		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil, nil,
@@ -469,9 +469,9 @@ func TestHandlePinned_AttestationQueryParams(t *testing.T) {
 
 func TestNewPinnedHandler(t *testing.T) {
 	spkiCache := attestation.NewSPKICache()
-	enforced := []string{"nonce_match", "tdx_debug_disabled"}
+	allowFail := []string{"nonce_match", "tdx_debug_disabled"}
 
-	h := NewPinnedHandler(spkiCache, "test-key", true, enforced, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{}, nil, nil, nil)
+	h := NewPinnedHandler(spkiCache, "test-key", true, allowFail, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{}, nil, nil, nil)
 
 	if h.apiKey != "test-key" {
 		t.Errorf("apiKey = %q, want %q", h.apiKey, "test-key")
@@ -479,13 +479,13 @@ func TestNewPinnedHandler(t *testing.T) {
 	if !h.offline {
 		t.Error("offline = false, want true")
 	}
-	if len(h.enforced) != 2 {
-		t.Errorf("enforced len = %d, want 2", len(h.enforced))
+	if len(h.allowFail) != 2 {
+		t.Errorf("allowFail len = %d, want 2", len(h.allowFail))
 	}
 	if h.spkiCache == nil {
 		t.Error("spkiCache is nil")
 	}
-	t.Logf("handler created: apiKey=%q, offline=%v, enforced=%v", h.apiKey, h.offline, h.enforced)
+	t.Logf("handler created: apiKey=%q, offline=%v, allowFail=%v", h.apiKey, h.offline, h.allowFail)
 }
 
 func TestSetDialer(t *testing.T) {
@@ -682,7 +682,7 @@ func TestHandlePinned_ModelHasDifferentFingerprint(t *testing.T) {
 		attestation.NewSPKICache(),
 		"test-key",
 		true,
-		[]string{},
+		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil, nil,
@@ -883,7 +883,7 @@ func TestHandlePinned_WithGatewayComposeAndModelFingerprint(t *testing.T) {
 		attestation.NewSPKICache(),
 		"test-key",
 		true,
-		[]string{},
+		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil, nil,
@@ -965,7 +965,7 @@ func TestHandlePinned_WithNonEmptyQuotesAndPayload(t *testing.T) {
 		attestation.NewSPKICache(),
 		"test-key",
 		true, // offline — skips NRAS, PoC, Sigstore
-		[]string{},
+		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil, nil,
@@ -1281,7 +1281,7 @@ func TestHandlePinned_GatewayBlockedModelPasses(t *testing.T) {
 
 	handler := NewPinnedHandler(
 		spkiCache, "test-key", true,
-		[]string{"gateway_nonce_match"},
+		[]string{}, // empty allow_fail → all factors enforced, including gateway_nonce_match
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil, nil, nil,
@@ -1356,7 +1356,7 @@ func TestHandlePinned_GatewayPassesModelBlocked(t *testing.T) {
 
 	handler := NewPinnedHandler(
 		spkiCache, "test-key", true,
-		[]string{"nonce_match"},
+		[]string{}, // empty allow_fail → all factors enforced, including nonce_match
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil, nil, nil,
@@ -1419,7 +1419,7 @@ func TestHandlePinned_SigningKeyCachedOnSuccess(t *testing.T) {
 
 	handler := NewPinnedHandler(
 		spkiCache, "test-key", true,
-		[]string{},
+		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil, nil, nil,
@@ -1510,7 +1510,7 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 
 	handler := NewPinnedHandler(
 		spkiCache, "test-key", true,
-		[]string{},
+		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
 		nil, nil, nil,

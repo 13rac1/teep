@@ -57,14 +57,16 @@ type FactorResult struct {
 // VerificationReport holds the factor-by-factor results of an attestation
 // verification run. Produced by BuildReport.
 type VerificationReport struct {
-	Provider  string            `json:"provider"`
-	Model     string            `json:"model"`
-	Timestamp time.Time         `json:"timestamp"`
-	Factors   []FactorResult    `json:"factors"`
-	Passed    int               `json:"passed"`
-	Failed    int               `json:"failed"`
-	Skipped   int               `json:"skipped"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	Provider       string            `json:"provider"`
+	Model          string            `json:"model"`
+	Timestamp      time.Time         `json:"timestamp"`
+	Factors        []FactorResult    `json:"factors"`
+	Passed         int               `json:"passed"`
+	Failed         int               `json:"failed"`
+	Skipped        int               `json:"skipped"`
+	EnforcedFailed int               `json:"enforced_failed"`
+	AllowedFailed  int               `json:"allowed_failed"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
 }
 
 // Blocked returns true if any enforced factor has failed. When Blocked is true,
@@ -103,38 +105,43 @@ func (r *VerificationReport) ReportDataBindingPassed() bool {
 	return false
 }
 
-// DefaultEnforced lists the factor names that block the proxy on failure.
-// These are the minimum checks required for E2EE security. See the plan for
-// rationale; notably tdx_reportdata_binding is critical — without it, a MITM
-// can substitute the enclave public key and intercept all E2EE traffic.
-var DefaultEnforced = []string{
-	"nonce_match",
-	"tdx_cert_chain",
-	"tdx_quote_signature",
-	"tdx_debug_disabled",
-	"signing_key_present",
-	"tdx_reportdata_binding",
-	"compose_binding",
-	"nvidia_signature",
-	"nvidia_nonce_client_bound",
-	"tdx_tcb_not_revoked",
-	"build_transparency_log",
-	"sigstore_verification",
-	"event_log_integrity",
+// DefaultAllowFail lists the factor names that are allowed to fail without
+// blocking the proxy. Every factor in KnownFactors that is NOT in this list
+// is enforced by default. This inversion is safer than a positive enforce
+// list: any new factor added to KnownFactors is automatically enforced
+// unless explicitly exempted here.
+var DefaultAllowFail = []string{
+	"tdx_quote_present",
+	"tdx_quote_structure",
+	"tdx_hardware_config",
+	"tdx_boot_config",
+	"intel_pcs_collateral",
+	"tdx_tcb_current",
+	"nvidia_payload_present",
+	"nvidia_claims",
+	"nvidia_nras_verified",
+	"e2ee_capable",
+	"e2ee_usable",
+	"tls_key_binding",
+	"cpu_gpu_chain",
+	"measured_model_weights",
+	"cpu_id_registry",
 	// Gateway factors (nearcloud only).
-	"gateway_nonce_match",
-	"gateway_tdx_cert_chain",
-	"gateway_tdx_quote_signature",
-	"gateway_tdx_debug_disabled",
-	"gateway_compose_binding",
-	"gateway_event_log_integrity",
+	"gateway_tdx_quote_present",
+	"gateway_tdx_quote_structure",
+	"gateway_tdx_hardware_config",
+	"gateway_tdx_boot_config",
+	"gateway_tdx_reportdata_binding",
+	"gateway_cpu_id_registry",
 }
 
 // KnownFactors is the complete set of factor names produced by BuildReport.
-// Used by config validation to reject typos in the enforce policy.
+// Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{
 	"nonce_match", "tdx_quote_present", "tdx_quote_structure", "tdx_cert_chain",
-	"tdx_quote_signature", "tdx_debug_disabled", "signing_key_present",
+	"tdx_quote_signature", "tdx_debug_disabled",
+	"tdx_mrseam_mrtd", "tdx_hardware_config", "tdx_boot_config",
+	"signing_key_present",
 	"tdx_reportdata_binding", "intel_pcs_collateral", "tdx_tcb_current",
 	"tdx_tcb_not_revoked", "nvidia_payload_present", "nvidia_signature", "nvidia_claims",
 	"nvidia_nonce_client_bound", "nvidia_nras_verified", "e2ee_capable", "e2ee_usable", "tls_key_binding", "cpu_gpu_chain",
@@ -143,6 +150,7 @@ var KnownFactors = []string{
 	// Gateway factors (nearcloud only).
 	"gateway_nonce_match", "gateway_tdx_quote_present", "gateway_tdx_quote_structure",
 	"gateway_tdx_cert_chain", "gateway_tdx_quote_signature", "gateway_tdx_debug_disabled",
+	"gateway_tdx_mrseam_mrtd", "gateway_tdx_hardware_config", "gateway_tdx_boot_config",
 	"gateway_tdx_reportdata_binding", "gateway_compose_binding", "gateway_cpu_id_registry",
 	"gateway_event_log_integrity",
 }
@@ -179,7 +187,7 @@ type ReportInput struct {
 	Model             string
 	Raw               *RawAttestation
 	Nonce             Nonce
-	Enforced          []string
+	AllowFail         []string
 	Policy            MeasurementPolicy
 	ImageRepos        []string
 	GatewayImageRepos []string
@@ -221,20 +229,21 @@ func factor(tier, name string, status Status, detail string) []FactorResult {
 }
 
 // BuildReport runs verification factors against the input and returns a
-// complete VerificationReport. The Enforced field controls which factor names
-// result in Enforced=true. Pass DefaultEnforced for production use.
+// complete VerificationReport. The AllowFail field lists factors that are
+// allowed to fail without blocking. Every other factor is enforced.
+// Pass DefaultAllowFail for production use.
 // Gateway factors are included only for nearcloud.
 func BuildReport(in *ReportInput) *VerificationReport {
-	enforcedSet := make(map[string]bool, len(in.Enforced))
-	for _, name := range in.Enforced {
-		enforcedSet[name] = true
+	allowFailSet := make(map[string]bool, len(in.AllowFail))
+	for _, name := range in.AllowFail {
+		allowFailSet[name] = true
 	}
 
 	evaluators := buildEvaluators(in.GatewayTDX != nil)
 	var factors []FactorResult
 	for _, eval := range evaluators {
 		for _, f := range eval(in) {
-			f.Enforced = enforcedSet[f.Name]
+			f.Enforced = !allowFailSet[f.Name]
 			factors = append(factors, f)
 		}
 	}
@@ -248,26 +257,34 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	}
 
 	passed, failed, skipped := 0, 0, 0
+	enforcedFailed, allowedFailed := 0, 0
 	for _, f := range factors {
 		switch f.Status {
 		case Pass:
 			passed++
 		case Fail:
 			failed++
+			if f.Enforced {
+				enforcedFailed++
+			} else {
+				allowedFailed++
+			}
 		case Skip:
 			skipped++
 		}
 	}
 
 	return &VerificationReport{
-		Provider:  in.Provider,
-		Model:     in.Model,
-		Timestamp: time.Now(),
-		Factors:   factors,
-		Passed:    passed,
-		Failed:    failed,
-		Skipped:   skipped,
-		Metadata:  buildMetadata(in),
+		Provider:       in.Provider,
+		Model:          in.Model,
+		Timestamp:      time.Now(),
+		Factors:        factors,
+		Passed:         passed,
+		Failed:         failed,
+		Skipped:        skipped,
+		EnforcedFailed: enforcedFailed,
+		AllowedFailed:  allowedFailed,
+		Metadata:       buildMetadata(in),
 	}
 }
 
@@ -279,6 +296,9 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalNonceMatch,
 		evalTDXQuotePresent,
 		evalTDXParseDependent,
+		evalTDXMrseamMrtd,
+		evalTDXHardwareConfig,
+		evalTDXBootConfig,
 		evalSigningKeyPresent,
 		// Tier 2: Binding & Crypto
 		evalTDXReportDataBinding,
@@ -307,6 +327,9 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 			evalGatewayNonceMatch,
 			evalGatewayTDXQuotePresent,
 			evalGatewayTDXParseDependent,
+			evalGatewayTDXMrseamMrtd,
+			evalGatewayTDXHardwareConfig,
+			evalGatewayTDXBootConfig,
 			evalGatewayTDXReportDataBinding,
 			evalGatewayComposeBinding,
 			evalGatewayCPUIDRegistry,
@@ -382,31 +405,92 @@ func evalTDXParseDependent(in *ReportInput) []FactorResult {
 	return results
 }
 
-// tdxQuoteStructure evaluates the tdx_quote_structure factor including
-// MRTD/MRSEAM policy checks. Precondition: in.TDX.ParseErr == nil.
+// tdxQuoteStructure evaluates the tdx_quote_structure factor — structural
+// validity only. Measurement policy checks are handled by the dedicated
+// tdx_mrseam_mrtd, tdx_hardware_config, and tdx_boot_config factors.
+// Precondition: in.TDX.ParseErr == nil.
 func tdxQuoteStructure(in *ReportInput) FactorResult {
 	mrtdHex := hex.EncodeToString(in.TDX.MRTD)
-	mrSeamHex := hex.EncodeToString(in.TDX.MRSeam)
 
 	detail := fmt.Sprintf("valid %s structure", tdxQuoteVersion(in.TDX))
 	if len(mrtdHex) >= 16 {
 		detail = fmt.Sprintf("valid %s, MRTD: %s...", tdxQuoteVersion(in.TDX), mrtdHex[:16])
 	}
+	return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: detail}
+}
 
-	switch {
-	case in.Policy.HasMRTDPolicy() && !containsAllowlist(in.Policy.MRTDAllow, mrtdHex):
-		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("MRTD not in policy allowlist: %s...", prefixHex(mrtdHex))}
-	case in.Policy.HasMRSeamPolicy() && !containsAllowlist(in.Policy.MRSeamAllow, mrSeamHex):
-		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex))}
-	case in.Policy.HasMRTDPolicy() && in.Policy.HasMRSeamPolicy():
-		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: detail + " (MRTD/MRSEAM policy matched)"}
-	case in.Policy.HasMRTDPolicy():
-		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: detail + " (MRTD policy matched)"}
-	case in.Policy.HasMRSeamPolicy():
-		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: detail + " (MRSEAM policy matched)"}
-	default:
-		return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: detail}
+// evalTDXMrseamMrtd checks MRSEAM and MRTD against measurement policy
+// allowlists. Skips when no policy is configured.
+// Precondition: in.TDX != nil && in.TDX.ParseErr == nil.
+func evalTDXMrseamMrtd(in *ReportInput) []FactorResult {
+	if in.TDX == nil || in.TDX.ParseErr != nil {
+		return factor(TierCore, "tdx_mrseam_mrtd", Skip, "no parseable TDX quote; cannot check MRSEAM/MRTD")
 	}
+	if !in.Policy.HasMRTDPolicy() && !in.Policy.HasMRSeamPolicy() {
+		return factor(TierCore, "tdx_mrseam_mrtd", Skip, "no MRSEAM/MRTD measurement policy configured")
+	}
+
+	mrtdHex := hex.EncodeToString(in.TDX.MRTD)
+	mrSeamHex := hex.EncodeToString(in.TDX.MRSeam)
+
+	if in.Policy.HasMRTDPolicy() && !containsAllowlist(in.Policy.MRTDAllow, mrtdHex) {
+		return factor(TierCore, "tdx_mrseam_mrtd", Fail,
+			fmt.Sprintf("MRTD not in policy allowlist: %s...", prefixHex(mrtdHex)))
+	}
+	if in.Policy.HasMRSeamPolicy() && !containsAllowlist(in.Policy.MRSeamAllow, mrSeamHex) {
+		return factor(TierCore, "tdx_mrseam_mrtd", Fail,
+			fmt.Sprintf("MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex)))
+	}
+
+	var matched string
+	switch {
+	case in.Policy.HasMRTDPolicy() && in.Policy.HasMRSeamPolicy():
+		matched = "MRTD/MRSEAM"
+	case in.Policy.HasMRTDPolicy():
+		matched = "MRTD"
+	default:
+		matched = "MRSEAM"
+	}
+	return factor(TierCore, "tdx_mrseam_mrtd", Pass, matched+" policy matched")
+}
+
+// evalTDXHardwareConfig checks RTMR0 against measurement policy allowlists.
+// Skips when no RTMR0 policy is configured.
+func evalTDXHardwareConfig(in *ReportInput) []FactorResult {
+	if in.TDX == nil || in.TDX.ParseErr != nil {
+		return factor(TierCore, "tdx_hardware_config", Skip, "no parseable TDX quote; cannot check RTMR0")
+	}
+	if !in.Policy.HasRTMRPolicy(0) {
+		return factor(TierCore, "tdx_hardware_config", Skip, "no RTMR0 measurement policy configured")
+	}
+	rtmrHex := hex.EncodeToString(in.TDX.RTMRs[0][:])
+	if _, ok := in.Policy.RTMRAllow[0][rtmrHex]; !ok {
+		return factor(TierCore, "tdx_hardware_config", Fail,
+			fmt.Sprintf("RTMR[0] not in policy allowlist: %s...", prefixHex(rtmrHex)))
+	}
+	return factor(TierCore, "tdx_hardware_config", Pass, "RTMR0 policy matched")
+}
+
+// evalTDXBootConfig checks RTMR1 and RTMR2 against measurement policy
+// allowlists. Skips when neither RTMR1 nor RTMR2 policy is configured.
+func evalTDXBootConfig(in *ReportInput) []FactorResult {
+	if in.TDX == nil || in.TDX.ParseErr != nil {
+		return factor(TierCore, "tdx_boot_config", Skip, "no parseable TDX quote; cannot check RTMR1/RTMR2")
+	}
+	if !in.Policy.HasRTMRPolicy(1) && !in.Policy.HasRTMRPolicy(2) {
+		return factor(TierCore, "tdx_boot_config", Skip, "no RTMR1/RTMR2 measurement policy configured")
+	}
+	for _, i := range []int{1, 2} {
+		if !in.Policy.HasRTMRPolicy(i) {
+			continue
+		}
+		rtmrHex := hex.EncodeToString(in.TDX.RTMRs[i][:])
+		if _, ok := in.Policy.RTMRAllow[i][rtmrHex]; !ok {
+			return factor(TierCore, "tdx_boot_config", Fail,
+				fmt.Sprintf("RTMR[%d] not in policy allowlist: %s...", i, prefixHex(rtmrHex)))
+		}
+	}
+	return factor(TierCore, "tdx_boot_config", Pass, "RTMR1/RTMR2 policy matched")
 }
 func evalSigningKeyPresent(in *ReportInput) []FactorResult {
 	if in.Raw.SigningKey == "" {
@@ -1006,17 +1090,6 @@ func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 		}
 	}
 
-	for i := range 4 {
-		if !in.Policy.HasRTMRPolicy(i) {
-			continue
-		}
-		rtmrHex := hex.EncodeToString(in.TDX.RTMRs[i][:])
-		if _, ok := in.Policy.RTMRAllow[i][rtmrHex]; !ok {
-			return factor(TierSupplyChain, "event_log_integrity", Fail,
-				fmt.Sprintf("RTMR[%d] not in policy allowlist: %s...", i, prefixHex(rtmrHex)))
-		}
-	}
-
 	return factor(TierSupplyChain, "event_log_integrity", Pass,
 		fmt.Sprintf("event log replayed (%d entries), all 4 RTMRs match quote", len(in.Raw.EventLog)))
 }
@@ -1081,33 +1154,95 @@ func evalGatewayTDXParseDependent(in *ReportInput) []FactorResult {
 	return results
 }
 
-// gatewayTDXQuoteStructure evaluates the gateway_tdx_quote_structure factor
-// including GatewayPolicy MRTD/MRSEAM allowlist checks (GW-M-04).
+// gatewayTDXQuoteStructure evaluates the gateway_tdx_quote_structure factor —
+// structural validity only. Measurement policy checks are handled by the
+// dedicated gateway_tdx_mrseam_mrtd, gateway_tdx_hardware_config, and
+// gateway_tdx_boot_config factors.
 // Precondition: in.GatewayTDX.ParseErr == nil.
 func gatewayTDXQuoteStructure(in *ReportInput) FactorResult {
 	mrtdHex := hex.EncodeToString(in.GatewayTDX.MRTD)
-	mrSeamHex := hex.EncodeToString(in.GatewayTDX.MRSeam)
 
 	detail := fmt.Sprintf("valid %s structure", tdxQuoteVersion(in.GatewayTDX))
 	if len(mrtdHex) >= 16 {
 		detail = fmt.Sprintf("valid %s, MRTD: %s...", tdxQuoteVersion(in.GatewayTDX), mrtdHex[:16])
 	}
+	return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: detail}
+}
 
-	gp := in.GatewayPolicy
-	switch {
-	case gp.HasMRTDPolicy() && !containsAllowlist(gp.MRTDAllow, mrtdHex):
-		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("gateway MRTD not in policy allowlist: %s...", prefixHex(mrtdHex))}
-	case gp.HasMRSeamPolicy() && !containsAllowlist(gp.MRSeamAllow, mrSeamHex):
-		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("gateway MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex))}
-	case gp.HasMRTDPolicy() && gp.HasMRSeamPolicy():
-		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: detail + " (gateway MRTD/MRSEAM policy matched)"}
-	case gp.HasMRTDPolicy():
-		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: detail + " (gateway MRTD policy matched)"}
-	case gp.HasMRSeamPolicy():
-		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: detail + " (gateway MRSEAM policy matched)"}
-	default:
-		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: detail}
+// evalGatewayTDXMrseamMrtd checks gateway MRSEAM and MRTD against the
+// gateway measurement policy allowlists. Skips when no policy is configured.
+func evalGatewayTDXMrseamMrtd(in *ReportInput) []FactorResult {
+	if in.GatewayTDX == nil || in.GatewayTDX.ParseErr != nil {
+		return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Skip, "no parseable gateway TDX quote; cannot check MRSEAM/MRTD")
 	}
+	gp := in.GatewayPolicy
+	if !gp.HasMRTDPolicy() && !gp.HasMRSeamPolicy() {
+		return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Skip, "no gateway MRSEAM/MRTD measurement policy configured")
+	}
+
+	mrtdHex := hex.EncodeToString(in.GatewayTDX.MRTD)
+	mrSeamHex := hex.EncodeToString(in.GatewayTDX.MRSeam)
+
+	if gp.HasMRTDPolicy() && !containsAllowlist(gp.MRTDAllow, mrtdHex) {
+		return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Fail,
+			fmt.Sprintf("gateway MRTD not in policy allowlist: %s...", prefixHex(mrtdHex)))
+	}
+	if gp.HasMRSeamPolicy() && !containsAllowlist(gp.MRSeamAllow, mrSeamHex) {
+		return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Fail,
+			fmt.Sprintf("gateway MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex)))
+	}
+
+	var matched string
+	switch {
+	case gp.HasMRTDPolicy() && gp.HasMRSeamPolicy():
+		matched = "gateway MRTD/MRSEAM"
+	case gp.HasMRTDPolicy():
+		matched = "gateway MRTD"
+	default:
+		matched = "gateway MRSEAM"
+	}
+	return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Pass, matched+" policy matched")
+}
+
+// evalGatewayTDXHardwareConfig checks gateway RTMR0 against the gateway
+// measurement policy allowlists. Skips when no RTMR0 policy is configured.
+func evalGatewayTDXHardwareConfig(in *ReportInput) []FactorResult {
+	if in.GatewayTDX == nil || in.GatewayTDX.ParseErr != nil {
+		return factor(TierGateway, "gateway_tdx_hardware_config", Skip, "no parseable gateway TDX quote; cannot check RTMR0")
+	}
+	gp := in.GatewayPolicy
+	if !gp.HasRTMRPolicy(0) {
+		return factor(TierGateway, "gateway_tdx_hardware_config", Skip, "no gateway RTMR0 measurement policy configured")
+	}
+	rtmrHex := hex.EncodeToString(in.GatewayTDX.RTMRs[0][:])
+	if _, ok := gp.RTMRAllow[0][rtmrHex]; !ok {
+		return factor(TierGateway, "gateway_tdx_hardware_config", Fail,
+			fmt.Sprintf("gateway RTMR[0] not in policy allowlist: %s...", prefixHex(rtmrHex)))
+	}
+	return factor(TierGateway, "gateway_tdx_hardware_config", Pass, "gateway RTMR0 policy matched")
+}
+
+// evalGatewayTDXBootConfig checks gateway RTMR1 and RTMR2 against the
+// gateway measurement policy allowlists. Skips when neither is configured.
+func evalGatewayTDXBootConfig(in *ReportInput) []FactorResult {
+	if in.GatewayTDX == nil || in.GatewayTDX.ParseErr != nil {
+		return factor(TierGateway, "gateway_tdx_boot_config", Skip, "no parseable gateway TDX quote; cannot check RTMR1/RTMR2")
+	}
+	gp := in.GatewayPolicy
+	if !gp.HasRTMRPolicy(1) && !gp.HasRTMRPolicy(2) {
+		return factor(TierGateway, "gateway_tdx_boot_config", Skip, "no gateway RTMR1/RTMR2 measurement policy configured")
+	}
+	for _, i := range []int{1, 2} {
+		if !gp.HasRTMRPolicy(i) {
+			continue
+		}
+		rtmrHex := hex.EncodeToString(in.GatewayTDX.RTMRs[i][:])
+		if _, ok := gp.RTMRAllow[i][rtmrHex]; !ok {
+			return factor(TierGateway, "gateway_tdx_boot_config", Fail,
+				fmt.Sprintf("gateway RTMR[%d] not in gateway policy allowlist: %s...", i, prefixHex(rtmrHex)))
+		}
+	}
+	return factor(TierGateway, "gateway_tdx_boot_config", Pass, "gateway RTMR1/RTMR2 policy matched")
 }
 func evalGatewayTDXReportDataBinding(in *ReportInput) []FactorResult {
 	switch {
@@ -1176,19 +1311,6 @@ func evalGatewayEventLogIntegrity(in *ReportInput) []FactorResult {
 				fmt.Sprintf("gateway RTMR[%d] mismatch: replayed %s, quote %s",
 					i, hex.EncodeToString(replayed[i][:])[:16]+"...",
 					hex.EncodeToString(in.GatewayTDX.RTMRs[i][:])[:16]+"..."))
-		}
-	}
-
-	// GW-M-06: Check RTMR policy allowlists using gateway-specific policy.
-	gp := in.GatewayPolicy
-	for i := range 4 {
-		if !gp.HasRTMRPolicy(i) {
-			continue
-		}
-		rtmrHex := hex.EncodeToString(in.GatewayTDX.RTMRs[i][:])
-		if _, ok := gp.RTMRAllow[i][rtmrHex]; !ok {
-			return factor(TierGateway, "gateway_event_log_integrity", Fail,
-				fmt.Sprintf("gateway RTMR[%d] not in gateway policy allowlist: %s...", i, prefixHex(rtmrHex)))
 		}
 	}
 
@@ -1417,6 +1539,37 @@ func buildMetadata(in *ReportInput) map[string]string {
 	}
 	if in.Raw.EventLogCount > 0 {
 		m["event_log"] = fmt.Sprintf("%d entries", in.Raw.EventLogCount)
+	}
+
+	// Include full TDX measurement register values so operators can
+	// identify golden values for allowlist policy configuration.
+	if in.TDX != nil && in.TDX.ParseErr == nil {
+		if v := hex.EncodeToString(in.TDX.MRSeam); v != "" {
+			m["mrseam"] = v
+		}
+		if v := hex.EncodeToString(in.TDX.MRTD); v != "" {
+			m["mrtd"] = v
+		}
+		for i, rtmr := range in.TDX.RTMRs {
+			if v := hex.EncodeToString(rtmr[:]); v != "" {
+				m[fmt.Sprintf("rtmr%d", i)] = v
+			}
+		}
+	}
+
+	// Include gateway CVM measurements when present (nearcloud).
+	if in.GatewayTDX != nil && in.GatewayTDX.ParseErr == nil {
+		if v := hex.EncodeToString(in.GatewayTDX.MRSeam); v != "" {
+			m["gateway_mrseam"] = v
+		}
+		if v := hex.EncodeToString(in.GatewayTDX.MRTD); v != "" {
+			m["gateway_mrtd"] = v
+		}
+		for i, rtmr := range in.GatewayTDX.RTMRs {
+			if v := hex.EncodeToString(rtmr[:]); v != "" {
+				m[fmt.Sprintf("gateway_rtmr%d", i)] = v
+			}
+		}
 	}
 
 	if len(m) == 0 {

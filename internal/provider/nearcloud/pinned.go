@@ -39,7 +39,7 @@ type PinnedHandler struct {
 	spkiCache     *attestation.SPKICache
 	apiKey        string
 	offline       bool
-	enforced      []string
+	allowFail     []string
 	policy        attestation.MeasurementPolicy
 	gatewayPolicy attestation.MeasurementPolicy
 	rdVerifier    provider.ReportDataVerifier
@@ -56,7 +56,7 @@ func NewPinnedHandler(
 	spkiCache *attestation.SPKICache,
 	apiKey string,
 	offline bool,
-	enforced []string,
+	allowFail []string,
 	policy attestation.MeasurementPolicy,
 	gatewayPolicy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
@@ -70,7 +70,7 @@ func NewPinnedHandler(
 		spkiCache:     spkiCache,
 		apiKey:        apiKey,
 		offline:       offline,
-		enforced:      enforced,
+		allowFail:     allowFail,
 		policy:        policy,
 		gatewayPolicy: gatewayPolicy,
 		rdVerifier:    rdVerifier,
@@ -412,7 +412,7 @@ func (h *PinnedHandler) attestOnConn(
 		Model:             model,
 		Raw:               raw,
 		Nonce:             modelNonce,
-		Enforced:          h.enforced,
+		AllowFail:         h.allowFail,
 		Policy:            h.policy,
 		SupplyChainPolicy: SupplyChainPolicy(),
 		ImageRepos:        modelCD.Repos,

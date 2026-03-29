@@ -83,6 +83,39 @@ var factorRegistry = []factorInfo{
 			"workloads must never run in debug mode.",
 	},
 	{
+		Name:    "tdx_mrseam_mrtd",
+		Tier:    1,
+		Summary: "MRSEAM/MRTD match measurement policy",
+		Description: "Checks that the TDX MRSEAM and MRTD values from the quote " +
+			"match the configured measurement policy allowlists. MRSEAM " +
+			"identifies the Intel TDX module version; MRTD is a SHA-384 " +
+			"hash of the initial TD image. Both are verifiable from Intel " +
+			"releases and dstack build artifacts. Skipped when no " +
+			"MRSEAM/MRTD policy is configured.",
+	},
+	{
+		Name:    "tdx_hardware_config",
+		Tier:    1,
+		Summary: "RTMR0 matches measurement policy",
+		Description: "Checks that RTMR0 from the TDX quote matches the configured " +
+			"measurement policy allowlist. RTMR0 reflects the hardware " +
+			"configuration of the host — firmware, CPU microcode, and " +
+			"platform settings. Different cloud instances or hardware " +
+			"generations produce different RTMR0 values. Skipped when " +
+			"no RTMR0 policy is configured.",
+	},
+	{
+		Name:    "tdx_boot_config",
+		Tier:    1,
+		Summary: "RTMR1/RTMR2 match measurement policy",
+		Description: "Checks that RTMR1 and RTMR2 from the TDX quote match the " +
+			"configured measurement policy allowlists. RTMR1 reflects the " +
+			"kernel and initrd boot chain; RTMR2 reflects the rootfs and " +
+			"application layer. Together they prove the boot sequence loaded " +
+			"the expected software stack. Skipped when no RTMR1/RTMR2 " +
+			"policy is configured.",
+	},
+	{
 		Name:    "signing_key_present",
 		Tier:    1,
 		Summary: "Enclave public key present in response",
@@ -367,6 +400,33 @@ var factorRegistry = []factorInfo{
 			"passing through the API gateway.",
 	},
 	{
+		Name:    "gateway_tdx_mrseam_mrtd",
+		Tier:    4,
+		Summary: "Gateway MRSEAM/MRTD match policy",
+		Description: "Checks that the gateway TDX MRSEAM and MRTD values match " +
+			"the configured gateway measurement policy allowlists. Verifies " +
+			"the gateway is running the expected Intel TDX module and VM " +
+			"image. Skipped when no gateway MRSEAM/MRTD policy is configured.",
+	},
+	{
+		Name:    "gateway_tdx_hardware_config",
+		Tier:    4,
+		Summary: "Gateway RTMR0 matches policy",
+		Description: "Checks that the gateway RTMR0 from the TDX quote matches the " +
+			"configured gateway measurement policy allowlist. RTMR0 reflects " +
+			"the gateway host hardware configuration. Skipped when no gateway " +
+			"RTMR0 policy is configured.",
+	},
+	{
+		Name:    "gateway_tdx_boot_config",
+		Tier:    4,
+		Summary: "Gateway RTMR1/RTMR2 match policy",
+		Description: "Checks that the gateway RTMR1 and RTMR2 from the TDX quote " +
+			"match the configured gateway measurement policy allowlists. Verifies " +
+			"the gateway booted the expected kernel, initrd, and rootfs. Skipped " +
+			"when no gateway RTMR1/RTMR2 policy is configured.",
+	},
+	{
 		Name:    "gateway_tdx_reportdata_binding",
 		Tier:    4,
 		Summary: "Gateway REPORTDATA binds TLS fingerprint + nonce",
@@ -475,6 +535,8 @@ func runHelp(args []string) {
 		printTiersHelp()
 	case "factors":
 		printFactorsHelp()
+	case "measurements":
+		printMeasurementsHelp()
 	default:
 		if f, ok := findFactorByName(args[0]); ok {
 			printFactorHelp(f)
@@ -498,11 +560,12 @@ Global flags:
   --log-level LEVEL   Set log verbosity: debug, info, warn, error (default: info).
 
 Help topics:
-  serve       Detailed documentation for the serve command.
-  verify      Detailed documentation for the verify command.
-  tiers       Explain the verification tier scoring system.
-  factors     List all verification factors with full descriptions.
-  <factor>    Show details for a single factor (e.g. teep help tls_key_binding).
+  serve        Detailed documentation for the serve command.
+  verify       Detailed documentation for the verify command.
+  tiers        Explain the verification tier scoring system.
+  factors      List all verification factors with full descriptions.
+  measurements TDX measurement allowlist configuration guide.
+  <factor>     Show details for a single factor (e.g. teep help tls_key_binding).
 
 Environment variables:
   TEEP_CONFIG        Path to TOML config file.
@@ -579,6 +642,12 @@ Optional flags:
 	--offline         Skip external verification (Intel PCS collateral,
 										Proof of Cloud registry, Certificate Transparency).
 										PPID is still extracted locally.
+  --update-config   Write observed TDX measurements to the config file at
+                    $TEEP_CONFIG. Adds values to [providers.X.policy] with
+                    deduplication. Creates
+                    a .bak backup of the original file.
+  --config-out PATH Write updated config to PATH instead of $TEEP_CONFIG.
+                    Implies --update-config behavior.
   --log-level LEVEL Set log verbosity: debug, info, warn, error (default: info).
 
 Exit codes:
@@ -590,9 +659,115 @@ Examples:
   teep verify neardirect --model qwen2.5-72b-instruct --save-dir ./attestation-data
   teep verify nearcloud --model Qwen/Qwen3.5-122B-A10B --log-level debug
   teep verify venice --model e2ee-qwen3-32b --log-level debug
+  teep verify venice --model e2ee-qwen3-32b --update-config
 
-See 'teep help tiers' for how factors are scored, or 'teep help factors'
-for descriptions of all verification factors.
+See 'teep help tiers' for how factors are scored, 'teep help factors'
+for descriptions of all verification factors, or 'teep help measurements'
+for TDX measurement allowlist configuration.
+`)
+}
+
+// printMeasurementsHelp prints documentation about TDX measurement allowlists.
+func printMeasurementsHelp() {
+	fmt.Print(`TDX Measurement Allowlists
+==========================
+
+Teep can enforce allowlists for TDX measurement registers: MRSEAM, MRTD, and
+RTMR0 through RTMR2. These registers identify the TDX module, virtual firmware,
+and measured boot chain of a CVM. Without allowlists, teep trusts the TDX
+quote structure without verifying that specific software was booted.
+
+RTMR3 is verified separately by replaying the event log and does not need an
+allowlist.
+
+Quickstart: Bootstrap Allowlists from Observed Values
+------------------------------------------------------
+
+  1. Run verification and save observed values to your config:
+
+       teep verify venice --model e2ee-qwen3-32b --update-config
+
+     This writes the observed MRSEAM, MRTD, and RTMR0-2 values to
+     [providers.venice.policy] in $TEEP_CONFIG, with deduplication.
+
+  2. To write to a different file instead of $TEEP_CONFIG:
+
+       teep verify venice --model e2ee-qwen3-32b --config-out ./teep.toml
+
+  3. Run against additional models to capture all deployment classes:
+
+       teep verify venice --model e2ee-deepseek-r1-0528 --update-config
+
+     New values are appended and deduplicated.
+
+  4. Review the generated config and cross-check against canonical sources
+     (see below), then deploy.
+
+Configuration
+-------------
+
+Measurement allowlists are configured in TOML policy sections:
+
+  # Global policy (applies to all providers without per-provider overrides)
+  [policy]
+  mrseam_allow = ["49b66faa..."]
+  mrtd_allow = ["b24d3b24..."]
+  rtmr0_allow = ["0cb94dba..."]
+  rtmr1_allow = ["c0445b70..."]
+  rtmr2_allow = ["56462c01..."]
+
+  # Per-provider policy (overrides global for this provider)
+  [providers.venice.policy]
+  mrseam_allow = ["49b66faa..."]
+  mrtd_allow = ["b24d3b24..."]
+
+Merge order: per-provider TOML > global TOML > Go-coded defaults.
+Each allowlist field is resolved independently.
+
+Register Reference
+------------------
+
+MRSEAM — Intel TDX Module Identity
+  Identifies the TDX module version. Values are published by Intel at:
+    github.com/intel/confidential-computing.tdx.tdx-module (release notes)
+  Also curated by Tinfoil at:
+    github.com/tinfoilsh/tinfoil-python
+  Does not vary with provider, hardware config, or guest image.
+
+MRTD — Virtual Firmware (TD) Image
+  Measures the guest firmware (OVMF) binary. Deterministic for a given dstack
+  OS image version. Does not vary with CPU count, memory, or GPU config.
+  Compute from source:
+    dstack-mr measure  (from github.com/Dstack-TEE/dstack)
+  Reproducible builds:
+    github.com/Dstack-TEE/meta-dstack
+    github.com/nearai/private-ml-sdk
+
+RTMR0 — Hardware Configuration
+  Measures vCPU count, memory size, GPU count, and PCI configuration.
+  Varies per deployment class. Must be either provider-published or observed
+  and pinned.
+  Compute with exact hardware params:
+    dstack-mr measure --cpu N --memory SIZE --num-gpus G
+
+RTMR1 — Kernel and Boot Loader
+  Measures the Linux kernel binary. Deterministic for a given dstack image
+  build, but may vary across fleet if multiple image versions are deployed.
+  Compute from source:
+    dstack-mr measure  (from github.com/Dstack-TEE/dstack)
+
+RTMR2 — Root Filesystem and Command Line
+  Measures the kernel command line, initrd, and rootfs. Varies with rootfs
+  configuration per deployment class.
+  Compute from source:
+    dstack-mr measure  (from github.com/Dstack-TEE/dstack)
+
+RTMR3 — Runtime Events (not allowlisted)
+  Computed from compose hash, instance ID, key provider, and other runtime
+  events. Verified by replaying the event log. No manual pinning needed.
+
+For full details see docs/measurement_allowlists.md and
+docs/attestation_gaps/dstack_integrity.md.
 `)
 }
 
@@ -622,9 +797,9 @@ they fail.
 		fmt.Println()
 	}
 
-	fmt.Print(`Default enforced factors: nonce_match, tdx_debug_disabled,
-signing_key_present, tdx_reportdata_binding. These can be overridden in
-the TOML config file.
+	fmt.Print(`Default enforced factors: all factors NOT listed in allow_fail. Factors
+in the allow_fail list may fail without blocking. The default allow_fail list
+can be overridden globally or per-provider in the TOML config file.
 
 Run 'teep help factors' for full descriptions, or 'teep help <factor>'
 for a single factor.

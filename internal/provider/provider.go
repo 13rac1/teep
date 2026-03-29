@@ -129,6 +129,14 @@ type Provider struct {
 	// provider. May be nil if the provider has no policy.
 	SupplyChainPolicy *attestation.SupplyChainPolicy
 
+	// MeasurementPolicy is the merged TDX measurement allowlist for this
+	// provider's model backend CVM (Go defaults + global TOML + per-provider TOML).
+	MeasurementPolicy attestation.MeasurementPolicy
+
+	// GatewayMeasurementPolicy is the merged TDX measurement allowlist for
+	// this provider's gateway CVM. Zero value for non-gateway providers.
+	GatewayMeasurementPolicy attestation.MeasurementPolicy
+
 	// ModelLister fetches available models from the provider's discovery API.
 	// May be nil if the provider does not support model listing.
 	ModelLister ModelLister

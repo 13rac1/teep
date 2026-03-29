@@ -218,3 +218,160 @@ For builders using teep:
 2. where providers do not publish authenticated baselines, pin the currently observed measurement values in teep policy for both inference and gateway hosts using `mrseam_allow`, `mrtd_allow`, `rtmr0_allow`, `rtmr1_allow`, `rtmr2_allow`, and the corresponding `gateway_mrseam_allow`, `gateway_mrtd_allow`, `gateway_rtmr0_allow`, `gateway_rtmr1_allow`, `gateway_rtmr2_allow` settings
 3. treat that pinning workflow as a stopgap that detects unexpected measurement drift, not as proof of private inference, because observed values are only truly trustworthy when they come from a reproducibly built and independently verifiable image
 4. require provider-published measurement manifests before claiming full dstack integrity
+
+---
+
+## Research Findings: Publicly Available Golden Values
+
+Investigation of GitHub source code, release artifacts, and third-party verifiers
+reveals that several register values **can** be determined from public sources
+today, even though neardirect and nearcloud do not explicitly publish them.
+
+### MRSEAM: Fully Determinable from Intel Releases
+
+Intel publishes MRSEAM hashes directly in their official TDX module release
+notes at `intel/confidential-computing.tdx.tdx-module`. The observed MRSEAM
+values in teep's captured attestation data map to specific Intel releases:
+
+| MRSEAM | TDX Module Version | Platform | Observed In |
+|--------|-------------------|----------|-------------|
+| `49b66faa451d19eb...` | **1.5.08** | Sapphire/Emerald Rapids | neardirect, venice |
+| `7bf063280e94fb05...` | **1.5.16** | Sapphire/Emerald Rapids | nanogpt (nearcloud) |
+| `476a2997c62bccc7...` | **2.0.08** | Granite Rapids | (not yet observed) |
+| `685f891ea5c20e8f...` | **2.0.02** | Granite Rapids | (not yet observed) |
+| `5b38e33a64879589...` | **1.5.05** | Sapphire/Emerald Rapids | (Phala docs, older) |
+
+The complete list of MRSEAM-to-version mappings is available from Intel's
+release pages. Tinfoil (`tinfoilsh/tinfoil-python`) also maintains a curated
+list of accepted MRSEAM values with version labels.
+
+**Implication for teep:** MRSEAM can be pinned today using Intel-published
+values. A reasonable policy is to allow the set of non-deprecated 1.5.x+2.0.x
+module versions. This does not require any provider cooperation.
+
+### MRTD: Deterministic Per Dstack Image Version
+
+All captured attestation data across neardirect, venice, and nanogpt (nearcloud)
+share a single MRTD value:
+
+```
+b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217
+```
+
+This value appears in 34 GitHub repositories, including dstack's own verifier
+fixtures and the Atlas aTLS library's production examples. The Atlas
+`BOOTCHAIN-VERIFICATION.md` documents that this MRTD is produced by running
+`dstack-mr measure` against the **dstack-nvidia-0.5.4.1** release from
+`nearai/private-ml-sdk`.
+
+MRTD is deterministic for a given dstack OS image version because it measures
+only the virtual firmware (OVMF) binary — it does not vary with CPU count,
+memory, or GPU configuration.
+
+**Implication for teep:** MRTD can be computed from the reproducibly-built
+dstack image using the `dstack-mr` tool from the dstack repository. The current
+value can also be pinned by observation since it is consistent across all
+providers sharing the same dstack version. When the dstack image is updated,
+the new MRTD can be re-derived.
+
+### RTMR0: Per-Deployment-Class (CPU/RAM/GPU Configuration)
+
+RTMR0 measures the virtual hardware configuration (vCPU count, memory size, PCI
+hole, GPU count, NVSwitch count, hotplug, QEMU version). Three distinct values
+were observed across all captures:
+
+| RTMR0 | Observed In |
+|-------|-------------|
+| `bc122d143ab76856...` | neardirect, nanogpt/glm-4.7, glm-5 |
+| `6ffe4a2c12f07ecc...` | nanogpt/gemma-3-27b, glm-4.7-flash, gpt-oss-120b, and 3 more |
+| `0cb94dba1a977341...` | venice, nanogpt/qwen3-30b |
+
+The Atlas `BOOTCHAIN-VERIFICATION.md` explains that RTMR0 varies with hardware
+configuration and must be computed per-deployment-class using `dstack-mr
+measure --cpu N --memory SIZE --num-gpus G ...`.
+
+**Implication for teep:** RTMR0 cannot be derived without knowing the exact
+hardware configuration of each deployment. Providers must either publish these
+values per deployment class, or teep operators must pin observed values.
+
+### RTMR1: Per Kernel Version (2-3 Variants)
+
+RTMR1 measures the Linux kernel binary. Three distinct values were observed:
+
+| RTMR1 | Observed In |
+|-------|-------------|
+| `c0445b704e4c4813...` | neardirect, venice, most nanogpt models (7 captures) |
+| `6e1afb7464ed0b94...` | nanogpt/gemma-3-27b, gpt-oss-20b, qwen2.5-vl (used in Atlas production examples) |
+| `920eb831509b58bf...` | nanogpt/gpt-oss-120b only |
+
+The multiple values suggest either different dstack image builds or different
+kernel configurations across nearcloud's fleet.
+
+**Implication for teep:** RTMR1 is deterministic for a given dstack image, so
+it can be computed via `dstack-mr measure` from the reproducible build artifacts.
+The current observed values can be pinned to detect unexpected kernel changes.
+
+### RTMR2: Per Image Metadata (5 Variants)
+
+RTMR2 measures the kernel command line, initrd, and rootfs. Five distinct values
+were observed, making it the most variable register. This variation likely
+reflects different rootfs configurations for different model deployments.
+
+**Implication for teep:** Like RTMR0, the variation means RTMR2 values must be
+either provider-published or observed and pinned per deployment class.
+
+### RTMR3: Replayable from Event Log (Already Verified)
+
+RTMR3 is computed by the dstack runtime from the compose hash, instance ID, key
+provider, and other runtime events. Teep already verifies RTMR3 by replaying the
+event log, so this register does not have a golden-value gap.
+
+### Recommended teep Policy Configuration
+
+Based on the research, teep can immediately configure the following without
+provider cooperation:
+
+**mrseam_allow** — The set of Intel-published MRSEAM values for non-deprecated
+TDX module versions:
+```
+mrseam_allow:
+  - "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6"  # TDX 1.5.08
+  - "7bf063280e94fb051f5dd7b1fc59ce9aac42bb961df8d44b709c9b0ff87a7b4df648657ba6d1189589feab1d5a3c9a9d"  # TDX 1.5.16
+  - "476a2997c62bccc78370913d0a80b956e3721b24272bc66c4d6307ced4be2865c40e26afac75f12df3425b03eb59ea7c"  # TDX 2.0.08
+  - "685f891ea5c20e8fa27b151bf34bf3b50fbaf7143cc53662727cbdb167c0ad8385f1f6f3571539a91e104a1c96d75e04"  # TDX 2.0.02
+```
+
+**mrtd_allow** — The MRTD for the current dstack image version, derivable from
+reproducible build or observed:
+```
+mrtd_allow:
+  - "b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217"  # dstack-nvidia-0.5.4.1
+```
+
+**rtmr1_allow** — Observed kernel measurements (stopgap until derivable):
+```
+rtmr1_allow:
+  - "c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc"
+  - "6e1afb7464ed0b941e8f5bf5b725cf1df9425e8105e3348dca52502f27c453f3018a28b90749cf05199d5a17820101a7"
+  - "920eb831509b58bf83a554b5377dd5ce26d3f5182f14d33622ac24c1d343a0fa3c7bde746e55098ca30baf784dfd2556"
+```
+
+**rtmr0_allow** and **rtmr2_allow** — Must be populated per deployment class;
+pin observed values as a drift-detection measure until providers publish.
+
+### Diagnostic Change
+
+The `buildMetadata` function in `report.go` now includes full hex values
+for `mrseam`, `mrtd`, and `rtmr0`-`rtmr3` in every verification report's
+metadata section. This makes it straightforward to extract the values needed
+for policy configuration from any teep verification run.
+
+### Sources
+
+- Intel TDX Module releases: `intel/confidential-computing.tdx.tdx-module` (GitHub releases with MRSEAM hashes)
+- Tinfoil Python verifier: `tinfoilsh/tinfoil-python` (`attestation_tdx.py`, curated MRSEAM list)
+- dstack reproducible builds: `Dstack-TEE/meta-dstack` and `nearai/private-ml-sdk` (releases)
+- dstack measurement calculator: `dstack-mr` tool in `Dstack-TEE/dstack`
+- Atlas aTLS library: `concrete-security/atlas` (`BOOTCHAIN-VERIFICATION.md`, production measurement examples)
+- Phala attestation docs: `Phala-Network/phala-docs` (attestation fields reference)
+- dstack attestation tutorial: `Dstack-TEE/dstack` (`docs/tutorials/attestation-verification.md`)

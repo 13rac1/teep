@@ -260,6 +260,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 		DigestToRepo: digestToRepo,
 		Sigstore:     sigstoreResults,
 		Rekor:        rekorResults,
+		AllowFail:    attestation.DefaultAllowFail,
 	})
 
 	total := report.Passed + report.Failed + report.Skipped

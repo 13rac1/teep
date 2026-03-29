@@ -227,7 +227,7 @@ func TestPinnedHandler_SPKICacheHit(t *testing.T) {
 		spkiCache:  spkiCache,
 		apiKey:     "test-key",
 		offline:    true,
-		enforced:   []string{},
+		allowFail:  []string{},
 		rdVerifier: ReportDataVerifier{},
 	}
 
@@ -368,14 +368,30 @@ func hostFromURL(t *testing.T, rawURL string) string {
 	return addr
 }
 
+// allFactorsExcept returns KnownFactors minus the given names — useful for
+// building an allow_fail list that enforces only the excluded factors.
+func allFactorsExcept(exclude ...string) []string {
+	ex := make(map[string]bool, len(exclude))
+	for _, n := range exclude {
+		ex[n] = true
+	}
+	var out []string
+	for _, n := range attestation.KnownFactors {
+		if !ex[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // TestNewPinnedHandler verifies constructor sets all fields correctly.
 func TestNewPinnedHandler(t *testing.T) {
 	spkiCache := attestation.NewSPKICache()
 	resolver := newEndpointResolverForTest("http://localhost")
 	rdVerifier := ReportDataVerifier{}
-	enforced := []string{"nonce_match", "tdx_debug_disabled"}
+	allowFail := []string{"nonce_match", "tdx_debug_disabled"}
 
-	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, enforced, attestation.MeasurementPolicy{}, rdVerifier, nil)
+	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, allowFail, attestation.MeasurementPolicy{}, rdVerifier, nil)
 
 	if h.apiKey != "test-api-key" {
 		t.Errorf("apiKey = %q, want %q", h.apiKey, "test-api-key")
@@ -383,8 +399,8 @@ func TestNewPinnedHandler(t *testing.T) {
 	if !h.offline {
 		t.Error("offline = false, want true")
 	}
-	if len(h.enforced) != 2 {
-		t.Errorf("enforced len = %d, want 2", len(h.enforced))
+	if len(h.allowFail) != 2 {
+		t.Errorf("allowFail len = %d, want 2", len(h.allowFail))
 	}
 	if h.spkiCache == nil {
 		t.Error("spkiCache is nil")
@@ -474,7 +490,7 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 		attestation.NewSPKICache(),
 		"test-key",
 		true, // offline — skip Sigstore/Rekor
-		[]string{},
+		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
 	)
@@ -644,7 +660,7 @@ func TestHandlePinned_BlockedReportDoesNotPopulateSPKICache(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/v1/attestation/report") {
 			attestCalls++
 			w.Header().Set("Content-Type", "application/json")
-			// Force nonce mismatch so nonce_match fails when enforced.
+			// Force nonce mismatch so nonce_match fails when not in allow_fail.
 			_, _ = w.Write([]byte(nearaiAttestationJSON(spkiHash, "0000000000000000000000000000000000000000000000000000000000000000")))
 			return
 		}
@@ -665,7 +681,7 @@ func TestHandlePinned_BlockedReportDoesNotPopulateSPKICache(t *testing.T) {
 		attestation.NewSPKICache(),
 		"test-key",
 		true,
-		[]string{"nonce_match"},
+		[]string{}, // empty allow_fail → all factors enforced, including nonce_match
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
 	)
@@ -846,7 +862,7 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 		attestation.NewSPKICache(),
 		"test-key",
 		true,
-		[]string{},
+		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
 	)
@@ -1056,7 +1072,7 @@ func TestHandlePinned_BlockedThenRecovery(t *testing.T) {
 		attestation.NewSPKICache(),
 		"test-key",
 		true,
-		[]string{"nonce_match"},
+		allFactorsExcept("nonce_match"), // only nonce_match is enforced
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
 	)
@@ -1064,7 +1080,7 @@ func TestHandlePinned_BlockedThenRecovery(t *testing.T) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
 	})
 
-	// Request 1: blocked (nonce mismatch).
+	// Request 1: blocked (nonce mismatch — nonce_match is the only enforced factor).
 	resp, err := handler.HandlePinned(context.Background(), &provider.PinnedRequest{
 		Method:  "POST",
 		Path:    "/v1/chat/completions",

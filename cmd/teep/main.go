@@ -32,6 +32,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
@@ -181,8 +182,8 @@ func extractProvider(args []string) (name string, rest []string) {
 }
 
 // runVerify parses flags, fetches attestation from the named provider, builds
-// the 20-factor report, prints it to stdout, and exits with code 1 if any
-// enforced factor failed.
+// the verification report, prints it to stdout, and exits with code 1 if any
+// enforced factor failed (i.e. a factor not in the allow_fail list).
 func runVerify(args []string) {
 	providerName, args := extractProvider(args)
 	if providerName == "" {
@@ -197,6 +198,8 @@ func runVerify(args []string) {
 	modelName := fs.String("model", "", "model name as known to the provider (required)")
 	saveDir := fs.String("save-dir", "", "directory to save raw attestation data (EAT, TDX quote)")
 	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
+	updateConfig := fs.Bool("update-config", false, "write observed measurements to the config file ($TEEP_CONFIG)")
+	configOut := fs.String("config-out", "", "write updated config to this path instead of $TEEP_CONFIG")
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 
 	if err := fs.Parse(args); err != nil {
@@ -212,7 +215,30 @@ func runVerify(args []string) {
 	report := runVerification(providerName, *modelName, *saveDir, *offline)
 	fmt.Print(formatReport(report))
 
-	if report.Blocked() {
+	blocked := report.Blocked()
+
+	if *updateConfig || *configOut != "" {
+		if blocked {
+			fmt.Fprintf(os.Stderr, "teep verify: refusing --update-config: attestation blocked (measurements may be untrustworthy)\n")
+			os.Exit(1)
+		}
+		outPath := *configOut
+		if outPath == "" {
+			outPath = os.Getenv("TEEP_CONFIG")
+		}
+		if outPath == "" {
+			fmt.Fprintf(os.Stderr, "teep verify: --update-config requires $TEEP_CONFIG or --config-out\n")
+			os.Exit(1)
+		}
+		observed := extractObserved(report)
+		if err := config.UpdateConfig(outPath, providerName, &observed); err != nil {
+			fmt.Fprintf(os.Stderr, "teep verify: update config: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "Config updated: %s (provider %s)\n", outPath, providerName)
+	}
+
+	if blocked {
 		os.Exit(1)
 	}
 }
@@ -291,13 +317,18 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 
 	e2eeResult := testE2EE(ctx, raw, providerName, cp, modelName, offline)
 
+	mDefaults, gwDefaults := defaults.MeasurementDefaults(providerName)
+	mergedPolicy := config.MergedMeasurementPolicy(providerName, cfg, mDefaults)
+	mergedGWPolicy := config.MergedGatewayMeasurementPolicy(providerName, cfg, gwDefaults)
+
 	return attestation.BuildReport(&attestation.ReportInput{
 		Provider:          providerName,
 		Model:             modelName,
 		Raw:               raw,
 		Nonce:             nonce,
-		Enforced:          cfg.Enforced,
-		Policy:            cfg.MeasurementPolicy,
+		AllowFail:         config.MergedAllowFail(providerName, cfg),
+		Policy:            mergedPolicy,
+		GatewayPolicy:     mergedGWPolicy,
 		SupplyChainPolicy: supplyChainPolicy(providerName),
 		TDX:               tdxResult,
 		Nvidia:            nvidiaResult,
@@ -317,6 +348,27 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		GatewayEventLog:   raw.GatewayEventLog,
 		E2EETest:          e2eeResult,
 	})
+}
+
+// extractObserved builds an ObservedMeasurements from the verification report
+// metadata. Missing metadata keys result in empty strings (no policy change).
+func extractObserved(report *attestation.VerificationReport) config.ObservedMeasurements {
+	m := report.Metadata
+	return config.ObservedMeasurements{
+		MRSeam: m["mrseam"],
+		MRTD:   m["mrtd"],
+		RTMR0:  m["rtmr0"],
+		RTMR1:  m["rtmr1"],
+		RTMR2:  m["rtmr2"],
+		// RTMR3 omitted: verified via event log replay, varies across instances.
+
+		GatewayMRSeam: m["gateway_mrseam"],
+		GatewayMRTD:   m["gateway_mrtd"],
+		GatewayRTMR0:  m["gateway_rtmr0"],
+		GatewayRTMR1:  m["gateway_rtmr1"],
+		GatewayRTMR2:  m["gateway_rtmr2"],
+		// Gateway RTMR3 omitted for the same reason as RTMR3.
+	}
 }
 
 // loadConfig loads the TOML config and looks up the named provider.
@@ -807,14 +859,20 @@ func formatReport(r *attestation.VerificationReport) string {
 		line := fmt.Sprintf("  %s %-26s %s", icon, f.Name, f.Detail)
 		if f.Enforced {
 			line += "  [ENFORCED]"
+		} else {
+			line += "  [ALLOWED]"
 		}
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
 
-	fmt.Fprintf(&b, "Score: %d/%d passed, %d skipped, %d failed\n",
+	fmt.Fprintf(&b, "Score: %d/%d passed, %d skipped, %d failed",
 		r.Passed, r.Passed+r.Failed+r.Skipped, r.Skipped, r.Failed)
+	if r.Failed > 0 {
+		fmt.Fprintf(&b, " (%d enforced, %d allowed)", r.EnforcedFailed, r.AllowedFailed)
+	}
+	b.WriteString("\n")
 	b.WriteString("\nRun 'teep help tiers' for scoring or 'teep help factors' for details.\n")
 
 	return b.String()

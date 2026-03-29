@@ -31,19 +31,19 @@ func buildTestReport(provider, model string) *attestation.VerificationReport {
 		{Name: "nonce_match", Status: attestation.Pass, Detail: "Nonce matches (64 hex chars)", Enforced: true, Tier: attestation.TierCore},
 		{Name: "tdx_quote_present", Status: attestation.Pass, Detail: "TDX quote present (1247 base64 chars)", Tier: attestation.TierCore},
 		{Name: "tdx_quote_structure", Status: attestation.Pass, Detail: "Valid QuoteV4 structure", Tier: attestation.TierCore},
-		{Name: "tdx_cert_chain", Status: attestation.Pass, Detail: "Certificate chain valid (Intel root CA)", Tier: attestation.TierCore},
+		{Name: "tdx_cert_chain", Status: attestation.Pass, Detail: "cert chain valid (Intel root CA)", Tier: attestation.TierCore},
 		{Name: "tdx_quote_signature", Status: attestation.Pass, Detail: "Quote signature verified", Tier: attestation.TierCore},
 		{Name: "tdx_debug_disabled", Status: attestation.Pass, Detail: "Debug bit is 0", Enforced: true, Tier: attestation.TierCore},
 		{Name: "signing_key_present", Status: attestation.Pass, Detail: "enclave pubkey present (04a3b2...)", Enforced: true, Tier: attestation.TierCore},
 		// Tier 2
 		{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "REPORTDATA binds signing key + nonce", Enforced: true, Tier: attestation.TierBinding},
 		{Name: "intel_pcs_collateral", Status: attestation.Skip, Detail: "Quote age not determinable", Tier: attestation.TierBinding},
-		{Name: "tdx_tcb_current", Status: attestation.Pass, Detail: "TCB SVN: 03000000000000000000000000000000", Tier: attestation.TierBinding},
+		{Name: "tdx_tcb_current", Status: attestation.Pass, Detail: "TCB is UpToDate per Intel PCS", Tier: attestation.TierBinding},
 		{Name: "nvidia_payload_present", Status: attestation.Pass, Detail: "NVIDIA payload present (512 chars)", Tier: attestation.TierBinding},
 		{Name: "nvidia_signature", Status: attestation.Pass, Detail: "JWT signature valid (RS256)", Tier: attestation.TierBinding},
 		{Name: "nvidia_claims", Status: attestation.Pass, Detail: "Claims valid", Tier: attestation.TierBinding},
-		{Name: "nvidia_nonce_client_bound", Status: attestation.Skip, Detail: "nonce field not found in NVIDIA payload", Tier: attestation.TierBinding},
-		{Name: "nvidia_nras_verified", Status: attestation.Skip, Detail: "offline mode; NRAS verification skipped", Tier: attestation.TierBinding},
+		{Name: "nvidia_nonce_client_bound", Status: attestation.Skip, Detail: "nonce not found in NVIDIA payload", Tier: attestation.TierBinding},
+		{Name: "nvidia_nras_verified", Status: attestation.Skip, Detail: "offline mode; NRAS skipped", Tier: attestation.TierBinding},
 		{Name: "e2ee_capable", Status: attestation.Pass, Detail: "E2EE key exchange possible", Tier: attestation.TierBinding},
 		// Tier 3
 		{Name: "tls_key_binding", Status: attestation.Fail, Detail: "no TLS key in attestation", Tier: attestation.TierSupplyChain},
@@ -54,25 +54,33 @@ func buildTestReport(provider, model string) *attestation.VerificationReport {
 	}
 
 	passed, failed, skipped := 0, 0, 0
+	enforcedFailed, allowedFailed := 0, 0
 	for _, f := range factors {
 		switch f.Status {
 		case attestation.Pass:
 			passed++
 		case attestation.Fail:
 			failed++
+			if f.Enforced {
+				enforcedFailed++
+			} else {
+				allowedFailed++
+			}
 		case attestation.Skip:
 			skipped++
 		}
 	}
 
 	return &attestation.VerificationReport{
-		Provider:  provider,
-		Model:     model,
-		Timestamp: time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC),
-		Factors:   factors,
-		Passed:    passed,
-		Failed:    failed,
-		Skipped:   skipped,
+		Provider:       provider,
+		Model:          model,
+		Timestamp:      time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC),
+		Factors:        factors,
+		Passed:         passed,
+		Failed:         failed,
+		Skipped:        skipped,
+		EnforcedFailed: enforcedFailed,
+		AllowedFailed:  allowedFailed,
 	}
 }
 
@@ -133,14 +141,18 @@ func TestFormatReport_EnforcedTag(t *testing.T) {
 	if !strings.Contains(out, "[ENFORCED]") {
 		t.Errorf("[ENFORCED] tag not found; output:\n%s", out)
 	}
+	// tdx_quote_present is not enforced, so it should show [ALLOWED].
+	if !strings.Contains(out, "[ALLOWED]") {
+		t.Errorf("[ALLOWED] tag not found; output:\n%s", out)
+	}
 }
 
 func TestFormatReport_ScoreLine(t *testing.T) {
 	r := buildTestReport("venice", "some-model")
 	out := formatReport(r)
 
-	// Expect the score line: "Score: 13/21 passed, 3 skipped, 5 failed"
-	// Our test report: 13 pass, 5 fail, 3 skip = 21 total.
+	// Expect the score line: "Score: 13/21 passed, 3 skipped, 5 failed (0 enforced, 5 allowed)"
+	// Our test report: 13 pass, 5 fail (0 enforced, 5 allowed), 3 skip = 21 total.
 	if !strings.Contains(out, "Score:") {
 		t.Errorf("Score line not found; output:\n%s", out)
 	}
@@ -152,6 +164,9 @@ func TestFormatReport_ScoreLine(t *testing.T) {
 	}
 	if !strings.Contains(out, "5 failed") {
 		t.Errorf("expected '5 failed' in score line; output:\n%s", out)
+	}
+	if !strings.Contains(out, "0 enforced, 5 allowed") {
+		t.Errorf("expected '0 enforced, 5 allowed' in score line; output:\n%s", out)
 	}
 }
 
@@ -187,6 +202,27 @@ func TestFormatReport_EmptyReport(t *testing.T) {
 	}
 	if !strings.Contains(out, "Score: 0/0") {
 		t.Errorf("score line for empty report should read '0/0'; output:\n%s", out)
+	}
+	if strings.Contains(out, "enforced") {
+		t.Errorf("score line should omit breakdown when no failures; output:\n%s", out)
+	}
+}
+
+func TestFormatReport_ScoreLineWithEnforcedFailures(t *testing.T) {
+	r := &attestation.VerificationReport{
+		Provider:  "test",
+		Model:     "m",
+		Timestamp: time.Now(),
+		Factors: []attestation.FactorResult{
+			{Name: "a", Status: attestation.Pass, Tier: attestation.TierCore},
+			{Name: "b", Status: attestation.Fail, Enforced: true, Tier: attestation.TierCore},
+			{Name: "c", Status: attestation.Fail, Enforced: false, Tier: attestation.TierSupplyChain},
+		},
+		Passed: 1, Failed: 2, EnforcedFailed: 1, AllowedFailed: 1,
+	}
+	out := formatReport(r)
+	if !strings.Contains(out, "1 enforced, 1 allowed") {
+		t.Errorf("expected '1 enforced, 1 allowed'; output:\n%s", out)
 	}
 }
 

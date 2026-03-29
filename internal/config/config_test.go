@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/13rac1/teep/internal/attestation"
 )
 
 // writeConfigFile creates a temporary TOML config file with the given content
@@ -51,12 +53,12 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Providers) != 0 {
 		t.Errorf("Providers: got %d entries, want 0", len(cfg.Providers))
 	}
-	if len(cfg.Enforced) != len(DefaultEnforced) {
-		t.Errorf("Enforced: got %d entries, want %d", len(cfg.Enforced), len(DefaultEnforced))
+	if len(cfg.AllowFail) != len(DefaultAllowFail) {
+		t.Errorf("AllowFail: got %d entries, want %d", len(cfg.AllowFail), len(DefaultAllowFail))
 	}
-	for i, name := range DefaultEnforced {
-		if cfg.Enforced[i] != name {
-			t.Errorf("Enforced[%d]: got %q, want %q", i, cfg.Enforced[i], name)
+	for i, name := range DefaultAllowFail {
+		if cfg.AllowFail[i] != name {
+			t.Errorf("AllowFail[%d]: got %q, want %q", i, cfg.AllowFail[i], name)
 		}
 	}
 }
@@ -116,7 +118,7 @@ e2ee = false
 func TestLoadTOMLPolicy(t *testing.T) {
 	toml := `
 [policy]
-enforce = ["nonce_match", "tls_key_binding"]
+allow_fail = ["nonce_match", "tls_key_binding"]
 `
 	path := writeConfigFile(t, toml, 0o600)
 	setenv(t, "TEEP_CONFIG", path)
@@ -129,21 +131,21 @@ enforce = ["nonce_match", "tls_key_binding"]
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if len(cfg.Enforced) != 2 {
-		t.Fatalf("Enforced: got %d entries, want 2", len(cfg.Enforced))
+	if len(cfg.AllowFail) != 2 {
+		t.Fatalf("AllowFail: got %d entries, want 2", len(cfg.AllowFail))
 	}
-	if cfg.Enforced[0] != "nonce_match" {
-		t.Errorf("Enforced[0]: got %q, want %q", cfg.Enforced[0], "nonce_match")
+	if cfg.AllowFail[0] != "nonce_match" {
+		t.Errorf("AllowFail[0]: got %q, want %q", cfg.AllowFail[0], "nonce_match")
 	}
-	if cfg.Enforced[1] != "tls_key_binding" {
-		t.Errorf("Enforced[1]: got %q, want %q", cfg.Enforced[1], "tls_key_binding")
+	if cfg.AllowFail[1] != "tls_key_binding" {
+		t.Errorf("AllowFail[1]: got %q, want %q", cfg.AllowFail[1], "tls_key_binding")
 	}
 }
 
-func TestLoadTOMLUnknownEnforceFactor(t *testing.T) {
+func TestLoadTOMLUnknownAllowFailFactor(t *testing.T) {
 	toml := `
 [policy]
-enforce = ["nonce_match", "typo_factor"]
+allow_fail = ["nonce_match", "typo_factor"]
 `
 	path := writeConfigFile(t, toml, 0o600)
 	setenv(t, "TEEP_CONFIG", path)
@@ -154,10 +156,85 @@ enforce = ["nonce_match", "typo_factor"]
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("expected error for unknown enforce factor, got nil")
+		t.Fatal("expected error for unknown allow_fail factor, got nil")
 	}
 	if !strings.Contains(err.Error(), "typo_factor") {
 		t.Errorf("error should mention the unknown factor: %v", err)
+	}
+}
+
+func TestLoadTOMLEmptyAllowFailEnforcesAll(t *testing.T) {
+	// An explicitly empty allow_fail = [] means "enforce all factors" —
+	// overrides the built-in defaults to an empty list.
+	toml := `
+allow_fail = []
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.AllowFail) != 0 {
+		t.Errorf("AllowFail: got %d entries, want 0 (enforce all)", len(cfg.AllowFail))
+	}
+}
+
+func TestLoadTOMLEmptyPolicyAllowFailEnforcesAll(t *testing.T) {
+	// An explicitly empty [policy] allow_fail = [] also means "enforce all".
+	toml := `
+[policy]
+allow_fail = []
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.AllowFail) != 0 {
+		t.Errorf("AllowFail: got %d entries, want 0 (enforce all)", len(cfg.AllowFail))
+	}
+}
+
+func TestLoadTOMLPerProviderEmptyAllowFailEnforcesAll(t *testing.T) {
+	// An explicitly empty per-provider allow_fail = [] means "enforce all"
+	// for that provider, overriding the global default.
+	toml := `
+[providers.venice]
+api_key = "k"
+base_url = "https://api.venice.ai"
+allow_fail = []
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	// Global allow_fail should still be the defaults.
+	if len(cfg.AllowFail) != len(DefaultAllowFail) {
+		t.Errorf("global AllowFail: got %d entries, want %d", len(cfg.AllowFail), len(DefaultAllowFail))
+	}
+	// Per-provider allow_fail should be empty (enforce all).
+	af := MergedAllowFail("venice", cfg)
+	if len(af) != 0 {
+		t.Errorf("MergedAllowFail(\"venice\"): got %d entries, want 0 (enforce all)", len(af))
 	}
 }
 
@@ -226,7 +303,7 @@ mrtd_allow = ["abcd"]
 }
 
 func TestLoadTOMLEmptyPolicyKeepsDefaults(t *testing.T) {
-	// An [policy] section with no enforce list must keep the built-in defaults.
+	// A [policy] section with no allow_fail list must keep the built-in defaults.
 	toml := `
 [providers.venice]
 api_key = "k"
@@ -243,8 +320,86 @@ base_url = "https://api.venice.ai"
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if len(cfg.Enforced) != len(DefaultEnforced) {
-		t.Errorf("Enforced after TOML with no [policy]: got %d entries, want %d", len(cfg.Enforced), len(DefaultEnforced))
+	if len(cfg.AllowFail) != len(DefaultAllowFail) {
+		t.Errorf("AllowFail after TOML with no [policy]: got %d entries, want %d", len(cfg.AllowFail), len(DefaultAllowFail))
+	}
+}
+
+func TestLoadTOMLPerProviderPolicy(t *testing.T) {
+	valid48a := strings.Repeat("ab", 48)
+	valid48b := strings.Repeat("cd", 48)
+	tomlCfg := `
+[policy]
+mrtd_allow = ["` + valid48a + `"]
+
+[providers.venice]
+api_key = "k"
+base_url = "https://api.venice.ai"
+
+[providers.venice.policy]
+mrtd_allow = ["` + valid48b + `"]
+`
+	path := writeConfigFile(t, tomlCfg, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	// Global policy should have valid48a.
+	if !cfg.MeasurementPolicy.HasMRTDPolicy() {
+		t.Fatal("global MeasurementPolicy should have MRTD allowlist")
+	}
+	// Per-provider policy should have valid48b.
+	pp, ok := cfg.ProviderPolicies["venice"]
+	if !ok {
+		t.Fatal("ProviderPolicies[venice] should be set")
+	}
+	if !pp.HasMRTDPolicy() {
+		t.Fatal("venice per-provider MRTD policy should be set")
+	}
+	if _, ok := pp.MRTDAllow[valid48b]; !ok {
+		t.Error("venice per-provider MRTD allowlist should contain " + valid48b[:16] + "...")
+	}
+}
+
+func TestMergedMeasurementPolicy(t *testing.T) {
+	valid48a := strings.Repeat("aa", 48)
+	valid48b := strings.Repeat("bb", 48)
+	valid48c := strings.Repeat("cc", 48)
+
+	goDefaults := attestation.MeasurementPolicy{
+		MRTDAllow:   map[string]struct{}{valid48a: {}},
+		MRSeamAllow: map[string]struct{}{valid48a: {}},
+	}
+	cfg := &Config{
+		MeasurementPolicy: attestation.MeasurementPolicy{
+			MRTDAllow: map[string]struct{}{valid48b: {}},
+		},
+		ProviderPolicies: map[string]attestation.MeasurementPolicy{
+			"venice": {MRTDAllow: map[string]struct{}{valid48c: {}}},
+		},
+		ProviderGatewayPolicies: make(map[string]attestation.MeasurementPolicy),
+	}
+
+	// Per-provider > global > Go defaults.
+	merged := MergedMeasurementPolicy("venice", cfg, goDefaults)
+	if _, ok := merged.MRTDAllow[valid48c]; !ok {
+		t.Error("per-provider MRTD should win over global and defaults")
+	}
+	// MRSeamAllow: no per-provider, no global → Go default.
+	if _, ok := merged.MRSeamAllow[valid48a]; !ok {
+		t.Error("Go default MRSeamAllow should be used when no per-provider or global override")
+	}
+
+	// For a provider without per-provider config, global > Go defaults.
+	merged2 := MergedMeasurementPolicy("neardirect", cfg, goDefaults)
+	if _, ok := merged2.MRTDAllow[valid48b]; !ok {
+		t.Error("global MRTD should override Go defaults for neardirect")
 	}
 }
 
@@ -603,11 +758,11 @@ base_url = "https://api.venice.ai"
 	}
 }
 
-// --- DefaultEnforced isolation ---
+// --- DefaultAllowFail isolation ---
 
-// TestDefaultEnforcedImmutable verifies that modifying the returned cfg.Enforced
-// slice does not alter DefaultEnforced.
-func TestDefaultEnforcedImmutable(t *testing.T) {
+// TestDefaultAllowFailImmutable verifies that modifying the returned cfg.AllowFail
+// slice does not alter DefaultAllowFail.
+func TestDefaultAllowFailImmutable(t *testing.T) {
 	unsetenv(t, "TEEP_CONFIG")
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "VENICE_API_KEY")
@@ -620,10 +775,10 @@ func TestDefaultEnforcedImmutable(t *testing.T) {
 	}
 
 	// Mutate the returned slice.
-	cfg.Enforced[0] = "mutated"
+	cfg.AllowFail[0] = "mutated"
 
-	// DefaultEnforced must be unchanged.
-	if DefaultEnforced[0] == "mutated" {
-		t.Error("mutating cfg.Enforced affected DefaultEnforced; Load must return a copy")
+	// DefaultAllowFail must be unchanged.
+	if DefaultAllowFail[0] == "mutated" {
+		t.Error("mutating cfg.AllowFail affected DefaultAllowFail; Load must return a copy")
 	}
 }

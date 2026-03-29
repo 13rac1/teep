@@ -97,18 +97,34 @@ func factorNames(r *VerificationReport) []string {
 	return names
 }
 
+// allExcept returns KnownFactors minus the given names. This builds an
+// AllowFail list that enforces only the excluded factors.
+func allExcept(exclude ...string) []string {
+	ex := make(map[string]bool, len(exclude))
+	for _, n := range exclude {
+		ex[n] = true
+	}
+	var out []string
+	for _, n := range KnownFactors {
+		if !ex[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // BuildReport-level tests (cross-cutting concerns)
 // ---------------------------------------------------------------------------
 
-// TestBuildReportFactorCount ensures exactly 26 factors are produced.
+// TestBuildReportFactorCount ensures exactly 29 factors are produced.
 func TestBuildReportFactorCount(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
-	if len(report.Factors) != 26 {
-		t.Errorf("factor count: got %d, want 26", len(report.Factors))
+	if len(report.Factors) != 29 {
+		t.Errorf("factor count: got %d, want 29", len(report.Factors))
 	}
 }
 
@@ -116,7 +132,7 @@ func TestBuildReportFactorCount(t *testing.T) {
 func TestBuildReportTotals(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
 	total := report.Passed + report.Failed + report.Skipped
 	if total != len(report.Factors) {
@@ -141,19 +157,19 @@ func TestBuildReportTotals(t *testing.T) {
 	}
 }
 
-// TestBuildReportEnforcedFlags verifies Enforced is set only for factors in the list.
+// TestBuildReportEnforcedFlags verifies Enforced is set for factors NOT in AllowFail.
 func TestBuildReportEnforcedFlags(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
-	enforcedSet := make(map[string]bool)
-	for _, name := range DefaultEnforced {
-		enforcedSet[name] = true
+	allowFailSet := make(map[string]bool)
+	for _, name := range DefaultAllowFail {
+		allowFailSet[name] = true
 	}
 
 	for _, f := range report.Factors {
-		wantEnforced := enforcedSet[f.Name]
+		wantEnforced := !allowFailSet[f.Name]
 		if f.Enforced != wantEnforced {
 			t.Errorf("factor %q: Enforced=%v, want %v", f.Name, f.Enforced, wantEnforced)
 		}
@@ -166,7 +182,7 @@ func TestBlockedReturnsTrue(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	raw.Nonce = "" // force nonce_match to fail
 
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
 	if !report.Blocked() {
 		t.Error("Blocked() returned false when enforced nonce_match is failing")
@@ -180,7 +196,7 @@ func TestBlockedFactorsReturnsFailingEnforced(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	raw.Nonce = "" // force nonce_match to fail
 
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
 	blocked := report.BlockedFactors()
 	if len(blocked) == 0 {
@@ -204,25 +220,25 @@ func TestBlockedFactorsReturnsFailingEnforced(t *testing.T) {
 }
 
 // TestBlockedFactorsReturnsNilWhenNotBlocked verifies BlockedFactors is nil
-// when no enforced factor fails.
+// when all factors are in allow_fail (nothing enforced).
 func TestBlockedFactorsReturnsNilWhenNotBlocked(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: []string{}})
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, AllowFail: KnownFactors})
 
 	if blocked := report.BlockedFactors(); blocked != nil {
 		t.Errorf("BlockedFactors() returned %v, want nil", blocked)
 	}
 }
 
-// TestBlockedReturnsFalse verifies Blocked is false when no enforced factor fails.
+// TestBlockedReturnsFalse verifies Blocked is false when all factors are allow_fail.
 func TestBlockedReturnsFalse(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: []string{}})
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, AllowFail: KnownFactors})
 
 	if report.Blocked() {
-		t.Error("Blocked() returned true with empty enforced list")
+		t.Error("Blocked() returned true with all factors allowed to fail")
 	}
 }
 
@@ -245,16 +261,20 @@ func TestVerificationReportMetadata(t *testing.T) {
 	}
 }
 
-func TestDefaultEnforcedIncludesSupplyChainFactors(t *testing.T) {
-	need := map[string]bool{
-		"sigstore_verification":  true,
-		"build_transparency_log": true,
+func TestDefaultAllowFailExcludesSupplyChainFactors(t *testing.T) {
+	// Supply-chain factors must be enforced, i.e. NOT in DefaultAllowFail.
+	mustEnforce := []string{
+		"sigstore_verification",
+		"build_transparency_log",
 	}
-	for _, f := range DefaultEnforced {
-		delete(need, f)
+	allowFailSet := make(map[string]bool, len(DefaultAllowFail))
+	for _, f := range DefaultAllowFail {
+		allowFailSet[f] = true
 	}
-	if len(need) != 0 {
-		t.Fatalf("DefaultEnforced missing required factors: %v", need)
+	for _, f := range mustEnforce {
+		if allowFailSet[f] {
+			t.Errorf("DefaultAllowFail should not contain %q (must be enforced)", f)
+		}
 	}
 }
 
@@ -389,24 +409,231 @@ func TestEvalTDXQuoteStructure(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)
 
-	t.Run("mrtd_policy_mismatch", func(t *testing.T) {
+	t.Run("pass_no_policy", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		tdx := &TDXVerifyResult{
 			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
 			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
 		}
 		results := evalTDXParseDependent(&ReportInput{
-			Raw:   raw,
-			Nonce: nonce,
-			TDX:   tdx,
+			Raw: raw, Nonce: nonce, TDX: tdx,
+		})
+		f := assertFactor(t, results, "tdx_quote_structure", Pass)
+		if !strings.Contains(f.Detail, "valid") {
+			t.Errorf("detail should mention valid: %s", f.Detail)
+		}
+	})
+
+	t.Run("mrtd_mismatch_no_longer_fails_structure", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		results := evalTDXParseDependent(&ReportInput{
+			Raw: raw, Nonce: nonce, TDX: tdx,
 			Policy: MeasurementPolicy{
 				MRTDAllow: map[string]struct{}{strings.Repeat("aa", 48): {}},
 			},
 		})
-		f := assertFactor(t, results, "tdx_quote_structure", Fail)
+		// tdx_quote_structure should pass — measurement checks moved to tdx_mrseam_mrtd
+		assertFactor(t, results, "tdx_quote_structure", Pass)
+	})
+}
+
+func TestEvalTDXMrseamMrtd(t *testing.T) {
+	t.Run("skip_no_policy", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{TDX: tdx}), Skip)
+	})
+
+	t.Run("skip_no_tdx", func(t *testing.T) {
+		assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{}), Skip)
+	})
+
+	t.Run("mrtd_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		f := assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow: map[string]struct{}{strings.Repeat("aa", 48): {}},
+			},
+		}), Fail)
 		if !strings.Contains(f.Detail, "MRTD") {
 			t.Errorf("detail should mention MRTD: %s", f.Detail)
 		}
+	})
+
+	t.Run("mrseam_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		f := assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow:   map[string]struct{}{strings.Repeat("11", 48): {}},
+				MRSeamAllow: map[string]struct{}{strings.Repeat("bb", 48): {}},
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "MRSEAM") {
+			t.Errorf("detail should mention MRSEAM: %s", f.Detail)
+		}
+	})
+
+	t.Run("pass_both_match", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		f := assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow:   map[string]struct{}{strings.Repeat("11", 48): {}},
+				MRSeamAllow: map[string]struct{}{strings.Repeat("22", 48): {}},
+			},
+		}), Pass)
+		if !strings.Contains(f.Detail, "MRTD/MRSEAM") {
+			t.Errorf("detail should mention MRTD/MRSEAM: %s", f.Detail)
+		}
+	})
+
+	t.Run("pass_mrtd_only", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		f := assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow: map[string]struct{}{strings.Repeat("11", 48): {}},
+			},
+		}), Pass)
+		if !strings.Contains(f.Detail, "MRTD") {
+			t.Errorf("detail should mention MRTD: %s", f.Detail)
+		}
+	})
+}
+
+func TestEvalTDXHardwareConfig(t *testing.T) {
+	makeRTMRs := func(t *testing.T, r0hex string) [4][48]byte {
+		t.Helper()
+		var rtmrs [4][48]byte
+		b := bytesFromHex(t, r0hex)
+		copy(rtmrs[0][:], b)
+		return rtmrs
+	}
+
+	t.Run("skip_no_policy", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48))}
+		assertSingleFactor(t, evalTDXHardwareConfig(&ReportInput{TDX: tdx}), Skip)
+	})
+
+	t.Run("skip_no_tdx", func(t *testing.T) {
+		assertSingleFactor(t, evalTDXHardwareConfig(&ReportInput{}), Skip)
+	})
+
+	t.Run("rtmr0_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48))}
+		f := assertSingleFactor(t, evalTDXHardwareConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					{strings.Repeat("00", 48): {}},
+				},
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "RTMR[0]") {
+			t.Errorf("detail should mention RTMR[0]: %s", f.Detail)
+		}
+	})
+
+	t.Run("rtmr0_match", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48))}
+		assertSingleFactor(t, evalTDXHardwareConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					{strings.Repeat("ab", 48): {}},
+				},
+			},
+		}), Pass)
+	})
+}
+
+func TestEvalTDXBootConfig(t *testing.T) {
+	makeRTMRs := func(t *testing.T, r1hex, r2hex string) [4][48]byte {
+		t.Helper()
+		var rtmrs [4][48]byte
+		copy(rtmrs[1][:], bytesFromHex(t, r1hex))
+		copy(rtmrs[2][:], bytesFromHex(t, r2hex))
+		return rtmrs
+	}
+
+	t.Run("skip_no_policy", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48), strings.Repeat("cd", 48))}
+		assertSingleFactor(t, evalTDXBootConfig(&ReportInput{TDX: tdx}), Skip)
+	})
+
+	t.Run("skip_no_tdx", func(t *testing.T) {
+		assertSingleFactor(t, evalTDXBootConfig(&ReportInput{}), Skip)
+	})
+
+	t.Run("rtmr1_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48), strings.Repeat("cd", 48))}
+		f := assertSingleFactor(t, evalTDXBootConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					nil,
+					{strings.Repeat("00", 48): {}},
+					nil,
+					nil,
+				},
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "RTMR[1]") {
+			t.Errorf("detail should mention RTMR[1]: %s", f.Detail)
+		}
+	})
+
+	t.Run("rtmr2_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48), strings.Repeat("cd", 48))}
+		f := assertSingleFactor(t, evalTDXBootConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					nil,
+					{strings.Repeat("ab", 48): {}},
+					{strings.Repeat("00", 48): {}},
+					nil,
+				},
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "RTMR[2]") {
+			t.Errorf("detail should mention RTMR[2]: %s", f.Detail)
+		}
+	})
+
+	t.Run("pass_both_match", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48), strings.Repeat("cd", 48))}
+		assertSingleFactor(t, evalTDXBootConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					nil,
+					{strings.Repeat("ab", 48): {}},
+					{strings.Repeat("cd", 48): {}},
+					nil,
+				},
+			},
+		}), Pass)
 	})
 }
 
@@ -890,7 +1117,7 @@ func TestEvalEventLogIntegrity(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)
 
-	t.Run("rtmr_policy_mismatch", func(t *testing.T) {
+	t.Run("pass_replay_matches_quote", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.EventLog = []EventLogEntry{{IMR: 0, Digest: strings.Repeat("ab", 48)}}
 
@@ -900,7 +1127,8 @@ func TestEvalEventLogIntegrity(t *testing.T) {
 		}
 
 		tdx := &TDXVerifyResult{RTMRs: replayed}
-		f := assertSingleFactor(t, evalEventLogIntegrity(&ReportInput{
+		// Policy mismatch is irrelevant — event_log_integrity only checks replay consistency.
+		assertSingleFactor(t, evalEventLogIntegrity(&ReportInput{
 			Raw:   raw,
 			Nonce: nonce,
 			TDX:   tdx,
@@ -912,10 +1140,7 @@ func TestEvalEventLogIntegrity(t *testing.T) {
 					nil,
 				},
 			},
-		}), Fail)
-		if !strings.Contains(f.Detail, "RTMR[0]") {
-			t.Errorf("detail should mention RTMR[0]: %s", f.Detail)
-		}
+		}), Pass)
 	})
 }
 
@@ -947,7 +1172,7 @@ func TestProvenanceTypeString(t *testing.T) {
 func TestBuildReportTier3AlwaysFail(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
-	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
+	report := BuildReport(&ReportInput{Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
 	for _, name := range []string{"cpu_gpu_chain", "measured_model_weights", "build_transparency_log"} {
 		f := findFactor(t, report, name)
@@ -1281,16 +1506,16 @@ func TestEvalE2EEUsable(t *testing.T) {
 	})
 
 	t.Run("enforced_no_api_key_promoted_to_fail", func(t *testing.T) {
-		// When e2ee_usable is enforced and there's no API key,
+		// When e2ee_usable is enforced (not in allow_fail) and there's no API key,
 		// the Skip should be promoted to Fail by BuildReport.
 		nonce := NewNonce()
 		raw := buildMinimalRaw(nonce, validSigningKey(t))
 		report := BuildReport(&ReportInput{
-			Provider: "venice",
-			Model:    "test-model",
-			Raw:      raw,
-			Nonce:    nonce,
-			Enforced: []string{"e2ee_usable"},
+			Provider:  "venice",
+			Model:     "test-model",
+			Raw:       raw,
+			Nonce:     nonce,
+			AllowFail: allExcept("e2ee_usable"),
 			E2EETest: &E2EETestResult{
 				NoAPIKey:  true,
 				APIKeyEnv: "VENICE_API_KEY",
@@ -1382,11 +1607,11 @@ func TestBuildReport_EnforcedPromotion(t *testing.T) {
 
 	t.Run("skip_promoted_to_fail", func(t *testing.T) {
 		report := BuildReport(&ReportInput{
-			Provider: "venice",
-			Model:    "test-model",
-			Raw:      raw,
-			Nonce:    nonce,
-			Enforced: []string{"event_log_integrity"},
+			Provider:  "venice",
+			Model:     "test-model",
+			Raw:       raw,
+			Nonce:     nonce,
+			AllowFail: allExcept("event_log_integrity"),
 		})
 		f := findFactor(t, report, "event_log_integrity")
 		if f.Status != Fail {
@@ -1402,10 +1627,11 @@ func TestBuildReport_EnforcedPromotion(t *testing.T) {
 
 	t.Run("skip_unchanged_without_enforcement", func(t *testing.T) {
 		report := BuildReport(&ReportInput{
-			Provider: "venice",
-			Model:    "test-model",
-			Raw:      raw,
-			Nonce:    nonce,
+			Provider:  "venice",
+			Model:     "test-model",
+			Raw:       raw,
+			Nonce:     nonce,
+			AllowFail: KnownFactors,
 		})
 		f := findFactor(t, report, "event_log_integrity")
 		if f.Status != Skip {
@@ -1427,19 +1653,20 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 		Model:           "test-model",
 		Raw:             raw,
 		Nonce:           nonce,
-		Enforced:        DefaultEnforced,
+		AllowFail:       DefaultAllowFail,
 		GatewayTDX:      &TDXVerifyResult{TeeTCBSVN: make([]byte, 16)},
 		GatewayNonceHex: gatewayNonce.Hex(),
 		GatewayNonce:    gatewayNonce,
 	})
 
-	// Base 24 + 10 gateway factors = 34
+	// Base 29 + 13 gateway factors = 42
 	// Gateway factors: gateway_nonce_match, gateway_tdx_quote_present,
 	// gateway_tdx_quote_structure, gateway_tdx_cert_chain, gateway_tdx_quote_signature,
-	// gateway_tdx_debug_disabled, gateway_tdx_reportdata_binding,
+	// gateway_tdx_debug_disabled, gateway_tdx_mrseam_mrtd, gateway_tdx_hardware_config,
+	// gateway_tdx_boot_config, gateway_tdx_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
-	if len(report.Factors) != 36 {
-		t.Errorf("factor count with gateway: got %d, want 36", len(report.Factors))
+	if len(report.Factors) != 42 {
+		t.Errorf("factor count with gateway: got %d, want 42", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}

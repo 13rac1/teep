@@ -49,7 +49,7 @@ func nanogptIntegrationConfig(t *testing.T) *config.Config {
 				E2EE:    false,
 			},
 		},
-		Enforced: []string{},
+		AllowFail: attestation.KnownFactors,
 	}
 }
 

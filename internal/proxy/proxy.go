@@ -8,9 +8,9 @@
 //  2. Resolve model → provider. Unknown model → 400.
 //  3. Check negative cache. Blocked → 503.
 //  4. Check attestation cache. On miss, fetch + verify + cache.
-//  5. Any enforced factor Fail → 502 with report JSON.
+//  5. Any enforced factor Fail (not in allow_fail) → 502 with report JSON.
 //  6. If E2EE and tdx_reportdata_binding Pass: encrypt messages, set headers.
-//     Otherwise: warn and forward plaintext-over-HTTPS.
+//     If E2EE required but binding fails: block request (no plaintext fallback).
 //  7. Forward to upstream. Parse streaming SSE or buffer non-streaming body.
 //  8. Decrypt each chunk (E2EE). Abort on any decryption failure.
 //  9. Re-emit SSE to client (streaming) or return assembled JSON (non-streaming).
@@ -39,6 +39,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
@@ -198,7 +199,10 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	for name, cp := range cfg.Providers {
-		p, err := fromConfig(cp, spkiCache, cfg.Offline, cfg.Enforced, cfg.MeasurementPolicy, cfg.GatewayMeasurementPolicy, s.rekorClient, s.pocSigningKey)
+		mDefaults, gwDefaults := defaults.MeasurementDefaults(name)
+		mergedPolicy := config.MergedMeasurementPolicy(name, cfg, mDefaults)
+		mergedGWPolicy := config.MergedGatewayMeasurementPolicy(name, cfg, gwDefaults)
+		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg), mergedPolicy, mergedGWPolicy, s.rekorClient, s.pocSigningKey)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
@@ -254,17 +258,19 @@ func fromConfig(
 	cp *config.Provider,
 	spkiCache *attestation.SPKICache,
 	offline bool,
-	enforced []string,
+	allowFail []string,
 	policy attestation.MeasurementPolicy,
 	gatewayPolicy attestation.MeasurementPolicy,
 	rekorClient *attestation.RekorClient,
 	pocSigningKey ed25519.PublicKey,
 ) (*provider.Provider, error) {
 	p := &provider.Provider{
-		Name:    cp.Name,
-		BaseURL: cp.BaseURL,
-		APIKey:  cp.APIKey,
-		E2EE:    cp.E2EE,
+		Name:                     cp.Name,
+		BaseURL:                  cp.BaseURL,
+		APIKey:                   cp.APIKey,
+		E2EE:                     cp.E2EE,
+		MeasurementPolicy:        policy,
+		GatewayMeasurementPolicy: gatewayPolicy,
 	}
 	switch cp.Name {
 	case "venice":
@@ -287,7 +293,7 @@ func fromConfig(
 			spkiCache,
 			cp.APIKey,
 			offline,
-			enforced,
+			allowFail,
 			policy,
 			rdVerifier,
 			rekorClient,
@@ -305,7 +311,7 @@ func fromConfig(
 			spkiCache,
 			cp.APIKey,
 			offline,
-			enforced,
+			allowFail,
 			policy,
 			gatewayPolicy,
 			rdVerifier,
@@ -458,8 +464,9 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		Model:             upstreamModel,
 		Raw:               raw,
 		Nonce:             nonce,
-		Enforced:          s.cfg.Enforced,
-		Policy:            s.cfg.MeasurementPolicy,
+		AllowFail:         config.MergedAllowFail(prov.Name, s.cfg),
+		Policy:            prov.MeasurementPolicy,
+		GatewayPolicy:     prov.GatewayMeasurementPolicy,
 		SupplyChainPolicy: prov.SupplyChainPolicy,
 		ImageRepos:        imageRepos,
 		DigestToRepo:      digestToRepo,

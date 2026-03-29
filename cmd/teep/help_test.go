@@ -151,7 +151,7 @@ func TestPrintOverview(t *testing.T) {
 	out := captureStdout(t, printOverview)
 	t.Logf("output length: %d", len(out))
 
-	for _, want := range []string{"teep", "Usage:", "serve", "verify", "help"} {
+	for _, want := range []string{"teep", "Usage:", "serve", "verify", "help", "measurements"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printOverview missing %q", want)
 		}
@@ -173,7 +173,7 @@ func TestPrintVerifyHelp(t *testing.T) {
 	out := captureStdout(t, printVerifyHelp)
 	t.Logf("output length: %d", len(out))
 
-	for _, want := range []string{"teep verify", "PROVIDER", "--model"} {
+	for _, want := range []string{"teep verify", "PROVIDER", "--model", "--update-config", "--config-out"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printVerifyHelp missing %q", want)
 		}
@@ -257,6 +257,29 @@ func TestRunHelp_FactorName(t *testing.T) {
 	out := captureStdout(t, func() { runHelp([]string{"nonce_match"}) })
 	if !strings.Contains(out, "nonce_match") {
 		t.Error("runHelp(nonce_match) should print factor help")
+	}
+}
+
+func TestPrintMeasurementsHelp(t *testing.T) {
+	out := captureStdout(t, printMeasurementsHelp)
+	t.Logf("output length: %d", len(out))
+
+	for _, want := range []string{
+		"TDX Measurement Allowlists",
+		"MRSEAM", "MRTD", "RTMR0", "RTMR1", "RTMR2", "RTMR3",
+		"--update-config",
+		"dstack-mr measure",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("printMeasurementsHelp missing %q", want)
+		}
+	}
+}
+
+func TestRunHelp_Measurements(t *testing.T) {
+	out := captureStdout(t, func() { runHelp([]string{"measurements"}) })
+	if !strings.Contains(out, "TDX Measurement Allowlists") {
+		t.Error("runHelp(measurements) should print measurements help")
 	}
 }
 

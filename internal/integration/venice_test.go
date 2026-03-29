@@ -344,6 +344,7 @@ func TestIntegration_Venice_Fixture(t *testing.T) {
 		DigestToRepo: sig.digestToRepo,
 		Sigstore:     sig.results,
 		Rekor:        rekorResults,
+		AllowFail:    attestation.DefaultAllowFail,
 	})
 
 	total := report.Passed + report.Failed + report.Skipped
