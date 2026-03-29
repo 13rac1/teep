@@ -215,7 +215,13 @@ func runVerify(args []string) {
 	report := runVerification(providerName, *modelName, *saveDir, *offline)
 	fmt.Print(formatReport(report))
 
+	blocked := report.Blocked()
+
 	if *updateConfig || *configOut != "" {
+		if blocked {
+			fmt.Fprintf(os.Stderr, "teep verify: refusing --update-config: attestation blocked (measurements may be untrustworthy)\n")
+			os.Exit(1)
+		}
 		outPath := *configOut
 		if outPath == "" {
 			outPath = os.Getenv("TEEP_CONFIG")
@@ -232,7 +238,7 @@ func runVerify(args []string) {
 		fmt.Fprintf(os.Stderr, "Config updated: %s (provider %s)\n", outPath, providerName)
 	}
 
-	if report.Blocked() {
+	if blocked {
 		os.Exit(1)
 	}
 }
