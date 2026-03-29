@@ -1204,7 +1204,7 @@ func evalGatewayEventLogIntegrity(in *ReportInput) []FactorResult {
 		rtmrHex := hex.EncodeToString(in.GatewayTDX.RTMRs[i][:])
 		if _, ok := gp.RTMRAllow[i][rtmrHex]; !ok {
 			if gp.WarnOnly {
-				return factor(TierGateway, "gateway_event_log_integrity", Pass,
+				return factor(TierGateway, "gateway_event_log_integrity", Fail,
 					fmt.Sprintf("WARN: gateway RTMR[%d] not in gateway policy allowlist: %s... (warn_measurements)", i, prefixHex(rtmrHex)))
 			}
 			return factor(TierGateway, "gateway_event_log_integrity", Fail,
