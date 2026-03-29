@@ -164,7 +164,8 @@ func loadTOML(cfg *Config, path string) error {
 	}
 
 	var f tomlFile
-	if _, err := toml.DecodeFile(path, &f); err != nil {
+	meta, err := toml.DecodeFile(path, &f)
+	if err != nil {
 		return fmt.Errorf("TOML decode: %w", err)
 	}
 
@@ -174,7 +175,9 @@ func loadTOML(cfg *Config, path string) error {
 		cfg.Providers[name] = p
 
 		// Parse per-provider allow_fail list.
-		if len(pc.AllowFail) > 0 {
+		// Use meta.IsDefined to distinguish "not set" from explicitly empty
+		// (allow_fail = []), which means "enforce all factors".
+		if meta.IsDefined("providers", name, "allow_fail") {
 			if err := validateAllowFail(pc.AllowFail); err != nil {
 				return fmt.Errorf("providers.%s.allow_fail: %w", name, err)
 			}
@@ -200,11 +203,15 @@ func loadTOML(cfg *Config, path string) error {
 
 	// Top-level allow_fail (from toml file root or [policy] section).
 	// Provider-level takes precedence; this is the global fallback.
+	// Use meta.IsDefined to distinguish "not set" from explicitly empty
+	// (allow_fail = []), which means "enforce all factors".
 	topLevelAF := f.AllowFail
-	if len(topLevelAF) == 0 {
+	topLevelDefined := meta.IsDefined("allow_fail")
+	if !topLevelDefined && meta.IsDefined("policy", "allow_fail") {
 		topLevelAF = f.Policy.AllowFail
+		topLevelDefined = true
 	}
-	if len(topLevelAF) > 0 {
+	if topLevelDefined {
 		if err := validateAllowFail(topLevelAF); err != nil {
 			return fmt.Errorf("allow_fail: %w", err)
 		}

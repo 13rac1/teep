@@ -163,6 +163,81 @@ allow_fail = ["nonce_match", "typo_factor"]
 	}
 }
 
+func TestLoadTOMLEmptyAllowFailEnforcesAll(t *testing.T) {
+	// An explicitly empty allow_fail = [] means "enforce all factors" —
+	// overrides the built-in defaults to an empty list.
+	toml := `
+allow_fail = []
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.AllowFail) != 0 {
+		t.Errorf("AllowFail: got %d entries, want 0 (enforce all)", len(cfg.AllowFail))
+	}
+}
+
+func TestLoadTOMLEmptyPolicyAllowFailEnforcesAll(t *testing.T) {
+	// An explicitly empty [policy] allow_fail = [] also means "enforce all".
+	toml := `
+[policy]
+allow_fail = []
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.AllowFail) != 0 {
+		t.Errorf("AllowFail: got %d entries, want 0 (enforce all)", len(cfg.AllowFail))
+	}
+}
+
+func TestLoadTOMLPerProviderEmptyAllowFailEnforcesAll(t *testing.T) {
+	// An explicitly empty per-provider allow_fail = [] means "enforce all"
+	// for that provider, overriding the global default.
+	toml := `
+[providers.venice]
+api_key = "k"
+base_url = "https://api.venice.ai"
+allow_fail = []
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+	unsetenv(t, "NEARAI_API_KEY")
+	unsetenv(t, "NANOGPT_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	// Global allow_fail should still be the defaults.
+	if len(cfg.AllowFail) != len(DefaultAllowFail) {
+		t.Errorf("global AllowFail: got %d entries, want %d", len(cfg.AllowFail), len(DefaultAllowFail))
+	}
+	// Per-provider allow_fail should be empty (enforce all).
+	af := MergedAllowFail("venice", cfg)
+	if len(af) != 0 {
+		t.Errorf("MergedAllowFail(\"venice\"): got %d entries, want 0 (enforce all)", len(af))
+	}
+}
+
 func TestLoadTOMLMeasurementPolicy(t *testing.T) {
 	valid48 := strings.Repeat("ab", 48)
 	toml := `
