@@ -14,6 +14,11 @@ type MeasurementPolicy struct {
 	// produce annotated Pass results instead of Fail. This lets operators
 	// deploy allowlists in observation mode before enforcing them.
 	WarnOnly bool
+
+	// WarnOnlySet indicates WarnOnly was explicitly configured (e.g. from
+	// TOML warn_measurements), as opposed to being a Go zero-value default.
+	// Used by the config merge layer to distinguish "not set" from "set to false".
+	WarnOnlySet bool
 }
 
 // HasMRTDPolicy reports whether an MRTD allowlist is configured.
