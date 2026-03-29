@@ -104,7 +104,9 @@ type Config struct {
 	Providers map[string]*Provider
 
 	// AllowFail lists factor names that are allowed to fail without blocking.
-	// Every factor NOT in this list is enforced. Defaults to DefaultAllowFail.
+	// Every factor NOT in this list is enforced. When nil (no TOML loaded or
+	// programmatic config), MergedAllowFail selects per-provider or global
+	// Go defaults. Use MergedAllowFail to obtain the effective list.
 	AllowFail []string
 
 	// ProviderAllowFail holds per-provider allow_fail overrides parsed from
