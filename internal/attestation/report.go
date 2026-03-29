@@ -1019,7 +1019,7 @@ func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 		rtmrHex := hex.EncodeToString(in.TDX.RTMRs[i][:])
 		if _, ok := in.Policy.RTMRAllow[i][rtmrHex]; !ok {
 			if in.Policy.WarnOnly {
-				return factor(TierSupplyChain, "event_log_integrity", Pass,
+				return factor(TierSupplyChain, "event_log_integrity", Fail,
 					fmt.Sprintf("WARN: RTMR[%d] not in policy allowlist: %s... (warn_measurements)", i, prefixHex(rtmrHex)))
 			}
 			return factor(TierSupplyChain, "event_log_integrity", Fail,
