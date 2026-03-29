@@ -83,6 +83,39 @@ var factorRegistry = []factorInfo{
 			"workloads must never run in debug mode.",
 	},
 	{
+		Name:    "tdx_mrseam_mrtd",
+		Tier:    1,
+		Summary: "MRSEAM/MRTD match measurement policy",
+		Description: "Checks that the TDX MRSEAM and MRTD values from the quote " +
+			"match the configured measurement policy allowlists. MRSEAM " +
+			"identifies the Intel TDX module version; MRTD is a SHA-384 " +
+			"hash of the initial TD image. Both are verifiable from Intel " +
+			"releases and dstack build artifacts. Skipped when no " +
+			"MRSEAM/MRTD policy is configured.",
+	},
+	{
+		Name:    "tdx_hardware_config",
+		Tier:    1,
+		Summary: "RTMR0 matches measurement policy",
+		Description: "Checks that RTMR0 from the TDX quote matches the configured " +
+			"measurement policy allowlist. RTMR0 reflects the hardware " +
+			"configuration of the host — firmware, CPU microcode, and " +
+			"platform settings. Different cloud instances or hardware " +
+			"generations produce different RTMR0 values. Skipped when " +
+			"no RTMR0 policy is configured.",
+	},
+	{
+		Name:    "tdx_boot_config",
+		Tier:    1,
+		Summary: "RTMR1/RTMR2 match measurement policy",
+		Description: "Checks that RTMR1 and RTMR2 from the TDX quote match the " +
+			"configured measurement policy allowlists. RTMR1 reflects the " +
+			"kernel and initrd boot chain; RTMR2 reflects the rootfs and " +
+			"application layer. Together they prove the boot sequence loaded " +
+			"the expected software stack. Skipped when no RTMR1/RTMR2 " +
+			"policy is configured.",
+	},
+	{
 		Name:    "signing_key_present",
 		Tier:    1,
 		Summary: "Enclave public key present in response",
@@ -365,6 +398,33 @@ var factorRegistry = []factorInfo{
 		Description: "Checks that the gateway's TD_ATTRIBUTES debug bit is not set. " +
 			"A debug gateway enclave would allow the host to inspect all traffic " +
 			"passing through the API gateway.",
+	},
+	{
+		Name:    "gateway_tdx_mrseam_mrtd",
+		Tier:    4,
+		Summary: "Gateway MRSEAM/MRTD match policy",
+		Description: "Checks that the gateway TDX MRSEAM and MRTD values match " +
+			"the configured gateway measurement policy allowlists. Verifies " +
+			"the gateway is running the expected Intel TDX module and VM " +
+			"image. Skipped when no gateway MRSEAM/MRTD policy is configured.",
+	},
+	{
+		Name:    "gateway_tdx_hardware_config",
+		Tier:    4,
+		Summary: "Gateway RTMR0 matches policy",
+		Description: "Checks that the gateway RTMR0 from the TDX quote matches the " +
+			"configured gateway measurement policy allowlist. RTMR0 reflects " +
+			"the gateway host hardware configuration. Skipped when no gateway " +
+			"RTMR0 policy is configured.",
+	},
+	{
+		Name:    "gateway_tdx_boot_config",
+		Tier:    4,
+		Summary: "Gateway RTMR1/RTMR2 match policy",
+		Description: "Checks that the gateway RTMR1 and RTMR2 from the TDX quote " +
+			"match the configured gateway measurement policy allowlists. Verifies " +
+			"the gateway booted the expected kernel, initrd, and rootfs. Skipped " +
+			"when no gateway RTMR1/RTMR2 policy is configured.",
 	},
 	{
 		Name:    "gateway_tdx_reportdata_binding",

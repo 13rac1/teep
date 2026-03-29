@@ -101,14 +101,14 @@ func factorNames(r *VerificationReport) []string {
 // BuildReport-level tests (cross-cutting concerns)
 // ---------------------------------------------------------------------------
 
-// TestBuildReportFactorCount ensures exactly 26 factors are produced.
+// TestBuildReportFactorCount ensures exactly 29 factors are produced.
 func TestBuildReportFactorCount(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, Enforced: DefaultEnforced})
 
-	if len(report.Factors) != 26 {
-		t.Errorf("factor count: got %d, want 26", len(report.Factors))
+	if len(report.Factors) != 29 {
+		t.Errorf("factor count: got %d, want 29", len(report.Factors))
 	}
 }
 
@@ -389,24 +389,231 @@ func TestEvalTDXQuoteStructure(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)
 
-	t.Run("mrtd_policy_mismatch", func(t *testing.T) {
+	t.Run("pass_no_policy", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		tdx := &TDXVerifyResult{
 			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
 			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
 		}
 		results := evalTDXParseDependent(&ReportInput{
-			Raw:   raw,
-			Nonce: nonce,
-			TDX:   tdx,
+			Raw: raw, Nonce: nonce, TDX: tdx,
+		})
+		f := assertFactor(t, results, "tdx_quote_structure", Pass)
+		if !strings.Contains(f.Detail, "valid") {
+			t.Errorf("detail should mention valid: %s", f.Detail)
+		}
+	})
+
+	t.Run("mrtd_mismatch_no_longer_fails_structure", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		results := evalTDXParseDependent(&ReportInput{
+			Raw: raw, Nonce: nonce, TDX: tdx,
 			Policy: MeasurementPolicy{
 				MRTDAllow: map[string]struct{}{strings.Repeat("aa", 48): {}},
 			},
 		})
-		f := assertFactor(t, results, "tdx_quote_structure", Fail)
+		// tdx_quote_structure should pass — measurement checks moved to tdx_mrseam_mrtd
+		assertFactor(t, results, "tdx_quote_structure", Pass)
+	})
+}
+
+func TestEvalTDXMrseamMrtd(t *testing.T) {
+	t.Run("skip_no_policy", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{TDX: tdx}), Skip)
+	})
+
+	t.Run("skip_no_tdx", func(t *testing.T) {
+		assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{}), Skip)
+	})
+
+	t.Run("mrtd_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		f := assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow: map[string]struct{}{strings.Repeat("aa", 48): {}},
+			},
+		}), Fail)
 		if !strings.Contains(f.Detail, "MRTD") {
 			t.Errorf("detail should mention MRTD: %s", f.Detail)
 		}
+	})
+
+	t.Run("mrseam_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		f := assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow:   map[string]struct{}{strings.Repeat("11", 48): {}},
+				MRSeamAllow: map[string]struct{}{strings.Repeat("bb", 48): {}},
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "MRSEAM") {
+			t.Errorf("detail should mention MRSEAM: %s", f.Detail)
+		}
+	})
+
+	t.Run("pass_both_match", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		f := assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow:   map[string]struct{}{strings.Repeat("11", 48): {}},
+				MRSeamAllow: map[string]struct{}{strings.Repeat("22", 48): {}},
+			},
+		}), Pass)
+		if !strings.Contains(f.Detail, "MRTD/MRSEAM") {
+			t.Errorf("detail should mention MRTD/MRSEAM: %s", f.Detail)
+		}
+	})
+
+	t.Run("pass_mrtd_only", func(t *testing.T) {
+		tdx := &TDXVerifyResult{
+			MRTD:   bytesFromHex(t, strings.Repeat("11", 48)),
+			MRSeam: bytesFromHex(t, strings.Repeat("22", 48)),
+		}
+		f := assertSingleFactor(t, evalTDXMrseamMrtd(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				MRTDAllow: map[string]struct{}{strings.Repeat("11", 48): {}},
+			},
+		}), Pass)
+		if !strings.Contains(f.Detail, "MRTD") {
+			t.Errorf("detail should mention MRTD: %s", f.Detail)
+		}
+	})
+}
+
+func TestEvalTDXHardwareConfig(t *testing.T) {
+	makeRTMRs := func(t *testing.T, r0hex string) [4][48]byte {
+		t.Helper()
+		var rtmrs [4][48]byte
+		b := bytesFromHex(t, r0hex)
+		copy(rtmrs[0][:], b)
+		return rtmrs
+	}
+
+	t.Run("skip_no_policy", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48))}
+		assertSingleFactor(t, evalTDXHardwareConfig(&ReportInput{TDX: tdx}), Skip)
+	})
+
+	t.Run("skip_no_tdx", func(t *testing.T) {
+		assertSingleFactor(t, evalTDXHardwareConfig(&ReportInput{}), Skip)
+	})
+
+	t.Run("rtmr0_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48))}
+		f := assertSingleFactor(t, evalTDXHardwareConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					{strings.Repeat("00", 48): {}},
+				},
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "RTMR[0]") {
+			t.Errorf("detail should mention RTMR[0]: %s", f.Detail)
+		}
+	})
+
+	t.Run("rtmr0_match", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48))}
+		assertSingleFactor(t, evalTDXHardwareConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					{strings.Repeat("ab", 48): {}},
+				},
+			},
+		}), Pass)
+	})
+}
+
+func TestEvalTDXBootConfig(t *testing.T) {
+	makeRTMRs := func(t *testing.T, r1hex, r2hex string) [4][48]byte {
+		t.Helper()
+		var rtmrs [4][48]byte
+		copy(rtmrs[1][:], bytesFromHex(t, r1hex))
+		copy(rtmrs[2][:], bytesFromHex(t, r2hex))
+		return rtmrs
+	}
+
+	t.Run("skip_no_policy", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48), strings.Repeat("cd", 48))}
+		assertSingleFactor(t, evalTDXBootConfig(&ReportInput{TDX: tdx}), Skip)
+	})
+
+	t.Run("skip_no_tdx", func(t *testing.T) {
+		assertSingleFactor(t, evalTDXBootConfig(&ReportInput{}), Skip)
+	})
+
+	t.Run("rtmr1_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48), strings.Repeat("cd", 48))}
+		f := assertSingleFactor(t, evalTDXBootConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					nil,
+					{strings.Repeat("00", 48): {}},
+					nil,
+					nil,
+				},
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "RTMR[1]") {
+			t.Errorf("detail should mention RTMR[1]: %s", f.Detail)
+		}
+	})
+
+	t.Run("rtmr2_mismatch", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48), strings.Repeat("cd", 48))}
+		f := assertSingleFactor(t, evalTDXBootConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					nil,
+					{strings.Repeat("ab", 48): {}},
+					{strings.Repeat("00", 48): {}},
+					nil,
+				},
+			},
+		}), Fail)
+		if !strings.Contains(f.Detail, "RTMR[2]") {
+			t.Errorf("detail should mention RTMR[2]: %s", f.Detail)
+		}
+	})
+
+	t.Run("pass_both_match", func(t *testing.T) {
+		tdx := &TDXVerifyResult{RTMRs: makeRTMRs(t, strings.Repeat("ab", 48), strings.Repeat("cd", 48))}
+		assertSingleFactor(t, evalTDXBootConfig(&ReportInput{
+			TDX: tdx,
+			Policy: MeasurementPolicy{
+				RTMRAllow: [4]map[string]struct{}{
+					nil,
+					{strings.Repeat("ab", 48): {}},
+					{strings.Repeat("cd", 48): {}},
+					nil,
+				},
+			},
+		}), Pass)
 	})
 }
 
@@ -890,7 +1097,7 @@ func TestEvalEventLogIntegrity(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)
 
-	t.Run("rtmr_policy_mismatch", func(t *testing.T) {
+	t.Run("pass_replay_matches_quote", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.EventLog = []EventLogEntry{{IMR: 0, Digest: strings.Repeat("ab", 48)}}
 
@@ -900,7 +1107,8 @@ func TestEvalEventLogIntegrity(t *testing.T) {
 		}
 
 		tdx := &TDXVerifyResult{RTMRs: replayed}
-		f := assertSingleFactor(t, evalEventLogIntegrity(&ReportInput{
+		// Policy mismatch is irrelevant — event_log_integrity only checks replay consistency.
+		assertSingleFactor(t, evalEventLogIntegrity(&ReportInput{
 			Raw:   raw,
 			Nonce: nonce,
 			TDX:   tdx,
@@ -912,10 +1120,7 @@ func TestEvalEventLogIntegrity(t *testing.T) {
 					nil,
 				},
 			},
-		}), Fail)
-		if !strings.Contains(f.Detail, "RTMR[0]") {
-			t.Errorf("detail should mention RTMR[0]: %s", f.Detail)
-		}
+		}), Pass)
 	})
 }
 
@@ -1433,13 +1638,14 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 		GatewayNonce:    gatewayNonce,
 	})
 
-	// Base 24 + 10 gateway factors = 34
+	// Base 29 + 13 gateway factors = 42
 	// Gateway factors: gateway_nonce_match, gateway_tdx_quote_present,
 	// gateway_tdx_quote_structure, gateway_tdx_cert_chain, gateway_tdx_quote_signature,
-	// gateway_tdx_debug_disabled, gateway_tdx_reportdata_binding,
+	// gateway_tdx_debug_disabled, gateway_tdx_mrseam_mrtd, gateway_tdx_hardware_config,
+	// gateway_tdx_boot_config, gateway_tdx_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
-	if len(report.Factors) != 36 {
-		t.Errorf("factor count with gateway: got %d, want 36", len(report.Factors))
+	if len(report.Factors) != 42 {
+		t.Errorf("factor count with gateway: got %d, want 42", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}
