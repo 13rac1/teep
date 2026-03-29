@@ -821,6 +821,7 @@ func TestE2EEEnabledByDefault(t *testing.T) {
 	}{
 		{"venice", true},
 		{"nearcloud", true},
+		{"chutes", true},
 		{"neardirect", false},
 		{"nanogpt", false},
 		{"unknown", false},
@@ -828,24 +829,6 @@ func TestE2EEEnabledByDefault(t *testing.T) {
 	for _, tc := range tests {
 		if got := e2eeEnabledByDefault(tc.provider); got != tc.want {
 			t.Errorf("e2eeEnabledByDefault(%q) = %v, want %v", tc.provider, got, tc.want)
-		}
-	}
-}
-
-func TestE2EEVersion(t *testing.T) {
-	tests := []struct {
-		provider string
-		want     int
-	}{
-		{"venice", attestation.E2EEv1},
-		{"nearcloud", attestation.E2EEv2},
-		{"neardirect", 0},
-		{"nanogpt", 0},
-		{"unknown", 0},
-	}
-	for _, tc := range tests {
-		if got := e2eeVersion(tc.provider); got != tc.want {
-			t.Errorf("e2eeVersion(%q) = %d, want %d", tc.provider, got, tc.want)
 		}
 	}
 }
@@ -859,6 +842,7 @@ func TestChatPathForProvider(t *testing.T) {
 		{"nearcloud", "/v1/chat/completions"},
 		{"neardirect", "/v1/chat/completions"},
 		{"nanogpt", "/v1/chat/completions"},
+		{"chutes", "/chat/completions"},
 		{"unknown", ""},
 	}
 	for _, tc := range tests {

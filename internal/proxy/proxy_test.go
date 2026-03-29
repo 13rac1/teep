@@ -19,6 +19,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/proxy"
 )
@@ -1495,12 +1496,12 @@ func TestE2EEStreamingRefusesPlaintext(t *testing.T) {
 // proxy). This confirms the relay correctly passes content through unchanged.
 func TestPlaintextPassthrough_PreservesCiphertext(t *testing.T) {
 	// Generate a test session whose public key we use to encrypt a test payload.
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	enc, err := attestation.Encrypt([]byte("secret"), session.PrivateKey.PubKey())
+	enc, err := e2ee.EncryptVenice([]byte("secret"), session.PrivateKey.PubKey())
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
@@ -1575,22 +1576,22 @@ func TestPlaintextPassthrough_PreservesCiphertext(t *testing.T) {
 
 func TestAttestationEncryptDecryptRoundTrip(t *testing.T) {
 	// This test verifies the underlying crypto used by the proxy.
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 
 	want := "Hello, proxy!"
-	enc, err := attestation.Encrypt([]byte(want), session.PrivateKey.PubKey())
+	enc, err := e2ee.EncryptVenice([]byte(want), session.PrivateKey.PubKey())
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
-	if !attestation.IsEncryptedChunk(enc) {
+	if !e2ee.IsEncryptedChunkVenice(enc) {
 		t.Error("IsEncryptedChunk returned false for valid ciphertext")
 	}
 
-	got, err := attestation.Decrypt(enc, session.PrivateKey)
+	got, err := e2ee.DecryptVenice(enc, session.PrivateKey)
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
@@ -1604,18 +1605,18 @@ func TestAttestationEncryptDecryptRoundTrip(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestReassembleNonStream(t *testing.T) {
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 
 	// Encrypt two content chunks using the session's public key (simulating
 	// what the upstream TEE would do).
-	enc1, err := attestation.Encrypt([]byte("Hello, "), session.PrivateKey.PubKey())
+	enc1, err := e2ee.EncryptVenice([]byte("Hello, "), session.PrivateKey.PubKey())
 	if err != nil {
 		t.Fatalf("Encrypt chunk 1: %v", err)
 	}
-	enc2, err := attestation.Encrypt([]byte("world!"), session.PrivateKey.PubKey())
+	enc2, err := e2ee.EncryptVenice([]byte("world!"), session.PrivateKey.PubKey())
 	if err != nil {
 		t.Fatalf("Encrypt chunk 2: %v", err)
 	}
@@ -1632,7 +1633,7 @@ func TestReassembleNonStream(t *testing.T) {
 	))
 	fmt.Fprintf(&sse, "data: [DONE]\n\n")
 
-	result, err := proxy.ReassembleNonStream(strings.NewReader(sse.String()), session)
+	result, err := e2ee.ReassembleNonStream(strings.NewReader(sse.String()), session)
 	if err != nil {
 		t.Fatalf("ReassembleNonStream: %v", err)
 	}
@@ -1674,21 +1675,21 @@ func TestReassembleNonStream(t *testing.T) {
 }
 
 func TestReassembleNonStream_WithReasoning(t *testing.T) {
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 
 	// Encrypt content and reasoning chunks separately.
-	encThink1, err := attestation.Encrypt([]byte("Let me "), session.PrivateKey.PubKey())
+	encThink1, err := e2ee.EncryptVenice([]byte("Let me "), session.PrivateKey.PubKey())
 	if err != nil {
 		t.Fatalf("Encrypt think1: %v", err)
 	}
-	encThink2, err := attestation.Encrypt([]byte("think..."), session.PrivateKey.PubKey())
+	encThink2, err := e2ee.EncryptVenice([]byte("think..."), session.PrivateKey.PubKey())
 	if err != nil {
 		t.Fatalf("Encrypt think2: %v", err)
 	}
-	encContent, err := attestation.Encrypt([]byte("Hello!"), session.PrivateKey.PubKey())
+	encContent, err := e2ee.EncryptVenice([]byte("Hello!"), session.PrivateKey.PubKey())
 	if err != nil {
 		t.Fatalf("Encrypt content: %v", err)
 	}
@@ -1709,7 +1710,7 @@ func TestReassembleNonStream_WithReasoning(t *testing.T) {
 	))
 	fmt.Fprintf(&sse, "data: [DONE]\n\n")
 
-	result, err := proxy.ReassembleNonStream(strings.NewReader(sse.String()), session)
+	result, err := e2ee.ReassembleNonStream(strings.NewReader(sse.String()), session)
 	if err != nil {
 		t.Fatalf("ReassembleNonStream: %v", err)
 	}
@@ -1955,7 +1956,7 @@ func TestSafePrefix(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := proxy.SafePrefix(tc.s, tc.n)
+			got := e2ee.SafePrefix(tc.s, tc.n)
 			if got != tc.want {
 				t.Errorf("SafePrefix(%q, %d) = %q, want %q", tc.s, tc.n, got, tc.want)
 			}
@@ -1969,20 +1970,20 @@ func TestSafePrefix(t *testing.T) {
 
 func TestDecryptSSEChunk(t *testing.T) {
 	// Create a session and encrypt some content using the session's own pubkey.
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 
 	plaintext := "Hello, SSE!"
-	enc, err := attestation.Encrypt([]byte(plaintext), session.PrivateKey.PubKey())
+	enc, err := e2ee.EncryptVenice([]byte(plaintext), session.PrivateKey.PubKey())
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
 	t.Run("decrypt_success", func(t *testing.T) {
 		chunk := fmt.Sprintf(`{"id":"c1","choices":[{"delta":{"content":%q},"index":0}]}`, enc)
-		got, err := proxy.DecryptSSEChunk(chunk, session)
+		got, err := e2ee.DecryptSSEChunk(chunk, session)
 		if err != nil {
 			t.Fatalf("DecryptSSEChunk: %v", err)
 		}
@@ -1995,7 +1996,7 @@ func TestDecryptSSEChunk(t *testing.T) {
 
 	t.Run("empty_delta_passthrough", func(t *testing.T) {
 		chunk := `{"id":"c1","choices":[{"delta":{"role":"assistant"},"index":0}]}`
-		got, err := proxy.DecryptSSEChunk(chunk, session)
+		got, err := e2ee.DecryptSSEChunk(chunk, session)
 		if err != nil {
 			t.Fatalf("DecryptSSEChunk: %v", err)
 		}
@@ -2006,7 +2007,7 @@ func TestDecryptSSEChunk(t *testing.T) {
 
 	t.Run("no_choices_passthrough", func(t *testing.T) {
 		chunk := `{"id":"c1","usage":{"prompt_tokens":5}}`
-		got, err := proxy.DecryptSSEChunk(chunk, session)
+		got, err := e2ee.DecryptSSEChunk(chunk, session)
 		if err != nil {
 			t.Fatalf("DecryptSSEChunk: %v", err)
 		}
@@ -2017,7 +2018,7 @@ func TestDecryptSSEChunk(t *testing.T) {
 
 	t.Run("non_encrypted_content_errors", func(t *testing.T) {
 		chunk := `{"id":"c1","choices":[{"delta":{"content":"plain text"},"index":0}]}`
-		_, err := proxy.DecryptSSEChunk(chunk, session)
+		_, err := e2ee.DecryptSSEChunk(chunk, session)
 		if err == nil {
 			t.Fatal("expected error for non-encrypted content")
 		}
@@ -2025,7 +2026,7 @@ func TestDecryptSSEChunk(t *testing.T) {
 	})
 
 	t.Run("invalid_json_errors", func(t *testing.T) {
-		_, err := proxy.DecryptSSEChunk("not json", session)
+		_, err := e2ee.DecryptSSEChunk("not json", session)
 		if err == nil {
 			t.Fatal("expected error for invalid JSON")
 		}
@@ -2033,13 +2034,13 @@ func TestDecryptSSEChunk(t *testing.T) {
 
 	t.Run("reasoning_decrypted", func(t *testing.T) {
 		reasoning := "Let me think..."
-		encReasoning, err := attestation.Encrypt([]byte(reasoning), session.PrivateKey.PubKey())
+		encReasoning, err := e2ee.EncryptVenice([]byte(reasoning), session.PrivateKey.PubKey())
 		if err != nil {
 			t.Fatalf("Encrypt reasoning: %v", err)
 		}
 
 		chunk := fmt.Sprintf(`{"id":"c1","choices":[{"delta":{"reasoning":%q},"index":0}]}`, encReasoning)
-		got, err := proxy.DecryptSSEChunk(chunk, session)
+		got, err := e2ee.DecryptSSEChunk(chunk, session)
 		if err != nil {
 			t.Fatalf("DecryptSSEChunk: %v", err)
 		}
@@ -2066,17 +2067,17 @@ func TestDecryptSSEChunk(t *testing.T) {
 	t.Run("content_and_reasoning_both_decrypted", func(t *testing.T) {
 		contentText := "Hello!"
 		reasoningText := "I should say hello."
-		encContent, err := attestation.Encrypt([]byte(contentText), session.PrivateKey.PubKey())
+		encContent, err := e2ee.EncryptVenice([]byte(contentText), session.PrivateKey.PubKey())
 		if err != nil {
 			t.Fatalf("Encrypt content: %v", err)
 		}
-		encReasoning, err := attestation.Encrypt([]byte(reasoningText), session.PrivateKey.PubKey())
+		encReasoning, err := e2ee.EncryptVenice([]byte(reasoningText), session.PrivateKey.PubKey())
 		if err != nil {
 			t.Fatalf("Encrypt reasoning: %v", err)
 		}
 
 		chunk := fmt.Sprintf(`{"id":"c1","choices":[{"delta":{"content":%q,"reasoning":%q},"index":0}]}`, encContent, encReasoning)
-		got, err := proxy.DecryptSSEChunk(chunk, session)
+		got, err := e2ee.DecryptSSEChunk(chunk, session)
 		if err != nil {
 			t.Fatalf("DecryptSSEChunk: %v", err)
 		}
@@ -2109,20 +2110,20 @@ func TestDecryptSSEChunk(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestDecryptNonStreamResponse(t *testing.T) {
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 
 	plaintext := "Hello, non-stream!"
-	enc, err := attestation.Encrypt([]byte(plaintext), session.PrivateKey.PubKey())
+	enc, err := e2ee.EncryptVenice([]byte(plaintext), session.PrivateKey.PubKey())
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
 	t.Run("decrypt_success", func(t *testing.T) {
 		body := []byte(nonStreamResponse(enc))
-		got, err := proxy.DecryptNonStreamResponse(body, session)
+		got, err := e2ee.DecryptNonStreamResponse(body, session)
 		if err != nil {
 			t.Fatalf("DecryptNonStreamResponse: %v", err)
 		}
@@ -2135,7 +2136,7 @@ func TestDecryptNonStreamResponse(t *testing.T) {
 
 	t.Run("no_choices_passthrough", func(t *testing.T) {
 		body := []byte(`{"id":"c1","usage":{"prompt_tokens":5}}`)
-		got, err := proxy.DecryptNonStreamResponse(body, session)
+		got, err := e2ee.DecryptNonStreamResponse(body, session)
 		if err != nil {
 			t.Fatalf("DecryptNonStreamResponse: %v", err)
 		}
@@ -2146,7 +2147,7 @@ func TestDecryptNonStreamResponse(t *testing.T) {
 
 	t.Run("empty_content_passthrough", func(t *testing.T) {
 		body := []byte(nonStreamResponse(""))
-		got, err := proxy.DecryptNonStreamResponse(body, session)
+		got, err := e2ee.DecryptNonStreamResponse(body, session)
 		if err != nil {
 			t.Fatalf("DecryptNonStreamResponse: %v", err)
 		}
@@ -2158,7 +2159,7 @@ func TestDecryptNonStreamResponse(t *testing.T) {
 
 	t.Run("non_encrypted_content_errors", func(t *testing.T) {
 		body := []byte(nonStreamResponse("plain text"))
-		_, err := proxy.DecryptNonStreamResponse(body, session)
+		_, err := e2ee.DecryptNonStreamResponse(body, session)
 		if err == nil {
 			t.Fatal("expected error for non-encrypted content")
 		}
@@ -2166,7 +2167,7 @@ func TestDecryptNonStreamResponse(t *testing.T) {
 	})
 
 	t.Run("invalid_json_errors", func(t *testing.T) {
-		_, err := proxy.DecryptNonStreamResponse([]byte("not json"), session)
+		_, err := e2ee.DecryptNonStreamResponse([]byte("not json"), session)
 		if err == nil {
 			t.Fatal("expected error for invalid JSON")
 		}
@@ -2174,7 +2175,7 @@ func TestDecryptNonStreamResponse(t *testing.T) {
 
 	t.Run("reasoning_decrypted", func(t *testing.T) {
 		reasoning := "Thinking about it..."
-		encReasoning, err := attestation.Encrypt([]byte(reasoning), session.PrivateKey.PubKey())
+		encReasoning, err := e2ee.EncryptVenice([]byte(reasoning), session.PrivateKey.PubKey())
 		if err != nil {
 			t.Fatalf("Encrypt reasoning: %v", err)
 		}
@@ -2186,7 +2187,7 @@ func TestDecryptNonStreamResponse(t *testing.T) {
 			"model": "test-model",
 			"choices": [{"index":0,"message":{"role":"assistant","content":%q,"reasoning":%q},"finish_reason":"stop"}]
 		}`, enc, encReasoning)
-		got, err := proxy.DecryptNonStreamResponse([]byte(body), session)
+		got, err := e2ee.DecryptNonStreamResponse([]byte(body), session)
 		if err != nil {
 			t.Fatalf("DecryptNonStreamResponse: %v", err)
 		}
@@ -2243,7 +2244,7 @@ type mockPreparer struct {
 	apiKey string
 }
 
-func (m *mockPreparer) PrepareRequest(req *http.Request, _ *attestation.Session) error {
+func (m *mockPreparer) PrepareRequest(req *http.Request, _ *e2ee.Session) error {
 	m.called = true
 	req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	return nil
@@ -2297,7 +2298,7 @@ func TestPrepareUpstreamHeaders_WithSession(t *testing.T) {
 		Preparer: mock,
 	}
 
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -2325,33 +2326,10 @@ func TestPrepareUpstreamHeaders_WithSession(t *testing.T) {
 // relayStream tests
 // --------------------------------------------------------------------------
 
-// newMinimalServer creates a minimal proxy.Server for testing relay methods.
-func newMinimalServer(t *testing.T) *proxy.Server {
-	t.Helper()
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"venice": {
-				Name:    "venice",
-				BaseURL: "http://localhost",
-				APIKey:  "key",
-				E2EE:    false,
-			},
-		},
-		Enforced: []string{},
-	}
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-	return srv
-}
-
 func TestRelayStream_EmptyBody(t *testing.T) {
-	srv := newMinimalServer(t)
 	rec := httptest.NewRecorder()
 
-	srv.RelayStream(rec, strings.NewReader(""), nil)
+	e2ee.RelayStream(rec, strings.NewReader(""), nil)
 
 	t.Logf("status: %d, body: %q", rec.Code, rec.Body.String())
 	if rec.Code != http.StatusBadGateway {
@@ -2363,12 +2341,11 @@ func TestRelayStream_EmptyBody(t *testing.T) {
 }
 
 func TestRelayStream_NonDataLines(t *testing.T) {
-	srv := newMinimalServer(t)
 	rec := httptest.NewRecorder()
 
 	// SSE with a comment line, a non-data event, then a data chunk and DONE.
 	body := ": this is a comment\nevent: heartbeat\ndata: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"
-	srv.RelayStream(rec, strings.NewReader(body), nil)
+	e2ee.RelayStream(rec, strings.NewReader(body), nil)
 
 	t.Logf("status: %d", rec.Code)
 	if rec.Code != http.StatusOK {
@@ -2397,11 +2374,10 @@ func TestRelayStream_NonDataLines(t *testing.T) {
 }
 
 func TestRelayStream_PlaintextPassthrough(t *testing.T) {
-	srv := newMinimalServer(t)
 	rec := httptest.NewRecorder()
 
 	body := streamSSE("hello world")
-	srv.RelayStream(rec, strings.NewReader(body), nil)
+	e2ee.RelayStream(rec, strings.NewReader(body), nil)
 
 	t.Logf("status: %d", rec.Code)
 	if rec.Code != http.StatusOK {
@@ -2424,11 +2400,10 @@ func TestRelayStream_PlaintextPassthrough(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestRelayNonStream_NilSession(t *testing.T) {
-	srv := newMinimalServer(t)
 	rec := httptest.NewRecorder()
 
 	body := nonStreamResponse("hello from upstream")
-	srv.RelayNonStream(rec, strings.NewReader(body), nil)
+	e2ee.RelayNonStream(rec, strings.NewReader(body), nil)
 
 	t.Logf("status: %d", rec.Code)
 	if rec.Code != http.StatusOK {
@@ -2448,11 +2423,10 @@ func TestRelayNonStream_NilSession(t *testing.T) {
 }
 
 func TestRelayReassembledNonStream_MalformedSSE(t *testing.T) {
-	srv := newMinimalServer(t)
 	rec := httptest.NewRecorder()
 
 	// No valid SSE data lines — should fail during reassembly.
-	srv.RelayReassembledNonStream(rec, strings.NewReader("not valid sse"), nil)
+	e2ee.RelayReassembledNonStream(rec, strings.NewReader("not valid sse"), nil)
 
 	t.Logf("status: %d, body: %q", rec.Code, rec.Body.String())
 	if rec.Code != http.StatusBadGateway {

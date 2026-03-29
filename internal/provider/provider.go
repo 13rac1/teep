@@ -1,7 +1,7 @@
 // Package provider defines the Provider struct and the Attester and
 // RequestPreparer interfaces used by all TEE-capable AI backends.
 //
-// Dependency flow: attestation → provider → proxy → cmd
+// Dependency flow: attestation → e2ee → provider → proxy → cmd
 // Provider uses attestation types but is not imported by attestation.
 package provider
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 )
 
 // Attester fetches raw attestation data from a TEE provider.
@@ -23,7 +24,14 @@ type Attester interface {
 // RequestPreparer injects provider-specific headers into an outgoing upstream
 // request. It is called once per request after the E2EE session is established.
 type RequestPreparer interface {
-	PrepareRequest(req *http.Request, session *attestation.Session) error
+	PrepareRequest(req *http.Request, session *e2ee.Session) error
+}
+
+// RequestEncryptor encrypts an outgoing chat request body for a provider's
+// E2EE protocol. Returns the encrypted body, session for response decryption,
+// and any error.
+type RequestEncryptor interface {
+	EncryptRequest(body []byte, raw *attestation.RawAttestation) ([]byte, *e2ee.Session, error)
 }
 
 // PinnedHandler handles chat requests on a connection-pinned TLS connection
@@ -65,7 +73,7 @@ type PinnedResponse struct {
 
 	// Session is the E2EE session established during the pinned request.
 	// Non-nil when E2EE was active; callers use it for response decryption.
-	Session *attestation.Session
+	Session *e2ee.Session
 }
 
 // ModelLister fetches the list of available models from a provider.
@@ -103,9 +111,13 @@ type Provider struct {
 	// E2EE indicates whether this provider supports end-to-end encryption.
 	E2EE bool
 
-	// E2EEVersion selects the E2EE protocol version (attestation.E2EEv1 or
-	// attestation.E2EEv2). Defaults to E2EEv1 when zero.
-	E2EEVersion int
+	// Encryptor encrypts outgoing chat request bodies for the provider's
+	// E2EE protocol. Non-nil when E2EE is true.
+	Encryptor RequestEncryptor
+
+	// SkipSigningKeyCache indicates the provider needs fresh attestation for
+	// each E2EE request (e.g. Chutes requires per-request instance/nonce data).
+	SkipSigningKeyCache bool
 
 	// Attester fetches raw attestation from the provider's attestation endpoint.
 	// May be nil if the provider does not support attestation.

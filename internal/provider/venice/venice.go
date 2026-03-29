@@ -25,6 +25,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 )
@@ -254,7 +255,7 @@ func NewPreparer(apiKey string) *Preparer {
 
 // PrepareRequest injects the Venice E2EE headers into req. The session must
 // have its ModelKeyHex set (via SetModelKey) before calling this function.
-func (p *Preparer) PrepareRequest(req *http.Request, session *attestation.Session) error {
+func (p *Preparer) PrepareRequest(req *http.Request, session *e2ee.Session) error {
 	if session.ModelKeyHex == "" {
 		return errors.New("venice: PrepareRequest called with empty session.ModelKeyHex; call SetModelKey first")
 	}

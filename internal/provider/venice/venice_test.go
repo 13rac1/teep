@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
@@ -280,11 +281,11 @@ func TestPreparer_PrepareRequest_SetsHeaders(t *testing.T) {
 
 	// Generate two distinct sessions: one for the client, one to supply a real
 	// model public key (must be a valid secp256k1 point).
-	clientSession, err := attestation.NewSession()
+	clientSession, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession (client): %v", err)
 	}
-	modelSession, err := attestation.NewSession()
+	modelSession, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession (model): %v", err)
 	}
@@ -315,7 +316,7 @@ func TestPreparer_PrepareRequest_SetsHeaders(t *testing.T) {
 
 func TestPreparer_PrepareRequest_EmptyModelKey(t *testing.T) {
 	p := venice.NewPreparer("key")
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -333,11 +334,11 @@ func TestPreparer_PrepareRequest_EmptyPublicKeyHex(t *testing.T) {
 	// Construct a session with ModelKeyHex set but PublicKeyHex empty.
 	// This shouldn't happen in normal usage (NewSession always sets PublicKeyHex),
 	// but we guard against it defensively.
-	modelSession, err := attestation.NewSession()
+	modelSession, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	session := &attestation.Session{
+	session := &e2ee.Session{
 		ModelKeyHex:  modelSession.PublicKeyHex, // valid key
 		PublicKeyHex: "",                        // deliberately empty
 	}

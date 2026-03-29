@@ -19,7 +19,6 @@
 package proxy
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -39,9 +38,10 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
-	"github.com/13rac1/teep/internal/provider/chutes"
+	chutesProvider "github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
@@ -72,19 +72,7 @@ const (
 	// upstreamStreamTimeout is the context deadline for streaming upstream
 	// requests. Streaming responses can run for a long time.
 	upstreamStreamTimeout = 30 * time.Minute
-
-	// sseScannerBufSize is the bufio.Scanner buffer for SSE parsing.
-	// Encrypted chunks can be large; 1 MiB is sufficient.
-	sseScannerBufSize = 1 << 20 // 1 MiB
 )
-
-// sseScannerBufPool reuses 1 MiB scanner buffers across SSE requests.
-var sseScannerBufPool = sync.Pool{
-	New: func() any {
-		buf := make([]byte, sseScannerBufSize)
-		return &buf
-	},
-}
 
 // stats holds live operational counters for the status page.
 // All fields are read/written atomically — no mutex needed.
@@ -274,6 +262,7 @@ func fromConfig(
 		p.ChatPath = "/api/v1/chat/completions"
 		p.Attester = venice.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = venice.NewPreparer(cp.APIKey)
+		p.Encryptor = venice.NewE2EE()
 		p.ReportDataVerifier = venice.ReportDataVerifier{}
 		p.SupplyChainPolicy = venice.SupplyChainPolicy()
 		p.ModelLister = venice.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
@@ -298,7 +287,7 @@ func fromConfig(
 		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
-		p.E2EEVersion = attestation.E2EEv2
+		p.Encryptor = nearcloud.NewE2EE()
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
@@ -338,9 +327,11 @@ func fromConfig(
 		p.SupplyChainPolicy = nil // no supply chain policy yet
 	case "chutes":
 		p.ChatPath = "/chat/completions"
-		p.Attester = chutes.NewAttester(cp.BaseURL, cp.APIKey, offline)
-		p.Preparer = chutes.NewPreparer(cp.APIKey)
-		p.ReportDataVerifier = chutes.ReportDataVerifier{}
+		p.SkipSigningKeyCache = true
+		p.Encryptor = chutesProvider.NewE2EE(p.ChatPath)
+		p.Attester = chutesProvider.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		p.Preparer = chutesProvider.NewPreparer(cp.APIKey)
+		p.ReportDataVerifier = chutesProvider.ReportDataVerifier{}
 		p.SupplyChainPolicy = nil // cosign+IMA model, no docker-compose
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", cp.Name)
@@ -613,15 +604,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	attestDur = time.Since(attestStart)
 
 	if report.Blocked() {
-		status = "blocked"
-		s.stats.errors.Add(1)
-		ms.errors.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		if err := json.NewEncoder(w).Encode(report); err != nil {
-			slog.Error("encode response", "error", err)
+		if s.cfg.Force {
+			slog.Warn("--force: bypassing blocked attestation", "provider", prov.Name, "model", upstreamModel)
+		} else {
+			status = "blocked"
+			s.stats.errors.Add(1)
+			ms.errors.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			if err := json.NewEncoder(w).Encode(report); err != nil {
+				slog.Error("encode response", "error", err)
+			}
+			return
 		}
-		return
 	}
 
 	// Only cache the signing key after attestation passes. Caching before
@@ -700,26 +695,23 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// E2EE forces stream=true upstream (buildUpstreamBody), so the response
-	// is always SSE. When the client requested non-streaming, reassemble the
-	// decrypted SSE chunks into a single JSON response.
-	if session != nil {
-		if req.Stream {
-			s.relayStream(w, resp.Body, session)
-		} else {
-			s.relayReassembledNonStream(w, resp.Body, session)
-		}
-		upstreamDur = time.Since(upstreamStart)
-		status = "ok"
-		return
+	// E2EE forces stream=true upstream (Venice/NearCloud) or uses /e2e/invoke
+	// (Chutes), so the response is always SSE. When the client requested
+	// non-streaming, reassemble the decrypted SSE chunks into a single JSON response.
+	switch {
+	case session != nil && session.ChuteID != "" && req.Stream:
+		e2ee.RelayStreamChutes(w, resp.Body, session)
+	case session != nil && session.ChuteID != "":
+		e2ee.RelayNonStreamChutes(w, resp.Body, session)
+	case session != nil && req.Stream:
+		e2ee.RelayStream(w, resp.Body, session)
+	case session != nil:
+		e2ee.RelayReassembledNonStream(w, resp.Body, session)
+	case req.Stream:
+		e2ee.RelayStreamPlaintext(w, resp.Body)
+	default:
+		e2ee.RelayNonStreamPlaintext(w, resp.Body)
 	}
-	if req.Stream {
-		s.relayStream(w, resp.Body, session)
-		upstreamDur = time.Since(upstreamStart)
-		status = "ok"
-		return
-	}
-	s.relayNonStream(w, resp.Body, session)
 	upstreamDur = time.Since(upstreamStart)
 	status = "ok"
 }
@@ -794,13 +786,17 @@ func (s *Server) handlePinnedChat(
 		report = cached
 	}
 	if report != nil && report.Blocked() {
-		s.negCache.Record(prov.Name, upstreamModel)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		if err := json.NewEncoder(w).Encode(report); err != nil {
-			slog.Error("encode response", "error", err)
+		if s.cfg.Force {
+			slog.Warn("--force: bypassing blocked attestation (pinned)", "provider", prov.Name, "model", upstreamModel)
+		} else {
+			s.negCache.Record(prov.Name, upstreamModel)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			if err := json.NewEncoder(w).Encode(report); err != nil {
+				slog.Error("encode response", "error", err)
+			}
+			return
 		}
-		return
 	}
 	// E2EE providers require REPORTDATA binding even on first request (SPKI
 	// miss). Without it a MITM can substitute the enclave public key and
@@ -844,23 +840,22 @@ func (s *Server) handlePinnedChat(
 		s.stats.e2ee.Add(1)
 		defer session.Zero()
 		if req.Stream {
-			s.relayStream(w, pinnedResp.Body, session)
+			e2ee.RelayStream(w, pinnedResp.Body, session)
 		} else {
-			s.relayReassembledNonStream(w, pinnedResp.Body, session)
+			e2ee.RelayReassembledNonStream(w, pinnedResp.Body, session)
 		}
 		return
 	}
 	s.stats.plaintext.Add(1)
 	if req.Stream {
-		s.relayStream(w, pinnedResp.Body, nil)
+		e2ee.RelayStreamPlaintext(w, pinnedResp.Body)
 		return
 	}
-	s.relayNonStream(w, pinnedResp.Body, nil)
+	e2ee.RelayNonStreamPlaintext(w, pinnedResp.Body)
 }
 
 // buildUpstreamBody constructs the body to forward upstream. If e2eeActive is
-// true it creates an ephemeral session, encrypts each message, and forces
-// stream=true (required for per-chunk decryption).
+// true it delegates encryption to the provider's Encryptor.
 //
 // When freshRaw is non-nil (cache miss path), its signing key is reused — the
 // REPORTDATA binding was already verified by fetchAndVerify. When freshRaw is
@@ -875,7 +870,7 @@ func (s *Server) buildUpstreamBody(
 	e2eeActive bool,
 	prov *provider.Provider,
 	freshRaw *attestation.RawAttestation,
-) ([]byte, *attestation.Session, error) {
+) ([]byte, *e2ee.Session, error) {
 	if !e2eeActive {
 		if prov.E2EE {
 			return nil, nil, fmt.Errorf("E2EE required for %s but tdx_reportdata_binding not passed; refusing plaintext", prov.Name)
@@ -886,10 +881,14 @@ func (s *Server) buildUpstreamBody(
 	raw := freshRaw
 	if raw == nil {
 		// Cache hit path: try the signing key cache before re-fetching attestation.
-		if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok {
-			slog.Debug("E2EE key exchange: using cached signing key", "provider", prov.Name, "model", upstreamModel)
-			raw = &attestation.RawAttestation{SigningKey: cachedKey}
-		} else {
+		// Some providers (e.g. Chutes) need fresh instance/nonce data per request.
+		if !prov.SkipSigningKeyCache {
+			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok {
+				slog.Debug("E2EE key exchange: using cached signing key", "provider", prov.Name, "model", upstreamModel)
+				raw = &attestation.RawAttestation{SigningKey: cachedKey}
+			}
+		}
+		if raw == nil {
 			// Signing key not cached: fetch fresh attestation and re-verify.
 			slog.Debug("E2EE key exchange: fetching fresh attestation (cache hit path)", "provider", prov.Name, "model", upstreamModel)
 			nonce := attestation.NewNonce()
@@ -927,53 +926,12 @@ func (s *Server) buildUpstreamBody(
 		return nil, nil, errors.New("attestation response missing signing_key")
 	}
 
-	// Dispatch E2EE version based on provider configuration.
-	if prov.E2EEVersion == attestation.E2EEv2 {
-		return attestation.EncryptChatMessagesV2(rawBody, raw.SigningKey)
-	}
-
-	session, err := attestation.NewSession()
+	encrypted, session, err := prov.Encryptor.EncryptRequest(rawBody, raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create E2EE session: %w", err)
+		return nil, nil, err
 	}
-	if err := session.SetModelKey(raw.SigningKey); err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("set model key: %w", err)
-	}
-
-	encMessages := make([]chatMessage, len(req.Messages))
-	for i, msg := range req.Messages {
-		ciphertext, err := attestation.Encrypt([]byte(msg.Content), session.ModelPubKey())
-		if err != nil {
-			session.Zero()
-			return nil, nil, fmt.Errorf("encrypt message %d: %w", i, err)
-		}
-		encMessages[i] = chatMessage{Role: msg.Role, Content: ciphertext}
-	}
-
-	// Reassemble the full request as a generic map so we preserve unknown fields.
-	var full map[string]json.RawMessage
-	if err := json.Unmarshal(rawBody, &full); err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("re-parse body for E2EE rewrite: %w", err)
-	}
-
-	messagesJSON, err := json.Marshal(encMessages)
-	if err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("marshal encrypted messages: %w", err)
-	}
-	full["messages"] = messagesJSON
-
-	// Force stream=true so we can decrypt per-chunk.
-	full["stream"] = json.RawMessage("true")
-
-	out, err := json.Marshal(full)
-	if err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("marshal E2EE request body: %w", err)
-	}
-	return out, session, nil
+	session.Stream = req.Stream
+	return encrypted, session, nil
 }
 
 // prepareUpstreamHeaders injects auth and E2EE headers into the upstream request.
@@ -981,7 +939,7 @@ func (s *Server) buildUpstreamBody(
 // When session is nil (plaintext fallback), it sets only the Authorization header
 // directly, because provider-specific Preparers may require a fully initialised
 // session (e.g. Venice requires ModelKeyHex to be set).
-func prepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session *attestation.Session) error {
+func prepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session *e2ee.Session) error {
 	if session != nil && prov.Preparer != nil {
 		return prov.Preparer.PrepareRequest(req, session)
 	}
@@ -991,135 +949,6 @@ func prepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session 
 		req.Header.Set("Authorization", "Bearer "+prov.APIKey)
 	}
 	return nil
-}
-
-// relayStream reads an SSE stream from body, decrypts chunks when session is
-// non-nil, and writes the decrypted SSE lines to w. It aborts immediately if
-// any decryption fails — no plaintext fallthrough.
-func (s *Server) relayStream(w http.ResponseWriter, body io.Reader, session *attestation.Session) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	scanner := bufio.NewScanner(body)
-	bufp, ok := sseScannerBufPool.Get().(*[]byte)
-	if !ok {
-		panic("sseScannerBufPool: unexpected type")
-	}
-	defer sseScannerBufPool.Put(bufp)
-	scanner.Buffer((*bufp)[:cap(*bufp)], sseScannerBufSize)
-
-	// Read the first line before committing a 200 status. If the upstream
-	// body is empty or immediately errors, return a proper HTTP error.
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			http.Error(w, "upstream stream error", http.StatusBadGateway)
-		} else {
-			http.Error(w, "empty upstream stream", http.StatusBadGateway)
-		}
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-
-	// Process first line, then loop for the rest.
-	done := s.relaySSELine(w, flusher, scanner.Text(), session)
-	if done {
-		return
-	}
-
-	for scanner.Scan() {
-		if s.relaySSELine(w, flusher, scanner.Text(), session) {
-			return
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		slog.Error("SSE scanner error", "err", err)
-	}
-}
-
-// relaySSELine processes a single SSE line, writing it to w. Returns true if
-// the stream should end (DONE marker or decryption error).
-func (s *Server) relaySSELine(w http.ResponseWriter, flusher http.Flusher, line string, session *attestation.Session) bool {
-	if !strings.HasPrefix(line, "data: ") {
-		fmt.Fprintf(w, "%s\n", line)
-		flusher.Flush()
-		return false
-	}
-
-	data := line[len("data: "):]
-	if data == "[DONE]" {
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-		flusher.Flush()
-		return true
-	}
-
-	if session == nil {
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-		return false
-	}
-
-	decrypted, err := decryptSSEChunk(data, session)
-	if err != nil {
-		slog.Error("stream decryption failed", "err", err)
-		fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":\"stream decryption failed\",\"type\":\"decryption_error\"}}\n\n")
-		flusher.Flush()
-		return true
-	}
-
-	fmt.Fprintf(w, "data: %s\n\n", decrypted)
-	flusher.Flush()
-	return false
-}
-
-// relayNonStream reads a non-streaming JSON response from body, decrypts the
-// content field if session is non-nil, and writes the result to w.
-func (s *Server) relayNonStream(w http.ResponseWriter, body io.Reader, session *attestation.Session) {
-	responseBody, err := io.ReadAll(io.LimitReader(body, 10<<20))
-	if err != nil {
-		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
-		return
-	}
-
-	if session == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(responseBody)
-		return
-	}
-
-	decrypted, err := decryptNonStreamResponse(responseBody, session)
-	if err != nil {
-		slog.Error("non-stream decryption failed", "err", err)
-		http.Error(w, "response decryption failed", http.StatusBadGateway)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(decrypted)
-}
-
-// relayReassembledNonStream reads an SSE stream from the E2EE upstream,
-// decrypts each chunk, and writes a single non-streaming JSON response.
-func (s *Server) relayReassembledNonStream(w http.ResponseWriter, body io.Reader, session *attestation.Session) {
-	result, err := reassembleNonStream(body, session)
-	if err != nil {
-		slog.Error("E2EE non-stream reassembly failed", "err", err)
-		http.Error(w, "response decryption failed", http.StatusBadGateway)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(result)
 }
 
 // modelsListResponse is the OpenAI-compatible response for GET /v1/models.
@@ -1182,14 +1011,14 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 
 // handleIndex serves a live stats dashboard at /.
 func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
-	var provName, baseURL, e2ee string
+	var provName, baseURL, e2eeStatus string
 	for name, p := range s.providers {
 		provName = name
 		baseURL = p.BaseURL
 		if p.E2EE {
-			e2ee = "enabled"
+			e2eeStatus = "enabled"
 		} else {
-			e2ee = "disabled"
+			e2eeStatus = "disabled"
 		}
 	}
 
@@ -1301,7 +1130,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 </body>
 </html>
 `, html.EscapeString(s.cfg.ListenAddr), uptime,
-		html.EscapeString(provName), html.EscapeString(baseURL), e2ee,
+		html.EscapeString(provName), html.EscapeString(baseURL), e2eeStatus,
 		requests, streaming, nonStream,
 		e2eeCount, plainCount, errCount,
 		s.cache.Len(), s.negCache.Len(),

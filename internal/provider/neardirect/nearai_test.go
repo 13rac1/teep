@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
@@ -437,7 +438,7 @@ func TestPreparer_PrepareRequest_SetsAuthHeader(t *testing.T) {
 	p := neardirect.NewPreparer("nearai-key")
 	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/v1/chat/completions", http.NoBody)
 
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -455,7 +456,7 @@ func TestPreparer_PrepareRequest_NoSessionRequired(t *testing.T) {
 	// NEAR AI's PrepareRequest should not error when session has no model key.
 	p := neardirect.NewPreparer("key")
 	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/", http.NoBody)
-	session, err := attestation.NewSession()
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}

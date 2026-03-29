@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct"
@@ -170,12 +171,12 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	}, nil
 }
 
-// encryptChat handles E2EE v2 encryption of chat messages. On error, any
+// encryptChat handles NearCloud E2EE encryption of chat messages. On error, any
 // allocated session is zeroed before returning. On success, the caller is
 // responsible for zeroing the session on subsequent errors.
 func (h *PinnedHandler) encryptChat(
 	req *provider.PinnedRequest, report *attestation.VerificationReport, signingKey string,
-) (chatBody []byte, session *attestation.Session, extraHeaders http.Header, err error) {
+) (chatBody []byte, session *e2ee.Session, extraHeaders http.Header, err error) {
 	if !req.E2EE {
 		return req.Body, nil, nil, nil
 	}
@@ -194,16 +195,16 @@ func (h *PinnedHandler) encryptChat(
 		return nil, nil, nil, errors.New("E2EE requested but no signing key available")
 	}
 
-	encBody, sess, err := attestation.EncryptChatMessagesV2(req.Body, sk)
+	encBody, sess, err := e2ee.EncryptChatMessagesNearCloud(req.Body, sk)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("E2EE v2 encrypt: %w", err)
+		return nil, nil, nil, fmt.Errorf("NearCloud E2EE encrypt: %w", err)
 	}
 
-	// V2 protocol headers per NEAR AI E2EE docs.
+	// NearCloud E2EE protocol headers per NEAR AI docs.
 	// Note: X-Model-Pub-Key is intentionally omitted. The gateway uses it
 	// to pin requests to a specific model instance by signing key, which
 	// causes 502 "model unavailable" errors when the instance restarts or
-	// scales. The official NEAR AI E2EE v2 protocol does not require it.
+	// scales. The official NEAR AI E2EE protocol does not require it.
 	hdrs := make(http.Header)
 	hdrs.Set("X-Signing-Algo", "ed25519")
 	hdrs.Set("X-Client-Pub-Key", sess.Ed25519PubHex)
