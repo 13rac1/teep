@@ -293,17 +293,21 @@ new values may appear in attestation responses.
 Recommended approach:
 1. Before the update, add the new expected values to your allowlists
 2. After the rollout completes, remove the old values
-3. If unexpected values appear, the allowlist enforcement will block requests
-   (with `warn_measurements = false`) or emit warnings
+3. If unexpected values appear and are not covered by an `allow_fail` rule,
+   the allowlist enforcement will block requests; mismatches that are
+   explicitly listed in `allow_fail` will be treated as warnings
+   instead of hard failures.
 
 ### Fail-closed enforcement
 
-When `warn_measurements = false` and a measurement value is not in the
-allowlist, the corresponding verification factor fails and the proxy blocks
-the request. This is the intended behavior for production deployments.
+By default, when a measurement value is not in the allowlist, the
+corresponding verification factor fails and the proxy blocks the request.
+This is the intended behavior for production deployments.
 
-If all values in the fleet are unknown, start with `warn_measurements = true`,
-observe, pin, cross-check, then switch to enforcement.
+If all values in the fleet are unknown, you can temporarily configure
+`allow_fail` for the relevant measurement checks to observe real-world
+values, pin and cross-check them, and then remove those `allow_fail` entries
+to switch back to strict enforcement.
 
 ## Related Documentation
 
