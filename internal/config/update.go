@@ -58,6 +58,15 @@ func UpdateConfig(path, providerName string, observed *ObservedMeasurements) err
 		f.Providers = make(map[string]updateProvider)
 	}
 	prov := f.Providers[providerName]
+	// Populate known defaults for new provider entries so the resulting
+	// config is usable without manual editing of base_url / api_key_env.
+	if prov.BaseURL == "" {
+		if d, ok := knownProviderDefaults[providerName]; ok {
+			prov.BaseURL = d.baseURL
+			prov.APIKeyEnv = d.keyEnvVar
+			prov.E2EE = d.e2ee
+		}
+	}
 	mergeObserved(&prov.Policy, observed)
 	prov.Policy.WarnMeasurements = false
 	f.Providers[providerName] = prov
@@ -65,8 +74,9 @@ func UpdateConfig(path, providerName string, observed *ObservedMeasurements) err
 	return writeConfig(path, &f)
 }
 
-// updateFile mirrors the TOML config structure for round-trip editing.
-// Fields use toml tags to preserve unknown top-level keys.
+// updateFile mirrors the TOML config structure for update editing.
+// Note: toml.Decode into a struct drops unknown keys and all comments;
+// the .bak backup preserves the original file for manual recovery.
 type updateFile struct {
 	Providers     map[string]updateProvider `toml:"providers,omitempty"`
 	Policy        updatePolicy              `toml:"policy,omitempty"`
@@ -128,6 +138,20 @@ func addUnique(list []string, val string) []string {
 	list = append(list, val)
 	sort.Strings(list)
 	return list
+}
+
+// knownProviderDefaults provides base_url, api_key_env, and e2ee defaults
+// for each known provider, matching the values in config.go applyAPIKeyEnv.
+// Used to populate new provider entries created by --update-config.
+var knownProviderDefaults = map[string]struct {
+	baseURL   string
+	keyEnvVar string
+	e2ee      bool
+}{
+	"venice":     {baseURL: "https://api.venice.ai", keyEnvVar: "VENICE_API_KEY", e2ee: true},
+	"neardirect": {baseURL: "https://completions.near.ai", keyEnvVar: "NEARAI_API_KEY"},
+	"nearcloud":  {baseURL: "https://cloud-api.near.ai", keyEnvVar: "NEARAI_API_KEY", e2ee: true},
+	"nanogpt":    {baseURL: "https://nano-gpt.com/api", keyEnvVar: "NANOGPT_API_KEY"},
 }
 
 func writeConfig(path string, f *updateFile) error {
