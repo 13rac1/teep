@@ -39,6 +39,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
@@ -198,7 +199,7 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	for name, cp := range cfg.Providers {
-		mDefaults, gwDefaults := measurementDefaults(name)
+		mDefaults, gwDefaults := defaults.MeasurementDefaults(name)
 		mergedPolicy := config.MergedMeasurementPolicy(name, cfg, mDefaults)
 		mergedGWPolicy := config.MergedGatewayMeasurementPolicy(name, cfg, gwDefaults)
 		p, err := fromConfig(cp, spkiCache, cfg.Offline, cfg.Enforced, mergedPolicy, mergedGWPolicy, s.rekorClient, s.pocSigningKey)
@@ -328,25 +329,6 @@ func fromConfig(
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt)", cp.Name)
 	}
 	return p, nil
-}
-
-// measurementDefaults returns Go-coded default measurement policies for the
-// named provider. The first return is the model-backend policy; the second
-// is the gateway policy (zero value for non-gateway providers).
-func measurementDefaults(name string) (model, gateway attestation.MeasurementPolicy) {
-	var gw attestation.MeasurementPolicy
-	switch name {
-	case "venice":
-		return venice.DefaultMeasurementPolicy(), gw
-	case "neardirect":
-		return neardirect.DefaultMeasurementPolicy(), gw
-	case "nearcloud":
-		return nearcloud.DefaultMeasurementPolicy(), nearcloud.DefaultGatewayMeasurementPolicy()
-	case "nanogpt":
-		return nanogpt.DefaultMeasurementPolicy(), gw
-	default:
-		return attestation.MeasurementPolicy{}, gw
-	}
 }
 
 // resolveModel finds the provider for a client model. The model name is passed

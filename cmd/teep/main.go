@@ -32,6 +32,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
@@ -310,7 +311,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 
 	e2eeResult := testE2EE(ctx, raw, providerName, cp, modelName, offline)
 
-	mDefaults, gwDefaults := measurementDefaults(providerName)
+	mDefaults, gwDefaults := defaults.MeasurementDefaults(providerName)
 	mergedPolicy := config.MergedMeasurementPolicy(providerName, cfg, mDefaults)
 	mergedGWPolicy := config.MergedGatewayMeasurementPolicy(providerName, cfg, gwDefaults)
 
@@ -354,6 +355,13 @@ func extractObserved(report *attestation.VerificationReport) config.ObservedMeas
 		RTMR1:  m["rtmr1"],
 		RTMR2:  m["rtmr2"],
 		RTMR3:  m["rtmr3"],
+
+		GatewayMRSeam: m["gateway_mrseam"],
+		GatewayMRTD:   m["gateway_mrtd"],
+		GatewayRTMR0:  m["gateway_rtmr0"],
+		GatewayRTMR1:  m["gateway_rtmr1"],
+		GatewayRTMR2:  m["gateway_rtmr2"],
+		GatewayRTMR3:  m["gateway_rtmr3"],
 	}
 }
 
@@ -550,25 +558,6 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 		return nanogpt.SupplyChainPolicy()
 	default:
 		return nil
-	}
-}
-
-// measurementDefaults returns the Go-coded default measurement policies for
-// the named provider. The first return is the model-backend policy; the second
-// is the gateway policy (zero value for non-gateway providers).
-func measurementDefaults(name string) (model, gateway attestation.MeasurementPolicy) {
-	var gw attestation.MeasurementPolicy
-	switch name {
-	case "venice":
-		return venice.DefaultMeasurementPolicy(), gw
-	case "neardirect":
-		return neardirect.DefaultMeasurementPolicy(), gw
-	case "nearcloud":
-		return nearcloud.DefaultMeasurementPolicy(), nearcloud.DefaultGatewayMeasurementPolicy()
-	case "nanogpt":
-		return nanogpt.DefaultMeasurementPolicy(), gw
-	default:
-		return attestation.MeasurementPolicy{}, gw
 	}
 }
 
