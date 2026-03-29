@@ -1107,12 +1107,12 @@ func gatewayTDXQuoteStructure(in *ReportInput) FactorResult {
 	switch {
 	case gp.HasMRTDPolicy() && !containsAllowlist(gp.MRTDAllow, mrtdHex):
 		if gp.WarnOnly {
-			return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: fmt.Sprintf("WARN: gateway MRTD not in policy allowlist: %s... (warn_measurements)", prefixHex(mrtdHex))}
+			return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("WARN: gateway MRTD not in policy allowlist: %s... (warn_measurements)", prefixHex(mrtdHex))}
 		}
 		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("gateway MRTD not in policy allowlist: %s...", prefixHex(mrtdHex))}
 	case gp.HasMRSeamPolicy() && !containsAllowlist(gp.MRSeamAllow, mrSeamHex):
 		if gp.WarnOnly {
-			return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: fmt.Sprintf("WARN: gateway MRSEAM not in policy allowlist: %s... (warn_measurements)", prefixHex(mrSeamHex))}
+			return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("WARN: gateway MRSEAM not in policy allowlist: %s... (warn_measurements)", prefixHex(mrSeamHex))}
 		}
 		return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("gateway MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex))}
 	case gp.HasMRTDPolicy() && gp.HasMRSeamPolicy():
