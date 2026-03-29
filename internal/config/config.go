@@ -316,10 +316,14 @@ func mergeAllowlists(base, overlay attestation.MeasurementPolicy) attestation.Me
 			base.RTMRAllow[i] = overlay.RTMRAllow[i]
 		}
 	}
-	// WarnOnly in the overlay is authoritative: this allows explicit
-	// configuration (e.g., warn_measurements=false in TOML) to turn
-	// warn-only mode off, so allowlist mismatches can block as intended.
-	base.WarnOnly = overlay.WarnOnly
+	// WarnOnly in the overlay is authoritative when the overlay has any
+	// measurement policy configured. This allows explicit TOML configuration
+	// (e.g., warn_measurements=false) to override Go defaults, while a
+	// completely empty overlay (no allowlists, no warn setting) preserves
+	// the base layer's WarnOnly value.
+	if hasMeasurementPolicy(overlay) {
+		base.WarnOnly = overlay.WarnOnly
+	}
 	return base
 }
 

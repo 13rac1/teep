@@ -424,7 +424,7 @@ func TestEvalTDXQuoteStructure(t *testing.T) {
 				WarnOnly:  true,
 			},
 		})
-		f := assertFactor(t, results, "tdx_quote_structure", Pass)
+		f := assertFactor(t, results, "tdx_quote_structure", Fail)
 		if !strings.Contains(f.Detail, "WARN") {
 			t.Errorf("detail should contain WARN: %s", f.Detail)
 		}
@@ -448,7 +448,7 @@ func TestEvalTDXQuoteStructure(t *testing.T) {
 				WarnOnly:    true,
 			},
 		})
-		f := assertFactor(t, results, "tdx_quote_structure", Pass)
+		f := assertFactor(t, results, "tdx_quote_structure", Fail)
 		if !strings.Contains(f.Detail, "WARN") {
 			t.Errorf("detail should contain WARN: %s", f.Detail)
 		}
@@ -989,7 +989,7 @@ func TestEvalEventLogIntegrity(t *testing.T) {
 				},
 				WarnOnly: true,
 			},
-		}), Pass)
+		}), Fail)
 		if !strings.Contains(f.Detail, "WARN") {
 			t.Errorf("detail should contain WARN: %s", f.Detail)
 		}
