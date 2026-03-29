@@ -243,3 +243,26 @@ allow_fail = ["cpu_gpu_chain", "measured_model_weights"]
 		t.Errorf("per-provider allow_fail changed: got %v", prov.AllowFail)
 	}
 }
+
+func TestUpdateConfigCreatesParentDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "subdir", "teep.toml")
+
+	obs := ObservedMeasurements{MRSeam: strings.Repeat("ab", 48)}
+	if err := UpdateConfig(path, "venice", &obs); err != nil {
+		t.Fatalf("UpdateConfig error: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("config file not created: %v", err)
+	}
+
+	// Verify parent directory permissions.
+	info, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("parent dir stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("parent dir permissions = %o, want 700", perm)
+	}
+}

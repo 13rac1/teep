@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 
@@ -164,6 +165,9 @@ func writeConfig(path string, f *updateFile) error {
 	if path == "" {
 		_, err := io.Copy(os.Stdout, &buf)
 		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
 	}
 	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
