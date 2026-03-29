@@ -196,10 +196,41 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	return ParseAttestationResponse(body)
 }
 
+// detectFormat identifies the attestation format from a NanoGPT response by
+// probing top-level JSON keys. NanoGPT proxies multiple backends that each
+// return a different attestation envelope.
+func detectFormat(body []byte) string {
+	var probe struct {
+		Format          string           `json:"format"`
+		AttestationType string           `json:"attestation_type"`
+		IntelQuote      string           `json:"intel_quote"`
+		GatewayAtt      *json.RawMessage `json:"gateway_attestation"`
+	}
+	if json.Unmarshal(body, &probe) != nil {
+		return "invalid"
+	}
+	switch {
+	case probe.Format != "":
+		return "tinfoil"
+	case probe.AttestationType == "chutes":
+		return "chutes"
+	case probe.GatewayAtt != nil:
+		return "gateway"
+	case probe.IntelQuote != "":
+		return "dstack"
+	default:
+		return "unknown"
+	}
+}
+
 // ParseAttestationResponse unmarshals a NanoGPT attestation JSON response body
 // into a RawAttestation. Exported so integration tests can parse fixture files
 // without making HTTP calls.
 func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) {
+	if format := detectFormat(body); format != "dstack" {
+		return nil, fmt.Errorf("nanogpt: unsupported attestation format %q", format)
+	}
+
 	var ar attestationResponse
 	if err := jsonstrict.UnmarshalWarn(body, &ar, "nanogpt attestation response"); err != nil {
 		return nil, fmt.Errorf("nanogpt: unmarshal attestation response: %w", err)

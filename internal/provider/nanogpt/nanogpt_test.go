@@ -3,8 +3,10 @@ package nanogpt_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -273,15 +275,13 @@ func TestAttester_FetchAttestation_EmptyResponse(t *testing.T) {
 	defer srv.Close()
 
 	a := nanogpt.NewAttester(srv.URL, "key")
-	raw, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
-	if err != nil {
-		t.Fatalf("FetchAttestation with empty body returned error: %v", err)
+	_, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
+	if err == nil {
+		t.Fatal("expected error for empty JSON response")
 	}
-	if raw.Nonce != "" {
-		t.Errorf("Nonce = %q for empty response, want empty", raw.Nonce)
-	}
-	if raw.SigningKey != "" {
-		t.Errorf("SigningKey = %q for empty response, want empty", raw.SigningKey)
+	t.Logf("error: %v", err)
+	if !strings.Contains(err.Error(), "unsupported attestation format") {
+		t.Errorf("error should mention unsupported format: %v", err)
 	}
 }
 
@@ -337,6 +337,43 @@ func TestAttester_FetchAttestation_EventLogAsArray(t *testing.T) {
 	}
 	if len(raw.EventLog) != 1 {
 		t.Errorf("len(EventLog) = %d, want 1", len(raw.EventLog))
+	}
+}
+
+func TestParseAttestationResponse_UnsupportedFormats(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantFmt string
+	}{
+		{"tinfoil", `{"format":"https://tinfoil.sh/predicate/tdx-guest/v2","body":"H4s...","nonce":"aa"}`, "tinfoil"},
+		{"chutes", `{"attestation_type":"chutes","nonce":"aa","all_attestations":[]}`, "chutes"},
+		{"gateway", `{"gateway_attestation":{"intel_quote":"ab"},"model_attestations":[],"nonce":"aa"}`, "gateway"},
+		{"unknown", `{"something":"else"}`, "unknown"},
+		{"invalid", `not json`, "invalid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := nanogpt.ParseAttestationResponse([]byte(tc.body))
+			if err == nil {
+				t.Fatal("expected error for unsupported format")
+			}
+			t.Logf("error: %v", err)
+			wantMsg := fmt.Sprintf("unsupported attestation format %q", tc.wantFmt)
+			if !strings.Contains(err.Error(), wantMsg) {
+				t.Errorf("error %q should contain %q", err, wantMsg)
+			}
+		})
+	}
+}
+
+func TestParseAttestationResponse_DstackAccepted(t *testing.T) {
+	raw, err := nanogpt.ParseAttestationResponse([]byte(validAttestationJSON))
+	if err != nil {
+		t.Fatalf("dstack format should be accepted: %v", err)
+	}
+	if raw.IntelQuote == "" {
+		t.Error("IntelQuote should be populated")
 	}
 }
 
