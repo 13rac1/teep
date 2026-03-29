@@ -31,7 +31,9 @@ api_key_env = "NANOGPT_API_KEY"
 # ---------------------------------------------------------------------------
 # Global Policy
 # ---------------------------------------------------------------------------
-# Applies to all providers unless overridden by a per-provider [providers.X.policy].
+# Measurement allowlists go under [policy] and can be overridden per-provider
+# in [providers.X.policy]. The allow_fail list is a top-level key (outside
+# [policy]) and can be overridden per-provider under [providers.X].
 
 [policy]
 
@@ -86,9 +88,15 @@ api_key_env = "NANOGPT_API_KEY"
 # ---------------------------------------------------------------------------
 # Per-Provider Policy Overrides
 # ---------------------------------------------------------------------------
-# Each [providers.X.policy] section overrides the global [policy] for that
-# provider. Each allowlist field is resolved independently:
+# Each [providers.X.policy] section overrides the global [policy] measurement
+# allowlists. Each allowlist field is resolved independently:
 #   per-provider TOML > global TOML > Go-coded defaults
+#
+# Per-provider allow_fail overrides go directly under [providers.X], NOT
+# inside [providers.X.policy]:
+#
+# [providers.venice]
+# allow_fail = ["cpu_gpu_chain", "measured_model_weights"]
 
 # Example: set measurement allowlists for venice only
 # [providers.venice.policy]
