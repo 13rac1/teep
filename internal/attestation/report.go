@@ -183,10 +183,19 @@ var KnownFactors = []string{
 	"gateway_event_log_integrity",
 }
 
-// OnlineFactors lists factors that require network access to external services
-// (Intel PCS, NVIDIA NRAS, Proof of Cloud, Sigstore/Rekor, live E2EE test).
-// In --offline mode these factors are automatically added to allow_fail so
-// they cannot block requests.
+// OnlineFactors lists factors whose evaluation requires network access to
+// external services (Intel PCS, NVIDIA NRAS, Proof of Cloud, Sigstore/Rekor,
+// live E2EE inference test).
+//
+// Note: e2ee_usable is included because it is evaluated via a live encrypted
+// inference against the provider (see testE2EE in cmd/teep/main.go). The
+// local crypto self-test (TestE2EESetup) validates key exchange and encryption
+// without network access, but does not exercise the full E2EE round-trip and
+// is therefore not sufficient to satisfy e2ee_usable in online mode.
+//
+// In --offline mode every factor in this list is automatically added to
+// allow_fail so that the absence of network connectivity cannot block
+// requests.
 var OnlineFactors = []string{
 	"intel_pcs_collateral",
 	"tdx_tcb_current",
