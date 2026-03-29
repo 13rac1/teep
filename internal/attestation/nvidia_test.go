@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -334,16 +335,19 @@ func TestVerifyNVIDIAJWT_EmptyToken(t *testing.T) {
 // TestExtractNRASJWT verifies the NRAS response parsing.
 func TestExtractNRASJWT(t *testing.T) {
 	// Valid: array of [type, token] pairs.
-	extracted, err := extractNRASJWT(`[["JWT","eyJhbGciOi.payload.sig"]]`)
+	extracted, perGPU, err := extractNRASJWT(`[["JWT","eyJhbGciOi.payload.sig"]]`)
 	if err != nil {
 		t.Fatalf("extractNRASJWT valid: %v", err)
 	}
 	if extracted != "eyJhbGciOi.payload.sig" {
 		t.Errorf("got %q, want %q", extracted, "eyJhbGciOi.payload.sig")
 	}
+	if perGPU != nil {
+		t.Errorf("perGPU = %v, want nil", perGPU)
+	}
 
 	// Multiple entries: takes the JWT one.
-	extracted, err = extractNRASJWT(`[["OTHER","foo"],["JWT","eyJhbGciOi.p.s"]]`)
+	extracted, _, err = extractNRASJWT(`[["OTHER","foo"],["JWT","eyJhbGciOi.p.s"]]`)
 	if err != nil {
 		t.Fatalf("extractNRASJWT multi: %v", err)
 	}
@@ -351,20 +355,35 @@ func TestExtractNRASJWT(t *testing.T) {
 		t.Errorf("got %q", extracted)
 	}
 
+	// With per-GPU JWTs (NRAS v3 format).
+	extracted, perGPU, err = extractNRASJWT(`[["JWT","eyJ.overall.sig"],{"GPU-0":"eyJ.gpu0.sig","GPU-1":"eyJ.gpu1.sig"}]`)
+	if err != nil {
+		t.Fatalf("extractNRASJWT v3: %v", err)
+	}
+	if extracted != "eyJ.overall.sig" {
+		t.Errorf("overall JWT = %q, want %q", extracted, "eyJ.overall.sig")
+	}
+	if len(perGPU) != 2 {
+		t.Fatalf("perGPU count = %d, want 2", len(perGPU))
+	}
+	if perGPU["GPU-0"] != "eyJ.gpu0.sig" {
+		t.Errorf("GPU-0 = %q", perGPU["GPU-0"])
+	}
+
 	// No JWT entry.
-	_, err = extractNRASJWT(`[["OTHER","foo"]]`)
+	_, _, err = extractNRASJWT(`[["OTHER","foo"]]`)
 	if err == nil {
 		t.Error("expected error for no JWT entry, got nil")
 	}
 
 	// Not JSON.
-	_, err = extractNRASJWT(`not-json`)
+	_, _, err = extractNRASJWT(`not-json`)
 	if err == nil {
 		t.Error("expected error for non-JSON, got nil")
 	}
 
 	// Empty array.
-	_, err = extractNRASJWT(`[]`)
+	_, _, err = extractNRASJWT(`[]`)
 	if err == nil {
 		t.Error("expected error for empty array, got nil")
 	}
@@ -529,5 +548,73 @@ func TestVerifyNVIDIANRAS_EmptyResponse(t *testing.T) {
 
 	if result.SignatureErr == nil {
 		t.Error("expected SignatureErr for empty response, got nil")
+	}
+}
+
+// TestExtractGPUDiags verifies per-GPU JWT payload decoding.
+func TestExtractGPUDiags(t *testing.T) {
+	// Build a minimal per-GPU JWT payload (no signature verification needed).
+	claims := map[string]any{
+		"measres":                     "success",
+		"hwmodel":                     "GH100",
+		"x-nvidia-gpu-driver-version": "570.172.08",
+		"x-nvidia-gpu-vbios-version":  "96.00.CF.00.02",
+		"x-nvidia-gpu-attestation-report-nonce-match": true,
+		"secboot": true,
+		"dbgstat": "disabled",
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Construct a fake JWT: header.payload.signature
+	fakeJWT := "eyJhbGciOiJFUzM4NCJ9." + base64.RawURLEncoding.EncodeToString(payload) + ".fakesig"
+
+	perGPU := map[string]string{
+		"GPU-0": fakeJWT,
+		"GPU-1": fakeJWT,
+	}
+
+	diags := extractGPUDiags(perGPU)
+	t.Logf("diags: %+v", diags)
+
+	if len(diags) != 2 {
+		t.Fatalf("got %d diags, want 2", len(diags))
+	}
+	// Sorted by GPU ID.
+	if diags[0].GPUID != "GPU-0" {
+		t.Errorf("diags[0].GPUID = %q", diags[0].GPUID)
+	}
+	if diags[0].MeasRes != "success" {
+		t.Errorf("MeasRes = %q, want success", diags[0].MeasRes)
+	}
+	if diags[0].HWModel != "GH100" {
+		t.Errorf("HWModel = %q, want GH100", diags[0].HWModel)
+	}
+	if diags[0].DriverVersion != "570.172.08" {
+		t.Errorf("DriverVersion = %q", diags[0].DriverVersion)
+	}
+	if !diags[0].NonceMatch {
+		t.Error("NonceMatch = false, want true")
+	}
+	if !diags[0].SecBoot {
+		t.Error("SecBoot = false, want true")
+	}
+	if diags[0].DbgStat != "disabled" {
+		t.Errorf("DbgStat = %q", diags[0].DbgStat)
+	}
+
+	// Nil map returns nil.
+	if got := extractGPUDiags(nil); got != nil {
+		t.Errorf("nil map returned %v", got)
+	}
+
+	// Invalid JWT payload.
+	diags = extractGPUDiags(map[string]string{"GPU-0": "not-a-jwt"})
+	if len(diags) != 1 {
+		t.Fatalf("got %d diags, want 1", len(diags))
+	}
+	if !strings.Contains(diags[0].MeasRes, "decode error") {
+		t.Errorf("expected decode error, got %q", diags[0].MeasRes)
 	}
 }

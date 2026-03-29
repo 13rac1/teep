@@ -3,6 +3,10 @@
 // consistency (AST checks) and architectural completeness (every provider
 // wired into all integration points).
 //
+// Provider discovery is fully automatic: any package under internal/provider/
+// with an Attester struct is a provider. The archetype (direct, gateway,
+// fixed-gateway) is detected from the code structure itself.
+//
 // Usage:
 //
 //	go run ./cmd/teeplint
@@ -43,19 +47,29 @@ func (r *result) skipf(format string, args ...any) {
 	fmt.Printf("    [SKIP] %s\n", fmt.Sprintf(format, args...))
 }
 
-// providerException encodes known structural deviations for specific providers.
-type providerException struct {
-	// responseStructName overrides "attestationResponse" for checkResponseStruct.
-	responseStructName string
-	// parseFunc overrides "ParseAttestationResponse" for checkParseFunc.
-	parseFunc string
-}
+// providerArchetype classifies providers by their structural pattern.
+type providerArchetype string
 
-var exceptions = map[string]providerException{
-	"nearcloud": {
-		responseStructName: "gatewayResponse",
-		parseFunc:          "ParseGatewayResponse",
-	},
+const (
+	// archetypeDirect: owns its attestation format, has attestationResponse
+	// struct, calls jsonstrict.UnmarshalWarn directly.
+	archetypeDirect providerArchetype = "direct"
+	// archetypeGateway: detects format via formatdetect.Detect(), delegates
+	// parsing to backend providers.
+	archetypeGateway providerArchetype = "gateway"
+	// archetypeFixedGateway: parses its own fixed wrapper format, then
+	// delegates nested attestation to a direct backend.
+	archetypeFixedGateway providerArchetype = "fixed-gateway"
+)
+
+// providerInfo holds parsed AST and detected archetype for a provider.
+type providerInfo struct {
+	name      string
+	archetype providerArchetype
+	dir       string
+	files     []*ast.File
+	fileNames []string
+	fset      *token.FileSet
 }
 
 const providerDir = "internal/provider"
@@ -66,15 +80,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "teeplint: discover providers: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("teeplint: discovered %d providers: %s\n\n", len(providers), strings.Join(providers, ", "))
+
+	names := make([]string, len(providers))
+	for i, p := range providers {
+		names[i] = fmt.Sprintf("%s(%s)", p.name, p.archetype)
+	}
+	fmt.Printf("teeplint: discovered %d providers: %s\n\n", len(providers), strings.Join(names, ", "))
 
 	var r result
 
 	// Category 1: Provider package structure.
 	fmt.Println("teeplint: checking provider package structure...")
 	fmt.Println()
-	for _, prov := range providers {
-		checkProviderStructure(&r, prov)
+	for i := range providers {
+		checkProviderStructure(&r, &providers[i])
 		fmt.Println()
 	}
 
@@ -87,13 +106,18 @@ func main() {
 	fmt.Println("teeplint: checking architectural completeness...")
 	fmt.Println()
 
+	provNames := make([]string, len(providers))
+	for i, p := range providers {
+		provNames[i] = p.name
+	}
+
 	// Read providerEnvVars from cmd/teep/main.go for help text checks.
 	envVars := readProviderEnvVars()
 
-	checkMakefile(&r, providers)
-	checkProxyWiring(&r, providers)
-	checkCLIMain(&r, providers)
-	checkHelpText(&r, providers, envVars)
+	checkMakefile(&r, provNames)
+	checkProxyWiring(&r, provNames)
+	checkCLIMain(&r, provNames)
+	checkHelpText(&r, provNames, envVars)
 
 	// Summary.
 	total := r.passed + r.failed + r.skipped
@@ -105,38 +129,39 @@ func main() {
 	}
 }
 
-// discoverProviders scans internal/provider/*/ for directories containing .go files.
-func discoverProviders() ([]string, error) {
+// discoverProviders scans internal/provider/*/ for provider packages.
+// A package is a provider if it contains an Attester struct.
+// The archetype is detected from the code structure.
+func discoverProviders() ([]providerInfo, error) {
 	entries, err := os.ReadDir(providerDir)
 	if err != nil {
 		return nil, err
 	}
-	var providers []string
+	var providers []providerInfo
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		goFiles, _ := filepath.Glob(filepath.Join(providerDir, e.Name(), "*.go"))
-		if len(goFiles) > 0 {
-			providers = append(providers, e.Name())
+		p, ok, err := loadProvider(e.Name())
+		if err != nil {
+			return nil, err
 		}
+		if !ok {
+			continue
+		}
+		providers = append(providers, p)
 	}
 	return providers, nil
 }
 
-// =============================================================================
-// Category 1: Provider package structure checks
-// =============================================================================
-
-func checkProviderStructure(r *result, prov string) {
-	dir := filepath.Join(providerDir, prov)
-	fmt.Printf("  %s/\n", dir)
-
+// loadProvider parses a package's Go files and detects whether it's a provider.
+// Returns ok=false if the package has no Attester struct (utility package).
+func loadProvider(name string) (providerInfo, bool, error) {
+	dir := filepath.Join(providerDir, name)
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		r.failf("read %s: %v", dir, err)
-		return
+		return providerInfo{}, false, err
 	}
 	var files []*ast.File
 	var fileNames []string
@@ -145,31 +170,80 @@ func checkProviderStructure(r *result, prov string) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		f, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if parseErr != nil {
-			r.failf("parse %s: %v", path, parseErr)
-			return
+		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			return providerInfo{}, false, fmt.Errorf("parse %s: %w", path, err)
 		}
 		files = append(files, f)
 		fileNames = append(fileNames, path)
 	}
+	if !hasStruct(files, "Attester") {
+		return providerInfo{}, false, nil
+	}
+	return providerInfo{
+		name:      name,
+		archetype: detectArchetype(files),
+		dir:       dir,
+		files:     files,
+		fileNames: fileNames,
+		fset:      fset,
+	}, true, nil
+}
 
-	exc := exceptions[prov]
+// detectArchetype determines a provider's archetype from its code structure.
+//
+// Priority:
+//  1. Imports formatdetect package → gateway
+//  2. Has ParseGatewayResponse func → fixed-gateway
+//  3. Otherwise → direct
+func detectArchetype(files []*ast.File) providerArchetype {
+	for _, f := range files {
+		for _, imp := range f.Imports {
+			path := strings.Trim(imp.Path.Value, `"`)
+			if strings.HasSuffix(path, "/formatdetect") {
+				return archetypeGateway
+			}
+		}
+	}
+	if hasFunc(files, "ParseGatewayResponse") {
+		return archetypeFixedGateway
+	}
+	return archetypeDirect
+}
 
-	checkAttestationPathConst(r, fset, files, prov)
-	checkResponseStruct(r, fset, files, prov, exc)
-	checkAttesterClientField(r, fset, files, prov)
-	parseFunc := checkParseFunc(r, fset, files, prov, exc)
-	checkParseFuncUsesJSONStrict(r, fset, parseFunc, prov)
-	checkFetchUsesLimitReader(r, fset, files, prov)
-	checkNoSlogAPIKeyArgs(r, fset, files, prov)
-	checkNoJSONRawMessage(r, fset, files, fileNames, prov)
-	checkExternalTestPackage(r, dir, prov)
+// =============================================================================
+// Category 1: Provider package structure checks
+// =============================================================================
+
+func checkProviderStructure(r *result, p *providerInfo) {
+	fmt.Printf("  %s/ (%s)\n", p.dir, p.archetype)
+
+	checkAttestationPathConst(r, p)
+
+	switch p.archetype {
+	case archetypeDirect:
+		checkResponseStruct(r, p, "attestationResponse")
+		fd := checkParseFunc(r, p, "ParseAttestationResponse")
+		checkParseFuncUsesJSONStrict(r, p, fd)
+	case archetypeGateway:
+		fd := checkParseFunc(r, p, "ParseAttestationResponse")
+		checkUsesFormatDetect(r, p, fd)
+	case archetypeFixedGateway:
+		checkResponseStruct(r, p, "gatewayResponse")
+		fd := checkParseFunc(r, p, "ParseGatewayResponse")
+		checkParseFuncUsesJSONStrict(r, p, fd)
+	}
+
+	checkAttesterClientField(r, p)
+	checkFetchUsesBoundedRead(r, p)
+	checkNoSlogAPIKeyArgs(r, p)
+	checkNoJSONRawMessage(r, p)
+	checkExternalTestPackage(r, p)
 }
 
 // attestationPath string constant.
-func checkAttestationPathConst(r *result, fset *token.FileSet, files []*ast.File, prov string) {
-	for _, f := range files {
+func checkAttestationPathConst(r *result, p *providerInfo) {
+	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
 			if !ok || gd.Tok != token.CONST {
@@ -182,7 +256,7 @@ func checkAttestationPathConst(r *result, fset *token.FileSet, files []*ast.File
 				}
 				for _, name := range vs.Names {
 					if name.Name == "attestationPath" {
-						pos := fset.Position(name.Pos())
+						pos := p.fset.Position(name.Pos())
 						r.passf("attestationPath constant (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 						return
 					}
@@ -190,16 +264,12 @@ func checkAttestationPathConst(r *result, fset *token.FileSet, files []*ast.File
 			}
 		}
 	}
-	r.failf("attestationPath constant not found in %s", prov)
+	r.failf("attestationPath constant not found in %s", p.name)
 }
 
-// attestationResponse (or exception) unexported struct.
-func checkResponseStruct(r *result, fset *token.FileSet, files []*ast.File, prov string, exc providerException) {
-	want := "attestationResponse"
-	if exc.responseStructName != "" {
-		want = exc.responseStructName
-	}
-	for _, f := range files {
+// Response struct check (attestationResponse or gatewayResponse).
+func checkResponseStruct(r *result, p *providerInfo, want string) {
+	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
 			if !ok || gd.Tok != token.TYPE {
@@ -212,24 +282,20 @@ func checkResponseStruct(r *result, fset *token.FileSet, files []*ast.File, prov
 				}
 				if ts.Name.Name == want {
 					if _, isStruct := ts.Type.(*ast.StructType); isStruct {
-						pos := fset.Position(ts.Name.Pos())
-						if exc.responseStructName != "" {
-							r.passf("%s struct — %s uses %s (%s:%d)", want, prov, want, filepath.Base(pos.Filename), pos.Line)
-						} else {
-							r.passf("%s struct (%s:%d)", want, filepath.Base(pos.Filename), pos.Line)
-						}
+						pos := p.fset.Position(ts.Name.Pos())
+						r.passf("%s struct (%s:%d)", want, filepath.Base(pos.Filename), pos.Line)
 						return
 					}
 				}
 			}
 		}
 	}
-	r.failf("%s struct not found in %s", want, prov)
+	r.failf("%s struct not found in %s", want, p.name)
 }
 
 // Attester.client *http.Client field.
-func checkAttesterClientField(r *result, fset *token.FileSet, files []*ast.File, prov string) {
-	for _, f := range files {
+func checkAttesterClientField(r *result, p *providerInfo) {
+	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
 			if !ok || gd.Tok != token.TYPE {
@@ -247,7 +313,7 @@ func checkAttesterClientField(r *result, fset *token.FileSet, files []*ast.File,
 				for _, field := range st.Fields.List {
 					for _, name := range field.Names {
 						if name.Name == "client" && typeString(field.Type) == "*http.Client" {
-							pos := fset.Position(name.Pos())
+							pos := p.fset.Position(name.Pos())
 							r.passf("Attester.client *http.Client (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 							return
 						}
@@ -256,78 +322,85 @@ func checkAttesterClientField(r *result, fset *token.FileSet, files []*ast.File,
 			}
 		}
 	}
-	r.failf("Attester.client *http.Client field not found in %s", prov)
+	r.failf("Attester.client *http.Client field not found in %s", p.name)
 }
 
-// ParseAttestationResponse (or exception) exists.
-func checkParseFunc(r *result, fset *token.FileSet, files []*ast.File, prov string, exc providerException) *ast.FuncDecl {
-	want := "ParseAttestationResponse"
-	if exc.parseFunc != "" {
-		want = exc.parseFunc
-	}
-	for _, f := range files {
+// Parse function exists.
+func checkParseFunc(r *result, p *providerInfo, want string) *ast.FuncDecl {
+	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
 			if !ok || fd.Recv != nil {
 				continue
 			}
 			if fd.Name.Name == want {
-				pos := fset.Position(fd.Name.Pos())
-				if exc.parseFunc != "" {
-					r.passf("%s exists — %s uses %s (%s:%d)", want, prov, want, filepath.Base(pos.Filename), pos.Line)
-				} else {
-					r.passf("%s exists (%s:%d)", want, filepath.Base(pos.Filename), pos.Line)
-				}
+				pos := p.fset.Position(fd.Name.Pos())
+				r.passf("%s exists (%s:%d)", want, filepath.Base(pos.Filename), pos.Line)
 				return fd
 			}
 		}
 	}
-	r.failf("%s function not found in %s", want, prov)
+	r.failf("%s function not found in %s", want, p.name)
 	return nil
 }
 
 // Parse function calls jsonstrict.UnmarshalWarn.
-func checkParseFuncUsesJSONStrict(r *result, fset *token.FileSet, fd *ast.FuncDecl, prov string) {
+func checkParseFuncUsesJSONStrict(r *result, p *providerInfo, fd *ast.FuncDecl) {
 	if fd == nil {
-		r.failf("%s uses jsonstrict.UnmarshalWarn — no parse function in %s", prov, prov)
+		r.failf("jsonstrict.UnmarshalWarn — no parse function in %s", p.name)
 		return
 	}
 	if containsCall(fd.Body, "jsonstrict", "UnmarshalWarn") {
-		pos := fset.Position(fd.Name.Pos())
+		pos := p.fset.Position(fd.Name.Pos())
 		r.passf("%s uses jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 		return
 	}
-	pos := fset.Position(fd.Name.Pos())
+	pos := p.fset.Position(fd.Name.Pos())
 	r.failf("%s does not call jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 }
 
-// FetchAttestation calls io.LimitReader.
-func checkFetchUsesLimitReader(r *result, fset *token.FileSet, files []*ast.File, prov string) {
-	for _, f := range files {
+// Parse function calls formatdetect.Detect.
+func checkUsesFormatDetect(r *result, p *providerInfo, fd *ast.FuncDecl) {
+	if fd == nil {
+		r.failf("formatdetect.Detect — no parse function in %s", p.name)
+		return
+	}
+	if containsCall(fd.Body, "formatdetect", "Detect") {
+		pos := p.fset.Position(fd.Name.Pos())
+		r.passf("%s calls formatdetect.Detect (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+		return
+	}
+	pos := p.fset.Position(fd.Name.Pos())
+	r.failf("%s does not call formatdetect.Detect (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+}
+
+// FetchAttestation calls provider.FetchAttestationJSON for bounded reads.
+func checkFetchUsesBoundedRead(r *result, p *providerInfo) {
+	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
 			if !ok || fd.Recv == nil {
 				continue
 			}
 			if fd.Name.Name == "FetchAttestation" {
-				if containsCall(fd.Body, "io", "LimitReader") {
-					pos := fset.Position(fd.Name.Pos())
-					r.passf("FetchAttestation uses io.LimitReader (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+				if containsCall(fd.Body, "provider", "FetchAttestationJSON") {
+					pos := p.fset.Position(fd.Name.Pos())
+					r.passf("FetchAttestation uses provider.FetchAttestationJSON (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 					return
 				}
-				pos := fset.Position(fd.Name.Pos())
-				r.failf("FetchAttestation does not call io.LimitReader (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+				pos := p.fset.Position(fd.Name.Pos())
+				r.failf("FetchAttestation does not call provider.FetchAttestationJSON (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 				return
 			}
 		}
 	}
-	r.failf("FetchAttestation method not found in %s", prov)
+	r.failf("FetchAttestation method not found in %s", p.name)
 }
 
 // No slog calls with API key field names.
-func checkNoSlogAPIKeyArgs(r *result, fset *token.FileSet, files []*ast.File, prov string) {
+func checkNoSlogAPIKeyArgs(r *result, p *providerInfo) {
 	badNames := []string{"apiKey", "api_key", "APIKey", "apikey"}
-	for _, f := range files {
+	for _, f := range p.files {
 		found := false
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
@@ -350,8 +423,8 @@ func checkNoSlogAPIKeyArgs(r *result, fset *token.FileSet, files []*ast.File, pr
 				val := strings.Trim(lit.Value, `"`)
 				for _, bad := range badNames {
 					if val == bad {
-						pos := fset.Position(lit.Pos())
-						r.failf("slog call with %q arg in %s (%s:%d)", bad, prov, filepath.Base(pos.Filename), pos.Line)
+						pos := p.fset.Position(lit.Pos())
+						r.failf("slog call with %q arg in %s (%s:%d)", bad, p.name, filepath.Base(pos.Filename), pos.Line)
 						found = true
 						return false
 					}
@@ -368,10 +441,10 @@ func checkNoSlogAPIKeyArgs(r *result, fset *token.FileSet, files []*ast.File, pr
 
 // No json.RawMessage in provider response structs.
 // Skips models.go which uses json.RawMessage for pass-through relay (not attestation parsing).
-func checkNoJSONRawMessage(r *result, fset *token.FileSet, files []*ast.File, fileNames []string, prov string) {
+func checkNoJSONRawMessage(r *result, p *providerInfo) {
 	var violations []string
-	for i, f := range files {
-		if filepath.Base(fileNames[i]) == "models.go" {
+	for i, f := range p.files {
+		if filepath.Base(p.fileNames[i]) == "models.go" {
 			continue
 		}
 		for _, decl := range f.Decls {
@@ -388,7 +461,7 @@ func checkNoJSONRawMessage(r *result, fset *token.FileSet, files []*ast.File, fi
 				if !ok {
 					continue
 				}
-				collectRawMessageViolations(fset, st, ts.Name.Name, fileNames[i], &violations)
+				collectRawMessageViolations(p.fset, st, ts.Name.Name, p.fileNames[i], &violations)
 			}
 		}
 	}
@@ -397,7 +470,7 @@ func checkNoJSONRawMessage(r *result, fset *token.FileSet, files []*ast.File, fi
 		return
 	}
 	for _, v := range violations {
-		r.failf("json.RawMessage field %s in %s", v, prov)
+		r.failf("json.RawMessage field %s in %s", v, p.name)
 	}
 }
 
@@ -426,9 +499,9 @@ func collectRawMessageViolations(fset *token.FileSet, st *ast.StructType, struct
 }
 
 // At least one test file uses external package.
-func checkExternalTestPackage(r *result, dir, prov string) {
-	testFiles, _ := filepath.Glob(filepath.Join(dir, "*_test.go"))
-	wantPkg := prov + "_test"
+func checkExternalTestPackage(r *result, p *providerInfo) {
+	testFiles, _ := filepath.Glob(filepath.Join(p.dir, "*_test.go"))
+	wantPkg := p.name + "_test"
 	for _, tf := range testFiles {
 		if strings.HasSuffix(filepath.Base(tf), "export_test.go") {
 			continue
@@ -443,7 +516,7 @@ func checkExternalTestPackage(r *result, dir, prov string) {
 			return
 		}
 	}
-	r.failf("no test file uses external package %q in %s", wantPkg, prov)
+	r.failf("no test file uses external package %q in %s", wantPkg, p.name)
 }
 
 // =============================================================================
@@ -780,6 +853,46 @@ func typeString(expr ast.Expr) string {
 		}
 	}
 	return ""
+}
+
+// hasStruct reports whether any file defines a struct type with the given name.
+func hasStruct(files []*ast.File, name string) bool {
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if ts.Name.Name == name {
+					if _, isStruct := ts.Type.(*ast.StructType); isStruct {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// hasFunc reports whether any file defines a top-level function (no receiver) with the given name.
+func hasFunc(files []*ast.File, name string) bool {
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil {
+				continue
+			}
+			if fd.Name.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // containsCall checks if the AST node contains a call to pkg.funcName.

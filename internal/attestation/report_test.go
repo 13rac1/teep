@@ -3,6 +3,7 @@ package attestation
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -429,9 +430,9 @@ func TestEvalTDXReportDataBinding(t *testing.T) {
 			Pass, "keccak256",
 		},
 		{
-			"skip_no_verifier",
+			"fail_no_verifier",
 			&TDXVerifyResult{TeeTCBSVN: make([]byte, 16)},
-			Skip, "no REPORTDATA verifier",
+			Fail, "no REPORTDATA verifier",
 		},
 		{
 			"fail_nil_tdx",
@@ -1212,6 +1213,42 @@ func TestEvalE2EECapable_Ed25519(t *testing.T) {
 		raw := buildMinimalRaw(nonce, strings.Repeat("aa", 31)+"a")
 		// 63 chars goes to secp256k1 path (default), which also fails.
 		assertSingleFactor(t, evalE2EECapable(&ReportInput{Raw: raw}), Fail)
+	})
+}
+
+func TestEvalE2EECapable_MLKEM768(t *testing.T) {
+	nonce := NewNonce()
+
+	t.Run("valid_1184_bytes", func(t *testing.T) {
+		key := base64.StdEncoding.EncodeToString(make([]byte, 1184))
+		raw := buildMinimalRaw(nonce, key)
+		raw.SigningAlgo = "ml-kem-768"
+		f := assertSingleFactor(t, evalE2EECapable(&ReportInput{Raw: raw}), Pass)
+		t.Logf("detail: %s", f.Detail)
+		if !strings.Contains(f.Detail, "ML-KEM-768") {
+			t.Errorf("detail should mention ML-KEM-768: %s", f.Detail)
+		}
+	})
+
+	t.Run("wrong_size", func(t *testing.T) {
+		key := base64.StdEncoding.EncodeToString(make([]byte, 1000))
+		raw := buildMinimalRaw(nonce, key)
+		raw.SigningAlgo = "ml-kem-768"
+		f := assertSingleFactor(t, evalE2EECapable(&ReportInput{Raw: raw}), Fail)
+		t.Logf("detail: %s", f.Detail)
+		if !strings.Contains(f.Detail, "wrong size") {
+			t.Errorf("detail should mention wrong size: %s", f.Detail)
+		}
+	})
+
+	t.Run("invalid_base64", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, "!!!not-valid-base64!!!")
+		raw.SigningAlgo = "ml-kem-768"
+		f := assertSingleFactor(t, evalE2EECapable(&ReportInput{Raw: raw}), Fail)
+		t.Logf("detail: %s", f.Detail)
+		if !strings.Contains(f.Detail, "base64") {
+			t.Errorf("detail should mention base64: %s", f.Detail)
+		}
 	})
 }
 

@@ -831,8 +831,13 @@ func TestFetchAttestation_LongErrorTruncated(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "truncated") {
-		t.Errorf("long error should be truncated: %v", err)
+	errMsg := err.Error()
+	full600 := strings.Repeat("x", 600)
+	if strings.Contains(errMsg, full600) {
+		t.Errorf("error should be truncated, but contains all 600 bytes")
+	}
+	if !strings.Contains(errMsg, "...") {
+		t.Errorf("truncated error should end with ...: %v", err)
 	}
 }
 

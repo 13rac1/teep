@@ -33,9 +33,11 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/proxy"
 )
@@ -158,6 +160,8 @@ var providerEnvVars = map[string]string{
 	"neardirect": "NEARAI_API_KEY",
 	"nearcloud":  "NEARAI_API_KEY",
 	"nanogpt":    "NANOGPT_API_KEY",
+	"phalacloud": "PHALA_API_KEY",
+	"chutes":     "CHUTES_API_KEY",
 }
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
@@ -370,12 +374,31 @@ func verifyNVIDIA(ctx context.Context, raw *attestation.RawAttestation, nonce at
 		nvidiaStart := time.Now()
 		eat = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
 		slog.Debug("NVIDIA verification complete", "elapsed", time.Since(nvidiaStart))
+	} else if len(raw.GPUEvidence) > 0 {
+		serverNonce, err := attestation.ParseNonce(raw.Nonce)
+		if err != nil {
+			slog.Error("parse server nonce for GPU verification", "err", err)
+			eat = &attestation.NvidiaVerifyResult{
+				SignatureErr: fmt.Errorf("parse server nonce: %w", err),
+			}
+			return eat, nil
+		}
+		slog.Debug("NVIDIA GPU direct verification starting", "gpus", len(raw.GPUEvidence))
+		nvidiaStart := time.Now()
+		eat = attestation.VerifyNVIDIAGPUDirect(raw.GPUEvidence, serverNonce)
+		slog.Debug("NVIDIA GPU direct verification complete", "elapsed", time.Since(nvidiaStart))
 	}
 	if !offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
 		slog.Debug("NVIDIA NRAS verification starting")
 		nrasStart := time.Now()
 		nras = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, client)
 		slog.Debug("NVIDIA NRAS verification complete", "elapsed", time.Since(nrasStart))
+	} else if !offline && len(raw.GPUEvidence) > 0 {
+		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
+		slog.Debug("NVIDIA NRAS verification starting (synthesized EAT)")
+		nrasStart := time.Now()
+		nras = attestation.VerifyNVIDIANRAS(ctx, eatJSON, client)
+		slog.Debug("NVIDIA NRAS verification complete (synthesized EAT)", "elapsed", time.Since(nrasStart))
 	}
 	return eat, nras
 }
@@ -481,8 +504,12 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 		return nearcloud.NewAttester(cp.APIKey, offline), nil
 	case "nanogpt":
 		return nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
+	case "phalacloud":
+		return phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
+	case "chutes":
+		return chutes.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt)", name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", name)
 	}
 }
 
@@ -495,6 +522,11 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 	case "nanogpt":
 		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
 		return venice.ReportDataVerifier{}
+	case "phalacloud":
+		// Chutes format has no signing_address; REPORTDATA binding is unknown.
+		return nil
+	case "chutes":
+		return chutes.ReportDataVerifier{}
 	default:
 		return nil
 	}
@@ -510,6 +542,10 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 		return nearcloud.SupplyChainPolicy()
 	case "nanogpt":
 		return nanogpt.SupplyChainPolicy()
+	case "phalacloud":
+		return nil // no supply chain policy yet
+	case "chutes":
+		return nil // cosign+IMA model, no docker-compose
 	default:
 		return nil
 	}

@@ -10,55 +10,42 @@ package nanogpt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider"
 )
 
 // attestationPath is the NanoGPT API path for TEE attestation.
 const attestationPath = "/v1/tee/attestation"
 
-// eventLogEntry is one entry in NanoGPT's event_log array — a TDX RTMR
-// measurement extend event. Mirrors attestation.EventLogEntry but with
-// NanoGPT's field order for strict JSON parsing.
-type eventLogEntry struct {
-	Digest       string `json:"digest"`
-	Event        string `json:"event"`
-	EventPayload string `json:"event_payload"`
-	EventType    int    `json:"event_type"`
-	IMR          int    `json:"imr"`
-}
-
 // tcbInfo holds the parsed info.tcb_info object from NanoGPT's attestation
 // response. Contains dstack measurements and the docker-compose manifest.
 type tcbInfo struct {
-	AppCompose  string          `json:"app_compose"`
-	ComposeHash string          `json:"compose_hash"`
-	DeviceID    string          `json:"device_id"`
-	EventLog    []eventLogEntry `json:"event_log"`
-	MRTD        string          `json:"mrtd"`
-	OSImageHash string          `json:"os_image_hash"`
-	RTMR0       string          `json:"rtmr0"`
-	RTMR1       string          `json:"rtmr1"`
-	RTMR2       string          `json:"rtmr2"`
-	RTMR3       string          `json:"rtmr3"`
+	AppCompose  string                      `json:"app_compose"`
+	ComposeHash string                      `json:"compose_hash"`
+	DeviceID    string                      `json:"device_id"`
+	EventLog    []attestation.EventLogEntry `json:"event_log"`
+	MRTD        string                      `json:"mrtd"`
+	OSImageHash string                      `json:"os_image_hash"`
+	RTMR0       string                      `json:"rtmr0"`
+	RTMR1       string                      `json:"rtmr1"`
+	RTMR2       string                      `json:"rtmr2"`
+	RTMR3       string                      `json:"rtmr3"`
 }
 
 // UnmarshalJSON handles tcb_info being either a direct JSON object or a
 // JSON-encoded string containing JSON (double-encoded by some dstack versions).
 func (t *tcbInfo) UnmarshalJSON(data []byte) error {
-	var str string
-	if json.Unmarshal(data, &str) == nil {
-		data = []byte(str)
-	}
-	type alias tcbInfo // prevent recursion
-	return json.Unmarshal(data, (*alias)(t))
+	type alias tcbInfo
+	return json.Unmarshal(provider.UnwrapDoubleEncoded(data), (*alias)(t))
 }
 
 // nanogptInfo holds the nested "info" object from NanoGPT's attestation
@@ -103,11 +90,11 @@ type attestationResponse struct {
 
 // eventLogFlexible handles event_log being either a JSON array of objects or a
 // JSON-encoded string containing the array.
-type eventLogFlexible []eventLogEntry
+type eventLogFlexible []attestation.EventLogEntry
 
 func (e *eventLogFlexible) UnmarshalJSON(data []byte) error {
 	// Try direct array first.
-	var entries []eventLogEntry
+	var entries []attestation.EventLogEntry
 	if json.Unmarshal(data, &entries) == nil {
 		*e = entries
 		return nil
@@ -117,21 +104,7 @@ func (e *eventLogFlexible) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &str); err != nil {
 		return fmt.Errorf("event_log: expected array or string, got: %.50s", data)
 	}
-	return json.Unmarshal([]byte(str), (*[]eventLogEntry)(e))
-}
-
-func toEventLogEntries(local []eventLogEntry) []attestation.EventLogEntry {
-	out := make([]attestation.EventLogEntry, len(local))
-	for i, e := range local {
-		out[i] = attestation.EventLogEntry{
-			IMR:          e.IMR,
-			Digest:       e.Digest,
-			EventType:    e.EventType,
-			Event:        e.Event,
-			EventPayload: e.EventPayload,
-		}
-	}
-	return out
+	return json.Unmarshal([]byte(str), (*[]attestation.EventLogEntry)(e))
 }
 
 // Attester fetches attestation data from NanoGPT's /v1/tee/attestation
@@ -161,51 +134,50 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	if err != nil {
 		return nil, fmt.Errorf("nanogpt: parse base URL %q: %w", a.baseURL, err)
 	}
-
 	q := endpoint.Query()
 	q.Set("model", model)
 	q.Set("nonce", nonce.Hex())
 	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)
+	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
 	if err != nil {
-		return nil, fmt.Errorf("nanogpt: build attestation request: %w", err)
+		return nil, fmt.Errorf("nanogpt: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
-
-	resp, err := a.client.Do(req)
-	if err != nil {
-		// Use host+path only — never include query parameters (may leak nonce).
-		return nil, fmt.Errorf("nanogpt: GET %s%s: %w", endpoint.Host, endpoint.Path, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB max
-	if err != nil {
-		return nil, fmt.Errorf("nanogpt: read attestation response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		msg := string(body)
-		if len(msg) > 512 {
-			msg = msg[:512] + "...[truncated]"
-		}
-		return nil, fmt.Errorf("nanogpt: attestation endpoint returned HTTP %d: %s", resp.StatusCode, msg)
-	}
-
 	return ParseAttestationResponse(body)
 }
 
-// ParseAttestationResponse unmarshals a NanoGPT attestation JSON response body
-// into a RawAttestation. Exported so integration tests can parse fixture files
-// without making HTTP calls.
+// ParseAttestationResponse detects the attestation format from the JSON body
+// and delegates to the appropriate parser. For dstack format (the primary
+// NanoGPT backend), parsing is handled internally. Other formats (chutes)
+// are delegated to their respective packages.
 func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) {
+	format := formatdetect.Detect(body)
+	slog.Debug("nanogpt format detected", "format", format)
+
+	switch format {
+	case attestation.FormatDstack:
+		return parseDstack(body)
+	case attestation.FormatChutes:
+		return provider.ParseChutesFormat(body, "nanogpt")
+	case attestation.FormatTinfoil:
+		return nil, errors.New("nanogpt: tinfoil attestation format not yet supported")
+	case attestation.FormatGateway:
+		return nil, errors.New("nanogpt: gateway attestation format not yet supported")
+	default:
+		return nil, errors.New("nanogpt: unrecognized attestation format (no known format keys found)")
+	}
+}
+
+// parseDstack handles the dstack attestation format with NanoGPT-specific
+// quirks (signing_public_key instead of signing_key, eventLogFlexible,
+// double-encoded tcb_info).
+func parseDstack(body []byte) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
 	if err := jsonstrict.UnmarshalWarn(body, &ar, "nanogpt attestation response"); err != nil {
 		return nil, fmt.Errorf("nanogpt: unmarshal attestation response: %w", err)
 	}
 
-	entries := []eventLogEntry(ar.EventLog)
+	entries := []attestation.EventLogEntry(ar.EventLog)
 	slog.Debug("nanogpt event log", "entries", len(entries))
 	for i, e := range entries {
 		digest := e.Digest
@@ -216,19 +188,10 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 			"event", e.Event, "type", e.EventType, "digest", digest)
 	}
 
-	appCompose := ar.Info.TCBInfo.AppCompose
-
-	// NanoGPT returns the raw secp256k1 x||y point (64 bytes = 128 hex)
-	// without the 04 uncompressed-point prefix. Prepend it so downstream
-	// code (reportdata verifier, E2EE session) works unchanged.
-	signingKey := ar.SigningPublicKey
-	if len(signingKey) == 128 {
-		signingKey = "04" + signingKey
-	}
-
 	return &attestation.RawAttestation{
+		BackendFormat:  attestation.FormatDstack,
 		Nonce:          ar.RequestNonce,
-		SigningKey:     signingKey,
+		SigningKey:     provider.NormalizeUncompressedKey(ar.SigningPublicKey),
 		SigningAddress: ar.SigningAddress,
 		IntelQuote:     ar.IntelQuote,
 		NvidiaPayload:  ar.NvidiaPayload,
@@ -238,8 +201,8 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 		ComposeHash:   ar.Info.ComposeHash,
 		OSImageHash:   ar.Info.OSImageHash,
 		DeviceID:      ar.Info.DeviceID,
-		AppCompose:    appCompose,
-		EventLog:      toEventLogEntries(entries),
+		AppCompose:    ar.Info.TCBInfo.AppCompose,
+		EventLog:      entries,
 		EventLogCount: len(entries),
 
 		RawBody: body,
