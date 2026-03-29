@@ -437,6 +437,7 @@ func (h *PinnedHandler) attestOnConn(
 		GatewayCompose:    gatewayCompose,
 		GatewayEventLog:   gwRaw.EventLog,
 		GatewayPolicy:     h.gatewayPolicy,
+		E2EETest:          attestation.TestE2EESetup(raw.SigningKey, attestation.E2EEv2),
 	})
 	return report, raw.SigningKey, nil
 }

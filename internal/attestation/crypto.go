@@ -567,3 +567,52 @@ func ValidateModelKeyV2(ed25519PubHex string) error {
 	}
 	return nil
 }
+
+// TestE2EESetup validates that E2EE key exchange and encryption work for the
+// given signing key and version. It creates a session, sets the model key,
+// encrypts a test message, and zeros the session. This is a local crypto test;
+// it does not send a network request. Returns nil when the provider is not
+// E2EE-capable (no signing key).
+func TestE2EESetup(signingKey string, version int) *E2EETestResult {
+	if signingKey == "" {
+		return nil // e2ee_capable will report the missing key
+	}
+	switch version {
+	case E2EEv1:
+		return testE2EESetupV1(signingKey)
+	case E2EEv2:
+		return testE2EESetupV2(signingKey)
+	default:
+		return nil
+	}
+}
+
+func testE2EESetupV1(signingKey string) *E2EETestResult {
+	session, err := NewSession()
+	if err != nil {
+		return &E2EETestResult{Attempted: true, Err: fmt.Errorf("create v1 session: %w", err)}
+	}
+	defer session.Zero()
+	if err := session.SetModelKey(signingKey); err != nil {
+		return &E2EETestResult{Attempted: true, Err: fmt.Errorf("set model key v1: %w", err)}
+	}
+	if _, err := Encrypt([]byte("e2ee-setup-test"), session.ModelPubKey()); err != nil {
+		return &E2EETestResult{Attempted: true, Err: fmt.Errorf("encrypt v1: %w", err)}
+	}
+	return &E2EETestResult{Attempted: true, Detail: "E2EE v1 key exchange and encryption verified (local)"}
+}
+
+func testE2EESetupV2(signingKey string) *E2EETestResult {
+	session, err := NewSessionV2()
+	if err != nil {
+		return &E2EETestResult{Attempted: true, Err: fmt.Errorf("create v2 session: %w", err)}
+	}
+	defer session.Zero()
+	if err := session.SetModelKeyV2(signingKey); err != nil {
+		return &E2EETestResult{Attempted: true, Err: fmt.Errorf("set model key v2: %w", err)}
+	}
+	if _, err := EncryptV2([]byte("e2ee-setup-test"), session.ModelX25519Pub()); err != nil {
+		return &E2EETestResult{Attempted: true, Err: fmt.Errorf("encrypt v2: %w", err)}
+	}
+	return &E2EETestResult{Attempted: true, Detail: "E2EE v2 key exchange and encryption verified (local)"}
+}

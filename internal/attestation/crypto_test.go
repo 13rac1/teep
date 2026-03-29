@@ -2,6 +2,8 @@ package attestation
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -466,5 +468,72 @@ func TestModelPubKey(t *testing.T) {
 	gotHex := hex.EncodeToString(got.SerializeUncompressed())
 	if gotHex != validKey {
 		t.Errorf("ModelPubKey hex mismatch:\n got  %s\n want %s", gotHex, validKey)
+	}
+}
+
+func TestTestE2EESetupV2Pass(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := TestE2EESetup(hex.EncodeToString(pub), E2EEv2)
+	if r == nil {
+		t.Fatal("expected non-nil result for v2 key")
+	}
+	if !r.Attempted {
+		t.Error("expected Attempted=true")
+	}
+	if r.Err != nil {
+		t.Errorf("unexpected error: %v", r.Err)
+	}
+	if !strings.Contains(r.Detail, "v2") {
+		t.Errorf("detail should mention v2: %s", r.Detail)
+	}
+}
+
+func TestTestE2EESetupV1Pass(t *testing.T) {
+	priv, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
+	r := TestE2EESetup(key, E2EEv1)
+	if r == nil {
+		t.Fatal("expected non-nil result for v1 key")
+	}
+	if !r.Attempted {
+		t.Error("expected Attempted=true")
+	}
+	if r.Err != nil {
+		t.Errorf("unexpected error: %v", r.Err)
+	}
+	if !strings.Contains(r.Detail, "v1") {
+		t.Errorf("detail should mention v1: %s", r.Detail)
+	}
+}
+
+func TestTestE2EESetupEmptyKey(t *testing.T) {
+	if r := TestE2EESetup("", E2EEv2); r != nil {
+		t.Errorf("expected nil for empty key, got %+v", r)
+	}
+}
+
+func TestTestE2EESetupUnknownVersion(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	if r := TestE2EESetup(hex.EncodeToString(pub), 99); r != nil {
+		t.Errorf("expected nil for unknown version, got %+v", r)
+	}
+}
+
+func TestTestE2EESetupInvalidKey(t *testing.T) {
+	r := TestE2EESetup("not-a-valid-key", E2EEv2)
+	if r == nil {
+		t.Fatal("expected non-nil result for invalid key")
+	}
+	if !r.Attempted {
+		t.Error("expected Attempted=true")
+	}
+	if r.Err == nil {
+		t.Error("expected error for invalid key")
 	}
 }

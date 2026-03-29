@@ -173,6 +173,8 @@ func TestIntegration_NearCloud(t *testing.T) {
 			"tdx_quote_signature",
 			"tdx_debug_disabled",
 			"signing_key_present",
+			"e2ee_capable",
+			"e2ee_usable",
 		}
 		for _, name := range tier1 {
 			f, ok := findFactor(report.Factors, name)
