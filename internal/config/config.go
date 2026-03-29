@@ -39,6 +39,13 @@ const (
 // blocking the proxy. Every factor NOT in this list is enforced.
 var DefaultAllowFail = attestation.DefaultAllowFail
 
+// ProviderDefaultAllowFail maps provider names to their provider-specific
+// Go-level default allow_fail lists. Providers not in this map fall back to
+// the global DefaultAllowFail.
+var ProviderDefaultAllowFail = map[string][]string{
+	"nearcloud": attestation.NearcloudDefaultAllowFail,
+}
+
 // ProviderConfig holds the TOML-parsed configuration for one provider.
 // Either APIKey or APIKeyEnv must be set; APIKeyEnv takes precedence if both
 // are present. The resolved key is exposed via the Provider struct, not here.
@@ -117,6 +124,11 @@ type Config struct {
 	// ProviderGatewayPolicies holds per-provider gateway measurement
 	// allowlists parsed from [providers.X.policy] gateway_ fields.
 	ProviderGatewayPolicies map[string]attestation.MeasurementPolicy
+
+	// GlobalAllowFailDefined is true when the TOML config explicitly sets
+	// a top-level allow_fail list (including an empty list). When false,
+	// MergedAllowFail checks per-provider Go defaults before the global default.
+	GlobalAllowFailDefined bool
 
 	// Offline skips external verification calls (Intel PCS collateral,
 	// Proof of Cloud registry, and Certificate Transparency checks).
@@ -216,6 +228,7 @@ func loadTOML(cfg *Config, path string) error {
 			return fmt.Errorf("allow_fail: %w", err)
 		}
 		cfg.AllowFail = topLevelAF
+		cfg.GlobalAllowFailDefined = true
 	}
 
 	policy, err := buildMeasurementPolicy(&f.Policy)
@@ -295,10 +308,20 @@ func validateAllowFail(names []string) error {
 	return nil
 }
 
-// MergedAllowFail returns the allow_fail list for a provider, applying the
-// three-layer merge: per-provider TOML > global TOML > Go defaults.
+// MergedAllowFail returns the allow_fail list for a provider, applying a
+// four-layer merge (first defined wins):
+//  1. Per-provider TOML override  ([providers.X] allow_fail)
+//  2. Global TOML override        (top-level allow_fail)
+//  3. Per-provider Go defaults    (ProviderDefaultAllowFail)
+//  4. Global Go defaults          (DefaultAllowFail)
 func MergedAllowFail(providerName string, cfg *Config) []string {
 	if af, ok := cfg.ProviderAllowFail[providerName]; ok {
+		return af
+	}
+	if cfg.GlobalAllowFailDefined {
+		return cfg.AllowFail
+	}
+	if af, ok := ProviderDefaultAllowFail[providerName]; ok {
 		return af
 	}
 	return cfg.AllowFail

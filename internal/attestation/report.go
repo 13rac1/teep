@@ -135,6 +135,22 @@ var DefaultAllowFail = []string{
 	"gateway_cpu_id_registry",
 }
 
+// NearcloudDefaultAllowFail is the nearcloud-specific default allow_fail list.
+// It enforces more factors than the global DefaultAllowFail, reflecting the
+// nearcloud provider's stronger attestation support.
+var NearcloudDefaultAllowFail = []string{
+	"tdx_hardware_config",
+	"tdx_boot_config",
+	"cpu_gpu_chain",
+	"measured_model_weights",
+	"cpu_id_registry",
+	// Gateway factors (nearcloud only).
+	"gateway_tdx_hardware_config",
+	"gateway_tdx_boot_config",
+	"gateway_tdx_reportdata_binding",
+	"gateway_cpu_id_registry",
+}
+
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{

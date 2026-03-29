@@ -782,3 +782,111 @@ func TestDefaultAllowFailImmutable(t *testing.T) {
 		t.Error("mutating cfg.AllowFail affected DefaultAllowFail; Load must return a copy")
 	}
 }
+
+// --- Per-provider Go defaults ---
+
+func TestMergedAllowFailNearcloudGoDefaults(t *testing.T) {
+	// When no TOML config is loaded, nearcloud should use its tighter
+	// Go-level defaults instead of the global DefaultAllowFail.
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "NEARAI_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	af := MergedAllowFail("nearcloud", cfg)
+	want := attestation.NearcloudDefaultAllowFail
+	if len(af) != len(want) {
+		t.Fatalf("MergedAllowFail(\"nearcloud\"): got %d entries, want %d", len(af), len(want))
+	}
+	for i, name := range want {
+		if af[i] != name {
+			t.Errorf("MergedAllowFail(\"nearcloud\")[%d]: got %q, want %q", i, af[i], name)
+		}
+	}
+
+	// Factors removed from nearcloud defaults must not be present.
+	enforced := []string{
+		"tdx_quote_present", "tdx_quote_structure",
+		"intel_pcs_collateral", "tdx_tcb_current",
+		"nvidia_payload_present", "nvidia_claims", "nvidia_nras_verified",
+		"e2ee_capable", "e2ee_usable", "tls_key_binding",
+		"gateway_tdx_quote_present", "gateway_tdx_quote_structure",
+	}
+	afSet := make(map[string]bool, len(af))
+	for _, name := range af {
+		afSet[name] = true
+	}
+	for _, name := range enforced {
+		if afSet[name] {
+			t.Errorf("factor %q should be enforced (not in allow_fail) for nearcloud", name)
+		}
+	}
+}
+
+func TestMergedAllowFailNonNearcloudUsesGlobalDefaults(t *testing.T) {
+	// Providers without per-provider Go defaults should still use the
+	// global DefaultAllowFail.
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "VENICE_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	af := MergedAllowFail("venice", cfg)
+	if len(af) != len(DefaultAllowFail) {
+		t.Errorf("MergedAllowFail(\"venice\"): got %d entries, want %d", len(af), len(DefaultAllowFail))
+	}
+}
+
+func TestMergedAllowFailGlobalTOMLOverridesNearcloudDefaults(t *testing.T) {
+	// A global TOML allow_fail should override nearcloud's Go-level defaults.
+	toml := `allow_fail = ["cpu_gpu_chain"]`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "NEARAI_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	af := MergedAllowFail("nearcloud", cfg)
+	if len(af) != 1 || af[0] != "cpu_gpu_chain" {
+		t.Errorf("MergedAllowFail(\"nearcloud\"): got %v, want [cpu_gpu_chain]", af)
+	}
+}
+
+func TestMergedAllowFailPerProviderTOMLOverridesAll(t *testing.T) {
+	// Per-provider TOML allow_fail should take highest priority,
+	// overriding both nearcloud Go defaults and global TOML.
+	toml := `
+allow_fail = ["e2ee_usable", "cpu_gpu_chain"]
+
+[providers.nearcloud]
+api_key = "k"
+base_url = "https://cloud-api.near.ai"
+allow_fail = ["tdx_hardware_config"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "NEARAI_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	af := MergedAllowFail("nearcloud", cfg)
+	if len(af) != 1 || af[0] != "tdx_hardware_config" {
+		t.Errorf("MergedAllowFail(\"nearcloud\"): got %v, want [tdx_hardware_config]", af)
+	}
+}
