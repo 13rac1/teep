@@ -859,8 +859,12 @@ func formatReport(r *attestation.VerificationReport) string {
 	}
 	b.WriteString("\n")
 
-	fmt.Fprintf(&b, "Score: %d/%d passed, %d skipped, %d failed\n",
+	fmt.Fprintf(&b, "Score: %d/%d passed, %d skipped, %d failed",
 		r.Passed, r.Passed+r.Failed+r.Skipped, r.Skipped, r.Failed)
+	if r.Failed > 0 {
+		fmt.Fprintf(&b, " (%d enforced, %d allowed)", r.EnforcedFailed, r.AllowedFailed)
+	}
+	b.WriteString("\n")
 	b.WriteString("\nRun 'teep help tiers' for scoring or 'teep help factors' for details.\n")
 
 	return b.String()

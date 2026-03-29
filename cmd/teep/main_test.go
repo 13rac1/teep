@@ -54,25 +54,33 @@ func buildTestReport(provider, model string) *attestation.VerificationReport {
 	}
 
 	passed, failed, skipped := 0, 0, 0
+	enforcedFailed, allowedFailed := 0, 0
 	for _, f := range factors {
 		switch f.Status {
 		case attestation.Pass:
 			passed++
 		case attestation.Fail:
 			failed++
+			if f.Enforced {
+				enforcedFailed++
+			} else {
+				allowedFailed++
+			}
 		case attestation.Skip:
 			skipped++
 		}
 	}
 
 	return &attestation.VerificationReport{
-		Provider:  provider,
-		Model:     model,
-		Timestamp: time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC),
-		Factors:   factors,
-		Passed:    passed,
-		Failed:    failed,
-		Skipped:   skipped,
+		Provider:       provider,
+		Model:          model,
+		Timestamp:      time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC),
+		Factors:        factors,
+		Passed:         passed,
+		Failed:         failed,
+		Skipped:        skipped,
+		EnforcedFailed: enforcedFailed,
+		AllowedFailed:  allowedFailed,
 	}
 }
 
@@ -139,8 +147,8 @@ func TestFormatReport_ScoreLine(t *testing.T) {
 	r := buildTestReport("venice", "some-model")
 	out := formatReport(r)
 
-	// Expect the score line: "Score: 13/21 passed, 3 skipped, 5 failed"
-	// Our test report: 13 pass, 5 fail, 3 skip = 21 total.
+	// Expect the score line: "Score: 13/21 passed, 3 skipped, 5 failed (0 enforced, 5 allowed)"
+	// Our test report: 13 pass, 5 fail (0 enforced, 5 allowed), 3 skip = 21 total.
 	if !strings.Contains(out, "Score:") {
 		t.Errorf("Score line not found; output:\n%s", out)
 	}
@@ -152,6 +160,9 @@ func TestFormatReport_ScoreLine(t *testing.T) {
 	}
 	if !strings.Contains(out, "5 failed") {
 		t.Errorf("expected '5 failed' in score line; output:\n%s", out)
+	}
+	if !strings.Contains(out, "0 enforced, 5 allowed") {
+		t.Errorf("expected '0 enforced, 5 allowed' in score line; output:\n%s", out)
 	}
 }
 
@@ -187,6 +198,27 @@ func TestFormatReport_EmptyReport(t *testing.T) {
 	}
 	if !strings.Contains(out, "Score: 0/0") {
 		t.Errorf("score line for empty report should read '0/0'; output:\n%s", out)
+	}
+	if strings.Contains(out, "enforced") {
+		t.Errorf("score line should omit breakdown when no failures; output:\n%s", out)
+	}
+}
+
+func TestFormatReport_ScoreLineWithEnforcedFailures(t *testing.T) {
+	r := &attestation.VerificationReport{
+		Provider:  "test",
+		Model:     "m",
+		Timestamp: time.Now(),
+		Factors: []attestation.FactorResult{
+			{Name: "a", Status: attestation.Pass, Tier: attestation.TierCore},
+			{Name: "b", Status: attestation.Fail, Enforced: true, Tier: attestation.TierCore},
+			{Name: "c", Status: attestation.Fail, Enforced: false, Tier: attestation.TierSupplyChain},
+		},
+		Passed: 1, Failed: 2, EnforcedFailed: 1, AllowedFailed: 1,
+	}
+	out := formatReport(r)
+	if !strings.Contains(out, "1 enforced, 1 allowed") {
+		t.Errorf("expected '1 enforced, 1 allowed'; output:\n%s", out)
 	}
 }
 
