@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -223,6 +224,16 @@ func WithOfflineAllowFail(allowFail []string) []string {
 		}
 	}
 	return merged
+}
+
+// WithAllowFail returns a new allow_fail list with the given factor added
+// if not already present. Returns a copy; does not modify the input slice.
+func WithAllowFail(allowFail []string, factor string) []string {
+	if slices.Contains(allowFail, factor) {
+		return append([]string(nil), allowFail...)
+	}
+	merged := append([]string(nil), allowFail...)
+	return append(merged, factor)
 }
 
 // E2EETestResult holds the outcome of a live E2EE test inference.

@@ -345,6 +345,41 @@ func TestWithOfflineAllowFailDoesNotMutateInput(t *testing.T) {
 	}
 }
 
+func TestWithAllowFailAddsNewFactor(t *testing.T) {
+	input := []string{"tdx_hardware_config"}
+	result := WithAllowFail(input, "e2ee_usable")
+	if len(result) != 2 {
+		t.Fatalf("got %d entries, want 2", len(result))
+	}
+	if result[0] != "tdx_hardware_config" || result[1] != "e2ee_usable" {
+		t.Errorf("got %v, want [tdx_hardware_config e2ee_usable]", result)
+	}
+}
+
+func TestWithAllowFailDeduplicates(t *testing.T) {
+	input := []string{"tdx_hardware_config", "e2ee_usable"}
+	result := WithAllowFail(input, "e2ee_usable")
+	if len(result) != 2 {
+		t.Fatalf("got %d entries, want 2 (no duplicate)", len(result))
+	}
+}
+
+func TestWithAllowFailDoesNotMutateInput(t *testing.T) {
+	input := []string{"tdx_hardware_config"}
+	inputCopy := append([]string(nil), input...)
+	_ = WithAllowFail(input, "e2ee_usable")
+	if len(input) != len(inputCopy) || input[0] != inputCopy[0] {
+		t.Error("WithAllowFail mutated the input slice")
+	}
+}
+
+func TestWithAllowFailNilInput(t *testing.T) {
+	result := WithAllowFail(nil, "e2ee_usable")
+	if len(result) != 1 || result[0] != "e2ee_usable" {
+		t.Errorf("got %v, want [e2ee_usable]", result)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Direct evaluator tests
 // ---------------------------------------------------------------------------

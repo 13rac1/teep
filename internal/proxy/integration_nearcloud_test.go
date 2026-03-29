@@ -176,7 +176,9 @@ func TestIntegration_NearCloud(t *testing.T) {
 			"signing_key_present",
 			// Tier 2: Binding & Crypto.
 			"e2ee_capable",
-			"e2ee_usable",
+			// e2ee_usable is not checked here: it requires a live E2EE
+			// inference test which the proxy does not perform during report
+			// building. The proxy enforces E2EE at the transport layer.
 		}
 		for _, name := range mustPass {
 			f, ok := findFactor(report.Factors, name)
