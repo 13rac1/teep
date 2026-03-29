@@ -32,7 +32,8 @@ type ObservedMeasurements struct {
 
 // UpdateConfig reads the TOML config at path, adds the observed measurement
 // values to the [providers.<providerName>.policy] section (deduplicating),
-// and writes the result back. The original file is backed up to path+".bak".
+// and writes the result back. If the existing config file is non-empty, its
+// original contents are backed up to path+".bak".
 //
 // If path is empty or the file does not exist, a new config is created.
 func UpdateConfig(path, providerName string, observed *ObservedMeasurements) error {
