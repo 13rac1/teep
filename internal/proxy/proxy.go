@@ -10,7 +10,7 @@
 //  4. Check attestation cache. On miss, fetch + verify + cache.
 //  5. Any enforced factor Fail (not in allow_fail) → 502 with report JSON.
 //  6. If E2EE and tdx_reportdata_binding Pass: encrypt messages, set headers.
-//     Otherwise: warn and forward plaintext-over-HTTPS.
+//     If E2EE required but binding fails: block request (no plaintext fallback).
 //  7. Forward to upstream. Parse streaming SSE or buffer non-streaming body.
 //  8. Decrypt each chunk (E2EE). Abort on any decryption failure.
 //  9. Re-emit SSE to client (streaming) or return assembled JSON (non-streaming).
