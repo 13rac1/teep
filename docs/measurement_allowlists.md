@@ -48,7 +48,6 @@ Each invocation:
 - Fetches attestation and runs all verification factors
 - Extracts MRSEAM, MRTD, and RTMR0-2 from the TDX quote and event log
 - Appends new values to `[providers.X.policy]` in the config, deduplicating
-- Sets `warn_measurements = false` to enable enforcement
 - Creates a `.bak` backup of the original config
 
 To write to a different file instead of `$TEEP_CONFIG`:
@@ -83,7 +82,6 @@ Applies to all providers that do not have a per-provider policy section:
 
 ```toml
 [policy]
-warn_measurements = false
 mrseam_allow = [
   "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6",
   "7bf063280e94fb051f5dd7b1fc59ce9aac42bb961df8d44b709c9b0ff87a7b4df648657ba6d1189589feab1d5a3c9a9d",
@@ -99,7 +97,6 @@ Overrides global policy for a specific provider:
 
 ```toml
 [providers.venice.policy]
-warn_measurements = false
 mrseam_allow = [
   "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6",
 ]
@@ -123,7 +120,6 @@ For providers with a separate gateway CVM:
 
 ```toml
 [providers.nearcloud.policy]
-warn_measurements = false
 gateway_mrseam_allow = ["..."]
 gateway_mrtd_allow = ["..."]
 gateway_rtmr0_allow = ["..."]
@@ -139,21 +135,24 @@ Each allowlist field is resolved independently using:
 2. **Global TOML** — else if the global policy has values, use those
 3. **Go-coded defaults** — else use the built-in defaults
 
-`warn_measurements` follows the same precedence.
+## Measurement Enforcement Behavior
 
-## Warn-Only Mode
+Teep treats measurement allowlists as **enforced** by default: if a
+measurement factor is configured with one or more allowed values, a report
+whose value is not in that allowlist will cause attestation to fail and the
+request to be blocked.
 
-Go-coded defaults ship with `warn_measurements = true`. In this mode,
-measurement mismatches produce a PASS result annotated with `WARN:` instead of
-blocking the request. This allows operators to:
+Some deployments may configure certain factors as *advisory* by listing them
+under `allow_fail` in the attestation policy. When a factor is in
+`allow_fail`, a mismatch is recorded and surfaced as a warning, but does not
+by itself block the request. Factors not listed in `allow_fail` are strictly
+enforced and any mismatch is a hard failure.
 
-1. Deploy teep and observe which measurement values appear in reports
-2. Use `--update-config` to capture those values into the config
-3. Cross-check against canonical sources
-4. Set `warn_measurements = false` to enable enforcement
-
-The `--update-config` flag sets `warn_measurements = false` automatically,
-transitioning from observation to enforcement.
+The `--update-config` flag helps populate or refresh measurement allowlists
+from observed reports. It writes the discovered values into the appropriate
+configuration file(s) using the precedence described above. It does **not**
+toggle any warn-only mode; enforcement behavior is controlled solely by which
+factors are configured and whether they are listed under `allow_fail`.
 
 ## Canonical Value Sources
 
