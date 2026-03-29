@@ -43,7 +43,8 @@ var DefaultAllowFail = attestation.DefaultAllowFail
 // Go-level default allow_fail lists. Providers not in this map fall back to
 // the global DefaultAllowFail.
 var ProviderDefaultAllowFail = map[string][]string{
-	"nearcloud": attestation.NearcloudDefaultAllowFail,
+	"nearcloud":  attestation.NearcloudDefaultAllowFail,
+	"neardirect": attestation.NeardirectDefaultAllowFail,
 }
 
 // ProviderConfig holds the TOML-parsed configuration for one provider.

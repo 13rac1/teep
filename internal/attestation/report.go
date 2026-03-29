@@ -151,6 +151,18 @@ var NearcloudDefaultAllowFail = []string{
 	"gateway_cpu_id_registry",
 }
 
+// NeardirectDefaultAllowFail is the neardirect-specific default allow_fail
+// list. It enforces more factors than the global DefaultAllowFail, reflecting
+// the neardirect provider's stronger attestation support.
+var NeardirectDefaultAllowFail = []string{
+	"tdx_hardware_config",
+	"tdx_boot_config",
+	"e2ee_usable",
+	"cpu_gpu_chain",
+	"measured_model_weights",
+	"cpu_id_registry",
+}
+
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{

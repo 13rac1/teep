@@ -890,3 +890,44 @@ allow_fail = ["tdx_hardware_config"]
 		t.Errorf("MergedAllowFail(\"nearcloud\"): got %v, want [tdx_hardware_config]", af)
 	}
 }
+
+func TestMergedAllowFailNeardirectGoDefaults(t *testing.T) {
+	// When no TOML config is loaded, neardirect should use its tighter
+	// Go-level defaults instead of the global DefaultAllowFail.
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "NEARAI_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	af := MergedAllowFail("neardirect", cfg)
+	want := attestation.NeardirectDefaultAllowFail
+	if len(af) != len(want) {
+		t.Fatalf("MergedAllowFail(\"neardirect\"): got %d entries, want %d", len(af), len(want))
+	}
+	for i, name := range want {
+		if af[i] != name {
+			t.Errorf("MergedAllowFail(\"neardirect\")[%d]: got %q, want %q", i, af[i], name)
+		}
+	}
+
+	// Factors removed from neardirect defaults must not be present.
+	enforced := []string{
+		"tdx_quote_present", "tdx_quote_structure",
+		"intel_pcs_collateral", "tdx_tcb_current",
+		"nvidia_payload_present", "nvidia_claims", "nvidia_nras_verified",
+		"e2ee_capable", "tls_key_binding",
+	}
+	afSet := make(map[string]bool, len(af))
+	for _, name := range af {
+		afSet[name] = true
+	}
+	for _, name := range enforced {
+		if afSet[name] {
+			t.Errorf("factor %q should be enforced (not in allow_fail) for neardirect", name)
+		}
+	}
+}
