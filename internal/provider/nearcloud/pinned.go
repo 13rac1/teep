@@ -407,12 +407,17 @@ func (h *PinnedHandler) attestOnConn(
 
 	sigstoreResults, rekorResults := h.verifySigstore(ctx, allDigests)
 
+	allowFail := h.allowFail
+	if h.offline {
+		allowFail = attestation.WithOfflineAllowFail(allowFail)
+	}
+
 	report := attestation.BuildReport(&attestation.ReportInput{
 		Provider:          "nearcloud",
 		Model:             model,
 		Raw:               raw,
 		Nonce:             modelNonce,
-		AllowFail:         h.allowFail,
+		AllowFail:         allowFail,
 		Policy:            h.policy,
 		SupplyChainPolicy: SupplyChainPolicy(),
 		ImageRepos:        modelCD.Repos,
@@ -446,6 +451,8 @@ func (h *PinnedHandler) sendAttestationRequest(
 	q.Set("model", model)
 	q.Set("include_tls_fingerprint", "true")
 	q.Set("nonce", nonce.Hex())
+	// Intentionally request ed25519 (E2EEv2) — never allow the provider
+	// to negotiate a weaker algorithm or regress to an older version.
 	q.Set("signing_algo", "ed25519")
 	path := attestationPath + "?" + q.Encode()
 

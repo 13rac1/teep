@@ -391,12 +391,17 @@ func (h *PinnedHandler) attestOnConn(
 		}
 	}
 
+	allowFail := h.allowFail
+	if h.offline {
+		allowFail = attestation.WithOfflineAllowFail(allowFail)
+	}
+
 	report := attestation.BuildReport(&attestation.ReportInput{
 		Provider:          "neardirect",
 		Model:             model,
 		Raw:               raw,
 		Nonce:             nonce,
-		AllowFail:         h.allowFail,
+		AllowFail:         allowFail,
 		Policy:            h.policy,
 		SupplyChainPolicy: SupplyChainPolicy(),
 		ImageRepos:        imageRepos,

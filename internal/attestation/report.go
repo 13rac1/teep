@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -135,6 +136,34 @@ var DefaultAllowFail = []string{
 	"gateway_cpu_id_registry",
 }
 
+// NearcloudDefaultAllowFail is the nearcloud-specific default allow_fail list.
+// It enforces more factors than the global DefaultAllowFail, reflecting the
+// nearcloud provider's stronger attestation support.
+var NearcloudDefaultAllowFail = []string{
+	"tdx_hardware_config",
+	"tdx_boot_config",
+	"cpu_gpu_chain",
+	"measured_model_weights",
+	"cpu_id_registry",
+	// Gateway factors (nearcloud only).
+	"gateway_tdx_hardware_config",
+	"gateway_tdx_boot_config",
+	"gateway_tdx_reportdata_binding",
+	"gateway_cpu_id_registry",
+}
+
+// NeardirectDefaultAllowFail is the neardirect-specific default allow_fail
+// list. It enforces more factors than the global DefaultAllowFail, reflecting
+// the neardirect provider's stronger attestation support.
+var NeardirectDefaultAllowFail = []string{
+	"tdx_hardware_config",
+	"tdx_boot_config",
+	"e2ee_usable",
+	"cpu_gpu_chain",
+	"measured_model_weights",
+	"cpu_id_registry",
+}
+
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{
@@ -153,6 +182,58 @@ var KnownFactors = []string{
 	"gateway_tdx_mrseam_mrtd", "gateway_tdx_hardware_config", "gateway_tdx_boot_config",
 	"gateway_tdx_reportdata_binding", "gateway_compose_binding", "gateway_cpu_id_registry",
 	"gateway_event_log_integrity",
+}
+
+// OnlineFactors lists factors whose evaluation requires network access to
+// external services (Intel PCS, NVIDIA NRAS, Proof of Cloud, Sigstore/Rekor,
+// live E2EE inference test).
+//
+// Note: e2ee_usable is included because it is evaluated via a live encrypted
+// inference against the provider (see testE2EE in cmd/teep/main.go). The
+// local crypto self-test (TestE2EESetup) validates key exchange and encryption
+// without network access, but does not exercise the full E2EE round-trip and
+// is therefore not sufficient to satisfy e2ee_usable in online mode.
+//
+// In --offline mode every factor in this list is automatically added to
+// allow_fail so that the absence of network connectivity cannot block
+// requests.
+var OnlineFactors = []string{
+	"intel_pcs_collateral",
+	"tdx_tcb_current",
+	"tdx_tcb_not_revoked",
+	"nvidia_nras_verified",
+	"e2ee_usable",
+	"build_transparency_log",
+	"cpu_id_registry",
+	"sigstore_verification",
+	"gateway_cpu_id_registry",
+}
+
+// WithOfflineAllowFail returns a new allow_fail list that unions the given
+// list with OnlineFactors. Used when --offline mode is active to prevent
+// online-dependent factors from blocking requests.
+func WithOfflineAllowFail(allowFail []string) []string {
+	have := make(map[string]bool, len(allowFail))
+	for _, f := range allowFail {
+		have[f] = true
+	}
+	merged := append([]string(nil), allowFail...)
+	for _, f := range OnlineFactors {
+		if !have[f] {
+			merged = append(merged, f)
+		}
+	}
+	return merged
+}
+
+// WithAllowFail returns a new allow_fail list with the given factor added
+// if not already present. Returns a copy; does not modify the input slice.
+func WithAllowFail(allowFail []string, factor string) []string {
+	if slices.Contains(allowFail, factor) {
+		return append([]string(nil), allowFail...)
+	}
+	merged := append([]string(nil), allowFail...)
+	return append(merged, factor)
 }
 
 // E2EETestResult holds the outcome of a live E2EE test inference.

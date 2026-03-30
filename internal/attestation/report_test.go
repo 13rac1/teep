@@ -278,6 +278,108 @@ func TestDefaultAllowFailExcludesSupplyChainFactors(t *testing.T) {
 	}
 }
 
+func TestOnlineFactorsAreKnown(t *testing.T) {
+	known := make(map[string]bool, len(KnownFactors))
+	for _, f := range KnownFactors {
+		known[f] = true
+	}
+	for _, f := range OnlineFactors {
+		if !known[f] {
+			t.Errorf("OnlineFactors contains unknown factor %q", f)
+		}
+	}
+}
+
+func TestWithOfflineAllowFail(t *testing.T) {
+	// Starting from an empty list, should return exactly OnlineFactors.
+	result := WithOfflineAllowFail(nil)
+	if len(result) != len(OnlineFactors) {
+		t.Fatalf("WithOfflineAllowFail(nil): got %d entries, want %d", len(result), len(OnlineFactors))
+	}
+	resultSet := make(map[string]bool, len(result))
+	for _, f := range result {
+		resultSet[f] = true
+	}
+	for _, f := range OnlineFactors {
+		if !resultSet[f] {
+			t.Errorf("WithOfflineAllowFail(nil): missing %q", f)
+		}
+	}
+}
+
+func TestWithOfflineAllowFailNoDuplicates(t *testing.T) {
+	// If the input already contains some OnlineFactors, they should not
+	// be duplicated.
+	input := []string{"intel_pcs_collateral", "tdx_hardware_config"}
+	result := WithOfflineAllowFail(input)
+	seen := make(map[string]int, len(result))
+	for _, f := range result {
+		seen[f]++
+	}
+	for f, count := range seen {
+		if count > 1 {
+			t.Errorf("WithOfflineAllowFail duplicated %q (%d times)", f, count)
+		}
+	}
+	// Should contain both original entries and all OnlineFactors.
+	resultSet := make(map[string]bool, len(result))
+	for _, f := range result {
+		resultSet[f] = true
+	}
+	if !resultSet["tdx_hardware_config"] {
+		t.Error("original entry tdx_hardware_config missing")
+	}
+	for _, f := range OnlineFactors {
+		if !resultSet[f] {
+			t.Errorf("missing online factor %q", f)
+		}
+	}
+}
+
+func TestWithOfflineAllowFailDoesNotMutateInput(t *testing.T) {
+	input := []string{"tdx_hardware_config"}
+	inputCopy := append([]string(nil), input...)
+	_ = WithOfflineAllowFail(input)
+	if len(input) != len(inputCopy) || input[0] != inputCopy[0] {
+		t.Error("WithOfflineAllowFail mutated the input slice")
+	}
+}
+
+func TestWithAllowFailAddsNewFactor(t *testing.T) {
+	input := []string{"tdx_hardware_config"}
+	result := WithAllowFail(input, "e2ee_usable")
+	if len(result) != 2 {
+		t.Fatalf("got %d entries, want 2", len(result))
+	}
+	if result[0] != "tdx_hardware_config" || result[1] != "e2ee_usable" {
+		t.Errorf("got %v, want [tdx_hardware_config e2ee_usable]", result)
+	}
+}
+
+func TestWithAllowFailDeduplicates(t *testing.T) {
+	input := []string{"tdx_hardware_config", "e2ee_usable"}
+	result := WithAllowFail(input, "e2ee_usable")
+	if len(result) != 2 {
+		t.Fatalf("got %d entries, want 2 (no duplicate)", len(result))
+	}
+}
+
+func TestWithAllowFailDoesNotMutateInput(t *testing.T) {
+	input := []string{"tdx_hardware_config"}
+	inputCopy := append([]string(nil), input...)
+	_ = WithAllowFail(input, "e2ee_usable")
+	if len(input) != len(inputCopy) || input[0] != inputCopy[0] {
+		t.Error("WithAllowFail mutated the input slice")
+	}
+}
+
+func TestWithAllowFailNilInput(t *testing.T) {
+	result := WithAllowFail(nil, "e2ee_usable")
+	if len(result) != 1 || result[0] != "e2ee_usable" {
+		t.Errorf("got %v, want [e2ee_usable]", result)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Direct evaluator tests
 // ---------------------------------------------------------------------------

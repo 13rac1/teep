@@ -252,6 +252,7 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		slog.Error("load config failed", "err", err)
 		os.Exit(1)
 	}
+	cfg.Offline = offline
 	attester, err := newAttester(providerName, cp, offline)
 	if err != nil {
 		slog.Error("attester init failed", "err", err)

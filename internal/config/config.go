@@ -39,6 +39,30 @@ const (
 // blocking the proxy. Every factor NOT in this list is enforced.
 var DefaultAllowFail = attestation.DefaultAllowFail
 
+// providerDefaultAllowFail maps provider names to their provider-specific
+// Go-level default allow_fail lists. Providers not in this map fall back to
+// the global DefaultAllowFail.
+var providerDefaultAllowFail = map[string][]string{
+	"nearcloud":  attestation.NearcloudDefaultAllowFail,
+	"neardirect": attestation.NeardirectDefaultAllowFail,
+}
+
+// ProviderDefaultAllowFail returns a defensive copy of the provider-specific
+// default allow_fail lists. Callers must not rely on mutating the returned
+// map or its slices to change enforcement behavior at runtime.
+func ProviderDefaultAllowFail() map[string][]string {
+	out := make(map[string][]string, len(providerDefaultAllowFail))
+	for provider, allowList := range providerDefaultAllowFail {
+		if allowList == nil {
+			continue
+		}
+		copied := make([]string, len(allowList))
+		copy(copied, allowList)
+		out[provider] = copied
+	}
+	return out
+}
+
 // ProviderConfig holds the TOML-parsed configuration for one provider.
 // Either APIKey or APIKeyEnv must be set; APIKeyEnv takes precedence if both
 // are present. The resolved key is exposed via the Provider struct, not here.
@@ -96,7 +120,9 @@ type Config struct {
 	Providers map[string]*Provider
 
 	// AllowFail lists factor names that are allowed to fail without blocking.
-	// Every factor NOT in this list is enforced. Defaults to DefaultAllowFail.
+	// Every factor NOT in this list is enforced. When nil (no TOML loaded or
+	// programmatic config), MergedAllowFail selects per-provider or global
+	// Go defaults. Use MergedAllowFail to obtain the effective list.
 	AllowFail []string
 
 	// ProviderAllowFail holds per-provider allow_fail overrides parsed from
@@ -118,6 +144,12 @@ type Config struct {
 	// allowlists parsed from [providers.X.policy] gateway_ fields.
 	ProviderGatewayPolicies map[string]attestation.MeasurementPolicy
 
+	// GlobalAllowFailDefined is true when the TOML config explicitly sets a
+	// global allow_fail list (including an empty list), either via the root
+	// allow_fail field or [policy].allow_fail. When false, MergedAllowFail
+	// checks per-provider Go defaults before the global default.
+	GlobalAllowFailDefined bool
+
 	// Offline skips external verification calls (Intel PCS collateral,
 	// Proof of Cloud registry, and Certificate Transparency checks).
 	// Set via --offline flag at runtime.
@@ -137,7 +169,6 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		ListenAddr:              DefaultListenAddr,
 		Providers:               make(map[string]*Provider),
-		AllowFail:               append([]string(nil), DefaultAllowFail...),
 		ProviderAllowFail:       make(map[string][]string),
 		ProviderPolicies:        make(map[string]attestation.MeasurementPolicy),
 		ProviderGatewayPolicies: make(map[string]attestation.MeasurementPolicy),
@@ -216,6 +247,7 @@ func loadTOML(cfg *Config, path string) error {
 			return fmt.Errorf("allow_fail: %w", err)
 		}
 		cfg.AllowFail = topLevelAF
+		cfg.GlobalAllowFailDefined = true
 	}
 
 	policy, err := buildMeasurementPolicy(&f.Policy)
@@ -295,13 +327,38 @@ func validateAllowFail(names []string) error {
 	return nil
 }
 
-// MergedAllowFail returns the allow_fail list for a provider, applying the
-// three-layer merge: per-provider TOML > global TOML > Go defaults.
+// MergedAllowFail returns the allow_fail list for a provider, applying a
+// four-layer merge (first defined wins):
+//  1. Per-provider TOML override  ([providers.X] allow_fail)
+//  2. Global TOML override        (top-level allow_fail)
+//  3. Per-provider Go defaults    (ProviderDefaultAllowFail)
+//  4. Global Go defaults          (DefaultAllowFail)
+//
+// When offline is true, factors that require network access (OnlineFactors)
+// are automatically added to the result so they cannot block requests.
 func MergedAllowFail(providerName string, cfg *Config) []string {
-	if af, ok := cfg.ProviderAllowFail[providerName]; ok {
-		return af
+	var af []string
+	switch {
+	case cfg.ProviderAllowFail[providerName] != nil:
+		// Use != nil (not ok) so that an explicitly empty slice is honored.
+		af = cfg.ProviderAllowFail[providerName]
+	case cfg.GlobalAllowFailDefined || cfg.AllowFail != nil:
+		// GlobalAllowFailDefined is set by loadTOML; cfg.AllowFail != nil
+		// covers programmatic configs (tests, proxy setup) that set
+		// AllowFail directly without calling Load().
+		af = cfg.AllowFail
+	default:
+		if paf, ok := ProviderDefaultAllowFail()[providerName]; ok {
+			af = paf
+		} else {
+			af = DefaultAllowFail
+		}
 	}
-	return cfg.AllowFail
+	if cfg.Offline {
+		return attestation.WithOfflineAllowFail(af)
+	}
+	// Return a copy so callers cannot mutate shared defaults.
+	return append([]string(nil), af...)
 }
 
 // hasMeasurementPolicy reports whether p has any configured allowlists.
