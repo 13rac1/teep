@@ -22,16 +22,21 @@ type Attester interface {
 }
 
 // RequestPreparer injects provider-specific headers into an outgoing upstream
-// request. It is called once per request after the E2EE session is established.
+// request. e2eeHeaders contains pre-built E2EE protocol headers (may be nil
+// for plaintext or Chutes paths). meta is non-nil for Chutes requests.
 type RequestPreparer interface {
-	PrepareRequest(req *http.Request, session *e2ee.Session) error
+	PrepareRequest(req *http.Request, e2eeHeaders http.Header, meta *e2ee.ChutesE2EE, stream bool) error
 }
 
 // RequestEncryptor encrypts an outgoing chat request body for a provider's
-// E2EE protocol. Returns the encrypted body, session for response decryption,
-// and any error.
+// E2EE protocol. Returns the encrypted body, a Decryptor for response
+// decryption, optional Chutes metadata, and any error.
+//
+// For Chutes, Decryptor is nil; crypto state is carried in *e2ee.ChutesE2EE
+// instead (the Chutes protocol uses a different relay path).
+// For Venice and NearCloud, *e2ee.ChutesE2EE is nil.
 type RequestEncryptor interface {
-	EncryptRequest(body []byte, raw *attestation.RawAttestation) ([]byte, *e2ee.Session, error)
+	EncryptRequest(body []byte, raw *attestation.RawAttestation) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error)
 }
 
 // PinnedHandler handles chat requests on a connection-pinned TLS connection
@@ -73,7 +78,7 @@ type PinnedResponse struct {
 
 	// Session is the E2EE session established during the pinned request.
 	// Non-nil when E2EE was active; callers use it for response decryption.
-	Session *e2ee.Session
+	Session e2ee.Decryptor
 }
 
 // ModelLister fetches the list of available models from a provider.

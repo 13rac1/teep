@@ -17,29 +17,85 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-// hkdfInfoEd25519 is the HKDF info string for the NearCloud Ed25519/XChaCha20
-// E2EE protocol.
-const hkdfInfoEd25519 = "ed25519_encryption"
+// NearCloudSession holds ephemeral Ed25519/X25519 key material for one
+// NearCloud E2EE request/response cycle.
+type NearCloudSession struct {
+	// ed25519PubHex is the client's Ed25519 public key (64 hex chars),
+	// sent in the X-Client-Pub-Key header.
+	ed25519PubHex string
+	// modelEd25519Hex is the model's Ed25519 public key (64 hex chars).
+	modelEd25519Hex string
+	// x25519Priv is the client's X25519 private key (derived from Ed25519
+	// seed) used for decrypting incoming response chunks.
+	x25519Priv *ecdh.PrivateKey
+	// modelX25519 is the model's X25519 public key (converted from its
+	// Ed25519 public key) used for encrypting outgoing messages.
+	modelX25519 *ecdh.PublicKey
+}
 
-// newNearCloudSession generates a fresh Ed25519 key pair and derives the X25519
-// private key. The Ed25519 public key is used in the X-Client-Pub-Key header;
-// the X25519 private key is used to decrypt incoming response chunks.
-func newNearCloudSession() (*Session, error) {
+// NewNearCloudSession generates a fresh Ed25519 key pair and derives the X25519
+// private key.
+func NewNearCloudSession() (*NearCloudSession, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate ed25519 key: %w", err)
 	}
-
 	x25519Priv, err := ed25519SeedToX25519(priv.Seed())
 	if err != nil {
 		return nil, fmt.Errorf("derive x25519 private key: %w", err)
 	}
-
-	return &Session{
-		Ed25519PubHex: hex.EncodeToString(pub),
+	return &NearCloudSession{
+		ed25519PubHex: hex.EncodeToString(pub),
 		x25519Priv:    x25519Priv,
 	}, nil
 }
+
+// ClientEd25519PubHex returns the client's Ed25519 public key as 64 hex chars.
+func (s *NearCloudSession) ClientEd25519PubHex() string { return s.ed25519PubHex }
+
+// SetModelKeyEd25519 parses and validates the model's Ed25519 public key (64 hex
+// chars) and converts it to an X25519 public key for encryption.
+func (s *NearCloudSession) SetModelKeyEd25519(ed25519PubHex string) error {
+	if len(ed25519PubHex) != 64 {
+		return fmt.Errorf("model ed25519 public key must be 64 hex chars, got %d", len(ed25519PubHex))
+	}
+	edPubBytes, err := hex.DecodeString(ed25519PubHex)
+	if err != nil {
+		return fmt.Errorf("model ed25519 key is not valid hex: %w", err)
+	}
+	x25519Pub, err := ed25519PubToX25519(edPubBytes)
+	if err != nil {
+		return fmt.Errorf("convert model ed25519 to x25519: %w", err)
+	}
+	s.modelEd25519Hex = ed25519PubHex
+	s.modelX25519 = x25519Pub
+	return nil
+}
+
+// ModelX25519Pub returns the model's X25519 public key.
+func (s *NearCloudSession) ModelX25519Pub() *ecdh.PublicKey {
+	return s.modelX25519
+}
+
+// IsEncryptedChunk returns true if val looks like a NearCloud E2EE encrypted chunk.
+func (s *NearCloudSession) IsEncryptedChunk(val string) bool {
+	return IsEncryptedChunkXChaCha20(val)
+}
+
+// Decrypt decrypts a hex-encoded NearCloud ciphertext using the session's X25519 key.
+func (s *NearCloudSession) Decrypt(ciphertextHex string) ([]byte, error) {
+	return DecryptXChaCha20(ciphertextHex, s.x25519Priv)
+}
+
+// Zero nils key references so the GC can collect the key material.
+func (s *NearCloudSession) Zero() {
+	s.x25519Priv = nil
+	s.modelX25519 = nil
+}
+
+// hkdfInfoEd25519 is the HKDF info string for the NearCloud Ed25519/XChaCha20
+// E2EE protocol.
+const hkdfInfoEd25519 = "ed25519_encryption"
 
 // EncryptXChaCha20 encrypts plaintext for the recipient's X25519 public key
 // using per-message ephemeral X25519 ECDH + HKDF-SHA256 + XChaCha20-Poly1305.
@@ -148,7 +204,7 @@ func IsEncryptedChunkXChaCha20(s string) bool {
 // EncryptChatMessagesNearCloud creates a NearCloud E2EE session, encrypts each
 // message's content, and forces stream=true. The signingKey is the model's
 // Ed25519 public key (64 hex chars) from the attestation response.
-func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *Session, error) {
+func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
 	session, err := NewNearCloudSession()
 	if err != nil {
 		return nil, nil, fmt.Errorf("create NearCloud E2EE session: %w", err)

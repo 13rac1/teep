@@ -644,7 +644,7 @@ func testE2EEVenice(ctx context.Context, raw *attestation.RawAttestation, cp *co
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Venice-Tee-Client-Pub-Key", session.PublicKeyHex)
+	req.Header.Set("X-Venice-Tee-Client-Pub-Key", session.ClientPubKeyHex())
 	req.Header.Set("X-Venice-Tee-Model-Pub-Key", raw.SigningKey)
 	req.Header.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
 	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
@@ -682,7 +682,7 @@ func testE2EENearCloud(ctx context.Context, raw *attestation.RawAttestation, cp 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Signing-Algo", "ed25519")
-	req.Header.Set("X-Client-Pub-Key", session.Ed25519PubHex)
+	req.Header.Set("X-Client-Pub-Key", session.ClientEd25519PubHex())
 	req.Header.Set("X-Encryption-Version", "2")
 	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
 	req.Header.Set("Connection", "close")
@@ -692,7 +692,7 @@ func testE2EENearCloud(ctx context.Context, raw *attestation.RawAttestation, cp 
 
 // doE2EEStreamTest sends an E2EE chat completions request and validates
 // that the SSE response contains properly encrypted content fields.
-func doE2EEStreamTest(req *http.Request, session *e2ee.Session, version string) *attestation.E2EETestResult {
+func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string) *attestation.E2EETestResult {
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

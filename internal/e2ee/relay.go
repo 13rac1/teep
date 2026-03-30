@@ -1,7 +1,6 @@
 package e2ee
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,17 +38,17 @@ var NonEncryptedFields = map[string]bool{
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
 // map, decrypts any that pass the session's IsEncryptedChunk check,
 // and returns true if any field was decrypted.
-func decryptDeltaFields(fields map[string]json.RawMessage, session *Session, ctx string) (bool, error) {
+func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
 	changed := false
 	for key, raw := range fields {
 		var s string
 		if json.Unmarshal(raw, &s) != nil || s == "" {
 			continue
 		}
+		if NonEncryptedFields[key] {
+			continue
+		}
 		if !session.IsEncryptedChunk(s) {
-			if NonEncryptedFields[key] {
-				continue
-			}
 			return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 		}
 		plaintext, err := session.Decrypt(s)
@@ -68,7 +67,7 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session *Session, ctx
 
 // DecryptSSEChunk parses one SSE data JSON payload, decrypts all encrypted
 // fields in the delta object, and returns the JSON with plaintext substituted.
-func DecryptSSEChunk(data string, session *Session) (string, error) {
+func DecryptSSEChunk(data string, session Decryptor) (string, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(data), &full); err != nil {
 		return "", fmt.Errorf("parse SSE chunk JSON: %w", err)
@@ -128,7 +127,7 @@ func DecryptSSEChunk(data string, session *Session) (string, error) {
 // decryptSSEChunkContent decrypts all encrypted fields from the first choice's
 // delta in one SSE JSON chunk and returns them as a map of field name to
 // plaintext string.
-func decryptSSEChunkContent(data string, session *Session) (map[string]string, error) {
+func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(data), &full); err != nil {
 		return nil, fmt.Errorf("parse SSE chunk JSON: %w", err)
@@ -163,10 +162,10 @@ func decryptSSEChunkContent(data string, session *Session) (map[string]string, e
 		if json.Unmarshal(raw, &s) != nil || s == "" {
 			continue
 		}
+		if NonEncryptedFields[key] {
+			continue
+		}
 		if !session.IsEncryptedChunk(s) {
-			if NonEncryptedFields[key] {
-				continue
-			}
 			return nil, fmt.Errorf("delta.%s: expected encrypted but not recognised (len=%d prefix=%q)", key, len(s), SafePrefix(s, 8))
 		}
 		plaintext, err := session.Decrypt(s)
@@ -184,7 +183,7 @@ func decryptSSEChunkContent(data string, session *Session) (map[string]string, e
 
 // DecryptNonStreamResponse decrypts all encrypted string fields in each
 // choice's message of an OpenAI-format non-streaming response body.
-func DecryptNonStreamResponse(body []byte, session *Session) ([]byte, error) {
+func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(body, &full); err != nil {
 		return nil, fmt.Errorf("parse response JSON: %w", err)
@@ -236,14 +235,9 @@ func DecryptNonStreamResponse(body []byte, session *Session) ([]byte, error) {
 
 // ReassembleNonStream reads an SSE stream (forced by E2EE), decrypts each
 // chunk, and reassembles the result into a single non-streaming OpenAI response.
-func ReassembleNonStream(body io.Reader, session *Session) ([]byte, error) {
-	scanner := bufio.NewScanner(body)
-	bufp, ok := SSEScannerBufPool.Get().(*[]byte)
-	if !ok {
-		panic("SSEScannerBufPool: unexpected type")
-	}
-	defer SSEScannerBufPool.Put(bufp)
-	scanner.Buffer((*bufp)[:cap(*bufp)], SSEScannerBufSize)
+func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, error) {
+	scanner, cleanup := newSSEScanner(body)
+	defer cleanup()
 
 	fields := make(map[string]*strings.Builder)
 	var lastData string
@@ -314,20 +308,15 @@ func ReassembleNonStream(body io.Reader, session *Session) ([]byte, error) {
 
 // RelayStream reads an SSE stream from body, decrypts chunks when session is
 // non-nil, and writes the decrypted SSE lines to w. Aborts on decryption failure.
-func RelayStream(w http.ResponseWriter, body io.Reader, session *Session) {
+func RelayStream(w http.ResponseWriter, body io.Reader, session Decryptor) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
 
-	scanner := bufio.NewScanner(body)
-	bufp, ok := SSEScannerBufPool.Get().(*[]byte)
-	if !ok {
-		panic("SSEScannerBufPool: unexpected type")
-	}
-	defer SSEScannerBufPool.Put(bufp)
-	scanner.Buffer((*bufp)[:cap(*bufp)], SSEScannerBufSize)
+	scanner, cleanup := newSSEScanner(body)
+	defer cleanup()
 
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
@@ -360,7 +349,7 @@ func RelayStream(w http.ResponseWriter, body io.Reader, session *Session) {
 
 // relaySSELine processes a single SSE line, writing it to w. Returns true if
 // the stream should end (DONE marker or decryption error).
-func relaySSELine(w http.ResponseWriter, flusher http.Flusher, line string, session *Session) bool {
+func relaySSELine(w http.ResponseWriter, flusher http.Flusher, line string, session Decryptor) bool {
 	if !strings.HasPrefix(line, "data: ") {
 		fmt.Fprintf(w, "%s\n", line)
 		flusher.Flush()
@@ -395,7 +384,7 @@ func relaySSELine(w http.ResponseWriter, flusher http.Flusher, line string, sess
 
 // RelayReassembledNonStream reads an SSE stream from the E2EE upstream,
 // decrypts each chunk, and writes a single non-streaming JSON response.
-func RelayReassembledNonStream(w http.ResponseWriter, body io.Reader, session *Session) {
+func RelayReassembledNonStream(w http.ResponseWriter, body io.Reader, session Decryptor) {
 	result, err := ReassembleNonStream(body, session)
 	if err != nil {
 		slog.Error("E2EE non-stream reassembly failed", "err", err)
@@ -410,7 +399,7 @@ func RelayReassembledNonStream(w http.ResponseWriter, body io.Reader, session *S
 
 // RelayNonStream reads a non-streaming JSON response from body, decrypts the
 // content fields if session is non-nil, and writes the result to w.
-func RelayNonStream(w http.ResponseWriter, body io.Reader, session *Session) {
+func RelayNonStream(w http.ResponseWriter, body io.Reader, session Decryptor) {
 	responseBody, err := io.ReadAll(io.LimitReader(body, 10<<20))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
@@ -434,14 +423,4 @@ func RelayNonStream(w http.ResponseWriter, body io.Reader, session *Session) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(decrypted)
-}
-
-// RelayStreamPlaintext relays an SSE stream without decryption.
-func RelayStreamPlaintext(w http.ResponseWriter, body io.Reader) {
-	RelayStream(w, body, nil)
-}
-
-// RelayNonStreamPlaintext relays a non-streaming JSON response without decryption.
-func RelayNonStreamPlaintext(w http.ResponseWriter, body io.Reader) {
-	RelayNonStream(w, body, nil)
 }

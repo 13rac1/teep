@@ -14,6 +14,84 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
+// VeniceSession holds ephemeral secp256k1 key material for one Venice E2EE
+// request/response cycle.
+type VeniceSession struct {
+	privateKey   *secp256k1.PrivateKey
+	publicKeyHex string // 130 hex chars, uncompressed, starts with "04"
+	modelKeyHex  string // model's public key from attestation
+	modelPubKey  *secp256k1.PublicKey
+}
+
+// NewVeniceSession generates a fresh ephemeral secp256k1 key pair for Venice E2EE.
+func NewVeniceSession() (*VeniceSession, error) {
+	priv, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		return nil, fmt.Errorf("generate session key: %w", err)
+	}
+	pub := priv.PubKey()
+	return &VeniceSession{
+		privateKey:   priv,
+		publicKeyHex: hex.EncodeToString(pub.SerializeUncompressed()),
+	}, nil
+}
+
+// ClientPubKey returns the session's ephemeral secp256k1 public key.
+// Used by tests that simulate server-side encryption. Panics after Zero().
+func (s *VeniceSession) ClientPubKey() *secp256k1.PublicKey { return s.privateKey.PubKey() }
+
+// ClientPubKeyHex returns the session's ephemeral public key as 130 hex chars.
+func (s *VeniceSession) ClientPubKeyHex() string { return s.publicKeyHex }
+
+// ModelKeyHex returns the model's attested public key as 130 hex chars.
+func (s *VeniceSession) ModelKeyHex() string { return s.modelKeyHex }
+
+// SetModelKey parses and validates the enclave's secp256k1 public key from the
+// attestation response. The key must be 130 hex chars, start with "04"
+// (uncompressed), and be a valid point on the secp256k1 curve.
+func (s *VeniceSession) SetModelKey(pubKeyHex string) error {
+	if len(pubKeyHex) != 130 {
+		return fmt.Errorf("enclave public key must be 130 hex chars, got %d", len(pubKeyHex))
+	}
+	if pubKeyHex[:2] != "04" {
+		return fmt.Errorf("enclave public key must start with '04' (uncompressed), got %q", pubKeyHex[:2])
+	}
+	b, err := hex.DecodeString(pubKeyHex)
+	if err != nil {
+		return fmt.Errorf("enclave public key is not valid hex: %w", err)
+	}
+	pub, err := secp256k1.ParsePubKey(b)
+	if err != nil {
+		return fmt.Errorf("enclave public key is not a valid secp256k1 point: %w", err)
+	}
+	s.modelKeyHex = pubKeyHex
+	s.modelPubKey = pub
+	return nil
+}
+
+// ModelPubKey returns the parsed secp256k1 public key set by SetModelKey.
+func (s *VeniceSession) ModelPubKey() *secp256k1.PublicKey {
+	return s.modelPubKey
+}
+
+// IsEncryptedChunk returns true if val looks like a Venice E2EE encrypted chunk.
+func (s *VeniceSession) IsEncryptedChunk(val string) bool {
+	return IsEncryptedChunkVenice(val)
+}
+
+// Decrypt decrypts a hex-encoded Venice ciphertext using the session's private key.
+func (s *VeniceSession) Decrypt(ciphertextHex string) ([]byte, error) {
+	return DecryptVenice(ciphertextHex, s.privateKey)
+}
+
+// Zero clears private key bytes from memory.
+func (s *VeniceSession) Zero() {
+	if s.privateKey != nil {
+		s.privateKey.Zero()
+		s.privateKey = nil
+	}
+}
+
 // hkdfInfoVenice is the HKDF info string required by the Venice E2EE protocol.
 // Do not change — this value must match the TEE server implementation.
 const hkdfInfoVenice = "ecdsa_encryption"

@@ -241,25 +241,26 @@ func findE2EPubKey(instances []e2eInstance, instanceID string) (string, error) {
 // outgoing requests. For E2EE, it rewrites the URL to /e2e/invoke and
 // sets the required X-Chute-Id, X-Instance-Id, and X-E2E-Nonce headers.
 type Preparer struct {
-	apiKey string
+	apiKey   string
+	chatPath string
 }
 
-// NewPreparer returns a Chutes Preparer configured with the given API key.
-func NewPreparer(apiKey string) *Preparer {
-	return &Preparer{apiKey: apiKey}
+// NewPreparer returns a Chutes Preparer configured with the given API key and chat path.
+func NewPreparer(apiKey, chatPath string) *Preparer {
+	return &Preparer{apiKey: apiKey, chatPath: chatPath}
 }
 
 // PrepareRequest injects the Authorization header into req. For Chutes E2EE
 // sessions, it also sets the E2EE headers and rewrites the URL path to
 // /e2e/invoke.
-func (p *Preparer) PrepareRequest(req *http.Request, session *e2ee.Session) error {
+func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, meta *e2ee.ChutesE2EE, stream bool) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	if session != nil && session.ChuteID != "" {
-		req.Header.Set("X-Chute-Id", session.ChuteID)
-		req.Header.Set("X-Instance-Id", session.InstanceID)
-		req.Header["X-E2E-Nonce"] = []string{session.E2ENonce}
-		req.Header["X-E2E-Stream"] = []string{strconv.FormatBool(session.Stream)}
-		req.Header["X-E2E-Path"] = []string{session.ChatPath}
+	if meta != nil {
+		req.Header.Set("X-Chute-Id", meta.ChuteID)
+		req.Header.Set("X-Instance-Id", meta.InstanceID)
+		req.Header["X-E2E-Nonce"] = []string{meta.E2ENonce}
+		req.Header["X-E2E-Stream"] = []string{strconv.FormatBool(stream)}
+		req.Header["X-E2E-Path"] = []string{p.chatPath}
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.URL.Path = "/e2e/invoke"
 	}

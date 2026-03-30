@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/edwards25519"
 	"github.com/google/go-tdx-guest/pcs"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
 )
@@ -682,13 +683,18 @@ func evalE2EEUsable(in *ReportInput) []FactorResult {
 	return factor(TierBinding, "e2ee_usable", Skip, detail)
 }
 
-// validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519 public key).
+// validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519
+// public key) and that the bytes form a valid point on the Ed25519 curve.
 func validateEd25519Hex(s string) error {
 	if len(s) != 64 {
 		return fmt.Errorf("expected 64 hex chars, got %d", len(s))
 	}
-	if _, err := hex.DecodeString(s); err != nil {
+	b, err := hex.DecodeString(s)
+	if err != nil {
 		return fmt.Errorf("not valid hex: %w", err)
+	}
+	if _, err := new(edwards25519.Point).SetBytes(b); err != nil {
+		return fmt.Errorf("not a valid ed25519 point: %w", err)
 	}
 	return nil
 }

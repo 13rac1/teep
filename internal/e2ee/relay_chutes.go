@@ -1,7 +1,6 @@
 package e2ee
 
 import (
-	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,20 +13,15 @@ import (
 // RelayStreamChutes reads a Chutes E2EE SSE stream (e2e_init + e2e events),
 // decrypts each chunk using the stream key derived from the e2e_init KEM
 // ciphertext, and writes standard OpenAI-format SSE to w.
-func RelayStreamChutes(w http.ResponseWriter, body io.Reader, session *Session) {
+func RelayStreamChutes(w http.ResponseWriter, body io.Reader, session *ChutesSession) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
 
-	scanner := bufio.NewScanner(body)
-	bufp, ok := SSEScannerBufPool.Get().(*[]byte)
-	if !ok {
-		panic("SSEScannerBufPool: unexpected type")
-	}
-	defer SSEScannerBufPool.Put(bufp)
-	scanner.Buffer((*bufp)[:cap(*bufp)], SSEScannerBufSize)
+	scanner, cleanup := newSSEScanner(body)
+	defer cleanup()
 
 	var streamKey []byte
 	headerWritten := false
@@ -120,7 +114,7 @@ func RelayStreamChutes(w http.ResponseWriter, body io.Reader, session *Session) 
 // RelayNonStreamChutes reads a Chutes non-streaming E2EE response blob,
 // decrypts it, and writes the plaintext JSON to the client.
 // Wire format: mlkem_ct(1088) + nonce(12) + ciphertext + tag(16).
-func RelayNonStreamChutes(w http.ResponseWriter, body io.Reader, session *Session) {
+func RelayNonStreamChutes(w http.ResponseWriter, body io.Reader, session *ChutesSession) {
 	blob, err := io.ReadAll(io.LimitReader(body, 10<<20))
 	if err != nil {
 		slog.Error("chutes E2EE non-stream read failed", "err", err)

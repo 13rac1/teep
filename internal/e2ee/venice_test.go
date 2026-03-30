@@ -228,14 +228,14 @@ func TestVeniceSessionNewAndPublicKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewVeniceSession: %v", err)
 	}
-	if s.PrivateKey == nil {
+	if s.privateKey == nil {
 		t.Fatal("PrivateKey is nil")
 	}
-	if len(s.PublicKeyHex) != 130 {
-		t.Errorf("PublicKeyHex length: got %d, want 130", len(s.PublicKeyHex))
+	if len(s.publicKeyHex) != 130 {
+		t.Errorf("PublicKeyHex length: got %d, want 130", len(s.publicKeyHex))
 	}
-	if !strings.HasPrefix(s.PublicKeyHex, "04") {
-		t.Errorf("PublicKeyHex must start with '04', got %q", s.PublicKeyHex[:2])
+	if !strings.HasPrefix(s.publicKeyHex, "04") {
+		t.Errorf("PublicKeyHex must start with '04', got %q", s.publicKeyHex[:2])
 	}
 }
 
@@ -283,7 +283,7 @@ func TestSetModelKeyValidation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &Session{}
+			s := &VeniceSession{}
 			err := s.SetModelKey(tc.input)
 			if tc.wantErr && err == nil {
 				t.Errorf("SetModelKey(%q): expected error, got nil", tc.input[:min(20, len(tc.input))])
@@ -389,14 +389,14 @@ func TestVeniceSessionZero(t *testing.T) {
 		t.Fatalf("NewVeniceSession: %v", err)
 	}
 	s.Zero()
-	if s.PrivateKey != nil {
+	if s.privateKey != nil {
 		t.Fatal("PrivateKey should be nil after Zero()")
 	}
 }
 
 // TestSessionZeroNilKey verifies Zero does not panic when PrivateKey is nil.
 func TestSessionZeroNilKey(t *testing.T) {
-	s := &Session{}
+	s := &VeniceSession{}
 	// Should not panic.
 	s.Zero()
 }
@@ -411,7 +411,7 @@ func TestVeniceEncryptDecryptViaSession(t *testing.T) {
 	}
 
 	// Use session's own public key as the "model" key to keep test self-contained.
-	if err := session.SetModelKey(session.PublicKeyHex); err != nil {
+	if err := session.SetModelKey(session.publicKeyHex); err != nil {
 		t.Fatalf("SetModelKey: %v", err)
 	}
 
@@ -427,7 +427,7 @@ func TestVeniceEncryptDecryptViaSession(t *testing.T) {
 	}
 
 	// Decrypt with session's private key (simulating the TEE side).
-	got, err := DecryptVenice(ciphertextHex, session.PrivateKey)
+	got, err := DecryptVenice(ciphertextHex, session.privateKey)
 	if err != nil {
 		t.Fatalf("DecryptVenice: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestVeniceEncryptDecryptViaSession(t *testing.T) {
 // TestModelPubKey verifies ModelPubKey returns nil before SetModelKey and
 // the correct key after SetModelKey.
 func TestModelPubKey(t *testing.T) {
-	s := &Session{}
+	s := &VeniceSession{}
 	if got := s.ModelPubKey(); got != nil {
 		t.Fatalf("ModelPubKey before SetModelKey: got %v, want nil", got)
 	}

@@ -68,7 +68,7 @@ func TestSetModelKeyMLKEM(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &Session{}
+			s := &ChutesSession{}
 			err := s.SetModelKeyMLKEM(tc.input)
 			if tc.wantErr && err == nil {
 				t.Error("expected error, got nil")
@@ -108,9 +108,9 @@ func TestChutesEncryptDecrypt(t *testing.T) {
 	}
 	t.Logf("encrypted payload: %d bytes (plaintext: %d bytes)", len(encrypted), len(plaintext))
 
-	decrypted, err := DecryptPayloadChaCha20(encrypted, key)
+	decrypted, err := decryptPayloadChaCha20(encrypted, key)
 	if err != nil {
-		t.Fatalf("DecryptPayloadChaCha20: %v", err)
+		t.Fatalf("decryptPayloadChaCha20: %v", err)
 	}
 	if !bytes.Equal(decrypted, plaintext) {
 		t.Errorf("round-trip failed: got %q, want %q", decrypted, plaintext)
@@ -142,9 +142,9 @@ func TestChutesEncryptDecryptWrongKey(t *testing.T) {
 		t.Fatalf("deriveKeyMLKEM (wrong): %v", err)
 	}
 
-	_, err = DecryptPayloadChaCha20(encrypted, wrongKey)
+	_, err = decryptPayloadChaCha20(encrypted, wrongKey)
 	if err == nil {
-		t.Fatal("DecryptPayloadChaCha20 with wrong key must return error")
+		t.Fatal("decryptPayloadChaCha20 with wrong key must return error")
 	}
 	t.Logf("wrong key correctly returned: %v", err)
 }
@@ -212,7 +212,7 @@ func TestDecryptStreamChutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey768 (client): %v", err)
 	}
-	clientSession := &Session{
+	clientSession := &ChutesSession{
 		mlkemDecapKey: clientDK,
 		mlkemEncapKey: clientDK.EncapsulationKey(),
 	}
@@ -311,9 +311,9 @@ func TestEncryptChatRequestChutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("server deriveKeyMLKEM: %v", err)
 	}
-	plaintext, err := DecryptPayloadChaCha20(encPayload, requestKey)
+	plaintext, err := decryptPayloadChaCha20(encPayload, requestKey)
 	if err != nil {
-		t.Fatalf("server DecryptPayloadChaCha20: %v", err)
+		t.Fatalf("server decryptPayloadChaCha20: %v", err)
 	}
 
 	t.Logf("decrypted payload: %s", plaintext)
@@ -368,13 +368,13 @@ func TestChutesSessionZero(t *testing.T) {
 	}
 }
 
-// TestDecryptPayloadChaCha20TooShort verifies DecryptPayloadChaCha20 returns an
+// TestDecryptPayloadChaCha20TooShort verifies decryptPayloadChaCha20 returns an
 // error on payloads shorter than nonce + tag.
 func TestDecryptPayloadChaCha20TooShort(t *testing.T) {
 	key := make([]byte, 32)
-	_, err := DecryptPayloadChaCha20(make([]byte, 10), key)
+	_, err := decryptPayloadChaCha20(make([]byte, 10), key)
 	if err == nil {
-		t.Fatal("DecryptPayloadChaCha20 with short payload must return error")
+		t.Fatal("decryptPayloadChaCha20 with short payload must return error")
 	}
 	t.Logf("short payload correctly returned: %v", err)
 }

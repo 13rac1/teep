@@ -176,7 +176,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 // responsible for zeroing the session on subsequent errors.
 func (h *PinnedHandler) encryptChat(
 	req *provider.PinnedRequest, report *attestation.VerificationReport, signingKey string,
-) (chatBody []byte, session *e2ee.Session, extraHeaders http.Header, err error) {
+) (chatBody []byte, session e2ee.Decryptor, extraHeaders http.Header, err error) {
 	if !req.E2EE {
 		return req.Body, nil, nil, nil
 	}
@@ -207,7 +207,7 @@ func (h *PinnedHandler) encryptChat(
 	// scales. The official NEAR AI E2EE protocol does not require it.
 	hdrs := make(http.Header)
 	hdrs.Set("X-Signing-Algo", "ed25519")
-	hdrs.Set("X-Client-Pub-Key", sess.Ed25519PubHex)
+	hdrs.Set("X-Client-Pub-Key", sess.ClientEd25519PubHex())
 	hdrs.Set("X-Encryption-Version", "2")
 
 	return encBody, sess, hdrs, nil

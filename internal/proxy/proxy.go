@@ -328,9 +328,9 @@ func fromConfig(
 	case "chutes":
 		p.ChatPath = "/chat/completions"
 		p.SkipSigningKeyCache = true
-		p.Encryptor = chutesProvider.NewE2EE(p.ChatPath)
+		p.Encryptor = chutesProvider.NewE2EE()
 		p.Attester = chutesProvider.NewAttester(cp.BaseURL, cp.APIKey, offline)
-		p.Preparer = chutesProvider.NewPreparer(cp.APIKey)
+		p.Preparer = chutesProvider.NewPreparer(cp.APIKey, p.ChatPath)
 		p.ReportDataVerifier = chutesProvider.ReportDataVerifier{}
 		p.SupplyChainPolicy = nil // cosign+IMA model, no docker-compose
 	default:
@@ -637,7 +637,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	e2eeStart := time.Now()
-	upstreamBody, session, err := s.buildUpstreamBody(r.Context(), body, req, upstreamModel, e2eeActive, prov, raw)
+	upstreamBody, session, meta, err := s.buildUpstreamBody(r.Context(), body, upstreamModel, e2eeActive, prov, raw)
 	if err != nil {
 		status = "e2ee_failed"
 		s.stats.errors.Add(1)
@@ -649,6 +649,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	e2eeDur = time.Since(e2eeStart)
 	if session != nil {
 		defer session.Zero()
+	}
+	if meta != nil && meta.Session != nil {
+		defer meta.Session.Zero()
 	}
 
 	upstreamURL := prov.BaseURL + prov.ChatPath
@@ -667,7 +670,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	upstreamReq.Header.Set("Content-Type", "application/json")
 
-	if err := prepareUpstreamHeaders(upstreamReq, prov, session); err != nil {
+	if err := prepareUpstreamHeaders(upstreamReq, prov, session, meta, req.Stream); err != nil {
 		slog.Error("PrepareRequest failed", "provider", prov.Name, "err", err)
 		http.Error(w, "failed to prepare upstream request headers", http.StatusInternalServerError)
 		return
@@ -699,18 +702,18 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// (Chutes), so the response is always SSE. When the client requested
 	// non-streaming, reassemble the decrypted SSE chunks into a single JSON response.
 	switch {
-	case session != nil && session.ChuteID != "" && req.Stream:
-		e2ee.RelayStreamChutes(w, resp.Body, session)
-	case session != nil && session.ChuteID != "":
-		e2ee.RelayNonStreamChutes(w, resp.Body, session)
+	case meta != nil && req.Stream:
+		e2ee.RelayStreamChutes(w, resp.Body, meta.Session)
+	case meta != nil:
+		e2ee.RelayNonStreamChutes(w, resp.Body, meta.Session)
 	case session != nil && req.Stream:
 		e2ee.RelayStream(w, resp.Body, session)
 	case session != nil:
 		e2ee.RelayReassembledNonStream(w, resp.Body, session)
 	case req.Stream:
-		e2ee.RelayStreamPlaintext(w, resp.Body)
+		e2ee.RelayStream(w, resp.Body, nil)
 	default:
-		e2ee.RelayNonStreamPlaintext(w, resp.Body)
+		e2ee.RelayNonStream(w, resp.Body, nil)
 	}
 	upstreamDur = time.Since(upstreamStart)
 	status = "ok"
@@ -848,10 +851,10 @@ func (s *Server) handlePinnedChat(
 	}
 	s.stats.plaintext.Add(1)
 	if req.Stream {
-		e2ee.RelayStreamPlaintext(w, pinnedResp.Body)
+		e2ee.RelayStream(w, pinnedResp.Body, nil)
 		return
 	}
-	e2ee.RelayNonStreamPlaintext(w, pinnedResp.Body)
+	e2ee.RelayNonStream(w, pinnedResp.Body, nil)
 }
 
 // buildUpstreamBody constructs the body to forward upstream. If e2eeActive is
@@ -861,21 +864,21 @@ func (s *Server) handlePinnedChat(
 // REPORTDATA binding was already verified by fetchAndVerify. When freshRaw is
 // nil (cache hit), a fresh attestation is fetched and re-verified.
 //
-// Returns the encoded body, the session (nil for plaintext), and any error.
+// Returns the encoded body, the session (nil for plaintext), Chutes metadata
+// (nil for non-Chutes), and any error.
 func (s *Server) buildUpstreamBody(
 	ctx context.Context,
 	rawBody []byte,
-	req chatRequest,
 	upstreamModel string,
 	e2eeActive bool,
 	prov *provider.Provider,
 	freshRaw *attestation.RawAttestation,
-) ([]byte, *e2ee.Session, error) {
+) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
 	if !e2eeActive {
 		if prov.E2EE {
-			return nil, nil, fmt.Errorf("E2EE required for %s but tdx_reportdata_binding not passed; refusing plaintext", prov.Name)
+			return nil, nil, nil, fmt.Errorf("E2EE required for %s but tdx_reportdata_binding not passed; refusing plaintext", prov.Name)
 		}
-		return rawBody, nil, nil
+		return rawBody, nil, nil, nil
 	}
 
 	raw := freshRaw
@@ -895,10 +898,10 @@ func (s *Server) buildUpstreamBody(
 			var err error
 			raw, err = prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
 			if err != nil {
-				return nil, nil, fmt.Errorf("fetch signing key: %w", err)
+				return nil, nil, nil, fmt.Errorf("fetch signing key: %w", err)
 			}
 			if raw.IntelQuote == "" {
-				return nil, nil, errors.New("fresh attestation missing TDX quote; cannot verify signing key binding")
+				return nil, nil, nil, errors.New("fresh attestation missing TDX quote; cannot verify signing key binding")
 			}
 			// offline=true: only REPORTDATA binding is needed here, not full
 			// online verification (Intel PCS collateral). The primary
@@ -906,14 +909,14 @@ func (s *Server) buildUpstreamBody(
 			// the cached report.
 			tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, true)
 			if tdxResult.ParseErr != nil {
-				return nil, nil, fmt.Errorf("fresh TDX quote parse failed: %w", tdxResult.ParseErr)
+				return nil, nil, nil, fmt.Errorf("fresh TDX quote parse failed: %w", tdxResult.ParseErr)
 			}
 			if prov.ReportDataVerifier != nil {
 				_, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
 				if errors.Is(err, multi.ErrNoVerifier) {
 					slog.Debug("no REPORTDATA verifier for backend format", "format", raw.BackendFormat)
 				} else if err != nil {
-					return nil, nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", err)
+					return nil, nil, nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", err)
 				}
 			}
 			s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
@@ -923,32 +926,43 @@ func (s *Server) buildUpstreamBody(
 	}
 
 	if raw.SigningKey == "" {
-		return nil, nil, errors.New("attestation response missing signing_key")
+		return nil, nil, nil, errors.New("attestation response missing signing_key")
 	}
 
-	encrypted, session, err := prov.Encryptor.EncryptRequest(rawBody, raw)
+	encrypted, session, meta, err := prov.Encryptor.EncryptRequest(rawBody, raw)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	session.Stream = req.Stream
-	return encrypted, session, nil
+	return encrypted, session, meta, nil
 }
 
 // prepareUpstreamHeaders injects auth and E2EE headers into the upstream request.
-// When session is non-nil (E2EE path), it delegates to the provider's Preparer.
-// When session is nil (plaintext fallback), it sets only the Authorization header
-// directly, because provider-specific Preparers may require a fully initialised
-// session (e.g. Venice requires ModelKeyHex to be set).
-func prepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session *e2ee.Session) error {
-	if session != nil && prov.Preparer != nil {
-		return prov.Preparer.PrepareRequest(req, session)
+// It builds protocol-specific headers from the Decryptor via type switch, then
+// delegates to the provider's Preparer. When no Preparer is configured, it sets
+// only the Authorization header.
+func prepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session e2ee.Decryptor, meta *e2ee.ChutesE2EE, stream bool) error {
+	if prov.Preparer == nil {
+		if prov.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+prov.APIKey)
+		}
+		return nil
 	}
-	// Plaintext path: inject the Authorization header manually so the upstream
-	// request is authenticated. This is safe because we are on HTTPS.
-	if prov.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+prov.APIKey)
+
+	// nil session: plaintext or Chutes (Chutes headers are in meta, not session).
+	var e2eeHeaders http.Header
+	switch s := session.(type) {
+	case *e2ee.VeniceSession:
+		e2eeHeaders = make(http.Header)
+		e2eeHeaders.Set("X-Venice-Tee-Client-Pub-Key", s.ClientPubKeyHex())
+		e2eeHeaders.Set("X-Venice-Tee-Model-Pub-Key", s.ModelKeyHex())
+		e2eeHeaders.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
+	case *e2ee.NearCloudSession:
+		e2eeHeaders = make(http.Header)
+		e2eeHeaders.Set("X-Signing-Algo", "ed25519")
+		e2eeHeaders.Set("X-Client-Pub-Key", s.ClientEd25519PubHex())
+		e2eeHeaders.Set("X-Encryption-Version", "2")
 	}
-	return nil
+	return prov.Preparer.PrepareRequest(req, e2eeHeaders, meta, stream)
 }
 
 // modelsListResponse is the OpenAI-compatible response for GET /v1/models.

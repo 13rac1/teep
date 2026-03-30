@@ -308,7 +308,7 @@ func TestPreparer_SetsAuthHeader(t *testing.T) {
 	p := phalacloud.NewPreparer("sk-test-123")
 	req, _ := http.NewRequest(http.MethodPost, "https://api.redpill.ai/v1/chat/completions", http.NoBody)
 
-	if err := p.PrepareRequest(req, nil); err != nil {
+	if err := p.PrepareRequest(req, nil, nil, false); err != nil {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
 	if req.Header.Get("Authorization") != "Bearer sk-test-123" {

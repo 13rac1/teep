@@ -287,10 +287,8 @@ func NewPreparer(apiKey string) *Preparer {
 	return &Preparer{apiKey: apiKey}
 }
 
-// PrepareRequest injects the NEAR AI Authorization header into req. The session
-// parameter is accepted for interface compatibility but is not used until NEAR
-// AI's E2EE header protocol is specified.
-func (p *Preparer) PrepareRequest(req *http.Request, _ *e2ee.Session) error {
+// PrepareRequest injects the NEAR AI Authorization header into req.
+func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	return nil
 }

@@ -21,6 +21,6 @@ func (s *Server) SetNegativeCache(nc *attestation.NegativeCache) {
 }
 
 // PrepareUpstreamHeaders exposes prepareUpstreamHeaders for external tests.
-func PrepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session *e2ee.Session) error {
-	return prepareUpstreamHeaders(req, prov, session)
+func PrepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session e2ee.Decryptor, meta *e2ee.ChutesE2EE, stream bool) error {
+	return prepareUpstreamHeaders(req, prov, session, meta, stream)
 }
