@@ -18,17 +18,19 @@ import (
 type ReportDataVerifier struct{}
 
 // VerifyReportData checks that reportData matches the Chutes binding scheme.
+// The client-generated nonce is used for the preimage — never raw.Nonce, which
+// is server-controlled and must match the client nonce exactly.
 func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, nonce attestation.Nonce) (string, error) {
 	if raw.SigningKey == "" {
 		return "", errors.New("e2e_pubkey absent from attestation response")
 	}
-	if raw.Nonce == "" {
-		return "", errors.New("nonce absent from attestation response")
+	if raw.Nonce != nonce.Hex() {
+		return "", fmt.Errorf("nonce mismatch: attestation response nonce %q does not match client nonce", raw.Nonce)
 	}
 
 	// Chutes binding: SHA256(nonce_hex_string + e2e_pubkey_base64_string)
-	// Both values are their string representations, concatenated directly.
-	preimage := raw.Nonce + raw.SigningKey
+	// Uses client-generated nonce, not the server-echoed value.
+	preimage := nonce.Hex() + raw.SigningKey
 	expected := sha256.Sum256([]byte(preimage))
 
 	if subtle.ConstantTimeCompare(expected[:], reportData[:32]) != 1 {

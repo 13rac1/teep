@@ -172,7 +172,7 @@ func TestIntegration_PhalaCloud(t *testing.T) {
 		if !ok {
 			t.Error("factor tdx_reportdata_binding not found")
 		} else if f.Status != attestation.Fail {
-			t.Logf("tdx_reportdata_binding: status = %v, want Fail, detail: %s", f.Status, f.Detail)
+			t.Errorf("tdx_reportdata_binding: status = %v, want Fail, detail: %s", f.Status, f.Detail)
 		}
 
 		// Log every non-Pass factor so failures are visible in test output.

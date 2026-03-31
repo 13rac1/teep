@@ -34,6 +34,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
@@ -111,7 +112,7 @@ func runServe(args []string) {
 
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
-	force := fs.Bool("force", false, "forward requests even when enforced attestation factors fail (WARNING: reduces security)")
+	force := registerForceFlag(fs)
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 	fs.Usage = func() { printServeHelp() }
 	if err := fs.Parse(args); err != nil {
@@ -124,9 +125,9 @@ func runServe(args []string) {
 		os.Exit(1)
 	}
 	cfg.Offline = *offline
-	cfg.Force = *force
 
-	if *force {
+	if force != nil && *force {
+		cfg.Force = true
 		slog.Warn("--force enabled: requests will be forwarded even when enforced attestation factors fail")
 	}
 
@@ -583,8 +584,11 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
 		return venice.ReportDataVerifier{}
 	case "phalacloud":
-		// Chutes format has no signing_address; REPORTDATA binding is unknown.
-		return nil
+		return multi.Verifier{
+			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
+				attestation.FormatDstack: venice.ReportDataVerifier{},
+			},
+		}
 	case "chutes":
 		return chutes.ReportDataVerifier{}
 	default:
@@ -660,6 +664,10 @@ func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName
 		return testE2EEVenice(ctx, raw, cp, model)
 	case "nearcloud":
 		return testE2EENearCloud(ctx, raw, cp, model)
+	case "chutes":
+		return &attestation.E2EETestResult{
+			Detail: "chutes ML-KEM-768 E2EE: live test not yet implemented",
+		}
 	default:
 		return nil
 	}

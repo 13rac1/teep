@@ -3,6 +3,7 @@ package chutes_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -85,6 +86,33 @@ func TestReportDataVerifier_MissingNonce(t *testing.T) {
 		t.Fatal("expected error for missing nonce")
 	}
 	t.Logf("error: %v", err)
+}
+
+func TestReportDataVerifier_TamperedServerNonce(t *testing.T) {
+	clientNonce := attestation.NewNonce()
+	e2ePubKey := "dGVzdC1wdWJrZXk="
+
+	// Build valid REPORTDATA using the client nonce.
+	preimage := clientNonce.Hex() + e2ePubKey
+	hash := sha256.Sum256([]byte(preimage))
+	var reportData [64]byte
+	copy(reportData[:32], hash[:])
+
+	// Server tampers raw.Nonce to a different value.
+	raw := &attestation.RawAttestation{
+		Nonce:      "aaaa" + clientNonce.Hex()[4:], // differs from client nonce
+		SigningKey: e2ePubKey,
+	}
+
+	v := chutes.ReportDataVerifier{}
+	_, err := v.VerifyReportData(reportData, raw, clientNonce)
+	if err == nil {
+		t.Fatal("expected error for tampered server nonce")
+	}
+	if !strings.Contains(err.Error(), "nonce mismatch") {
+		t.Errorf("expected nonce mismatch error, got: %v", err)
+	}
+	t.Logf("error (expected): %v", err)
 }
 
 func TestReportDataVerifier_DifferentNonceDifferentHash(t *testing.T) {
