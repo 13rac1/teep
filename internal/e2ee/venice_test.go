@@ -1,9 +1,7 @@
-package attestation
+package e2ee
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -28,11 +26,11 @@ func mustPrivKey(t *testing.T, hexScalar string) *secp256k1.PrivateKey {
 	return secp256k1.NewPrivateKey(&scalar)
 }
 
-// encryptWithFixedEphemeral is a test-only variant of Encrypt that uses a
+// encryptWithFixedEphemeral is a test-only variant of EncryptVenice that uses a
 // caller-supplied ephemeral private key instead of a random one. This makes
 // the output deterministic for cross-language test vector validation.
 func encryptWithFixedEphemeral(plaintext []byte, recipientPubKey *secp256k1.PublicKey, ephemeralPriv *secp256k1.PrivateKey, nonce []byte) (string, error) {
-	aesKey, err := deriveKey(ephemeralPriv, recipientPubKey)
+	aesKey, err := deriveKeyVenice(ephemeralPriv, recipientPubKey)
 	if err != nil {
 		return "", err
 	}
@@ -81,67 +79,67 @@ func testNonce() []byte {
 
 // ---- tests ------------------------------------------------------------------
 
-// TestRoundTrip verifies that Encrypt → Decrypt recovers the original plaintext
-// when using the correct private key.
-func TestRoundTrip(t *testing.T) {
+// TestVeniceRoundTrip verifies that EncryptVenice → DecryptVenice recovers
+// the original plaintext when using the correct private key.
+func TestVeniceRoundTrip(t *testing.T) {
 	keyA := mustPrivKey(t, testKeyAScalar())
 
 	plaintext := []byte("hello, TEE world")
-	ciphertextHex, err := Encrypt(plaintext, keyA.PubKey())
+	ciphertextHex, err := EncryptVenice(plaintext, keyA.PubKey())
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatalf("EncryptVenice: %v", err)
 	}
 
-	got, err := Decrypt(ciphertextHex, keyA)
+	got, err := DecryptVenice(ciphertextHex, keyA)
 	if err != nil {
-		t.Fatalf("Decrypt: %v", err)
+		t.Fatalf("DecryptVenice: %v", err)
 	}
 	if !bytes.Equal(got, plaintext) {
 		t.Errorf("round-trip failed: got %q, want %q", got, plaintext)
 	}
 }
 
-// TestRoundTripLargePayload ensures we handle payloads larger than one AES block.
-func TestRoundTripLargePayload(t *testing.T) {
+// TestVeniceRoundTripLargePayload ensures we handle payloads larger than one AES block.
+func TestVeniceRoundTripLargePayload(t *testing.T) {
 	keyA := mustPrivKey(t, testKeyAScalar())
 	plaintext := bytes.Repeat([]byte("A"), 4096)
 
-	ciphertextHex, err := Encrypt(plaintext, keyA.PubKey())
+	ciphertextHex, err := EncryptVenice(plaintext, keyA.PubKey())
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatalf("EncryptVenice: %v", err)
 	}
 
-	got, err := Decrypt(ciphertextHex, keyA)
+	got, err := DecryptVenice(ciphertextHex, keyA)
 	if err != nil {
-		t.Fatalf("Decrypt: %v", err)
+		t.Fatalf("DecryptVenice: %v", err)
 	}
 	if !bytes.Equal(got, plaintext) {
 		t.Error("large payload round-trip failed")
 	}
 }
 
-// TestWrongKeyFails is a critical security test: decrypting with the wrong
-// private key must return an error, never silently succeed or return garbage.
-func TestWrongKeyFails(t *testing.T) {
+// TestVeniceWrongKeyFails is a critical security test: decrypting with the
+// wrong private key must return an error, never silently succeed or return garbage.
+func TestVeniceWrongKeyFails(t *testing.T) {
 	keyA := mustPrivKey(t, testKeyAScalar())
 	keyB := mustPrivKey(t, testKeyBScalar())
 
 	plaintext := []byte("secret message")
-	ciphertextHex, err := Encrypt(plaintext, keyA.PubKey())
+	ciphertextHex, err := EncryptVenice(plaintext, keyA.PubKey())
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatalf("EncryptVenice: %v", err)
 	}
 
-	_, err = Decrypt(ciphertextHex, keyB)
+	_, err = DecryptVenice(ciphertextHex, keyB)
 	if err == nil {
-		t.Fatal("Decrypt with wrong key must return an error, got nil")
+		t.Fatal("DecryptVenice with wrong key must return an error, got nil")
 	}
 	// The error must mention authentication or decryption failure,
 	// not silently return plaintext or a zero-length slice.
-	t.Logf("Decrypt with wrong key correctly returned: %v", err)
+	t.Logf("DecryptVenice with wrong key correctly returned: %v", err)
 }
 
-// TestDeterministicVector validates the full ECDH + HKDF + AES-GCM chain
+// TestVeniceDeterministicVector validates the full ECDH + HKDF + AES-GCM chain
 // against a known-good output. This serves as a cross-language compatibility
 // test: the same fixed inputs must produce the same hex output in Python/JS.
 //
@@ -150,7 +148,7 @@ func TestWrongKeyFails(t *testing.T) {
 //   - HKDF: SHA-256, no salt, info="ecdsa_encryption", 32-byte output
 //   - AES-256-GCM: 12-byte nonce, no AAD
 //   - Wire: ephemeral_pub_uncompressed(65) || nonce(12) || ciphertext+tag
-func TestDeterministicVector(t *testing.T) {
+func TestVeniceDeterministicVector(t *testing.T) {
 	recipientPriv := mustPrivKey(t, testKeyAScalar())
 	ephemeralPriv := mustPrivKey(t, testEphemeralScalar())
 	nonce := testNonce()
@@ -180,24 +178,22 @@ func TestDeterministicVector(t *testing.T) {
 	}
 
 	// Verify decryption recovers plaintext.
-	decrypted, err := Decrypt(got, recipientPriv)
+	decrypted, err := DecryptVenice(got, recipientPriv)
 	if err != nil {
-		t.Fatalf("Decrypt deterministic vector: %v", err)
+		t.Fatalf("DecryptVenice deterministic vector: %v", err)
 	}
 	if !bytes.Equal(decrypted, plaintext) {
 		t.Errorf("decrypt: got %q, want %q", decrypted, plaintext)
 	}
 
 	// Emit the full expected hex so it can be used in Python/JS cross-language tests.
-	// Copy this value into the cross-language test suite.
 	t.Logf("deterministic vector hex: %s", got)
 }
 
-// TestDeterministicVectorHKDF validates the HKDF key derivation in isolation
-// so that cross-language implementations can check intermediate values.
-func TestDeterministicVectorHKDF(t *testing.T) {
+// TestVeniceDeterministicVectorHKDF validates the HKDF key derivation in
+// isolation so that cross-language implementations can check intermediate values.
+func TestVeniceDeterministicVectorHKDF(t *testing.T) {
 	// Use a known shared secret and verify the derived key matches.
-	// shared_secret = SHA-256("teep hkdf test input") — just for testing.
 	sharedSecret := sha256.Sum256([]byte("teep hkdf test input"))
 
 	r := hkdf.New(sha256.New, sharedSecret[:], nil, []byte("ecdsa_encryption"))
@@ -225,21 +221,21 @@ func TestDeterministicVectorHKDF(t *testing.T) {
 	t.Logf("  derived_key   (hex): %s", hex.EncodeToString(key))
 }
 
-// TestSessionNewAndPublicKey verifies NewSession produces a valid uncompressed
-// public key in the expected format.
-func TestSessionNewAndPublicKey(t *testing.T) {
-	s, err := NewSession()
+// TestVeniceSessionNewAndPublicKey verifies NewVeniceSession produces a valid
+// uncompressed public key in the expected format.
+func TestVeniceSessionNewAndPublicKey(t *testing.T) {
+	s, err := NewVeniceSession()
 	if err != nil {
-		t.Fatalf("NewSession: %v", err)
+		t.Fatalf("NewVeniceSession: %v", err)
 	}
-	if s.PrivateKey == nil {
+	if s.privateKey == nil {
 		t.Fatal("PrivateKey is nil")
 	}
-	if len(s.PublicKeyHex) != 130 {
-		t.Errorf("PublicKeyHex length: got %d, want 130", len(s.PublicKeyHex))
+	if len(s.publicKeyHex) != 130 {
+		t.Errorf("PublicKeyHex length: got %d, want 130", len(s.publicKeyHex))
 	}
-	if !strings.HasPrefix(s.PublicKeyHex, "04") {
-		t.Errorf("PublicKeyHex must start with '04', got %q", s.PublicKeyHex[:2])
+	if !strings.HasPrefix(s.publicKeyHex, "04") {
+		t.Errorf("PublicKeyHex must start with '04', got %q", s.publicKeyHex[:2])
 	}
 }
 
@@ -287,7 +283,7 @@ func TestSetModelKeyValidation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &Session{}
+			s := &VeniceSession{}
 			err := s.SetModelKey(tc.input)
 			if tc.wantErr && err == nil {
 				t.Errorf("SetModelKey(%q): expected error, got nil", tc.input[:min(20, len(tc.input))])
@@ -299,8 +295,8 @@ func TestSetModelKeyValidation(t *testing.T) {
 	}
 }
 
-// TestIsEncryptedChunk exercises all IsEncryptedChunk decision paths.
-func TestIsEncryptedChunk(t *testing.T) {
+// TestIsEncryptedChunkVenice exercises all IsEncryptedChunkVenice decision paths.
+func TestIsEncryptedChunkVenice(t *testing.T) {
 	// Build a valid-looking 186-char hex string starting with "04".
 	valid186 := "04" + strings.Repeat("ab", 92) // 2 + 184 = 186 chars
 
@@ -358,84 +354,82 @@ func TestIsEncryptedChunk(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := IsEncryptedChunk(tc.input)
+			got := IsEncryptedChunkVenice(tc.input)
 			if got != tc.want {
-				t.Errorf("IsEncryptedChunk(%q...): got %v, want %v",
+				t.Errorf("IsEncryptedChunkVenice(%q...): got %v, want %v",
 					tc.input[:min(20, len(tc.input))], got, tc.want)
 			}
 		})
 	}
 }
 
-// TestDecryptTruncatedInput ensures Decrypt returns an error on inputs that
-// are too short to be valid, not a panic or silent failure.
-func TestDecryptTruncatedInput(t *testing.T) {
+// TestVeniceDecryptTruncatedInput ensures DecryptVenice returns an error on
+// inputs that are too short to be valid, not a panic or silent failure.
+func TestVeniceDecryptTruncatedInput(t *testing.T) {
 	// 185 hex chars = 92.5 bytes: can't even hold the minimum 93 bytes.
 	short := strings.Repeat("04", 46) // 92 hex chars = 46 bytes
-	_, err := Decrypt(short, mustPrivKey(t, testKeyAScalar()))
+	_, err := DecryptVenice(short, mustPrivKey(t, testKeyAScalar()))
 	if err == nil {
-		t.Fatal("Decrypt with truncated input must return error")
+		t.Fatal("DecryptVenice with truncated input must return error")
 	}
 }
 
-// TestDecryptNotHex ensures Decrypt returns an error on non-hex input.
-func TestDecryptNotHex(t *testing.T) {
-	_, err := Decrypt("not-hex-data", mustPrivKey(t, testKeyAScalar()))
+// TestVeniceDecryptNotHex ensures DecryptVenice returns an error on non-hex input.
+func TestVeniceDecryptNotHex(t *testing.T) {
+	_, err := DecryptVenice("not-hex-data", mustPrivKey(t, testKeyAScalar()))
 	if err == nil {
-		t.Fatal("Decrypt with non-hex input must return error")
+		t.Fatal("DecryptVenice with non-hex input must return error")
 	}
 }
 
-// TestSessionZero verifies Zero zeroes the key and nils the pointer.
-func TestSessionZero(t *testing.T) {
-	s, err := NewSession()
+// TestVeniceSessionZero verifies Zero zeroes the key and nils the pointer.
+func TestVeniceSessionZero(t *testing.T) {
+	s, err := NewVeniceSession()
 	if err != nil {
-		t.Fatalf("NewSession: %v", err)
+		t.Fatalf("NewVeniceSession: %v", err)
 	}
 	s.Zero()
-	if s.PrivateKey != nil {
+	if s.privateKey != nil {
 		t.Fatal("PrivateKey should be nil after Zero()")
 	}
 }
 
 // TestSessionZeroNilKey verifies Zero does not panic when PrivateKey is nil.
 func TestSessionZeroNilKey(t *testing.T) {
-	s := &Session{}
+	s := &VeniceSession{}
 	// Should not panic.
 	s.Zero()
 }
 
-// TestEncryptDecryptViaSession exercises the full session flow: NewSession,
-// SetModelKey (using session's own public key as the "model"), Encrypt with
-// the model pub key, Decrypt with the session private key.
-func TestEncryptDecryptViaSession(t *testing.T) {
-	// Simulate the proxy side generating a session.
-	session, err := NewSession()
+// TestVeniceEncryptDecryptViaSession exercises the full session flow:
+// NewVeniceSession, SetModelKey (using session's own public key as the "model"),
+// EncryptVenice with the model pub key, DecryptVenice with the session private key.
+func TestVeniceEncryptDecryptViaSession(t *testing.T) {
+	session, err := NewVeniceSession()
 	if err != nil {
-		t.Fatalf("NewSession: %v", err)
+		t.Fatalf("NewVeniceSession: %v", err)
 	}
 
-	// Simulate SetModelKey receiving the model's public key from attestation.
-	// Here we use session's own public key to keep the test self-contained.
-	if err := session.SetModelKey(session.PublicKeyHex); err != nil {
+	// Use session's own public key as the "model" key to keep test self-contained.
+	if err := session.SetModelKey(session.publicKeyHex); err != nil {
 		t.Fatalf("SetModelKey: %v", err)
 	}
 
 	plaintext := []byte(`{"role":"user","content":"hello world"}`)
-	ciphertextHex, err := Encrypt(plaintext, session.modelPubKey)
+	ciphertextHex, err := EncryptVenice(plaintext, session.modelPubKey)
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatalf("EncryptVenice: %v", err)
 	}
 
 	// Verify the output looks like an encrypted chunk.
-	if !IsEncryptedChunk(ciphertextHex) {
-		t.Error("Encrypt output does not pass IsEncryptedChunk")
+	if !IsEncryptedChunkVenice(ciphertextHex) {
+		t.Error("EncryptVenice output does not pass IsEncryptedChunkVenice")
 	}
 
 	// Decrypt with session's private key (simulating the TEE side).
-	got, err := Decrypt(ciphertextHex, session.PrivateKey)
+	got, err := DecryptVenice(ciphertextHex, session.privateKey)
 	if err != nil {
-		t.Fatalf("Decrypt: %v", err)
+		t.Fatalf("DecryptVenice: %v", err)
 	}
 	if !bytes.Equal(got, plaintext) {
 		t.Errorf("session encrypt/decrypt: got %q, want %q", got, plaintext)
@@ -447,7 +441,7 @@ func TestEncryptDecryptViaSession(t *testing.T) {
 // TestModelPubKey verifies ModelPubKey returns nil before SetModelKey and
 // the correct key after SetModelKey.
 func TestModelPubKey(t *testing.T) {
-	s := &Session{}
+	s := &VeniceSession{}
 	if got := s.ModelPubKey(); got != nil {
 		t.Fatalf("ModelPubKey before SetModelKey: got %v, want nil", got)
 	}
@@ -468,89 +462,5 @@ func TestModelPubKey(t *testing.T) {
 	gotHex := hex.EncodeToString(got.SerializeUncompressed())
 	if gotHex != validKey {
 		t.Errorf("ModelPubKey hex mismatch:\n got  %s\n want %s", gotHex, validKey)
-	}
-}
-
-func TestTestE2EESetupV2Pass(t *testing.T) {
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := TestE2EESetup(hex.EncodeToString(pub), E2EEv2)
-	if r == nil {
-		t.Fatal("expected non-nil result for v2 key")
-	}
-	if !r.Attempted {
-		t.Error("expected Attempted=true")
-	}
-	if r.Err != nil {
-		t.Errorf("unexpected error: %v", r.Err)
-	}
-	if !strings.Contains(r.Detail, "v2") {
-		t.Errorf("detail should mention v2: %s", r.Detail)
-	}
-}
-
-func TestTestE2EESetupV1Pass(t *testing.T) {
-	priv, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
-	r := TestE2EESetup(key, E2EEv1)
-	if r == nil {
-		t.Fatal("expected non-nil result for v1 key")
-	}
-	if !r.Attempted {
-		t.Error("expected Attempted=true")
-	}
-	if r.Err != nil {
-		t.Errorf("unexpected error: %v", r.Err)
-	}
-	if !strings.Contains(r.Detail, "v1") {
-		t.Errorf("detail should mention v1: %s", r.Detail)
-	}
-}
-
-func TestTestE2EESetupEmptyKey(t *testing.T) {
-	r := TestE2EESetup("", E2EEv2)
-	if r == nil {
-		t.Fatal("expected non-nil result for empty key")
-	}
-	if r.Attempted {
-		t.Error("expected Attempted=false for empty key")
-	}
-	if r.Detail == "" {
-		t.Error("expected non-empty Detail for empty key")
-	}
-}
-
-func TestTestE2EESetupUnknownVersion(t *testing.T) {
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := TestE2EESetup(hex.EncodeToString(pub), 99)
-	if r == nil {
-		t.Fatal("expected non-nil result for unknown version")
-	}
-	if r.Attempted {
-		t.Error("expected Attempted=false for unknown version")
-	}
-	if r.Detail == "" {
-		t.Error("expected non-empty Detail for unknown version")
-	}
-}
-
-func TestTestE2EESetupInvalidKey(t *testing.T) {
-	r := TestE2EESetup("not-a-valid-key", E2EEv2)
-	if r == nil {
-		t.Fatal("expected non-nil result for invalid key")
-	}
-	if !r.Attempted {
-		t.Error("expected Attempted=true")
-	}
-	if r.Err == nil {
-		t.Error("expected error for invalid key")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/edwards25519"
 	"github.com/google/go-tdx-guest/pcs"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
 )
@@ -800,16 +801,15 @@ func evalE2EECapable(in *ReportInput) []FactorResult {
 		}
 		return factor(TierBinding, "e2ee_capable", Pass, "ML-KEM-768 public key valid (1184 bytes); post-quantum E2EE key exchange possible")
 	case in.Raw.SigningAlgo == "ed25519" || len(in.Raw.SigningKey) == 64:
-		// V2: Ed25519 key (64 hex chars).
-		if err := ValidateModelKeyV2(in.Raw.SigningKey); err != nil {
+		// Ed25519 key (64 hex chars).
+		if err := validateEd25519Hex(in.Raw.SigningKey); err != nil {
 			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave ed25519 public key invalid: %v", err))
 		}
-		return factor(TierBinding, "e2ee_capable", Pass, "enclave ed25519 public key valid; v2 E2EE key exchange possible (ed25519)")
+		return factor(TierBinding, "e2ee_capable", Pass, "enclave ed25519 public key valid; E2EE key exchange possible (ed25519)")
 	default:
-		// V1: secp256k1 key (130 hex chars).
-		s := &Session{}
-		if err := s.SetModelKey(in.Raw.SigningKey); err != nil {
-			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave public key is not a valid secp256k1 point: %v", err))
+		// secp256k1 key (130 hex chars, uncompressed).
+		if err := validateSecp256k1Hex(in.Raw.SigningKey); err != nil {
+			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave public key invalid: %v", err))
 		}
 		detail := "enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible"
 		if in.Raw.SigningAlgo != "" {
@@ -846,6 +846,38 @@ func evalE2EEUsable(in *ReportInput) []FactorResult {
 		detail = "E2EE test not attempted"
 	}
 	return factor(TierBinding, "e2ee_usable", Skip, detail)
+}
+
+// validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519
+// public key) and that the bytes form a valid point on the Ed25519 curve.
+func validateEd25519Hex(s string) error {
+	if len(s) != 64 {
+		return fmt.Errorf("expected 64 hex chars, got %d", len(s))
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return fmt.Errorf("not valid hex: %w", err)
+	}
+	if _, err := new(edwards25519.Point).SetBytes(b); err != nil {
+		return fmt.Errorf("not a valid ed25519 point: %w", err)
+	}
+	return nil
+}
+
+// validateSecp256k1Hex checks that s is 130 hex characters starting with "04"
+// (uncompressed secp256k1 public key format). Full point-on-curve validation
+// happens at E2EE session setup time.
+func validateSecp256k1Hex(s string) error {
+	if len(s) != 130 {
+		return fmt.Errorf("expected 130 hex chars, got %d", len(s))
+	}
+	if s[:2] != "04" {
+		return fmt.Errorf("must start with '04' (uncompressed), got %q", s[:2])
+	}
+	if _, err := hex.DecodeString(s); err != nil {
+		return fmt.Errorf("not valid hex: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

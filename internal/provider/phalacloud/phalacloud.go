@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
@@ -115,7 +116,7 @@ func NewPreparer(apiKey string) *Preparer {
 }
 
 // PrepareRequest injects the Authorization header into req.
-func (p *Preparer) PrepareRequest(req *http.Request, _ *attestation.Session) error {
+func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	return nil
 }

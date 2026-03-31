@@ -17,14 +17,15 @@ package venice
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 )
@@ -252,19 +253,9 @@ func NewPreparer(apiKey string) *Preparer {
 	return &Preparer{apiKey: apiKey}
 }
 
-// PrepareRequest injects the Venice E2EE headers into req. The session must
-// have its ModelKeyHex set (via SetModelKey) before calling this function.
-func (p *Preparer) PrepareRequest(req *http.Request, session *attestation.Session) error {
-	if session.ModelKeyHex == "" {
-		return errors.New("venice: PrepareRequest called with empty session.ModelKeyHex; call SetModelKey first")
-	}
-	if session.PublicKeyHex == "" {
-		return errors.New("venice: PrepareRequest called with empty session.PublicKeyHex; session may not be initialised")
-	}
-
-	req.Header.Set("X-Venice-Tee-Client-Pub-Key", session.PublicKeyHex)
-	req.Header.Set("X-Venice-Tee-Model-Pub-Key", session.ModelKeyHex)
-	req.Header.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
+// PrepareRequest merges pre-built E2EE headers into req and sets Authorization.
+func (p *Preparer) PrepareRequest(req *http.Request, e2eeHeaders http.Header, _ *e2ee.ChutesE2EE, _ bool) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	maps.Copy(req.Header, e2eeHeaders)
 	return nil
 }

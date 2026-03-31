@@ -23,9 +23,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 )
@@ -194,6 +196,15 @@ func ParseAttestationResponse(instancesBody, evidenceBody []byte, nonce attestat
 		"has_e2e_pubkey", e2ePubKey != "",
 	)
 
+	// Find the first available nonce token for E2EE.
+	var e2eNonce string
+	for _, inst := range instances.Instances {
+		if inst.InstanceID == first.InstanceID && len(inst.Nonces) > 0 {
+			e2eNonce = inst.Nonces[0]
+			break
+		}
+	}
+
 	return &attestation.RawAttestation{
 		BackendFormat: attestation.FormatChutes,
 		Nonce:         nonce.Hex(),
@@ -209,6 +220,9 @@ func ParseAttestationResponse(instancesBody, evidenceBody []byte, nonce attestat
 		CandidatesAvail: len(ar.Evidence),
 		CandidatesEval:  1,
 
+		InstanceID: first.InstanceID,
+		E2ENonce:   e2eNonce,
+
 		RawBody: evidenceBody,
 	}, nil
 }
@@ -223,18 +237,32 @@ func findE2EPubKey(instances []e2eInstance, instanceID string) (string, error) {
 	return "", fmt.Errorf("chutes: instance %q not found in e2e instances", instanceID)
 }
 
-// Preparer injects the Chutes Authorization header into outgoing requests.
+// Preparer injects the Chutes Authorization header and E2EE headers into
+// outgoing requests. For E2EE, it rewrites the URL to /e2e/invoke and
+// sets the required X-Chute-Id, X-Instance-Id, and X-E2E-Nonce headers.
 type Preparer struct {
-	apiKey string
+	apiKey   string
+	chatPath string
 }
 
-// NewPreparer returns a Chutes Preparer configured with the given API key.
-func NewPreparer(apiKey string) *Preparer {
-	return &Preparer{apiKey: apiKey}
+// NewPreparer returns a Chutes Preparer configured with the given API key and chat path.
+func NewPreparer(apiKey, chatPath string) *Preparer {
+	return &Preparer{apiKey: apiKey, chatPath: chatPath}
 }
 
-// PrepareRequest injects the Authorization header into req.
-func (p *Preparer) PrepareRequest(req *http.Request, _ *attestation.Session) error {
+// PrepareRequest injects the Authorization header into req. For Chutes E2EE
+// sessions, it also sets the E2EE headers and rewrites the URL path to
+// /e2e/invoke.
+func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, meta *e2ee.ChutesE2EE, stream bool) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if meta != nil {
+		req.Header.Set("X-Chute-Id", meta.ChuteID)
+		req.Header.Set("X-Instance-Id", meta.InstanceID)
+		req.Header["X-E2E-Nonce"] = []string{meta.E2ENonce}
+		req.Header["X-E2E-Stream"] = []string{strconv.FormatBool(stream)}
+		req.Header["X-E2E-Path"] = []string{p.chatPath}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.URL.Path = "/e2e/invoke"
+	}
 	return nil
 }
