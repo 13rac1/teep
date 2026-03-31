@@ -169,8 +169,7 @@ func (c *Checker) CheckTLSState(ctx context.Context, host string, state *tls.Con
 	}
 
 	leaf := state.PeerCertificates[0]
-	h := sha256.Sum256(leaf.Raw)
-	cacheKey := strings.ToLower(host) + "\x00" + hex.EncodeToString(h[:])
+	cacheKey := certCacheKey(host, leaf)
 
 	c.mu.Lock()
 	if e, ok := c.entries[cacheKey]; ok && time.Since(e.checkedAt) <= certCacheTTL {
@@ -235,29 +234,7 @@ func (c *Checker) CheckTLSState(ctx context.Context, host string, state *tls.Con
 			continue
 		}
 
-		c.mu.Lock()
-		if len(c.entries) > 1024 {
-			now := time.Now()
-			for k, e := range c.entries {
-				if now.Sub(e.checkedAt) > certCacheTTL {
-					delete(c.entries, k)
-				}
-			}
-			// Hard cap: if still over limit after TTL sweep, evict oldest.
-			for len(c.entries) > 1024 {
-				var oldestKey string
-				var oldestTime time.Time
-				for k, e := range c.entries {
-					if oldestKey == "" || e.checkedAt.Before(oldestTime) {
-						oldestKey = k
-						oldestTime = e.checkedAt
-					}
-				}
-				delete(c.entries, oldestKey)
-			}
-		}
-		c.entries[cacheKey] = certCacheEntry{checkedAt: time.Now()}
-		c.mu.Unlock()
+		c.addCacheEntry(cacheKey)
 		return nil
 	}
 
@@ -265,6 +242,32 @@ func (c *Checker) CheckTLSState(ctx context.Context, host string, state *tls.Con
 		return errors.New("no verifiable SCTs")
 	}
 	return fmt.Errorf("no valid SCTs: %s", strings.Join(verifyErrs, "; "))
+}
+
+func (c *Checker) addCacheEntry(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) > 1024 {
+		now := time.Now()
+		for k, e := range c.entries {
+			if now.Sub(e.checkedAt) > certCacheTTL {
+				delete(c.entries, k)
+			}
+		}
+		// Hard cap: if still over limit after TTL sweep, evict oldest.
+		for len(c.entries) > 1024 {
+			var oldestKey string
+			var oldestTime time.Time
+			for k, e := range c.entries {
+				if oldestKey == "" || e.checkedAt.Before(oldestTime) {
+					oldestKey = k
+					oldestTime = e.checkedAt
+				}
+			}
+			delete(c.entries, oldestKey)
+		}
+	}
+	c.entries[key] = certCacheEntry{checkedAt: time.Now()}
 }
 
 func (c *Checker) loadLogList(parentCtx context.Context) (*loglist3.LogList, error) {
@@ -335,6 +338,11 @@ func toCTChain(chain []*x509.Certificate) ([]*ctx509.Certificate, error) {
 		out = append(out, parsed)
 	}
 	return out, nil
+}
+
+func certCacheKey(host string, cert *x509.Certificate) string {
+	h := sha256.Sum256(cert.Raw)
+	return strings.ToLower(host) + "\x00" + hex.EncodeToString(h[:])
 }
 
 func isPrivateHost(host string) bool {
