@@ -2,12 +2,14 @@ package attestation
 
 import (
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
+	"filippo.io/edwards25519"
 	"github.com/google/go-tdx-guest/pcs"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
 )
@@ -597,7 +599,7 @@ func evalTDXReportDataBinding(in *ReportInput) []FactorResult {
 	if in.TDX.ReportDataBindingDetail != "" {
 		return factor(TierBinding, "tdx_reportdata_binding", Pass, in.TDX.ReportDataBindingDetail)
 	}
-	return factor(TierBinding, "tdx_reportdata_binding", Skip, "no REPORTDATA verifier configured for this provider")
+	return factor(TierBinding, "tdx_reportdata_binding", Fail, "no REPORTDATA verifier configured for this provider")
 }
 func evalIntelPCSCollateral(in *ReportInput) []FactorResult {
 	if in.TDX == nil || in.TDX.ParseErr != nil {
@@ -666,14 +668,17 @@ func evalTDXTCBNotRevoked(in *ReportInput) []FactorResult {
 		fmt.Sprintf("TCB status %s is not Revoked", in.TDX.TcbStatus))
 }
 func evalNvidiaPayloadPresent(in *ReportInput) []FactorResult {
-	if in.Raw.NvidiaPayload == "" {
-		return factor(TierBinding, "nvidia_payload_present", Fail, "nvidia_payload field is absent from attestation response")
+	if in.Raw.NvidiaPayload != "" {
+		return factor(TierBinding, "nvidia_payload_present", Pass, fmt.Sprintf("NVIDIA payload present (%d chars)", len(in.Raw.NvidiaPayload)))
 	}
-	return factor(TierBinding, "nvidia_payload_present", Pass, fmt.Sprintf("NVIDIA payload present (%d chars)", len(in.Raw.NvidiaPayload)))
+	if len(in.Raw.GPUEvidence) > 0 {
+		return factor(TierBinding, "nvidia_payload_present", Pass, fmt.Sprintf("GPU evidence present (%d GPUs, SPDM format)", len(in.Raw.GPUEvidence)))
+	}
+	return factor(TierBinding, "nvidia_payload_present", Fail, "nvidia_payload field is absent from attestation response")
 }
 func evalNvidiaSignature(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
-		if in.Raw.NvidiaPayload == "" {
+		if in.Raw.NvidiaPayload == "" && len(in.Raw.GPUEvidence) == 0 {
 			return factor(TierBinding, "nvidia_signature", Skip, "no NVIDIA payload to verify")
 		}
 		return factor(TierBinding, "nvidia_signature", Fail, "NVIDIA verification was not attempted")
@@ -685,7 +690,7 @@ func evalNvidiaSignature(in *ReportInput) []FactorResult {
 }
 func evalNvidiaClaims(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
-		if in.Raw.NvidiaPayload == "" {
+		if in.Raw.NvidiaPayload == "" && len(in.Raw.GPUEvidence) == 0 {
 			return factor(TierBinding, "nvidia_claims", Skip, "no NVIDIA payload to check")
 		}
 		return factor(TierBinding, "nvidia_claims", Fail, "NVIDIA verification was not attempted")
@@ -697,7 +702,7 @@ func evalNvidiaClaims(in *ReportInput) []FactorResult {
 }
 func evalNvidiaClientNonceBound(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
-		if in.Raw.NvidiaPayload == "" {
+		if in.Raw.NvidiaPayload == "" && len(in.Raw.GPUEvidence) == 0 {
 			return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "no NVIDIA payload; nonce not checked")
 		}
 		return factor(TierBinding, "nvidia_nonce_client_bound", Skip, "NVIDIA verification not attempted")
@@ -728,25 +733,83 @@ func evalNvidiaNRASVerified(in *ReportInput) []FactorResult {
 			fmt.Sprintf("NRAS JWT claims invalid: %v", in.NvidiaNRAS.ClaimsErr))
 	}
 	if !in.NvidiaNRAS.OverallResult {
-		return factor(TierBinding, "nvidia_nras_verified", Fail, "NRAS result: false")
+		return factor(TierBinding, "nvidia_nras_verified", Fail, nrasDiagDetail(in.NvidiaNRAS))
 	}
 	return factor(TierBinding, "nvidia_nras_verified", Pass, "NRAS: true (JWT verified)")
 }
+
+// nrasDiagDetail formats per-GPU diagnostic claims when NRAS overall result is false.
+// When all GPUs report the same error, it deduplicates to avoid repetition.
+func nrasDiagDetail(r *NvidiaVerifyResult) string {
+	if len(r.GPUDiags) == 0 {
+		return "NRAS result: false"
+	}
+
+	// Check if all GPUs have the same error.
+	if allSameError(r.GPUDiags) {
+		d := r.GPUDiags[0]
+		if d.ErrorDetails != "" {
+			return fmt.Sprintf("NRAS result: false; all %d GPUs: %s", len(r.GPUDiags), d.ErrorDetails)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("NRAS result: false")
+	for i, d := range r.GPUDiags {
+		if i >= 8 {
+			fmt.Fprintf(&b, "; ... and %d more GPUs", len(r.GPUDiags)-8)
+			break
+		}
+		switch {
+		case d.ErrorDetails != "":
+			fmt.Fprintf(&b, "; %s: %s", d.GPUID, d.ErrorDetails)
+		case d.MeasRes != "":
+			fmt.Fprintf(&b, "; %s: measres=%s nonce=%t driver=%s hwmodel=%s",
+				d.GPUID, d.MeasRes, d.NonceMatch, d.DriverVersion, d.HWModel)
+		default:
+			fmt.Fprintf(&b, "; %s: no diagnostic claims", d.GPUID)
+		}
+	}
+	return b.String()
+}
+
+func allSameError(diags []NRASGPUDiag) bool {
+	if len(diags) < 2 {
+		return false
+	}
+	first := diags[0].ErrorDetails
+	for _, d := range diags[1:] {
+		if d.ErrorDetails != first {
+			return false
+		}
+	}
+	return first != ""
+}
+
 func evalE2EECapable(in *ReportInput) []FactorResult {
 	switch {
 	case in.Raw.SigningKey == "":
 		return factor(TierBinding, "e2ee_capable", Fail, "enclave public key absent; E2EE key exchange not possible")
+	case in.Raw.SigningAlgo == "ml-kem-768":
+		// ML-KEM-768 post-quantum key (1184 bytes, base64-encoded).
+		b, err := base64.StdEncoding.DecodeString(in.Raw.SigningKey)
+		if err != nil {
+			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("ML-KEM-768 public key invalid base64: %v", err))
+		}
+		if len(b) != 1184 {
+			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("ML-KEM-768 public key wrong size: %d bytes, want 1184", len(b)))
+		}
+		return factor(TierBinding, "e2ee_capable", Pass, "ML-KEM-768 public key valid (1184 bytes); post-quantum E2EE key exchange possible")
 	case in.Raw.SigningAlgo == "ed25519" || len(in.Raw.SigningKey) == 64:
-		// V2: Ed25519 key (64 hex chars).
-		if err := ValidateModelKeyV2(in.Raw.SigningKey); err != nil {
+		// Ed25519 key (64 hex chars).
+		if err := validateEd25519Hex(in.Raw.SigningKey); err != nil {
 			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave ed25519 public key invalid: %v", err))
 		}
-		return factor(TierBinding, "e2ee_capable", Pass, "enclave ed25519 public key valid; v2 E2EE key exchange possible (ed25519)")
+		return factor(TierBinding, "e2ee_capable", Pass, "enclave ed25519 public key valid; E2EE key exchange possible (ed25519)")
 	default:
-		// V1: secp256k1 key (130 hex chars).
-		s := &Session{}
-		if err := s.SetModelKey(in.Raw.SigningKey); err != nil {
-			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave public key is not a valid secp256k1 point: %v", err))
+		// secp256k1 key (130 hex chars, uncompressed).
+		if err := validateSecp256k1Hex(in.Raw.SigningKey); err != nil {
+			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave public key invalid: %v", err))
 		}
 		detail := "enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible"
 		if in.Raw.SigningAlgo != "" {
@@ -783,6 +846,38 @@ func evalE2EEUsable(in *ReportInput) []FactorResult {
 		detail = "E2EE test not attempted"
 	}
 	return factor(TierBinding, "e2ee_usable", Skip, detail)
+}
+
+// validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519
+// public key) and that the bytes form a valid point on the Ed25519 curve.
+func validateEd25519Hex(s string) error {
+	if len(s) != 64 {
+		return fmt.Errorf("expected 64 hex chars, got %d", len(s))
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return fmt.Errorf("not valid hex: %w", err)
+	}
+	if _, err := new(edwards25519.Point).SetBytes(b); err != nil {
+		return fmt.Errorf("not a valid ed25519 point: %w", err)
+	}
+	return nil
+}
+
+// validateSecp256k1Hex checks that s is 130 hex characters starting with "04"
+// (uncompressed secp256k1 public key format). Full point-on-curve validation
+// happens at E2EE session setup time.
+func validateSecp256k1Hex(s string) error {
+	if len(s) != 130 {
+		return fmt.Errorf("expected 130 hex chars, got %d", len(s))
+	}
+	if s[:2] != "04" {
+		return fmt.Errorf("must start with '04' (uncompressed), got %q", s[:2])
+	}
+	if _, err := hex.DecodeString(s); err != nil {
+		return fmt.Errorf("not valid hex: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -878,6 +973,10 @@ func buildTransparencyNoRekor(in *ReportInput, scPolicy *SupplyChainPolicy) Fact
 		}
 		return FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Skip,
 			Detail: fmt.Sprintf("compose hash present (%s) but no Rekor provenance fetched", hashPreview)}
+	}
+	if in.Raw.BackendFormat == FormatChutes {
+		return FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Skip,
+			Detail: "chutes attestation does not include container image metadata; supply chain verification is validator-side only"}
 	}
 	return FactorResult{Tier: TierSupplyChain, Name: "build_transparency_log", Status: Fail,
 		Detail: "no build transparency log"}
@@ -1105,6 +1204,9 @@ func evalCPUIDRegistry(in *ReportInput) []FactorResult {
 func evalComposeBinding(in *ReportInput) []FactorResult {
 	switch {
 	case in.Compose == nil || !in.Compose.Checked:
+		if in.Raw.BackendFormat == FormatChutes {
+			return factor(TierSupplyChain, "compose_binding", Skip, "chutes uses cosign image admission + IMA, not docker-compose; compose binding not applicable")
+		}
 		return factor(TierSupplyChain, "compose_binding", Skip, "no app_compose in attestation response")
 	case in.Compose.Err != nil:
 		return factor(TierSupplyChain, "compose_binding", Fail, fmt.Sprintf("compose binding failed: %v", in.Compose.Err))
@@ -1114,6 +1216,9 @@ func evalComposeBinding(in *ReportInput) []FactorResult {
 }
 func evalSigstoreVerification(in *ReportInput) []FactorResult {
 	if len(in.Sigstore) == 0 {
+		if in.Raw.BackendFormat == FormatChutes {
+			return factor(TierSupplyChain, "sigstore_verification", Skip, "chutes attestation does not include container image digests; cosign verification is validator-side only")
+		}
 		return factor(TierSupplyChain, "sigstore_verification", Skip, "no image digests to verify")
 	}
 
@@ -1151,6 +1256,9 @@ func evalSigstoreVerification(in *ReportInput) []FactorResult {
 }
 func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 	if len(in.Raw.EventLog) == 0 {
+		if in.Raw.BackendFormat == FormatChutes {
+			return factor(TierSupplyChain, "event_log_integrity", Skip, "chutes performs RTMR verification validator-side against a golden baseline; event log not exposed to clients")
+		}
 		return factor(TierSupplyChain, "event_log_integrity", Skip, "no event log entries in attestation response")
 	}
 	if in.TDX == nil || in.TDX.ParseErr != nil {

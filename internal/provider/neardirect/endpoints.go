@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/tlsct"
 	"golang.org/x/sync/singleflight"
 )
@@ -137,7 +138,7 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 256))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, provider.Truncate(string(body), 256))
 	}
 
 	var er endpointsResponse
@@ -216,12 +217,4 @@ func isValidDomain(d string, restrictToNearAI bool) bool {
 		return true
 	}
 	return host == "near.ai" || strings.HasSuffix(host, ".near.ai")
-}
-
-// truncate returns s truncated to n characters with "..." appended if needed.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

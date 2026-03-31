@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+
+	"github.com/13rac1/teep/internal/provider"
 )
 
 // modelsPath is the Venice API path for listing models.
@@ -64,7 +66,7 @@ func (l *ModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("venice: models endpoint returned HTTP %d: %s", resp.StatusCode, truncate(string(body), 256))
+		return nil, fmt.Errorf("venice: models endpoint returned HTTP %d: %s", resp.StatusCode, provider.Truncate(string(body), 256))
 	}
 
 	var mr modelsResponse
@@ -84,12 +86,4 @@ func (l *ModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error)
 		}
 	}
 	return models, nil
-}
-
-// truncate returns s truncated to n characters with "..." appended if needed.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

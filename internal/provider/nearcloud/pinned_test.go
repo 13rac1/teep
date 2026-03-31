@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
@@ -831,8 +832,13 @@ func TestFetchAttestation_LongErrorTruncated(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "truncated") {
-		t.Errorf("long error should be truncated: %v", err)
+	errMsg := err.Error()
+	full600 := strings.Repeat("x", 600)
+	if strings.Contains(errMsg, full600) {
+		t.Errorf("error should be truncated, but contains all 600 bytes")
+	}
+	if !strings.Contains(errMsg, "...") {
+		t.Errorf("truncated error should end with ...: %v", err)
 	}
 }
 
@@ -1218,7 +1224,9 @@ func TestEncryptChat_UsesRequestSigningKey(t *testing.T) {
 	t.Logf("err: %v", err)
 	t.Logf("chatBody len: %d", len(chatBody))
 	if session != nil {
-		t.Logf("session: Ed25519PubHex=%s", session.Ed25519PubHex[:16]+"...")
+		if nc, ok := session.(*e2ee.NearCloudSession); ok {
+			t.Logf("session: Ed25519PubHex=%s", nc.ClientEd25519PubHex()[:16]+"...")
+		}
 	}
 	if headers != nil {
 		t.Logf("headers: %v", headers)

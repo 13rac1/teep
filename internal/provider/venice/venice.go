@@ -17,57 +17,42 @@ package venice
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider"
 )
 
 // attestationPath is the Venice API path for TEE attestation.
 const attestationPath = "/api/v1/tee/attestation"
 
-// eventLogEntry is one entry in Venice's event_log array — a TDX RTMR
-// measurement extend event. Mirrors attestation.EventLogEntry but with
-// Venice's field order for strict JSON parsing.
-type eventLogEntry struct {
-	Digest       string `json:"digest"`
-	Event        string `json:"event"`
-	EventPayload string `json:"event_payload"`
-	EventType    int    `json:"event_type"`
-	IMR          int    `json:"imr"`
-}
-
 // tcbInfo holds the parsed info.tcb_info object from Venice's attestation
 // response. Contains dstack measurements and the docker-compose manifest.
 type tcbInfo struct {
-	AppCompose  string          `json:"app_compose"`  // JSON-encoded dstack manifest
-	ComposeHash string          `json:"compose_hash"` // hex SHA-256
-	DeviceID    string          `json:"device_id"`    // hex TDX device ID
-	EventLog    []eventLogEntry `json:"event_log"`    // TDX RTMR extend events
-	MRTD        string          `json:"mrtd"`         // hex SHA-384
-	OSImageHash string          `json:"os_image_hash"`
-	RTMR0       string          `json:"rtmr0"` // hex SHA-384
-	RTMR1       string          `json:"rtmr1"`
-	RTMR2       string          `json:"rtmr2"`
-	RTMR3       string          `json:"rtmr3"`
+	AppCompose  string                      `json:"app_compose"`  // JSON-encoded dstack manifest
+	ComposeHash string                      `json:"compose_hash"` // hex SHA-256
+	DeviceID    string                      `json:"device_id"`    // hex TDX device ID
+	EventLog    []attestation.EventLogEntry `json:"event_log"`    // TDX RTMR extend events
+	MRTD        string                      `json:"mrtd"`         // hex SHA-384
+	OSImageHash string                      `json:"os_image_hash"`
+	RTMR0       string                      `json:"rtmr0"` // hex SHA-384
+	RTMR1       string                      `json:"rtmr1"`
+	RTMR2       string                      `json:"rtmr2"`
+	RTMR3       string                      `json:"rtmr3"`
 }
 
 // UnmarshalJSON handles tcb_info being either a direct JSON object or a
 // JSON-encoded string containing JSON (double-encoded by some dstack versions).
 func (t *tcbInfo) UnmarshalJSON(data []byte) error {
-	// Try to unwrap a JSON string first.
-	var str string
-	if json.Unmarshal(data, &str) == nil {
-		data = []byte(str)
-	}
-	type alias tcbInfo // prevent recursion
-	return json.Unmarshal(data, (*alias)(t))
+	type alias tcbInfo
+	return json.Unmarshal(provider.UnwrapDoubleEncoded(data), (*alias)(t))
 }
 
 // ServerVerification holds Venice's gateway-level verification result.
@@ -123,20 +108,6 @@ type ServerVerification struct {
 	VerificationDurationMs int    `json:"verificationDurationMs"`
 }
 
-func toEventLogEntries(local []eventLogEntry) []attestation.EventLogEntry {
-	out := make([]attestation.EventLogEntry, len(local))
-	for i, e := range local {
-		out[i] = attestation.EventLogEntry{
-			IMR:          e.IMR,
-			Digest:       e.Digest,
-			EventType:    e.EventType,
-			Event:        e.Event,
-			EventPayload: e.EventPayload,
-		}
-	}
-	return out
-}
-
 // veniceInfo holds the nested "info" object from Venice's attestation
 // response, containing dstack environment metadata.
 type veniceInfo struct {
@@ -167,16 +138,16 @@ type attestationResponse struct {
 	NvidiaPayload  string `json:"nvidia_payload"`
 
 	// Extended fields (10 propagated to RawAttestation).
-	EventLog           []eventLogEntry     `json:"event_log"`
-	Info               veniceInfo          `json:"info"`
-	ServerVerification *ServerVerification `json:"server_verification"`
-	ModelName          string              `json:"model_name"`
-	UpstreamModel      string              `json:"upstream_model"`
-	SigningAlgo        string              `json:"signing_algo"`
-	TEEHardware        string              `json:"tee_hardware"`
-	NonceSource        string              `json:"nonce_source"`
-	CandidatesAvail    int                 `json:"candidates_available"`
-	CandidatesEval     int                 `json:"candidates_evaluated"`
+	EventLog           []attestation.EventLogEntry `json:"event_log"`
+	Info               veniceInfo                  `json:"info"`
+	ServerVerification *ServerVerification         `json:"server_verification"`
+	ModelName          string                      `json:"model_name"`
+	UpstreamModel      string                      `json:"upstream_model"`
+	SigningAlgo        string                      `json:"signing_algo"`
+	TEEHardware        string                      `json:"tee_hardware"`
+	NonceSource        string                      `json:"nonce_source"`
+	CandidatesAvail    int                         `json:"candidates_available"`
+	CandidatesEval     int                         `json:"candidates_evaluated"`
 
 	// Duplicate fields (parsed to silence jsonstrict, not propagated).
 	SigningPublicKey string `json:"signing_public_key"`
@@ -210,37 +181,15 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	if err != nil {
 		return nil, fmt.Errorf("venice: parse base URL %q: %w", a.baseURL, err)
 	}
-
 	q := endpoint.Query()
 	q.Set("model", model)
 	q.Set("nonce", nonce.Hex())
 	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)
+	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
 	if err != nil {
-		return nil, fmt.Errorf("venice: build attestation request: %w", err)
+		return nil, fmt.Errorf("venice: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
-
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("venice: GET %s%s: %w", endpoint.Host, endpoint.Path, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB max
-	if err != nil {
-		return nil, fmt.Errorf("venice: read attestation response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		msg := string(body)
-		if len(msg) > 512 {
-			msg = msg[:512] + "...[truncated]"
-		}
-		return nil, fmt.Errorf("venice: attestation endpoint returned HTTP %d: %s", resp.StatusCode, msg)
-	}
-
 	return ParseAttestationResponse(body)
 }
 
@@ -264,6 +213,7 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 	}
 
 	return &attestation.RawAttestation{
+		BackendFormat:  attestation.FormatDstack,
 		Verified:       ar.Verified,
 		Nonce:          ar.Nonce,
 		Model:          ar.Model,
@@ -281,7 +231,7 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 		OSImageHash:     ar.Info.OSImageHash,
 		DeviceID:        ar.Info.DeviceID,
 		AppCompose:      ar.Info.TCBInfo.AppCompose,
-		EventLog:        toEventLogEntries(ar.EventLog),
+		EventLog:        ar.EventLog,
 		EventLogCount:   len(ar.EventLog),
 		NonceSource:     ar.NonceSource,
 		CandidatesAvail: ar.CandidatesAvail,
@@ -303,19 +253,9 @@ func NewPreparer(apiKey string) *Preparer {
 	return &Preparer{apiKey: apiKey}
 }
 
-// PrepareRequest injects the Venice E2EE headers into req. The session must
-// have its ModelKeyHex set (via SetModelKey) before calling this function.
-func (p *Preparer) PrepareRequest(req *http.Request, session *attestation.Session) error {
-	if session.ModelKeyHex == "" {
-		return errors.New("venice: PrepareRequest called with empty session.ModelKeyHex; call SetModelKey first")
-	}
-	if session.PublicKeyHex == "" {
-		return errors.New("venice: PrepareRequest called with empty session.PublicKeyHex; session may not be initialised")
-	}
-
-	req.Header.Set("X-Venice-Tee-Client-Pub-Key", session.PublicKeyHex)
-	req.Header.Set("X-Venice-Tee-Model-Pub-Key", session.ModelKeyHex)
-	req.Header.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
+// PrepareRequest merges pre-built E2EE headers into req and sets Authorization.
+func (p *Preparer) PrepareRequest(req *http.Request, e2eeHeaders http.Header, _ *e2ee.ChutesE2EE, _ bool) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	maps.Copy(req.Header, e2eeHeaders)
 	return nil
 }

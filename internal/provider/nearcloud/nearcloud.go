@@ -13,13 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
@@ -50,12 +50,8 @@ type tcbInfo struct {
 // UnmarshalJSON handles tcb_info being either a direct JSON object or a
 // JSON-encoded string containing JSON (double-encoded by some dstack versions).
 func (t *tcbInfo) UnmarshalJSON(data []byte) error {
-	var str string
-	if json.Unmarshal(data, &str) == nil {
-		data = []byte(str)
-	}
-	type alias tcbInfo // prevent recursion
-	return json.Unmarshal(data, (*alias)(t))
+	type alias tcbInfo
+	return json.Unmarshal(provider.UnwrapDoubleEncoded(data), (*alias)(t))
 }
 
 // gatewayAttestation holds the gateway's own TDX attestation data.
@@ -159,29 +155,9 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("signing_algo", "ed25519")
 	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)
+	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
 	if err != nil {
-		return nil, fmt.Errorf("nearcloud: build attestation request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
-
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("nearcloud: GET %s: %w", endpoint.Host+endpoint.Path, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MiB max (gateway responses are larger)
-	if err != nil {
-		return nil, fmt.Errorf("nearcloud: read attestation response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		msg := string(body)
-		if len(msg) > 512 {
-			msg = msg[:512] + "...[truncated]"
-		}
-		return nil, fmt.Errorf("nearcloud: attestation endpoint returned HTTP %d: %s", resp.StatusCode, msg)
+		return nil, fmt.Errorf("nearcloud: %w", err)
 	}
 
 	gwRaw, raw, err := ParseGatewayResponse(body, model)

@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -26,7 +25,9 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider"
 )
 
 const (
@@ -48,12 +49,8 @@ type tcbInfo struct {
 // UnmarshalJSON handles tcb_info being either a direct JSON object or a
 // JSON-encoded string containing JSON (double-encoded by some dstack versions).
 func (t *tcbInfo) UnmarshalJSON(data []byte) error {
-	var str string
-	if json.Unmarshal(data, &str) == nil {
-		data = []byte(str)
-	}
-	type alias tcbInfo // prevent recursion
-	return json.Unmarshal(data, (*alias)(t))
+	type alias tcbInfo
+	return json.Unmarshal(provider.UnwrapDoubleEncoded(data), (*alias)(t))
 }
 
 // modelAttestation represents one element of the model_attestations array
@@ -165,29 +162,9 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("signing_algo", "ecdsa")
 	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), http.NoBody)
+	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
 	if err != nil {
-		return nil, fmt.Errorf("nearai: build attestation request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
-
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("nearai: GET %s%s: %w", endpoint.Host, endpoint.Path, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB max
-	if err != nil {
-		return nil, fmt.Errorf("nearai: read attestation response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		msg := string(body)
-		if len(msg) > 512 {
-			msg = msg[:512] + "...[truncated]"
-		}
-		return nil, fmt.Errorf("nearai: attestation endpoint returned HTTP %d: %s", resp.StatusCode, msg)
+		return nil, fmt.Errorf("nearai: %w", err)
 	}
 
 	return ParseAttestationResponse(body, model)
@@ -234,11 +211,12 @@ func ParseAttestationResponse(body []byte, model string) (*attestation.RawAttest
 
 	// Flat response form: use top-level fields directly.
 	raw := &attestation.RawAttestation{
+		BackendFormat:  attestation.FormatNear,
 		Verified:       ar.Verified,
 		Nonce:          ar.RequestNonce,
 		Model:          ar.ModelName,
 		TEEProvider:    "TDX+NVIDIA",
-		SigningKey:     normalizeUncompressedKey(ar.SigningPublicKey),
+		SigningKey:     provider.NormalizeUncompressedKey(ar.SigningPublicKey),
 		SigningAddress: ar.SigningAddress,
 		SigningAlgo:    ar.SigningAlgo,
 		TLSFingerprint: ar.TLSCertFingerprint,
@@ -270,11 +248,12 @@ func selectByModel(list []modelAttestation, model string) (*modelAttestation, er
 
 func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*attestation.RawAttestation, error) {
 	raw := &attestation.RawAttestation{
+		BackendFormat:  attestation.FormatNear,
 		Verified:       verified,
 		Nonce:          m.RequestNonce,
 		Model:          m.ModelName,
 		TEEProvider:    "TDX+NVIDIA",
-		SigningKey:     normalizeUncompressedKey(m.SigningPublicKey),
+		SigningKey:     provider.NormalizeUncompressedKey(m.SigningPublicKey),
 		SigningAddress: m.SigningAddress,
 		SigningAlgo:    m.SigningAlgo,
 		TLSFingerprint: m.TLSCertFingerprint,
@@ -295,16 +274,6 @@ func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*
 	return raw, nil
 }
 
-// normalizeUncompressedKey prepends the "04" uncompressed point prefix if the
-// key is 128 hex chars (raw x||y without prefix). NEAR AI's signing_public_key
-// omits the prefix; SetModelKey and e2ee_capable require the standard 130-char form.
-func normalizeUncompressedKey(key string) string {
-	if len(key) == 128 {
-		return "04" + key
-	}
-	return key
-}
-
 // Preparer injects the NEAR AI Authorization header into an outgoing request.
 // NEAR AI's E2EE protocol headers are not yet publicly specified; this
 // implementation sets the Authorization header only. Additional headers will
@@ -318,10 +287,8 @@ func NewPreparer(apiKey string) *Preparer {
 	return &Preparer{apiKey: apiKey}
 }
 
-// PrepareRequest injects the NEAR AI Authorization header into req. The session
-// parameter is accepted for interface compatibility but is not used until NEAR
-// AI's E2EE header protocol is specified.
-func (p *Preparer) PrepareRequest(req *http.Request, session *attestation.Session) error {
+// PrepareRequest injects the NEAR AI Authorization header into req.
+func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	return nil
 }

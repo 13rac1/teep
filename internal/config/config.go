@@ -155,6 +155,10 @@ type Config struct {
 	// Set via --offline flag at runtime.
 	Offline bool
 
+	// Force forwards requests even when enforced attestation factors fail.
+	// Set via --force flag. WARNING: this reduces security guarantees.
+	Force bool
+
 	// PoCSigningKey is the optional base64-encoded ed25519 public key for
 	// verifying EdDSA signatures on Proof of Cloud JWTs (GW-M-11).
 	// When empty, only JWT claims are validated (no signature verification).
@@ -198,6 +202,9 @@ func loadTOML(cfg *Config, path string) error {
 	meta, err := toml.DecodeFile(path, &f)
 	if err != nil {
 		return fmt.Errorf("TOML decode: %w", err)
+	}
+	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
+		return fmt.Errorf("unknown config keys: %v", undecoded)
 	}
 
 	for name := range f.Providers {
@@ -470,6 +477,8 @@ func applyEnvOverrides(cfg *Config) {
 	applyAPIKeyEnv(cfg, "neardirect", "NEARAI_API_KEY", "https://completions.near.ai", false)
 	applyAPIKeyEnv(cfg, "nearcloud", "NEARAI_API_KEY", "https://cloud-api.near.ai", true)
 	applyAPIKeyEnv(cfg, "nanogpt", "NANOGPT_API_KEY", "https://nano-gpt.com/api", false)
+	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://api.redpill.ai/v1", false)
+	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai", true)
 }
 
 // applyAPIKeyEnv sets or updates the API key for the named provider from the

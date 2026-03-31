@@ -278,32 +278,21 @@ func TestAttester_FetchAttestation_InvalidBaseURL(t *testing.T) {
 func TestPreparer_PrepareRequest_SetsHeaders(t *testing.T) {
 	p := venice.NewPreparer("test-api-key")
 
-	// Generate two distinct sessions: one for the client, one to supply a real
-	// model public key (must be a valid secp256k1 point).
-	clientSession, err := attestation.NewSession()
-	if err != nil {
-		t.Fatalf("NewSession (client): %v", err)
-	}
-	modelSession, err := attestation.NewSession()
-	if err != nil {
-		t.Fatalf("NewSession (model): %v", err)
-	}
-	modelKey := modelSession.PublicKeyHex // guaranteed valid secp256k1 point
-
-	if err := clientSession.SetModelKey(modelKey); err != nil {
-		t.Fatalf("SetModelKey: %v", err)
-	}
+	e2eeHeaders := make(http.Header)
+	e2eeHeaders.Set("X-Venice-Tee-Client-Pub-Key", "04abcdef")
+	e2eeHeaders.Set("X-Venice-Tee-Model-Pub-Key", "04123456")
+	e2eeHeaders.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
 
 	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/api/v1/chat/completions", http.NoBody)
-	if err := p.PrepareRequest(req, clientSession); err != nil {
+	if err := p.PrepareRequest(req, e2eeHeaders, nil, false); err != nil {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
 
-	if got := req.Header.Get("X-Venice-Tee-Client-Pub-Key"); got != clientSession.PublicKeyHex {
-		t.Errorf("X-Venice-TEE-Client-Pub-Key = %q, want %q", got, clientSession.PublicKeyHex)
+	if got := req.Header.Get("X-Venice-Tee-Client-Pub-Key"); got != "04abcdef" {
+		t.Errorf("X-Venice-TEE-Client-Pub-Key = %q, want %q", got, "04abcdef")
 	}
-	if got := req.Header.Get("X-Venice-Tee-Model-Pub-Key"); got != modelKey {
-		t.Errorf("X-Venice-TEE-Model-Pub-Key = %q, want %q", got, modelKey)
+	if got := req.Header.Get("X-Venice-Tee-Model-Pub-Key"); got != "04123456" {
+		t.Errorf("X-Venice-TEE-Model-Pub-Key = %q, want %q", got, "04123456")
 	}
 	if got := req.Header.Get("X-Venice-Tee-Signing-Algo"); got != "ecdsa" {
 		t.Errorf("X-Venice-TEE-Signing-Algo = %q, want %q", got, "ecdsa")
@@ -313,38 +302,14 @@ func TestPreparer_PrepareRequest_SetsHeaders(t *testing.T) {
 	}
 }
 
-func TestPreparer_PrepareRequest_EmptyModelKey(t *testing.T) {
-	p := venice.NewPreparer("key")
-	session, err := attestation.NewSession()
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	// Do NOT call SetModelKey — ModelKeyHex is empty.
+func TestPreparer_PrepareRequest_NilHeaders(t *testing.T) {
+	p := venice.NewPreparer("test-api-key")
 
 	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/", http.NoBody)
-	err = p.PrepareRequest(req, session)
-	if err == nil {
-		t.Fatal("expected error for empty ModelKeyHex, got nil")
+	if err := p.PrepareRequest(req, nil, nil, false); err != nil {
+		t.Fatalf("PrepareRequest with nil headers: %v", err)
 	}
-}
-
-func TestPreparer_PrepareRequest_EmptyPublicKeyHex(t *testing.T) {
-	p := venice.NewPreparer("key")
-	// Construct a session with ModelKeyHex set but PublicKeyHex empty.
-	// This shouldn't happen in normal usage (NewSession always sets PublicKeyHex),
-	// but we guard against it defensively.
-	modelSession, err := attestation.NewSession()
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	session := &attestation.Session{
-		ModelKeyHex:  modelSession.PublicKeyHex, // valid key
-		PublicKeyHex: "",                        // deliberately empty
-	}
-
-	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/", http.NoBody)
-	err = p.PrepareRequest(req, session)
-	if err == nil {
-		t.Fatal("expected error for empty PublicKeyHex, got nil")
+	if got := req.Header.Get("Authorization"); got != "Bearer test-api-key" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer test-api-key")
 	}
 }

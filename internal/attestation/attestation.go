@@ -52,6 +52,29 @@ func ParseNonce(s string) (Nonce, error) {
 	return n, nil
 }
 
+// BackendFormat identifies which backend attestation format a response uses.
+// Set by Attesters during ParseAttestationResponse. Gateway providers use this
+// to dispatch to the correct ReportDataVerifier via multi.Verifier.
+type BackendFormat string
+
+// BackendFormat constants for known attestation backends.
+const (
+	FormatDstack  BackendFormat = "dstack"
+	FormatChutes  BackendFormat = "chutes"
+	FormatTinfoil BackendFormat = "tinfoil"
+	FormatGateway BackendFormat = "gateway"
+	FormatNear    BackendFormat = "near"
+)
+
+// GPUEvidence is a single GPU's NVIDIA attestation entry: an X.509 certificate
+// chain and SPDM 1.1 measurement signature. Used by chutes-format providers
+// that return per-GPU evidence instead of a single EAT envelope.
+type GPUEvidence struct {
+	Certificate string `json:"certificate"` // base64-encoded PEM certificate chain
+	Evidence    string `json:"evidence"`    // base64-encoded SPDM measurement blob
+	Arch        string `json:"arch"`        // GPU architecture (e.g. "HOPPER")
+}
+
 // EventLogEntry is one entry in the TDX event log — a RTMR extend event.
 // The JSON tags match both Venice and NEAR AI attestation response formats.
 type EventLogEntry struct {
@@ -67,6 +90,11 @@ type EventLogEntry struct {
 // All fields are raw strings exactly as returned by the provider; higher layers
 // are responsible for validation.
 type RawAttestation struct {
+	// BackendFormat identifies which backend attestation format this response
+	// uses. Set by Attesters during ParseAttestationResponse. Gateway providers
+	// use this to dispatch to the correct ReportDataVerifier.
+	BackendFormat BackendFormat
+
 	// Verified is the server-side verification result. This is a convenience
 	// flag from the provider — clients must perform their own client-side checks.
 	Verified bool
@@ -94,7 +122,13 @@ type RawAttestation struct {
 	IntelQuote string
 
 	// NvidiaPayload is the NVIDIA GPU attestation JWT or raw payload.
+	// Used by dstack-based providers that return a single EAT envelope.
 	NvidiaPayload string
+
+	// GPUEvidence is per-GPU NVIDIA attestation evidence (certificate chain +
+	// SPDM measurement signature). Used by chutes-format providers that return
+	// individual GPU evidence entries instead of a single EAT envelope.
+	GPUEvidence []GPUEvidence
 
 	// TLSFingerprint is the hex SHA-256 of the backend's TLS certificate SPKI.
 	// Set by providers that perform connection-level attestation (NEAR AI).
@@ -115,6 +149,11 @@ type RawAttestation struct {
 	NonceSource     string          // "client" or "server"
 	CandidatesAvail int             // node pool size
 	CandidatesEval  int             // nodes evaluated
+
+	// E2EE instance metadata — populated by providers that use instance-level
+	// key exchange (Chutes). Carried through to the Session for header injection.
+	InstanceID string `json:"-"` // selected instance for E2EE
+	E2ENonce   string `json:"-"` // single-use nonce token from instance discovery
 
 	// Gateway fields — populated by providers with TEE-attested API gateways.
 	// Empty for providers without a gateway (e.g. Venice, NEAR AI direct).

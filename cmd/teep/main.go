@@ -33,10 +33,14 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/defaults"
+	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/proxy"
 )
@@ -108,6 +112,7 @@ func runServe(args []string) {
 
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
+	force := registerForceFlag(fs)
 	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
 	fs.Usage = func() { printServeHelp() }
 	if err := fs.Parse(args); err != nil {
@@ -120,6 +125,11 @@ func runServe(args []string) {
 		os.Exit(1)
 	}
 	cfg.Offline = *offline
+
+	if force != nil && *force {
+		cfg.Force = true
+		slog.Warn("--force enabled: requests will be forwarded even when enforced attestation factors fail")
+	}
 
 	if err := filterProviders(cfg, providerName); err != nil {
 		slog.Error("provider filter failed", "err", err)
@@ -159,6 +169,8 @@ var providerEnvVars = map[string]string{
 	"neardirect": "NEARAI_API_KEY",
 	"nearcloud":  "NEARAI_API_KEY",
 	"nanogpt":    "NANOGPT_API_KEY",
+	"phalacloud": "PHALA_API_KEY",
+	"chutes":     "CHUTES_API_KEY",
 }
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
@@ -423,12 +435,31 @@ func verifyNVIDIA(ctx context.Context, raw *attestation.RawAttestation, nonce at
 		nvidiaStart := time.Now()
 		eat = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
 		slog.Debug("NVIDIA verification complete", "elapsed", time.Since(nvidiaStart))
+	} else if len(raw.GPUEvidence) > 0 {
+		serverNonce, err := attestation.ParseNonce(raw.Nonce)
+		if err != nil {
+			slog.Error("parse server nonce for GPU verification", "err", err)
+			eat = &attestation.NvidiaVerifyResult{
+				SignatureErr: fmt.Errorf("parse server nonce: %w", err),
+			}
+			return eat, nil
+		}
+		slog.Debug("NVIDIA GPU direct verification starting", "gpus", len(raw.GPUEvidence))
+		nvidiaStart := time.Now()
+		eat = attestation.VerifyNVIDIAGPUDirect(raw.GPUEvidence, serverNonce)
+		slog.Debug("NVIDIA GPU direct verification complete", "elapsed", time.Since(nvidiaStart))
 	}
 	if !offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
 		slog.Debug("NVIDIA NRAS verification starting")
 		nrasStart := time.Now()
 		nras = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, client)
 		slog.Debug("NVIDIA NRAS verification complete", "elapsed", time.Since(nrasStart))
+	} else if !offline && len(raw.GPUEvidence) > 0 {
+		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
+		slog.Debug("NVIDIA NRAS verification starting (synthesized EAT)")
+		nrasStart := time.Now()
+		nras = attestation.VerifyNVIDIANRAS(ctx, eatJSON, client)
+		slog.Debug("NVIDIA NRAS verification complete (synthesized EAT)", "elapsed", time.Since(nrasStart))
 	}
 	return eat, nras
 }
@@ -534,8 +565,12 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 		return nearcloud.NewAttester(cp.APIKey, offline), nil
 	case "nanogpt":
 		return nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
+	case "phalacloud":
+		return phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
+	case "chutes":
+		return chutes.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt)", name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", name)
 	}
 }
 
@@ -548,6 +583,14 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 	case "nanogpt":
 		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
 		return venice.ReportDataVerifier{}
+	case "phalacloud":
+		return multi.Verifier{
+			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
+				attestation.FormatDstack: venice.ReportDataVerifier{},
+			},
+		}
+	case "chutes":
+		return chutes.ReportDataVerifier{}
 	default:
 		return nil
 	}
@@ -563,6 +606,10 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 		return nearcloud.SupplyChainPolicy()
 	case "nanogpt":
 		return nanogpt.SupplyChainPolicy()
+	case "phalacloud":
+		return nil // no supply chain policy yet
+	case "chutes":
+		return nil // cosign+IMA model, no docker-compose
 	default:
 		return nil
 	}
@@ -572,22 +619,10 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 // by default in config.go's applyAPIKeyEnv.
 func e2eeEnabledByDefault(name string) bool {
 	switch name {
-	case "venice", "nearcloud":
+	case "venice", "nearcloud", "chutes":
 		return true
 	default:
 		return false
-	}
-}
-
-// e2eeVersion returns the E2EE protocol version for the named provider.
-func e2eeVersion(name string) int {
-	switch name {
-	case "venice":
-		return attestation.E2EEv1
-	case "nearcloud":
-		return attestation.E2EEv2
-	default:
-		return 0
 	}
 }
 
@@ -598,6 +633,8 @@ func chatPathForProvider(name string) string {
 		return "/api/v1/chat/completions"
 	case "nearcloud", "neardirect", "nanogpt":
 		return "/v1/chat/completions"
+	case "chutes":
+		return "/chat/completions"
 	default:
 		return ""
 	}
@@ -622,19 +659,23 @@ func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName
 		return &attestation.E2EETestResult{NoAPIKey: true, APIKeyEnv: envVar}
 	}
 
-	switch e2eeVersion(providerName) {
-	case attestation.E2EEv1:
-		return testE2EEv1(ctx, raw, cp, model)
-	case attestation.E2EEv2:
-		return testE2EEv2(ctx, raw, cp, model)
+	switch providerName {
+	case "venice":
+		return testE2EEVenice(ctx, raw, cp, model)
+	case "nearcloud":
+		return testE2EENearCloud(ctx, raw, cp, model)
+	case "chutes":
+		return &attestation.E2EETestResult{
+			Detail: "chutes ML-KEM-768 E2EE: live test not yet implemented",
+		}
 	default:
 		return nil
 	}
 }
 
-// testE2EEv1 tests Venice v1 E2EE (secp256k1 ECDH + AES-256-GCM).
-func testE2EEv1(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
-	session, err := attestation.NewSession()
+// testE2EEVenice tests Venice E2EE (secp256k1 ECDH + AES-256-GCM).
+func testE2EEVenice(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
+	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("create session: %w", err)}
 	}
@@ -644,7 +685,7 @@ func testE2EEv1(ctx context.Context, raw *attestation.RawAttestation, cp *config
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("set model key: %w", err)}
 	}
 
-	ct, err := attestation.Encrypt([]byte("Say hello"), session.ModelPubKey())
+	ct, err := e2ee.EncryptVenice([]byte("Say hello"), session.ModelPubKey())
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("encrypt: %w", err)}
 	}
@@ -664,18 +705,18 @@ func testE2EEv1(ctx context.Context, raw *attestation.RawAttestation, cp *config
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Venice-Tee-Client-Pub-Key", session.PublicKeyHex)
+	req.Header.Set("X-Venice-Tee-Client-Pub-Key", session.ClientPubKeyHex())
 	req.Header.Set("X-Venice-Tee-Model-Pub-Key", raw.SigningKey)
 	req.Header.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
 	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
 	req.Header.Set("Connection", "close")
 
-	return doE2EEStreamTest(req, session, "v1")
+	return doE2EEStreamTest(req, session, "venice")
 }
 
-// testE2EEv2 tests nearcloud v2 E2EE (Ed25519/XChaCha20-Poly1305) via
-// direct HTTPS request with v2 headers.
-func testE2EEv2(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
+// testE2EENearCloud tests NearCloud E2EE (Ed25519/XChaCha20-Poly1305) via
+// direct HTTPS request with E2EE headers.
+func testE2EENearCloud(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
 	body, err := json.Marshal(map[string]any{
 		"model":    model,
 		"messages": []map[string]string{{"role": "user", "content": "Say hello"}},
@@ -685,7 +726,7 @@ func testE2EEv2(ctx context.Context, raw *attestation.RawAttestation, cp *config
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("marshal body: %w", err)}
 	}
 
-	encBody, session, err := attestation.EncryptChatMessagesV2(body, raw.SigningKey)
+	encBody, session, err := e2ee.EncryptChatMessagesNearCloud(body, raw.SigningKey)
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("encrypt v2: %w", err)}
 	}
@@ -702,17 +743,17 @@ func testE2EEv2(ctx context.Context, raw *attestation.RawAttestation, cp *config
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Signing-Algo", "ed25519")
-	req.Header.Set("X-Client-Pub-Key", session.Ed25519PubHex)
+	req.Header.Set("X-Client-Pub-Key", session.ClientEd25519PubHex())
 	req.Header.Set("X-Encryption-Version", "2")
 	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
 	req.Header.Set("Connection", "close")
 
-	return doE2EEStreamTest(req, session, "v2")
+	return doE2EEStreamTest(req, session, "nearcloud")
 }
 
 // doE2EEStreamTest sends an E2EE chat completions request and validates
 // that the SSE response contains properly encrypted content fields.
-func doE2EEStreamTest(req *http.Request, session *attestation.Session, version string) *attestation.E2EETestResult {
+func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string) *attestation.E2EETestResult {
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -775,17 +816,17 @@ func doE2EEStreamTest(req *http.Request, session *attestation.Session, version s
 			if json.Unmarshal(raw, &s) != nil || s == "" {
 				continue
 			}
-			if proxy.NonEncryptedFields[key] {
+			if e2ee.NonEncryptedFields[key] {
 				continue
 			}
 			// This field should be encrypted.
-			if !attestation.IsEncryptedChunkForSession(s, session) {
+			if !session.IsEncryptedChunk(s) {
 				return &attestation.E2EETestResult{
 					Attempted: true,
 					Err:       fmt.Errorf("field %q not encrypted (len=%d, prefix=%q)", key, len(s), safePrefix(s, 16)),
 				}
 			}
-			if _, err := attestation.DecryptForSession(s, session); err != nil {
+			if _, err := session.Decrypt(s); err != nil {
 				return &attestation.E2EETestResult{
 					Attempted: true,
 					Err:       fmt.Errorf("decrypt field %q: %w", key, err),

@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -338,4 +339,97 @@ func verifySPDMEvidence(evidence []byte, expectedNonce Nonce, leafKey *ecdsa.Pub
 		"evidence_len", len(evidence))
 
 	return nil
+}
+
+// VerifyNVIDIAGPUDirect verifies per-GPU SPDM evidence directly, without an
+// EAT envelope. Used by chutes-format providers that return individual GPU
+// evidence entries. The serverNonce is the nonce from the attestation response
+// (typically server-generated); it must match the SPDM requester nonce embedded
+// in each GPU's evidence.
+func VerifyNVIDIAGPUDirect(evidence []GPUEvidence, serverNonce Nonce) *NvidiaVerifyResult {
+	result := &NvidiaVerifyResult{
+		Format:   "SPDM",
+		GPUCount: len(evidence),
+		Nonce:    serverNonce.Hex(),
+	}
+
+	if len(evidence) == 0 {
+		result.SignatureErr = errors.New("GPU evidence list is empty")
+		return result
+	}
+
+	result.Arch = evidence[0].Arch
+
+	slog.Debug("NVIDIA GPU direct verification starting",
+		"gpu_count", len(evidence),
+		"arch", result.Arch,
+		"nonce_prefix", serverNonce.HexPrefix(),
+	)
+
+	rootCA, err := loadPinnedNVIDIARootCA()
+	if err != nil {
+		result.SignatureErr = fmt.Errorf("load pinned NVIDIA root CA: %w", err)
+		return result
+	}
+
+	for i, ev := range evidence {
+		internal := nvidiaGPUEvidence{
+			Arch:        ev.Arch,
+			Certificate: ev.Certificate,
+			Evidence:    ev.Evidence,
+		}
+		if err := verifyGPUEvidence(internal, serverNonce, rootCA); err != nil {
+			result.SignatureErr = fmt.Errorf("GPU %d verification failed: %w", i, err)
+			return result
+		}
+	}
+
+	slog.Debug("NVIDIA GPU direct verification complete",
+		"gpu_count", len(evidence),
+		"arch", result.Arch,
+	)
+	return result
+}
+
+// GPUEvidenceToEAT synthesizes an EAT JSON envelope from per-GPU evidence
+// entries for NRAS submission. NRAS expects the same {arch, nonce, evidence_list}
+// structure that dstack provides natively; the per-GPU fields are identical.
+func GPUEvidenceToEAT(evidence []GPUEvidence, nonce string) string {
+	type eatEvidence struct {
+		Arch        string `json:"arch"`
+		Certificate string `json:"certificate"`
+		Evidence    string `json:"evidence"`
+	}
+	type eatEnvelope struct {
+		Arch         string        `json:"arch"`
+		Nonce        string        `json:"nonce"`
+		EvidenceList []eatEvidence `json:"evidence_list"`
+	}
+
+	list := make([]eatEvidence, 0, len(evidence))
+	for _, ev := range evidence {
+		list = append(list, eatEvidence{
+			Arch:        ev.Arch,
+			Certificate: ev.Certificate,
+			Evidence:    ev.Evidence,
+		})
+	}
+
+	arch := ""
+	if len(evidence) > 0 {
+		arch = evidence[0].Arch
+	}
+
+	eat := eatEnvelope{
+		Arch:         arch,
+		Nonce:        nonce,
+		EvidenceList: list,
+	}
+
+	b, err := json.Marshal(eat)
+	if err != nil {
+		// GPUEvidence fields are all strings; Marshal cannot fail.
+		panic(fmt.Sprintf("json.Marshal EAT envelope: %v", err))
+	}
+	return string(b)
 }

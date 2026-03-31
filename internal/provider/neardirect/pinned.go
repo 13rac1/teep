@@ -311,7 +311,7 @@ func (h *PinnedHandler) attestOnConn(
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("attestation HTTP %d: %s", resp.StatusCode, truncate(string(body), 256))
+		return nil, fmt.Errorf("attestation HTTP %d: %s", resp.StatusCode, provider.Truncate(string(body), 256))
 	}
 
 	// Parse the attestation response using shared parser.
@@ -361,7 +361,7 @@ func (h *PinnedHandler) attestOnConn(
 		return nil, fmt.Errorf("compare live SPKI vs attested TLS fingerprint: %w", err)
 	}
 	if !match {
-		return nil, fmt.Errorf("live SPKI %s != attested TLS fingerprint %s", truncate(liveSPKI, 16)+"...", truncate(raw.TLSFingerprint, 16)+"...")
+		return nil, fmt.Errorf("live SPKI %s != attested TLS fingerprint %s", provider.Truncate(liveSPKI, 16), provider.Truncate(raw.TLSFingerprint, 16))
 	}
 
 	var composeResult *attestation.ComposeBindingResult

@@ -184,7 +184,7 @@ func verifyPoCJWTClaims(jwtStr, expectedMachineID string) error {
 		if claims.MachineID == "" {
 			return fmt.Errorf("JWT missing machineId claim, expected %q", expectedMachineID)
 		}
-		if claims.MachineID != expectedMachineID {
+		if subtle.ConstantTimeCompare([]byte(claims.MachineID), []byte(expectedMachineID)) != 1 {
 			return fmt.Errorf("JWT machineId %q does not match stage-1 machineId %q",
 				claims.MachineID, expectedMachineID)
 		}
@@ -405,7 +405,7 @@ func (c *PoCClient) verifyPoCJWT(jwtStr, expectedMachineID string) error {
 		if mid == "" {
 			return fmt.Errorf("JWT missing machineId claim, expected %q", expectedMachineID)
 		}
-		if mid != expectedMachineID {
+		if subtle.ConstantTimeCompare([]byte(mid), []byte(expectedMachineID)) != 1 {
 			return fmt.Errorf("JWT machineId %q != stage-1 %q", mid, expectedMachineID)
 		}
 	}

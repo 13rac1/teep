@@ -2,12 +2,14 @@ package attestation
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -62,13 +64,31 @@ type NvidiaVerifyResult struct {
 
 	// GPUCount is the number of GPUs in the evidence list (EAT only).
 	GPUCount int
+
+	// GPUDiags holds per-GPU diagnostic claims from the NRAS response (JWT only).
+	GPUDiags []NRASGPUDiag
+}
+
+// NRASGPUDiag holds diagnostic claims extracted from a single per-GPU NRAS JWT.
+// When attestation succeeds, NRAS returns full claims (MeasRes, DriverVersion, etc.).
+// When attestation fails, NRAS returns only x-nvidia-error-details.
+type NRASGPUDiag struct {
+	GPUID         string // e.g. "GPU-0"
+	MeasRes       string // "success" or "fail" (empty on error)
+	DriverVersion string
+	VBIOSVersion  string
+	HWModel       string
+	NonceMatch    bool
+	SecBoot       bool
+	DbgStat       string // "disabled" or "enabled"
+	ErrorDetails  string // x-nvidia-error-details (set on failure)
 }
 
 // nvidiaClaims extends jwt.RegisteredClaims with NVIDIA-specific fields.
 type nvidiaClaims struct {
 	jwt.RegisteredClaims
 	OverallResult bool   `json:"x-nvidia-overall-att-result"`
-	Nonce         string `json:"nonce"`
+	Nonce         string `json:"eat_nonce"`
 }
 
 // jwksEntry pairs a keyfunc.Keyfunc with its cancel function for cleanup.
@@ -85,7 +105,8 @@ var (
 	jwksMu       sync.Mutex
 	// jwksInstances caches keyfunc instances by JWKS URL. Production uses
 	// NvidiaJWKSURL; tests use httptest server URLs. Protected by jwksMu.
-	jwksInstances = make(map[string]*jwksEntry)
+	jwksInstances    = make(map[string]*jwksEntry)
+	maxJWKSInstances = 16
 )
 
 // getOrCreateKeyfunc returns a keyfunc.Keyfunc for the given JWKS URL.
@@ -108,6 +129,18 @@ func getOrCreateKeyfunc(jwksURL string) (keyfunc.Keyfunc, error) {
 	}
 	if prev, ok := jwksInstances[jwksURL]; ok {
 		prev.cancel()
+	} else if len(jwksInstances) >= maxJWKSInstances {
+		// Evict the oldest entry to stay within the cap.
+		var oldestURL string
+		var oldestTime time.Time
+		for u, e := range jwksInstances {
+			if oldestURL == "" || e.createdAt.Before(oldestTime) {
+				oldestURL = u
+				oldestTime = e.createdAt
+			}
+		}
+		jwksInstances[oldestURL].cancel()
+		delete(jwksInstances, oldestURL)
 	}
 	entry := &jwksEntry{kf: k, cancel: cancel, createdAt: time.Now()}
 	jwksInstances[jwksURL] = entry
@@ -273,9 +306,8 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 		"body_len", len(jwtStr),
 		"body_prefix", truncate(jwtStr, 200))
 
-	// NRAS returns a JSON array of [type, token] pairs: [["JWT","eyJ..."]].
-	// Extract the first JWT from this structure.
-	extracted, err := extractNRASJWT(jwtStr)
+	// NRAS v3 returns [["JWT","<overall>"], {"GPU-0":"<jwt>", ...}].
+	overallJWT, perGPU, err := extractNRASJWT(jwtStr)
 	if err != nil {
 		return &NvidiaVerifyResult{
 			Format:       "JWT",
@@ -283,27 +315,143 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 		}
 	}
 
-	return verifyNVIDIAJWT(extracted, NvidiaJWKSURL, opts...) //nolint:contextcheck // keyfunc manages its own background context for JWKS refresh
+	result := verifyNVIDIAJWT(overallJWT, NvidiaJWKSURL, opts...) //nolint:contextcheck // keyfunc manages its own background context for JWKS refresh
+	result.GPUDiags = extractGPUDiags(perGPU)
+	return result
 }
 
-// extractNRASJWT parses the NRAS response body. NRAS returns a JSON array
-// whose elements may be [type, token] pairs or other structures. This extracts
-// the first JWT from any ["JWT","eyJ..."] pair.
-func extractNRASJWT(body string) (string, error) {
+// extractGPUDiags decodes per-GPU JWT payloads (without signature verification)
+// and extracts diagnostic claims. The per-GPU JWTs share the same JWKS as the
+// overall JWT and their digests are checked via the submods claim, so
+// re-verifying signatures is unnecessary.
+func extractGPUDiags(perGPU map[string]string) []NRASGPUDiag {
+	if len(perGPU) == 0 {
+		return nil
+	}
+
+	// Sort GPU IDs for deterministic output.
+	ids := make([]string, 0, len(perGPU))
+	for id := range perGPU {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	diags := make([]NRASGPUDiag, 0, len(ids))
+	for _, id := range ids {
+		jwtStr := perGPU[id]
+		claims, err := decodeJWTPayload(jwtStr)
+		if err != nil {
+			slog.Warn("failed to decode per-GPU JWT payload", "gpu", id, "err", err)
+			diags = append(diags, NRASGPUDiag{GPUID: id, MeasRes: fmt.Sprintf("decode error: %v", err)})
+			continue
+		}
+		slog.Debug("per-GPU JWT decoded", "gpu", id, "claim_count", len(claims),
+			"measres", claims["measres"], "error_details", claims["x-nvidia-error-details"])
+		diags = append(diags, NRASGPUDiag{
+			GPUID:         id,
+			MeasRes:       jsonString(claims, "measres"),
+			DriverVersion: jsonString(claims, "x-nvidia-gpu-driver-version"),
+			VBIOSVersion:  jsonString(claims, "x-nvidia-gpu-vbios-version"),
+			HWModel:       jsonString(claims, "hwmodel"),
+			NonceMatch:    jsonBool(claims, "x-nvidia-gpu-attestation-report-nonce-match"),
+			SecBoot:       jsonBool(claims, "secboot"),
+			DbgStat:       jsonString(claims, "dbgstat"),
+			ErrorDetails:  nvidiaErrorMessage(claims),
+		})
+	}
+	return diags
+}
+
+// decodeJWTPayload extracts and JSON-decodes the payload segment of a JWT
+// without verifying the signature.
+func decodeJWTPayload(jwtStr string) (map[string]any, error) {
+	parts := strings.SplitN(jwtStr, ".", 3)
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("JWT has %d parts, want at least 2", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("base64url decode payload: %w", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("unmarshal payload JSON: %w", err)
+	}
+	return claims, nil
+}
+
+func jsonString(m map[string]any, key string) string {
+	v, ok := m[key]
+	if !ok {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Sprintf("%v", v)
+	}
+	return s
+}
+
+func jsonBool(m map[string]any, key string) bool {
+	v, ok := m[key]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return b
+}
+
+// nvidiaErrorMessage extracts the message from x-nvidia-error-details, which is
+// a nested object like {"code":4010, "message":"NONCE_NOT_MATCHING", ...}.
+func nvidiaErrorMessage(claims map[string]any) string {
+	v, ok := claims["x-nvidia-error-details"]
+	if !ok {
+		return ""
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v", v)
+	}
+	msg := jsonString(m, "message")
+	if msg == "" {
+		msg = jsonString(m, "description")
+	}
+	return msg
+}
+
+// extractNRASJWT parses the NRAS response body. NRAS v3 returns a JSON array:
+//
+//	[["JWT","<overall-jwt>"], {"GPU-0":"<jwt>", "GPU-1":"<jwt>", ...}]
+//
+// The first element is a [type, token] pair with the overall summary JWT.
+// The second element (if present) is an object mapping GPU IDs to per-GPU JWTs
+// containing detailed attestation claims.
+func extractNRASJWT(body string) (overallJWT string, perGPU map[string]string, err error) {
 	var elements []json.RawMessage
 	if err := json.Unmarshal([]byte(body), &elements); err != nil {
-		return "", fmt.Errorf("NRAS response is not a JSON array: %w (prefix: %s)", err, truncate(body, 100))
+		return "", nil, fmt.Errorf("NRAS response is not a JSON array: %w (prefix: %s)", err, truncate(body, 100))
 	}
 	for _, elem := range elements {
+		// Try ["JWT","eyJ..."] pair.
 		var pair []string
-		if err := json.Unmarshal(elem, &pair); err != nil {
-			continue // skip non-array elements
+		if json.Unmarshal(elem, &pair) == nil && len(pair) == 2 && pair[0] == "JWT" {
+			overallJWT = strings.TrimSpace(pair[1])
+			continue
 		}
-		if len(pair) == 2 && pair[0] == "JWT" {
-			return strings.TrimSpace(pair[1]), nil
+		// Try {"GPU-0":"eyJ...", ...} object.
+		var gpuMap map[string]string
+		if json.Unmarshal(elem, &gpuMap) == nil && len(gpuMap) > 0 {
+			perGPU = gpuMap
 		}
 	}
-	return "", fmt.Errorf("no JWT entry found in NRAS response (%d elements)", len(elements))
+	if overallJWT == "" {
+		return "", nil, fmt.Errorf("no JWT entry found in NRAS response (%d elements)", len(elements))
+	}
+	slog.Debug("NRAS JWT extracted", "overall_len", len(overallJWT), "per_gpu_count", len(perGPU))
+	return overallJWT, perGPU, nil
 }
 
 // truncate returns s truncated to maxLen characters with "..." appended if truncated.
