@@ -60,6 +60,7 @@ type FactorResult struct {
 // VerificationReport holds the factor-by-factor results of an attestation
 // verification run. Produced by BuildReport.
 type VerificationReport struct {
+	Title          string            `json:"title,omitempty"` // header label; defaults to "Attestation Report"
 	Provider       string            `json:"provider"`
 	Model          string            `json:"model"`
 	Timestamp      time.Time         `json:"timestamp"`
