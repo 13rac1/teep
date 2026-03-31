@@ -1,13 +1,20 @@
-.PHONY: help build build-debug test integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture capture-neardirect capture-venice vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes e2e-venice
+.PHONY: help build build-debug self-check test integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture capture-neardirect capture-venice vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes e2e-venice
+
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+LDFLAGS  = -X main.Version=$(VERSION) -X main.Commit=$(COMMIT)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-22s %s\n", $$1, $$2}'
 
 build: ## Build the teep binary
-	go build -o teep ./cmd/teep
+	go build -ldflags "$(LDFLAGS)" -trimpath -o teep ./cmd/teep
 
 build-debug: ## Build with debug tag (enables --force flag for serve)
-	go build -tags debug -o teep ./cmd/teep
+	go build -tags debug -ldflags "$(LDFLAGS)" -trimpath -o teep ./cmd/teep
+
+self-check: build ## Build and run self-check
+	./teep self-check
 
 test: ## Run unit tests with race detector (-short skips integration)
 	go test -short -race ./cmd/... ./internal/...

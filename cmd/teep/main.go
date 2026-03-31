@@ -2,8 +2,10 @@
 //
 // Usage:
 //
-//	teep serve   PROVIDER                Start the proxy server.
-//	teep verify  PROVIDER --model M      Fetch and verify attestation, print report.
+//	teep serve      PROVIDER                Start the proxy server.
+//	teep verify     PROVIDER --model M      Fetch and verify attestation, print report.
+//	teep self-check                         Verify this binary's build provenance.
+//	teep version                            Print version information.
 //
 // Configuration is loaded from $TEEP_CONFIG (TOML) and environment variables.
 // See the config package for full documentation.
@@ -64,6 +66,10 @@ func main() {
 		runServe(os.Args[2:])
 	case "verify":
 		runVerify(os.Args[2:])
+	case "self-check":
+		runSelfCheck(os.Args[2:])
+	case "version":
+		runVersion(os.Args[2:])
 	case "-h", "--help", "help":
 		runHelp(os.Args[2:])
 	default:
@@ -874,7 +880,11 @@ func knownProviders(cfg *config.Config) string {
 func formatReport(r *attestation.VerificationReport) string {
 	var b strings.Builder
 
-	header := fmt.Sprintf("Attestation Report: %s / %s", r.Provider, r.Model)
+	title := r.Title
+	if title == "" {
+		title = "Attestation Report"
+	}
+	header := fmt.Sprintf("%s: %s / %s", title, r.Provider, r.Model)
 	separator := strings.Repeat("\u2550", len(header)) // U+2550 BOX DRAWINGS DOUBLE HORIZONTAL
 
 	b.WriteString(header)
@@ -947,6 +957,14 @@ var metadataDisplayOrder = []struct {
 	{"nonce_source", "Nonce source"},
 	{"candidates", "Candidates"},
 	{"event_log", "Event log"},
+	// Self-check metadata
+	{"version", "Version"},
+	{"commit", "Commit"},
+	{"vcs_revision", "VCS revision"},
+	{"vcs_time", "VCS time"},
+	{"go_version", "Go version"},
+	{"module", "Module"},
+	{"binary", "Binary"},
 }
 
 // writeMetadataBlock renders the metadata key-value pairs into b. Only keys
@@ -959,7 +977,7 @@ func writeMetadataBlock(b *strings.Builder, meta map[string]string) {
 			continue
 		}
 		// Truncate long hex hashes for display.
-		if (entry.key == "compose_hash" || entry.key == "os_image" || entry.key == "device" || entry.key == "ppid") && len(val) > 16 {
+		if (entry.key == "compose_hash" || entry.key == "os_image" || entry.key == "device" || entry.key == "ppid" || entry.key == "commit" || entry.key == "vcs_revision") && len(val) > 16 {
 			val = val[:16] + "..."
 		}
 		fmt.Fprintf(b, "  %-14s %s\n", entry.label+":", val)

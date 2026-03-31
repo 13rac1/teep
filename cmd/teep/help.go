@@ -537,6 +537,8 @@ func runHelp(args []string) {
 		printFactorsHelp()
 	case "measurements":
 		printMeasurementsHelp()
+	case "self-check":
+		printSelfCheckHelp()
 	default:
 		if f, ok := findFactorByName(args[0]); ok {
 			printFactorHelp(f)
@@ -552,9 +554,11 @@ func printOverview() {
 	fmt.Print(`teep — TEE attestation verifier and E2EE proxy for AI providers
 
 Usage:
-  teep serve   PROVIDER [flags]                    Start the HTTP proxy server.
-  teep verify  PROVIDER --model M [flags]          Fetch and print attestation report.
-  teep help    [topic]                             Show detailed help for a topic.
+  teep serve      PROVIDER [flags]                 Start the HTTP proxy server.
+  teep verify     PROVIDER --model M [flags]       Fetch and print attestation report.
+  teep self-check                                  Verify this binary's build provenance.
+  teep version                                     Print version information.
+  teep help       [topic]                          Show detailed help for a topic.
 
 Global flags:
   --log-level LEVEL   Set log verbosity: debug, info, warn, error (default: info).
@@ -562,6 +566,7 @@ Global flags:
 Help topics:
   serve        Detailed documentation for the serve command.
   verify       Detailed documentation for the verify command.
+  self-check   Explain the self-check build provenance factors.
   tiers        Explain the verification tier scoring system.
   factors      List all verification factors with full descriptions.
   measurements TDX measurement allowlist configuration guide.
@@ -831,6 +836,34 @@ func printFactorHelp(f factorInfo) {
 	fmt.Printf("%s (%s)\n", f.Name, tier.Label)
 	fmt.Print(strings.Repeat("-", len(f.Name)+len(tier.Label)+3) + "\n\n")
 	fmt.Print(wrapText(f.Description, 0, 76) + "\n")
+}
+
+// printSelfCheckHelp prints detailed help for the self-check command.
+func printSelfCheckHelp() {
+	fmt.Print(`teep self-check — Verify this binary's build provenance
+
+Usage:
+  teep self-check
+
+Checks the teep binary's own build metadata using Go's embedded build info
+and ldflags-injected version data. No network access required.
+
+Factors:
+  build_info     debug.ReadBuildInfo() succeeded                 [ENFORCED]
+  vcs_revision   VCS commit hash is embedded                     [ENFORCED]
+  vcs_clean      Binary was built from a clean working tree      [ALLOWED]
+  version_set    Version was set via ldflags (not "dev")         [ALLOWED]
+  commit_set     Commit was set via ldflags, matches vcs.revision [ALLOWED]
+  module_path    Module path matches github.com/13rac1/teep      [ENFORCED]
+  go_version     Go version is embedded                          [ENFORCED]
+
+Exit code 1 if any enforced factor fails.
+
+Examples:
+  make self-check       Build and run self-check.
+  teep self-check       Run self-check on the current binary.
+  teep version          Print one-line version string.
+`)
 }
 
 // wrapText wraps text to the given width with the given indent. Each line
