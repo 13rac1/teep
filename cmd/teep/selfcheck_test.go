@@ -160,6 +160,73 @@ func TestEvalVersionSet_Empty(t *testing.T) {
 	}
 }
 
+func TestEvalCommitSet_Pass(t *testing.T) {
+	orig := Commit
+	Commit = "abc123def456789"
+	defer func() { Commit = orig }()
+
+	info := cleanBuildInfo()
+	factors := evalCommitSet(info, true)
+	t.Logf("commit_set pass: %v %q", factors[0].Status, factors[0].Detail)
+	if factors[0].Status != attestation.Pass {
+		t.Errorf("status = %v, want Pass", factors[0].Status)
+	}
+}
+
+func TestEvalCommitSet_Unknown(t *testing.T) {
+	orig := Commit
+	Commit = "unknown"
+	defer func() { Commit = orig }()
+
+	factors := evalCommitSet(nil, false)
+	t.Logf("commit_set unknown: %v %q", factors[0].Status, factors[0].Detail)
+	if factors[0].Status != attestation.Fail {
+		t.Errorf("status = %v, want Fail", factors[0].Status)
+	}
+}
+
+func TestEvalCommitSet_Empty(t *testing.T) {
+	orig := Commit
+	Commit = ""
+	defer func() { Commit = orig }()
+
+	factors := evalCommitSet(nil, false)
+	t.Logf("commit_set empty: %v %q", factors[0].Status, factors[0].Detail)
+	if factors[0].Status != attestation.Fail {
+		t.Errorf("status = %v, want Fail", factors[0].Status)
+	}
+}
+
+func TestEvalCommitSet_Mismatch(t *testing.T) {
+	orig := Commit
+	Commit = "stale1234567890"
+	defer func() { Commit = orig }()
+
+	info := cleanBuildInfo()
+	factors := evalCommitSet(info, true)
+	t.Logf("commit_set mismatch: %v %q", factors[0].Status, factors[0].Detail)
+	if factors[0].Status != attestation.Fail {
+		t.Errorf("status = %v, want Fail", factors[0].Status)
+	}
+	if !strings.Contains(factors[0].Detail, "!=") {
+		t.Errorf("detail should show mismatch: %q", factors[0].Detail)
+	}
+}
+
+func TestEvalCommitSet_NoVCSRevision(t *testing.T) {
+	orig := Commit
+	Commit = "abc123def456789"
+	defer func() { Commit = orig }()
+
+	// BuildInfo with no vcs.revision — cross-check is skipped, should still pass.
+	info := testBuildInfo("go1.25.0", expectedModulePath)
+	factors := evalCommitSet(info, true)
+	t.Logf("commit_set no vcs.revision: %v %q", factors[0].Status, factors[0].Detail)
+	if factors[0].Status != attestation.Pass {
+		t.Errorf("status = %v, want Pass", factors[0].Status)
+	}
+}
+
 func TestEvalModulePath_Pass(t *testing.T) {
 	factors := evalModulePath(cleanBuildInfo(), true)
 	if factors[0].Status != attestation.Pass {
@@ -243,6 +310,10 @@ func TestBuildSelfCheckReport_AllPass(t *testing.T) {
 	Version = "v0.3.0"
 	defer func() { Version = orig }()
 
+	origCommit := Commit
+	Commit = "abc123def456789"
+	defer func() { Commit = origCommit }()
+
 	report := buildSelfCheckReport(cleanBuildInfo(), true)
 
 	if report.Title != "Self-Check Report" {
@@ -254,8 +325,8 @@ func TestBuildSelfCheckReport_AllPass(t *testing.T) {
 	if report.Model != "v0.3.0" {
 		t.Errorf("model = %q, want v0.3.0", report.Model)
 	}
-	if report.Passed != 6 {
-		t.Errorf("passed = %d, want 6", report.Passed)
+	if report.Passed != 7 {
+		t.Errorf("passed = %d, want 7", report.Passed)
 	}
 	if report.Failed != 0 {
 		t.Errorf("failed = %d, want 0", report.Failed)
@@ -288,6 +359,10 @@ func TestBuildSelfCheckReport_DirtyNotBlocking(t *testing.T) {
 	Version = "v0.3.0"
 	defer func() { Version = orig }()
 
+	origCommit := Commit
+	Commit = "abc123def456789"
+	defer func() { Commit = origCommit }()
+
 	report := buildSelfCheckReport(info, true)
 
 	// vcs_clean should fail but is allowed, so not blocking.
@@ -306,12 +381,12 @@ func TestBuildSelfCheckReport_DevVersionNotBlocking(t *testing.T) {
 
 	report := buildSelfCheckReport(cleanBuildInfo(), true)
 
-	// version_set should fail but is allowed.
+	// version_set and commit_set should fail but are allowed.
 	if report.Blocked() {
-		t.Error("dev version should not block (version_set is allowed)")
+		t.Error("dev version should not block (version_set and commit_set are allowed)")
 	}
-	if report.AllowedFailed != 1 {
-		t.Errorf("allowed_failed = %d, want 1", report.AllowedFailed)
+	if report.AllowedFailed != 2 {
+		t.Errorf("allowed_failed = %d, want 2", report.AllowedFailed)
 	}
 }
 
@@ -405,7 +480,7 @@ func TestFormatReport_SelfCheckFactors(t *testing.T) {
 	report := buildSelfCheckReport(cleanBuildInfo(), true)
 	out := formatReport(report)
 
-	expectedFactors := []string{"build_info", "vcs_revision", "vcs_clean", "version_set", "module_path", "go_version"}
+	expectedFactors := []string{"build_info", "vcs_revision", "vcs_clean", "version_set", "commit_set", "module_path", "go_version"}
 	for _, name := range expectedFactors {
 		if !strings.Contains(out, name) {
 			t.Errorf("output should contain factor %q; output:\n%s", name, out)

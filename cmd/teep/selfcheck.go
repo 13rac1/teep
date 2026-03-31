@@ -24,6 +24,7 @@ const expectedModulePath = "github.com/13rac1/teep"
 var selfCheckAllowFail = map[string]bool{
 	"vcs_clean":   true,
 	"version_set": true,
+	"commit_set":  true,
 }
 
 func runSelfCheck(_ []string) {
@@ -47,10 +48,7 @@ func runVersion() {
 			rev = r
 		}
 	}
-	if len(rev) > 12 {
-		rev = rev[:12]
-	}
-	fmt.Printf("teep %s (%s, %s)\n", Version, rev, goVer)
+	fmt.Printf("teep %s (%s, %s)\n", Version, shortCommit(rev), goVer)
 }
 
 // selfCheckEvaluator evaluates one or more self-check factors.
@@ -62,6 +60,7 @@ func buildSelfCheckReport(info *debug.BuildInfo, ok bool) *attestation.Verificat
 		evalVCSRevision,
 		evalVCSClean,
 		evalVersionSet,
+		evalCommitSet,
 		evalModulePath,
 		evalGoVersion,
 	}
@@ -127,11 +126,7 @@ func evalVCSRevision(info *debug.BuildInfo, ok bool) []attestation.FactorResult 
 	if rev == "" {
 		return selfFactor("vcs_revision", attestation.Fail, "not embedded (built with go run?)")
 	}
-	short := rev
-	if len(short) > 12 {
-		short = short[:12]
-	}
-	return selfFactor("vcs_revision", attestation.Pass, "commit "+short)
+	return selfFactor("vcs_revision", attestation.Pass, "commit "+shortCommit(rev))
 }
 
 func evalVCSClean(info *debug.BuildInfo, ok bool) []attestation.FactorResult {
@@ -153,6 +148,27 @@ func evalVersionSet(_ *debug.BuildInfo, _ bool) []attestation.FactorResult {
 		return selfFactor("version_set", attestation.Fail, fmt.Sprintf("version is %q (not set via ldflags)", Version))
 	}
 	return selfFactor("version_set", attestation.Pass, "version "+Version)
+}
+
+func evalCommitSet(info *debug.BuildInfo, ok bool) []attestation.FactorResult {
+	if Commit == "unknown" || Commit == "" {
+		return selfFactor("commit_set", attestation.Fail, fmt.Sprintf("commit is %q (not set via ldflags)", Commit))
+	}
+	// Cross-check against vcs.revision when available.
+	if ok {
+		if rev := buildSetting(info, "vcs.revision"); rev != "" && rev != Commit {
+			return selfFactor("commit_set", attestation.Fail,
+				fmt.Sprintf("ldflags commit %s != vcs.revision %s", shortCommit(Commit), shortCommit(rev)))
+		}
+	}
+	return selfFactor("commit_set", attestation.Pass, "commit "+shortCommit(Commit))
+}
+
+func shortCommit(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
 }
 
 func evalModulePath(info *debug.BuildInfo, ok bool) []attestation.FactorResult {
