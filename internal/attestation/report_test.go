@@ -1670,6 +1670,104 @@ func TestEvalE2EEUsable(t *testing.T) {
 	})
 }
 
+func TestEvalE2EEUsable_E2EEConfigured(t *testing.T) {
+	t.Run("configured_pending", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEUsable(&ReportInput{
+			Raw:            &RawAttestation{},
+			E2EEConfigured: true,
+		}), Skip)
+		if !strings.Contains(f.Detail, "pending") {
+			t.Errorf("detail should mention pending: %s", f.Detail)
+		}
+		if strings.Contains(f.Detail, "not configured") {
+			t.Error("detail should NOT say 'not configured' when E2EEConfigured is true")
+		}
+	})
+
+	t.Run("not_configured_no_test", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEUsable(&ReportInput{
+			Raw: &RawAttestation{},
+		}), Skip)
+		if !strings.Contains(f.Detail, "not configured") {
+			t.Errorf("detail should say not configured: %s", f.Detail)
+		}
+	})
+
+	t.Run("e2ee_test_takes_precedence", func(t *testing.T) {
+		// When E2EETest is non-nil, E2EEConfigured is irrelevant.
+		f := assertSingleFactor(t, evalE2EEUsable(&ReportInput{
+			Raw:            &RawAttestation{},
+			E2EEConfigured: true,
+			E2EETest: &E2EETestResult{
+				Attempted: true,
+				Detail:    "E2EE test passed",
+			},
+		}), Pass)
+		if !strings.Contains(f.Detail, "E2EE test passed") {
+			t.Errorf("detail should come from E2EETest: %s", f.Detail)
+		}
+	})
+}
+
+func TestMarkE2EEUsable(t *testing.T) {
+	t.Run("promotes_skip_to_pass", func(t *testing.T) {
+		report := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "nonce_match", Status: Pass},
+				{Name: "e2ee_usable", Status: Skip, Detail: "E2EE configured; pending live test"},
+			},
+			Passed:  1,
+			Skipped: 1,
+		}
+		report.MarkE2EEUsable("roundtrip succeeded")
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Pass {
+			t.Errorf("status = %s, want Pass", f.Status)
+		}
+		if f.Detail != "roundtrip succeeded" {
+			t.Errorf("detail = %q, want %q", f.Detail, "roundtrip succeeded")
+		}
+		if report.Passed != 2 {
+			t.Errorf("Passed = %d, want 2", report.Passed)
+		}
+		if report.Skipped != 0 {
+			t.Errorf("Skipped = %d, want 0", report.Skipped)
+		}
+	})
+
+	t.Run("noop_already_pass", func(t *testing.T) {
+		report := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "e2ee_usable", Status: Pass, Detail: "original"},
+			},
+			Passed:  1,
+			Skipped: 0,
+		}
+		report.MarkE2EEUsable("second call")
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Detail != "original" {
+			t.Errorf("detail should not change for already-Pass factor: %s", f.Detail)
+		}
+		if report.Passed != 1 {
+			t.Errorf("Passed should stay 1, got %d", report.Passed)
+		}
+	})
+
+	t.Run("noop_missing_factor", func(t *testing.T) {
+		report := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "nonce_match", Status: Pass},
+			},
+			Passed: 1,
+		}
+		// Should not panic when factor is absent.
+		report.MarkE2EEUsable("roundtrip succeeded")
+		if report.Passed != 1 {
+			t.Errorf("Passed should remain 1, got %d", report.Passed)
+		}
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Feature D: DSSE signature verification
 // ---------------------------------------------------------------------------

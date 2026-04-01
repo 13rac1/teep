@@ -158,9 +158,9 @@ func TestIntegration_Chutes(t *testing.T) {
 			// Tier 2: Binding & Crypto.
 			"tdx_reportdata_binding",
 			"e2ee_capable",
-			// Note: e2ee_usable is only evaluated in CLI verify mode
-			// (cmd/teep), not in proxy mode. The proxy does not run a
-			// standalone E2EE test during report generation.
+			// e2ee_usable: after a successful E2EE roundtrip in proxy
+			// mode the cached report is promoted from Skip to Pass.
+			"e2ee_usable",
 		}
 		for _, name := range mustPass {
 			f, ok := findFactor(report.Factors, name)

@@ -109,6 +109,24 @@ func (r *VerificationReport) ReportDataBindingPassed() bool {
 	return false
 }
 
+// MarkE2EEUsable updates the e2ee_usable factor to Pass after a successful
+// E2EE roundtrip in the proxy path. It adjusts the Passed/Skipped counters
+// accordingly. This must only be called when E2EE was actually used for a
+// live request and the response was successfully decrypted.
+func (r *VerificationReport) MarkE2EEUsable(detail string) {
+	for i := range r.Factors {
+		if r.Factors[i].Name == "e2ee_usable" {
+			if r.Factors[i].Status == Skip {
+				r.Factors[i].Status = Pass
+				r.Factors[i].Detail = detail
+				r.Passed++
+				r.Skipped--
+			}
+			return
+		}
+	}
+}
+
 // DefaultAllowFail lists the factor names that are allowed to fail without
 // blocking the proxy. Every factor in KnownFactors that is NOT in this list
 // is enforced by default. This inversion is safer than a positive enforce
@@ -316,6 +334,13 @@ type ReportInput struct {
 	// E2EETest is the result of a live E2EE test inference. Nil when
 	// the provider is not E2EE-capable or the test was not attempted.
 	E2EETest *E2EETestResult
+
+	// E2EEConfigured is true when the provider has E2EE enabled in its
+	// configuration. Used by the proxy path where E2EETest is not
+	// populated at report-build time but the provider will use E2EE
+	// for actual requests. When true and E2EETest is nil, e2ee_usable
+	// reports "pending live test" instead of "not configured".
+	E2EEConfigured bool
 }
 
 // ---------------------------------------------------------------------------
@@ -840,6 +865,9 @@ func evalE2EECapable(in *ReportInput) []FactorResult {
 
 func evalE2EEUsable(in *ReportInput) []FactorResult {
 	if in.E2EETest == nil {
+		if in.E2EEConfigured {
+			return factor(TierBinding, "e2ee_usable", Skip, "E2EE configured; pending live test")
+		}
 		return factor(TierBinding, "e2ee_usable", Skip, "E2EE not configured for this provider")
 	}
 	if in.E2EETest.NoAPIKey {

@@ -169,11 +169,13 @@ func assertStreamResponse(t *testing.T, resp *http.Response) {
 	t.Logf("response (%d chunks): %q", len(chunks), content)
 }
 
-// assertReportFactors verifies tier-1 factors pass and REPORTDATA binding holds.
+// assertReportFactors verifies tier-1 factors pass, REPORTDATA binding holds,
+// and e2ee_usable is Pass (the test issues a chat request with E2EE before
+// fetching the report).
 func assertReportFactors(t *testing.T, report *attestation.VerificationReport) {
 	t.Helper()
 
-	tier1 := []string{
+	mustPass := []string{
 		"nonce_match",
 		"tdx_quote_present",
 		"tdx_quote_structure",
@@ -181,8 +183,10 @@ func assertReportFactors(t *testing.T, report *attestation.VerificationReport) {
 		"tdx_quote_signature",
 		"tdx_debug_disabled",
 		"signing_key_present",
+		"tdx_reportdata_binding",
+		"e2ee_usable",
 	}
-	for _, name := range tier1 {
+	for _, name := range mustPass {
 		f, ok := findFactor(report.Factors, name)
 		if !ok {
 			t.Errorf("factor %q not found in report", name)
@@ -191,13 +195,6 @@ func assertReportFactors(t *testing.T, report *attestation.VerificationReport) {
 		if f.Status != attestation.Pass {
 			t.Errorf("factor %q: status = %v, want Pass; detail: %s", name, f.Status, f.Detail)
 		}
-	}
-
-	f, ok := findFactor(report.Factors, "tdx_reportdata_binding")
-	if !ok {
-		t.Error("factor tdx_reportdata_binding not found")
-	} else if f.Status != attestation.Pass {
-		t.Errorf("tdx_reportdata_binding: status = %v, want Pass; detail: %s", f.Status, f.Detail)
 	}
 
 	for _, f := range report.Factors {

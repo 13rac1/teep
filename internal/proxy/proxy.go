@@ -516,6 +516,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		Compose:           composeResult,
 		Sigstore:          sigstoreResults,
 		Rekor:             rekorResults,
+		E2EEConfigured:    prov.E2EE,
 	})
 	return report, raw
 }
@@ -724,6 +725,15 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		e2ee.RelayNonStream(ctx, w, resp.Body, nil)
 	}
 	upstreamDur = time.Since(upstreamStart)
+
+	// After a successful E2EE roundtrip, promote the cached report's
+	// e2ee_usable factor from Skip to Pass so that subsequent report
+	// fetches reflect the live test result.
+	if e2eeActive {
+		report.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
+		s.cache.Put(prov.Name, upstreamModel, report)
+	}
+
 	status = "ok"
 }
 
@@ -855,6 +865,14 @@ func (s *Server) handlePinnedChat(
 		} else {
 			e2ee.RelayReassembledNonStream(ctx, w, pinnedResp.Body, session)
 		}
+
+		// After a successful E2EE roundtrip on the pinned path,
+		// promote e2ee_usable from Skip to Pass in the cached report.
+		if report != nil {
+			report.MarkE2EEUsable("E2EE roundtrip succeeded via pinned connection")
+			s.cache.Put(prov.Name, upstreamModel, report)
+		}
+
 		return
 	}
 	s.stats.plaintext.Add(1)
