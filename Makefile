@@ -82,7 +82,7 @@ report-phalacloud: build ## Verify Phala Cloud attestation (requires PHALA_API_K
 	./teep verify phalacloud --model phala/deepseek-v3.2 --log-level debug --save-dir /tmp/teep-attestation-phalacloud
 
 report-chutes: build ## Verify Chutes attestation (requires CHUTES_API_KEY)
-	./teep verify chutes --model zai-org/GLM-4.6-TEE --log-level debug --save-dir /tmp/teep-attestation-chutes
+	./teep verify chutes --model zai-org/GLM-5-TEE --log-level debug --save-dir /tmp/teep-attestation-chutes
 
 e2e-venice: ## Run Venice E2E test (requires VENICE_API_KEY)
 	./test/e2e-venice.sh
