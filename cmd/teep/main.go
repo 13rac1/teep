@@ -672,9 +672,7 @@ func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName
 	case "nearcloud":
 		return testE2EENearCloud(ctx, raw, cp, model)
 	case "chutes":
-		return &attestation.E2EETestResult{
-			Detail: "chutes ML-KEM-768 E2EE: live test not yet implemented",
-		}
+		return testE2EEChutes(ctx, raw, cp, model)
 	default:
 		return nil
 	}
@@ -756,6 +754,176 @@ func testE2EENearCloud(ctx context.Context, raw *attestation.RawAttestation, cp 
 	req.Header.Set("Connection", "close")
 
 	return doE2EEStreamTest(req, session, "nearcloud")
+}
+
+// testE2EEChutes tests Chutes E2EE (ML-KEM-768 + ChaCha20-Poly1305) via
+// direct HTTPS request to the /e2e/invoke endpoint.
+func testE2EEChutes(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
+	if raw.InstanceID == "" {
+		return &attestation.E2EETestResult{Attempted: true, Err: errors.New("chutes E2EE: instance_id absent from attestation")}
+	}
+	if raw.E2ENonce == "" {
+		return &attestation.E2EETestResult{Attempted: true, Err: errors.New("chutes E2EE: e2e_nonce absent from attestation")}
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model":    model,
+		"messages": []map[string]string{{"role": "user", "content": "Say hello"}},
+		"stream":   true,
+	})
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("marshal body: %w", err)}
+	}
+
+	encPayload, session, err := e2ee.EncryptChatRequestChutes(body, raw.SigningKey)
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("encrypt: %w", err)}
+	}
+	defer session.Zero()
+
+	baseURL := cp.BaseURL
+	if baseURL == "" {
+		baseURL = "https://api.chutes.ai"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/e2e/invoke", bytes.NewReader(encPayload))
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
+	}
+	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
+	req.Header.Set("X-Chute-Id", model)
+	req.Header.Set("X-Instance-Id", raw.InstanceID)
+	req.Header["X-E2E-Nonce"] = []string{raw.E2ENonce}
+	req.Header["X-E2E-Stream"] = []string{"true"}
+	req.Header["X-E2E-Path"] = []string{chatPathForProvider("chutes")}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Connection", "close")
+
+	return doE2EEChutesStreamTest(req, session)
+}
+
+// doE2EEChutesStreamTest sends an encrypted Chutes E2EE request and validates
+// the SSE response, which uses Chutes-specific envelope events (e2e_init,
+// e2e, e2e_error, usage) instead of the per-field encryption used by other
+// providers.
+func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *attestation.E2EETestResult {
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP request: %w", err)}
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return &attestation.E2EETestResult{
+			Attempted: true,
+			Err:       fmt.Errorf("HTTP %d: %s", resp.StatusCode, body),
+		}
+	}
+
+	// Collect non-standard response headers for leak reporting.
+	var headerNotes []string
+	for name := range resp.Header {
+		switch strings.ToLower(name) {
+		case "content-type", "cache-control", "date", "server",
+			"transfer-encoding", "connection", "keep-alive",
+			"x-request-id", "x-trace-id",
+			"access-control-allow-origin", "access-control-allow-headers",
+			"access-control-allow-methods", "access-control-max-age",
+			"access-control-expose-headers",
+			"vary", "strict-transport-security", "x-content-type-options":
+			// Standard/infra headers — skip.
+		default:
+			headerNotes = append(headerNotes, fmt.Sprintf("%s: %s", name, strings.Join(resp.Header[name], ", ")))
+		}
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+
+	var streamKey []byte
+	decryptedChunks := 0
+	usageEvents := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[len("data: "):]
+		if data == "[DONE]" {
+			break
+		}
+
+		var event map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return &attestation.E2EETestResult{
+				Attempted: true,
+				Err:       fmt.Errorf("parse SSE event: %w (prefix=%q)", err, safePrefix(data, 64)),
+			}
+		}
+
+		if initB64, ok := event["e2e_init"]; ok {
+			var b64 string
+			if err := json.Unmarshal(initB64, &b64); err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("parse e2e_init: %w", err)}
+			}
+			streamKey, err = session.DecryptStreamInitChutes(b64)
+			if err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("derive stream key: %w", err)}
+			}
+		} else if encB64, ok := event["e2e"]; ok {
+			if streamKey == nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: errors.New("e2e event before e2e_init")}
+			}
+			var b64 string
+			if err := json.Unmarshal(encB64, &b64); err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("parse e2e chunk: %w", err)}
+			}
+			encrypted, err := base64.StdEncoding.DecodeString(b64)
+			if err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("decode e2e chunk: %w", err)}
+			}
+			plaintext, err := e2ee.DecryptStreamChunkChutes(encrypted, streamKey)
+			if err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("decrypt e2e chunk %d: %w", decryptedChunks+1, err)}
+			}
+			// Validate the decrypted chunk is valid JSON.
+			if !json.Valid(plaintext) {
+				return &attestation.E2EETestResult{
+					Attempted: true,
+					Err:       fmt.Errorf("decrypted chunk %d is not valid JSON (prefix=%q)", decryptedChunks+1, safePrefix(string(plaintext), 64)),
+				}
+			}
+			decryptedChunks++
+		} else if errMsg, ok := event["e2e_error"]; ok {
+			return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("server e2e_error: %s", string(errMsg))}
+		} else if _, ok := event["usage"]; ok {
+			usageEvents++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("read SSE stream: %w", err)}
+	}
+
+	if streamKey == nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: errors.New("no e2e_init event received")}
+	}
+	if decryptedChunks == 0 {
+		return &attestation.E2EETestResult{Attempted: true, Err: errors.New("no encrypted chunks received")}
+	}
+
+	detail := fmt.Sprintf("E2EE chutes ML-KEM-768: %d encrypted chunks decrypted", decryptedChunks)
+	if usageEvents > 0 {
+		detail += fmt.Sprintf("; %d cleartext usage events (expected)", usageEvents)
+	}
+	if len(headerNotes) > 0 {
+		detail += "; non-standard response headers: " + strings.Join(headerNotes, "; ")
+	}
+	return &attestation.E2EETestResult{Attempted: true, Detail: detail}
 }
 
 // doE2EEStreamTest sends an E2EE chat completions request and validates
