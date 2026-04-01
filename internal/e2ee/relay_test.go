@@ -209,11 +209,11 @@ func TestReassembleNonStream(t *testing.T) {
 	}
 	sb.WriteString("data: [DONE]\n\n")
 
-	result, err := ReassembleNonStream(strings.NewReader(sb.String()), session)
+	result, ss, err := ReassembleNonStream(strings.NewReader(sb.String()), session)
 	if err != nil {
 		t.Fatalf("ReassembleNonStream: %v", err)
 	}
-	t.Logf("reassembled: %s", result)
+	t.Logf("reassembled: %s (chunks=%d, tokens=%d, duration=%s)", result, ss.Chunks, ss.Tokens, ss.Duration)
 
 	var resp struct {
 		Object  string `json:"object"`

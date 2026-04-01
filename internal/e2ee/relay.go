@@ -9,7 +9,30 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// StreamStats holds token throughput metrics collected during SSE relay.
+type StreamStats struct {
+	Chunks   int           // number of SSE data chunks with delta/content
+	Tokens   int           // completion_tokens from usage (0 if unavailable)
+	Duration time.Duration // time from first to last chunk
+}
+
+// EffectiveTokens returns Tokens if available (from usage), else Chunks.
+func (s StreamStats) EffectiveTokens() int {
+	if s.Tokens > 0 {
+		return s.Tokens
+	}
+	return s.Chunks
+}
+
+// usageInfo is used for partial unmarshal of the usage field in SSE chunks.
+type usageInfo struct {
+	Usage *struct {
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
+}
 
 // NonEncryptedFields is the set of known string-valued fields in OpenAI chat
 // delta/message objects that are never encrypted by the E2EE layer. Expanding
@@ -236,12 +259,15 @@ func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
 
 // ReassembleNonStream reads an SSE stream (forced by E2EE), decrypts each
 // chunk, and reassembles the result into a single non-streaming OpenAI response.
-func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, error) {
+// Returns the assembled JSON and token throughput stats.
+func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, StreamStats, error) {
 	scanner, cleanup := newSSEScanner(body)
 	defer cleanup()
 
 	fields := make(map[string]*strings.Builder)
 	var lastData string
+	var stats StreamStats
+	var firstChunk time.Time
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -253,9 +279,22 @@ func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, error) {
 			break
 		}
 
+		now := time.Now()
+		if firstChunk.IsZero() {
+			firstChunk = now
+		}
+		stats.Chunks++
+		stats.Duration = now.Sub(firstChunk)
+
+		// Try to extract usage from the chunk.
+		var u usageInfo
+		if json.Unmarshal([]byte(data), &u) == nil && u.Usage != nil {
+			stats.Tokens = u.Usage.CompletionTokens
+		}
+
 		decrypted, err := decryptSSEChunkContent(data, session)
 		if err != nil {
-			return nil, fmt.Errorf("reassemble: %w", err)
+			return nil, stats, fmt.Errorf("reassemble: %w", err)
 		}
 		for k, v := range decrypted {
 			b, ok := fields[k]
@@ -268,11 +307,11 @@ func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, error) {
 		lastData = data
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reassemble: scanner: %w", err)
+		return nil, stats, fmt.Errorf("reassemble: scanner: %w", err)
 	}
 
 	if lastData == "" {
-		return nil, errors.New("reassemble: no SSE chunks received")
+		return nil, stats, errors.New("reassemble: no SSE chunks received")
 	}
 
 	var meta struct {
@@ -281,7 +320,7 @@ func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, error) {
 		Created int64  `json:"created"`
 	}
 	if err := json.Unmarshal([]byte(lastData), &meta); err != nil {
-		return nil, fmt.Errorf("reassemble: parse metadata from last chunk: %w", err)
+		return nil, stats, fmt.Errorf("reassemble: parse metadata from last chunk: %w", err)
 	}
 
 	msg := make(map[string]any, len(fields)+1)
@@ -304,16 +343,18 @@ func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, error) {
 		},
 	}
 
-	return json.Marshal(resp)
+	result, err := json.Marshal(resp)
+	return result, stats, err
 }
 
 // RelayStream reads an SSE stream from body, decrypts chunks when session is
-// non-nil, and writes the decrypted SSE lines to w. Aborts on decryption failure.
-func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) {
+// non-nil, and writes the decrypted SSE lines to w. Returns token throughput
+// stats. Aborts on decryption failure.
+func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) StreamStats {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
+		return StreamStats{}
 	}
 
 	scanner, cleanup := newSSEScanner(body)
@@ -325,7 +366,7 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 		} else {
 			http.Error(w, "empty upstream stream", http.StatusBadGateway)
 		}
-		return
+		return StreamStats{}
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -333,19 +374,42 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	if relaySSELine(ctx, w, flusher, scanner.Text(), session) {
-		return
+	var stats StreamStats
+	var firstChunk time.Time
+
+	process := func(line string) bool {
+		if relaySSELine(ctx, w, flusher, line, session) {
+			return true
+		}
+		if data, ok := strings.CutPrefix(line, "data: "); ok && data != "[DONE]" {
+			now := time.Now()
+			if firstChunk.IsZero() {
+				firstChunk = now
+			}
+			stats.Chunks++
+			stats.Duration = now.Sub(firstChunk)
+			// Try to extract usage from the chunk.
+			var u usageInfo
+			if json.Unmarshal([]byte(data), &u) == nil && u.Usage != nil {
+				stats.Tokens = u.Usage.CompletionTokens
+			}
+		}
+		return false
 	}
 
+	if process(scanner.Text()) {
+		return stats
+	}
 	for scanner.Scan() {
-		if relaySSELine(ctx, w, flusher, scanner.Text(), session) {
-			return
+		if process(scanner.Text()) {
+			return stats
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		slog.ErrorContext(ctx, "SSE scanner error", "err", err)
 	}
+	return stats
 }
 
 // relaySSELine processes a single SSE line, writing it to w. Returns true if
@@ -385,17 +449,19 @@ func relaySSELine(ctx context.Context, w http.ResponseWriter, flusher http.Flush
 
 // RelayReassembledNonStream reads an SSE stream from the E2EE upstream,
 // decrypts each chunk, and writes a single non-streaming JSON response.
-func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) {
-	result, err := ReassembleNonStream(body, session)
+// Returns token throughput stats.
+func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) StreamStats {
+	result, stats, err := ReassembleNonStream(body, session)
 	if err != nil {
 		slog.ErrorContext(ctx, "E2EE non-stream reassembly failed", "err", err)
 		http.Error(w, "response decryption failed", http.StatusBadGateway)
-		return
+		return stats
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result)
+	return stats
 }
 
 // RelayNonStream reads a non-streaming JSON response from body, decrypts the

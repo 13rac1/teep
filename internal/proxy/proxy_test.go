@@ -1651,12 +1651,12 @@ func TestReassembleNonStream(t *testing.T) {
 	))
 	fmt.Fprintf(&sse, "data: [DONE]\n\n")
 
-	result, err := e2ee.ReassembleNonStream(strings.NewReader(sse.String()), session)
+	result, ss, err := e2ee.ReassembleNonStream(strings.NewReader(sse.String()), session)
 	if err != nil {
 		t.Fatalf("ReassembleNonStream: %v", err)
 	}
 
-	t.Logf("result: %s", result)
+	t.Logf("result: %s (chunks=%d, tokens=%d, duration=%s)", result, ss.Chunks, ss.Tokens, ss.Duration)
 
 	got := extractMessageContent(t, result)
 	want := "Hello, world!"
@@ -1728,12 +1728,12 @@ func TestReassembleNonStream_WithReasoning(t *testing.T) {
 	))
 	fmt.Fprintf(&sse, "data: [DONE]\n\n")
 
-	result, err := e2ee.ReassembleNonStream(strings.NewReader(sse.String()), session)
+	result, ss, err := e2ee.ReassembleNonStream(strings.NewReader(sse.String()), session)
 	if err != nil {
 		t.Fatalf("ReassembleNonStream: %v", err)
 	}
 
-	t.Logf("result: %s", result)
+	t.Logf("result: %s (chunks=%d, tokens=%d, duration=%s)", result, ss.Chunks, ss.Tokens, ss.Duration)
 
 	// Parse and verify both fields present in message.
 	var parsed struct {
