@@ -297,10 +297,10 @@ func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, meta *e2ee.C
 		req.Header["X-E2E-Path"] = []string{p.chatPath}
 		req.Header.Set("Content-Type", "application/octet-stream")
 		// E2EE invoke is on the platform API (api.chutes.ai), not the
-		// LLM inference gateway (llm.chutes.ai). We must also clear
-		// req.Host so the Host header is derived from the new URL;
-		// http.NewRequestWithContext snapshots the original host into
-		// req.Host, which would otherwise override the URL host.
+		// LLM inference gateway (llm.chutes.ai). We must also set
+		// req.Host to match the rewritten URL host; http.NewRequestWithContext
+		// snapshots the original host into req.Host, which would otherwise
+		// override the URL host.
 		e2eURL, err := url.Parse(p.apiBaseURL + "/e2e/invoke")
 		if err != nil {
 			return fmt.Errorf("parse e2e invoke URL: %w", err)
