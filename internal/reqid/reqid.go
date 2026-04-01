@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 )
 
@@ -17,7 +18,9 @@ type ctxKey struct{}
 // New generates an 8-character hex request ID (4 random bytes).
 func New() string {
 	var b [4]byte
-	_, _ = rand.Read(b[:]) // crypto/rand.Read never errors on supported platforms
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
 	return hex.EncodeToString(b[:])
 }
 

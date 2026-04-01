@@ -125,7 +125,7 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 		return result
 	}
 
-	slog.Debug("TDX quote decoded", "raw_bytes", len(raw))
+	slog.DebugContext(ctx, "TDX quote decoded", "raw_bytes", len(raw))
 
 	// Parse raw bytes into a QuoteV4 or QuoteV5 proto.
 	quoteAny, err := tdxabi.QuoteToProto(raw)
@@ -141,7 +141,7 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 	var rtmrs [][]byte
 	switch q := quoteAny.(type) {
 	case *pb.QuoteV4:
-		slog.Debug("TDX quote version", "version", 4)
+		slog.DebugContext(ctx, "TDX quote version", "version", 4)
 		body := q.GetTdQuoteBody()
 		if body == nil {
 			result.ParseErr = errors.New("TDX QuoteV4 body is nil after parse")
@@ -158,7 +158,7 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 		mrOwner = body.GetMrOwner()
 		mrOwnerConfig = body.GetMrOwnerConfig()
 	case *pb.QuoteV5:
-		slog.Debug("TDX quote version", "version", 5)
+		slog.DebugContext(ctx, "TDX quote version", "version", 5)
 		desc := q.GetTdQuoteBodyDescriptor()
 		if desc == nil {
 			result.ParseErr = errors.New("TDX QuoteV5 body descriptor is nil after parse")
@@ -204,7 +204,7 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 		copy(result.RTMRs[i][:], r)
 	}
 
-	slog.Debug("TDX measurements extracted",
+	slog.DebugContext(ctx, "TDX measurements extracted",
 		"mrtd", hex.EncodeToString(mrTD),
 		"rtmr0", hex.EncodeToString(safeSlice(rtmrs, 0)),
 		"rtmr1", hex.EncodeToString(safeSlice(rtmrs, 1)),
@@ -254,16 +254,16 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 		}
 		if err := tdxverify.TdxQuoteContext(ctx, quoteAny, collateralOpts); err != nil {
 			result.CollateralErr = fmt.Errorf("intel PCS collateral: %w", err)
-			slog.Debug("TDX collateral verification failed (non-fatal for cert chain)", "err", err)
+			slog.DebugContext(ctx, "TDX collateral verification failed (non-fatal for cert chain)", "err", err)
 		} else {
 			tcbLevel, _, err := tdxverify.SupportedTcbLevelsFromCollateral(quoteAny, collateralOpts)
 			if err != nil {
 				result.CollateralErr = fmt.Errorf("TCB level extraction: %w", err)
-				slog.Debug("TCB level extraction failed", "err", err)
+				slog.DebugContext(ctx, "TCB level extraction failed", "err", err)
 			} else {
 				result.TcbStatus = tcbLevel.TcbStatus
 				result.AdvisoryIDs = tcbLevel.AdvisoryIDs
-				slog.Debug("TCB level extracted", "status", tcbLevel.TcbStatus, "date", tcbLevel.TcbDate, "advisories", tcbLevel.AdvisoryIDs)
+				slog.DebugContext(ctx, "TCB level extracted", "status", tcbLevel.TcbStatus, "date", tcbLevel.TcbDate, "advisories", tcbLevel.AdvisoryIDs)
 			}
 		}
 	}
@@ -271,11 +271,11 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 	// Extract PPID/FMSPC from PCK certificate (informational, non-fatal).
 	ppid, fmspc, err := extractPCKExtensions(quoteAny)
 	if err != nil {
-		slog.Debug("PPID extraction failed (non-fatal)", "err", err)
+		slog.DebugContext(ctx, "PPID extraction failed (non-fatal)", "err", err)
 	} else {
 		result.PPID = ppid
 		result.FMSPC = fmspc
-		slog.Debug("PCK extensions extracted", "ppid", ppid, "fmspc", fmspc)
+		slog.DebugContext(ctx, "PCK extensions extracted", "ppid", ppid, "fmspc", fmspc)
 	}
 
 	return result

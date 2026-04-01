@@ -301,7 +301,7 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 		}
 	}
 
-	slog.Debug("NRAS response", "status", resp.StatusCode,
+	slog.DebugContext(ctx, "NRAS response", "status", resp.StatusCode,
 		"content_type", resp.Header.Get("Content-Type"),
 		"body_len", len(jwtStr),
 		"body_prefix", truncate(jwtStr, 200))
