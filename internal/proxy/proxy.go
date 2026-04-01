@@ -941,7 +941,7 @@ func (s *Server) buildUpstreamBody(
 		if prov.E2EEMaterialFetcher != nil {
 			mat, err := prov.E2EEMaterialFetcher.FetchE2EEMaterial(ctx, upstreamModel)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("nonce pool: %w", err)
+				return nil, nil, nil, err
 			}
 			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); !ok {
 				slog.DebugContext(ctx, "E2EE key exchange: nonce pool key rejected (no cached signing key)",
