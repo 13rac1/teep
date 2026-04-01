@@ -1766,6 +1766,29 @@ func TestMarkE2EEUsable(t *testing.T) {
 			t.Errorf("Passed should remain 1, got %d", report.Passed)
 		}
 	})
+
+	t.Run("skipped_zero_no_underflow", func(t *testing.T) {
+		// If Skipped is already 0 (out-of-sync counters), MarkE2EEUsable
+		// must not underflow to a negative value.
+		report := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "e2ee_usable", Status: Skip, Detail: "pending"},
+			},
+			Passed:  0,
+			Skipped: 0, // desynced: factor is Skip but counter is 0
+		}
+		report.MarkE2EEUsable("roundtrip succeeded")
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Pass {
+			t.Errorf("status = %s, want Pass", f.Status)
+		}
+		if report.Passed != 1 {
+			t.Errorf("Passed = %d, want 1", report.Passed)
+		}
+		if report.Skipped != 0 {
+			t.Errorf("Skipped = %d, want 0 (should not underflow)", report.Skipped)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

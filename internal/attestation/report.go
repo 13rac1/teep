@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -113,6 +114,12 @@ func (r *VerificationReport) ReportDataBindingPassed() bool {
 // E2EE roundtrip in the proxy path. It adjusts the Passed/Skipped counters
 // accordingly. This must only be called when E2EE was actually used for a
 // live request and the response was successfully decrypted.
+//
+// TODO(e2ee_usable): This method manually adjusts report counters, which is
+// fragile and can desync if the factor is in an unexpected state (e.g.
+// promoted from Skip to Fail by BuildReport). The interaction between
+// report factors, proxy blocking, and live inference test factors needs
+// to be redesigned. See docs/plans/e2ee_usable_refactoring.md.
 func (r *VerificationReport) MarkE2EEUsable(detail string) {
 	for i := range r.Factors {
 		if r.Factors[i].Name == "e2ee_usable" {
@@ -120,7 +127,11 @@ func (r *VerificationReport) MarkE2EEUsable(detail string) {
 				r.Factors[i].Status = Pass
 				r.Factors[i].Detail = detail
 				r.Passed++
-				r.Skipped--
+				if r.Skipped > 0 {
+					r.Skipped--
+				} else {
+					slog.Warn("MarkE2EEUsable: Skipped counter already zero; counters may be out of sync")
+				}
 			}
 			return
 		}
