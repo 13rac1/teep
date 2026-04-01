@@ -5,6 +5,7 @@ package defaults
 
 import (
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
@@ -29,6 +30,9 @@ var registry = map[string]providerDefaults{
 	},
 	"nanogpt": {
 		model: nanogpt.DefaultMeasurementPolicy(),
+	},
+	"chutes": {
+		model: chutes.DefaultMeasurementPolicy(),
 	},
 }
 
