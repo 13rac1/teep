@@ -151,7 +151,7 @@ type attestationResponse struct {
 	Nonce          string `json:"nonce"`
 	Model          string `json:"model"`
 	TEEProvider    string `json:"tee_provider"`
-	SigningKey     string `json:"signing_key"`
+	SigningKey     string `json:"signing_public_key"`
 	SigningAddress string `json:"signing_address"`
 	IntelQuote     string `json:"intel_quote"`
 	NvidiaPayload  string `json:"nvidia_payload"`
@@ -168,14 +168,13 @@ type attestationResponse struct {
 	CandidatesAvail    int                 `json:"candidates_available"`
 	CandidatesEval     int                 `json:"candidates_evaluated"`
 
-	// Alternate/legacy field names (used as fallbacks in ParseAttestationResponse).
-	SigningPublicKey string `json:"signing_public_key"` // fallback for signing_key
-
 	// Duplicate top-level fields (parsed to silence jsonstrict, not propagated).
 	// quote == intel_quote; vm_config == info.vm_config. Venice flattens these.
-	RequestNonce string `json:"request_nonce"`
-	Quote        string `json:"quote"`
-	VMConfig     string `json:"vm_config"`
+	// signing_key is the legacy name for signing_public_key.
+	RequestNonce  string `json:"request_nonce"`
+	Quote         string `json:"quote"`
+	VMConfig      string `json:"vm_config"`
+	LegacySignKey string `json:"signing_key"`
 }
 
 // Attester fetches attestation data from Venice's /api/v1/tee/attestation
@@ -236,19 +235,13 @@ func ParseAttestationResponse(body []byte) (*attestation.RawAttestation, error) 
 			"event", e.Event, "type", e.EventType, "digest", digest)
 	}
 
-	// Venice renamed signing_key → signing_public_key; use whichever is present.
-	signingKey := ar.SigningKey
-	if signingKey == "" {
-		signingKey = ar.SigningPublicKey
-	}
-
 	return &attestation.RawAttestation{
 		BackendFormat:  attestation.FormatDstack,
 		Verified:       ar.Verified,
 		Nonce:          ar.Nonce,
 		Model:          ar.Model,
 		TEEProvider:    ar.TEEProvider,
-		SigningKey:     signingKey,
+		SigningKey:     ar.SigningKey,
 		SigningAddress: ar.SigningAddress,
 		IntelQuote:     ar.IntelQuote,
 		NvidiaPayload:  ar.NvidiaPayload,
