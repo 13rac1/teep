@@ -167,6 +167,24 @@ var NeardirectDefaultAllowFail = []string{
 	"cpu_id_registry",
 }
 
+// ChutesDefaultAllowFail is the chutes-specific default allow_fail list.
+// Chutes runs sek8s inside Intel TDX VMs and supports NVIDIA GPU attestation,
+// so core TDX and NVIDIA factors are enforced. Supply-chain and build
+// provenance factors remain allowed-to-fail until the sek8s platform
+// exposes the necessary evidence.
+var ChutesDefaultAllowFail = []string{
+	"nvidia_signature",
+	"nvidia_nras_verified",
+	"tls_key_binding",
+	"cpu_gpu_chain",
+	"measured_model_weights",
+	"build_transparency_log",
+	"cpu_id_registry",
+	"compose_binding",
+	"sigstore_verification",
+	"event_log_integrity",
+}
+
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{

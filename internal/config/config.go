@@ -43,6 +43,7 @@ var DefaultAllowFail = attestation.DefaultAllowFail
 // Go-level default allow_fail lists. Providers not in this map fall back to
 // the global DefaultAllowFail.
 var providerDefaultAllowFail = map[string][]string{
+	"chutes":     attestation.ChutesDefaultAllowFail,
 	"nearcloud":  attestation.NearcloudDefaultAllowFail,
 	"neardirect": attestation.NeardirectDefaultAllowFail,
 }
