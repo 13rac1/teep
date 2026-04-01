@@ -37,7 +37,7 @@ integration-phalacloud: ## Run Phala Cloud integration tests (requires PHALA_API
 	go test -v -race -timeout 120s -run TestIntegration_PhalaCloud ./internal/proxy/
 
 integration-chutes: ## Run Chutes integration tests (requires CHUTES_API_KEY)
-	go test -v -race -timeout 120s -run TestIntegration_Chutes ./internal/proxy/
+	go test -v -race -timeout 180s -run TestIntegration_Chutes ./internal/proxy/
 
 integration-neardirect-fixture: ## Run NEAR Direct fixture integration test (no API key needed)
 	go test -v -race -timeout 60s -run TestIntegration_NearDirect_Fixture ./internal/integration/
