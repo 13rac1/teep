@@ -26,12 +26,12 @@ func skipPhalaCloudIntegration(t *testing.T) {
 }
 
 // phalaCloudIntegrationModel returns the Phala Cloud model to use, defaulting
-// to a known-good model if PHALA_MODEL is unset.
+// to a known-good dstack-backed model if PHALA_MODEL is unset.
 func phalaCloudIntegrationModel() string {
 	if m := os.Getenv("PHALA_MODEL"); m != "" {
 		return m
 	}
-	return "phala/deepseek-v3.2"
+	return "phala/gemma-3-27b-it"
 }
 
 // integrationPhalaCloudConfig returns a config pointing at the live Phala Cloud
@@ -138,52 +138,43 @@ func TestIntegration_PhalaCloud(t *testing.T) {
 			t.Fatalf("decode report: %v", err)
 		}
 
-		// Chutes format: server generates its own nonce (does not echo ours),
-		// so nonce_match will fail. Verify TDX factors that should pass.
-		tier1Pass := []string{
-			"tdx_quote_present",
-			"tdx_quote_structure",
-			"tdx_cert_chain",
-			"tdx_quote_signature",
-			"tdx_debug_disabled",
-			"signing_key_present",
-		}
-		for _, name := range tier1Pass {
-			f, ok := findFactor(report.Factors, name)
-			if !ok {
-				t.Errorf("factor %q not found in report", name)
-				continue
-			}
-			if f.Status != attestation.Pass {
-				t.Errorf("factor %q: status = %v, want Pass; detail: %s", name, f.Status, f.Detail)
-			}
-		}
+		assertPhalaCloudReportFactors(t, &report)
+	})
+}
 
-		// nonce_match is expected to fail (server-generated nonce).
-		f, ok := findFactor(report.Factors, "nonce_match")
+// assertPhalaCloudReportFactors checks the core TDX attestation factors that
+// must pass for a dstack-backed PhalaCloud model. Unlike assertReportFactors,
+// this does not require e2ee_usable because PhalaCloud does not support E2EE.
+func assertPhalaCloudReportFactors(t *testing.T, report *attestation.VerificationReport) {
+	t.Helper()
+
+	mustPass := []string{
+		"nonce_match",
+		"tdx_quote_present",
+		"tdx_quote_structure",
+		"tdx_cert_chain",
+		"tdx_quote_signature",
+		"tdx_debug_disabled",
+		"signing_key_present",
+		"tdx_reportdata_binding",
+	}
+	for _, name := range mustPass {
+		f, ok := findFactor(report.Factors, name)
 		if !ok {
-			t.Error("factor nonce_match not found in report")
-		} else if f.Status != attestation.Fail {
-			t.Errorf("nonce_match: status = %v, want Fail (chutes server generates its own nonce); detail: %s", f.Status, f.Detail)
+			t.Errorf("factor %q not found in report", name)
+			continue
 		}
-
-		// REPORTDATA binding fails (no verifier for chutes format in MultiVerifier).
-		f, ok = findFactor(report.Factors, "tdx_reportdata_binding")
-		if !ok {
-			t.Error("factor tdx_reportdata_binding not found")
-		} else if f.Status != attestation.Fail {
-			t.Errorf("tdx_reportdata_binding: status = %v, want Fail, detail: %s", f.Status, f.Detail)
+		if f.Status != attestation.Pass {
+			t.Errorf("factor %q: status = %v, want Pass; detail: %s", name, f.Status, f.Detail)
 		}
+	}
 
-		// Log every non-Pass factor so failures are visible in test output.
-		for _, f := range report.Factors {
-			if f.Status == attestation.Pass {
-				continue
-			}
+	for _, f := range report.Factors {
+		if f.Status != attestation.Pass {
 			t.Logf("  %s %s: %s", f.Status, f.Name, f.Detail)
 		}
+	}
 
-		t.Logf("score: %d/%d passed, %d skipped, %d failed",
-			report.Passed, report.Passed+report.Failed+report.Skipped, report.Skipped, report.Failed)
-	})
+	t.Logf("score: %d/%d passed, %d skipped, %d failed",
+		report.Passed, report.Passed+report.Failed+report.Skipped, report.Skipped, report.Failed)
 }
