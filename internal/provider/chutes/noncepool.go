@@ -32,9 +32,10 @@ type NoncePool struct {
 	client   *http.Client
 	resolver modelResolver
 
-	mu      sync.Mutex
-	refresh singleflight.Group    // per-chute refresh dedup
-	pools   map[string]*chutePool // keyed by chute UUID
+	mu       sync.Mutex
+	refresh  singleflight.Group          // per-chute refresh dedup
+	pools    map[string]*chutePool       // keyed by chute UUID
+	failures map[string]map[string]int   // chute UUID → instance ID → failure count
 }
 
 // chutePool holds cached instances and their remaining nonces for one chute.
@@ -48,7 +49,6 @@ type poolInstance struct {
 	instanceID string
 	e2ePubKey  string
 	nonces     []string
-	failures   int // consecutive failures on this instance; prefer others
 }
 
 // NewNoncePool creates a NoncePool that fetches from the given base URL.
@@ -59,6 +59,7 @@ func NewNoncePool(baseURL, apiKey string, resolver modelResolver, client *http.C
 		client:   client,
 		resolver: resolver,
 		pools:    make(map[string]*chutePool),
+		failures: make(map[string]map[string]int),
 	}
 }
 
@@ -97,16 +98,10 @@ func (p *NoncePool) Take(ctx context.Context, model string) (*provider.E2EEMater
 func (p *NoncePool) MarkFailed(chuteID, instanceID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	pool, ok := p.pools[chuteID]
-	if !ok {
-		return
+	if p.failures[chuteID] == nil {
+		p.failures[chuteID] = make(map[string]int)
 	}
-	for i := range pool.instances {
-		if pool.instances[i].instanceID == instanceID {
-			pool.instances[i].failures++
-			return
-		}
-	}
+	p.failures[chuteID][instanceID]++
 }
 
 // Invalidate discards cached nonces for a chute, forcing a refresh on next Take.
@@ -114,6 +109,7 @@ func (p *NoncePool) Invalidate(chuteID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.pools, chuteID)
+	delete(p.failures, chuteID)
 }
 
 // FetchE2EEMaterial implements provider.E2EEMaterialFetcher.
@@ -134,13 +130,17 @@ func (p *NoncePool) take(chuteID string) *provider.E2EEMaterial {
 	}
 
 	// Find the instance with the fewest failures that has nonces.
+	chuteFailures := p.failures[chuteID]
 	bestIdx := -1
+	bestFailures := 0
 	for i := range pool.instances {
 		if len(pool.instances[i].nonces) == 0 {
 			continue
 		}
-		if bestIdx == -1 || pool.instances[i].failures < pool.instances[bestIdx].failures {
+		f := chuteFailures[pool.instances[i].instanceID]
+		if bestIdx == -1 || f < bestFailures {
 			bestIdx = i
+			bestFailures = f
 		}
 	}
 	if bestIdx == -1 {
@@ -157,7 +157,7 @@ func (p *NoncePool) take(chuteID string) *provider.E2EEMaterial {
 		"chute_id", chuteID,
 		"instance_id", inst.instanceID,
 		"remaining", len(inst.nonces),
-		"failures", inst.failures,
+		"failures", bestFailures,
 	)
 
 	return &provider.E2EEMaterial{
@@ -206,19 +206,6 @@ func (p *NoncePool) doRefresh(ctx context.Context, chuteID string) error {
 		expiresAt: time.Now().Add(time.Duration(ttl) * time.Second),
 	}
 
-	// Carry over failure counts from previous pool.
-	// Build the map while holding p.mu to avoid racing with MarkFailed().
-	p.mu.Lock()
-	oldFailures := make(map[string]int)
-	if oldPool, ok := p.pools[chuteID]; ok {
-		for _, inst := range oldPool.instances {
-			if inst.failures > 0 {
-				oldFailures[inst.instanceID] = inst.failures
-			}
-		}
-	}
-	p.mu.Unlock()
-
 	totalNonces := 0
 	for _, inst := range resp.Instances {
 		if inst.E2EPubKey == "" || len(inst.Nonces) == 0 {
@@ -228,7 +215,6 @@ func (p *NoncePool) doRefresh(ctx context.Context, chuteID string) error {
 			instanceID: inst.InstanceID,
 			e2ePubKey:  inst.E2EPubKey,
 			nonces:     inst.Nonces,
-			failures:   oldFailures[inst.InstanceID],
 		}
 		pool.instances = append(pool.instances, pi)
 		totalNonces += len(inst.Nonces)
