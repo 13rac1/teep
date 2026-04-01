@@ -25,12 +25,12 @@ func skipNanogptIntegration(t *testing.T) {
 }
 
 // nanogptIntegrationModel returns the NanoGPT model to use, defaulting to a
-// known-good TEE model if NANOGPT_MODEL is unset.
+// known-good dstack-backed TEE model if NANOGPT_MODEL is unset.
 func nanogptIntegrationModel() string {
 	if m := os.Getenv("NANOGPT_MODEL"); m != "" {
 		return m
 	}
-	return "TEE/llama-3.3-70b-instruct"
+	return "TEE/gemma-3-27b-it"
 }
 
 // nanogptIntegrationConfig returns a config pointing at the live NanoGPT API
@@ -101,6 +101,43 @@ func TestIntegration_NanoGPT(t *testing.T) {
 		if err := json.NewDecoder(reportResp.Body).Decode(&report); err != nil {
 			t.Fatalf("decode report: %v", err)
 		}
-		assertReportFactors(t, &report)
+		assertNanogptReportFactors(t, &report)
 	})
+}
+
+// assertNanogptReportFactors checks the core TDX attestation factors that
+// must pass for a dstack-backed NanoGPT model. Unlike assertReportFactors,
+// this does not require e2ee_usable because NanoGPT does not support E2EE.
+func assertNanogptReportFactors(t *testing.T, report *attestation.VerificationReport) {
+	t.Helper()
+
+	mustPass := []string{
+		"nonce_match",
+		"tdx_quote_present",
+		"tdx_quote_structure",
+		"tdx_cert_chain",
+		"tdx_quote_signature",
+		"tdx_debug_disabled",
+		"signing_key_present",
+		"tdx_reportdata_binding",
+	}
+	for _, name := range mustPass {
+		f, ok := findFactor(report.Factors, name)
+		if !ok {
+			t.Errorf("factor %q not found in report", name)
+			continue
+		}
+		if f.Status != attestation.Pass {
+			t.Errorf("factor %q: status = %v, want Pass; detail: %s", name, f.Status, f.Detail)
+		}
+	}
+
+	for _, f := range report.Factors {
+		if f.Status != attestation.Pass {
+			t.Logf("  %s %s: %s", f.Status, f.Name, f.Detail)
+		}
+	}
+
+	t.Logf("score: %d/%d passed, %d skipped, %d failed",
+		report.Passed, report.Passed+report.Failed+report.Skipped, report.Skipped, report.Failed)
 }
