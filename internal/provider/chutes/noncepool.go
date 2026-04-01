@@ -185,7 +185,9 @@ func (p *NoncePool) doRefresh(ctx context.Context, chuteID string) error {
 	slog.DebugContext(ctx, "nonce pool: fetching fresh instances", "chute_id", chuteID)
 	body, err := provider.FetchAttestationJSON(ctx, p.client, instancesURL.String(), p.apiKey, maxBodySize)
 	if err != nil {
-		return fmt.Errorf("nonce pool: fetch instances: %w", err)
+		// Do not propagate the underlying error because it may include a
+		// truncated HTTP response body containing single-use nonce material.
+		return fmt.Errorf("nonce pool: fetch instances for chute %s failed", chuteID)
 	}
 
 	var resp e2eInstancesResponse
