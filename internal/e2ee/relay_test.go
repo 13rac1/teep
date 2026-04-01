@@ -3,11 +3,13 @@ package e2ee
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -620,17 +622,23 @@ func BenchmarkDecryptSSEChunk_Parallel(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	var firstErr atomic.Value
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			result, err := DecryptSSEChunk(chunkJSON, session)
 			if err != nil {
-				b.Fatalf("DecryptSSEChunk: %v", err)
+				firstErr.CompareAndSwap(nil, err)
+				return
 			}
 			if result == "" {
-				b.Fatal("empty result")
+				firstErr.CompareAndSwap(nil, errors.New("empty result"))
+				return
 			}
 		}
 	})
+	if err := firstErr.Load(); err != nil {
+		b.Fatalf("parallel DecryptSSEChunk: %v", err)
+	}
 }
 
 func TestDecryptDeltaFields_EmptyStringSkipped(t *testing.T) {

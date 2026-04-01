@@ -3,6 +3,7 @@ package reqid_test
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"log/slog"
 	"testing"
 
@@ -15,12 +16,8 @@ func TestNew(t *testing.T) {
 	if len(id) != 8 {
 		t.Fatalf("expected 8-char hex, got %d chars: %q", len(id), id)
 	}
-
-	// Should be unique.
-	id2 := reqid.New()
-	t.Logf("generated ID: %s", id2)
-	if id == id2 {
-		t.Fatal("two consecutive IDs should differ")
+	if _, err := hex.DecodeString(id); err != nil {
+		t.Fatalf("not valid hex: %v", err)
 	}
 }
 

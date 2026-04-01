@@ -35,13 +35,13 @@ func FromContext(ctx context.Context) string {
 	return id
 }
 
-// handler wraps a slog.Handler to prepend "req" from context.
+// handler wraps a slog.Handler to append "req" from context.
 type handler struct {
 	next slog.Handler
 }
 
 // NewHandler wraps next so that every record with a request ID in its
-// context gets a "req" attribute prepended.
+// context gets a "req" attribute appended.
 func NewHandler(next slog.Handler) slog.Handler {
 	return &handler{next: next}
 }
@@ -50,7 +50,7 @@ func (h *handler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.next.Enabled(ctx, level)
 }
 
-func (h *handler) Handle(ctx context.Context, r slog.Record) error { //nolint:gocritic // slog.Handler interface requires value receiver
+func (h *handler) Handle(ctx context.Context, r slog.Record) error { //nolint:gocritic // slog.Handler interface requires slog.Record by value
 	if id := FromContext(ctx); id != "" {
 		r.AddAttrs(slog.String("req", id))
 	}
