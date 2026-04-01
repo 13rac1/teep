@@ -32,7 +32,7 @@ func chutesIntegrationModel() string {
 	if m := os.Getenv("CHUTES_E2EE_MODEL"); m != "" {
 		return m
 	}
-	return "deepseek-ai/DeepSeek-V3-0324-TEE"
+	return "zai-org/GLM-5-TEE"
 }
 
 // integrationChutesPlaintextConfig returns a config pointing at the live
