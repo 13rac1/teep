@@ -1,6 +1,7 @@
 package e2ee
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -84,7 +85,7 @@ func TestRelayStreamChutes(t *testing.T) {
 	t.Logf("SSE input length: %d bytes", len(sseInput))
 
 	rec := httptest.NewRecorder()
-	RelayStreamChutes(rec, strings.NewReader(sseInput), session)
+	RelayStreamChutes(context.Background(), rec, strings.NewReader(sseInput), session)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -117,7 +118,7 @@ func TestRelayStreamChutes_MissingInit(t *testing.T) {
 	input := `data: {"e2e":"dGVzdA=="}` + "\n\n"
 
 	rec := httptest.NewRecorder()
-	RelayStreamChutes(rec, strings.NewReader(input), session)
+	RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
 
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("status = %d, want 502", rec.Code)
@@ -139,7 +140,7 @@ func TestRelayStreamChutes_E2EError(t *testing.T) {
 	input := fmt.Sprintf("data: %s\n\ndata: %s\n\n", initJSON, errJSON)
 
 	rec := httptest.NewRecorder()
-	RelayStreamChutes(rec, strings.NewReader(input), session)
+	RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
 
 	body := rec.Body.String()
 	t.Logf("e2e_error response: %s", body)
@@ -158,7 +159,7 @@ func TestRelayNonStreamChutes(t *testing.T) {
 	blob := simulateServerResponseBlob(t, session, []byte(plainJSON))
 
 	rec := httptest.NewRecorder()
-	RelayNonStreamChutes(rec, strings.NewReader(string(blob)), session)
+	RelayNonStreamChutes(context.Background(), rec, strings.NewReader(string(blob)), session)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -185,7 +186,7 @@ func TestRelayStreamChutes_DoneWithoutChunks(t *testing.T) {
 	input := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", initJSON)
 
 	rec := httptest.NewRecorder()
-	RelayStreamChutes(rec, strings.NewReader(input), session)
+	RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
 
 	// [DONE] without header written: should not write [DONE] to output.
 	body := rec.Body.String()

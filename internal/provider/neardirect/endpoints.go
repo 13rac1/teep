@@ -98,7 +98,7 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 	})
 	if err != nil {
 		if ok {
-			slog.Warn("nearai endpoint discovery refresh failed, using stale mapping",
+			slog.WarnContext(ctx, "nearai endpoint discovery refresh failed, using stale mapping",
 				"model", model,
 				"domain", domain,
 				"err", err,
@@ -149,12 +149,12 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 	mapping := make(map[string]string)
 	for _, ep := range er.Endpoints {
 		if !isValidDomain(ep.Domain, r.restrictToNearAI) {
-			slog.Warn("nearai: endpoint discovery: skipping invalid domain", "domain", ep.Domain)
+			slog.WarnContext(ctx, "nearai: endpoint discovery: skipping invalid domain", "domain", ep.Domain)
 			continue
 		}
 		for _, m := range ep.Models {
 			if prior, exists := mapping[m]; exists && prior != ep.Domain {
-				slog.Warn("nearai: endpoint discovery: duplicate model mapping; last value wins",
+				slog.WarnContext(ctx, "nearai: endpoint discovery: duplicate model mapping; last value wins",
 					"model", m,
 					"first_domain", prior,
 					"second_domain", ep.Domain,

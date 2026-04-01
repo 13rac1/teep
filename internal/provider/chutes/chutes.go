@@ -106,7 +106,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 		return nil, fmt.Errorf("chutes: parse instances URL: %w", err)
 	}
 
-	slog.Debug("chutes: fetching e2e instances", "url_path", instancesURL.Path)
+	slog.DebugContext(ctx, "chutes: fetching e2e instances", "url_path", instancesURL.Path)
 	instancesBody, err := provider.FetchAttestationJSON(ctx, a.client, instancesURL.String(), a.apiKey, maxBodySize)
 	if err != nil {
 		return nil, fmt.Errorf("chutes: fetch instances: %w", err)
@@ -122,7 +122,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("nonce", nonce.Hex())
 	evidenceURL.RawQuery = q.Encode()
 
-	slog.Debug("chutes: fetching evidence", "url_path", evidenceURL.Path)
+	slog.DebugContext(ctx, "chutes: fetching evidence", "url_path", evidenceURL.Path)
 	evidenceBody, err := provider.FetchAttestationJSON(ctx, a.client, evidenceURL.String(), a.apiKey, maxBodySize)
 	if err != nil {
 		return nil, fmt.Errorf("chutes: fetch evidence: %w", err)

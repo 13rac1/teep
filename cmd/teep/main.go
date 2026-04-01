@@ -45,6 +45,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/proxy"
+	"github.com/13rac1/teep/internal/reqid"
 )
 
 func main() {
@@ -59,7 +60,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "teep: %v\n", err)
 		os.Exit(1)
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	slog.SetDefault(slog.New(reqid.NewHandler(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))))
 
 	switch os.Args[1] {
 	case "serve":

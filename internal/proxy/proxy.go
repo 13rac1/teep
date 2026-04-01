@@ -48,6 +48,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/venice"
+	"github.com/13rac1/teep/internal/reqid"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -364,7 +365,7 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 // binding has already been verified against the raw's signing key.
 func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, upstreamModel string) (*attestation.VerificationReport, *attestation.RawAttestation) {
 	if prov.Attester == nil {
-		slog.Error("provider has no Attester", "provider", prov.Name, "model", upstreamModel)
+		slog.ErrorContext(ctx, "provider has no Attester", "provider", prov.Name, "model", upstreamModel)
 		s.negCache.Record(prov.Name, upstreamModel)
 		return nil, nil
 	}
@@ -373,44 +374,44 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	nonce := attestation.NewNonce()
 	var fetchDur, tdxDur, nvidiaDur, nrasDur, pocDur, composeDur time.Duration
 
-	slog.Debug("attestation fetch starting", "provider", prov.Name, "model", upstreamModel)
+	slog.DebugContext(ctx, "attestation fetch starting", "provider", prov.Name, "model", upstreamModel)
 	fetchStart := time.Now()
 	raw, err := prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
 	if err != nil {
-		slog.Error("attestation fetch failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+		slog.ErrorContext(ctx, "attestation fetch failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		s.negCache.Record(prov.Name, upstreamModel)
 		return nil, nil
 	}
 	fetchDur = time.Since(fetchStart)
-	slog.Debug("attestation fetch complete", "provider", prov.Name, "elapsed", fetchDur)
+	slog.DebugContext(ctx, "attestation fetch complete", "provider", prov.Name, "elapsed", fetchDur)
 
 	var tdxResult *attestation.TDXVerifyResult
 	if raw.IntelQuote != "" {
-		slog.Debug("TDX verification starting", "provider", prov.Name)
+		slog.DebugContext(ctx, "TDX verification starting", "provider", prov.Name)
 		tdxStart := time.Now()
 		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, s.cfg.Offline)
 		if prov.ReportDataVerifier != nil && tdxResult.ParseErr == nil {
 			detail, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
 			if errors.Is(err, multi.ErrNoVerifier) {
-				slog.Debug("no REPORTDATA verifier for backend format", "format", raw.BackendFormat)
+				slog.DebugContext(ctx, "no REPORTDATA verifier for backend format", "format", raw.BackendFormat)
 			} else {
 				tdxResult.ReportDataBindingErr = err
 				tdxResult.ReportDataBindingDetail = detail
 			}
 		}
 		tdxDur = time.Since(tdxStart)
-		slog.Debug("TDX verification complete", "provider", prov.Name, "elapsed", tdxDur)
+		slog.DebugContext(ctx, "TDX verification complete", "provider", prov.Name, "elapsed", tdxDur)
 	}
 
 	var nvidiaResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" {
-		slog.Debug("NVIDIA verification starting", "provider", prov.Name)
+		slog.DebugContext(ctx, "NVIDIA verification starting", "provider", prov.Name)
 		nvidiaStart := time.Now()
 		nvidiaResult = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
 		nvidiaDur = time.Since(nvidiaStart)
-		slog.Debug("NVIDIA verification complete", "provider", prov.Name, "elapsed", nvidiaDur)
+		slog.DebugContext(ctx, "NVIDIA verification complete", "provider", prov.Name, "elapsed", nvidiaDur)
 	} else if len(raw.GPUEvidence) > 0 {
-		slog.Debug("NVIDIA GPU direct verification starting", "provider", prov.Name, "gpus", len(raw.GPUEvidence))
+		slog.DebugContext(ctx, "NVIDIA GPU direct verification starting", "provider", prov.Name, "gpus", len(raw.GPUEvidence))
 		serverNonce, err := attestation.ParseNonce(raw.Nonce)
 		if err != nil {
 			nvidiaResult = &attestation.NvidiaVerifyResult{
@@ -420,34 +421,34 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 			nvidiaStart := time.Now()
 			nvidiaResult = attestation.VerifyNVIDIAGPUDirect(raw.GPUEvidence, serverNonce)
 			nvidiaDur = time.Since(nvidiaStart)
-			slog.Debug("NVIDIA GPU direct verification complete", "provider", prov.Name, "elapsed", nvidiaDur)
+			slog.DebugContext(ctx, "NVIDIA GPU direct verification complete", "provider", prov.Name, "elapsed", nvidiaDur)
 		}
 	}
 
 	var nrasResult *attestation.NvidiaVerifyResult
 	if !s.cfg.Offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
-		slog.Debug("NVIDIA NRAS verification starting", "provider", prov.Name)
+		slog.DebugContext(ctx, "NVIDIA NRAS verification starting", "provider", prov.Name)
 		nrasStart := time.Now()
 		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, s.attestClient)
 		nrasDur = time.Since(nrasStart)
-		slog.Debug("NVIDIA NRAS verification complete", "provider", prov.Name, "elapsed", nrasDur)
+		slog.DebugContext(ctx, "NVIDIA NRAS verification complete", "provider", prov.Name, "elapsed", nrasDur)
 	} else if !s.cfg.Offline && len(raw.GPUEvidence) > 0 {
-		slog.Debug("NVIDIA NRAS verification starting (synthesized EAT)", "provider", prov.Name)
+		slog.DebugContext(ctx, "NVIDIA NRAS verification starting (synthesized EAT)", "provider", prov.Name)
 		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
 		nrasStart := time.Now()
 		nrasResult = attestation.VerifyNVIDIANRAS(ctx, eatJSON, s.attestClient)
 		nrasDur = time.Since(nrasStart)
-		slog.Debug("NVIDIA NRAS verification complete (synthesized EAT)", "provider", prov.Name, "elapsed", nrasDur)
+		slog.DebugContext(ctx, "NVIDIA NRAS verification complete (synthesized EAT)", "provider", prov.Name, "elapsed", nrasDur)
 	}
 
 	var pocResult *attestation.PoCResult
 	if !s.cfg.Offline && raw.IntelQuote != "" {
-		slog.Debug("Proof of Cloud check starting", "provider", prov.Name)
+		slog.DebugContext(ctx, "Proof of Cloud check starting", "provider", prov.Name)
 		pocStart := time.Now()
 		poc := attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient, s.pocSigningKey)
 		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
 		pocDur = time.Since(pocStart)
-		slog.Debug("Proof of Cloud check complete", "provider", prov.Name, "elapsed", pocDur,
+		slog.DebugContext(ctx, "Proof of Cloud check complete", "provider", prov.Name, "elapsed", pocDur,
 			"registered", pocResult != nil && pocResult.Registered)
 	}
 
@@ -482,7 +483,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	}
 
 	totalDur := time.Since(totalStart)
-	slog.Info("verification complete",
+	slog.InfoContext(ctx, "verification complete",
 		"provider", prov.Name,
 		"model", upstreamModel,
 		"total", fmtDur(totalDur),
@@ -521,6 +522,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 
 // handleChatCompletions is the core proxy handler for POST /v1/chat/completions.
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	ctx := reqid.WithID(r.Context(), reqid.New())
 	requestStart := time.Now()
 
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10 MiB max
@@ -551,7 +553,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	var attestDur, e2eeDur, upstreamDur time.Duration
 	var status string
 	defer func() {
-		slog.Info("request complete",
+		slog.InfoContext(ctx, "request complete",
 			"provider", prov.Name,
 			"model", upstreamModel,
 			"stream", req.Stream,
@@ -587,7 +589,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// single TLS connection. No separate attestation cache or E2EE needed.
 	if prov.PinnedHandler != nil {
 		status = "pinned"
-		s.handlePinnedChat(w, r, prov, upstreamModel, body, req)
+		s.handlePinnedChat(ctx, w, r, prov, upstreamModel, body, req)
 		return
 	}
 
@@ -598,7 +600,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.stats.cacheHits.Add(1)
 	} else {
 		s.stats.cacheMisses.Add(1)
-		report, raw = s.fetchAndVerify(r.Context(), prov, upstreamModel)
+		report, raw = s.fetchAndVerify(ctx, prov, upstreamModel)
 		if report == nil {
 			status = "attest_failed"
 			s.stats.errors.Add(1)
@@ -612,7 +614,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	if report.Blocked() {
 		if s.cfg.Force {
-			slog.Warn("--force: bypassing blocked attestation", "provider", prov.Name, "model", upstreamModel)
+			slog.WarnContext(ctx, "--force: bypassing blocked attestation", "provider", prov.Name, "model", upstreamModel)
 		} else {
 			status = "blocked"
 			s.stats.errors.Add(1)
@@ -620,7 +622,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
 			if err := json.NewEncoder(w).Encode(report); err != nil {
-				slog.Error("encode response", "error", err)
+				slog.ErrorContext(ctx, "encode response", "error", err)
 			}
 			return
 		}
@@ -631,7 +633,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// be reused for E2EE on a subsequent cache-hit request.
 	if raw != nil && raw.SigningKey != "" {
 		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && subtle.ConstantTimeCompare([]byte(prev), []byte(raw.SigningKey)) == 0 {
-			slog.Warn("signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
+			slog.WarnContext(ctx, "signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
 		}
 		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
 	}
@@ -644,12 +646,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	e2eeStart := time.Now()
-	upstreamBody, session, meta, err := s.buildUpstreamBody(r.Context(), body, upstreamModel, e2eeActive, prov, raw)
+	upstreamBody, session, meta, err := s.buildUpstreamBody(ctx, body, upstreamModel, e2eeActive, prov, raw)
 	if err != nil {
 		status = "e2ee_failed"
 		s.stats.errors.Add(1)
 		ms.errors.Add(1)
-		slog.Error("build upstream body failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+		slog.ErrorContext(ctx, "build upstream body failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		http.Error(w, "failed to prepare upstream request", http.StatusInternalServerError)
 		return
 	}
@@ -662,7 +664,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	upstreamURL := prov.BaseURL + prov.ChatPath
-	ctx := r.Context()
 	var cancel context.CancelFunc
 	if !req.Stream {
 		ctx, cancel = context.WithTimeout(ctx, upstreamNonStreamTimeout)
@@ -678,7 +679,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	upstreamReq.Header.Set("Content-Type", "application/json")
 
 	if err := prepareUpstreamHeaders(upstreamReq, prov, session, meta, req.Stream); err != nil {
-		slog.Error("PrepareRequest failed", "provider", prov.Name, "err", err)
+		slog.ErrorContext(ctx, "PrepareRequest failed", "provider", prov.Name, "err", err)
 		http.Error(w, "failed to prepare upstream request headers", http.StatusInternalServerError)
 		return
 	}
@@ -689,7 +690,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		status = "upstream_failed"
 		s.stats.errors.Add(1)
 		ms.errors.Add(1)
-		slog.Error("upstream request failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+		slog.ErrorContext(ctx, "upstream request failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
@@ -710,17 +711,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// non-streaming, reassemble the decrypted SSE chunks into a single JSON response.
 	switch {
 	case meta != nil && req.Stream:
-		e2ee.RelayStreamChutes(w, resp.Body, meta.Session)
+		e2ee.RelayStreamChutes(ctx, w, resp.Body, meta.Session)
 	case meta != nil:
-		e2ee.RelayNonStreamChutes(w, resp.Body, meta.Session)
+		e2ee.RelayNonStreamChutes(ctx, w, resp.Body, meta.Session)
 	case session != nil && req.Stream:
-		e2ee.RelayStream(w, resp.Body, session)
+		e2ee.RelayStream(ctx, w, resp.Body, session)
 	case session != nil:
-		e2ee.RelayReassembledNonStream(w, resp.Body, session)
+		e2ee.RelayReassembledNonStream(ctx, w, resp.Body, session)
 	case req.Stream:
-		e2ee.RelayStream(w, resp.Body, nil)
+		e2ee.RelayStream(ctx, w, resp.Body, nil)
 	default:
-		e2ee.RelayNonStream(w, resp.Body, nil)
+		e2ee.RelayNonStream(ctx, w, resp.Body, nil)
 	}
 	upstreamDur = time.Since(upstreamStart)
 	status = "ok"
@@ -729,6 +730,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 // handlePinnedChat handles chat completions for connection-pinned providers.
 // Attestation and chat happen on the same TLS connection via PinnedHandler.
 func (s *Server) handlePinnedChat(
+	ctx context.Context,
 	w http.ResponseWriter, r *http.Request,
 	prov *provider.Provider, upstreamModel string,
 	body []byte, req chatRequest,
@@ -747,7 +749,7 @@ func (s *Server) handlePinnedChat(
 	// the pinned handler itself, which will block internally).
 	if prov.E2EE {
 		if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok && !cached.ReportDataBindingPassed() {
-			slog.Error("E2EE required but tdx_reportdata_binding not passed; refusing request",
+			slog.ErrorContext(ctx, "E2EE required but tdx_reportdata_binding not passed; refusing request",
 				"provider", prov.Name, "model", upstreamModel)
 			http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
 			return
@@ -769,7 +771,6 @@ func (s *Server) handlePinnedChat(
 		}
 	}
 
-	ctx := r.Context()
 	var cancel context.CancelFunc
 	if req.Stream {
 		ctx, cancel = context.WithTimeout(ctx, 30*time.Minute)
@@ -781,7 +782,7 @@ func (s *Server) handlePinnedChat(
 	pinnedResp, err := prov.PinnedHandler.HandlePinned(ctx, &pinnedReq)
 	if err != nil {
 		s.negCache.Record(prov.Name, upstreamModel)
-		slog.Error("pinned chat failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+		slog.ErrorContext(ctx, "pinned chat failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		http.Error(w, fmt.Sprintf("pinned connection failed: %v", err), http.StatusBadGateway)
 		return
 	}
@@ -797,13 +798,13 @@ func (s *Server) handlePinnedChat(
 	}
 	if report != nil && report.Blocked() {
 		if s.cfg.Force {
-			slog.Warn("--force: bypassing blocked attestation (pinned)", "provider", prov.Name, "model", upstreamModel)
+			slog.WarnContext(ctx, "--force: bypassing blocked attestation (pinned)", "provider", prov.Name, "model", upstreamModel)
 		} else {
 			s.negCache.Record(prov.Name, upstreamModel)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
 			if err := json.NewEncoder(w).Encode(report); err != nil {
-				slog.Error("encode response", "error", err)
+				slog.ErrorContext(ctx, "encode response", "error", err)
 			}
 			return
 		}
@@ -813,7 +814,7 @@ func (s *Server) handlePinnedChat(
 	// E2EE degrades to plaintext.
 	if prov.E2EE && report != nil && !report.ReportDataBindingPassed() {
 		s.negCache.Record(prov.Name, upstreamModel)
-		slog.Error("E2EE required but tdx_reportdata_binding not passed; refusing request",
+		slog.ErrorContext(ctx, "E2EE required but tdx_reportdata_binding not passed; refusing request",
 			"provider", prov.Name, "model", upstreamModel)
 		http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
 		return
@@ -850,18 +851,18 @@ func (s *Server) handlePinnedChat(
 		s.stats.e2ee.Add(1)
 		defer session.Zero()
 		if req.Stream {
-			e2ee.RelayStream(w, pinnedResp.Body, session)
+			e2ee.RelayStream(ctx, w, pinnedResp.Body, session)
 		} else {
-			e2ee.RelayReassembledNonStream(w, pinnedResp.Body, session)
+			e2ee.RelayReassembledNonStream(ctx, w, pinnedResp.Body, session)
 		}
 		return
 	}
 	s.stats.plaintext.Add(1)
 	if req.Stream {
-		e2ee.RelayStream(w, pinnedResp.Body, nil)
+		e2ee.RelayStream(ctx, w, pinnedResp.Body, nil)
 		return
 	}
-	e2ee.RelayNonStream(w, pinnedResp.Body, nil)
+	e2ee.RelayNonStream(ctx, w, pinnedResp.Body, nil)
 }
 
 // buildUpstreamBody constructs the body to forward upstream. If e2eeActive is
@@ -894,13 +895,13 @@ func (s *Server) buildUpstreamBody(
 		// Some providers (e.g. Chutes) need fresh instance/nonce data per request.
 		if !prov.SkipSigningKeyCache {
 			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok {
-				slog.Debug("E2EE key exchange: using cached signing key", "provider", prov.Name, "model", upstreamModel)
+				slog.DebugContext(ctx, "E2EE key exchange: using cached signing key", "provider", prov.Name, "model", upstreamModel)
 				raw = &attestation.RawAttestation{SigningKey: cachedKey}
 			}
 		}
 		if raw == nil {
 			// Signing key not cached: fetch fresh attestation and re-verify.
-			slog.Debug("E2EE key exchange: fetching fresh attestation (cache hit path)", "provider", prov.Name, "model", upstreamModel)
+			slog.DebugContext(ctx, "E2EE key exchange: fetching fresh attestation (cache hit path)", "provider", prov.Name, "model", upstreamModel)
 			nonce := attestation.NewNonce()
 			var err error
 			raw, err = prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
@@ -921,7 +922,7 @@ func (s *Server) buildUpstreamBody(
 			if prov.ReportDataVerifier != nil {
 				_, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
 				if errors.Is(err, multi.ErrNoVerifier) {
-					slog.Debug("no REPORTDATA verifier for backend format", "format", raw.BackendFormat)
+					slog.DebugContext(ctx, "no REPORTDATA verifier for backend format", "format", raw.BackendFormat)
 				} else if err != nil {
 					return nil, nil, nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", err)
 				}
@@ -929,7 +930,7 @@ func (s *Server) buildUpstreamBody(
 			s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
 		}
 	} else {
-		slog.Debug("E2EE key exchange: reusing attestation from verification (cache miss path)", "provider", prov.Name, "model", upstreamModel)
+		slog.DebugContext(ctx, "E2EE key exchange: reusing attestation from verification (cache miss path)", "provider", prov.Name, "model", upstreamModel)
 	}
 
 	if raw.SigningKey == "" {
@@ -985,7 +986,7 @@ const modelsTimeout = 30 * time.Second
 // Each provider's model entries are relayed as raw JSON to preserve all
 // upstream fields (pricing, capabilities, constraints, etc.).
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), modelsTimeout)
+	ctx, cancel := context.WithTimeout(reqid.WithID(r.Context(), reqid.New()), modelsTimeout)
 	defer cancel()
 
 	all := make([]json.RawMessage, 0)
@@ -995,7 +996,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		}
 		models, err := p.ModelLister.ListModels(ctx)
 		if err != nil {
-			slog.Warn("model listing failed", "provider", p.Name, "err", err)
+			slog.WarnContext(ctx, "model listing failed", "provider", p.Name, "err", err)
 			continue
 		}
 		all = append(all, models...)
@@ -1003,7 +1004,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(modelsListResponse{Object: "list", Data: all}); err != nil {
-		slog.Error("encoding models response", "err", err)
+		slog.ErrorContext(ctx, "encoding models response", "err", err)
 	}
 }
 

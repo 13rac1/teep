@@ -244,7 +244,7 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 				return
 			}
 			if resp.statusCode == 403 {
-				slog.Debug("PoC: peer returned 403 (not whitelisted)", "peer", peerURL)
+				slog.DebugContext(ctx1, "PoC: peer returned 403 (not whitelisted)", "peer", peerURL)
 				collectCh <- collectResult{forbidden: true}
 				return
 			}
@@ -262,7 +262,7 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 				collectCh <- collectResult{err: fmt.Errorf("stage 1: missing moniker/nonce from %s", peerURL)}
 				return
 			}
-			slog.Debug("PoC: nonce collected", "peer", peerURL, "moniker", s1.Moniker)
+			slog.DebugContext(ctx1, "PoC: nonce collected", "peer", peerURL, "moniker", s1.Moniker)
 			collectCh <- collectResult{n: nonceEntry{
 				peerURL:   peerURL,
 				moniker:   s1.Moniker,
@@ -338,7 +338,7 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 		}
 
 		if s2.JWT != "" {
-			slog.Debug("PoC: final JWT received", "peer", n.peerURL, "label", s2.Label)
+			slog.DebugContext(ctx, "PoC: final JWT received", "peer", n.peerURL, "label", s2.Label)
 
 			// Validate JWT claims (F-39): expiry + machine ID consistency.
 			// When a signing key is configured, also verify the EdDSA
@@ -352,7 +352,7 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 				}
 			}
 			if err := verifyFn(s2.JWT, expectedMachineID); err != nil {
-				slog.Warn("PoC JWT claims validation failed", "peer", n.peerURL, "err", err)
+				slog.WarnContext(ctx, "PoC JWT claims validation failed", "peer", n.peerURL, "err", err)
 				return &PoCResult{Err: fmt.Errorf("PoC JWT validation: %w", err)}
 			}
 
@@ -371,7 +371,7 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 			return &PoCResult{Err: fmt.Errorf("stage 2: parse partial sigs from %s: %w", n.peerURL, err)}
 		}
 		partialSigs = sigs
-		slog.Debug("PoC: partial sig collected", "peer", n.peerURL, "signer", i+1, "of", c.quorum)
+		slog.DebugContext(ctx, "PoC: partial sig collected", "peer", n.peerURL, "signer", i+1, "of", c.quorum)
 	}
 
 	return &PoCResult{Err: errors.New("stage 2 completed without final JWT")}

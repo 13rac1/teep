@@ -268,11 +268,11 @@ func (h *PinnedHandler) attestIfNeeded(
 	domain, liveSPKI, model string,
 ) (*attestation.VerificationReport, string, error) {
 	if h.spkiCache.Contains(domain, liveSPKI) {
-		slog.Debug("SPKI cache hit, skipping attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
+		slog.DebugContext(ctx, "SPKI cache hit, skipping attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
 		return nil, "", nil
 	}
 
-	slog.Info("SPKI cache miss, fetching gateway+model attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
+	slog.InfoContext(ctx, "SPKI cache miss, fetching gateway+model attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
 	v, sfErr, _ := h.verifySF.Do(domain+"\x00"+liveSPKI, func() (any, error) {
 		if h.spkiCache.Contains(domain, liveSPKI) {
 			return nil, errAlreadyCached
@@ -287,13 +287,13 @@ func (h *PinnedHandler) attestIfNeeded(
 			for i, f := range blocked {
 				names[i] = f.Name
 			}
-			slog.Warn("attestation blocked by policy",
+			slog.WarnContext(ctx, "attestation blocked by policy",
 				"domain", domain,
 				"model", model,
 				"blocked_factors", names,
 			)
 			for _, f := range blocked {
-				slog.Debug("blocked factor detail",
+				slog.DebugContext(ctx, "blocked factor detail",
 					"factor", f.Name,
 					"detail", f.Detail,
 					"tier", f.Tier,
@@ -302,7 +302,7 @@ func (h *PinnedHandler) attestIfNeeded(
 			return attestResult{report: r, signingKey: key}, nil
 		}
 		h.spkiCache.Add(domain, liveSPKI)
-		slog.Info("SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
+		slog.InfoContext(ctx, "SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
 		return attestResult{report: r, signingKey: key}, nil
 	})
 	if sfErr != nil && !errors.Is(sfErr, errAlreadyCached) {
@@ -329,7 +329,7 @@ func (h *PinnedHandler) attestOnConn(
 	domain, liveSPKI, model string,
 ) (*attestation.VerificationReport, string, error) {
 	modelNonce := attestation.NewNonce()
-	slog.Debug("nearcloud attestation nonce generated",
+	slog.DebugContext(ctx, "nearcloud attestation nonce generated",
 		"nonce_prefix", modelNonce.HexPrefix(),
 		"domain", domain,
 		"model", model,
@@ -342,7 +342,7 @@ func (h *PinnedHandler) attestOnConn(
 
 	tdxResult := h.verifyModelTDX(ctx, raw, modelNonce)
 	if raw.NvidiaPayload != "" {
-		slog.Debug("verifying NVIDIA payload with nonce",
+		slog.DebugContext(ctx, "verifying NVIDIA payload with nonce",
 			"nonce_prefix", modelNonce.HexPrefix(),
 			"domain", domain,
 			"model", model,
@@ -353,7 +353,7 @@ func (h *PinnedHandler) attestOnConn(
 
 	// Model TLS fingerprint is for the model backend, not the gateway.
 	if raw.TLSFingerprint != "" {
-		slog.Debug("model tls_cert_fingerprint present (model backend SPKI, not gateway)",
+		slog.DebugContext(ctx, "model tls_cert_fingerprint present (model backend SPKI, not gateway)",
 			"model_fp", provider.Truncate(raw.TLSFingerprint, 16),
 			"gateway_spki", provider.Truncate(liveSPKI, 16),
 		)
@@ -379,7 +379,7 @@ func (h *PinnedHandler) attestOnConn(
 			provider.Truncate(liveSPKI, 16),
 			provider.Truncate(gwRaw.TLSCertFingerprint, 16))
 	}
-	slog.Debug("gateway TLS fingerprint matches live SPKI",
+	slog.DebugContext(ctx, "gateway TLS fingerprint matches live SPKI",
 		"spki", provider.Truncate(liveSPKI, 16),
 		"fp", provider.Truncate(gwRaw.TLSCertFingerprint, 16),
 	)

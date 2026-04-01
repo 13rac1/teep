@@ -137,7 +137,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	//    for the same domain via singleflight (prevents thundering herd).
 	var report *attestation.VerificationReport
 	if !h.spkiCache.Contains(domain, liveSPKI) {
-		slog.Info("SPKI cache miss, fetching attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
+		slog.InfoContext(ctx, "SPKI cache miss, fetching attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
 		v, sfErr, _ := h.verifySF.Do(domain+"\x00"+liveSPKI, func() (any, error) {
 			// Double-check after winning the singleflight race.
 			if h.spkiCache.Contains(domain, liveSPKI) {
@@ -153,13 +153,13 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 				for i, f := range blocked {
 					names[i] = f.Name
 				}
-				slog.Warn("attestation blocked by policy, refusing to cache SPKI",
+				slog.WarnContext(ctx, "attestation blocked by policy, refusing to cache SPKI",
 					"domain", domain,
 					"model", req.Model,
 					"blocked_factors", names,
 				)
 				for _, f := range blocked {
-					slog.Debug("blocked factor detail",
+					slog.DebugContext(ctx, "blocked factor detail",
 						"factor", f.Name,
 						"detail", f.Detail,
 						"tier", f.Tier,
@@ -168,7 +168,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 				return r, nil
 			}
 			h.spkiCache.Add(domain, liveSPKI)
-			slog.Info("SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
+			slog.InfoContext(ctx, "SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
 			return r, nil
 		})
 		if sfErr != nil && !errors.Is(sfErr, errAlreadyCached) {
@@ -182,7 +182,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 			}
 		}
 	} else {
-		slog.Debug("SPKI cache hit, skipping attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
+		slog.DebugContext(ctx, "SPKI cache hit, skipping attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
 	}
 
 	if report != nil && report.Blocked() {
@@ -267,7 +267,7 @@ func (h *PinnedHandler) attestOnConn(
 	domain, liveSPKI, model string,
 ) (*attestation.VerificationReport, error) {
 	nonce := attestation.NewNonce()
-	slog.Debug("neardirect attestation nonce generated",
+	slog.DebugContext(ctx, "neardirect attestation nonce generated",
 		"nonce_prefix", nonce.HexPrefix(),
 		"domain", domain,
 		"model", model,
@@ -333,7 +333,7 @@ func (h *PinnedHandler) attestOnConn(
 
 	var nvidiaResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" {
-		slog.Debug("verifying NVIDIA payload with nonce",
+		slog.DebugContext(ctx, "verifying NVIDIA payload with nonce",
 			"nonce_prefix", nonce.HexPrefix(),
 			"domain", domain,
 			"model", model,

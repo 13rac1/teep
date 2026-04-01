@@ -78,7 +78,7 @@ func (l *ModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error)
 	for _, raw := range mr.Data {
 		var f modelFilter
 		if err := json.Unmarshal(raw, &f); err != nil {
-			slog.Warn("venice: skipping model entry", "err", err)
+			slog.WarnContext(ctx, "venice: skipping model entry", "err", err)
 			continue
 		}
 		if f.ModelSpec.Capabilities.SupportsTeeAttestation || f.ModelSpec.Capabilities.SupportsE2EE {

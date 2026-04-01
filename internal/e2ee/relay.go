@@ -1,6 +1,7 @@
 package e2ee
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -308,7 +309,7 @@ func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, error) {
 
 // RelayStream reads an SSE stream from body, decrypts chunks when session is
 // non-nil, and writes the decrypted SSE lines to w. Aborts on decryption failure.
-func RelayStream(w http.ResponseWriter, body io.Reader, session Decryptor) {
+func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -332,24 +333,24 @@ func RelayStream(w http.ResponseWriter, body io.Reader, session Decryptor) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	if relaySSELine(w, flusher, scanner.Text(), session) {
+	if relaySSELine(ctx, w, flusher, scanner.Text(), session) {
 		return
 	}
 
 	for scanner.Scan() {
-		if relaySSELine(w, flusher, scanner.Text(), session) {
+		if relaySSELine(ctx, w, flusher, scanner.Text(), session) {
 			return
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		slog.Error("SSE scanner error", "err", err)
+		slog.ErrorContext(ctx, "SSE scanner error", "err", err)
 	}
 }
 
 // relaySSELine processes a single SSE line, writing it to w. Returns true if
 // the stream should end (DONE marker or decryption error).
-func relaySSELine(w http.ResponseWriter, flusher http.Flusher, line string, session Decryptor) bool {
+func relaySSELine(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, line string, session Decryptor) bool {
 	if !strings.HasPrefix(line, "data: ") {
 		fmt.Fprintf(w, "%s\n", line)
 		flusher.Flush()
@@ -371,7 +372,7 @@ func relaySSELine(w http.ResponseWriter, flusher http.Flusher, line string, sess
 
 	decrypted, err := DecryptSSEChunk(data, session)
 	if err != nil {
-		slog.Error("stream decryption failed", "err", err)
+		slog.ErrorContext(ctx, "stream decryption failed", "err", err)
 		fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":\"stream decryption failed\",\"type\":\"decryption_error\"}}\n\n")
 		flusher.Flush()
 		return true
@@ -384,10 +385,10 @@ func relaySSELine(w http.ResponseWriter, flusher http.Flusher, line string, sess
 
 // RelayReassembledNonStream reads an SSE stream from the E2EE upstream,
 // decrypts each chunk, and writes a single non-streaming JSON response.
-func RelayReassembledNonStream(w http.ResponseWriter, body io.Reader, session Decryptor) {
+func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) {
 	result, err := ReassembleNonStream(body, session)
 	if err != nil {
-		slog.Error("E2EE non-stream reassembly failed", "err", err)
+		slog.ErrorContext(ctx, "E2EE non-stream reassembly failed", "err", err)
 		http.Error(w, "response decryption failed", http.StatusBadGateway)
 		return
 	}
@@ -399,7 +400,7 @@ func RelayReassembledNonStream(w http.ResponseWriter, body io.Reader, session De
 
 // RelayNonStream reads a non-streaming JSON response from body, decrypts the
 // content fields if session is non-nil, and writes the result to w.
-func RelayNonStream(w http.ResponseWriter, body io.Reader, session Decryptor) {
+func RelayNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) {
 	responseBody, err := io.ReadAll(io.LimitReader(body, 10<<20))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
@@ -415,7 +416,7 @@ func RelayNonStream(w http.ResponseWriter, body io.Reader, session Decryptor) {
 
 	decrypted, err := DecryptNonStreamResponse(responseBody, session)
 	if err != nil {
-		slog.Error("non-stream decryption failed", "err", err)
+		slog.ErrorContext(ctx, "non-stream decryption failed", "err", err)
 		http.Error(w, "response decryption failed", http.StatusBadGateway)
 		return
 	}
