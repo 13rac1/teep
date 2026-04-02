@@ -2807,10 +2807,20 @@ func (m *mockE2EEFetcher) Invalidate(chuteID string) {
 
 // passthroughEncryptor returns the body unmodified with no E2EE session,
 // allowing nonce pool tests to verify routing logic without real encryption.
+// It populates ChutesE2EE metadata from the raw attestation so the retry
+// loop can track instance IDs via MarkFailed.
 type passthroughEncryptor struct{}
 
-func (passthroughEncryptor) EncryptRequest(body []byte, _ *attestation.RawAttestation) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
-	return body, nil, nil, nil
+func (passthroughEncryptor) EncryptRequest(body []byte, raw *attestation.RawAttestation) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
+	var meta *e2ee.ChutesE2EE
+	if raw != nil && raw.InstanceID != "" {
+		meta = &e2ee.ChutesE2EE{
+			ChuteID:    raw.ChuteID,
+			InstanceID: raw.InstanceID,
+			E2ENonce:   raw.E2ENonce,
+		}
+	}
+	return body, nil, meta, nil
 }
 
 // noopPreparer sets only Authorization, without rewriting the URL.
@@ -3184,6 +3194,9 @@ func TestChutesRetry_FailoverOnUpstream502(t *testing.T) {
 	if fetcher.fetchCalls != 2 {
 		t.Errorf("fetchCalls = %d, want 2 (one per attempt)", fetcher.fetchCalls)
 	}
+	if fetcher.markFailedCalls != 1 {
+		t.Errorf("markFailedCalls = %d, want 1 (first attempt only)", fetcher.markFailedCalls)
+	}
 }
 
 // TestChutesRetry_NoRetryOnSuccess verifies that when the first Chutes E2EE
@@ -3285,9 +3298,13 @@ func TestChutesRetry_AllAttemptsFail(t *testing.T) {
 
 	fetcher.mu.Lock()
 	defer fetcher.mu.Unlock()
-	// 3 attempts = 3 fetches (first from initial raw, but buildUpstreamBody
-	// calls nonce pool on retry).
+	// 3 attempts = 3 fetches (buildUpstreamBody uses the nonce pool on every
+	// attempt in this test because attestation and signing key are cached).
 	if fetcher.fetchCalls != 3 {
 		t.Errorf("fetchCalls = %d, want 3", fetcher.fetchCalls)
+	}
+	// All 3 instances are marked failed (including the final attempt).
+	if fetcher.markFailedCalls != 3 {
+		t.Errorf("markFailedCalls = %d, want 3", fetcher.markFailedCalls)
 	}
 }

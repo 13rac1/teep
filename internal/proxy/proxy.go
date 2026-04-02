@@ -133,9 +133,13 @@ func fmtDur(d time.Duration) string {
 
 // chutesRetryableError returns true if the upstream error or response status
 // indicates a Chutes instance-level failure that warrants failover to a
-// different instance. Returns false for nil error with a 200 status.
+// different instance. Returns false for client-induced cancellations
+// (context.Canceled) so we don't burn retries after the caller is gone.
 func chutesRetryableError(err error, resp *http.Response) bool {
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return false // client disconnected; retrying is pointless
+		}
 		return true // connection error, timeout, etc.
 	}
 	if resp == nil {
@@ -734,7 +738,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 		upstreamBody, session, meta, err = s.buildUpstreamBody(ctx, body, upstreamModel, e2eeActive, prov, freshRaw)
 		if err != nil {
-			if attempt < maxAttempts-1 {
+			if attempt < maxAttempts-1 && !errors.Is(err, context.Canceled) {
 				slog.WarnContext(ctx, "chutes: E2EE body build failed, retrying",
 					"provider", prov.Name, "model", upstreamModel, "attempt", attempt+1, "err", err)
 				continue
@@ -769,10 +773,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 		resp, err = s.upstreamClient.Do(upstreamReq)
 
-		if attempt < maxAttempts-1 && chutesRetryableError(err, resp) {
+		retryable := chutesRetryableError(err, resp)
+
+		// Mark the instance as failed so the nonce pool deprioritises it
+		// on subsequent requests, even on the final attempt.
+		if retryable && meta != nil && prov.E2EEMaterialFetcher != nil {
+			prov.E2EEMaterialFetcher.MarkFailed(meta.ChuteID, meta.InstanceID)
+		}
+
+		if attempt < maxAttempts-1 && retryable {
 			attemptCancel()
-			if meta != nil && prov.E2EEMaterialFetcher != nil {
-				prov.E2EEMaterialFetcher.MarkFailed(meta.ChuteID, meta.InstanceID)
+			if meta != nil {
 				slog.WarnContext(ctx, "chutes: upstream attempt failed, trying different instance",
 					"provider", prov.Name, "model", upstreamModel,
 					"instance_id", meta.InstanceID, "attempt", attempt+1,
@@ -827,9 +838,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// (Chutes), so the response is always SSE. When the client requested
 	// non-streaming, reassemble the decrypted SSE chunks into a single JSON response.
 	switch {
-	case meta != nil && req.Stream:
+	case meta != nil && meta.Session != nil && req.Stream:
 		e2ee.RelayStreamChutes(ctx, w, resp.Body, meta.Session)
-	case meta != nil:
+	case meta != nil && meta.Session != nil:
 		e2ee.RelayNonStreamChutes(ctx, w, resp.Body, meta.Session)
 	case session != nil && req.Stream:
 		e2ee.RelayStream(ctx, w, resp.Body, session)
