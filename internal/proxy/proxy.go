@@ -705,7 +705,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// so if that instance is unhealthy we must fail over to another
 	// instance from the nonce pool. Other providers do not pin to instances
 	// and need no retry.
-	e2eeStart := time.Now()
 	upstreamURL := prov.BaseURL + prov.ChatPath
 	var upstreamTimeout time.Duration
 	if !req.Stream {
@@ -736,7 +735,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			freshRaw = nil
 		}
 
+		e2eeStart := time.Now()
+
 		upstreamBody, session, meta, err = s.buildUpstreamBody(ctx, body, upstreamModel, e2eeActive, prov, freshRaw)
+		e2eeDur += time.Since(e2eeStart)
 		if err != nil {
 			if attempt < maxAttempts-1 && !errors.Is(err, context.Canceled) {
 				slog.WarnContext(ctx, "chutes: E2EE body build failed, retrying",
@@ -771,7 +773,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		upstreamDoStart := time.Now()
 		resp, err = s.upstreamClient.Do(upstreamReq)
+		upstreamDur += time.Since(upstreamDoStart)
 
 		retryable := chutesRetryableError(err, resp)
 
@@ -799,7 +803,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		break
 	}
-	e2eeDur = time.Since(e2eeStart)
 
 	// Ensure final crypto material is zeroed on exit.
 	if session != nil {
@@ -825,7 +828,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstreamStart := time.Now()
+	upstreamRelayStart := time.Now()
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
@@ -855,7 +858,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	default:
 		e2ee.RelayNonStream(ctx, w, resp.Body, nil)
 	}
-	upstreamDur = time.Since(upstreamStart)
+	upstreamDur += time.Since(upstreamRelayStart)
 
 	// After a successful E2EE roundtrip, promote the cached report's
 	// e2ee_usable factor from Skip to Pass so that subsequent report
