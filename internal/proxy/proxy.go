@@ -76,9 +76,10 @@ const (
 	upstreamStreamTimeout = 30 * time.Minute
 
 	// chutesMaxAttempts is the maximum number of Chutes E2EE upstream
-	// attempts. Each attempt targets a different instance from the nonce
-	// pool, with full E2EE re-encryption. Failover is acceptable because
-	// every instance's key is verified via TDX attestation before use.
+	// attempts. Retries attempt failover to a different instance from the
+	// nonce pool when available, with full E2EE re-encryption. Failover is
+	// acceptable because every instance's key is verified via TDX attestation
+	// before use.
 	chutesMaxAttempts = 3
 )
 

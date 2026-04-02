@@ -170,9 +170,11 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 // ParseAttestationResponse parses the two Chutes API response bodies (instances
 // and evidence) into a RawAttestation. Evidence entries are matched against the
 // instances list; the first evidence entry whose instance ID appears in the
-// instances list is used. This tolerates fleet changes between the two API
-// calls (instances fetched first, then evidence), where an evidence entry may
-// reference an instance that joined or left the fleet in between.
+// instances list and whose matched instance has complete E2EE material
+// (non-empty e2e_pubkey and at least one nonce) is used. This tolerates fleet
+// changes between the two API calls (instances fetched first, then evidence),
+// where an evidence entry may reference an instance that joined or left the
+// fleet in between.
 func ParseAttestationResponse(instancesBody, evidenceBody []byte, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	var instances e2eInstancesResponse
 	if err := jsonstrict.UnmarshalWarn(instancesBody, &instances, "chutes e2e instances response"); err != nil {
