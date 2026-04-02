@@ -112,6 +112,11 @@ func (a *Attester) SetModelsBase(modelsBase string) {
 	a.resolver = NewModelResolver(modelsBase, a.apiKey, a.client)
 }
 
+// Resolver returns the Attester's ModelResolver for sharing with NoncePool.
+func (a *Attester) Resolver() *ModelResolver {
+	return a.resolver
+}
+
 // FetchAttestation fetches TEE attestation from Chutes using the two-step
 // protocol: discover instances, then fetch evidence. The model parameter
 // can be a human-readable name (e.g. "deepseek-ai/DeepSeek-V3-0324-TEE")

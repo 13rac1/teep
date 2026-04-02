@@ -222,7 +222,15 @@ wrong enforcement point. Instead:
      s.e2eeFailed.Store(cacheKey{prov.Name, upstreamModel}, true)
      s.cache.Delete(prov.Name, upstreamModel)
      s.signingKeyCache.Delete(prov.Name, upstreamModel)
+     // Chutes nonce pool: discard cached instances/nonces for this chute.
+     if prov.E2EEMaterialFetcher != nil {
+         prov.E2EEMaterialFetcher.Invalidate(chuteID)
+     }
      ```
+   - Note: the nonce pool (`E2EEMaterialFetcher`) is a third cache alongside
+     the report cache and signing key cache. All three must be invalidated
+     together on E2EE failure to prevent serving cached nonces from a
+     compromised or broken instance.
    - Note: by this point the (possibly corrupted) response has already been
      written to the client. For streaming, the HTTP 200 was sent with the
      first chunk. This is unavoidable without buffering the entire response.
@@ -544,6 +552,10 @@ verify that features work correctly through the attested environment.
      AND E2EE was active, call `e2eeTracker.MarkFailed(prov.Name, model)`
      and `s.cache.Delete(prov.Name, model)` and
      `s.signingKeyCache.Delete(prov.Name, model)`.
+   - For Chutes (or any provider with `E2EEMaterialFetcher`), also call
+     `prov.E2EEMaterialFetcher.Invalidate(chuteID)` to discard cached
+     nonces. The nonce pool is a third cache that must be invalidated
+     alongside the report cache and signing key cache.
 
 5. **Report endpoint**: `internal/proxy/proxy.go` report handler
    - Include E2EE state (Pending/Active/Failed) in the JSON report as a
@@ -645,3 +657,11 @@ verify that features work correctly through the attested environment.
 - **Client-facing E2EE status**: Consider adding an `X-Teep-E2EE` response
   header so clients can verify E2EE was used for each request without
   fetching the full report.
+- **Nonce pool failure escalation**: The Chutes `NoncePool` tracks
+  per-instance failure counts via `MarkFailed` and prefers instances with
+  fewer failures. When *all* instances for a chute have been marked failed
+  (i.e. no healthy instances remain), the proxy should escalate to
+  `E2EETracker.MarkFailed` (fail-closed for the provider+model) rather
+  than endlessly retrying bad instances. The escalation threshold and
+  recovery path (full re-attestation) should be specified when the E2EE
+  state machine is implemented.

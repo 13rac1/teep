@@ -21,6 +21,28 @@ type Attester interface {
 	FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error)
 }
 
+// E2EEMaterial holds the minimum information needed to encrypt a single
+// Chutes E2EE request without full re-attestation: instance ID, ML-KEM
+// public key, single-use nonce, and resolved chute UUID.
+type E2EEMaterial struct {
+	InstanceID string
+	E2EPubKey  string // base64-encoded ML-KEM-768 public key
+	E2ENonce   string // single-use nonce from /e2e/instances
+	ChuteID    string // resolved chute UUID
+}
+
+// E2EEMaterialFetcher provides lightweight E2EE key material from a nonce
+// pool without full re-attestation. Used by Chutes to avoid the expensive
+// /chutes/{id}/evidence + TDX verification roundtrip on every request.
+// MarkFailed records that an instance produced an error so the pool can
+// prefer other instances. Invalidate discards all cached material for a
+// chute, forcing a fresh fetch on the next request.
+type E2EEMaterialFetcher interface {
+	FetchE2EEMaterial(ctx context.Context, model string) (*E2EEMaterial, error)
+	MarkFailed(chuteID, instanceID string)
+	Invalidate(chuteID string)
+}
+
 // RequestPreparer injects provider-specific headers into an outgoing upstream
 // request. e2eeHeaders contains pre-built E2EE protocol headers (may be nil
 // for plaintext or Chutes paths). meta is non-nil for Chutes requests.
@@ -123,6 +145,12 @@ type Provider struct {
 	// SkipSigningKeyCache indicates the provider needs fresh attestation for
 	// each E2EE request (e.g. Chutes requires per-request instance/nonce data).
 	SkipSigningKeyCache bool
+
+	// E2EEMaterialFetcher provides lightweight E2EE material from a nonce
+	// pool for providers that separate attestation from E2EE key exchange
+	// (Chutes). When set, buildUpstreamBody uses this instead of full
+	// re-attestation for cache-hit E2EE requests.
+	E2EEMaterialFetcher E2EEMaterialFetcher
 
 	// Attester fetches raw attestation from the provider's attestation endpoint.
 	// May be nil if the provider does not support attestation.
