@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2812,6 +2813,17 @@ func (passthroughEncryptor) EncryptRequest(body []byte, _ *attestation.RawAttest
 	return body, nil, nil, nil
 }
 
+// noopPreparer sets only Authorization, without rewriting the URL.
+type noopPreparer struct {
+	apiKey string
+}
+
+func (p noopPreparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool) error {
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	return nil
+}
+
 // mockAttester records FetchAttestation calls for fallback-path testing.
 type mockAttester struct {
 	mu    sync.Mutex
@@ -2827,7 +2839,7 @@ func (m *mockAttester) FetchAttestation(_ context.Context, _ string, _ attestati
 
 // passingReport returns a minimal VerificationReport with tdx_reportdata_binding
 // passing so that e2eeActive is true on attestation cache hits.
-func passingReport(provName, model string) *attestation.VerificationReport {
+func passingReport(provName, model string) *attestation.VerificationReport { //nolint:unparam // model varies by test intent
 	return &attestation.VerificationReport{
 		Provider: provName,
 		Model:    model,
@@ -3033,5 +3045,249 @@ func TestNoncePoolMismatch_Invalidate(t *testing.T) {
 	defer attester.mu.Unlock()
 	if attester.calls != 1 {
 		t.Errorf("attester.calls = %d, want 1 (fallback to fresh attestation after mismatch)", attester.calls)
+	}
+}
+
+// --- Chutes instance failover retry tests ---
+
+// mockMarkingFetcher is a mockE2EEFetcher that also records MarkFailed calls
+// and can return different materials per call.
+type mockMarkingFetcher struct {
+	mu              sync.Mutex
+	materials       []*provider.E2EEMaterial // one per call; cycles last entry
+	fetchErr        error
+	fetchCalls      int
+	invalidateCalls int
+	markFailedCalls int
+	lastMarkedInst  string
+}
+
+func (m *mockMarkingFetcher) FetchE2EEMaterial(_ context.Context, _ string) (*provider.E2EEMaterial, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	idx := m.fetchCalls
+	m.fetchCalls++
+	if m.fetchErr != nil {
+		return nil, m.fetchErr
+	}
+	if idx >= len(m.materials) {
+		idx = len(m.materials) - 1
+	}
+	return m.materials[idx], nil
+}
+
+func (m *mockMarkingFetcher) MarkFailed(_, instanceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.markFailedCalls++
+	m.lastMarkedInst = instanceID
+}
+
+func (m *mockMarkingFetcher) Invalidate(_ string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.invalidateCalls++
+}
+
+// newChutesRetryTestServer creates a proxy with a "chutes" provider wired
+// for unit testing instance failover. The encryptor is replaced with a
+// passthrough so tests can focus on the retry routing logic.
+func newChutesRetryTestServer(t *testing.T, upstreamURL string) (srv *proxy.Server, ts *httptest.Server) {
+	t.Helper()
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"chutes": {
+				Name:    "chutes",
+				BaseURL: upstreamURL,
+				APIKey:  "test-key",
+				E2EE:    true,
+			},
+		},
+		AllowFail: attestation.KnownFactors,
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+	prov := srv.ProviderByName("chutes")
+	// Override defaults set by the chutes provider case in proxy.New:
+	// BaseURL is hardcoded to llm.chutes.ai, and the encryptor/preparer
+	// use real Chutes crypto. Replace with passthroughs so tests can
+	// focus on the retry routing logic. passthroughEncryptor returns
+	// meta=nil, so the relay uses the non-E2EE path for plaintext.
+	prov.BaseURL = upstreamURL
+	prov.Encryptor = passthroughEncryptor{}
+	prov.Preparer = noopPreparer{apiKey: "test-key"}
+	return srv, httptest.NewServer(srv)
+}
+
+// TestChutesRetry_FailoverOnUpstream502 verifies that when a Chutes E2EE
+// request gets a 502 from the upstream instance, the proxy retries with
+// a different instance from the nonce pool. Uses passthroughEncryptor
+// (meta=nil) so the relay uses the non-E2EE path; we verify retry behavior
+// via the mock fetcher's call counts and upstream request counts.
+func TestChutesRetry_FailoverOnUpstream502(t *testing.T) {
+	const signingKey = "chutes-signing-key"
+	const wantContent = "retry succeeded"
+
+	var upstreamRequests atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := upstreamRequests.Add(1)
+		if n == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("instance down"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(nonStreamResponse(wantContent)))
+	}))
+	defer upstream.Close()
+
+	srv, proxySrv := newChutesRetryTestServer(t, upstream.URL)
+	defer proxySrv.Close()
+
+	fetcher := &mockMarkingFetcher{
+		materials: []*provider.E2EEMaterial{
+			{InstanceID: "inst-A", E2EPubKey: signingKey, E2ENonce: "nonce-1", ChuteID: "chute-1"},
+			{InstanceID: "inst-B", E2EPubKey: signingKey, E2ENonce: "nonce-2", ChuteID: "chute-1"},
+		},
+	}
+	prov := srv.ProviderByName("chutes")
+	prov.E2EEMaterialFetcher = fetcher
+
+	srv.PutAttestationCache("chutes", "test-model", passingReport("chutes", "test-model"))
+	srv.PutSigningKeyCache("chutes", "test-model", signingKey)
+
+	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	if err != nil {
+		t.Fatalf("POST chat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	got := extractMessageContent(t, func() []byte { b, _ := io.ReadAll(resp.Body); return b }())
+	if got != wantContent {
+		t.Errorf("content = %q, want %q", got, wantContent)
+	}
+
+	if n := upstreamRequests.Load(); n != 2 {
+		t.Errorf("upstream received %d requests, want 2 (first fails, second succeeds)", n)
+	}
+
+	fetcher.mu.Lock()
+	defer fetcher.mu.Unlock()
+	if fetcher.fetchCalls != 2 {
+		t.Errorf("fetchCalls = %d, want 2 (one per attempt)", fetcher.fetchCalls)
+	}
+}
+
+// TestChutesRetry_NoRetryOnSuccess verifies that when the first Chutes E2EE
+// attempt succeeds, no retry is triggered.
+func TestChutesRetry_NoRetryOnSuccess(t *testing.T) {
+	const signingKey = "chutes-signing-key"
+	const wantContent = "first try ok"
+
+	var upstreamRequests atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(nonStreamResponse(wantContent)))
+	}))
+	defer upstream.Close()
+
+	srv, proxySrv := newChutesRetryTestServer(t, upstream.URL)
+	defer proxySrv.Close()
+
+	fetcher := &mockMarkingFetcher{
+		materials: []*provider.E2EEMaterial{
+			{InstanceID: "inst-A", E2EPubKey: signingKey, E2ENonce: "nonce-1", ChuteID: "chute-1"},
+		},
+	}
+	prov := srv.ProviderByName("chutes")
+	prov.E2EEMaterialFetcher = fetcher
+
+	srv.PutAttestationCache("chutes", "test-model", passingReport("chutes", "test-model"))
+	srv.PutSigningKeyCache("chutes", "test-model", signingKey)
+
+	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	if err != nil {
+		t.Fatalf("POST chat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	if n := upstreamRequests.Load(); n != 1 {
+		t.Errorf("upstream received %d requests, want 1", n)
+	}
+
+	fetcher.mu.Lock()
+	defer fetcher.mu.Unlock()
+	if fetcher.fetchCalls != 1 {
+		t.Errorf("fetchCalls = %d, want 1 (single attempt)", fetcher.fetchCalls)
+	}
+	if fetcher.markFailedCalls != 0 {
+		t.Errorf("markFailedCalls = %d, want 0", fetcher.markFailedCalls)
+	}
+}
+
+// TestChutesRetry_AllAttemptsFail verifies that when all retry attempts fail,
+// the proxy returns the last error status to the client.
+func TestChutesRetry_AllAttemptsFail(t *testing.T) {
+	const signingKey = "chutes-signing-key"
+
+	var upstreamRequests atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("all instances down"))
+	}))
+	defer upstream.Close()
+
+	srv, proxySrv := newChutesRetryTestServer(t, upstream.URL)
+	defer proxySrv.Close()
+
+	fetcher := &mockMarkingFetcher{
+		materials: []*provider.E2EEMaterial{
+			{InstanceID: "inst-A", E2EPubKey: signingKey, E2ENonce: "nonce-1", ChuteID: "chute-1"},
+			{InstanceID: "inst-B", E2EPubKey: signingKey, E2ENonce: "nonce-2", ChuteID: "chute-1"},
+			{InstanceID: "inst-C", E2EPubKey: signingKey, E2ENonce: "nonce-3", ChuteID: "chute-1"},
+		},
+	}
+	prov := srv.ProviderByName("chutes")
+	prov.E2EEMaterialFetcher = fetcher
+
+	srv.PutAttestationCache("chutes", "test-model", passingReport("chutes", "test-model"))
+	srv.PutSigningKeyCache("chutes", "test-model", signingKey)
+
+	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	if err != nil {
+		t.Fatalf("POST chat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// After all 3 attempts fail with 503, the last status is forwarded.
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+
+	if n := upstreamRequests.Load(); n != 3 {
+		t.Errorf("upstream received %d requests, want 3", n)
+	}
+
+	fetcher.mu.Lock()
+	defer fetcher.mu.Unlock()
+	// 3 attempts = 3 fetches (first from initial raw, but buildUpstreamBody
+	// calls nonce pool on retry).
+	if fetcher.fetchCalls != 3 {
+		t.Errorf("fetchCalls = %d, want 3", fetcher.fetchCalls)
 	}
 }

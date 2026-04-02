@@ -162,8 +162,41 @@ func TestParseAttestationResponse_InstanceMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for instance mismatch")
 	}
-	if !strings.Contains(err.Error(), "not found in e2e instances") {
-		t.Errorf("error should mention instance not found, got: %v", err)
+	if !strings.Contains(err.Error(), "none of") {
+		t.Errorf("error should mention no matching entries, got: %v", err)
+	}
+}
+
+func TestParseAttestationResponse_SkipUnknownInstance(t *testing.T) {
+	quote := fakeQuoteBase64()
+	nonce := attestation.NewNonce()
+
+	// First evidence entry references an unknown instance, second matches.
+	instancesBody := []byte(`{
+		"instances": [
+			{"instance_id": "inst-BBB", "e2e_pubkey": "keyB", "nonces": ["n1"]}
+		]
+	}`)
+	evidenceBody := []byte(`{
+		"evidence": [
+			{"quote": "` + quote + `", "gpu_evidence": [], "instance_id": "inst-UNKNOWN", "certificate": ""},
+			{"quote": "` + quote + `", "gpu_evidence": [], "instance_id": "inst-BBB", "certificate": ""}
+		],
+		"failed_instance_ids": []
+	}`)
+
+	raw, err := chutes.ParseAttestationResponse(instancesBody, evidenceBody, nonce)
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse: %v", err)
+	}
+	if raw.InstanceID != "inst-BBB" {
+		t.Errorf("InstanceID = %q, want inst-BBB", raw.InstanceID)
+	}
+	if raw.SigningKey != "keyB" {
+		t.Errorf("SigningKey = %q, want keyB", raw.SigningKey)
+	}
+	if raw.CandidatesAvail != 2 {
+		t.Errorf("CandidatesAvail = %d, want 2", raw.CandidatesAvail)
 	}
 }
 

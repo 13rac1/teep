@@ -16,10 +16,11 @@ import (
 	"github.com/13rac1/teep/internal/config"
 )
 
-// integrationClient is an HTTP client with a 120-second timeout for integration
-// tests. Chutes E2EE can take ~60s total (attestation ~30s + E2EE invoke ~30s);
-// 120s gives headroom without hanging forever on a stuck connection.
-var integrationClient = &http.Client{Timeout: 120 * time.Second}
+// integrationClient is an HTTP client with a 5-minute timeout for integration
+// tests. Chutes E2EE can take ~30s attestation + ~60s inference, and with
+// instance failover retries the total may exceed 120s. 5 minutes gives
+// generous headroom without hanging forever on a stuck connection.
+var integrationClient = &http.Client{Timeout: 5 * time.Minute}
 
 // skipIntegration skips the test if VENICE_API_KEY is unset or if running
 // under go test -short.

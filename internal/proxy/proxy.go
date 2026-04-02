@@ -74,6 +74,12 @@ const (
 	// upstreamStreamTimeout is the context deadline for streaming upstream
 	// requests. Streaming responses can run for a long time.
 	upstreamStreamTimeout = 30 * time.Minute
+
+	// chutesMaxAttempts is the maximum number of Chutes E2EE upstream
+	// attempts. Each attempt targets a different instance from the nonce
+	// pool, with full E2EE re-encryption. Failover is acceptable because
+	// every instance's key is verified via TDX attestation before use.
+	chutesMaxAttempts = 3
 )
 
 // stats holds live operational counters for the status page.
@@ -123,6 +129,45 @@ func (st *stats) getModelStats(prov, model string) *modelStats {
 // fmtDur formats a duration as seconds with 3 decimal places (e.g. "4.200s").
 func fmtDur(d time.Duration) string {
 	return fmt.Sprintf("%.3fs", d.Seconds())
+}
+
+// chutesRetryableError returns true if the upstream error or response status
+// indicates a Chutes instance-level failure that warrants failover to a
+// different instance. Returns false for nil error with a 200 status.
+func chutesRetryableError(err error, resp *http.Response) bool {
+	if err != nil {
+		return true // connection error, timeout, etc.
+	}
+	if resp == nil {
+		return true
+	}
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// respStatusCode returns the HTTP status code from a response, or 0 if nil.
+func respStatusCode(resp *http.Response) int {
+	if resp == nil {
+		return 0
+	}
+	return resp.StatusCode
+}
+
+// zeroE2EESessions zeroes crypto material from a failed E2EE attempt.
+func zeroE2EESessions(session e2ee.Decryptor, meta *e2ee.ChutesE2EE) {
+	if session != nil {
+		session.Zero()
+	}
+	if meta != nil && meta.Session != nil {
+		meta.Session.Zero()
+	}
 }
 
 // chatRequest is a minimal parse of an OpenAI chat completions request.
@@ -651,47 +696,111 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.stats.plaintext.Add(1)
 	}
 
+	// Build the upstream body, send it, and handle retries for Chutes E2EE.
+	// Chutes pins each request to a specific instance via X-Instance-Id,
+	// so if that instance is unhealthy we must fail over to another
+	// instance from the nonce pool. Other providers do not pin to instances
+	// and need no retry.
 	e2eeStart := time.Now()
-	upstreamBody, session, meta, err := s.buildUpstreamBody(ctx, body, upstreamModel, e2eeActive, prov, raw)
-	if err != nil {
-		status = "e2ee_failed"
-		s.stats.errors.Add(1)
-		ms.errors.Add(1)
-		slog.ErrorContext(ctx, "build upstream body failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-		http.Error(w, "failed to prepare upstream request", http.StatusInternalServerError)
-		return
+	upstreamURL := prov.BaseURL + prov.ChatPath
+	var upstreamTimeout time.Duration
+	if !req.Stream {
+		upstreamTimeout = upstreamNonStreamTimeout
+	} else {
+		upstreamTimeout = upstreamStreamTimeout
+	}
+
+	chutesRetry := e2eeActive && prov.E2EEMaterialFetcher != nil && prov.SkipSigningKeyCache
+	maxAttempts := 1
+	if chutesRetry {
+		maxAttempts = chutesMaxAttempts
+	}
+
+	var (
+		upstreamBody  []byte
+		session       e2ee.Decryptor
+		meta          *e2ee.ChutesE2EE
+		resp          *http.Response
+		attemptCancel context.CancelFunc
+	)
+
+	for attempt := range maxAttempts {
+		// On retry, force buildUpstreamBody to use the nonce pool (different
+		// instance) instead of the raw attestation from the initial fetch.
+		freshRaw := raw
+		if attempt > 0 {
+			freshRaw = nil
+		}
+
+		upstreamBody, session, meta, err = s.buildUpstreamBody(ctx, body, upstreamModel, e2eeActive, prov, freshRaw)
+		if err != nil {
+			if attempt < maxAttempts-1 {
+				slog.WarnContext(ctx, "chutes: E2EE body build failed, retrying",
+					"provider", prov.Name, "model", upstreamModel, "attempt", attempt+1, "err", err)
+				continue
+			}
+			status = "e2ee_failed"
+			s.stats.errors.Add(1)
+			ms.errors.Add(1)
+			slog.ErrorContext(ctx, "build upstream body failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+			http.Error(w, "failed to prepare upstream request", http.StatusInternalServerError)
+			return
+		}
+
+		var attemptCtx context.Context
+		attemptCtx, attemptCancel = context.WithTimeout(ctx, upstreamTimeout)
+
+		upstreamReq, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
+		if reqErr != nil {
+			attemptCancel()
+			zeroE2EESessions(session, meta)
+			http.Error(w, "failed to build upstream request", http.StatusInternalServerError)
+			return
+		}
+		upstreamReq.Header.Set("Content-Type", "application/json")
+
+		if prepErr := prepareUpstreamHeaders(upstreamReq, prov, session, meta, req.Stream); prepErr != nil {
+			attemptCancel()
+			zeroE2EESessions(session, meta)
+			slog.ErrorContext(ctx, "PrepareRequest failed", "provider", prov.Name, "err", prepErr)
+			http.Error(w, "failed to prepare upstream request headers", http.StatusInternalServerError)
+			return
+		}
+
+		resp, err = s.upstreamClient.Do(upstreamReq)
+
+		if attempt < maxAttempts-1 && chutesRetryableError(err, resp) {
+			attemptCancel()
+			if meta != nil && prov.E2EEMaterialFetcher != nil {
+				prov.E2EEMaterialFetcher.MarkFailed(meta.ChuteID, meta.InstanceID)
+				slog.WarnContext(ctx, "chutes: upstream attempt failed, trying different instance",
+					"provider", prov.Name, "model", upstreamModel,
+					"instance_id", meta.InstanceID, "attempt", attempt+1,
+					"err", err, "status", respStatusCode(resp))
+			}
+			zeroE2EESessions(session, meta)
+			if resp != nil {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
+				resp.Body.Close()
+				resp = nil
+			}
+			continue
+		}
+		break
 	}
 	e2eeDur = time.Since(e2eeStart)
+
+	// Ensure final crypto material is zeroed on exit.
 	if session != nil {
 		defer session.Zero()
 	}
 	if meta != nil && meta.Session != nil {
 		defer meta.Session.Zero()
 	}
-
-	upstreamURL := prov.BaseURL + prov.ChatPath
-	var cancel context.CancelFunc
-	if !req.Stream {
-		ctx, cancel = context.WithTimeout(ctx, upstreamNonStreamTimeout)
-	} else {
-		ctx, cancel = context.WithTimeout(ctx, upstreamStreamTimeout)
-	}
-	defer cancel()
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
-	if err != nil {
-		http.Error(w, "failed to build upstream request", http.StatusInternalServerError)
-		return
-	}
-	upstreamReq.Header.Set("Content-Type", "application/json")
-
-	if err := prepareUpstreamHeaders(upstreamReq, prov, session, meta, req.Stream); err != nil {
-		slog.ErrorContext(ctx, "PrepareRequest failed", "provider", prov.Name, "err", err)
-		http.Error(w, "failed to prepare upstream request headers", http.StatusInternalServerError)
-		return
+	if attemptCancel != nil {
+		defer attemptCancel()
 	}
 
-	upstreamStart := time.Now()
-	resp, err := s.upstreamClient.Do(upstreamReq)
 	if err != nil {
 		status = "upstream_failed"
 		s.stats.errors.Add(1)
@@ -700,6 +809,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
+
+	upstreamStart := time.Now()
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
