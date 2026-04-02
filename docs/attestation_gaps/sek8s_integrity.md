@@ -82,6 +82,15 @@ This is why teep correctly returns `Skip` for these chutes factors:
 - **`sigstore_verification`**: "chutes attestation does not include container image digests; cosign verification is validator-side only"
 - **`event_log_integrity`**: "chutes performs RTMR verification validator-side against a golden baseline; event log not exposed to clients"
 
+### Model weight identity (`measured_model_weights`)
+
+Chutes has two mechanisms for verifying model weights, neither of which is available to teep:
+
+1. **Watchtower weight verification** (server-side filesystem probing)
+2. **cllmv per-token verification** (closed-source inference-time hashing)
+
+Both are analyzed in detail in [model_weights.md](model_weights.md). Teep currently returns `Fail` for `measured_model_weights` with detail "no model weight hashes" because neither mechanism exposes verifiable data to clients.
+
 ### LUKS boot gate
 
 Chutes gates disk decryption on measurement verification: the `chutes-api` validator only releases the LUKS decryption key after verifying MRTD + all RTMRs against the golden `TeeMeasurementConfig`. If measurements fail, the VM cannot decrypt its root filesystem and cannot boot.
@@ -95,6 +104,36 @@ Chutes performs runtime re-attestation using RTMR3 and IMA measurements, verifie
 ### GPU-to-measurement binding
 
 Chutes' `TeeMeasurementConfig` includes `expected_gpus` and `gpu_count` fields, allowing the validator to reject a VM whose GPU inventory does not match the expected deployment class. Teep verifies GPU evidence independently via NVIDIA EAT tokens, but cannot verify that the Chutes validator applied the GPU-to-measurement binding correctly.
+
+## Chutes Security Architecture — Additional Components
+
+Source: [Chutes Security/Integrity documentation](https://chutes.ai/docs/core-concepts/security-architecture)
+
+Chutes documents several additional security layers beyond TEE attestation. Most are **closed-source, validator-side-only** mechanisms:
+
+| Component | Purpose | Available to teep? |
+|-----------|---------|-------------------|
+| **chutes-aegis.so** | Runtime security: network access control, filesystem encryption, LD_PRELOAD integrity, DNS verification, pod intrusion prevention (intentional segfault on exec/attach) | No. Runs inside the chute container; its enforcement is not attestable externally. |
+| **Chutes Secure Filesystem Validation** | Challenge-response filesystem integrity using random digest seeds | No. Validator-miner protocol only. |
+| **cllmv** (Chutes LLM Verification) | Per-token verification hashes binding output to model+revision | No. Closed-source algorithm, session key not available. See analysis above. |
+| **Environment Dump** | Comprehensive environment snapshot (env vars, kernel, Python modules) | No. Validator-miner protocol only. |
+| **Python Code Inspection** | Static analysis of Python bytecode for overrides and logic bombs | No. Validator-side only. |
+| **GPU Attestation (graval)** | Proof of Consecutive VRAM Work via matrix multiplications | No. Uses a separate challenge-response protocol not exposed to clients. Teep performs independent NVIDIA SPDM/EAT attestation instead. |
+| **forge** (image builder) | Source-of-truth for filesystem and bytecode baselines, cosign signing | No. Build-time only; signed images verified by in-TEE admission controller. |
+
+### IMA (Integrity Measurement Architecture)
+
+The Chutes security documentation states that the Linux kernel's IMA generates a signed manifest of every file on the filesystem, and that this manifest is included in the attestation report's measurements. The documentation further claims:
+
+> "For any chute running on the network, at any time, anyone will be able to query: [...] The Full Software Manifest: We use the Integrity Measurement Architecture (IMA) of the Linux kernel to generate a signed manifest of every single file, library, and package on the filesystem."
+
+However, the current Chutes evidence API does **not** expose IMA manifests or RTMR3 event logs to clients. If Chutes implements this public IMA manifest API as described in their documentation, teep could:
+
+1. Fetch and parse the IMA manifest for a TEE instance
+2. Verify specific file hashes (including model weight files) against expected values
+3. Cross-reference IMA measurements against RTMR3 values in the TDX quote
+
+This would be the single most impactful evidence API enrichment for teep's independent verification capability.
 
 ## Trust Model
 
@@ -120,6 +159,12 @@ When teep pins MRTD and RTMR values via `--update-config`, it is recording value
 
 RTMR3/IMA verification is entirely server-side. Teep trusts that Chutes re-attests running VMs and revokes access when runtime measurements diverge.
 
+### 5. Model weight integrity relies on boot chain, not runtime verification
+
+For TEE instances, model weight integrity depends entirely on the cosign admission controller and the measured boot chain preventing loading of unauthorized images. The watchtower's runtime weight verification explicitly excludes TEE instances, and cllmv per-token verification is not enforced for TEE chutes. See [model_weights.md](model_weights.md) for full analysis of both mechanisms.
+
+The residual risk is a time-of-check-to-time-of-use gap: the boot chain verifies the software stack at boot, but does not continuously prove that the inference engine loaded the expected model revision from HuggingFace into VRAM. In practice, this risk is mitigated by the TEE's memory isolation (an external attacker cannot modify VRAM) and the locked-down execution environment (aegis blocks outbound network access and pod intrusion), but it is not cryptographically proven.
+
 ## Comparison with Dstack
 
 | Property | Dstack | Sek8s (Chutes) |
@@ -130,24 +175,37 @@ RTMR3/IMA verification is entirely server-side. Teep trusts that Chutes re-attes
 | Event log | Exposed; teep replays RTMR3 | Not exposed to clients |
 | Boot gating | None; host launches VM regardless | LUKS key withheld until measurements verified |
 | Supply chain visibility | Full (compose + image digests + Rekor) | None (trust the cosign admission controller) |
+| Model weight verification | Not applicable (no model-specific attestation) | Watchtower (non-TEE only) + cllmv (non-TEE enforced); neither available to teep. See [model_weights.md](model_weights.md) |
+| Per-token output binding | Not applicable | cllmv: closed-source, TEE-exempt, not client-verifiable. See [model_weights.md](model_weights.md) |
 
 The trade-off is clear: dstack gives teep **more independent verification surface** (compose binding, image digests, event log replay), while sek8s gives the **validator stronger boot-time enforcement** (LUKS gating prevents non-compliant VMs from starting) at the cost of requiring trust in the validator's implementation.
 
 ## Recommended Actions
 
-### Short-term: Pin observed measurements
+### Short-term: Pin observed measurements (done)
 
-Use `--update-config` to capture MRTD, RTMR0, RTMR1, and RTMR2 from a known-good Chutes deployment. Add MRSEAM from the existing Intel allowlist. This lets teep reject quotes from VMs running unexpected firmware, kernels, or boot configurations.
+Sek8s measurement defaults have been captured and coded in `internal/provider/chutes/policy.go`:
+- MRTD, RTMR0, RTMR1, RTMR2 pinned from known-good Chutes deployments
+- MRSEAM allowlist extended for sek8s fleet TDX module versions (1.5.0d, 2.0.06)
+- Registered in `internal/defaults/defaults.go`
 
-Add Go-coded defaults for Chutes once stable sek8s measurement values are confirmed, similar to the existing `DstackBaseMeasurementPolicy()` and per-provider `DefaultMeasurementPolicy()` functions used by venice, nearcloud, and neardirect.
+Teep now rejects quotes from VMs running unexpected firmware, kernels, or boot configurations.
 
 ### Medium-term: Request evidence API enrichment
 
 Ask Chutes to include in their evidence API response:
 
-1. The `TeeMeasurementConfig` version string that matched the boot attestation, so teep can correlate the quote to a declared deployment class
-2. Container image digests for running workloads, so teep can apply independent supply chain checks
-3. IMA measurement log or RTMR3 event log, so teep can perform runtime replay
+1. **IMA manifest** (highest priority): A signed manifest of all files on the TEE filesystem, as described in their own security documentation. This would let teep verify model weight file hashes, container image digests, and library versions independently. Cross-referencing IMA measurements against RTMR3 values in the TDX quote would provide the first client-verifiable runtime integrity proof for sek8s.
+
+2. **Model identity metadata**: The HuggingFace model name and exact revision hash for the model loaded on the instance. Even without full weight hashes, confirming model identity would let teep populate `measured_model_weights` with at least a declared-model check.
+
+3. **`TeeMeasurementConfig` version string**: The deployment class identifier that matched the boot attestation, so teep can correlate the quote to a declared configuration.
+
+4. **Container image digests**: Image hashes for running workloads, so teep can apply independent supply chain checks.
+
+### Medium-term: Model weight authentication
+
+See [model_weights.md](model_weights.md) for a detailed analysis of approaches including cllmv specification publication, IMA-based weight file verification, HuggingFace baseline computation, and per-token output binding.
 
 ### Long-term: Independent measurement reproduction
 
