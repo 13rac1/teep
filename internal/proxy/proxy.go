@@ -947,19 +947,20 @@ func (s *Server) buildUpstreamBody(
 				// Fall through to fresh attestation below.
 			} else {
 				mat, err := prov.E2EEMaterialFetcher.FetchE2EEMaterial(ctx, upstreamModel)
-				if err != nil {
+				switch {
+				case err != nil:
 					slog.ErrorContext(ctx, "E2EE key exchange: failed to fetch nonce pool material; falling back to fresh attestation",
 						"provider", prov.Name, "model", upstreamModel,
 					)
 					// Fall through to fresh attestation below (raw remains nil).
-				} else if subtle.ConstantTimeCompare([]byte(cachedKey), []byte(mat.E2EPubKey)) != 1 {
+				case subtle.ConstantTimeCompare([]byte(cachedKey), []byte(mat.E2EPubKey)) != 1:
 					slog.DebugContext(ctx, "E2EE key exchange: nonce pool key mismatch; invalidating pool",
 						"provider", prov.Name, "model", upstreamModel,
 						"instance_id", mat.InstanceID,
 					)
 					prov.E2EEMaterialFetcher.Invalidate(mat.ChuteID)
 					// Fall through to fresh attestation below.
-				} else {
+				default:
 					slog.DebugContext(ctx, "E2EE key exchange: using nonce pool",
 						"provider", prov.Name, "model", upstreamModel,
 						"instance_id", mat.InstanceID,
