@@ -201,14 +201,25 @@ func (p *NoncePool) doRefresh(ctx context.Context, chuteID string) error {
 		return fmt.Errorf("nonce pool: too many instances (%d, max %d)", len(resp.Instances), maxInstances)
 	}
 
+	const (
+		defaultTTLSeconds = 55   // default from Chutes reference proxy
+		maxTTLSeconds     = 300  // clamp provider TTL to 5 minutes
+		rejectTTLSeconds  = 3600 // reject absurd provider TTLs
+		safetyMargin      = 5
+	)
+
 	ttl := resp.NonceExpIn
-	if ttl <= 0 {
-		ttl = 55 // default from Chutes reference proxy
+	switch {
+	case ttl <= 0:
+		ttl = defaultTTLSeconds
+	case ttl > rejectTTLSeconds:
+		return fmt.Errorf("nonce pool: provider TTL too large (%d > %d seconds)", ttl, rejectTTLSeconds)
+	case ttl > maxTTLSeconds:
+		ttl = maxTTLSeconds
 	}
 	// Subtract a safety margin to avoid using near-expired nonces.
-	margin := 5
-	if ttl > margin*2 {
-		ttl -= margin
+	if ttl > safetyMargin*2 {
+		ttl -= safetyMargin
 	}
 
 	pool := &chutePool{
