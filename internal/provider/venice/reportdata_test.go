@@ -3,6 +3,7 @@ package venice_test
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -188,6 +189,22 @@ func TestReportDataVerifier_NonceBinding(t *testing.T) {
 	// Verify the nonce bytes in REPORTDATA match what we set.
 	if reportData[32] == 0 && reportData[33] == 0 {
 		t.Error("nonce bytes should be non-zero")
+	}
+}
+
+func TestReportDataVerifier_EmptyKey(t *testing.T) {
+	raw := &attestation.RawAttestation{
+		SigningKey: "", // empty hex → empty bytes
+	}
+
+	v := venice.ReportDataVerifier{}
+	_, err := v.VerifyReportData([64]byte{}, raw, attestation.Nonce{})
+	if err == nil {
+		t.Fatal("expected error for empty signing key, got nil")
+	}
+	t.Logf("expected error: %v", err)
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error = %q, want it to mention 'empty'", err)
 	}
 }
 

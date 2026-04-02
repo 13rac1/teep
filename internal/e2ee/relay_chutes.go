@@ -9,22 +9,26 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // RelayStreamChutes reads a Chutes E2EE SSE stream (e2e_init + e2e events),
 // decrypts each chunk using the stream key derived from the e2e_init KEM
-// ciphertext, and writes standard OpenAI-format SSE to w.
-func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reader, session *ChutesSession) {
+// ciphertext, and writes standard OpenAI-format SSE to w. Returns token
+// throughput stats.
+func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reader, session *ChutesSession) StreamStats {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
+		return StreamStats{}
 	}
 
 	scanner, cleanup := newSSEScanner(body)
 	defer cleanup()
 
 	var streamKey []byte
+	var stats StreamStats
+	var firstChunk time.Time
 	headerWritten := false
 
 	for scanner.Scan() {
@@ -39,7 +43,7 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 				fmt.Fprintf(w, "data: [DONE]\n\n")
 				flusher.Flush()
 			}
-			return
+			return stats
 		}
 
 		// Chutes SSE events are JSON objects with "e2e_init", "e2e", "usage",
@@ -56,38 +60,38 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 			if err := json.Unmarshal(initB64, &b64); err != nil {
 				slog.ErrorContext(ctx, "chutes stream: parse e2e_init string", "err", err)
 				http.Error(w, "chutes stream decryption failed", http.StatusBadGateway)
-				return
+				return stats
 			}
 			var err error
 			streamKey, err = session.DecryptStreamInitChutes(b64)
 			if err != nil {
 				slog.ErrorContext(ctx, "chutes stream: derive stream key", "err", err)
 				http.Error(w, "chutes stream decryption failed", http.StatusBadGateway)
-				return
+				return stats
 			}
 		} else if encB64, ok := event["e2e"]; ok {
 			if streamKey == nil {
 				slog.ErrorContext(ctx, "chutes stream: e2e event before e2e_init")
 				http.Error(w, "chutes stream decryption failed", http.StatusBadGateway)
-				return
+				return stats
 			}
 			var b64 string
 			if err := json.Unmarshal(encB64, &b64); err != nil {
 				slog.ErrorContext(ctx, "chutes stream: parse e2e chunk string", "err", err)
 				WriteSSEError(w, flusher, "chutes stream decryption failed")
-				return
+				return stats
 			}
 			encrypted, err := base64.StdEncoding.DecodeString(b64)
 			if err != nil {
 				slog.ErrorContext(ctx, "chutes stream: decode e2e chunk", "err", err)
 				WriteSSEError(w, flusher, "chutes stream decryption failed")
-				return
+				return stats
 			}
 			plaintext, err := DecryptStreamChunkChutes(encrypted, streamKey)
 			if err != nil {
 				slog.ErrorContext(ctx, "chutes stream: decrypt chunk", "err", err)
 				WriteSSEError(w, flusher, "chutes stream decryption failed")
-				return
+				return stats
 			}
 
 			if !headerWritten {
@@ -101,18 +105,33 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 			// The decrypted plaintext is a raw fragment of the original
 			// SSE stream (including "data: " prefix and newlines).
 			// Write it verbatim — do NOT wrap in another "data: ".
+			now := time.Now()
+			if firstChunk.IsZero() {
+				firstChunk = now
+			}
+			stats.Chunks++
+			stats.Duration = now.Sub(firstChunk)
+
 			w.Write(plaintext)
 			flusher.Flush()
+		} else if usageRaw, ok := event["usage"]; ok {
+			// Parse completion_tokens from usage event.
+			var u struct {
+				CompletionTokens int `json:"completion_tokens"`
+			}
+			if json.Unmarshal(usageRaw, &u) == nil && u.CompletionTokens > 0 {
+				stats.Tokens = u.CompletionTokens
+			}
 		} else if errMsg, ok := event["e2e_error"]; ok {
 			slog.ErrorContext(ctx, "chutes stream: server-side E2E error", "error", string(errMsg))
 			WriteSSEError(w, flusher, "chutes server-side E2E error")
-			return
+			return stats
 		}
-		// "usage" events are passed through as-is (no encryption).
 	}
 	if err := scanner.Err(); err != nil {
 		slog.ErrorContext(ctx, "chutes SSE scanner error", "err", err)
 	}
+	return stats
 }
 
 // RelayNonStreamChutes reads a Chutes non-streaming E2EE response blob,

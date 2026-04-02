@@ -33,19 +33,38 @@ import (
 // attestationPath is the Venice API path for TEE attestation.
 const attestationPath = "/api/v1/tee/attestation"
 
+// eventLogFlexible handles event_log being either a JSON array of objects or a
+// JSON-encoded string containing the array.
+type eventLogFlexible []attestation.EventLogEntry
+
+func (e *eventLogFlexible) UnmarshalJSON(data []byte) error {
+	// Try direct array first. Error intentionally discarded — fall through to string parse.
+	var entries []attestation.EventLogEntry
+	if json.Unmarshal(data, &entries) == nil {
+		*e = entries
+		return nil
+	}
+	// Try JSON-encoded string containing the array.
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return fmt.Errorf("event_log: expected array or string, got: %.50s", data)
+	}
+	return json.Unmarshal([]byte(str), (*[]attestation.EventLogEntry)(e))
+}
+
 // tcbInfo holds the parsed info.tcb_info object from Venice's attestation
 // response. Contains dstack measurements and the docker-compose manifest.
 type tcbInfo struct {
-	AppCompose  string                      `json:"app_compose"`  // JSON-encoded dstack manifest
-	ComposeHash string                      `json:"compose_hash"` // hex SHA-256
-	DeviceID    string                      `json:"device_id"`    // hex TDX device ID
-	EventLog    []attestation.EventLogEntry `json:"event_log"`    // TDX RTMR extend events
-	MRTD        string                      `json:"mrtd"`         // hex SHA-384
-	OSImageHash string                      `json:"os_image_hash"`
-	RTMR0       string                      `json:"rtmr0"` // hex SHA-384
-	RTMR1       string                      `json:"rtmr1"`
-	RTMR2       string                      `json:"rtmr2"`
-	RTMR3       string                      `json:"rtmr3"`
+	AppCompose  string           `json:"app_compose"`  // JSON-encoded dstack manifest
+	ComposeHash string           `json:"compose_hash"` // hex SHA-256
+	DeviceID    string           `json:"device_id"`    // hex TDX device ID
+	EventLog    eventLogFlexible `json:"event_log"`    // TDX RTMR extend events
+	MRTD        string           `json:"mrtd"`         // hex SHA-384
+	OSImageHash string           `json:"os_image_hash"`
+	RTMR0       string           `json:"rtmr0"` // hex SHA-384
+	RTMR1       string           `json:"rtmr1"`
+	RTMR2       string           `json:"rtmr2"`
+	RTMR3       string           `json:"rtmr3"`
 }
 
 // UnmarshalJSON handles tcb_info being either a direct JSON object or a
@@ -132,26 +151,30 @@ type attestationResponse struct {
 	Nonce          string `json:"nonce"`
 	Model          string `json:"model"`
 	TEEProvider    string `json:"tee_provider"`
-	SigningKey     string `json:"signing_key"`
+	SigningKey     string `json:"signing_public_key"`
 	SigningAddress string `json:"signing_address"`
 	IntelQuote     string `json:"intel_quote"`
 	NvidiaPayload  string `json:"nvidia_payload"`
 
 	// Extended fields (10 propagated to RawAttestation).
-	EventLog           []attestation.EventLogEntry `json:"event_log"`
-	Info               veniceInfo                  `json:"info"`
-	ServerVerification *ServerVerification         `json:"server_verification"`
-	ModelName          string                      `json:"model_name"`
-	UpstreamModel      string                      `json:"upstream_model"`
-	SigningAlgo        string                      `json:"signing_algo"`
-	TEEHardware        string                      `json:"tee_hardware"`
-	NonceSource        string                      `json:"nonce_source"`
-	CandidatesAvail    int                         `json:"candidates_available"`
-	CandidatesEval     int                         `json:"candidates_evaluated"`
+	EventLog           eventLogFlexible    `json:"event_log"`
+	Info               veniceInfo          `json:"info"`
+	ServerVerification *ServerVerification `json:"server_verification"`
+	ModelName          string              `json:"model_name"`
+	UpstreamModel      string              `json:"upstream_model"`
+	SigningAlgo        string              `json:"signing_algo"`
+	TEEHardware        string              `json:"tee_hardware"`
+	NonceSource        string              `json:"nonce_source"`
+	CandidatesAvail    int                 `json:"candidates_available"`
+	CandidatesEval     int                 `json:"candidates_evaluated"`
 
-	// Duplicate fields (parsed to silence jsonstrict, not propagated).
-	SigningPublicKey string `json:"signing_public_key"`
-	RequestNonce     string `json:"request_nonce"`
+	// Duplicate top-level fields (parsed to silence jsonstrict, not propagated).
+	// quote == intel_quote; vm_config == info.vm_config. Venice flattens these.
+	// signing_key is an alternate name for signing_public_key used by some backends.
+	RequestNonce  string `json:"request_nonce"`
+	Quote         string `json:"quote"`
+	VMConfig      string `json:"vm_config"`
+	DupSigningKey string `json:"signing_key"`
 }
 
 // Attester fetches attestation data from Venice's /api/v1/tee/attestation

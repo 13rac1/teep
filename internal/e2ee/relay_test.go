@@ -209,11 +209,17 @@ func TestReassembleNonStream(t *testing.T) {
 	}
 	sb.WriteString("data: [DONE]\n\n")
 
-	result, err := ReassembleNonStream(strings.NewReader(sb.String()), session)
+	result, ss, err := ReassembleNonStream(strings.NewReader(sb.String()), session)
 	if err != nil {
 		t.Fatalf("ReassembleNonStream: %v", err)
 	}
-	t.Logf("reassembled: %s", result)
+	t.Logf("reassembled: %s (chunks=%d, tokens=%d, duration=%s)", result, ss.Chunks, ss.Tokens, ss.Duration)
+	if ss.Chunks != len(chunks) {
+		t.Errorf("StreamStats.Chunks = %d, want %d", ss.Chunks, len(chunks))
+	}
+	if ss.Tokens != 0 {
+		t.Errorf("StreamStats.Tokens = %d, want 0 (no usage event in fixture)", ss.Tokens)
+	}
 
 	var resp struct {
 		Object  string `json:"object"`
@@ -655,5 +661,27 @@ func TestDecryptDeltaFields_EmptyStringSkipped(t *testing.T) {
 	}
 	if changed {
 		t.Error("expected no changes for empty string")
+	}
+}
+
+func TestEffectiveTokens(t *testing.T) {
+	tests := []struct {
+		name   string
+		tokens int
+		chunks int
+		want   int
+	}{
+		{"tokens available", 42, 10, 42},
+		{"tokens zero, falls back to chunks", 0, 10, 10},
+		{"both zero", 0, 0, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ss := &StreamStats{Tokens: tc.tokens, Chunks: tc.chunks}
+			got := ss.EffectiveTokens()
+			if got != tc.want {
+				t.Errorf("EffectiveTokens() = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

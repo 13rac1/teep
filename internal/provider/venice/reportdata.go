@@ -3,6 +3,7 @@ package venice
 import (
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,6 +23,9 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	signingKeyBytes, err := hex.DecodeString(raw.SigningKey)
 	if err != nil {
 		return "", fmt.Errorf("enclave public key is not valid hex: %w", err)
+	}
+	if len(signingKeyBytes) == 0 {
+		return "", errors.New("enclave public key is empty")
 	}
 	if len(signingKeyBytes) != 65 || signingKeyBytes[0] != 0x04 {
 		return "", fmt.Errorf("enclave public key is not an uncompressed secp256k1 point (got %d bytes, first byte 0x%02x)",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -137,6 +138,55 @@ func TestAttester_FetchAttestation_ExtendedFields(t *testing.T) {
 	if raw.CandidatesEval != 1 {
 		t.Errorf("CandidatesEval = %d, want 1", raw.CandidatesEval)
 	}
+}
+
+func TestParseAttestationResponse_EventLogString(t *testing.T) {
+	// Venice sometimes returns event_log as a JSON-encoded string instead of
+	// a direct array. Test that eventLogFlexible handles this.
+	eventLogArray := `[{"digest":"d6d8d853","event":"","event_payload":"09","event_type":2147483659,"imr":0}]`
+	body := strings.Replace(validAttestationJSON,
+		`"event_log": [`+"\n"+
+			"\t\t"+`{"digest": "d6d8d853b6454f838d98c5573d6a098c", "event": "", "event_payload": "095464785461626c65", "event_type": 2147483659, "imr": 0},`+"\n"+
+			"\t\t"+`{"digest": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "event": "", "event_payload": "0a1b2c3d4e5f", "event_type": 2147483649, "imr": 1}`+"\n"+
+			"\t"+`]`,
+		`"event_log": `+mustMarshal(t, eventLogArray),
+		1)
+
+	raw, err := venice.ParseAttestationResponse([]byte(body))
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse: %v", err)
+	}
+	t.Logf("EventLogCount = %d", raw.EventLogCount)
+	if raw.EventLogCount != 1 {
+		t.Errorf("EventLogCount = %d, want 1", raw.EventLogCount)
+	}
+}
+
+func TestParseAttestationResponse_EventLogInvalid(t *testing.T) {
+	// event_log that is neither an array nor a string should error.
+	body := strings.Replace(validAttestationJSON,
+		`"event_log": [`+"\n"+
+			"\t\t"+`{"digest": "d6d8d853b6454f838d98c5573d6a098c", "event": "", "event_payload": "095464785461626c65", "event_type": 2147483659, "imr": 0},`+"\n"+
+			"\t\t"+`{"digest": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "event": "", "event_payload": "0a1b2c3d4e5f", "event_type": 2147483649, "imr": 1}`+"\n"+
+			"\t"+`]`,
+		`"event_log": 42`,
+		1)
+
+	_, err := venice.ParseAttestationResponse([]byte(body))
+	if err == nil {
+		t.Fatal("expected error for numeric event_log, got nil")
+	}
+	t.Logf("expected error: %v", err)
+}
+
+// mustMarshal JSON-encodes v, failing the test on error.
+func mustMarshal(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	return string(b)
 }
 
 func TestAttester_FetchAttestation_EchoesNonce(t *testing.T) {
