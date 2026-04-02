@@ -817,6 +817,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.stats.errors.Add(1)
 		ms.errors.Add(1)
 		slog.ErrorContext(ctx, "upstream request failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+		if resp != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
+			resp.Body.Close()
+		}
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}

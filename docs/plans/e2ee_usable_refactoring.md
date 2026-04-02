@@ -191,12 +191,14 @@ response). The retry loop runs *before* the relay; post-relay enforcement
 runs *after* it.
 
 **Hazard — escalation gap**: When all 3 retry attempts fail, the current
-implementation returns HTTP 502 to the client but does NOT mark the
-provider+model as persistently failed. The next request will retry from
-scratch (via the nonce pool, which deprioritizes but does not remove
-failed instances). Once the E2EE state machine (long-term step 1) is
-implemented, retry exhaustion should escalate to
-`E2EETracker.MarkFailed(provider, model)` with full cache invalidation.
+implementation either forwards the last upstream HTTP status (if a
+response was received, e.g. repeated 503s) or returns HTTP 502 on pure
+transport errors, but in all cases does NOT mark the provider+model as
+persistently failed. The next request will retry from scratch (via the
+nonce pool, which deprioritizes but does not remove failed instances).
+Once the E2EE state machine (long-term step 1) is implemented, retry
+exhaustion should escalate to `E2EETracker.MarkFailed(provider, model)`
+with full cache invalidation.
 See "Nonce pool failure escalation" in Future Considerations.
 
 **Hazard — retry + decryption failure interaction**: If the retry loop

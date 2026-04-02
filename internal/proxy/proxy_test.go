@@ -3124,8 +3124,10 @@ func newChutesRetryTestServer(t *testing.T, upstreamURL string) (srv *proxy.Serv
 	// Override defaults set by the chutes provider case in proxy.New:
 	// BaseURL is hardcoded to llm.chutes.ai, and the encryptor/preparer
 	// use real Chutes crypto. Replace with passthroughs so tests can
-	// focus on the retry routing logic. passthroughEncryptor returns
-	// meta=nil, so the relay uses the non-E2EE path for plaintext.
+	// focus on the retry routing logic. passthroughEncryptor populates
+	// ChutesE2EE metadata (ChuteID, InstanceID) from the raw attestation
+	// but leaves Session nil, so the relay uses the non-E2EE path while
+	// the retry loop can still track instances via MarkFailed.
 	prov.BaseURL = upstreamURL
 	prov.Encryptor = passthroughEncryptor{}
 	prov.Preparer = noopPreparer{apiKey: "test-key"}
@@ -3134,9 +3136,10 @@ func newChutesRetryTestServer(t *testing.T, upstreamURL string) (srv *proxy.Serv
 
 // TestChutesRetry_FailoverOnUpstream502 verifies that when a Chutes E2EE
 // request gets a 502 from the upstream instance, the proxy retries with
-// a different instance from the nonce pool. Uses passthroughEncryptor
-// (meta=nil) so the relay uses the non-E2EE path; we verify retry behavior
-// via the mock fetcher's call counts and upstream request counts.
+// a different instance from the nonce pool. passthroughEncryptor populates
+// ChutesE2EE metadata (Session=nil) so the relay uses the non-E2EE path;
+// we verify retry behavior via the mock fetcher's call counts and upstream
+// request counts.
 func TestChutesRetry_FailoverOnUpstream502(t *testing.T) {
 	const signingKey = "chutes-signing-key"
 	const wantContent = "retry succeeded"
