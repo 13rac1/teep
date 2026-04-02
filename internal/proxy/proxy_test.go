@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2772,5 +2773,265 @@ func TestPinnedPath_E2EE_ReportDataBindingCacheCheck(t *testing.T) {
 	resp2.Body.Close()
 	if resp2.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("request 2 status = %d, want 503 (negative-cached after binding failure)", resp2.StatusCode)
+	}
+}
+
+// --- Nonce pool unit tests ---
+
+// mockE2EEFetcher records calls for nonce pool fast-path testing.
+type mockE2EEFetcher struct {
+	mu              sync.Mutex
+	material        *provider.E2EEMaterial
+	fetchErr        error
+	fetchCalls      int
+	invalidateCalls int
+	lastChuteID     string
+}
+
+func (m *mockE2EEFetcher) FetchE2EEMaterial(_ context.Context, _ string) (*provider.E2EEMaterial, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fetchCalls++
+	return m.material, m.fetchErr
+}
+
+func (m *mockE2EEFetcher) MarkFailed(_, _ string) {}
+
+func (m *mockE2EEFetcher) Invalidate(chuteID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.invalidateCalls++
+	m.lastChuteID = chuteID
+}
+
+// passthroughEncryptor returns the body unmodified with no E2EE session,
+// allowing nonce pool tests to verify routing logic without real encryption.
+type passthroughEncryptor struct{}
+
+func (passthroughEncryptor) EncryptRequest(body []byte, _ *attestation.RawAttestation) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
+	return body, nil, nil, nil
+}
+
+// mockAttester records FetchAttestation calls for fallback-path testing.
+type mockAttester struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *mockAttester) FetchAttestation(_ context.Context, _ string, _ attestation.Nonce) (*attestation.RawAttestation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	return nil, errors.New("mock: fresh attestation not available")
+}
+
+// passingReport returns a minimal VerificationReport with tdx_reportdata_binding
+// passing so that e2eeActive is true on attestation cache hits.
+func passingReport(provName, model string) *attestation.VerificationReport {
+	return &attestation.VerificationReport{
+		Provider: provName,
+		Model:    model,
+		Factors: []attestation.FactorResult{
+			{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "test"},
+		},
+	}
+}
+
+// newNoncePoolTestServer creates a proxy server with a venice provider
+// configured for nonce pool testing. It replaces the Encryptor and Preparer
+// with passthroughs so tests can focus on the nonce pool routing logic.
+// The returned server's upstream points at upstreamURL for chat completions.
+func newNoncePoolTestServer(t *testing.T, upstreamURL string) (srv *proxy.Server, ts *httptest.Server) {
+	t.Helper()
+
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"venice": {
+				Name:    "venice",
+				BaseURL: upstreamURL,
+				APIKey:  "test-key",
+				E2EE:    true,
+			},
+		},
+		AllowFail: attestation.KnownFactors,
+	}
+
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+
+	prov := srv.ProviderByName("venice")
+	prov.Encryptor = passthroughEncryptor{}
+	return srv, httptest.NewServer(srv)
+}
+
+// TestNoncePoolAccept verifies that when the signing key cache has a key
+// matching the nonce pool's E2EPubKey, the pool material is used without
+// falling back to fresh attestation.
+func TestNoncePoolAccept(t *testing.T) {
+	const signingKey = "matching-signing-key"
+	const wantContent = "nonce pool accepted"
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(nonStreamResponse(wantContent)))
+	}))
+	defer upstream.Close()
+
+	srv, proxySrv := newNoncePoolTestServer(t, upstream.URL)
+	defer proxySrv.Close()
+
+	fetcher := &mockE2EEFetcher{
+		material: &provider.E2EEMaterial{
+			InstanceID: "inst-1",
+			E2EPubKey:  signingKey,
+			E2ENonce:   "nonce-1",
+			ChuteID:    "chute-1",
+		},
+	}
+	prov := srv.ProviderByName("venice")
+	prov.E2EEMaterialFetcher = fetcher
+
+	srv.PutAttestationCache("venice", "test-model", passingReport("venice", "test-model"))
+	srv.PutSigningKeyCache("venice", "test-model", signingKey)
+
+	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	if err != nil {
+		t.Fatalf("POST chat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	got := extractMessageContent(t, func() []byte { b, _ := io.ReadAll(resp.Body); return b }())
+	if got != wantContent {
+		t.Errorf("content = %q, want %q", got, wantContent)
+	}
+
+	fetcher.mu.Lock()
+	defer fetcher.mu.Unlock()
+	if fetcher.fetchCalls != 1 {
+		t.Errorf("fetchCalls = %d, want 1", fetcher.fetchCalls)
+	}
+	if fetcher.invalidateCalls != 0 {
+		t.Errorf("invalidateCalls = %d, want 0", fetcher.invalidateCalls)
+	}
+}
+
+// TestNoncePoolReject_ColdSigningKeyCache verifies that when the signing key
+// cache is empty, the nonce pool is skipped entirely (no nonce consumed) and
+// the proxy falls back to fresh attestation.
+func TestNoncePoolReject_ColdSigningKeyCache(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(nonStreamResponse("ok")))
+	}))
+	defer upstream.Close()
+
+	srv, proxySrv := newNoncePoolTestServer(t, upstream.URL)
+	defer proxySrv.Close()
+
+	fetcher := &mockE2EEFetcher{
+		material: &provider.E2EEMaterial{
+			InstanceID: "inst-1",
+			E2EPubKey:  "some-key",
+			E2ENonce:   "nonce-1",
+			ChuteID:    "chute-1",
+		},
+	}
+	attester := &mockAttester{}
+	prov := srv.ProviderByName("venice")
+	prov.E2EEMaterialFetcher = fetcher
+	prov.Attester = attester
+
+	// Pre-populate attestation cache but NOT the signing key cache.
+	srv.PutAttestationCache("venice", "test-model", passingReport("venice", "test-model"))
+
+	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	if err != nil {
+		t.Fatalf("POST chat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Fallback attestation fails (mock attester), so proxy returns 500.
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (fallback attestation fails)", resp.StatusCode)
+	}
+
+	fetcher.mu.Lock()
+	defer fetcher.mu.Unlock()
+	if fetcher.fetchCalls != 0 {
+		t.Errorf("fetchCalls = %d, want 0 (cold cache should skip nonce pool)", fetcher.fetchCalls)
+	}
+
+	attester.mu.Lock()
+	defer attester.mu.Unlock()
+	if attester.calls != 1 {
+		t.Errorf("attester.calls = %d, want 1 (fallback to fresh attestation)", attester.calls)
+	}
+}
+
+// TestNoncePoolMismatch_Invalidate verifies that when the nonce pool's
+// E2EPubKey differs from the cached signing key, the pool is invalidated
+// and the proxy falls back to fresh attestation.
+func TestNoncePoolMismatch_Invalidate(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(nonStreamResponse("ok")))
+	}))
+	defer upstream.Close()
+
+	srv, proxySrv := newNoncePoolTestServer(t, upstream.URL)
+	defer proxySrv.Close()
+
+	fetcher := &mockE2EEFetcher{
+		material: &provider.E2EEMaterial{
+			InstanceID: "inst-1",
+			E2EPubKey:  "new-different-key",
+			E2ENonce:   "nonce-1",
+			ChuteID:    "chute-1",
+		},
+	}
+	attester := &mockAttester{}
+	prov := srv.ProviderByName("venice")
+	prov.E2EEMaterialFetcher = fetcher
+	prov.Attester = attester
+
+	// Pre-populate both caches, but with a different key than the fetcher returns.
+	srv.PutAttestationCache("venice", "test-model", passingReport("venice", "test-model"))
+	srv.PutSigningKeyCache("venice", "test-model", "old-cached-key")
+
+	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	if err != nil {
+		t.Fatalf("POST chat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Fallback attestation fails (mock attester), so proxy returns 500.
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (fallback attestation fails after mismatch)", resp.StatusCode)
+	}
+
+	fetcher.mu.Lock()
+	defer fetcher.mu.Unlock()
+	if fetcher.fetchCalls != 1 {
+		t.Errorf("fetchCalls = %d, want 1", fetcher.fetchCalls)
+	}
+	if fetcher.invalidateCalls != 1 {
+		t.Errorf("invalidateCalls = %d, want 1 (mismatch should invalidate pool)", fetcher.invalidateCalls)
+	}
+	if fetcher.lastChuteID != "chute-1" {
+		t.Errorf("lastChuteID = %q, want %q", fetcher.lastChuteID, "chute-1")
+	}
+
+	attester.mu.Lock()
+	defer attester.mu.Unlock()
+	if attester.calls != 1 {
+		t.Errorf("attester.calls = %d, want 1 (fallback to fresh attestation after mismatch)", attester.calls)
 	}
 }
