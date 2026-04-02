@@ -214,6 +214,12 @@ func TestReassembleNonStream(t *testing.T) {
 		t.Fatalf("ReassembleNonStream: %v", err)
 	}
 	t.Logf("reassembled: %s (chunks=%d, tokens=%d, duration=%s)", result, ss.Chunks, ss.Tokens, ss.Duration)
+	if ss.Chunks != len(chunks) {
+		t.Errorf("StreamStats.Chunks = %d, want %d", ss.Chunks, len(chunks))
+	}
+	if ss.Tokens != 0 {
+		t.Errorf("StreamStats.Tokens = %d, want 0 (no usage event in fixture)", ss.Tokens)
+	}
 
 	var resp struct {
 		Object  string `json:"object"`

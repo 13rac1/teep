@@ -1657,6 +1657,12 @@ func TestReassembleNonStream(t *testing.T) {
 	}
 
 	t.Logf("result: %s (chunks=%d, tokens=%d, duration=%s)", result, ss.Chunks, ss.Tokens, ss.Duration)
+	if ss.Chunks != 2 {
+		t.Errorf("StreamStats.Chunks = %d, want 2", ss.Chunks)
+	}
+	if ss.Tokens != 0 {
+		t.Errorf("StreamStats.Tokens = %d, want 0 (no usage event in fixture)", ss.Tokens)
+	}
 
 	got := extractMessageContent(t, result)
 	want := "Hello, world!"
@@ -1734,6 +1740,12 @@ func TestReassembleNonStream_WithReasoning(t *testing.T) {
 	}
 
 	t.Logf("result: %s (chunks=%d, tokens=%d, duration=%s)", result, ss.Chunks, ss.Tokens, ss.Duration)
+	if ss.Chunks != 3 {
+		t.Errorf("StreamStats.Chunks = %d, want 3", ss.Chunks)
+	}
+	if ss.Tokens != 0 {
+		t.Errorf("StreamStats.Tokens = %d, want 0 (no usage event in fixture)", ss.Tokens)
+	}
 
 	// Parse and verify both fields present in message.
 	var parsed struct {
@@ -2491,6 +2503,110 @@ func TestHandleIndex_Fresh(t *testing.T) {
 			t.Errorf("response missing %q", want)
 		}
 	}
+}
+
+func TestHandleEvents(t *testing.T) {
+	attestSrv := makeAttestationServer(t, false)
+	defer attestSrv.Close()
+
+	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
+	defer proxySrv.Close()
+
+	// Connect to the SSE endpoint and read the first event.
+	resp, err := http.Get(proxySrv.URL + "/events")
+	if err != nil {
+		t.Fatalf("GET /events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	t.Logf("Content-Type: %s", ct)
+	if !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	// Read at least one well-formed SSE data line.
+	scanner := bufio.NewScanner(resp.Body)
+	var gotData bool
+	for scanner.Scan() {
+		line := scanner.Text()
+		t.Logf("SSE line: %s", line)
+		if strings.HasPrefix(line, "data: ") {
+			// Verify it's valid JSON.
+			payload := line[len("data: "):]
+			var obj map[string]any
+			if err := json.Unmarshal([]byte(payload), &obj); err != nil {
+				t.Fatalf("SSE data is not valid JSON: %v\npayload: %s", err, payload)
+			}
+			t.Logf("SSE payload keys: %v", keys(obj))
+			// Expect dashboard data fields.
+			for _, key := range []string{"listen_addr", "uptime", "provider", "requests", "cache", "models"} {
+				if _, ok := obj[key]; !ok {
+					t.Errorf("SSE payload missing key %q", key)
+				}
+			}
+			gotData = true
+			break
+		}
+	}
+	if !gotData {
+		t.Fatal("no SSE data event received")
+	}
+	resp.Body.Close()
+}
+
+func TestHandleEvents_MaxConns(t *testing.T) {
+	attestSrv := makeAttestationServer(t, false)
+	defer attestSrv.Close()
+
+	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
+	defer proxySrv.Close()
+
+	// Open maxSSEConns (10) connections.
+	const maxConns = 10
+	conns := make([]io.Closer, 0, maxConns)
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	for i := range maxConns {
+		resp, err := http.Get(proxySrv.URL + "/events")
+		if err != nil {
+			t.Fatalf("GET /events [%d]: %v", i, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			t.Fatalf("connection %d: status = %d, want 200", i, resp.StatusCode)
+		}
+		t.Logf("connection %d: status=%d", i, resp.StatusCode)
+		conns = append(conns, resp.Body)
+	}
+
+	// The 11th connection should get 503.
+	resp, err := http.Get(proxySrv.URL + "/events")
+	if err != nil {
+		t.Fatalf("GET /events [overflow]: %v", err)
+	}
+	defer resp.Body.Close()
+	t.Logf("overflow connection: status=%d", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("overflow status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+}
+
+// keys returns the top-level keys of a map for test logging.
+func keys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestHandleIndex_AfterRequest(t *testing.T) {
