@@ -92,7 +92,7 @@ To ensure data privacy and integrity, adhere to the following rules:
 - Error paths MUST only return or propagate errors. Any other behavior is a defect.
 - Reject malformed input entirely; never silently drop malformed elements.
 - Unknown or misspelled config values MUST be rejected at startup.
-- JSON unmarshalling MUST use strict mode (warn or reject unknown fields).
+- JSON unmarshalling MUST use strict mode (warn on unknown fields, and reject failures).
 - If you can't make development progress due to a failing validation, STOP and ask for advice.
 - NEVER weaken or bypass validation behavior.
 - NO WORKAROUNDS. NO ERROR FALLBACKS. NO BACKWARDS COMPATIBILITY.

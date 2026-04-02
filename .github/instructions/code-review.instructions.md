@@ -56,7 +56,7 @@ for security validation.
 
 - Error returns block the request — no silent swallowing.
 - Unknown or misspelled config values MUST be rejected at startup.
-- JSON unmarshalling SHOULD use strict mode (warn or reject unknown fields).
+- JSON unmarshalling MUST use strict mode (warn on unknown fields, and reject failures).
 - Malformed attestation data MUST fail the entire response, not skip elements.
 
 ## Go Conventions
