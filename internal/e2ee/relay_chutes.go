@@ -12,6 +12,36 @@ import (
 	"time"
 )
 
+// handleChutesInit decodes the e2e_init event and derives the stream key.
+func handleChutesInit(initB64 json.RawMessage, session *ChutesSession) ([]byte, error) {
+	var b64 string
+	if err := json.Unmarshal(initB64, &b64); err != nil {
+		return nil, fmt.Errorf("parse e2e_init string: %w", err)
+	}
+	streamKey, err := session.DecryptStreamInitChutes(b64)
+	if err != nil {
+		return nil, fmt.Errorf("derive stream key: %w", err)
+	}
+	return streamKey, nil
+}
+
+// handleChutesChunk decodes and decrypts a single e2e chunk.
+func handleChutesChunk(encB64 json.RawMessage, streamKey []byte) ([]byte, error) {
+	var b64 string
+	if err := json.Unmarshal(encB64, &b64); err != nil {
+		return nil, fmt.Errorf("parse e2e chunk string: %w", err)
+	}
+	encrypted, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, fmt.Errorf("decode e2e chunk: %w", err)
+	}
+	plaintext, err := DecryptStreamChunkChutes(encrypted, streamKey)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt chunk: %w", err)
+	}
+	return plaintext, nil
+}
+
 // RelayStreamChutes reads a Chutes E2EE SSE stream (e2e_init + e2e events),
 // decrypts each chunk using the stream key derived from the e2e_init KEM
 // ciphertext, and writes standard OpenAI-format SSE to w. Returns token
@@ -55,17 +85,10 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 		}
 
 		if initB64, ok := event["e2e_init"]; ok {
-			// First event: contains base64 KEM ciphertext for stream key derivation.
-			var b64 string
-			if err := json.Unmarshal(initB64, &b64); err != nil {
-				slog.ErrorContext(ctx, "chutes stream: parse e2e_init string", "err", err)
-				http.Error(w, "chutes stream decryption failed", http.StatusBadGateway)
-				return stats
-			}
 			var err error
-			streamKey, err = session.DecryptStreamInitChutes(b64)
+			streamKey, err = handleChutesInit(initB64, session)
 			if err != nil {
-				slog.ErrorContext(ctx, "chutes stream: derive stream key", "err", err)
+				slog.ErrorContext(ctx, "chutes stream: init failed", "err", err)
 				http.Error(w, "chutes stream decryption failed", http.StatusBadGateway)
 				return stats
 			}
@@ -75,21 +98,9 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 				http.Error(w, "chutes stream decryption failed", http.StatusBadGateway)
 				return stats
 			}
-			var b64 string
-			if err := json.Unmarshal(encB64, &b64); err != nil {
-				slog.ErrorContext(ctx, "chutes stream: parse e2e chunk string", "err", err)
-				WriteSSEError(w, flusher, "chutes stream decryption failed")
-				return stats
-			}
-			encrypted, err := base64.StdEncoding.DecodeString(b64)
+			plaintext, err := handleChutesChunk(encB64, streamKey)
 			if err != nil {
-				slog.ErrorContext(ctx, "chutes stream: decode e2e chunk", "err", err)
-				WriteSSEError(w, flusher, "chutes stream decryption failed")
-				return stats
-			}
-			plaintext, err := DecryptStreamChunkChutes(encrypted, streamKey)
-			if err != nil {
-				slog.ErrorContext(ctx, "chutes stream: decrypt chunk", "err", err)
+				slog.ErrorContext(ctx, "chutes stream: chunk failed", "err", err)
 				WriteSSEError(w, flusher, "chutes stream decryption failed")
 				return stats
 			}
@@ -102,9 +113,6 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 				headerWritten = true
 			}
 
-			// The decrypted plaintext is a raw fragment of the original
-			// SSE stream (including "data: " prefix and newlines).
-			// Write it verbatim — do NOT wrap in another "data: ".
 			now := time.Now()
 			if firstChunk.IsZero() {
 				firstChunk = now

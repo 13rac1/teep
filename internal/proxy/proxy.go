@@ -482,7 +482,6 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 
 	totalStart := time.Now()
 	nonce := attestation.NewNonce()
-	var fetchDur, tdxDur, nvidiaDur, nrasDur, pocDur, composeDur time.Duration
 
 	slog.DebugContext(ctx, "attestation fetch starting", "provider", prov.Name, "model", upstreamModel)
 	fetchStart := time.Now()
@@ -492,105 +491,14 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		s.negCache.Record(prov.Name, upstreamModel)
 		return nil, nil
 	}
-	fetchDur = time.Since(fetchStart)
+	fetchDur := time.Since(fetchStart)
 	slog.DebugContext(ctx, "attestation fetch complete", "provider", prov.Name, "elapsed", fetchDur)
 
-	var tdxResult *attestation.TDXVerifyResult
-	if raw.IntelQuote != "" {
-		slog.DebugContext(ctx, "TDX verification starting", "provider", prov.Name)
-		tdxStart := time.Now()
-		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, s.cfg.Offline)
-		if prov.ReportDataVerifier != nil && tdxResult.ParseErr == nil {
-			detail, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
-			if errors.Is(err, multi.ErrNoVerifier) {
-				slog.DebugContext(ctx, "no REPORTDATA verifier for backend format", "format", raw.BackendFormat)
-			} else {
-				tdxResult.ReportDataBindingErr = err
-				tdxResult.ReportDataBindingDetail = detail
-			}
-		}
-		tdxDur = time.Since(tdxStart)
-		slog.DebugContext(ctx, "TDX verification complete", "provider", prov.Name, "elapsed", tdxDur)
-	}
-
-	var nvidiaResult *attestation.NvidiaVerifyResult
-	if raw.NvidiaPayload != "" {
-		slog.DebugContext(ctx, "NVIDIA verification starting", "provider", prov.Name)
-		nvidiaStart := time.Now()
-		nvidiaResult = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
-		nvidiaDur = time.Since(nvidiaStart)
-		slog.DebugContext(ctx, "NVIDIA verification complete", "provider", prov.Name, "elapsed", nvidiaDur)
-	} else if len(raw.GPUEvidence) > 0 {
-		slog.DebugContext(ctx, "NVIDIA GPU direct verification starting", "provider", prov.Name, "gpus", len(raw.GPUEvidence))
-		serverNonce, err := attestation.ParseNonce(raw.Nonce)
-		if err != nil {
-			nvidiaResult = &attestation.NvidiaVerifyResult{
-				SignatureErr: fmt.Errorf("parse server nonce: %w", err),
-			}
-		} else {
-			nvidiaStart := time.Now()
-			nvidiaResult = attestation.VerifyNVIDIAGPUDirect(raw.GPUEvidence, serverNonce)
-			nvidiaDur = time.Since(nvidiaStart)
-			slog.DebugContext(ctx, "NVIDIA GPU direct verification complete", "provider", prov.Name, "elapsed", nvidiaDur)
-		}
-	}
-
-	var nrasResult *attestation.NvidiaVerifyResult
-	if !s.cfg.Offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
-		slog.DebugContext(ctx, "NVIDIA NRAS verification starting", "provider", prov.Name)
-		nrasStart := time.Now()
-		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, s.attestClient)
-		nrasDur = time.Since(nrasStart)
-		slog.DebugContext(ctx, "NVIDIA NRAS verification complete", "provider", prov.Name, "elapsed", nrasDur)
-	} else if !s.cfg.Offline && len(raw.GPUEvidence) > 0 {
-		slog.DebugContext(ctx, "NVIDIA NRAS verification starting (synthesized EAT)", "provider", prov.Name)
-		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
-		nrasStart := time.Now()
-		nrasResult = attestation.VerifyNVIDIANRAS(ctx, eatJSON, s.attestClient)
-		nrasDur = time.Since(nrasStart)
-		slog.DebugContext(ctx, "NVIDIA NRAS verification complete (synthesized EAT)", "provider", prov.Name, "elapsed", nrasDur)
-	}
-
-	var pocResult *attestation.PoCResult
-	if !s.cfg.Offline && raw.IntelQuote != "" {
-		slog.DebugContext(ctx, "Proof of Cloud check starting", "provider", prov.Name)
-		pocStart := time.Now()
-		poc := attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient, s.pocSigningKey)
-		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
-		pocDur = time.Since(pocStart)
-		slog.DebugContext(ctx, "Proof of Cloud check complete", "provider", prov.Name, "elapsed", pocDur,
-			"registered", pocResult != nil && pocResult.Registered)
-	}
-
-	var composeResult *attestation.ComposeBindingResult
-	var sigstoreResults []attestation.SigstoreResult
-	var imageRepos []string
-	var digestToRepo map[string]string
-	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
-		composeStart := time.Now()
-		composeResult = &attestation.ComposeBindingResult{Checked: true}
-		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
-
-		if composeResult.Err == nil {
-			cd := attestation.ExtractComposeDigests(raw.AppCompose)
-			imageRepos = cd.Repos
-			digestToRepo = cd.DigestToRepo
-			digests := cd.Digests
-			if len(digests) > 0 && !s.cfg.Offline {
-				sigstoreResults = s.rekorClient.CheckSigstoreDigests(ctx, digests)
-			}
-		}
-		composeDur = time.Since(composeStart)
-	}
-
-	var rekorResults []attestation.RekorProvenance
-	if len(sigstoreResults) > 0 && !s.cfg.Offline {
-		for _, sr := range sigstoreResults {
-			if sr.OK {
-				rekorResults = append(rekorResults, s.rekorClient.FetchRekorProvenance(ctx, sr.Digest))
-			}
-		}
-	}
+	tdxResult, tdxDur := s.verifyTDX(ctx, raw, nonce, prov)
+	nvidiaResult, nvidiaDur := verifyNVIDIA(ctx, raw, nonce, prov.Name)
+	nrasResult, nrasDur := s.verifyNVIDIAOnline(ctx, raw, prov.Name)
+	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)
+	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult)
 
 	totalDur := time.Since(totalStart)
 	slog.InfoContext(ctx, "verification complete",
@@ -617,18 +525,170 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		Policy:            prov.MeasurementPolicy,
 		GatewayPolicy:     prov.GatewayMeasurementPolicy,
 		SupplyChainPolicy: prov.SupplyChainPolicy,
-		ImageRepos:        imageRepos,
-		DigestToRepo:      digestToRepo,
+		ImageRepos:        sc.ImageRepos,
+		DigestToRepo:      sc.DigestToRepo,
 		TDX:               tdxResult,
 		Nvidia:            nvidiaResult,
 		NvidiaNRAS:        nrasResult,
 		PoC:               pocResult,
-		Compose:           composeResult,
-		Sigstore:          sigstoreResults,
-		Rekor:             rekorResults,
+		Compose:           sc.Compose,
+		Sigstore:          sc.Sigstore,
+		Rekor:             sc.Rekor,
 		E2EEConfigured:    prov.E2EE,
 	})
 	return report, raw
+}
+
+// verifyTDX runs TDX quote verification and REPORTDATA binding.
+func (s *Server) verifyTDX(
+	ctx context.Context,
+	raw *attestation.RawAttestation,
+	nonce attestation.Nonce,
+	prov *provider.Provider,
+) (*attestation.TDXVerifyResult, time.Duration) {
+	if raw.IntelQuote == "" {
+		return nil, 0
+	}
+	slog.DebugContext(ctx, "TDX verification starting", "provider", prov.Name)
+	start := time.Now()
+	result := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, s.cfg.Offline)
+	if prov.ReportDataVerifier != nil && result.ParseErr == nil {
+		detail, err := prov.ReportDataVerifier.VerifyReportData(result.ReportData, raw, nonce)
+		if errors.Is(err, multi.ErrNoVerifier) {
+			slog.DebugContext(ctx, "no REPORTDATA verifier for backend format", "format", raw.BackendFormat)
+		} else {
+			result.ReportDataBindingErr = err
+			result.ReportDataBindingDetail = detail
+		}
+	}
+	dur := time.Since(start)
+	slog.DebugContext(ctx, "TDX verification complete", "provider", prov.Name, "elapsed", dur)
+	return result, dur
+}
+
+// verifyNVIDIA runs offline NVIDIA payload or GPU direct verification.
+func verifyNVIDIA(
+	ctx context.Context,
+	raw *attestation.RawAttestation,
+	nonce attestation.Nonce,
+	provName string,
+) (*attestation.NvidiaVerifyResult, time.Duration) {
+	if raw.NvidiaPayload != "" {
+		slog.DebugContext(ctx, "NVIDIA verification starting", "provider", provName)
+		start := time.Now()
+		result := attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
+		dur := time.Since(start)
+		slog.DebugContext(ctx, "NVIDIA verification complete", "provider", provName, "elapsed", dur)
+		return result, dur
+	}
+	if len(raw.GPUEvidence) > 0 {
+		slog.DebugContext(ctx, "NVIDIA GPU direct verification starting", "provider", provName, "gpus", len(raw.GPUEvidence))
+		serverNonce, err := attestation.ParseNonce(raw.Nonce)
+		if err != nil {
+			return &attestation.NvidiaVerifyResult{
+				SignatureErr: fmt.Errorf("parse server nonce: %w", err),
+			}, 0
+		}
+		start := time.Now()
+		result := attestation.VerifyNVIDIAGPUDirect(raw.GPUEvidence, serverNonce)
+		dur := time.Since(start)
+		slog.DebugContext(ctx, "NVIDIA GPU direct verification complete", "provider", provName, "elapsed", dur)
+		return result, dur
+	}
+	return nil, 0
+}
+
+// verifyNVIDIAOnline runs NVIDIA NRAS online verification.
+func (s *Server) verifyNVIDIAOnline(
+	ctx context.Context,
+	raw *attestation.RawAttestation,
+	provName string,
+) (*attestation.NvidiaVerifyResult, time.Duration) {
+	if s.cfg.Offline {
+		return nil, 0
+	}
+	if raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
+		slog.DebugContext(ctx, "NVIDIA NRAS verification starting", "provider", provName)
+		start := time.Now()
+		result := attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, s.attestClient)
+		dur := time.Since(start)
+		slog.DebugContext(ctx, "NVIDIA NRAS verification complete", "provider", provName, "elapsed", dur)
+		return result, dur
+	}
+	if len(raw.GPUEvidence) > 0 {
+		slog.DebugContext(ctx, "NVIDIA NRAS verification starting (synthesized EAT)", "provider", provName)
+		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
+		start := time.Now()
+		result := attestation.VerifyNVIDIANRAS(ctx, eatJSON, s.attestClient)
+		dur := time.Since(start)
+		slog.DebugContext(ctx, "NVIDIA NRAS verification complete (synthesized EAT)", "provider", provName, "elapsed", dur)
+		return result, dur
+	}
+	return nil, 0
+}
+
+// verifyPoC runs the Proof of Cloud check against quorum peers.
+func (s *Server) verifyPoC(
+	ctx context.Context,
+	raw *attestation.RawAttestation,
+	provName string,
+) (*attestation.PoCResult, time.Duration) {
+	if s.cfg.Offline || raw.IntelQuote == "" {
+		return nil, 0
+	}
+	slog.DebugContext(ctx, "Proof of Cloud check starting", "provider", provName)
+	start := time.Now()
+	poc := attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient, s.pocSigningKey)
+	result := poc.CheckQuote(ctx, raw.IntelQuote)
+	dur := time.Since(start)
+	slog.DebugContext(ctx, "Proof of Cloud check complete", "provider", provName, "elapsed", dur,
+		"registered", result != nil && result.Registered)
+	return result, dur
+}
+
+// supplyChainResult holds the outputs of compose binding, sigstore, and rekor
+// verification. Zero value is safe to use (nil slices/maps/pointers).
+type supplyChainResult struct {
+	Compose      *attestation.ComposeBindingResult
+	Sigstore     []attestation.SigstoreResult
+	ImageRepos   []string
+	DigestToRepo map[string]string
+	Rekor        []attestation.RekorProvenance
+}
+
+// verifySupplyChain runs compose binding, sigstore digest, and rekor provenance checks.
+func (s *Server) verifySupplyChain(
+	ctx context.Context,
+	raw *attestation.RawAttestation,
+	tdxResult *attestation.TDXVerifyResult,
+) (supplyChainResult, time.Duration) {
+	if raw.AppCompose == "" || tdxResult == nil || tdxResult.ParseErr != nil {
+		return supplyChainResult{}, 0
+	}
+	start := time.Now()
+	sc := supplyChainResult{
+		Compose: &attestation.ComposeBindingResult{Checked: true},
+	}
+	sc.Compose.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+
+	if sc.Compose.Err == nil {
+		cd := attestation.ExtractComposeDigests(raw.AppCompose)
+		sc.ImageRepos = cd.Repos
+		sc.DigestToRepo = cd.DigestToRepo
+		if len(cd.Digests) > 0 && !s.cfg.Offline {
+			sc.Sigstore = s.rekorClient.CheckSigstoreDigests(ctx, cd.Digests)
+		}
+	}
+
+	if len(sc.Sigstore) > 0 && !s.cfg.Offline {
+		for _, sr := range sc.Sigstore {
+			if sr.OK {
+				sc.Rekor = append(sc.Rekor, s.rekorClient.FetchRekorProvenance(ctx, sr.Digest))
+			}
+		}
+	}
+
+	return sc, time.Since(start)
 }
 
 // handleChatCompletions is the core proxy handler for POST /v1/chat/completions.
@@ -704,196 +764,38 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attestStart := time.Now()
-	var raw *attestation.RawAttestation // non-nil on cache miss; reused for E2EE
-	report, cached := s.cache.Get(prov.Name, upstreamModel)
-	if cached {
-		s.stats.cacheHits.Add(1)
-	} else {
-		s.stats.cacheMisses.Add(1)
-		report, raw = s.fetchAndVerify(ctx, prov, upstreamModel)
-		if report == nil {
-			status = "attest_failed"
-			s.stats.errors.Add(1)
-			ms.errors.Add(1)
-			http.Error(w, "attestation fetch failed; see server logs", http.StatusBadGateway)
-			return
-		}
-		s.cache.Put(prov.Name, upstreamModel, report)
+	ar, failStatus := s.attestAndCache(ctx, w, prov, upstreamModel, ms)
+	if failStatus != "" {
+		status = failStatus
+		return
 	}
-	attestDur = time.Since(attestStart)
+	attestDur = ar.AttestDur
+	report := ar.Report
 
-	if report.Blocked() {
-		if s.cfg.Force {
-			slog.WarnContext(ctx, "--force: bypassing blocked attestation", "provider", prov.Name, "model", upstreamModel)
-		} else {
-			status = "blocked"
-			s.stats.errors.Add(1)
-			ms.errors.Add(1)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadGateway)
-			if err := json.NewEncoder(w).Encode(report); err != nil {
-				slog.ErrorContext(ctx, "encode response", "error", err)
-			}
-			return
+	ur, err := s.doUpstreamRoundtrip(ctx, prov, body, upstreamModel, ar.E2EEActive, ar.Raw, req.Stream)
+	if err != nil {
+		status = "upstream_failed"
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
+		slog.ErrorContext(ctx, "upstream roundtrip failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+		code := http.StatusBadGateway
+		if he := (*httpError)(nil); errors.As(err, &he) {
+			code = he.code
 		}
+		http.Error(w, "upstream request failed", code)
+		return
 	}
-
-	// Only cache the signing key after attestation passes. Caching before
-	// the Blocked() check would allow a key from a failed attestation to
-	// be reused for E2EE on a subsequent cache-hit request.
-	if raw != nil && raw.SigningKey != "" {
-		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && subtle.ConstantTimeCompare([]byte(prev), []byte(raw.SigningKey)) == 0 {
-			slog.WarnContext(ctx, "signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
-		}
-		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
-	}
-
-	e2eeActive := prov.E2EE && report.ReportDataBindingPassed()
-	if e2eeActive {
-		s.stats.e2ee.Add(1)
-	} else {
-		s.stats.plaintext.Add(1)
-	}
-
-	// Build the upstream body, send it, and handle retries for Chutes E2EE.
-	// Chutes pins each request to a specific instance via X-Instance-Id,
-	// so if that instance is unhealthy we must fail over to another
-	// instance from the nonce pool. Other providers do not pin to instances
-	// and need no retry.
-	upstreamURL := prov.BaseURL + prov.ChatPath
-	var upstreamTimeout time.Duration
-	if !req.Stream {
-		upstreamTimeout = upstreamNonStreamTimeout
-	} else {
-		upstreamTimeout = upstreamStreamTimeout
-	}
-
-	chutesRetry := e2eeActive && prov.E2EEMaterialFetcher != nil && prov.SkipSigningKeyCache
-	maxAttempts := 1
-	if chutesRetry {
-		maxAttempts = chutesMaxAttempts
-	}
-
-	var (
-		reqBody       []byte
-		session       e2ee.Decryptor
-		meta          *e2ee.ChutesE2EE
-		resp          *http.Response
-		attemptCancel context.CancelFunc
-		// Per-attempt Chutes instance tracking for MarkFailed/logging,
-		// independent of meta.Session being populated.
-		attemptChuteID    string
-		attemptInstanceID string
-	)
-
-	for attempt := range maxAttempts {
-		// On retry, force buildUpstreamBody to use the nonce pool (different
-		// instance) instead of the raw attestation from the initial fetch.
-		freshRaw := raw
-		if attempt > 0 {
-			freshRaw = nil
-		}
-
-		e2eeStart := time.Now()
-
-		ub, buildErr := s.buildUpstreamBody(ctx, body, upstreamModel, e2eeActive, prov, freshRaw)
-		e2eeDur += time.Since(e2eeStart)
-
-		if buildErr != nil {
-			err = buildErr
-			if attempt < maxAttempts-1 && !errors.Is(err, context.Canceled) {
-				slog.WarnContext(ctx, "chutes: E2EE body build failed, retrying",
-					"provider", prov.Name, "model", upstreamModel, "attempt", attempt+1, "err", err)
-				continue
-			}
-			status = "e2ee_failed"
-			s.stats.errors.Add(1)
-			ms.errors.Add(1)
-			slog.ErrorContext(ctx, "build upstream body failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-			http.Error(w, "failed to prepare upstream request", http.StatusInternalServerError)
-			return
-		}
-
-		reqBody = ub.Body
-		session = ub.Session
-		meta = ub.Meta
-		attemptChuteID = ub.ChuteID
-		attemptInstanceID = ub.InstanceID
-
-		var attemptCtx context.Context
-		attemptCtx, attemptCancel = context.WithTimeout(ctx, upstreamTimeout)
-
-		upstreamReq, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, upstreamURL, bytes.NewReader(reqBody))
-		if reqErr != nil {
-			attemptCancel()
-			zeroE2EESessions(session, meta)
-			http.Error(w, "failed to build upstream request", http.StatusInternalServerError)
-			return
-		}
-		upstreamReq.Header.Set("Content-Type", "application/json")
-
-		if prepErr := prepareUpstreamHeaders(upstreamReq, prov, session, meta, req.Stream); prepErr != nil {
-			attemptCancel()
-			zeroE2EESessions(session, meta)
-			slog.ErrorContext(ctx, "PrepareRequest failed", "provider", prov.Name, "err", prepErr)
-			http.Error(w, "failed to prepare upstream request headers", http.StatusInternalServerError)
-			return
-		}
-
-		upstreamDoStart := time.Now()
-		resp, err = s.upstreamClient.Do(upstreamReq)
-		upstreamDur += time.Since(upstreamDoStart)
-
-		retryable := chutesRetryableError(err, resp)
-
-		// Mark the instance as failed so the nonce pool deprioritises it
-		// on subsequent requests, even on the final attempt.
-		if retryable && attemptInstanceID != "" && prov.E2EEMaterialFetcher != nil {
-			prov.E2EEMaterialFetcher.MarkFailed(attemptChuteID, attemptInstanceID)
-		}
-
-		if attempt < maxAttempts-1 && retryable {
-			attemptCancel()
-			if attemptInstanceID != "" {
-				slog.WarnContext(ctx, "chutes: upstream attempt failed, trying different instance",
-					"provider", prov.Name, "model", upstreamModel,
-					"instance_id", attemptInstanceID, "attempt", attempt+1,
-					"err", err, "status", respStatusCode(resp))
-			}
-			zeroE2EESessions(session, meta)
-			if resp != nil {
-				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
-				resp.Body.Close()
-				resp = nil
-			}
-			continue
-		}
-		break
-	}
-
-	// Ensure final crypto material is zeroed on exit.
+	e2eeDur = ur.E2EEDur
+	upstreamDur = ur.UpstreamDur
+	resp := ur.Resp
+	session := ur.Session
+	meta := ur.Meta
+	defer ur.Cancel()
 	if session != nil {
 		defer session.Zero()
 	}
 	if meta != nil && meta.Session != nil {
 		defer meta.Session.Zero()
-	}
-	if attemptCancel != nil {
-		defer attemptCancel()
-	}
-
-	if err != nil {
-		status = "upstream_failed"
-		s.stats.errors.Add(1)
-		ms.errors.Add(1)
-		slog.ErrorContext(ctx, "upstream request failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-		if resp != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
-			resp.Body.Close()
-		}
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
 	}
 
 	upstreamRelayStart := time.Now()
@@ -927,21 +829,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "e2ee session not established", http.StatusInternalServerError)
 		return
 	}
-	var ss e2ee.StreamStats
-	switch {
-	case meta != nil && meta.Session != nil && req.Stream:
-		ss = e2ee.RelayStreamChutes(ctx, w, resp.Body, meta.Session)
-	case meta != nil && meta.Session != nil:
-		e2ee.RelayNonStreamChutes(ctx, w, resp.Body, meta.Session)
-	case session != nil && req.Stream:
-		ss = e2ee.RelayStream(ctx, w, resp.Body, session)
-	case session != nil:
-		ss = e2ee.RelayReassembledNonStream(ctx, w, resp.Body, session)
-	case req.Stream:
-		ss = e2ee.RelayStream(ctx, w, resp.Body, nil)
-	default:
-		e2ee.RelayNonStream(ctx, w, resp.Body, nil)
-	}
+	ss := relayResponse(ctx, w, resp.Body, session, meta, req.Stream)
 	recordTokPerSec(ms, ss)
 	upstreamDur += time.Since(upstreamRelayStart)
 
@@ -955,7 +843,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// The report should be deep-copied before mutation, or the e2ee_usable
 	// lifecycle should be separated from the report factor system entirely.
 	// See docs/plans/e2ee_usable_refactoring.md.
-	if e2eeActive {
+	if ar.E2EEActive {
 		report.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
 		s.cache.Put(prov.Name, upstreamModel, report)
 	}
@@ -1032,18 +920,9 @@ func (s *Server) handlePinnedChat(
 	} else if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok {
 		report = cached
 	}
-	if report != nil && report.Blocked() {
-		if s.cfg.Force {
-			slog.WarnContext(ctx, "--force: bypassing blocked attestation (pinned)", "provider", prov.Name, "model", upstreamModel)
-		} else {
-			s.negCache.Record(prov.Name, upstreamModel)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadGateway)
-			if err := json.NewEncoder(w).Encode(report); err != nil {
-				slog.ErrorContext(ctx, "encode response", "error", err)
-			}
-			return
-		}
+	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
+		s.negCache.Record(prov.Name, upstreamModel)
+		return
 	}
 	// E2EE providers require REPORTDATA binding even on first request (SPKI
 	// miss). Without it a MITM can substitute the enclave public key and
@@ -1079,42 +958,287 @@ func (s *Server) handlePinnedChat(
 		return
 	}
 
-	// E2EE: use the session from the pinned response for decryption.
-	// When E2EE is active, upstream was forced to stream=true so the response
-	// is always SSE, matching the non-pinned E2EE path.
 	ms := s.stats.getModelStats(prov.Name, upstreamModel)
-	var ss e2ee.StreamStats
 	session := pinnedResp.Session
 	if session != nil {
 		s.stats.e2ee.Add(1)
 		defer session.Zero()
-		if req.Stream {
-			ss = e2ee.RelayStream(ctx, w, pinnedResp.Body, session)
-		} else {
-			ss = e2ee.RelayReassembledNonStream(ctx, w, pinnedResp.Body, session)
-		}
-		recordTokPerSec(ms, ss)
-
-		// After a successful E2EE roundtrip on the pinned path,
-		// promote e2ee_usable from Skip to Pass in the cached report.
-		//
-		// TODO(e2ee_usable): Same cache mutation race as the non-pinned
-		// path — see the comment there and
-		// docs/plans/e2ee_usable_refactoring.md.
-		if report != nil {
-			report.MarkE2EEUsable("E2EE roundtrip succeeded via pinned connection")
-			s.cache.Put(prov.Name, upstreamModel, report)
-		}
-
-		return
+	} else {
+		s.stats.plaintext.Add(1)
 	}
-	s.stats.plaintext.Add(1)
-	if req.Stream {
-		ss = e2ee.RelayStream(ctx, w, pinnedResp.Body, nil)
-		recordTokPerSec(ms, ss)
-		return
+	ss := relayResponse(ctx, w, pinnedResp.Body, session, nil, req.Stream)
+	recordTokPerSec(ms, ss)
+
+	// After a successful E2EE roundtrip on the pinned path,
+	// promote e2ee_usable from Skip to Pass in the cached report.
+	//
+	// TODO(e2ee_usable): Same cache mutation race as the non-pinned
+	// path — see the comment there and
+	// docs/plans/e2ee_usable_refactoring.md.
+	if session != nil && report != nil {
+		report.MarkE2EEUsable("E2EE roundtrip succeeded via pinned connection")
+		s.cache.Put(prov.Name, upstreamModel, report)
 	}
-	e2ee.RelayNonStream(ctx, w, pinnedResp.Body, nil)
+}
+
+// attestResult holds the outcome of attestAndCache on success.
+type attestResult struct {
+	Report     *attestation.VerificationReport
+	Raw        *attestation.RawAttestation
+	E2EEActive bool
+	AttestDur  time.Duration
+}
+
+// attestAndCache checks the attestation cache, fetches and verifies on miss,
+// enforces the report, caches the signing key, and determines E2EE status.
+// On failure it writes the HTTP error response, increments error stats, and
+// returns a non-empty status string. On success it returns (result, "").
+func (s *Server) attestAndCache(
+	ctx context.Context,
+	w http.ResponseWriter,
+	prov *provider.Provider,
+	upstreamModel string,
+	ms *modelStats,
+) (result *attestResult, failStatus string) {
+	attestStart := time.Now()
+	var raw *attestation.RawAttestation
+	report, cached := s.cache.Get(prov.Name, upstreamModel)
+	if cached {
+		s.stats.cacheHits.Add(1)
+	} else {
+		s.stats.cacheMisses.Add(1)
+		report, raw = s.fetchAndVerify(ctx, prov, upstreamModel)
+		if report == nil {
+			s.stats.errors.Add(1)
+			ms.errors.Add(1)
+			http.Error(w, "attestation fetch failed; see server logs", http.StatusBadGateway)
+			return nil, "attest_failed"
+		}
+		s.cache.Put(prov.Name, upstreamModel, report)
+	}
+
+	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
+		return nil, "blocked"
+	}
+
+	// Only cache the signing key after attestation passes. Caching before
+	// the Blocked() check would allow a key from a failed attestation to
+	// be reused for E2EE on a subsequent cache-hit request.
+	if raw != nil && raw.SigningKey != "" {
+		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && subtle.ConstantTimeCompare([]byte(prev), []byte(raw.SigningKey)) == 0 {
+			slog.WarnContext(ctx, "signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
+		}
+		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
+	}
+
+	e2eeActive := prov.E2EE && report.ReportDataBindingPassed()
+	if e2eeActive {
+		s.stats.e2ee.Add(1)
+	} else {
+		s.stats.plaintext.Add(1)
+	}
+
+	return &attestResult{
+		Report:     report,
+		Raw:        raw,
+		E2EEActive: e2eeActive,
+		AttestDur:  time.Since(attestStart),
+	}, ""
+}
+
+// enforceReport checks whether a verification report is blocked. If --force is
+// set, logs a warning and returns true (proceed). Otherwise writes a 502 JSON
+// response and returns false (request handled). Returns true for nil reports.
+func (s *Server) enforceReport(ctx context.Context, w http.ResponseWriter,
+	report *attestation.VerificationReport, prov *provider.Provider, model string,
+) bool {
+	if report == nil || !report.Blocked() {
+		return true
+	}
+	if s.cfg.Force {
+		slog.WarnContext(ctx, "--force: bypassing blocked attestation", "provider", prov.Name, "model", model)
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadGateway)
+	if err := json.NewEncoder(w).Encode(report); err != nil {
+		slog.ErrorContext(ctx, "encode response", "error", err)
+	}
+	return false
+}
+
+// relayResponse dispatches the upstream response to the correct relay function
+// based on E2EE session type (Chutes meta, Venice/NearCloud session, or
+// plaintext) and streaming mode.
+func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
+	session e2ee.Decryptor, meta *e2ee.ChutesE2EE, stream bool,
+) e2ee.StreamStats {
+	switch {
+	case meta != nil && meta.Session != nil && stream:
+		return e2ee.RelayStreamChutes(ctx, w, body, meta.Session)
+	case meta != nil && meta.Session != nil:
+		e2ee.RelayNonStreamChutes(ctx, w, body, meta.Session)
+		return e2ee.StreamStats{}
+	case session != nil && stream:
+		return e2ee.RelayStream(ctx, w, body, session)
+	case session != nil:
+		return e2ee.RelayReassembledNonStream(ctx, w, body, session)
+	case stream:
+		return e2ee.RelayStream(ctx, w, body, nil)
+	default:
+		e2ee.RelayNonStream(ctx, w, body, nil)
+		return e2ee.StreamStats{}
+	}
+}
+
+// httpError wraps an error with an HTTP status code for doUpstreamRoundtrip.
+type httpError struct {
+	code int
+	err  error
+}
+
+func (e *httpError) Error() string { return e.err.Error() }
+func (e *httpError) Unwrap() error { return e.err }
+
+// upstreamResult holds the outcome of doUpstreamRoundtrip on success.
+type upstreamResult struct {
+	Resp        *http.Response
+	Session     e2ee.Decryptor
+	Meta        *e2ee.ChutesE2EE
+	Cancel      context.CancelFunc
+	E2EEDur     time.Duration
+	UpstreamDur time.Duration
+}
+
+// doUpstreamRoundtrip builds the upstream body, sends it, and handles Chutes
+// retry/failover. On error it cleans up all resources (crypto material, response
+// bodies, contexts) and returns the error. On success the caller owns cleanup.
+func (s *Server) doUpstreamRoundtrip(
+	ctx context.Context,
+	prov *provider.Provider,
+	body []byte,
+	upstreamModel string,
+	e2eeActive bool,
+	raw *attestation.RawAttestation,
+	stream bool,
+) (*upstreamResult, error) {
+	upstreamURL := prov.BaseURL + prov.ChatPath
+	upstreamTimeout := upstreamStreamTimeout
+	if !stream {
+		upstreamTimeout = upstreamNonStreamTimeout
+	}
+
+	chutesRetry := e2eeActive && prov.E2EEMaterialFetcher != nil && prov.SkipSigningKeyCache
+	maxAttempts := 1
+	if chutesRetry {
+		maxAttempts = chutesMaxAttempts
+	}
+
+	var (
+		session     e2ee.Decryptor
+		meta        *e2ee.ChutesE2EE
+		resp        *http.Response
+		cancel      context.CancelFunc
+		err         error
+		e2eeDur     time.Duration
+		upstreamDur time.Duration
+	)
+
+	for attempt := range maxAttempts {
+		// On retry, force buildUpstreamBody to use the nonce pool (different
+		// instance) instead of the raw attestation from the initial fetch.
+		freshRaw := raw
+		if attempt > 0 {
+			freshRaw = nil
+		}
+
+		e2eeStart := time.Now()
+		ub, buildErr := s.buildUpstreamBody(ctx, body, upstreamModel, e2eeActive, prov, freshRaw)
+		e2eeDur += time.Since(e2eeStart)
+
+		if buildErr != nil {
+			err = buildErr
+			if attempt < maxAttempts-1 && !errors.Is(err, context.Canceled) {
+				slog.WarnContext(ctx, "chutes: E2EE body build failed, retrying",
+					"provider", prov.Name, "model", upstreamModel, "attempt", attempt+1, "err", err)
+				continue
+			}
+			return nil, &httpError{http.StatusInternalServerError, fmt.Errorf("build upstream body: %w", err)}
+		}
+
+		session = ub.Session
+		meta = ub.Meta
+
+		var attemptCtx context.Context
+		attemptCtx, cancel = context.WithTimeout(ctx, upstreamTimeout)
+
+		upstreamReq, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, upstreamURL, bytes.NewReader(ub.Body))
+		if reqErr != nil {
+			cancel()
+			zeroE2EESessions(session, meta)
+			return nil, &httpError{http.StatusInternalServerError, fmt.Errorf("build upstream request: %w", reqErr)}
+		}
+		upstreamReq.Header.Set("Content-Type", "application/json")
+
+		if prepErr := prepareUpstreamHeaders(upstreamReq, prov, session, meta, stream); prepErr != nil {
+			cancel()
+			zeroE2EESessions(session, meta)
+			return nil, &httpError{http.StatusInternalServerError, fmt.Errorf("prepare upstream headers: %w", prepErr)}
+		}
+
+		upstreamDoStart := time.Now()
+		resp, err = s.upstreamClient.Do(upstreamReq)
+		upstreamDur += time.Since(upstreamDoStart)
+
+		retryable := chutesRetryableError(err, resp)
+
+		// Mark the instance as failed so the nonce pool deprioritises it
+		// on subsequent requests, even on the final attempt.
+		if retryable && ub.InstanceID != "" && prov.E2EEMaterialFetcher != nil {
+			prov.E2EEMaterialFetcher.MarkFailed(ub.ChuteID, ub.InstanceID)
+		}
+
+		if attempt < maxAttempts-1 && retryable {
+			cancel()
+			if ub.InstanceID != "" {
+				slog.WarnContext(ctx, "chutes: upstream attempt failed, trying different instance",
+					"provider", prov.Name, "model", upstreamModel,
+					"instance_id", ub.InstanceID, "attempt", attempt+1,
+					"err", err, "status", respStatusCode(resp))
+			}
+			zeroE2EESessions(session, meta)
+			if resp != nil {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
+				resp.Body.Close()
+				resp = nil
+			}
+			continue
+		}
+		break
+	}
+
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		zeroE2EESessions(session, meta)
+		if resp != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
+			resp.Body.Close()
+		}
+		return nil, &httpError{http.StatusBadGateway, fmt.Errorf("upstream request: %w", err)}
+	}
+
+	return &upstreamResult{
+		Resp:        resp,
+		Session:     session,
+		Meta:        meta,
+		Cancel:      cancel,
+		E2EEDur:     e2eeDur,
+		UpstreamDur: upstreamDur,
+	}, nil
 }
 
 // buildUpstreamBody constructs the body to forward upstream. If e2eeActive is
