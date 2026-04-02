@@ -120,7 +120,7 @@ The `tdx_hardware_config` / `gateway_tdx_hardware_config` (RTMR0) and `tdx_boot_
 > - **RTMR2** is deterministic per deployment class kernel command line.
 > - MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros.
 >
-> **No gateway measurement policy.** Chutes has no gateway CVM.
+> **No gateway measurement policy.** The Chutes gateway is unattested and produces no TDX quote.
 >
 > **Measurement defaults** are in `internal/provider/chutes/policy.go` (`DefaultMeasurementPolicy()`). Values are pinned from observed Chutes deployments and cannot be independently reproduced without building sek8s from source.
 >

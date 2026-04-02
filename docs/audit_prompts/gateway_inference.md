@@ -4,7 +4,7 @@ This repository implements a proxy that ensures private LLM inference by perform
 
 Please verify every stage of attestation for the requested provider, following this audit guide to produce a detailed report.
 
-This audit applies to gateway inference providers, where a single TEE-attested API gateway load balancer receives all client traffic and forwards it to model-specific TEE-attested inference backends. It also covers direct inference providers that use fundamentally different TEE guest stacks (sek8s/Chutes), which may appear as model backends behind a gateway or operate independently.
+This audit applies to gateway inference providers, where a gateway receives all client traffic and forwards it to model-specific TEE-attested inference backends. Some gateways are TEE-attested CVMs (NearCloud), while others are unattested infrastructure (Chutes). In both cases, the proxy connects to the gateway, not directly to model backends.
 
 Two reference provider architectures are covered:
 
@@ -14,8 +14,8 @@ Two reference provider architectures are covered:
 
 Additionally, the model backend's attestation provides an E2EE signing key (Ed25519) that the proxy uses to encrypt request messages and decrypt response messages, protecting header and body confidentiality even if the gateway is compromised.
 
-**Chutes (sek8s-based):** A direct inference model using Intel TDX confidential VMs running sek8s (a custom Kubernetes distribution). Key architectural differences from dstack:
-- **No gateway CVM**: Chutes does not interpose a TEE-attested gateway. The proxy connects directly to the inference instance, or receives chutes evidence via a gateway-wrapped response from another provider (e.g., NanoGPT).
+**Chutes (sek8s-based):** A gateway inference model using Intel TDX confidential VMs running sek8s (a custom Kubernetes distribution). Requests route through the Chutes gateway (`api.chutes.ai`/`llm.chutes.ai`) to specific TEE instance IDs. Key architectural differences from dstack:
+- **Unattested gateway**: The Chutes gateway routes traffic to sek8s TEE instances but is not itself a TEE-attested CVM — it produces no TDX quote and has no `gateway_*` attestation factors.
 - **No compose binding**: sek8s does not use docker-compose or MRCONFIGID. Container image integrity relies on a cosign admission controller running inside the measured TEE.
 - **No client-visible event log**: RTMR3/IMA measurements are verified server-side by the Chutes validator; the event log is not exposed to clients.
 - **ML-KEM-768 E2EE**: Chutes uses post-quantum ML-KEM-768 key encapsulation + ChaCha20-Poly1305, not Ed25519/X25519/XChaCha20-Poly1305.
@@ -123,19 +123,19 @@ The gateway host is fixed (not resolved via a model routing API). The proxy open
 
 ### Chutes/Sek8s Architecture Overview
 
-Chutes uses a fundamentally different model. There is no TEE-attested gateway; the proxy connects directly to the inference cluster or receives chutes evidence through a gateway-wrapped response from another provider:
+Chutes uses a gateway model where an **unattested** gateway (`api.chutes.ai`/`llm.chutes.ai`) routes requests to specific sek8s TEE instances by instance ID. Unlike nearcloud, the Chutes gateway is not a TEE-attested CVM and produces no TDX quote:
 
-**Direct access:**
+**Chutes gateway access:**
 ```
-Client → teep proxy → llm.chutes.ai → sek8s TDX instance (model)
-                          ↑ HTTPS               ↑ TDX attestation
-                          ↑ no gateway TEE       ↑ ML-KEM-768 E2EE
+Client → teep proxy → api.chutes.ai (unattested gateway) → sek8s TDX instance (model)
+                          ↑ HTTPS (standard CA)              ↑ TDX attestation
+                          ↑ no gateway TDX quote              ↑ ML-KEM-768 E2EE
 ```
 
-**Gateway-wrapped access (e.g., via NanoGPT):**
+**Chutes evidence via another provider's gateway (e.g., NanoGPT):**
 ```
-Client → teep proxy → gateway → chutes sek8s TDX instance (model)
-                          ↑ gateway attestation may or may not be present
+Client → teep proxy → NanoGPT gateway → chutes sek8s TDX instance (model)
+                          ↑ NanoGPT gateway attestation may or may not be present
                           ↑ chutes evidence in gateway-wrapped format
 ```
 
@@ -264,7 +264,7 @@ The audit MUST verify:
 - that the gateway attestation endpoint returns both gateway and model attestation in a single response,
 - that there is no code path that allows connecting to an unattested alternate host.
 
-> **Known divergence: Chutes/Sek8s.** Chutes does not use a gateway architecture. The proxy uses a two-step direct attestation flow: an instances endpoint for model discovery and ML-KEM-768 key retrieval, then a separate evidence endpoint for TDX quotes. The audit for chutes MUST instead verify: (1) that the instances and evidence endpoints are constructed from hardcoded constants plus URL-encoded model identifiers, (2) that instance-to-evidence matching is by instance ID with bounds checking, (3) that failed or missing instances are handled fail-closed, (4) that response arrays are bounded (max 256 instances, max 256 evidence entries, max 64 GPU evidence per instance). When chutes evidence appears in a gateway-wrapped format (e.g., via NanoGPT), the audit MUST verify that the gateway-wrapped parsing extracts the inner chutes evidence correctly and applies all chutes-specific verification.
+> **Known divergence: Chutes/Sek8s.** The Chutes gateway (`api.chutes.ai`) is not a TEE-attested CVM and produces no TDX quote — there is no `PinnedHandler` or attestation-bound TLS connection to the gateway. The proxy uses a two-step attestation flow via the Chutes gateway: an instances endpoint for model discovery and ML-KEM-768 key retrieval, then a separate evidence endpoint for TDX quotes from the backend instances. The audit for chutes MUST instead verify: (1) that the instances and evidence endpoints are constructed from hardcoded constants plus URL-encoded model identifiers, (2) that instance-to-evidence matching is by instance ID with bounds checking, (3) that failed or missing instances are handled fail-closed, (4) that response arrays are bounded (max 256 instances, max 256 evidence entries, max 64 GPU evidence per instance). When chutes evidence appears via another provider's gateway (e.g., NanoGPT), the audit MUST verify that the gateway-wrapped parsing extracts the inner chutes evidence correctly and applies all chutes-specific verification.
 
 ### 4.2 Attestation Fetch and Response Parsing
 
@@ -333,7 +333,7 @@ The gateway's TDX quote MUST undergo the same verification as the model backend'
 
 The audit MUST verify that the gateway TDX verification uses the same code path / library as the model TDX verification (to avoid diverging security standards).
 
-> **Known divergence: Chutes/Sek8s.** Chutes has no gateway CVM and therefore no gateway TDX quote. When auditing chutes, skip §4.5 entirely. When chutes evidence appears in a gateway-wrapped format (e.g., via NanoGPT), the wrapping gateway’s TDX quote (if present) is verified by the wrapping provider, not by the chutes verification path.
+> **Known divergence: Chutes/Sek8s.** The Chutes gateway is unattested and produces no TDX quote — there are no `gateway_*` TDX factors. When auditing chutes, skip §4.5 entirely. When chutes evidence appears via another provider's gateway (e.g., NanoGPT), the wrapping gateway's TDX quote (if present) is verified by the wrapping provider, not by the chutes verification path.
 
 ### 4.6 TDX Measurement Fields and Policy
 
@@ -388,7 +388,7 @@ The audit MUST verify:
 > - **Separate MRTD value.** Sek8s OVMF firmware is distinct from dstack OVMF.
 > - **RTMR0-2 are the primary enforcement surface.** Since compose binding and event log replay are unavailable, these measurement allowlists are the sole client-side boot chain controls.
 > - **REPORTDATA binding scheme differs.** `SHA256(nonce_hex + e2e_pubkey_base64)` — no signing_address or tls_fingerprint.
-> - **No gateway measurement policy.** Chutes has no gateway CVM.
+> - **No gateway measurement policy.** The Chutes gateway is unattested and produces no TDX quote.
 > - The audit for chutes MUST evaluate whether the MRTD/RTMR0-2 allowlists provide sufficient assurance given the absence of compose binding, event log, and Sigstore/Rekor checks. See `docs/attestation_gaps/sek8s_integrity.md`.
 ### 4.7 CVM Image Verification — Model Backend (Compose Binding)
 
@@ -509,7 +509,7 @@ The audit MUST verify:
 
 The audit MUST also verify that the gateway REPORTDATA verifier is a separate implementation from the model REPORTDATA verifier (because the binding scheme differs), and that the correct verifier is used for each quote.
 
-> **Known divergence: Chutes/Sek8s.** Gateway REPORTDATA (§4.13) does not apply to chutes — there is no gateway CVM. Skip this section when auditing chutes.
+> **Known divergence: Chutes/Sek8s.** Gateway REPORTDATA (§4.13) does not apply to chutes — the Chutes gateway is unattested and has no TDX quote or REPORTDATA. Skip this section when auditing chutes.
 
 ### 4.14 TLS Pinning and Connection-Bound Attestation (Gateway)
 
@@ -535,7 +535,7 @@ The audit MUST verify pin-cache behavior:
 - that concurrent attestation attempts for the same (domain, SPKI) are collapsed (singleflight) with a double-check-after-winning pattern,
 - that the singleflight key includes both domain and SPKI (so a certificate rotation triggers a new attestation rather than coalescing with the old one).
 
-> **Known divergence: Chutes/Sek8s.** TLS pinning via gateway attestation (§4.14) does not apply to chutes in direct access mode — there is no attestation-bound TLS pinning to a gateway CVM. The `tls_key_binding` factor is in `ChutesDefaultAllowFail`. Chutes uses standard HTTPS to `llm.chutes.ai` with no attestation-bound SPKI pinning. The E2EE layer (ML-KEM-768) provides the primary confidentiality control instead of TLS pinning. When chutes evidence appears in a gateway-wrapped format, the TLS pinning belongs to the wrapping provider (not chutes).
+> **Known divergence: Chutes/Sek8s.** TLS pinning via gateway attestation (§4.14) does not apply to chutes — the Chutes gateway is unattested and there is no attestation-bound TLS pinning. The `tls_key_binding` factor is in `ChutesDefaultAllowFail`. The proxy connects to `llm.chutes.ai`/`api.chutes.ai` via standard HTTPS with no attestation-bound SPKI pinning. The E2EE layer (ML-KEM-768) provides the primary confidentiality control instead of TLS pinning. When chutes evidence appears via another provider's gateway, the TLS pinning belongs to the wrapping provider (not chutes).
 
 ### 4.15 NVIDIA TEE Verification Depth
 
@@ -704,7 +704,7 @@ The audit MUST evaluate whether additional factors should be enforced by default
 >
 > Factors that remain **enforced** for chutes include: `nonce_match`, `tdx_quote_present`, `tdx_quote_structure`, `tdx_cert_chain`, `tdx_quote_signature`, `tdx_debug_disabled`, `tdx_mrseam_mrtd`, `tdx_reportdata_binding`, `intel_pcs_collateral`, `tdx_tcb_current`, `tdx_tcb_not_revoked`, `e2ee_capable`, `signing_key_present`.
 >
-> The audit for chutes MUST verify: (a) that Skip results for compose_binding, sigstore_verification, event_log_integrity, and build_transparency_log are correctly returned with explanatory messages, (b) that these Skip factors are in `ChutesDefaultAllowFail` and do not block traffic, (c) that the enforced factors provide adequate security despite the absence of compose/event-log/supply-chain checks, (d) that no enforced gateway factors exist (chutes has no gateway CVM).
+> The audit for chutes MUST verify: (a) that Skip results for compose_binding, sigstore_verification, event_log_integrity, and build_transparency_log are correctly returned with explanatory messages, (b) that these Skip factors are in `ChutesDefaultAllowFail` and do not block traffic, (c) that the enforced factors provide adequate security despite the absence of compose/event-log/supply-chain checks, (d) that no `gateway_*` factors exist (the Chutes gateway is unattested).
 
 ### 5.2 Verification Cache Safety
 
@@ -815,9 +815,9 @@ The audit MUST quantify the residual risk and clearly state which attack scenari
 
 #### Chutes/Sek8s Trust Model
 
-The chutes trust model is fundamentally different from the gateway model. Since there is no TEE-attested gateway, the trust delegation is simpler but the trust surface is different:
+The chutes trust model differs from the nearcloud gateway model. The Chutes gateway (`api.chutes.ai`/`llm.chutes.ai`) routes requests to sek8s TEE instances but is itself unattested, so the trust delegation is different:
 
-1. **No gateway trust**: The proxy connects to `llm.chutes.ai` via standard HTTPS. There is no attestation-bound TLS pinning. The TLS connection itself is not cryptographically bound to a TEE.
+1. **Unattested gateway**: The proxy connects to the Chutes gateway via standard HTTPS. There is no attestation-bound TLS pinning and no gateway TDX quote. The gateway can observe request routing metadata but, with E2EE active, cannot read inference content.
 2. **E2EE key integrity via REPORTDATA**: The ML-KEM-768 public key is bound to the TDX quote via REPORTDATA. The proxy encrypts using this key, ensuring that only the attested TEE can decrypt.
 3. **Request/response confidentiality**: ML-KEM-768 + ChaCha20-Poly1305 E2EE protects content from any intermediary, including the Chutes infrastructure itself.
 

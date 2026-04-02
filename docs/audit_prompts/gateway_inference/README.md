@@ -52,13 +52,13 @@ Additionally, the gateway architecture introduces:
 
 When auditing the chutes provider, sub-agents must account for the sek8s attestation model:
 
-- **No gateway CVM**: Chutes has no Tier 4 factors. Sections covering gateway TDX, gateway compose, gateway event log, and gateway REPORTDATA are N/A (verify `Skip` results instead).
+- **Unattested gateway**: The Chutes gateway (`api.chutes.ai`/`llm.chutes.ai`) is not a TEE-attested CVM and produces no TDX quote. There are no Tier 4 factors. Sections covering gateway TDX, gateway compose, gateway event log, and gateway REPORTDATA are N/A (verify `Skip` results instead).
 - **No compose binding**: sek8s does not use docker-compose or MRCONFIGID. `compose_binding`, `sigstore_verification`, `build_transparency_log` return `Skip`.
 - **No event log**: Event log is not exposed to clients. `event_log_integrity` returns `Skip`.
 - **Different E2EE**: ML-KEM-768 + ChaCha20-Poly1305 (not Ed25519/X25519/XChaCha20). Code is in `internal/e2ee/relay_chutes.go` and `internal/provider/chutes/e2ee.go`.
 - **Different REPORTDATA**: `SHA256(nonce_hex + e2e_pubkey_base64)` in `internal/provider/chutes/reportdata.go`.
 - **Separate measurement defaults**: Sek8s OVMF/RTMR values in `internal/provider/chutes/policy.go`.
-- **Two-step attestation**: Instances endpoint + evidence endpoint (not a combined gateway response).
+- **Two-step attestation**: Instances endpoint + evidence endpoint via `api.chutes.ai` (not a combined gateway attestation response).
 - **Nonce pool**: Cached instances/nonces in `internal/provider/chutes/noncepool.go`.
 
 See `docs/attestation_gaps/sek8s_integrity.md` for the full trust model analysis.

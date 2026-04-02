@@ -117,13 +117,13 @@ Verify and report:
 
 ## Known Divergence: Chutes/Sek8s
 
-Chutes providers do **not** use attestation-bound TLS pinning or the gateway keep-alive/close connection lifecycle. Key differences:
+Chutes providers do **not** use attestation-bound TLS pinning or the nearcloud keep-alive/close connection lifecycle. The Chutes gateway (`api.chutes.ai`/`llm.chutes.ai`) is unattested and routes requests to sek8s TEE instances. Key differences:
 
-- **No raw HTTP construction**: Chutes uses standard Go `http.Client` for all requests (instances endpoint, evidence endpoint, inference endpoint). There is no raw TLS connection management.
-- **No `Connection: keep-alive` / `Connection: close` lifecycle**: Each chutes HTTP request is independent. The attestation fetch (instances + evidence) and inference request are separate HTTP calls, not pipelined on a single TLS connection.
-- **No SPKI pinning**: Standard HTTPS with system CA verification. No `InsecureSkipVerify` override.
-- **No certificate extraction**: The chutes code path does not extract TLS peer certificates for SPKI comparison.
-- **Standard response handling**: Responses are read via `http.Response.Body` through Go's standard library.
+- **No raw HTTP construction**: Chutes uses standard Go `http.Client` for all requests to the Chutes gateway (instances endpoint, evidence endpoint, inference endpoint). There is no raw TLS connection management.
+- **No `Connection: keep-alive` / `Connection: close` lifecycle**: Each chutes HTTP request to the gateway is independent. The attestation fetch (instances + evidence) and inference request are separate HTTP calls, not pipelined on a single TLS connection.
+- **No SPKI pinning**: Standard HTTPS with system CA verification to the Chutes gateway. No `InsecureSkipVerify` override.
+- **No certificate extraction**: The chutes code path does not extract TLS peer certificates from the gateway connection for SPKI comparison.
+- **Standard response handling**: Responses from the gateway are read via `http.Response.Body` through Go's standard library.
 
 However, the following transport safety checks still apply to chutes:
 - Response body size limits (`io.LimitReader`) on attestation and inference responses.

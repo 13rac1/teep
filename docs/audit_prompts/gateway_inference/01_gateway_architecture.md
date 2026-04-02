@@ -81,10 +81,9 @@ Venice is a gateway provider with a fundamentally weaker security model:
 - The audit SHOULD document Venice's weaker gateway model as a contrast to nearcloud's full dual-tier attestation, but as these issues are server-side, they are not findings to fix in teep.
 ### Known Architectural Divergence: Chutes/Sek8s
 
-Chutes uses a fundamentally different architecture from both nearcloud and Venice:
-- Chutes does NOT use a gateway architecture at all. The proxy connects directly to the inference cluster (`llm.chutes.ai`) or receives chutes evidence via a gateway-wrapped response from another provider (e.g., NanoGPT via `internal/provider/chutes_format.go`).
+Chutes uses a gateway architecture where all traffic routes through the Chutes gateway (`api.chutes.ai`/`llm.chutes.ai`) to specific sek8s TEE instances by instance ID. However, unlike nearcloud, the Chutes gateway is **not a TEE-attested CVM** — it produces no TDX quote and has no `gateway_*` attestation factors:
 - There is no `PinnedHandler`, no gateway TDX quote, no gateway compose binding, and no gateway REPORTDATA.
-- The attestation flow is **two-step**: an instances endpoint (`GET /e2e/instances/{chute}`) returns available TEE instances with ML-KEM-768 public keys, then an evidence endpoint (`GET /chutes/{chute}/evidence?nonce={hex}`) returns TDX quotes per instance.
+- The attestation flow uses the Chutes gateway to reach backend instances via a **two-step** protocol: an instances endpoint (`GET /e2e/instances/{chute}`) returns available TEE instances with ML-KEM-768 public keys, then an evidence endpoint (`GET /chutes/{chute}/evidence?nonce={hex}`) returns TDX quotes per instance.
 - Instance-to-evidence matching is by instance ID, with bounds checking (max 256 instances, max 256 evidence entries, max 64 GPU evidence per instance).
 - Model resolution uses a separate cache (`resolve.go`) that maps human-readable model names to chute UUIDs with a 5-minute TTL.
 

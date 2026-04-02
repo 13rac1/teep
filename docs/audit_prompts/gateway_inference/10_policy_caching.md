@@ -206,7 +206,7 @@ Chutes uses a separate enforcement configuration (`ChutesDefaultAllowFail`) with
 - `tls_key_binding`, `nvidia_signature`, `nvidia_nras_verified`, `cpu_gpu_chain`
 - `measured_model_weights`, `cpu_id_registry`, `e2ee_usable`
 
-No `gateway_*` factors exist for chutes (no gateway CVM).
+No `gateway_*` factors exist for chutes (the Chutes gateway is unattested and produces no TDX quote).
 
 ### Chutes Cache Model
 

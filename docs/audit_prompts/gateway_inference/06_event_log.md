@@ -104,7 +104,7 @@ After replay succeeds, the audit MUST verify (for both model and gateway event l
 
 ## Known Divergence: Chutes/Sek8s
 
-Chutes/sek8s providers do **not** supply event logs. The `event_log_integrity` factor returns `Skip` and is in `ChutesDefaultAllowFail`. There is no gateway CVM, so `gateway_event_log_integrity` does not apply.
+Chutes/sek8s providers do **not** supply event logs. The `event_log_integrity` factor returns `Skip` and is in `ChutesDefaultAllowFail`. The Chutes gateway is unattested and produces no event log, so `gateway_event_log_integrity` does not apply.
 
 Sek8s validates RTMR values server-side during boot (LUKS gating), but teep has no independent event-log replay path for chutes providers. This means:
 - There is no client-verifiable mapping from individual software components to RTMR values.

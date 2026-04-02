@@ -149,7 +149,7 @@ For the pinned connection path, verify whether offline mode is honored. The offl
 
 ## Known Divergence: Chutes/Sek8s
 
-Chutes/sek8s uses a fundamentally different REPORTDATA scheme and has no gateway REPORTDATA, no TLS pinning, and no SPKI cache.
+Chutes/sek8s uses a fundamentally different REPORTDATA scheme. The Chutes gateway is unattested, so there is no gateway REPORTDATA, no attestation-bound TLS pinning, and no SPKI cache.
 
 ### Chutes REPORTDATA Scheme
 
@@ -167,7 +167,7 @@ Primary reference: `internal/provider/chutes/reportdata.go`.
 
 ### No Gateway REPORTDATA, TLS Pinning, or SPKI Cache
 
-Chutes providers connect directly to the inference endpoint (no gateway CVM). Therefore:
+The Chutes gateway (`api.chutes.ai`/`llm.chutes.ai`) is unattested and produces no TDX quote. Therefore:
 - No `gateway_tdx_reportdata_binding` factor exists.
 - No SPKI pin cache is maintained for chutes providers.
 - No `tls_key_binding` enforcement — `tls_key_binding` is in `ChutesDefaultAllowFail`.
