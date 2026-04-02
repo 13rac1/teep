@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/13rac1/teep/internal/provider"
 )
@@ -37,7 +38,7 @@ func NewModelLister(modelsBase, apiKey string, client *http.Client) *ModelLister
 		modelsBase = DefaultModelsBaseURL
 	}
 	return &ModelLister{
-		modelsBase: modelsBase,
+		modelsBase: strings.TrimRight(modelsBase, "/"),
 		apiKey:     apiKey,
 		client:     client,
 	}
