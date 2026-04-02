@@ -59,21 +59,31 @@ For complete attestation of a dstack-based CVM — applicable to BOTH the gatewa
 
 5. **Verify MRSEAM + MRTD + RTMR0-2 as a set**: These five values form a complete chain-of-trust. Verifying only a subset leaves significant gaps.
 
-## Current Gap: Inference Provider Has Not Published Golden Values
+## Current Stopgaps and Residual Gaps
 
-The code currently supports an allowlist-based `MeasurementPolicy` for MRTD, MRSEAM, and RTMR0-3, but the current gateway inference provider (NearCloud / NEAR AI) does not publish:
-- reproducible build instructions or pre-built images for their gateway CVM or model backend CVM,
-- golden/reference values for MRTD, MRSEAM, RTMR0, RTMR1, or RTMR2 for either the gateway or the model backend,
-- documentation of their specific CPU/RAM configuration (needed to compute RTMR0) for either CVM type,
-- the dstack OS version or TDX module version deployed on either the gateway or the model backends.
+The code supports an allowlist-based `MeasurementPolicy` for MRTD, MRSEAM, and RTMR0-3 for both the gateway and the model backend. If gateway inference provider does not publish authenticated measurement baselines in-band, teep provides Go-coded stopgap defaults and operator tooling to partially close this gap:
 
-Because these reference values are unavailable, the code does not currently enforce checking MRSEAM, MRTD, or RTMR0-2 against any baseline for either the gateway or the model backend. The `MeasurementPolicy` allowlists remain empty, meaning these fields are extracted and logged but not policy-enforced. This is the correct behavior given the absence of reference data — enforcing against fabricated or unverified golden values would provide false assurance.
+**MRSEAM — Go-coded defaults from Intel releases.** `DstackBaseMeasurementPolicy()` in `internal/attestation/dstack_defaults.go` ships an allowlist of four Intel-published MRSEAM values corresponding to TDX module versions 1.5.08, 1.5.16, 2.0.08, and 2.0.02. The `tdx_mrseam_mrtd` and `gateway_tdx_mrseam_mrtd` factors are enforced by default for nearcloud (they are NOT in `NearcloudDefaultAllowFail`).
 
-**The audit MUST flag this as a residual risk**: without MRSEAM/MRTD/RTMR0-2 verification for BOTH the gateway and the model backend, the attestation trusts any TDX module version and any VM image that happens to produce the correct compose hash (MRConfigID) and valid RTMR3 event log. This means:
-- A compromised or outdated TDX module would not be detected (MRSEAM gap) — on either the gateway or model backend,
-- A substituted virtual firmware could bypass measured boot (MRTD gap),
-- A modified kernel, initrd, or rootfs could go undetected (RTMR0-2 gap),
-- Only the application-layer compose binding (MRConfigID) and event log replay (RTMR3) provide assurance, which is insufficient for full CVM integrity.
+**MRTD — Go-coded defaults from dstack reproducible builds.** The same base policy ships two MRTD values corresponding to dstack-nvidia image versions 0.5.4.1 and 0.5.5. These apply to both the model backend and gateway CVMs.
+
+**RTMR0, RTMR1, RTMR2 — Per-tier observed-value defaults.** NearCloud uses separate measurement policies for the model backend and the gateway:
+- `DefaultMeasurementPolicy()` in `internal/provider/nearcloud/policy.go` provides model backend RTMR values,
+- `DefaultGatewayMeasurementPolicy()` provides gateway CVM RTMR values (which differ from model backend values due to different hardware configurations and compose manifests).
+
+The `tdx_hardware_config` / `gateway_tdx_hardware_config` (RTMR0) and `tdx_boot_config` / `gateway_tdx_boot_config` (RTMR1/RTMR2) factors are in `NearcloudDefaultAllowFail` — meaning they are computed and reported but do not block traffic by default.
+
+**Measurement policy merge.** Policies are resolved via a three-tier precedence: per-provider TOML config → global TOML config → Go-coded defaults. Gateway measurement policies use separate TOML fields (`gateway_mrtd_allow`, `gateway_rtmr0_allow`, etc.) to allow independent configuration of gateway and model backend allowlists.
+
+**Operator bootstrapping.** The `teep verify <provider> --model <model> --update-config` command runs a full attestation verification and appends newly observed measurement values to the per-provider policy section. For nearcloud, this captures both model backend and gateway measurements.
+
+**Residual risk.** Despite these stopgaps:
+- MRSEAM and MRTD defaults are independently verifiable from Intel and dstack sources — these are the strongest stopgaps.
+- RTMR0-2 defaults are pinned from observed attestation data and cannot distinguish a legitimate provider infrastructure change from a compromised lower stack.
+- No signed measurement manifest exists for automated consumption.
+- These risks apply independently to both the gateway CVM and the model backend CVM.
+
+**The audit MUST flag the remaining residual risk** and recommend that the inference provider publish authenticated measurement baselines. See `docs/attestation_gaps/dstack_integrity.md` for the detailed analysis.
 
 ## Current Gateway-Provider Expectation Summary
 
@@ -81,15 +91,21 @@ Because these reference values are unavailable, the code does not currently enfo
 - MRCONFIGID is expected to be cryptographically checked via compose binding,
 - RTMR fields are expected to be consistency-checked via event log replay when event logs are present,
 - REPORTDATA is expected to be cryptographically verified via the nearai binding scheme (`sha256(signing_address + tls_fingerprint) + nonce`),
-- MRSEAM, MRTD, RTMR0, RTMR1, and RTMR2 are currently informational-only — this MUST be documented as a gap with high residual risk,
-- MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros for standard dstack deployments.
+- MRSEAM and MRTD are enforced by default via Go-coded allowlists — the `tdx_mrseam_mrtd` factor is enforced (not in `NearcloudDefaultAllowFail`),
+- RTMR0 is checked via `tdx_hardware_config` against per-provider observed values — allowed to fail by default,
+- RTMR1 and RTMR2 are checked via `tdx_boot_config` against per-provider observed values — allowed to fail by default,
+- MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros.
 
 **Gateway attestation (Tier 4):**
 - MRCONFIGID is expected to be cryptographically checked via gateway compose binding,
 - RTMR fields are expected to be consistency-checked via gateway event log replay when gateway event logs are present,
 - REPORTDATA is expected to be cryptographically verified via the gateway binding scheme (`sha256(tls_fingerprint) + nonce` — note: no signing_address for the gateway),
-- MRSEAM, MRTD, RTMR0, RTMR1, and RTMR2 are currently informational-only (same gap as model backend),
+- MRSEAM and MRTD are enforced by default via the same Go-coded allowlists — `gateway_tdx_mrseam_mrtd` is enforced,
+- RTMR0 is checked via `gateway_tdx_hardware_config` — allowed to fail by default,
+- RTMR1 and RTMR2 are checked via `gateway_tdx_boot_config` — allowed to fail by default,
 - MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros.
+
+> **Known divergence**: Venice does not have gateway TEE attestation — there is no gateway TDX quote, no gateway measurement policy, and no Tier 4 factors. These are server-side limitations that cannot be fixed in teep.
 
 ## Required Checks
 
@@ -129,10 +145,13 @@ Verify and report:
 - whether the comparison is byte-level or string-level (hex canonicalization),
 - **whether separate policies can be specified for the gateway CVM vs model backend CVM** (this is gateway-specific).
 
-When allowlist policy exists (i.e., when the inference provider eventually publishes golden values), the audit MUST verify:
-- how MRTD/MRSEAM/RTMR allowlists are configured,
+The audit MUST verify:
+- how MRTD/MRSEAM/RTMR allowlists are configured via the three-tier merge (per-provider TOML > global TOML > Go defaults),
+- whether separate `MeasurementPolicy` instances exist for gateway vs model backend (`DefaultMeasurementPolicy()` and `DefaultGatewayMeasurementPolicy()`),
+- that separate TOML fields exist for gateway measurement policies (`gateway_mrtd_allow`, `gateway_rtmr0_allow`, etc.),
 - input validation rules for allowlist values (length/encoding),
-- whether allowlist mismatches are enforced fail-closed or informational.
+- whether allowlist mismatches are enforced fail-closed or informational (depends on whether the factor is in `allow_fail`),
+- the `--update-config` bootstrapping flow and that it correctly captures both model and gateway measurements.
 
 ## Mandatory Residual-Risk Analysis
 

@@ -49,44 +49,52 @@ Verify:
 
 #### Factor Configuration Mechanism
 
+Teep uses an **inverted enforcement model**: any factor NOT in the provider's `DefaultAllowFail` list is enforced by default. Adding a new factor automatically enforces it unless explicitly added to the allow-fail list. The nearcloud provider uses `NearcloudDefaultAllowFail` (defined in `internal/attestation/report.go`), which is stricter than the global `DefaultAllowFail`.
+
 Enforcement is configured via a three-layer mechanism:
-1. **Hardcoded defaults** — `DefaultEnforced` in `report.go`, copied at startup,
-2. **TOML config file** — `[policy] enforce = [...]` overrides the default list entirely when present,
+1. **Hardcoded defaults** — `DefaultAllowFail` and provider-specific `NearcloudDefaultAllowFail` in `report.go`,
+2. **TOML config file** — `[policy] allow_fail = [...]` overrides the default allow-fail list when present,
 3. **No per-factor env var override** — individual factors cannot be toggled via environment.
 
 Verify:
-- that `DefaultEnforced` is copied (not shared by reference),
-- that the TOML list **replaces** (not appends to) the default,
-- that unknown factor names in the TOML enforce list are rejected at startup by checking against `KnownFactors`.
+- that `DefaultAllowFail` / `NearcloudDefaultAllowFail` are copied (not shared by reference),
+- that the TOML `allow_fail` list **replaces** (not appends to) the default,
+- that unknown factor names in the TOML enforce/allow_fail list are rejected at startup by checking against `KnownFactors`.
 
-#### Expected Default Enforced Factors
+#### Nearcloud Allowed-to-Fail Factors
 
-Validate the actual `DefaultEnforced` list in code against these expected factors:
+The current `NearcloudDefaultAllowFail` factors are:
+- `tdx_hardware_config` — model RTMR0 (varies per deployment hardware),
+- `tdx_boot_config` — model RTMR1/RTMR2,
+- `e2ee_usable` — chicken-and-egg problem (see Section 08),
+- `cpu_gpu_chain` — not yet implemented,
+- `measured_model_weights` — not yet implemented,
+- `cpu_id_registry` — Proof-of-Cloud hardware registry,
+- `gateway_tdx_hardware_config` — gateway RTMR0,
+- `gateway_tdx_boot_config` — gateway RTMR1/RTMR2,
+- `gateway_tdx_reportdata_binding` — gateway REPORTDATA binding (the audit MUST document whether this is a deliberate design choice or a gap),
+- `gateway_cpu_id_registry` — gateway Proof-of-Cloud.
+
+All other factors are enforced by default for nearcloud, including:
 
 **Model backend factors (Tier 1–3):**
-- `nonce_match` — prevents replay of stale model attestations,
-- `tdx_cert_chain` — validates model PCK chain to Intel roots,
-- `tdx_quote_signature` — validates model quote signature,
-- `tdx_debug_disabled` — prevents model debug enclaves from being trusted,
-- `signing_key_present` — ensures the model enclave provided a public key for E2EE,
-- `tdx_reportdata_binding` — prevents key-substitution MITM on the model backend's E2EE key,
-- `compose_binding` — enforces model image/config binding to MRConfigID,
-- `nvidia_signature` — enforces local NVIDIA signature validation when NVIDIA evidence exists,
-- `nvidia_nonce_match` — enforces NVIDIA nonce freshness binding,
-- `build_transparency_log` — enforces provenance for attested container images,
-- `sigstore_verification` — enforces Sigstore presence for image digests,
-- `event_log_integrity` — enforces model RTMR replay consistency when event logs are present.
+- `nonce_match`, `tdx_quote_present`, `tdx_quote_structure`, `tdx_cert_chain`, `tdx_quote_signature`, `tdx_debug_disabled`,
+- `tdx_mrseam_mrtd` — enforces model MRSEAM and MRTD allowlists,
+- `signing_key_present`, `tdx_reportdata_binding`,
+- `tdx_tcb_not_revoked`, `intel_pcs_collateral`, `tdx_tcb_current`,
+- `nvidia_payload_present`, `nvidia_signature`, `nvidia_claims`, `nvidia_nonce_client_bound`, `nvidia_nras_verified`,
+- `e2ee_capable`, `tls_key_binding`,
+- `compose_binding`, `sigstore_verification`, `build_transparency_log`, `event_log_integrity`.
 
 **Gateway factors (Tier 4):**
-- `gateway_nonce_match` — prevents replay of stale gateway attestations,
-- `gateway_tdx_cert_chain` — validates gateway PCK chain to Intel roots,
-- `gateway_tdx_quote_signature` — validates gateway quote signature,
-- `gateway_tdx_debug_disabled` — prevents gateway debug enclaves from being trusted,
-- `gateway_tdx_reportdata_binding` — binds gateway TLS certificate to its TDX quote,
-- `gateway_compose_binding` — enforces gateway image/config binding to MRConfigID,
-- `gateway_event_log_integrity` — enforces gateway RTMR replay consistency when event logs are present.
+- `gateway_nonce_match`, `gateway_tdx_quote_present`, `gateway_tdx_quote_structure`,
+- `gateway_tdx_cert_chain`, `gateway_tdx_quote_signature`, `gateway_tdx_debug_disabled`,
+- `gateway_tdx_mrseam_mrtd` — enforces gateway MRSEAM and MRTD allowlists,
+- `gateway_compose_binding`, `gateway_event_log_integrity`.
 
-Evaluate whether additional factors should be enforced by default (e.g., `tdx_tcb_current`, gateway Sigstore/Rekor checks), and document the rationale.
+The audit MUST evaluate whether additional factors should be enforced and document the rationale for the current enforcement boundary.
+
+> **Known divergence**: Venice currently uses the global `DefaultAllowFail` (less strict than `NearcloudDefaultAllowFail`), has no gateway factors, and does not enforce `tdx_mrseam_mrtd` or `build_transparency_log` by default. Venice may have its own allow_fail list in the future.
 
 #### Complete Factor Inventory
 
@@ -165,7 +173,7 @@ Verify:
 ### Go (Golang) Best Practices
 
 - **Map concurrency safety**: All cache maps protected by appropriate synchronization.
-- **Slice copy for defaults**: `DefaultEnforced` copied, not shared by reference.
+- **Slice copy for defaults**: `DefaultAllowFail` and `NearcloudDefaultAllowFail` copied, not shared by reference.
 - **Error wrapping**: Errors from cache operations and enforcement checks use `%w`.
 - **Bounded iteration**: Factor evaluation iterates a fixed set, no input-controlled count.
 
@@ -177,7 +185,7 @@ Verify:
 
 ### General Security Audit Practices
 
-- **Fail-secure defaults**: If `DefaultEnforced` is empty, the proxy should refuse to start or refuse all traffic.
+- **Fail-secure defaults**: With the inverted enforcement model, an empty `DefaultAllowFail` means ALL factors are enforced — verify this is the desired fail-secure behavior.
 - **Defense in depth for caching**: Cache corruption or eviction must always result in re-verification.
 - **Audit trail**: Enforcement decisions logged with sufficient detail for forensic analysis.
 

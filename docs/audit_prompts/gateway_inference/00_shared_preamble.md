@@ -2,7 +2,7 @@
 
 This repository implements a proxy that ensures private LLM inference by performing attestation-bound TLS pinning to a TEE-attested API gateway, which in turn routes traffic to TEE-attested model inference backends. The proxy validates that both the gateway and the model backend run genuine TEE hardware with verifiable software, prevents man-in-the-middle attacks through cryptographic binding of the TLS channel to the gateway's attestation report, and protects request and response confidentiality through E2EE using a signing key obtained from the model backend's attestation.
 
-This is a **gateway inference** provider audit: attestation covers two layers — a gateway CVM and a model backend CVM.
+This is a **gateway inference** provider audit: attestation covers two layers — a gateway CVM and a model backend CVM. The primary reference provider is **nearcloud** (NearCloud / NEAR AI), which provides full dual-tier TEE attestation. **Venice** is a secondary reference: it forwards model backend attestation but does NOT provide gateway-level TEE attestation — see Section 01 for architectural divergences.
 
 ## Architectural Overview
 

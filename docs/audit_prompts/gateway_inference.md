@@ -137,30 +137,31 @@ For complete attestation of a dstack-based CVM — applicable to BOTH the gatewa
 
 5. **Verify MRSEAM + MRTD + RTMR0-2 as a set**: These five values together form a complete chain-of-trust from the TDX module through firmware, kernel, and OS components. Verifying only a subset (e.g., only compose binding via MRConfigID + RTMR3 event log replay) leaves significant gaps where the base system could be substituted.
 
-### Current Gap: No Published Golden Values
+### Current Stopgaps and Residual Gaps
 
-The code currently supports an allowlist-based `MeasurementPolicy` for MRTD, MRSEAM, and RTMR0-3, but the current gateway inference provider (NearCloud / NEAR AI) does not publish:
-- reproducible build instructions or pre-built images for their gateway CVM or model backend CVM,
-- golden/reference values for MRTD, MRSEAM, RTMR0, RTMR1, or RTMR2 for either the gateway or the model backend,
-- documentation of their specific CPU/RAM configuration (needed to compute RTMR0) for either CVM type,
-- the dstack OS version or TDX module version deployed on either the gateway or the model backends.
+The code supports an allowlist-based `MeasurementPolicy` for MRTD, MRSEAM, and RTMR0-3 for both the gateway and the model backend. If the gateway inference provider does not publish authenticated measurement baselines in-band, teep should use Go-coded stopgap defaults and operator tooling to partially close this gap:
 
-Because these reference values are unavailable, the code does not currently enforce checking MRSEAM, MRTD, or RTMR0-2 against any baseline for either the gateway or the model backend. The `MeasurementPolicy` allowlists remain empty, meaning these fields are extracted and logged but not policy-enforced. This is the correct behavior given the absence of reference data — enforcing against fabricated or unverified golden values would provide false assurance.
+**MRSEAM — Go-coded defaults from Intel releases.** `DstackBaseMeasurementPolicy()` in `internal/attestation/dstack_defaults.go` ships an allowlist of four Intel-published MRSEAM values corresponding to TDX module versions 1.5.08, 1.5.16, 2.0.08, and 2.0.02. These are sourced from Intel's official release notes. The `tdx_mrseam_mrtd` and `gateway_tdx_mrseam_mrtd` factors are enforced by default for nearcloud (they are NOT in `NearcloudDefaultAllowFail`).
 
-**The audit MUST flag this as a residual risk**: without MRSEAM/MRTD/RTMR0-2 verification for BOTH the gateway and the model backend, the attestation trusts any TDX module version and any VM image that happens to produce the correct compose hash (MRConfigID) and valid RTMR3 event log. This means:
-- A compromised or outdated TDX module would not be detected (MRSEAM gap) — on either the gateway or model backend,
-- A substituted virtual firmware could bypass measured boot (MRTD gap),
-- A modified kernel, initrd, or rootfs could go undetected (RTMR0-2 gap),
-- Only the application-layer compose binding (MRConfigID) and event log replay (RTMR3) provide assurance, which is insufficient for full CVM integrity.
+**MRTD — Go-coded defaults from dstack reproducible builds.** The same base policy ships two MRTD values corresponding to dstack-nvidia image versions 0.5.4.1 and 0.5.5, derived from reproducible build artifacts. These apply to both the model backend and gateway CVMs.
 
-**The audit MUST recommend** that the inference provider (NearCloud / NEAR AI) publish:
-1. The specific dstack OS version (or equivalent CVM image) and TDX module version used in their gateway and model backend deployments,
-2. Reproducible build instructions or source references for both CVM images,
-3. Pre-computed golden values for MRTD, RTMR0, RTMR1, and RTMR2 for each supported CPU/RAM configuration, for both gateway and model backend,
-4. The expected MRSEAM value for the Intel TDX module version deployed on their hardware,
-5. A versioned manifest or API endpoint that maps deployment configurations to expected measurement values, so that verifiers like teep can populate `MeasurementPolicy` allowlists automatically.
+**RTMR0, RTMR1, RTMR2 — Per-tier observed-value defaults.** NearCloud uses separate measurement policies for the model backend and the gateway:
+- `DefaultMeasurementPolicy()` in `internal/provider/nearcloud/policy.go` provides model backend RTMR values,
+- `DefaultGatewayMeasurementPolicy()` provides gateway CVM RTMR values (which differ from model backend values due to different hardware configurations and compose manifests).
 
-Until this information is provided, the attestation provides application-layer assurance (compose hash and RTMR3) but not full system-level assurance. The auditor MUST quantify this gap by noting that an attacker with hypervisor-level access could substitute the firmware/kernel/initrd while preserving compose binding, and report it as a high-severity residual risk. This applies independently to both the gateway CVM and the model backend CVM.
+The `tdx_hardware_config` / `gateway_tdx_hardware_config` (RTMR0) and `tdx_boot_config` / `gateway_tdx_boot_config` (RTMR1/RTMR2) factors are in `NearcloudDefaultAllowFail` — meaning they are computed and reported but do not block traffic by default.
+
+**Measurement policy merge.** Policies are resolved via a three-tier precedence: per-provider TOML config → global TOML config → Go-coded defaults. Gateway measurement policies use separate TOML fields (`gateway_mrtd_allow`, `gateway_rtmr0_allow`, etc.) to allow independent configuration of gateway and model backend allowlists.
+
+**Operator bootstrapping.** The `teep verify <provider> --model <model> --update-config` command runs a full attestation verification and appends newly observed measurement values to the per-provider policy section. For nearcloud, this captures both model backend and gateway measurements.
+
+**Residual risk.** Despite these stopgaps:
+- MRSEAM and MRTD defaults are independently verifiable from Intel and dstack sources — these are the strongest stopgaps.
+- RTMR0-2 defaults are pinned from observed attestation data and cannot distinguish a legitimate provider infrastructure change from a compromised lower stack.
+- No signed measurement manifest exists for automated consumption.
+- These risks apply independently to both the gateway CVM and the model backend CVM.
+
+**The audit MUST flag the remaining residual risk** and recommend that the inference provider publish authenticated measurement baselines. See `docs/attestation_gaps/dstack_integrity.md` for the detailed analysis and recommended in-band publication model.
 
 ---
 
@@ -258,20 +259,29 @@ For each field, the report MUST distinguish between:
 - MRCONFIGID is expected to be cryptographically checked via compose binding,
 - RTMR fields are expected to be consistency-checked via event log replay when event logs are present,
 - REPORTDATA is expected to be cryptographically verified via the nearai binding scheme (sha256(signing_address + tls_fingerprint) + nonce),
-- MRSEAM, MRTD, RTMR0, RTMR1, and RTMR2 are currently informational-only due to the absence of provider-published golden values — this MUST be documented as a gap with high residual risk,
+- MRSEAM and MRTD are enforced by default via Go-coded allowlists sourced from Intel TDX module releases and dstack reproducible builds — the `tdx_mrseam_mrtd` factor is enforced,
+- RTMR0 is checked via `tdx_hardware_config` against per-provider observed values — allowed to fail by default,
+- RTMR1 and RTMR2 are checked via `tdx_boot_config` against per-provider observed values — allowed to fail by default,
 - MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros for standard dstack deployments and should be documented as informational-only.
 
 **Gateway attestation (Tier 4):**
 - MRCONFIGID is expected to be cryptographically checked via gateway compose binding,
 - RTMR fields are expected to be consistency-checked via gateway event log replay when gateway event logs are present,
 - REPORTDATA is expected to be cryptographically verified via the gateway binding scheme (sha256(tls_fingerprint) + nonce — note: no signing_address for the gateway),
-- MRSEAM, MRTD, RTMR0, RTMR1, and RTMR2 are currently informational-only (same gap as model backend),
+- MRSEAM and MRTD are enforced by default via the same Go-coded allowlists as the model backend — `gateway_tdx_mrseam_mrtd` is enforced,
+- RTMR0 is checked via `gateway_tdx_hardware_config` — allowed to fail by default,
+- RTMR1 and RTMR2 are checked via `gateway_tdx_boot_config` — allowed to fail by default,
 - MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros.
 
-When allowlist policy exists (i.e., when the inference provider eventually publishes golden values), the audit MUST verify:
-- how MRTD/MRSEAM/RTMR allowlists are configured (and whether separate policies can be specified for gateway vs model backends),
+The audit MUST verify:
+- how MRTD/MRSEAM/RTMR allowlists are configured for both gateway and model,
+- the three-tier policy merge precedence (per-provider TOML > global TOML > Go defaults) in `MergedMeasurementPolicy()`,
+- that separate TOML fields exist for gateway measurement policies (`gateway_mrtd_allow`, `gateway_rtmr0_allow`, etc.),
 - input validation rules for allowlist values (length/encoding),
-- whether allowlist mismatches are enforced fail-closed or informational.
+- whether allowlist mismatches are enforced fail-closed or informational (depends on whether the factor is in `allow_fail`),
+- the `--update-config` bootstrapping flow and that it correctly captures both model and gateway measurements.
+
+> **Known divergence**: Venice does not have gateway TEE attestation — there is no gateway TDX quote, no gateway measurement policy, and no Tier 4 factors. Venice's `ServerVerification` field is an untrusted gateway-side claim that is parsed but NOT verified by teep. This is a server-side limitation of Venice that should be flagged in audits but not listed as a finding for teep to fix.
 
 ### 4.7 CVM Image Verification — Model Backend (Compose Binding)
 
@@ -309,7 +319,8 @@ The audit MUST verify:
 - Sigstore query behavior and failure handling (is a Sigstore timeout a hard fail or a skip? — per fail-closed policy, a skip is a defect unless explicitly documented as an accepted offline-mode risk),
 - Rekor provenance extraction logic,
 - issuer/identity checks used to classify provenance as trusted (what OIDC issuer values are accepted?),
-- behavior when a digest appears in Sigstore but has no Fulcio certificate (raw key signature — is this treated as passing provenance or only presence?).
+- behavior when a digest appears in Sigstore but has no Fulcio certificate (raw key signature — is this treated as passing provenance or only presence?),
+- handling of Rekor entries that lack DSSE (Dead Simple Signing Envelope) signatures — some images have Rekor transparency log entries but no DSSE envelope signatures; the `NoDSSE` field in `ImageProvenance` controls whether this is accepted.
 
 The audit MUST explicitly state if Sigstore/Rekor are soft-fail in default policy and what traffic is still allowed during outage conditions.
 
@@ -428,16 +439,21 @@ If offline mode exists, the audit MUST state which NVIDIA checks remain active a
 
 ### 4.16 E2EE: End-to-End Encryption via Model Signing Key
 
-In the gateway inference model, the model backend's attestation provides a secp256k1 public key (`signing_key`) that is bound to the model backend's TDX quote via REPORTDATA. The proxy uses this key for ECDH-based E2EE, encrypting request messages so that even the gateway cannot read them, and decrypting response messages that were encrypted by the model backend.
+In the gateway inference model, the model backend's attestation provides an Ed25519 public key (`signing_key`) that is bound to the model backend's TDX quote via REPORTDATA. The proxy uses this key for X25519-based E2EE (converting Ed25519 to X25519 for key exchange), encrypting request messages so that even the gateway cannot read them, and decrypting response messages that were encrypted by the model backend.
+
+> **Known divergence**: Venice uses a different E2EE protocol — secp256k1 ECDH + AES-256-GCM with a keccak256-derived REPORTDATA binding scheme. The Venice procol is actually a previous version of the nearcloud E2EE protocol, and so this section focuses on the mechanics of the latest nearcloud protocol.
 
 The audit MUST verify:
 - that the `signing_key` is obtained from the model backend's attestation (not the gateway's attestation),
-- that the `signing_key` is present in the attestation response and validated as a 130-hex-character uncompressed secp256k1 public key starting with "04",
+- that the `signing_key` is present in the attestation response and validated as a 64-hex-character Ed25519 public key (32 bytes),
 - that the `signing_key` is bound to the model backend's TDX quote via `tdx_reportdata_binding` — without this binding, a MITM could substitute the key,
-- that the E2EE session is created with a fresh ephemeral key pair per request,
-- that the ephemeral public key is transmitted to the model backend (typically via HTTP headers),
-- that the ECDH shared secret derivation uses HKDF-SHA256 with the expected info string,
-- that AES-256-GCM is used for symmetric encryption/decryption with random nonces (per Part 1 cryptographic safety: authenticated encryption only),
+- that the E2EE session is created with a fresh ephemeral Ed25519 key pair per request, with the X25519 private key derived from the Ed25519 seed,
+- that the ephemeral Ed25519 public key is transmitted to the model backend via the `X-Client-Pub-Key` header (64 hex chars),
+- that the `X-Signing-Algo: ed25519` and `X-Encryption-Version: 2` headers are set,
+- that the model's Ed25519 public key is converted to X25519 for the ECDH shared secret derivation,
+- that the ECDH shared secret is used as input to HKDF-SHA256 with info string `"ed25519_encryption"`,
+- that XChaCha20-Poly1305 is used for symmetric encryption/decryption (24-byte nonce, authenticated encryption),
+- that nonce generation uses `crypto/rand` and that nonce failure is a hard error,
 - that the session private key is zeroed after use (`Session.Zero()`) — per Part 1 sensitive data handling,
 - that E2EE is only activated when `tdx_reportdata_binding` has passed — if binding fails, E2EE is refused (not silently degraded to plaintext; per fail-closed policy, degradation is a defect).
 
@@ -447,7 +463,7 @@ A key security benefit of the gateway inference model is that E2EE protects requ
 - that request message content is encrypted before being sent through the gateway,
 - that response message content (both streaming SSE chunks and non-streaming JSON bodies) is decrypted by the proxy,
 - that non-encrypted content fields in an E2EE session are treated as errors (not silently accepted as plaintext — per fail-closed policy),
-- that the "role" and "refusal" fields are correctly exempted from encryption expectations,
+- that the "role" and "refusal" fields are correctly exempted from encryption expectations (these are in the `NonEncryptedFields` allowlist in `internal/e2ee/relay.go`),
 - that streaming SSE decryption handles all encrypted delta fields (content, reasoning_content, etc.), not just a hardcoded subset.
 
 #### Signing Key Cache
@@ -459,6 +475,10 @@ The audit MUST verify:
 - that the signing key is only cached after successful REPORTDATA binding verification,
 - that a key rotation (different signing key from the same provider/model) emits a warning,
 - that the cached signing key is the one verified by REPORTDATA binding, not from a subsequent unverified response.
+
+#### e2ee_usable Factor
+
+The `e2ee_usable` factor tests live E2EE encryption/decryption. It has a chicken-and-egg problem in the proxy path: the factor starts as Skip (pending live test), which `BuildReport` promotes to Fail when enforced, blocking the very request needed to prove E2EE works. For this reason, `e2ee_usable` is in `NearcloudDefaultAllowFail`. The planned redesign is described in `docs/plans/e2ee_usable_refactoring.md`.
 
 ---
 
@@ -479,32 +499,54 @@ The audit MUST also verify:
 - that misspelled or unknown factor names in the enforcement config are rejected at startup (not silently ignored — per Part 1 error handling rules),
 - that there is a code path (`Blocked()` or equivalent) that inspects the report before every forwarded request and returns an error response to the client when any enforced factor has failed.
 
-The current expected default enforced factors for gateway providers are:
+Teep uses an inverted enforcement model: any factor NOT in the provider's `DefaultAllowFail` list is enforced by default. Adding a new factor automatically enforces it. The nearcloud provider uses `NearcloudDefaultAllowFail` (defined in `internal/attestation/report.go`), which is stricter than the global `DefaultAllowFail`.
+
+The current nearcloud-specific allowed-to-fail factors are:
+- `tdx_hardware_config` — model RTMR0 (varies per deployment hardware),
+- `tdx_boot_config` — model RTMR1/RTMR2,
+- `e2ee_usable` — chicken-and-egg problem (see §4.16),
+- `cpu_gpu_chain` — not yet implemented,
+- `measured_model_weights` — not yet implemented,
+- `cpu_id_registry` — Proof-of-Cloud hardware registry,
+- `gateway_tdx_hardware_config` — gateway RTMR0,
+- `gateway_tdx_boot_config` — gateway RTMR1/RTMR2,
+- `gateway_tdx_reportdata_binding` — gateway REPORTDATA binding (currently allowed to fail; the audit MUST document whether this is a deliberate design choice or a gap),
+- `gateway_cpu_id_registry` — gateway Proof-of-Cloud.
+
+All other factors are enforced by default for nearcloud, including:
 
 **Model backend factors (Tier 1–3):**
 - `nonce_match` — prevents replay of stale model attestations,
+- `tdx_quote_present`, `tdx_quote_structure` — TDX quote integrity,
 - `tdx_cert_chain` — validates model PCK chain to Intel roots,
 - `tdx_quote_signature` — validates model quote signature,
 - `tdx_debug_disabled` — prevents model debug enclaves from being trusted,
+- `tdx_mrseam_mrtd` — enforces model MRSEAM and MRTD allowlists,
 - `signing_key_present` — ensures the model enclave provided a public key for E2EE,
 - `tdx_reportdata_binding` — prevents key-substitution MITM on the model backend's E2EE key,
-- `compose_binding` — enforces model image/config binding to MRConfigID,
-- `nvidia_signature` — enforces local NVIDIA signature validation when NVIDIA evidence exists,
-- `nvidia_nonce_match` — enforces NVIDIA nonce freshness binding,
-- `build_transparency_log` — enforces provenance for attested container images,
-- `sigstore_verification` — enforces Sigstore presence for image digests,
-- `event_log_integrity` — enforces model RTMR replay consistency when event logs are present.
+- `tdx_tcb_not_revoked` — rejects revoked TCB levels,
+- `intel_pcs_collateral`, `tdx_tcb_current` — Intel PCS collateral and TCB currency,
+- `nvidia_payload_present`, `nvidia_signature`, `nvidia_claims`, `nvidia_nonce_client_bound`, `nvidia_nras_verified` — NVIDIA attestation factors,
+- `e2ee_capable` — model backend advertises E2EE support,
+- `tls_key_binding` — TLS certificate SPKI binding,
+- `compose_binding` — enforces model image/config binding to MRCONFIGID,
+- `sigstore_verification` — enforces Sigstore presence,
+- `build_transparency_log` — enforces Rekor provenance,
+- `event_log_integrity` — enforces model RTMR replay consistency.
 
 **Gateway factors (Tier 4):**
 - `gateway_nonce_match` — prevents replay of stale gateway attestations,
+- `gateway_tdx_quote_present`, `gateway_tdx_quote_structure` — gateway TDX quote integrity,
 - `gateway_tdx_cert_chain` — validates gateway PCK chain to Intel roots,
 - `gateway_tdx_quote_signature` — validates gateway quote signature,
 - `gateway_tdx_debug_disabled` — prevents gateway debug enclaves from being trusted,
-- `gateway_tdx_reportdata_binding` — binds gateway TLS certificate to its TDX quote,
+- `gateway_tdx_mrseam_mrtd` — enforces gateway MRSEAM and MRTD allowlists,
 - `gateway_compose_binding` — enforces gateway image/config binding to MRConfigID,
-- `gateway_event_log_integrity` — enforces gateway RTMR replay consistency when event logs are present.
+- `gateway_event_log_integrity` — enforces gateway RTMR replay consistency.
 
-The audit MUST evaluate whether additional factors should be enforced by default (for example, `tdx_tcb_current`, or gateway-specific Sigstore/Rekor checks), and document the rationale for the current enforcement boundary.
+The audit MUST evaluate whether additional factors should be enforced by default and document the rationale for the current enforcement boundary.
+
+> **Known divergence**: Venice uses the global `DefaultAllowFail` (less strict than `NearcloudDefaultAllowFail`), has no gateway factors, and does not enforce `tdx_mrseam_mrtd` or `build_transparency_log` by default. Venice should have its own allowlist in the future.
 
 ### 5.2 Verification Cache Safety
 

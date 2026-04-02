@@ -60,12 +60,12 @@ The docker compose files for BOTH the gateway and model backend list sub-images.
 
 ### Gateway Compose Image Verification Gap
 
-> NOTE: The current implementation may perform Sigstore/Rekor checks only on the model backend's compose images.
-
 The audit MUST verify:
 - whether gateway compose images are also subject to Sigstore/Rekor provenance checks,
 - whether gateway compose images are checked against the provider's image repository allowlist,
 - if gateway compose images are NOT checked, flag this as a gap and document the residual risk (a compromised gateway image that is nonetheless compose-bound would pass attestation).
+
+> NOTE: The current implementation performs Sigstore/Rekor checks only on the model backend's compose images. The audit MUST flag whether gateway compose images are also subject to these checks, and if not, report this as a gap.
 
 ### Sigstore Verification
 
@@ -86,7 +86,10 @@ Verify and report:
 - Fulcio certificate provenance extraction via X.509 extension OIDs (1.3.6.1.4.1.57264.1.*),
 - accepted signer identity model (OIDC issuer, identity patterns, exact-match vs glob),
 - behavior when a Rekor entry has a raw public key (no Fulcio cert): document whether this is treated as passing provenance,
+- handling of Rekor entries that lack DSSE (Dead Simple Signing Envelope) signatures — the `NoDSSE` field in `ImageProvenance` controls whether this is accepted,
 - when multiple Rekor UUIDs are returned, only the first is fetched — document risk.
+
+For the nearcloud provider, the supply chain policy (`internal/provider/nearcloud/policy.go`) extends the neardirect base policy with gateway-specific images. The model-tier images (shared with neardirect) include `datadog/agent`, `certbot/dns-cloudflare`, and `nearaidev/compose-manager`. Gateway-tier images include `nearaidev/dstack-vpc`, `nearaidev/cloud-api`, and `nearaidev/cvm-ingress`. Each image entry specifies whether it is a model-tier or gateway-tier image, and the expected provenance (Sigstore key, Fulcio OIDC identity, or compose-binding-only).
 
 ### Outage Behavior and Enforcement Classification
 

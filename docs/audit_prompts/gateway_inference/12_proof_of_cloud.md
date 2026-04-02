@@ -23,7 +23,7 @@ The audit MUST also document whether Proof-of-Cloud is checked for the gateway C
 ### PoC Enforcement Factor
 
 The PoC result is reported via the `cpu_id_registry` verification factor. Verify:
-- `cpu_id_registry` is **not** in `DefaultEnforced` — PoC failure does not block traffic by default,
+- `cpu_id_registry` IS in `NearcloudDefaultAllowFail` — PoC failure does not block traffic by default,
 - this means PoC is currently **informational-only** (computed but non-blocking),
 - document the rationale: PoC depends on external trust servers that may be unavailable,
 - verify whether PoC can be promoted to enforced via the `[policy] enforce` TOML configuration.

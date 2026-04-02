@@ -32,7 +32,9 @@ The model backend's REPORTDATA binds the E2EE signing key and TLS fingerprint:
 - `REPORTDATA[0:32]` = `SHA256(signing_address_bytes || tls_fingerprint_bytes)`
 - `REPORTDATA[32:64]` = raw_client_nonce_32_bytes
 
-The `signing_address` is the ECDSA public key address (secp256k1) used for E2EE key exchange. The `tls_fingerprint` is the model backend's own TLS certificate fingerprint. Since the proxy connects to the gateway (not the model backend directly), the proxy cannot verify the model backend's TLS fingerprint against a live TLS connection — this fingerprint is verified only as part of the REPORTDATA binding to the TDX quote.
+For nearcloud, the `signing_address` is derived from the Ed25519 public key used for E2EE key exchange. The `tls_fingerprint` is the model backend's own TLS certificate fingerprint. Since the proxy connects to the gateway (not the model backend directly), the proxy cannot verify the model backend's TLS fingerprint against a live TLS connection — this fingerprint is verified only as part of the REPORTDATA binding to the TDX quote.
+
+> **Known divergence**: Venice uses a different REPORTDATA scheme — the signing address is derived from a keccak256 hash of a secp256k1 public key, occupying bytes [0:20] with zeros in [20:32]. See `internal/provider/venice/reportdata.go` for the Venice-specific scheme.
 
 ### Gateway REPORTDATA
 

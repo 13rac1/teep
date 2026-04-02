@@ -71,6 +71,15 @@ Verify:
 - **Trust boundary**: The gateway host is authenticated solely by its TLS certificate + attestation. The hardcoded host constant ensures DNS resolution is the only variability — and attestation-bound SPKI pinning is the compensating control.
 - **No alternate host fallback**: Verify that no error-handling code path falls back to a different host (e.g., a non-gateway direct connection to the model backend) when the gateway is unreachable.
 
+### Known Architectural Divergence
+
+Venice is a gateway provider with a fundamentally weaker security model:
+- Venice does NOT have a `PinnedHandler` — there is no attestation-bound TLS pinning to the Venice gateway,
+- Venice does NOT produce a gateway TDX quote — there are no Tier 4 gateway factors,
+- Venice's `ServerVerification` field is an untrusted gateway-side claim that is parsed but NOT independently verified by teep,
+- Venice forwards model backend attestation (which may be produced by NearAI infrastructure), but the gateway itself is not hardware-attested,
+- The audit SHOULD document Venice's weaker gateway model as a contrast to nearcloud's full dual-tier attestation, but as these issues are server-side, they are not findings to fix in teep.
+
 ## Section Deliverable
 
 Provide:
