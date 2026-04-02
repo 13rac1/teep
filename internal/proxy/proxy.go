@@ -875,6 +875,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// data, so we abort.
 	if meta != nil && meta.Session == nil {
 		status = "e2ee_session_missing"
+		s.stats.errors.Add(1)
+		if ms != nil {
+			ms.errors.Add(1)
+		}
+		slog.ErrorContext(ctx, "e2ee session missing; aborting response", "status", status)
 		http.Error(w, "e2ee session not established", http.StatusInternalServerError)
 		return
 	}

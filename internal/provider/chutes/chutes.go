@@ -286,7 +286,7 @@ func ParseAttestationResponse(instancesBody, evidenceBody []byte, nonce attestat
 		NonceSource: "client",
 
 		CandidatesAvail: len(ar.Evidence),
-		CandidatesEval:  1,
+		CandidatesEval:  skipped + 1,
 
 		InstanceID: matched.InstanceID,
 		E2ENonce:   matchedInst.Nonces[0],

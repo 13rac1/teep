@@ -226,6 +226,9 @@ func TestParseAttestationResponse_SkipInstanceNoNonces(t *testing.T) {
 	if raw.InstanceID != "inst-B" {
 		t.Errorf("InstanceID = %q, want inst-B (inst-A skipped: no nonces)", raw.InstanceID)
 	}
+	if raw.CandidatesEval != 2 {
+		t.Errorf("CandidatesEval = %d, want 2 (1 skipped + 1 matched)", raw.CandidatesEval)
+	}
 	if raw.SigningKey != "keyB" {
 		t.Errorf("SigningKey = %q, want keyB", raw.SigningKey)
 	}
@@ -259,6 +262,9 @@ func TestParseAttestationResponse_SkipInstanceEmptyPubKey(t *testing.T) {
 	}
 	if raw.InstanceID != "inst-B" {
 		t.Errorf("InstanceID = %q, want inst-B (inst-A skipped: empty pubkey)", raw.InstanceID)
+	}
+	if raw.CandidatesEval != 2 {
+		t.Errorf("CandidatesEval = %d, want 2 (1 skipped + 1 matched)", raw.CandidatesEval)
 	}
 	if raw.SigningKey != "keyB" {
 		t.Errorf("SigningKey = %q, want keyB", raw.SigningKey)
