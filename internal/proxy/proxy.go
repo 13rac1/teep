@@ -103,7 +103,8 @@ type modelStats struct {
 	errors        atomic.Int64
 	lastVerifyMs  atomic.Int64 // last verification duration in ms
 	lastRequestAt atomic.Int64 // unix timestamp
-	lastTokPerSec atomic.Int64 // tokens/sec × 10 (fixed-point, one decimal place)
+	lastTokCount  atomic.Int64 // effective tokens from last request
+	lastTokDurMs  atomic.Int64 // stream duration in milliseconds
 }
 
 // getModelStats returns (or creates) the modelStats for a provider/model key.
@@ -126,13 +127,14 @@ func (st *stats) getModelStats(prov, model string) *modelStats {
 	return ms
 }
 
-// recordTokPerSec computes tokens/sec from StreamStats and stores it in modelStats.
+// recordTokPerSec stores raw token count and duration from StreamStats.
+// Tokens/sec is computed at render time in buildDashboardData.
 func recordTokPerSec(ms *modelStats, ss e2ee.StreamStats) {
 	if ss.Duration <= 0 {
 		return
 	}
-	tps := float64(ss.EffectiveTokens()) / ss.Duration.Seconds()
-	ms.lastTokPerSec.Store(int64(tps * 10)) // fixed-point ×10
+	ms.lastTokCount.Store(int64(ss.EffectiveTokens()))
+	ms.lastTokDurMs.Store(ss.Duration.Milliseconds())
 }
 
 // fmtDur formats a duration as seconds with 3 decimal places (e.g. "4.200s").
@@ -221,6 +223,7 @@ type Server struct {
 	mux             *http.ServeMux
 	attestClient    *http.Client // for attestation fetches
 	upstreamClient  *http.Client // for chat completions forwards
+	sseConns        atomic.Int64 // active SSE /events connections
 	stats           stats
 }
 
@@ -325,6 +328,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(b)
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
@@ -1395,8 +1405,9 @@ func (s *Server) buildDashboardData() dashboardData {
 			verifyStr = "—"
 		}
 		var tokStr string
-		if tps := m.lastTokPerSec.Load(); tps > 0 {
-			tokStr = fmt.Sprintf("%.1f", float64(tps)/10)
+		if dur := m.lastTokDurMs.Load(); dur > 0 {
+			tps := float64(m.lastTokCount.Load()) / (float64(dur) / 1000)
+			tokStr = fmt.Sprintf("%.1f", tps)
 		} else {
 			tokStr = "—"
 		}
@@ -1443,8 +1454,19 @@ func (s *Server) buildDashboardData() dashboardData {
 	}
 }
 
+// maxSSEConns is the maximum number of concurrent SSE /events connections.
+const maxSSEConns = 10
+
 // handleEvents streams dashboard stats as Server-Sent Events.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if s.sseConns.Add(1) > maxSSEConns {
+		s.sseConns.Add(-1)
+		http.Error(w, "too many SSE connections", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.sseConns.Add(-1)
+
+	ctx := r.Context()
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -1457,23 +1479,30 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	send := func() {
+	send := func(ctx context.Context) bool {
 		b, err := json.Marshal(s.buildDashboardData())
 		if err != nil {
-			slog.Error("marshal dashboard data", "err", err)
-			return
+			slog.ErrorContext(ctx, "marshal dashboard data", "err", err)
+			return false
 		}
-		fmt.Fprintf(w, "data: %s\n\n", b)
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+			return true
+		}
 		flusher.Flush()
+		return false
 	}
 
-	send() // immediate first event
+	if send(ctx) {
+		return
+	}
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			send()
+			if send(ctx) {
+				return
+			}
 		}
 	}
 }

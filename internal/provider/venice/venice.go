@@ -38,7 +38,7 @@ const attestationPath = "/api/v1/tee/attestation"
 type eventLogFlexible []attestation.EventLogEntry
 
 func (e *eventLogFlexible) UnmarshalJSON(data []byte) error {
-	// Try direct array first.
+	// Try direct array first. Error intentionally discarded — fall through to string parse.
 	var entries []attestation.EventLogEntry
 	if json.Unmarshal(data, &entries) == nil {
 		*e = entries
@@ -170,11 +170,11 @@ type attestationResponse struct {
 
 	// Duplicate top-level fields (parsed to silence jsonstrict, not propagated).
 	// quote == intel_quote; vm_config == info.vm_config. Venice flattens these.
-	// signing_key is the legacy name for signing_public_key.
+	// signing_key is an alternate name for signing_public_key used by some backends.
 	RequestNonce  string `json:"request_nonce"`
 	Quote         string `json:"quote"`
 	VMConfig      string `json:"vm_config"`
-	LegacySignKey string `json:"signing_key"`
+	DupSigningKey string `json:"signing_key"`
 }
 
 // Attester fetches attestation data from Venice's /api/v1/tee/attestation

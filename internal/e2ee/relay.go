@@ -20,11 +20,25 @@ type StreamStats struct {
 }
 
 // EffectiveTokens returns Tokens if available (from usage), else Chunks.
-func (s StreamStats) EffectiveTokens() int {
+func (s *StreamStats) EffectiveTokens() int {
 	if s.Tokens > 0 {
 		return s.Tokens
 	}
 	return s.Chunks
+}
+
+// recordChunk updates chunk timing and extracts usage from an SSE data payload.
+func (s *StreamStats) recordChunk(data string, firstChunk *time.Time) {
+	now := time.Now()
+	if firstChunk.IsZero() {
+		*firstChunk = now
+	}
+	s.Chunks++
+	s.Duration = now.Sub(*firstChunk)
+	var u usageInfo
+	if json.Unmarshal([]byte(data), &u) == nil && u.Usage != nil {
+		s.Tokens = u.Usage.CompletionTokens
+	}
 }
 
 // usageInfo is used for partial unmarshal of the usage field in SSE chunks.
@@ -279,18 +293,7 @@ func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, StreamStats
 			break
 		}
 
-		now := time.Now()
-		if firstChunk.IsZero() {
-			firstChunk = now
-		}
-		stats.Chunks++
-		stats.Duration = now.Sub(firstChunk)
-
-		// Try to extract usage from the chunk.
-		var u usageInfo
-		if json.Unmarshal([]byte(data), &u) == nil && u.Usage != nil {
-			stats.Tokens = u.Usage.CompletionTokens
-		}
+		stats.recordChunk(data, &firstChunk)
 
 		decrypted, err := decryptSSEChunkContent(data, session)
 		if err != nil {
@@ -382,17 +385,7 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 			return true
 		}
 		if data, ok := strings.CutPrefix(line, "data: "); ok && data != "[DONE]" {
-			now := time.Now()
-			if firstChunk.IsZero() {
-				firstChunk = now
-			}
-			stats.Chunks++
-			stats.Duration = now.Sub(firstChunk)
-			// Try to extract usage from the chunk.
-			var u usageInfo
-			if json.Unmarshal([]byte(data), &u) == nil && u.Usage != nil {
-				stats.Tokens = u.Usage.CompletionTokens
-			}
+			stats.recordChunk(data, &firstChunk)
 		}
 		return false
 	}
