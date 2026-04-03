@@ -128,7 +128,7 @@ func TestClassifyUpstreamError(t *testing.T) {
 
 func TestE2EEFailed_StoreAndRecover(t *testing.T) {
 	// Simulate the e2eeFailed lifecycle: store a failure, verify it's
-	// present, then clear it on successful re-attestation.
+	// present, then clear it on successful fresh re-attestation.
 	var e2eeFailed sync.Map
 	key := providerModelKey{provider: "venice", model: "test-model"}
 
@@ -143,12 +143,36 @@ func TestE2EEFailed_StoreAndRecover(t *testing.T) {
 		t.Fatal("should be failed after Store")
 	}
 
-	// Recovery: clear on successful re-attestation (as handleChatCompletions does).
+	// Recovery: clear on successful fresh re-attestation (ar.Raw != nil).
+	freshAttestation := true // simulates ar.Raw != nil
 	if _, failed := e2eeFailed.Load(key); failed {
-		e2eeFailed.Delete(key)
+		if freshAttestation {
+			e2eeFailed.Delete(key)
+		}
 	}
 	if _, failed := e2eeFailed.Load(key); failed {
-		t.Fatal("should be cleared after Delete")
+		t.Fatal("should be cleared after fresh attestation")
+	}
+}
+
+func TestE2EEFailed_NotClearedOnCachedAttestation(t *testing.T) {
+	// When the marker is set and attestation comes from cache (ar.Raw == nil),
+	// the marker must NOT be cleared — fail closed until fresh attestation.
+	var e2eeFailed sync.Map
+	key := providerModelKey{provider: "venice", model: "test-model"}
+
+	e2eeFailed.Store(key, true)
+
+	// Simulates cached attestation (ar.Raw == nil).
+	freshAttestation := false
+	if _, failed := e2eeFailed.Load(key); failed {
+		if freshAttestation {
+			e2eeFailed.Delete(key)
+		}
+		// else: fail closed, marker stays
+	}
+	if _, failed := e2eeFailed.Load(key); !failed {
+		t.Fatal("marker should NOT be cleared on cached attestation")
 	}
 }
 

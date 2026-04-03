@@ -132,10 +132,12 @@ func TestRelayStreamChutes_MissingInit(t *testing.T) {
 		t.Errorf("error should wrap ErrDecryptionFailed, got: %v", err)
 	}
 
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("status = %d, want 502", rec.Code)
+	// Pre-header decryption errors no longer write HTTP responses,
+	// allowing callers to retry with a different instance.
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for pre-header error, got: %s", rec.Body.String())
 	}
-	t.Logf("missing init response: %d %s", rec.Code, rec.Body.String())
+	t.Logf("missing init error: %v", err)
 }
 
 func TestRelayStreamChutes_E2EError(t *testing.T) {
@@ -160,15 +162,11 @@ func TestRelayStreamChutes_E2EError(t *testing.T) {
 		t.Errorf("error should wrap ErrDecryptionFailed, got: %v", err)
 	}
 
-	body := rec.Body.String()
-	t.Logf("e2e_error response: status=%d body=%s", rec.Code, body)
-	// Stream hasn't started (no chunks decrypted), so we get a plain HTTP error.
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("status = %d, want 502", rec.Code)
+	// Pre-header: no HTTP response written (caller writes after retries).
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for pre-header error, got: %s", rec.Body.String())
 	}
-	if !strings.Contains(body, "E2E error") {
-		t.Error("expected 'E2E error' in error body")
-	}
+	t.Logf("e2e_error: %v", err)
 }
 
 func TestRelayNonStreamChutes(t *testing.T) {
@@ -221,12 +219,9 @@ func TestRelayStreamChutes_UnparseableEvent(t *testing.T) {
 	body := rec.Body.String()
 	t.Logf("unparseable event response: status=%d body=%q chunks=%d", rec.Code, body, stats.Chunks)
 
-	// Stream hasn't started (no headers written), so we get a plain HTTP error.
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("status = %d, want 502", rec.Code)
-	}
-	if !strings.Contains(body, "unparseable event") {
-		t.Error("expected 'unparseable event' in error body")
+	// Pre-header: no HTTP response written (caller writes after retries).
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for pre-header error, got: %s", body)
 	}
 	if stats.Chunks != 0 {
 		t.Errorf("chunks = %d, want 0 (stream should abort before any chunks)", stats.Chunks)
@@ -249,4 +244,42 @@ func TestRelayStreamChutes_DoneWithoutChunks(t *testing.T) {
 	// [DONE] without header written: should not write [DONE] to output.
 	body := rec.Body.String()
 	t.Logf("done-without-chunks: status=%d body=%q", rec.Code, body)
+}
+
+func TestRelayNonStreamChutes_DecryptError_NoResponse(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+
+	// Send garbage that will fail decryption.
+	rec := httptest.NewRecorder()
+	_, err = RelayNonStreamChutes(context.Background(), rec, strings.NewReader("not-encrypted"), session)
+	if err == nil {
+		t.Fatal("expected error from RelayNonStreamChutes")
+	}
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("error should wrap ErrDecryptionFailed, got: %v", err)
+	}
+
+	// Decryption errors should not write an HTTP response (caller handles it).
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for decryption error, got: %s", rec.Body.String())
+	}
+}
+
+func TestRelayStreamChutes_ScannerError_ReturnsRelayFailed(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	_, err = RelayStreamChutes(context.Background(), rec, &failReader{}, session)
+	if err == nil {
+		t.Fatal("expected non-nil error on scanner failure")
+	}
+	if !errors.Is(err, ErrRelayFailed) {
+		t.Errorf("error should wrap ErrRelayFailed, got: %v", err)
+	}
 }

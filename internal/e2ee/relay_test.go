@@ -772,3 +772,37 @@ func (w *noFlushWriter) WriteHeader(code int) { w.code = code }
 type failReader struct{}
 
 func (*failReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+
+// failAfterReader succeeds for the first read (returning data) then fails.
+type failAfterReader struct {
+	data []byte
+	read bool
+}
+
+func (r *failAfterReader) Read(p []byte) (int, error) {
+	if !r.read {
+		r.read = true
+		n := copy(p, r.data)
+		return n, nil
+	}
+	return 0, errors.New("mid-stream read failure")
+}
+
+func TestRelayStream_MidStreamScannerError_ReturnsRelayFailed(t *testing.T) {
+	// First scan succeeds (valid SSE line), then scanner hits a read error.
+	// The scanner.Err() at end of RelayStream should return ErrRelayFailed.
+	data := []byte("data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+	r := &failAfterReader{data: data}
+
+	rec := httptest.NewRecorder()
+	_, err := RelayStream(context.Background(), rec, r, nil)
+	if err == nil {
+		t.Fatal("expected non-nil error on mid-stream scanner failure")
+	}
+	if !errors.Is(err, ErrRelayFailed) {
+		t.Errorf("error should wrap ErrRelayFailed, got: %v", err)
+	}
+	if errors.Is(err, ErrDecryptionFailed) {
+		t.Error("error should NOT be ErrDecryptionFailed")
+	}
+}

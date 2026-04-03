@@ -780,17 +780,29 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	report := ar.Report
 
 	// A prior E2EE failure marks the provider+model pair as failed and also
-	// invalidates the cached attestation. Reaching this point means the
-	// current request has already completed attestation successfully, so that
-	// successful re-attestation is the recovery point: clear the stale E2EE
-	// failure marker and proceed. If attestation had failed, the request would
-	// already have been blocked above.
+	// invalidates the cached attestation. Recovery requires a confirmed fresh
+	// attestation (cache miss), indicated by ar.Raw != nil.
 	if ar.E2EEActive {
 		key := providerModelKey{prov.Name, upstreamModel}
 		if _, failed := s.e2eeFailed.Load(key); failed {
-			s.e2eeFailed.Delete(key)
-			slog.InfoContext(ctx, "Cleared prior E2EE failure after successful re-attestation",
-				"provider", prov.Name, "model", upstreamModel)
+			if ar.Raw != nil {
+				// Fresh attestation succeeded: safe to clear the prior
+				// E2EE failure marker and proceed.
+				s.e2eeFailed.Delete(key)
+				slog.InfoContext(ctx, "Cleared prior E2EE failure after successful re-attestation",
+					"provider", prov.Name, "model", upstreamModel)
+			} else {
+				// Cached attestation: a concurrent request may have
+				// repopulated the cache without fresh verification.
+				// Fail closed and invalidate caches to force re-attestation.
+				s.cache.Delete(prov.Name, upstreamModel)
+				s.signingKeyCache.Delete(prov.Name, upstreamModel)
+				slog.ErrorContext(ctx, "E2EE previously failed; cached attestation insufficient for recovery",
+					"provider", prov.Name, "model", upstreamModel)
+				http.Error(w, "E2EE previously failed; re-attestation required", http.StatusServiceUnavailable)
+				status = "e2ee_recovery_pending"
+				return
+			}
 		}
 	}
 
@@ -984,6 +996,16 @@ func (s *Server) relayWithRetry(
 	}
 
 	result.status = s.classifyRelayOutcome(ctx, relayErr, ar.E2EEActive, prov, upstreamModel, ms, chutesE2EE, lastChuteID)
+	// Chutes relay functions do not write HTTP error responses for pre-header
+	// decryption failures (allowing the retry loop to attempt new instances).
+	// Write the error response here after all retries are exhausted.
+	if result.status != "" && !ri.headerSent {
+		if errors.Is(relayErr, e2ee.ErrDecryptionFailed) {
+			http.Error(riWriter, "response decryption failed", http.StatusBadGateway)
+		} else {
+			http.Error(riWriter, "relay failed", http.StatusBadGateway)
+		}
+	}
 	return result
 }
 
@@ -1148,15 +1170,24 @@ func (s *Server) handlePinnedChat(
 		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
 	}
 
-	// Clear stale E2EE failure markers: reaching this point means
-	// attestation succeeded on this pinned connection. Same recovery
-	// logic as the non-pinned path.
+	// Clear stale E2EE failure markers only after a confirmed fresh pinned
+	// attestation (pinnedResp.Report != nil). On an SPKI cache hit the pinned
+	// handler skips attestation: fail closed and force re-attestation.
 	if prov.E2EE {
 		key := providerModelKey{prov.Name, upstreamModel}
 		if _, failed := s.e2eeFailed.Load(key); failed {
-			s.e2eeFailed.Delete(key)
-			slog.InfoContext(ctx, "Cleared prior E2EE failure after successful pinned attestation",
-				"provider", prov.Name, "model", upstreamModel)
+			if pinnedResp.Report != nil {
+				s.e2eeFailed.Delete(key)
+				slog.InfoContext(ctx, "Cleared prior E2EE failure after successful fresh pinned attestation",
+					"provider", prov.Name, "model", upstreamModel)
+			} else {
+				s.cache.Delete(prov.Name, upstreamModel)
+				s.signingKeyCache.Delete(prov.Name, upstreamModel)
+				slog.ErrorContext(ctx, "E2EE previously failed; cached pinned attestation insufficient for recovery",
+					"provider", prov.Name, "model", upstreamModel)
+				http.Error(w, "E2EE previously failed; re-attestation required", http.StatusServiceUnavailable)
+				return
+			}
 		}
 	}
 

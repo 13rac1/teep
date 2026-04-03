@@ -419,6 +419,7 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 
 	if err := scanner.Err(); err != nil {
 		slog.ErrorContext(ctx, "SSE scanner error", "err", err)
+		return stats, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 	return stats, decryptErr
 }
