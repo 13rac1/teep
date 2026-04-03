@@ -138,12 +138,27 @@ enforcement.
 
 ### Chutes Instance Retry Loop
 
+Chutes runs a dynamic fleet of GPU instances behind a routing layer.
+Individual instances are unreliable — they may fail E2EE handshakes, crash
+mid-inference, or go offline without notice. This is an expected operational
+characteristic, not a security failure. Retrying a request on a *different*
+instance with a *fresh* E2EE handshake (new key encapsulation, new nonces)
+is not a fallback or a weakening of E2EE — it is the normal path for
+maintaining request reliability across an unreliable fleet.
+
 The Chutes-specific retry loop (`chutesMaxAttempts = 3`) lives in
 `doUpstreamRoundtrip`. It wraps the body-build → upstream-request cycle and
-handles **transport-level** failures (connection errors, HTTP 429/500-504)
-by marking the failed instance via `NoncePool.MarkFailed(chuteID,
-instanceID)`, zeroing crypto material via `zeroE2EESessions`, and retrying
-with a fresh nonce/key from a different instance.
+handles **transport-level** and **per-instance E2EE** failures (connection
+errors, HTTP 429/500-504, handshake failures) by:
+
+1. Marking the failed instance via `NoncePool.MarkFailed(chuteID,
+   instanceID)` — fail-closed for that specific instance.
+2. Zeroing crypto material from the failed attempt via `zeroE2EESessions`.
+3. Selecting a different instance from the nonce pool and performing a
+   complete fresh E2EE handshake (new key pair, new nonces).
+
+Each retry attempt is a full cryptographic session from scratch, not a
+resumption of the failed session.
 
 `doUpstreamRoundtrip` returns `(*upstreamResult, error)`. The
 `upstreamResult` struct carries `Resp`, `Session`, `Meta`, `Cancel`,
@@ -159,21 +174,25 @@ independent of `meta.Session` being populated — this decoupling allows the
 retry loop to track instances for `MarkFailed` even when the encryptor
 returns `meta == nil`.
 
-This retry loop is distinct from post-relay enforcement: the retry loop
-handles transport-level failures *before* the relay; post-relay enforcement
-handles **cryptographic** failures (decryption failed after a successful
-HTTP response) *after* it.
+**Two failure tiers**:
 
-**Hazard — escalation gap**: When all 3 retry attempts fail, per-instance
-`MarkFailed` fires on every retryable failure, so the nonce pool correctly
-deprioritizes all failed instances. However the provider+model pair is NOT
-marked as persistently failed — the next request retries from scratch.
-The E2EE state machine should provide the escalation path.
+| Failure scope | Trigger | Action | Retryable? |
+|---------------|---------|--------|------------|
+| Per-instance | Transport error, handshake failure, HTTP 429/5xx | `MarkFailed(instanceID)`, zero session, retry on fresh instance | Yes — fresh handshake on new instance |
+| Provider+model | Post-relay decryption failure (response data cannot be decrypted) | `E2EETracker.MarkFailed`, invalidate all caches | No — fail-closed for all requests |
+
+The retry loop handles the first tier (pre-relay, per-instance). Post-relay
+enforcement handles the second tier (post-relay, provider-wide). A
+post-relay decryption failure is qualitatively different from a
+pre-relay transport error: it means a seemingly-healthy instance returned
+data that could not be authenticated, indicating possible MITM or
+server-side E2EE breakage.
 
 **Hazard — retry + decryption failure interaction**: If the retry loop
 succeeds on the last attempt (transport OK) but the relay then detects a
 decryption failure, post-relay enforcement must fire using the *last
-successful attempt's* instance info. Instance info is available via
+successful attempt's* instance info for both per-instance `MarkFailed` and
+provider-level `MarkFailed`. Instance info is available via
 `attemptChuteID` / `attemptInstanceID` (from `upstreamBody`), not from
 `meta`.
 
@@ -222,6 +241,13 @@ system.
 
 ### E2EE State Machine (proxy only)
 
+The state machine operates at the **provider+model** level, not the
+instance level. Individual instance failures (common in Chutes fleet
+dynamics) are handled by the retry loop's per-instance `MarkFailed` and do
+not affect the provider+model E2EE state. Only a post-relay cryptographic
+failure — where a response from a seemingly-healthy instance cannot be
+decrypted — escalates to provider+model failure.
+
 Per provider+model pair:
 
 ```
@@ -233,7 +259,7 @@ Per provider+model pair:
                      ┌─────────┐
                      │ Active  │  (E2EE verified working)
                      └────┬────┘
-                          │ decryption failure on response
+                          │ post-relay decryption failure
                           ▼
                      ┌─────────┐
                      │ Failed  │  (block all subsequent requests)
@@ -242,13 +268,24 @@ Per provider+model pair:
 
 - **Pending**: Provider has `E2EE=true` in config. The proxy encrypts
   outgoing requests when `ReportDataBindingPassed()`. If the roundtrip
-  succeeds, transition to `Active`.
+  succeeds, transition to `Active`. Per-instance failures during the retry
+  loop do not prevent the transition — only the final attempt's outcome
+  matters.
 - **Active**: E2EE has been verified working. Continue encrypting.
-- **Failed**: A previously-working E2EE roundtrip returned data that could
-  not be decrypted. This indicates either a key mismatch (possible MITM) or
-  server-side E2EE breakage. **Block all subsequent requests** for this
+  Per-instance transport failures and handshake failures are retried
+  transparently via the retry loop without affecting this state.
+- **Failed**: A relay received data it could not decrypt. This indicates
+  a key mismatch (possible MITM) or server-side E2EE breakage — not a
+  transient instance failure. **Block all subsequent requests** for this
   provider+model (fail-closed). Invalidate report cache, signing key cache,
   and nonce pool. Require full re-attestation to recover.
+
+**What does NOT trigger provider+model `Failed`**:
+- Instance going offline mid-request (transport error → retry)
+- E2EE handshake failure on a specific instance (prep error → retry)
+- HTTP 429/500-504 from a specific instance (transport error → retry)
+- All retry attempts exhausted for a single request (returns error to
+  client, but next request may succeed on newly-available instances)
 
 ### `teep verify` E2EE Probe
 
@@ -308,6 +345,16 @@ through the attested environment.
 - **Crypto material must be zeroed on failure.** Use `zeroE2EESessions` to
   zero ephemeral key material from the current session after any E2EE
   failure, per cryptographic safety requirements.
+
+- **Instance failover is not a fallback.** For fleet-based providers like
+  Chutes, retrying a request on a different instance with a fresh E2EE
+  handshake (new key encapsulation, new nonces) is the normal reliability
+  mechanism, not a security degradation. Each retry performs a complete
+  cryptographic session from scratch. Per-instance failures are fail-closed
+  at the instance level (the failed instance is marked unusable) while
+  allowing the request to succeed on a healthy instance. Only post-relay
+  decryption failures — where a seemingly-healthy instance returns data
+  that cannot be authenticated — escalate to provider+model fail-closed.
 
 ---
 
@@ -390,11 +437,19 @@ state machine into the proxy. Wire up post-relay enforcement.
    `relayResponse` call, if the relay returned a decryption error AND
    `e2eeActive` was true:
    ```go
+   // Mark the specific instance as failed (Chutes fleet dynamics).
+   // attemptChuteID/attemptInstanceID come from upstreamBody struct.
+   if prov.E2EEMaterialFetcher != nil {
+       prov.E2EEMaterialFetcher.MarkFailed(attemptChuteID, attemptInstanceID)
+   }
+   // Post-relay decryption failure is provider+model level: fail-closed.
+   // Unlike pre-relay transport errors (handled by retry loop), this
+   // means a seemingly-healthy instance returned unauthenticated data.
    s.e2eeTracker.MarkFailed(prov.Name, upstreamModel)
    s.cache.Delete(prov.Name, upstreamModel)
    s.signingKeyCache.Delete(prov.Name, upstreamModel)
-   // Nonce pool: discard cached instances/nonces.
-   // attemptChuteID comes from upstreamBody struct, not meta.
+   // Nonce pool: discard ALL cached instances/nonces (not just the
+   // failed instance) — the trust model for this provider is broken.
    if prov.E2EEMaterialFetcher != nil {
        prov.E2EEMaterialFetcher.Invalidate(attemptChuteID)
    }
@@ -406,6 +461,13 @@ state machine into the proxy. Wire up post-relay enforcement.
        ms.errors.Add(1)
    }
    ```
+   Note: post-relay decryption failure is categorically different from
+   pre-relay instance failures. The retry loop handles instance-level
+   unreliability (transport errors, handshake failures) by failing over
+   to fresh instances. Post-relay enforcement fires when a
+   seemingly-successful HTTP response cannot be decrypted, which
+   indicates a systemic problem (MITM, server-side E2EE breakage) that
+   instance failover cannot recover from.
 
 10. **Post-relay success** — After successful relay, if `e2eeActive`:
     call `e2eeTracker.MarkActive(prov.Name, model)`.
@@ -495,24 +557,32 @@ state machine into the proxy. Wire up post-relay enforcement.
 2. **P2, P3 eliminated**: `MarkE2EEUsable` is deleted. No report mutation
    after `BuildReport`.
 
-3. **Fail-closed on decryption failure**: After a decryption failure with
-   `e2eeActive`, the E2EE state machine transitions to `Failed` and all
-   subsequent requests for that provider+model are blocked with HTTP 502.
+3. **Fail-closed on decryption failure**: After a post-relay decryption
+   failure with `e2eeActive`, the E2EE state machine transitions to
+   `Failed` and all subsequent requests for that provider+model are
+   blocked with HTTP 502.
 
-4. **Cache invalidation complete**: Decryption failure invalidates all three
-   caches (report, signing key, nonce pool) and zeroes crypto material.
+4. **Cache invalidation complete**: Post-relay decryption failure
+   invalidates all three caches (report, signing key, nonce pool) and
+   zeroes crypto material.
 
-5. **`teep verify` shows E2EE status**: The verify output displays a
+5. **Instance failover preserves reliability**: For Chutes, per-instance
+   failures (transport errors, handshake failures, instance going offline)
+   are retried on fresh instances with new E2EE handshakes without
+   affecting the provider+model E2EE state. Only post-relay decryption
+   failures escalate to provider+model fail-closed.
+
+6. **`teep verify` shows E2EE status**: The verify output displays a
    separate "Provider Functionality" section with E2EE probe results.
 
-6. **Config rejects `e2ee_usable` in `allow_fail`**: Unknown factor names
+7. **Config rejects `e2ee_usable` in `allow_fail`**: Unknown factor names
    are rejected at startup.
 
-7. **All existing tests pass**: `make check` and `make integration` pass.
+8. **All existing tests pass**: `make check` and `make integration` pass.
    Integration tests assert `Metadata["e2ee_status"]` instead of factor
    status.
 
-8. **Report endpoint includes E2EE status**: The `/v1/tee/report` JSON
+9. **Report endpoint includes E2EE status**: The `/v1/tee/report` JSON
    includes `"e2ee_status"` in the metadata map.
 
 ---
@@ -533,14 +603,14 @@ state machine into the proxy. Wire up post-relay enforcement.
 - **Client-facing E2EE status**: Consider adding an `X-Teep-E2EE` response
   header so clients can verify E2EE was used for each request without
   fetching the full report.
-- **Nonce pool failure escalation**: When all retry attempts exhaust for a
-  single request, should this immediately escalate to
-  `E2EETracker.MarkFailed` (fail-closed for the provider+model), or should
-  it allow subsequent requests to retry independently? When all instances in
-  the nonce pool have accumulated failures, should the pool signal "no
-  healthy instances" for escalation? The escalation threshold and recovery
-  path (full re-attestation) should be specified as part of Phase 3
-  implementation.
+- **Nonce pool exhaustion**: When all instances in the nonce pool are
+  marked failed (across multiple requests), `Take` currently returns an
+  error only when no nonces remain, not when all instances are unhealthy.
+  Consider whether the pool should signal "no healthy instances" as a
+  distinct condition. This is an operational exhaustion (all instances
+  individually failed), not a cryptographic failure, so it should NOT
+  escalate to `E2EETracker.MarkFailed`. The correct recovery is
+  re-attestation to refresh the instance pool.
 - **Crypto material lifecycle in retry**: `zeroE2EESessions` is the
   canonical helper for zeroing E2EE crypto material. Post-relay enforcement
   should use the same pattern when invalidating material after decryption
