@@ -273,86 +273,17 @@ func (h *PinnedHandler) attestOnConn(
 		"model", model,
 	)
 
-	// Build the attestation request path with query parameters.
-	path := attestationPath +
-		"?include_tls_fingerprint=true" +
-		"&nonce=" + nonce.Hex() +
-		"&signing_algo=ecdsa"
-
-	// Write the GET request on the existing connection.
-	attestHeaders := make(http.Header)
-	attestHeaders.Set("Host", domain)
-	attestHeaders.Set("Authorization", "Bearer "+h.apiKey)
-	attestHeaders.Set("Connection", "keep-alive")
-	if err := WriteHTTPRequest(bw, http.MethodGet, path, attestHeaders, nil); err != nil {
-		return nil, fmt.Errorf("write attestation request: %w", err)
-	}
-
-	// Set a read deadline for the attestation response.
-	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
-		return nil, fmt.Errorf("set read deadline: %w", err)
-	}
-
-	// Read the attestation response.
-	resp, err := http.ReadResponse(br, nil)
-	if err != nil {
-		return nil, fmt.Errorf("read attestation response: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Clear read deadline for subsequent operations.
-	if err := conn.SetReadDeadline(time.Time{}); err != nil {
-		return nil, fmt.Errorf("clear read deadline: %w", err)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read attestation body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("attestation HTTP %d: %s", resp.StatusCode, provider.Truncate(string(body), 256))
-	}
-
-	// Parse the attestation response using shared parser.
-	raw, err := ParseAttestationResponse(body, model)
+	raw, err := h.sendAttestationRequest(conn, br, bw, domain, model, nonce)
 	if err != nil {
 		return nil, err
 	}
 
-	// Verify TDX quote.
-	var tdxResult *attestation.TDXVerifyResult
-	if raw.IntelQuote != "" {
-		tdxResult = attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, h.offline)
-		if h.rdVerifier != nil && tdxResult.ParseErr == nil {
-			detail, rdErr := h.rdVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
-			tdxResult.ReportDataBindingErr = rdErr
-			tdxResult.ReportDataBindingDetail = detail
-		}
-	}
-
-	var nvidiaResult *attestation.NvidiaVerifyResult
-	if raw.NvidiaPayload != "" {
-		slog.DebugContext(ctx, "verifying NVIDIA payload with nonce",
-			"nonce_prefix", nonce.HexPrefix(),
-			"domain", domain,
-			"model", model,
-		)
-		nvidiaResult = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
-	}
-
-	var nrasResult *attestation.NvidiaVerifyResult
-	if !h.offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
-		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, tlsct.NewHTTPClient(30*time.Second))
-	}
-
-	var pocResult *attestation.PoCResult
-	if !h.offline && raw.IntelQuote != "" {
-		poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second))
-		pocResult = poc.CheckQuote(ctx, raw.IntelQuote)
-	}
+	tdxResult := h.verifyTDX(ctx, raw, nonce)
+	nvidiaResult, nrasResult := h.verifyNVIDIA(ctx, raw, nonce)
+	pocResult := h.checkPoC(ctx, raw.IntelQuote)
 
 	// Verify live SPKI matches the attested TLS fingerprint.
+	// Connection trust anchor — MUST remain inline and fatal.
 	if raw.TLSFingerprint == "" {
 		return nil, errors.New("attestation response missing tls_cert_fingerprint")
 	}
@@ -364,32 +295,8 @@ func (h *PinnedHandler) attestOnConn(
 		return nil, fmt.Errorf("live SPKI %s != attested TLS fingerprint %s", provider.Truncate(liveSPKI, 16), provider.Truncate(raw.TLSFingerprint, 16))
 	}
 
-	var composeResult *attestation.ComposeBindingResult
-	var sigstoreResults []attestation.SigstoreResult
-	var imageRepos []string
-	var digestToRepo map[string]string
-	if raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil {
-		composeResult = &attestation.ComposeBindingResult{Checked: true}
-		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
-
-		if composeResult.Err == nil {
-			cd := attestation.ExtractComposeDigests(raw.AppCompose)
-			imageRepos = cd.Repos
-			digestToRepo = cd.DigestToRepo
-			if len(cd.Digests) > 0 && !h.offline && h.rekorClient != nil {
-				sigstoreResults = h.rekorClient.CheckSigstoreDigests(ctx, cd.Digests)
-			}
-		}
-	}
-
-	var rekorResults []attestation.RekorProvenance
-	if len(sigstoreResults) > 0 && !h.offline && h.rekorClient != nil {
-		for _, sr := range sigstoreResults {
-			if sr.OK {
-				rekorResults = append(rekorResults, h.rekorClient.FetchRekorProvenance(ctx, sr.Digest))
-			}
-		}
-	}
+	composeResult, imageRepos, digestToRepo, sigstoreResults, rekorResults :=
+		h.verifySupplyChain(ctx, raw, tdxResult)
 
 	allowFail := h.allowFail
 	if h.offline {
@@ -415,6 +322,132 @@ func (h *PinnedHandler) attestOnConn(
 		Rekor:             rekorResults,
 	})
 	return report, nil
+}
+
+// sendAttestationRequest writes the attestation HTTP request and reads the
+// response. On error, the caller must close the connection.
+func (h *PinnedHandler) sendAttestationRequest(
+	conn *tls.Conn, br *bufio.Reader, bw *bufio.Writer,
+	domain, model string, nonce attestation.Nonce,
+) (*attestation.RawAttestation, error) {
+	path := attestationPath +
+		"?include_tls_fingerprint=true" +
+		"&nonce=" + nonce.Hex() +
+		"&signing_algo=ecdsa"
+
+	attestHeaders := make(http.Header)
+	attestHeaders.Set("Host", domain)
+	attestHeaders.Set("Authorization", "Bearer "+h.apiKey)
+	attestHeaders.Set("Connection", "keep-alive")
+	if err := WriteHTTPRequest(bw, http.MethodGet, path, attestHeaders, nil); err != nil {
+		return nil, fmt.Errorf("write attestation request: %w", err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+		return nil, fmt.Errorf("set read deadline: %w", err)
+	}
+
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		return nil, fmt.Errorf("read attestation response: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("clear read deadline: %w", err)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read attestation body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("attestation HTTP %d: %s", resp.StatusCode, provider.Truncate(string(body), 256))
+	}
+
+	return ParseAttestationResponse(body, model)
+}
+
+// verifyTDX runs TDX quote verification and report data binding.
+// Returns nil if no intel_quote is present.
+func (h *PinnedHandler) verifyTDX(
+	ctx context.Context, raw *attestation.RawAttestation, nonce attestation.Nonce,
+) *attestation.TDXVerifyResult {
+	if raw.IntelQuote == "" {
+		return nil
+	}
+	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, h.offline)
+	if h.rdVerifier != nil && tdxResult.ParseErr == nil {
+		detail, rdErr := h.rdVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
+		tdxResult.ReportDataBindingErr = rdErr
+		tdxResult.ReportDataBindingDetail = detail
+	}
+	return tdxResult
+}
+
+// verifyNVIDIA runs NVIDIA EAT and NRAS verification.
+// Returns nil for either if not applicable.
+func (h *PinnedHandler) verifyNVIDIA(
+	ctx context.Context, raw *attestation.RawAttestation, nonce attestation.Nonce,
+) (eat, nras *attestation.NvidiaVerifyResult) {
+	if raw.NvidiaPayload != "" {
+		slog.DebugContext(ctx, "verifying NVIDIA payload with nonce",
+			"nonce_prefix", nonce.HexPrefix(),
+		)
+		eat = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
+	}
+	if !h.offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
+		nras = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, tlsct.NewHTTPClient(30*time.Second))
+	}
+	return eat, nras
+}
+
+// checkPoC runs a Proof of Cloud check for the given intel_quote.
+// Returns nil if offline or quote is empty.
+func (h *PinnedHandler) checkPoC(ctx context.Context, quote string) *attestation.PoCResult {
+	if h.offline || quote == "" {
+		return nil
+	}
+	poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second))
+	return poc.CheckQuote(ctx, quote)
+}
+
+// verifySupplyChain runs compose binding, sigstore, and rekor verification.
+// Returns nil results if compose is empty or TDX verification failed.
+func (h *PinnedHandler) verifySupplyChain(
+	ctx context.Context, raw *attestation.RawAttestation, tdxResult *attestation.TDXVerifyResult,
+) (
+	compose *attestation.ComposeBindingResult,
+	imageRepos []string,
+	digestToRepo map[string]string,
+	sigstore []attestation.SigstoreResult,
+	rekor []attestation.RekorProvenance,
+) {
+	if raw.AppCompose == "" || tdxResult == nil || tdxResult.ParseErr != nil {
+		return nil, nil, nil, nil, nil
+	}
+
+	compose = &attestation.ComposeBindingResult{Checked: true}
+	compose.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+	if compose.Err != nil {
+		return compose, nil, nil, nil, nil
+	}
+
+	cd := attestation.ExtractComposeDigests(raw.AppCompose)
+	imageRepos = cd.Repos
+	digestToRepo = cd.DigestToRepo
+
+	if len(cd.Digests) > 0 && !h.offline && h.rekorClient != nil {
+		sigstore = h.rekorClient.CheckSigstoreDigests(ctx, cd.Digests)
+		for _, sr := range sigstore {
+			if sr.OK {
+				rekor = append(rekor, h.rekorClient.FetchRekorProvenance(ctx, sr.Digest))
+			}
+		}
+	}
+
+	return compose, imageRepos, digestToRepo, sigstore, rekor
 }
 
 // readChatResponse reads an HTTP response from a buffered reader. The caller
