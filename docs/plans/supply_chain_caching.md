@@ -407,11 +407,15 @@ references. To support tag-based images (common in NanoGPT and other dstack
 providers), the plan adds tag-aware caching:
 
 **Specific release tags**: If a specific release tag for an image is
-authenticated via Sigstore/Rekor verification, it can be cached and treated
-like a hash pin. The cached entry must use the **full canonical `image:tag`**
-(e.g., `vllm/vllm-openai:v0.4.2`), not just the tag portion. Once cached, the
-image at that specific tag is considered authenticated without further online
-verification, since release tags are immutable by convention.
+authenticated via Sigstore/Rekor verification, the implementation must resolve
+and persist the corresponding immutable image digest and treat that digest as
+the cache key / trust anchor. The original **full canonical `image:tag`**
+(e.g., `vllm/vllm-openai:v0.4.2`) may be stored only as metadata for operator
+readability, but it must not by itself be treated like a hash pin for offline
+authentication because tags are mutable in many registries. Offline reuse is
+allowed only when the previously verified digest is present and matches the
+cached policy entry, or when a registry-side tag immutability guarantee is an
+explicit prerequisite and is verified by policy.
 
 **Generic / branch tags**: For image references that use non-specific tags
 such as `latest`, `head`, `main`, or similar branch-tracking tags, the version
@@ -430,7 +434,7 @@ cached config.
 # Specific release tag — cached like a hash, no allow_any_version needed
 [providers.nanogpt.supply_chain.images."vllm/vllm-openai"]
 model_tier = true
-provenance = "compose_binding_only"
+provenance = "sigstore_present"
 pinned_tag = "v0.4.2"  # full canonical tag, authenticated via sigstore
 
 # Generic tag — allow_any_version is explicit
