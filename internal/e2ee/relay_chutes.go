@@ -42,6 +42,16 @@ func handleChutesChunk(encB64 json.RawMessage, streamKey []byte) ([]byte, error)
 	return plaintext, nil
 }
 
+// writeStreamError writes an SSE error event if the stream has started, or
+// falls back to http.Error if headers haven't been written yet.
+func writeStreamError(w http.ResponseWriter, flusher http.Flusher, headerWritten bool, msg string) {
+	if headerWritten {
+		WriteSSEError(w, flusher, msg)
+		return
+	}
+	http.Error(w, msg, http.StatusBadGateway)
+}
+
 // RelayStreamChutes reads a Chutes E2EE SSE stream (e2e_init + e2e events),
 // decrypts each chunk using the stream key derived from the e2e_init KEM
 // ciphertext, and writes standard OpenAI-format SSE to w. Returns token
@@ -81,7 +91,7 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 		var event map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			slog.ErrorContext(ctx, "chutes stream: parse event JSON", "err", err, "data_len", len(data))
-			WriteSSEError(w, flusher, "chutes stream: unparseable event")
+			writeStreamError(w, flusher, headerWritten, "chutes stream: unparseable event")
 			return stats
 		}
 
@@ -102,7 +112,7 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 			plaintext, err := handleChutesChunk(encB64, streamKey)
 			if err != nil {
 				slog.ErrorContext(ctx, "chutes stream: chunk failed", "err", err)
-				WriteSSEError(w, flusher, "chutes stream decryption failed")
+				writeStreamError(w, flusher, headerWritten, "chutes stream decryption failed")
 				return stats
 			}
 
@@ -133,7 +143,7 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 			}
 		} else if errMsg, ok := event["e2e_error"]; ok {
 			slog.ErrorContext(ctx, "chutes stream: server-side E2E error", "error", string(errMsg))
-			WriteSSEError(w, flusher, "chutes server-side E2E error")
+			writeStreamError(w, flusher, headerWritten, "chutes server-side E2E error")
 			return stats
 		}
 	}

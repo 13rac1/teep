@@ -765,28 +765,29 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ar, failStatus := s.attestAndCache(ctx, w, prov, upstreamModel, ms)
+	attestDur = ar.AttestDur
 	if failStatus != "" {
 		status = failStatus
 		return
 	}
-	attestDur = ar.AttestDur
 	report := ar.Report
 
 	ur, err := s.doUpstreamRoundtrip(ctx, prov, body, upstreamModel, ar.E2EEActive, ar.Raw, req.Stream)
+	e2eeDur = ur.E2EEDur
+	upstreamDur = ur.UpstreamDur
 	if err != nil {
 		status = "upstream_failed"
+		code := http.StatusBadGateway
+		if he := (*httpError)(nil); errors.As(err, &he) {
+			status = he.status
+			code = he.code
+		}
 		s.stats.errors.Add(1)
 		ms.errors.Add(1)
 		slog.ErrorContext(ctx, "upstream roundtrip failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-		code := http.StatusBadGateway
-		if he := (*httpError)(nil); errors.As(err, &he) {
-			code = he.code
-		}
 		http.Error(w, "upstream request failed", code)
 		return
 	}
-	e2eeDur = ur.E2EEDur
-	upstreamDur = ur.UpstreamDur
 	resp := ur.Resp
 	session := ur.Session
 	meta := ur.Meta
@@ -1022,7 +1023,7 @@ func (s *Server) attestAndCache(
 			s.stats.errors.Add(1)
 			ms.errors.Add(1)
 			http.Error(w, "attestation fetch failed; see server logs", http.StatusBadGateway)
-			return nil, "attest_failed"
+			return &attestResult{AttestDur: time.Since(attestStart)}, "attest_failed"
 		}
 		s.cache.Put(prov.Name, upstreamModel, report)
 	}
@@ -1030,7 +1031,7 @@ func (s *Server) attestAndCache(
 	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
 		s.stats.errors.Add(1)
 		ms.errors.Add(1)
-		return nil, "blocked"
+		return &attestResult{AttestDur: time.Since(attestStart)}, "blocked"
 	}
 
 	// Only cache the signing key after attestation passes. Caching before
@@ -1107,14 +1108,16 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
 
 // httpError wraps an error with an HTTP status code for doUpstreamRoundtrip.
 type httpError struct {
-	code int
-	err  error
+	code   int
+	status string // metric status, e.g. "e2ee_failed", "upstream_failed"
+	err    error
 }
 
 func (e *httpError) Error() string { return e.err.Error() }
 func (e *httpError) Unwrap() error { return e.err }
 
-// upstreamResult holds the outcome of doUpstreamRoundtrip on success.
+// upstreamResult holds the outcome of doUpstreamRoundtrip. Always returned
+// (even on error) so callers can extract partial timing for metrics.
 type upstreamResult struct {
 	Resp        *http.Response
 	Session     e2ee.Decryptor
@@ -1177,7 +1180,8 @@ func (s *Server) doUpstreamRoundtrip(
 					"provider", prov.Name, "model", upstreamModel, "attempt", attempt+1, "err", err)
 				continue
 			}
-			return nil, &httpError{http.StatusInternalServerError, fmt.Errorf("build upstream body: %w", err)}
+			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
+				&httpError{http.StatusInternalServerError, "e2ee_failed", fmt.Errorf("build upstream body: %w", err)}
 		}
 
 		session = ub.Session
@@ -1190,14 +1194,16 @@ func (s *Server) doUpstreamRoundtrip(
 		if reqErr != nil {
 			cancel()
 			zeroE2EESessions(session, meta)
-			return nil, &httpError{http.StatusInternalServerError, fmt.Errorf("build upstream request: %w", reqErr)}
+			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
+				&httpError{http.StatusInternalServerError, "e2ee_failed", fmt.Errorf("build upstream request: %w", reqErr)}
 		}
 		upstreamReq.Header.Set("Content-Type", "application/json")
 
 		if prepErr := prepareUpstreamHeaders(upstreamReq, prov, session, meta, stream); prepErr != nil {
 			cancel()
 			zeroE2EESessions(session, meta)
-			return nil, &httpError{http.StatusInternalServerError, fmt.Errorf("prepare upstream headers: %w", prepErr)}
+			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
+				&httpError{http.StatusInternalServerError, "e2ee_failed", fmt.Errorf("prepare upstream headers: %w", prepErr)}
 		}
 
 		upstreamDoStart := time.Now()
@@ -1240,7 +1246,8 @@ func (s *Server) doUpstreamRoundtrip(
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 			resp.Body.Close()
 		}
-		return nil, &httpError{http.StatusBadGateway, fmt.Errorf("upstream request: %w", err)}
+		return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
+			&httpError{http.StatusBadGateway, "upstream_failed", fmt.Errorf("upstream request: %w", err)}
 	}
 
 	return &upstreamResult{
