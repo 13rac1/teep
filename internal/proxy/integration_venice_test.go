@@ -14,13 +14,14 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 // integrationClient is an HTTP client with a 5-minute timeout for integration
 // tests. Chutes E2EE can take ~30s attestation + ~60s inference, and with
 // instance failover retries the total may exceed 120s. 5 minutes gives
 // generous headroom without hanging forever on a stuck connection.
-var integrationClient = &http.Client{Timeout: 5 * time.Minute}
+var integrationClient = tlsct.NewHTTPClient(5 * time.Minute)
 
 // skipIntegration skips the test if VENICE_API_KEY is unset or if running
 // under go test -short.

@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
@@ -53,7 +55,7 @@ func main() {
 	fmt.Printf("capture time:   %s\n", captureTime.Format(time.RFC3339))
 
 	ctx := context.Background()
-	client := &http.Client{Timeout: httpTimeout}
+	client := tlsct.NewHTTPClient(httpTimeout)
 
 	// 1. Fetch model list.
 	fmt.Println("\n--- fetching model list ---")

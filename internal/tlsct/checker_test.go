@@ -584,6 +584,28 @@ func TestNewHTTPClientWithTransport(t *testing.T) {
 			t.Fatalf("expected 42s timeout, got %v", c.Timeout)
 		}
 	})
+
+	t.Run("default CT enabled without explicit arg", func(t *testing.T) {
+		c := tlsct.NewHTTPClient(5 * time.Second)
+		if _, ok := c.Transport.(*http.Transport); ok {
+			t.Fatal("expected CT-wrapped transport by default (no explicit bool)")
+		}
+	})
+
+	t.Run("NewHTTPClientWithTransport default CT enabled", func(t *testing.T) {
+		c := tlsct.NewHTTPClientWithTransport(5*time.Second, nil)
+		if _, ok := c.Transport.(*http.Transport); ok {
+			t.Fatal("expected CT-wrapped transport by default")
+		}
+	})
+
+	t.Run("TLS 1.3 enforced when CT enabled by default", func(t *testing.T) {
+		base := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS10}}
+		_ = tlsct.NewHTTPClientWithTransport(5*time.Second, base)
+		if base.TLSClientConfig.MinVersion != tls.VersionTLS13 {
+			t.Fatalf("expected TLS 1.3 enforcement, got %d", base.TLSClientConfig.MinVersion)
+		}
+	})
 }
 
 // ---------- Group 14: loadLogList ----------
