@@ -168,7 +168,7 @@ func ShutdownJWKS() {
 // certificate chain and signature verification. The payload must be EAT JSON
 // (starting with '{'). NRAS cloud verification is handled separately by
 // VerifyNVIDIANRAS.
-func VerifyNVIDIAPayload(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
+func VerifyNVIDIAPayload(ctx context.Context, payload string, expectedNonce Nonce) *NvidiaVerifyResult {
 	if payload == "" {
 		return &NvidiaVerifyResult{SignatureErr: errors.New("empty NVIDIA payload")}
 	}
@@ -177,7 +177,7 @@ func VerifyNVIDIAPayload(payload string, expectedNonce Nonce) *NvidiaVerifyResul
 	if len(prefix) > 200 {
 		prefix = prefix[:200]
 	}
-	slog.Debug("NVIDIA payload received", "length", len(payload), "prefix", prefix)
+	slog.DebugContext(ctx, "NVIDIA payload received", "length", len(payload), "prefix", prefix)
 
 	if payload[0] != '{' {
 		return &NvidiaVerifyResult{
@@ -185,7 +185,7 @@ func VerifyNVIDIAPayload(payload string, expectedNonce Nonce) *NvidiaVerifyResul
 		}
 	}
 
-	return verifyNVIDIAEAT(payload, expectedNonce)
+	return verifyNVIDIAEAT(ctx, payload, expectedNonce)
 }
 
 // verifyNVIDIAJWT verifies an NVIDIA NRAS attestation JWT. It fetches (and
@@ -307,7 +307,7 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 		"body_prefix", truncate(jwtStr, 200))
 
 	// NRAS v3 returns [["JWT","<overall>"], {"GPU-0":"<jwt>", ...}].
-	overallJWT, perGPU, err := extractNRASJWT(jwtStr)
+	overallJWT, perGPU, err := extractNRASJWT(ctx, jwtStr)
 	if err != nil {
 		return &NvidiaVerifyResult{
 			Format:       "JWT",
@@ -316,7 +316,7 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 	}
 
 	result := verifyNVIDIAJWT(overallJWT, NvidiaJWKSURL, opts...) //nolint:contextcheck // keyfunc manages its own background context for JWKS refresh
-	result.GPUDiags = extractGPUDiags(perGPU)
+	result.GPUDiags = extractGPUDiags(ctx, perGPU)
 	return result
 }
 
@@ -324,7 +324,7 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 // and extracts diagnostic claims. The per-GPU JWTs share the same JWKS as the
 // overall JWT and their digests are checked via the submods claim, so
 // re-verifying signatures is unnecessary.
-func extractGPUDiags(perGPU map[string]string) []NRASGPUDiag {
+func extractGPUDiags(ctx context.Context, perGPU map[string]string) []NRASGPUDiag {
 	if len(perGPU) == 0 {
 		return nil
 	}
@@ -341,11 +341,11 @@ func extractGPUDiags(perGPU map[string]string) []NRASGPUDiag {
 		jwtStr := perGPU[id]
 		claims, err := decodeJWTPayload(jwtStr)
 		if err != nil {
-			slog.Warn("failed to decode per-GPU JWT payload", "gpu", id, "err", err)
+			slog.WarnContext(ctx, "failed to decode per-GPU JWT payload", "gpu", id, "err", err)
 			diags = append(diags, NRASGPUDiag{GPUID: id, MeasRes: fmt.Sprintf("decode error: %v", err)})
 			continue
 		}
-		slog.Debug("per-GPU JWT decoded", "gpu", id, "claim_count", len(claims),
+		slog.DebugContext(ctx, "per-GPU JWT decoded", "gpu", id, "claim_count", len(claims),
 			"measres", claims["measres"], "error_details", claims["x-nvidia-error-details"])
 		diags = append(diags, NRASGPUDiag{
 			GPUID:         id,
@@ -429,7 +429,7 @@ func nvidiaErrorMessage(claims map[string]any) string {
 // The first element is a [type, token] pair with the overall summary JWT.
 // The second element (if present) is an object mapping GPU IDs to per-GPU JWTs
 // containing detailed attestation claims.
-func extractNRASJWT(body string) (overallJWT string, perGPU map[string]string, err error) {
+func extractNRASJWT(ctx context.Context, body string) (overallJWT string, perGPU map[string]string, err error) {
 	var elements []json.RawMessage
 	if err := json.Unmarshal([]byte(body), &elements); err != nil {
 		return "", nil, fmt.Errorf("NRAS response is not a JSON array: %w (prefix: %s)", err, truncate(body, 100))
@@ -450,7 +450,7 @@ func extractNRASJWT(body string) (overallJWT string, perGPU map[string]string, e
 	if overallJWT == "" {
 		return "", nil, fmt.Errorf("no JWT entry found in NRAS response (%d elements)", len(elements))
 	}
-	slog.Debug("NRAS JWT extracted", "overall_len", len(overallJWT), "per_gpu_count", len(perGPU))
+	slog.DebugContext(ctx, "NRAS JWT extracted", "overall_len", len(overallJWT), "per_gpu_count", len(perGPU))
 	return overallJWT, perGPU, nil
 }
 

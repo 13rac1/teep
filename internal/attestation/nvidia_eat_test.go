@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -34,7 +35,7 @@ func TestVerifyNVIDIAEAT_RealFixture(t *testing.T) {
 	payload := loadEATFixture(t)
 	nonce := fixtureNonceBytes(t)
 
-	result := verifyNVIDIAEAT(payload, nonce)
+	result := verifyNVIDIAEAT(context.Background(), payload, nonce)
 
 	if result.SignatureErr != nil {
 		t.Fatalf("SignatureErr: %v", result.SignatureErr)
@@ -107,7 +108,7 @@ func TestVerifyGPUEvidence_Signature(t *testing.T) {
 	}
 
 	// Verify first GPU's evidence (includes signature check).
-	if err := verifyGPUEvidence(eat.EvidenceList[0], nonce, rootCA); err != nil {
+	if err := verifyGPUEvidence(context.Background(), eat.EvidenceList[0], nonce, rootCA); err != nil {
 		t.Fatalf("verifyGPUEvidence: %v", err)
 	}
 }
@@ -128,7 +129,7 @@ func TestVerifyGPUEvidence_NonceMatch(t *testing.T) {
 
 	// All 8 GPUs should have the same nonce.
 	for i, ev := range eat.EvidenceList {
-		if err := verifyGPUEvidence(ev, nonce, rootCA); err != nil {
+		if err := verifyGPUEvidence(context.Background(), ev, nonce, rootCA); err != nil {
 			t.Errorf("GPU %d: %v", i, err)
 		}
 	}
@@ -139,7 +140,7 @@ func TestVerifyNVIDIAEAT_WrongNonce(t *testing.T) {
 	payload := loadEATFixture(t)
 	wrongNonce := NewNonce() // random, won't match fixture
 
-	result := verifyNVIDIAEAT(payload, wrongNonce)
+	result := verifyNVIDIAEAT(context.Background(), payload, wrongNonce)
 
 	if result.ClaimsErr == nil {
 		t.Fatal("expected ClaimsErr for wrong nonce, got nil")
@@ -151,7 +152,7 @@ func TestVerifyNVIDIAEAT_WrongNonce(t *testing.T) {
 
 // TestVerifyNVIDIAEAT_InvalidJSON verifies error handling for bad JSON.
 func TestVerifyNVIDIAEAT_InvalidJSON(t *testing.T) {
-	result := verifyNVIDIAEAT("not json{{{", NewNonce())
+	result := verifyNVIDIAEAT(context.Background(), "not json{{{", NewNonce())
 
 	if result.SignatureErr == nil {
 		t.Fatal("expected SignatureErr for invalid JSON, got nil")
@@ -161,7 +162,7 @@ func TestVerifyNVIDIAEAT_InvalidJSON(t *testing.T) {
 // TestVerifyNVIDIAEAT_EmptyEvidenceList verifies error for empty evidence list.
 func TestVerifyNVIDIAEAT_EmptyEvidenceList(t *testing.T) {
 	payload := `{"arch":"HOPPER","nonce":"` + fixtureNonce + `","evidence_list":[]}`
-	result := verifyNVIDIAEAT(payload, fixtureNonceBytes(t))
+	result := verifyNVIDIAEAT(context.Background(), payload, fixtureNonceBytes(t))
 
 	if result.SignatureErr == nil {
 		t.Fatal("expected SignatureErr for empty evidence_list, got nil")

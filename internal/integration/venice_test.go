@@ -89,7 +89,7 @@ func verifyVeniceNvidiaEAT(t *testing.T, raw *attestation.RawAttestation, nonce 
 	if raw.NvidiaPayload == "" {
 		return nil
 	}
-	result := attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
+	result := attestation.VerifyNVIDIAPayload(context.Background(), raw.NvidiaPayload, nonce)
 	t.Logf("NVIDIA format: %s", result.Format)
 	t.Logf("NVIDIA signature err: %v", result.SignatureErr)
 	t.Logf("NVIDIA claims err: %v", result.ClaimsErr)

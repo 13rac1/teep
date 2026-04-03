@@ -395,7 +395,7 @@ func (h *PinnedHandler) verifyNVIDIA(
 		slog.DebugContext(ctx, "verifying NVIDIA payload with nonce",
 			"nonce_prefix", nonce.HexPrefix(),
 		)
-		eat = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
+		eat = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce)
 	}
 	if !h.offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
 		nras = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, tlsct.NewHTTPClient(30*time.Second))

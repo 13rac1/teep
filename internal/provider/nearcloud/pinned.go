@@ -515,7 +515,7 @@ func (h *PinnedHandler) verifyModelNVIDIA(
 	ctx context.Context, raw *attestation.RawAttestation, nonce attestation.Nonce,
 ) (eat, nras *attestation.NvidiaVerifyResult) {
 	if raw.NvidiaPayload != "" {
-		eat = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
+		eat = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce)
 	}
 	if !h.offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
 		nras = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, tlsct.NewHTTPClient(30*time.Second))

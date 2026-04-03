@@ -159,7 +159,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 	t.Log("--- NVIDIA EAT verification ---")
 	var nvidiaResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" {
-		nvidiaResult = attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
+		nvidiaResult = attestation.VerifyNVIDIAPayload(context.Background(), raw.NvidiaPayload, nonce)
 		t.Logf("NVIDIA format: %s", nvidiaResult.Format)
 		t.Logf("NVIDIA signature err: %v", nvidiaResult.SignatureErr)
 		t.Logf("NVIDIA claims err: %v", nvidiaResult.ClaimsErr)

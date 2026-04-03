@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/sha256"
@@ -54,7 +55,7 @@ type nvidiaGPUEvidence struct {
 // verifyNVIDIAEAT parses an EAT JSON payload and verifies every GPU's
 // certificate chain and SPDM evidence signature. Any single GPU failure
 // causes the overall result to fail.
-func verifyNVIDIAEAT(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
+func verifyNVIDIAEAT(ctx context.Context, payload string, expectedNonce Nonce) *NvidiaVerifyResult {
 	result := &NvidiaVerifyResult{}
 
 	var eat nvidiaEAT
@@ -73,7 +74,7 @@ func verifyNVIDIAEAT(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
 	result.Nonce = eat.Nonce
 	result.Format = "EAT"
 
-	slog.Debug("NVIDIA EAT parsed",
+	slog.DebugContext(ctx, "NVIDIA EAT parsed",
 		"arch", eat.Arch,
 		"gpu_count", len(eat.EvidenceList),
 		"eat_nonce_prefix", NoncePrefix(eat.Nonce),
@@ -96,13 +97,13 @@ func verifyNVIDIAEAT(payload string, expectedNonce Nonce) *NvidiaVerifyResult {
 
 	// Verify each GPU's evidence.
 	for i, ev := range eat.EvidenceList {
-		if err := verifyGPUEvidence(ev, expectedNonce, rootCA); err != nil {
+		if err := verifyGPUEvidence(ctx, ev, expectedNonce, rootCA); err != nil {
 			result.SignatureErr = fmt.Errorf("GPU %d verification failed: %w", i, err)
 			return result
 		}
 	}
 
-	slog.Debug("NVIDIA EAT verification complete", "gpu_count", len(eat.EvidenceList), "arch", eat.Arch)
+	slog.DebugContext(ctx, "NVIDIA EAT verification complete", "gpu_count", len(eat.EvidenceList), "arch", eat.Arch)
 	return result
 }
 
@@ -132,7 +133,7 @@ func loadPinnedNVIDIARootCA() (*x509.Certificate, error) {
 
 // verifyGPUEvidence verifies a single GPU's certificate chain and SPDM
 // measurement signature.
-func verifyGPUEvidence(ev nvidiaGPUEvidence, expectedNonce Nonce, rootCA *x509.Certificate) error {
+func verifyGPUEvidence(ctx context.Context, ev nvidiaGPUEvidence, expectedNonce Nonce, rootCA *x509.Certificate) error {
 	// 1. Parse certificate chain.
 	certs, err := parseCertChain(ev.Certificate)
 	if err != nil {
@@ -163,7 +164,7 @@ func verifyGPUEvidence(ev nvidiaGPUEvidence, expectedNonce Nonce, rootCA *x509.C
 		return fmt.Errorf("base64 decode evidence: %w", err)
 	}
 
-	if err := verifySPDMEvidence(evidenceBytes, expectedNonce, ecdsaKey); err != nil {
+	if err := verifySPDMEvidence(ctx, evidenceBytes, expectedNonce, ecdsaKey); err != nil {
 		return fmt.Errorf("SPDM evidence: %w", err)
 	}
 
@@ -241,7 +242,7 @@ func verifyCertChain(certs []*x509.Certificate, pinnedRoot *x509.Certificate) er
 // verifySPDMEvidence validates the SPDM 1.1 GET_MEASUREMENTS request/response
 // binary blob: checks version codes, extracts and verifies the nonce, and
 // verifies the ECDSA P-384 signature over the message.
-func verifySPDMEvidence(evidence []byte, expectedNonce Nonce, leafKey *ecdsa.PublicKey) error {
+func verifySPDMEvidence(ctx context.Context, evidence []byte, expectedNonce Nonce, leafKey *ecdsa.PublicKey) error {
 	if len(evidence) < spdmGetMeasurementsLen+10 {
 		return fmt.Errorf("evidence too short: %d bytes", len(evidence))
 	}
@@ -259,7 +260,7 @@ func verifySPDMEvidence(evidence []byte, expectedNonce Nonce, leafKey *ecdsa.Pub
 	copy(requestNonce[:], evidence[4:36])
 	gotHex := hex.EncodeToString(requestNonce[:])
 	wantHex := expectedNonce.Hex()
-	slog.Debug("SPDM requester nonce extracted",
+	slog.DebugContext(ctx, "SPDM requester nonce extracted",
 		"spdm_nonce_prefix", NoncePrefix(gotHex),
 		"expected_nonce_prefix", NoncePrefix(wantHex),
 		"match", subtle.ConstantTimeCompare(requestNonce[:], expectedNonce[:]) == 1,
@@ -333,7 +334,7 @@ func verifySPDMEvidence(evidence []byte, expectedNonce Nonce, leafKey *ecdsa.Pub
 		return errors.New("ECDSA P-384 signature verification failed")
 	}
 
-	slog.Debug("SPDM evidence verified",
+	slog.DebugContext(ctx, "SPDM evidence verified",
 		"meas_record_len", measRecordLen,
 		"opaque_len", opaqueLen,
 		"evidence_len", len(evidence))
@@ -346,7 +347,7 @@ func verifySPDMEvidence(evidence []byte, expectedNonce Nonce, leafKey *ecdsa.Pub
 // evidence entries. The serverNonce is the nonce from the attestation response
 // (typically server-generated); it must match the SPDM requester nonce embedded
 // in each GPU's evidence.
-func VerifyNVIDIAGPUDirect(evidence []GPUEvidence, serverNonce Nonce) *NvidiaVerifyResult {
+func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, serverNonce Nonce) *NvidiaVerifyResult {
 	result := &NvidiaVerifyResult{
 		Format:   "SPDM",
 		GPUCount: len(evidence),
@@ -360,7 +361,7 @@ func VerifyNVIDIAGPUDirect(evidence []GPUEvidence, serverNonce Nonce) *NvidiaVer
 
 	result.Arch = evidence[0].Arch
 
-	slog.Debug("NVIDIA GPU direct verification starting",
+	slog.DebugContext(ctx, "NVIDIA GPU direct verification starting",
 		"gpu_count", len(evidence),
 		"arch", result.Arch,
 		"nonce_prefix", serverNonce.HexPrefix(),
@@ -378,13 +379,13 @@ func VerifyNVIDIAGPUDirect(evidence []GPUEvidence, serverNonce Nonce) *NvidiaVer
 			Certificate: ev.Certificate,
 			Evidence:    ev.Evidence,
 		}
-		if err := verifyGPUEvidence(internal, serverNonce, rootCA); err != nil {
+		if err := verifyGPUEvidence(ctx, internal, serverNonce, rootCA); err != nil {
 			result.SignatureErr = fmt.Errorf("GPU %d verification failed: %w", i, err)
 			return result
 		}
 	}
 
-	slog.Debug("NVIDIA GPU direct verification complete",
+	slog.DebugContext(ctx, "NVIDIA GPU direct verification complete",
 		"gpu_count", len(evidence),
 		"arch", result.Arch,
 	)

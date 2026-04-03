@@ -583,7 +583,7 @@ func verifyNVIDIA(
 	if raw.NvidiaPayload != "" {
 		slog.DebugContext(ctx, "NVIDIA verification starting", "provider", provName)
 		start := time.Now()
-		result := attestation.VerifyNVIDIAPayload(raw.NvidiaPayload, nonce)
+		result := attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce)
 		dur := time.Since(start)
 		slog.DebugContext(ctx, "NVIDIA verification complete", "provider", provName, "elapsed", dur)
 		return result, dur
@@ -597,7 +597,7 @@ func verifyNVIDIA(
 			}, 0
 		}
 		start := time.Now()
-		result := attestation.VerifyNVIDIAGPUDirect(raw.GPUEvidence, serverNonce)
+		result := attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce)
 		dur := time.Since(start)
 		slog.DebugContext(ctx, "NVIDIA GPU direct verification complete", "provider", provName, "elapsed", dur)
 		return result, dur

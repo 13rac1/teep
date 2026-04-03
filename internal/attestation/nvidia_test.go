@@ -335,7 +335,7 @@ func TestVerifyNVIDIAJWT_EmptyToken(t *testing.T) {
 // TestExtractNRASJWT verifies the NRAS response parsing.
 func TestExtractNRASJWT(t *testing.T) {
 	// Valid: array of [type, token] pairs.
-	extracted, perGPU, err := extractNRASJWT(`[["JWT","eyJhbGciOi.payload.sig"]]`)
+	extracted, perGPU, err := extractNRASJWT(context.Background(), `[["JWT","eyJhbGciOi.payload.sig"]]`)
 	if err != nil {
 		t.Fatalf("extractNRASJWT valid: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestExtractNRASJWT(t *testing.T) {
 	}
 
 	// Multiple entries: takes the JWT one.
-	extracted, _, err = extractNRASJWT(`[["OTHER","foo"],["JWT","eyJhbGciOi.p.s"]]`)
+	extracted, _, err = extractNRASJWT(context.Background(), `[["OTHER","foo"],["JWT","eyJhbGciOi.p.s"]]`)
 	if err != nil {
 		t.Fatalf("extractNRASJWT multi: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestExtractNRASJWT(t *testing.T) {
 	}
 
 	// With per-GPU JWTs (NRAS v3 format).
-	extracted, perGPU, err = extractNRASJWT(`[["JWT","eyJ.overall.sig"],{"GPU-0":"eyJ.gpu0.sig","GPU-1":"eyJ.gpu1.sig"}]`)
+	extracted, perGPU, err = extractNRASJWT(context.Background(), `[["JWT","eyJ.overall.sig"],{"GPU-0":"eyJ.gpu0.sig","GPU-1":"eyJ.gpu1.sig"}]`)
 	if err != nil {
 		t.Fatalf("extractNRASJWT v3: %v", err)
 	}
@@ -371,19 +371,19 @@ func TestExtractNRASJWT(t *testing.T) {
 	}
 
 	// No JWT entry.
-	_, _, err = extractNRASJWT(`[["OTHER","foo"]]`)
+	_, _, err = extractNRASJWT(context.Background(), `[["OTHER","foo"]]`)
 	if err == nil {
 		t.Error("expected error for no JWT entry, got nil")
 	}
 
 	// Not JSON.
-	_, _, err = extractNRASJWT(`not-json`)
+	_, _, err = extractNRASJWT(context.Background(), `not-json`)
 	if err == nil {
 		t.Error("expected error for non-JSON, got nil")
 	}
 
 	// Empty array.
-	_, _, err = extractNRASJWT(`[]`)
+	_, _, err = extractNRASJWT(context.Background(), `[]`)
 	if err == nil {
 		t.Error("expected error for empty array, got nil")
 	}
@@ -394,7 +394,7 @@ func TestExtractNRASJWT(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestVerifyNVIDIAPayload_EmptyPayload(t *testing.T) {
-	result := VerifyNVIDIAPayload("", NewNonce())
+	result := VerifyNVIDIAPayload(context.Background(), "", NewNonce())
 	if result.SignatureErr == nil {
 		t.Fatal("expected error for empty payload")
 	}
@@ -403,7 +403,7 @@ func TestVerifyNVIDIAPayload_EmptyPayload(t *testing.T) {
 
 func TestVerifyNVIDIAPayload_NonEATPayload(t *testing.T) {
 	// JWT-style payload starts with 'e' (base64 header), not '{'
-	result := VerifyNVIDIAPayload("eyJhbGciOiJSUzI1NiJ9.payload.sig", NewNonce())
+	result := VerifyNVIDIAPayload(context.Background(), "eyJhbGciOiJSUzI1NiJ9.payload.sig", NewNonce())
 	if result.SignatureErr == nil {
 		t.Fatal("expected error for non-EAT payload")
 	}
@@ -419,7 +419,7 @@ func TestVerifyNVIDIAPayload_EATDispatch(t *testing.T) {
 	// verifyNVIDIAEAT will detect the format but fail on GPU cert verification.
 	payload := fmt.Sprintf(`{"arch":"HOPPER","nonce":%q,"evidence_list":[{"arch":"HOPPER","certificate":"","evidence":""}]}`, nonce.Hex())
 
-	result := VerifyNVIDIAPayload(payload, nonce)
+	result := VerifyNVIDIAPayload(context.Background(), payload, nonce)
 	// EAT format should be detected even though verification fails.
 	if result.Format != "EAT" {
 		t.Errorf("Format = %q, want EAT", result.Format)
@@ -575,7 +575,7 @@ func TestExtractGPUDiags(t *testing.T) {
 		"GPU-1": fakeJWT,
 	}
 
-	diags := extractGPUDiags(perGPU)
+	diags := extractGPUDiags(context.Background(), perGPU)
 	t.Logf("diags: %+v", diags)
 
 	if len(diags) != 2 {
@@ -605,12 +605,12 @@ func TestExtractGPUDiags(t *testing.T) {
 	}
 
 	// Nil map returns nil.
-	if got := extractGPUDiags(nil); got != nil {
+	if got := extractGPUDiags(context.Background(), nil); got != nil {
 		t.Errorf("nil map returned %v", got)
 	}
 
 	// Invalid JWT payload.
-	diags = extractGPUDiags(map[string]string{"GPU-0": "not-a-jwt"})
+	diags = extractGPUDiags(context.Background(), map[string]string{"GPU-0": "not-a-jwt"})
 	if len(diags) != 1 {
 		t.Fatalf("got %d diags, want 1", len(diags))
 	}
