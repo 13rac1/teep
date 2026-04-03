@@ -2893,6 +2893,60 @@ func TestPinnedPath_E2EE_ReportDataBindingCacheCheck(t *testing.T) {
 	}
 }
 
+// TestPinnedPath_E2EE_NilReportBlocked verifies that an E2EE provider on the
+// pinned path blocks the request when the pinned handler returns a nil report
+// (SPKI cache hit) and the attestation cache is empty. Previously this was a
+// fail-open: enforceReport returned true for nil reports, and the E2EE binding
+// check short-circuited on report==nil.
+func TestPinnedPath_E2EE_NilReportBlocked(t *testing.T) {
+	// Handler always returns nil report (simulates SPKI cache hit with no
+	// attestation). Also returns 200 + body so we can distinguish "blocked
+	// by proxy" (502) from "handler error."
+	handler := &stubPinnedHandler{}
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+				E2EE:    true,
+			},
+		},
+		AllowFail: attestation.KnownFactors,
+	}
+
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+	prov := srv.ProviderByName("neardirect")
+	if prov == nil {
+		t.Fatal("neardirect provider missing")
+	}
+	prov.PinnedHandler = handler
+
+	// Do NOT populate the attestation cache — simulate cache expiry.
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	if err != nil {
+		t.Fatalf("POST chat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	t.Logf("status=%d body=%s", resp.StatusCode, string(body))
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (E2EE with nil report must be blocked)", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "no attestation report available") {
+		t.Errorf("expected 'no attestation report available' in body, got: %s", string(body))
+	}
+}
+
 // --- Nonce pool unit tests ---
 
 // mockE2EEFetcher records calls for nonce pool fast-path testing.

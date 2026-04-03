@@ -16,7 +16,7 @@ linters:
     - gochecknoglobals   # we have legitimate package-level vars
     - gochecknoinits     # we don't use init() but no need to lint for it
     - gocognit           # cognitive complexity limits are arbitrary
-    - gocyclo            # cyclomatic complexity limits are arbitrary
+    # gocyclo enabled with over=34 (see settings below)
     - godox              # we allow TODO/FIXME comments
     - gomoddirectives    # no go.mod directive restrictions needed
     - gomodguard         # no module allow/blocklist needed
@@ -54,6 +54,8 @@ linters:
     - zerologlint        # no zerolog
 
   settings:
+    gocyclo:
+      min-complexity: 34
     errcheck:
       exclude-functions:
         - (net/http.ResponseWriter).Write

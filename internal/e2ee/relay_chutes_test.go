@@ -145,9 +145,13 @@ func TestRelayStreamChutes_E2EError(t *testing.T) {
 	RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
 
 	body := rec.Body.String()
-	t.Logf("e2e_error response: %s", body)
-	if !strings.Contains(body, "decryption_error") {
-		t.Error("expected decryption_error in SSE error event")
+	t.Logf("e2e_error response: status=%d body=%s", rec.Code, body)
+	// Stream hasn't started (no chunks decrypted), so we get a plain HTTP error.
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+	if !strings.Contains(body, "E2E error") {
+		t.Error("expected 'E2E error' in error body")
 	}
 }
 
@@ -174,6 +178,33 @@ func TestRelayNonStreamChutes(t *testing.T) {
 	t.Logf("decrypted non-stream: %s", body)
 	if body != plainJSON {
 		t.Errorf("body mismatch:\n  got:  %s\n  want: %s", body, plainJSON)
+	}
+}
+
+func TestRelayStreamChutes_UnparseableEvent(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+
+	// An unparseable JSON event in the E2EE stream must abort (not continue).
+	input := "data: not-valid-json!!!\n\ndata: [DONE]\n\n"
+
+	rec := httptest.NewRecorder()
+	stats := RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
+
+	body := rec.Body.String()
+	t.Logf("unparseable event response: status=%d body=%q chunks=%d", rec.Code, body, stats.Chunks)
+
+	// Stream hasn't started (no headers written), so we get a plain HTTP error.
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+	if !strings.Contains(body, "unparseable event") {
+		t.Error("expected 'unparseable event' in error body")
+	}
+	if stats.Chunks != 0 {
+		t.Errorf("chunks = %d, want 0 (stream should abort before any chunks)", stats.Chunks)
 	}
 }
 
