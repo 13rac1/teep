@@ -379,8 +379,11 @@ func TestRelayReassembledNonStream(t *testing.T) {
 func TestRelayStream_EmptyBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	_, err := RelayStream(context.Background(), rec, strings.NewReader(""), nil)
-	if err != nil {
-		t.Logf("RelayStream error: %v", err)
+	if err == nil {
+		t.Fatal("RelayStream with empty body should return non-nil error")
+	}
+	if !errors.Is(err, ErrRelayFailed) {
+		t.Errorf("error should wrap ErrRelayFailed, got: %v", err)
 	}
 
 	// Empty body should produce a bad gateway error.
@@ -703,3 +706,69 @@ func TestEffectiveTokens(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Relay error sentinel tests
+// ---------------------------------------------------------------------------
+
+func TestRelayStream_NoFlusher_ReturnsRelayFailed(t *testing.T) {
+	// Writer that does not implement http.Flusher.
+	w := &noFlushWriter{}
+	_, err := RelayStream(context.Background(), w, strings.NewReader("data: {}\n\n"), nil)
+	if err == nil {
+		t.Fatal("expected non-nil error when writer lacks Flusher")
+	}
+	if !errors.Is(err, ErrRelayFailed) {
+		t.Errorf("error should wrap ErrRelayFailed, got: %v", err)
+	}
+	if errors.Is(err, ErrDecryptionFailed) {
+		t.Error("error should NOT be ErrDecryptionFailed")
+	}
+}
+
+func TestRelayStream_ScannerError_ReturnsRelayFailed(t *testing.T) {
+	_, err := RelayStream(context.Background(), httptest.NewRecorder(), &failReader{}, nil)
+	if err == nil {
+		t.Fatal("expected non-nil error on scanner failure")
+	}
+	if !errors.Is(err, ErrRelayFailed) {
+		t.Errorf("error should wrap ErrRelayFailed, got: %v", err)
+	}
+}
+
+func TestRelayNonStream_ReadError_ReturnsRelayFailed(t *testing.T) {
+	_, err := RelayNonStream(context.Background(), httptest.NewRecorder(), &failReader{}, nil)
+	if err == nil {
+		t.Fatal("expected non-nil error on read failure")
+	}
+	if !errors.Is(err, ErrRelayFailed) {
+		t.Errorf("error should wrap ErrRelayFailed, got: %v", err)
+	}
+}
+
+func TestErrSentinels_Distinct(t *testing.T) {
+	if errors.Is(ErrRelayFailed, ErrDecryptionFailed) {
+		t.Error("ErrRelayFailed should not match ErrDecryptionFailed")
+	}
+	if errors.Is(ErrDecryptionFailed, ErrRelayFailed) {
+		t.Error("ErrDecryptionFailed should not match ErrRelayFailed")
+	}
+}
+
+// noFlushWriter is an http.ResponseWriter that does not implement http.Flusher.
+type noFlushWriter struct {
+	code int
+	body []byte
+}
+
+func (w *noFlushWriter) Header() http.Header { return http.Header{} }
+func (w *noFlushWriter) Write(b []byte) (int, error) {
+	w.body = append(w.body, b...)
+	return len(b), nil
+}
+func (w *noFlushWriter) WriteHeader(code int) { w.code = code }
+
+// failReader always returns an error on Read.
+type failReader struct{}
+
+func (*failReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }

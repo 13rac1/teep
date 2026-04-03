@@ -779,19 +779,18 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	report := ar.Report
 
-	// Block requests to provider+model pairs where E2EE previously failed
-	// (decryption failure after a successful HTTP response). Full
-	// re-attestation is required to recover; the cache entries were
-	// already invalidated when the failure was recorded.
+	// A prior E2EE failure marks the provider+model pair as failed and also
+	// invalidates the cached attestation. Reaching this point means the
+	// current request has already completed attestation successfully, so that
+	// successful re-attestation is the recovery point: clear the stale E2EE
+	// failure marker and proceed. If attestation had failed, the request would
+	// already have been blocked above.
 	if ar.E2EEActive {
-		if _, failed := s.e2eeFailed.Load(providerModelKey{prov.Name, upstreamModel}); failed {
-			status = "e2ee_previously_failed"
-			s.stats.errors.Add(1)
-			ms.errors.Add(1)
-			slog.ErrorContext(ctx, "E2EE previously failed; re-attestation required",
+		key := providerModelKey{prov.Name, upstreamModel}
+		if _, failed := s.e2eeFailed.Load(key); failed {
+			s.e2eeFailed.Delete(key)
+			slog.InfoContext(ctx, "Cleared prior E2EE failure after successful re-attestation",
 				"provider", prov.Name, "model", upstreamModel)
-			http.Error(w, "E2EE previously failed for this provider/model; re-attestation required", http.StatusBadGateway)
-			return
 		}
 	}
 
@@ -848,7 +847,7 @@ func (s *Server) relayWithRetry(
 		maxRelayAttempts = chutesMaxAttempts
 	}
 
-	ri := &responseInterceptor{ResponseWriter: w}
+	ri, riWriter := newResponseInterceptor(w)
 	var ss e2ee.StreamStats
 	var relayErr error
 	var lastChuteID string // track for post-loop nonce pool invalidation
@@ -938,7 +937,7 @@ func (s *Server) relayWithRetry(
 		}
 
 		upstreamRelayStart := time.Now()
-		ss, relayErr = relayResponse(ctx, ri, resp.Body, session, meta, stream)
+		ss, relayErr = relayResponse(ctx, riWriter, resp.Body, session, meta, stream)
 		result.upstreamDur += time.Since(upstreamRelayStart)
 		recordTokPerSec(ms, ss)
 
@@ -984,13 +983,36 @@ func (s *Server) relayWithRetry(
 		break
 	}
 
-	// Post-relay enforcement: handle decryption failures that could not be retried.
-	if relayErr != nil && errors.Is(relayErr, e2ee.ErrDecryptionFailed) && ar.E2EEActive {
-		result.status = s.handleE2EEDecryptionFailure(ctx, prov, upstreamModel, ms, chutesE2EE, lastChuteID, relayErr)
-		return result
-	}
-
+	result.status = s.classifyRelayOutcome(ctx, relayErr, ar.E2EEActive, prov, upstreamModel, ms, chutesE2EE, lastChuteID)
 	return result
+}
+
+// classifyRelayOutcome handles post-loop relay errors, returning the status
+// string (empty on success).
+func (s *Server) classifyRelayOutcome(
+	ctx context.Context,
+	relayErr error,
+	e2eeActive bool,
+	prov *provider.Provider,
+	upstreamModel string,
+	ms *modelStats,
+	chutesE2EE bool,
+	lastChuteID string,
+) string {
+	if relayErr == nil {
+		return ""
+	}
+	// Post-relay enforcement: handle decryption failures that could not be retried.
+	if errors.Is(relayErr, e2ee.ErrDecryptionFailed) && e2eeActive {
+		return s.handleE2EEDecryptionFailure(ctx, prov, upstreamModel, ms, chutesE2EE, lastChuteID, relayErr)
+	}
+	// Non-decryption relay errors (e.g. streaming unsupported, empty
+	// upstream, read failures): the error response has already been written
+	// to the client. Set status so the caller does not promote e2ee_usable.
+	s.stats.errors.Add(1)
+	ms.errors.Add(1)
+	slog.ErrorContext(ctx, "relay failed", "provider", prov.Name, "model", upstreamModel, "err", relayErr)
+	return "relay_failed"
 }
 
 // handleE2EEDecryptionFailure records an unretriable E2EE decryption failure,
@@ -1126,6 +1148,18 @@ func (s *Server) handlePinnedChat(
 		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
 	}
 
+	// Clear stale E2EE failure markers: reaching this point means
+	// attestation succeeded on this pinned connection. Same recovery
+	// logic as the non-pinned path.
+	if prov.E2EE {
+		key := providerModelKey{prov.Name, upstreamModel}
+		if _, failed := s.e2eeFailed.Load(key); failed {
+			s.e2eeFailed.Delete(key)
+			slog.InfoContext(ctx, "Cleared prior E2EE failure after successful pinned attestation",
+				"provider", prov.Name, "model", upstreamModel)
+		}
+	}
+
 	// Copy response headers, excluding hop-by-hop headers that Go's
 	// HTTP stack manages (matching proxy.py's filtering).
 	// net/http canonicalizes keys, so compare against canonical forms.
@@ -1166,6 +1200,14 @@ func (s *Server) handlePinnedChat(
 		s.signingKeyCache.Delete(prov.Name, upstreamModel)
 		slog.ErrorContext(ctx, "pinned E2EE decryption failed; caches invalidated",
 			"provider", prov.Name, "model", upstreamModel, "err", relayErr)
+		return
+	}
+
+	// Non-decryption relay errors: response already written to client.
+	if relayErr != nil {
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
+		slog.ErrorContext(ctx, "pinned relay failed", "provider", prov.Name, "model", upstreamModel, "err", relayErr)
 		return
 	}
 
@@ -1294,6 +1336,10 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
 // responseInterceptor wraps an http.ResponseWriter to detect whether headers
 // have been flushed to the client. Used by the Chutes E2EE retry loop to
 // determine if a failed streaming relay can be retried.
+//
+// It only satisfies http.Flusher when the underlying ResponseWriter does,
+// so relay code's `w.(http.Flusher)` check correctly reflects the real
+// writer's capability.
 type responseInterceptor struct {
 	http.ResponseWriter
 	headerSent bool
@@ -1309,10 +1355,25 @@ func (ri *responseInterceptor) Write(b []byte) (int, error) {
 	return ri.ResponseWriter.Write(b)
 }
 
-func (ri *responseInterceptor) Flush() {
-	if f, ok := ri.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
+// responseInterceptorFlusher extends responseInterceptor with Flush support.
+// Returned by newResponseInterceptor when the underlying writer is flushable.
+type responseInterceptorFlusher struct {
+	*responseInterceptor
+	flusher http.Flusher
+}
+
+func (rif *responseInterceptorFlusher) Flush() {
+	rif.flusher.Flush()
+}
+
+// newResponseInterceptor wraps w in a responseInterceptor. The returned writer
+// satisfies http.Flusher only if w does.
+func newResponseInterceptor(w http.ResponseWriter) (*responseInterceptor, http.ResponseWriter) {
+	ri := &responseInterceptor{ResponseWriter: w}
+	if f, ok := w.(http.Flusher); ok {
+		return ri, &responseInterceptorFlusher{responseInterceptor: ri, flusher: f}
 	}
+	return ri, ri
 }
 
 // isChutesE2EE returns true if the request uses Chutes E2EE (has a nonce pool

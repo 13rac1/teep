@@ -18,6 +18,13 @@ import (
 // E2EE breakage) from other relay errors.
 var ErrDecryptionFailed = errors.New("e2ee decryption failed")
 
+// ErrRelayFailed is a sentinel error returned by relay functions for
+// non-decryption failures (e.g. streaming not supported, empty upstream,
+// read errors). Callers should treat any non-nil relay error as terminal
+// but use errors.Is to distinguish decryption failures from other relay
+// failures.
+var ErrRelayFailed = errors.New("relay failed")
+
 // StreamStats holds token throughput metrics collected during SSE relay.
 type StreamStats struct {
 	Chunks   int           // number of SSE data chunks with delta/content
@@ -358,12 +365,13 @@ func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, StreamStats
 
 // RelayStream reads an SSE stream from body, decrypts chunks when session is
 // non-nil, and writes the decrypted SSE lines to w. Returns token throughput
-// stats and a non-nil error wrapping ErrDecryptionFailed on decryption failure.
+// stats and a non-nil error: ErrDecryptionFailed on decryption failure,
+// ErrRelayFailed on other terminal failures.
 func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) (StreamStats, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return StreamStats{}, nil
+		return StreamStats{}, fmt.Errorf("%w: streaming not supported", ErrRelayFailed)
 	}
 
 	scanner, cleanup := newSSEScanner(body)
@@ -372,10 +380,10 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
 			http.Error(w, "upstream stream error", http.StatusBadGateway)
-		} else {
-			http.Error(w, "empty upstream stream", http.StatusBadGateway)
+			return StreamStats{}, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 		}
-		return StreamStats{}, nil
+		http.Error(w, "empty upstream stream", http.StatusBadGateway)
+		return StreamStats{}, fmt.Errorf("%w: empty upstream stream", ErrRelayFailed)
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -471,12 +479,13 @@ func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body 
 
 // RelayNonStream reads a non-streaming JSON response from body, decrypts the
 // content fields if session is non-nil, and writes the result to w. Returns a
-// non-nil error wrapping ErrDecryptionFailed on decryption failure.
+// non-nil error: ErrDecryptionFailed on decryption failure, ErrRelayFailed on
+// other terminal failures.
 func RelayNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) (StreamStats, error) {
 	responseBody, err := io.ReadAll(io.LimitReader(body, 10<<20))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
-		return StreamStats{}, err
+		return StreamStats{}, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 
 	if session == nil {

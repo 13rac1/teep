@@ -4,7 +4,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+
+	"github.com/13rac1/teep/internal/e2ee"
 )
 
 // ---------------------------------------------------------------------------
@@ -46,11 +49,31 @@ func TestResponseInterceptor_WriteSetsSent(t *testing.T) {
 
 func TestResponseInterceptor_Flush(t *testing.T) {
 	rec := httptest.NewRecorder()
-	ri := &responseInterceptor{ResponseWriter: rec}
+	_, riWriter := newResponseInterceptor(rec)
 
-	// Flush should not panic and should work through to the underlying writer.
-	ri.Flush()
+	// httptest.Recorder implements http.Flusher, so riWriter should too.
+	flusher, ok := riWriter.(http.Flusher)
+	if !ok {
+		t.Fatal("riWriter should satisfy http.Flusher when underlying writer does")
+	}
+	flusher.Flush()
 }
+
+func TestResponseInterceptor_NoFlusher(t *testing.T) {
+	// A writer that does not implement http.Flusher.
+	ri, riWriter := newResponseInterceptor(nonFlushWriter{})
+	_ = ri
+	if _, ok := riWriter.(http.Flusher); ok {
+		t.Fatal("riWriter should NOT satisfy http.Flusher when underlying writer doesn't")
+	}
+}
+
+// nonFlushWriter is an http.ResponseWriter that does not implement http.Flusher.
+type nonFlushWriter struct{}
+
+func (nonFlushWriter) Header() http.Header         { return http.Header{} }
+func (nonFlushWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (nonFlushWriter) WriteHeader(int)             {}
 
 // ---------------------------------------------------------------------------
 // classifyUpstreamError
@@ -97,4 +120,75 @@ func TestClassifyUpstreamError(t *testing.T) {
 			t.Errorf("msg = %q, want 'failed to prepare encrypted request'", msg)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// e2eeFailed enforcement and recovery
+// ---------------------------------------------------------------------------
+
+func TestE2EEFailed_StoreAndRecover(t *testing.T) {
+	// Simulate the e2eeFailed lifecycle: store a failure, verify it's
+	// present, then clear it on successful re-attestation.
+	var e2eeFailed sync.Map
+	key := providerModelKey{provider: "venice", model: "test-model"}
+
+	// Initially not failed.
+	if _, failed := e2eeFailed.Load(key); failed {
+		t.Fatal("should not be failed initially")
+	}
+
+	// Record failure (as handleE2EEDecryptionFailure does).
+	e2eeFailed.Store(key, true)
+	if _, failed := e2eeFailed.Load(key); !failed {
+		t.Fatal("should be failed after Store")
+	}
+
+	// Recovery: clear on successful re-attestation (as handleChatCompletions does).
+	if _, failed := e2eeFailed.Load(key); failed {
+		e2eeFailed.Delete(key)
+	}
+	if _, failed := e2eeFailed.Load(key); failed {
+		t.Fatal("should be cleared after Delete")
+	}
+}
+
+func TestE2EEFailed_IsolationByKey(t *testing.T) {
+	var e2eeFailed sync.Map
+	key1 := providerModelKey{provider: "venice", model: "model-a"}
+	key2 := providerModelKey{provider: "venice", model: "model-b"}
+
+	e2eeFailed.Store(key1, true)
+
+	if _, failed := e2eeFailed.Load(key1); !failed {
+		t.Error("key1 should be failed")
+	}
+	if _, failed := e2eeFailed.Load(key2); failed {
+		t.Error("key2 should NOT be failed (different model)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Relay error classification
+// ---------------------------------------------------------------------------
+
+func TestRelayError_DecryptionVsRelay(t *testing.T) {
+	// Verify that errors.Is correctly distinguishes the two relay sentinels.
+	decErr := e2ee.ErrDecryptionFailed
+	relayErr := e2ee.ErrRelayFailed
+
+	if errors.Is(decErr, relayErr) {
+		t.Error("ErrDecryptionFailed should not match ErrRelayFailed")
+	}
+	if errors.Is(relayErr, decErr) {
+		t.Error("ErrRelayFailed should not match ErrDecryptionFailed")
+	}
+
+	// A wrapped decryption error should match ErrDecryptionFailed but not ErrRelayFailed.
+	wrapped := errors.Join(decErr, errors.New("bad crypto"))
+	if !errors.Is(wrapped, decErr) {
+		t.Error("wrapped decryption error should match ErrDecryptionFailed")
+	}
+	if errors.Is(wrapped, relayErr) {
+		t.Error("wrapped decryption error should NOT match ErrRelayFailed")
+	}
 }

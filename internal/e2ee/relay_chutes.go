@@ -55,13 +55,13 @@ func writeStreamError(w http.ResponseWriter, flusher http.Flusher, headerWritten
 // RelayStreamChutes reads a Chutes E2EE SSE stream (e2e_init + e2e events),
 // decrypts each chunk using the stream key derived from the e2e_init KEM
 // ciphertext, and writes standard OpenAI-format SSE to w. Returns token
-// throughput stats and a non-nil error wrapping ErrDecryptionFailed on
-// decryption failure.
+// throughput stats and a non-nil error: ErrDecryptionFailed on decryption
+// failure, ErrRelayFailed on other terminal failures.
 func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reader, session *ChutesSession) (StreamStats, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return StreamStats{}, nil
+		return StreamStats{}, fmt.Errorf("%w: streaming not supported", ErrRelayFailed)
 	}
 
 	scanner, cleanup := newSSEScanner(body)
@@ -163,7 +163,7 @@ func RelayNonStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Re
 	if err != nil {
 		slog.ErrorContext(ctx, "chutes E2EE non-stream read failed", "err", err)
 		http.Error(w, "response read failed", http.StatusBadGateway)
-		return StreamStats{}, nil
+		return StreamStats{}, fmt.Errorf("%w: read response blob: %w", ErrRelayFailed, err)
 	}
 	result, err := session.DecryptResponseBlobChutes(blob)
 	if err != nil {
