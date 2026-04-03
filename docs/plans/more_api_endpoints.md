@@ -67,11 +67,15 @@ The Chutes `/e2e/invoke` tunnel requires an `X-E2E-Path` header naming the TEE-i
 
 6. Add `TargetPath string` to the `e2ee.ChutesE2EE` struct (in `internal/e2ee/chutes.go` or wherever `ChutesE2EE` is defined).
 
-7. In the new handler relay paths (Phases 3–6), set `meta.TargetPath = prov.EmbeddingsPath` (or `AudioPath`, `ImagesPath`) before calling `prov.Preparer.PrepareRequest`.
+7. In every Chutes relay handler, set `meta.TargetPath` unconditionally before calling `prov.Preparer.PrepareRequest`:
+   - chat completions: `meta.TargetPath = prov.ChatPath`
+   - embeddings: `meta.TargetPath = prov.EmbeddingsPath`
+   - audio transcriptions: `meta.TargetPath = prov.AudioPath`
+   - image generations: `meta.TargetPath = prov.ImagesPath`
 
-8. In `internal/provider/chutes/chutes.go` `PrepareRequest`: use `meta.TargetPath` when non-empty, fall back to configured `chatPath` for chat completions (preserves existing behaviour).
+8. In `internal/provider/chutes/chutes.go` `PrepareRequest`: require `meta.TargetPath` to be non-empty, use it for `X-E2E-Path`, and return an error if it is missing. Do not fall back to configured `chatPath`; missing routing metadata must fail-closed.
 
-9. Unit tests for the new `TargetPath` routing in the chutes preparer.
+9. Unit tests for the chutes preparer must cover both explicit `TargetPath` routing and rejection when `TargetPath` is empty, so non-chat requests cannot be silently misrouted to the chat endpoint.
 
 ---
 
@@ -176,6 +180,6 @@ Depends on Phase 1; research required first.
 
 1. **nearcloud non-chat E2EE**: Does near.ai's `X-Client-Pub-Key` / `X-Encryption-Version` protocol extend to `/v1/embeddings`, `/v1/audio/transcriptions`, `/v1/images/generations`? If yes, nearcloud becomes viable for those endpoints and should be wired in Phases 3/5/6. If no, only neardirect is in scope for new endpoint types from near.ai.
 
-2. **Audio overchutes nearcloud**: Encrypting `multipart/form-data` at app layer is non-trivial. Needs resolution once nearcloud non-chat E2EE status is known.
+2. **Audio over Chutes / NearCloud**: Encrypting `multipart/form-data` at app layer is non-trivial. Needs resolution once nearcloud non-chat E2EE status is known.
 
 3. **Chutes embeddings base URL**: Chutes uses `llm.chutes.ai` for LLM models and `api.chutes.ai` for E2EE invoke. Verify whether the embeddings base URL differs (e.g. `embedding.chutes.ai`). Check the `/v1/models` response for embedding chute type metadata.
