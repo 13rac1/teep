@@ -64,6 +64,28 @@ To ensure data privacy and integrity, adhere to the following rules:
 - Use `Connection: close` to prevent TLS connection reuse across attestation boundaries.
 - ALWAYS add regression test coverage for audit findings.
 
+### Code Structure
+
+Functions must not exceed cyclomatic complexity 32 (enforced by `gocyclo` via golangci-lint). **Plan the decomposition before writing code** — do not write a monolithic function and refactor after.
+
+Each function should do one thing at one level of abstraction. When a function handles multiple verification steps, network I/O, or branching logic, extract named helpers. The orchestrator should read like a checklist:
+
+```go
+// Good: orchestrator calls named helpers
+func (h *Handler) attestOnConn(...) (*Report, error) {
+    raw, err := h.sendAttestationRequest(...)
+    tdxResult := h.verifyTDX(ctx, raw, nonce)
+    nvidiaResult, nrasResult := h.verifyNVIDIA(ctx, raw, nonce)
+    // ... TLS fingerprint check (inline — fatal trust anchor) ...
+    compose, repos, digests, sig, rekor := h.verifySupplyChain(ctx, raw, tdxResult)
+    return buildReport(...)
+}
+```
+
+Reference implementations to mirror when adding providers or verification logic:
+- **Attestation verification:** `internal/provider/nearcloud/pinned.go:attestOnConn` and `internal/provider/neardirect/pinned.go:attestOnConn`
+- **Proxy handler:** `internal/proxy/proxy.go:handleChat`
+
 ### Cryptographic Safety
 
 - All cryptographic comparisons MUST be constant-time (`subtle.ConstantTimeCompare`). Never use `==`, `!=`, `bytes.Equal`, or `strings.EqualFold` on secrets, keys, fingerprints, nonces, or hashes.
