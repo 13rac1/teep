@@ -2,141 +2,79 @@
 
 ## Goals
 
-Redesign E2EE enforcement by cleanly separating two concerns the current
-architecture conflates:
+1. Keep `e2ee_usable` as a standard attestation factor that can be
+   enforced or listed in `allow_fail`, configurable per-provider via config
+   — consistent behavior across `teep verify`, `teep serve`, and
+   integration tests.
 
-1. **Attestation Validation** — immutable cryptographic verification of the
-   TEE environment (TDX quote, GPU attestation, container measurements,
-   Sigstore/Rekor transparency, data binding). Evaluated once at attestation
-   time. Gates request forwarding via `Blocked()`.
+2. No chicken-and-egg blocking: the proxy must be able to forward a
+   first request through E2EE *before* the factor transitions to Pass, even
+   when the factor is enforced.
 
-2. **Provider Functionality** — live verification that provider features
-   work as expected (E2EE roundtrip, future tool call tests). Requires an
-   actual inference roundtrip and cannot be evaluated at attestation time.
-   In the proxy, enforced at the relay layer. In `teep verify`, evaluated
-   via probe requests and displayed separately.
+3. Post-relay fail-closed enforcement: decryption failures block future
+   requests and invalidate caches. This is the primary E2EE safety
+   mechanism.
 
-Remove `e2ee_usable` from the attestation factor system entirely. Replace
-it with an E2EE state machine in the proxy and a separate "Provider
-Functionality" tier in `teep verify`.
-
----
-
-## Problems
-
-### P1: Chicken-and-egg blocking (critical)
-
-When `e2ee_usable` is enforced (not in a provider's `allow_fail` list),
-`BuildReport` promotes the initial `Skip` → `Fail (enforced)`, which causes
-`Blocked()` to return `true`. The proxy then refuses the request with HTTP
-502. But `e2ee_usable` can only pass after a successful live E2EE
-roundtrip — which requires a request to go through first.
-
-**Code path** (proxy non-pinned):
-1. `handleChatCompletions` calls `attestAndCache` on cache miss
-2. `attestAndCache` → `fetchAndVerify` → `BuildReport` with
-   `E2EEConfigured: prov.E2EE` and `E2EETest: nil`
-3. `evalE2EEUsable` returns `Skip "E2EE configured; pending live test"`
-4. `BuildReport` promotes enforced `Skip` → `Fail (enforced)`
-5. `enforceReport` checks `report.Blocked()` → request rejected
-6. `MarkE2EEUsable` is never reached
-
-**Code path** (proxy pinned, NearCloud):
-Same issue: the report is built with `E2EEConfigured=true` and
-`E2EETest=nil` inside the pinned handler's attestation path.
-`enforceReport` fires before the E2EE relay.
-
-### P2: Cache mutation race
-
-`MarkE2EEUsable()` mutates the `*VerificationReport` pointer stored in the
-cache in-place. The cache's `Get()` returns the same pointer to all
-concurrent callers. This means:
-
-- Two concurrent requests for the same provider/model can race on
-  `MarkE2EEUsable`, observing a half-mutated `Factors` slice.
-- The `/v1/tee/report` endpoint can read the report mid-mutation.
-- `report.Passed++` and `report.Skipped--` are non-atomic int mutations.
-
-**Locations**: non-pinned and pinned paths in `internal/proxy/proxy.go`.
-
-### P3: Counter desync risk
-
-`MarkE2EEUsable()` manually adjusts `Passed` and `Skipped` counters. If the
-factor was promoted from `Skip` to `Fail (enforced)` by `BuildReport` (as
-happens when `e2ee_usable` is enforced per P1), the guard `Status == Skip`
-prevents the transition — but the factor remains `Fail` and is never
-corrected. If the guard were removed without also adjusting the `Failed`
-counter, counters would desync.
-
-### P4: Divergent verify vs proxy paths
-
-`teep verify` and `teep serve` use fundamentally different lifecycles for
-`e2ee_usable`:
-
-| Aspect | `teep verify` | `teep serve` (proxy) |
-|--------|--------------|---------------------|
-| When E2EE is tested | During report-build via `testE2EE()` | After first successful relay |
-| `E2EETest` | Populated in `ReportInput` | Always `nil` |
-| `E2EEConfigured` | Not used (irrelevant) | Set from `prov.E2EE` |
-| Factor result | Clean `Pass`/`Fail`/`Skip` from `evalE2EEUsable` | Initially `Skip`, retroactively patched via `MarkE2EEUsable` |
-| Report mutation | None | Yes (cache in-place mutation) |
-
-### P5: Inconsistent enforcement across providers
-
-`e2ee_usable` enforcement varies across providers' default `allow_fail`
-lists, with no clear rationale for the differences:
-
-| Provider | `allow_fail` list | `e2ee_usable` in list? | Enforced? |
-|----------|------------------|----------------------|-----------|
-| Venice | `DefaultAllowFail` | Yes | No |
-| NearDirect | `NeardirectDefaultAllowFail` | Yes | No |
-| NearCloud | `NearcloudDefaultAllowFail` | **No** | **Yes** |
-| Chutes | `ChutesDefaultAllowFail` | **No** | **Yes** |
-
-NearCloud and Chutes both support E2EE and have it enabled by default.
-Having `e2ee_usable` enforced for them triggers P1.
+4. Instance-level failover for fleet-based providers (Chutes) must not
+   impact overall request reliability. Per-instance failures are fail-closed
+   at the instance level; the request retries on a fresh instance with a
+   new E2EE handshake.
 
 ---
 
-## Code Context
+## Current State
 
-### E2EE Relay Error Handling
+The short-term plan has been fully implemented. The following mechanisms
+are now in place:
 
-When E2EE is active and decryption fails in the relay functions, the
-current behavior is:
+### Factor System
 
-- **Streaming** (`RelayStream`/`relaySSELine` in `internal/e2ee/relay.go`):
-  Writes an SSE error event `{"error":{"message":"stream decryption failed",
-  "type":"decryption_error"}}` and ends the stream. The HTTP 200 status has
-  already been sent, so no status code change is possible. Returns
-  `StreamStats`.
+- `e2ee_usable` remains in `KnownFactors`, `OnlineFactors`, and is
+  evaluated by `evalE2EEUsable` in `BuildReport`.
+- `e2ee_usable` is **exempt from Skip→Fail promotion** in `BuildReport`:
+  even when enforced (not in `allow_fail`), a `Skip` status stays `Skip`
+  rather than being promoted to `Fail`. This solves the chicken-and-egg
+  problem — the initial `Skip "E2EE configured; pending live test"` does
+  not cause `Blocked()` to return `true`.
+- `e2ee_usable` is enforced by default for NearCloud and Chutes (absent
+  from `NearcloudDefaultAllowFail` and `ChutesDefaultAllowFail`), and
+  allowed-to-fail for Venice/NearDirect (present in `DefaultAllowFail`
+  and `NeardirectDefaultAllowFail`).
+- Users can add or remove `e2ee_usable` from their `allow_fail` config.
+  Config validation accepts it as a valid factor name.
 
-- **Non-streaming** (`RelayReassembledNonStream` in
-  `internal/e2ee/relay.go`): Returns HTTP 502 "response decryption failed".
-  Returns `StreamStats`. `ReassembleNonStream` returns
-  `([]byte, StreamStats, error)`.
+### Proxy Post-Relay Enforcement
 
-- **Chutes streaming** (`RelayStreamChutes` in
-  `internal/e2ee/relay_chutes.go`): Uses `writeStreamError` helper: returns
-  HTTP 502 if failure occurs before first chunk; writes SSE error event via
-  `WriteSSEError` if after headers. Unparseable SSE events abort the stream.
-  Logs `data_len` instead of raw event data. Init and chunk processing are
-  in `handleChutesInit` and `handleChutesChunk` helpers. Returns
-  `StreamStats`.
+- `VerificationReport.Clone()` deep-copies Factors and Metadata before
+  mutation. `MarkE2EEUsable` uses `recomputeCounters()` instead of manual
+  counter adjustment. Both non-pinned and pinned paths clone before
+  calling `MarkE2EEUsable`.
+- Relay functions (`RelayStream`, `RelayNonStream`,
+  `RelayReassembledNonStream`, `RelayStreamChutes`,
+  `RelayNonStreamChutes`) return `(StreamStats, error)` with
+  `ErrDecryptionFailed` and `ErrRelayFailed` sentinel errors.
+- `relayWithRetry` performs the upstream roundtrip and E2EE relay. For
+  Chutes, it retries on `ErrDecryptionFailed` before response headers are
+  sent — marking the specific instance failed and selecting a fresh
+  instance with a new E2EE handshake. Non-Chutes providers execute exactly
+  once.
+- `classifyRelayOutcome` dispatches post-loop relay errors.
+  `handleE2EEDecryptionFailure` handles unretriable decryption failures:
+  for Chutes it invalidates the nonce pool; for non-Chutes it stores to
+  `e2eeFailed`. Both paths delete from report cache and signing key cache.
+- `e2eeFailed sync.Map` (keyed by `providerModelKey{provider, model}`)
+  tracks provider+model pairs with prior E2EE decryption failures.
+  Checked after `attestAndCache` — recovery requires a confirmed fresh
+  attestation (`ar.Raw != nil` for non-pinned, `pinnedResp.Report != nil`
+  for pinned). Cached attestation with a stale marker fails closed and
+  invalidates caches to force re-attestation.
+- `responseInterceptor` tracks whether HTTP headers have been written
+  (`headerSent`), enabling the retry loop to attempt new instances before
+  the client receives any data.
+- `Cache.Delete` and `SigningKeyCache.Delete` methods support targeted
+  cache invalidation.
 
-- **Chutes non-streaming** (`RelayNonStreamChutes`): Returns HTTP 502
-  "response decryption failed".
-
-**Key observation**: None of these paths currently invalidate the cached
-report or prevent future requests. A decryption failure is treated as a
-transient error for the current request only.
-
-Relay functions currently return `StreamStats` but not `error`. `StreamStats`
-has `Chunks`, `Tokens`, and `Duration` fields. Changing the return to
-`(StreamStats, error)` is the structural change needed for post-relay
-enforcement.
-
-### Chutes Instance Retry Loop
+### Chutes Instance Failover
 
 Chutes runs a dynamic fleet of GPU instances behind a routing layer.
 Individual instances are unreliable — they may fail E2EE handshakes, crash
@@ -146,196 +84,210 @@ instance with a *fresh* E2EE handshake (new key encapsulation, new nonces)
 is not a fallback or a weakening of E2EE — it is the normal path for
 maintaining request reliability across an unreliable fleet.
 
-The Chutes-specific retry loop (`chutesMaxAttempts = 3`) lives in
-`doUpstreamRoundtrip`. It wraps the body-build → upstream-request cycle and
-handles **transport-level** and **per-instance E2EE** failures (connection
-errors, HTTP 429/500-504, handshake failures) by:
+Instance failover operates at two levels:
 
-1. Marking the failed instance via `NoncePool.MarkFailed(chuteID,
-   instanceID)` — fail-closed for that specific instance.
-2. Zeroing crypto material from the failed attempt via `zeroE2EESessions`.
-3. Selecting a different instance from the nonce pool and performing a
-   complete fresh E2EE handshake (new key pair, new nonces).
+1. **Pre-relay** (`doUpstreamRoundtrip`, `chutesMaxAttempts = 3`):
+   Transport-level failures (connection errors, HTTP 429/500-504,
+   handshake failures). Each retry marks the failed instance via
+   `NoncePool.MarkFailed(chuteID, instanceID)`, zeros crypto material,
+   and selects a different instance for a complete fresh E2EE handshake.
 
-Each retry attempt is a full cryptographic session from scratch, not a
-resumption of the failed session.
-
-`doUpstreamRoundtrip` returns `(*upstreamResult, error)`. The
-`upstreamResult` struct carries `Resp`, `Session`, `Meta`, `Cancel`,
-`E2EEDur`, and `UpstreamDur`. On error it returns an `httpError` with a
-`status` field that distinguishes E2EE preparation errors (`"e2ee_failed"`,
-HTTP 500) from transport errors (`"upstream_failed"`, HTTP 502). The caller
-(`handleChatCompletions`) maps these to different client messages.
-
-`buildUpstreamBody` returns an `upstreamBody` struct that carries `Body`,
-`Session`, `Meta`, `ChuteID`, and `InstanceID`. The `ChuteID`/`InstanceID`
-fields are populated from the raw attestation (or nonce pool) and are
-independent of `meta.Session` being populated — this decoupling allows the
-retry loop to track instances for `MarkFailed` even when the encryptor
-returns `meta == nil`.
+2. **Post-relay** (`relayWithRetry`, `chutesMaxAttempts`): Decryption
+   failures detected during relay (before response headers are sent to
+   client). The specific instance is marked failed and the loop retries
+   with a new instance and new E2EE handshake.
 
 **Two failure tiers**:
 
 | Failure scope | Trigger | Action | Retryable? |
 |---------------|---------|--------|------------|
-| Per-instance | Transport error, handshake failure, HTTP 429/5xx | `MarkFailed(instanceID)`, zero session, retry on fresh instance | Yes — fresh handshake on new instance |
-| Provider+model | Post-relay decryption failure (response data cannot be decrypted) | `E2EETracker.MarkFailed`, invalidate all caches | No — fail-closed for all requests |
+| Per-instance | Transport error, handshake failure, HTTP 429/5xx, pre-header decryption error | `MarkFailed(instanceID)`, zero session, retry on fresh instance | Yes — fresh handshake on new instance |
+| Provider+model | Post-relay decryption failure after headers sent (non-Chutes), or all Chutes retries exhausted | `e2eeFailed.Store`, invalidate all caches | No — fail-closed until re-attestation |
 
-The retry loop handles the first tier (pre-relay, per-instance). Post-relay
-enforcement handles the second tier (post-relay, provider-wide). A
-post-relay decryption failure is qualitatively different from a
-pre-relay transport error: it means a seemingly-healthy instance returned
-data that could not be authenticated, indicating possible MITM or
-server-side E2EE breakage.
-
-**Hazard — retry + decryption failure interaction**: If the retry loop
-succeeds on the last attempt (transport OK) but the relay then detects a
-decryption failure, post-relay enforcement must fire using the *last
-successful attempt's* instance info for both per-instance `MarkFailed` and
-provider-level `MarkFailed`. Instance info is available via
-`attemptChuteID` / `attemptInstanceID` (from `upstreamBody`), not from
-`meta`.
+**What does NOT trigger provider+model failure**:
+- Instance going offline mid-request (transport error → retry)
+- E2EE handshake failure on a specific instance (prep error → retry)
+- HTTP 429/500-504 from a specific instance (transport error → retry)
+- Pre-header decryption failure on a Chutes instance (retry on new instance)
+- All retry attempts exhausted for a single request (returns error to
+  client, but next request may succeed on newly-available instances)
 
 ### Existing Safeguards
 
 **Pre-relay session guard**: A fail-closed check
-(`meta != nil && meta.Session == nil`) runs in `handleChatCompletions`
-*before* the relay dispatch. If Chutes E2EE metadata was populated but
-key encapsulation failed to produce a session, the guard returns HTTP 500
-instead of forwarding ciphertext as plaintext. Error counters and
-`slog.ErrorContext` are incremented. This catches pre-relay invariant
-violations; post-relay enforcement catches cryptographic failures.
+(`meta != nil && meta.Session == nil`) runs in `relayWithRetry` before the
+relay dispatch. If Chutes E2EE metadata was populated but key encapsulation
+failed to produce a session, the guard retries on a new instance (if
+attempts remain) or returns an error. This catches pre-relay invariant
+violations.
 
 **Pinned E2EE nil report block**: The pinned (NearCloud) path blocks when
 `prov.E2EE && report == nil`. Without a report, the signing key cannot be
 verified as bound to the TDX quote, so E2EE would degrade to plaintext.
 Records a negative cache entry and returns HTTP 502.
 
+**e2eeFailed recovery guards**: The `e2eeFailed` marker is only cleared
+after a confirmed fresh attestation (cache miss with `ar.Raw != nil`
+non-pinned, or `pinnedResp.Report != nil` pinned). A concurrent request
+that hits a cached attestation while `e2eeFailed` is set fails closed and
+invalidates caches to force re-attestation on the next attempt.
+
+---
+
+## Remaining Problems
+
+### R1: Skip→Fail promotion exemption is a special case
+
+The `e2ee_usable` exemption in `BuildReport` (`factors[i].Name !=
+"e2ee_usable"`) is a hard-coded special case in the factor promotion loop.
+If future factors have similar lifecycle requirements (e.g. tool call
+tests), each would need its own exemption. A cleaner approach would be a
+general mechanism for factors that require post-report-build evaluation.
+
+### R2: Report mutation via Clone + MarkE2EEUsable
+
+The proxy still mutates a cloned report after `BuildReport` via
+`MarkE2EEUsable` to transition the factor from `Skip` to `Pass`. While
+`Clone()` and `recomputeCounters()` prevent the original P2/P3 cache
+mutation race and counter desync issues, the pattern of post-build report
+mutation remains architecturally unusual — no other factor is modified
+after `BuildReport`.
+
+### R3: Divergent evaluation paths
+
+`teep verify` evaluates `e2ee_usable` cleanly inside `BuildReport` via
+`E2EETest` in `ReportInput`. The proxy evaluates it via a two-step
+process: `BuildReport` produces `Skip`, then `MarkE2EEUsable` promotes to
+`Pass` after a successful relay. Both paths produce the same end result
+(Pass/Fail/Skip), but via different mechanisms.
+
+### R4: `e2eeFailed` is a parallel enforcement mechanism
+
+The `e2eeFailed sync.Map` duplicates some responsibility that would
+otherwise belong to the factor system. A decryption failure blocks future
+requests via `e2eeFailed`, but `e2ee_usable` in the cached report is not
+demoted back to `Fail` — the factor and the blocking map can be
+inconsistent (factor says `Pass`, but requests are blocked). This is
+correct from a security perspective (fail-closed) but confusing from a
+report-reading perspective.
+
 ---
 
 ## Design
 
-### Architecture Overview
+### Approach: Deferred Factor Evaluation
+
+Rather than removing `e2ee_usable` from the factor system, introduce a
+general mechanism for **deferred factors** — factors whose evaluation
+requires a live roundtrip and cannot complete at attestation time. This
+preserves `e2ee_usable` as a standard factor with consistent `allow_fail`
+behavior while eliminating the special-case exemption.
+
+### Factor Lifecycle
 
 ```
-teep serve (proxy)                    teep verify (CLI)
-──────────────────                    ─────────────────
+BuildReport time          Post-relay (proxy)           teep verify
+──────────────            ──────────────────           ───────────
+evalE2EEUsable:           MarkE2EEUsable:              evalE2EEUsable:
+  E2EETest=nil →            relay succeeded →           E2EETest populated →
+  Skip (deferred)           Clone + promote               Pass/Fail/Skip
+                            to Pass                       (clean, no mutation)
 
-Attestation factors                   Attestation factors
-  → BuildReport()                       → BuildReport()
-  → immutable VerificationReport        → immutable VerificationReport
-  → Blocked() gates requests            → displayed in Attestation Tier
-
-E2EE state machine                    E2EE probe
-  → per-provider/model tracker          → testE2EE() probe request
-  → Pending → Active → Failed          → result displayed in Functionality Tier
-  → enforced at relay layer             → NOT passed to BuildReport
-  → exposed in report metadata          → separate section in formatReport()
+                          handleE2EEDecryptionFailure:
+                            relay failed →
+                            e2eeFailed.Store +
+                            cache invalidation
 ```
 
-The proxy never runs an E2EE probe. It tracks E2EE state via the actual
-relay lifecycle. `teep verify` runs an explicit probe and displays the
-result. In both cases, `e2ee_usable` is **not** an attestation factor —
-it does not participate in `BuildReport`, `Blocked()`, or the `allow_fail`
-system.
+**Key property**: A deferred factor in `Skip` status never triggers
+`Blocked()`, even when enforced. The Skip→Fail promotion exemption is
+generalized from a name check to a factor property.
 
-### E2EE State Machine (proxy only)
+### Generalized Deferred Factor Mechanism
 
-The state machine operates at the **provider+model** level, not the
-instance level. Individual instance failures (common in Chutes fleet
-dynamics) are handled by the retry loop's per-instance `MarkFailed` and do
-not affect the provider+model E2EE state. Only a post-relay cryptographic
-failure — where a response from a seemingly-healthy instance cannot be
-decrypted — escalates to provider+model failure.
+Replace the hard-coded `factors[i].Name != "e2ee_usable"` check with a
+`Deferred` property on `FactorResult`:
 
-Per provider+model pair:
-
-```
-                     ┌─────────┐
-                     │ Pending │  (E2EE configured, not yet tested)
-                     └────┬────┘
-                          │ first successful encrypted roundtrip
-                          ▼
-                     ┌─────────┐
-                     │ Active  │  (E2EE verified working)
-                     └────┬────┘
-                          │ post-relay decryption failure
-                          ▼
-                     ┌─────────┐
-                     │ Failed  │  (block all subsequent requests)
-                     └─────────┘
+```go
+type FactorResult struct {
+    Name     string
+    Status   FactorStatus
+    Detail   string
+    Enforced bool
+    Tier     FactorTier
+    Deferred bool // true = post-report-build evaluation; Skip not promoted
+}
 ```
 
-- **Pending**: Provider has `E2EE=true` in config. The proxy encrypts
-  outgoing requests when `ReportDataBindingPassed()`. If the roundtrip
-  succeeds, transition to `Active`. Per-instance failures during the retry
-  loop do not prevent the transition — only the final attempt's outcome
-  matters.
-- **Active**: E2EE has been verified working. Continue encrypting.
-  Per-instance transport failures and handshake failures are retried
-  transparently via the retry loop without affecting this state.
-- **Failed**: A relay received data it could not decrypt. This indicates
-  a key mismatch (possible MITM) or server-side E2EE breakage — not a
-  transient instance failure. **Block all subsequent requests** for this
-  provider+model (fail-closed). Invalidate report cache, signing key cache,
-  and nonce pool. Require full re-attestation to recover.
+The Skip→Fail promotion loop becomes:
 
-**What does NOT trigger provider+model `Failed`**:
-- Instance going offline mid-request (transport error → retry)
-- E2EE handshake failure on a specific instance (prep error → retry)
-- HTTP 429/500-504 from a specific instance (transport error → retry)
-- All retry attempts exhausted for a single request (returns error to
-  client, but next request may succeed on newly-available instances)
-
-### `teep verify` E2EE Probe
-
-`teep verify` continues to run provider-specific E2EE test functions
-(`testE2EEVenice`, `testE2EENearCloud`, `testE2EEChutes`) as it does today.
-The difference is that the result is no longer fed into `BuildReport` as
-`E2EETest`. Instead, it is displayed in a separate "Provider Functionality"
-section of the report output, visually distinct from the attestation factor
-table.
-
-Example `teep verify` output:
-
-```
-Attestation Validation
-──────────────────────
-  ✓ tdx_quote          TDX quote signature valid
-  ✓ gpu_attestation    NVIDIA EAT token verified
-  ✓ container_hash     Matches allowed measurement
-  ✓ data_binding       Signing key bound to TDX report
-  ✓ sigstore           Rekor log entry verified
-  ...
-
-  12 passed, 0 failed, 0 skipped
-
-Provider Functionality
-──────────────────────
-  ✓ e2ee_usable        E2EE roundtrip succeeded (streaming + non-streaming)
+```go
+for i := range factors {
+    if factors[i].Status == Skip && factors[i].Enforced && !factors[i].Deferred {
+        factors[i].Status = Fail
+        factors[i].Detail += " (enforced)"
+    }
+}
 ```
 
-Attestation factors determine whether the provider's TEE environment is
-trustworthy. Provider functionality tests verify that features work correctly
-through the attested environment.
+`evalE2EEUsable` sets `Deferred: true` when returning `Skip` with
+`E2EEConfigured: true` and `E2EETest: nil` (the proxy path). The existing
+`teep verify` path (where `E2EETest` is populated) returns `Pass`/`Fail`
+with `Deferred: false` — no behavior change.
+
+### e2eeFailed → Report Consistency
+
+When `handleE2EEDecryptionFailure` fires, in addition to storing to
+`e2eeFailed` and invalidating caches, the factor should be demoted to
+`Fail` in the cached report so that `e2ee_usable` accurately reflects the
+failure state. This keeps the report and the blocking map consistent:
+
+```go
+func (s *Server) handleE2EEDecryptionFailure(...) string {
+    // ... existing invalidation logic ...
+
+    // Demote e2ee_usable in the cached report so the report endpoint
+    // reflects the failure. The cache entry is about to be deleted, but
+    // a concurrent reader may still see it briefly.
+    if cachedReport := s.cache.Get(prov.Name, upstreamModel); cachedReport != nil {
+        cloned := cachedReport.Clone()
+        cloned.MarkE2EEFailed("E2EE decryption failed: " + relayErr.Error())
+        s.cache.Put(prov.Name, upstreamModel, cloned)
+    }
+
+    s.cache.Delete(prov.Name, upstreamModel)
+    // ...
+}
+```
+
+This requires a new `MarkE2EEFailed` method (counterpart to
+`MarkE2EEUsable`) that transitions the factor from `Pass`/`Skip` to `Fail`
+and recomputes counters. In practice, the cache entry is deleted
+immediately after, so this is a belt-and-suspenders measure for the brief
+window between Put and Delete.
 
 ### Key Design Decisions
 
-- **`e2ee_usable` is NOT an attestation factor.** It does not participate in
-  `BuildReport`, `Blocked()`, or `allow_fail`. This permanently eliminates
-  P1 (chicken-and-egg), P2 (cache mutation race), P3 (counter desync), and
-  P5 (inconsistent enforcement). P4 (divergent paths) is resolved by giving
-  each path its own appropriate mechanism.
+- **`e2ee_usable` remains a standard factor.** It participates in
+  `BuildReport`, `KnownFactors`, `allow_fail`, and `OnlineFactors`.
+  Users can enforce or allow-fail it via config. This is consistent with
+  all other factors.
 
-- **Enforcement moves to the relay layer.** The proxy always encrypts when
-  `prov.E2EE && ReportDataBindingPassed()`. If decryption fails on the
-  response, the E2EE state machine blocks future requests (fail-closed).
+- **Deferred factors are exempt from Skip→Fail promotion.** A general
+  `Deferred` property replaces the hard-coded name check. Future factors
+  with similar lifecycle requirements (e.g. tool call tests) use the same
+  mechanism.
+
+- **Post-relay enforcement is the primary E2EE safety mechanism.** The
+  proxy always encrypts when `prov.E2EE && ReportDataBindingPassed()`.
+  Decryption failures trigger `e2eeFailed` (fail-closed for future
+  requests), cache invalidation, and report demotion.
 
 - **Forward-looking enforcement.** For streaming responses, the HTTP 200
   status has already been sent with the first chunk. The first decryption
   failure is relayed to the client as an SSE error event. Enforcement is
-  forward-looking: the *next* request is blocked. This is unavoidable without
-  buffering the entire response.
+  forward-looking: the *next* request is blocked. This is unavoidable
+  without buffering the entire response.
 
 - **Three caches must be invalidated together.** On E2EE failure: the
   report cache, signing key cache, and nonce pool
@@ -360,258 +312,159 @@ through the attested environment.
 
 ## Implementation
 
-### Phase 1: Foundation
+### Phase 1: Generalize Deferred Factor Mechanism
 
-**Goal**: Build the E2EE state machine and cache deletion infrastructure.
+**Goal**: Replace the hard-coded `e2ee_usable` exemption with a general
+`Deferred` property on `FactorResult`.
 
-1. **`internal/proxy/e2ee_state.go`** (new file)
-   - Define `E2EEState` type with `Pending`/`Active`/`Failed` constants.
-   - Define `E2EETracker` struct: concurrent-safe map of
-     `cacheKey{provider, model}` → `E2EEState`.
-   - Methods: `Get`, `MarkActive`, `MarkFailed`, `Delete`.
-   - `MarkFailed` must be idempotent (multiple concurrent relay failures
-     should not panic or desync).
+1. **`internal/attestation/report.go`**
+   - Add `Deferred bool` field to `FactorResult`.
+   - In `evalE2EEUsable`: set `Deferred: true` when returning `Skip`
+     with `E2EEConfigured: true` and `E2EETest: nil` (proxy path). All
+     other return paths set `Deferred: false` (or leave as zero value).
+   - In `BuildReport` Skip→Fail promotion: change
+     `factors[i].Name != "e2ee_usable"` to `!factors[i].Deferred`.
+   - Update JSON serialization if `FactorResult` is exposed via the
+     report endpoint (include `Deferred` field with `omitempty`).
 
-2. **`internal/proxy/e2ee_state_test.go`** (new file)
-   - Test state transitions: Pending → Active, Active → Failed.
-   - Test concurrent access safety.
-   - Test fail-closed: once `Failed`, `Get` always returns `Failed` even
-     after `Delete` is called (until re-added as `Pending`).
+2. **`internal/attestation/report_test.go`**
+   - Update `TestEvalE2EEUsable` cases to verify `Deferred` is set
+     correctly for each evaluation path.
+   - Add test: deferred factor with `Skip` and `Enforced` stays `Skip`
+     (not promoted to `Fail`).
+   - Add test: non-deferred factor with `Skip` and `Enforced` is
+     promoted to `Fail` (existing behavior preserved).
 
-3. **Cache `Delete` methods**: `internal/attestation/attestation.go`
-   - Add `Delete(provider, model)` to the report cache and signing key
-     cache if they don't already exist.
+### Phase 2: Report Consistency on Failure
 
-### Phase 2: Relay Error Propagation
+**Goal**: Keep `e2ee_usable` factor status consistent with `e2eeFailed`
+blocking state.
 
-**Goal**: Relay functions signal decryption failures to callers.
+1. **`internal/attestation/report.go`**
+   - Add `MarkE2EEFailed(detail string)` method: transitions
+     `e2ee_usable` from `Pass` or `Skip` to `Fail`, sets detail,
+     calls `recomputeCounters()`.
 
-1. **`internal/e2ee/relay.go`**
-   - Change `RelayStream` return from `StreamStats` to `(StreamStats, error)`.
-   - Change `RelayReassembledNonStream` return from `StreamStats` to
-     `(StreamStats, error)`.
-   - Return a sentinel or typed error on decryption failure (e.g.
-     `ErrDecryptionFailed`). Return `nil` on success.
+2. **`internal/proxy/proxy.go`** `handleE2EEDecryptionFailure`
+   - Before `s.cache.Delete(...)`, clone the cached report and call
+     `MarkE2EEFailed` so any concurrent reader sees the failure state.
+   - Apply the same pattern to the pinned path's post-relay E2EE
+     failure handling.
 
-2. **`internal/e2ee/relay_chutes.go`**
-   - Change `RelayStreamChutes` return from `StreamStats` to
-     `(StreamStats, error)`.
-   - `RelayNonStreamChutes` already returns `error` — ensure decryption
-     failures use the same sentinel/typed error.
+3. **`internal/attestation/report_test.go`**
+   - Add `TestMarkE2EEFailed` tests: transition from Pass→Fail,
+     Skip→Fail; verify counters are correct after recomputation.
 
-3. **`internal/proxy/proxy.go`** `relayResponse` helper
-   - Update `relayResponse` to propagate the new `error` return from all
-     relay dispatch paths back to `handleChatCompletions`.
+### Phase 3: Cleanup
 
-4. **Update relay tests** to check the new error return.
+**Goal**: Remove deprecated workarounds and ensure consistency.
 
-### Phase 3: Factor System Cleanup & Proxy Integration
+1. **Remove Skip→Fail exemption by name**: Verify no code still
+   references `factors[i].Name != "e2ee_usable"` — the `Deferred`
+   property should be the sole mechanism.
 
-**Goal**: Remove `e2ee_usable` from the factor system. Integrate the E2EE
-state machine into the proxy. Wire up post-relay enforcement.
+2. **Verify allow_fail consistency**: Write a test that:
+   - With `e2ee_usable` in `allow_fail` (Venice/NearDirect): factor
+     starts `Skip` (not enforced, not deferred-relevant since not
+     enforced), report is not blocked, proxy serves requests, factor
+     transitions to `Pass` after successful relay.
+   - With `e2ee_usable` NOT in `allow_fail` (NearCloud/Chutes): factor
+     starts `Skip` (enforced + deferred, not promoted to Fail), report
+     is not blocked, proxy serves requests, factor transitions to `Pass`
+     after successful relay.
+   - Both cases: decryption failure triggers `e2eeFailed`, caches
+     invalidated, factor demoted to `Fail`, subsequent requests blocked
+     until re-attestation.
 
-#### Factor system removal (`internal/attestation/report.go`)
-
-1. Remove `evalE2EEUsable` from the evaluator list in `buildEvaluators()`.
-2. Remove `"e2ee_usable"` from `KnownFactors`, `DefaultAllowFail`,
-   `NearcloudDefaultAllowFail`, `NeardirectDefaultAllowFail`,
-   `ChutesDefaultAllowFail`, and `OnlineFactors`.
-3. Delete the `MarkE2EEUsable` method.
-4. Delete the `E2EEConfigured` field from `ReportInput`.
-5. Delete the `E2EETest` field from `ReportInput`. Keep `E2EETestResult` as
-   a standalone type (used by the verify path).
-6. Update `internal/attestation/report_test.go`: remove
-   `TestMarkE2EEUsable` tests and `e2ee_usable` references from factor
-   evaluation tests.
-
-#### Proxy integration (`internal/proxy/proxy.go`)
-
-7. Add `E2EETracker` field to the `Server` struct. Initialize in
-   `NewServer` or equivalent.
-
-8. **E2EE state gate** — In `handleChatCompletions`, after `enforceReport`:
-   if `prov.E2EE && e2eeTracker.Get(prov.Name, model) == Failed`, return
-   HTTP 502 "E2EE previously failed; re-attestation required".
-
-9. **Post-relay enforcement** — In `handleChatCompletions`, after the
-   `relayResponse` call, if the relay returned a decryption error AND
-   `e2eeActive` was true:
-   ```go
-   // Mark the specific instance as failed (Chutes fleet dynamics).
-   // attemptChuteID/attemptInstanceID come from upstreamBody struct.
-   if prov.E2EEMaterialFetcher != nil {
-       prov.E2EEMaterialFetcher.MarkFailed(attemptChuteID, attemptInstanceID)
-   }
-   // Post-relay decryption failure is provider+model level: fail-closed.
-   // Unlike pre-relay transport errors (handled by retry loop), this
-   // means a seemingly-healthy instance returned unauthenticated data.
-   s.e2eeTracker.MarkFailed(prov.Name, upstreamModel)
-   s.cache.Delete(prov.Name, upstreamModel)
-   s.signingKeyCache.Delete(prov.Name, upstreamModel)
-   // Nonce pool: discard ALL cached instances/nonces (not just the
-   // failed instance) — the trust model for this provider is broken.
-   if prov.E2EEMaterialFetcher != nil {
-       prov.E2EEMaterialFetcher.Invalidate(attemptChuteID)
-   }
-   // Zero crypto material from current session.
-   zeroE2EESessions(session, meta)
-   // Increment error counters for monitoring.
-   s.stats.errors.Add(1)
-   if ms != nil {
-       ms.errors.Add(1)
-   }
-   ```
-   Note: post-relay decryption failure is categorically different from
-   pre-relay instance failures. The retry loop handles instance-level
-   unreliability (transport errors, handshake failures) by failing over
-   to fresh instances. Post-relay enforcement fires when a
-   seemingly-successful HTTP response cannot be decrypted, which
-   indicates a systemic problem (MITM, server-side E2EE breakage) that
-   instance failover cannot recover from.
-
-10. **Post-relay success** — After successful relay, if `e2eeActive`:
-    call `e2eeTracker.MarkActive(prov.Name, model)`.
-
-11. Remove all `MarkE2EEUsable` calls (non-pinned and pinned paths).
-
-12. Remove `E2EEConfigured` and `E2EETest` from `ReportInput` construction
-    in `fetchAndVerify`.
-
-#### Report endpoint (`internal/proxy/proxy.go`)
-
-13. Include E2EE state in the JSON report as metadata, e.g.
-    `"e2ee_status": "active"`. Clone the report before adding metadata
-    (do not mutate the cached report).
-
-#### Config validation (`internal/config/config.go`)
-
-14. Remove `"e2ee_usable"` from valid `allow_fail` entries. Unknown factor
-    names must be rejected at config load time (no backwards-compatible
-    no-ops).
-
-### Phase 4: Verify Path & Two-Tier Report
-
-**Goal**: Update `teep verify` to display E2EE results in a separate
-"Provider Functionality" tier.
-
-1. **`cmd/teep/main.go`**
-   - Keep `testE2EE()` and all provider-specific E2EE test functions.
-   - Remove `E2EETest` from the `ReportInput` passed to `BuildReport`.
-   - Display the E2EE test result in a separate "Provider Functionality"
-     section of `formatReport()`, after the attestation factor table.
-   - Use the same pass/fail/skip iconography as the factor table but
-     clearly label as a distinct tier.
-
-2. **(Optional) Shared E2EE probe functions**: `internal/e2ee/probe.go`
-   - Factor out core E2EE test logic from `cmd/teep/main.go` into a
-     shared package. Not strictly required since only `teep verify` runs
-     probes:
-     - `ProbeVenice(ctx, signingKey, apiKey, baseURL, model) error`
-     - `ProbeNearCloud(ctx, signingKey, apiKey, baseURL, model) error`
-     - `ProbeChutes(ctx, raw, apiKey, baseURL, model) error`
-   - The stream validation logic (`doE2EEStreamTest`,
-     `doE2EEChutesStreamTest`) tests both streaming and non-streaming
-     paths. This thoroughness is appropriate for `teep verify` (runs once
-     per invocation).
-
-3. **Update integration tests**: `internal/proxy/integration_*_test.go`
-   - Remove assertions that `e2ee_usable` factor is `Pass`.
-   - Check `Metadata["e2ee_status"]` is `"active"` after a successful
-     E2EE roundtrip.
-
-4. **Update verify output tests**: `cmd/teep/`
-   - Expect the two-tier report format (attestation tier + functionality
-     tier).
+3. **Integration test verification**: Run `make integration` to confirm
+   that enforced `e2ee_usable` works end-to-end for NearCloud and Chutes.
 
 ---
 
 ## Tradeoffs
 
-- **Pro**: Cleanest separation of concerns. Attestation factors are
-  immutable after `BuildReport` — no report mutation, no counter desync,
-  no cache race. Eliminates P1, P2, P3, P5 by design.
-- **Pro**: E2EE failure triggers fail-closed at the right layer — after
-  observing actual decryption failure, not at report-build time.
-- **Pro**: Unified behavior across all providers. No per-provider
-  `allow_fail` exceptions for `e2ee_usable`.
-- **Pro**: `teep verify` retains full E2EE visibility via probes,
-  displayed in a dedicated tier.
-- **Pro**: Two-tier format scales to future live-test checks (e.g. tool
-  call tests) that face the same chicken-and-egg problem.
-- **Con**: Touches relay function signatures, report format, config
-  validation, and `teep verify` output formatting.
-- **Con**: External tools parsing `e2ee_usable` from the report's
-  `Factors` JSON array will need to look in `Metadata["e2ee_status"]`
-  (proxy) or the functionality tier (verify).
-- **Con**: E2EE state machine is another concurrent data structure
-  alongside the report cache and signing key cache.
+- **Pro**: `e2ee_usable` is a standard factor — consistent with user
+  expectations and the existing factor system. No special-case behavior
+  visible to users.
+- **Pro**: `allow_fail` configuration works as expected: users can
+  enforce or relax `e2ee_usable` like any other factor.
+- **Pro**: The `Deferred` mechanism is general — future live-test factors
+  (tool call tests) use the same pattern without new exemptions.
+- **Pro**: Post-relay enforcement catches real cryptographic failures at
+  the right layer.
+- **Pro**: Chutes instance failover preserves request reliability without
+  weakening E2EE guarantees.
+- **Pro**: Report consistency — `e2ee_usable` factor status and
+  `e2eeFailed` blocking state stay in sync.
+- **Con**: Proxy still mutates reports via `Clone` + `MarkE2EEUsable` /
+  `MarkE2EEFailed`. This is safe (clone prevents races) but
+  architecturally unusual.
+- **Con**: Two enforcement mechanisms coexist: `e2ee_usable` factor
+  status (informational after relay) and `e2eeFailed` map (blocking).
+  The blocking map is the primary safety mechanism; the factor status
+  is for reporting/observability.
+- **Con**: `Deferred` adds a new concept to the factor system that
+  requires documentation.
 
 ---
 
 ## Success Criteria
 
-1. **P1 eliminated**: No request is ever blocked due to `e2ee_usable` being
-   evaluated at report-build time. `BuildReport` does not include
-   `e2ee_usable` as a factor.
+1. **No chicken-and-egg blocking**: With `e2ee_usable` enforced (not in
+   `allow_fail`), the proxy serves the first E2EE request without
+   blocking. The factor starts as `Skip` (deferred), not `Fail`.
 
-2. **P2, P3 eliminated**: `MarkE2EEUsable` is deleted. No report mutation
-   after `BuildReport`.
+2. **Consistent factor behavior**: `e2ee_usable` in `allow_fail` or not
+   produces consistent results across `teep verify`, `teep serve`, and
+   integration tests. No unspecified fail-open behavior.
 
 3. **Fail-closed on decryption failure**: After a post-relay decryption
-   failure with `e2eeActive`, the E2EE state machine transitions to
-   `Failed` and all subsequent requests for that provider+model are
-   blocked with HTTP 502.
+   failure, `e2eeFailed` is set, caches are invalidated, and all
+   subsequent requests for that provider+model are blocked until
+   successful re-attestation.
 
-4. **Cache invalidation complete**: Post-relay decryption failure
-   invalidates all three caches (report, signing key, nonce pool) and
-   zeroes crypto material.
+4. **Report consistency**: After a decryption failure, the `e2ee_usable`
+   factor shows `Fail` in the report (not stale `Pass`). After a
+   successful relay, it shows `Pass`.
 
 5. **Instance failover preserves reliability**: For Chutes, per-instance
-   failures (transport errors, handshake failures, instance going offline)
-   are retried on fresh instances with new E2EE handshakes without
-   affecting the provider+model E2EE state. Only post-relay decryption
-   failures escalate to provider+model fail-closed.
+   failures (transport errors, handshake failures, pre-header decryption
+   errors) are retried on fresh instances with new E2EE handshakes
+   without triggering provider+model failure.
 
-6. **`teep verify` shows E2EE status**: The verify output displays a
-   separate "Provider Functionality" section with E2EE probe results.
+6. **Deferred mechanism is general**: The `Deferred` property on
+   `FactorResult` replaces the hard-coded name check. No
+   `e2ee_usable`-specific logic in the Skip→Fail promotion loop.
 
-7. **Config rejects `e2ee_usable` in `allow_fail`**: Unknown factor names
-   are rejected at startup.
-
-8. **All existing tests pass**: `make check` and `make integration` pass.
-   Integration tests assert `Metadata["e2ee_status"]` instead of factor
-   status.
-
-9. **Report endpoint includes E2EE status**: The `/v1/tee/report` JSON
-   includes `"e2ee_status"` in the metadata map.
+7. **All tests pass**: `make check` and `make integration` pass.
 
 ---
 
 ## Future Considerations
 
 - **Tool call test factor**: A forthcoming check that tests whether tool
-  calls work through the E2EE path. It will face the same chicken-and-egg
-  problem as `e2ee_usable`. It belongs in the Provider Functionality tier,
-  not the attestation factor system.
-- **E2EE key rotation**: When a signing key rotates (VM restart), the E2EE
-  state machine should reset to `Pending`, requiring re-verification of the
-  E2EE path with the new key.
-- **Report cache TTL vs E2EE state**: The report cache has a 5-minute TTL.
-  E2EE state is tracked independently and persists across report cache
-  misses. A cache miss triggers re-attestation but does not reset E2EE
-  state.
-- **Client-facing E2EE status**: Consider adding an `X-Teep-E2EE` response
-  header so clients can verify E2EE was used for each request without
-  fetching the full report.
+  calls work through the E2EE path. It will face the same lifecycle as
+  `e2ee_usable` and should use `Deferred: true` to avoid Skip→Fail
+  promotion.
+- **E2EE key rotation**: When a signing key rotates (VM restart), the
+  `e2eeFailed` marker should be cleared (the new key requires fresh
+  attestation anyway, which gates recovery).
+- **Report cache TTL vs e2eeFailed**: The report cache has a 5-minute
+  TTL. `e2eeFailed` persists independently and is only cleared on fresh
+  attestation, not on cache expiry. This is correct — cache expiry
+  triggers re-attestation, which is the recovery path.
+- **Client-facing E2EE status**: Consider adding an `X-Teep-E2EE`
+  response header so clients can verify E2EE was used for each request
+  without fetching the full report.
 - **Nonce pool exhaustion**: When all instances in the nonce pool are
   marked failed (across multiple requests), `Take` currently returns an
   error only when no nonces remain, not when all instances are unhealthy.
   Consider whether the pool should signal "no healthy instances" as a
   distinct condition. This is an operational exhaustion (all instances
   individually failed), not a cryptographic failure, so it should NOT
-  escalate to `E2EETracker.MarkFailed`. The correct recovery is
-  re-attestation to refresh the instance pool.
+  trigger `e2eeFailed`. The correct recovery is re-attestation to refresh
+  the instance pool.
 - **Crypto material lifecycle in retry**: `zeroE2EESessions` is the
-  canonical helper for zeroing E2EE crypto material. Post-relay enforcement
-  should use the same pattern when invalidating material after decryption
-  failure.
+  canonical helper for zeroing E2EE crypto material. Post-relay
+  enforcement uses the same pattern when invalidating material after
+  decryption failure.
