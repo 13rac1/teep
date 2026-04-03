@@ -12,8 +12,9 @@
    when the factor is enforced.
 
 3. Post-relay fail-closed enforcement: decryption failures block future
-   requests and invalidate caches. This is the primary E2EE safety
-   mechanism.
+   requests for non-fleet providers; for Chutes, unretriable failures
+   invalidate caches and force re-attestation / fresh instance selection
+   with a new E2EE handshake. This is the primary E2EE safety mechanism.
 
 4. Instance-level failover for fleet-based providers (Chutes) must not
    impact overall request reliability. Per-instance failures are fail-closed
@@ -102,14 +103,15 @@ Instance failover operates at two levels:
 | Failure scope | Trigger | Action | Retryable? |
 |---------------|---------|--------|------------|
 | Per-instance | Transport error, handshake failure, HTTP 429/5xx, pre-header decryption error | `MarkFailed(instanceID)`, zero session, retry on fresh instance | Yes — fresh handshake on new instance |
-| Provider+model | Post-relay decryption failure after headers sent (non-Chutes), or all Chutes retries exhausted | `e2eeFailed.Store`, invalidate all caches | No — fail-closed until re-attestation |
+| Request-scoped (Chutes exhaustion) | All Chutes retries exhausted for a single request | Return error for that request; invalidate the relevant nonce pool/caches for fresh E2EE on subsequent requests; do **not** call `e2eeFailed.Store` for provider+model global block | No for that request; next request may succeed on a newly-available instance with fresh attestation/E2EE |
+| Provider+model | Post-relay decryption failure after headers sent (non-Chutes) | `e2eeFailed.Store`, invalidate all caches | No — fail-closed until re-attestation |
 
 **What does NOT trigger provider+model failure**:
 - Instance going offline mid-request (transport error → retry)
 - E2EE handshake failure on a specific instance (prep error → retry)
 - HTTP 429/500-504 from a specific instance (transport error → retry)
 - Pre-header decryption failure on a Chutes instance (retry on new instance)
-- All retry attempts exhausted for a single request (returns error to
+- All Chutes retry attempts exhausted for a single request (returns error to
   client, but next request may succeed on newly-available instances)
 
 ### Existing Safeguards
