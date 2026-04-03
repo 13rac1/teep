@@ -1932,3 +1932,137 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Clone
+// ---------------------------------------------------------------------------
+
+func TestClone(t *testing.T) {
+	t.Run("deep_copies_factors", func(t *testing.T) {
+		orig := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "a", Status: Pass, Detail: "ok"},
+				{Name: "b", Status: Fail, Detail: "bad"},
+			},
+			Passed: 1, Failed: 1,
+		}
+		cloned := orig.Clone()
+		// Mutate clone; original must be unchanged.
+		cloned.Factors[0].Status = Fail
+		cloned.Factors[0].Detail = "mutated"
+		if orig.Factors[0].Status != Pass {
+			t.Error("original factor status was mutated via clone")
+		}
+		if orig.Factors[0].Detail != "ok" {
+			t.Error("original factor detail was mutated via clone")
+		}
+	})
+
+	t.Run("deep_copies_metadata", func(t *testing.T) {
+		orig := &VerificationReport{
+			Metadata: map[string]string{"key": "val"},
+		}
+		cloned := orig.Clone()
+		cloned.Metadata["key"] = "changed"
+		cloned.Metadata["new"] = "added"
+		if orig.Metadata["key"] != "val" {
+			t.Error("original metadata was mutated via clone")
+		}
+		if _, ok := orig.Metadata["new"]; ok {
+			t.Error("new key appeared in original metadata after clone mutation")
+		}
+	})
+
+	t.Run("nil_report", func(t *testing.T) {
+		var r *VerificationReport
+		if r.Clone() != nil {
+			t.Error("Clone of nil report should return nil")
+		}
+	})
+
+	t.Run("nil_metadata", func(t *testing.T) {
+		orig := &VerificationReport{
+			Factors: []FactorResult{{Name: "a", Status: Pass}},
+			Passed:  1,
+		}
+		cloned := orig.Clone()
+		if cloned.Metadata != nil {
+			t.Error("clone of report with nil Metadata should have nil Metadata")
+		}
+		if cloned.Passed != 1 {
+			t.Errorf("Passed = %d, want 1", cloned.Passed)
+		}
+	})
+
+	t.Run("preserves_scalar_fields", func(t *testing.T) {
+		orig := &VerificationReport{
+			Provider: "test-provider",
+			Model:    "test-model",
+			Passed:   3,
+			Failed:   1,
+			Skipped:  2,
+		}
+		cloned := orig.Clone()
+		if cloned.Provider != orig.Provider || cloned.Model != orig.Model {
+			t.Error("scalar fields not preserved")
+		}
+		if cloned.Passed != 3 || cloned.Failed != 1 || cloned.Skipped != 2 {
+			t.Error("counter fields not preserved")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// recomputeCounters
+// ---------------------------------------------------------------------------
+
+func TestRecomputeCounters(t *testing.T) {
+	t.Run("correct_counts", func(t *testing.T) {
+		r := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "a", Status: Pass},
+				{Name: "b", Status: Pass},
+				{Name: "c", Status: Fail, Enforced: true},
+				{Name: "d", Status: Skip},
+				{Name: "e", Status: Fail, Enforced: false},
+				{Name: "e2ee_usable", Status: Skip, Detail: "pending"},
+			},
+		}
+		r.MarkE2EEUsable("roundtrip ok")
+		// e2ee_usable promoted: 3 pass, 2 fail, 1 skip
+		if r.Passed != 3 {
+			t.Errorf("Passed = %d, want 3", r.Passed)
+		}
+		if r.Failed != 2 {
+			t.Errorf("Failed = %d, want 2", r.Failed)
+		}
+		if r.Skipped != 1 {
+			t.Errorf("Skipped = %d, want 1", r.Skipped)
+		}
+		if r.EnforcedFailed != 1 {
+			t.Errorf("EnforcedFailed = %d, want 1", r.EnforcedFailed)
+		}
+		if r.AllowedFailed != 1 {
+			t.Errorf("AllowedFailed = %d, want 1", r.AllowedFailed)
+		}
+	})
+
+	t.Run("desynced_counters_fixed", func(t *testing.T) {
+		// Start with intentionally wrong counters.
+		r := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "a", Status: Pass},
+				{Name: "e2ee_usable", Status: Skip},
+			},
+			Passed:  99,
+			Skipped: 0,
+		}
+		r.MarkE2EEUsable("promotes skip to pass and recomputes")
+		if r.Passed != 2 {
+			t.Errorf("Passed = %d, want 2 (recomputed from factors)", r.Passed)
+		}
+		if r.Skipped != 0 {
+			t.Errorf("Skipped = %d, want 0", r.Skipped)
+		}
+	})
+}

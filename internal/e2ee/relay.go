@@ -12,6 +12,12 @@ import (
 	"time"
 )
 
+// ErrDecryptionFailed is a sentinel error returned by relay functions when
+// E2EE decryption fails on the upstream response. Callers use this to
+// distinguish cryptographic failures (indicating possible MITM or server-side
+// E2EE breakage) from other relay errors.
+var ErrDecryptionFailed = errors.New("e2ee decryption failed")
+
 // StreamStats holds token throughput metrics collected during SSE relay.
 type StreamStats struct {
 	Chunks   int           // number of SSE data chunks with delta/content
@@ -352,12 +358,12 @@ func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, StreamStats
 
 // RelayStream reads an SSE stream from body, decrypts chunks when session is
 // non-nil, and writes the decrypted SSE lines to w. Returns token throughput
-// stats. Aborts on decryption failure.
-func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) StreamStats {
+// stats and a non-nil error wrapping ErrDecryptionFailed on decryption failure.
+func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) (StreamStats, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return StreamStats{}
+		return StreamStats{}, nil
 	}
 
 	scanner, cleanup := newSSEScanner(body)
@@ -369,7 +375,7 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 		} else {
 			http.Error(w, "empty upstream stream", http.StatusBadGateway)
 		}
-		return StreamStats{}
+		return StreamStats{}, nil
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -379,52 +385,57 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 
 	var stats StreamStats
 	var firstChunk time.Time
+	var decryptErr error
 
 	process := func(line string) bool {
-		if relaySSELine(ctx, w, flusher, line, session) {
-			return true
+		done, derr := relaySSELine(ctx, w, flusher, line, session)
+		if derr != nil {
+			decryptErr = derr
 		}
-		if data, ok := strings.CutPrefix(line, "data: "); ok && data != "[DONE]" {
-			stats.recordChunk(data, &firstChunk)
+		if !done {
+			if data, ok := strings.CutPrefix(line, "data: "); ok && data != "[DONE]" {
+				stats.recordChunk(data, &firstChunk)
+			}
 		}
-		return false
+		return done
 	}
 
 	if process(scanner.Text()) {
-		return stats
+		return stats, decryptErr
 	}
 	for scanner.Scan() {
 		if process(scanner.Text()) {
-			return stats
+			return stats, decryptErr
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		slog.ErrorContext(ctx, "SSE scanner error", "err", err)
 	}
-	return stats
+	return stats, decryptErr
 }
 
-// relaySSELine processes a single SSE line, writing it to w. Returns true if
-// the stream should end (DONE marker or decryption error).
-func relaySSELine(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, line string, session Decryptor) bool {
+// relaySSELine processes a single SSE line, writing it to w. Returns
+// (done, error) where done=true means the stream should end. error is non-nil
+// only on decryption failure (wraps ErrDecryptionFailed).
+func relaySSELine(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, line string, session Decryptor) (bool, error) {
 	if !strings.HasPrefix(line, "data: ") {
 		fmt.Fprintf(w, "%s\n", line)
 		flusher.Flush()
-		return false
+		return false, nil
 	}
 
 	data := line[len("data: "):]
 	if data == "[DONE]" {
 		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
-		return true
+		return true, nil
 	}
 
 	if session == nil {
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
-		return false
+		return false, nil
 	}
 
 	decrypted, err := DecryptSSEChunk(data, session)
@@ -432,55 +443,58 @@ func relaySSELine(ctx context.Context, w http.ResponseWriter, flusher http.Flush
 		slog.ErrorContext(ctx, "stream decryption failed", "err", err)
 		fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":\"stream decryption failed\",\"type\":\"decryption_error\"}}\n\n")
 		flusher.Flush()
-		return true
+		return true, fmt.Errorf("%w: %w", ErrDecryptionFailed, err)
 	}
 
 	fmt.Fprintf(w, "data: %s\n\n", decrypted)
 	flusher.Flush()
-	return false
+	return false, nil
 }
 
 // RelayReassembledNonStream reads an SSE stream from the E2EE upstream,
 // decrypts each chunk, and writes a single non-streaming JSON response.
-// Returns token throughput stats.
-func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) StreamStats {
+// Returns token throughput stats and a non-nil error wrapping
+// ErrDecryptionFailed on decryption failure.
+func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) (StreamStats, error) {
 	result, stats, err := ReassembleNonStream(body, session)
 	if err != nil {
 		slog.ErrorContext(ctx, "E2EE non-stream reassembly failed", "err", err)
 		http.Error(w, "response decryption failed", http.StatusBadGateway)
-		return stats
+		return stats, fmt.Errorf("%w: %w", ErrDecryptionFailed, err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result)
-	return stats
+	return stats, nil
 }
 
 // RelayNonStream reads a non-streaming JSON response from body, decrypts the
-// content fields if session is non-nil, and writes the result to w.
-func RelayNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) {
+// content fields if session is non-nil, and writes the result to w. Returns a
+// non-nil error wrapping ErrDecryptionFailed on decryption failure.
+func RelayNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) (StreamStats, error) {
 	responseBody, err := io.ReadAll(io.LimitReader(body, 10<<20))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
-		return
+		return StreamStats{}, err
 	}
 
 	if session == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(responseBody)
-		return
+		return StreamStats{}, nil
 	}
 
 	decrypted, err := DecryptNonStreamResponse(responseBody, session)
 	if err != nil {
 		slog.ErrorContext(ctx, "non-stream decryption failed", "err", err)
 		http.Error(w, "response decryption failed", http.StatusBadGateway)
-		return
+		return StreamStats{}, fmt.Errorf("%w: %w", ErrDecryptionFailed, err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(decrypted)
+	return StreamStats{}, nil
 }

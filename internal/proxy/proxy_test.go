@@ -2359,7 +2359,7 @@ func TestPrepareUpstreamHeaders_WithSession(t *testing.T) {
 func TestRelayStream_EmptyBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	e2ee.RelayStream(context.Background(), rec, strings.NewReader(""), nil)
+	_, _ = e2ee.RelayStream(context.Background(), rec, strings.NewReader(""), nil)
 
 	t.Logf("status: %d, body: %q", rec.Code, rec.Body.String())
 	if rec.Code != http.StatusBadGateway {
@@ -2375,7 +2375,7 @@ func TestRelayStream_NonDataLines(t *testing.T) {
 
 	// SSE with a comment line, a non-data event, then a data chunk and DONE.
 	body := ": this is a comment\nevent: heartbeat\ndata: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"
-	e2ee.RelayStream(context.Background(), rec, strings.NewReader(body), nil)
+	_, _ = e2ee.RelayStream(context.Background(), rec, strings.NewReader(body), nil)
 
 	t.Logf("status: %d", rec.Code)
 	if rec.Code != http.StatusOK {
@@ -2407,7 +2407,7 @@ func TestRelayStream_PlaintextPassthrough(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	body := streamSSE("hello world")
-	e2ee.RelayStream(context.Background(), rec, strings.NewReader(body), nil)
+	_, _ = e2ee.RelayStream(context.Background(), rec, strings.NewReader(body), nil)
 
 	t.Logf("status: %d", rec.Code)
 	if rec.Code != http.StatusOK {
@@ -2433,7 +2433,7 @@ func TestRelayNonStream_NilSession(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	body := nonStreamResponse("hello from upstream")
-	e2ee.RelayNonStream(context.Background(), rec, strings.NewReader(body), nil)
+	_, _ = e2ee.RelayNonStream(context.Background(), rec, strings.NewReader(body), nil)
 
 	t.Logf("status: %d", rec.Code)
 	if rec.Code != http.StatusOK {
@@ -2456,7 +2456,7 @@ func TestRelayReassembledNonStream_MalformedSSE(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	// No valid SSE data lines — should fail during reassembly.
-	e2ee.RelayReassembledNonStream(context.Background(), rec, strings.NewReader("not valid sse"), nil)
+	_, _ = e2ee.RelayReassembledNonStream(context.Background(), rec, strings.NewReader("not valid sse"), nil)
 
 	t.Logf("status: %d, body: %q", rec.Code, rec.Body.String())
 	if rec.Code != http.StatusBadGateway {

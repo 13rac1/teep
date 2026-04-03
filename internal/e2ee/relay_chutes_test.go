@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -87,7 +88,10 @@ func TestRelayStreamChutes(t *testing.T) {
 	t.Logf("SSE input length: %d bytes", len(sseInput))
 
 	rec := httptest.NewRecorder()
-	RelayStreamChutes(context.Background(), rec, strings.NewReader(sseInput), session)
+	_, err = RelayStreamChutes(context.Background(), rec, strings.NewReader(sseInput), session)
+	if err != nil {
+		t.Fatalf("RelayStreamChutes: %v", err)
+	}
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -120,7 +124,13 @@ func TestRelayStreamChutes_MissingInit(t *testing.T) {
 	input := `data: {"e2e":"dGVzdA=="}` + "\n\n"
 
 	rec := httptest.NewRecorder()
-	RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
+	_, err = RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
+	if err == nil {
+		t.Fatal("expected error from RelayStreamChutes")
+	}
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("error should wrap ErrDecryptionFailed, got: %v", err)
+	}
 
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("status = %d, want 502", rec.Code)
@@ -142,7 +152,13 @@ func TestRelayStreamChutes_E2EError(t *testing.T) {
 	input := fmt.Sprintf("data: %s\n\ndata: %s\n\n", initJSON, errJSON)
 
 	rec := httptest.NewRecorder()
-	RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
+	_, err = RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
+	if err == nil {
+		t.Fatal("expected error from RelayStreamChutes")
+	}
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("error should wrap ErrDecryptionFailed, got: %v", err)
+	}
 
 	body := rec.Body.String()
 	t.Logf("e2e_error response: status=%d body=%s", rec.Code, body)
@@ -165,7 +181,10 @@ func TestRelayNonStreamChutes(t *testing.T) {
 	blob := simulateServerResponseBlob(t, session, []byte(plainJSON))
 
 	rec := httptest.NewRecorder()
-	RelayNonStreamChutes(context.Background(), rec, strings.NewReader(string(blob)), session)
+	_, err = RelayNonStreamChutes(context.Background(), rec, strings.NewReader(string(blob)), session)
+	if err != nil {
+		t.Fatalf("RelayNonStreamChutes: %v", err)
+	}
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -191,7 +210,13 @@ func TestRelayStreamChutes_UnparseableEvent(t *testing.T) {
 	input := "data: not-valid-json!!!\n\ndata: [DONE]\n\n"
 
 	rec := httptest.NewRecorder()
-	stats := RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
+	stats, err := RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
+	if err == nil {
+		t.Fatal("expected error from RelayStreamChutes")
+	}
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("error should wrap ErrDecryptionFailed, got: %v", err)
+	}
 
 	body := rec.Body.String()
 	t.Logf("unparseable event response: status=%d body=%q chunks=%d", rec.Code, body, stats.Chunks)
@@ -219,7 +244,7 @@ func TestRelayStreamChutes_DoneWithoutChunks(t *testing.T) {
 	input := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", initJSON)
 
 	rec := httptest.NewRecorder()
-	RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
+	_, _ = RelayStreamChutes(context.Background(), rec, strings.NewReader(input), session)
 
 	// [DONE] without header written: should not write [DONE] to output.
 	body := rec.Body.String()

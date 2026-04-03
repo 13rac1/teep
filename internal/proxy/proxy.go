@@ -210,6 +210,12 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
+// providerModelKey is used as the key in the e2eeFailed sync.Map.
+type providerModelKey struct {
+	provider string
+	model    string
+}
+
 // Server is the teep proxy HTTP server.
 type Server struct {
 	cfg             *config.Config
@@ -224,6 +230,7 @@ type Server struct {
 	attestClient    *http.Client // for attestation fetches
 	upstreamClient  *http.Client // for chat completions forwards
 	sseConns        atomic.Int64 // active SSE /events connections
+	e2eeFailed      sync.Map     // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
 	stats           stats
 }
 
@@ -772,88 +779,254 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	report := ar.Report
 
-	ur, err := s.doUpstreamRoundtrip(ctx, prov, body, upstreamModel, ar.E2EEActive, ar.Raw, req.Stream)
-	e2eeDur = ur.E2EEDur
-	upstreamDur = ur.UpstreamDur
-	if err != nil {
-		status = "upstream_failed"
-		code := http.StatusBadGateway
-		msg := "upstream request failed"
-		if he := (*httpError)(nil); errors.As(err, &he) {
-			status = he.status
-			code = he.code
-			if he.status == "e2ee_failed" {
-				msg = "failed to prepare encrypted request"
-			}
-		}
-		s.stats.errors.Add(1)
-		ms.errors.Add(1)
-		slog.ErrorContext(ctx, "upstream roundtrip failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-		http.Error(w, msg, code)
-		return
-	}
-	resp := ur.Resp
-	session := ur.Session
-	meta := ur.Meta
-	defer ur.Cancel()
-	if session != nil {
-		defer session.Zero()
-	}
-	if meta != nil && meta.Session != nil {
-		defer meta.Session.Zero()
-	}
-
-	upstreamRelayStart := time.Now()
-	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
-		resp.Body.Close()
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		status = fmt.Sprintf("upstream_%d", resp.StatusCode)
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, io.LimitReader(resp.Body, 10<<20))
-		return
-	}
-
-	// E2EE forces stream=true upstream (Venice/NearCloud) or uses /e2e/invoke
-	// (Chutes), so the response is always SSE. When the client requested
-	// non-streaming, reassemble the decrypted SSE chunks into a single JSON response.
-	//
-	// Fail closed: if Chutes E2EE metadata was populated (meta != nil) but
-	// the session is missing, something went wrong during key encapsulation.
-	// Forwarding the ciphertext response as plaintext would leak confidential
-	// data, so we abort.
-	if meta != nil && meta.Session == nil {
-		status = "e2ee_session_missing"
-		s.stats.errors.Add(1)
-		if ms != nil {
+	// Block requests to provider+model pairs where E2EE previously failed
+	// (decryption failure after a successful HTTP response). Full
+	// re-attestation is required to recover; the cache entries were
+	// already invalidated when the failure was recorded.
+	if ar.E2EEActive {
+		if _, failed := s.e2eeFailed.Load(providerModelKey{prov.Name, upstreamModel}); failed {
+			status = "e2ee_previously_failed"
+			s.stats.errors.Add(1)
 			ms.errors.Add(1)
+			slog.ErrorContext(ctx, "E2EE previously failed; re-attestation required",
+				"provider", prov.Name, "model", upstreamModel)
+			http.Error(w, "E2EE previously failed for this provider/model; re-attestation required", http.StatusBadGateway)
+			return
 		}
-		slog.ErrorContext(ctx, "e2ee session missing; aborting response", "status", status)
-		http.Error(w, "e2ee session not established", http.StatusInternalServerError)
+	}
+
+	// Chutes E2EE requests can retry the full upstream+relay cycle when an
+	// instance fails post-relay (decryption error). The specific instance is
+	// marked failed and the next attempt uses a fresh instance from the
+	// nonce pool with a new encryption handshake. Non-Chutes paths execute
+	// exactly once; post-relay decryption failure marks the provider+model
+	// pair as globally failed (fail-closed).
+	rr := s.relayWithRetry(ctx, w, prov, upstreamModel, body, ar, ms, req.Stream)
+	e2eeDur += rr.e2eeDur
+	upstreamDur += rr.upstreamDur
+	if rr.status != "" {
+		status = rr.status
 		return
 	}
-	ss := relayResponse(ctx, w, resp.Body, session, meta, req.Stream)
-	recordTokPerSec(ms, ss)
-	upstreamDur += time.Since(upstreamRelayStart)
 
 	// After a successful E2EE roundtrip, promote the cached report's
 	// e2ee_usable factor from Skip to Pass so that subsequent report
-	// fetches reflect the live test result.
-	//
-	// TODO(e2ee_usable): This mutates a shared *VerificationReport pointer
-	// returned by cache.Get, which can race with concurrent requests reading
-	// the same report (e.g. /v1/tee/report or parallel chat requests).
-	// The report should be deep-copied before mutation, or the e2ee_usable
-	// lifecycle should be separated from the report factor system entirely.
-	// See docs/plans/e2ee_usable_refactoring.md.
+	// fetches reflect the live test result. Clone before mutating to
+	// avoid racing with concurrent readers of the shared cache pointer.
 	if ar.E2EEActive {
-		report.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
-		s.cache.Put(prov.Name, upstreamModel, report)
+		cloned := report.Clone()
+		cloned.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
+		s.cache.Put(prov.Name, upstreamModel, cloned)
 	}
 
 	status = "ok"
+}
+
+// relayResult holds the outcome of relayWithRetry.
+type relayResult struct {
+	status      string        // non-empty on terminal failure
+	e2eeDur     time.Duration // accumulated E2EE key-exchange time
+	upstreamDur time.Duration // accumulated upstream + relay time
+}
+
+// relayWithRetry performs the upstream roundtrip and E2EE relay, retrying on
+// Chutes instance-level decryption failures. For non-Chutes providers the
+// loop executes exactly once.
+func (s *Server) relayWithRetry(
+	ctx context.Context,
+	w http.ResponseWriter,
+	prov *provider.Provider,
+	upstreamModel string,
+	body []byte,
+	ar *attestResult,
+	ms *modelStats,
+	stream bool,
+) relayResult {
+	chutesE2EE := isChutesE2EE(prov, ar.E2EEActive)
+	maxRelayAttempts := 1
+	if chutesE2EE {
+		maxRelayAttempts = chutesMaxAttempts
+	}
+
+	ri := &responseInterceptor{ResponseWriter: w}
+	var ss e2ee.StreamStats
+	var relayErr error
+	var lastChuteID string // track for post-loop nonce pool invalidation
+	var result relayResult
+
+	for relayAttempt := range maxRelayAttempts {
+		// On retry, clear raw so doUpstreamRoundtrip uses the nonce pool
+		// (different instance) instead of the initial attestation.
+		attemptRaw := ar.Raw
+		if relayAttempt > 0 {
+			attemptRaw = nil
+		}
+
+		ur, err := s.doUpstreamRoundtrip(ctx, prov, body, upstreamModel, ar.E2EEActive, attemptRaw, stream)
+		result.e2eeDur += ur.E2EEDur
+		result.upstreamDur += ur.UpstreamDur
+		if err != nil {
+			statusStr, code, msg := classifyUpstreamError(err)
+			result.status = statusStr
+			// For Chutes, upstream failures (transport) are already retried
+			// inside doUpstreamRoundtrip. If we get here, all transport
+			// retries are exhausted. Continue to the next relay attempt
+			// only if we haven't written headers yet.
+			if relayAttempt < maxRelayAttempts-1 && !ri.headerSent {
+				slog.WarnContext(ctx, "chutes: upstream failed, trying relay attempt with new instance",
+					"provider", prov.Name, "model", upstreamModel, "relay_attempt", relayAttempt+1, "err", err)
+				continue
+			}
+			s.stats.errors.Add(1)
+			ms.errors.Add(1)
+			slog.ErrorContext(ctx, "upstream roundtrip failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+			if !ri.headerSent {
+				http.Error(w, msg, code)
+				return result
+			}
+			return result
+		}
+		resp := ur.Resp
+		session := ur.Session
+		meta := ur.Meta
+		if meta != nil && meta.ChuteID != "" {
+			lastChuteID = meta.ChuteID
+		}
+
+		// cleanupAttempt drains and closes the response body and zeros crypto.
+		cleanupAttempt := func() {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
+			resp.Body.Close()
+			ur.Cancel()
+			zeroE2EESessions(session, meta)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			// Non-200 upstream: for Chutes, this may be instance-level.
+			// doUpstreamRoundtrip already handles retryable HTTP codes, so
+			// reaching here means the code is not retryable. Forward as-is.
+			if !ri.headerSent {
+				result.status = fmt.Sprintf("upstream_%d", resp.StatusCode)
+				w.WriteHeader(resp.StatusCode)
+				_, _ = io.Copy(w, io.LimitReader(resp.Body, 10<<20))
+			}
+			cleanupAttempt()
+			return result
+		}
+
+		// Fail closed: if Chutes E2EE metadata was populated (meta != nil)
+		// but the session is missing, something went wrong during key
+		// encapsulation. Forwarding ciphertext as plaintext would leak data.
+		if meta != nil && meta.Session == nil {
+			cleanupAttempt()
+			if relayAttempt < maxRelayAttempts-1 && !ri.headerSent {
+				slog.WarnContext(ctx, "chutes: e2ee session missing, trying new instance",
+					"provider", prov.Name, "model", upstreamModel, "relay_attempt", relayAttempt+1)
+				continue
+			}
+			result.status = "e2ee_session_missing"
+			s.stats.errors.Add(1)
+			if ms != nil {
+				ms.errors.Add(1)
+			}
+			slog.ErrorContext(ctx, "e2ee session missing; aborting response", "status", result.status)
+			if !ri.headerSent {
+				http.Error(w, "e2ee session not established", http.StatusInternalServerError)
+				return result
+			}
+			return result
+		}
+
+		upstreamRelayStart := time.Now()
+		ss, relayErr = relayResponse(ctx, ri, resp.Body, session, meta, stream)
+		result.upstreamDur += time.Since(upstreamRelayStart)
+		recordTokPerSec(ms, ss)
+
+		// Always drain body and clean up crypto material from this attempt.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
+		resp.Body.Close()
+		ur.Cancel()
+		if session != nil {
+			session.Zero()
+		}
+		if meta != nil && meta.Session != nil {
+			meta.Session.Zero()
+		}
+
+		if relayErr == nil {
+			// Relay succeeded.
+			break
+		}
+
+		// Relay returned a decryption error.
+		if !errors.Is(relayErr, e2ee.ErrDecryptionFailed) {
+			break // Non-decryption error; don't retry.
+		}
+
+		if chutesE2EE && ur.Meta != nil {
+			// Mark the specific Chutes instance as failed so the nonce pool
+			// deprioritises it on subsequent requests.
+			if ur.Meta.InstanceID != "" && prov.E2EEMaterialFetcher != nil {
+				prov.E2EEMaterialFetcher.MarkFailed(ur.Meta.ChuteID, ur.Meta.InstanceID)
+				slog.WarnContext(ctx, "chutes: instance E2EE decryption failed, marked unusable",
+					"provider", prov.Name, "model", upstreamModel,
+					"instance_id", ur.Meta.InstanceID, "chute_id", ur.Meta.ChuteID,
+					"relay_attempt", relayAttempt+1, "err", relayErr)
+			}
+		}
+
+		// Can only retry if we haven't written response headers to the client.
+		if relayAttempt < maxRelayAttempts-1 && !ri.headerSent {
+			slog.WarnContext(ctx, "chutes: relay decryption failed before headers, retrying with new instance",
+				"provider", prov.Name, "model", upstreamModel, "relay_attempt", relayAttempt+1)
+			continue
+		}
+		break
+	}
+
+	// Post-relay enforcement: handle decryption failures that could not be retried.
+	if relayErr != nil && errors.Is(relayErr, e2ee.ErrDecryptionFailed) && ar.E2EEActive {
+		result.status = s.handleE2EEDecryptionFailure(ctx, prov, upstreamModel, ms, chutesE2EE, lastChuteID, relayErr)
+		return result
+	}
+
+	return result
+}
+
+// handleE2EEDecryptionFailure records an unretriable E2EE decryption failure,
+// invalidates caches, and returns the status string for request logging.
+func (s *Server) handleE2EEDecryptionFailure(
+	ctx context.Context,
+	prov *provider.Provider,
+	upstreamModel string,
+	ms *modelStats,
+	chutesE2EE bool,
+	lastChuteID string,
+	relayErr error,
+) string {
+	s.stats.errors.Add(1)
+	ms.errors.Add(1)
+
+	if chutesE2EE {
+		// For Chutes, per-instance failures are already handled via
+		// MarkFailed. Invalidate the nonce pool for this chute so the
+		// next request fetches fresh instances.
+		if prov.E2EEMaterialFetcher != nil && lastChuteID != "" {
+			prov.E2EEMaterialFetcher.Invalidate(lastChuteID)
+		}
+	} else {
+		// Non-Chutes: mark the provider+model pair as globally failed.
+		// This is a stronger signal — possible MITM or server-side E2EE
+		// breakage. Block all subsequent requests until re-attestation.
+		s.e2eeFailed.Store(providerModelKey{prov.Name, upstreamModel}, true)
+	}
+	// Invalidate caches to force full re-attestation on the next request.
+	s.cache.Delete(prov.Name, upstreamModel)
+	s.signingKeyCache.Delete(prov.Name, upstreamModel)
+
+	slog.ErrorContext(ctx, "E2EE decryption failed; caches invalidated",
+		"provider", prov.Name, "model", upstreamModel, "err", relayErr)
+	return "e2ee_decrypt_failed"
 }
 
 // handlePinnedChat handles chat completions for connection-pinned providers.
@@ -981,18 +1154,28 @@ func (s *Server) handlePinnedChat(
 	} else {
 		s.stats.plaintext.Add(1)
 	}
-	ss := relayResponse(ctx, w, pinnedResp.Body, session, nil, req.Stream)
+	ss, relayErr := relayResponse(ctx, w, pinnedResp.Body, session, nil, req.Stream)
 	recordTokPerSec(ms, ss)
+
+	// Post-relay enforcement for pinned E2EE paths.
+	if relayErr != nil && errors.Is(relayErr, e2ee.ErrDecryptionFailed) && session != nil {
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
+		s.e2eeFailed.Store(providerModelKey{prov.Name, upstreamModel}, true)
+		s.cache.Delete(prov.Name, upstreamModel)
+		s.signingKeyCache.Delete(prov.Name, upstreamModel)
+		slog.ErrorContext(ctx, "pinned E2EE decryption failed; caches invalidated",
+			"provider", prov.Name, "model", upstreamModel, "err", relayErr)
+		return
+	}
 
 	// After a successful E2EE roundtrip on the pinned path,
 	// promote e2ee_usable from Skip to Pass in the cached report.
-	//
-	// TODO(e2ee_usable): Same cache mutation race as the non-pinned
-	// path — see the comment there and
-	// docs/plans/e2ee_usable_refactoring.md.
-	if session != nil && report != nil {
-		report.MarkE2EEUsable("E2EE roundtrip succeeded via pinned connection")
-		s.cache.Put(prov.Name, upstreamModel, report)
+	// Clone before mutating to avoid racing with concurrent readers.
+	if session != nil && report != nil && relayErr == nil {
+		cloned := report.Clone()
+		cloned.MarkE2EEUsable("E2EE roundtrip succeeded via pinned connection")
+		s.cache.Put(prov.Name, upstreamModel, cloned)
 	}
 }
 
@@ -1088,16 +1271,15 @@ func (s *Server) enforceReport(ctx context.Context, w http.ResponseWriter,
 
 // relayResponse dispatches the upstream response to the correct relay function
 // based on E2EE session type (Chutes meta, Venice/NearCloud session, or
-// plaintext) and streaming mode.
+// plaintext) and streaming mode. Returns StreamStats and any decryption error.
 func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
 	session e2ee.Decryptor, meta *e2ee.ChutesE2EE, stream bool,
-) e2ee.StreamStats {
+) (e2ee.StreamStats, error) {
 	switch {
 	case meta != nil && meta.Session != nil && stream:
 		return e2ee.RelayStreamChutes(ctx, w, body, meta.Session)
 	case meta != nil && meta.Session != nil:
-		e2ee.RelayNonStreamChutes(ctx, w, body, meta.Session)
-		return e2ee.StreamStats{}
+		return e2ee.RelayNonStreamChutes(ctx, w, body, meta.Session)
 	case session != nil && stream:
 		return e2ee.RelayStream(ctx, w, body, session)
 	case session != nil:
@@ -1105,9 +1287,54 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
 	case stream:
 		return e2ee.RelayStream(ctx, w, body, nil)
 	default:
-		e2ee.RelayNonStream(ctx, w, body, nil)
-		return e2ee.StreamStats{}
+		return e2ee.RelayNonStream(ctx, w, body, nil)
 	}
+}
+
+// responseInterceptor wraps an http.ResponseWriter to detect whether headers
+// have been flushed to the client. Used by the Chutes E2EE retry loop to
+// determine if a failed streaming relay can be retried.
+type responseInterceptor struct {
+	http.ResponseWriter
+	headerSent bool
+}
+
+func (ri *responseInterceptor) WriteHeader(code int) {
+	ri.headerSent = true
+	ri.ResponseWriter.WriteHeader(code)
+}
+
+func (ri *responseInterceptor) Write(b []byte) (int, error) {
+	ri.headerSent = true
+	return ri.ResponseWriter.Write(b)
+}
+
+func (ri *responseInterceptor) Flush() {
+	if f, ok := ri.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// isChutesE2EE returns true if the request uses Chutes E2EE (has a nonce pool
+// for instance failover).
+func isChutesE2EE(prov *provider.Provider, e2eeActive bool) bool {
+	return e2eeActive && prov.E2EEMaterialFetcher != nil && prov.SkipSigningKeyCache
+}
+
+// classifyUpstreamError returns a status string, HTTP code, and user-facing
+// message for an error from doUpstreamRoundtrip.
+func classifyUpstreamError(err error) (status string, code int, msg string) {
+	status = "upstream_failed"
+	code = http.StatusBadGateway
+	msg = "upstream request failed"
+	if he := (*httpError)(nil); errors.As(err, &he) {
+		status = he.status
+		code = he.code
+		if he.status == "e2ee_failed" {
+			msg = "failed to prepare encrypted request"
+		}
+	}
+	return
 }
 
 // httpError wraps an error with an HTTP status code for doUpstreamRoundtrip.

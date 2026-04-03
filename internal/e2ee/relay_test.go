@@ -260,7 +260,10 @@ func TestRelayStream(t *testing.T) {
 	input := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", data)
 
 	rec := httptest.NewRecorder()
-	RelayStream(context.Background(), rec, strings.NewReader(input), session)
+	_, err := RelayStream(context.Background(), rec, strings.NewReader(input), session)
+	if err != nil {
+		t.Fatalf("RelayStream: %v", err)
+	}
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -283,7 +286,10 @@ func TestRelayStream(t *testing.T) {
 func TestRelayStream_NilSession(t *testing.T) {
 	input := "data: {\"choices\":[{\"delta\":{\"content\":\"plain\"}}]}\n\ndata: [DONE]\n\n"
 	rec := httptest.NewRecorder()
-	RelayStream(context.Background(), rec, strings.NewReader(input), nil)
+	_, err := RelayStream(context.Background(), rec, strings.NewReader(input), nil)
+	if err != nil {
+		t.Fatalf("RelayStream: %v", err)
+	}
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -298,7 +304,10 @@ func TestRelayStream_NilSession(t *testing.T) {
 func TestRelayNonStream_NilSession(t *testing.T) {
 	input := `{"choices":[{"message":{"content":"hello"}}]}`
 	rec := httptest.NewRecorder()
-	RelayNonStream(context.Background(), rec, strings.NewReader(input), nil)
+	_, err := RelayNonStream(context.Background(), rec, strings.NewReader(input), nil)
+	if err != nil {
+		t.Fatalf("RelayNonStream: %v", err)
+	}
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -321,7 +330,10 @@ func TestRelayNonStream_Encrypted(t *testing.T) {
 	body := nonStreamJSON(t, encrypted)
 
 	rec := httptest.NewRecorder()
-	RelayNonStream(context.Background(), rec, strings.NewReader(string(body)), session)
+	_, err := RelayNonStream(context.Background(), rec, strings.NewReader(string(body)), session)
+	if err != nil {
+		t.Fatalf("RelayNonStream: %v", err)
+	}
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -342,7 +354,10 @@ func TestRelayReassembledNonStream(t *testing.T) {
 	input := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", data)
 
 	rec := httptest.NewRecorder()
-	RelayReassembledNonStream(context.Background(), rec, strings.NewReader(input), session)
+	_, err := RelayReassembledNonStream(context.Background(), rec, strings.NewReader(input), session)
+	if err != nil {
+		t.Fatalf("RelayReassembledNonStream: %v", err)
+	}
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -363,7 +378,10 @@ func TestRelayReassembledNonStream(t *testing.T) {
 
 func TestRelayStream_EmptyBody(t *testing.T) {
 	rec := httptest.NewRecorder()
-	RelayStream(context.Background(), rec, strings.NewReader(""), nil)
+	_, err := RelayStream(context.Background(), rec, strings.NewReader(""), nil)
+	if err != nil {
+		t.Logf("RelayStream error: %v", err)
+	}
 
 	// Empty body should produce a bad gateway error.
 	if rec.Code != http.StatusBadGateway {

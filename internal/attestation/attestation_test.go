@@ -556,3 +556,52 @@ func TestSigningKeyCacheConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// ---------------------------------------------------------------------------
+// Cache.Delete
+// ---------------------------------------------------------------------------
+
+func TestCacheDelete(t *testing.T) {
+	c := NewCache(time.Minute)
+	report := &VerificationReport{Provider: "venice", Model: "m1"}
+
+	c.Put("venice", "m1", report)
+	if _, ok := c.Get("venice", "m1"); !ok {
+		t.Fatal("expected cache hit after Put")
+	}
+
+	c.Delete("venice", "m1")
+	if _, ok := c.Get("venice", "m1"); ok {
+		t.Error("expected cache miss after Delete")
+	}
+}
+
+func TestCacheDelete_NoopOnMiss(t *testing.T) {
+	c := NewCache(time.Minute)
+	// Should not panic when deleting a missing key.
+	c.Delete("venice", "nonexistent")
+}
+
+// ---------------------------------------------------------------------------
+// SigningKeyCache.Delete
+// ---------------------------------------------------------------------------
+
+func TestSigningKeyCacheDelete(t *testing.T) {
+	c := NewSigningKeyCache(time.Minute)
+	c.Put("venice", "m1", "pubkey123")
+
+	if _, ok := c.Get("venice", "m1"); !ok {
+		t.Fatal("expected signing key cache hit after Put")
+	}
+
+	c.Delete("venice", "m1")
+	if _, ok := c.Get("venice", "m1"); ok {
+		t.Error("expected signing key cache miss after Delete")
+	}
+}
+
+func TestSigningKeyCacheDelete_NoopOnMiss(t *testing.T) {
+	c := NewSigningKeyCache(time.Minute)
+	// Should not panic when deleting a missing key.
+	c.Delete("venice", "nonexistent")
+}

@@ -265,6 +265,13 @@ func (c *Cache) Put(provider, model string, report *VerificationReport) {
 	}
 }
 
+// Delete removes the cached report for the given provider and model.
+func (c *Cache) Delete(provider, model string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, cacheKey{provider, model})
+}
+
 // Len returns the number of entries in the cache (including expired ones).
 func (c *Cache) Len() int {
 	c.mu.RLock()
@@ -453,6 +460,13 @@ func (c *SigningKeyCache) Put(provider, model, signingKey string) {
 		signingKey: signingKey,
 		fetchedAt:  time.Now(),
 	}
+}
+
+// Delete removes the cached signing key for the given provider and model.
+func (c *SigningKeyCache) Delete(provider, model string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, cacheKey{provider, model})
 }
 
 // Len returns the number of entries in the signing key cache (including expired).
