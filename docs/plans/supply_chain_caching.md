@@ -1,5 +1,428 @@
 # Plan: Supply Chain Policy Caching and Configuration
 
+## 0. Offline Activity Inventory and Cacheability Analysis
+
+### Goal
+
+All data currently exempted by `--offline` should be cached, post-authentication,
+along with all data currently captured by `--update-config`, such that a full
+attestation report can be rebuilt and verified with as little online activity as
+possible — ideally none, so long as the cached data is fresh.
+
+This section enumerates every piece of online activity currently exempted by
+`--offline`, examines what each one fetches, and reasons about whether it can
+be safely and usefully cached to disk.
+
+### 0a. Current `--offline` Exemptions
+
+`OnlineFactors` (from `internal/attestation/report.go`) lists 9 factors that
+are automatically added to `allow_fail` in offline mode:
+
+| # | Factor | Online Service | What It Fetches | What It Produces |
+|---|--------|---------------|-----------------|-----------------|
+| 1 | `intel_pcs_collateral` | Intel PCS (`api.trustedservices.intel.com`) | TCB info, CRLs, advisory data for this platform's FMSPC | `CollateralErr == nil` (collateral present) |
+| 2 | `tdx_tcb_current` | (derived from #1) | — | `TcbStatus ∈ {UpToDate, SWHardeningNeeded}` |
+| 3 | `tdx_tcb_not_revoked` | (derived from #1) | — | `TcbStatus != Revoked` |
+| 4 | `nvidia_nras_verified` | NVIDIA NRAS (`nras.attestation.nvidia.com`) | JWT with GPU measurement results | `OverallResult == true`, GPU diagnostics |
+| 5 | `e2ee_usable` | Provider inference API | Live encrypted roundtrip | `Attempted == true, Err == nil` |
+| 6 | `build_transparency_log` | Rekor (`rekor.sigstore.dev`) | Fulcio certs, DSSE signatures, OIDC provenance | Per-image build provenance classification |
+| 7 | `sigstore_verification` | Rekor (`rekor.sigstore.dev`) | Sigstore log entry existence | `OK == true` per digest |
+| 8 | `cpu_id_registry` | Proof of Cloud (3 trust servers) | Hardware registry lookup + multisig JWT | `Registered == true` |
+| 9 | `gateway_cpu_id_registry` | Proof of Cloud (3 trust servers) | Same, for gateway VM | `Registered == true` |
+
+Additionally, Certificate Transparency checking (not a factor, but provider-level)
+is disabled when `offline=true` via the CT checker flag in provider initialization.
+
+### 0b. What `--update-config` Currently Captures
+
+Today `--update-config` writes only TDX measurement register values:
+MRSEAM, MRTD, RTMR0, RTMR1, RTMR2 (and gateway equivalents for nearcloud).
+These are extracted from `VerificationReport.Metadata` and added as allowlist
+entries to `[providers.X.policy]`.
+
+This means the following online-dependent data is **not** currently persisted
+anywhere:
+- Intel PCS collateral (TcbStatus, AdvisoryIDs)
+- NVIDIA NRAS result (OverallResult, GPU diagnostics)
+- Proof of Cloud result (Registered, MachineID, Label, JWT)
+- Rekor provenance entries (Fulcio certificates, DSSE verification, OIDC claims)
+- Sigstore digest verification results
+- E2EE roundtrip test outcome
+
+### 0c. Per-Factor Cacheability Analysis
+
+#### 1–3. Intel PCS Collateral → TcbStatus + AdvisoryIDs
+
+**What's fetched**: Intel PCS serves TCB info and CRLs for a given FMSPC
+(Family-Model-Stepping-Platform-CustomSKU). The result is a `TcbStatus`
+(enum: UpToDate, SWHardeningNeeded, OutOfDate, OutOfDateConfigurationNeeded,
+Revoked) plus a list of `AdvisoryIDs` (e.g., `INTEL-SA-00615`).
+
+**How it's authenticated**: The PCS collateral is fetched over HTTPS from
+Intel's endpoint and verified by the `intel/trustauthority` library, which
+checks the collateral's signature chain. The result is bound to the platform's
+FMSPC and TeeTCBSVN.
+
+**Volatility**: TCB info changes on Intel firmware advisories — typically
+monthly, sometimes hotfix-driven. CRLs update on certificate revocation.
+Advisory data is additive (new advisories appear, old ones don't disappear).
+
+**Cache key**: `(FMSPC, TeeTCBSVN)` — these identify the exact platform
+firmware version. The same FMSPC+SVN always maps to the same TCB level.
+
+**Can it be cached?** **Yes, with age-based staleness.**
+
+The PCS result for a given `(FMSPC, TeeTCBSVN)` is deterministic: the same
+platform at the same firmware version always gets the same TCB status. Caching
+the tuple `(FMSPC, TeeTCBSVN) → (TcbStatus, AdvisoryIDs, timestamp)` is safe.
+
+**Staleness risk**: If Intel publishes a new advisory that downgrades a
+previously-UpToDate TCB to SWHardeningNeeded or Revoked, a stale cache would
+miss it. Mitigation: cache entries should have a configurable max-age (e.g.,
+24h default). Beyond max-age, the factor degrades to `allow_fail` rather than
+using stale data as a Pass.
+
+**Fail-closed**: A missing or expired cache entry in offline mode should
+produce `Skip` (non-enforced), never a synthetic `Pass`.
+
+**What to persist**: `fmspc`, `tee_tcb_svn` (hex), `tcb_status` (string),
+`advisory_ids` ([]string), `verified_at` (RFC 3339 timestamp).
+
+---
+
+#### 4. NVIDIA NRAS → GPU Firmware Verification
+
+**What's fetched**: The EAT (Entity Attestation Token) payload from the
+provider's attestation response is POSTed to NVIDIA's NRAS API. NRAS returns
+a signed JWT containing `x-nvidia-overall-att-result` (bool) and per-GPU
+diagnostics (MeasRes, DriverVersion, VBIOSVersion, HWModel, etc.).
+
+**How it's authenticated**: The JWT is verified against NVIDIA's JWKS
+(`nras.attestation.nvidia.com/.well-known/jwks.json`). The JWKS keys rotate
+infrequently (annually).
+
+**Volatility**: The NRAS result depends on the GPU's firmware measurement,
+which changes only on driver/VBIOS updates. For a stable deployment, the same
+GPU with the same firmware always produces the same NRAS result.
+
+**Cache key**: A hash of the EAT payload itself — or more precisely, the
+GPU evidence measurements within it (driver version, VBIOS version, GPU model,
+measurement values). If the same GPU evidence is seen again, the NRAS result
+is the same.
+
+**Can it be cached?** **Yes, with qualification.**
+
+The EAT payload contains GPU measurements that are deterministic for a given
+hardware+firmware combination. However, the NRAS service also checks for
+revoked firmware: if NVIDIA publishes a driver revocation, a previously-passing
+result could flip to fail. Same staleness concern as Intel PCS.
+
+**What to persist**: A content hash of the GPU evidence (or the full EAT hash),
+the `overall_result` bool, per-GPU diagnostic summaries, and a `verified_at`
+timestamp. The raw JWT could optionally be stored for audit trail.
+
+**Special consideration**: NRAS verification is the only way to check GPU
+measurements against NVIDIA's reference integrity manifests (RIMs). There is
+no local-only alternative. Caching the result is the only path to offline
+GPU verification.
+
+---
+
+#### 5. E2EE Usable → Live Encrypted Roundtrip
+
+**What's fetched**: A live inference request is encrypted, sent to the provider,
+and the response is decrypted. This tests the full E2EE pipeline end-to-end.
+
+**How it's authenticated**: The test validates that the E2EE key exchange
+(bound to the TDX attestation via the signing key in the quote's report data)
+actually works for real inference traffic.
+
+**Volatility**: The E2EE setup depends on the provider's signing key (bound
+to TDX report data), the encryption scheme, and the provider's live inference
+endpoint. It's inherently ephemeral — a new deployment may have a new key.
+
+**Can it be cached?** **No — not meaningfully.**
+
+The point of `e2ee_usable` is to verify that a *live* encrypted roundtrip
+works. Caching a previous success doesn't prove the current deployment's E2EE
+is functional. The `e2ee_capable` factor (offline, checks key presence and
+format) already covers the static parts. The live test is intentionally
+non-cacheable.
+
+**Recommendation**: Leave `e2ee_usable` as a non-cacheable online factor. In
+offline mode it stays `Skip` (non-enforced). This is the correct behavior —
+you can't verify live E2EE without a live connection.
+
+---
+
+#### 6–7. Rekor/Sigstore → Build Provenance and Transparency Log
+
+**What's fetched**: For each container image digest found in the docker-compose
+manifest, two queries go to Rekor:
+1. `POST /api/v1/index/retrieve` — search for log entries matching the digest
+2. `GET /api/v1/log/entries/<uuid>` — fetch each matching entry
+
+Each entry contains: a DSSE envelope (cosign signature over the image digest),
+a Fulcio short-lived certificate (with OIDC claims: issuer, identity, source
+repo, commit), a Signed Entry Timestamp (SET), and a Merkle inclusion proof.
+
+**How it's authenticated**: Three independent cryptographic verifications:
+1. DSSE signature verified against the Fulcio certificate's public key
+2. SET verified against Rekor's log signing key
+3. Inclusion proof verified against Rekor's Merkle tree root
+
+**Volatility**: Rekor entries are **append-only and immutable**. Once an entry
+for a given image digest is written, it never changes. New entries may be added
+for the same digest (e.g., re-signing), but existing entries are permanent.
+
+**Cache key**: Image digest (`sha256:<hex>`). A given digest is an immutable
+content address.
+
+**Can it be cached?** **Yes — this is the ideal caching candidate.**
+
+Rekor entries are immutable by design. An image digest that was verified today
+will have the exact same Rekor entries tomorrow. The Fulcio certificate may
+have expired (20-minute lifetime), but the verification that matters is the SET
+(proves the entry existed in the log at signing time) and the inclusion proof
+(proves the entry is in the Merkle tree). Both are permanently valid.
+
+**What to persist per image digest**:
+- `digest` (sha256 hex)
+- `repo` (image repository name, if extractable)
+- `provenance_class` (fulcio_signed | sigstore_present | compose_binding_only)
+- For fulcio_signed: `oidc_issuer`, `subject_uri`, `source_repo`,
+  `source_commit`, `runner_env`
+- `key_fingerprint` (for raw-key entries)
+- `signature_verified` (bool)
+- `set_verified` (bool)
+- `inclusion_verified` (bool)
+- `no_dsse` (bool, for entries without DSSE envelope)
+- `pinned_tag` (string, for tag-based images whose digest was resolved at
+  verification time — see Section 0h)
+- `allow_any_version` (bool, for images authenticated by allowlist presence
+  alone — see Section 0h)
+- `verified_at` (RFC 3339 timestamp)
+
+**Staleness**: Effectively infinite — immutable data doesn't go stale. However,
+a new image digest (from a compose manifest change) won't be in the cache. The
+cache helps only when the same images are seen again. Max-age could be set very
+long (30d+) or omitted entirely for digest-pinned entries.
+
+**Negative caching**: If a digest has **no** Rekor entries, that result is also
+cacheable (entry-not-found is deterministic for an immutable log, modulo new
+signings — a conservative max-age of 24h for negatives is reasonable).
+
+---
+
+#### 8–9. Proof of Cloud → Hardware Registry Lookup
+
+**What's fetched**: The TDX quote's PCK certificate contains a PPID (Platform
+Provisioning ID). This PPID is sent to 3 Proof of Cloud trust servers in a
+two-stage multisig protocol:
+1. Stage 1: All 3 servers receive the PPID, return nonces + machine metadata
+2. Stage 2: Signatures are chained through the quorum, producing a signed JWT
+
+The result is `Registered == true/false`, plus `MachineID` and `Label`.
+
+**How it's authenticated**: The JWT is signed by the final signer using EdDSA
+(Ed25519). When `poc_signing_key` is configured, the JWT signature is verified
+against that key. The multisig ensures no single trust server can forge a
+registration.
+
+**Volatility**: The registry is **append-only**. Once a machine is registered,
+it stays registered. New machines are added as they first attest.
+
+**Cache key**: PPID (hex string). A PPID is a stable hardware identifier.
+
+**Can it be cached?** **Yes, for positive results.**
+
+If a PPID has been verified as registered, it will remain registered (the
+registry is append-only, no deregistration mechanism). The MachineID and Label
+are also stable.
+
+**Caveat for negative results**: A PPID that is NOT registered today might be
+registered tomorrow (new hardware being onboarded). Negative results should
+have a short max-age or not be cached at all.
+
+**What to persist**:
+- `ppid` (hex)
+- `registered` (bool)
+- `machine_id` (string)
+- `label` (string)
+- `jwt` (raw JWT string, for optional re-verification)
+- `verified_at` (RFC 3339 timestamp)
+
+**Note**: Gateway CPU ID (`gateway_cpu_id_registry`) follows the same logic
+but for the gateway VM's PPID. Both can use the same cache keyed by PPID.
+
+---
+
+#### CT (Certificate Transparency) — Not a Factor
+
+**What's fetched**: CT log lookups for the provider's TLS certificate (only
+neardirect, nearcloud). Verifies the certificate appears in public CT logs.
+
+**Can it be cached?** Not needed — CT is not a report factor and doesn't
+contribute to the attestation report. It's a TLS-layer check that runs during
+provider connection, orthogonal to the caching goal.
+
+---
+
+### 0d. Summary: Cacheability Matrix
+
+| Factor(s) | Data Source | Immutable? | Cache Key | Cacheable? | Staleness Strategy |
+|-----------|------------|-----------|-----------|-----------|-------------------|
+| `intel_pcs_collateral`, `tdx_tcb_current`, `tdx_tcb_not_revoked` | Intel PCS | No (advisories update) | `(FMSPC, TeeTCBSVN)` | **Yes** | Max-age (e.g., 24h); degrade to allow_fail when expired |
+| `nvidia_nras_verified` | NVIDIA NRAS | No (firmware revocations) | EAT evidence hash | **Yes** | Max-age (e.g., 24h); degrade to allow_fail when expired |
+| `e2ee_usable` | Live inference | No (ephemeral) | — | **No** | Always online-only |
+| `build_transparency_log` | Rekor | **Yes** (append-only) | Image digest | **Yes** | Effectively infinite for positives; 24h for negatives |
+| `sigstore_verification` | Rekor | **Yes** (append-only) | Image digest | **Yes** | Effectively infinite for positives; 24h for negatives |
+| `cpu_id_registry` | Proof of Cloud | **Yes** (append-only, positive) | PPID | **Yes** (positive only) | Infinite for positives; short/no cache for negatives |
+| `gateway_cpu_id_registry` | Proof of Cloud | **Yes** (append-only, positive) | PPID | **Yes** (positive only) | Same as above |
+| `compose_binding` (supply chain) | Compose manifest hash in MRCONFIG | **Yes** (content-addressed) | `sha256(app_compose)` | **Yes** | Infinite (hash is deterministic) |
+
+**Result: 8 of 9 online factors can be meaningfully cached. Only `e2ee_usable`
+is inherently non-cacheable.** Additionally, the compose manifest hash — while
+not an online factor itself — is a critical caching accelerator: a pinned
+compose hash eliminates the need to re-extract images and re-run Sigstore/Rekor
+queries entirely (see Section 0h).
+
+### 0e. What `--update-config` Should Capture (Expanded)
+
+Today `--update-config` captures only TDX measurement registers. To support
+offline operation, it should capture **all authenticated online verification
+results**, producing a config that is a complete snapshot of the security
+posture at verification time:
+
+| Data | Currently Captured | Should Capture | Persist Where |
+|------|-------------------|----------------|---------------|
+| TDX measurements (MRSEAM, MRTD, RTMR0–2) | **Yes** | Yes | `[providers.X.policy]` |
+| Intel PCS TCB status + advisories | No | **Yes** | `[providers.X.tcb_cache]` |
+| NVIDIA NRAS result + GPU diagnostics | No | **Yes** | `[providers.X.nras_cache]` |
+| Proof of Cloud registration (PPID → result) | No | **Yes** | `[providers.X.poc_cache]` |
+| Rekor provenance per image digest | No | **Yes** | `[providers.X.supply_chain]` (per the existing plan) |
+| Sigstore verification per image digest | No | **Yes** | `[providers.X.supply_chain]` |
+| Compose hash → image list binding | No | **Yes** | `[providers.X.supply_chain.compose_hashes]` |
+| Image allowlist (full merged policy) | No | **Yes** | `[providers.X.supply_chain.images]` |
+| Tag-based image → resolved digest | No | **Yes** | `[providers.X.supply_chain.images."repo".pinned_tag]` |
+| Presence-only images (allow_any_version) | No | **Yes** | `[providers.X.supply_chain.images."repo".allow_any_version]` |
+| E2EE usable result | No | **No** (non-cacheable) | — |
+
+### 0f. Freshness and Trust Model
+
+Cached data falls into two categories:
+
+**Immutable data** (Rekor entries, PoC positive registrations): These are
+authenticated by cryptographic proofs that do not expire. A Rekor inclusion
+proof is valid forever. A PoC registration, once granted, is permanent. These
+can be cached indefinitely with no freshness concern.
+
+**Mutable-authority data** (Intel PCS, NVIDIA NRAS): These are attestations
+by third-party authorities whose judgments can change (new advisories, firmware
+revocations). Caching requires a freshness boundary:
+
+- **Within max-age**: Cached result is used directly. The factor evaluates as
+  it did at verification time (Pass/Fail).
+- **Beyond max-age, online available**: Re-fetch from the authority. Update
+  cache if result changed.
+- **Beyond max-age, offline**: The cached result is stale. The factor should
+  degrade to `Skip` (non-enforced via allow_fail), NOT use the stale result
+  as a guaranteed Pass. This preserves fail-closed semantics: we don't assert
+  "TCB is current" based on month-old data.
+
+**Alternative under consideration**: For mutable-authority data, an operator
+might prefer "use stale if within N days, then hard-fail" rather than "degrade
+to allow_fail." This could be a per-factor or global configuration option
+(`stale_policy: allow_fail | hard_fail`). The conservative default should be
+`allow_fail` (consistent with current offline behavior).
+
+### 0g. Relationship to Existing Plan
+
+The analysis above generalizes the supply-chain-specific caching design in
+Sections 1–5 below. The existing plan's compose-hash cache and image-digest
+cache are specific instances of the broader pattern: "cache authenticated
+verification results keyed by content-addressed identifiers."
+
+The expanded scope adds Intel PCS, NVIDIA NRAS, and Proof of Cloud caching
+to the same framework. The implementation phases below should be re-scoped
+to include these additional cache types alongside the supply chain caches.
+
+### 0h. Compose Hash and Image-Level Caching
+
+Beyond the per-factor online data, the supply chain verification pathway has
+two additional layers of cacheable structure that eliminate online activity
+indirectly — not because they are online factors themselves, but because they
+short-circuit the need to perform online Sigstore/Rekor verification.
+
+#### Compose Manifest Hash (MRCONFIG Binding)
+
+For dstack providers, the docker-compose manifest is authenticated by
+`compose_binding`: the SHA-256 hash of the compose YAML is bound to the TDX
+quote's MRCONFIG register. This hash is content-addressed and immutable — the
+same compose manifest always produces the same hash.
+
+**Cache semantics**: If a compose hash has been previously validated (all images
+extracted, checked against the allowlist, and verified via Sigstore/Rekor), the
+entire supply chain evaluation for that compose can be skipped on subsequent
+encounters. The compose hash acts as a trust anchor for the full set of images
+within it.
+
+**What to persist**: `sha256(app_compose)` strings in
+`[providers.X.supply_chain.compose_hashes]`. When a compose hash from a new
+attestation matches a pinned value, no further image extraction, allowlist
+checking, or Sigstore/Rekor querying is needed.
+
+**Offline behavior** (consistent with Section 5):
+
+| Condition | Compose hash | Image digest | Image repo |
+|-----------|-------------|-------------|------------|
+| Online, cache hit | Cached → skip re-eval | Cached → skip Sigstore | N/A (compose validated) |
+| Online, cache miss | Full eval | Full Sigstore/Rekor | Checked against allowlist |
+| Offline, pinned hash | Pinned → pass | Pinned → pass | N/A (compose validated) |
+| Offline, unpinned hash | Fail (non-enforced) | Fail (non-enforced) | Checked against allowlist |
+| Offline, no config | Fail (non-enforced) | Fail (non-enforced) | Checked against allowlist |
+
+#### Tag-Based Image Caching
+
+The current `ExtractImageRepositories` only handles `@sha256:`-pinned image
+references. Many real compose manifests use tag-based references (`image:tag`)
+without embedded digests. Tag-based images fall into two categories for caching
+purposes:
+
+**Specific release tags** (e.g., `vllm/vllm-openai:v0.4.2`): When a tagged
+image is authenticated via Sigstore/Rekor, the implementation must resolve the
+tag to its corresponding immutable digest and persist the digest as the trust
+anchor. The tag is stored as readable metadata (`pinned_tag`), but the digest
+is the actual cache key. Offline reuse is allowed only when the previously
+verified digest is present and matches. Tags are mutable in most registries, so
+the tag string alone is never sufficient for offline authentication.
+
+**Generic / branch tags** (e.g., `alpine:latest`, `image:main`): The version
+cannot be pinned because the same tag may resolve to different images over time.
+For these, `--update-config` emits `allow_any_version = true` in the image's
+config entry. This means the image is authenticated by its presence in the
+allowlist alone — no digest or tag pinning. This is on by default for images
+where a specific release cannot be determined, and is always explicit in the
+config for operator visibility.
+
+**Behavior summary**:
+
+| Image reference type | Cache key | Offline authentication | Config field |
+|---------------------|-----------|----------------------|-------------|
+| `repo@sha256:digest` | Digest (sha256 hex) | Digest match → pass | (standard) |
+| `repo:v1.2.3` (specific release) | Resolved digest | Resolved digest match → pass | `pinned_tag = "v1.2.3"` |
+| `repo:latest` (generic tag) | Repo name | Allowlist membership → pass | `allow_any_version = true` |
+| `repo` (no tag/digest) | Repo name | Allowlist membership → pass | `allow_any_version = true` |
+
+**Security ordering**: Digest-pinned > specific-release-tag > allow_any_version.
+Digest-pinned is the strongest (immutable content address). Specific release tags
+are next (digest resolved and cached, but freshness depends on when the tag was
+resolved). `allow_any_version` is the weakest (any image from that repo passes),
+but it is still explicit in the config and requires the image to appear in the
+allowlist — it is not a blanket bypass.
+
+---
+
 ## Background
 
 Today, `SupplyChainPolicy` (the allowed container image list for each dstack
