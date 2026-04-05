@@ -42,6 +42,18 @@ type untaggedStruct struct {
 	GoName string
 }
 
+// PtrEmbeddedInner is the target for pointer-embedded struct tests.
+// Exported because encoding/json requires embedded pointer targets to be
+// exported when used from external test packages.
+type PtrEmbeddedInner struct {
+	Deep string `json:"deep"`
+}
+
+type ptrEmbeddedParent struct {
+	*PtrEmbeddedInner
+	Top string `json:"top"`
+}
+
 // recordingHandler captures slog records for test assertions.
 type recordingHandler struct {
 	records []slog.Record
@@ -238,6 +250,23 @@ func TestUnmarshalWarn_UntaggedField(t *testing.T) {
 		t.Errorf("untagged field should use Go name, got %d warnings", len(warns(h)))
 	}
 	if v.GoName != "val" {
+		t.Errorf("decode wrong: got %+v", v)
+	}
+}
+
+func TestUnmarshalWarn_PtrEmbeddedStruct(t *testing.T) {
+	h := withRecorder(t)
+	var v ptrEmbeddedParent
+	data := `{"deep":"d","top":"t"}`
+	err := jsonstrict.UnmarshalWarn([]byte(data), &v, "ptr-embed")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warns(h)) != 0 {
+		t.Errorf("ptr-embedded fields should be known, got %d warnings", len(warns(h)))
+	}
+	t.Logf("decoded: deep=%q top=%q", v.Deep, v.Top)
+	if v.Deep != "d" || v.Top != "t" {
 		t.Errorf("decode wrong: got %+v", v)
 	}
 }

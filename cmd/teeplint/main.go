@@ -560,6 +560,7 @@ func checkProjectWideBans(r *result) {
 	checkNoStringsEqualFold(r, files, names)
 	checkNoLogImportProject(r, files, names)
 	checkNoMathRand(r, files, names)
+	checkNoJSONUnmarshalCLI(r, files, names, fset)
 	fmt.Println()
 }
 
@@ -634,6 +635,43 @@ func checkNoMathRand(r *result, files []*ast.File, names []string) {
 	}
 	for _, v := range violations {
 		r.failf("math/rand imported in %s (use crypto/rand)", v)
+	}
+}
+
+// No json.Unmarshal in cmd/teep/main.go (use jsonstrict.UnmarshalWarn).
+func checkNoJSONUnmarshalCLI(r *result, files []*ast.File, names []string, fset *token.FileSet) {
+	const target = "cmd/teep/main.go"
+	var violations []string
+	for i, f := range files {
+		if names[i] != target {
+			continue
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			x, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if x.Name == "json" && sel.Sel.Name == "Unmarshal" {
+				pos := fset.Position(call.Pos())
+				violations = append(violations, fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line))
+			}
+			return true
+		})
+	}
+	if len(violations) == 0 {
+		r.passf("no json.Unmarshal in %s (use jsonstrict.UnmarshalWarn)", target)
+		return
+	}
+	for _, v := range violations {
+		r.failf("json.Unmarshal in %s at %s (use jsonstrict.UnmarshalWarn)", target, v)
 	}
 }
 

@@ -62,11 +62,17 @@ func knownJSONKeys(t reflect.Type) map[string]struct{} {
 	for i := range t.NumField() {
 		field := t.Field(i)
 
-		if field.Anonymous && field.Type.Kind() == reflect.Struct {
-			for k := range knownJSONKeys(field.Type) {
-				keys[k] = struct{}{}
+		if field.Anonymous {
+			ft := field.Type
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
 			}
-			continue
+			if ft.Kind() == reflect.Struct {
+				for k := range knownJSONKeys(ft) {
+					keys[k] = struct{}{}
+				}
+				continue
+			}
 		}
 
 		tag := field.Tag.Get("json")
