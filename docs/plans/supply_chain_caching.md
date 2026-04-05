@@ -31,7 +31,7 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
 2. Write all authenticated verification results to the cache file.
 3. **Merge semantics**: replace entries for the specified provider + model(s)
    but preserve unrelated providers and models already in the cache file.
-4. The cache file location defaults to `$TEEP_CACHE` or
+4. The cache file location defaults to `$TEEP_CACHE_FILE` or
    `~/.config/teep/cache.yaml`. Overridable with `--cache-file <path>`
    or with `attestation_cache_file` field in the teep toml config.
 5. If attestation is blocked (report would be blocked), refuse to write cache
@@ -45,20 +45,45 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
 ### 2b. Changes to `teep verify`
 
 - Remove `--update-config` and `--config-out` flags.
-- Add `--cache-file <path>` flag (optional; defaults to `$TEEP_CACHE` or
+- Add `--cache-file <path>` flag (optional; defaults to `$TEEP_CACHE_FILE` or
   `~/.config/teep/cache.yaml`).
 - `teep verify` reads the cache file if present and uses cached data for any
   online factors. If a cache entry is stale or invalidated (e.g., compose hash
-  changed), it re-fetches live unless `--offline` is set.
+  changed), it re-fetches live unless `--offline` is set. If `--offline` is
+  set, the affected factor is evaluated using the normal offline behavior
+  (for example, `Skip` if the factor cannot be refreshed), and enforcement
+  still depends on the configured `allow_fail` set and offline handling for
+  online-only factors.
 - When stale entries are encountered, emit `slog.Info` (notice-level) logs
-  explaining what was stale and whether it was re-fetched or degraded to
-  `allow_fail`.
+  explaining what was stale, whether it was re-fetched, and if offline, what
+  factor result was returned and whether that result is blocking under the
+  normal enforcement rules.
 
 ### 2c. Changes to `teep serve`
 
 - Add `--cache-file <path>` flag (same default).
 - Same cache consultation logic as `teep verify`: use cached data, re-fetch
   stale entries live, emit notice logs on staleness.
+- **Memory-only cache**: Even without a cache file, `teep serve` creates an
+  in-memory cache at startup (using the same cache data structures and code
+  paths as `teep cache`). Subsequent re-attestations of the same (provider,
+  model) benefit from cached Sigstore/Rekor, Intel PCS, NVIDIA NRAS, and
+  Proof of Cloud results without re-fetching. The memory-only cache is
+  initialized empty and populated as attestations are performed.
+- **Authenticated write-back**: When `teep serve` (or `teep verify` with a
+  cache file) encounters changes it can fully authenticate, it updates the
+  cache file:
+  - New compose hash where all images pass Sigstore/Rekor verification.
+  - Refreshed Intel PCS or NVIDIA NRAS results.
+  - New Proof of Cloud positive registrations.
+  - New or updated global image entries with full Sigstore/Rekor provenance.
+- **Unauthenticated values are NOT written back**: Changes to TDX measurement
+  registers (MRSEAM, MRTD, RTMR0–2) are not updated by `teep serve` or
+  `teep verify`. These values can only be updated by `teep cache`, which
+  performs the explicit operator-initiated trust-on-first-use flow. If `teep
+  serve` observes a TDX measurement mismatch against the cache, it reports
+  a factor failure (or warning if in `allow_fail`) but does not overwrite
+  the cached values.
 
 ---
 
@@ -96,9 +121,11 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
 #### Global Images (top-level `images` map)
 
 Each entry is keyed by a stable identifier. For digest-pinned images
-(`repo@sha256:...`), the key is the digest hex. For tag-based images, the key
-is a content-derived ID (e.g., `sha256:<resolved-digest>` if resolvable, or
-`<repo>:<tag>` for `allow_any_version` images).
+(`repo@sha256:...`), the key is `sha256:<hex>` (matching OCI notation). For
+tag-based images, the key is the `<repo>:<tag>` string as it appeared in the
+compose manifest — this allows direct cache lookup without resolving the tag
+to a digest first (see Section 5b rationale). For `allow_any_version` images,
+the key is also `<repo>:<tag>`.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -174,11 +201,11 @@ Intel PCS, NVIDIA (if applicable), Proof of Cloud, etc.
 |-------------|-----------|-----------|-------------------|
 | TDX measurements | (provider, model) | Compose hash matches | Invalidated if compose hash changes |
 | Compose hash | `sha256(app_compose)` | Content-addressed (immutable per-content) | New hash → re-extract images, re-validate |
-| Image (digest-pinned) | `sha256:<digest>` | Immutable | Never stale |
-| Image (release tag) | Resolved `sha256:<digest>` | Resolved digest matches what's in compose | Stale if compose now references different digest |
-| Image (allow_any_version) | `repo` name | Repo in allowlist | Never stale (presence-only) |
-| Intel PCS | `(FMSPC, TeeTCBSVN)` | Within max-age (default 24h) | Re-fetch; offline → `allow_fail` |
-| NVIDIA NRAS | EAT evidence hash | Within max-age (default 24h) | Re-fetch; offline → `allow_fail` |
+| Image (digest-pinned) | `sha256:<hex>` | Immutable | Never stale |
+| Image (release tag) | `<repo>:<tag>` | Resolved digest matches cached digest | Stale if tag resolves to different digest |
+| Image (allow_any_version) | `<repo>:<tag>` | Repo in allowlist | Never stale (presence-only) |
+| Intel PCS | `(FMSPC, TeeTCBSVN)` | Within max-age (default 24h) | Re-fetch; offline → `Skip` |
+| NVIDIA NRAS | EAT evidence hash | Within max-age (default 24h) | Re-fetch; offline → `Skip` |
 | Proof of Cloud | PPID | Positive → infinite; negative → short TTL | Positive never stale; negative re-fetched |
 | E2EE test | — | **Not cacheable** (live test) | Always re-run if online; offline → `Skip` |
 
@@ -212,7 +239,8 @@ invalidated. Re-validation proceeds as:
 If `intel_pcs_verified_at` or `nras_verified_at` is older than max-age:
 - **Online**: Re-fetch from the authority. Update cache. Log:
   `slog.Info("refreshing stale cache entry", "factor", f, "age", age)`.
-- **Offline**: Factor degrades to `Skip` (non-enforced via `allow_fail`). Log:
+- **Offline**: Factor evaluates as `Skip`. Whether this blocks depends on the
+  configured `allow_fail` list and normal offline factor handling. Log:
   `slog.Warn("stale cache entry in offline mode", "factor", f, "age", age)`.
 
 ### 4c. Offline Mode
@@ -221,14 +249,13 @@ When `--offline` is set, no re-fetching occurs. Cache data is used as-is with
 these rules:
 - **Fresh cache entry**: Factor evaluates using cached data (Pass/Fail as
   originally determined).
-- **Stale mutable-authority entry**: Factor degrades to `Skip` (non-enforced).
-  Log emitted.
-- **Missing cache entry**: Factor evaluates as `Skip` (non-enforced). Same
-  behavior as current `--offline` without cache.
+- **Stale mutable-authority entry**: Factor evaluates as `Skip`. Log emitted.
+- **Missing cache entry**: Factor evaluates as `Skip`. Same behavior as
+  current `--offline` without cache.
 - **Immutable entries** (Rekor, PoC positive): Never stale; used directly.
 - **E2EE usable**: Always `Skip` in offline mode (non-cacheable).
-- **Compose hash mismatch (no matching images)**: Supply chain factors degrade
-  to `Skip` (non-enforced). Without online access, unknown images cannot be
+- **Compose hash mismatch (no matching images)**: Supply chain factors
+  evaluate as `Skip`. Without online access, unknown images cannot be
   verified.
 
 ---
@@ -252,6 +279,13 @@ authentication requires the resolved digest to match what's in the current
 compose manifest. If the compose now resolves the same tag to a different
 digest, the cache entry is stale and must be re-verified online.
 
+**Cache key is `<repo>:<tag>`, not the resolved digest.** The compose manifest
+specifies images by tag, and we cannot know which digest the provider resolved
+a given tag to on their side. Keying by tag allows direct cache lookup when the
+same tag appears in a compose manifest without requiring a digest resolution
+step. The resolved digest is stored inside the cache entry as the authenticated
+trust anchor, not as the key.
+
 ### 5c. Generic / Branch Tag (`repo:latest`, `repo:main`, no tag)
 
 The version cannot be pinned because the same tag may resolve to different
@@ -267,17 +301,17 @@ Digest-pinned > specific release tag > allow_any_version.
 | Image Reference | Global Image Key | Offline Auth | Staleness |
 |----------------|-----------------|-------------|-----------|
 | `repo@sha256:abc` | `sha256:abc` | Digest match → Pass | Never stale |
-| `repo:v1.2.3` | `sha256:<resolved>` | Resolved digest match → Pass | Stale if tag resolves to new digest |
-| `repo:latest` | `<repo>:latest` | Allowlist membership → Pass | Never stale (presence-only) |
+| `repo:v1.2.3` | `repo:v1.2.3` | Cached resolved digest match → Pass | Stale if tag resolves to new digest |
+| `repo:latest` | `repo:latest` | Allowlist membership → Pass | Never stale (presence-only) |
 
 ---
 
-## 6. Cache File Format
+## 6. Cache File Format (YAML)
 
-The cache file is machine-generated. Two format options are presented below.
-The format should be chosen based on ecosystem fit and readability.
-
-### 6a. YAML Example
+The cache file uses YAML for human readability and comment support.
+Operators may inspect and occasionally hand-edit cache entries (e.g., remove
+a stale provider). Strict unmarshalling (`KnownFields(true)`) rejects unknown
+fields on read (fail-closed).
 
 ```yaml
 # teep attestation cache — machine-generated, do not edit
@@ -473,200 +507,19 @@ providers:
         e2ee_tested: false
 ```
 
-### 6b. JSON Example
-
-```json
-{
-  "version": 1,
-  "images": {
-    "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321": {
-      "repo": "datadog/agent",
-      "digest": "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321",
-      "provenance": "sigstore_present",
-      "key_fingerprint": "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b",
-      "signature_verified": true,
-      "set_verified": true,
-      "inclusion_verified": true,
-      "verified_at": "2026-04-05T14:30:00Z"
-    },
-    "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890": {
-      "repo": "nearaidev/compose-manager",
-      "digest": "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890",
-      "provenance": "fulcio_signed",
-      "oidc_issuer": "https://token.actions.githubusercontent.com",
-      "oidc_identity": "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
-      "source_repos": [
-        "nearai/compose-manager",
-        "https://github.com/nearai/compose-manager"
-      ],
-      "source_commit": "abc123def456",
-      "no_dsse": true,
-      "signature_verified": true,
-      "set_verified": true,
-      "inclusion_verified": true,
-      "verified_at": "2026-04-05T14:30:00Z"
-    },
-    "alpine:latest": {
-      "repo": "alpine",
-      "tag": "latest",
-      "provenance": "compose_binding_only",
-      "allow_any_version": true,
-      "verified_at": "2026-04-05T14:30:00Z"
-    },
-    "vllm/vllm-openai:v0.6.6.post1": {
-      "repo": "vllm/vllm-openai",
-      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "tag": "v0.6.6.post1",
-      "provenance": "sigstore_present",
-      "key_fingerprint": "aabbccdd...",
-      "signature_verified": true,
-      "set_verified": true,
-      "inclusion_verified": true,
-      "verified_at": "2026-04-05T14:30:00Z"
-    }
-  },
-  "providers": {
-    "neardirect": {
-      "models": {
-        "meta-llama/Llama-3.3-70B-Instruct": {
-          "cached_at": "2026-04-05T14:30:00Z",
-          "mrseam": "49b66faa...",
-          "mrtd": "b24d3b24...",
-          "rtmr0": "bc122d14...",
-          "rtmr1": "c0445b70...",
-          "rtmr2": "564622c7...",
-          "compose_hash": "sha256:e3b0c44298fc1c14...",
-          "image_refs": [
-            "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321",
-            "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890"
-          ],
-          "fmspc": "00906ED50000",
-          "tee_tcb_svn": "04040303ffff01000000000000000000",
-          "tcb_status": "UpToDate",
-          "advisory_ids": ["INTEL-SA-00615"],
-          "intel_pcs_verified_at": "2026-04-05T14:30:00Z",
-          "eat_hash": "sha256:1234abcd...",
-          "nras_overall_result": true,
-          "nras_gpu_count": 8,
-          "nras_verified_at": "2026-04-05T14:30:00Z",
-          "ppid": "0a1b2c3d4e5f67890a1b2c3d4e5f6789",
-          "poc_registered": true,
-          "poc_machine_id": "machine-xyz-123",
-          "poc_label": "Azure DC-series v5",
-          "poc_verified_at": "2026-04-05T14:30:00Z",
-          "e2ee_tested": false
-        }
-      }
-    },
-    "nearcloud": {
-      "gateway": {
-        "cached_at": "2026-04-05T14:30:00Z",
-        "mrseam": "49b66faa...",
-        "mrtd": "aabbccdd...",
-        "rtmr0": "11223344...",
-        "rtmr1": "55667788...",
-        "rtmr2": "99aabbcc...",
-        "compose_hash": "sha256:dddddddd...",
-        "image_refs": [
-          "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        ],
-        "ppid": "ff00ee11dd22cc33ff00ee11dd22cc33",
-        "poc_registered": true,
-        "poc_machine_id": "gateway-001",
-        "poc_label": "Gateway node",
-        "poc_verified_at": "2026-04-05T14:30:00Z"
-      },
-      "models": {
-        "meta-llama/Llama-3.3-70B-Instruct": {
-          "cached_at": "2026-04-05T14:30:00Z",
-          "mrseam": "49b66faa...",
-          "mrtd": "b24d3b24...",
-          "rtmr0": "bc122d14...",
-          "rtmr1": "c0445b70...",
-          "rtmr2": "564622c7...",
-          "compose_hash": "sha256:e3b0c442...",
-          "image_refs": [
-            "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321",
-            "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890"
-          ],
-          "fmspc": "00906ED50000",
-          "tee_tcb_svn": "04040303ffff01000000000000000000",
-          "tcb_status": "UpToDate",
-          "advisory_ids": [],
-          "intel_pcs_verified_at": "2026-04-05T14:30:00Z",
-          "eat_hash": "sha256:5678efgh...",
-          "nras_overall_result": true,
-          "nras_gpu_count": 8,
-          "nras_verified_at": "2026-04-05T14:30:00Z",
-          "ppid": "0a1b2c3d4e5f67890a1b2c3d4e5f6789",
-          "poc_registered": true,
-          "poc_machine_id": "machine-xyz-123",
-          "poc_label": "Azure DC-series v5",
-          "poc_verified_at": "2026-04-05T14:30:00Z",
-          "e2ee_tested": true,
-          "e2ee_passed": true,
-          "e2ee_tested_at": "2026-04-05T14:30:00Z"
-        }
-      }
-    },
-    "nanogpt": {
-      "models": {
-        "meta-llama/Llama-3.3-70B-Instruct": {
-          "cached_at": "2026-04-05T14:30:00Z",
-          "mrseam": "...",
-          "mrtd": "...",
-          "rtmr0": "...",
-          "rtmr1": "...",
-          "rtmr2": "...",
-          "compose_hash": "sha256:eeeeeeee...",
-          "image_refs": [
-            "vllm/vllm-openai:v0.6.6.post1",
-            "alpine:latest"
-          ],
-          "fmspc": "00906ED50000",
-          "tee_tcb_svn": "04040303ffff01000000000000000000",
-          "tcb_status": "SWHardeningNeeded",
-          "advisory_ids": ["INTEL-SA-00615", "INTEL-SA-00657"],
-          "intel_pcs_verified_at": "2026-04-05T14:30:00Z",
-          "eat_hash": "sha256:9999...",
-          "nras_overall_result": true,
-          "nras_gpu_count": 1,
-          "nras_verified_at": "2026-04-05T14:30:00Z",
-          "ppid": "aabb...",
-          "poc_registered": true,
-          "poc_machine_id": "nano-001",
-          "poc_label": "NanoGPT node",
-          "poc_verified_at": "2026-04-05T14:30:00Z",
-          "e2ee_tested": false
-        }
-      }
-    }
-  }
-}
-```
-
 ---
 
 ## 7. Format Decision
 
-| Property | YAML | JSON |
-|----------|------|------|
-| Human readability | Better (comments, compact) | Worse (verbose, no comments) |
-| Machine parsing | Good (Go: `gopkg.in/yaml.v3`) | Excellent (Go: `encoding/json`) |
-| Comment support | Yes (used for "do not edit" header) | No |
-| Strictness | Looser (indentation-sensitive) | Strict (well-defined grammar) |
-| Existing codebase | Not used | Used (`encoding/json`, `jsonstrict`) |
-| Config file synergy | Config is TOML; cache is separate | Distinct format from config (clear separation) |
+**YAML only.** Operators may want to examine and modify cache entries (e.g.,
+remove a stale provider, inspect image provenance). YAML supports comments,
+is compact, and is human-readable. The cache file header comment
+(`# teep attestation cache — machine-generated`) signals its origin.
 
-**Recommendation**: JSON. The codebase already uses `encoding/json` and has a
-`jsonstrict` package for strict unmarshalling. JSON's strictness prevents
-ambiguity in machine-generated output. The lack of comments is acceptable since
-the cache file is not meant to be human-edited. A `//`-style header comment
-can be approximated by a top-level `"_comment"` field or omitted entirely
-(the `version` field signals machine generation).
-
-If YAML is preferred for readability during development, both formats could be
-supported with auto-detection based on file extension (`.yaml` / `.json`).
+Strict unmarshalling will be enforced during cache reads: unknown fields are
+rejected (fail-closed), preventing version skew or corruption from going
+unnoticed. The Go `gopkg.in/yaml.v3` decoder's `KnownFields(true)` option
+provides this guarantee.
 
 ---
 
@@ -699,7 +552,8 @@ mode:
 **Intel PCS (factors 1–3)**: TCB info for `(FMSPC, TeeTCBSVN)` is
 deterministic for a given platform firmware. Cached `tcb_status` and
 `advisory_ids` are valid until Intel publishes new advisories (typically
-monthly). Max-age 24h default; stale → `allow_fail` in offline mode.
+monthly). Max-age 24h default; stale → `Skip` in offline mode (enforcement
+depends on `allow_fail` configuration).
 
 **NVIDIA NRAS (factor 4)**: GPU measurement verification for a given EAT
 payload is deterministic for a given hardware+firmware. Cached
@@ -831,7 +685,7 @@ verification, or staleness degradation.
 | TDX register handling | **Removed** (no allowlists) | Cached values compared against live attestation |
 | Enforcement | `allow_fail` controls which factors block | Cached data compared; `allow_fail` controls block/warn |
 | Merge on update | N/A (user-managed) | Provider+model replacement with merge |
-| Format | TOML | JSON (recommended) |
+| Format | TOML | YAML |
 
 ---
 
@@ -864,11 +718,21 @@ verification, or staleness degradation.
 
 ### Phase 4: Cache Consumption in `teep serve`
 
-- Load cache file in `teep serve`.
+- Create in-memory cache at `teep serve` startup (same data structures as the
+  cache file). If a cache file is configured, load it into memory; otherwise
+  start with an empty memory-only cache.
 - Same staleness/re-fetch/logging logic as `teep verify`.
-- Cache updates from live re-fetches are written back to the cache file
-  (optional; may be deferred to avoid concurrent write complexity in the
-  proxy hot path).
+- Populate the in-memory cache after each successful attestation, using the
+  same code paths as `teep cache` for extracting authenticated results.
+- **Authenticated write-back**: When live re-attestation produces changes that
+  are fully authenticated (new compose hash with all images passing
+  Sigstore/Rekor, refreshed Intel PCS / NVIDIA NRAS, new PoC positive
+  registrations), write these back to both the in-memory cache and the cache
+  file (if configured). Use atomic write (write → rename) and a file lock to
+  handle concurrent proxy requests.
+- **TDX measurement registers are read-only**: `teep serve` never overwrites
+  cached MRSEAM, MRTD, or RTMR values. Only `teep cache` can update these
+  (explicit operator trust-on-first-use).
 
 ### Phase 5: Testing and Documentation
 
