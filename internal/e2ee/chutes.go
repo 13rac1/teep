@@ -63,8 +63,12 @@ func (s *ChutesSession) MLKEMClientPubKeyBase64() string {
 	return base64.StdEncoding.EncodeToString(s.mlkemEncapKey.Bytes())
 }
 
-// Zero nils key references so the GC can collect the key material.
+// Zero clears owned byte slices and nils key references so the GC can collect
+// the key material. Unlike VeniceSession, crypto/mlkem does not expose a method
+// to overwrite key bytes in place. The actual key material persists until GC
+// reclaims it.
 func (s *ChutesSession) Zero() {
+	clear(s.RequestCiphertext)
 	s.mlkemDecapKey = nil
 	s.mlkemEncapKey = nil
 	s.modelMLKEMPub = nil

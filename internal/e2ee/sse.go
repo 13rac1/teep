@@ -32,7 +32,10 @@ func newSSEScanner(body io.Reader) (scanner *bufio.Scanner, cleanup func()) {
 		panic("sseScannerBufPool: unexpected type")
 	}
 	scanner.Buffer((*bufp)[:cap(*bufp)], sseScannerBufSize)
-	return scanner, func() { sseScannerBufPool.Put(bufp) }
+	return scanner, func() {
+		clear(*bufp)
+		sseScannerBufPool.Put(bufp)
+	}
 }
 
 // WriteSSEError writes an SSE error event and flushes. Used when streaming
