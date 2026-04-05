@@ -551,8 +551,10 @@ func RedactKey(key string) string {
 // are disabled to avoid external CT log list downloads.
 func NewAttestationClient(offline ...bool) *http.Client {
 	ctEnabled := len(offline) == 0 || !offline[0]
-	return tlsct.NewHTTPClientWithTransport(AttestationTimeout, &http.Transport{
+	client := tlsct.NewHTTPClientWithTransport(AttestationTimeout, &http.Transport{
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 	}, ctEnabled)
+	client.Transport = tlsct.WrapLogging(client.Transport)
+	return client
 }
