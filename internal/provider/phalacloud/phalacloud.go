@@ -58,6 +58,7 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 	}, ctEnabled)
+	client.Transport = tlsct.WrapLogging(client.Transport)
 	return &Attester{
 		baseURL: baseURL,
 		apiKey:  apiKey,

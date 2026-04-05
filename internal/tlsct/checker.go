@@ -66,7 +66,7 @@ func NewChecker() *Checker {
 		enabled: ctEnabledDefault,
 		logListHTTP: &http.Client{
 			Timeout:   20 * time.Second,
-			Transport: base,
+			Transport: WrapLogging(base),
 		},
 	}
 }
@@ -83,12 +83,15 @@ func (c *Checker) SetEnabled(enabled bool) {
 }
 
 // NewHTTPClient returns an HTTP client that enforces CT for all HTTPS requests.
+// All outgoing requests are logged at DEBUG level via WrapLogging.
 func NewHTTPClient(timeout time.Duration, ctEnabled ...bool) *http.Client {
 	dt, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		panic("http.DefaultTransport is not *http.Transport")
 	}
-	return NewHTTPClientWithTransport(timeout, dt.Clone(), ctEnabled...)
+	client := NewHTTPClientWithTransport(timeout, dt.Clone(), ctEnabled...)
+	client.Transport = WrapLogging(client.Transport)
+	return client
 }
 
 // NewHTTPClientWithTransport returns an HTTP client that enforces CT for all

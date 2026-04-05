@@ -8,7 +8,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"time"
 
 	tdxabi "github.com/google/go-tdx-guest/abi"
@@ -21,8 +23,54 @@ import (
 // TDXCollateralGetter overrides the Intel PCS HTTPS getter used by
 // VerifyTDXQuote for collateral fetching. When nil (production), a
 // RetryHTTPSGetter wrapping SimpleHTTPSGetter is used. Tests set this
-// to a fixture-backed getter.
+// to a fixture-backed getter; the proxy sets it to route through the
+// attestation client for caching and observability.
 var TDXCollateralGetter trust.HTTPSGetter
+
+// clientHTTPSGetter adapts an *http.Client to the trust.HTTPSGetter interface
+// so Intel PCS collateral fetches flow through our transport chain (caching,
+// logging, observability).
+type clientHTTPSGetter struct{ client *http.Client }
+
+func (g *clientHTTPSGetter) Get(url string) (header map[string][]string, body []byte, err error) {
+	return g.GetContext(context.Background(), url)
+}
+
+const maxPCSResponseSize = 10 << 20 // 10 MiB
+
+func (g *clientHTTPSGetter) GetContext(ctx context.Context, url string) (header map[string][]string, body []byte, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		return nil, nil, fmt.Errorf("failed to retrieve %s, status code received %d", url, resp.StatusCode)
+	}
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxPCSResponseSize+1))
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(body) > maxPCSResponseSize {
+		return nil, nil, fmt.Errorf("PCS response body exceeds %d bytes", maxPCSResponseSize)
+	}
+	return resp.Header, body, nil
+}
+
+// NewCollateralGetter wraps an *http.Client as a trust.HTTPSGetter with retry
+// logic, suitable for setting as TDXCollateralGetter.
+func NewCollateralGetter(client *http.Client) trust.HTTPSGetter {
+	return &trust.RetryHTTPSGetter{
+		Timeout:       30 * time.Second,
+		MaxRetryDelay: 5 * time.Second,
+		Getter:        &clientHTTPSGetter{client: client},
+	}
+}
 
 //go:embed certs/intel_sgx_root_ca.pem
 var intelSGXRootCAPEM []byte
