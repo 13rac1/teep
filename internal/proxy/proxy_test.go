@@ -341,7 +341,8 @@ func extractDeltaContent(t *testing.T, chunkJSON string) string {
 	var chunk struct {
 		Choices []struct {
 			Delta struct {
-				Content string `json:"content"`
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
 			} `json:"delta"`
 		} `json:"choices"`
 	}
@@ -351,7 +352,12 @@ func extractDeltaContent(t *testing.T, chunkJSON string) string {
 	if len(chunk.Choices) == 0 {
 		return ""
 	}
-	return chunk.Choices[0].Delta.Content
+	// Thinking models (e.g. Qwen3.5) emit reasoning in reasoning_content
+	// and may leave content empty. Fall back so callers see useful text.
+	if c := chunk.Choices[0].Delta.Content; c != "" {
+		return c
+	}
+	return chunk.Choices[0].Delta.ReasoningContent
 }
 
 // extractMessageContent extracts message.content from a non-streaming response.
