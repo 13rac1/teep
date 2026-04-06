@@ -672,11 +672,16 @@ func testPNG8x8() []byte {
 	return buf.Bytes()
 }
 
-// TestIntegration_NearCloud_VL_EncryptedImage tests what happens when a VL
-// (vision-language) chat request includes an encrypted image. The standard
-// EncryptChatMessagesNearCloud only encrypts message content strings, but VL
-// messages use structured content arrays with image_url objects. This test
-// verifies whether the server can handle encrypted image data in a VL request.
+// TestIntegration_NearCloud_VL_EncryptedImage is a NEGATIVE test demonstrating
+// the WRONG way to encrypt VL content. It encrypts individual fields within the
+// content array structure (separate ciphertexts for "text" and "image_url.url"),
+// leaving the array structure visible. The inference-proxy does not decrypt
+// individual fields within a content array on request — it only handles the
+// whole-content-as-string case (see TestIntegration_NearCloud_VL_SerializedArray
+// for the correct approach).
+//
+// This test documents that per-field encryption within a VL content array fails
+// because the encrypted image_url is not a valid URL format.
 func TestIntegration_NearCloud_VL_EncryptedImage(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
 
@@ -811,10 +816,16 @@ func TestIntegration_NearCloud_VL_EncryptedImage(t *testing.T) {
 // Encrypted image generation input test
 // --------------------------------------------------------------------------
 
-// TestIntegration_NearCloud_Images_EncryptedInput tests what happens when we
-// encrypt the "prompt" field of an image generation request. If the server
-// supported E2EE for image generation, it would decrypt the prompt before
-// generating the image.
+// TestIntegration_NearCloud_Images_EncryptedInput tests E2EE for image generation.
+// The NearCloud gateway forwards E2EE headers for /v1/images/generations, and
+// the inference-proxy decrypts the "prompt" field and encrypts "data[].b64_json"
+// and "data[].revised_prompt" in the response.
+//
+// Reference: nearai/cloud-api completions.rs image_generations handler (~line
+// 860) calls validate_encryption_headers and forwards to provider.
+// Reference: nearai/inference-proxy encryption.rs decrypt_request_fields
+// ImagesGenerations branch decrypts "prompt"; encrypt_response_fields encrypts
+// "data[].b64_json" and "data[].revised_prompt".
 func TestIntegration_NearCloud_Images_EncryptedInput(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
 
@@ -837,6 +848,7 @@ func TestIntegration_NearCloud_Images_EncryptedInput(t *testing.T) {
 	ptResp.Body.Close()
 	t.Logf("plaintext images: status=%d body_len=%d", ptResp.StatusCode, len(ptBody))
 
+	var ptB64Len int
 	if ptResp.StatusCode == http.StatusOK {
 		var imgResp struct {
 			Data []struct {
@@ -844,7 +856,8 @@ func TestIntegration_NearCloud_Images_EncryptedInput(t *testing.T) {
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(ptBody, &imgResp); err == nil && len(imgResp.Data) > 0 {
-			t.Logf("plaintext image: got b64_json (%d chars)", len(imgResp.Data[0].B64JSON))
+			ptB64Len = len(imgResp.Data[0].B64JSON)
+			t.Logf("plaintext image: got b64_json (%d chars)", ptB64Len)
 		} else {
 			t.Logf("plaintext image response: %s", truncate(ptBody, 300))
 		}
@@ -877,14 +890,43 @@ func TestIntegration_NearCloud_Images_EncryptedInput(t *testing.T) {
 	case http.StatusOK:
 		var imgResp struct {
 			Data []struct {
-				B64JSON string `json:"b64_json"`
+				B64JSON       string `json:"b64_json"`
+				RevisedPrompt string `json:"revised_prompt"`
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(e2eeBody, &imgResp); err == nil && len(imgResp.Data) > 0 {
-			t.Log("FINDING: Server generated an image from the CIPHERTEXT prompt")
-			t.Logf("  b64_json length: %d chars", len(imgResp.Data[0].B64JSON))
-			t.Log("The model interpreted the hex-encoded ciphertext as a text prompt")
-			t.Log("CONCLUSION: Server does NOT decrypt the prompt — E2EE is NOT end-to-end for image generation")
+			b64Field := imgResp.Data[0].B64JSON
+			t.Logf("  b64_json length: %d chars", len(b64Field))
+
+			// Check if b64_json is hex-encoded ciphertext (encrypted response)
+			// rather than actual base64 image data. The inference-proxy encrypts
+			// b64_json via encrypt_response_fields → encrypt_field.
+			if e2ee.IsEncryptedChunkXChaCha20(b64Field) {
+				decrypted, decErr := session.Decrypt(b64Field)
+				if decErr != nil {
+					t.Logf("FINDING: b64_json looks encrypted but decryption failed: %v", decErr)
+				} else {
+					t.Log("FINDING: Server returned ENCRYPTED b64_json — E2EE is end-to-end for image generation")
+					t.Logf("  Decrypted b64_json length: %d bytes", len(decrypted))
+					// Verify decrypted data is valid base64 image data.
+					if _, err := base64.StdEncoding.DecodeString(string(decrypted)); err == nil {
+						t.Log("  Decrypted b64_json is valid base64 — image data is intact")
+					} else {
+						t.Logf("  Decrypted b64_json is not valid base64: %v", err)
+					}
+				}
+				// Also check revised_prompt.
+				if rp := imgResp.Data[0].RevisedPrompt; rp != "" && e2ee.IsEncryptedChunkXChaCha20(rp) {
+					if pt, err := session.Decrypt(rp); err == nil {
+						t.Logf("  Decrypted revised_prompt: %q", string(pt))
+					}
+				}
+				t.Log("CONCLUSION: Image generation E2EE WORKS — gateway forwards headers, inference-proxy decrypts prompt and encrypts response")
+			} else {
+				t.Log("FINDING: Server returned PLAINTEXT b64_json despite E2EE headers and encrypted prompt")
+				t.Logf("  The model may have generated an image from the ciphertext as a text prompt")
+				t.Log("CONCLUSION: Server does NOT decrypt the prompt — E2EE is NOT end-to-end for this model's image generation")
+			}
 		} else {
 			bodyStr := string(e2eeBody)
 			if e2ee.IsEncryptedChunkXChaCha20(strings.TrimSpace(bodyStr)) {
@@ -898,5 +940,175 @@ func TestIntegration_NearCloud_Images_EncryptedInput(t *testing.T) {
 		t.Logf("FINDING: Server rejected encrypted image prompt: status=%d body=%s",
 			e2eeResp.StatusCode, truncate(e2eeBody, 500))
 		t.Log("CONCLUSION: Server cannot process encrypted prompts for image generation")
+	}
+}
+
+// --------------------------------------------------------------------------
+// VL serialize-and-encrypt test (whole content array as one encrypted string)
+// --------------------------------------------------------------------------
+
+// TestIntegration_NearCloud_VL_SerializedArray tests the inference-proxy's
+// documented VL E2EE protocol: the client serializes the entire content array
+// to a JSON string, encrypts that string, and sends it as a scalar "content"
+// field. The inference-proxy's decrypt_chat_message_fields tries json.loads on
+// the decrypted result and, if it finds an array, restores the original
+// structure.
+//
+// This is distinct from TestIntegration_NearCloud_VL_EncryptedImage, which
+// encrypts individual fields within the content array structure. That approach
+// fails because the server sees a malformed image_url. This test verifies the
+// correct serialize-then-encrypt approach used by the inference-proxy.
+//
+// Reference: nearai/inference-proxy encryption.rs decrypt_chat_message_fields
+// (line ~573): decrypts content string, tries serde_json::from_str, if array
+// replaces content with parsed array.
+func TestIntegration_NearCloud_VL_SerializedArray(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	const model = "Qwen/Qwen3-VL-30B-A3B-Instruct"
+	signingKey := fetchSigningKey(t, model)
+	session := createE2EESession(t, signingKey)
+	defer session.Zero()
+
+	// Baseline: plaintext VL request to confirm model works.
+	pngData := testPNG8x8()
+	pngB64 := base64.StdEncoding.EncodeToString(pngData)
+	imgDataURL := "data:image/png;base64," + pngB64
+
+	plaintextBody := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{
+			"role": "user",
+			"content": [
+				{"type": "text", "text": "What color is this image? Answer in one word."},
+				{"type": "image_url", "image_url": {"url": %q}}
+			]
+		}],
+		"stream": true,
+		"max_tokens": 50
+	}`, model, imgDataURL)
+
+	ptResp := nearcloudPlaintextRequest(t, "/v1/chat/completions", []byte(plaintextBody), "application/json")
+	ptBody := readBody(t, ptResp)
+	ptResp.Body.Close()
+	t.Logf("plaintext VL baseline: status=%d body_len=%d", ptResp.StatusCode, len(ptBody))
+
+	if ptResp.StatusCode == http.StatusOK {
+		// Extract plaintext SSE response for comparison.
+		var ptText strings.Builder
+		for line := range strings.SplitSeq(string(ptBody), "\n") {
+			line = strings.TrimPrefix(line, "data: ")
+			line = strings.TrimSpace(line)
+			if line == "" || line == "[DONE]" {
+				continue
+			}
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+			if err := json.Unmarshal([]byte(line), &chunk); err == nil && len(chunk.Choices) > 0 {
+				ptText.WriteString(chunk.Choices[0].Delta.Content)
+			}
+		}
+		t.Logf("plaintext VL answer: %q", ptText.String())
+	} else {
+		t.Logf("plaintext VL failed: status=%d body=%s", ptResp.StatusCode, truncate(ptBody, 500))
+	}
+
+	// Serialize the entire content array to a JSON string, then encrypt.
+	// This matches the inference-proxy protocol: the client sends a single
+	// encrypted string as "content", and the server decrypts it, detects
+	// it's a JSON array, and restores the structured content.
+	contentArray := fmt.Sprintf(`[{"type":"text","text":"What color is this image? Answer in one word."},{"type":"image_url","image_url":{"url":%q}}]`, imgDataURL)
+
+	encContent, err := e2ee.EncryptXChaCha20([]byte(contentArray), session.ModelX25519Pub())
+	if err != nil {
+		t.Fatalf("encrypt serialized content array: %v", err)
+	}
+	t.Logf("encrypted content array length: %d hex chars (original JSON: %d bytes)", len(encContent), len(contentArray))
+
+	// Build VL request with content as an encrypted scalar string (not array).
+	encBody := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{
+			"role": "user",
+			"content": %q
+		}],
+		"stream": true,
+		"max_tokens": 50
+	}`, model, encContent)
+
+	e2eeResp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(encBody), "application/json", session)
+	e2eeBody := readBody(t, e2eeResp)
+	e2eeResp.Body.Close()
+	t.Logf("serialized-array VL E2EE: status=%d body_len=%d", e2eeResp.StatusCode, len(e2eeBody))
+	t.Logf("serialized-array VL response: %s", truncate(e2eeBody, 500))
+
+	switch e2eeResp.StatusCode {
+	case http.StatusOK:
+		// Parse SSE chunks: check for encrypted vs plaintext content.
+		bodyStr := string(e2eeBody)
+		var encChunks, ptChunks int
+		var decryptedText strings.Builder
+
+		for line := range strings.SplitSeq(bodyStr, "\n") {
+			line = strings.TrimPrefix(line, "data: ")
+			line = strings.TrimSpace(line)
+			if line == "" || line == "[DONE]" {
+				continue
+			}
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+			if err := json.Unmarshal([]byte(line), &chunk); err != nil || len(chunk.Choices) == 0 {
+				continue
+			}
+			c := chunk.Choices[0].Delta.Content
+			if c == "" {
+				continue
+			}
+			if e2ee.IsEncryptedChunkXChaCha20(c) {
+				encChunks++
+				pt, decErr := session.Decrypt(c)
+				if decErr != nil {
+					t.Logf("  chunk decrypt failed: %v", decErr)
+				} else {
+					decryptedText.Write(pt)
+				}
+			} else {
+				ptChunks++
+			}
+		}
+
+		t.Logf("SSE chunks: encrypted=%d plaintext=%d", encChunks, ptChunks)
+
+		switch {
+		case encChunks > 0 && ptChunks == 0:
+			t.Log("FINDING: Server returned ENCRYPTED SSE chunks for serialized-array VL E2EE")
+			t.Logf("  Decrypted response: %q", decryptedText.String())
+			t.Log("CONCLUSION: VL E2EE WORKS when the content array is serialized to a JSON string and encrypted as a single value")
+			t.Log("The inference-proxy's json.loads heuristic correctly restores the content array after decryption")
+		case ptChunks > 0 && encChunks == 0:
+			t.Log("FINDING: Server returned PLAINTEXT despite serialized-array E2EE approach")
+			t.Log("CONCLUSION: Gateway may not forward E2EE headers properly for this model/endpoint")
+		case encChunks > 0 && ptChunks > 0:
+			t.Logf("FINDING: Mixed encrypted (%d) and plaintext (%d) chunks", encChunks, ptChunks)
+			if decryptedText.Len() > 0 {
+				t.Logf("  Decrypted portion: %q", decryptedText.String())
+			}
+		default:
+			t.Log("FINDING: No content chunks found in SSE response")
+		}
+	default:
+		t.Logf("FINDING: Server rejected serialized-array VL E2EE request: status=%d body=%s",
+			e2eeResp.StatusCode, truncate(e2eeBody, 500))
+		t.Log("CONCLUSION: Server cannot process encrypted serialized content arrays")
 	}
 }
