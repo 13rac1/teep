@@ -196,6 +196,9 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 	}
 }
 
+// SetClient replaces the HTTP client used for attestation fetches.
+func (a *Attester) SetClient(c *http.Client) { a.client = c }
+
 // FetchAttestation fetches TEE attestation for the given model from Venice.
 // The nonce is sent to Venice as a hex string query parameter; Venice echoes it
 // back in the response so callers can verify nonce_match.

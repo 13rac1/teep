@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/mlkem"
 	"crypto/rand"
@@ -14,8 +13,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -688,79 +685,6 @@ func TestNewReportDataVerifier(t *testing.T) {
 				t.Fatalf("newReportDataVerifier(%q) = nil, want non-nil", tc.name)
 			}
 		})
-	}
-}
-
-// --------------------------------------------------------------------------
-// saveFile / saveAttestationData tests
-// --------------------------------------------------------------------------
-
-func TestSaveFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.txt")
-	data := []byte("hello world")
-
-	saveFile(path, data)
-
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if !bytes.Equal(got, data) {
-		t.Errorf("content = %q, want %q", got, data)
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
-	perm := info.Mode().Perm()
-	if perm != 0o600 {
-		t.Errorf("permissions = %o, want 600", perm)
-	}
-}
-
-func TestSaveAttestationData(t *testing.T) {
-	dir := t.TempDir()
-	raw := &attestation.RawAttestation{
-		RawBody:       []byte(`{"test":"body"}`),
-		NvidiaPayload: `{"nvidia":"payload"}`,
-		IntelQuote:    "AABBCCDD",
-	}
-
-	saveAttestationData(dir, "venice", raw)
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	t.Logf("saved %d files:", len(entries))
-	for _, e := range entries {
-		t.Logf("  %s", e.Name())
-	}
-
-	if len(entries) != 3 {
-		t.Fatalf("expected 3 files, got %d", len(entries))
-	}
-
-	// Check each file exists with the correct prefix.
-	gotPrefixes := make([]string, 0, len(entries))
-	for _, e := range entries {
-		gotPrefixes = append(gotPrefixes, e.Name())
-	}
-
-	wantPrefixes := []string{"venice_attestation_", "venice_nvidia_payload_", "venice_intel_quote_"}
-	for _, want := range wantPrefixes {
-		found := false
-		for _, got := range gotPrefixes {
-			if strings.HasPrefix(got, want) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("no file with prefix %q found in %v", want, gotPrefixes)
-		}
 	}
 }
 

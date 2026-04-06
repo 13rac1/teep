@@ -88,6 +88,8 @@ func (s *NearCloudSession) Decrypt(ciphertextHex string) ([]byte, error) {
 }
 
 // Zero nils key references so the GC can collect the key material.
+// Unlike VeniceSession, crypto/ecdh does not expose a method to overwrite
+// key bytes in place. The actual key material persists until GC reclaims it.
 func (s *NearCloudSession) Zero() {
 	s.x25519Priv = nil
 	s.modelX25519 = nil

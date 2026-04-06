@@ -2,353 +2,166 @@ package integration
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/capture"
+	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
-// neardirectFixtureDir returns the directory containing NEAR AI fixture files.
-func neardirectFixtureDir(t *testing.T) string {
+// extractBaseURL returns scheme+host from the first captured entry.
+// The DomainResolver has its own HTTP client and isn't captured, so we
+// extract the resolved base URL from the captured attestation request.
+func extractBaseURL(t *testing.T, entries []capture.RecordedEntry) string {
 	t.Helper()
-	if dir := os.Getenv("NEARAI_FIXTURE_DIR"); dir != "" {
-		return dir
+	if len(entries) == 0 {
+		t.Fatal("no captured entries")
 	}
-
-	entries, err := os.ReadDir("testdata")
+	u, err := url.Parse(entries[0].URL)
 	if err != nil {
-		t.Fatalf("read testdata: %v", err)
+		t.Fatalf("parse first entry URL: %v", err)
 	}
-
-	var latest string
-	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "neardirect_") {
-			if e.Name() > latest {
-				latest = e.Name()
-			}
-		}
-	}
-	if latest == "" {
-		t.Fatal("no neardirect fixture directory found in testdata/; run: go run ./cmd/capture_neardirect")
-	}
-	return filepath.Join("testdata", latest)
-}
-
-func parseNearDirectCaptureTime(t *testing.T, fdir string) time.Time {
-	t.Helper()
-	base := filepath.Base(fdir)
-	ct, err := time.Parse("neardirect_20060102_150405", base)
-	if err != nil {
-		t.Fatalf("parse capture time from %q: %v", base, err)
-	}
-	return ct
-}
-
-// extractModel returns the model name from the first entry in the fixture.
-func extractModel(t *testing.T, body []byte) string {
-	t.Helper()
-	var ar struct {
-		ModelAttestations []struct {
-			Model     string `json:"model"`
-			ModelName string `json:"model_name"`
-		} `json:"model_attestations"`
-		AllAttestations []struct {
-			Model     string `json:"model"`
-			ModelName string `json:"model_name"`
-		} `json:"all_attestations"`
-		Model     string `json:"model"`
-		ModelName string `json:"model_name"`
-	}
-	if err := json.Unmarshal(body, &ar); err != nil {
-		t.Fatalf("parse attestation for model name: %v", err)
-	}
-	for _, list := range [][]struct {
-		Model     string `json:"model"`
-		ModelName string `json:"model_name"`
-	}{ar.AllAttestations, ar.ModelAttestations} {
-		if len(list) > 0 {
-			if list[0].Model != "" {
-				return list[0].Model
-			}
-			return list[0].ModelName
-		}
-	}
-	if ar.Model != "" {
-		return ar.Model
-	}
-	if ar.ModelName != "" {
-		return ar.ModelName
-	}
-	t.Fatal("no model found in attestation fixture")
-	return ""
+	return u.Scheme + "://" + u.Host
 }
 
 func TestIntegration_NearDirect_Fixture(t *testing.T) {
 	ctx := context.Background()
+	env := loadFixture(t, "neardirect")
 
-	// ---------------------------------------------------------------
-	// 1. Load fixtures
-	// ---------------------------------------------------------------
-	fdir := neardirectFixtureDir(t)
-	captureTime := parseNearDirectCaptureTime(t, fdir)
-	t.Logf("loading fixtures from %s (captured %s)", fdir, captureTime.Format(time.RFC3339))
+	// Extract base URL from captured traffic to bypass DomainResolver.
+	baseURL := extractBaseURL(t, env.entries)
+	t.Logf("base URL: %s", baseURL)
 
-	attestBody := readFixtureFrom(t, fdir, "neardirect_attestation.json")
-	nonceHex := strings.TrimSpace(string(readFixtureFrom(t, fdir, "neardirect_fixture_nonce.txt")))
-	nonce, err := attestation.ParseNonce(nonceHex)
+	attester := neardirect.NewAttester(baseURL, "", true)
+	attester.SetClient(env.client)
+	raw, err := attester.FetchAttestation(ctx, env.manifest.Model, env.nonce)
 	if err != nil {
-		t.Fatalf("parse nonce: %v", err)
+		t.Fatalf("fetch attestation: %v", err)
 	}
-	t.Logf("nonce: %s", nonceHex[:16]+"...")
+	t.Logf("model=%s intel_quote=%d nvidia_payload=%d app_compose=%d",
+		raw.Model, len(raw.IntelQuote), len(raw.NvidiaPayload), len(raw.AppCompose))
 
-	model := extractModel(t, attestBody)
-	t.Logf("model: %s", model)
-
-	// ---------------------------------------------------------------
-	// 2. Parse fixture into RawAttestation
-	// ---------------------------------------------------------------
-	raw, err := neardirect.ParseAttestationResponse(ctx, attestBody, model)
-	if err != nil {
-		t.Fatalf("parse NEAR AI fixture: %v", err)
-	}
-	t.Logf("intel_quote: %d hex chars", len(raw.IntelQuote))
-	t.Logf("nvidia_payload: %d bytes", len(raw.NvidiaPayload))
-	t.Logf("app_compose: %d bytes", len(raw.AppCompose))
-	t.Logf("signing_address: %s", raw.SigningAddress)
-
-	// ---------------------------------------------------------------
-	// 3. Set up mocks for ALL external services
-	// ---------------------------------------------------------------
-	pocPeers, client, rekorClient := setupMocks(t, fdir, "neardirect", raw)
-
-	// ---------------------------------------------------------------
-	// 4. Run the pipeline (mirrors runVerification)
-	// ---------------------------------------------------------------
-
-	// 4a. TDX quote verification (online — uses fixture PCS getter)
-	t.Log("--- TDX verification ---")
-	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, false)
-	t.Logf("TDX parse err: %v", tdxResult.ParseErr)
-	t.Logf("TDX cert chain err: %v", tdxResult.CertChainErr)
-	t.Logf("TDX signature err: %v", tdxResult.SignatureErr)
-	t.Logf("TDX collateral err: %v", tdxResult.CollateralErr)
-	t.Logf("TDX debug: %v", tdxResult.DebugEnabled)
-	t.Logf("TDX FMSPC: %s", tdxResult.FMSPC)
-	t.Logf("TDX TCB status: %s", tdxResult.TcbStatus)
-
+	// TDX
+	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, env.nonce, false)
 	if tdxResult.ParseErr != nil {
-		t.Fatalf("TDX parse failed: %v", tdxResult.ParseErr)
+		t.Fatalf("TDX parse: %v", tdxResult.ParseErr)
 	}
+	t.Logf("TDX: cert_chain=%v sig=%v collateral=%v fmspc=%s tcb=%s",
+		tdxResult.CertChainErr, tdxResult.SignatureErr, tdxResult.CollateralErr,
+		tdxResult.FMSPC, tdxResult.TcbStatus)
 
-	// 4b. REPORTDATA binding (NEAR AI scheme)
-	t.Log("--- REPORTDATA binding ---")
-	verifier := neardirect.ReportDataVerifier{}
-	detail, rdErr := verifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
+	// REPORTDATA binding
+	detail, rdErr := neardirect.ReportDataVerifier{}.VerifyReportData(tdxResult.ReportData, raw, env.nonce)
 	tdxResult.ReportDataBindingErr = rdErr
 	tdxResult.ReportDataBindingDetail = detail
-	t.Logf("REPORTDATA binding: detail=%q err=%v", detail, rdErr)
+	t.Logf("REPORTDATA: detail=%q err=%v", detail, rdErr)
 
-	// 4c. NVIDIA EAT verification
-	t.Log("--- NVIDIA EAT verification ---")
+	// NVIDIA EAT
 	var nvidiaResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" {
-		nvidiaResult = attestation.VerifyNVIDIAPayload(context.Background(), raw.NvidiaPayload, nonce)
-		t.Logf("NVIDIA format: %s", nvidiaResult.Format)
-		t.Logf("NVIDIA signature err: %v", nvidiaResult.SignatureErr)
-		t.Logf("NVIDIA claims err: %v", nvidiaResult.ClaimsErr)
-		t.Logf("NVIDIA nonce: %s", nvidiaResult.Nonce)
+		nvidiaResult = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, env.nonce)
+		t.Logf("NVIDIA EAT: format=%s sig_err=%v claims_err=%v", nvidiaResult.Format, nvidiaResult.SignatureErr, nvidiaResult.ClaimsErr)
 	}
 
-	// 4d. NVIDIA NRAS verification (online — hits mock NRAS + JWKS)
-	t.Log("--- NVIDIA NRAS verification ---")
+	// NVIDIA NRAS (time-pinned)
 	var nrasResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
-		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, client,
-			jwt.WithTimeFunc(func() time.Time { return captureTime }),
+		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, env.client,
+			jwt.WithTimeFunc(func() time.Time { return env.manifest.CapturedAt }),
 			jwt.WithLeeway(10*time.Second),
 		)
-		t.Logf("NRAS format: %s", nrasResult.Format)
-		t.Logf("NRAS signature err: %v", nrasResult.SignatureErr)
-		t.Logf("NRAS claims err: %v", nrasResult.ClaimsErr)
-		t.Logf("NRAS overall result: %v", nrasResult.OverallResult)
+		t.Logf("NRAS: format=%s sig_err=%v claims_err=%v result=%v",
+			nrasResult.Format, nrasResult.SignatureErr, nrasResult.ClaimsErr, nrasResult.OverallResult)
 	}
 
-	// 4e. Compose binding
-	t.Log("--- compose binding ---")
+	// Compose binding
 	var composeResult *attestation.ComposeBindingResult
 	if raw.AppCompose != "" && tdxResult.ParseErr == nil {
 		composeResult = &attestation.ComposeBindingResult{Checked: true}
 		composeResult.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
-		t.Logf("compose binding err: %v", composeResult.Err)
+		t.Logf("compose binding: err=%v", composeResult.Err)
 	}
 
-	// 4f. Sigstore
-	t.Log("--- Sigstore ---")
-	var imageRepos []string
-	var digestToRepo map[string]string
-	var sigstoreResults []attestation.SigstoreResult
-	if raw.AppCompose != "" {
-		dockerCompose, err := attestation.ExtractDockerCompose(raw.AppCompose)
-		if err != nil {
-			t.Logf("extract docker_compose_file: %v (using raw app_compose)", err)
-		}
-		source := dockerCompose
-		if source == "" {
-			source = raw.AppCompose
-		}
-		imageRepos = attestation.ExtractImageRepositories(source)
-		digestToRepo = attestation.ExtractImageDigestToRepoMap(source)
-		t.Logf("image repos: %d", len(imageRepos))
-		for _, repo := range imageRepos {
-			t.Logf("  repo: %s", repo)
-		}
-		digests := attestation.ExtractImageDigests(source)
-		t.Logf("image digests: %d", len(digests))
-		for _, d := range digests {
-			t.Logf("  sha256:%s...", d[:min(16, len(d))])
-		}
-		if len(digests) > 0 {
-			sigstoreResults = rekorClient.CheckSigstoreDigests(ctx, digests)
-			for _, r := range sigstoreResults {
-				t.Logf("  sigstore: digest=%s ok=%v status=%d err=%v", r.Digest[:min(16, len(r.Digest))], r.OK, r.Status, r.Err)
-			}
-		}
-	}
-
-	// 4g. Rekor
-	t.Log("--- Rekor ---")
+	// Sigstore + Rekor
+	modelCD := attestation.ExtractComposeDigests(raw.AppCompose)
+	allDigests, digestToRepo := attestation.MergeComposeDigests(modelCD, attestation.ComposeDigests{})
+	rc := attestation.NewRekorClient(env.client)
+	sigstoreResults := rc.CheckSigstoreDigests(ctx, allDigests)
+	t.Logf("sigstore: %d digests checked", len(sigstoreResults))
 	var rekorResults []attestation.RekorProvenance
 	for _, sr := range sigstoreResults {
 		if sr.OK {
-			prov := rekorClient.FetchRekorProvenance(ctx, sr.Digest)
+			prov := rc.FetchRekorProvenance(ctx, sr.Digest)
 			t.Logf("  rekor: digest=%s hasCert=%v err=%v", prov.Digest[:min(16, len(prov.Digest))], prov.HasCert, prov.Err)
 			rekorResults = append(rekorResults, prov)
 		}
 	}
+	assertRekorExercised(t, sigstoreResults, rekorResults)
 
-	// 4h. PoC
-	t.Log("--- Proof of Cloud ---")
-	poc := attestation.NewPoCClient(pocPeers, 3, client)
+	// PoC
+	poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, env.client)
 	pocResult := poc.CheckQuote(ctx, raw.IntelQuote)
-	t.Logf("PoC registered: %v", pocResult.Registered)
-	t.Logf("PoC machine ID: %s", pocResult.MachineID)
-	t.Logf("PoC label: %s", pocResult.Label)
-	t.Logf("PoC err: %v", pocResult.Err)
+	t.Logf("PoC: registered=%v err=%v", pocResult.Registered, pocResult.Err)
 
-	// ---------------------------------------------------------------
-	// 5. Build report and assert factors
-	// ---------------------------------------------------------------
-	t.Log("--- BuildReport ---")
+	// Build report with provider defaults.
+	modelPolicy, _ := defaults.MeasurementDefaults("neardirect")
 	report := attestation.BuildReport(&attestation.ReportInput{
-		Provider:     "neardirect",
-		Model:        model,
-		Raw:          raw,
-		Nonce:        nonce,
-		TDX:          tdxResult,
-		Nvidia:       nvidiaResult,
-		NvidiaNRAS:   nrasResult,
-		PoC:          pocResult,
-		Compose:      composeResult,
-		ImageRepos:   imageRepos,
-		DigestToRepo: digestToRepo,
-		Sigstore:     sigstoreResults,
-		Rekor:        rekorResults,
-		AllowFail:    attestation.DefaultAllowFail,
+		Provider:          "neardirect",
+		Model:             env.manifest.Model,
+		Raw:               raw,
+		Nonce:             env.nonce,
+		TDX:               tdxResult,
+		Nvidia:            nvidiaResult,
+		NvidiaNRAS:        nrasResult,
+		PoC:               pocResult,
+		Compose:           composeResult,
+		ImageRepos:        modelCD.Repos,
+		DigestToRepo:      digestToRepo,
+		Sigstore:          sigstoreResults,
+		Rekor:             rekorResults,
+		Policy:            modelPolicy,
+		SupplyChainPolicy: neardirect.SupplyChainPolicy(),
+		AllowFail:         attestation.NeardirectDefaultAllowFail,
 	})
 
-	total := report.Passed + report.Failed + report.Skipped
-	t.Logf("Score: %d/%d (passed=%d failed=%d skipped=%d)",
-		report.Passed, total, report.Passed, report.Failed, report.Skipped)
+	t.Logf("Score: %d/%d (passed=%d failed=%d skipped=%d)", report.Passed, total(report), report.Passed, report.Failed, report.Skipped)
 	for _, f := range report.Factors {
 		t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 	}
 
-	// ---------------------------------------------------------------
-	// 6. Assert expected factor results
-	// ---------------------------------------------------------------
-	expectations := []struct {
-		name   string
-		status attestation.Status
-	}{
-		{"nonce_match", attestation.Pass},
-		{"tdx_quote_present", attestation.Pass},
-		{"tdx_quote_structure", attestation.Pass},
-		{"tdx_debug_disabled", attestation.Pass},
-		{"signing_key_present", attestation.Pass},
-		{"tdx_reportdata_binding", attestation.Pass},
-		{"nvidia_payload_present", attestation.Pass},
-		{"nvidia_nonce_client_bound", attestation.Pass},
-		{"e2ee_capable", attestation.Pass},
-		{"tls_key_binding", attestation.Pass},
-		{"compose_binding", attestation.Pass},
-		{"sigstore_verification", attestation.Pass},
-		{"build_transparency_log", attestation.Pass},
-		{"event_log_integrity", attestation.Pass},
-	}
+	assertNeardirectReport(t, report)
+}
 
-	for _, exp := range expectations {
-		f := findFactor(t, report, exp.name)
-		if f.Status != exp.status {
-			t.Errorf("factor %s: got %s, want %s (detail: %s)", exp.name, f.Status, exp.status, f.Detail)
-		}
-	}
+func assertNeardirectReport(t *testing.T, report *attestation.VerificationReport) {
+	t.Helper()
 
-	// Cert chain and signature — accept pass; log warning on fail (cert expiry).
-	for _, name := range []string{"tdx_cert_chain", "tdx_quote_signature"} {
-		f := findFactor(t, report, name)
-		if f.Status == attestation.Fail {
-			t.Logf("WARNING: %s failed (likely PCK cert expiry, recapture fixtures): %s", name, f.Detail)
-		}
-	}
+	assertMustPass(t, report, []string{
+		"nonce_match",
+		"tdx_quote_present",
+		"tdx_quote_structure",
+		"tdx_debug_disabled",
+		"tdx_mrseam_mrtd",
+		"signing_key_present",
+		"tdx_reportdata_binding",
+		"nvidia_payload_present",
+		"nvidia_nonce_client_bound",
+		"e2ee_capable",
+		"tls_key_binding",
+		"compose_binding",
+		"sigstore_verification",
+		"build_transparency_log",
+		"event_log_integrity",
+	})
 
-	// Intel PCS collateral — expect pass with fixture data.
-	pcsF := findFactor(t, report, "intel_pcs_collateral")
-	if pcsF.Status == attestation.Fail {
-		t.Logf("WARNING: intel_pcs_collateral failed (may need fixture refresh): %s", pcsF.Detail)
-	} else if pcsF.Status != attestation.Pass {
-		t.Errorf("intel_pcs_collateral: got %s, want Pass or Fail (detail: %s)", pcsF.Status, pcsF.Detail)
-	}
+	commonModelAssertions(t, report)
 
-	// NVIDIA signature — SPDM cert chain may have time sensitivity.
-	nvidSig := findFactor(t, report, "nvidia_signature")
-	if nvidSig.Status == attestation.Fail {
-		t.Logf("WARNING: nvidia_signature failed (may need fixture refresh): %s", nvidSig.Detail)
-	}
-
-	// NVIDIA claims — may have time-sensitive fields.
-	nvidClaims := findFactor(t, report, "nvidia_claims")
-	if nvidClaims.Status == attestation.Fail {
-		t.Logf("WARNING: nvidia_claims failed (may need fixture refresh): %s", nvidClaims.Detail)
-	}
-
-	// NRAS — JWT expiry is pinned to capture time, so this should pass.
-	nrasF := findFactor(t, report, "nvidia_nras_verified")
-	if nrasF.Status != attestation.Pass {
-		t.Errorf("nvidia_nras_verified: got %s, want Pass (detail: %s)", nrasF.Status, nrasF.Detail)
-	}
-
-	// PoC — depends on whether the machine is whitelisted.
-	pocF := findFactor(t, report, "cpu_id_registry")
-	t.Logf("cpu_id_registry: %s (%s)", pocF.Status, pocF.Detail)
-
-	// Not implemented — expected fail.
-	for _, name := range []string{"cpu_gpu_chain", "measured_model_weights"} {
-		f := findFactor(t, report, name)
-		if f.Status != attestation.Fail {
-			t.Errorf("factor %s: got %s, want Fail (not implemented)", name, f.Status)
-		}
-	}
-
-	// Overall: we should have many passes.
 	if report.Passed < 10 {
 		t.Errorf("expected at least 10 passing factors, got %d", report.Passed)
 	}
-	t.Logf("PASS: %d/%d factors passed", report.Passed, total)
+	t.Logf("RESULT: %d/%d factors passed", report.Passed, total(report))
 }

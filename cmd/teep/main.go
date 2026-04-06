@@ -27,15 +27,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/chutes"
@@ -183,13 +185,14 @@ var providerEnvVars = map[string]string{
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
 func providerNotFoundError(name string, cfg *config.Config) error {
-	if envVar, ok := providerEnvVars[name]; ok && len(cfg.Providers) == 0 {
-		return fmt.Errorf("provider '%s' not configured (set %s or add [providers.%s] to config)", name, envVar, name)
+	envVar, known := providerEnvVars[name]
+	if known && len(cfg.Providers) == 0 {
+		return fmt.Errorf("provider %q not configured (set %s or add [providers.%s] to config)", name, envVar, name)
 	}
-	if envVar, ok := providerEnvVars[name]; ok {
-		return fmt.Errorf("provider '%s' not configured (set %s or add [providers.%s] to config; known: %s)", name, envVar, name, knownProviders(cfg))
+	if known {
+		return fmt.Errorf("provider %q not configured (set %s or add [providers.%s] to config; known: %s)", name, envVar, name, knownProviders(cfg))
 	}
-	return fmt.Errorf("provider '%s' not found (known: %s)", name, knownProviders(cfg))
+	return fmt.Errorf("provider %q not found (known: %s)", name, knownProviders(cfg))
 }
 
 // extractProvider returns the first arg as a provider name if it doesn't look
@@ -206,17 +209,13 @@ func extractProvider(args []string) (name string, rest []string) {
 // enforced factor failed (i.e. a factor not in the allow_fail list).
 func runVerify(args []string) {
 	providerName, args := extractProvider(args)
-	if providerName == "" {
-		fmt.Fprintf(os.Stderr, "teep verify: provider is required\n\n")
-		printVerifyHelp()
-		os.Exit(1)
-	}
 
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.Usage = func() { printVerifyHelp() }
 
 	modelName := fs.String("model", "", "model name as known to the provider (required)")
-	saveDir := fs.String("save-dir", "", "directory to save raw attestation data (EAT, TDX quote)")
+	captureDir := fs.String("capture", "", "save all HTTP traffic to DIR for archival")
+	reverifyDir := fs.String("reverify", "", "re-verify from a captured attestation directory")
 	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
 	updateConfig := fs.Bool("update-config", false, "write observed measurements to the config file ($TEEP_CONFIG)")
 	configOut := fs.String("config-out", "", "write updated config to this path instead of $TEEP_CONFIG")
@@ -226,13 +225,27 @@ func runVerify(args []string) {
 		os.Exit(2)
 	}
 
+	if *reverifyDir != "" {
+		runReverify(*reverifyDir)
+		return
+	}
+
+	if providerName == "" {
+		fmt.Fprintf(os.Stderr, "teep verify: provider is required\n\n")
+		printVerifyHelp()
+		os.Exit(1)
+	}
 	if *modelName == "" {
 		fmt.Fprintf(os.Stderr, "teep verify: --model is required\n")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	report := runVerification(providerName, *modelName, *saveDir, *offline)
+	report, err := runVerification(providerName, *modelName, *captureDir, *offline, nil, attestation.Nonce{}, nil)
+	if err != nil {
+		slog.Error("verification failed", "err", err)
+		os.Exit(1)
+	}
 	fmt.Print(formatReport(report))
 
 	blocked := report.Blocked()
@@ -263,49 +276,135 @@ func runVerify(args []string) {
 	}
 }
 
+// runReverify re-verifies attestation from a previously captured directory.
+// All HTTP traffic is served from the saved responses via a replay transport.
+func runReverify(captureDir string) {
+	report, reverifyText, err := replayVerification(captureDir)
+	if err != nil {
+		slog.Error("replay verification failed", "err", err)
+		os.Exit(1)
+	}
+
+	capturedText, loadErr := capture.LoadReport(captureDir)
+	switch {
+	case loadErr == nil:
+		if err := compareReports(capturedText, reverifyText); err != nil {
+			slog.Error("report comparison failed", "err", err)
+			os.Exit(1)
+		}
+	case errors.Is(loadErr, os.ErrNotExist):
+		slog.Warn("no captured report to compare (report.txt absent)")
+	default:
+		slog.Error("read captured report failed", "err", loadErr)
+		os.Exit(1)
+	}
+
+	fmt.Print(reverifyText)
+	if report.Blocked() {
+		os.Exit(1)
+	}
+}
+
+// replayVerification loads a capture directory, replays all HTTP traffic, and
+// returns the verification report and formatted text.
+func replayVerification(captureDir string) (report *attestation.VerificationReport, reportText string, err error) {
+	manifest, entries, err := capture.Load(captureDir)
+	if err != nil {
+		return nil, "", fmt.Errorf("load capture: %w", err)
+	}
+	slog.Info("replaying capture",
+		"provider", manifest.Provider,
+		"model", manifest.Model,
+		"captured_at", manifest.CapturedAt.Format(time.RFC3339),
+		"responses", len(entries),
+	)
+
+	nonce, err := attestation.ParseNonce(manifest.NonceHex)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid nonce in manifest: %w", err)
+	}
+
+	replayClient := &http.Client{
+		Transport: capture.NewReplayTransport(entries),
+		Timeout:   config.AttestationTimeout,
+	}
+
+	capturedE2EE := e2eeResultFromOutcome(manifest.E2EE)
+	report, err = runVerification(manifest.Provider, manifest.Model, "",
+		false, replayClient, nonce, capturedE2EE)
+	if err != nil {
+		return nil, "", fmt.Errorf("replay verification: %w", err)
+	}
+	reportText = formatReport(report)
+	return report, reportText, nil
+}
+
 // runVerification loads config, builds the appropriate attester, fetches
 // attestation, runs TDX and NVIDIA verification, and returns the report.
-// If saveDir is non-empty, raw attestation data is saved to files there.
-func runVerification(providerName, modelName, saveDir string, offline bool) *attestation.VerificationReport {
+//
+// When captureDir is non-empty, all HTTP traffic is recorded and saved there.
+// When overrideClient is non-nil, it replaces the default attestation client
+// (used by --reverify to inject a replay transport). When overrideNonce is
+// non-zero, it replaces the generated nonce. When capturedE2EE is non-nil,
+// it replaces the live E2EE test (used by --reverify to inject the captured result).
+func runVerification(providerName, modelName, captureDir string, offline bool,
+	overrideClient *http.Client, overrideNonce attestation.Nonce, capturedE2EE *attestation.E2EETestResult,
+) (*attestation.VerificationReport, error) {
 	cfg, cp, err := loadConfig(providerName)
 	if err != nil {
-		slog.Error("load config failed", "err", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("load config: %w", err)
 	}
 	cfg.Offline = offline
 	attester, err := newAttester(providerName, cp, offline)
 	if err != nil {
-		slog.Error("attester init failed", "err", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("attester init: %w", err)
 	}
-	client := config.NewAttestationClient(offline)
 
+	// Validate config before setting up deferred cleanup.
 	var pocSigningKey ed25519.PublicKey
 	if cfg.PoCSigningKey != "" {
 		keyBytes, err := base64.StdEncoding.DecodeString(cfg.PoCSigningKey)
 		if err != nil {
-			slog.Error("poc_signing_key: invalid base64", "err", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("poc_signing_key: invalid base64: %w", err)
 		}
 		if len(keyBytes) != ed25519.PublicKeySize {
-			slog.Error("poc_signing_key: wrong size", "expected", ed25519.PublicKeySize, "got", len(keyBytes))
-			os.Exit(1)
+			return nil, fmt.Errorf("poc_signing_key: wrong size: expected %d, got %d", ed25519.PublicKeySize, len(keyBytes))
 		}
 		pocSigningKey = ed25519.PublicKey(keyBytes)
 		slog.Info("PoC JWT EdDSA signature verification enabled")
 	}
 
-	nonce := attestation.NewNonce()
+	client := overrideClient
+	if client == nil {
+		client = config.NewAttestationClient(offline)
+	}
+	attestation.TDXCollateralGetter = attestation.NewCollateralGetter(client)
+	defer func() { attestation.TDXCollateralGetter = nil }()
+
+	// Wrap transport with recording when capturing.
+	var recorder *capture.RecordingTransport
+	if captureDir != "" {
+		recorder = capture.WrapRecording(client.Transport)
+		client.Transport = recorder
+	}
+
+	// Inject shared client into attester for capture/replay.
+	type clientSetter interface{ SetClient(*http.Client) }
+	if cs, ok := attester.(clientSetter); ok {
+		cs.SetClient(client)
+	}
+
+	nonce := overrideNonce
+	if nonce == (attestation.Nonce{}) {
+		nonce = attestation.NewNonce()
+	}
+
 	slog.Debug("nonce generated", "provider", providerName, "model", modelName, "nonce", nonce.Hex()[:16]+"...")
 	ctx := context.Background()
 
 	raw, err := fetchAttestation(ctx, attester, providerName, modelName, nonce)
 	if err != nil {
-		slog.Error("fetch attestation failed", "err", err)
-		os.Exit(1)
-	}
-	if saveDir != "" {
-		saveAttestationData(saveDir, providerName, raw)
+		return nil, fmt.Errorf("fetch attestation: %w", err)
 	}
 
 	tdxResult := verifyTDX(ctx, raw, nonce, providerName, offline)
@@ -336,13 +435,18 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 	allDigests, digestToRepo := attestation.MergeComposeDigests(modelCD, gatewayCD)
 	sigstoreResults, rekorResults := checkSigstore(ctx, allDigests, client, offline)
 
-	e2eeResult := testE2EE(ctx, raw, providerName, cp, modelName, offline)
+	var e2eeResult *attestation.E2EETestResult
+	if capturedE2EE != nil {
+		e2eeResult = capturedE2EE
+	} else {
+		e2eeResult = testE2EE(ctx, raw, providerName, cp, modelName, offline)
+	}
 
 	mDefaults, gwDefaults := defaults.MeasurementDefaults(providerName)
 	mergedPolicy := config.MergedMeasurementPolicy(providerName, cfg, mDefaults)
 	mergedGWPolicy := config.MergedGatewayMeasurementPolicy(providerName, cfg, gwDefaults)
 
-	return attestation.BuildReport(&attestation.ReportInput{
+	report := attestation.BuildReport(&attestation.ReportInput{
 		Provider:          providerName,
 		Model:             modelName,
 		Raw:               raw,
@@ -369,6 +473,120 @@ func runVerification(providerName, modelName, saveDir string, offline bool) *att
 		GatewayEventLog:   raw.GatewayEventLog,
 		E2EETest:          e2eeResult,
 	})
+
+	// Save capture after building report so report.txt is available.
+	if captureDir != "" {
+		reportText := formatReport(report)
+		subdir, saveErr := capture.Save(captureDir, &capture.Manifest{
+			Provider:   providerName,
+			Model:      modelName,
+			NonceHex:   nonce.Hex(),
+			CapturedAt: time.Now().UTC(),
+			E2EE:       outcomeFromE2EEResult(e2eeResult),
+		}, reportText, recorder.Entries)
+		if saveErr != nil {
+			return nil, fmt.Errorf("save capture: %w", saveErr)
+		}
+		slog.Info("capture saved", "dir", subdir, "responses", len(recorder.Entries))
+		if err := verifyCapture(subdir, reportText); err != nil {
+			return nil, fmt.Errorf("capture self-check: %w", err)
+		}
+	}
+
+	return report, nil
+}
+
+// verifyCapture loads a just-saved capture and re-verifies it to confirm the
+// capture round-trips cleanly.
+func verifyCapture(captureDir, originalReport string) error {
+	_, reverifyText, err := replayVerification(captureDir)
+	if err != nil {
+		return fmt.Errorf("verify capture: %w", err)
+	}
+	if err := compareReports(originalReport, reverifyText); err != nil {
+		return err
+	}
+	slog.Info("capture verified", "dir", captureDir)
+	return nil
+}
+
+// outcomeFromE2EEResult converts an attestation.E2EETestResult to a serializable E2EEOutcome.
+// Returns nil if r is nil.
+func outcomeFromE2EEResult(r *attestation.E2EETestResult) *capture.E2EEOutcome {
+	if r == nil {
+		return nil
+	}
+	o := &capture.E2EEOutcome{
+		Attempted: r.Attempted,
+		NoAPIKey:  r.NoAPIKey,
+		APIKeyEnv: r.APIKeyEnv,
+		Detail:    r.Detail,
+	}
+	if r.Err != nil {
+		o.Failed = true
+		o.ErrMsg = r.Err.Error()
+	}
+	return o
+}
+
+// e2eeResultFromOutcome converts a captured E2EEOutcome back to an attestation.E2EETestResult.
+// Returns nil if o is nil.
+func e2eeResultFromOutcome(o *capture.E2EEOutcome) *attestation.E2EETestResult {
+	if o == nil {
+		return nil
+	}
+	r := &attestation.E2EETestResult{
+		Attempted: o.Attempted,
+		NoAPIKey:  o.NoAPIKey,
+		APIKeyEnv: o.APIKeyEnv,
+		Detail:    o.Detail,
+	}
+	if o.Failed {
+		// Err is reconstructed from the serialized message; type information is
+		// lost across the capture boundary. Callers only check Err != nil.
+		msg := o.ErrMsg
+		if msg == "" {
+			msg = "(error message lost across capture boundary)"
+		}
+		r.Err = errors.New(msg)
+	}
+	return r
+}
+
+// compareReports compares two formatted report strings exactly.
+// On mismatch, prints a line-by-line diff to stderr and returns an error.
+func compareReports(captured, reverify string) error {
+	if captured == reverify {
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "--- MISMATCH: reverify report differs from capture ---")
+	printReportDiff(captured, reverify)
+	return errors.New("reverify report differs from capture")
+}
+
+// printReportDiff prints a positional line-by-line diff. This is correct
+// because both reports are produced by formatReport over the same factor
+// list — lines cannot shift, only change in content.
+func printReportDiff(a, b string) {
+	aLines := strings.Split(a, "\n")
+	bLines := strings.Split(b, "\n")
+	for i := range max(len(aLines), len(bLines)) {
+		var aLine, bLine string
+		if i < len(aLines) {
+			aLine = aLines[i]
+		}
+		if i < len(bLines) {
+			bLine = bLines[i]
+		}
+		if aLine != bLine {
+			if aLine != "" {
+				fmt.Fprintf(os.Stderr, "- %s\n", aLine)
+			}
+			if bLine != "" {
+				fmt.Fprintf(os.Stderr, "+ %s\n", bLine)
+			}
+		}
+	}
 }
 
 // extractObserved builds an ObservedMeasurements from the verification report
@@ -649,7 +867,7 @@ func chatPathForProvider(name string) string {
 }
 
 // testE2EE runs a live E2EE test inference if the provider is E2EE-capable.
-// Returns nil if the provider doesn't support E2EE, signalling evalE2EEUsable
+// Returns nil if the provider doesn't support E2EE, signalling callers
 // to skip. Returns a result with NoAPIKey=true if the API key is missing, or
 // with Err set on any failure.
 func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName string, cp *config.Provider, model string, offline bool) *attestation.E2EETestResult {
@@ -867,32 +1085,30 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 			break
 		}
 
-		var event map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
+		var event struct {
+			E2EInit  *string `json:"e2e_init,omitempty"`
+			E2E      *string `json:"e2e,omitempty"`
+			E2EError *string `json:"e2e_error,omitempty"`
+			Usage    any     `json:"usage,omitempty"`
+		}
+		if err := jsonstrict.UnmarshalWarn([]byte(data), &event, "chutes SSE event"); err != nil {
 			return &attestation.E2EETestResult{
 				Attempted: true,
 				Err:       fmt.Errorf("parse SSE event: %w (prefix=%q)", err, safePrefix(data, 64)),
 			}
 		}
 
-		if initB64, ok := event["e2e_init"]; ok {
-			var b64 string
-			if err := json.Unmarshal(initB64, &b64); err != nil {
-				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("parse e2e_init: %w", err)}
-			}
-			streamKey, err = session.DecryptStreamInitChutes(b64)
+		switch {
+		case event.E2EInit != nil:
+			streamKey, err = session.DecryptStreamInitChutes(*event.E2EInit)
 			if err != nil {
 				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("derive stream key: %w", err)}
 			}
-		} else if encB64, ok := event["e2e"]; ok {
+		case event.E2E != nil:
 			if streamKey == nil {
 				return &attestation.E2EETestResult{Attempted: true, Err: errors.New("e2e event before e2e_init")}
 			}
-			var b64 string
-			if err := json.Unmarshal(encB64, &b64); err != nil {
-				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("parse e2e chunk: %w", err)}
-			}
-			encrypted, err := base64.StdEncoding.DecodeString(b64)
+			encrypted, err := base64.StdEncoding.DecodeString(*event.E2E)
 			if err != nil {
 				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("decode e2e chunk: %w", err)}
 			}
@@ -918,9 +1134,9 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 				}
 			}
 			decryptedChunks++
-		} else if errMsg, ok := event["e2e_error"]; ok {
-			return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("server e2e_error: %s", string(errMsg))}
-		} else if _, ok := event["usage"]; ok {
+		case event.E2EError != nil:
+			return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("server e2e_error: %s", *event.E2EError)}
+		case event.Usage != nil:
 			usageEvents++
 		}
 	}
@@ -940,6 +1156,7 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 		detail += fmt.Sprintf("; %d cleartext usage events (expected)", usageEvents)
 	}
 	if len(headerNotes) > 0 {
+		sort.Strings(headerNotes)
 		detail += "; non-standard response headers: " + strings.Join(headerNotes, "; ")
 	}
 	return &attestation.E2EETestResult{Attempted: true, Detail: detail}
@@ -983,11 +1200,19 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 		chunkCount++
 
 		var chunk struct {
-			Choices []struct {
-				Delta json.RawMessage `json:"delta"`
+			ID                string `json:"id"`
+			Object            string `json:"object"`
+			Created           int64  `json:"created"`
+			Model             string `json:"model"`
+			SystemFingerprint string `json:"system_fingerprint"`
+			Choices           []struct {
+				Index        int `json:"index"`
+				Delta        any `json:"delta"`
+				FinishReason any `json:"finish_reason"`
 			} `json:"choices"`
+			Usage any `json:"usage"`
 		}
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		if err := jsonstrict.UnmarshalWarn([]byte(data), &chunk, "e2ee SSE chunk"); err != nil {
 			return &attestation.E2EETestResult{
 				Attempted: true,
 				Err:       fmt.Errorf("parse SSE chunk %d: %w", chunkCount, err),
@@ -997,17 +1222,21 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 			continue
 		}
 
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(chunk.Choices[0].Delta, &fields); err != nil {
+		delta := chunk.Choices[0].Delta
+		if delta == nil {
+			continue
+		}
+		fields, ok := delta.(map[string]any)
+		if !ok {
 			return &attestation.E2EETestResult{
 				Attempted: true,
-				Err:       fmt.Errorf("parse delta in chunk %d: %w", chunkCount, err),
+				Err:       fmt.Errorf("delta in chunk %d is %T, expected map", chunkCount, delta),
 			}
 		}
 
-		for key, raw := range fields {
-			var s string
-			if json.Unmarshal(raw, &s) != nil || s == "" {
+		for key, val := range fields {
+			s, ok := val.(string)
+			if !ok || s == "" {
 				continue
 			}
 			if e2ee.NonEncryptedFields[key] {
@@ -1054,12 +1283,14 @@ func safePrefix(s string, n int) string {
 	return s[:n]
 }
 
-// knownProviders returns the comma-separated list of provider names from cfg.
+// knownProviders returns the comma-separated list of provider names from cfg
+// in deterministic (sorted) order.
 func knownProviders(cfg *config.Config) string {
 	names := make([]string, 0, len(cfg.Providers))
 	for name := range cfg.Providers {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return strings.Join(names, ", ")
 }
 
@@ -1170,37 +1401,4 @@ func writeMetadataBlock(b *strings.Builder, meta map[string]string) {
 		}
 		fmt.Fprintf(b, "  %-14s %s\n", entry.label+":", val)
 	}
-}
-
-// saveAttestationData writes the raw provider response and extracted fields to dir.
-// Filenames include a timestamp so multiple runs do not overwrite each other.
-func saveAttestationData(dir, provName string, raw *attestation.RawAttestation) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		slog.Error("create save dir failed", "dir", dir, "err", err)
-		return
-	}
-
-	ts := time.Now().UTC().Format("20060102T150405Z")
-
-	// Save the unmodified HTTP response body from the provider.
-	if len(raw.RawBody) > 0 {
-		saveFile(filepath.Join(dir, fmt.Sprintf("%s_attestation_%s.json", provName, ts)), raw.RawBody)
-	}
-
-	if raw.NvidiaPayload != "" {
-		saveFile(filepath.Join(dir, fmt.Sprintf("%s_nvidia_payload_%s.json", provName, ts)), []byte(raw.NvidiaPayload))
-	}
-
-	if raw.IntelQuote != "" {
-		saveFile(filepath.Join(dir, fmt.Sprintf("%s_intel_quote_%s.hex", provName, ts)), []byte(raw.IntelQuote))
-	}
-}
-
-// saveFile writes data to path with 0600 permissions, logging the result.
-func saveFile(path string, data []byte) {
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		slog.Error("save failed", "path", path, "err", err)
-		return
-	}
-	slog.Debug("saved", "path", path, "bytes", len(data))
 }

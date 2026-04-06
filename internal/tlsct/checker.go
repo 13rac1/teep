@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	ct "github.com/google/certificate-transparency-go"
@@ -41,7 +42,7 @@ type certCacheEntry struct {
 type Checker struct {
 	mu      sync.Mutex
 	entries map[string]certCacheEntry
-	enabled bool
+	enabled atomic.Bool
 
 	logListMu   sync.RWMutex
 	logList     *loglist3.LogList
@@ -61,14 +62,15 @@ func NewChecker() *Checker {
 	base.IdleConnTimeout = 90 * time.Second
 	base.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 
-	return &Checker{
+	c := &Checker{
 		entries: make(map[string]certCacheEntry),
-		enabled: ctEnabledDefault,
 		logListHTTP: &http.Client{
 			Timeout:   20 * time.Second,
 			Transport: WrapLogging(base),
 		},
 	}
+	c.enabled.Store(ctEnabledDefault)
+	return c
 }
 
 // DefaultChecker returns the shared process-wide CT checker.
@@ -79,7 +81,7 @@ func (c *Checker) SetEnabled(enabled bool) {
 	if c == nil {
 		return
 	}
-	c.enabled = enabled
+	c.enabled.Store(enabled)
 }
 
 // NewHTTPClient returns an HTTP client that enforces CT for all HTTPS requests.
@@ -161,7 +163,7 @@ func (t *ctRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 // CheckTLSState verifies that the peer cert chain provides valid SCT evidence
 // anchored to a known CT log in Google's public log list.
 func (c *Checker) CheckTLSState(ctx context.Context, host string, state *tls.ConnectionState) error {
-	if c == nil || !c.enabled {
+	if c == nil || !c.enabled.Load() {
 		return nil
 	}
 	if isPrivateHost(host) {

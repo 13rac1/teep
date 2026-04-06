@@ -66,10 +66,16 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 	}
 }
 
+// SetClient replaces the HTTP client used for attestation fetches.
+func (a *Attester) SetClient(c *http.Client) { a.client = c }
+
 // FetchAttestation fetches TEE attestation from Phala Cloud. The nonce is sent
 // as a query parameter. Format detection is performed on the response body to
 // delegate to the correct backend parser.
 func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	ctx, cancel := context.WithTimeout(ctx, attestationTimeout)
+	defer cancel()
+
 	endpoint, err := url.Parse(a.baseURL + attestationPath)
 	if err != nil {
 		return nil, fmt.Errorf("phalacloud: parse endpoint URL %q: %w", a.baseURL+attestationPath, err)

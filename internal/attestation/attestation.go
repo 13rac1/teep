@@ -165,7 +165,7 @@ type RawAttestation struct {
 	GatewayTLSFingerprint string          `json:"-"`
 
 	// RawBody is the unmodified HTTP response body from the provider.
-	// Used by --save-dir to write the original JSON as-is.
+	// Used by --capture to write the original JSON as-is.
 	RawBody []byte `json:"-"`
 }
 

@@ -140,6 +140,9 @@ func NewAttester(apiKey string, offline ...bool) *Attester {
 	}
 }
 
+// SetClient replaces the HTTP client used for attestation fetches.
+func (a *Attester) SetClient(c *http.Client) { a.client = c }
+
 // FetchAttestation fetches TEE attestation from the cloud gateway.
 // The same nonce is used for both gateway and model attestation (the gateway
 // shares the nonce with the model backend).

@@ -644,15 +644,18 @@ Required flags:
   --model MODEL     Model name as known to the provider.
 
 Optional flags:
-  --save-dir DIR    Save raw attestation data to DIR (JSON, TDX quote,
-                    NVIDIA payload). Useful for debugging and offline analysis.
-	--offline         Skip external verification (Intel PCS collateral,
-										Proof of Cloud registry, Certificate Transparency).
-										PPID is still extracted locally.
+  --capture DIR     Save all HTTP traffic to DIR for archival. Creates a
+                    timestamped subdirectory with raw response bodies and
+                    metadata. Use --reverify to re-verify from a capture.
+  --reverify DIR    Re-verify attestation from a previously captured directory.
+                    All HTTP traffic is served from saved responses. E2EE
+                    connectivity test is skipped (no live server).
+  --offline         Skip external verification (Intel PCS collateral,
+                    Proof of Cloud registry, Certificate Transparency).
+                    PPID is still extracted locally.
   --update-config   Write observed TDX measurements to the config file at
                     $TEEP_CONFIG. Adds values to [providers.X.policy] with
-                    deduplication. Creates
-                    a .bak backup of the original file.
+                    deduplication. Creates a .bak backup of the original file.
   --config-out PATH Write updated config to PATH instead of $TEEP_CONFIG.
                     Implies --update-config behavior.
   --log-level LEVEL Set log verbosity: debug, info, warn, error (default: info).
@@ -663,9 +666,9 @@ Exit codes:
 
 Examples:
   teep verify venice --model e2ee-deepseek-r1-0528
-  teep verify neardirect --model qwen2.5-72b-instruct --save-dir ./attestation-data
+  teep verify neardirect --model qwen2.5-72b-instruct --capture ./captures
+  teep verify --reverify ./captures/neardirect_qwen2.5-72b-instruct_20260404_120000
   teep verify nearcloud --model Qwen/Qwen3.5-122B-A10B --log-level debug
-  teep verify venice --model e2ee-qwen3-32b --log-level debug
   teep verify venice --model e2ee-qwen3-32b --update-config
 
 See 'teep help tiers' for how factors are scored, 'teep help factors'

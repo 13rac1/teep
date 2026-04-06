@@ -1,0 +1,55 @@
+{
+  "method": "GET",
+  "url": "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "headers": {
+    "Accept-Ranges": [
+      "bytes"
+    ],
+    "Connection": [
+      "keep-alive"
+    ],
+    "Content-Length": [
+      "294"
+    ],
+    "Content-Type": [
+      "binary/octet-stream"
+    ],
+    "Date": [
+      "Sun, 05 Apr 2026 22:52:53 GMT"
+    ],
+    "Etag": [
+      "\"a3d246a50122dbdb11caf9749a4fc40f\""
+    ],
+    "Last-Modified": [
+      "Thu, 26 Feb 2026 13:04:11 GMT"
+    ],
+    "Server": [
+      "AmazonS3"
+    ],
+    "Vary": [
+      "Accept-Encoding"
+    ],
+    "Via": [
+      "1.1 fdd1eada351372fafa8612323f367f28.cloudfront.net (CloudFront)"
+    ],
+    "X-Amz-Cf-Id": [
+      "-hSg4smPqIVCMXx0sETnUpHjzGwef8yEQBInoY80JLQYQ3ZVB3t7dQ=="
+    ],
+    "X-Amz-Cf-Pop": [
+      "SFO53-P4"
+    ],
+    "X-Amz-Server-Side-Encryption": [
+      "AES256"
+    ],
+    "X-Amz-Version-Id": [
+      "f2FY9v6BmcG11MrdDIsyVYNLKiHrbdVG"
+    ],
+    "X-Cache": [
+      "RefreshHit from cloudfront"
+    ]
+  }
+}

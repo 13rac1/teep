@@ -1298,7 +1298,7 @@ func evalCPUIDRegistry(in *ReportInput) []FactorResult {
 				fmt.Sprintf("Proof of Cloud query failed: %v", in.PoC.Err))
 		default:
 			return factor(TierSupplyChain, "cpu_id_registry", Fail,
-				"hardware not found in Proof of Cloud registry; paste intel_quote from --save-dir at proofofcloud.org to verify")
+				"hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify")
 		}
 	}
 	if in.TDX != nil && in.TDX.PPID != "" {
@@ -1585,7 +1585,7 @@ func evalGatewayCPUIDRegistry(in *ReportInput) []FactorResult {
 				fmt.Sprintf("gateway Proof of Cloud query failed: %v", in.GatewayPoC.Err))
 		default:
 			return factor(TierGateway, "gateway_cpu_id_registry", Fail,
-				"gateway hardware not found in Proof of Cloud registry; paste gateway intel_quote from --save-dir at proofofcloud.org to verify")
+				"gateway hardware not found in Proof of Cloud registry; paste gateway intel_quote from --capture at proofofcloud.org to verify")
 		}
 	}
 	if in.GatewayTDX != nil && in.GatewayTDX.PPID != "" {

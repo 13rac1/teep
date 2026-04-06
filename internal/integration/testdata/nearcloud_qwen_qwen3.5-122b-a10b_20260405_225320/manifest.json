@@ -1,0 +1,10 @@
+{
+  "provider": "nearcloud",
+  "model": "Qwen/Qwen3.5-122B-A10B",
+  "nonce_hex": "1df40c38e3397cb6be510c26e6270125003caec14a671162bbe96ea1ddc42737",
+  "captured_at": "2026-04-05T22:53:20.341111Z",
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE nearcloud: 506 encrypted fields decrypted across 509 chunks"
+  }
+}

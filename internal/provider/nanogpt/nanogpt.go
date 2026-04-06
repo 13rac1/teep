@@ -126,6 +126,9 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 	}
 }
 
+// SetClient replaces the HTTP client used for attestation fetches.
+func (a *Attester) SetClient(c *http.Client) { a.client = c }
+
 // FetchAttestation fetches TEE attestation for the given model from NanoGPT.
 // The nonce is sent as a hex string query parameter; NanoGPT echoes it back in
 // the response so callers can verify nonce_match.

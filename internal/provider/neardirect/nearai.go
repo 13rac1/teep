@@ -130,6 +130,9 @@ func NewAttesterWithResolver(baseURL, apiKey string, resolver DomainResolver, of
 	}
 }
 
+// SetClient replaces the HTTP client used for attestation fetches.
+func (a *Attester) SetClient(c *http.Client) { a.client = c }
+
 // FetchAttestation fetches TEE attestation from NEAR AI. The nonce is sent as
 // a query parameter; NEAR AI echoes it back in the response. Query parameters
 // include_tls_fingerprint=true and signing_algo=ecdsa are also sent so the
