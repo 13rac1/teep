@@ -563,6 +563,111 @@ func TestEncryptChatMessagesNearCloud_VLContent(t *testing.T) {
 	}
 }
 
+// TestEncryptChatMessagesNearCloud_StripsToolCalls verifies that
+// EncryptChatMessagesNearCloud cannot handle multi-turn tool calling
+// conversations. Assistant messages with tool_calls have null content,
+// which causes contentPlaintext to fail. Even if this were fixed, the
+// function only preserves role and content — stripping tool_calls,
+// tool_call_id, and name from messages.
+func TestEncryptChatMessagesNearCloud_StripsToolCalls(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+
+	// Multi-turn conversation with tool calls: the assistant message contains
+	// tool_calls with null content (standard OpenAI format).
+	body := map[string]any{
+		"model": "test-model",
+		"messages": []map[string]any{
+			{
+				"role":    "user",
+				"content": "What's the weather in NYC?",
+			},
+			{
+				"role":    "assistant",
+				"content": nil,
+				"tool_calls": []map[string]any{
+					{
+						"id":   "call_123",
+						"type": "function",
+						"function": map[string]string{
+							"name":      "get_weather",
+							"arguments": `{"location":"New York City"}`,
+						},
+					},
+				},
+			},
+			{
+				"role":         "tool",
+				"tool_call_id": "call_123",
+				"name":         "get_weather",
+				"content":      "72°F and sunny",
+			},
+			{
+				"role":    "user",
+				"content": "Thanks! What about tomorrow?",
+			},
+		},
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// EncryptChatMessagesNearCloud fails on null content in assistant
+	// tool-call messages. This means E2EE CANNOT be used with multi-turn
+	// tool calling conversations at all.
+	_, _, err = EncryptChatMessagesNearCloud(bodyJSON, pubHex)
+	if err == nil {
+		t.Fatal("expected EncryptChatMessagesNearCloud to fail on null content, but it succeeded")
+	}
+	t.Logf("EncryptChatMessagesNearCloud error: %v", err)
+	t.Log("FINDING: EncryptChatMessagesNearCloud fails on multi-turn tool calling conversations")
+	t.Log("  Assistant tool_call messages have null content (standard OpenAI format)")
+	t.Log("  contentPlaintext rejects null/non-string/non-array content types")
+
+	// Also verify that even single-message tool calling works but strips fields.
+	singleMsg := map[string]any{
+		"model": "test-model",
+		"messages": []map[string]any{
+			{
+				"role":    "user",
+				"content": "What's the weather?",
+				"name":    "test_user",
+			},
+		},
+	}
+	singleJSON, err := json.Marshal(singleMsg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	encBody, session, err := EncryptChatMessagesNearCloud(singleJSON, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptChatMessagesNearCloud single: %v", err)
+	}
+	defer session.Zero()
+
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var messages []map[string]json.RawMessage
+	if err := json.Unmarshal(out["messages"], &messages); err != nil {
+		t.Fatalf("unmarshal messages: %v", err)
+	}
+
+	// Verify the "name" field was stripped from the user message.
+	if _, ok := messages[0]["name"]; ok {
+		t.Error("user message still has 'name' field — expected it to be stripped")
+	}
+	for key := range messages[0] {
+		if key != "role" && key != "content" {
+			t.Errorf("message has unexpected field %q — EncryptChatMessagesNearCloud strips all fields except role and content", key)
+		}
+	}
+	t.Log("FINDING: EncryptChatMessagesNearCloud strips all message fields except role and content")
+	t.Log("  Fields dropped: name, tool_calls, tool_call_id, reasoning_content, reasoning, audio")
+}
+
 func TestEncryptImagePromptNearCloud(t *testing.T) {
 	pubHex, seed := ed25519KeyPairHex(t)
 

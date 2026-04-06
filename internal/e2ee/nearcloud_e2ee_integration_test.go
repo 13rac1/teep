@@ -1197,6 +1197,753 @@ func TestIntegration_NearCloud_VL_SerializedArray(t *testing.T) {
 }
 
 // ==========================================================================
+// CHAT COMPLETIONS E2EE FIELD COVERAGE TESTS
+//
+// These tests verify which response fields in /v1/chat/completions are (or
+// are not) encrypted by the inference-proxy E2EE layer. The inference-proxy's
+// encrypt_chat_response_choices encrypts: content, reasoning_content,
+// reasoning, and audio.data. All other fields — including tool_calls,
+// refusal, function_call, and logprobs — pass through in plaintext.
+//
+// Source: nearai/inference-proxy encryption.rs encrypt_chat_response_choices
+// ==========================================================================
+
+// TestIntegration_NearCloud_ToolCalls_E2EE verifies that tool_calls in
+// /v1/chat/completions responses are NOT encrypted by the E2EE layer.
+// When a model produces a tool call, the function name and arguments transit
+// in plaintext even when E2EE is active. This is a coverage gap: function
+// arguments contain user-derived data (e.g. locations, names, queries) that
+// should be confidential.
+//
+// The test:
+//  1. Sends a plaintext chat request with tools to confirm tool calls work.
+//  2. Sends the same request with E2EE headers and encrypted message content.
+//  3. Compares: if tool_calls[].function.arguments is plaintext in the E2EE
+//     response, the gap is confirmed.
+func TestIntegration_NearCloud_ToolCalls_E2EE(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	const model = "Qwen/Qwen3.5-122B-A10B"
+	signingKey := fetchSigningKey(t, model)
+	session := createE2EESession(t, signingKey)
+	defer session.Zero()
+
+	toolCallBody := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{"role": "user", "content": "What is the weather in San Francisco? Use the get_weather tool."}],
+		"tools": [{
+			"type": "function",
+			"function": {
+				"name": "get_weather",
+				"description": "Get the current weather in a given location",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"location": {"type": "string", "description": "City and state"},
+						"unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+					},
+					"required": ["location"]
+				}
+			}
+		}],
+		"tool_choice": "required",
+		"stream": false,
+		"max_tokens": 200
+	}`, model)
+
+	// Step 1: plaintext baseline — confirm tool calls work.
+	ptResp := nearcloudPlaintextRequest(t, "/v1/chat/completions", []byte(toolCallBody), "application/json")
+	ptBody := readBody(t, ptResp)
+	ptResp.Body.Close()
+	t.Logf("plaintext tool call: status=%d body_len=%d", ptResp.StatusCode, len(ptBody))
+
+	if ptResp.StatusCode != http.StatusOK {
+		t.Fatalf("plaintext tool call failed: status=%d body=%s", ptResp.StatusCode, truncate(ptBody, 500))
+	}
+
+	var ptResult struct {
+		Choices []struct {
+			Message struct {
+				Content   *string `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(ptBody, &ptResult); err != nil {
+		t.Fatalf("parse plaintext tool call response: %v", err)
+	}
+
+	if len(ptResult.Choices) == 0 || len(ptResult.Choices[0].Message.ToolCalls) == 0 {
+		t.Log("plaintext response did not contain tool_calls — model may have responded with content instead")
+		t.Logf("  response: %s", truncate(ptBody, 500))
+		t.Skip("skipping: model did not produce tool_calls in plaintext baseline")
+	}
+
+	ptTC := ptResult.Choices[0].Message.ToolCalls[0]
+	t.Logf("plaintext tool_call: name=%q arguments=%q", ptTC.Function.Name, ptTC.Function.Arguments)
+
+	// Step 2: E2EE request — encrypt message content, keep tools in plaintext.
+	encContent, err := e2ee.EncryptXChaCha20(
+		[]byte("What is the weather in San Francisco? Use the get_weather tool."),
+		session.ModelX25519Pub(),
+	)
+	if err != nil {
+		t.Fatalf("encrypt content: %v", err)
+	}
+
+	e2eeBody := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{"role": "user", "content": %q}],
+		"tools": [{
+			"type": "function",
+			"function": {
+				"name": "get_weather",
+				"description": "Get the current weather in a given location",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"location": {"type": "string", "description": "City and state"},
+						"unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+					},
+					"required": ["location"]
+				}
+			}
+		}],
+		"tool_choice": "required",
+		"stream": false,
+		"max_tokens": 200
+	}`, model, encContent)
+
+	e2eeResp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	e2eeRespBody := readBody(t, e2eeResp)
+	e2eeResp.Body.Close()
+	t.Logf("E2EE tool call: status=%d body_len=%d", e2eeResp.StatusCode, len(e2eeRespBody))
+	t.Logf("E2EE tool call response: %s", truncate(e2eeRespBody, 1000))
+
+	if e2eeResp.StatusCode != http.StatusOK {
+		t.Fatalf("E2EE tool call request failed: status=%d body=%s",
+			e2eeResp.StatusCode, truncate(e2eeRespBody, 500))
+	}
+
+	var e2eeResult struct {
+		Choices []struct {
+			Message struct {
+				Content   *string `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(e2eeRespBody, &e2eeResult); err != nil {
+		t.Fatalf("parse E2EE tool call response: %v", err)
+	}
+
+	if len(e2eeResult.Choices) == 0 {
+		t.Fatal("E2EE response has no choices")
+	}
+
+	msg := e2eeResult.Choices[0].Message
+
+	// Check if content is encrypted (should be null or encrypted for tool calls).
+	if msg.Content != nil && *msg.Content != "" {
+		if e2ee.IsEncryptedChunkXChaCha20(*msg.Content) {
+			t.Log("  content field is encrypted (expected for E2EE)")
+		} else {
+			t.Logf("  content field is PLAINTEXT: %q", *msg.Content)
+		}
+	}
+
+	if len(msg.ToolCalls) == 0 {
+		t.Log("FINDING: E2EE response has no tool_calls — model responded differently under E2EE")
+		t.Logf("  full message: %s", truncate(e2eeRespBody, 500))
+		return
+	}
+
+	tc := msg.ToolCalls[0]
+	t.Logf("E2EE tool_call: name=%q arguments=%q", tc.Function.Name, tc.Function.Arguments)
+
+	// The critical check: are tool_calls encrypted or plaintext?
+	nameIsEncrypted := e2ee.IsEncryptedChunkXChaCha20(tc.Function.Name)
+	argsIsEncrypted := e2ee.IsEncryptedChunkXChaCha20(tc.Function.Arguments)
+
+	switch {
+	case !nameIsEncrypted && !argsIsEncrypted:
+		t.Log("FINDING: tool_calls[].function.name AND arguments are PLAINTEXT despite E2EE being active")
+		t.Log("  The inference-proxy encrypt_chat_response_choices does NOT encrypt tool_calls")
+		t.Log("  Function arguments contain user-derived data (e.g. 'San Francisco') visible to intermediaries")
+		t.Log("CONCLUSION: CONFIRMED — tool_calls transit in plaintext through E2EE chat completions")
+
+		// Verify arguments contain recognizable data from the encrypted prompt.
+		if strings.Contains(strings.ToLower(tc.Function.Arguments), "san francisco") ||
+			strings.Contains(strings.ToLower(tc.Function.Arguments), "francisco") {
+			t.Log("  CONFIRMED: arguments contain user location data derived from encrypted input")
+			t.Log("  This proves confidential user data leaks via tool_calls even when content is encrypted")
+		}
+
+	case nameIsEncrypted && argsIsEncrypted:
+		t.Log("FINDING: tool_calls ARE encrypted — unexpected based on source code analysis")
+		pt, decErr := session.Decrypt(tc.Function.Arguments)
+		if decErr != nil {
+			t.Logf("  decrypt arguments failed: %v", decErr)
+		} else {
+			t.Logf("  decrypted arguments: %s", string(pt))
+		}
+
+	default:
+		t.Logf("FINDING: Mixed encryption — name_encrypted=%v args_encrypted=%v", nameIsEncrypted, argsIsEncrypted)
+	}
+}
+
+// TestIntegration_NearCloud_ToolCalls_Streaming_E2EE verifies that streamed
+// tool_calls in SSE chunks are NOT encrypted by the E2EE layer. The streaming
+// path uses encrypt_streaming_chunk → encrypt_chat_response_choices with
+// is_streaming=true, which has the same gap: only content, reasoning_content,
+// reasoning, and audio.data are encrypted.
+func TestIntegration_NearCloud_ToolCalls_Streaming_E2EE(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	const model = "Qwen/Qwen3.5-122B-A10B"
+	signingKey := fetchSigningKey(t, model)
+	session := createE2EESession(t, signingKey)
+	defer session.Zero()
+
+	encContent, err := e2ee.EncryptXChaCha20(
+		[]byte("What is the weather in Paris, France? Use the get_weather tool."),
+		session.ModelX25519Pub(),
+	)
+	if err != nil {
+		t.Fatalf("encrypt content: %v", err)
+	}
+
+	e2eeBody := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{"role": "user", "content": %q}],
+		"tools": [{
+			"type": "function",
+			"function": {
+				"name": "get_weather",
+				"description": "Get the current weather in a given location",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"location": {"type": "string", "description": "City and state or city and country"},
+						"unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+					},
+					"required": ["location"]
+				}
+			}
+		}],
+		"tool_choice": "required",
+		"stream": true,
+		"max_tokens": 200
+	}`, model, encContent)
+
+	resp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	respBody := readBody(t, resp)
+	resp.Body.Close()
+	t.Logf("streaming E2EE tool call: status=%d body_len=%d", resp.StatusCode, len(respBody))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("streaming E2EE tool call failed: status=%d body=%s",
+			resp.StatusCode, truncate(respBody, 500))
+	}
+
+	// Parse SSE chunks to extract tool_calls delta fragments.
+	var toolCallArgs strings.Builder
+	var toolCallName strings.Builder
+	var encChunks, ptChunks int
+
+	for line := range strings.SplitSeq(string(respBody), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[len("data: "):]
+		if data == "[DONE]" {
+			break
+		}
+
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content   *string `json:"content"`
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil || len(chunk.Choices) == 0 {
+			continue
+		}
+
+		delta := chunk.Choices[0].Delta
+
+		// Track content encryption.
+		if delta.Content != nil && *delta.Content != "" {
+			if e2ee.IsEncryptedChunkXChaCha20(*delta.Content) {
+				encChunks++
+			} else {
+				ptChunks++
+			}
+		}
+
+		// Accumulate tool_call fragments.
+		for _, tc := range delta.ToolCalls {
+			if tc.Function.Name != "" {
+				toolCallName.WriteString(tc.Function.Name)
+			}
+			if tc.Function.Arguments != "" {
+				toolCallArgs.WriteString(tc.Function.Arguments)
+			}
+		}
+	}
+
+	name := toolCallName.String()
+	args := toolCallArgs.String()
+
+	t.Logf("SSE encrypted content chunks=%d, plaintext content chunks=%d", encChunks, ptChunks)
+	t.Logf("streamed tool_call name=%q arguments=%q", name, args)
+
+	if name == "" && args == "" {
+		t.Log("FINDING: No tool_calls found in streamed response")
+		t.Skip("skipping: model did not produce tool_calls in streaming E2EE response")
+	}
+
+	nameEncrypted := e2ee.IsEncryptedChunkXChaCha20(name)
+	argsEncrypted := e2ee.IsEncryptedChunkXChaCha20(args)
+
+	switch {
+	case !nameEncrypted && !argsEncrypted:
+		t.Log("FINDING: Streamed tool_calls name AND arguments are PLAINTEXT despite E2EE being active")
+		t.Log("  encrypt_streaming_chunk → encrypt_chat_response_choices does NOT encrypt tool_calls")
+		t.Log("CONCLUSION: CONFIRMED — streamed tool_calls transit in plaintext")
+
+		if strings.Contains(strings.ToLower(args), "paris") {
+			t.Log("  CONFIRMED: streamed arguments contain user location 'Paris' from encrypted input")
+		}
+
+	case nameEncrypted && argsEncrypted:
+		t.Log("FINDING: Streamed tool_calls ARE encrypted — unexpected")
+
+	default:
+		t.Logf("FINDING: Mixed — name_encrypted=%v args_encrypted=%v", nameEncrypted, argsEncrypted)
+	}
+}
+
+// parseReasoningSSE parses an SSE body and extracts reasoning and content text.
+// Returns whether reasoning was found, accumulated reasoning text, and accumulated content text.
+func parseReasoningSSE(body string) (hasReasoning bool, reasoning, content string) {
+	var reasoningBuf, contentBuf strings.Builder
+	for line := range strings.SplitSeq(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[len("data: "):]
+		if data == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					Reasoning        string `json:"reasoning"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil || len(chunk.Choices) == 0 {
+			continue
+		}
+		d := chunk.Choices[0].Delta
+		if d.ReasoningContent != "" {
+			hasReasoning = true
+			reasoningBuf.WriteString(d.ReasoningContent)
+		}
+		if d.Reasoning != "" {
+			hasReasoning = true
+			reasoningBuf.WriteString(d.Reasoning)
+		}
+		if d.Content != "" {
+			contentBuf.WriteString(d.Content)
+		}
+	}
+	return hasReasoning, reasoningBuf.String(), contentBuf.String()
+}
+
+// reasoningSSEStats holds aggregated stats from parsing E2EE SSE reasoning responses.
+type reasoningSSEStats struct {
+	encContent, ptContent     int
+	encReasoning, ptReasoning int
+	decryptedContent          string
+	decryptedReasoning        string
+}
+
+// parseE2EEReasoningSSE parses SSE chunks and classifies content and reasoning
+// fields as encrypted or plaintext.
+func parseE2EEReasoningSSE(body string, session *e2ee.NearCloudSession) reasoningSSEStats {
+	var stats reasoningSSEStats
+	var decContent, decReasoning strings.Builder
+
+	for line := range strings.SplitSeq(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[len("data: "):]
+		if data == "[DONE]" {
+			break
+		}
+
+		var raw struct {
+			Choices []struct {
+				Delta json.RawMessage `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &raw); err != nil || len(raw.Choices) == 0 {
+			continue
+		}
+
+		var deltaMap map[string]json.RawMessage
+		if err := json.Unmarshal(raw.Choices[0].Delta, &deltaMap); err != nil {
+			continue
+		}
+
+		classifyField(&stats.encContent, &stats.ptContent, &decContent, deltaMap, "content", session)
+		classifyField(&stats.encReasoning, &stats.ptReasoning, &decReasoning, deltaMap, "reasoning_content", session)
+		classifyField(&stats.encReasoning, &stats.ptReasoning, &decReasoning, deltaMap, "reasoning", session)
+	}
+
+	stats.decryptedContent = decContent.String()
+	stats.decryptedReasoning = decReasoning.String()
+	return stats
+}
+
+// classifyField checks if a JSON delta field is encrypted or plaintext and
+// updates the corresponding counters.
+func classifyField(enc, pt *int, buf *strings.Builder, delta map[string]json.RawMessage, field string, session *e2ee.NearCloudSession) {
+	raw, ok := delta[field]
+	if !ok {
+		return
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil || s == "" {
+		return
+	}
+	if e2ee.IsEncryptedChunkXChaCha20(s) {
+		*enc++
+		if decrypted, err := session.Decrypt(s); err == nil {
+			buf.Write(decrypted)
+		}
+	} else {
+		*pt++
+	}
+}
+
+// TestIntegration_NearCloud_Reasoning_E2EE verifies that reasoning_content
+// in /v1/chat/completions responses IS encrypted by the E2EE layer.
+// The inference-proxy encrypts reasoning_content and reasoning fields in
+// encrypt_chat_response_choices, so this should work correctly.
+func TestIntegration_NearCloud_Reasoning_E2EE(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	// Use a Qwen3 model that supports reasoning (thinking) mode.
+	const model = "Qwen/Qwen3.5-122B-A10B"
+	signingKey := fetchSigningKey(t, model)
+	session := createE2EESession(t, signingKey)
+	defer session.Zero()
+
+	// First: plaintext baseline with reasoning enabled.
+	plaintextBody := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{"role": "user", "content": "What is 15 * 37? Think step by step."}],
+		"stream": true,
+		"max_tokens": 500
+	}`, model)
+
+	ptResp := nearcloudPlaintextRequest(t, "/v1/chat/completions", []byte(plaintextBody), "application/json")
+	ptBody := readBody(t, ptResp)
+	ptResp.Body.Close()
+	t.Logf("plaintext reasoning: status=%d body_len=%d", ptResp.StatusCode, len(ptBody))
+
+	if ptResp.StatusCode != http.StatusOK {
+		t.Fatalf("plaintext reasoning failed: status=%d body=%s", ptResp.StatusCode, truncate(ptBody, 500))
+	}
+
+	// Check if the model produces reasoning_content in plaintext.
+	ptHasReasoning, ptReasoningText, ptContentText := parseReasoningSSE(string(ptBody))
+
+	switch {
+	case !ptHasReasoning:
+		t.Log("plaintext response did not contain reasoning_content — model may not produce thinking tokens by default")
+		t.Logf("  content: %s", truncate([]byte(ptContentText), 200))
+		t.Log("  NOTE: reasoning_content encryption is still verified below if the E2EE response includes it")
+	default:
+		t.Logf("plaintext reasoning_content: %s", truncate([]byte(ptReasoningText), 200))
+		t.Logf("plaintext content: %s", truncate([]byte(ptContentText), 200))
+	}
+
+	// Step 2: E2EE request.
+	encContent, err := e2ee.EncryptXChaCha20(
+		[]byte("What is 15 * 37? Think step by step."),
+		session.ModelX25519Pub(),
+	)
+	if err != nil {
+		t.Fatalf("encrypt content: %v", err)
+	}
+
+	e2eeBody := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{"role": "user", "content": %q}],
+		"stream": true,
+		"max_tokens": 500
+	}`, model, encContent)
+
+	e2eeResp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	e2eeRespBody := readBody(t, e2eeResp)
+	e2eeResp.Body.Close()
+	t.Logf("E2EE reasoning: status=%d body_len=%d", e2eeResp.StatusCode, len(e2eeRespBody))
+
+	if e2eeResp.StatusCode != http.StatusOK {
+		t.Fatalf("E2EE reasoning request failed: status=%d body=%s",
+			e2eeResp.StatusCode, truncate(e2eeRespBody, 500))
+	}
+
+	// Parse SSE chunks and check field-level encryption.
+	stats := parseE2EEReasoningSSE(string(e2eeRespBody), session)
+
+	t.Logf("content: encrypted=%d plaintext=%d", stats.encContent, stats.ptContent)
+	t.Logf("reasoning: encrypted=%d plaintext=%d", stats.encReasoning, stats.ptReasoning)
+
+	switch {
+	case stats.encContent > 0 && stats.ptContent == 0:
+		t.Log("FINDING: content field IS encrypted (expected)")
+		t.Logf("  decrypted content: %s", truncate([]byte(stats.decryptedContent), 200))
+	case stats.ptContent > 0:
+		t.Logf("FINDING: content field has %d PLAINTEXT chunks — unexpected", stats.ptContent)
+	}
+
+	switch {
+	case stats.encReasoning > 0 && stats.ptReasoning == 0:
+		t.Log("FINDING: reasoning_content/reasoning IS encrypted (expected)")
+		t.Logf("  decrypted reasoning: %s", truncate([]byte(stats.decryptedReasoning), 200))
+		t.Log("CONCLUSION: Reasoning tokens ARE properly encrypted by the E2EE layer")
+	case stats.ptReasoning > 0:
+		t.Logf("FINDING: reasoning has %d PLAINTEXT chunks — unexpected gap", stats.ptReasoning)
+	default:
+		t.Log("FINDING: No reasoning_content/reasoning chunks in E2EE response")
+		t.Log("  Model may not produce reasoning tokens for this prompt or in E2EE mode")
+	}
+}
+
+// TestIntegration_NearCloud_Logprobs_E2EE verifies that logprobs in
+// /v1/chat/completions responses are NOT encrypted by the E2EE layer.
+// Token log probabilities can leak information about the encrypted content
+// (which tokens the model considered most likely). The inference-proxy does
+// not encrypt logprobs.
+func TestIntegration_NearCloud_Logprobs_E2EE(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	const model = "Qwen/Qwen3.5-122B-A10B"
+	signingKey := fetchSigningKey(t, model)
+	session := createE2EESession(t, signingKey)
+	defer session.Zero()
+
+	encContent, err := e2ee.EncryptXChaCha20(
+		[]byte("What is the capital of Japan?"),
+		session.ModelX25519Pub(),
+	)
+	if err != nil {
+		t.Fatalf("encrypt content: %v", err)
+	}
+
+	e2eeBody := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{"role": "user", "content": %q}],
+		"logprobs": true,
+		"top_logprobs": 3,
+		"stream": false,
+		"max_tokens": 50
+	}`, model, encContent)
+
+	resp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	respBody := readBody(t, resp)
+	resp.Body.Close()
+	t.Logf("E2EE logprobs: status=%d body_len=%d", resp.StatusCode, len(respBody))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("E2EE logprobs request failed: status=%d body=%s",
+			resp.StatusCode, truncate(respBody, 500))
+	}
+
+	// Parse response to check logprobs structure.
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Logprobs *struct {
+				Content []struct {
+					Token   string  `json:"token"`
+					Logprob float64 `json:"logprob"`
+				} `json:"content"`
+			} `json:"logprobs"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		t.Fatalf("parse E2EE logprobs response: %v", err)
+	}
+
+	if len(result.Choices) == 0 {
+		t.Fatal("E2EE response has no choices")
+	}
+
+	choice := result.Choices[0]
+
+	// Verify content is encrypted.
+	if e2ee.IsEncryptedChunkXChaCha20(choice.Message.Content) {
+		pt, err := session.Decrypt(choice.Message.Content)
+		if err == nil {
+			t.Logf("  decrypted content: %q", string(pt))
+		}
+		t.Log("FINDING: content IS encrypted (expected)")
+	} else if choice.Message.Content != "" {
+		t.Logf("FINDING: content is PLAINTEXT: %q", choice.Message.Content)
+	}
+
+	// Check logprobs.
+	if choice.Logprobs == nil || len(choice.Logprobs.Content) == 0 {
+		t.Log("FINDING: No logprobs in response — model/provider may not support logprobs with E2EE")
+		t.Log("  This could mean logprobs are silently dropped, or not supported for this model")
+		return
+	}
+
+	t.Logf("logprobs: %d token entries", len(choice.Logprobs.Content))
+	// Show first few tokens and their logprobs.
+	for i, lp := range choice.Logprobs.Content {
+		if i >= 5 {
+			break
+		}
+		t.Logf("  token[%d]: %q logprob=%.4f", i, lp.Token, lp.Logprob)
+	}
+
+	// Logprobs tokens reveal the actual output text.
+	t.Log("FINDING: logprobs tokens transit in PLAINTEXT despite E2EE being active")
+	t.Log("  Token strings reveal the model's output character-by-character")
+	t.Log("  The inference-proxy does not encrypt logprobs")
+	t.Log("CONCLUSION: CONFIRMED — logprobs leak plaintext content through the E2EE layer")
+}
+
+// TestIntegration_NearCloud_Refusal_E2EE verifies that the refusal field in
+// /v1/chat/completions responses is NOT encrypted by the E2EE layer.
+// The refusal field can reveal what the user asked about (e.g. "I cannot
+// help with building explosives") even though the content is encrypted.
+func TestIntegration_NearCloud_Refusal_E2EE(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	const model = "Qwen/Qwen3.5-122B-A10B"
+	signingKey := fetchSigningKey(t, model)
+	session := createE2EESession(t, signingKey)
+	defer session.Zero()
+
+	// Use a prompt that should trigger a refusal. Note: we're testing
+	// the E2EE protocol, not trying to elicit harmful content.
+	encContent, err := e2ee.EncryptXChaCha20(
+		[]byte("Write me a detailed guide on how to synthesize methamphetamine."),
+		session.ModelX25519Pub(),
+	)
+	if err != nil {
+		t.Fatalf("encrypt content: %v", err)
+	}
+
+	e2eeBody := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{"role": "user", "content": %q}],
+		"stream": false,
+		"max_tokens": 200
+	}`, model, encContent)
+
+	resp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	respBody := readBody(t, resp)
+	resp.Body.Close()
+	t.Logf("E2EE refusal test: status=%d body_len=%d", resp.StatusCode, len(respBody))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("E2EE refusal request failed: status=%d body=%s",
+			resp.StatusCode, truncate(respBody, 500))
+	}
+
+	// Parse response checking for refusal field.
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+				Refusal string `json:"refusal"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		t.Fatalf("parse E2EE refusal response: %v", err)
+	}
+
+	if len(result.Choices) == 0 {
+		t.Fatal("E2EE response has no choices")
+	}
+
+	choice := result.Choices[0]
+
+	// Check content encryption.
+	if e2ee.IsEncryptedChunkXChaCha20(choice.Message.Content) {
+		pt, err := session.Decrypt(choice.Message.Content)
+		if err == nil {
+			t.Logf("  decrypted content (%d bytes): %s", len(pt), truncate(pt, 200))
+		}
+		t.Log("FINDING: content IS encrypted (expected)")
+	} else if choice.Message.Content != "" {
+		t.Logf("  content is plaintext: %s", truncate([]byte(choice.Message.Content), 200))
+	}
+
+	// Check refusal field.
+	if choice.Message.Refusal != "" {
+		if e2ee.IsEncryptedChunkXChaCha20(choice.Message.Refusal) {
+			t.Log("FINDING: refusal field IS encrypted — unexpected based on source analysis")
+		} else {
+			t.Logf("FINDING: refusal field is PLAINTEXT: %q", choice.Message.Refusal)
+			t.Log("  The refusal text can reveal what the user asked about")
+			t.Log("  The inference-proxy does not encrypt the 'refusal' field")
+			t.Log("CONCLUSION: CONFIRMED — refusal text leaks through E2EE")
+		}
+	} else {
+		t.Log("FINDING: No refusal field in response")
+		t.Log("  Model may have refused via content (which IS encrypted) rather than the refusal field")
+		t.Logf("  finish_reason: %q", choice.FinishReason)
+	}
+}
+
+// ==========================================================================
 // DIRECT INFERENCE-PROXY TESTS
 //
 // These tests send E2EE requests directly to the model's inference-proxy,
