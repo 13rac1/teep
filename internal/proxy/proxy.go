@@ -1418,7 +1418,6 @@ func (s *Server) handlePinnedChat(
 		return
 	}
 	if !s.pinnedPostDispatchE2EE(ctx, w, prov, upstreamModel, report, pinnedResp.Report != nil) {
-		s.negCache.Record(prov.Name, upstreamModel)
 		return
 	}
 	if pinnedResp.SigningKey != "" {
@@ -2060,7 +2059,6 @@ func (s *Server) handlePinnedNonChat(
 		return
 	}
 	if !s.pinnedPostDispatchE2EE(ctx, w, prov, upstreamModel, report, pinnedResp.Report != nil) {
-		s.negCache.Record(prov.Name, upstreamModel)
 		return
 	}
 	if pinnedResp.SigningKey != "" {
