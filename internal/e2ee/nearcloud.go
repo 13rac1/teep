@@ -206,6 +206,12 @@ func IsEncryptedChunkXChaCha20(s string) bool {
 // EncryptChatMessagesNearCloud creates a NearCloud E2EE session, encrypts each
 // message's content, and forces stream=true. The signingKey is the model's
 // Ed25519 public key (64 hex chars) from the attestation response.
+//
+// All message fields (tool_calls, tool_call_id, name, reasoning_content, etc.)
+// are preserved in the output. Only the content field is encrypted — matching
+// the fields that the inference-proxy's decrypt_chat_message_fields decrypts.
+// Messages with null content (e.g. assistant tool-call messages) pass through
+// with content unchanged.
 func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
 	session, err := NewNearCloudSession()
 	if err != nil {
@@ -216,43 +222,28 @@ func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *Near
 		return nil, nil, fmt.Errorf("set model key ed25519: %w", err)
 	}
 
-	// Minimal parse: only extract messages for encryption, preserve all other fields.
+	// Parse top-level body, preserving all fields (tools, model, etc.).
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(body, &full); err != nil {
 		session.Zero()
 		return nil, nil, fmt.Errorf("parse body for NearCloud E2EE: %w", err)
 	}
 
-	// Parse messages with raw content to handle both string and VL array content.
-	var messages []struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-	}
+	// Parse messages preserving ALL fields — each message is a raw JSON map.
+	var messages []map[string]json.RawMessage
 	if err := json.Unmarshal(full["messages"], &messages); err != nil {
 		session.Zero()
 		return nil, nil, fmt.Errorf("parse messages for NearCloud E2EE: %w", err)
 	}
 
-	type encMsg struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-	enc := make([]encMsg, len(messages))
 	for i, msg := range messages {
-		plaintext, pErr := contentPlaintext(msg.Content)
-		if pErr != nil {
+		if err := encryptMessageContent(msg, i, session); err != nil {
 			session.Zero()
-			return nil, nil, fmt.Errorf("message %d content: %w", i, pErr)
+			return nil, nil, err
 		}
-		ct, encErr := EncryptXChaCha20(plaintext, session.ModelX25519Pub())
-		if encErr != nil {
-			session.Zero()
-			return nil, nil, fmt.Errorf("encrypt NearCloud message %d: %w", i, encErr)
-		}
-		enc[i] = encMsg{Role: msg.Role, Content: ct}
 	}
 
-	messagesJSON, err := json.Marshal(enc)
+	messagesJSON, err := json.Marshal(messages)
 	if err != nil {
 		session.Zero()
 		return nil, nil, fmt.Errorf("marshal NearCloud encrypted messages: %w", err)
@@ -266,6 +257,54 @@ func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *Near
 		return nil, nil, fmt.Errorf("marshal NearCloud E2EE body: %w", err)
 	}
 	return out, session, nil
+}
+
+// encryptMessageContent encrypts the content field of a single chat message
+// in-place. Messages with null or absent content (e.g. assistant tool-call
+// messages) are left unchanged.
+func encryptMessageContent(msg map[string]json.RawMessage, idx int, session *NearCloudSession) error {
+	contentRaw, ok := msg["content"]
+	if !ok {
+		return nil // no content field at all (valid for some message types)
+	}
+
+	// Null content: standard format for assistant tool-call messages.
+	// Pass through unchanged — the inference-proxy handles null content.
+	if isJSONNull(contentRaw) {
+		return nil
+	}
+
+	plaintext, err := contentPlaintext(contentRaw)
+	if err != nil {
+		return fmt.Errorf("message %d content: %w", idx, err)
+	}
+	ct, err := EncryptXChaCha20(plaintext, session.ModelX25519Pub())
+	if err != nil {
+		return fmt.Errorf("encrypt NearCloud message %d: %w", idx, err)
+	}
+	ctJSON, err := json.Marshal(ct)
+	if err != nil {
+		return fmt.Errorf("marshal encrypted content %d: %w", idx, err)
+	}
+	msg["content"] = ctJSON
+	return nil
+}
+
+// isJSONNull returns true if raw represents a JSON null value.
+func isJSONNull(raw json.RawMessage) bool {
+	// Trim whitespace and check for literal "null".
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case 'n':
+			return string(raw) == "null" || // fast path
+				len(raw) >= 4 && raw[len(raw)-4] == 'n' // trimmed
+		default:
+			return false
+		}
+	}
+	return len(raw) == 0
 }
 
 // contentPlaintext extracts the plaintext bytes to encrypt from a message's

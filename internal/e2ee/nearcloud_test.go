@@ -2,6 +2,7 @@ package e2ee
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -563,17 +564,15 @@ func TestEncryptChatMessagesNearCloud_VLContent(t *testing.T) {
 	}
 }
 
-// TestEncryptChatMessagesNearCloud_StripsToolCalls verifies that
-// EncryptChatMessagesNearCloud cannot handle multi-turn tool calling
-// conversations. Assistant messages with tool_calls have null content,
-// which causes contentPlaintext to fail. Even if this were fixed, the
-// function only preserves role and content — stripping tool_calls,
-// tool_call_id, and name from messages.
-func TestEncryptChatMessagesNearCloud_StripsToolCalls(t *testing.T) {
-	pubHex, _ := ed25519KeyPairHex(t)
+// TestEncryptChatMessagesNearCloud_ToolCallConversation verifies that
+// EncryptChatMessagesNearCloud correctly handles multi-turn tool calling
+// conversations:
+//   - assistant messages with null content pass through unchanged
+//   - tool_calls, tool_call_id, and name fields are preserved
+//   - only the content field is encrypted
+func TestEncryptChatMessagesNearCloud_ToolCallConversation(t *testing.T) {
+	pubHex, seed := ed25519KeyPairHex(t)
 
-	// Multi-turn conversation with tool calls: the assistant message contains
-	// tool_calls with null content (standard OpenAI format).
 	body := map[string]any{
 		"model": "test-model",
 		"messages": []map[string]any{
@@ -612,37 +611,101 @@ func TestEncryptChatMessagesNearCloud_StripsToolCalls(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	// EncryptChatMessagesNearCloud fails on null content in assistant
-	// tool-call messages. This means E2EE CANNOT be used with multi-turn
-	// tool calling conversations at all.
-	_, _, err = EncryptChatMessagesNearCloud(bodyJSON, pubHex)
-	if err == nil {
-		t.Fatal("expected EncryptChatMessagesNearCloud to fail on null content, but it succeeded")
+	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
-	t.Logf("EncryptChatMessagesNearCloud error: %v", err)
-	t.Log("FINDING: EncryptChatMessagesNearCloud fails on multi-turn tool calling conversations")
-	t.Log("  Assistant tool_call messages have null content (standard OpenAI format)")
-	t.Log("  contentPlaintext rejects null/non-string/non-array content types")
+	defer session.Zero()
 
-	// Also verify that even single-message tool calling works but strips fields.
-	singleMsg := map[string]any{
+	// Parse output.
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	var messages []map[string]json.RawMessage
+	if err := json.Unmarshal(out["messages"], &messages); err != nil {
+		t.Fatalf("unmarshal messages: %v", err)
+	}
+	if len(messages) != 4 {
+		t.Fatalf("message count = %d, want 4", len(messages))
+	}
+
+	x25519Priv, err := ed25519SeedToX25519(seed)
+	if err != nil {
+		t.Fatalf("derive x25519: %v", err)
+	}
+
+	// Message 0: user — content encrypted, role preserved.
+	assertRole(t, messages[0], "user")
+	assertContentEncrypted(t, messages[0], x25519Priv, "What's the weather in NYC?")
+
+	// Message 1: assistant with null content and tool_calls — null preserved, tool_calls preserved.
+	assertRole(t, messages[1], "assistant")
+	assertContentNull(t, messages[1])
+	assertFieldPresent(t, messages[1], "tool_calls")
+	var toolCalls []map[string]any
+	if err := json.Unmarshal(messages[1]["tool_calls"], &toolCalls); err != nil {
+		t.Fatalf("unmarshal tool_calls: %v", err)
+	}
+	if len(toolCalls) != 1 {
+		t.Fatalf("tool_calls count = %d, want 1", len(toolCalls))
+	}
+	if toolCalls[0]["id"] != "call_123" {
+		t.Errorf("tool_calls[0].id = %v, want call_123", toolCalls[0]["id"])
+	}
+
+	// Message 2: tool — content encrypted, tool_call_id and name preserved.
+	assertRole(t, messages[2], "tool")
+	assertContentEncrypted(t, messages[2], x25519Priv, "72°F and sunny")
+	assertFieldPresent(t, messages[2], "tool_call_id")
+	assertFieldPresent(t, messages[2], "name")
+	var toolCallID string
+	if err := json.Unmarshal(messages[2]["tool_call_id"], &toolCallID); err != nil {
+		t.Fatalf("unmarshal tool_call_id: %v", err)
+	}
+	if toolCallID != "call_123" {
+		t.Errorf("tool_call_id = %q, want call_123", toolCallID)
+	}
+
+	// Message 3: user — content encrypted.
+	assertRole(t, messages[3], "user")
+	assertContentEncrypted(t, messages[3], x25519Priv, "Thanks! What about tomorrow?")
+}
+
+// TestEncryptChatMessagesNearCloud_PreservesExtraFields verifies that
+// EncryptChatMessagesNearCloud preserves ALL message fields, not just
+// role and content.
+func TestEncryptChatMessagesNearCloud_PreservesExtraFields(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+
+	body := map[string]any{
 		"model": "test-model",
 		"messages": []map[string]any{
 			{
 				"role":    "user",
-				"content": "What's the weather?",
+				"content": "hello",
 				"name":    "test_user",
 			},
 		},
+		"tools": []map[string]any{
+			{
+				"type": "function",
+				"function": map[string]string{
+					"name":        "get_weather",
+					"description": "Get weather",
+				},
+			},
+		},
+		"temperature": 0.7,
 	}
-	singleJSON, err := json.Marshal(singleMsg)
+	bodyJSON, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	encBody, session, err := EncryptChatMessagesNearCloud(singleJSON, pubHex)
+	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, pubHex)
 	if err != nil {
-		t.Fatalf("EncryptChatMessagesNearCloud single: %v", err)
+		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
 	defer session.Zero()
 
@@ -650,22 +713,172 @@ func TestEncryptChatMessagesNearCloud_StripsToolCalls(t *testing.T) {
 	if err := json.Unmarshal(encBody, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+
+	// Top-level fields must be preserved.
+	for _, field := range []string{"model", "tools", "temperature", "stream"} {
+		if _, ok := out[field]; !ok {
+			t.Errorf("top-level field %q missing — was stripped", field)
+		}
+	}
+
 	var messages []map[string]json.RawMessage
 	if err := json.Unmarshal(out["messages"], &messages); err != nil {
 		t.Fatalf("unmarshal messages: %v", err)
 	}
 
-	// Verify the "name" field was stripped from the user message.
-	if _, ok := messages[0]["name"]; ok {
-		t.Error("user message still has 'name' field — expected it to be stripped")
+	// Message-level name field must be preserved.
+	assertFieldPresent(t, messages[0], "name")
+	var name string
+	if err := json.Unmarshal(messages[0]["name"], &name); err != nil {
+		t.Fatalf("unmarshal name: %v", err)
 	}
-	for key := range messages[0] {
-		if key != "role" && key != "content" {
-			t.Errorf("message has unexpected field %q — EncryptChatMessagesNearCloud strips all fields except role and content", key)
-		}
+	if name != "test_user" {
+		t.Errorf("name = %q, want test_user", name)
 	}
-	t.Log("FINDING: EncryptChatMessagesNearCloud strips all message fields except role and content")
-	t.Log("  Fields dropped: name, tool_calls, tool_call_id, reasoning_content, reasoning, audio")
+}
+
+// TestEncryptChatMessagesNearCloud_NullContentVariants tests handling of
+// null and absent content in various message configurations.
+func TestEncryptChatMessagesNearCloud_NullContentVariants(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+
+	tests := []struct {
+		name    string
+		content any // nil for JSON null, missing for absent
+		absent  bool
+	}{
+		{"explicit null", nil, false},
+		{"absent content", nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := map[string]any{
+				"role": "assistant",
+				"tool_calls": []map[string]any{
+					{
+						"id":   "call_1",
+						"type": "function",
+						"function": map[string]string{
+							"name":      "test_fn",
+							"arguments": `{}`,
+						},
+					},
+				},
+			}
+			if !tt.absent {
+				msg["content"] = tt.content
+			}
+
+			body := map[string]any{
+				"model":    "test-model",
+				"messages": []any{msg},
+			}
+			bodyJSON, err := json.Marshal(body)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+
+			encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, pubHex)
+			if err != nil {
+				t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
+			}
+			defer session.Zero()
+
+			var out map[string]json.RawMessage
+			if err := json.Unmarshal(encBody, &out); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			var messages []map[string]json.RawMessage
+			if err := json.Unmarshal(out["messages"], &messages); err != nil {
+				t.Fatalf("unmarshal messages: %v", err)
+			}
+
+			if tt.absent {
+				if _, ok := messages[0]["content"]; ok {
+					t.Error("absent content should remain absent")
+				}
+			} else {
+				assertContentNull(t, messages[0])
+			}
+			assertFieldPresent(t, messages[0], "tool_calls")
+		})
+	}
+}
+
+func TestIsJSONNull(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"null", true},
+		{`"hello"`, false},
+		{"42", false},
+		{"[]", false},
+		{"{}", false},
+		{"", true},
+		{"  null  ", false}, // json.RawMessage preserves exact bytes
+		{`""`, false},
+		{"true", false},
+		{"false", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isJSONNull(json.RawMessage(tt.input))
+			if got != tt.want {
+				t.Errorf("isJSONNull(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// Test helpers for message assertion.
+
+func assertRole(t *testing.T, msg map[string]json.RawMessage, want string) {
+	t.Helper()
+	var got string
+	if err := json.Unmarshal(msg["role"], &got); err != nil {
+		t.Fatalf("unmarshal role: %v", err)
+	}
+	if got != want {
+		t.Errorf("role = %q, want %q", got, want)
+	}
+}
+
+func assertContentEncrypted(t *testing.T, msg map[string]json.RawMessage, x25519Priv *ecdh.PrivateKey, wantPlaintext string) {
+	t.Helper()
+	var ct string
+	if err := json.Unmarshal(msg["content"], &ct); err != nil {
+		t.Fatalf("unmarshal content: %v", err)
+	}
+	if !IsEncryptedChunkXChaCha20(ct) {
+		t.Fatalf("content not encrypted: %q", SafePrefix(ct, 40))
+	}
+	pt, err := DecryptXChaCha20(ct, x25519Priv)
+	if err != nil {
+		t.Fatalf("decrypt content: %v", err)
+	}
+	if string(pt) != wantPlaintext {
+		t.Errorf("decrypted = %q, want %q", pt, wantPlaintext)
+	}
+}
+
+func assertContentNull(t *testing.T, msg map[string]json.RawMessage) {
+	t.Helper()
+	raw, ok := msg["content"]
+	if !ok {
+		t.Fatal("content field missing — expected null")
+	}
+	if !isJSONNull(raw) {
+		t.Fatalf("content = %s, want null", raw)
+	}
+}
+
+func assertFieldPresent(t *testing.T, msg map[string]json.RawMessage, field string) {
+	t.Helper()
+	if _, ok := msg[field]; !ok {
+		t.Errorf("field %q missing from message", field)
+	}
 }
 
 func TestEncryptImagePromptNearCloud(t *testing.T) {
