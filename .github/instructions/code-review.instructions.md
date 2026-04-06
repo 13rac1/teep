@@ -68,6 +68,18 @@ for security validation.
 - Use `Connection: close` or equivalent to prevent TLS connection reuse
   across attestation boundaries.
 
+## Plan Compliance Review
+
+If the requested review contains a removed plan file along with code changes, then the code changes are meant to implement the removed plan.
+
+In addition to ensuring that the code meets the above review requirements, verify:
+
+- All behaviors and features of the plan are implemented, with test coverage.
+- All phases of the plan have been executed with clean design.
+- Security and reliability of the surrounding code and related components have not been impacted.
+- Any problems or requirements that the plan enumerates are addressed and verified with tests.
+- Appropriate documentation has been updated.
+
 ## Review Style
 
 - Be specific: cite the code location and explain the risk.
