@@ -136,7 +136,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		}, nil
 	}
 
-	chatBody, session, chatHeaders, err := h.encryptChat(req, report, signingKey)
+	encBody, session, e2eeHeaders, err := h.encryptBody(req, report, signingKey)
 	if err != nil {
 		return nil, err
 	}
@@ -145,11 +145,11 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	headers.Set("Host", domain)
 	headers.Set("Authorization", "Bearer "+h.apiKey)
 	headers.Set("Connection", "close")
-	for k := range chatHeaders {
-		headers.Set(k, chatHeaders.Get(k))
+	for k := range e2eeHeaders {
+		headers.Set(k, e2eeHeaders.Get(k))
 	}
 
-	if err := neardirect.WriteHTTPRequest(bw, req.Method, req.Path, headers, chatBody); err != nil {
+	if err := neardirect.WriteHTTPRequest(bw, req.Method, req.Path, headers, encBody); err != nil {
 		if session != nil {
 			session.Zero()
 		}
@@ -171,12 +171,12 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	}, nil
 }
 
-// encryptChat handles NearCloud E2EE encryption of chat messages. On error, any
-// allocated session is zeroed before returning. On success, the caller is
-// responsible for zeroing the session on subsequent errors.
-func (h *PinnedHandler) encryptChat(
+// encryptBody handles NearCloud E2EE encryption, dispatching by endpoint path.
+// On error, any allocated session is zeroed before returning. On success, the
+// caller is responsible for zeroing the session on subsequent errors.
+func (h *PinnedHandler) encryptBody(
 	req *provider.PinnedRequest, report *attestation.VerificationReport, signingKey string,
-) (chatBody []byte, session e2ee.Decryptor, extraHeaders http.Header, err error) {
+) (encBody []byte, session e2ee.Decryptor, extraHeaders http.Header, err error) {
 	if !req.E2EE {
 		return req.Body, nil, nil, nil
 	}
@@ -195,7 +195,9 @@ func (h *PinnedHandler) encryptChat(
 		return nil, nil, nil, errors.New("E2EE requested but no signing key available")
 	}
 
-	encBody, sess, err := e2ee.EncryptChatMessagesNearCloud(req.Body, sk)
+	raw := &attestation.RawAttestation{SigningKey: sk}
+	enc := NewE2EE()
+	result, sess, _, err := enc.EncryptRequest(req.Body, raw, req.Path)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("NearCloud E2EE encrypt: %w", err)
 	}
@@ -205,12 +207,17 @@ func (h *PinnedHandler) encryptChat(
 	// to pin requests to a specific model instance by signing key, which
 	// causes 502 "model unavailable" errors when the instance restarts or
 	// scales. The official NEAR AI E2EE protocol does not require it.
+	ncSess, ok := sess.(*e2ee.NearCloudSession)
+	if !ok {
+		sess.Zero()
+		return nil, nil, nil, errors.New("NearCloud E2EE: unexpected session type")
+	}
 	hdrs := make(http.Header)
 	hdrs.Set("X-Signing-Algo", "ed25519")
-	hdrs.Set("X-Client-Pub-Key", sess.ClientEd25519PubHex())
+	hdrs.Set("X-Client-Pub-Key", ncSess.ClientEd25519PubHex())
 	hdrs.Set("X-Encryption-Version", "2")
 
-	return encBody, sess, hdrs, nil
+	return result, sess, hdrs, nil
 }
 
 // readChatResponse reads an HTTP response from a buffered reader. The caller

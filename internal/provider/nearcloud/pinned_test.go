@@ -1168,15 +1168,15 @@ func TestMergeComposeDigests(t *testing.T) {
 	})
 }
 
-func TestEncryptChat_NoE2EE(t *testing.T) {
+func TestEncryptBody_NoE2EE(t *testing.T) {
 	h := &PinnedHandler{}
 	body := []byte(`{"messages":[]}`)
-	chatBody, session, headers, err := h.encryptChat(
+	chatBody, session, headers, err := h.encryptBody(
 		&provider.PinnedRequest{Body: body},
 		nil, "",
 	)
 	if err != nil {
-		t.Fatalf("encryptChat: %v", err)
+		t.Fatalf("encryptBody: %v", err)
 	}
 	t.Logf("chatBody len: %d, session: %v, headers: %v", len(chatBody), session, headers)
 
@@ -1191,10 +1191,10 @@ func TestEncryptChat_NoE2EE(t *testing.T) {
 	}
 }
 
-func TestEncryptChat_NoSigningKey(t *testing.T) {
+func TestEncryptBody_NoSigningKey(t *testing.T) {
 	h := &PinnedHandler{}
-	_, _, _, err := h.encryptChat(
-		&provider.PinnedRequest{E2EE: true, Body: []byte(`{}`)},
+	_, _, _, err := h.encryptBody(
+		&provider.PinnedRequest{E2EE: true, Path: "/v1/chat/completions", Body: []byte(`{}`)},
 		nil, "",
 	)
 	t.Logf("error: %v", err)
@@ -1206,17 +1206,18 @@ func TestEncryptChat_NoSigningKey(t *testing.T) {
 	}
 }
 
-func TestEncryptChat_UsesRequestSigningKey(t *testing.T) {
+func TestEncryptBody_UsesRequestSigningKey(t *testing.T) {
 	// Generate a valid Ed25519 key pair (64 hex chars = 32 bytes public key).
 	h := &PinnedHandler{}
 
 	// A valid 64-hex-char Ed25519 public key (from test fixtures).
 	sigKey := "04aaaa0000000000000000000000000000000000000000000000000000000000"
 
-	chatBody, session, headers, err := h.encryptChat(
+	chatBody, session, headers, err := h.encryptBody(
 		&provider.PinnedRequest{
 			E2EE:       true,
 			SigningKey: sigKey,
+			Path:       "/v1/chat/completions",
 			Body:       []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
 		},
 		nil, "", // no report, no attestation signing key — uses req.SigningKey
@@ -1233,7 +1234,7 @@ func TestEncryptChat_UsesRequestSigningKey(t *testing.T) {
 	}
 
 	if err != nil {
-		t.Fatalf("encryptChat: %v", err)
+		t.Fatalf("encryptBody: %v", err)
 	}
 	if session == nil {
 		t.Fatal("session should be non-nil with E2EE")
