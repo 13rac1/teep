@@ -41,7 +41,7 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
    for that model — same safety guard as the current `--update-config`.
 
 **Flags**:
-- `--model <name>` / `--all-models` (required, mutually exclusive)
+- `--model <name>` (required unless `--all-models` is set; supports one or more models, either as a comma-separated list such as `--model <m1>,<m2>` and/or by repeating the flag) / `--all-models` (required unless `--model` is set; mutually exclusive with `--model`)
 - `--cache-file <path>` (optional override)
 - `--offline` is NOT supported on `teep cache` — caching requires online access
 
@@ -320,7 +320,16 @@ It is normally generated and refreshed by `teep cache`, but operators may
 inspect it and hand-edit it when needed. Any manual change to cached entries,
 including pinned TDX register values, is an explicit local policy change and
 must be treated as operator-authored trust data rather than re-verified cached
-evidence. Strict unmarshalling (`KnownFields(true)`) rejects unknown fields on
+evidence. Because the cache contains trust anchors (for example pinned TDX
+measurements and verified image provenance), cache file access must be
+protected with the same strict local file safety checks used for sensitive
+config: on every read, validate owner and permissions using the same policy as
+`internal/config/config.go` (`checkFilePermissions`), and fail closed if the
+file is not owned by the expected user or is readable/writable by other users
+or groups (for example, require `0600`-style permissions). On write, create or
+replace the cache file with restrictive permissions explicitly set (do not rely
+on umask), then re-validate ownership and permissions before accepting the
+result. Strict unmarshalling (`KnownFields(true)`) rejects unknown fields on
 read (fail-closed).
 
 ```yaml
