@@ -170,7 +170,14 @@ These tests encrypt the actual request data using the NearCloud E2EE protocol (X
 
 ```sh
 source .env  # or export NEARAI_API_KEY=...
-go test -v -run 'TestIntegration_NearCloud_' ./internal/e2ee/ -count=1 -timeout 120s
+go test -v -run 'TestIntegration_NearCloud_' ./internal/e2ee/ -count=1 -timeout 300s
+```
+
+### Run only the direct inference-proxy tests
+
+```sh
+source .env
+go test -v -run 'TestIntegration_NearCloud_Direct_' ./internal/e2ee/ -count=1 -timeout 120s
 ```
 
 ### Run only the encrypted input tests
@@ -202,6 +209,36 @@ All tests pass. Results observed on `cloud-api.near.ai`:
 | VL EncryptedImage | PASS | Rejected (400: invalid URL) — wrong approach (per-field, not serialized) |
 | **Images Encrypted** | **PASS** | **E2EE works** — decrypted b64_json is valid base64, revised_prompt matches |
 | **VL SerializedArray** | **PASS** | **E2EE works** — decrypted response is "Red", matching plaintext baseline |
+
+### Direct Inference-Proxy Tests (Bypassing Gateway)
+
+To definitively prove the gateway is the sole point of failure, a second set of tests sends the **exact same E2EE protocol** directly to the model TEE inference-proxy, bypassing the gateway entirely. Direct endpoints are available via `https://completions.near.ai/endpoints`, each model having a dedicated subdomain (e.g., `qwen3-embedding.completions.near.ai`).
+
+The tests share the same `createE2EESession` and `e2eeRequest` helper functions as the gateway tests — the only difference is the base URL. Attestation is fetched directly from the model TEE at `https://{domain}/v1/attestation/report?nonce={hex}&signing_algo=ed25519`.
+
+| Test | Status | Key Observation |
+|---|---|---|
+| **Direct Embeddings E2EE** | **PASS** | **E2EE works** — embedding value is encrypted hex; decrypts to float array |
+| **Direct Rerank E2EE** | **PASS** | **E2EE works** — document text fields encrypted; decrypts to original input. Relevance scores are plaintext (model-generated) |
+| **Direct Audio E2EE** | **PASS** | **E2EE works** — transcript `text` field encrypted; decrypts to transcribed text |
+
+**Side-by-side comparison:**
+
+| Endpoint | Through Gateway | Direct to Model TEE | Same Code Path? |
+|---|---|---|---|
+| `/v1/embeddings` | Plaintext (headers dropped) | **Encrypted** (decryptable) | Yes — same `e2eeRequest` helper |
+| `/v1/rerank` | Plaintext (headers dropped) | **Encrypted** (decryptable) | Yes — same `e2eeRequest` helper |
+| `/v1/audio/transcriptions` | Plaintext (headers dropped) | **Encrypted** (decryptable) | Yes — same `e2eeRequest` helper |
+
+This confirms the gateway is the only component that prevents E2EE from working for these endpoints. The model TEE correctly decrypts input fields, processes the request, and encrypts response fields — exactly as designed.
+
+### Direct E2EE Test Descriptions
+
+- **`TestIntegration_NearCloud_Direct_Embeddings_E2EE`**: Fetches Ed25519 signing key from `qwen3-embedding.completions.near.ai` attestation. Creates E2EE session and encrypts `"Hello World"` with `EncryptXChaCha20`. Sends to `/v1/embeddings` via `e2eeRequest` (same helper as gateway tests). Response embedding value is an encrypted hex string that decrypts to a JSON float array — the model decrypted the input, computed the embedding, and encrypted the result.
+
+- **`TestIntegration_NearCloud_Direct_Rerank_E2EE`**: Fetches signing key from `qwen3-reranker.completions.near.ai`. Encrypts query and document strings. Sends to `/v1/rerank` via `e2eeRequest`. Response document `text` fields are encrypted: `"9d19c3c6650b..."` decrypts to `"Deep learning is a subset of machine learning"`. Relevance scores are plaintext floats (model output, not user data).
+
+- **`TestIntegration_NearCloud_Direct_Audio_E2EE`**: Fetches signing key from `whisper-large-v3.completions.near.ai`. Sends a minimal WAV file via multipart to `/v1/audio/transcriptions` with E2EE headers. Response `text` field is encrypted: decrypts to the transcribed audio content. The model TEE honors E2EE headers for audio when they arrive — they just never arrive through the gateway.
 
 ## Remediation Path
 

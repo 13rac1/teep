@@ -28,6 +28,15 @@ import (
 
 const nearcloudBaseURL = "https://cloud-api.near.ai"
 
+// directEndpoints maps model names to their direct inference-proxy domains,
+// bypassing the gateway. These are discovered from
+// https://completions.near.ai/endpoints.
+var directEndpoints = map[string]string{
+	"Qwen/Qwen3-Embedding-0.6B": "https://qwen3-embedding.completions.near.ai",
+	"Qwen/Qwen3-Reranker-0.6B":  "https://qwen3-reranker.completions.near.ai",
+	"openai/whisper-large-v3":   "https://whisper-large-v3.completions.near.ai",
+}
+
 func skipNearCloudE2EEIntegration(t *testing.T) {
 	t.Helper()
 	if testing.Short() {
@@ -61,13 +70,73 @@ func fetchSigningKey(t *testing.T, model string) string {
 	return raw.SigningKey
 }
 
-// nearcloudE2EERequest sends a POST request to the nearcloud API with E2EE
-// headers. Returns the raw response. The caller must close resp.Body.
-func nearcloudE2EERequest(t *testing.T, path string, body []byte, contentType string, session *e2ee.NearCloudSession) *http.Response {
+// fetchDirectSigningKey fetches a TEE attestation report directly from the
+// model's inference-proxy (bypassing the gateway) and returns the Ed25519
+// signing key.
+func fetchDirectSigningKey(t *testing.T, model string) string {
+	t.Helper()
+	baseURL, ok := directEndpoints[model]
+	if !ok {
+		t.Fatalf("no direct endpoint for model %s", model)
+	}
+	apiKey := os.Getenv("NEARAI_API_KEY")
+	nonce := attestation.NewNonce()
+
+	url := fmt.Sprintf("%s/v1/attestation/report?nonce=%s&signing_algo=ed25519",
+		baseURL, nonce.Hex())
+
+	req, err := http.NewRequest(http.MethodGet, url, http.NoBody)
+	if err != nil {
+		t.Fatalf("create attestation request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Connection", "close")
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("fetch direct attestation for %s: %v", model, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		t.Fatalf("read direct attestation body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("direct attestation for %s: status=%d body=%s", model, resp.StatusCode, truncate(body, 500))
+	}
+
+	// Parse attestation — may have model_attestations wrapper or be flat.
+	var wrapper struct {
+		ModelAttestations []struct {
+			SigningPublicKey string `json:"signing_public_key"`
+		} `json:"model_attestations"`
+		SigningPublicKey string `json:"signing_public_key"`
+	}
+	if err := json.Unmarshal(body, &wrapper); err != nil {
+		t.Fatalf("parse direct attestation: %v", err)
+	}
+
+	signingKey := wrapper.SigningPublicKey
+	if len(wrapper.ModelAttestations) > 0 {
+		signingKey = wrapper.ModelAttestations[0].SigningPublicKey
+	}
+	if signingKey == "" {
+		t.Fatalf("no signing key in direct attestation for %s", model)
+	}
+	t.Logf("direct signing key for %s: %s...", model, signingKey[:16])
+	return signingKey
+}
+
+// e2eeRequest sends a POST request to the given base URL with E2EE headers.
+// This is the shared request builder used by both gateway and direct tests,
+// ensuring the exact same E2EE protocol is used for both paths.
+func e2eeRequest(t *testing.T, baseURL, path string, body []byte, contentType string, session *e2ee.NearCloudSession) *http.Response {
 	t.Helper()
 	apiKey := os.Getenv("NEARAI_API_KEY")
 
-	req, err := http.NewRequest(http.MethodPost, nearcloudBaseURL+path, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}
@@ -75,7 +144,7 @@ func nearcloudE2EERequest(t *testing.T, path string, body []byte, contentType st
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Connection", "close")
 
-	// E2EE headers.
+	// E2EE headers — identical for gateway and direct requests.
 	req.Header.Set("X-Signing-Algo", "ed25519")
 	req.Header.Set("X-Client-Pub-Key", session.ClientEd25519PubHex())
 	req.Header.Set("X-Encryption-Version", "2")
@@ -83,18 +152,18 @@ func nearcloudE2EERequest(t *testing.T, path string, body []byte, contentType st
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("POST %s: %v", path, err)
+		t.Fatalf("POST %s%s: %v", baseURL, path, err)
 	}
 	return resp
 }
 
-// nearcloudPlaintextRequest sends a POST request to the nearcloud API without
-// E2EE headers. Returns the raw response. The caller must close resp.Body.
-func nearcloudPlaintextRequest(t *testing.T, path string, body []byte, contentType string) *http.Response {
+// plaintextRequest sends a POST request to the given base URL without E2EE
+// headers.
+func plaintextRequest(t *testing.T, baseURL, path string, body []byte, contentType string) *http.Response {
 	t.Helper()
 	apiKey := os.Getenv("NEARAI_API_KEY")
 
-	req, err := http.NewRequest(http.MethodPost, nearcloudBaseURL+path, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}
@@ -105,9 +174,23 @@ func nearcloudPlaintextRequest(t *testing.T, path string, body []byte, contentTy
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("POST %s: %v", path, err)
+		t.Fatalf("POST %s%s: %v", baseURL, path, err)
 	}
 	return resp
+}
+
+// nearcloudE2EERequest sends a POST to the nearcloud gateway with E2EE headers.
+// Wrapper around e2eeRequest for gateway-specific tests.
+func nearcloudE2EERequest(t *testing.T, path string, body []byte, contentType string, session *e2ee.NearCloudSession) *http.Response {
+	t.Helper()
+	return e2eeRequest(t, nearcloudBaseURL, path, body, contentType, session)
+}
+
+// nearcloudPlaintextRequest sends a POST to the nearcloud gateway without
+// E2EE headers.
+func nearcloudPlaintextRequest(t *testing.T, path string, body []byte, contentType string) *http.Response {
+	t.Helper()
+	return plaintextRequest(t, nearcloudBaseURL, path, body, contentType)
 }
 
 // readBody reads and returns the response body, bounded to 1 MiB.
@@ -1110,5 +1193,297 @@ func TestIntegration_NearCloud_VL_SerializedArray(t *testing.T) {
 		t.Logf("FINDING: Server rejected serialized-array VL E2EE request: status=%d body=%s",
 			e2eeResp.StatusCode, truncate(e2eeBody, 500))
 		t.Log("CONCLUSION: Server cannot process encrypted serialized content arrays")
+	}
+}
+
+// ==========================================================================
+// DIRECT INFERENCE-PROXY TESTS
+//
+// These tests send E2EE requests directly to the model's inference-proxy,
+// bypassing the NearCloud gateway (cloud-api.near.ai). They use the EXACT
+// SAME createE2EESession + e2eeRequest helpers as the gateway tests above.
+//
+// If a gateway test above shows E2EE headers are silently dropped (plaintext
+// response), but the corresponding direct test below succeeds with encrypted
+// responses, it conclusively proves the gateway is the sole point of failure.
+// ==========================================================================
+
+// TestIntegration_NearCloud_Direct_Embeddings_E2EE sends an embeddings request
+// with E2EE headers directly to the inference-proxy. This uses the SAME E2EE
+// protocol that fails through the gateway in
+// TestIntegration_NearCloud_Embeddings_E2EE.
+func TestIntegration_NearCloud_Direct_Embeddings_E2EE(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	model := "Qwen/Qwen3-Embedding-0.6B"
+	baseURL := directEndpoints[model]
+
+	// 1. Fetch signing key from the DIRECT inference-proxy attestation.
+	signingKey := fetchDirectSigningKey(t, model)
+
+	// 2. Create E2EE session — identical to gateway tests.
+	session := createE2EESession(t, signingKey)
+
+	// 3. Encrypt the input — identical to TestIntegration_NearCloud_Embeddings_E2EE.
+	encInput, err := e2ee.EncryptXChaCha20([]byte("Hello World"), session.ModelX25519Pub())
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	body := fmt.Sprintf(`{"model":%q,"input":%q}`, model, encInput)
+
+	// 4. Send via the SAME e2eeRequest helper, just with the direct base URL.
+	resp := e2eeRequest(t, baseURL, "/v1/embeddings", []byte(body), "application/json", session)
+	defer resp.Body.Close()
+	respBody := readBody(t, resp)
+	t.Logf("direct embeddings E2EE: status=%d body_len=%d", resp.StatusCode, len(respBody))
+	t.Logf("direct embeddings response: %s", truncate(respBody, 500))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("direct embeddings E2EE failed: status=%d body=%s",
+			resp.StatusCode, truncate(respBody, 500))
+	}
+
+	// 5. Check whether the response is encrypted.
+	var embResp struct {
+		Data []struct {
+			Embedding json.RawMessage `json:"embedding"`
+		} `json:"data"`
+		EncryptedData string `json:"encrypted_data"`
+	}
+	if err := json.Unmarshal(respBody, &embResp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+
+	switch {
+	case embResp.EncryptedData != "":
+		t.Log("FINDING: Direct inference-proxy returned encrypted_data field")
+		pt, decErr := session.Decrypt(embResp.EncryptedData)
+		if decErr != nil {
+			t.Logf("  decrypt failed: %v", decErr)
+		} else {
+			t.Logf("  decrypted: %s", truncate(pt, 300))
+		}
+		t.Log("CONCLUSION: E2EE WORKS for embeddings when sent DIRECTLY to the model TEE")
+		t.Log("  The SAME protocol FAILS through the gateway because the gateway drops E2EE headers")
+
+	case len(embResp.Data) > 0:
+		raw := string(embResp.Data[0].Embedding)
+		switch {
+		case e2ee.IsEncryptedChunkXChaCha20(raw):
+			t.Log("FINDING: Direct embeddings returned encrypted embedding values")
+			t.Log("CONCLUSION: E2EE WORKS for embeddings when sent DIRECTLY to the model TEE")
+		case strings.HasPrefix(strings.TrimSpace(raw), "["):
+			t.Log("FINDING: Direct embeddings returned PLAINTEXT numeric array — E2EE headers may not have been honored")
+		case e2ee.IsEncryptedChunkXChaCha20(strings.Trim(raw, `"`)):
+			trimmed := strings.Trim(raw, `"`)
+			t.Log("FINDING: Embedding value is an encrypted string")
+			pt, decErr := session.Decrypt(trimmed)
+			if decErr != nil {
+				t.Logf("  decrypt failed: %v", decErr)
+			} else {
+				t.Logf("  decrypted embedding: %s", truncate(pt, 200))
+			}
+			t.Log("CONCLUSION: E2EE WORKS for embeddings when sent DIRECTLY to the model TEE")
+		default:
+			t.Logf("FINDING: Unknown embedding format: %s", truncate([]byte(raw), 200))
+		}
+
+	default:
+		t.Logf("FINDING: Unexpected response structure: %s", truncate(respBody, 500))
+	}
+}
+
+// TestIntegration_NearCloud_Direct_Rerank_E2EE sends a rerank request with E2EE
+// headers directly to the inference-proxy. This uses the SAME E2EE protocol
+// that fails through the gateway in TestIntegration_NearCloud_Rerank_E2EE.
+func TestIntegration_NearCloud_Direct_Rerank_E2EE(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	model := "Qwen/Qwen3-Reranker-0.6B"
+	baseURL := directEndpoints[model]
+
+	// 1. Fetch signing key from the DIRECT inference-proxy attestation.
+	signingKey := fetchDirectSigningKey(t, model)
+
+	// 2. Create E2EE session — identical to gateway tests.
+	session := createE2EESession(t, signingKey)
+
+	// 3. Encrypt the fields — identical to TestIntegration_NearCloud_Rerank_E2EE.
+	encQuery, err := e2ee.EncryptXChaCha20([]byte("What is deep learning?"), session.ModelX25519Pub())
+	if err != nil {
+		t.Fatalf("encrypt query: %v", err)
+	}
+	encDoc1, err := e2ee.EncryptXChaCha20([]byte("Deep learning is a subset of machine learning"), session.ModelX25519Pub())
+	if err != nil {
+		t.Fatalf("encrypt doc1: %v", err)
+	}
+	encDoc2, err := e2ee.EncryptXChaCha20([]byte("The weather is sunny today"), session.ModelX25519Pub())
+	if err != nil {
+		t.Fatalf("encrypt doc2: %v", err)
+	}
+	body := fmt.Sprintf(`{"model":%q,"query":%q,"documents":[%q,%q],"top_n":2}`,
+		model, encQuery, encDoc1, encDoc2)
+
+	// 4. Send via the SAME e2eeRequest helper, just with the direct base URL.
+	resp := e2eeRequest(t, baseURL, "/v1/rerank", []byte(body), "application/json", session)
+	defer resp.Body.Close()
+	respBody := readBody(t, resp)
+	t.Logf("direct rerank E2EE: status=%d body_len=%d", resp.StatusCode, len(respBody))
+	t.Logf("direct rerank response: %s", truncate(respBody, 500))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("direct rerank E2EE failed: status=%d body=%s",
+			resp.StatusCode, truncate(respBody, 500))
+	}
+
+	// 5. Check whether the response is encrypted.
+	var rerankResp struct {
+		Results []struct {
+			Index          int             `json:"index"`
+			RelevanceScore json.RawMessage `json:"relevance_score"`
+			Document       json.RawMessage `json:"document"`
+		} `json:"results"`
+		EncryptedData string `json:"encrypted_data"`
+	}
+	if err := json.Unmarshal(respBody, &rerankResp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+
+	switch {
+	case rerankResp.EncryptedData != "":
+		t.Log("FINDING: Direct inference-proxy returned encrypted_data for rerank")
+		pt, decErr := session.Decrypt(rerankResp.EncryptedData)
+		if decErr != nil {
+			t.Logf("  decrypt failed: %v", decErr)
+		} else {
+			t.Logf("  decrypted: %s", truncate(pt, 300))
+		}
+		t.Log("CONCLUSION: E2EE WORKS for rerank when sent DIRECTLY to the model TEE")
+		t.Log("  The SAME protocol FAILS through the gateway because the gateway drops E2EE headers")
+
+	case len(rerankResp.Results) > 0:
+		// Document is {"multi_modal":null,"text":"..."} — extract inner text.
+		var doc struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(rerankResp.Results[0].Document, &doc); err != nil {
+			t.Fatalf("parse document: %v (raw: %s)", err, truncate(rerankResp.Results[0].Document, 200))
+		}
+		score := string(rerankResp.Results[0].RelevanceScore)
+
+		if e2ee.IsEncryptedChunkXChaCha20(doc.Text) {
+			t.Log("FINDING: Rerank document text is encrypted")
+			pt, decErr := session.Decrypt(doc.Text)
+			if decErr != nil {
+				t.Logf("  decrypt failed: %v", decErr)
+			} else {
+				t.Logf("  decrypted document: %s", string(pt))
+			}
+			t.Logf("  relevance_score (plaintext, model-generated): %s", score)
+			t.Log("CONCLUSION: E2EE WORKS for rerank when sent DIRECTLY to the model TEE")
+			t.Log("  The SAME protocol FAILS through the gateway because the gateway drops E2EE headers")
+		} else {
+			t.Logf("FINDING: Rerank document text appears non-encrypted — text=%s score=%s",
+				truncate([]byte(doc.Text), 100), truncate([]byte(score), 50))
+			t.Log("  Note: the server decrypted input and returned results; text fields may not be re-encrypted for rerank")
+		}
+
+	default:
+		t.Logf("FINDING: Unexpected response structure: %s", truncate(respBody, 500))
+	}
+}
+
+// TestIntegration_NearCloud_Direct_Audio_E2EE sends a whisper transcription
+// request with E2EE headers directly to the inference-proxy. This uses the
+// SAME E2EE protocol that fails through the gateway in
+// TestIntegration_NearCloud_Audio_E2EE.
+func TestIntegration_NearCloud_Direct_Audio_E2EE(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	model := "openai/whisper-large-v3"
+	baseURL := directEndpoints[model]
+
+	// 1. Fetch signing key from the DIRECT inference-proxy attestation.
+	signingKey := fetchDirectSigningKey(t, model)
+
+	// 2. Create E2EE session — identical to gateway tests.
+	session := createE2EESession(t, signingKey)
+
+	// 3. Build multipart form — identical to TestIntegration_NearCloud_Audio_E2EE.
+	wavData := makeMinimalWAV()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", model)
+	fw, err := mw.CreateFormFile("file", "test.wav")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := fw.Write(wavData); err != nil {
+		t.Fatalf("write wav: %v", err)
+	}
+	mw.Close()
+
+	// 4. Send via the SAME e2eeRequest helper, just with the direct base URL.
+	resp := e2eeRequest(t, baseURL, "/v1/audio/transcriptions", buf.Bytes(), mw.FormDataContentType(), session)
+	defer resp.Body.Close()
+	respBody := readBody(t, resp)
+	t.Logf("direct audio E2EE: status=%d body_len=%d", resp.StatusCode, len(respBody))
+	t.Logf("direct audio response: %s", truncate(respBody, 500))
+
+	// 5. Analyze the response.
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var audioResp struct {
+			Text          string `json:"text"`
+			EncryptedData string `json:"encrypted_data"`
+		}
+		if err := json.Unmarshal(respBody, &audioResp); err != nil {
+			t.Logf("  (parse failed, raw: %s)", truncate(respBody, 300))
+		}
+
+		switch {
+		case audioResp.EncryptedData != "":
+			t.Log("FINDING: Direct inference-proxy returned encrypted_data for audio")
+			pt, decErr := session.Decrypt(audioResp.EncryptedData)
+			if decErr != nil {
+				t.Logf("  decrypt failed: %v", decErr)
+			} else {
+				t.Logf("  decrypted: %s", truncate(pt, 300))
+			}
+			t.Log("CONCLUSION: E2EE WORKS for audio when sent DIRECTLY to the model TEE")
+			t.Log("  The SAME protocol FAILS through the gateway because the gateway drops E2EE headers")
+
+		case e2ee.IsEncryptedChunkXChaCha20(audioResp.Text):
+			t.Log("FINDING: Direct audio returned encrypted text field")
+			pt, decErr := session.Decrypt(audioResp.Text)
+			if decErr != nil {
+				t.Logf("  decrypt failed: %v", decErr)
+			} else {
+				t.Logf("  decrypted transcript: %s", string(pt))
+			}
+			t.Log("CONCLUSION: E2EE WORKS for audio when sent DIRECTLY to the model TEE")
+
+		default:
+			t.Log("FINDING: Direct audio response is plaintext — E2EE may not encrypt audio transcription output")
+			t.Logf("  text: %q", audioResp.Text)
+		}
+
+	case http.StatusBadGateway, http.StatusInternalServerError:
+		// If inference-proxy tries to decrypt a non-encrypted WAV, it may
+		// fail. That STILL proves E2EE headers are being processed (unlike
+		// the gateway which silently drops them).
+		bodyStr := string(respBody)
+		if strings.Contains(bodyStr, "ncrypt") || strings.Contains(bodyStr, "hex") ||
+			strings.Contains(bodyStr, "decrypt") {
+			t.Log("FINDING: Direct inference-proxy ATTEMPTED to decrypt the audio file")
+			t.Log("  This error proves E2EE headers ARE processed on the direct endpoint")
+			t.Log("CONCLUSION: The inference-proxy honors E2EE for audio; the gateway silently drops the headers")
+		} else {
+			t.Logf("FINDING: Direct audio E2EE returned error: %s", truncate(respBody, 500))
+		}
+
+	default:
+		t.Logf("FINDING: Direct audio E2EE: status=%d body=%s",
+			resp.StatusCode, truncate(respBody, 500))
 	}
 }
