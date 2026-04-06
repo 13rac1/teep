@@ -474,7 +474,7 @@ func TestFetchAttestation_SendsCorrectRequests(t *testing.T) {
 }
 
 func TestPreparer_SetsAuthHeader(t *testing.T) {
-	p := chutes.NewPreparer("sk-test-123", "/v1/chat/completions", "https://api.chutes.ai")
+	p := chutes.NewPreparer("sk-test-123", "https://api.chutes.ai")
 	req, _ := http.NewRequest(http.MethodPost, "https://llm.chutes.ai/v1/chat/completions", http.NoBody)
 
 	if err := p.PrepareRequest(req, nil, nil, false, ""); err != nil {
@@ -496,7 +496,7 @@ func TestPreparer_RejectsInvalidAPIBaseURL(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p := chutes.NewPreparer("key", "/v1/chat/completions", tc.apiBaseURL)
+			p := chutes.NewPreparer("key", tc.apiBaseURL)
 			req, _ := http.NewRequest(http.MethodPost, "https://llm.chutes.ai/v1/chat/completions", http.NoBody)
 			meta := &e2ee.ChutesE2EE{
 				ChuteID:    "chute-uuid",
@@ -515,7 +515,7 @@ func TestPreparer_RejectsInvalidAPIBaseURL(t *testing.T) {
 }
 
 func TestPreparer_E2EE_RejectsEmptyPath(t *testing.T) {
-	p := chutes.NewPreparer("key", "/v1/chat/completions", "https://api.chutes.ai")
+	p := chutes.NewPreparer("key", "https://api.chutes.ai")
 	req, _ := http.NewRequest(http.MethodPost, "https://llm.chutes.ai/v1/chat/completions", http.NoBody)
 	meta := &e2ee.ChutesE2EE{
 		ChuteID:    "chute-uuid",
@@ -541,7 +541,7 @@ func TestPreparer_E2EE_MultiPath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p := chutes.NewPreparer("key", "/v1/chat/completions", "https://api.chutes.ai")
+			p := chutes.NewPreparer("key", "https://api.chutes.ai")
 			req, _ := http.NewRequest(http.MethodPost, "https://llm.chutes.ai"+tc.path, http.NoBody)
 			meta := &e2ee.ChutesE2EE{
 				ChuteID:    "chute-uuid",

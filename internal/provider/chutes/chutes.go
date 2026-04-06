@@ -309,9 +309,8 @@ type Preparer struct {
 // NewPreparer returns a Chutes Preparer configured with the given API key
 // and platform API base URL. The apiBaseURL is used for E2EE invoke URL
 // rewriting (the LLM inference and platform APIs use different hosts).
-// The chatPath parameter is accepted for backward compatibility but ignored;
-// endpoint paths are now passed dynamically per-request via PrepareRequest.
-func NewPreparer(apiKey, chatPath, apiBaseURL string) *Preparer {
+// Endpoint paths are passed dynamically per-request via PrepareRequest.
+func NewPreparer(apiKey, apiBaseURL string) *Preparer {
 	return &Preparer{apiKey: apiKey, apiBaseURL: apiBaseURL}
 }
 
