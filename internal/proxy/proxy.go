@@ -166,6 +166,9 @@ func extractMultipartField(contentType string, body []byte, fieldName string) (s
 	for {
 		p, err := mr.NextPart()
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return "", fmt.Errorf("field %q not found in multipart body", fieldName)
+			}
 			return "", err
 		}
 		if p.FormName() == fieldName {
@@ -837,8 +840,11 @@ func parseJSONModelRequest(_ *http.Request, body []byte) (model string, stream b
 // parseAudioModelRequest extracts the model field from a multipart/form-data body.
 func parseAudioModelRequest(r *http.Request, body []byte) (model string, stream bool, err error) {
 	model, err = extractMultipartField(r.Header.Get("Content-Type"), body, "model")
-	if err != nil || model == "" {
-		return "", false, errors.New(`"model" form field is required`)
+	if err != nil {
+		return "", false, fmt.Errorf("extracting model from multipart body: %w", err)
+	}
+	if model == "" {
+		return "", false, errors.New(`"model" form field is empty`)
 	}
 	return model, false, nil
 }
@@ -923,8 +929,12 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 		}
 
 		endpointPath := ep.endpointPath(prov)
-		if endpointPath == "" && ep.unsupported != "" {
-			http.Error(w, fmt.Sprintf("provider %q does not support %s", prov.Name, ep.unsupported), http.StatusBadRequest)
+		if endpointPath == "" {
+			if ep.unsupported != "" {
+				http.Error(w, fmt.Sprintf("provider %q does not support %s", prov.Name, ep.unsupported), http.StatusBadRequest)
+			} else {
+				http.Error(w, fmt.Sprintf("provider %q has no path configured for %s", prov.Name, ep.name), http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -2054,6 +2064,24 @@ func (s *Server) handlePinnedNonChat(
 	}
 	if pinnedResp.SigningKey != "" {
 		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
+	}
+
+	// Fail closed if the upstream returned an E2EE session: handlePinnedNonChat
+	// has no decryptor for non-chat response schemas (images, embeddings, etc.).
+	// Forwarding the ciphertext would leak encrypted garbage to the client.
+	if pinnedResp.Session != nil {
+		defer pinnedResp.Session.Zero()
+		s.e2eeFailed.Store(providerModelKey{prov.Name, upstreamModel}, true)
+		s.cache.Delete(prov.Name, upstreamModel)
+		s.signingKeyCache.Delete(prov.Name, upstreamModel)
+		s.negCache.Record(prov.Name, upstreamModel)
+		ms := s.stats.getModelStats(prov.Name, upstreamModel)
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
+		slog.ErrorContext(ctx, "pinned non-chat endpoint received E2EE session; failing closed",
+			"provider", prov.Name, "model", upstreamModel, "path", endpointPath)
+		http.Error(w, "E2EE decryption not supported for this endpoint type", http.StatusBadGateway)
+		return
 	}
 
 	for key, vals := range pinnedResp.Header {
