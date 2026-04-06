@@ -244,3 +244,90 @@ func TestIntegration_NearCloud(t *testing.T) {
 			report.Passed, report.Passed+report.Failed+report.Skipped, report.Skipped, report.Failed)
 	})
 }
+
+// --------------------------------------------------------------------------
+// NearCloud Images E2EE integration (FLUX via gateway)
+// --------------------------------------------------------------------------
+
+// nearCloudImagesModel returns the model for nearcloud image generation tests.
+// Reuses the NEARAI_IMAGES_MODEL env var shared with neardirect tests.
+func nearCloudImagesModel() string {
+	if m := os.Getenv("NEARAI_IMAGES_MODEL"); m != "" {
+		return m
+	}
+	return "black-forest-labs/FLUX.2-klein-4B"
+}
+
+func TestIntegration_NearCloud_Images(t *testing.T) {
+	skipNearCloudIntegration(t)
+
+	t.Run("E2EE", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+		defer proxySrv.Close()
+
+		model := nearCloudImagesModel()
+		body := fmt.Sprintf(`{"model":%q,"prompt":"a solid red square","n":1,"size":"256x256","response_format":"b64_json"}`, model)
+
+		resp, err := integrationClient.Post(proxySrv.URL+"/v1/images/generations", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST images: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+
+		assertImagesResponse(t, respBody)
+	})
+}
+
+// --------------------------------------------------------------------------
+// NearCloud VL E2EE integration (serialize-and-encrypt via gateway)
+// --------------------------------------------------------------------------
+
+// nearCloudVLModel returns the model for nearcloud VL tests.
+// Reuses the NEARAI_VL_MODEL env var shared with neardirect tests.
+func nearCloudVLModel() string {
+	if m := os.Getenv("NEARAI_VL_MODEL"); m != "" {
+		return m
+	}
+	return "Qwen/Qwen3-VL-30B-A3B-Instruct"
+}
+
+func TestIntegration_NearCloud_VL(t *testing.T) {
+	skipNearCloudIntegration(t)
+
+	t.Run("E2EE", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+		defer proxySrv.Close()
+
+		model := nearCloudVLModel()
+		body := fmt.Sprintf(`{
+			"model": %q,
+			"messages": [{
+				"role": "user",
+				"content": [
+					{"type": "text", "text": "What color is this image? Answer in one word."},
+					{"type": "image_url", "image_url": {"url": "data:image/png;base64,%s"}}
+				]
+			}],
+			"stream": true,
+			"max_tokens": 50
+		}`, model, testPNG())
+
+		resp, err := integrationClient.Post(proxySrv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST chat (VL E2EE): %v", err)
+		}
+		defer resp.Body.Close()
+
+		assertStreamResponse(t, resp)
+	})
+}
