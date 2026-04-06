@@ -32,7 +32,9 @@ const (
 	DefaultListenAddr = "127.0.0.1:8337"
 
 	// AttestationTimeout is the HTTP client timeout for attestation fetches.
-	AttestationTimeout = 30 * time.Second
+	// 45 seconds accommodates Chutes' multi-GPU evidence endpoint which
+	// consistently takes ~30 seconds for large TEE deployments.
+	AttestationTimeout = 45 * time.Second
 )
 
 // DefaultAllowFail lists the factor names that are allowed to fail without
