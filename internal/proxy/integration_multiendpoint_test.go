@@ -130,6 +130,38 @@ func TestIntegration_Chutes_VL(t *testing.T) {
 	t.Logf("chutes VL model response: %q", content)
 }
 
+// TestIntegration_Chutes_VL_E2EE sends a real VL request with an image through
+// the proxy with E2EE enabled. Chutes whole-body ML-KEM encryption covers all
+// request fields including the VL content array.
+func TestIntegration_Chutes_VL_E2EE(t *testing.T) {
+	skipChutesIntegration(t)
+
+	proxySrv := newProxyServer(t, integrationChutesE2EEConfig(t))
+	defer proxySrv.Close()
+
+	model := chutesVLModel()
+	body := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{
+			"role": "user",
+			"content": [
+				{"type": "text", "text": "What color is this image? Answer in one word."},
+				{"type": "image_url", "image_url": {"url": "data:image/png;base64,%s"}}
+			]
+		}],
+		"stream": true,
+		"max_tokens": 50
+	}`, model, testPNG())
+
+	resp, err := integrationClient.Post(proxySrv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST chat (VL E2EE): %v", err)
+	}
+	defer resp.Body.Close()
+
+	assertStreamResponse(t, resp)
+}
+
 // --------------------------------------------------------------------------
 // NearDirect Images integration (FLUX)
 // --------------------------------------------------------------------------

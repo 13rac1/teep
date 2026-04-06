@@ -116,8 +116,16 @@ func TestIntegration_Chutes_EmbeddingsE2EE(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// PhalaCloud embeddings integration (expected fail-closed)
+// PhalaCloud embeddings integration
 // --------------------------------------------------------------------------
+
+// phalaCloudEmbeddingsModel returns the model for phalacloud embedding tests.
+func phalaCloudEmbeddingsModel() string {
+	if m := os.Getenv("PHALA_EMBEDDING_MODEL"); m != "" {
+		return m
+	}
+	return "qwen/qwen3-embedding-8b"
+}
 
 func TestIntegration_PhalaCloud_Embeddings(t *testing.T) {
 	skipPhalaCloudIntegration(t)
@@ -125,18 +133,25 @@ func TestIntegration_PhalaCloud_Embeddings(t *testing.T) {
 	proxySrv := newProxyServer(t, integrationPhalaCloudConfig(t))
 	defer proxySrv.Close()
 
-	body := `{"model":"qwen/qwen3-embedding-8b","input":"hello"}`
+	model := phalaCloudEmbeddingsModel()
+	body := `{"model":"` + model + `","input":"The quick brown fox jumps over the lazy dog"}`
 	resp, err := integrationClient.Post(proxySrv.URL+"/v1/embeddings", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST embeddings: %v", err)
 	}
 	defer resp.Body.Close()
 
-	// PhalaCloud has no E2EE; expect blocked (502) or provider-level failure.
-	// The proxy should not silently succeed.
-	t.Logf("phalacloud embeddings: status=%d (blocked is expected)", resp.StatusCode)
+	// PhalaCloud has no E2EE. Depending on E2EE enforcement policy, the
+	// proxy may block the request (502) or pass it through to the provider.
+	// Either outcome is valid — the important thing is the proxy does not
+	// silently claim E2EE is active when it is not.
+	t.Logf("phalacloud embeddings: status=%d", resp.StatusCode)
 	if resp.StatusCode == http.StatusOK {
-		t.Log("WARNING: phalacloud embeddings returned 200; verify E2EE policy enforcement")
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		assertEmbeddingsResponse(t, respBody)
 	}
 }
 
