@@ -270,7 +270,7 @@ func encryptMessageContent(msg map[string]json.RawMessage, idx int, session *Nea
 
 	// Null content: standard format for assistant tool-call messages.
 	// Pass through unchanged — the inference-proxy handles null content.
-	if isJSONNull(contentRaw) {
+	if IsJSONNull(contentRaw) {
 		return nil
 	}
 
@@ -290,8 +290,8 @@ func encryptMessageContent(msg map[string]json.RawMessage, idx int, session *Nea
 	return nil
 }
 
-// isJSONNull returns true if raw represents a JSON null value.
-func isJSONNull(raw json.RawMessage) bool {
+// IsJSONNull returns true if raw represents a JSON null value.
+func IsJSONNull(raw json.RawMessage) bool {
 	// Trim whitespace and check for literal "null".
 	for _, b := range raw {
 		switch b {

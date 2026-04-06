@@ -824,9 +824,9 @@ func TestIsJSONNull(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := isJSONNull(json.RawMessage(tt.input))
+			got := IsJSONNull(json.RawMessage(tt.input))
 			if got != tt.want {
-				t.Errorf("isJSONNull(%q) = %v, want %v", tt.input, got, tt.want)
+				t.Errorf("IsJSONNull(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -869,7 +869,7 @@ func assertContentNull(t *testing.T, msg map[string]json.RawMessage) {
 	if !ok {
 		t.Fatal("content field missing — expected null")
 	}
-	if !isJSONNull(raw) {
+	if !IsJSONNull(raw) {
 		t.Fatalf("content = %s, want null", raw)
 	}
 }

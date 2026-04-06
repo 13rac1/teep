@@ -35,30 +35,23 @@ func (v *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ st
 		return nil, nil, nil, fmt.Errorf("parse body for venice E2EE: %w", err)
 	}
 
-	var messages []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
+	// Parse messages preserving ALL fields — each message is a raw JSON map.
+	// Only the content field is encrypted in-place; all other fields
+	// (tool_calls, tool_call_id, name, reasoning_content, etc.) pass through.
+	var messages []map[string]json.RawMessage
 	if err := json.Unmarshal(full["messages"], &messages); err != nil {
 		session.Zero()
 		return nil, nil, nil, fmt.Errorf("parse messages for venice E2EE: %w", err)
 	}
 
-	type encMsg struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-	enc := make([]encMsg, len(messages))
 	for i, msg := range messages {
-		ciphertext, err := e2ee.EncryptVenice([]byte(msg.Content), session.ModelPubKey())
-		if err != nil {
+		if err := encryptVeniceMessageContent(msg, i, session); err != nil {
 			session.Zero()
-			return nil, nil, nil, fmt.Errorf("encrypt message %d: %w", i, err)
+			return nil, nil, nil, err
 		}
-		enc[i] = encMsg{Role: msg.Role, Content: ciphertext}
 	}
 
-	messagesJSON, err := json.Marshal(enc)
+	messagesJSON, err := json.Marshal(messages)
 	if err != nil {
 		session.Zero()
 		return nil, nil, nil, fmt.Errorf("marshal encrypted messages: %w", err)
@@ -72,4 +65,38 @@ func (v *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ st
 		return nil, nil, nil, fmt.Errorf("marshal venice E2EE request body: %w", err)
 	}
 	return out, session, nil, nil
+}
+
+// encryptVeniceMessageContent encrypts the content field of a single chat
+// message in-place using Venice E2EE (secp256k1 ECDH + AES-256-GCM).
+// Messages with null or absent content (e.g. assistant tool-call messages)
+// are left unchanged.
+func encryptVeniceMessageContent(msg map[string]json.RawMessage, idx int, session *e2ee.VeniceSession) error {
+	contentRaw, ok := msg["content"]
+	if !ok {
+		return nil // no content field at all (valid for some message types)
+	}
+
+	// Null content: standard format for assistant tool-call messages.
+	if e2ee.IsJSONNull(contentRaw) {
+		return nil
+	}
+
+	// Venice content is always a string — unmarshal to get decoded value.
+	var s string
+	if err := json.Unmarshal(contentRaw, &s); err != nil {
+		return fmt.Errorf("message %d: parse content: %w", idx, err)
+	}
+
+	ciphertext, err := e2ee.EncryptVenice([]byte(s), session.ModelPubKey())
+	if err != nil {
+		return fmt.Errorf("encrypt venice message %d: %w", idx, err)
+	}
+
+	ctJSON, err := json.Marshal(ciphertext)
+	if err != nil {
+		return fmt.Errorf("marshal encrypted content %d: %w", idx, err)
+	}
+	msg["content"] = ctJSON
+	return nil
 }
