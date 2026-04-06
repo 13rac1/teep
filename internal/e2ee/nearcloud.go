@@ -1,6 +1,7 @@
 package e2ee
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -291,20 +292,10 @@ func encryptMessageContent(msg map[string]json.RawMessage, idx int, session *Nea
 }
 
 // IsJSONNull returns true if raw represents a JSON null value.
+// Leading and trailing whitespace is trimmed before comparison.
 func IsJSONNull(raw json.RawMessage) bool {
-	// Trim whitespace and check for literal "null".
-	for _, b := range raw {
-		switch b {
-		case ' ', '\t', '\n', '\r':
-			continue
-		case 'n':
-			return string(raw) == "null" || // fast path
-				len(raw) >= 4 && raw[len(raw)-4] == 'n' // trimmed
-		default:
-			return false
-		}
-	}
-	return len(raw) == 0
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || string(trimmed) == "null"
 }
 
 // contentPlaintext extracts the plaintext bytes to encrypt from a message's
