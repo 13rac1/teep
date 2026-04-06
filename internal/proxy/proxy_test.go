@@ -3425,7 +3425,7 @@ func (m *mockE2EEFetcher) Invalidate(chuteID string) {
 // from meta.
 type passthroughEncryptor struct{}
 
-func (passthroughEncryptor) EncryptRequest(body []byte, _ *attestation.RawAttestation) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
+func (passthroughEncryptor) EncryptRequest(body []byte, _ *attestation.RawAttestation, _ string) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
 	return body, nil, nil, nil
 }
 

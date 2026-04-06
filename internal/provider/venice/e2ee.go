@@ -17,7 +17,8 @@ func NewE2EE() *E2EE { return &E2EE{} }
 
 // EncryptRequest encrypts each message content with Venice E2EE and forces
 // stream=true. The raw.SigningKey must be a 130-char hex secp256k1 public key.
-func (v *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
+// The endpointPath is unused — Venice only supports chat completions.
+func (v *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ string) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
 	session, err := e2ee.NewVeniceSession()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("create venice E2EE session: %w", err)

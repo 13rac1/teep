@@ -1,6 +1,8 @@
 package nearcloud
 
 import (
+	"fmt"
+
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
 )
@@ -12,12 +14,29 @@ type E2EE struct{}
 // NewE2EE returns a NearCloud RequestEncryptor.
 func NewE2EE() *E2EE { return &E2EE{} }
 
-// EncryptRequest encrypts each message content with NearCloud E2EE and forces
-// stream=true. The raw.SigningKey must be a 64-char hex Ed25519 public key.
-func (n *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
-	encBody, session, err := e2ee.EncryptChatMessagesNearCloud(body, raw.SigningKey)
-	if err != nil {
-		return nil, nil, nil, err
+// EncryptRequest encrypts request fields with NearCloud E2EE. The endpointPath
+// determines which fields are encrypted:
+//   - /v1/chat/completions: encrypts messages[].content (text or serialized VL array)
+//   - /v1/images/generations: encrypts the prompt field
+//
+// Unsupported endpoint paths fail closed — the gateway does not forward E2EE
+// headers for other endpoints (embeddings, audio, rerank), so encrypting them
+// would leave the model TEE unable to decrypt.
+func (n *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpointPath string) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
+	switch endpointPath {
+	case "/v1/chat/completions":
+		encBody, session, err := e2ee.EncryptChatMessagesNearCloud(body, raw.SigningKey)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return encBody, session, nil, nil
+	case "/v1/images/generations":
+		encBody, session, err := e2ee.EncryptImagePromptNearCloud(body, raw.SigningKey)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return encBody, session, nil, nil
+	default:
+		return nil, nil, nil, fmt.Errorf("nearcloud E2EE not supported for endpoint %q: gateway does not forward E2EE headers", endpointPath)
 	}
-	return encBody, session, nil, nil
 }

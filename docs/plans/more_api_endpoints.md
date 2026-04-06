@@ -38,13 +38,13 @@ All endpoints require TEE attestation + body E2EE per policy. Providers that can
 | Provider | E2EE mechanism | New endpoint viability |
 |---|---|---|
 | **neardirect** | TLS-level (SPKI pinned to model TEE cert) | ✓ all types |
-| **nearcloud** | XChaCha20-Poly1305 app-layer (chat only today) | ⚠️ see nearcloud gate below |
+| **nearcloud** | XChaCha20-Poly1305 app-layer (chat + images) | ⚠️ chat/images only; embeddings/audio/rerank blocked (gateway drops E2EE headers) |
 | **chutes** | ML-KEM-768 via `/e2e/invoke` + `X-E2E-Path` | ✓ all types |
 | **phalacloud** | None | ✗ fail-closed per policy (expected) |
 
 neardirect TLS E2EE: SPKI cert is generated inside the model TEE and verified by attestation; TLS terminates at the model TEE, so the TLS channel provides end-to-end encryption to the TEE directly. No additional application-layer E2EE is needed.
 
-**GATE: nearcloud non-chat E2EE** — nearcloud's `EncryptChatMessagesNearCloud` only encrypts the `messages` array in chat requests. For embeddings the secret data is in `input`; for images, in `prompt`. **nearcloud MUST NOT be wired for non-chat endpoints until the E2EE protocol is verified to cover those content fields.** If implementation proceeds without this gate, an embeddings request through nearcloud could send the `input` field in plaintext through a channel the user believes is E2EE. Until verified, non-chat nearcloud paths must either not be wired or must fail-closed with an explicit error.
+**GATE: nearcloud non-chat E2EE** — nearcloud E2EE dispatch now covers chat (`messages[].content`, including VL serialize-and-encrypt) and image generation (`prompt`). The gateway forwards E2EE headers for these two endpoints only. **nearcloud MUST NOT be wired for embeddings, audio, rerank, or score endpoints** — the gateway silently drops E2EE headers for these, so encrypting fields would leave the model TEE unable to decrypt. See `docs/attestation_gaps/e2ee_plaintext_gaps.md` for the full analysis. Until the gateway fix lands, only neardirect handles non-chat/non-image endpoint types from near.ai.
 
 ---
 
@@ -246,7 +246,7 @@ Depends on Phase 1; research required first.
 
 ## Open Questions
 
-1. **nearcloud non-chat E2EE**: Does near.ai's `X-Client-Pub-Key` / `X-Encryption-Version` protocol extend to `/v1/embeddings`, `/v1/audio/transcriptions`, `/v1/images/generations`? This is gated — nearcloud must not be wired for non-chat endpoints until answered (see E2EE Status section above). If verified, wire nearcloud in Phases 3/5/6. If not, only neardirect handles new endpoint types from near.ai.
+1. **nearcloud non-chat E2EE** *(partially resolved)*: The gateway forwards E2EE headers for `/v1/chat/completions` and `/v1/images/generations` only. Teep now wires `RequestEncryptor` for both. The gateway does **not** forward E2EE headers for `/v1/embeddings`, `/v1/audio/transcriptions`, `/v1/rerank`, or `/v1/score` — these endpoints remain blocked for nearcloud. If the gateway fix lands (see `e2ee_plaintext_gaps.md` remediation path), teep can wire nearcloud for these additional endpoints.
 
 2. **Audio over Chutes / NearCloud**: Encrypting `multipart/form-data` at app layer is non-trivial. Needs resolution once nearcloud non-chat E2EE status is known. Phase 5 includes a fail-closed guard that blocks multipart requests for non-pinned E2EE providers.
 

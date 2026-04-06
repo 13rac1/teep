@@ -252,10 +252,6 @@ The model TEE (inference-proxy) already supports E2EE for all endpoints. The fix
 
 3. **Audio multipart handling.** The inference-proxy currently only encrypts/decrypts the `prompt` field for audio transcriptions, not the audio file bytes. Full audio E2EE would additionally require binary-level encryption of the multipart file content, which is a fundamentally different wire format from JSON field encryption.
 
-### Teep improvements
+### Teep status
 
-1. **Enable image generation E2EE.** The gateway already forwards E2EE headers for `/v1/images/generations` and the model TEE handles it correctly. Teep should wire `RequestEncryptor` for this endpoint on the `nearcloud` provider.
-
-2. **Implement VL serialize-and-encrypt.** `EncryptChatMessagesNearCloud` currently only encrypts flat string content. It should detect structured VL content arrays, serialize them to JSON, and encrypt the serialized string. The inference-proxy's `decrypt_chat_message_fields` already handles this format.
-
-3. **Block remaining non-chat endpoints.** Continue blocking E2EE for embeddings, rerank, score, and audio until the gateway forwards headers for these endpoints.
+**Implemented:** Image generation E2EE (`/v1/images/generations`) and VL serialize-and-encrypt for vision-language chat are now wired in the nearcloud provider. Unsupported endpoints (embeddings, rerank, score, audio) fail closed — the nearcloud `EncryptRequest` dispatcher rejects them with an explicit error since the gateway does not forward E2EE headers for these endpoints.
