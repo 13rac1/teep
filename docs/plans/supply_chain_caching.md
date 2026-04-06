@@ -4,9 +4,12 @@
 
 All data currently exempted by `--offline` should be cached post-authentication,
 and all data currently obtained by `--update-config` should instead be obtained
-by a dedicated `teep cache` command, such that the full attestation report can
-be rebuilt and verified with zero online activity so long as the cached data is
-fresh.
+by a dedicated `teep cache` command, such that the attestation report can be
+rebuilt and verified with zero online activity for all cacheable factors so
+long as the cached data is fresh. Live-only checks that are not cacheable,
+such as the E2EE usability roundtrip (`e2ee_usable`), are not included in
+that offline guarantee and retain their normal offline result (e.g., `Skip`
+under `--offline`).
 
 This replaces the current `--update-config` / `--config-out` flags on
 `teep verify` with a standalone `teep cache` command and a dedicated cache file
@@ -122,16 +125,19 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
 
 Each entry is keyed by a stable identifier. For digest-pinned images
 (`repo@sha256:...`), the key is `sha256:<hex>` (matching OCI notation). For
-tag-based images, the key is the `<repo>:<tag>` string as it appeared in the
-compose manifest — this allows direct cache lookup without resolving the tag
-to a digest first (see Section 5b rationale). For `allow_any_version` images,
-the key is also `<repo>:<tag>`.
+tag-based images, the key is the canonical `<repo>:<tag>` string. If the
+compose manifest omits the tag (bare `repo`), it MUST be normalized to
+`<repo>:latest` for cache key generation and lookup. This avoids duplicate
+keys for equivalent references such as `repo` and `repo:latest`, and allows
+direct cache lookup without resolving the tag to a digest first (see Section
+5b rationale). For `allow_any_version` images, the key follows the same rule:
+`<repo>:<tag>`, with omitted tags canonicalized to `<repo>:latest`.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `repo` | string | Image repository (e.g., `datadog/agent`) |
 | `digest` | string | `sha256:<hex>` (immutable content address); empty for `allow_any_version` |
-| `tag` | string | Tag observed in compose (e.g., `v0.4.2`, `latest`); empty for digest-pinned |
+| `tag` | string | Canonical tag used for cache key (e.g., `v0.4.2`, `latest`); omitted tags stored as `latest`; empty for digest-pinned |
 | `provenance` | string | `fulcio_signed` / `sigstore_present` / `compose_binding_only` |
 | `allow_any_version` | bool | `true` → any version accepted by allowlist membership alone |
 | `key_fingerprint` | string | SHA-256 hex of PKIX public key (for `sigstore_present`) |
@@ -206,7 +212,7 @@ Intel PCS, NVIDIA (if applicable), Proof of Cloud, etc.
 | Image (allow_any_version) | `<repo>:<tag>` | Repo in allowlist | Never stale (presence-only) |
 | Intel PCS | `(FMSPC, TeeTCBSVN)` | Within max-age (default 24h) | Re-fetch; offline → `Skip` |
 | NVIDIA NRAS | EAT evidence hash | Within max-age (default 24h) | Re-fetch; offline → `Skip` |
-| Proof of Cloud | PPID | Positive → infinite; negative → short TTL | Positive never stale; negative re-fetched |
+| Proof of Cloud | PPID | Positive → infinite; negative → 24h TTL | Positive never stale; negative re-fetched after TTL |
 | E2EE test | — | **Not cacheable** (live test) | Always re-run if online; offline → `Skip` |
 
 ---
@@ -254,9 +260,10 @@ these rules:
   current `--offline` without cache.
 - **Immutable entries** (Rekor, PoC positive): Never stale; used directly.
 - **E2EE usable**: Always `Skip` in offline mode (non-cacheable).
-- **Compose hash mismatch (no matching images)**: Supply chain factors
-  evaluate as `Skip`. Without online access, unknown images cannot be
-  verified.
+- **Compose hash mismatch (no matching images)**: Image provenance factors
+  for unmatched images evaluate as `Skip` — those images cannot be verified
+  without online access. This is logged at notice level, consistent with
+  other non-enforced changes in offline mode.
 
 ---
 
@@ -309,13 +316,16 @@ Digest-pinned > specific release tag > allow_any_version.
 ## 6. Cache File Format (YAML)
 
 The cache file uses YAML for human readability and comment support.
-Operators may inspect and occasionally hand-edit cache entries (e.g., remove
-a stale provider). Strict unmarshalling (`KnownFields(true)`) rejects unknown
-fields on read (fail-closed).
+It is normally generated and refreshed by `teep cache`, but operators may
+inspect it and hand-edit it when needed. Any manual change to cached entries,
+including pinned TDX register values, is an explicit local policy change and
+must be treated as operator-authored trust data rather than re-verified cached
+evidence. Strict unmarshalling (`KnownFields(true)`) rejects unknown fields on
+read (fail-closed).
 
 ```yaml
-# teep attestation cache — machine-generated, do not edit
-# regenerate with: teep cache <provider> --model <model>
+# teep attestation cache — generated by `teep cache`
+# manual edits are allowed but are treated as operator policy changes
 version: 1
 
 images:
@@ -570,9 +580,10 @@ Digest-pinned results never go stale. This is the ideal caching candidate. The
 global `images` table in the cache stores full Rekor provenance data.
 
 **Proof of Cloud (factors 8–9)**: Hardware registry is append-only. Positive
-registrations never expire. Negative results are not cached (machine may be
-registered tomorrow). Cached positive `poc_registered: true` is valid
-indefinitely.
+registrations never expire. Negative results are cached with a short TTL
+(default 24h, matching Intel PCS) to avoid hammering the registry — PoC is
+currently `allow_fail` for all providers. Cached positive
+`poc_registered: true` is valid indefinitely.
 
 ### 8c. Non-Online Cacheable Data
 
