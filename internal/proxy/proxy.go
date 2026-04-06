@@ -172,13 +172,17 @@ func extractMultipartField(contentType string, body []byte, fieldName string) (s
 			return "", err
 		}
 		if p.FormName() == fieldName {
-			val, err := io.ReadAll(io.LimitReader(p, 1024))
+			const maxFieldSize = 1024
+			val, err := io.ReadAll(io.LimitReader(p, maxFieldSize+1))
 			if err != nil {
 				_ = p.Close()
 				return "", err
 			}
 			if err := p.Close(); err != nil {
 				return "", err
+			}
+			if len(val) > maxFieldSize {
+				return "", fmt.Errorf("field %q exceeds %d bytes", fieldName, maxFieldSize)
 			}
 			return string(val), nil
 		}
@@ -912,12 +916,13 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 		requestStart := time.Now()
 
 		r.Body = http.MaxBytesReader(w, r.Body, 50<<20) // 50 MiB max
+		defer r.Body.Close()
+
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "request body too large or unreadable", http.StatusBadRequest)
 			return
 		}
-		r.Body.Close()
 
 		model, stream, err := ep.parseRequest(r, body)
 		if err != nil {

@@ -912,6 +912,30 @@ func TestAudio_NonPinnedE2EEFails400(t *testing.T) {
 	}
 }
 
+func TestAudio_OversizedModelField400(t *testing.T) {
+	// Regression: extractMultipartField must reject fields exceeding the size
+	// limit instead of silently truncating them.
+	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
+	defer proxySrv.Close()
+
+	oversized := strings.Repeat("a", 1025)
+	var buf bytes.Buffer
+	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n")
+	buf.WriteString(oversized)
+	buf.WriteString("\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
+	resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
+		"multipart/form-data; boundary=boundary", &buf)
+	if err != nil {
+		t.Fatalf("POST audio: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("status = %d, want 400; body=%s", resp.StatusCode, body)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Rerank endpoint tests
 // --------------------------------------------------------------------------

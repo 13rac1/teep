@@ -82,13 +82,13 @@ func encryptVeniceMessageContent(msg map[string]json.RawMessage, idx int, sessio
 		return nil
 	}
 
-	// Venice content is always a string — unmarshal to get decoded value.
-	var s string
-	if err := json.Unmarshal(contentRaw, &s); err != nil {
-		return fmt.Errorf("message %d: parse content: %w", idx, err)
+	// Content may be a JSON string or an array (OpenAI multimodal/VL format).
+	plaintext, err := veniceContentPlaintext(contentRaw, idx)
+	if err != nil {
+		return err
 	}
 
-	ciphertext, err := e2ee.EncryptVenice([]byte(s), session.ModelPubKey())
+	ciphertext, err := e2ee.EncryptVenice(plaintext, session.ModelPubKey())
 	if err != nil {
 		return fmt.Errorf("encrypt venice message %d: %w", idx, err)
 	}
@@ -99,4 +99,24 @@ func encryptVeniceMessageContent(msg map[string]json.RawMessage, idx int, sessio
 	}
 	msg["content"] = ctJSON
 	return nil
+}
+
+// veniceContentPlaintext extracts the plaintext bytes from a message content
+// field. String content is unwrapped; array content (OpenAI multimodal/VL
+// format) is serialized as-is, matching NearCloud's approach.
+func veniceContentPlaintext(raw json.RawMessage, idx int) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("message %d: empty content", idx)
+	}
+	if raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, fmt.Errorf("message %d: parse string content: %w", idx, err)
+		}
+		return []byte(s), nil
+	}
+	if raw[0] == '[' {
+		return []byte(raw), nil
+	}
+	return nil, fmt.Errorf("message %d: unsupported content type (starts with %q)", idx, raw[0])
 }

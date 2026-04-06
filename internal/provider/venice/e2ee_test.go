@@ -360,3 +360,80 @@ func assertFieldPresent(t *testing.T, msg map[string]json.RawMessage, field stri
 		t.Errorf("field %q missing from message", field)
 	}
 }
+
+// TestVeniceE2EE_VLArrayContent verifies that multimodal/VL content (array
+// format) is encrypted successfully, matching NearCloud's handling.
+func TestVeniceE2EE_VLArrayContent(t *testing.T) {
+	pubHex, modelPriv := modelKeyPair(t)
+	raw := &attestation.RawAttestation{SigningKey: pubHex}
+
+	body := []byte(`{
+		"model": "venice-vision",
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "What is in this image?"},
+				{"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}
+			]}
+		]
+	}`)
+
+	enc := venice.NewE2EE()
+	encBody, decryptor, _, err := enc.EncryptRequest(body, raw, "/v1/chat/completions")
+	if err != nil {
+		t.Fatalf("EncryptRequest with VL array content: %v", err)
+	}
+	defer decryptor.Zero()
+
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal encrypted body: %v", err)
+	}
+
+	var messages []map[string]json.RawMessage
+	if err := json.Unmarshal(out["messages"], &messages); err != nil {
+		t.Fatalf("unmarshal messages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(messages))
+	}
+
+	assertRole(t, messages[0], "user")
+
+	// Content should be encrypted — decrypt to verify.
+	var ct string
+	if err := json.Unmarshal(messages[0]["content"], &ct); err != nil {
+		t.Fatalf("unmarshal encrypted content: %v", err)
+	}
+	pt, err := e2ee.DecryptVenice(ct, modelPriv)
+	if err != nil {
+		t.Fatalf("decrypt VL content: %v", err)
+	}
+
+	// Decrypted plaintext should be a valid JSON array.
+	var arr []json.RawMessage
+	if err := json.Unmarshal(pt, &arr); err != nil {
+		t.Fatalf("decrypted content is not a JSON array: %v", err)
+	}
+	if len(arr) != 2 {
+		t.Errorf("decrypted array length = %d, want 2", len(arr))
+	}
+}
+
+// TestVeniceE2EE_UnsupportedContentType verifies that content with an
+// unsupported type (e.g. object) fails closed.
+func TestVeniceE2EE_UnsupportedContentType(t *testing.T) {
+	pubHex := modelPubKeyHex(t)
+	raw := &attestation.RawAttestation{SigningKey: pubHex}
+
+	body := []byte(`{
+		"model": "venice-model",
+		"messages": [{"role": "user", "content": {"invalid": "object"}}]
+	}`)
+
+	enc := venice.NewE2EE()
+	_, _, _, err := enc.EncryptRequest(body, raw, "/v1/chat/completions")
+	if err == nil {
+		t.Fatal("expected error for unsupported content type (object)")
+	}
+	t.Logf("error (expected): %v", err)
+}
