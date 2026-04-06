@@ -19,7 +19,8 @@ func NewE2EE() *E2EE {
 // EncryptRequest encrypts the entire JSON body as a binary blob with Chutes
 // ML-KEM-768 E2EE. Returns ChutesE2EE for the Preparer to inject headers.
 // Requires raw.InstanceID, raw.E2ENonce, and raw.ChuteID from attestation.
-func (c *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
+// The endpointPath is unused — Chutes encrypts the entire body regardless.
+func (c *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ string) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
 	encPayload, session, err := e2ee.EncryptChatRequestChutes(body, raw.SigningKey)
 	if err != nil {
 		return nil, nil, nil, err

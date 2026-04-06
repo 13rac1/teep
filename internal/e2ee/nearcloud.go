@@ -223,9 +223,10 @@ func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *Near
 		return nil, nil, fmt.Errorf("parse body for NearCloud E2EE: %w", err)
 	}
 
+	// Parse messages with raw content to handle both string and VL array content.
 	var messages []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
 	}
 	if err := json.Unmarshal(full["messages"], &messages); err != nil {
 		session.Zero()
@@ -238,7 +239,12 @@ func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *Near
 	}
 	enc := make([]encMsg, len(messages))
 	for i, msg := range messages {
-		ct, encErr := EncryptXChaCha20([]byte(msg.Content), session.ModelX25519Pub())
+		plaintext, pErr := contentPlaintext(msg.Content)
+		if pErr != nil {
+			session.Zero()
+			return nil, nil, fmt.Errorf("message %d content: %w", i, pErr)
+		}
+		ct, encErr := EncryptXChaCha20(plaintext, session.ModelX25519Pub())
 		if encErr != nil {
 			session.Zero()
 			return nil, nil, fmt.Errorf("encrypt NearCloud message %d: %w", i, encErr)
@@ -258,6 +264,83 @@ func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *Near
 	if err != nil {
 		session.Zero()
 		return nil, nil, fmt.Errorf("marshal NearCloud E2EE body: %w", err)
+	}
+	return out, session, nil
+}
+
+// contentPlaintext extracts the plaintext bytes to encrypt from a message's
+// content field. For string content, returns the string bytes directly. For VL
+// structured content arrays (e.g. [{"type":"text",...},{"type":"image_url",...}]),
+// serializes the array to a JSON string — the inference-proxy's decrypt_chat_message_fields
+// detects the JSON array after decryption and restores the structured content.
+func contentPlaintext(raw json.RawMessage) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("empty content")
+	}
+	// String content: unmarshal to get the decoded string value.
+	if raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, fmt.Errorf("parse string content: %w", err)
+		}
+		return []byte(s), nil
+	}
+	// Array content (VL): serialize the raw JSON array as the plaintext.
+	// The inference-proxy decrypts it, detects the JSON array, and restores
+	// the structured content.
+	if raw[0] == '[' {
+		return []byte(raw), nil
+	}
+	return nil, fmt.Errorf("unsupported content type (starts with %q)", raw[0])
+}
+
+// EncryptImagePromptNearCloud creates a NearCloud E2EE session and encrypts
+// the "prompt" field in an image generation request. The signingKey is the
+// model's Ed25519 public key (64 hex chars) from the attestation response.
+func EncryptImagePromptNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
+	session, err := NewNearCloudSession()
+	if err != nil {
+		return nil, nil, fmt.Errorf("create NearCloud E2EE session: %w", err)
+	}
+	if err := session.SetModelKeyEd25519(signingKey); err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("set model key ed25519: %w", err)
+	}
+
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(body, &full); err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("parse body for NearCloud image E2EE: %w", err)
+	}
+
+	promptRaw, ok := full["prompt"]
+	if !ok {
+		session.Zero()
+		return nil, nil, errors.New("image generation body missing 'prompt' field")
+	}
+	var prompt string
+	if err := json.Unmarshal(promptRaw, &prompt); err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("parse prompt for NearCloud image E2EE: %w", err)
+	}
+
+	ct, err := EncryptXChaCha20([]byte(prompt), session.ModelX25519Pub())
+	if err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("encrypt NearCloud image prompt: %w", err)
+	}
+
+	encPrompt, err := json.Marshal(ct)
+	if err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("marshal encrypted prompt: %w", err)
+	}
+	full["prompt"] = encPrompt
+
+	out, err := json.Marshal(full)
+	if err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("marshal NearCloud image E2EE body: %w", err)
 	}
 	return out, session, nil
 }

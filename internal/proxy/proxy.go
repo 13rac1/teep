@@ -474,11 +474,12 @@ func fromConfig(
 		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
-		// nearcloud non-chat E2EE is NOT verified: EncryptChatMessagesNearCloud
-		// only encrypts the messages array. Embeddings (input), audio, and images
-		// (prompt) would be sent in plaintext through a channel the user believes
-		// is E2EE. Non-chat paths are not wired until the E2EE protocol is
-		// verified to cover those content fields.
+		p.ImagesPath = "/v1/images/generations"
+		// nearcloud non-chat E2EE: the gateway only forwards E2EE headers for
+		// chat completions and image generations. Embeddings (input), audio,
+		// and rerank fields would be sent in plaintext through a channel the
+		// user believes is E2EE. Non-chat paths (other than images) are not
+		// wired until the gateway is fixed to forward E2EE headers.
 		p.Encryptor = nearcloud.NewE2EE()
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
@@ -1742,7 +1743,7 @@ func (s *Server) doUpstreamRoundtrip(
 		}
 
 		e2eeStart := time.Now()
-		ub, buildErr := s.buildUpstreamBody(ctx, body, upstreamModel, e2eeActive, prov, freshRaw)
+		ub, buildErr := s.buildUpstreamBody(ctx, body, upstreamModel, e2eeActive, prov, freshRaw, endpointPath)
 		e2eeDur += time.Since(e2eeStart)
 
 		if buildErr != nil {
@@ -1845,6 +1846,7 @@ func (s *Server) buildUpstreamBody(
 	e2eeActive bool,
 	prov *provider.Provider,
 	freshRaw *attestation.RawAttestation,
+	endpointPath string,
 ) (*upstreamBody, error) {
 	if !e2eeActive {
 		if prov.E2EE {
@@ -1945,7 +1947,7 @@ func (s *Server) buildUpstreamBody(
 		return nil, errors.New("attestation response missing signing_key")
 	}
 
-	encrypted, session, meta, err := prov.Encryptor.EncryptRequest(rawBody, raw)
+	encrypted, session, meta, err := prov.Encryptor.EncryptRequest(rawBody, raw, endpointPath)
 	if err != nil {
 		return nil, err
 	}

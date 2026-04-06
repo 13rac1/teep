@@ -52,15 +52,16 @@ type RequestPreparer interface {
 	PrepareRequest(req *http.Request, e2eeHeaders http.Header, meta *e2ee.ChutesE2EE, stream bool, path string) error
 }
 
-// RequestEncryptor encrypts an outgoing chat request body for a provider's
-// E2EE protocol. Returns the encrypted body, a Decryptor for response
-// decryption, optional Chutes metadata, and any error.
+// RequestEncryptor encrypts an outgoing request body for a provider's E2EE
+// protocol. The endpointPath (e.g. "/v1/chat/completions", "/v1/images/generations")
+// tells the encryptor which fields to encrypt. Returns the encrypted body, a
+// Decryptor for response decryption, optional Chutes metadata, and any error.
 //
 // For Chutes, Decryptor is nil; crypto state is carried in *e2ee.ChutesE2EE
 // instead (the Chutes protocol uses a different relay path).
 // For Venice and NearCloud, *e2ee.ChutesE2EE is nil.
 type RequestEncryptor interface {
-	EncryptRequest(body []byte, raw *attestation.RawAttestation) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error)
+	EncryptRequest(body []byte, raw *attestation.RawAttestation, endpointPath string) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error)
 }
 
 // PinnedHandler handles chat requests on a connection-pinned TLS connection

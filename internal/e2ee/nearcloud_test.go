@@ -489,3 +489,212 @@ func TestNearCloudSession_DecryptorInterface(t *testing.T) {
 		t.Error("expected IsEncryptedChunk to return true for valid ciphertext")
 	}
 }
+
+func TestEncryptChatMessagesNearCloud_VLContent(t *testing.T) {
+	pubHex, seed := ed25519KeyPairHex(t)
+
+	// VL content: array of [text, image_url] parts.
+	body := map[string]any{
+		"model": "vl-model",
+		"messages": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "text", "text": "What is this?"},
+					{"type": "image_url", "image_url": map[string]string{"url": "data:image/png;base64,iVBOR"}},
+				},
+			},
+		},
+		"stream": false,
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptChatMessagesNearCloud VL: %v", err)
+	}
+	defer session.Zero()
+
+	// Parse output.
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var messages []struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(out["messages"], &messages); err != nil {
+		t.Fatalf("unmarshal messages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(messages))
+	}
+
+	// Content must be a single encrypted string (not array).
+	if !IsEncryptedChunkXChaCha20(messages[0].Content) {
+		t.Fatalf("VL content not encrypted: %q", SafePrefix(messages[0].Content, 40))
+	}
+
+	// Decrypt and verify the serialized array is valid JSON.
+	x25519Priv, err := ed25519SeedToX25519(seed)
+	if err != nil {
+		t.Fatalf("derive x25519: %v", err)
+	}
+	pt, err := DecryptXChaCha20(messages[0].Content, x25519Priv)
+	if err != nil {
+		t.Fatalf("decrypt VL content: %v", err)
+	}
+	t.Logf("decrypted VL content: %s", pt)
+
+	// Must be a valid JSON array.
+	var parts []map[string]any
+	if err := json.Unmarshal(pt, &parts); err != nil {
+		t.Fatalf("decrypted VL content is not a JSON array: %v", err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(parts))
+	}
+	if parts[0]["type"] != "text" {
+		t.Errorf("part[0].type = %v, want text", parts[0]["type"])
+	}
+}
+
+func TestEncryptImagePromptNearCloud(t *testing.T) {
+	pubHex, seed := ed25519KeyPairHex(t)
+
+	body := map[string]any{
+		"model":  "flux-model",
+		"prompt": "A cat sitting on a rainbow",
+		"n":      1,
+		"size":   "1024x1024",
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	encBody, session, err := EncryptImagePromptNearCloud(bodyJSON, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptImagePromptNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	// Parse and verify structure.
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Other fields must be preserved.
+	var model string
+	if err := json.Unmarshal(out["model"], &model); err != nil {
+		t.Fatalf("unmarshal model: %v", err)
+	}
+	if model != "flux-model" {
+		t.Errorf("model = %q, want flux-model", model)
+	}
+
+	// Prompt must be encrypted.
+	var prompt string
+	if err := json.Unmarshal(out["prompt"], &prompt); err != nil {
+		t.Fatalf("unmarshal prompt: %v", err)
+	}
+	if prompt == "A cat sitting on a rainbow" {
+		t.Error("prompt appears unencrypted")
+	}
+	if !IsEncryptedChunkXChaCha20(prompt) {
+		t.Fatalf("prompt does not look encrypted: %q", SafePrefix(prompt, 40))
+	}
+
+	// Decrypt and verify.
+	x25519Priv, err := ed25519SeedToX25519(seed)
+	if err != nil {
+		t.Fatalf("derive x25519: %v", err)
+	}
+	pt, err := DecryptXChaCha20(prompt, x25519Priv)
+	if err != nil {
+		t.Fatalf("decrypt prompt: %v", err)
+	}
+	if string(pt) != "A cat sitting on a rainbow" {
+		t.Errorf("decrypted prompt = %q, want 'A cat sitting on a rainbow'", pt)
+	}
+}
+
+func TestEncryptImagePromptNearCloud_InvalidKey(t *testing.T) {
+	_, _, err := EncryptImagePromptNearCloud([]byte(`{"model":"m","prompt":"test"}`), "bad-key")
+	if err == nil {
+		t.Fatal("expected error for invalid key")
+	}
+}
+
+func TestEncryptImagePromptNearCloud_MissingPrompt(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	_, _, err := EncryptImagePromptNearCloud([]byte(`{"model":"m"}`), pubHex)
+	if err == nil {
+		t.Fatal("expected error for missing prompt")
+	}
+}
+
+func TestEncryptImagePromptNearCloud_InvalidBody(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	_, _, err := EncryptImagePromptNearCloud([]byte("not json"), pubHex)
+	if err == nil {
+		t.Fatal("expected error for invalid body")
+	}
+}
+
+func TestContentPlaintext(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "string content",
+			raw:  `"Hello world"`,
+			want: "Hello world",
+		},
+		{
+			name: "VL array content",
+			raw:  `[{"type":"text","text":"What?"},{"type":"image_url","image_url":{"url":"data:..."}}]`,
+			want: `[{"type":"text","text":"What?"},{"type":"image_url","image_url":{"url":"data:..."}}]`,
+		},
+		{
+			name:    "empty content",
+			raw:     ``,
+			wantErr: true,
+		},
+		{
+			name:    "number content",
+			raw:     `42`,
+			wantErr: true,
+		},
+		{
+			name:    "object content",
+			raw:     `{"key":"value"}`,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pt, err := contentPlaintext(json.RawMessage(tt.raw))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if string(pt) != tt.want {
+				t.Errorf("got %q, want %q", pt, tt.want)
+			}
+		})
+	}
+}

@@ -41,7 +41,7 @@ func TestVeniceE2EE_EncryptRequest(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 
 	enc := venice.NewE2EE()
-	encBody, decryptor, chutesE2EE, err := enc.EncryptRequest(chatBody(t), raw)
+	encBody, decryptor, chutesE2EE, err := enc.EncryptRequest(chatBody(t), raw, "/v1/chat/completions")
 	if err != nil {
 		t.Fatalf("EncryptRequest: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestVeniceE2EE_EncryptRequest(t *testing.T) {
 func TestVeniceE2EE_EncryptRequest_InvalidSigningKey(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: "not-a-valid-key"}
 	enc := venice.NewE2EE()
-	_, _, _, err := enc.EncryptRequest(chatBody(t), raw)
+	_, _, _, err := enc.EncryptRequest(chatBody(t), raw, "/v1/chat/completions")
 	if err == nil {
 		t.Fatal("expected error for invalid signing key")
 	}
@@ -118,7 +118,7 @@ func TestVeniceE2EE_EncryptRequest_InvalidBody(t *testing.T) {
 	pubHex := modelPubKeyHex(t)
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := venice.NewE2EE()
-	_, _, _, err := enc.EncryptRequest([]byte("not json"), raw)
+	_, _, _, err := enc.EncryptRequest([]byte("not json"), raw, "/v1/chat/completions")
 	if err == nil {
 		t.Fatal("expected error for invalid body")
 	}
@@ -130,7 +130,7 @@ func TestVeniceE2EE_EncryptRequest_InvalidMessages(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := venice.NewE2EE()
 	body := []byte(`{"model":"m","messages":"not-an-array"}`)
-	_, _, _, err := enc.EncryptRequest(body, raw)
+	_, _, _, err := enc.EncryptRequest(body, raw, "/v1/chat/completions")
 	if err == nil {
 		t.Fatal("expected error for invalid messages")
 	}
