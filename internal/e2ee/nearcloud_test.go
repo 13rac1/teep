@@ -817,7 +817,9 @@ func TestIsJSONNull(t *testing.T) {
 		{"[]", false},
 		{"{}", false},
 		{"", true},
-		{"  null  ", false}, // json.RawMessage preserves exact bytes
+		{"  null  ", true},
+		{"\tnull\n", true},
+		{" \r\n null \t", true},
 		{`""`, false},
 		{"true", false},
 		{"false", false},
