@@ -240,16 +240,47 @@ func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
 		return nil, fmt.Errorf("parse response JSON: %w", err)
 	}
 
-	choicesRaw, ok := full["choices"]
-	if !ok {
-		return body, nil
+	var changed bool
+
+	// Chat completions: decrypt choices[].message content fields.
+	if choicesRaw, ok := full["choices"]; ok {
+		c, err := decryptResponseChoices(choicesRaw, session)
+		if err != nil {
+			return nil, err
+		}
+		if c != nil {
+			full["choices"] = c
+			changed = true
+		}
 	}
 
+	// Images: decrypt data[].b64_json and data[].revised_prompt fields.
+	if dataRaw, ok := full["data"]; ok {
+		d, err := decryptResponseImageData(dataRaw, session)
+		if err != nil {
+			return nil, err
+		}
+		if d != nil {
+			full["data"] = d
+			changed = true
+		}
+	}
+
+	if !changed {
+		return body, nil
+	}
+	return json.Marshal(full)
+}
+
+// decryptResponseChoices decrypts content fields in choices[].message objects.
+// Returns the rewritten choices JSON, or nil if nothing was decrypted.
+func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
 	var choices []map[string]json.RawMessage
 	if err := json.Unmarshal(choicesRaw, &choices); err != nil {
 		return nil, fmt.Errorf("parse choices: %w", err)
 	}
 
+	changed := false
 	for i, choice := range choices {
 		msgRaw, ok := choice["message"]
 		if !ok {
@@ -260,11 +291,11 @@ func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
 			return nil, fmt.Errorf("parse choice[%d].message: %w", i, err)
 		}
 
-		changed, err := decryptDeltaFields(msg, session, fmt.Sprintf("choice[%d].message", i))
+		c, err := decryptDeltaFields(msg, session, fmt.Sprintf("choice[%d].message", i))
 		if err != nil {
 			return nil, err
 		}
-		if !changed {
+		if !c {
 			continue
 		}
 
@@ -273,15 +304,68 @@ func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
 			return nil, fmt.Errorf("choice[%d]: marshal rewritten message: %w", i, err)
 		}
 		choices[i]["message"] = msgOut
+		changed = true
 	}
 
-	choicesOut, err := json.Marshal(choices)
+	if !changed {
+		return nil, nil
+	}
+	out, err := json.Marshal(choices)
 	if err != nil {
 		return nil, fmt.Errorf("marshal rewritten choices: %w", err)
 	}
-	full["choices"] = choicesOut
+	return out, nil
+}
 
-	return json.Marshal(full)
+// imageEncryptedFields lists the fields in an images response data item that
+// the NearCloud inference-proxy encrypts with the E2EE session key.
+var imageEncryptedFields = []string{"b64_json", "revised_prompt"}
+
+// decryptResponseImageData decrypts encrypted fields in data[] items of an
+// images generation response. Returns the rewritten data JSON, or nil if
+// nothing was decrypted.
+func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
+	var data []map[string]json.RawMessage
+	if err := json.Unmarshal(dataRaw, &data); err != nil {
+		// Not an array of objects (e.g. embeddings float array) -- skip.
+		return nil, nil //nolint:nilerr // unmarshal error means data is not image objects
+	}
+
+	changed := false
+	for i, item := range data {
+		for _, field := range imageEncryptedFields {
+			raw, ok := item[field]
+			if !ok || IsJSONNull(raw) {
+				continue
+			}
+			var val string
+			if err := json.Unmarshal(raw, &val); err != nil {
+				continue // not a string field
+			}
+			if !session.IsEncryptedChunk(val) {
+				continue
+			}
+			plaintext, err := session.Decrypt(val)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt data[%d].%s: %w", i, field, err)
+			}
+			rewritten, err := json.Marshal(string(plaintext))
+			if err != nil {
+				return nil, fmt.Errorf("data[%d].%s: marshal plaintext: %w", i, field, err)
+			}
+			data[i][field] = rewritten
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil, nil
+	}
+	out, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal rewritten image data: %w", err)
+	}
+	return out, nil
 }
 
 // ReassembleNonStream reads an SSE stream (forced by E2EE), decrypts each

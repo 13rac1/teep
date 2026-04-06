@@ -660,9 +660,10 @@ func TestImages_PinnedOK(t *testing.T) {
 	}
 }
 
-func TestImages_PinnedE2EESessionFailsClosed(t *testing.T) {
-	// When a pinned non-chat endpoint returns an E2EE session, the proxy must
-	// fail closed (502) rather than forwarding ciphertext to the client.
+func TestImages_PinnedE2EESessionRelayed(t *testing.T) {
+	// When a pinned non-chat endpoint returns an E2EE session, the proxy
+	// decrypts the response via RelayNonStream and forwards to the client.
+	// fakeDecryptor.IsEncryptedChunk returns false, so the body passes through.
 	proxySrv := newNeardirectProxyServer(t, sessionPinnedHandler{})
 	defer proxySrv.Close()
 
@@ -673,9 +674,9 @@ func TestImages_PinnedE2EESessionFailsClosed(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadGateway {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Errorf("status = %d, want 502; body=%s", resp.StatusCode, body)
+		t.Errorf("status = %d, want 200; body=%s", resp.StatusCode, body)
 	}
 }
 

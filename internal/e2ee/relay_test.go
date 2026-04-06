@@ -1,6 +1,7 @@
 package e2ee
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -192,6 +193,67 @@ func TestDecryptNonStreamResponse(t *testing.T) {
 	}
 	if result.Choices[0].Message.Content != "World" {
 		t.Errorf("content = %q, want World", result.Choices[0].Message.Content)
+	}
+}
+
+func TestDecryptNonStreamResponse_ImageData(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encB64JSON := encryptForClient(t, "iVBORw0KGgo=", session)
+	encPrompt := encryptForClient(t, "a solid red square", session)
+
+	resp := map[string]any{
+		"created": 1234567890,
+		"data": []map[string]any{
+			{
+				"b64_json":       encB64JSON,
+				"revised_prompt": encPrompt,
+			},
+		},
+	}
+	body, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	decrypted, err := DecryptNonStreamResponse(body, session)
+	if err != nil {
+		t.Fatalf("DecryptNonStreamResponse: %v", err)
+	}
+	t.Logf("decrypted: %s", decrypted)
+
+	var result struct {
+		Data []struct {
+			B64JSON       string `json:"b64_json"`
+			RevisedPrompt string `json:"revised_prompt"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(decrypted, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(result.Data) != 1 {
+		t.Fatalf("data length = %d, want 1", len(result.Data))
+	}
+	if result.Data[0].B64JSON != "iVBORw0KGgo=" {
+		t.Errorf("b64_json = %q, want iVBORw0KGgo=", result.Data[0].B64JSON)
+	}
+	if result.Data[0].RevisedPrompt != "a solid red square" {
+		t.Errorf("revised_prompt = %q, want 'a solid red square'", result.Data[0].RevisedPrompt)
+	}
+}
+
+func TestDecryptNonStreamResponse_NoChoicesNoData(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := []byte(`{"object":"list","model":"test"}`)
+	result, err := DecryptNonStreamResponse(body, session)
+	if err != nil {
+		t.Fatalf("DecryptNonStreamResponse: %v", err)
+	}
+	if !bytes.Equal(result, body) {
+		t.Errorf("expected unchanged body, got %s", result)
 	}
 }
 

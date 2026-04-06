@@ -2001,7 +2001,8 @@ func prepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session 
 
 // handlePinnedNonChat handles non-chat requests for connection-pinned providers.
 // It mirrors handlePinnedChat but uses the given endpointPath and is always
-// non-streaming with no E2EE session decryption (E2EE is TLS-level for pinned).
+// non-streaming. When the upstream returns an E2EE session (e.g. images with
+// encrypted b64_json), the response is decrypted via RelayNonStream.
 func (s *Server) handlePinnedNonChat(
 	ctx context.Context,
 	w http.ResponseWriter, r *http.Request,
@@ -2066,36 +2067,39 @@ func (s *Server) handlePinnedNonChat(
 		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
 	}
 
-	// Fail closed if the upstream returned an E2EE session: handlePinnedNonChat
-	// has no decryptor for non-chat response schemas (images, embeddings, etc.).
-	// Forwarding the ciphertext would leak encrypted garbage to the client.
-	if pinnedResp.Session != nil {
-		defer pinnedResp.Session.Zero()
-		s.e2eeFailed.Store(providerModelKey{prov.Name, upstreamModel}, true)
-		s.cache.Delete(prov.Name, upstreamModel)
-		s.signingKeyCache.Delete(prov.Name, upstreamModel)
-		s.negCache.Record(prov.Name, upstreamModel)
-		ms := s.stats.getModelStats(prov.Name, upstreamModel)
-		s.stats.errors.Add(1)
-		ms.errors.Add(1)
-		slog.ErrorContext(ctx, "pinned non-chat endpoint received E2EE session; failing closed",
-			"provider", prov.Name, "model", upstreamModel, "path", endpointPath)
-		http.Error(w, "E2EE decryption not supported for this endpoint type", http.StatusBadGateway)
+	// Non-OK: forward error response directly (no E2EE decryption needed).
+	if pinnedResp.StatusCode != http.StatusOK {
+		if pinnedResp.Session != nil {
+			defer pinnedResp.Session.Zero()
+		}
+		for key, vals := range pinnedResp.Header {
+			switch key {
+			case "Transfer-Encoding", "Content-Encoding", "Content-Length", "Connection":
+				continue
+			}
+			for _, v := range vals {
+				w.Header().Add(key, v)
+			}
+		}
+		w.WriteHeader(pinnedResp.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(pinnedResp.Body, 10<<20))
 		return
 	}
 
-	for key, vals := range pinnedResp.Header {
-		switch key {
-		case "Transfer-Encoding", "Content-Encoding", "Content-Length", "Connection":
-			continue
-		}
-		for _, v := range vals {
-			w.Header().Add(key, v)
-		}
+	ms := s.stats.getModelStats(prov.Name, upstreamModel)
+	session := pinnedResp.Session
+	if session != nil {
+		s.stats.e2ee.Add(1)
+		defer session.Zero()
+	} else {
+		s.stats.plaintext.Add(1)
 	}
 
-	w.WriteHeader(pinnedResp.StatusCode)
-	_, _ = io.Copy(w, io.LimitReader(pinnedResp.Body, 50<<20))
+	// RelayNonStream reads the full body, decrypts if session is non-nil
+	// (handling both chat choices and image data fields), and writes to w.
+	_, relayErr := e2ee.RelayNonStream(ctx, w, pinnedResp.Body, session)
+
+	s.handlePinnedPostRelay(ctx, prov, upstreamModel, report, session, ms, relayErr)
 }
 
 // clearE2EEFailureIfFresh clears a prior E2EE failure if the attestation
