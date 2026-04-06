@@ -174,9 +174,16 @@ func extractMultipartField(contentType string, body []byte, fieldName string) (s
 		if p.FormName() == fieldName {
 			val, err := io.ReadAll(io.LimitReader(p, 1024))
 			if err != nil {
+				_ = p.Close()
+				return "", err
+			}
+			if err := p.Close(); err != nil {
 				return "", err
 			}
 			return string(val), nil
+		}
+		if err := p.Close(); err != nil {
+			return "", err
 		}
 	}
 }
