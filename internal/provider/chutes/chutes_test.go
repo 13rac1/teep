@@ -513,3 +513,51 @@ func TestPreparer_RejectsInvalidAPIBaseURL(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparer_E2EE_RejectsEmptyPath(t *testing.T) {
+	p := chutes.NewPreparer("key", "/v1/chat/completions", "https://api.chutes.ai")
+	req, _ := http.NewRequest(http.MethodPost, "https://llm.chutes.ai/v1/chat/completions", http.NoBody)
+	meta := &e2ee.ChutesE2EE{
+		ChuteID:    "chute-uuid",
+		InstanceID: "inst-1",
+		E2ENonce:   "nonce-1",
+	}
+	err := p.PrepareRequest(req, nil, meta, true, "")
+	if err == nil {
+		t.Fatal("expected error for empty path with E2EE meta")
+	}
+	if !strings.Contains(err.Error(), "endpoint path is required but empty") {
+		t.Errorf("error should mention empty path, got: %v", err)
+	}
+}
+
+func TestPreparer_E2EE_MultiPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"chat", "/v1/chat/completions"},
+		{"embeddings", "/v1/embeddings"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := chutes.NewPreparer("key", "/v1/chat/completions", "https://api.chutes.ai")
+			req, _ := http.NewRequest(http.MethodPost, "https://llm.chutes.ai"+tc.path, http.NoBody)
+			meta := &e2ee.ChutesE2EE{
+				ChuteID:    "chute-uuid",
+				InstanceID: "inst-1",
+				E2ENonce:   "nonce-1",
+			}
+			err := p.PrepareRequest(req, nil, meta, false, tc.path)
+			if err != nil {
+				t.Fatalf("PrepareRequest: %v", err)
+			}
+			if got := req.Header["X-E2E-Path"]; len(got) != 1 || got[0] != tc.path { //nolint:staticcheck // non-canonical header set intentionally by production code
+				t.Errorf("X-E2E-Path = %q, want [%q]", got, tc.path)
+			}
+			if got := req.URL.Path; got != "/e2e/invoke" {
+				t.Errorf("URL path = %q, want /e2e/invoke", got)
+			}
+		})
+	}
+}

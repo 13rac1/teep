@@ -303,15 +303,16 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 // /e2e/invoke endpoint and sets the required headers.
 type Preparer struct {
 	apiKey     string
-	chatPath   string
 	apiBaseURL string // platform API base (e.g. https://api.chutes.ai)
 }
 
-// NewPreparer returns a Chutes Preparer configured with the given API key,
-// chat path, and platform API base URL. The apiBaseURL is used for E2EE
-// invoke URL rewriting (the LLM inference and platform APIs use different hosts).
+// NewPreparer returns a Chutes Preparer configured with the given API key
+// and platform API base URL. The apiBaseURL is used for E2EE invoke URL
+// rewriting (the LLM inference and platform APIs use different hosts).
+// The chatPath parameter is accepted for backward compatibility but ignored;
+// endpoint paths are now passed dynamically per-request via PrepareRequest.
 func NewPreparer(apiKey, chatPath, apiBaseURL string) *Preparer {
-	return &Preparer{apiKey: apiKey, chatPath: chatPath, apiBaseURL: apiBaseURL}
+	return &Preparer{apiKey: apiKey, apiBaseURL: apiBaseURL}
 }
 
 // PrepareRequest injects the Authorization header into req. For Chutes E2EE
