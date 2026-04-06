@@ -806,3 +806,97 @@ func TestIntegration_NearCloud_VL_EncryptedImage(t *testing.T) {
 		t.Log("CONCLUSION: Server cannot process encrypted image URLs in VL content arrays")
 	}
 }
+
+// --------------------------------------------------------------------------
+// Encrypted image generation input test
+// --------------------------------------------------------------------------
+
+// TestIntegration_NearCloud_Images_EncryptedInput tests what happens when we
+// encrypt the "prompt" field of an image generation request. If the server
+// supported E2EE for image generation, it would decrypt the prompt before
+// generating the image.
+func TestIntegration_NearCloud_Images_EncryptedInput(t *testing.T) {
+	skipNearCloudE2EEIntegration(t)
+
+	const model = "black-forest-labs/FLUX.2-klein-4B"
+	signingKey := fetchSigningKey(t, model)
+	session := createE2EESession(t, signingKey)
+	defer session.Zero()
+
+	// First: baseline plaintext image generation.
+	plaintextBody := fmt.Sprintf(`{
+		"model": %q,
+		"prompt": "A solid red square",
+		"n": 1,
+		"size": "256x256",
+		"response_format": "b64_json"
+	}`, model)
+
+	ptResp := nearcloudPlaintextRequest(t, "/v1/images/generations", []byte(plaintextBody), "application/json")
+	ptBody := readBody(t, ptResp)
+	ptResp.Body.Close()
+	t.Logf("plaintext images: status=%d body_len=%d", ptResp.StatusCode, len(ptBody))
+
+	if ptResp.StatusCode == http.StatusOK {
+		var imgResp struct {
+			Data []struct {
+				B64JSON string `json:"b64_json"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(ptBody, &imgResp); err == nil && len(imgResp.Data) > 0 {
+			t.Logf("plaintext image: got b64_json (%d chars)", len(imgResp.Data[0].B64JSON))
+		} else {
+			t.Logf("plaintext image response: %s", truncate(ptBody, 300))
+		}
+	} else {
+		t.Logf("plaintext images failed: status=%d body=%s", ptResp.StatusCode, truncate(ptBody, 500))
+	}
+
+	// Now: encrypt the prompt and send with E2EE headers.
+	encPrompt, err := e2ee.EncryptXChaCha20([]byte("A solid red square"), session.ModelX25519Pub())
+	if err != nil {
+		t.Fatalf("encrypt prompt: %v", err)
+	}
+	t.Logf("encrypted prompt length: %d hex chars", len(encPrompt))
+
+	encBody := fmt.Sprintf(`{
+		"model": %q,
+		"prompt": %q,
+		"n": 1,
+		"size": "256x256",
+		"response_format": "b64_json"
+	}`, model, encPrompt)
+
+	e2eeResp := nearcloudE2EERequest(t, "/v1/images/generations", []byte(encBody), "application/json", session)
+	e2eeBody := readBody(t, e2eeResp)
+	e2eeResp.Body.Close()
+	t.Logf("encrypted images: status=%d body_len=%d", e2eeResp.StatusCode, len(e2eeBody))
+	t.Logf("encrypted images response: %s", truncate(e2eeBody, 500))
+
+	switch e2eeResp.StatusCode {
+	case http.StatusOK:
+		var imgResp struct {
+			Data []struct {
+				B64JSON string `json:"b64_json"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(e2eeBody, &imgResp); err == nil && len(imgResp.Data) > 0 {
+			t.Log("FINDING: Server generated an image from the CIPHERTEXT prompt")
+			t.Logf("  b64_json length: %d chars", len(imgResp.Data[0].B64JSON))
+			t.Log("The model interpreted the hex-encoded ciphertext as a text prompt")
+			t.Log("CONCLUSION: Server does NOT decrypt the prompt — E2EE is NOT end-to-end for image generation")
+		} else {
+			bodyStr := string(e2eeBody)
+			if e2ee.IsEncryptedChunkXChaCha20(strings.TrimSpace(bodyStr)) {
+				t.Log("FINDING: Server returned encrypted response for encrypted image prompt")
+				t.Log("CONCLUSION: Server MAY support true E2EE for image generation")
+			} else {
+				t.Logf("FINDING: Unexpected response format: %s", truncate(e2eeBody, 300))
+			}
+		}
+	default:
+		t.Logf("FINDING: Server rejected encrypted image prompt: status=%d body=%s",
+			e2eeResp.StatusCode, truncate(e2eeBody, 500))
+		t.Log("CONCLUSION: Server cannot process encrypted prompts for image generation")
+	}
+}
