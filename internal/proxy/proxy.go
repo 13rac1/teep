@@ -986,7 +986,7 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 		if prov.PinnedHandler != nil {
 			status = "pinned"
 			if ep.canStream {
-				s.handlePinnedChat(ctx, w, r, prov, upstreamModel, body, stream, endpointPath)
+				s.handlePinnedChat(ctx, w, r, prov, upstreamModel, body, stream, endpointPath, ep.contentType)
 			} else {
 				s.handlePinnedNonChat(ctx, w, r, prov, upstreamModel, body, endpointPath)
 			}
@@ -1359,11 +1359,18 @@ func (s *Server) handlePinnedChat(
 	ctx context.Context,
 	w http.ResponseWriter, r *http.Request,
 	prov *provider.Provider, upstreamModel string,
-	body []byte, stream bool, endpointPath string,
+	body []byte, stream bool, endpointPath string, contentType string,
 ) {
 	// Build forwarded headers.
 	headers := make(http.Header)
-	headers.Set("Content-Type", "application/json")
+	ct := contentType
+	if ct == "" {
+		ct = r.Header.Get("Content-Type")
+	}
+	if ct == "" {
+		ct = "application/json"
+	}
+	headers.Set("Content-Type", ct)
 	// Forward Authorization from client if present.
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		headers.Set("Authorization", auth)
