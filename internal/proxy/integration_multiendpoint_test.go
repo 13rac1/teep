@@ -258,7 +258,8 @@ func TestIntegration_NearDirect_Audio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	t.Logf("audio transcription response: %s", respBody)
+
+	assertAudioResponse(t, respBody)
 }
 
 // --------------------------------------------------------------------------
@@ -364,6 +365,23 @@ func putLE32(b []byte, v uint32) {
 	b[1] = byte(v >> 8)
 	b[2] = byte(v >> 16)
 	b[3] = byte(v >> 24)
+}
+
+// assertAudioResponse validates the response body matches OpenAI audio
+// transcription spec: {"text": "..."}.
+func assertAudioResponse(t *testing.T, body []byte) {
+	t.Helper()
+
+	var resp struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode audio response: %v\nraw: %s", err, body[:min(500, len(body))])
+	}
+
+	// A silent WAV produces empty or whitespace-only transcription — that's
+	// fine. The test validates the response structure, not speech content.
+	t.Logf("audio transcription: %q", resp.Text)
 }
 
 // assertRerankResponse validates the response body matches a rerank response spec.
