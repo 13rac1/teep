@@ -230,6 +230,45 @@ func TestIntegration_NearDirect_Audio(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// NearDirect Rerank integration
+// --------------------------------------------------------------------------
+
+func nearDirectRerankModel() string {
+	if m := os.Getenv("NEARAI_RERANK_MODEL"); m != "" {
+		return m
+	}
+	return "Qwen/Qwen3-Reranker-0.6B"
+}
+
+func TestIntegration_NearDirect_Rerank(t *testing.T) {
+	skipNearDirectIntegration(t)
+
+	proxySrv := newProxyServer(t, integrationNearDirectConfig(t))
+	defer proxySrv.Close()
+
+	model := nearDirectRerankModel()
+	body := fmt.Sprintf(`{"model":%q,"query":"What is deep learning?","documents":["Deep learning is a subset of machine learning.","The weather today is sunny.","Neural networks have multiple layers."],"top_n":2}`, model)
+
+	resp, err := integrationClient.Post(proxySrv.URL+"/v1/rerank", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST rerank: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	assertRerankResponse(t, respBody)
+}
+
+// --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------
 
@@ -293,4 +332,35 @@ func putLE32(b []byte, v uint32) {
 	b[1] = byte(v >> 8)
 	b[2] = byte(v >> 16)
 	b[3] = byte(v >> 24)
+}
+
+// assertRerankResponse validates the response body matches a rerank response spec.
+func assertRerankResponse(t *testing.T, body []byte) {
+	t.Helper()
+
+	var resp struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Results []struct {
+			Index          int     `json:"index"`
+			RelevanceScore float64 `json:"relevance_score"`
+			Document       struct {
+				Text string `json:"text"`
+			} `json:"document"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode rerank response: %v\nraw: %s", err, body[:min(500, len(body))])
+	}
+
+	if len(resp.Results) == 0 {
+		t.Fatal("no rerank results in response")
+	}
+	for i, r := range resp.Results {
+		if r.RelevanceScore == 0 && r.Document.Text == "" {
+			t.Errorf("result[%d] has zero score and empty document", i)
+		}
+	}
+	t.Logf("rerank: model=%s results=%d top_score=%.4f",
+		resp.Model, len(resp.Results), resp.Results[0].RelevanceScore)
 }

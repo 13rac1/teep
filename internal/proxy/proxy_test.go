@@ -763,6 +763,88 @@ func TestAudio_NonPinnedE2EEFails400(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// Rerank endpoint tests
+// --------------------------------------------------------------------------
+
+func TestRerank_MissingModel400(t *testing.T) {
+	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
+	defer proxySrv.Close()
+
+	resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
+		strings.NewReader(`{"query":"hello","documents":["a","b"]}`))
+	if err != nil {
+		t.Fatalf("POST rerank: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRerank_InvalidJSON400(t *testing.T) {
+	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
+	defer proxySrv.Close()
+
+	resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
+		strings.NewReader(`not json`))
+	if err != nil {
+		t.Fatalf("POST rerank: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRerank_PinnedOK(t *testing.T) {
+	handler := &pathCapturingPinnedHandler{}
+	proxySrv := newNeardirectProxyServer(t, handler)
+	defer proxySrv.Close()
+
+	resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
+		strings.NewReader(`{"model":"test-model","query":"hello","documents":["a","b"]}`))
+	if err != nil {
+		t.Fatalf("POST rerank: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	handler.mu.Lock()
+	gotPath := handler.path
+	handler.mu.Unlock()
+	if gotPath != "/v1/rerank" {
+		t.Errorf("PinnedRequest.Path = %q, want /v1/rerank", gotPath)
+	}
+}
+
+func TestRerank_ProviderDoesNotSupport400(t *testing.T) {
+	// Venice has no RerankPath set.
+	attestSrv := makeAttestationServer(t, false)
+	defer attestSrv.Close()
+
+	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
+	defer proxySrv.Close()
+
+	resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
+		strings.NewReader(`{"model":"test-model","query":"hello","documents":["a","b"]}`))
+	if err != nil {
+		t.Fatalf("POST rerank: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("status = %d, want 400; body=%s", resp.StatusCode, body)
+	}
+}
+
+// --------------------------------------------------------------------------
 // Embeddings negative cache hit returns 503
 // --------------------------------------------------------------------------
 

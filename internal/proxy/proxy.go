@@ -348,6 +348,7 @@ func New(cfg *config.Config) (*Server, error) {
 	s.mux.HandleFunc("POST /v1/embeddings", s.handleEmbeddings)
 	s.mux.HandleFunc("POST /v1/audio/transcriptions", s.handleAudioTranscriptions)
 	s.mux.HandleFunc("POST /v1/images/generations", s.handleImagesGenerations)
+	s.mux.HandleFunc("POST /v1/rerank", s.handleRerank)
 	s.mux.HandleFunc("GET /v1/models", s.handleModels)
 	s.mux.HandleFunc("GET /v1/tee/report", s.handleReport)
 
@@ -453,6 +454,7 @@ func fromConfig(
 		p.EmbeddingsPath = "/v1/embeddings"
 		p.AudioPath = "/v1/audio/transcriptions"
 		p.ImagesPath = "/v1/images/generations"
+		p.RerankPath = "/v1/rerank"
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
@@ -2032,6 +2034,110 @@ func (s *Server) handleImagesGenerations(w http.ResponseWriter, r *http.Request)
 	}
 
 	rr := s.relayWithRetry(ctx, w, prov, upstreamModel, body, ar, ms, false, prov.ImagesPath)
+	e2eeDur += rr.e2eeDur
+	upstreamDur += rr.upstreamDur
+	if rr.status != "" {
+		status = rr.status
+		return
+	}
+
+	if ar.E2EEActive {
+		cloned := report.Clone()
+		cloned.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
+		s.cache.Put(prov.Name, upstreamModel, cloned)
+	}
+	status = "ok"
+}
+
+// rerankRequest is a minimal parse of a rerank request.
+type rerankRequest struct {
+	Model string `json:"model"`
+}
+
+// handleRerank handles POST /v1/rerank. Non-streaming JSON relay.
+func (s *Server) handleRerank(w http.ResponseWriter, r *http.Request) {
+	ctx := reqid.WithID(r.Context(), reqid.New())
+	requestStart := time.Now()
+
+	r.Body = http.MaxBytesReader(w, r.Body, 50<<20)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "request body too large or unreadable", http.StatusBadRequest)
+		return
+	}
+	r.Body.Close()
+
+	var req rerankRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if req.Model == "" {
+		http.Error(w, `"model" field is required`, http.StatusBadRequest)
+		return
+	}
+
+	prov, upstreamModel, ok := s.resolveModel(req.Model)
+	if !ok {
+		http.Error(w, fmt.Sprintf("unknown model %q", req.Model), http.StatusBadRequest)
+		return
+	}
+	if prov.RerankPath == "" {
+		http.Error(w, fmt.Sprintf("provider %q does not support reranking", prov.Name), http.StatusBadRequest)
+		return
+	}
+
+	var attestDur, e2eeDur, upstreamDur time.Duration
+	var status string
+	defer func() {
+		slog.InfoContext(ctx, "request complete",
+			"endpoint", "rerank",
+			"provider", prov.Name,
+			"model", upstreamModel,
+			"status", status,
+			"attest", fmtDur(attestDur),
+			"e2ee", fmtDur(e2eeDur),
+			"upstream", fmtDur(upstreamDur),
+			"total", fmtDur(time.Since(requestStart)),
+		)
+	}()
+
+	s.stats.requests.Add(1)
+	ms := s.stats.getModelStats(prov.Name, upstreamModel)
+	ms.requests.Add(1)
+	ms.lastRequestAt.Store(time.Now().Unix())
+	s.stats.nonStream.Add(1)
+
+	if s.negCache.IsBlocked(prov.Name, upstreamModel) {
+		status = "neg_cached"
+		s.stats.errors.Add(1)
+		ms.errors.Add(1)
+		http.Error(w, fmt.Sprintf("attestation recently failed for %s/%s; try again later", prov.Name, upstreamModel), http.StatusServiceUnavailable)
+		return
+	}
+
+	if prov.PinnedHandler != nil {
+		status = "pinned"
+		s.handlePinnedNonChat(ctx, w, r, prov, upstreamModel, body, prov.RerankPath)
+		return
+	}
+
+	ar, failStatus := s.attestAndCache(ctx, w, prov, upstreamModel, ms)
+	attestDur = ar.AttestDur
+	if failStatus != "" {
+		status = failStatus
+		return
+	}
+	report := ar.Report
+
+	if ar.E2EEActive {
+		if ok := s.clearE2EEFailureIfFresh(ctx, w, prov, upstreamModel, ar, ms); !ok {
+			status = "e2ee_recovery_pending"
+			return
+		}
+	}
+
+	rr := s.relayWithRetry(ctx, w, prov, upstreamModel, body, ar, ms, false, prov.RerankPath)
 	e2eeDur += rr.e2eeDur
 	upstreamDur += rr.upstreamDur
 	if rr.status != "" {

@@ -149,6 +149,10 @@ type Provider struct {
 	// (e.g. "/v1/images/generations"). Empty means unsupported.
 	ImagesPath string
 
+	// RerankPath is the upstream API path for reranking
+	// (e.g. "/v1/rerank"). Empty means unsupported.
+	RerankPath string
+
 	// E2EE indicates whether this provider supports end-to-end encryption.
 	E2EE bool
 
