@@ -489,6 +489,34 @@ func newNeardirectProxyServer(t *testing.T, handler provider.PinnedHandler) *htt
 	return httptest.NewServer(srv)
 }
 
+// sessionPinnedHandler returns a non-nil Session in PinnedResponse, simulating
+// an upstream that returned E2EE-encrypted data on a non-chat endpoint.
+type sessionPinnedHandler struct{}
+
+// fakeDecryptor satisfies e2ee.Decryptor for testing.
+type fakeDecryptor struct{}
+
+func (fakeDecryptor) IsEncryptedChunk(string) bool   { return false }
+func (fakeDecryptor) Decrypt(string) ([]byte, error) { return nil, errors.New("fake") }
+func (fakeDecryptor) Zero()                          {}
+
+func (sessionPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
+	body := io.NopCloser(strings.NewReader(`{"data":"encrypted"}`))
+	return &provider.PinnedResponse{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       body,
+		Session:    fakeDecryptor{},
+		Report: &attestation.VerificationReport{
+			Provider: "neardirect",
+			Model:    "test-model",
+			Factors: []attestation.FactorResult{
+				{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
+			},
+		},
+	}, nil
+}
+
 // --------------------------------------------------------------------------
 // Embeddings endpoint tests
 // --------------------------------------------------------------------------
@@ -632,6 +660,25 @@ func TestImages_PinnedOK(t *testing.T) {
 	}
 }
 
+func TestImages_PinnedE2EESessionFailsClosed(t *testing.T) {
+	// When a pinned non-chat endpoint returns an E2EE session, the proxy must
+	// fail closed (502) rather than forwarding ciphertext to the client.
+	proxySrv := newNeardirectProxyServer(t, sessionPinnedHandler{})
+	defer proxySrv.Close()
+
+	resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
+		strings.NewReader(`{"model":"test-model","prompt":"a cat","n":1}`))
+	if err != nil {
+		t.Fatalf("POST images: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("status = %d, want 502; body=%s", resp.StatusCode, body)
+	}
+}
+
 func TestImages_ProviderDoesNotSupport400(t *testing.T) {
 	// Venice has no ImagesPath set.
 	attestSrv := makeAttestationServer(t, false)
@@ -684,6 +731,34 @@ func TestAudio_PinnedOK(t *testing.T) {
 	// Multipart form with model field.
 	var buf bytes.Buffer
 	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ntest-model\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
+	resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
+		"multipart/form-data; boundary=boundary", &buf)
+	if err != nil {
+		t.Fatalf("POST audio: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	handler.mu.Lock()
+	gotPath := handler.path
+	handler.mu.Unlock()
+	if gotPath != "/v1/audio/transcriptions" {
+		t.Errorf("PinnedRequest.Path = %q, want /v1/audio/transcriptions", gotPath)
+	}
+}
+
+func TestAudio_PinnedOK_FileBeforeModel(t *testing.T) {
+	handler := &pathCapturingPinnedHandler{}
+	proxySrv := newNeardirectProxyServer(t, handler)
+	defer proxySrv.Close()
+
+	// Multipart form with file field before model field (reversed order).
+	var buf bytes.Buffer
+	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ntest-model\r\n--boundary--\r\n")
 	resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
 		"multipart/form-data; boundary=boundary", &buf)
 	if err != nil {

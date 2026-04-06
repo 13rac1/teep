@@ -326,6 +326,24 @@ func assertImagesResponse(t *testing.T, body []byte) {
 	if resp.Data[0].URL == "" && resp.Data[0].B64JSON == "" {
 		t.Error("image data[0] has neither url nor b64_json")
 	}
+	if resp.Data[0].B64JSON != "" {
+		decoded, err := base64.StdEncoding.DecodeString(resp.Data[0].B64JSON)
+		switch {
+		case err != nil:
+			t.Errorf("b64_json is not valid base64: %v", err)
+		case len(decoded) < 4:
+			t.Error("b64_json decoded to fewer than 4 bytes")
+		default:
+			// Check for common image magic bytes (PNG, JPEG, GIF, WebP).
+			isPNG := decoded[0] == 0x89 && decoded[1] == 'P' && decoded[2] == 'N' && decoded[3] == 'G'
+			isJPEG := decoded[0] == 0xFF && decoded[1] == 0xD8
+			isGIF := decoded[0] == 'G' && decoded[1] == 'I' && decoded[2] == 'F'
+			isWebP := len(decoded) >= 12 && string(decoded[8:12]) == "WEBP"
+			if !isPNG && !isJPEG && !isGIF && !isWebP {
+				t.Errorf("b64_json does not start with known image magic bytes (first 4: %x)", decoded[:4])
+			}
+		}
+	}
 	t.Logf("images: created=%d count=%d has_url=%v has_b64=%v",
 		resp.Created, len(resp.Data), resp.Data[0].URL != "", resp.Data[0].B64JSON != "")
 }
