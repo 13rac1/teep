@@ -1644,10 +1644,10 @@ func TestEvalE2EEUsable(t *testing.T) {
 		}
 	})
 
-	t.Run("enforced_no_api_key_stays_skip", func(t *testing.T) {
-		// e2ee_usable is exempt from Skip→Fail promotion because it can
-		// only be evaluated via a live relay roundtrip. Post-relay
-		// enforcement catches failures instead.
+	t.Run("enforced_no_api_key_promoted_to_fail", func(t *testing.T) {
+		// When E2EETest is populated (teep verify path), the factor is
+		// NOT deferred. If enforced and Skip (no API key), it gets
+		// promoted to Fail — correct fail-closed behavior.
 		nonce := NewNonce()
 		raw := buildMinimalRaw(nonce, validSigningKey(t))
 		report := BuildReport(&ReportInput{
@@ -1662,8 +1662,8 @@ func TestEvalE2EEUsable(t *testing.T) {
 			},
 		})
 		f := findFactor(t, report, "e2ee_usable")
-		if f.Status != Skip {
-			t.Errorf("e2ee_usable should stay Skip (exempt from promotion), got %s", f.Status)
+		if f.Status != Fail {
+			t.Errorf("e2ee_usable should be promoted to Fail (enforced, not deferred), got %s", f.Status)
 		}
 		if !f.Enforced {
 			t.Error("should be marked enforced")
@@ -2064,6 +2064,348 @@ func TestRecomputeCounters(t *testing.T) {
 		}
 		if r.Skipped != 0 {
 			t.Errorf("Skipped = %d, want 0", r.Skipped)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// MarkE2EEFailed
+// ---------------------------------------------------------------------------
+
+func TestMarkE2EEFailed(t *testing.T) {
+	t.Run("demotes_pass_to_fail", func(t *testing.T) {
+		report := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "nonce_match", Status: Pass},
+				{Name: "e2ee_usable", Status: Pass, Detail: "roundtrip succeeded"},
+			},
+			Passed: 2,
+		}
+		report.MarkE2EEFailed("E2EE decryption failed: bad ciphertext")
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Fail {
+			t.Errorf("status = %s, want Fail", f.Status)
+		}
+		if f.Detail != "E2EE decryption failed: bad ciphertext" {
+			t.Errorf("detail = %q, want error message", f.Detail)
+		}
+		if report.Passed != 1 {
+			t.Errorf("Passed = %d, want 1", report.Passed)
+		}
+		if report.Failed != 1 {
+			t.Errorf("Failed = %d, want 1", report.Failed)
+		}
+	})
+
+	t.Run("demotes_skip_to_fail", func(t *testing.T) {
+		report := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "nonce_match", Status: Pass},
+				{Name: "e2ee_usable", Status: Skip, Detail: "pending"},
+			},
+			Passed:  1,
+			Skipped: 1,
+		}
+		report.MarkE2EEFailed("decryption failed")
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Fail {
+			t.Errorf("status = %s, want Fail", f.Status)
+		}
+		if report.Skipped != 0 {
+			t.Errorf("Skipped = %d, want 0", report.Skipped)
+		}
+		if report.Failed != 1 {
+			t.Errorf("Failed = %d, want 1", report.Failed)
+		}
+	})
+
+	t.Run("noop_already_fail", func(t *testing.T) {
+		report := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "e2ee_usable", Status: Fail, Detail: "original error"},
+			},
+			Failed: 1,
+		}
+		report.MarkE2EEFailed("second failure")
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Detail != "original error" {
+			t.Errorf("detail should not change for already-Fail factor: %s", f.Detail)
+		}
+	})
+
+	t.Run("noop_missing_factor", func(t *testing.T) {
+		report := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "nonce_match", Status: Pass},
+			},
+			Passed: 1,
+		}
+		report.MarkE2EEFailed("decryption failed")
+		if report.Passed != 1 {
+			t.Errorf("Passed should remain 1, got %d", report.Passed)
+		}
+	})
+
+	t.Run("enforced_counts_correct", func(t *testing.T) {
+		report := &VerificationReport{
+			Factors: []FactorResult{
+				{Name: "nonce_match", Status: Pass, Enforced: true},
+				{Name: "e2ee_usable", Status: Pass, Enforced: true},
+			},
+			Passed:         2,
+			EnforcedFailed: 0,
+		}
+		report.MarkE2EEFailed("decryption failed")
+		if report.EnforcedFailed != 1 {
+			t.Errorf("EnforcedFailed = %d, want 1", report.EnforcedFailed)
+		}
+		if report.Passed != 1 {
+			t.Errorf("Passed = %d, want 1", report.Passed)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Deferred factor mechanism
+// ---------------------------------------------------------------------------
+
+func TestEvalE2EEUsable_Deferred(t *testing.T) {
+	t.Run("deferred_when_e2ee_configured_no_test", func(t *testing.T) {
+		// Proxy path: E2EEConfigured=true, E2EETest=nil → Deferred=true
+		results := evalE2EEUsable(&ReportInput{
+			Raw:            &RawAttestation{},
+			E2EEConfigured: true,
+		})
+		f := assertSingleFactor(t, results, Skip)
+		if !f.Deferred {
+			t.Error("Deferred should be true for E2EEConfigured+nil E2EETest (proxy path)")
+		}
+	})
+
+	t.Run("not_deferred_when_not_configured", func(t *testing.T) {
+		// No E2EE configured → not deferred
+		results := evalE2EEUsable(&ReportInput{
+			Raw: &RawAttestation{},
+		})
+		f := assertSingleFactor(t, results, Skip)
+		if f.Deferred {
+			t.Error("Deferred should be false when E2EE is not configured")
+		}
+	})
+
+	t.Run("not_deferred_when_test_passes", func(t *testing.T) {
+		// teep verify path: E2EETest populated → not deferred
+		results := evalE2EEUsable(&ReportInput{
+			Raw:            &RawAttestation{},
+			E2EEConfigured: true,
+			E2EETest: &E2EETestResult{
+				Attempted: true,
+				Detail:    "E2EE test passed",
+			},
+		})
+		f := assertSingleFactor(t, results, Pass)
+		if f.Deferred {
+			t.Error("Deferred should be false when E2EETest is populated and passes")
+		}
+	})
+
+	t.Run("not_deferred_when_test_fails", func(t *testing.T) {
+		results := evalE2EEUsable(&ReportInput{
+			Raw: &RawAttestation{},
+			E2EETest: &E2EETestResult{
+				Attempted: true,
+				Err:       errors.New("test failed"),
+			},
+		})
+		f := assertSingleFactor(t, results, Fail)
+		if f.Deferred {
+			t.Error("Deferred should be false when E2EETest fails")
+		}
+	})
+}
+
+func TestBuildReport_DeferredSkipNotPromoted(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+
+	t.Run("deferred_factor_stays_skip_when_enforced", func(t *testing.T) {
+		// e2ee_usable is enforced (not in allow_fail) and deferred (E2EEConfigured=true).
+		// It must stay Skip, not be promoted to Fail.
+		report := BuildReport(&ReportInput{
+			Provider:       "nearcloud",
+			Model:          "test-model",
+			Raw:            raw,
+			Nonce:          nonce,
+			AllowFail:      allExcept("e2ee_usable"),
+			E2EEConfigured: true,
+		})
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Skip {
+			t.Errorf("e2ee_usable: got %s, want Skip (deferred factor should not be promoted)", f.Status)
+		}
+		if !f.Enforced {
+			t.Error("e2ee_usable should be marked enforced")
+		}
+		if !f.Deferred {
+			t.Error("e2ee_usable should be marked deferred")
+		}
+		// Report should NOT be blocked by the deferred skip.
+		if report.Blocked() {
+			t.Error("report should not be blocked when only deferred factors are Skip")
+		}
+	})
+
+	t.Run("non_deferred_factor_promoted_to_fail", func(t *testing.T) {
+		// A non-deferred enforced Skip factor is promoted to Fail.
+		report := BuildReport(&ReportInput{
+			Provider:  "venice",
+			Model:     "test-model",
+			Raw:       raw,
+			Nonce:     nonce,
+			AllowFail: allExcept("event_log_integrity"),
+		})
+		f := findFactor(t, report, "event_log_integrity")
+		if f.Status != Fail {
+			t.Errorf("event_log_integrity: got %s, want Fail (non-deferred enforced promotion)", f.Status)
+		}
+		if f.Deferred {
+			t.Error("event_log_integrity should not be deferred")
+		}
+	})
+
+	t.Run("deferred_not_configured_promoted_to_fail", func(t *testing.T) {
+		// e2ee_usable with E2EEConfigured=false is NOT deferred, so it
+		// can be promoted to Fail when enforced.
+		report := BuildReport(&ReportInput{
+			Provider:  "venice",
+			Model:     "test-model",
+			Raw:       raw,
+			Nonce:     nonce,
+			AllowFail: allExcept("e2ee_usable"),
+		})
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Fail {
+			t.Errorf("e2ee_usable (not configured): got %s, want Fail (not deferred, so promoted)", f.Status)
+		}
+		if f.Deferred {
+			t.Error("e2ee_usable should not be deferred when not configured")
+		}
+	})
+}
+
+// TestAllowFailConsistency verifies that e2ee_usable behaves correctly under
+// both allow_fail configurations (Venice/NearDirect vs NearCloud/Chutes).
+func TestAllowFailConsistency(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+
+	t.Run("venice_allow_fail_e2ee", func(t *testing.T) {
+		// Venice: e2ee_usable is in DefaultAllowFail → not enforced.
+		report := BuildReport(&ReportInput{
+			Provider:       "venice",
+			Model:          "test-model",
+			Raw:            raw,
+			Nonce:          nonce,
+			AllowFail:      DefaultAllowFail,
+			E2EEConfigured: true,
+		})
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Skip {
+			t.Errorf("venice e2ee_usable: got %s, want Skip", f.Status)
+		}
+		if f.Enforced {
+			t.Error("venice: e2ee_usable should NOT be enforced (in DefaultAllowFail)")
+		}
+	})
+
+	t.Run("nearcloud_enforced_e2ee_stays_skip", func(t *testing.T) {
+		// NearCloud: e2ee_usable NOT in NearcloudDefaultAllowFail → enforced.
+		// But since E2EEConfigured=true, Deferred=true, stays Skip.
+		report := BuildReport(&ReportInput{
+			Provider:       "nearcloud",
+			Model:          "test-model",
+			Raw:            raw,
+			Nonce:          nonce,
+			AllowFail:      NearcloudDefaultAllowFail,
+			E2EEConfigured: true,
+		})
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Skip {
+			t.Errorf("nearcloud e2ee_usable: got %s, want Skip (deferred)", f.Status)
+		}
+		if !f.Enforced {
+			t.Error("nearcloud: e2ee_usable should be enforced")
+		}
+		if !f.Deferred {
+			t.Error("nearcloud: e2ee_usable should be deferred")
+		}
+	})
+
+	t.Run("chutes_enforced_e2ee_stays_skip", func(t *testing.T) {
+		// Chutes: e2ee_usable NOT in ChutesDefaultAllowFail → enforced.
+		report := BuildReport(&ReportInput{
+			Provider:       "chutes",
+			Model:          "test-model",
+			Raw:            raw,
+			Nonce:          nonce,
+			AllowFail:      ChutesDefaultAllowFail,
+			E2EEConfigured: true,
+		})
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Skip {
+			t.Errorf("chutes e2ee_usable: got %s, want Skip (deferred)", f.Status)
+		}
+		if !f.Enforced {
+			t.Error("chutes: e2ee_usable should be enforced")
+		}
+		if !f.Deferred {
+			t.Error("chutes: e2ee_usable should be deferred")
+		}
+	})
+
+	t.Run("mark_usable_then_fail_roundtrip", func(t *testing.T) {
+		// Simulate full lifecycle: build → MarkE2EEUsable → MarkE2EEFailed
+		report := BuildReport(&ReportInput{
+			Provider:       "nearcloud",
+			Model:          "test-model",
+			Raw:            raw,
+			Nonce:          nonce,
+			AllowFail:      NearcloudDefaultAllowFail,
+			E2EEConfigured: true,
+		})
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Skip {
+			t.Fatalf("initial: got %s, want Skip", f.Status)
+		}
+
+		// Successful relay promotes to Pass.
+		cloned := report.Clone()
+		cloned.MarkE2EEUsable("E2EE roundtrip succeeded")
+		f = findFactor(t, cloned, "e2ee_usable")
+		if f.Status != Pass {
+			t.Fatalf("after MarkE2EEUsable: got %s, want Pass", f.Status)
+		}
+
+		// Decryption failure demotes to Fail.
+		failed := cloned.Clone()
+		failed.MarkE2EEFailed("decryption error")
+		f = findFactor(t, failed, "e2ee_usable")
+		if f.Status != Fail {
+			t.Errorf("after MarkE2EEFailed: got %s, want Fail", f.Status)
+		}
+
+		// Original is untouched.
+		f = findFactor(t, report, "e2ee_usable")
+		if f.Status != Skip {
+			t.Error("original report should be unchanged after Clone+mutation")
+		}
+
+		// Cloned (Pass) is untouched.
+		f = findFactor(t, cloned, "e2ee_usable")
+		if f.Status != Pass {
+			t.Error("cloned report (Pass) should be unchanged after further Clone+mutation")
 		}
 	})
 }

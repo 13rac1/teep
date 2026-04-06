@@ -1094,6 +1094,18 @@ func (s *Server) handleE2EEDecryptionFailure(
 		// breakage. Block all subsequent requests until re-attestation.
 		s.e2eeFailed.Store(providerModelKey{prov.Name, upstreamModel}, true)
 	}
+
+	// Demote e2ee_usable in the cached report so the report endpoint
+	// reflects the failure. The cache entry is about to be deleted, but
+	// a concurrent reader may still see it briefly. Keep the report detail
+	// sanitized: relayErr may wrap lower-level decrypt errors that include
+	// upstream content, which must never be exposed via the report endpoint.
+	if cachedReport, ok := s.cache.Get(prov.Name, upstreamModel); ok {
+		cloned := cachedReport.Clone()
+		cloned.MarkE2EEFailed("E2EE decryption failed (see server logs, req=" + reqid.FromContext(ctx) + ")")
+		s.cache.Put(prov.Name, upstreamModel, cloned)
+	}
+
 	// Invalidate caches to force full re-attestation on the next request.
 	s.cache.Delete(prov.Name, upstreamModel)
 	s.signingKeyCache.Delete(prov.Name, upstreamModel)
@@ -1253,11 +1265,35 @@ func (s *Server) handlePinnedChat(
 	ss, relayErr := relayResponse(ctx, w, pinnedResp.Body, session, nil, req.Stream)
 	recordTokPerSec(ms, ss)
 
+	s.handlePinnedPostRelay(ctx, prov, upstreamModel, report, session, ms, relayErr)
+}
+
+// handlePinnedPostRelay handles E2EE enforcement and cache updates after a
+// pinned relay completes. Extracted from handlePinnedChat for complexity.
+func (s *Server) handlePinnedPostRelay(
+	ctx context.Context,
+	prov *provider.Provider,
+	upstreamModel string,
+	report *attestation.VerificationReport,
+	session e2ee.Decryptor,
+	ms *modelStats,
+	relayErr error,
+) {
 	// Post-relay enforcement for pinned E2EE paths.
 	if relayErr != nil && errors.Is(relayErr, e2ee.ErrDecryptionFailed) && session != nil {
 		s.stats.errors.Add(1)
 		ms.errors.Add(1)
 		s.e2eeFailed.Store(providerModelKey{prov.Name, upstreamModel}, true)
+
+		// Demote e2ee_usable in the cached report so the report endpoint
+		// reflects the failure before the cache entry is deleted. Keep detail
+		// sanitized: relayErr may include upstream content.
+		if cachedReport, ok := s.cache.Get(prov.Name, upstreamModel); ok {
+			cloned := cachedReport.Clone()
+			cloned.MarkE2EEFailed("pinned E2EE decryption failed (see server logs, req=" + reqid.FromContext(ctx) + ")")
+			s.cache.Put(prov.Name, upstreamModel, cloned)
+		}
+
 		s.cache.Delete(prov.Name, upstreamModel)
 		s.signingKeyCache.Delete(prov.Name, upstreamModel)
 		slog.ErrorContext(ctx, "pinned E2EE decryption failed; caches invalidated",
@@ -1276,7 +1312,7 @@ func (s *Server) handlePinnedChat(
 	// After a successful E2EE roundtrip on the pinned path,
 	// promote e2ee_usable from Skip to Pass in the cached report.
 	// Clone before mutating to avoid racing with concurrent readers.
-	if session != nil && report != nil && relayErr == nil {
+	if session != nil && report != nil {
 		cloned := report.Clone()
 		cloned.MarkE2EEUsable("E2EE roundtrip succeeded via pinned connection")
 		s.cache.Put(prov.Name, upstreamModel, cloned)

@@ -392,7 +392,7 @@ Teep uses an inverted enforcement model: any factor NOT in the provider's `Defau
 The current neardirect-specific allowed-to-fail factors are:
 - `tdx_hardware_config` — RTMR0 (varies per deployment hardware configuration),
 - `tdx_boot_config` — RTMR1/RTMR2 (varies per dstack image build),
-- `e2ee_usable` — has a chicken-and-egg problem: the factor starts as Skip (pending live test), which `BuildReport` promotes to Fail when enforced, blocking the very request needed to prove E2EE works (see `docs/plans/e2ee_usable_refactoring.md`),
+- `e2ee_usable` — uses the Deferred factor mechanism: starts as Skip with `Deferred: true` in the proxy path, exempt from Skip→Fail promotion even when enforced; promoted to Pass after successful E2EE relay, or demoted to Fail on decryption failure,
 - `cpu_gpu_chain` — not yet implemented,
 - `measured_model_weights` — not yet implemented,
 - `cpu_id_registry` — Proof-of-Cloud hardware registry.

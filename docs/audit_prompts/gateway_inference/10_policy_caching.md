@@ -67,7 +67,6 @@ Verify:
 The current `NearcloudDefaultAllowFail` factors are:
 - `tdx_hardware_config` — model RTMR0 (varies per deployment hardware),
 - `tdx_boot_config` — model RTMR1/RTMR2,
-- `e2ee_usable` — chicken-and-egg problem (see Section 08),
 - `cpu_gpu_chain` — not yet implemented,
 - `measured_model_weights` — not yet implemented,
 - `cpu_id_registry` — Proof-of-Cloud hardware registry,

@@ -619,7 +619,7 @@ The audit MUST verify:
 
 #### e2ee_usable Factor
 
-The `e2ee_usable` factor tests live E2EE encryption/decryption. It has a chicken-and-egg problem in the proxy path: the factor starts as Skip (pending live test), which `BuildReport` promotes to Fail when enforced, blocking the very request needed to prove E2EE works. For this reason, `e2ee_usable` is in `NearcloudDefaultAllowFail`. The planned redesign is described in `docs/plans/e2ee_usable_refactoring.md`.
+The `e2ee_usable` factor tests live E2EE encryption/decryption. In the proxy path, the factor starts as Skip (pending live test) with `Deferred: true`, which exempts it from `BuildReport`'s Skip→Fail promotion even when enforced. This solves the chicken-and-egg problem: the proxy can forward the first E2EE request without blocking, then promotes the factor to Pass via `MarkE2EEUsable` after a successful relay. Post-relay decryption failures trigger `MarkE2EEFailed` (demoting to Fail), `e2eeFailed` blocking, and cache invalidation — fail-closed for all subsequent requests until re-attestation. `e2ee_usable` is enforced by default for NearCloud (not in `NearcloudDefaultAllowFail`).
 
 ---
 
@@ -645,7 +645,6 @@ Teep uses an inverted enforcement model: any factor NOT in the provider's `Defau
 The current nearcloud-specific allowed-to-fail factors are:
 - `tdx_hardware_config` — model RTMR0 (varies per deployment hardware),
 - `tdx_boot_config` — model RTMR1/RTMR2,
-- `e2ee_usable` — chicken-and-egg problem (see §4.16),
 - `cpu_gpu_chain` — not yet implemented,
 - `measured_model_weights` — not yet implemented,
 - `cpu_id_registry` — Proof-of-Cloud hardware registry,
@@ -700,7 +699,7 @@ The audit MUST evaluate whether additional factors should be enforced by default
 > - `compose_binding` — not applicable (returns `Skip`; sek8s uses cosign admission, not docker-compose),
 > - `sigstore_verification` — not applicable (returns `Skip`; no container image digests in attestation),
 > - `event_log_integrity` — not applicable (returns `Skip`; event log not exposed to clients),
-> - `e2ee_usable` — same chicken-and-egg problem as nearcloud.
+> Note: `e2ee_usable` is enforced for chutes (not in `ChutesDefaultAllowFail`). The Deferred factor mechanism allows it to start as Skip without blocking requests (see §4.16).
 >
 > Factors that remain **enforced** for chutes include: `nonce_match`, `tdx_quote_present`, `tdx_quote_structure`, `tdx_cert_chain`, `tdx_quote_signature`, `tdx_debug_disabled`, `tdx_mrseam_mrtd`, `tdx_reportdata_binding`, `intel_pcs_collateral`, `tdx_tcb_current`, `tdx_tcb_not_revoked`, `e2ee_capable`, `signing_key_present`.
 >

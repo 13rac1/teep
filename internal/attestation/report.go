@@ -56,6 +56,7 @@ type FactorResult struct {
 	Detail   string `json:"detail"`
 	Enforced bool   `json:"enforced"` // from policy config
 	Tier     string `json:"tier"`
+	Deferred bool   `json:"deferred,omitempty"` // true = post-report-build evaluation; Skip not promoted to Fail
 }
 
 // VerificationReport holds the factor-by-factor results of an attestation
@@ -138,6 +139,23 @@ func (r *VerificationReport) MarkE2EEUsable(detail string) {
 		if r.Factors[i].Name == "e2ee_usable" {
 			if r.Factors[i].Status == Skip {
 				r.Factors[i].Status = Pass
+				r.Factors[i].Detail = detail
+				r.recomputeCounters()
+			}
+			return
+		}
+	}
+}
+
+// MarkE2EEFailed demotes the e2ee_usable factor to Fail after a post-relay
+// decryption failure. This is the counterpart to MarkE2EEUsable and keeps
+// the report consistent with the e2eeFailed blocking state. Counters are
+// recomputed from the full factor list.
+func (r *VerificationReport) MarkE2EEFailed(detail string) {
+	for i := range r.Factors {
+		if r.Factors[i].Name == "e2ee_usable" {
+			if r.Factors[i].Status != Fail {
+				r.Factors[i].Status = Fail
 				r.Factors[i].Detail = detail
 				r.recomputeCounters()
 			}
@@ -422,12 +440,12 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	}
 
 	// Promote Skip → Fail for enforced factors.
-	// Exception: e2ee_usable stays Skip because it can only be evaluated
-	// via a live relay roundtrip — promoting it to Fail would block the
-	// very request needed to prove E2EE works. Post-relay enforcement
-	// catches failures instead (see proxy.handleE2EEDecryptionFailure).
+	// Deferred factors (e.g. e2ee_usable) stay Skip because they can only
+	// be evaluated via a live roundtrip — promoting them to Fail would
+	// block the very request needed to prove they work. Post-relay
+	// enforcement catches failures instead.
 	for i := range factors {
-		if factors[i].Status == Skip && factors[i].Enforced && factors[i].Name != "e2ee_usable" {
+		if factors[i].Status == Skip && factors[i].Enforced && !factors[i].Deferred {
 			factors[i].Status = Fail
 			factors[i].Detail += " (enforced)"
 		}
@@ -916,7 +934,7 @@ func evalE2EECapable(in *ReportInput) []FactorResult {
 func evalE2EEUsable(in *ReportInput) []FactorResult {
 	if in.E2EETest == nil {
 		if in.E2EEConfigured {
-			return factor(TierBinding, "e2ee_usable", Skip, "E2EE configured; pending live test")
+			return []FactorResult{{Tier: TierBinding, Name: "e2ee_usable", Status: Skip, Detail: "E2EE configured; pending live test", Deferred: true}}
 		}
 		return factor(TierBinding, "e2ee_usable", Skip, "E2EE not configured for this provider")
 	}

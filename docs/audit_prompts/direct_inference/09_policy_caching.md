@@ -65,7 +65,7 @@ The audit MUST verify:
 The current `NeardirectDefaultAllowFail` factors are:
 - `tdx_hardware_config` — RTMR0 (varies per deployment hardware),
 - `tdx_boot_config` — RTMR1/RTMR2,
-- `e2ee_usable` — chicken-and-egg problem: starts as Skip, promoted to Fail by `BuildReport` when enforced, blocking the request needed to prove E2EE works,
+- `e2ee_usable` — allowed to fail for neardirect; uses the Deferred factor mechanism in the proxy path (starts as Skip, not promoted to Fail when enforced),
 - `cpu_gpu_chain` — not yet implemented,
 - `measured_model_weights` — not yet implemented,
 - `cpu_id_registry` — Proof-of-Cloud hardware registry.
