@@ -56,21 +56,9 @@ Even when E2EE is fully active for `/v1/chat/completions`, only a subset of resp
 | `choices[].message.function_call` (deprecated) | **No** | **Yes** | ❌ Leaks user data |
 | `choices[].logprobs.content[].token` | **No** | **Yes** | ❌ Leaks output text token-by-token |
 
-#### Request-Side Field Stripping
+#### Request-Side Field Preservation
 
-Teep's `EncryptChatMessagesNearCloud` only preserves `role` and `content` when encrypting request messages. All other fields are stripped:
-
-| Request Message Field | Preserved? | Impact |
-|---|---|---|
-| `role` | **Yes** | — |
-| `content` | **Yes** (encrypted) | ✅ Protected |
-| `tool_calls` | **No** (stripped) | ❌ Breaks multi-turn tool calling |
-| `tool_call_id` | **No** (stripped) | ❌ Breaks tool result messages |
-| `name` | **No** (stripped) | ❌ Drops function/user name |
-| `reasoning_content` | **No** (stripped) | ❌ Drops reasoning context |
-| `audio` | **No** (stripped) | ❌ Drops audio input |
-
-Additionally, `EncryptChatMessagesNearCloud` **fails entirely** on multi-turn tool calling conversations because assistant tool-call messages have `null` content, which `contentPlaintext` rejects.
+Teep's `EncryptChatMessagesNearCloud` preserves all message fields during encryption. Only the `content` field is encrypted in-place; all other fields (`tool_calls`, `tool_call_id`, `name`, `reasoning_content`, `audio`, etc.) pass through unchanged. Messages with null or absent content (e.g., assistant tool-call messages) are preserved without modification.
 
 ## Server Source Code Analysis
 
@@ -177,8 +165,6 @@ On the request side, `decrypt_chat_message_fields` similarly only decrypts `cont
 
 7. **Refusal text reveals user intent.** The `refusal` field contains the model's reason for refusing a request (e.g., "I cannot assist with creating malware"). This plaintext field reveals what the user asked about even when the input was encrypted.
 
-8. **Multi-turn tool calling is incompatible with E2EE.** Teep's `EncryptChatMessagesNearCloud` fails entirely on conversations containing assistant messages with `null` content (standard format for tool call responses). Even if this were fixed, it strips all message fields except `role` and `content`, losing `tool_calls`, `tool_call_id`, and `name` — breaking the conversation context.
-
 ## What Works: Chat (Partial), Images, and VL (Serialized)
 
 ### Chat completions (text content only)
@@ -230,12 +216,9 @@ Non-chat endpoints (`/v1/embeddings`, `/v1/audio/transcriptions`) are wired with
 
 ### Chat Completions Field Coverage
 
-For `/v1/chat/completions`, teep's `EncryptChatMessagesNearCloud` only encrypts `messages[].content` and only preserves the `role` and `content` fields. This has several consequences:
+For `/v1/chat/completions`, teep's `EncryptChatMessagesNearCloud` encrypts `messages[].content` in-place while preserving all other message fields (including `tool_calls`, `tool_call_id`, `name`, `reasoning_content`, and `audio`). Messages with null or absent content (e.g., assistant tool-call messages) pass through unchanged, enabling multi-turn tool calling under E2EE.
 
-1. **Tool calling is broken under E2EE.** Multi-turn tool calling conversations fail because assistant messages have null content. Even single-turn tool use results in plaintext `tool_calls` in the response.
-2. **Message fields are stripped.** `tool_calls`, `tool_call_id`, `name`, `reasoning_content`, `reasoning`, and `audio` are dropped from request messages passed through E2EE encryption.
-3. **Response tool_calls leak data.** The inference-proxy does not encrypt `tool_calls[].function.arguments` or `tool_calls[].function.name`, so user-derived data in function arguments transits in plaintext.
-4. **Logprobs bypass encryption.** If a client requests logprobs, the tokens in the response reveal the output text, negating content encryption.
+**Remaining server-side gaps:** The inference-proxy does not encrypt `tool_calls[].function.arguments`, `tool_calls[].function.name`, `refusal`, `function_call`, or `logprobs` in responses. These fields transit in plaintext even when E2EE is active.
 
 Teep's relay layer (`relay.go`) correctly identifies these as `NonEncryptedFields` and passes them through without attempting decryption, but does not warn users that these fields are plaintext.
 
@@ -271,21 +254,25 @@ These tests encrypt the actual request data using the NearCloud E2EE protocol (X
 
 ### Chat Completions Field Coverage Tests
 
-These tests verify which response fields in `/v1/chat/completions` are encrypted when E2EE is active. They send encrypted requests with E2EE headers and examine specific response fields.
+These tests verify which response fields in `/v1/chat/completions` are encrypted when E2EE is active. Each test runs as two subtests — `gateway` (against `cloud-api.near.ai`) and `direct` (against the model's inference-proxy via `*.completions.near.ai`) — using the same test code to isolate whether gaps are in the gateway or the TEE.
 
-- **`TestIntegration_NearCloud_ToolCalls_E2EE`**: Sends a non-streaming chat request with `tools` defined and `tool_choice: "required"` to force tool call output. The encrypted message asks about weather in San Francisco. Verifies whether `tool_calls[].function.arguments` and `tool_calls[].function.name` are encrypted or plaintext in the response. **Expected**: arguments and name are plaintext, revealing the user's location data despite encrypted input.
+- **`TestIntegration_NearCloud_ToolCalls_E2EE`**: Sends a non-streaming chat request with `tools` defined and `tool_choice: "required"` to force tool call output. Runs against both gateway and direct. Verifies whether `tool_calls[].function.arguments` and `tool_calls[].function.name` are encrypted or plaintext.
 
-- **`TestIntegration_NearCloud_ToolCalls_Streaming_E2EE`**: Same as above but with `stream: true`. Accumulates tool_call fragments from SSE delta chunks and checks whether the reassembled `function.name` and `function.arguments` are encrypted. **Expected**: plaintext — `encrypt_streaming_chunk` calls the same `encrypt_chat_response_choices` which skips tool_calls.
+- **`TestIntegration_NearCloud_ToolCalls_Streaming_E2EE`**: Same as above but with `stream: true`. Accumulates tool_call fragments from SSE delta chunks. Runs against both gateway and direct.
 
-- **`TestIntegration_NearCloud_Reasoning_E2EE`**: Sends a math problem with `stream: true` to a model that produces reasoning tokens. Checks whether `reasoning_content` and `reasoning` fields are encrypted alongside `content`. **Expected**: all three fields are encrypted — the inference-proxy handles these correctly.
+- **`TestIntegration_NearCloud_Reasoning_E2EE`**: Sends a math problem with `stream: true` to a model that produces reasoning tokens. Checks whether `reasoning_content` and `reasoning` fields are encrypted alongside `content`. Runs against both gateway and direct.
 
-- **`TestIntegration_NearCloud_Logprobs_E2EE`**: Sends a non-streaming request with `logprobs: true` and `top_logprobs: 3`. Checks whether `choices[].logprobs.content[].token` values reveal the output text. **Expected**: logprobs is plaintext — the inference-proxy does not encrypt logprobs.
+- **`TestIntegration_NearCloud_Logprobs_E2EE`**: Sends a non-streaming request with `logprobs: true` and `top_logprobs: 3`. Checks whether `choices[].logprobs.content[].token` values reveal the output text. Runs against both gateway and direct.
 
-- **`TestIntegration_NearCloud_Refusal_E2EE`**: Sends an encrypted request designed to trigger a safety refusal. Checks whether the `refusal` field (if present) is encrypted or plaintext. **Expected**: refusal is plaintext if used, but many models refuse via the `content` field (which IS encrypted).
+- **`TestIntegration_NearCloud_Refusal_E2EE`**: Sends an encrypted request designed to trigger a safety refusal. Checks whether the `refusal` field (if present) is encrypted or plaintext. Runs against both gateway and direct.
 
 ### Unit Tests
 
-- **`TestEncryptChatMessagesNearCloud_StripsToolCalls`** (in `nearcloud_test.go`): Verifies that `EncryptChatMessagesNearCloud` fails on multi-turn tool calling conversations (assistant messages with null content) and strips all message fields except `role` and `content`.
+- **`TestEncryptChatMessagesNearCloud_ToolCallConversation`** (in `nearcloud_test.go`): Verifies that `EncryptChatMessagesNearCloud` preserves all message fields in a multi-turn tool calling conversation — including null content, `tool_calls`, `tool_call_id`, and `name`. Verifies content is encrypted and decryptable.
+
+- **`TestEncryptChatMessagesNearCloud_PreservesExtraFields`** (in `nearcloud_test.go`): Verifies that non-message fields (`tools`, `temperature`) and message-level fields (`name`) are preserved through encryption.
+
+- **`TestEncryptChatMessagesNearCloud_NullContentVariants`** (in `nearcloud_test.go`): Verifies that messages with explicit `null` content and messages with absent content both pass through without error.
 
 ## Running the Tests
 
@@ -405,14 +392,14 @@ The inference-proxy's `encrypt_chat_response_choices` must be extended to encryp
 
 ### Teep fixes — Client-Side Encryption
 
-1. **Handle null content in `EncryptChatMessagesNearCloud`.** Assistant tool-call messages have null content. The function should pass null content through as-is (or as an empty encrypted string) rather than failing.
+1. ~~**Handle null content in `EncryptChatMessagesNearCloud`.**~~ **Fixed.** Null/absent content passes through unchanged.
 
-2. **Preserve all message fields.** `EncryptChatMessagesNearCloud` must not strip `tool_calls`, `tool_call_id`, `name`, `reasoning_content`, `reasoning`, or `audio`. These should be preserved in the output, with sensitive fields encrypted.
+2. ~~**Preserve all message fields.**~~ **Fixed.** `EncryptChatMessagesNearCloud` now uses raw JSON maps to encrypt only `content` in-place, preserving all other fields.
 
 3. **Warn or block logprobs under E2EE.** If the client requests `logprobs: true` while E2EE is active, teep should either strip the parameter (preventing the leak) or warn that logprobs will be plaintext.
 
 ### Teep status
 
-**Implemented:** Image generation E2EE (`/v1/images/generations`) and VL serialize-and-encrypt for vision-language chat are now wired in the nearcloud provider. Unsupported endpoints (embeddings, rerank, score, audio) fail closed — the nearcloud `EncryptRequest` dispatcher rejects them with an explicit error since the gateway does not forward E2EE headers for these endpoints.
+**Implemented:** Image generation E2EE (`/v1/images/generations`) and VL serialize-and-encrypt for vision-language chat are now wired in the nearcloud provider. Unsupported endpoints (embeddings, rerank, score, audio) fail closed — the nearcloud `EncryptRequest` dispatcher rejects them with an explicit error since the gateway does not forward E2EE headers for these endpoints. `EncryptChatMessagesNearCloud` preserves all message fields and handles null content, enabling multi-turn tool calling under E2EE.
 
-**Not yet addressed:** Tool calls, refusal, logprobs, and function_call transit in plaintext through authenticated E2EE sessions. Multi-turn tool calling fails under E2EE due to null content handling and field stripping in `EncryptChatMessagesNearCloud`.
+**Not yet addressed:** On the server side, tool calls, refusal, logprobs, and function_call transit in plaintext through authenticated E2EE sessions. Teep does not yet warn when a client requests logprobs under E2EE.

@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,59 @@ var directEndpoints = map[string]string{
 	"Qwen/Qwen3-Embedding-0.6B": "https://qwen3-embedding.completions.near.ai",
 	"Qwen/Qwen3-Reranker-0.6B":  "https://qwen3-reranker.completions.near.ai",
 	"openai/whisper-large-v3":   "https://whisper-large-v3.completions.near.ai",
+}
+
+// resolveDirectEndpoint looks up the direct inference-proxy URL for a model.
+// First checks the hardcoded directEndpoints map, then queries the NEAR AI
+// endpoint discovery API at https://completions.near.ai/endpoints.
+func resolveDirectEndpoint(t *testing.T, model string) string {
+	t.Helper()
+	if url, ok := directEndpoints[model]; ok {
+		return url
+	}
+
+	apiKey := os.Getenv("NEARAI_API_KEY")
+	req, err := http.NewRequest(http.MethodGet, "https://completions.near.ai/endpoints", http.NoBody)
+	if err != nil {
+		t.Fatalf("create endpoints request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Connection", "close")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("fetch endpoints: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		t.Fatalf("read endpoints body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("endpoints API: status=%d body=%s", resp.StatusCode, truncate(body, 500))
+	}
+
+	var result struct {
+		Endpoints []struct {
+			Domain string   `json:"domain"`
+			Models []string `json:"models"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("parse endpoints: %v", err)
+	}
+
+	for _, ep := range result.Endpoints {
+		if slices.Contains(ep.Models, model) {
+			url := "https://" + ep.Domain
+			t.Logf("resolved direct endpoint for %s: %s", model, url)
+			return url
+		}
+	}
+	t.Fatalf("model %q not found in endpoint discovery", model)
+	return ""
 }
 
 func skipNearCloudE2EEIntegration(t *testing.T) {
@@ -75,10 +129,7 @@ func fetchSigningKey(t *testing.T, model string) string {
 // signing key.
 func fetchDirectSigningKey(t *testing.T, model string) string {
 	t.Helper()
-	baseURL, ok := directEndpoints[model]
-	if !ok {
-		t.Fatalf("no direct endpoint for model %s", model)
-	}
+	baseURL := resolveDirectEndpoint(t, model)
 	apiKey := os.Getenv("NEARAI_API_KEY")
 	nonce := attestation.NewNonce()
 
@@ -1208,23 +1259,28 @@ func TestIntegration_NearCloud_VL_SerializedArray(t *testing.T) {
 // Source: nearai/inference-proxy encryption.rs encrypt_chat_response_choices
 // ==========================================================================
 
-// TestIntegration_NearCloud_ToolCalls_E2EE verifies that tool_calls in
-// /v1/chat/completions responses are NOT encrypted by the E2EE layer.
-// When a model produces a tool call, the function name and arguments transit
-// in plaintext even when E2EE is active. This is a coverage gap: function
-// arguments contain user-derived data (e.g. locations, names, queries) that
-// should be confidential.
-//
-// The test:
-//  1. Sends a plaintext chat request with tools to confirm tool calls work.
-//  2. Sends the same request with E2EE headers and encrypted message content.
-//  3. Compares: if tool_calls[].function.arguments is plaintext in the E2EE
-//     response, the gap is confirmed.
+// TestIntegration_NearCloud_ToolCalls_E2EE verifies tool_calls E2EE behavior
+// via both the gateway (cloud-api.near.ai) and the direct inference-proxy.
+// When a model produces a tool call, the function name and arguments may
+// transit in plaintext even when E2EE is active. Running the same test code
+// against both paths isolates whether a gap is in the gateway or the TEE.
 func TestIntegration_NearCloud_ToolCalls_E2EE(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
-
 	const model = "Qwen/Qwen3.5-122B-A10B"
-	signingKey := fetchSigningKey(t, model)
+
+	t.Run("gateway", func(t *testing.T) {
+		signingKey := fetchSigningKey(t, model)
+		testToolCallsE2EE(t, nearcloudBaseURL, model, signingKey)
+	})
+	t.Run("direct", func(t *testing.T) {
+		baseURL := resolveDirectEndpoint(t, model)
+		signingKey := fetchDirectSigningKey(t, model)
+		testToolCallsE2EE(t, baseURL, model, signingKey)
+	})
+}
+
+func testToolCallsE2EE(t *testing.T, baseURL, model, signingKey string) {
+	t.Helper()
 	session := createE2EESession(t, signingKey)
 	defer session.Zero()
 
@@ -1252,7 +1308,7 @@ func TestIntegration_NearCloud_ToolCalls_E2EE(t *testing.T) {
 	}`, model)
 
 	// Step 1: plaintext baseline — confirm tool calls work.
-	ptResp := nearcloudPlaintextRequest(t, "/v1/chat/completions", []byte(toolCallBody), "application/json")
+	ptResp := plaintextRequest(t, baseURL, "/v1/chat/completions", []byte(toolCallBody), "application/json")
 	ptBody := readBody(t, ptResp)
 	ptResp.Body.Close()
 	t.Logf("plaintext tool call: status=%d body_len=%d", ptResp.StatusCode, len(ptBody))
@@ -1322,7 +1378,7 @@ func TestIntegration_NearCloud_ToolCalls_E2EE(t *testing.T) {
 		"max_tokens": 200
 	}`, model, encContent)
 
-	e2eeResp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	e2eeResp := e2eeRequest(t, baseURL, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
 	e2eeRespBody := readBody(t, e2eeResp)
 	e2eeResp.Body.Close()
 	t.Logf("E2EE tool call: status=%d body_len=%d", e2eeResp.StatusCode, len(e2eeRespBody))
@@ -1409,16 +1465,27 @@ func TestIntegration_NearCloud_ToolCalls_E2EE(t *testing.T) {
 	}
 }
 
-// TestIntegration_NearCloud_ToolCalls_Streaming_E2EE verifies that streamed
-// tool_calls in SSE chunks are NOT encrypted by the E2EE layer. The streaming
-// path uses encrypt_streaming_chunk → encrypt_chat_response_choices with
-// is_streaming=true, which has the same gap: only content, reasoning_content,
-// reasoning, and audio.data are encrypted.
+// TestIntegration_NearCloud_ToolCalls_Streaming_E2EE verifies streamed
+// tool_calls E2EE behavior via both the gateway and the direct inference-proxy.
+// The streaming path uses encrypt_streaming_chunk → encrypt_chat_response_choices
+// with is_streaming=true. Running both paths isolates gateway vs TEE gaps.
 func TestIntegration_NearCloud_ToolCalls_Streaming_E2EE(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
-
 	const model = "Qwen/Qwen3.5-122B-A10B"
-	signingKey := fetchSigningKey(t, model)
+
+	t.Run("gateway", func(t *testing.T) {
+		signingKey := fetchSigningKey(t, model)
+		testStreamingToolCallsE2EE(t, nearcloudBaseURL, model, signingKey)
+	})
+	t.Run("direct", func(t *testing.T) {
+		baseURL := resolveDirectEndpoint(t, model)
+		signingKey := fetchDirectSigningKey(t, model)
+		testStreamingToolCallsE2EE(t, baseURL, model, signingKey)
+	})
+}
+
+func testStreamingToolCallsE2EE(t *testing.T, baseURL, model, signingKey string) {
+	t.Helper()
 	session := createE2EESession(t, signingKey)
 	defer session.Zero()
 
@@ -1453,7 +1520,7 @@ func TestIntegration_NearCloud_ToolCalls_Streaming_E2EE(t *testing.T) {
 		"max_tokens": 200
 	}`, model, encContent)
 
-	resp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	resp := e2eeRequest(t, baseURL, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
 	respBody := readBody(t, resp)
 	resp.Body.Close()
 	t.Logf("streaming E2EE tool call: status=%d body_len=%d", resp.StatusCode, len(respBody))
@@ -1662,20 +1729,31 @@ func classifyField(enc, pt *int, buf *strings.Builder, delta map[string]json.Raw
 	}
 }
 
-// TestIntegration_NearCloud_Reasoning_E2EE verifies that reasoning_content
-// in /v1/chat/completions responses IS encrypted by the E2EE layer.
-// The inference-proxy encrypts reasoning_content and reasoning fields in
-// encrypt_chat_response_choices, so this should work correctly.
+// TestIntegration_NearCloud_Reasoning_E2EE verifies reasoning_content E2EE
+// behavior via both the gateway and the direct inference-proxy. The
+// inference-proxy encrypts reasoning_content and reasoning fields.
+// Running both paths confirms encryption works end-to-end.
 func TestIntegration_NearCloud_Reasoning_E2EE(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
-
-	// Use a Qwen3 model that supports reasoning (thinking) mode.
 	const model = "Qwen/Qwen3.5-122B-A10B"
-	signingKey := fetchSigningKey(t, model)
+
+	t.Run("gateway", func(t *testing.T) {
+		signingKey := fetchSigningKey(t, model)
+		testReasoningE2EE(t, nearcloudBaseURL, model, signingKey)
+	})
+	t.Run("direct", func(t *testing.T) {
+		baseURL := resolveDirectEndpoint(t, model)
+		signingKey := fetchDirectSigningKey(t, model)
+		testReasoningE2EE(t, baseURL, model, signingKey)
+	})
+}
+
+func testReasoningE2EE(t *testing.T, baseURL, model, signingKey string) {
+	t.Helper()
 	session := createE2EESession(t, signingKey)
 	defer session.Zero()
 
-	// First: plaintext baseline with reasoning enabled.
+	// Plaintext baseline with reasoning enabled.
 	plaintextBody := fmt.Sprintf(`{
 		"model": %q,
 		"messages": [{"role": "user", "content": "What is 15 * 37? Think step by step."}],
@@ -1683,7 +1761,7 @@ func TestIntegration_NearCloud_Reasoning_E2EE(t *testing.T) {
 		"max_tokens": 500
 	}`, model)
 
-	ptResp := nearcloudPlaintextRequest(t, "/v1/chat/completions", []byte(plaintextBody), "application/json")
+	ptResp := plaintextRequest(t, baseURL, "/v1/chat/completions", []byte(plaintextBody), "application/json")
 	ptBody := readBody(t, ptResp)
 	ptResp.Body.Close()
 	t.Logf("plaintext reasoning: status=%d body_len=%d", ptResp.StatusCode, len(ptBody))
@@ -1721,7 +1799,7 @@ func TestIntegration_NearCloud_Reasoning_E2EE(t *testing.T) {
 		"max_tokens": 500
 	}`, model, encContent)
 
-	e2eeResp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	e2eeResp := e2eeRequest(t, baseURL, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
 	e2eeRespBody := readBody(t, e2eeResp)
 	e2eeResp.Body.Close()
 	t.Logf("E2EE reasoning: status=%d body_len=%d", e2eeResp.StatusCode, len(e2eeRespBody))
@@ -1758,16 +1836,27 @@ func TestIntegration_NearCloud_Reasoning_E2EE(t *testing.T) {
 	}
 }
 
-// TestIntegration_NearCloud_Logprobs_E2EE verifies that logprobs in
-// /v1/chat/completions responses are NOT encrypted by the E2EE layer.
-// Token log probabilities can leak information about the encrypted content
-// (which tokens the model considered most likely). The inference-proxy does
-// not encrypt logprobs.
+// TestIntegration_NearCloud_Logprobs_E2EE verifies logprobs E2EE behavior
+// via both the gateway and the direct inference-proxy. Token log probabilities
+// can leak information about the encrypted content. Running both paths
+// isolates whether the gap is in the gateway or the TEE.
 func TestIntegration_NearCloud_Logprobs_E2EE(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
-
 	const model = "Qwen/Qwen3.5-122B-A10B"
-	signingKey := fetchSigningKey(t, model)
+
+	t.Run("gateway", func(t *testing.T) {
+		signingKey := fetchSigningKey(t, model)
+		testLogprobsE2EE(t, nearcloudBaseURL, model, signingKey)
+	})
+	t.Run("direct", func(t *testing.T) {
+		baseURL := resolveDirectEndpoint(t, model)
+		signingKey := fetchDirectSigningKey(t, model)
+		testLogprobsE2EE(t, baseURL, model, signingKey)
+	})
+}
+
+func testLogprobsE2EE(t *testing.T, baseURL, model, signingKey string) {
+	t.Helper()
 	session := createE2EESession(t, signingKey)
 	defer session.Zero()
 
@@ -1788,7 +1877,7 @@ func TestIntegration_NearCloud_Logprobs_E2EE(t *testing.T) {
 		"max_tokens": 50
 	}`, model, encContent)
 
-	resp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	resp := e2eeRequest(t, baseURL, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
 	respBody := readBody(t, resp)
 	resp.Body.Close()
 	t.Logf("E2EE logprobs: status=%d body_len=%d", resp.StatusCode, len(respBody))
@@ -1856,15 +1945,27 @@ func TestIntegration_NearCloud_Logprobs_E2EE(t *testing.T) {
 	t.Log("CONCLUSION: CONFIRMED — logprobs leak plaintext content through the E2EE layer")
 }
 
-// TestIntegration_NearCloud_Refusal_E2EE verifies that the refusal field in
-// /v1/chat/completions responses is NOT encrypted by the E2EE layer.
-// The refusal field can reveal what the user asked about (e.g. "I cannot
-// help with building explosives") even though the content is encrypted.
+// TestIntegration_NearCloud_Refusal_E2EE verifies the refusal field E2EE
+// behavior via both the gateway and the direct inference-proxy. The refusal
+// field can reveal what the user asked about even when content is encrypted.
+// Running both paths isolates whether the gap is in the gateway or the TEE.
 func TestIntegration_NearCloud_Refusal_E2EE(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
-
 	const model = "Qwen/Qwen3.5-122B-A10B"
-	signingKey := fetchSigningKey(t, model)
+
+	t.Run("gateway", func(t *testing.T) {
+		signingKey := fetchSigningKey(t, model)
+		testRefusalE2EE(t, nearcloudBaseURL, model, signingKey)
+	})
+	t.Run("direct", func(t *testing.T) {
+		baseURL := resolveDirectEndpoint(t, model)
+		signingKey := fetchDirectSigningKey(t, model)
+		testRefusalE2EE(t, baseURL, model, signingKey)
+	})
+}
+
+func testRefusalE2EE(t *testing.T, baseURL, model, signingKey string) {
+	t.Helper()
 	session := createE2EESession(t, signingKey)
 	defer session.Zero()
 
@@ -1885,7 +1986,7 @@ func TestIntegration_NearCloud_Refusal_E2EE(t *testing.T) {
 		"max_tokens": 200
 	}`, model, encContent)
 
-	resp := nearcloudE2EERequest(t, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
+	resp := e2eeRequest(t, baseURL, "/v1/chat/completions", []byte(e2eeBody), "application/json", session)
 	respBody := readBody(t, resp)
 	resp.Body.Close()
 	t.Logf("E2EE refusal test: status=%d body_len=%d", resp.StatusCode, len(respBody))
@@ -1963,7 +2064,7 @@ func TestIntegration_NearCloud_Direct_Embeddings_E2EE(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
 
 	model := "Qwen/Qwen3-Embedding-0.6B"
-	baseURL := directEndpoints[model]
+	baseURL := resolveDirectEndpoint(t, model)
 
 	// 1. Fetch signing key from the DIRECT inference-proxy attestation.
 	signingKey := fetchDirectSigningKey(t, model)
@@ -2047,7 +2148,7 @@ func TestIntegration_NearCloud_Direct_Rerank_E2EE(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
 
 	model := "Qwen/Qwen3-Reranker-0.6B"
-	baseURL := directEndpoints[model]
+	baseURL := resolveDirectEndpoint(t, model)
 
 	// 1. Fetch signing key from the DIRECT inference-proxy attestation.
 	signingKey := fetchDirectSigningKey(t, model)
@@ -2148,7 +2249,7 @@ func TestIntegration_NearCloud_Direct_Audio_E2EE(t *testing.T) {
 	skipNearCloudE2EEIntegration(t)
 
 	model := "openai/whisper-large-v3"
-	baseURL := directEndpoints[model]
+	baseURL := resolveDirectEndpoint(t, model)
 
 	// 1. Fetch signing key from the DIRECT inference-proxy attestation.
 	signingKey := fetchDirectSigningKey(t, model)
