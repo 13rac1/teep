@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -96,6 +98,115 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 	if result.JWT != testJWT {
 		t.Errorf("JWT: got %q, want %q", result.JWT, testJWT)
 	}
+}
+
+// TestCheckQuote_DeterministicStage2Order verifies that stage 2 visits peers
+// in sorted URL order regardless of goroutine scheduling in stage 1. Without
+// this invariant, capture/replay round-tripping breaks because stage 2 POST
+// bodies (which include partial_sigs from prior peers) differ across runs.
+func TestCheckQuote_DeterministicStage2Order(t *testing.T) {
+	hexQuote := "aabbccdd"
+	monikers := []string{"alice", "bob", "carol"}
+	nonceVals := []string{"nonce_alice", "nonce_bob", "nonce_carol"}
+
+	// stage2Order records the URL of each peer as it receives its stage 2 POST.
+	var mu sync.Mutex
+	var stage2Order []string
+
+	// finalIdx is the creation index of the peer that should return the final
+	// JWT. Set after all servers are created (once we know sorted URL order).
+	var finalIdx atomic.Int32
+
+	makePeer := func(idx int) *httptest.Server {
+		var calls atomic.Int32
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
+			}
+
+			call := calls.Add(1)
+			if call == 1 {
+				// Stage 1: return nonce.
+				json.NewEncoder(w).Encode(map[string]string{
+					"machineId": "deadbeef",
+					"moniker":   monikers[idx],
+					"nonce":     nonceVals[idx],
+				})
+				return
+			}
+
+			// Stage 2: record visit order.
+			mu.Lock()
+			stage2Order = append(stage2Order, r.Host)
+			mu.Unlock()
+
+			// Last peer in sorted URL order returns JWT; others return partial sigs.
+			if int32(idx) == finalIdx.Load() {
+				json.NewEncoder(w).Encode(map[string]string{
+					"machineId": "deadbeef",
+					"label":     "test-machine",
+					"jwt":       "header.payload.signature",
+				})
+			} else {
+				json.NewEncoder(w).Encode(map[string]string{
+					monikers[idx]: "partialsig_" + monikers[idx],
+				})
+			}
+		}))
+	}
+
+	servers := make([]*httptest.Server, 3)
+	peers := make([]string, 3)
+	for i := range 3 {
+		servers[i] = makePeer(i)
+		peers[i] = servers[i].URL
+	}
+	defer func() {
+		for _, s := range servers {
+			s.Close()
+		}
+	}()
+
+	// Determine which idx is last in sorted URL order. httptest.NewServer
+	// assigns random ports, so we can't assume idx 2 is last.
+	type urlIdx struct {
+		url string
+		idx int
+	}
+	sortedByURL := make([]urlIdx, len(peers))
+	for i, p := range peers {
+		sortedByURL[i] = urlIdx{url: p, idx: i}
+	}
+	sort.Slice(sortedByURL, func(i, j int) bool {
+		return sortedByURL[i].url < sortedByURL[j].url
+	})
+	finalIdx.Store(int32(sortedByURL[len(sortedByURL)-1].idx))
+
+	expectedHosts := make([]string, len(sortedByURL))
+	for i, s := range sortedByURL {
+		expectedHosts[i] = strings.TrimPrefix(s.url, "http://")
+	}
+
+	poc := NewPoCClient(peers, PoCQuorum, &http.Client{})
+	poc.jwtVerifyFn = func(jwtStr, machineID string) error { return nil }
+	result := poc.CheckQuote(context.Background(), hexQuote)
+
+	if result.Err != nil {
+		t.Fatalf("CheckQuote: %v", result.Err)
+	}
+
+	// Verify stage 2 visit order matches sorted peer URLs.
+	if len(stage2Order) != len(expectedHosts) {
+		t.Fatalf("stage 2 visited %d peers, want %d", len(stage2Order), len(expectedHosts))
+	}
+	for i := range stage2Order {
+		if stage2Order[i] != expectedHosts[i] {
+			t.Errorf("stage 2 visit[%d]: got %s, want %s", i, stage2Order[i], expectedHosts[i])
+		}
+	}
+	t.Logf("stage 2 order: %v", stage2Order)
 }
 
 // TestCheckQuoteNotWhitelisted verifies 403 handling.

@@ -242,11 +242,13 @@ func runVerify(args []string) {
 	}
 
 	report, err := runVerification(providerName, *modelName, *captureDir, *offline, nil, attestation.Nonce{}, nil)
+	if report != nil {
+		fmt.Print(formatReport(report))
+	}
 	if err != nil {
 		slog.Error("verification failed", "err", err)
 		os.Exit(1)
 	}
-	fmt.Print(formatReport(report))
 
 	blocked := report.Blocked()
 
@@ -489,7 +491,7 @@ func runVerification(providerName, modelName, captureDir string, offline bool,
 		}
 		slog.Info("capture saved", "dir", subdir, "responses", len(recorder.Entries))
 		if err := verifyCapture(subdir, reportText); err != nil {
-			return nil, fmt.Errorf("capture self-check: %w", err)
+			return report, fmt.Errorf("capture self-check: %w", err)
 		}
 	}
 

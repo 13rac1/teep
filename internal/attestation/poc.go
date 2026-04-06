@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -298,6 +299,15 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 		}
 		return &PoCResult{Err: fmt.Errorf("collected %d nonces, need %d", len(nonces), c.quorum)}
 	}
+
+	// Deterministic peer order for stage 2: goroutine scheduling is
+	// non-deterministic, so the nonces slice arrives in random order.
+	// Sorting ensures stage 2 POST bodies (which include partial_sigs
+	// from prior peers) are identical across runs — required for
+	// capture/replay round-tripping.
+	sort.Slice(nonces, func(i, j int) bool {
+		return nonces[i].peerURL < nonces[j].peerURL
+	})
 
 	// Use the machine ID from the first stage-1 responder for JWT consistency.
 	expectedMachineID := nonces[0].machineID
