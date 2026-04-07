@@ -392,14 +392,14 @@ func TestEd25519PubToX25519(t *testing.T) {
 	}
 
 	// Valid pub.
-	x25519Pub, err := ed25519PubToX25519(pub)
+	x25519Pub, err := Ed25519PubToX25519(pub)
 	if err != nil {
-		t.Fatalf("ed25519PubToX25519: %v", err)
+		t.Fatalf("Ed25519PubToX25519: %v", err)
 	}
 	t.Logf("x25519 pub key: %d bytes", len(x25519Pub.Bytes()))
 
 	// Wrong length.
-	_, err = ed25519PubToX25519([]byte("short"))
+	_, err = Ed25519PubToX25519([]byte("short"))
 	t.Logf("wrong length error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for wrong pub length")
@@ -411,7 +411,7 @@ func TestEd25519PubToX25519(t *testing.T) {
 	// Use a known-bad point instead: flip high bits.
 	badPub := make([]byte, 32)
 	badPub[31] = 0xFF // invalid: y coordinate too large
-	_, err = ed25519PubToX25519(badPub)
+	_, err = Ed25519PubToX25519(badPub)
 	t.Logf("bad point error: %v", err)
 	// This may or may not error depending on edwards25519 validation;
 	// the key thing is it doesn't panic.
