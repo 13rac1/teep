@@ -19,19 +19,20 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
+	nearcloudpkg "github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/proxy"
 )
 
-// mockNearCloudKeys holds the model's key material for the mock.
-type mockNearCloudKeys struct {
-	edPub       ed25519.PublicKey
-	edPubHex    string
-	x25519Priv  *ecdh.PrivateKey
+// mockNearKeys holds the model's key material for the mock.
+type mockNearKeys struct {
+	edPub      ed25519.PublicKey
+	edPubHex   string
+	x25519Priv *ecdh.PrivateKey
 }
 
 // generateMockKeys creates a fresh Ed25519 keypair and derives the X25519
 // private key for the mock model backend.
-func generateMockKeys(t *testing.T) *mockNearCloudKeys {
+func generateMockKeys(t *testing.T) *mockNearKeys {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -45,28 +46,29 @@ func generateMockKeys(t *testing.T) *mockNearCloudKeys {
 	if err != nil {
 		t.Fatalf("derive x25519 private key: %v", err)
 	}
-	return &mockNearCloudKeys{
+	return &mockNearKeys{
 		edPub:      pub,
 		edPubHex:   hex.EncodeToString(pub),
 		x25519Priv: x25519Priv,
 	}
 }
 
-// mockNearCloudHandler implements provider.PinnedHandler with real NearCloud
+// mockNearPinnedHandler implements provider.PinnedHandler with real NearCloud
 // E2EE crypto. It receives plaintext bodies from the proxy, performs
 // client-side encryption + server-side decryption, generates a mock response,
 // encrypts it, and returns the session for proxy-side decryption.
-type mockNearCloudHandler struct {
-	keys *mockNearCloudKeys
+type mockNearPinnedHandler struct {
+	keys         *mockNearKeys
+	providerName string // "nearcloud" or "neardirect"
 	// responseFunc optionally overrides the default response generation.
 	// Receives the decrypted request body and endpoint path, returns the
 	// plaintext response body to encrypt.
 	responseFunc func(body []byte, path string) string
 }
 
-func (m *mockNearCloudHandler) HandlePinned(_ context.Context, req *provider.PinnedRequest) (*provider.PinnedResponse, error) {
+func (m *mockNearPinnedHandler) HandlePinned(_ context.Context, req *provider.PinnedRequest) (*provider.PinnedResponse, error) {
 	report := &attestation.VerificationReport{
-		Provider: "nearcloud",
+		Provider: m.providerName,
 		Model:    req.Model,
 		Factors: []attestation.FactorResult{
 			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
@@ -82,7 +84,7 @@ func (m *mockNearCloudHandler) HandlePinned(_ context.Context, req *provider.Pin
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body:       io.NopCloser(strings.NewReader(respBody)),
 			Report:     report,
-			SigningKey: m.keys.edPubHex,
+			SigningKey:  m.keys.edPubHex,
 		}, nil
 	}
 
@@ -94,11 +96,11 @@ func (m *mockNearCloudHandler) HandlePinned(_ context.Context, req *provider.Pin
 	case "/v1/images/generations":
 		return m.handleImageE2EE(req, report)
 	default:
-		return nil, fmt.Errorf("mock nearcloud: unsupported E2EE endpoint %q", req.Path)
+		return nil, fmt.Errorf("mock %s: unsupported E2EE endpoint %q", m.providerName, req.Path)
 	}
 }
 
-func (m *mockNearCloudHandler) handleChatE2EE(req *provider.PinnedRequest, report *attestation.VerificationReport) (*provider.PinnedResponse, error) {
+func (m *mockNearPinnedHandler) handleChatE2EE(req *provider.PinnedRequest, report *attestation.VerificationReport) (*provider.PinnedResponse, error) {
 	// Client-side: encrypt the body and create a session.
 	encBody, session, err := e2ee.EncryptChatMessagesNearCloud(req.Body, m.keys.edPubHex)
 	if err != nil {
@@ -123,7 +125,7 @@ func (m *mockNearCloudHandler) handleChatE2EE(req *provider.PinnedRequest, repor
 	return &provider.PinnedResponse{
 		StatusCode: http.StatusOK,
 		Header: http.Header{
-			"Content-Type":    []string{"text/event-stream"},
+			"Content-Type":     []string{"text/event-stream"},
 			"X-Client-Pub-Key": []string{session.ClientEd25519PubHex()},
 		},
 		Body:       io.NopCloser(strings.NewReader(responseSSE)),
@@ -133,7 +135,7 @@ func (m *mockNearCloudHandler) handleChatE2EE(req *provider.PinnedRequest, repor
 	}, nil
 }
 
-func (m *mockNearCloudHandler) handleImageE2EE(req *provider.PinnedRequest, report *attestation.VerificationReport) (*provider.PinnedResponse, error) {
+func (m *mockNearPinnedHandler) handleImageE2EE(req *provider.PinnedRequest, report *attestation.VerificationReport) (*provider.PinnedResponse, error) {
 	// Client-side: encrypt the prompt and create a session.
 	encBody, session, err := e2ee.EncryptImagePromptNearCloud(req.Body, m.keys.edPubHex)
 	if err != nil {
@@ -165,7 +167,7 @@ func (m *mockNearCloudHandler) handleImageE2EE(req *provider.PinnedRequest, repo
 }
 
 // decryptChatBody decrypts all message content fields from an encrypted chat body.
-func (m *mockNearCloudHandler) decryptChatBody(encBody []byte) ([]map[string]json.RawMessage, error) {
+func (m *mockNearPinnedHandler) decryptChatBody(encBody []byte) ([]map[string]json.RawMessage, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(encBody, &full); err != nil {
 		return nil, fmt.Errorf("parse encrypted body: %w", err)
@@ -200,7 +202,7 @@ func (m *mockNearCloudHandler) decryptChatBody(encBody []byte) ([]map[string]jso
 }
 
 // decryptImageBody decrypts the prompt field from an encrypted image body.
-func (m *mockNearCloudHandler) decryptImageBody(encBody []byte) (string, error) {
+func (m *mockNearPinnedHandler) decryptImageBody(encBody []byte) (string, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(encBody, &full); err != nil {
 		return "", fmt.Errorf("parse encrypted body: %w", err)
@@ -217,7 +219,7 @@ func (m *mockNearCloudHandler) decryptImageBody(encBody []byte) (string, error) 
 }
 
 // chatResponse generates a mock chat response from decrypted messages.
-func (m *mockNearCloudHandler) chatResponse(messages []map[string]json.RawMessage) string {
+func (m *mockNearPinnedHandler) chatResponse(messages []map[string]json.RawMessage) string {
 	// Extract the last user message content for the echo response.
 	content := "echo"
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -243,7 +245,7 @@ func (m *mockNearCloudHandler) chatResponse(messages []map[string]json.RawMessag
 }
 
 // encryptSSEResponse builds an SSE stream with one encrypted content chunk.
-func (m *mockNearCloudHandler) encryptSSEResponse(content, clientEdPubHex string) (string, error) {
+func (m *mockNearPinnedHandler) encryptSSEResponse(content, clientEdPubHex string) (string, error) {
 	clientX25519, err := clientEdToX25519(clientEdPubHex)
 	if err != nil {
 		return "", err
@@ -258,7 +260,7 @@ func (m *mockNearCloudHandler) encryptSSEResponse(content, clientEdPubHex string
 }
 
 // encryptImageResponse builds a non-streaming image response with encrypted b64_json.
-func (m *mockNearCloudHandler) encryptImageResponse(decryptedPrompt, clientEdPubHex string) (string, error) {
+func (m *mockNearPinnedHandler) encryptImageResponse(decryptedPrompt, clientEdPubHex string) (string, error) {
 	clientX25519, err := clientEdToX25519(clientEdPubHex)
 	if err != nil {
 		return "", err
@@ -281,7 +283,7 @@ func (m *mockNearCloudHandler) encryptImageResponse(decryptedPrompt, clientEdPub
 }
 
 // buildPlaintextResponse generates a simple JSON response for non-E2EE requests.
-func (m *mockNearCloudHandler) buildPlaintextResponse(body []byte, path string) string {
+func (m *mockNearPinnedHandler) buildPlaintextResponse(body []byte, path string) string {
 	if m.responseFunc != nil {
 		return m.responseFunc(body, path)
 	}
@@ -309,7 +311,7 @@ func newMockNearCloudProxyServer(t *testing.T, e2eeEnabled bool) *httptest.Serve
 	t.Helper()
 
 	keys := generateMockKeys(t)
-	handler := &mockNearCloudHandler{keys: keys}
+	handler := &mockNearPinnedHandler{keys: keys, providerName: "nearcloud"}
 
 	cfg := &config.Config{
 		ListenAddr: "127.0.0.1:0",
@@ -345,6 +347,57 @@ func newMockNearCloudProxyServer(t *testing.T, e2eeEnabled bool) *httptest.Serve
 	srv.PutAttestationCache("nearcloud", "test-model", passingReport)
 	if e2eeEnabled {
 		srv.PutSigningKeyCache("nearcloud", "test-model", keys.edPubHex)
+	}
+
+	return httptest.NewServer(srv)
+}
+
+// newMockNeardirectE2EEServer creates a proxy with a mock neardirect
+// PinnedHandler that uses real XChaCha20 E2EE crypto. The neardirect
+// provider is wired with all 5 endpoint paths and E2EE enabled.
+func newMockNeardirectE2EEServer(t *testing.T, e2eeEnabled bool) *httptest.Server {
+	t.Helper()
+
+	keys := generateMockKeys(t)
+	handler := &mockNearPinnedHandler{keys: keys, providerName: "neardirect"}
+
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "test-key",
+				E2EE:    e2eeEnabled,
+			},
+		},
+		AllowFail: attestation.KnownFactors,
+	}
+
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+
+	prov := srv.ProviderByName("neardirect")
+	prov.PinnedHandler = handler
+	prov.E2EE = e2eeEnabled
+	if e2eeEnabled {
+		prov.Encryptor = nearcloudpkg.NewE2EE()
+	}
+
+	// Prime caches so the proxy doesn't try real attestation.
+	passingReport := &attestation.VerificationReport{
+		Provider: "neardirect",
+		Model:    "test-model",
+		Factors: []attestation.FactorResult{
+			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
+			{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
+		},
+	}
+	srv.PutAttestationCache("neardirect", "test-model", passingReport)
+	if e2eeEnabled {
+		srv.PutSigningKeyCache("neardirect", "test-model", keys.edPubHex)
 	}
 
 	return httptest.NewServer(srv)
