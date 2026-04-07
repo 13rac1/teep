@@ -36,9 +36,13 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
    but preserve unrelated providers and models already in the cache file.
 4. The cache file location defaults to `$TEEP_CACHE_FILE` or
    `~/.config/teep/cache.yaml`. Overridable with `--cache-file <path>`
-   or with `attestation_cache_file` field in the teep toml config.
+   or with `cache_file` field in the teep toml config.
 5. If attestation is blocked (report would be blocked), refuse to write cache
    for that model — same safety guard as the current `--update-config`.
+6. **Partial failure for `--all-models`**: If some models fail attestation and
+   others succeed, write cache entries for successful models, skip failed
+   models, collect per-model errors, and exit non-zero with a summary of
+   which models succeeded and which failed (and why).
 
 **Flags**:
 - `--model <name>` (required unless `--all-models` is set; supports one or more models, either as a comma-separated list such as `--model <m1>,<m2>` and/or by repeating the flag) / `--all-models` (required unless `--model` is set; mutually exclusive with `--model`)
@@ -48,25 +52,17 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
 ### 2b. Changes to `teep verify`
 
 - Remove `--update-config` and `--config-out` flags.
-- Add `--cache-file <path>` flag (optional; defaults to `$TEEP_CACHE_FILE` or
-  `~/.config/teep/cache.yaml`).
-- `teep verify` reads the cache file if present and uses cached data for any
-  online factors. If a cache entry is stale or invalidated (e.g., compose hash
-  changed), it re-fetches live unless `--offline` is set. If `--offline` is
-  set, the affected factor is evaluated using the normal offline behavior
-  (for example, `Skip` if the factor cannot be refreshed), and enforcement
-  still depends on the configured `allow_fail` set and offline handling for
-  online-only factors.
-- When stale entries are encountered, emit `slog.Info` (notice-level) logs
-  explaining what was stale, whether it was re-fetched, and if offline, what
-  factor result was returned and whether that result is blocking under the
-  normal enforcement rules.
+- `teep verify` does NOT read or write the cache file. It always performs live
+  network requests for all factors. This avoids surprising cache mutations
+  during what operators expect to be a read-only inspection command, and
+  avoids contention with the `--capture` and `--reverify` options.
 
 ### 2c. Changes to `teep serve`
 
-- Add `--cache-file <path>` flag (same default).
-- Same cache consultation logic as `teep verify`: use cached data, re-fetch
-  stale entries live, emit notice logs on staleness.
+- Add `--cache-file <path>` flag (defaults to `$TEEP_CACHE_FILE` or
+  `~/.config/teep/cache.yaml`; overridable with `cache_file` in config).
+- Use cached data for online factors, re-fetch stale entries live, emit
+  notice logs on staleness.
 - **Handler factory integration**: The proxy uses a `handleEndpoint` factory
   (`internal/proxy/proxy.go`) that produces handlers for all endpoint types
   (chat, embeddings, audio, images, rerank). The `attestAndCache` function
@@ -83,20 +79,23 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
   model) benefit from cached Sigstore/Rekor, Intel PCS, NVIDIA NRAS, and
   Proof of Cloud results without re-fetching. The memory-only cache is
   initialized empty and populated as attestations are performed.
-- **Authenticated write-back**: When `teep serve` (or `teep verify` with a
-  cache file) encounters changes it can fully authenticate, it updates the
-  cache file:
+- **Authenticated write-back**: When `teep serve` encounters changes it can
+  fully authenticate, it updates the in-memory cache and, if a cache file is
+  configured, writes back to the file:
   - New compose hash where all images pass Sigstore/Rekor verification.
   - Refreshed Intel PCS or NVIDIA NRAS results.
   - New Proof of Cloud positive registrations.
-  - New or updated global image entries with full Sigstore/Rekor provenance.
+  - New or updated image entries with full Sigstore/Rekor provenance.
+- **Write-back failure handling**: If a cache file write-back fails (I/O
+  error, permission denied, etc.), `teep serve` logs the error at
+  `slog.Error` level and continues serving requests. Cache write-back failures
+  MUST NOT cause request failures or block proxy operation.
 - **Unauthenticated values are NOT written back**: Changes to TDX measurement
-  registers (MRSEAM, MRTD, RTMR0–2) are not updated by `teep serve` or
-  `teep verify`. These values can only be updated by `teep cache`, which
-  performs the explicit operator-initiated trust-on-first-use flow. If `teep
-  serve` observes a TDX measurement mismatch against the cache, it reports
-  a factor failure (or warning if in `allow_fail`) but does not overwrite
-  the cached values.
+  registers (MRSEAM, MRTD, RTMR0–2) are not updated by `teep serve`. These
+  values can only be updated by `teep cache`, which performs the explicit
+  operator-initiated trust-on-first-use flow. If `teep serve` observes a TDX
+  measurement mismatch against the cache, it reports a factor failure (or
+  warning if in `allow_fail`) but does not overwrite the cached values.
 
 ---
 
@@ -109,62 +108,22 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
    settings (allow_fail, base_url, api_key_env, etc.). The cache file stores
    authenticated observations.
 
-2. **Global image table**: Container images are cached at the top level, keyed
-   by a unique identifier (the image digest or a generated ID for tag-based
-   images). This avoids duplicating Sigstore/Rekor results when the same image
-   appears across multiple providers or models.
+2. **Per-provider, per-model sections**: Each (provider, model) pair has its
+   own self-contained section with TDX measurements, compose hash, inline
+   image provenance data, NVIDIA results, Intel PCS results, Proof of Cloud
+   results, and E2EE test results. Sigstore/Rekor data is immutable — the
+   simplicity of inline storage outweighs the duplication cost when the same
+   image appears across multiple providers or models.
 
-3. **Per-provider, per-model sections**: Each (provider, model) pair has its
-   own section containing the TDX measurements, compose hash, NVIDIA results,
-   Intel PCS results, Proof of Cloud results, and references into the global
-   image table.
-
-4. **Per-provider gateway section**: For providers with gateway attestation
+3. **Per-provider gateway section**: For providers with gateway attestation
    (e.g., nearcloud), a `gateway` section sits alongside model sections with
-   its own TDX measurements, compose hash, and image references.
+   its own TDX measurements, compose hash, and inline image provenance.
 
-5. **Deterministic merge**: `teep cache provider --model X` replaces only
+4. **Deterministic merge**: `teep cache provider --model X` replaces only
    the `providers.<provider>.models.<X>` section (and the gateway section
-   if the provider has one). All other providers, models, and global images
-   are preserved. Orphaned global images (no longer referenced by any
-   provider/model in the merged config file) should be pruned.
+   if the provider has one). All other providers and models are preserved.
 
 ### 3b. Data Stored Per Scope
-
-#### Global Images (top-level `images` map)
-
-Each entry is keyed by a stable identifier. For digest-pinned images
-(`repo@sha256:...`), the key is `sha256:<hex>` (matching OCI notation). For
-tag-based images, the key is the canonical `<repo>:<tag>` string. If the
-compose manifest omits the tag (bare `repo`), it MUST be normalized to
-`<repo>:latest` for cache key generation and lookup. This avoids duplicate
-keys for equivalent references such as `repo` and `repo:latest`, and allows
-direct cache lookup without resolving the tag to a digest first (see Section
-5b rationale). For `allow_any_version` images, the key follows the same rule:
-`<repo>:<tag>`, with omitted tags canonicalized to `<repo>:latest`.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `repo` | string | Image repository (e.g., `datadog/agent`) |
-| `digest` | string | `sha256:<hex>` (immutable content address); empty for `allow_any_version` |
-| `tag` | string | Canonical tag used for cache key (e.g., `v0.4.2`, `latest`); omitted tags stored as `latest`; empty for digest-pinned |
-| `provenance` | string | `fulcio_signed` / `sigstore_present` / `compose_binding_only` |
-| `allow_any_version` | bool | `true` → any version accepted by allowlist membership alone |
-| `key_fingerprint` | string | SHA-256 hex of PKIX public key (for `sigstore_present`) |
-| `oidc_issuer` | string | Fulcio OIDC issuer (for `fulcio_signed`) |
-| `oidc_identity` | string | SAN URI / workflow identity (for `fulcio_signed`) |
-| `source_repos` | []string | Git repos (for `fulcio_signed`) |
-| `source_commit` | string | Git commit SHA (for `fulcio_signed`) |
-| `no_dsse` | bool | DSSE envelope lacks signatures |
-| `signature_verified` | bool | DSSE signature check passed |
-| `set_verified` | bool | Rekor SET check passed |
-| `inclusion_verified` | bool | Merkle inclusion proof passed |
-| `verified_at` | timestamp | When Sigstore/Rekor verification was performed |
-
-**Staleness**: Rekor entries are append-only and immutable. Digest-pinned
-entries never go stale. Tag-based entries with resolved digests are fresh as
-long as the same digest appears in the compose. `allow_any_version` entries
-are valid as long as the repo is in the allowlist.
 
 #### Per-Provider Model Section
 
@@ -172,16 +131,16 @@ Each model section under `providers.<name>.models.<model>`:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `cached_at` | timestamp | When this model was cached |
+| `cached_at` | timestamp | When this model was cached (informational; per-factor timestamps are authoritative) |
 | **TDX Measurements** | | |
-| `mrseam` | string | 48-byte hex |
-| `mrtd` | string | 48-byte hex |
-| `rtmr0` | string | 48-byte hex |
-| `rtmr1` | string | 48-byte hex |
-| `rtmr2` | string | 48-byte hex |
+| `mrseam` | []string | 48-byte hex allowlist |
+| `mrtd` | []string | 48-byte hex allowlist |
+| `rtmr0` | []string | 48-byte hex allowlist |
+| `rtmr1` | []string | 48-byte hex allowlist |
+| `rtmr2` | []string | 48-byte hex allowlist |
 | **Compose** | | |
 | `compose_hash` | string | `sha256:<hex>` of the docker-compose YAML |
-| `image_refs` | []string | References into the global `images` map |
+| `images` | []image | Inline image provenance entries (see below) |
 | **Intel PCS** | | |
 | `fmspc` | string | 12-char hex |
 | `tee_tcb_svn` | string | hex |
@@ -189,7 +148,7 @@ Each model section under `providers.<name>.models.<model>`:
 | `advisory_ids` | []string | Intel-SA-XXXXX IDs |
 | `intel_pcs_verified_at` | timestamp | When PCS was queried |
 | **NVIDIA NRAS** | | |
-| `eat_hash` | string | Content hash of GPU evidence |
+| `nvidia_evidence_hash` | string | Content hash of GPU evidence |
 | `nras_overall_result` | bool | `x-nvidia-overall-att-result` |
 | `nras_gpu_count` | int | Number of GPUs verified |
 | `nras_verified_at` | timestamp | When NRAS was queried |
@@ -204,12 +163,46 @@ Each model section under `providers.<name>.models.<model>`:
 | `e2ee_passed` | bool | Whether it succeeded |
 | `e2ee_tested_at` | timestamp | When test was performed |
 
+#### Per-Model Image Entry
+
+Each image in the `images` list within a model section:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `repo` | string | Image repository (e.g., `datadog/agent`) |
+| `digest` | string | `sha256:<hex>` (immutable content address); empty for `version_unpinned` |
+| `tag` | string | Canonical tag (e.g., `v0.4.2`, `latest`); omitted tags stored as `latest`; empty for digest-pinned |
+| `provenance` | string | `fulcio_signed` / `sigstore_present` / `no_sigstore_entry` |
+| `version_unpinned` | bool | `true` → any version accepted by allowlist membership alone |
+| `key_fingerprint` | string | SHA-256 hex of PKIX public key (for `sigstore_present`) |
+| `oidc_issuer` | string | Fulcio OIDC issuer (for `fulcio_signed`) |
+| `oidc_identity` | string | SAN URI / workflow identity (for `fulcio_signed`) |
+| `source_repos` | []string | Git repos (for `fulcio_signed`) |
+| `source_commit` | string | Git commit SHA (for `fulcio_signed`) |
+| `dsse_unsigned` | bool | DSSE envelope lacks signatures |
+| `signature_verified` | bool | DSSE signature check passed |
+| `set_verified` | bool | Rekor SET check passed |
+| `inclusion_verified` | bool | Merkle inclusion proof passed |
+| `verified_at` | timestamp | When Sigstore/Rekor verification was performed |
+
+The `version_unpinned` classification is derived from the compose manifest
+reference type, not operator-settable. `teep cache` MUST emit a warning when
+encountering `version_unpinned` images, recommending that the provider pin
+images by digest. The `version_unpinned` field is the weakest authentication
+level — the image is authenticated only by its presence in the supply chain
+allowlist (defined in `internal/attestation/compose.go`).
+
+**Staleness**: Rekor entries are append-only and immutable. Digest-pinned
+entries never go stale. Tag-based entries with resolved digests are fresh as
+long as the same digest appears in the compose. `version_unpinned` entries
+are valid as long as the repo is in the allowlist.
+
 #### Per-Provider Gateway Section
 
 For providers with gateway attestation (nearcloud), a `gateway` section
 at `providers.<name>.gateway` with the same structure as a model section:
-TDX measurements (gateway MRSEAM, MRTD, RTMR0–2), compose hash, image refs,
-Intel PCS, NVIDIA (if applicable), Proof of Cloud, etc.
+TDX measurements (gateway MRSEAM, MRTD, RTMR0–2), compose hash, inline
+images, Intel PCS, NVIDIA (if applicable), Proof of Cloud, etc.
 
 ### 3c. Cache Key and Invalidation Summary
 
@@ -217,20 +210,20 @@ Intel PCS, NVIDIA (if applicable), Proof of Cloud, etc.
 |-------------|-----------|-----------|-------------------|
 | TDX measurements | (provider, model) | Compose hash matches | Invalidated if compose hash changes |
 | Compose hash | `sha256(app_compose)` | Content-addressed (immutable per-content) | New hash → re-extract images, re-validate |
-| Image (digest-pinned) | `sha256:<hex>` | Immutable | Never stale |
-| Image (release tag) | `<repo>:<tag>` | Resolved digest matches cached digest | Stale if tag resolves to different digest |
-| Image (allow_any_version) | `<repo>:<tag>` | Repo in allowlist | Never stale (presence-only) |
+| Image (digest-pinned) | inline per-model | Immutable | Never stale |
+| Image (release tag) | inline per-model | Resolved digest matches cached digest | Stale if tag resolves to different digest |
+| Image (version_unpinned) | inline per-model | Repo in allowlist | Never stale (presence-only) |
 | Intel PCS | `(FMSPC, TeeTCBSVN)` | Within max-age (default 24h) | Re-fetch; offline → `Skip` |
-| NVIDIA NRAS | EAT evidence hash | Within max-age (default 24h) | Re-fetch; offline → `Skip` |
-| Proof of Cloud | PPID | Positive → infinite; negative → 24h TTL | Positive never stale; negative re-fetched after TTL |
+| NVIDIA NRAS | NVIDIA evidence hash | Within max-age (default 24h) | Re-fetch; offline → `Skip` |
+| Proof of Cloud | PPID | Positive → infinite; negative → 24h TTL | Positive never stale; negative re-fetched after TTL; `teep serve` always re-fetches negative results when online |
 | E2EE test | — | **Not cacheable** (live test) | Always re-run if online; offline → `Skip` |
 
 ---
 
 ## 4. Staleness and Re-fetch Behavior
 
-When `teep serve` or `teep verify` encounters a stale or invalidated cache
-entry during online operation (i.e., `--offline` is NOT set):
+When `teep serve` encounters a stale or invalidated cache entry during online
+operation:
 
 ### 4a. Compose Hash Changes
 
@@ -239,14 +232,15 @@ If the compose hash from a fresh attestation differs from the cached
 invalidated. Re-validation proceeds as:
 
 1. Extract images from the new compose manifest.
-2. For each image, check the global image cache:
-   - **Digest-pinned image in cache**: Cache hit — use cached Sigstore data.
+2. For each image, check the model's cached image list:
+   - **Digest-pinned image with matching digest**: Cache hit — use cached
+     Sigstore data.
    - **Tag-based image with matching resolved digest**: Cache hit.
    - **Tag-based image with different digest**: Cache miss — re-verify via
      Sigstore/Rekor.
    - **Image not in cache at all**: Cache miss — full Sigstore/Rekor fetch.
-3. After successful re-validation, update `compose_hash` and `image_refs` in
-   the model section; add any new images to the global table.
+3. After successful re-validation, update `compose_hash` and `images` in
+   the model section.
 4. Emit `slog.Info("compose hash changed, re-validated supply chain",
    "provider", p, "model", m, "old_hash", old, "new_hash", new)`.
 
@@ -259,10 +253,31 @@ If `intel_pcs_verified_at` or `nras_verified_at` is older than max-age:
   configured `allow_fail` list and normal offline factor handling. Log:
   `slog.Warn("stale cache entry in offline mode", "factor", f, "age", age)`.
 
-### 4c. Offline Mode
+### 4c. Proof of Cloud Negative Re-fetch
 
-When `--offline` is set, no re-fetching occurs. Cache data is used as-is with
-these rules:
+Negative PoC results (`poc_registered: false`) are cached with a 24h TTL to
+avoid hammering the registry. However, when `teep serve` is online and
+encounters a cached negative result, it MUST always re-fetch regardless of
+TTL age. Only positive PoC results (`poc_registered: true`) are trusted from
+cache without re-fetch (positive registrations are append-only and never
+expire). This prevents a false negative from a transient MITM or registry
+outage from persisting as a denial of service.
+
+### 4d. Maximum Cache Age
+
+A `max_cache_age` configuration option (default 7 days) controls the maximum
+age of any cache entry for `teep serve`. If all per-factor timestamps in a
+model's cache entry are older than `max_cache_age`, `teep serve` refuses to
+use the cache and requires a fresh attestation. This prevents indefinite
+operation on stale cache data when network access to Intel PCS or NVIDIA NRAS
+is blocked (which could mask a platform TCB revocation). The `max_cache_age`
+value is configured in `teep.toml` (e.g., `max_cache_age = "168h"`) and
+overridable with `--max-cache-age` on the CLI.
+
+### 4e. Offline Mode
+
+When `--offline` is set on `teep serve`, no re-fetching occurs. Cache data
+is used as-is with these rules:
 - **Fresh cache entry**: Factor evaluates using cached data (Pass/Fail as
   originally determined).
 - **Stale mutable-authority entry**: Factor evaluates as `Skip`. Log emitted.
@@ -291,10 +306,7 @@ go stale. Offline authentication: cached digest match → Pass.
 ### 5b. Specific Release Tag (`repo:v1.2.3`)
 
 When authenticated via Sigstore/Rekor, the resolved immutable digest is
-persisted as the trust anchor. The tag is stored as readable metadata. Offline
-authentication requires the resolved digest to match what's in the current
-compose manifest. If the compose now resolves the same tag to a different
-digest, the cache entry is stale and must be re-verified online.
+persisted as the trust anchor. The tag is stored as readable metadata.
 
 **Cache key is `<repo>:<tag>`, not the resolved digest.** The compose manifest
 specifies images by tag, and we cannot know which digest the provider resolved
@@ -303,114 +315,86 @@ same tag appears in a compose manifest without requiring a digest resolution
 step. The resolved digest is stored inside the cache entry as the authenticated
 trust anchor, not as the key.
 
+**Offline authentication**: If the same tag was previously authenticated via
+Sigstore/Rekor and the compose manifest still references the same tag, the
+cached entry is accepted. In offline mode, there is no way to resolve the
+current tag-to-digest mapping, so the cached provenance for that tag is used
+as-is. This is the expected behavior — the tag was previously authenticated.
+
+**Security limitation — tag re-push**: Because we are the client and have no
+visibility into which digest the provider actually pulled for a given tag, a
+tag re-push (where the same tag now points to a different image) is not
+detectable by teep in either online or offline mode. The compose YAML text is
+unchanged, so the compose hash does not change, and the cache is not
+invalidated. This is an inherent limitation of tag-based image references.
+`teep cache` and `teep serve` MUST emit `slog.Info` notices when encountering
+images referenced by tag rather than digest, recommending that providers pin
+images by digest for stronger supply chain guarantees.
+
 ### 5c. Generic / Branch Tag (`repo:latest`, `repo:main`, no tag)
 
 The version cannot be pinned because the same tag may resolve to different
-images over time. These are cached with `allow_any_version: true`, meaning the
+images over time. These are cached with `version_unpinned: true`, meaning the
 image is authenticated by its presence in the supply chain allowlist alone — no
 digest or tag pinning. This is the weakest authentication level but is explicit
-in the cache for operator visibility.
+in the cache for operator visibility. The allowlist is defined in
+`internal/attestation/compose.go`. `teep cache` MUST warn prominently when
+encountering `version_unpinned` images.
 
 ### Security Ordering
 
-Digest-pinned > specific release tag > allow_any_version.
+Digest-pinned > specific release tag > version_unpinned.
 
-| Image Reference | Global Image Key | Offline Auth | Staleness |
-|----------------|-----------------|-------------|-----------|
-| `repo@sha256:abc` | `sha256:abc` | Digest match → Pass | Never stale |
-| `repo:v1.2.3` | `repo:v1.2.3` | Cached resolved digest match → Pass | Stale if tag resolves to new digest |
-| `repo:latest` | `repo:latest` | Allowlist membership → Pass | Never stale (presence-only) |
+| Image Reference | Offline Auth | Staleness |
+|----------------|-------------|-----------|
+| `repo@sha256:abc` | Digest match → Pass | Never stale |
+| `repo:v1.2.3` | Previously authenticated tag → Pass | Not detectable if tag re-pushed (see 5b) |
+| `repo:latest` | Allowlist membership → Pass | Never stale (presence-only) |
 
 ---
 
 ## 6. Cache File Format (YAML)
 
-The cache file uses YAML for human readability and comment support.
+The cache file uses YAML for human readability and comment support. YAML
+provides the hierarchical structure needed for nested provider/model/image
+data that TOML does not naturally support. Note that `teep cache` rewrites the
+file using struct-based encoding, so operator-added comments will not be
+preserved across refreshes; only the generated header comment persists.
+
 It is normally generated and refreshed by `teep cache`, but operators may
 inspect it and hand-edit it when needed. Any manual change to cached entries,
 including pinned TDX register values, is an explicit local policy change and
 must be treated as operator-authored trust data rather than re-verified cached
-evidence. Because the cache contains trust anchors (for example pinned TDX
-measurements and verified image provenance), cache file access must be
-protected with the same strict local file safety checks used for sensitive
-config: on every read, validate owner and permissions using the same policy as
-`internal/config/config.go` (`checkFilePermissions`), and fail closed if the
-file is not owned by the expected user or is readable/writable by other users
-or groups (for example, require `0600`-style permissions). On write, create or
+evidence.
+
+**File permissions and safety**: Because the cache contains trust anchors (for
+example pinned TDX measurements and verified image provenance), cache file
+access must be protected with the same strict local file safety checks used
+for sensitive config: on every read, validate permissions using the same policy
+as `internal/config/config.go` (`checkFilePermissions`), and warn if the file
+is readable/writable by other users or groups (for example, require
+`0600`-style permissions). Permission checks MUST use `os.Lstat` (not
+`os.Stat`) to prevent symlink attacks where a symlink to an attacker-controlled
+file with correct permissions would pass validation. On write, create or
 replace the cache file with restrictive permissions explicitly set (do not rely
-on umask), then re-validate ownership and permissions before accepting the
-result. Strict unmarshalling (`KnownFields(true)`) rejects unknown fields on
-read (fail-closed).
+on umask).
+
+**Strict unmarshalling**: `KnownFields(true)` rejects unknown fields on read
+(fail-closed). Post-unmarshal validation MUST verify that all hex-encoded
+fields decode to expected lengths (e.g., 48 bytes for TDX measurements, 32
+bytes for SHA-256 digests). This catches YAML type coercion issues (unquoted
+hex strings parsed as integers) and data corruption.
+
+**Version compatibility**: The `version: 1` field combined with
+`KnownFields(true)` means an older binary will reject a cache file written by
+a newer binary that adds fields. This is acceptable — the project has no
+backwards compatibility guarantees, and the correct action is to upgrade the
+binary and re-run `teep cache`.
 
 ```yaml
 # teep attestation cache — generated by `teep cache`
 # manual edits are allowed but are treated as operator policy changes
 version: 1
-
-images:
-  "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321":
-    repo: "datadog/agent"
-    digest: "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321"
-    provenance: sigstore_present
-    key_fingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"
-    signature_verified: true
-    set_verified: true
-    inclusion_verified: true
-    verified_at: "2026-04-05T14:30:00Z"
-
-  "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890":
-    repo: "nearaidev/compose-manager"
-    digest: "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890"
-    provenance: fulcio_signed
-    oidc_issuer: "https://token.actions.githubusercontent.com"
-    oidc_identity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master"
-    source_repos:
-      - "nearai/compose-manager"
-      - "https://github.com/nearai/compose-manager"
-    source_commit: "abc123def456"
-    no_dsse: true
-    signature_verified: true
-    set_verified: true
-    inclusion_verified: true
-    verified_at: "2026-04-05T14:30:00Z"
-
-  "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef":
-    repo: "certbot/dns-cloudflare"
-    digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    provenance: compose_binding_only
-    verified_at: "2026-04-05T14:30:00Z"
-
-  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":
-    repo: "nearaidev/dstack-vpc"
-    digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    provenance: fulcio_signed
-    oidc_issuer: "https://token.actions.githubusercontent.com"
-    oidc_identity: "https://github.com/nearai/dstack-vpc/.github/workflows/build.yml@refs/heads/main"
-    source_repos:
-      - "nearai/dstack-vpc"
-    no_dsse: true
-    signature_verified: true
-    set_verified: true
-    inclusion_verified: true
-    verified_at: "2026-04-05T14:30:00Z"
-
-  "vllm/vllm-openai:v0.6.6.post1":
-    repo: "vllm/vllm-openai"
-    digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    tag: "v0.6.6.post1"
-    provenance: sigstore_present
-    key_fingerprint: "aabbccdd..."
-    signature_verified: true
-    set_verified: true
-    inclusion_verified: true
-    verified_at: "2026-04-05T14:30:00Z"
-
-  "alpine:latest":
-    repo: "alpine"
-    tag: "latest"
-    provenance: compose_binding_only
-    allow_any_version: true
-    verified_at: "2026-04-05T14:30:00Z"
 
 providers:
   neardirect:
@@ -418,19 +402,47 @@ providers:
       "meta-llama/Llama-3.3-70B-Instruct":
         cached_at: "2026-04-05T14:30:00Z"
 
-        # TDX measurements (pinned)
-        mrseam: "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6"
-        mrtd: "b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217"
-        rtmr0: "bc122d143ab768565ba5c3774ff5f03a63c89a4df7c1f5ea38d3bd173409d14f8cbdcc36d40e703cccb996a9d9687590"
-        rtmr1: "c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc"
-        rtmr2: "564622c7ddc55a53272cc9f0956d29b3f7e0dd18ede432720b71fd89e5b5d76cb0b99be7b7ff2a6a92b89b6b01643135"
+        # TDX measurements (pinned allowlists)
+        mrseam:
+          - "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6"
+        mrtd:
+          - "b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217"
+        rtmr0:
+          - "bc122d143ab768565ba5c3774ff5f03a63c89a4df7c1f5ea38d3bd173409d14f8cbdcc36d40e703cccb996a9d9687590"
+        rtmr1:
+          - "c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc"
+        rtmr2:
+          - "564622c7ddc55a53272cc9f0956d29b3f7e0dd18ede432720b71fd89e5b5d76cb0b99be7b7ff2a6a92b89b6b01643135"
 
         # Compose binding
         compose_hash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        image_refs:
-          - "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321"
-          - "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890"
-          - "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        images:
+          - repo: "datadog/agent"
+            digest: "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321"
+            provenance: sigstore_present
+            key_fingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"
+            signature_verified: true
+            set_verified: true
+            inclusion_verified: true
+            verified_at: "2026-04-05T14:30:00Z"
+          - repo: "nearaidev/compose-manager"
+            digest: "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890"
+            provenance: fulcio_signed
+            oidc_issuer: "https://token.actions.githubusercontent.com"
+            oidc_identity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master"
+            source_repos:
+              - "nearai/compose-manager"
+              - "https://github.com/nearai/compose-manager"
+            source_commit: "abc123def456"
+            dsse_unsigned: true
+            signature_verified: true
+            set_verified: true
+            inclusion_verified: true
+            verified_at: "2026-04-05T14:30:00Z"
+          - repo: "certbot/dns-cloudflare"
+            digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            provenance: no_sigstore_entry
+            verified_at: "2026-04-05T14:30:00Z"
 
         # Intel PCS
         fmspc: "00906ED50000"
@@ -441,7 +453,7 @@ providers:
         intel_pcs_verified_at: "2026-04-05T14:30:00Z"
 
         # NVIDIA NRAS
-        eat_hash: "sha256:1234abcd..."
+        nvidia_evidence_hash: "sha256:1234abcd..."
         nras_overall_result: true
         nras_gpu_count: 8
         nras_verified_at: "2026-04-05T14:30:00Z"
@@ -459,14 +471,30 @@ providers:
   nearcloud:
     gateway:
       cached_at: "2026-04-05T14:30:00Z"
-      mrseam: "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6"
-      mrtd: "aabbccdd..."
-      rtmr0: "11223344..."
-      rtmr1: "55667788..."
-      rtmr2: "99aabbcc..."
+      mrseam:
+        - "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6"
+      mrtd:
+        - "aabbccdd..."
+      rtmr0:
+        - "11223344..."
+      rtmr1:
+        - "55667788..."
+      rtmr2:
+        - "99aabbcc..."
       compose_hash: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-      image_refs:
-        - "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      images:
+        - repo: "nearaidev/dstack-vpc"
+          digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          provenance: fulcio_signed
+          oidc_issuer: "https://token.actions.githubusercontent.com"
+          oidc_identity: "https://github.com/nearai/dstack-vpc/.github/workflows/build.yml@refs/heads/main"
+          source_repos:
+            - "nearai/dstack-vpc"
+          dsse_unsigned: true
+          signature_verified: true
+          set_verified: true
+          inclusion_verified: true
+          verified_at: "2026-04-05T14:30:00Z"
       ppid: "ff00ee11dd22cc33ff00ee11dd22cc33"
       poc_registered: true
       poc_machine_id: "gateway-001"
@@ -476,22 +504,48 @@ providers:
     models:
       "meta-llama/Llama-3.3-70B-Instruct":
         cached_at: "2026-04-05T14:30:00Z"
-        mrseam: "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6"
-        mrtd: "b24d3b24..."
-        rtmr0: "bc122d14..."
-        rtmr1: "c0445b70..."
-        rtmr2: "564622c7..."
+        mrseam:
+          - "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6"
+        mrtd:
+          - "b24d3b24..."
+        rtmr0:
+          - "bc122d14..."
+        rtmr1:
+          - "c0445b70..."
+        rtmr2:
+          - "564622c7..."
         compose_hash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        image_refs:
-          - "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321"
-          - "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890"
-          - "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        images:
+          - repo: "datadog/agent"
+            digest: "sha256:a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890fedcba0987654321"
+            provenance: sigstore_present
+            key_fingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"
+            signature_verified: true
+            set_verified: true
+            inclusion_verified: true
+            verified_at: "2026-04-05T14:30:00Z"
+          - repo: "nearaidev/compose-manager"
+            digest: "sha256:fedcba0987654321a1b2c3d4e5f67890fedcba0987654321a1b2c3d4e5f67890"
+            provenance: fulcio_signed
+            oidc_issuer: "https://token.actions.githubusercontent.com"
+            oidc_identity: "https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master"
+            source_repos:
+              - "nearai/compose-manager"
+            dsse_unsigned: true
+            signature_verified: true
+            set_verified: true
+            inclusion_verified: true
+            verified_at: "2026-04-05T14:30:00Z"
+          - repo: "certbot/dns-cloudflare"
+            digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            provenance: no_sigstore_entry
+            verified_at: "2026-04-05T14:30:00Z"
         fmspc: "00906ED50000"
         tee_tcb_svn: "04040303ffff01000000000000000000"
         tcb_status: "UpToDate"
         advisory_ids: []
         intel_pcs_verified_at: "2026-04-05T14:30:00Z"
-        eat_hash: "sha256:5678efgh..."
+        nvidia_evidence_hash: "sha256:5678efgh..."
         nras_overall_result: true
         nras_gpu_count: 8
         nras_verified_at: "2026-04-05T14:30:00Z"
@@ -508,15 +562,32 @@ providers:
     models:
       "meta-llama/Llama-3.3-70B-Instruct":
         cached_at: "2026-04-05T14:30:00Z"
-        mrseam: "..."
-        mrtd: "..."
-        rtmr0: "..."
-        rtmr1: "..."
-        rtmr2: "..."
+        mrseam:
+          - "..."
+        mrtd:
+          - "..."
+        rtmr0:
+          - "..."
+        rtmr1:
+          - "..."
+        rtmr2:
+          - "..."
         compose_hash: "sha256:eeeeeeee..."
-        image_refs:
-          - "vllm/vllm-openai:v0.6.6.post1"
-          - "alpine:latest"
+        images:
+          - repo: "vllm/vllm-openai"
+            digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            tag: "v0.6.6.post1"
+            provenance: sigstore_present
+            key_fingerprint: "aabbccdd..."
+            signature_verified: true
+            set_verified: true
+            inclusion_verified: true
+            verified_at: "2026-04-05T14:30:00Z"
+          - repo: "alpine"
+            tag: "latest"
+            provenance: no_sigstore_entry
+            version_unpinned: true
+            verified_at: "2026-04-05T14:30:00Z"
         fmspc: "00906ED50000"
         tee_tcb_svn: "04040303ffff01000000000000000000"
         tcb_status: "SWHardeningNeeded"
@@ -524,7 +595,7 @@ providers:
           - "INTEL-SA-00615"
           - "INTEL-SA-00657"
         intel_pcs_verified_at: "2026-04-05T14:30:00Z"
-        eat_hash: "sha256:9999..."
+        nvidia_evidence_hash: "sha256:9999..."
         nras_overall_result: true
         nras_gpu_count: 1
         nras_verified_at: "2026-04-05T14:30:00Z"
@@ -544,6 +615,14 @@ providers:
 remove a stale provider, inspect image provenance). YAML supports comments,
 is compact, and is human-readable. The cache file header comment
 (`# teep attestation cache — machine-generated`) signals its origin.
+
+**Why YAML over TOML**: The codebase uses TOML (`BurntSushi/toml`) for config,
+but TOML lacks the nested hierarchical structure needed for
+`providers.<name>.models.<model>.images[].source_repos[]`. YAML's native
+support for deeply nested maps and sequences makes the cache file
+significantly more readable than equivalent TOML. This introduces a new
+`gopkg.in/yaml.v3` dependency. The TOML dependency could be dropped in the
+future if the config format is also migrated to YAML.
 
 Strict unmarshalling will be enforced during cache reads: unknown fields are
 rejected (fail-closed), preventing version skew or corruption from going
@@ -601,13 +680,14 @@ The `e2ee_tested` / `e2ee_passed` fields in the cache are informational only
 
 **Rekor/Sigstore (factors 6–7)**: Rekor entries are append-only and immutable.
 Digest-pinned results never go stale. This is the ideal caching candidate. The
-global `images` table in the cache stores full Rekor provenance data.
+per-model `images` list in the cache stores full Rekor provenance data.
 
 **Proof of Cloud (factors 8–9)**: Hardware registry is append-only. Positive
-registrations never expire. Negative results are cached with a short TTL
-(default 24h, matching Intel PCS) to avoid hammering the registry — PoC is
-currently `allow_fail` for all providers. Cached positive
-`poc_registered: true` is valid indefinitely.
+registrations never expire. Negative results are cached with a 24h TTL
+(matching Intel PCS) to avoid hammering the registry — PoC is currently
+`allow_fail` for all providers. However, `teep serve` always re-fetches
+negative results when online regardless of TTL age (see Section 4c). Cached
+positive `poc_registered: true` is valid indefinitely.
 
 ### 8c. Non-Online Cacheable Data
 
@@ -628,21 +708,29 @@ dependent but was previously obtained via `--update-config`:
 When `teep cache neardirect --model meta-llama/Llama-3.3-70B-Instruct` runs:
 
 1. Read existing cache file (if present).
-2. Replace `providers.neardirect.models["meta-llama/Llama-3.3-70B-Instruct"]`.
+2. Replace `providers.neardirect.models["meta-llama/Llama-3.3-70B-Instruct"]`
+   with the newly fetched and verified data (including inline images).
 3. If neardirect has gateway attestation, also replace
    `providers.neardirect.gateway`.
-4. For each image in the new model's compose + gateway compose:
-   - If the image (by digest or tag-key) already exists in global `images`
-     and is still valid, keep it.
-   - If the image is new or has a different resolved digest, add/update it.
-5. Preserve all other providers and models untouched.
-6. **Optional orphan pruning**: After merge, scan global `images` for entries
-   not referenced by any provider/model. These can be pruned to keep the file
-   compact, or left for potential future reuse (configurable, default: prune).
-7. Write the merged cache file atomically (write → rename).
+4. Preserve all other providers and models untouched.
+5. Write the merged cache file atomically (write to temp file → rename).
 
 For `--all-models`, repeat step 2 for each model, then do one gateway update
-and one orphan prune pass at the end.
+at the end.
+
+### 9a. File Locking and Concurrency
+
+**`teep serve` write-back**: Uses a single-writer goroutine pattern. All
+cache mutations (from concurrent request handlers) are serialized through a
+channel to a single goroutine that performs read-merge-write-rename. This
+avoids file-level locking complexity for in-process coordination.
+
+**Concurrent `teep cache` invocations** (e.g., `teep cache providerA &
+teep cache providerB &`): Last-writer-wins. Because each invocation replaces
+only its own provider section and preserves others, data loss is limited to
+the case where both invocations write at the exact same instant. This is
+acceptable for an operator-initiated tool; operators should not run concurrent
+`teep cache` commands for the same provider.
 
 ---
 
@@ -675,28 +763,28 @@ and run `teep cache` to populate the cache file instead.
 
 ### 10b. How the Cache Replaces Config Policy
 
-The cache file's per-model TDX register values (`mrseam`, `mrtd`, `rtmr0`–
-`rtmr2`, and gateway equivalents) serve the role formerly filled by the config
-measurement allowlists. At verification time:
+The cache file's per-model TDX register value lists (`mrseam`, `mrtd`,
+`rtmr0`–`rtmr2`, and gateway equivalents) serve the role formerly filled by
+the config measurement allowlists. At verification time in `teep serve`:
 
 1. Teep fetches a live attestation from the provider (as before).
 2. The live TDX quote is parsed and verified locally (signature, cert chain,
    nonce binding — all offline-capable factors).
-3. The live TDX measurement values are compared against the cached values for
-   that (provider, model) pair.
+3. The live TDX measurement values are compared against the cached allowlists
+   for that (provider, model) pair.
 
 **Enforcement follows the configured `allow_fail` list**:
 
-- **Factor NOT in `allow_fail`** (enforced): If a cached TDX register value
-  does not match the live value, the factor **fails**. In `teep serve`, the
-  request is **blocked**. In `teep verify`, the report shows the factor as
-  **Fail** and the overall result is blocked.
+- **Factor NOT in `allow_fail`** (enforced): If a live TDX register value
+  does not match any entry in the cached allowlist, the factor **fails**. In
+  `teep serve`, the request is **blocked**. In `teep verify`, TDX register
+  comparison is not performed (teep verify does not use the cache).
 
-- **Factor in `allow_fail`** (non-enforced): If a cached TDX register value
-  does not match the live value, a **warning** is emitted
+- **Factor in `allow_fail`** (non-enforced): If a live TDX register value
+  does not match any entry in the cached allowlist, a **warning** is emitted
   (`slog.Warn("cached TDX register mismatch", "register", name,
   "cached", cached, "live", live, "factor", factor)`), but the request is
-  not blocked and the report is not failed.
+  not blocked.
 
 - **No cache entry for the (provider, model)**: The comparison is skipped —
   there is nothing to compare against. This is equivalent to the former
@@ -716,9 +804,10 @@ verification, or staleness degradation.
 |---------|---------------------|-------------------|
 | Purpose | User policy / preferences | Machine-observed authenticated data |
 | Edited by | Human | `teep cache` command |
-| Content | `allow_fail`, `base_url`, `api_key_env`, provider settings | TDX register values, compose hashes, image provenance, PCS/NRAS/PoC results |
-| TDX register handling | **Removed** (no allowlists) | Cached values compared against live attestation |
+| Content | `allow_fail`, `base_url`, `api_key_env`, `cache_file`, `max_cache_age`, provider settings | TDX register allowlists, compose hashes, image provenance, PCS/NRAS/PoC results |
+| TDX register handling | **Removed** (no allowlists) | Cached allowlists compared against live attestation |
 | Enforcement | `allow_fail` controls which factors block | Cached data compared; `allow_fail` controls block/warn |
+| Used by | `teep verify`, `teep serve`, `teep cache` | `teep serve`, `teep cache` (NOT `teep verify`) |
 | Merge on update | N/A (user-managed) | Provider+model replacement with merge |
 | Format | TOML | YAML |
 
@@ -728,9 +817,12 @@ verification, or staleness degradation.
 
 ### Phase 1: Cache File Format and I/O
 
-- Define Go types for the cache file structure.
+- Define Go types for the cache file structure in `internal/cache/`.
+- Per-model inline image entries (no global image table).
+- TDX register fields as `[]string` allowlists.
 - Implement read/write/merge operations with atomic file writes.
-- Implement orphan pruning.
+- Permission checks using `os.Lstat` (symlink-safe).
+- Post-unmarshal validation of hex field lengths.
 - Unit tests for merge semantics, format round-tripping, concurrent access.
 
 ### Phase 2: `teep cache` Command
@@ -738,18 +830,17 @@ verification, or staleness degradation.
 - Add `teep cache` subcommand to `cmd/teep/main.go`.
 - Wire up attestation fetch → full verification → cache extraction → file write.
 - Support `--model`, `--all-models`, `--cache-file`.
+- Emit warnings for tag-based and `version_unpinned` images.
+- Partial failure handling for `--all-models`: continue all models, collect
+  per-model errors, write cache for successes, exit non-zero with summary.
 - Unit and integration tests.
 
-### Phase 3: Cache Consumption in `teep verify` and Config Removal
+### Phase 3: Config Removal
 
-- Load cache file in `teep verify`.
-- For each online factor, check cache before making network calls.
-- Compare live TDX register values against cached values; enforce via
-  `allow_fail` (see Section 10b).
-- Implement staleness detection and re-fetch logic.
-- Implement notice logging for stale/invalidated entries.
 - Remove `--update-config`, `--config-out`, and all config measurement
   allowlist fields (see Section 10a).
+- `teep verify` does NOT use the cache — no `--cache-file` flag, no cache
+  reads, no cache writes. It always performs live network requests.
 - Note: `e2ee_usable` needs no special handling. The `Deferred` property
   already prevents Skip→Fail promotion in `BuildReport`. Cache consultation
   code can treat it uniformly as a non-cacheable factor that evaluates via
@@ -765,7 +856,10 @@ verification, or staleness degradation.
 - Create the supply chain cache at `teep serve` startup (same data structures
   as the cache file). If a cache file is configured, load it into memory;
   otherwise start with an empty memory-only cache.
-- Same staleness/re-fetch/logging logic as `teep verify`.
+- Implement staleness detection, re-fetch logic, and `max_cache_age` threshold.
+- Implement notice logging for stale/invalidated entries.
+- Compare live TDX register values against cached allowlists; enforce via
+  `allow_fail` (see Section 10b).
 - **Integration point**: The `handleEndpoint` factory dispatches all endpoint
   types (chat, embeddings, audio, images, rerank) through `attestAndCache`.
   Supply chain cache consultation integrates into this flow — either within
@@ -778,8 +872,10 @@ verification, or staleness degradation.
   are fully authenticated (new compose hash with all images passing
   Sigstore/Rekor, refreshed Intel PCS / NVIDIA NRAS, new PoC positive
   registrations), write these back to both the in-memory cache and the cache
-  file (if configured). Use atomic write (write → rename) and a file lock to
-  handle concurrent proxy requests.
+  file (if configured). Use atomic write (write → rename) with a single-writer
+  goroutine pattern to handle concurrent proxy requests (see Section 9a).
+- **Write-back failure handling**: Cache file write failures are logged at
+  `slog.Error` level and do not fail requests or block proxy operation.
 - **TDX measurement registers are read-only**: `teep serve` never overwrites
   cached MRSEAM, MRTD, or RTMR values. Only `teep cache` can update these
   (explicit operator trust-on-first-use).
@@ -789,8 +885,8 @@ verification, or staleness degradation.
 - Integration tests with live providers.
 - `make reports` regression check.
 - Update `README.md`, `README_ADVANCED.md`, help text.
-- `teep.toml.example` — remove update-config examples, add cache-file
-  documentation.
+- `teep.toml.example` — remove update-config examples, add `cache_file`
+  and `max_cache_age` documentation.
 - Rewrite `docs/measurement_allowlists.md` to describe how to use
   `teep cache` combined with `allow_fail` configuration to pin cached
   values with and without strict enforcement.
