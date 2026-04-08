@@ -21,9 +21,7 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -277,7 +275,6 @@ type Server struct {
 	signingKeyCache *attestation.SigningKeyCache
 	spkiCache       *attestation.SPKICache
 	rekorClient     *attestation.RekorClient
-	pocSigningKey   ed25519.PublicKey // optional EdDSA key for PoC JWT verification (GW-M-11)
 	mux             *http.ServeMux
 	attestClient    *http.Client // for attestation fetches
 	upstreamClient  *http.Client // for chat completions forwards
@@ -331,24 +328,11 @@ func New(cfg *config.Config) (*Server, error) {
 	// Tests override this directly; they don't call proxy.New.
 	attestation.TDXCollateralGetter = attestation.NewCollateralGetter(s.attestClient)
 
-	// Parse optional PoC EdDSA signing key (GW-M-11).
-	if cfg.PoCSigningKey != "" {
-		keyBytes, err := base64.StdEncoding.DecodeString(cfg.PoCSigningKey)
-		if err != nil {
-			return nil, fmt.Errorf("poc_signing_key: invalid base64: %w", err)
-		}
-		if len(keyBytes) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("poc_signing_key: expected %d bytes, got %d", ed25519.PublicKeySize, len(keyBytes))
-		}
-		s.pocSigningKey = ed25519.PublicKey(keyBytes)
-		slog.Info("PoC JWT EdDSA signature verification enabled")
-	}
-
 	for name, cp := range cfg.Providers {
 		mDefaults, gwDefaults := defaults.MeasurementDefaults(name)
 		mergedPolicy := config.MergedMeasurementPolicy(name, cfg, mDefaults)
 		mergedGWPolicy := config.MergedGatewayMeasurementPolicy(name, cfg, gwDefaults)
-		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg), mergedPolicy, mergedGWPolicy, s.rekorClient, s.pocSigningKey)
+		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg), mergedPolicy, mergedGWPolicy, s.rekorClient)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
@@ -444,7 +428,6 @@ func fromConfig(
 	policy attestation.MeasurementPolicy,
 	gatewayPolicy attestation.MeasurementPolicy,
 	rekorClient *attestation.RekorClient,
-	pocSigningKey ed25519.PublicKey,
 ) (*provider.Provider, error) {
 	p := &provider.Provider{
 		Name:                     cp.Name,
@@ -509,7 +492,6 @@ func fromConfig(
 			gatewayPolicy,
 			rdVerifier,
 			rekorClient,
-			pocSigningKey,
 		)
 		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nanogpt":
@@ -736,7 +718,7 @@ func (s *Server) verifyPoC(
 	}
 	slog.DebugContext(ctx, "Proof of Cloud check starting", "provider", provName)
 	start := time.Now()
-	poc := attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient, s.pocSigningKey)
+	poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, s.attestClient)
 	result := poc.CheckQuote(ctx, raw.IntelQuote)
 	dur := time.Since(start)
 	slog.DebugContext(ctx, "Proof of Cloud check complete", "provider", provName, "elapsed", dur,

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -45,7 +44,6 @@ type PinnedHandler struct {
 	gatewayPolicy attestation.MeasurementPolicy
 	rdVerifier    provider.ReportDataVerifier
 	rekorClient   *attestation.RekorClient
-	pocSigningKey ed25519.PublicKey // optional EdDSA key for PoC JWT verification (GW-M-11)
 	ctChecker     *neardirect.CTChecker
 	dialFn        func(ctx context.Context, domain string) (*tls.Conn, error)
 
@@ -62,7 +60,6 @@ func NewPinnedHandler(
 	gatewayPolicy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
 	rekorClient *attestation.RekorClient,
-	pocSigningKey ed25519.PublicKey,
 ) *PinnedHandler {
 	checker := neardirect.NewCTChecker()
 	checker.SetEnabled(!offline)
@@ -76,7 +73,6 @@ func NewPinnedHandler(
 		gatewayPolicy: gatewayPolicy,
 		rdVerifier:    rdVerifier,
 		rekorClient:   rekorClient,
-		pocSigningKey: pocSigningKey,
 		ctChecker:     checker,
 	}
 }
@@ -554,7 +550,7 @@ func (h *PinnedHandler) checkPoC(ctx context.Context, quote string) *attestation
 	if h.offline || quote == "" {
 		return nil
 	}
-	poc := attestation.NewPoCClientWithSigningKey(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second), h.pocSigningKey)
+	poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second))
 	return poc.CheckQuote(ctx, quote)
 }
 

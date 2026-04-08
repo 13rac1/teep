@@ -2,11 +2,7 @@ package attestation
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,9 +13,17 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/golang-jwt/jwt/v5"
 )
+
+// makePoCJWT returns a minimal structurally-valid JWT whose payload contains
+// the given machineID and an exp far in the future.
+func makePoCJWT(machineID string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA"}`))
+	payload := base64.RawURLEncoding.EncodeToString(
+		fmt.Appendf(nil, `{"exp":9999999999,"machine_id":%q}`, machineID),
+	)
+	return header + "." + payload + ".fakesig"
+}
 
 // TestCheckQuoteMultisigFullFlow exercises the complete 3-peer multisig flow:
 // Stage 1: collect nonces from 3 peers, Stage 2: chain partial sigs, final JWT.
@@ -31,7 +35,7 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 
 	monikers := []string{"alice", "bob", "carol"}
 	nonces := []string{"nonce_alice", "nonce_bob", "nonce_carol"}
-	testJWT := "header.payload.signature"
+	testJWT := makePoCJWT("deadbeef")
 
 	makePeer := func(idx int) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -85,11 +89,7 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 		}
 	}()
 
-	client := &http.Client{}
-	poc := NewPoCClient(peers, PoCQuorum, client)
-	// Override JWT verification because the test uses a synthetic non-JWT token.
-	// Production code uses verifyPoCJWTClaims by default (F-39).
-	poc.jwtVerifyFn = func(jwtStr, machineID string) error { return nil }
+	poc := NewPoCClient(peers, PoCQuorum, &http.Client{})
 	result := poc.CheckQuote(context.Background(), hexQuote)
 
 	if result.Err != nil {
@@ -156,7 +156,7 @@ func TestCheckQuote_DeterministicStage2Order(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]string{
 					"machineId": "deadbeef",
 					"label":     "test-machine",
-					"jwt":       "header.payload.signature",
+					"jwt":       makePoCJWT("deadbeef"),
 				})
 			} else {
 				json.NewEncoder(w).Encode(map[string]string{
@@ -199,7 +199,6 @@ func TestCheckQuote_DeterministicStage2Order(t *testing.T) {
 	}
 
 	poc := NewPoCClient(peers, PoCQuorum, &http.Client{})
-	poc.jwtVerifyFn = func(jwtStr, machineID string) error { return nil }
 	result := poc.CheckQuote(context.Background(), hexQuote)
 
 	if result.Err != nil {
@@ -281,10 +280,10 @@ func buildTestJWT(t *testing.T, claims map[string]any) string {
 
 func TestVerifyPoCJWTClaims_Valid(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
-		"exp":       time.Now().Add(time.Hour).Unix(),
-		"machineId": "deadbeef",
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "deadbeef",
 	})
-	err := verifyPoCJWTClaims(token, "deadbeef")
+	err := verifyPoCJWTClaims(context.Background(), token, "deadbeef")
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
@@ -295,7 +294,7 @@ func TestVerifyPoCJWTClaims_ValidNoMachineIDCheck(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	// Empty expected machineID skips the check.
-	err := verifyPoCJWTClaims(token, "")
+	err := verifyPoCJWTClaims(context.Background(), token, "")
 	if err != nil {
 		t.Errorf("expected no error with empty machineID, got: %v", err)
 	}
@@ -303,10 +302,10 @@ func TestVerifyPoCJWTClaims_ValidNoMachineIDCheck(t *testing.T) {
 
 func TestVerifyPoCJWTClaims_Expired(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
-		"exp":       time.Now().Add(-time.Hour).Unix(),
-		"machineId": "deadbeef",
+		"exp":        time.Now().Add(-time.Hour).Unix(),
+		"machine_id": "deadbeef",
 	})
-	err := verifyPoCJWTClaims(token, "deadbeef")
+	err := verifyPoCJWTClaims(context.Background(), token, "deadbeef")
 	if err == nil {
 		t.Fatal("expected error for expired JWT")
 	}
@@ -315,27 +314,40 @@ func TestVerifyPoCJWTClaims_Expired(t *testing.T) {
 	}
 }
 
+func TestVerifyPoCJWTClaims_ExpZero(t *testing.T) {
+	// exp: 0 (Unix epoch 1970) must be treated as expired, not as "missing".
+	token := buildTestJWT(t, map[string]any{
+		"exp":        0,
+		"machine_id": "deadbeef",
+	})
+	err := verifyPoCJWTClaims(context.Background(), token, "deadbeef")
+	if err == nil {
+		t.Fatal("expected error for exp=0 (Unix epoch), got nil")
+	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Errorf("error should mention expired: %v", err)
+	}
+}
+
 func TestVerifyPoCJWTClaims_MissingExp(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
-		"machineId": "deadbeef",
+		"machine_id": "deadbeef",
 	})
-	err := verifyPoCJWTClaims(token, "deadbeef")
-	if err == nil {
-		t.Fatal("expected error for missing exp")
-	}
-	if !strings.Contains(err.Error(), "exp") {
-		t.Errorf("error should mention exp: %v", err)
+	// Missing exp is accepted with a warning (PoC JWTs don't include exp yet).
+	err := verifyPoCJWTClaims(context.Background(), token, "deadbeef")
+	if err != nil {
+		t.Errorf("expected no error for missing exp (warn-only), got: %v", err)
 	}
 }
 
 func TestVerifyPoCJWTClaims_MachineIDMismatch(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
-		"exp":       time.Now().Add(time.Hour).Unix(),
-		"machineId": "aaaaaaaa",
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "aaaaaaaa",
 	})
-	err := verifyPoCJWTClaims(token, "bbbbbbbb")
+	err := verifyPoCJWTClaims(context.Background(), token, "bbbbbbbb")
 	if err == nil {
-		t.Fatal("expected error for machineId mismatch")
+		t.Fatal("expected error for machine_id mismatch")
 	}
 	if !strings.Contains(err.Error(), "does not match") {
 		t.Errorf("error should mention mismatch: %v", err)
@@ -346,17 +358,17 @@ func TestVerifyPoCJWTClaims_MissingMachineID(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	err := verifyPoCJWTClaims(token, "expected-id")
+	err := verifyPoCJWTClaims(context.Background(), token, "expected-id")
 	if err == nil {
-		t.Fatal("expected error for missing machineId")
+		t.Fatal("expected error for missing machine_id")
 	}
-	if !strings.Contains(err.Error(), "missing machineId") {
-		t.Errorf("error should mention missing machineId: %v", err)
+	if !strings.Contains(err.Error(), "missing machine_id") {
+		t.Errorf("error should mention missing machine_id: %v", err)
 	}
 }
 
 func TestVerifyPoCJWTClaims_MalformedJWT(t *testing.T) {
-	err := verifyPoCJWTClaims("not.a.valid.jwt.token", "")
+	err := verifyPoCJWTClaims(context.Background(), "not.a.valid.jwt.token", "")
 	if err == nil {
 		t.Fatal("expected error for malformed JWT")
 	}
@@ -366,7 +378,7 @@ func TestVerifyPoCJWTClaims_MalformedJWT(t *testing.T) {
 }
 
 func TestVerifyPoCJWTClaims_BadBase64(t *testing.T) {
-	err := verifyPoCJWTClaims("header.!!!invalid!!!.sig", "")
+	err := verifyPoCJWTClaims(context.Background(), "header.!!!invalid!!!.sig", "")
 	if err == nil {
 		t.Fatal("expected error for bad base64")
 	}
@@ -374,343 +386,9 @@ func TestVerifyPoCJWTClaims_BadBase64(t *testing.T) {
 
 func TestVerifyPoCJWTClaims_BadJSON(t *testing.T) {
 	badPayload := base64.RawURLEncoding.EncodeToString([]byte("not json"))
-	err := verifyPoCJWTClaims("header."+badPayload+".sig", "")
+	err := verifyPoCJWTClaims(context.Background(), "header."+badPayload+".sig", "")
 	if err == nil {
 		t.Fatal("expected error for bad JSON payload")
-	}
-}
-
-// --------------------------------------------------------------------------
-// verifyPoCJWT (cryptographic EdDSA verification) tests
-// --------------------------------------------------------------------------
-
-func mustEdKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
-	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pub, priv
-}
-
-func signTestJWT(t *testing.T, privKey ed25519.PrivateKey, claims jwt.MapClaims) string {
-	t.Helper()
-	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	signed, err := token.SignedString(privKey)
-	if err != nil {
-		t.Fatalf("sign JWT: %v", err)
-	}
-	return signed
-}
-
-func TestVerifyPoCJWT_ValidSignature(t *testing.T) {
-	pub, priv := mustEdKey(t)
-	pc := &PoCClient{signingKey: pub}
-
-	token := signTestJWT(t, priv, jwt.MapClaims{
-		"exp":       time.Now().Add(time.Hour).Unix(),
-		"machineId": "deadbeef",
-	})
-	err := pc.verifyPoCJWT(token, "deadbeef")
-	if err != nil {
-		t.Errorf("expected no error, got: %v", err)
-	}
-}
-
-func TestVerifyPoCJWT_InvalidSignature(t *testing.T) {
-	_, priv1, _ := ed25519.GenerateKey(nil)
-	pub2, _, _ := ed25519.GenerateKey(nil)
-	pc := &PoCClient{signingKey: pub2}
-
-	// Sign with priv1 but verify with pub2.
-	token := signTestJWT(t, priv1, jwt.MapClaims{
-		"exp":       time.Now().Add(time.Hour).Unix(),
-		"machineId": "deadbeef",
-	})
-	err := pc.verifyPoCJWT(token, "deadbeef")
-	if err == nil {
-		t.Fatal("expected error for mismatched signing key")
-	}
-	if !strings.Contains(err.Error(), "verification failed") {
-		t.Errorf("error should mention verification failed: %v", err)
-	}
-}
-
-func TestVerifyPoCJWT_ExpiredToken(t *testing.T) {
-	pub, priv := mustEdKey(t)
-	pc := &PoCClient{signingKey: pub}
-
-	token := signTestJWT(t, priv, jwt.MapClaims{
-		"exp":       time.Now().Add(-time.Hour).Unix(),
-		"machineId": "deadbeef",
-	})
-	err := pc.verifyPoCJWT(token, "deadbeef")
-	if err == nil {
-		t.Fatal("expected error for expired token")
-	}
-}
-
-func TestVerifyPoCJWT_MachineIDMismatch(t *testing.T) {
-	pub, priv := mustEdKey(t)
-	pc := &PoCClient{signingKey: pub}
-
-	token := signTestJWT(t, priv, jwt.MapClaims{
-		"exp":       time.Now().Add(time.Hour).Unix(),
-		"machineId": "aaa",
-	})
-	err := pc.verifyPoCJWT(token, "bbb")
-	if err == nil {
-		t.Fatal("expected error for machineId mismatch")
-	}
-	if !strings.Contains(err.Error(), "machineId") {
-		t.Errorf("error should mention machineId: %v", err)
-	}
-}
-
-func TestVerifyPoCJWT_NoMachineIDCheck(t *testing.T) {
-	pub, priv := mustEdKey(t)
-	pc := &PoCClient{signingKey: pub}
-
-	token := signTestJWT(t, priv, jwt.MapClaims{
-		"exp": time.Now().Add(time.Hour).Unix(),
-	})
-	// Empty expected machineID skips the check.
-	err := pc.verifyPoCJWT(token, "")
-	if err != nil {
-		t.Errorf("expected no error with empty machineID, got: %v", err)
-	}
-}
-
-func TestVerifyPoCJWT_MissingMachineID(t *testing.T) {
-	pub, priv := mustEdKey(t)
-	pc := &PoCClient{signingKey: pub}
-
-	token := signTestJWT(t, priv, jwt.MapClaims{
-		"exp": time.Now().Add(time.Hour).Unix(),
-	})
-	err := pc.verifyPoCJWT(token, "expected-id")
-	if err == nil {
-		t.Fatal("expected error for missing machineId claim")
-	}
-}
-
-func TestVerifyPoCJWT_WrongAlgorithm(t *testing.T) {
-	pub, _, _ := ed25519.GenerateKey(nil)
-	pc := &PoCClient{signingKey: pub}
-
-	// Craft a JWT with HS256 header but it won't parse as EdDSA.
-	err := pc.verifyPoCJWT("eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjk5OTk5OTk5OTl9.fake", "")
-	if err == nil {
-		t.Fatal("expected error for wrong algorithm")
-	}
-}
-
-// --------------------------------------------------------------------------
-// NewPoCClientWithSigningKey tests
-// --------------------------------------------------------------------------
-
-func TestNewPoCClientWithSigningKey(t *testing.T) {
-	pub, _, _ := ed25519.GenerateKey(nil)
-	pc := NewPoCClientWithSigningKey(PoCPeers, PoCQuorum, &http.Client{}, pub)
-	if pc.signingKey == nil {
-		t.Error("signingKey should be set")
-	}
-	if len(pc.peers) != len(PoCPeers) {
-		t.Errorf("peers len = %d, want %d", len(pc.peers), len(PoCPeers))
-	}
-}
-
-func TestNewPoCClientWithSigningKey_NilKey(t *testing.T) {
-	pc := NewPoCClientWithSigningKey(PoCPeers, PoCQuorum, &http.Client{}, nil)
-	if pc.signingKey != nil {
-		t.Error("signingKey should be nil")
-	}
-}
-
-// --------------------------------------------------------------------------
-// NewPoCClientWithCertPins tests
-// --------------------------------------------------------------------------
-
-func TestNewPoCClientWithCertPins_EmptyPins(t *testing.T) {
-	client := &http.Client{}
-	pc := NewPoCClientWithCertPins(PoCPeers, PoCQuorum, client, nil)
-	// With no pins, the client should be the same.
-	if pc.client != client {
-		t.Error("with empty pins, client should not be wrapped")
-	}
-}
-
-func TestNewPoCClientWithCertPins_WithPins(t *testing.T) {
-	client := &http.Client{}
-	pins := map[string][]string{
-		"trust-server.scrtlabs.com": {"aabbccdd"},
-	}
-	pc := NewPoCClientWithCertPins(PoCPeers, PoCQuorum, client, pins)
-	// With pins, the client should be different (wrapped).
-	if pc.client == client {
-		t.Error("with pins, client should be wrapped with cert pin transport")
-	}
-}
-
-// --------------------------------------------------------------------------
-// pocCertPinTransport.RoundTrip tests
-// --------------------------------------------------------------------------
-
-func TestPocCertPinTransport_NoPinsForHost(t *testing.T) {
-	// No pins for the host — should pass through.
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "ok")
-	}))
-	defer ts.Close()
-
-	transport := &pocCertPinTransport{
-		base: http.DefaultTransport,
-		pins: map[string][]string{
-			"other-host.example.com": {"aabbccdd"},
-		},
-	}
-	client := &http.Client{Transport: transport}
-	resp, err := client.Get(ts.URL)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
-	}
-}
-
-func TestPocCertPinTransport_PinnedHostNoTLS(t *testing.T) {
-	// Pin configured for host, but connection is HTTP (not HTTPS).
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "ok")
-	}))
-	defer ts.Close()
-
-	// Extract host from URL.
-	host := strings.TrimPrefix(ts.URL, "http://")
-	hostname := strings.Split(host, ":")[0]
-
-	transport := &pocCertPinTransport{
-		base: http.DefaultTransport,
-		pins: map[string][]string{
-			hostname: {"aabbccdd"},
-		},
-	}
-	client := &http.Client{Transport: transport}
-	resp, err := client.Get(ts.URL)
-	if err == nil {
-		resp.Body.Close()
-		t.Fatal("expected error for non-TLS connection to pinned host")
-	}
-	if !strings.Contains(err.Error(), "HTTPS required") {
-		t.Errorf("error should mention HTTPS required: %v", err)
-	}
-}
-
-func TestPocCertPinTransport_PinnedHostMatchingCert(t *testing.T) {
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "ok")
-	}))
-	defer ts.Close()
-
-	// Compute the SHA-256 fingerprint of the test server's certificate.
-	cert := ts.TLS.Certificates[0]
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		t.Fatalf("parse cert: %v", err)
-	}
-	fp := sha256.Sum256(leaf.Raw)
-	fpHex := hex.EncodeToString(fp[:])
-	t.Logf("test server cert fingerprint: %s", fpHex)
-
-	hostname := strings.TrimPrefix(ts.URL, "https://")
-	hostname = strings.Split(hostname, ":")[0]
-
-	transport := &pocCertPinTransport{
-		base: ts.Client().Transport,
-		pins: map[string][]string{
-			hostname: {fpHex},
-		},
-	}
-	client := &http.Client{Transport: transport}
-	resp, err := client.Get(ts.URL)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
-	}
-}
-
-func TestPocCertPinTransport_PinnedHostNonMatchingCert(t *testing.T) {
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "ok")
-	}))
-	defer ts.Close()
-
-	hostname := strings.TrimPrefix(ts.URL, "https://")
-	hostname = strings.Split(hostname, ":")[0]
-
-	transport := &pocCertPinTransport{
-		base: ts.Client().Transport,
-		pins: map[string][]string{
-			hostname: {"0000000000000000000000000000000000000000000000000000000000000000"},
-		},
-	}
-	client := &http.Client{Transport: transport}
-	resp, err := client.Get(ts.URL)
-	if err == nil {
-		resp.Body.Close()
-		t.Fatal("expected error for non-matching cert fingerprint")
-	}
-	if !strings.Contains(err.Error(), "pinned fingerprint") {
-		t.Errorf("error should mention pinned fingerprint: %v", err)
-	}
-}
-
-// --------------------------------------------------------------------------
-// CheckQuote with signing key integration test
-// --------------------------------------------------------------------------
-
-func TestCheckQuoteWithSigningKey(t *testing.T) {
-	pub, priv := mustEdKey(t)
-	hexQuote := "aabbccdd"
-
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := calls.Add(1)
-		if call == 1 {
-			// Stage 1
-			json.NewEncoder(w).Encode(map[string]string{
-				"machineId": "deadbeef",
-				"moniker":   "alice",
-				"nonce":     "nonce_alice",
-			})
-			return
-		}
-		// Stage 2: return signed JWT.
-		signed := signTestJWT(t, priv, jwt.MapClaims{
-			"exp":       time.Now().Add(time.Hour).Unix(),
-			"machineId": "deadbeef",
-		})
-		json.NewEncoder(w).Encode(map[string]string{
-			"machineId": "deadbeef",
-			"label":     "test-machine",
-			"jwt":       signed,
-		})
-	}))
-	defer server.Close()
-
-	pc := NewPoCClientWithSigningKey([]string{server.URL}, 1, &http.Client{}, pub)
-	result := pc.CheckQuote(context.Background(), hexQuote)
-
-	if result.Err != nil {
-		t.Fatalf("CheckQuote: %v", result.Err)
-	}
-	if !result.Registered {
-		t.Error("expected Registered=true")
 	}
 }
 

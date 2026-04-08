@@ -99,10 +99,9 @@ type PolicyConfig struct {
 
 // tomlFile mirrors the top-level structure of the optional TOML config file.
 type tomlFile struct {
-	Providers     map[string]ProviderConfig `toml:"providers"`
-	AllowFail     []string                  `toml:"allow_fail"`
-	Policy        PolicyConfig              `toml:"policy"`
-	PoCSigningKey string                    `toml:"poc_signing_key"`
+	Providers map[string]ProviderConfig `toml:"providers"`
+	AllowFail []string                  `toml:"allow_fail"`
+	Policy    PolicyConfig              `toml:"policy"`
 }
 
 // Provider is a fully resolved provider configuration, ready for use by the
@@ -161,11 +160,6 @@ type Config struct {
 	// Force forwards requests even when enforced attestation factors fail.
 	// Set via --force flag. WARNING: this reduces security guarantees.
 	Force bool
-
-	// PoCSigningKey is the optional base64-encoded ed25519 public key for
-	// verifying EdDSA signatures on Proof of Cloud JWTs (GW-M-11).
-	// When empty, only JWT claims are validated (no signature verification).
-	PoCSigningKey string
 }
 
 // Load reads configuration from the optional TOML file (path from $TEEP_CONFIG)
@@ -271,8 +265,6 @@ func loadTOML(cfg *Config, path string) error {
 		return err
 	}
 	cfg.GatewayMeasurementPolicy = gatewayPolicy
-
-	cfg.PoCSigningKey = f.PoCSigningKey
 
 	return nil
 }

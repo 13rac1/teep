@@ -78,10 +78,9 @@ func UpdateConfig(path, providerName string, observed *ObservedMeasurements) err
 // Note: toml.Decode into a struct drops unknown keys and all comments;
 // the .bak backup preserves the original file for manual recovery.
 type updateFile struct {
-	Providers     map[string]updateProvider `toml:"providers,omitempty"`
-	AllowFail     []string                  `toml:"allow_fail,omitempty"`
-	Policy        updatePolicy              `toml:"policy,omitempty"`
-	PoCSigningKey string                    `toml:"poc_signing_key,omitempty"`
+	Providers map[string]updateProvider `toml:"providers,omitempty"`
+	AllowFail []string                  `toml:"allow_fail,omitempty"`
+	Policy    updatePolicy              `toml:"policy,omitempty"`
 }
 
 type updateProvider struct {
