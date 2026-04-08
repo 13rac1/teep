@@ -140,9 +140,10 @@ func tlsVersionName(v uint16) string {
 	}
 }
 
-// ReplayTransport serves saved HTTP responses. Matches by method+URL.
-// POST requests also match by request body SHA-256. Unmatched requests
-// return an error (fail-closed).
+// ReplayTransport serves saved HTTP responses. GET requests match by
+// method+host+path+query. POST requests match by method+host+path plus request
+// body SHA-256 (query is ignored because the body already uniquely identifies
+// each POST). Unmatched requests return an error (fail-closed).
 type replayTransport struct {
 	entries []RecordedEntry
 }
@@ -167,7 +168,13 @@ func (t *replayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	for i := range t.entries {
 		e := &t.entries[i]
-		if e.Method != req.Method || e.URL != req.URL.String() {
+		eURL, err := url.Parse(e.URL)
+		if err != nil || e.Method != req.Method || eURL.Host != req.URL.Host || eURL.Path != req.URL.Path {
+			continue
+		}
+		// For non-POST requests, also require the query string to match so that
+		// two GETs to the same path with different query params don't collide.
+		if req.Method != http.MethodPost && eURL.RawQuery != req.URL.RawQuery {
 			continue
 		}
 		if req.Method == http.MethodPost {

@@ -1,0 +1,10 @@
+{
+  "provider": "venice",
+  "model": "e2ee-qwen3-5-122b-a10b",
+  "nonce_hex": "4449f36d3f2f4ed9b94ba3b223ae7336ee2b7fa8170eeb12db0df6192ee1d06f",
+  "captured_at": "2026-04-07T18:57:38.196526Z",
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE venice: 384 encrypted fields decrypted across 387 chunks"
+  }
+}

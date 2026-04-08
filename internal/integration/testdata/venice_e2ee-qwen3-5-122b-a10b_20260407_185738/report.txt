@@ -1,0 +1,52 @@
+Attestation Report: venice / e2ee-qwen3-5-122b-a10b
+═══════════════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  Upstream:      Qwen/Qwen3.5-122B-A10B
+  App:           dstack-nvidia-0.5.5
+  Compose hash:  242a62724303cc32...
+  OS image:      9b69bb1698bacbb6...
+  Device:        71b4c123bc28aa4d...
+  PPID:          ba19033e7e0a7678...
+  Nonce source:  client
+  Candidates:    1/1 evaluated
+  Event log:     30 entries
+
+Tier 1: Core Attestation
+  ✓ nonce_match                nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✓ tdx_quote_present          TDX quote present (10020 hex chars)  [ALLOWED]
+  ✓ tdx_quote_structure        valid QuoteV4, MRTD: b24d3b24e9e3c160...  [ALLOWED]
+  ✓ tdx_cert_chain             certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tdx_quote_signature        quote signature verified  [ENFORCED]
+  ✓ tdx_debug_disabled         debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ tdx_mrseam_mrtd            MRTD/MRSEAM policy matched  [ENFORCED]
+  ✗ tdx_hardware_config        RTMR[0] not in policy allowlist: bc122d143ab76856...  [ALLOWED]
+  ✓ tdx_boot_config            RTMR1/RTMR2 policy matched  [ALLOWED]
+  ✓ signing_key_present        enclave pubkey present (041d9bbc96...)  [ENFORCED]
+
+Tier 2: Binding & Crypto
+  ✓ tdx_reportdata_binding     REPORTDATA binds enclave key (0x6525e128afcffebf7eed05d485d7be983cdae934) and nonce  [ENFORCED]
+  ✓ intel_pcs_collateral       Intel PCS collateral fetched (TCB status: UpToDate)  [ALLOWED]
+  ✓ tdx_tcb_current            TCB is UpToDate per Intel PCS  [ALLOWED]
+  ✓ tdx_tcb_not_revoked        TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present     NVIDIA payload present (97494 chars)  [ALLOWED]
+  ✓ nvidia_signature           EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)  [ENFORCED]
+  ✓ nvidia_claims              EAT: arch=HOPPER, 8 GPUs, nonce verified  [ALLOWED]
+  ✓ nvidia_nonce_client_bound  EAT nonce matches client nonce (8 GPUs)  [ENFORCED]
+  ✓ nvidia_nras_verified       NRAS: true (JWT verified)  [ALLOWED]
+  ✓ e2ee_capable               enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible (ecdsa)  [ALLOWED]
+  ✓ e2ee_usable                E2EE venice: 384 encrypted fields decrypted across 387 chunks  [ALLOWED]
+
+Tier 3: Supply Chain & Channel Integrity
+  ? tls_key_binding            provider uses E2EE key exchange; TLS binding not applicable  [ALLOWED]
+  ✗ cpu_gpu_chain              CPU-GPU attestation not bound  [ALLOWED]
+  ✗ measured_model_weights     no model weight hashes  [ALLOWED]
+  ✓ build_transparency_log     1 image(s) verified by Fulcio provenance; 1 present in Sigstore (nearai/compose-manager@406bddd, github-hosted; log integrity: SET 2/2, inclusion 2/2)  [ENFORCED]
+  ✗ cpu_id_registry            hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  ✓ compose_binding            sha256(app_compose) matches MRConfigID  [ENFORCED]
+  ✓ sigstore_verification      2 image digest(s) found in Sigstore transparency log; 1 not Sigstore-signed (compose-pinned)  [ENFORCED]
+  ✓ event_log_integrity        event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
+
+Score: 24/29 passed, 1 skipped, 4 failed (0 enforced, 4 allowed)
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.
