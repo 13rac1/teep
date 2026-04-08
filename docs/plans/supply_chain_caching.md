@@ -195,9 +195,11 @@ The `version_unpinned` classification is derived from the compose manifest
 reference type, not operator-settable. `teep cache` MUST emit a warning when
 encountering `version_unpinned` images, recommending that the provider pin
 images by digest. The `version_unpinned` field is the weakest authentication
-level — the image is authenticated only by its presence in the supply chain
-allowlist (defined in `internal/attestation/compose.go`), and that allowlist
-membership is not a freshness signal.
+level — the image is authenticated only by its presence in the supply-chain
+policy allowlist defined by the provider policy code (for example, provider
+`policy.go` files) and enforced via `attestation.SupplyChainPolicy`
+evaluation in `internal/attestation/report.go`; that allowlist membership is
+not a freshness signal.
 
 **Staleness**: Image cache entries are keyed by the verbatim compose reference
 (`reference` field). If the compose hash has not changed, all image references
@@ -263,11 +265,21 @@ invalidated. Re-validation proceeds as:
 
 ### 4b. Mutable-Authority Staleness (Intel PCS, NVIDIA NRAS)
 
-If `intel_pcs_verified_at` or `nras_verified_at` is older than max-age:
-- **Online**: Re-fetch from the authority. Update cache. Log:
+If `intel_pcs_verified_at` or `nras_verified_at` is older than max-age, the
+cached authority result is stale and MUST NOT be used to satisfy the factor
+until a fresh authority check succeeds.
+
+- **Online**: Re-fetch from the authority. Log:
   `slog.Info("refreshing stale cache entry", "factor", f, "age", age)`.
+  - On successful re-fetch and verification, update the cache and continue.
+  - On refresh failure (including timeout, DNS, TLS, HTTP, or malformed
+    response), the factor evaluates as `Fail` in normal online mode. `teep
+    serve` MUST return the error and MUST NOT fall back to the stale cached
+    result.
 - **Offline**: Factor evaluates as `Skip`. Whether this blocks depends on the
-  configured `allow_fail` list and normal offline factor handling. Log:
+  configured `allow_fail` list and normal offline factor handling. The stale
+  cached result MUST NOT be used as a substitute for a fresh authority check.
+  Log:
   `slog.Warn("stale cache entry in offline mode", "factor", f, "age", age)`.
 
 ### 4c. Proof of Cloud Negative Caching
@@ -367,10 +379,13 @@ images by digest for stronger supply chain guarantees.
 
 The version cannot be pinned because the same tag may resolve to different
 images over time. These are cached with `version_unpinned: true`, meaning the
-image is authenticated by its presence in the supply chain allowlist alone — no
-digest or tag pinning. This is the weakest authentication level but is explicit
-in the cache for operator visibility. The allowlist is defined in
-`internal/attestation/compose.go`. `teep cache` MUST warn prominently when
+image is authenticated by its presence in the authoritative supply-chain
+allowlist/policy used by attestation verification — no digest or tag pinning.
+This is the weakest authentication level but is explicit in the cache for
+operator visibility. Do not implement or reference this policy in
+`internal/attestation/compose.go`; that module is only for compose handling.
+`version_unpinned` MUST be evaluated by the existing supply-chain policy
+definition/evaluation path, and `teep cache` MUST warn prominently when
 encountering `version_unpinned` images.
 
 ### 5d. `image_binding` Report Factor
@@ -415,11 +430,12 @@ Digest-pinned > specific release tag > version_unpinned.
 
 ## 6. Cache File Format (YAML)
 
-The cache file uses YAML for human readability and comment support. YAML
-provides the hierarchical structure needed for nested provider/model/image
-data that TOML does not naturally support. Note that `teep cache` rewrites the
-file using struct-based encoding, so operator-added comments will not be
-preserved across refreshes; only the generated header comment persists.
+The cache file uses YAML for human readability, comment support, and a more
+ergonomic representation of the nested provider/model/image data used here.
+TOML can encode nested structures, but YAML is the preferred format for this
+cache file's operator-facing layout. Note that `teep cache` rewrites the file
+using struct-based encoding, so operator-added comments will not be preserved
+across refreshes; only the generated header comment persists.
 
 It is normally generated and refreshed by `teep cache`, but operators may
 inspect it and hand-edit it when needed. Any manual change to cached entries,
