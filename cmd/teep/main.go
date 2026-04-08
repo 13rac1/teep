@@ -847,7 +847,7 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 // by default in config.go's applyAPIKeyEnv.
 func e2eeEnabledByDefault(name string) bool {
 	switch name {
-	case "venice", "nearcloud", "chutes":
+	case "venice", "nearcloud", "neardirect", "chutes":
 		return true
 	default:
 		return false
@@ -892,6 +892,8 @@ func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName
 		return testE2EEVenice(ctx, raw, cp, model)
 	case "nearcloud":
 		return testE2EENearCloud(ctx, raw, cp, model)
+	case "neardirect":
+		return testE2EENeardirect(ctx, raw, cp, model)
 	case "chutes":
 		return testE2EEChutes(ctx, raw, cp, model)
 	default:
@@ -943,6 +945,27 @@ func testE2EEVenice(ctx context.Context, raw *attestation.RawAttestation, cp *co
 // testE2EENearCloud tests NearCloud E2EE (Ed25519/XChaCha20-Poly1305) via
 // direct HTTPS request with E2EE headers.
 func testE2EENearCloud(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
+	baseURL := cp.BaseURL
+	if baseURL == "" {
+		baseURL = "https://cloud-api.near.ai"
+	}
+	return testE2EENearAI(ctx, raw, cp, model, baseURL, "nearcloud")
+}
+
+// testE2EENeardirect tests neardirect E2EE (same Ed25519/XChaCha20-Poly1305
+// protocol as NearCloud) via direct HTTPS request to the resolved model domain.
+func testE2EENeardirect(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
+	resolver := neardirect.NewEndpointResolver()
+	domain, err := resolver.Resolve(ctx, model)
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("resolve model domain: %w", err)}
+	}
+	return testE2EENearAI(ctx, raw, cp, model, "https://"+domain, "neardirect")
+}
+
+// testE2EENearAI runs a NEAR AI E2EE test inference (Ed25519/XChaCha20-Poly1305).
+// Shared by nearcloud and neardirect.
+func testE2EENearAI(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model, baseURL, label string) *attestation.E2EETestResult {
 	body, err := json.Marshal(map[string]any{
 		"model":    model,
 		"messages": []map[string]string{{"role": "user", "content": "Say hello"}},
@@ -958,11 +981,7 @@ func testE2EENearCloud(ctx context.Context, raw *attestation.RawAttestation, cp 
 	}
 	defer session.Zero()
 
-	baseURL := cp.BaseURL
-	if baseURL == "" {
-		baseURL = "https://cloud-api.near.ai"
-	}
-	chatURL := baseURL + chatPathForProvider("nearcloud")
+	chatURL := baseURL + "/v1/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatURL, bytes.NewReader(encBody))
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
@@ -974,7 +993,7 @@ func testE2EENearCloud(ctx context.Context, raw *attestation.RawAttestation, cp 
 	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
 	req.Header.Set("Connection", "close")
 
-	return doE2EEStreamTest(req, session, "nearcloud")
+	return doE2EEStreamTest(req, session, label)
 }
 
 // testE2EEChutes tests Chutes E2EE (ML-KEM-768 + ChaCha20-Poly1305) via

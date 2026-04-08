@@ -1,0 +1,49 @@
+Attestation Report: neardirect / Qwen/Qwen3.5-122B-A10B
+═══════════════════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  App:           dstack-nvidia-0.5.5
+  Compose hash:  242a62724303cc32...
+  OS image:      9b69bb1698bacbb6...
+  Device:        aa781567445c6a3c...
+  PPID:          b02abcf3660e4059...
+  Event log:     30 entries
+
+Tier 1: Core Attestation
+  ✓ nonce_match                nonce matches (64 hex chars)  [ENFORCED]
+  ✓ tdx_quote_present          TDX quote present (10020 hex chars)  [ENFORCED]
+  ✓ tdx_quote_structure        valid QuoteV4, MRTD: b24d3b24e9e3c160...  [ENFORCED]
+  ✓ tdx_cert_chain             certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tdx_quote_signature        quote signature verified  [ENFORCED]
+  ✓ tdx_debug_disabled         debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ tdx_mrseam_mrtd            MRTD/MRSEAM policy matched  [ENFORCED]
+  ✗ tdx_hardware_config        RTMR[0] not in policy allowlist: 0cb94dba1a9773d7...  [ALLOWED]
+  ✓ tdx_boot_config            RTMR1/RTMR2 policy matched  [ALLOWED]
+  ✓ signing_key_present        enclave pubkey present (d0aa20bcf5...)  [ENFORCED]
+
+Tier 2: Binding & Crypto
+  ✓ tdx_reportdata_binding     REPORTDATA binds sha256(signing_address + tls_fingerprint) + nonce  [ENFORCED]
+  ✓ intel_pcs_collateral       Intel PCS collateral fetched (TCB status: UpToDate)  [ENFORCED]
+  ✓ tdx_tcb_current            TCB is UpToDate per Intel PCS  [ENFORCED]
+  ✓ tdx_tcb_not_revoked        TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present     NVIDIA payload present (97494 chars)  [ENFORCED]
+  ✓ nvidia_signature           EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)  [ENFORCED]
+  ✓ nvidia_claims              EAT: arch=HOPPER, 8 GPUs, nonce verified  [ENFORCED]
+  ✓ nvidia_nonce_client_bound  EAT nonce matches client nonce (8 GPUs)  [ENFORCED]
+  ✓ nvidia_nras_verified       NRAS: true (JWT verified)  [ENFORCED]
+  ✓ e2ee_capable               enclave ed25519 public key valid; E2EE key exchange possible (ed25519)  [ENFORCED]
+  ✓ e2ee_usable                E2EE neardirect: 542 encrypted fields decrypted across 544 chunks  [ALLOWED]
+
+Tier 3: Supply Chain & Channel Integrity
+  ✓ tls_key_binding            TLS certificate SPKI bound to attestation (3f6e62f57d60aabf...)  [ENFORCED]
+  ✗ cpu_gpu_chain              CPU-GPU attestation not bound  [ALLOWED]
+  ✗ measured_model_weights     no model weight hashes  [ALLOWED]
+  ✓ build_transparency_log     1 image(s) verified by Fulcio provenance; 1 present in Sigstore (nearai/compose-manager@406bddd, github-hosted; log integrity: SET 2/2, inclusion 2/2)  [ENFORCED]
+  ✗ cpu_id_registry            hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  ✓ compose_binding            sha256(app_compose) matches MRConfigID  [ENFORCED]
+  ✓ sigstore_verification      2 image digest(s) found in Sigstore transparency log; 1 not Sigstore-signed (compose-pinned)  [ENFORCED]
+  ✓ event_log_integrity        event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
+
+Score: 25/29 passed, 0 skipped, 4 failed (0 enforced, 4 allowed)
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

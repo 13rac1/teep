@@ -64,7 +64,7 @@ func (s *NearCloudSession) SetModelKeyEd25519(ed25519PubHex string) error {
 	if err != nil {
 		return fmt.Errorf("model ed25519 key is not valid hex: %w", err)
 	}
-	x25519Pub, err := ed25519PubToX25519(edPubBytes)
+	x25519Pub, err := Ed25519PubToX25519(edPubBytes)
 	if err != nil {
 		return fmt.Errorf("convert model ed25519 to x25519: %w", err)
 	}
@@ -385,7 +385,7 @@ func ValidateModelKeyEd25519(ed25519PubHex string) error {
 	if err != nil {
 		return fmt.Errorf("not valid hex: %w", err)
 	}
-	_, err = ed25519PubToX25519(b)
+	_, err = Ed25519PubToX25519(b)
 	if err != nil {
 		return fmt.Errorf("not a valid ed25519 point: %w", err)
 	}
@@ -418,10 +418,10 @@ func ed25519SeedToX25519(seed []byte) (*ecdh.PrivateKey, error) {
 	return ecdh.X25519().NewPrivateKey(h[:32])
 }
 
-// ed25519PubToX25519 converts an Ed25519 public key (32 bytes) to an X25519
+// Ed25519PubToX25519 converts an Ed25519 public key (32 bytes) to an X25519
 // public key using the birational map from the Edwards to Montgomery form:
 // u = (1 + y) / (1 - y) mod p.
-func ed25519PubToX25519(edPub []byte) (*ecdh.PublicKey, error) {
+func Ed25519PubToX25519(edPub []byte) (*ecdh.PublicKey, error) {
 	if len(edPub) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("ed25519 public key must be %d bytes, got %d", ed25519.PublicKeySize, len(edPub))
 	}

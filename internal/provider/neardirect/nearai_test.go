@@ -19,7 +19,7 @@ const validFlatResponseJSON = `{
 	"model_name": "llama-3.1-70b",
 	"intel_quote": "dGVzdHF1b3Rl",
 	"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test.sig",
-	"signing_public_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	"signing_public_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	"request_nonce": ""
 }`
 
@@ -41,7 +41,7 @@ func TestAttester_FetchAttestation_ArrayResponse_ExactMatch(t *testing.T) {
 				"model_name": "llama-3.1-70b",
 				"intel_quote": "cXVvdGUx",
 				"nvidia_payload": "jwt1",
-				"signing_public_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				"signing_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			},
 			{
 				"model_name": "llama-3.1-405b",
@@ -80,7 +80,7 @@ func TestAttester_FetchAttestation_ArrayResponse_NoMatch(t *testing.T) {
 				"model_name": "llama-3.1-70b",
 				"intel_quote": "cXVvdGUx",
 				"nvidia_payload": "jwt1",
-				"signing_public_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				"signing_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			}
 		]
 	}`
@@ -154,8 +154,8 @@ func TestAttester_FetchAttestation_SetsAuthHeaderAndQueryParams(t *testing.T) {
 	if got := params.Get("include_tls_fingerprint"); got != "true" {
 		t.Errorf("include_tls_fingerprint param = %q, want %q", got, "true")
 	}
-	if got := params.Get("signing_algo"); got != "ecdsa" {
-		t.Errorf("signing_algo param = %q, want %q", got, "ecdsa")
+	if got := params.Get("signing_algo"); got != "ed25519" {
+		t.Errorf("signing_algo param = %q, want %q", got, "ed25519")
 	}
 }
 
@@ -206,7 +206,7 @@ func TestAttester_FetchAttestation_TEEProviderIsSet(t *testing.T) {
 				"model_name": "m",
 				"intel_quote": "dA==",
 				"nvidia_payload": "j",
-				"signing_public_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				"signing_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			}
 		]
 	}`
@@ -231,9 +231,9 @@ func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
 				"model_name": "llama-3.1-70b",
 				"intel_quote": "cXVvdGUx",
 				"nvidia_payload": "jwt1",
-				"signing_public_key": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"signing_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"signing_address": "0xdeadbeef01020304050607080910111213141516",
-				"signing_algo": "ecdsa",
+				"signing_algo": "ed25519",
 				"tls_cert_fingerprint": "aabbccdd",
 				"request_nonce": "abc123"
 			}
@@ -251,8 +251,8 @@ func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
 	if raw.SigningAddress != "0xdeadbeef01020304050607080910111213141516" {
 		t.Errorf("SigningAddress = %q, want 0xdeadbeef...", raw.SigningAddress)
 	}
-	if raw.SigningAlgo != "ecdsa" {
-		t.Errorf("SigningAlgo = %q, want %q", raw.SigningAlgo, "ecdsa")
+	if raw.SigningAlgo != "ed25519" {
+		t.Errorf("SigningAlgo = %q, want %q", raw.SigningAlgo, "ed25519")
 	}
 	if raw.TLSFingerprint != "aabbccdd" {
 		t.Errorf("TLSFingerprint = %q, want %q", raw.TLSFingerprint, "aabbccdd")
@@ -268,9 +268,9 @@ func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
 		"model_name": "llama-3.1-70b",
 		"intel_quote": "dGVzdA==",
 		"nvidia_payload": "jwt",
-		"signing_public_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"signing_public_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		"signing_address": "0x1234",
-		"signing_algo": "ecdsa",
+		"signing_algo": "ed25519",
 		"tls_cert_fingerprint": "deadbeef",
 		"request_nonce": "test-nonce"
 	}`
@@ -301,9 +301,9 @@ func TestAttester_FetchAttestation_AllAttestations_UsesNewFieldNames(t *testing.
 				"model_name": "openai/gpt-oss-120b",
 				"intel_quote": "cXVvdGU=",
 				"nvidia_payload": "jwt",
-				"signing_public_key": "04cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				"signing_public_key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 				"signing_address": "0x1111111111111111111111111111111111111111",
-				"signing_algo": "ecdsa",
+				"signing_algo": "ed25519",
 				"tls_cert_fingerprint": "deadbeef",
 				"request_nonce": "abc123"
 			}
@@ -336,8 +336,8 @@ func TestAttester_FetchAttestation_TooManyAttestations(t *testing.T) {
 		if i > 0 {
 			sb.WriteByte(',')
 		}
-		fmt.Fprintf(&sb, `{"model_name":"m-%d","intel_quote":"q","signing_public_key":"04%s"}`,
-			i, "aa"+fmt.Sprintf("%0126d", i))
+		fmt.Fprintf(&sb, `{"model_name":"m-%d","intel_quote":"q","signing_public_key":"%s"}`,
+			i, "aa"+fmt.Sprintf("%062d", i))
 	}
 	body := fmt.Sprintf(`{"verified":true,"model_attestations":[%s]}`, sb.String())
 
@@ -358,7 +358,7 @@ func TestAttester_FetchAttestation_MalformedEventLogEntry(t *testing.T) {
 		"model_name": "test-model",
 		"intel_quote": "dGVzdA==",
 		"nvidia_payload": "jwt",
-		"signing_public_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"signing_public_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		"event_log": [123]
 	}`
 	srv := makeServer(t, http.StatusOK, body)
@@ -374,16 +374,15 @@ func TestAttester_FetchAttestation_MalformedEventLogEntry(t *testing.T) {
 	}
 }
 
-func TestAttester_FetchAttestation_NormalizesUnprefixedKey(t *testing.T) {
-	// NEAR AI may return signing_public_key without the "04" uncompressed prefix.
-	// The parser should normalize 128-char keys by prepending "04".
-	rawKey := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+func TestAttester_FetchAttestation_Ed25519KeyPassedThrough(t *testing.T) {
+	// Ed25519 signing keys are 64 hex chars and must be passed through as-is.
+	ed25519Key := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	body := `{
 		"verified": true,
 		"model_name": "test-model",
 		"intel_quote": "dGVzdA==",
 		"nvidia_payload": "jwt",
-		"signing_public_key": "` + rawKey + `",
+		"signing_public_key": "` + ed25519Key + `",
 		"request_nonce": "abc"
 	}`
 	srv := makeServer(t, http.StatusOK, body)
@@ -395,8 +394,8 @@ func TestAttester_FetchAttestation_NormalizesUnprefixedKey(t *testing.T) {
 		t.Fatalf("FetchAttestation: %v", err)
 	}
 
-	if raw.SigningKey != "04"+rawKey {
-		t.Errorf("SigningKey = %q (len %d), want '04' prefix + 128 chars (len 130)", raw.SigningKey, len(raw.SigningKey))
+	if raw.SigningKey != ed25519Key {
+		t.Errorf("SigningKey = %q (len %d), want 64-char ed25519 key", raw.SigningKey, len(raw.SigningKey))
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/tlsct"
 	"golang.org/x/sync/singleflight"
@@ -136,6 +137,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	// 4. Check SPKI cache. On miss, collapse concurrent attestation fetches
 	//    for the same domain via singleflight (prevents thundering herd).
 	var report *attestation.VerificationReport
+	var signingKey string
 	if !h.spkiCache.Contains(domain, liveSPKI) {
 		slog.InfoContext(ctx, "SPKI cache miss, fetching attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
 		v, sfErr, _ := h.verifySF.Do(domain+"\x00"+liveSPKI, func() (any, error) {
@@ -143,7 +145,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 			if h.spkiCache.Contains(domain, liveSPKI) {
 				return nil, errAlreadyCached
 			}
-			r, err := h.attestOnConn(ctx, conn, br, bw, domain, liveSPKI, req.Model)
+			r, key, err := h.attestOnConn(ctx, conn, br, bw, domain, liveSPKI, req.Model)
 			if err != nil {
 				return nil, err
 			}
@@ -165,21 +167,22 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 						"tier", f.Tier,
 					)
 				}
-				return r, nil
+				return attestResult{report: r, signingKey: key}, nil
 			}
 			h.spkiCache.Add(domain, liveSPKI)
 			slog.InfoContext(ctx, "SPKI verified and cached", "domain", domain, "spki", liveSPKI[:16]+"...")
-			return r, nil
+			return attestResult{report: r, signingKey: key}, nil
 		})
 		if sfErr != nil && !errors.Is(sfErr, errAlreadyCached) {
 			return nil, fmt.Errorf("attestation on %s: %w", domain, sfErr)
 		}
 		if v != nil {
-			var ok bool
-			report, ok = v.(*attestation.VerificationReport)
+			res, ok := v.(attestResult)
 			if !ok {
 				return nil, fmt.Errorf("singleflight returned unexpected type %T", v)
 			}
+			report = res.report
+			signingKey = res.signingKey
 		}
 	} else {
 		slog.DebugContext(ctx, "SPKI cache hit, skipping attestation", "domain", domain, "spki", liveSPKI[:16]+"...")
@@ -191,22 +194,38 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 			Header:     make(http.Header),
 			Body:       io.NopCloser(bytes.NewReader(nil)),
 			Report:     report,
+			SigningKey: signingKey,
 		}, nil
 	}
 
-	// 5. Send the actual chat request on the same connection.
+	// 5. Encrypt the request body if E2EE is active.
+	encBody, session, e2eeHeaders, err := h.encryptBody(req, report, signingKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// 6. Send the actual chat request on the same connection.
 	headers := req.Headers.Clone()
 	headers.Set("Host", domain)
 	headers.Set("Authorization", "Bearer "+h.apiKey)
 	headers.Set("Connection", "close")
+	for k := range e2eeHeaders {
+		headers.Set(k, e2eeHeaders.Get(k))
+	}
 
-	if err := WriteHTTPRequest(bw, req.Method, req.Path, headers, req.Body); err != nil {
+	if err := WriteHTTPRequest(bw, req.Method, req.Path, headers, encBody); err != nil {
+		if session != nil {
+			session.Zero()
+		}
 		return nil, fmt.Errorf("write chat request: %w", err)
 	}
 
-	// 6. Read the response.
+	// 7. Read the response.
 	resp, err := readChatResponse(br) //nolint:bodyclose // body ownership transfers to NewConnClosingReader
 	if err != nil {
+		if session != nil {
+			session.Zero()
+		}
 		return nil, fmt.Errorf("read chat response: %w", err)
 	}
 
@@ -215,7 +234,54 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		Header:     resp.Header,
 		Body:       NewConnClosingReader(resp.Body, conn),
 		Report:     report,
+		SigningKey: signingKey,
+		Session:    session,
 	}, nil
+}
+
+// encryptBody handles E2EE encryption for neardirect, dispatching by endpoint
+// path. Uses the same Ed25519/X25519/XChaCha20-Poly1305 protocol as nearcloud.
+// On error, any allocated session is zeroed before returning. On success, the
+// caller is responsible for zeroing the session on subsequent errors.
+func (h *PinnedHandler) encryptBody(
+	req *provider.PinnedRequest, report *attestation.VerificationReport, signingKey string,
+) (encBody []byte, session e2ee.Decryptor, extraHeaders http.Header, err error) {
+	if !req.E2EE {
+		return req.Body, nil, nil, nil
+	}
+
+	// E2EE providers must never downgrade to plaintext.
+	if report != nil && !report.ReportDataBindingPassed() {
+		return nil, nil, nil, errors.New("E2EE required but tdx_reportdata_binding not passed; refusing plaintext")
+	}
+
+	sk := signingKey
+	if sk == "" {
+		// SPKI cache hit — use the caller-provided signing key.
+		sk = req.SigningKey
+	}
+	if sk == "" {
+		return nil, nil, nil, errors.New("E2EE requested but no signing key available")
+	}
+
+	raw := &attestation.RawAttestation{SigningKey: sk}
+	enc := NewE2EE()
+	result, sess, _, err := enc.EncryptRequest(req.Body, raw, req.Path)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("neardirect E2EE encrypt: %w", err)
+	}
+
+	ncSess, ok := sess.(*e2ee.NearCloudSession)
+	if !ok {
+		sess.Zero()
+		return nil, nil, nil, errors.New("neardirect E2EE: unexpected session type")
+	}
+	hdrs := make(http.Header)
+	hdrs.Set("X-Signing-Algo", "ed25519")
+	hdrs.Set("X-Client-Pub-Key", ncSess.ClientEd25519PubHex())
+	hdrs.Set("X-Encryption-Version", "2")
+
+	return result, ncSess, hdrs, nil
 }
 
 // setDialer overrides the TLS dial function used by HandlePinned. Only
@@ -257,15 +323,21 @@ func (h *PinnedHandler) extractSPKI(conn *tls.Conn) (string, error) {
 	return attestation.ComputeSPKIHash(state.PeerCertificates[0].Raw)
 }
 
+// attestResult bundles a verification report with its signing key for singleflight.
+type attestResult struct {
+	report     *attestation.VerificationReport
+	signingKey string
+}
+
 // attestOnConn fetches and verifies TDX attestation on an existing connection.
-// Returns a VerificationReport on success.
+// Returns a VerificationReport and the model's Ed25519 signing key (for E2EE).
 func (h *PinnedHandler) attestOnConn(
 	ctx context.Context,
 	conn *tls.Conn,
 	br *bufio.Reader,
 	bw *bufio.Writer,
 	domain, liveSPKI, model string,
-) (*attestation.VerificationReport, error) {
+) (*attestation.VerificationReport, string, error) {
 	nonce := attestation.NewNonce()
 	slog.DebugContext(ctx, "neardirect attestation nonce generated",
 		"nonce_prefix", nonce.HexPrefix(),
@@ -275,7 +347,7 @@ func (h *PinnedHandler) attestOnConn(
 
 	raw, err := h.sendAttestationRequest(ctx, conn, br, bw, domain, model, nonce)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	tdxResult := h.verifyTDX(ctx, raw, nonce)
@@ -285,14 +357,14 @@ func (h *PinnedHandler) attestOnConn(
 	// Verify live SPKI matches the attested TLS fingerprint.
 	// Connection trust anchor — MUST remain inline and fatal.
 	if raw.TLSFingerprint == "" {
-		return nil, errors.New("attestation response missing tls_cert_fingerprint")
+		return nil, "", errors.New("attestation response missing tls_cert_fingerprint")
 	}
 	match, err := ConstantTimeHexEqual(liveSPKI, raw.TLSFingerprint)
 	if err != nil {
-		return nil, fmt.Errorf("compare live SPKI vs attested TLS fingerprint: %w", err)
+		return nil, "", fmt.Errorf("compare live SPKI vs attested TLS fingerprint: %w", err)
 	}
 	if !match {
-		return nil, fmt.Errorf("live SPKI %s != attested TLS fingerprint %s", provider.Truncate(liveSPKI, 16), provider.Truncate(raw.TLSFingerprint, 16))
+		return nil, "", fmt.Errorf("live SPKI %s != attested TLS fingerprint %s", provider.Truncate(liveSPKI, 16), provider.Truncate(raw.TLSFingerprint, 16))
 	}
 
 	composeResult, imageRepos, digestToRepo, sigstoreResults, rekorResults :=
@@ -320,8 +392,9 @@ func (h *PinnedHandler) attestOnConn(
 		Compose:           composeResult,
 		Sigstore:          sigstoreResults,
 		Rekor:             rekorResults,
+		E2EEConfigured:    true,
 	})
-	return report, nil
+	return report, raw.SigningKey, nil
 }
 
 // sendAttestationRequest writes the attestation HTTP request and reads the
@@ -333,7 +406,7 @@ func (h *PinnedHandler) sendAttestationRequest(
 	path := attestationPath +
 		"?include_tls_fingerprint=true" +
 		"&nonce=" + nonce.Hex() +
-		"&signing_algo=ecdsa"
+		"&signing_algo=ed25519"
 
 	attestHeaders := make(http.Header)
 	attestHeaders.Set("Host", domain)

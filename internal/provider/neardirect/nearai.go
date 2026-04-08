@@ -3,15 +3,15 @@
 //
 // NEAR AI attestation endpoint:
 //
-//	GET {base_url}/v1/attestation/report?nonce={nonce}&include_tls_fingerprint=true&signing_algo=ecdsa
+//	GET {base_url}/v1/attestation/report?nonce={nonce}&include_tls_fingerprint=true&signing_algo=ed25519
 //	Authorization: Bearer {api_key}
 //
 // The response contains a model_attestations array, where each element holds
 // TDX and NVIDIA attestation payloads for one inference node, plus
 // signing_address, tls_cert_fingerprint, and the echoed nonce.
 //
-// NEAR AI does not use E2EE; it relies on TLS certificate pinning via
-// attestation. PrepareRequest injects the Authorization header only.
+// When E2EE is enabled, the PinnedHandler encrypts the request body using the
+// Ed25519/X25519/XChaCha20-Poly1305 protocol (same as nearcloud).
 package neardirect
 
 import (
@@ -135,9 +135,10 @@ func (a *Attester) SetClient(c *http.Client) { a.client = c }
 
 // FetchAttestation fetches TEE attestation from NEAR AI. The nonce is sent as
 // a query parameter; NEAR AI echoes it back in the response. Query parameters
-// include_tls_fingerprint=true and signing_algo=ecdsa are also sent so the
-// response includes TLS certificate binding data. The model parameter selects
-// which attestation to use when the response contains multiple entries.
+// include_tls_fingerprint=true and signing_algo=ed25519 are also sent so the
+// response includes TLS certificate binding data and an Ed25519 signing key
+// for E2EE key exchange. The model parameter selects which attestation to use
+// when the response contains multiple entries.
 func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	baseURL := a.baseURL
 
@@ -162,7 +163,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q := endpoint.Query()
 	q.Set("nonce", nonce.Hex())
 	q.Set("include_tls_fingerprint", "true")
-	q.Set("signing_algo", "ecdsa")
+	q.Set("signing_algo", "ed25519")
 	endpoint.RawQuery = q.Encode()
 
 	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
@@ -219,7 +220,7 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 		Nonce:          ar.RequestNonce,
 		Model:          ar.ModelName,
 		TEEProvider:    "TDX+NVIDIA",
-		SigningKey:     provider.NormalizeUncompressedKey(ar.SigningPublicKey),
+		SigningKey:     ar.SigningPublicKey,
 		SigningAddress: ar.SigningAddress,
 		SigningAlgo:    ar.SigningAlgo,
 		TLSFingerprint: ar.TLSCertFingerprint,
@@ -256,7 +257,7 @@ func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*
 		Nonce:          m.RequestNonce,
 		Model:          m.ModelName,
 		TEEProvider:    "TDX+NVIDIA",
-		SigningKey:     provider.NormalizeUncompressedKey(m.SigningPublicKey),
+		SigningKey:     m.SigningPublicKey,
 		SigningAddress: m.SigningAddress,
 		SigningAlgo:    m.SigningAlgo,
 		TLSFingerprint: m.TLSCertFingerprint,

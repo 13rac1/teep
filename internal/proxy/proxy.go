@@ -494,7 +494,7 @@ func fromConfig(
 		// and rerank fields would be sent in plaintext through a channel the
 		// user believes is E2EE. Non-chat paths (other than images) are not
 		// wired until the gateway is fixed to forward E2EE headers.
-		p.Encryptor = nearcloud.NewE2EE()
+		p.Encryptor = neardirect.NewE2EE()
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)

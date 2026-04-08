@@ -110,8 +110,10 @@ var (
 )
 
 // getOrCreateKeyfunc returns a keyfunc.Keyfunc for the given JWKS URL.
-// Instances are created once per URL and cached for the process lifetime.
-func getOrCreateKeyfunc(jwksURL string) (keyfunc.Keyfunc, error) {
+// Instances are cached by URL. The provided client (which may be nil) is
+// used for the JWKS HTTP fetch, allowing capture/replay transports to
+// intercept the request.
+func getOrCreateKeyfunc(jwksURL string, client *http.Client) (keyfunc.Keyfunc, error) {
 	jwksMu.Lock()
 	defer jwksMu.Unlock()
 
@@ -122,7 +124,11 @@ func getOrCreateKeyfunc(jwksURL string) (keyfunc.Keyfunc, error) {
 	}
 
 	kfCtx, cancel := context.WithCancel(context.Background())
-	k, err := keyfunc.NewDefaultCtx(kfCtx, []string{jwksURL})
+	noErrSwallow := false
+	k, err := keyfunc.NewDefaultOverrideCtx(kfCtx, []string{jwksURL}, keyfunc.Override{
+		Client:                    client,
+		NoErrorReturnFirstHTTPReq: &noErrSwallow,
+	})
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("initialize JWKS for %s: %w", jwksURL, err)
@@ -192,10 +198,12 @@ func VerifyNVIDIAPayload(ctx context.Context, payload string, expectedNonce Nonc
 // caches) the NVIDIA JWKS via keyfunc/v3, verifies the JWT signature, and
 // extracts claims. Nonce freshness is verified separately via the EAT layer
 // (factor: nvidia_nonce_client_bound).
-func verifyNVIDIAJWT(jwtPayload, jwksURL string, opts ...jwt.ParserOption) *NvidiaVerifyResult {
+//
+// The provided client (which may be nil) is used for JWKS fetches.
+func verifyNVIDIAJWT(jwtPayload, jwksURL string, client *http.Client, opts ...jwt.ParserOption) *NvidiaVerifyResult {
 	result := &NvidiaVerifyResult{Format: "JWT"}
 
-	kf, err := getOrCreateKeyfunc(jwksURL)
+	kf, err := getOrCreateKeyfunc(jwksURL, client)
 	if err != nil {
 		result.SignatureErr = fmt.Errorf("JWKS initialization: %w", err)
 		return result
@@ -315,7 +323,7 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 		}
 	}
 
-	result := verifyNVIDIAJWT(overallJWT, NvidiaJWKSURL, opts...) //nolint:contextcheck // keyfunc manages its own background context for JWKS refresh
+	result := verifyNVIDIAJWT(overallJWT, NvidiaJWKSURL, client, opts...) //nolint:contextcheck // keyfunc manages its own background context for JWKS refresh
 	result.GPUDiags = extractGPUDiags(ctx, perGPU)
 	return result
 }

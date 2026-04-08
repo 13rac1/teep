@@ -1,4 +1,4 @@
-.PHONY: help build build-debug self-check test integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes e2e-venice
+.PHONY: help build build-debug self-check test test-fuzz integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes e2e-venice
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -58,6 +58,17 @@ lint: vet teeplint ## Run gofmt + go vet + golangci-lint + teeplint
 	@echo "gofmt check..."
 	@test -z "$$(gofmt -l cmd/ internal/)" || { gofmt -l cmd/ internal/; exit 1; }
 	golangci-lint run ./cmd/... ./internal/...
+
+FUZZTIME ?= 30s
+
+test-fuzz: ## Fuzz all attestation parsers (FUZZTIME=30s by default)
+	@for pkg in internal/formatdetect internal/jsonstrict internal/provider \
+	             internal/provider/neardirect internal/provider/nearcloud \
+	             internal/provider/venice internal/provider/nanogpt \
+	             internal/provider/chutes internal/provider/phalacloud; do \
+		echo "=== fuzzing $$pkg ($(FUZZTIME)) ==="; \
+		go test -fuzz=. -fuzztime=$(FUZZTIME) ./$$pkg/ || exit 1; \
+	done
 
 check: lint test ## Run lint + test
 

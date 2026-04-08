@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 )
 
@@ -448,9 +449,9 @@ func nearaiAttestationJSON(spkiHash, nonceHex string) string {
 		"model": "test-model",
 		"model_name": "test-model",
 		"nonce": %q,
-		"signing_key": "04aaaa",
+		"signing_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"signing_address": "0xtest",
-		"signing_algo": "ecdsa",
+		"signing_algo": "ed25519",
 		"intel_quote": "",
 		"nvidia_payload": "",
 		"tls_cert_fingerprint": %q
@@ -1040,9 +1041,9 @@ func TestHandlePinned_BlockedThenRecovery(t *testing.T) {
 					"verified": true,
 					"model_name": "test-model",
 					"request_nonce": %q,
-					"signing_public_key": "04aaaa",
+					"signing_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 					"signing_address": "0xtest",
-					"signing_algo": "ecdsa",
+					"signing_algo": "ed25519",
 					"intel_quote": "",
 					"nvidia_payload": "",
 					"tls_cert_fingerprint": %q
@@ -1386,4 +1387,120 @@ func TestVerifySupplyChain(t *testing.T) {
 			t.Error("expected nil rekor when offline")
 		}
 	})
+}
+
+// --------------------------------------------------------------------------
+// encryptBody tests
+// --------------------------------------------------------------------------
+
+func TestEncryptBody_NoE2EE(t *testing.T) {
+	h := &PinnedHandler{}
+	body := []byte(`{"messages":[]}`)
+	chatBody, session, headers, err := h.encryptBody(
+		&provider.PinnedRequest{Body: body},
+		nil, "",
+	)
+	if err != nil {
+		t.Fatalf("encryptBody: %v", err)
+	}
+	t.Logf("chatBody len: %d, session: %v, headers: %v", len(chatBody), session, headers)
+
+	if !bytes.Equal(chatBody, body) {
+		t.Errorf("chatBody = %q, want %q", chatBody, body)
+	}
+	if session != nil {
+		t.Error("session should be nil when E2EE is off")
+	}
+	if headers != nil {
+		t.Error("headers should be nil when E2EE is off")
+	}
+}
+
+func TestEncryptBody_NoSigningKey(t *testing.T) {
+	h := &PinnedHandler{}
+	_, _, _, err := h.encryptBody(
+		&provider.PinnedRequest{E2EE: true, Path: "/v1/chat/completions", Body: []byte(`{}`)},
+		nil, "",
+	)
+	t.Logf("error: %v", err)
+	if err == nil {
+		t.Fatal("expected error when E2EE requested but no signing key")
+	}
+	if !strings.Contains(err.Error(), "no signing key") {
+		t.Errorf("error should mention signing key: %v", err)
+	}
+}
+
+func TestEncryptBody_UsesRequestSigningKey(t *testing.T) {
+	h := &PinnedHandler{}
+
+	// A valid 64-hex-char Ed25519 public key.
+	sigKey := "04aaaa0000000000000000000000000000000000000000000000000000000000"
+
+	chatBody, session, headers, err := h.encryptBody(
+		&provider.PinnedRequest{
+			E2EE:       true,
+			SigningKey: sigKey,
+			Path:       "/v1/chat/completions",
+			Body:       []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
+		},
+		nil, "", // no report, no attestation signing key — uses req.SigningKey
+	)
+	t.Logf("err: %v", err)
+	t.Logf("chatBody len: %d", len(chatBody))
+	if session != nil {
+		if nc, ok := session.(*e2ee.NearCloudSession); ok {
+			t.Logf("session: Ed25519PubHex=%s", nc.ClientEd25519PubHex()[:16]+"...")
+		}
+	}
+	if headers != nil {
+		t.Logf("headers: %v", headers)
+	}
+
+	if err != nil {
+		t.Fatalf("encryptBody: %v", err)
+	}
+	if session == nil {
+		t.Fatal("session should be non-nil with E2EE")
+	}
+	defer session.Zero()
+	if headers == nil {
+		t.Fatal("headers should be non-nil with E2EE")
+	}
+	if headers.Get("X-Signing-Algo") != "ed25519" {
+		t.Errorf("X-Signing-Algo = %q, want ed25519", headers.Get("X-Signing-Algo"))
+	}
+	if headers.Get("X-Encryption-Version") != "2" {
+		t.Errorf("X-Encryption-Version = %q, want 2", headers.Get("X-Encryption-Version"))
+	}
+}
+
+func TestEncryptBody_FailsOnBadBinding(t *testing.T) {
+	h := &PinnedHandler{}
+
+	// Report with tdx_reportdata_binding failed.
+	report := &attestation.VerificationReport{
+		Provider: "neardirect",
+		Model:    "test-model",
+		Factors: []attestation.FactorResult{
+			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
+			{Name: "tdx_reportdata_binding", Status: attestation.Fail, Detail: "binding failed"},
+		},
+	}
+
+	_, _, _, err := h.encryptBody(
+		&provider.PinnedRequest{
+			E2EE: true,
+			Path: "/v1/chat/completions",
+			Body: []byte(`{"messages":[]}`),
+		},
+		report, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	)
+	t.Logf("error: %v", err)
+	if err == nil {
+		t.Fatal("expected error when REPORTDATA binding not passed")
+	}
+	if !strings.Contains(err.Error(), "tdx_reportdata_binding") {
+		t.Errorf("error should mention tdx_reportdata_binding: %v", err)
+	}
 }

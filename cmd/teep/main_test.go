@@ -794,7 +794,7 @@ func TestE2EEEnabledByDefault(t *testing.T) {
 		{"venice", true},
 		{"nearcloud", true},
 		{"chutes", true},
-		{"neardirect", false},
+		{"neardirect", true},
 		{"nanogpt", false},
 		{"unknown", false},
 	}
@@ -845,9 +845,9 @@ func TestSafePrefix(t *testing.T) {
 func TestTestE2EE_SkipNonE2EEProvider(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: "04aabb"}
 	cp := &config.Provider{APIKey: "key"}
-	got := testE2EE(context.Background(), raw, "neardirect", cp, "model", false)
+	got := testE2EE(context.Background(), raw, "nanogpt", cp, "model", false)
 	if got != nil {
-		t.Errorf("testE2EE for neardirect should return nil, got %+v", got)
+		t.Errorf("testE2EE for nanogpt should return nil, got %+v", got)
 	}
 }
 

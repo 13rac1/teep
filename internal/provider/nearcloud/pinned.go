@@ -196,7 +196,7 @@ func (h *PinnedHandler) encryptBody(
 	}
 
 	raw := &attestation.RawAttestation{SigningKey: sk}
-	enc := NewE2EE()
+	enc := neardirect.NewE2EE()
 	result, sess, _, err := enc.EncryptRequest(req.Body, raw, req.Path)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("NearCloud E2EE encrypt: %w", err)
