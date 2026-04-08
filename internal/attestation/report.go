@@ -243,7 +243,6 @@ var NearcloudDefaultAllowFail = []string{
 var NeardirectDefaultAllowFail = []string{
 	"tdx_hardware_config",
 	"tdx_boot_config",
-	"e2ee_usable",
 	"cpu_gpu_chain",
 	"measured_model_weights",
 	"cpu_id_registry",
@@ -255,6 +254,8 @@ var NeardirectDefaultAllowFail = []string{
 // provenance factors remain allowed-to-fail until the sek8s platform
 // exposes the necessary evidence.
 var ChutesDefaultAllowFail = []string{
+	"tdx_hardware_config",
+	"tdx_boot_config",
 	"nvidia_signature",
 	"nvidia_nras_verified",
 	"tls_key_binding",
