@@ -471,8 +471,8 @@ func fromConfig(
 			rdVerifier,
 			rekorClient,
 		)
-		p.SPKIDomainForModel = func(model string) (string, bool) {
-			d, err := resolver.Resolve(context.Background(), model)
+		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
+			d, err := resolver.Resolve(ctx, model)
 			if err != nil {
 				return "", false
 			}
@@ -503,7 +503,7 @@ func fromConfig(
 			rdVerifier,
 			rekorClient,
 		)
-		p.SPKIDomainForModel = func(_ string) (string, bool) {
+		p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
 			return nearcloud.GatewayHost(), true
 		}
 		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
@@ -1330,7 +1330,7 @@ func (s *Server) pinnedPreDispatchE2EE(ctx context.Context, w http.ResponseWrite
 			http.Error(w, "E2EE pinned provider configuration error", http.StatusInternalServerError)
 			return false
 		}
-		domain, ok := prov.SPKIDomainForModel(upstreamModel)
+		domain, ok := prov.SPKIDomainForModel(ctx, upstreamModel)
 		if !ok || domain == "" {
 			slog.ErrorContext(ctx, "E2EE pinned provider could not resolve SPKI domain; refusing request",
 				"provider", prov.Name, "model", upstreamModel)

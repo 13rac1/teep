@@ -3322,7 +3322,7 @@ func TestSigningKeyCacheReuse(t *testing.T) {
 		t.Fatal("neardirect provider missing")
 	}
 	prov.PinnedHandler = handler
-	prov.SPKIDomainForModel = func(_ string) (string, bool) { return "completions.near.ai", true }
+	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) { return "completions.near.ai", true }
 
 	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
@@ -3480,7 +3480,7 @@ func TestPinnedPath_E2EE_ReportDataBindingCacheCheck(t *testing.T) {
 		t.Fatal("neardirect provider missing")
 	}
 	prov.PinnedHandler = handler
-	prov.SPKIDomainForModel = func(_ string) (string, bool) { return "completions.near.ai", true }
+	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) { return "completions.near.ai", true }
 
 	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
@@ -3544,7 +3544,7 @@ func TestPinnedPath_E2EE_NilReportBlocked(t *testing.T) {
 		t.Fatal("neardirect provider missing")
 	}
 	prov.PinnedHandler = handler
-	prov.SPKIDomainForModel = func(_ string) (string, bool) { return "completions.near.ai", true }
+	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) { return "completions.near.ai", true }
 
 	// Do NOT populate the attestation cache — simulate cache expiry.
 	proxySrv := httptest.NewServer(srv)
