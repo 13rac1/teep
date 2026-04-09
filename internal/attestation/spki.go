@@ -35,7 +35,7 @@ const (
 	// defaultSPKITTL is how long a cached SPKI hash is trusted before
 	// re-attestation is required. This limits the window during which a
 	// stale pin is accepted after a key rotation.
-	defaultSPKITTL = 1 * time.Hour
+	defaultSPKITTL = PinnedCacheTTL
 )
 
 // spkiEntry stores a verified SPKI hash with its insertion time.

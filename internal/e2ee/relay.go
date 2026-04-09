@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/13rac1/teep/internal/jsonstrict"
 )
 
 // ErrDecryptionFailed is a sentinel error returned by relay functions when
@@ -529,7 +531,7 @@ type toolCallDelta struct {
 // tool calls map, keyed by index. Arguments are concatenated across chunks.
 func mergeToolCallDelta(calls map[int]*reassembledToolCall, raw json.RawMessage) error {
 	var d toolCallDelta
-	if err := json.Unmarshal(raw, &d); err != nil {
+	if err := jsonstrict.UnmarshalWarn(raw, &d, "tool_call delta"); err != nil {
 		return fmt.Errorf("parse tool_call delta: %w", err)
 	}
 	tc, ok := calls[d.Index]

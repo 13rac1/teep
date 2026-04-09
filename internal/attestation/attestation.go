@@ -57,6 +57,13 @@ func ParseNonce(s string) (Nonce, error) {
 // to dispatch to the correct ReportDataVerifier via multi.Verifier.
 type BackendFormat string
 
+// PinnedCacheTTL is the shared TTL for attestation-related caches on pinned
+// connections: the SPKI pin cache, the attestation report cache, and the
+// signing key cache. All three must use the same TTL to prevent one cache
+// outliving another, which would cause nil-report or missing-key errors
+// on SPKI cache hits after the report or signing key has expired.
+const PinnedCacheTTL = 1 * time.Hour
+
 // BackendFormat constants for known attestation backends.
 const (
 	FormatDstack  BackendFormat = "dstack"

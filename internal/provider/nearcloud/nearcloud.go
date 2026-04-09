@@ -35,6 +35,10 @@ const (
 	maxGatewayEventLogEntries = 10_000
 )
 
+// GatewayHost returns the fixed host used for SPKI cache keying and pinned
+// TLS connections to the NEAR AI cloud gateway.
+func GatewayHost() string { return gatewayHost }
+
 // gatewayResponse is the top-level JSON shape returned by the gateway
 // attestation endpoint. It wraps the standard neardirect model_attestations
 // with an additional gateway_attestation section.

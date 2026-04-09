@@ -30,7 +30,6 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,19 +53,16 @@ import (
 
 const (
 	// attestationCacheTTL is how long a VerificationReport is considered fresh.
-	// Must match the SPKI cache TTL (1 h) to avoid the attestation report
-	// expiring while pinned SPKI entries are still live, which would force
-	// unnecessary re-attestation.
-	attestationCacheTTL = 1 * time.Hour
+	// Uses the shared PinnedCacheTTL so it stays in sync with the SPKI cache.
+	attestationCacheTTL = attestation.PinnedCacheTTL
 
 	// negativeCacheTTL is how long a failed attestation blocks retries.
 	negativeCacheTTL = 30 * time.Second
 
 	// signingKeyCacheTTL is how long a REPORTDATA-verified signing key is
-	// reused for E2EE without re-fetching attestation. Must be ≥ the SPKI
-	// cache TTL (1 h) to avoid "no signing key available" errors on pinned
-	// connections where an SPKI cache hit skips attestation.
-	signingKeyCacheTTL = 1 * time.Hour
+	// reused for E2EE without re-fetching attestation. Uses the shared
+	// PinnedCacheTTL so it stays in sync with the SPKI cache.
+	signingKeyCacheTTL = attestation.PinnedCacheTTL
 
 	// upstreamNonStreamTimeout is the context deadline for non-streaming
 	// upstream requests. Must be generous — attestation + E2EE setup can
@@ -500,6 +496,9 @@ func fromConfig(
 			rdVerifier,
 			rekorClient,
 		)
+		p.SPKIDomainForModel = func(_ string) (string, bool) {
+			return nearcloud.GatewayHost(), true
+		}
 		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nanogpt":
 		p.ChatPath = "/v1/chat/completions"
@@ -1301,15 +1300,31 @@ func (s *Server) pinnedPreDispatchE2EE(ctx context.Context, w http.ResponseWrite
 			http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
 			return false
 		}
-	} else {
-		// Attestation report cache miss (expired or never populated).
-		// Evict the SPKI domain so the pinned handler treats this as an
-		// SPKI miss, forcing a fresh attestation that yields a report.
-		if u, err := url.Parse(prov.BaseURL); err == nil && u.Hostname() != "" {
-			s.spkiCache.DeleteDomain(u.Hostname())
-			slog.InfoContext(ctx, "evicted SPKI cache to force re-attestation (attestation report expired)",
-				"provider", prov.Name, "model", upstreamModel, "domain", u.Hostname())
+	} else if prov.PinnedHandler != nil {
+		// Attestation report cache miss (expired or never populated) on a
+		// pinned provider. Evict the SPKI domain so the pinned handler
+		// treats this as an SPKI miss, forcing fresh attestation.
+		//
+		// Use SPKIDomainForModel to resolve the correct SPKI cache key.
+		// If unavailable, fail closed — an unresolvable domain means we
+		// cannot guarantee the stale SPKI entry will be evicted, risking
+		// a nil report on the next pinned request.
+		if prov.SPKIDomainForModel == nil {
+			slog.ErrorContext(ctx, "E2EE pinned provider has no SPKIDomainForModel; cannot evict SPKI cache; refusing request",
+				"provider", prov.Name, "model", upstreamModel)
+			http.Error(w, "E2EE pinned provider configuration error", http.StatusInternalServerError)
+			return false
 		}
+		domain, ok := prov.SPKIDomainForModel(upstreamModel)
+		if !ok || domain == "" {
+			slog.ErrorContext(ctx, "E2EE pinned provider could not resolve SPKI domain; refusing request",
+				"provider", prov.Name, "model", upstreamModel)
+			http.Error(w, "E2EE SPKI domain resolution failed", http.StatusInternalServerError)
+			return false
+		}
+		s.spkiCache.DeleteDomain(domain)
+		slog.InfoContext(ctx, "evicted SPKI cache to force re-attestation (attestation report expired)",
+			"provider", prov.Name, "model", upstreamModel, "domain", domain)
 	}
 	return true
 }

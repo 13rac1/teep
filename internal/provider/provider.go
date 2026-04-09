@@ -189,6 +189,13 @@ type Provider struct {
 	// standard http.Client path.
 	PinnedHandler PinnedHandler
 
+	// SPKIDomainForModel returns the domain string used as the SPKI cache
+	// key for a given model. Required for E2EE providers with a PinnedHandler
+	// so the proxy can evict the correct SPKI entries when the attestation
+	// report cache expires. Returns ("", false) if the domain cannot be
+	// determined (the proxy must fail closed in that case).
+	SPKIDomainForModel func(model string) (string, bool)
+
 	// SupplyChainPolicy defines the allowed container image repos for this
 	// provider. May be nil if the provider has no policy.
 	SupplyChainPolicy *attestation.SupplyChainPolicy

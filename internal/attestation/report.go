@@ -249,10 +249,13 @@ var NeardirectDefaultAllowFail = []string{
 }
 
 // ChutesDefaultAllowFail is the chutes-specific default allow_fail list.
-// Chutes runs sek8s inside Intel TDX VMs and supports NVIDIA GPU attestation,
-// so core TDX and NVIDIA factors are enforced. Supply-chain and build
-// provenance factors remain allowed-to-fail until the sek8s platform
-// exposes the necessary evidence.
+// Chutes runs sek8s inside Intel TDX VMs and supports NVIDIA GPU attestation.
+// Core TDX quote integrity (structure, cert chain, signature, debug mode,
+// MRTD/MRSEAM) and REPORTDATA binding are enforced. TDX hardware/boot config
+// and NVIDIA signature/NRAS are allowed to fail because these factors are not
+// yet consistent across the Chutes fleet. Supply-chain and build provenance
+// factors remain allowed-to-fail until the sek8s platform exposes the
+// necessary evidence.
 var ChutesDefaultAllowFail = []string{
 	"tdx_hardware_config",
 	"tdx_boot_config",
