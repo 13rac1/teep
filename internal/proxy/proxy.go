@@ -54,7 +54,10 @@ import (
 
 const (
 	// attestationCacheTTL is how long a VerificationReport is considered fresh.
-	attestationCacheTTL = 5 * time.Minute
+	// Must match the SPKI cache TTL (1 h) to avoid the attestation report
+	// expiring while pinned SPKI entries are still live, which would force
+	// unnecessary re-attestation.
+	attestationCacheTTL = 1 * time.Hour
 
 	// negativeCacheTTL is how long a failed attestation blocks retries.
 	negativeCacheTTL = 30 * time.Second
