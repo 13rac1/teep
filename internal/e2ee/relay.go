@@ -520,7 +520,7 @@ func extractChunkMeta(data string) (chunkMeta, error) {
 type toolCallDelta struct {
 	ID       string `json:"id"`
 	Type     string `json:"type"`
-	Index    int    `json:"index"`
+	Index    *int   `json:"index"`
 	Function *struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
@@ -534,10 +534,14 @@ func mergeToolCallDelta(calls map[int]*reassembledToolCall, raw json.RawMessage)
 	if err := jsonstrict.UnmarshalWarn(raw, &d, "tool_call delta"); err != nil {
 		return fmt.Errorf("parse tool_call delta: %w", err)
 	}
-	tc, ok := calls[d.Index]
+	if d.Index == nil {
+		return errors.New("tool_call delta missing required index field")
+	}
+	idx := *d.Index
+	tc, ok := calls[idx]
 	if !ok {
 		tc = &reassembledToolCall{}
-		calls[d.Index] = tc
+		calls[idx] = tc
 	}
 	if d.ID != "" {
 		tc.ID = d.ID

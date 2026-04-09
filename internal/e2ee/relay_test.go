@@ -1091,3 +1091,50 @@ func TestRelayStream_MidStreamScannerError_ReturnsRelayFailed(t *testing.T) {
 		t.Error("error should NOT be ErrDecryptionFailed")
 	}
 }
+
+func TestMergeToolCallDelta_MissingIndex(t *testing.T) {
+	calls := make(map[int]*reassembledToolCall)
+
+	// Delta with no "index" field → should error.
+	raw := []byte(`{"id":"call_1","type":"function","function":{"name":"foo","arguments":""}}`)
+	err := mergeToolCallDelta(calls, raw)
+	if err == nil {
+		t.Fatal("expected error for missing index")
+	}
+	if !strings.Contains(err.Error(), "missing required index") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls map should be empty after error, got %d entries", len(calls))
+	}
+}
+
+func TestMergeToolCallDelta_NullIndex(t *testing.T) {
+	calls := make(map[int]*reassembledToolCall)
+
+	// Delta with explicit null index → should error.
+	raw := []byte(`{"id":"call_1","type":"function","index":null,"function":{"name":"foo","arguments":""}}`)
+	err := mergeToolCallDelta(calls, raw)
+	if err == nil {
+		t.Fatal("expected error for null index")
+	}
+	if !strings.Contains(err.Error(), "missing required index") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestMergeToolCallDelta_ValidIndex(t *testing.T) {
+	calls := make(map[int]*reassembledToolCall)
+
+	raw := []byte(`{"id":"call_1","type":"function","index":0,"function":{"name":"foo","arguments":"bar"}}`)
+	if err := mergeToolCallDelta(calls, raw); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(calls))
+	}
+	tc := calls[0]
+	if tc.ID != "call_1" || tc.Function.Name != "foo" || tc.Function.Arguments != "bar" {
+		t.Errorf("unexpected tool call: %+v", tc)
+	}
+}

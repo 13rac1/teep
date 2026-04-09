@@ -2343,6 +2343,30 @@ func TestAllowFailConsistency(t *testing.T) {
 		}
 	})
 
+	t.Run("neardirect_enforced_e2ee_stays_skip", func(t *testing.T) {
+		// NearDirect: e2ee_usable NOT in NeardirectDefaultAllowFail → enforced.
+		// e2ee_usable is intentionally enforced for neardirect; do not add it
+		// to NeardirectDefaultAllowFail without security review.
+		report := BuildReport(&ReportInput{
+			Provider:       "neardirect",
+			Model:          "test-model",
+			Raw:            raw,
+			Nonce:          nonce,
+			AllowFail:      NeardirectDefaultAllowFail,
+			E2EEConfigured: true,
+		})
+		f := findFactor(t, report, "e2ee_usable")
+		if f.Status != Skip {
+			t.Errorf("neardirect e2ee_usable: got %s, want Skip (deferred)", f.Status)
+		}
+		if !f.Enforced {
+			t.Error("neardirect: e2ee_usable should be enforced (not in NeardirectDefaultAllowFail)")
+		}
+		if !f.Deferred {
+			t.Error("neardirect: e2ee_usable should be deferred")
+		}
+	})
+
 	t.Run("chutes_enforced_e2ee_stays_skip", func(t *testing.T) {
 		// Chutes: e2ee_usable NOT in ChutesDefaultAllowFail → enforced.
 		report := BuildReport(&ReportInput{

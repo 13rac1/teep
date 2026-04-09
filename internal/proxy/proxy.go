@@ -53,16 +53,16 @@ import (
 
 const (
 	// attestationCacheTTL is how long a VerificationReport is considered fresh.
-	// Uses the shared PinnedCacheTTL so it stays in sync with the SPKI cache.
-	attestationCacheTTL = attestation.PinnedCacheTTL
+	// Uses the shared AttestationCacheTTL so all attestation caches expire together.
+	attestationCacheTTL = attestation.AttestationCacheTTL
 
 	// negativeCacheTTL is how long a failed attestation blocks retries.
 	negativeCacheTTL = 30 * time.Second
 
 	// signingKeyCacheTTL is how long a REPORTDATA-verified signing key is
 	// reused for E2EE without re-fetching attestation. Uses the shared
-	// PinnedCacheTTL so it stays in sync with the SPKI cache.
-	signingKeyCacheTTL = attestation.PinnedCacheTTL
+	// AttestationCacheTTL so all attestation caches expire together.
+	signingKeyCacheTTL = attestation.AttestationCacheTTL
 
 	// upstreamNonStreamTimeout is the context deadline for non-streaming
 	// upstream requests. Must be generous — attestation + E2EE setup can
@@ -471,6 +471,13 @@ func fromConfig(
 			rdVerifier,
 			rekorClient,
 		)
+		p.SPKIDomainForModel = func(model string) (string, bool) {
+			d, err := resolver.Resolve(context.Background(), model)
+			if err != nil {
+				return "", false
+			}
+			return d, true
+		}
 		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
@@ -539,6 +546,14 @@ func fromConfig(
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", cp.Name)
 	}
+
+	// Invariant: any provider with a PinnedHandler must have SPKIDomainForModel
+	// so the proxy can evict SPKI entries when the attestation cache expires.
+	// This check prevents future providers from silently omitting the resolver.
+	if p.PinnedHandler != nil && p.SPKIDomainForModel == nil {
+		return nil, fmt.Errorf("provider %q has PinnedHandler but no SPKIDomainForModel; SPKI eviction would fail", cp.Name)
+	}
+
 	return p, nil
 }
 
