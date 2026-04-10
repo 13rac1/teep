@@ -658,7 +658,10 @@ arbitrary code. However, this is defense-in-obscurity, not a cryptographic
 mitigation.
 
 **What teep should do (both providers):**
-1. `cpu_id_registry`: Set to `Skip` (no Proof of Cloud participation).
+1. `cpu_id_registry`: Advisory. Validate and surface failures, but do not
+   block requests until registry coverage and rollout are confirmed complete.
+   (TEE.fail means Proof of Cloud is the only way to truly verify, but the
+   hardware platform registry still provides defense-in-depth.)
 2. Apply the same TEE.fail residual risk assessment as for other providers.
 3. When DCEA/vTPM support becomes available, add verification support.
 
@@ -1168,23 +1171,33 @@ REPORTDATA verifiers in the same package.
 8. **MR_SEAM Whitelist** (in `policy.go`):
    The Sigstore hardware-measurements registry (`tinfoilsh/hardware-measurements`,
    already fetched in Phase 2 at lines 904-918) is the authoritative source for
-   MR_SEAM values. At runtime, the implementation should source MR_SEAM values
-   from the verified hardware-measurements predicate. The following hardcoded
-   values serve as an **offline fallback** when the Sigstore registry is
-   unreachable:
+   MR_SEAM values. At runtime, the implementation must source MR_SEAM values
+   from the verified hardware-measurements predicate. If the registry fetch
+   fails, Sigstore verification fails, or the predicate cannot be parsed into
+   an accepted MR_SEAM set, attestation verification must fail closed and the
+   request must be rejected; there is no runtime fallback that may convert this
+   factor into `Pass`.
+
+   The following values may be kept as test fixtures and for the explicit
+   `--offline` mode only:
    ```
    TDX 2.0.08: 476a2997c62bccc78370913d0a80b956e3721b24272bc66c4d6307ced4be2865c40e26afac75f12df3425b03eb59ea7c
    TDX 1.5.16: 7bf063280e94fb051f5dd7b1fc59ce9aac42bb961df8d44b709c9b0ff87a7b4df648657ba6d1189589feab1d5a3c9a9d
    TDX 2.0.02: 685f891ea5c20e8fa27b151bf34bf3b50fbaf7143cc53662727cbdb167c0ad8385f1f6f3571539a91e104a1c96d75e04
    TDX 1.5.08: 49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6
    ```
-   When Intel releases new TDX firmware, the Sigstore registry will contain
-   the updated MR_SEAM values automatically. The hardcoded fallback should
-   be updated periodically but is not the primary source.
+   The `--offline` flag is an explicit user choice (not a connectivity
+   fallback). When `--offline` is active, the MR_SEAM / `tee_hardware_config`
+   factor must be marked as `Skip` with detail text indicating that
+   registry-backed validation was not performed. It must never silently
+   weaken production verification or report `Pass` from the hardcoded list.
 
 **Unit tests** (split by provider):
 - **Shared**: Test gzip decompression (valid, truncated, oversized >10 MiB).
-  Test format URI rejection (unknown URI). Test MR_SEAM whitelist matching.
+  Test format URI rejection (unknown URI). Test MR_SEAM matching from verified
+  hardware-measurements predicate. Test registry fetch/verification/parsing
+  failure causes attestation rejection in normal mode. Test that `--offline`
+  mode records MR_SEAM / `tee_hardware_config` as `Skip`, never `Pass`.
 - **`tinfoil_v2`**: Test V2 document parsing with captured attestation response.
   Test V2 rejects responses with `report_data` field. Test V2 REPORTDATA
   extraction: verify correct byte offsets (TLS FP at [0:32], HPKE at [32:64]).
@@ -1801,9 +1814,11 @@ New Go module dependencies:
    TDX/SEV-SNP quotes with arbitrary measurements and REPORTDATA, defeating
    all software-layer security guarantees including Sigstore measurement
    matching and E2EE key binding. This is the same vulnerability affecting
-   all TEE providers. The `cpu_id_registry` factor should be `Skip` for
-   both `tinfoil_v2` and `tinfoil_v3`. See "Authentication Chain 5" for
-   full analysis and the gpu_cpu_binding.md staged mitigation trajectory.
+   all TEE providers. The `cpu_id_registry` factor should be advisory for
+   both `tinfoil_v2` and `tinfoil_v3` (validate and surface failures, but
+   do not block until registry coverage and rollout are confirmed complete).
+   See "Authentication Chain 5" for full analysis and the
+   gpu_cpu_binding.md staged mitigation trajectory.
 
 8. **GPU-CPU binding differs between providers**: `tinfoil_v3` binds GPU
    evidence into REPORTDATA (Option 2 from gpu_cpu_binding.md), preventing
