@@ -181,6 +181,24 @@ With authenticated measurement manifests in place, teep could:
 
 That is the end state teep needs: fail-closed verification of both the **boot image** and the **application payload**, with measurement baselines that update reliably when providers roll out infrastructure changes.
 
+### Tinfoil V3: Existing Implementation
+
+Tinfoil's V3 attestation format is a concrete implementation of the recommended in-band publication model. Tinfoil's `pri-build-action` GitHub Actions workflow computes expected measurement values for every deployment configuration and publishes them as a signed Sigstore bundle (DSSE in-toto attestation with a `snp-tdx-multiplatform/v1` predicate) in the Rekor transparency log.
+
+Teep fetches the Sigstore bundle for the deployment's GitHub repository and tag, verifies the DSSE signature against the Sigstore root of trust (Fulcio certificate, SCT, transparency log entry), extracts the measurement predicate, and compares every register value against the hardware attestation report. This eliminates the three operational problems identified in [The Problem](#the-problem):
+
+1. **No silent breakage.** Infrastructure changes that produce new measurements also produce new bundles — there is no window where measurements drift without a corresponding update to the verification baseline.
+
+2. **No safety/availability trade-off.** The Sigstore bundle is the canonical source of truth for what measurements to expect. Teep enforces exact matches — no manual pinning, no `allow_fail` fallback needed for boot-chain registers.
+
+3. **Upgrades are distinguishable from compromises.** Measurement baselines are authenticated by Sigstore (bound to a specific GitHub repository, workflow, and tag via Fulcio OIDC identity). A compromised lower stack produces measurements that do not match any published bundle. The distinction is cryptographic, not observational.
+
+In addition to the per-deployment code measurement bundle, Tinfoil publishes a separate Sigstore-attested hardware measurements registry (`tinfoilsh/hardware-measurements`) containing expected MRTD and RTMR0 values for each supported hardware platform. Teep cross-checks the attested values against this registry as a second verification layer.
+
+Unlike dstack, where RTMR0 varies with CPU/RAM/GPU count and operators must maintain multiple pinned values per deployment class, each Tinfoil Sigstore bundle is scoped to a specific deployment configuration. Changing the hardware profile produces a new bundle. This eliminates the fleet management burden that makes dstack measurement maintenance particularly difficult.
+
+For teep, the `sigstore_code_verified` factor covers the entire boot chain through a single verification step, replacing manual `mrseam_allow`, `mrtd_allow`, and `rtmr0_allow`–`rtmr2_allow` configuration. Dstack providers that adopt a similar Sigstore-based publication model would close the same gap.
+
 ## Practical Recommendations
 
 For providers:

@@ -605,6 +605,25 @@ with a Gap 1 mitigation (Option 1, 3, 4, or 5).
 - **No hardware changes required.**  This can be implemented entirely in the
   CVM application layer and the client verifier.
 
+### Tinfoil V3: Existing implementation of Option 2
+
+Tinfoil's V3 attestation format is the first concrete implementation of Option 2. V3 extends the basic approach to include both GPU and NVSwitch evidence hashes in REPORTDATA:
+
+```
+REPORTDATA[0:32] = SHA-256(tls_key_fp || hpke_key || nonce || gpu_evidence_hash || nvswitch_evidence_hash)
+REPORTDATA[32:64] = zeros
+```
+
+Where `gpu_evidence_hash = SHA-256(raw_gpu_spdm_json)` and `nvswitch_evidence_hash = SHA-256(raw_nvswitch_spdm_json)`. The CPU hardware signs REPORTDATA as part of the TDX or SEV-SNP quote, so both hashes are hardware-authenticated.
+
+The V3 attestation endpoint (`GET /.well-known/tinfoil-attestation?nonce=<64hex>`) collects fresh SPDM evidence from all GPUs and NVSwitches via NVML APIs with the client-supplied nonce passed through to the GPU hardware. Evidence is returned in the response as `gpu` and `nvswitch` JSON fields. For 8-GPU HGX systems, PCIe topology validation (8 GPUs + 4 NVSwitches mesh integrity) is enforced at boot time.
+
+GPU attestation is boot-time fail-closed: if `nvattest` local verification fails, the CVM aborts boot. This is enforced by CVM code that is itself verified via Sigstore supply chain attestation.
+
+Teep verifies the binding by extracting `gpu` and `nvswitch` as `json.RawMessage` (preserving raw bytes — re-serialization would break the hash), recomputing the evidence hashes, reconstructing expected REPORTDATA, and constant-time comparing against the verified CPU quote. When the binding verifies, `cpu_gpu_chain` is promoted to `Pass`.
+
+Tinfoil V3's residual risks are the same as Option 2 in general: it does **not** address Gap 1 (TEE.fail). The GPU evidence relay attack described in [Stage 2 analysis](#gpu-evidence-relay-attack-stage-2-residual-risk) applies. Tinfoil does not currently implement Proof of Cloud (Option 1), DCEA (Option 3), or TDX Connect (Option 5).
+
 ---
 
 ## Option 4 — Composite Attestation via TPM + TEE Collaborative Trust

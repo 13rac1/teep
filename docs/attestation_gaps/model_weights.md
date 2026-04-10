@@ -16,13 +16,17 @@ The severity of this gap depends on the provider's architecture:
 
 - **Sek8s (Chutes)**: The cosign admission controller verifies container images inside the TEE, and the LUKS-encrypted root filesystem prevents boot-time substitution. Weights are downloaded by the inference engine inside the already-measured TEE. See [sek8s_integrity.md](sek8s_integrity.md) for the full Chutes-specific analysis. For Chutes-specific weight verification mechanisms (watchtower, cllmv), see [Chutes weight verification mechanisms (reference)](#chutes-weight-verification-mechanisms-reference) below.
 
+- **Tinfoil**: Tinfoil closes the model weight gap by design using dm-verity attested model volumes. See [dm-verity attested model volumes (Tinfoil V3)](#dm-verity-attested-model-volumes-tinfoil-v3) below.
+
 ## Approaches for Client-Verifiable Weight Authentication
 
-Two approaches are viable paths to model weight authentication with current or near-term infrastructure:
+Three approaches are viable paths to model weight authentication with current or near-term infrastructure:
 
-1. **[Compose-attested model image identity](#compose-attested-model-image-identity-dstack-attestation-chain)** is the fastest path. It requires only that providers include Sigstore-signed model weight images in the Docker Compose manifest — infrastructure that teep already fully verifies today. No kernel changes, no new APIs, no new attestation endpoints. The missing piece is provider adoption.
+1. **[IMA manifest verification](#ima-manifest-verification-requires-provider-api-enrichment)** provides per-file runtime hash verification of model weight files anchored to TDX hardware, but requires providers to enable IMA in their CVM kernels and expose the measurement log through their attestation evidence API.
 
-2. **[IMA manifest verification](#ima-manifest-verification-requires-provider-api-enrichment)** is the strongest approach and a close second. It provides per-file runtime hash verification of model weight files anchored to TDX hardware, but requires providers to enable IMA in their CVM kernels and expose the measurement log through their attestation evidence API.
+2. **[Compose-attested model image identity](#compose-attested-model-image-identity-dstack-attestation-chain)** is the fastest path for dstack. It requires only that providers include Sigstore-signed model weight images in the Docker Compose manifest — infrastructure that teep already fully verifies today. Tinfoil's [`modelwrap`](https://github.com/tinfoilsh/modelwrap) tool can create such images. No kernel changes, no new APIs, no new attestation endpoints. The missing piece is provider adoption.
+
+3. **[dm-verity attested model volumes (Tinfoil V3)](#dm-verity-attested-model-volumes-tinfoil-v3)** is the strongest approach. It provides block-level runtime integrity enforcement via dm-verity, with root hashes pinned in a measured configuration and authenticated through Sigstore. Already implemented by Tinfoil; the pattern is reusable by dstack providers.
 
 The remaining approaches — [Independent HuggingFace baseline computation](#independent-huggingface-baseline-computation), [Per-token output binding](#per-token-output-binding-requires-open-specification), and [Reproducible inference verification](#reproducible-inference-verification) — are documented for reference but are either insufficient on their own (HuggingFace baselines have no verification target without IMA or compose-attested images), depend on closed-source or nonexistent protocols (per-token binding), or face fundamental practical barriers that make them unsuitable as primary verification mechanisms (reproducible inference). Teep cannot independently audit any of these three today.
 
@@ -184,7 +188,7 @@ For this approach to work, providers must:
 
 1. **Reference model weight images by digest** in the Docker Compose manifest (not by tag). Tags are mutable; digests are content-addressed and immutable.
 2. **Sign model weight images with Sigstore** using keyless (Fulcio OIDC) signing from a CI/CD pipeline, and include SLSA provenance attestations. This records the build in the Rekor transparency log.
-3. **Build model weight images from public, auditable source** — a public Dockerfile that downloads weights from HuggingFace by revision hash and packages them. The Dockerfile and CI configuration must be in a public repository so that the Fulcio OIDC provenance (source repo + commit) is independently verifiable.
+3. **Build model weight images from public, auditable source** — a public Dockerfile that downloads weights from HuggingFace by revision hash and packages them. The Dockerfile and CI configuration must be in a public repository so that the Fulcio OIDC provenance (source repo + commit) is independently verifiable. Tinfoil's [`modelwrap`](https://github.com/tinfoilsh/modelwrap) tool can create model weight container images suitable for this purpose.
 4. **Use separate images or clearly structured combined images** so that the model identity is unambiguous from the compose manifest. A combined `inference-with-model` image works if the Dockerfile clearly shows which model is embedded.
 
 #### What teep can verify today vs. what's needed
@@ -202,16 +206,27 @@ For this approach to work, providers must:
 
 The infrastructure for this verification already exists in teep. The missing piece is provider adoption: structuring deployments so that model identity is explicit in the compose manifest, and signing model images with Sigstore provenance that traces back to auditable source.
 
-#### Comparison with IMA verification
+### dm-verity attested model volumes (Tinfoil V3)
 
-| Property | Compose-attested model image | IMA manifest verification |
-|----------|------------------------------|--------------------------|
-| Proves model weights on disk | Yes (image contains weights) | Yes (runtime file hashes) |
-| Proves weights loaded in VRAM | No (proves image was deployed, not that engine used those files) | Closer (measures files as they are opened for read) |
-| Requires provider API changes | Minimal (add model image to compose, sign in Sigstore) | Significant (enable IMA, expose log, coordinate RTMR usage) |
-| Requires source code audit | Yes (Dockerfiles + inference scripts) | No (file hashes are directly compared) |
-| Available today | Infrastructure exists; needs provider adoption | Kernel infrastructure exists; needs provider enablement + API |
-| Granularity | Per-image (all weights in image verified as a unit) | Per-file (individual weight shard hashes verified) |
+Tinfoil's V3 attestation uses [`modelwrap`](https://github.com/tinfoilsh/modelwrap) to create a read-only dm-verity volume containing model weights and compute a Merkle tree root hash over the volume contents. This root hash is pinned in `tinfoil-config.yml`, whose SHA-256 is embedded in the kernel command line (measured into RTMR2 for TDX, or the launch measurement for SEV-SNP).
+
+At runtime, the CVM mounts the model volume read-only with dm-verity enabled. The kernel validates every block read against the Merkle tree root hash. A tampered block causes an I/O error and inference fails. All disks are mounted read-only with ramdisk for ephemeral data, so runtime weight substitution is not possible.
+
+The full authentication chain is: Sigstore bundle → code measurements → RTMR2 → kernel cmdline → config hash → dm-verity root hash → model weight volume. Teep verifies the Sigstore bundle and compares attestation registers against it; when `sigstore_code_verified` passes, the model weights are transitively authenticated, and `measured_model_weights` can be set to `Pass`.
+
+This approach is strictly stronger than compose-attested images because it provides block-level runtime integrity enforcement — not just proof that an image was deployed, but cryptographic verification of every block of model data as it is read. The `modelwrap` tool and dm-verity volume scheme are not Tinfoil-specific; dstack providers could adopt the same pattern by building dm-verity model volumes, pinning their root hashes in the compose manifest or a measured configuration file, and mounting them read-only inside the CVM.
+
+#### Comparison of approaches
+
+| Property | IMA manifest verification | Compose-attested model image | dm-verity attested volume |
+|----------|---------------------------|------------------------------|---------------------------|
+| Proves model weights on disk | Yes (runtime file hashes) | Yes (image contains weights) | Yes (block-level Merkle tree) |
+| Proves weights loaded in VRAM | Closer (measures files as they are opened for read) | No (proves image was deployed, not that engine used those files) | Block-level (every read validated by kernel) |
+| Requires provider API changes | Significant (enable IMA, expose log, coordinate RTMR usage) | Minimal (add model image to compose, sign in Sigstore) | Moderate (build dm-verity volumes, pin root hash in config) |
+| Requires source code audit | No (file hashes are directly compared) | Yes (Dockerfiles + inference scripts) | No (dm-verity enforced by kernel) |
+| Runtime substitution prevention | No (measures but does not block) | Depends on container config | Yes (read-only mount, kernel-enforced) |
+| Available today | Kernel infrastructure exists; needs provider enablement + API | Infrastructure exists; needs provider adoption | Implemented by Tinfoil; pattern reusable by dstack |
+| Granularity | Per-file (individual weight shard hashes) | Per-image (all weights verified as a unit) | Per-block (4K block Merkle tree) |
 
 ### Independent HuggingFace baseline computation
 
@@ -428,11 +443,14 @@ However, this would require Chutes to change their TEE trust model to include cl
 | Neardirect (dstack) | None | N/A | `Fail`: "no model weight hashes" |
 | Chutes (sek8s) — watchtower | SHA256 weight file probing, random byte range spot-checks | No (server-side only, TEE-excluded) | `Fail`: "no model weight hashes" |
 | Chutes (sek8s) — cllmv | Per-token HMAC binding model+revision | No (closed-source, TEE-exempt) | `Fail`: "no model weight hashes" |
+| Tinfoil | dm-verity root hash in attested config → Sigstore bundle | Yes (transitive via `sigstore_code_verified`) | `Pass`: model weights authenticated via dm-verity + Sigstore chain |
 
-The `measured_model_weights` factor will remain `Fail` for all providers until one of the two viable approaches is adopted:
+For dstack and sek8s providers, `measured_model_weights` will remain `Fail` until one of the viable approaches is adopted:
 
-1. **[Compose-attested model image identity](#compose-attested-model-image-identity-dstack-attestation-chain)** (fastest path): A dstack provider includes Sigstore-signed model weight images in the Docker Compose manifest. Teep's existing verification chain — compose binding, Sigstore/Rekor lookup, DSSE signature, SET, Merkle inclusion proof, and Fulcio OIDC provenance — already covers every link from TDX hardware to image identity. The only missing piece is provider adoption.
+1. **[IMA manifest verification](#ima-manifest-verification-requires-provider-api-enrichment)** (per-file granularity): Enable Linux IMA in the CVM kernel and expose the IMA measurement log through the attestation evidence API. This gives per-file runtime hash verification of model weights, hardware-anchored to TDX RTMRs.
 
-2. **[IMA manifest verification](#ima-manifest-verification-requires-provider-api-enrichment)** (strongest, close second): A provider enables Linux IMA in its CVM kernel and exposes the IMA measurement log through its attestation evidence API. This gives per-file runtime hash verification of model weights, hardware-anchored to TDX RTMRs.
+2. **[Compose-attested model image identity](#compose-attested-model-image-identity-dstack-attestation-chain)** (fastest path for dstack): Include Sigstore-signed model weight images in the Docker Compose manifest (Tinfoil's [`modelwrap`](https://github.com/tinfoilsh/modelwrap) can create such images). Teep's existing verification chain already covers every link from TDX hardware to image identity. The only missing piece is provider adoption.
+
+3. **[dm-verity attested model volumes](#dm-verity-attested-model-volumes-tinfoil-v3)** (strongest, reusable): Build dm-verity model weight volumes with [`modelwrap`](https://github.com/tinfoilsh/modelwrap) or equivalent, pin the root hash in a measured configuration, and mount read-only. Provides block-level runtime integrity. Already implemented by Tinfoil; the pattern is reusable by dstack providers.
 
 The remaining approaches documented above (HuggingFace baselines, per-token output binding, reproducible inference) are provided for reference but are either insufficient on their own, depend on closed-source protocols, or face fundamental practical barriers. They cannot serve as primary model weight authentication mechanisms for teep.
