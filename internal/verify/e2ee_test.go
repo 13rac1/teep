@@ -2,10 +2,12 @@ package verify
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/mlkem"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -420,6 +422,27 @@ func TestTestE2EEVenice_InvalidSigningKey(t *testing.T) {
 	}
 }
 
+// TestTestE2EENeardirect_ResolveError tests the error path in testE2EENeardirect
+// when the endpoint resolver fails (canceled context → immediate failure).
+func TestTestE2EENeardirect_ResolveError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so resolver.Resolve fails
+
+	raw := &attestation.RawAttestation{SigningKey: "04aabbcc"}
+	cp := &config.Provider{APIKey: "key"}
+	got := testE2EE(ctx, raw, "neardirect", cp, "nonexistent-model", false)
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !got.Attempted {
+		t.Error("Attempted should be true")
+	}
+	if got.Err == nil {
+		t.Error("expected error from failed resolve")
+	}
+	t.Logf("testE2EENeardirect resolve error: %v", got.Err)
+}
+
 func TestTestE2EENearCloud_InvalidSigningKey(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: "not-a-valid-ed25519-key"}
 	cp := &config.Provider{APIKey: "key"}
@@ -433,6 +456,128 @@ func TestTestE2EENearCloud_InvalidSigningKey(t *testing.T) {
 	if got.Err == nil {
 		t.Error("expected error for invalid signing key")
 	}
+}
+
+// --------------------------------------------------------------------------
+// testE2EEVenice — HTTP error path with valid key
+// --------------------------------------------------------------------------
+
+func TestTestE2EEVenice_HTTPError(t *testing.T) {
+	// Create a Venice session and use its own public key as the "model" key.
+	// This is the pattern used in the e2ee package's own tests.
+	session, err := e2ee.NewVeniceSession()
+	if err != nil {
+		t.Fatalf("NewVeniceSession: %v", err)
+	}
+	defer session.Zero()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer ts.Close()
+
+	raw := &attestation.RawAttestation{SigningKey: session.ClientPubKeyHex()}
+	cp := &config.Provider{APIKey: "key", BaseURL: ts.URL}
+	got := testE2EEVenice(context.Background(), raw, cp, "test-model")
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !got.Attempted {
+		t.Error("Attempted should be true")
+	}
+	if got.Err == nil {
+		t.Error("expected error from HTTP 401")
+	}
+	t.Logf("testE2EEVenice HTTP error: %v", got.Err)
+}
+
+// --------------------------------------------------------------------------
+// testE2EENearAI — HTTP error path with valid Ed25519 key
+// --------------------------------------------------------------------------
+
+func TestTestE2EENearAI_HTTPError(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubHex := hex.EncodeToString(pub)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer ts.Close()
+
+	raw := &attestation.RawAttestation{SigningKey: pubHex}
+	cp := &config.Provider{APIKey: "key"}
+	got := testE2EENearAI(context.Background(), raw, cp, "test-model", ts.URL, "nearcloud")
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !got.Attempted {
+		t.Error("Attempted should be true")
+	}
+	if got.Err == nil {
+		t.Error("expected error from HTTP 401")
+	}
+	t.Logf("testE2EENearAI HTTP error: %v", got.Err)
+}
+
+// --------------------------------------------------------------------------
+// testE2EEChutes — encrypt error path with invalid signing key
+// --------------------------------------------------------------------------
+
+func TestTestE2EEChutes_InvalidSigningKey(t *testing.T) {
+	raw := &attestation.RawAttestation{
+		SigningKey: "not-a-valid-mlkem-key",
+		InstanceID: "inst-1",
+		E2ENonce:   "nonce-token",
+		ChuteID:    "chute-uuid",
+	}
+	cp := &config.Provider{APIKey: "key", BaseURL: "https://example.com"}
+	got := testE2EEChutes(context.Background(), raw, cp, "model")
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !got.Attempted {
+		t.Error("Attempted should be true")
+	}
+	if got.Err == nil {
+		t.Error("expected error for invalid signing key")
+	}
+	t.Logf("testE2EEChutes invalid key error: %v", got.Err)
+}
+
+func TestTestE2EEChutes_HTTPError(t *testing.T) {
+	// Generate a valid ML-KEM-768 key to get past EncryptChatRequestChutes.
+	dk, err := mlkem.GenerateKey768()
+	if err != nil {
+		t.Fatalf("GenerateKey768: %v", err)
+	}
+	serverPubB64 := base64.StdEncoding.EncodeToString(dk.EncapsulationKey().Bytes())
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer ts.Close()
+
+	raw := &attestation.RawAttestation{
+		SigningKey: serverPubB64,
+		InstanceID: "inst-1",
+		E2ENonce:   "nonce-token",
+		ChuteID:    "chute-uuid",
+	}
+	cp := &config.Provider{APIKey: "key", BaseURL: ts.URL}
+	got := testE2EEChutes(context.Background(), raw, cp, "model")
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !got.Attempted {
+		t.Error("Attempted should be true")
+	}
+	if got.Err == nil {
+		t.Error("expected error from HTTP 401")
+	}
+	t.Logf("testE2EEChutes HTTP error: %v", got.Err)
 }
 
 // --------------------------------------------------------------------------

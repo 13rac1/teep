@@ -2,9 +2,12 @@ package verify
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -474,3 +477,57 @@ func newMinimalAttestServer(t *testing.T) *minimalAttestServerResult {
 }
 
 func (s *minimalAttestServerResult) Close() {}
+
+// --------------------------------------------------------------------------
+// Replay error paths
+// --------------------------------------------------------------------------
+
+func TestReplay_BadDir(t *testing.T) {
+	ctx := context.Background()
+	_, _, err := Replay(ctx, "/no/such/directory/for/testing", func(_ string) (*config.Config, *config.Provider, error) {
+		return nil, nil, nil
+	})
+	if err == nil {
+		t.Fatal("expected error for non-existent capture dir")
+	}
+	if !strings.Contains(err.Error(), "load capture") {
+		t.Errorf("error = %q, should mention 'load capture'", err)
+	}
+}
+
+func TestReplay_InvalidNonce(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `{"provider":"test","model":"m","nonce_hex":"not-valid-hex","captured_at":"2026-01-01T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	ctx := context.Background()
+	_, _, err := Replay(ctx, dir, func(_ string) (*config.Config, *config.Provider, error) {
+		return nil, nil, nil
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid nonce in manifest")
+	}
+	if !strings.Contains(err.Error(), "invalid nonce") {
+		t.Errorf("error = %q, should mention 'invalid nonce'", err)
+	}
+}
+
+func TestReplay_CfgLoaderError(t *testing.T) {
+	dir := t.TempDir()
+	nonce := attestation.NewNonce()
+	manifest := fmt.Sprintf(`{"provider":"test","model":"m","nonce_hex":%q,"captured_at":"2026-01-01T00:00:00Z"}`, nonce.Hex())
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	ctx := context.Background()
+	_, _, err := Replay(ctx, dir, func(_ string) (*config.Config, *config.Provider, error) {
+		return nil, nil, errors.New("config load error")
+	})
+	if err == nil {
+		t.Fatal("expected error from cfgLoader")
+	}
+	if !strings.Contains(err.Error(), "load config for replay") {
+		t.Errorf("error = %q, should mention 'load config for replay'", err)
+	}
+}

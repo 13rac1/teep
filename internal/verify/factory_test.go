@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
@@ -54,6 +56,26 @@ func TestNewAttester(t *testing.T) {
 		}
 	})
 
+	t.Run("phalacloud", func(t *testing.T) {
+		a, err := newAttester("phalacloud", cp, false)
+		if err != nil {
+			t.Fatalf("newAttester(phalacloud): %v", err)
+		}
+		if _, ok := a.(*phalacloud.Attester); !ok {
+			t.Errorf("newAttester(phalacloud) returned %T, want *phalacloud.Attester", a)
+		}
+	})
+
+	t.Run("chutes", func(t *testing.T) {
+		a, err := newAttester("chutes", cp, false)
+		if err != nil {
+			t.Fatalf("newAttester(chutes): %v", err)
+		}
+		if _, ok := a.(*chutes.Attester); !ok {
+			t.Errorf("newAttester(chutes) returned %T, want *chutes.Attester", a)
+		}
+	})
+
 	t.Run("unknown", func(t *testing.T) {
 		_, err := newAttester("bogus", cp, false)
 		t.Logf("newAttester(bogus) error: %v", err)
@@ -73,7 +95,10 @@ func TestNewReportDataVerifier(t *testing.T) {
 	}{
 		{"venice", false},
 		{"neardirect", false},
+		{"nearcloud", false},
 		{"nanogpt", false},
+		{"phalacloud", false},
+		{"chutes", false},
 		{"unknown", true},
 	}
 	for _, tc := range tests {
