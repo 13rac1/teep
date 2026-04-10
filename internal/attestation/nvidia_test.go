@@ -716,3 +716,57 @@ func TestNRASDiagDetail(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// nvidiaErrorMessage
+// ---------------------------------------------------------------------------
+
+func TestNvidiaErrorMessage_NoKey(t *testing.T) {
+	claims := map[string]any{"foo": "bar"}
+	got := nvidiaErrorMessage(claims)
+	if got != "" {
+		t.Errorf("nvidiaErrorMessage (no key) = %q, want empty", got)
+	}
+}
+
+func TestNvidiaErrorMessage_NotMap(t *testing.T) {
+	claims := map[string]any{"x-nvidia-error-details": "raw string value"}
+	got := nvidiaErrorMessage(claims)
+	if got != "raw string value" {
+		t.Errorf("nvidiaErrorMessage (not-map) = %q, want %q", got, "raw string value")
+	}
+}
+
+func TestNvidiaErrorMessage_WithMessage(t *testing.T) {
+	claims := map[string]any{
+		"x-nvidia-error-details": map[string]any{
+			"message": "GPU attestation failed",
+		},
+	}
+	got := nvidiaErrorMessage(claims)
+	if got != "GPU attestation failed" {
+		t.Errorf("nvidiaErrorMessage (with message) = %q, want %q", got, "GPU attestation failed")
+	}
+}
+
+func TestNvidiaErrorMessage_WithDescription(t *testing.T) {
+	claims := map[string]any{
+		"x-nvidia-error-details": map[string]any{
+			"description": "certificate expired",
+		},
+	}
+	got := nvidiaErrorMessage(claims)
+	if got != "certificate expired" {
+		t.Errorf("nvidiaErrorMessage (with description) = %q, want %q", got, "certificate expired")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ShutdownJWKS
+// ---------------------------------------------------------------------------
+
+func TestShutdownJWKS(t *testing.T) {
+	ShutdownJWKS() // must not panic; idempotent
+	ShutdownJWKS()
+	t.Log("ShutdownJWKS completed twice without panic")
+}

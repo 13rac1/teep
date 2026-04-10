@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/provider"
 )
 
 // ---------------------------------------------------------------------------
@@ -245,6 +247,111 @@ func TestVerifyNVIDIA_EmptyPayload(t *testing.T) {
 	}
 	if dur != 0 {
 		t.Errorf("expected 0 duration for empty raw, got %v", dur)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Relay error classification
+// ---------------------------------------------------------------------------
+
+// newMinimalServer builds a Server with only the fields needed for internal unit tests.
+func newMinimalServer() *Server {
+	return &Server{
+		cache:           attestation.NewCache(time.Minute),
+		signingKeyCache: attestation.NewSigningKeyCache(time.Minute),
+		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// classifyRelayOutcome
+// ---------------------------------------------------------------------------
+
+func TestClassifyRelayOutcome_NilError(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "test"}
+	ms := &modelStats{}
+	result := s.classifyRelayOutcome(context.Background(), nil, false, prov, "model", ms, false, "")
+	if result != "" {
+		t.Errorf("classifyRelayOutcome(nil) = %q, want empty", result)
+	}
+}
+
+func TestClassifyRelayOutcome_NonDecryptionError(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "test"}
+	ms := &modelStats{}
+	relayErr := errors.New("upstream connection reset")
+	result := s.classifyRelayOutcome(context.Background(), relayErr, false, prov, "model", ms, false, "")
+	if result != "relay_failed" {
+		t.Errorf("classifyRelayOutcome(non-decryption err) = %q, want relay_failed", result)
+	}
+}
+
+func TestClassifyRelayOutcome_DecryptionErrorNotE2EEActive(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "test"}
+	ms := &modelStats{}
+	// ErrDecryptionFailed but e2eeActive=false → should NOT call handleE2EEDecryptionFailure.
+	result := s.classifyRelayOutcome(context.Background(), e2ee.ErrDecryptionFailed, false, prov, "model", ms, false, "")
+	if result != "relay_failed" {
+		t.Errorf("classifyRelayOutcome(decrypt err, not e2ee active) = %q, want relay_failed", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// clearE2EEFailureIfFresh
+// ---------------------------------------------------------------------------
+
+func TestClearE2EEFailureIfFresh_NoFailure(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "venice"}
+	ms := &modelStats{}
+	ar := &attestResult{}
+
+	w := httptest.NewRecorder()
+	proceed := s.clearE2EEFailureIfFresh(context.Background(), w, prov, "model", ar, ms)
+	if !proceed {
+		t.Error("expected proceed=true when no failure recorded")
+	}
+}
+
+func TestClearE2EEFailureIfFresh_FailureWithFreshAttestation(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "venice"}
+	ms := &modelStats{}
+	// Record a failure for this provider+model.
+	key := providerModelKey{prov.Name, "model"}
+	s.e2eeFailed.Store(key, true)
+	// Fresh attestation clears the failure.
+	ar := &attestResult{Raw: &attestation.RawAttestation{}}
+
+	w := httptest.NewRecorder()
+	proceed := s.clearE2EEFailureIfFresh(context.Background(), w, prov, "model", ar, ms)
+	if !proceed {
+		t.Error("expected proceed=true after clearing failure with fresh attestation")
+	}
+	if _, still := s.e2eeFailed.Load(key); still {
+		t.Error("expected failure to be cleared from e2eeFailed")
+	}
+}
+
+func TestClearE2EEFailureIfFresh_FailureWithCachedAttestation(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "venice"}
+	ms := &modelStats{}
+	key := providerModelKey{prov.Name, "model"}
+	s.e2eeFailed.Store(key, true)
+	// Cached attestation (ar.Raw == nil) — should fail closed.
+	ar := &attestResult{Raw: nil}
+
+	w := httptest.NewRecorder()
+	proceed := s.clearE2EEFailureIfFresh(context.Background(), w, prov, "model", ar, ms)
+	if proceed {
+		t.Error("expected proceed=false when failure recorded and attestation is cached")
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
 }
 

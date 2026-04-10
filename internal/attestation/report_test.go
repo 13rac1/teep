@@ -2433,3 +2433,143 @@ func TestAllowFailConsistency(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// tdxQuoteVersion
+// ---------------------------------------------------------------------------
+
+func TestTDXQuoteVersion_Unknown(t *testing.T) {
+	r := &TDXVerifyResult{} // quote is nil → default branch
+	got := tdxQuoteVersion(r)
+	if got != "Quote (unknown version)" {
+		t.Errorf("tdxQuoteVersion (nil) = %q, want %q", got, "Quote (unknown version)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// evalGatewayNonceMatch
+// ---------------------------------------------------------------------------
+
+func TestEvalGatewayNonceMatch_Empty(t *testing.T) {
+	in := &ReportInput{Raw: &RawAttestation{}, GatewayNonceHex: ""}
+	results := evalGatewayNonceMatch(in)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+	t.Logf("result: %s %s", results[0].Status, results[0].Detail)
+}
+
+func TestEvalGatewayNonceMatch_Mismatch(t *testing.T) {
+	nonce := NewNonce()
+	in := &ReportInput{
+		Raw:             &RawAttestation{},
+		GatewayNonce:    nonce,
+		GatewayNonceHex: NewNonce().Hex(), // different nonce
+	}
+	results := evalGatewayNonceMatch(in)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+	t.Logf("result: %s %s", results[0].Status, results[0].Detail)
+}
+
+// ---------------------------------------------------------------------------
+// evalGatewayComposeBinding
+// ---------------------------------------------------------------------------
+
+func TestEvalGatewayComposeBinding_NilCompose(t *testing.T) {
+	in := &ReportInput{Raw: &RawAttestation{}, GatewayCompose: nil}
+	results := evalGatewayComposeBinding(in)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != Skip {
+		t.Errorf("status = %v, want Skip", results[0].Status)
+	}
+}
+
+func TestEvalGatewayComposeBinding_WithError(t *testing.T) {
+	in := &ReportInput{
+		Raw: &RawAttestation{},
+		GatewayCompose: &ComposeBindingResult{
+			Checked: true,
+			Err:     errors.New("binding check failed"),
+		},
+	}
+	results := evalGatewayComposeBinding(in)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+}
+
+func TestEvalGatewayComposeBinding_Pass(t *testing.T) {
+	in := &ReportInput{
+		Raw: &RawAttestation{},
+		GatewayCompose: &ComposeBindingResult{
+			Checked: true,
+			Err:     nil,
+		},
+	}
+	results := evalGatewayComposeBinding(in)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != Pass {
+		t.Errorf("status = %v, want Pass", results[0].Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildTransparencyNoRekor
+// ---------------------------------------------------------------------------
+
+func TestBuildTransparencyNoRekor_WithScPolicy(t *testing.T) {
+	scPolicy := &SupplyChainPolicy{} // non-nil → Fail
+	in := &ReportInput{Raw: &RawAttestation{}}
+	result := buildTransparencyNoRekor(in, scPolicy)
+	if result.Status != Fail {
+		t.Errorf("status = %v, want Fail", result.Status)
+	}
+	t.Logf("detail: %s", result.Detail)
+}
+
+func TestBuildTransparencyNoRekor_WithComposeHash(t *testing.T) {
+	in := &ReportInput{
+		Raw: &RawAttestation{ComposeHash: "abc123deadbeef"},
+	}
+	result := buildTransparencyNoRekor(in, nil)
+	if result.Status != Skip {
+		t.Errorf("status = %v, want Skip", result.Status)
+	}
+	t.Logf("detail: %s", result.Detail)
+}
+
+func TestBuildTransparencyNoRekor_Chutes(t *testing.T) {
+	in := &ReportInput{
+		Raw: &RawAttestation{BackendFormat: FormatChutes},
+	}
+	result := buildTransparencyNoRekor(in, nil)
+	if result.Status != Skip {
+		t.Errorf("status = %v, want Skip", result.Status)
+	}
+	t.Logf("detail: %s", result.Detail)
+}
+
+func TestBuildTransparencyNoRekor_NoRekorFail(t *testing.T) {
+	in := &ReportInput{
+		Raw: &RawAttestation{}, // no ComposeHash, not Chutes, scPolicy nil
+	}
+	result := buildTransparencyNoRekor(in, nil)
+	if result.Status != Fail {
+		t.Errorf("status = %v, want Fail", result.Status)
+	}
+}
