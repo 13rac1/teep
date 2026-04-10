@@ -661,6 +661,27 @@ func TestRelayReassembledNonStream(t *testing.T) {
 	}
 }
 
+func TestRelayReassembledNonStream_DecryptError(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	// Provide a chunk with unencrypted content — will trigger IsEncryptedChunk failure.
+	chunk := `{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"plaintext-not-encrypted"}}]}`
+	body := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", chunk)
+	rec := httptest.NewRecorder()
+	_, err := RelayReassembledNonStream(context.Background(), rec, strings.NewReader(body), session)
+	if err == nil {
+		t.Fatal("expected error for unencrypted content")
+	}
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("error should wrap ErrDecryptionFailed, got: %v", err)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+	t.Logf("relay reassembled decrypt error: %v", err)
+}
+
 func TestRelayStream_EmptyBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	_, err := RelayStream(context.Background(), rec, strings.NewReader(""), nil)
@@ -1029,6 +1050,52 @@ func TestRelayNonStream_ReadError_ReturnsRelayFailed(t *testing.T) {
 	if !errors.Is(err, ErrRelayFailed) {
 		t.Errorf("error should wrap ErrRelayFailed, got: %v", err)
 	}
+}
+
+func TestRelayNonStream_DecryptError_ReturnsDecryptionFailed(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	// Build a non-stream response with a fake encrypted content that passes
+	// IsEncryptedChunkVenice (≥186 hex chars starting with "04") but fails Decrypt.
+	fakeEncrypted := "04" + strings.Repeat("ab", 92) // 186 hex chars
+	body := fmt.Sprintf(
+		`{"choices":[{"message":{"role":"assistant","content":%q}}]}`,
+		fakeEncrypted,
+	)
+	rec := httptest.NewRecorder()
+	_, err := RelayNonStream(context.Background(), rec, strings.NewReader(body), session)
+	if err == nil {
+		t.Fatal("expected error for decryption failure")
+	}
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("error should wrap ErrDecryptionFailed, got: %v", err)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+	t.Logf("RelayNonStream decrypt error: %v", err)
+}
+
+func TestRelayStream_DecryptError_ReturnsDecryptionFailed(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	// Build an SSE data line with fake encrypted content that passes
+	// IsEncryptedChunkVenice (≥186 hex chars starting with "04") but fails Decrypt.
+	fakeEncrypted := "04" + strings.Repeat("ab", 92) // 186 hex chars
+	chunk := fmt.Sprintf(`{"id":"1","choices":[{"delta":{"content":%q}}]}`, fakeEncrypted)
+	sseBody := fmt.Sprintf("data: %s\n\n", chunk)
+
+	rec := httptest.NewRecorder()
+	_, err := RelayStream(context.Background(), rec, strings.NewReader(sseBody), session)
+	if err == nil {
+		t.Fatal("expected error for decryption failure")
+	}
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("error should wrap ErrDecryptionFailed, got: %v", err)
+	}
+	t.Logf("RelayStream decrypt error: %v", err)
 }
 
 func TestErrSentinels_Distinct(t *testing.T) {

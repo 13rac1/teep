@@ -368,6 +368,59 @@ func TestChutesSessionZero(t *testing.T) {
 	}
 }
 
+// TestEncryptChatRequestChutes_BadModelKey verifies SetModelKeyMLKEM error propagation.
+func TestEncryptChatRequestChutes_BadModelKey(t *testing.T) {
+	_, _, err := EncryptChatRequestChutes([]byte(`{}`), "not-base64!!!")
+	if err == nil {
+		t.Fatal("expected error for invalid model pub key")
+	}
+	t.Logf("expected error: %v", err)
+}
+
+// TestEncryptChatRequestChutes_InvalidBody verifies json.Unmarshal error propagation.
+func TestEncryptChatRequestChutes_InvalidBody(t *testing.T) {
+	dk, err := mlkem.GenerateKey768()
+	if err != nil {
+		t.Fatalf("GenerateKey768: %v", err)
+	}
+	modelPubBase64 := base64.StdEncoding.EncodeToString(dk.EncapsulationKey().Bytes())
+	_, _, err = EncryptChatRequestChutes([]byte(`not json`), modelPubBase64)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON body")
+	}
+	t.Logf("expected error: %v", err)
+}
+
+// TestDecryptStreamInitChutes_InvalidBase64 verifies error on invalid base64.
+func TestDecryptStreamInitChutes_InvalidBase64(t *testing.T) {
+	s, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+	defer s.Zero()
+	_, err = s.DecryptStreamInitChutes("not-base64!!!")
+	if err == nil {
+		t.Fatal("expected error for invalid base64")
+	}
+	t.Logf("expected error: %v", err)
+}
+
+// TestDecryptStreamInitChutes_WrongSize verifies error on wrong ciphertext size.
+func TestDecryptStreamInitChutes_WrongSize(t *testing.T) {
+	s, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+	defer s.Zero()
+	// Valid base64 but wrong size (100 bytes instead of 1088).
+	wrongSize := base64.StdEncoding.EncodeToString(make([]byte, 100))
+	_, err = s.DecryptStreamInitChutes(wrongSize)
+	if err == nil {
+		t.Fatal("expected error for wrong ciphertext size")
+	}
+	t.Logf("expected error: %v", err)
+}
+
 // TestDecryptPayloadChaCha20TooShort verifies decryptPayloadChaCha20 returns an
 // error on payloads shorter than nonce + tag.
 func TestDecryptPayloadChaCha20TooShort(t *testing.T) {

@@ -283,3 +283,87 @@ func TestRelayStreamChutes_ScannerError_ReturnsRelayFailed(t *testing.T) {
 		t.Errorf("error should wrap ErrRelayFailed, got: %v", err)
 	}
 }
+
+// --------------------------------------------------------------------------
+// handleChutesInit error branches
+// --------------------------------------------------------------------------
+
+func TestHandleChutesInit_InvalidJSON(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+	// Pass invalid JSON (not a string) — json.Unmarshal will fail.
+	_, err = handleChutesInit(json.RawMessage(`{invalid}`), session)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	t.Logf("handleChutesInit invalid JSON: %v", err)
+}
+
+func TestHandleChutesInit_DecryptFail(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+	// Pass a valid base64 string but wrong KEM ciphertext (too short).
+	badKEM := base64.StdEncoding.EncodeToString([]byte("bad-kem-ciphertext"))
+	raw, _ := json.Marshal(badKEM)
+	_, err = handleChutesInit(raw, session)
+	if err == nil {
+		t.Fatal("expected error for bad KEM ciphertext")
+	}
+	t.Logf("handleChutesInit decrypt fail: %v", err)
+}
+
+// --------------------------------------------------------------------------
+// handleChutesChunk error branches
+// --------------------------------------------------------------------------
+
+func TestHandleChutesChunk_InvalidJSON(t *testing.T) {
+	_, err := handleChutesChunk(json.RawMessage(`{invalid}`), make([]byte, 32))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	t.Logf("handleChutesChunk invalid JSON: %v", err)
+}
+
+func TestHandleChutesChunk_InvalidBase64(t *testing.T) {
+	raw, _ := json.Marshal("!!!not-base64!!!")
+	_, err := handleChutesChunk(raw, make([]byte, 32))
+	if err == nil {
+		t.Fatal("expected error for invalid base64")
+	}
+	t.Logf("handleChutesChunk invalid base64: %v", err)
+}
+
+func TestHandleChutesChunk_DecryptFail(t *testing.T) {
+	// Valid base64 but wrong content — decryption will fail.
+	badPayload := base64.StdEncoding.EncodeToString([]byte("bad-payload-too-short"))
+	raw, _ := json.Marshal(badPayload)
+	_, err := handleChutesChunk(raw, make([]byte, 32))
+	if err == nil {
+		t.Fatal("expected error for bad ciphertext")
+	}
+	t.Logf("handleChutesChunk decrypt fail: %v", err)
+}
+
+func TestRelayNonStreamChutes_ReadError_ReturnsRelayFailed(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	_, err = RelayNonStreamChutes(context.Background(), rec, &failReader{}, session)
+	if err == nil {
+		t.Fatal("expected non-nil error on read failure")
+	}
+	if !errors.Is(err, ErrRelayFailed) {
+		t.Errorf("error should wrap ErrRelayFailed, got: %v", err)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+	t.Logf("RelayNonStreamChutes read error: %v", err)
+}

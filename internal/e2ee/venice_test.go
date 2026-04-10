@@ -502,3 +502,35 @@ func TestModelPubKey(t *testing.T) {
 		t.Errorf("ModelPubKey hex mismatch:\n got  %s\n want %s", gotHex, validKey)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// aesgcmSeal / aesgcmOpen error paths
+// ---------------------------------------------------------------------------
+
+func TestAesgcmSeal_BadKeySize(t *testing.T) {
+	// AES requires 16, 24, or 32 byte keys — 7 bytes triggers an error.
+	_, err := aesgcmSeal(make([]byte, 7), make([]byte, 12), []byte("data"))
+	if err == nil {
+		t.Error("expected error for bad AES key size")
+	}
+	t.Logf("aesgcmSeal bad key: %v", err)
+}
+
+func TestAesgcmOpen_BadKeySize(t *testing.T) {
+	_, err := aesgcmOpen(make([]byte, 7), make([]byte, 12), []byte("ciphertext"))
+	if err == nil {
+		t.Error("expected error for bad AES key size")
+	}
+	t.Logf("aesgcmOpen bad key: %v", err)
+}
+
+func TestAesgcmOpen_AuthFail(t *testing.T) {
+	key := make([]byte, 32)
+	nonce := make([]byte, 12)
+	// Tampered ciphertext — authentication should fail.
+	_, err := aesgcmOpen(key, nonce, []byte("not valid ciphertext with tag"))
+	if err == nil {
+		t.Error("expected authentication failure")
+	}
+	t.Logf("aesgcmOpen auth fail: %v", err)
+}
