@@ -2573,3 +2573,244 @@ func TestBuildTransparencyNoRekor_NoRekorFail(t *testing.T) {
 		t.Errorf("status = %v, want Fail", result.Status)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// evalGatewayTDXMrseamMrtd
+// ---------------------------------------------------------------------------
+
+func TestEvalGatewayTDXMrseamMrtd_NilGatewayTDX(t *testing.T) {
+	in := &ReportInput{Raw: &RawAttestation{}, GatewayTDX: nil}
+	results := evalGatewayTDXMrseamMrtd(in)
+	if results[0].Status != Skip {
+		t.Errorf("status = %v, want Skip", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXMrseamMrtd_NoPolicy(t *testing.T) {
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{},
+		// No GatewayPolicy configured → both HasMRTDPolicy and HasMRSeamPolicy are false
+	}
+	results := evalGatewayTDXMrseamMrtd(in)
+	if results[0].Status != Skip {
+		t.Errorf("status = %v, want Skip", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXMrseamMrtd_MRTDFail(t *testing.T) {
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{MRTD: []byte{0xaa, 0xbb}},
+		GatewayPolicy: MeasurementPolicy{
+			MRTDAllow: map[string]struct{}{"ccdd": {}},
+		},
+	}
+	results := evalGatewayTDXMrseamMrtd(in)
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXMrseamMrtd_MRTDPass(t *testing.T) {
+	mrtd := []byte{0xaa, 0xbb}
+	mrtdHex := hex.EncodeToString(mrtd)
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{MRTD: mrtd},
+		GatewayPolicy: MeasurementPolicy{
+			MRTDAllow: map[string]struct{}{mrtdHex: {}},
+		},
+	}
+	results := evalGatewayTDXMrseamMrtd(in)
+	if results[0].Status != Pass {
+		t.Errorf("status = %v, want Pass", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXMrseamMrtd_MRSeamFail(t *testing.T) {
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{MRSeam: []byte{0x01}},
+		GatewayPolicy: MeasurementPolicy{
+			MRSeamAllow: map[string]struct{}{"ffff": {}},
+		},
+	}
+	results := evalGatewayTDXMrseamMrtd(in)
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXMrseamMrtd_BothMatch(t *testing.T) {
+	mrtd := []byte{0xaa}
+	mrseam := []byte{0xbb}
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{MRTD: mrtd, MRSeam: mrseam},
+		GatewayPolicy: MeasurementPolicy{
+			MRTDAllow:   map[string]struct{}{hex.EncodeToString(mrtd): {}},
+			MRSeamAllow: map[string]struct{}{hex.EncodeToString(mrseam): {}},
+		},
+	}
+	results := evalGatewayTDXMrseamMrtd(in)
+	if results[0].Status != Pass {
+		t.Errorf("status = %v, want Pass", results[0].Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// evalGatewayTDXHardwareConfig
+// ---------------------------------------------------------------------------
+
+func TestEvalGatewayTDXHardwareConfig_NilGatewayTDX(t *testing.T) {
+	in := &ReportInput{Raw: &RawAttestation{}, GatewayTDX: nil}
+	results := evalGatewayTDXHardwareConfig(in)
+	if results[0].Status != Skip {
+		t.Errorf("status = %v, want Skip", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXHardwareConfig_NoRTMR0Policy(t *testing.T) {
+	in := &ReportInput{Raw: &RawAttestation{}, GatewayTDX: &TDXVerifyResult{}}
+	results := evalGatewayTDXHardwareConfig(in)
+	if results[0].Status != Skip {
+		t.Errorf("status = %v, want Skip", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXHardwareConfig_RTMR0Fail(t *testing.T) {
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{},
+		GatewayPolicy: MeasurementPolicy{
+			RTMRAllow: [4]map[string]struct{}{{("wronghex"): {}}},
+		},
+	}
+	results := evalGatewayTDXHardwareConfig(in)
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXHardwareConfig_RTMR0Pass(t *testing.T) {
+	var rtmr0 [48]byte
+	rtmr0Hex := hex.EncodeToString(rtmr0[:])
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{RTMRs: [4][48]byte{rtmr0}},
+		GatewayPolicy: MeasurementPolicy{
+			RTMRAllow: [4]map[string]struct{}{{rtmr0Hex: {}}},
+		},
+	}
+	results := evalGatewayTDXHardwareConfig(in)
+	if results[0].Status != Pass {
+		t.Errorf("status = %v, want Pass", results[0].Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// evalGatewayTDXBootConfig
+// ---------------------------------------------------------------------------
+
+func TestEvalGatewayTDXBootConfig_NilGatewayTDX(t *testing.T) {
+	in := &ReportInput{Raw: &RawAttestation{}, GatewayTDX: nil}
+	results := evalGatewayTDXBootConfig(in)
+	if results[0].Status != Skip {
+		t.Errorf("status = %v, want Skip", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXBootConfig_NoPolicy(t *testing.T) {
+	in := &ReportInput{Raw: &RawAttestation{}, GatewayTDX: &TDXVerifyResult{}}
+	results := evalGatewayTDXBootConfig(in)
+	if results[0].Status != Skip {
+		t.Errorf("status = %v, want Skip", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXBootConfig_RTMR1Fail(t *testing.T) {
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{},
+		GatewayPolicy: MeasurementPolicy{
+			RTMRAllow: [4]map[string]struct{}{
+				0: nil,
+				1: {("wronghex"): {}},
+			},
+		},
+	}
+	results := evalGatewayTDXBootConfig(in)
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXBootConfig_Pass(t *testing.T) {
+	var rtmr1, rtmr2 [48]byte
+	rtmr1Hex := hex.EncodeToString(rtmr1[:])
+	rtmr2Hex := hex.EncodeToString(rtmr2[:])
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{},
+		GatewayPolicy: MeasurementPolicy{
+			RTMRAllow: [4]map[string]struct{}{
+				0: nil,
+				1: {rtmr1Hex: {}},
+				2: {rtmr2Hex: {}},
+			},
+		},
+	}
+	results := evalGatewayTDXBootConfig(in)
+	if results[0].Status != Pass {
+		t.Errorf("status = %v, want Pass", results[0].Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// evalGatewayTDXReportDataBinding
+// ---------------------------------------------------------------------------
+
+func TestEvalGatewayTDXReportDataBinding_ParseErr(t *testing.T) {
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{ParseErr: errors.New("bad quote")},
+	}
+	results := evalGatewayTDXReportDataBinding(in)
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXReportDataBinding_BindingErr(t *testing.T) {
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{ReportDataBindingErr: errors.New("nonce mismatch")},
+	}
+	results := evalGatewayTDXReportDataBinding(in)
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXReportDataBinding_Pass(t *testing.T) {
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{ReportDataBindingDetail: "binding verified"},
+	}
+	results := evalGatewayTDXReportDataBinding(in)
+	if results[0].Status != Pass {
+		t.Errorf("status = %v, want Pass", results[0].Status)
+	}
+}
+
+func TestEvalGatewayTDXReportDataBinding_NoDetail(t *testing.T) {
+	in := &ReportInput{
+		Raw:        &RawAttestation{},
+		GatewayTDX: &TDXVerifyResult{}, // no ParseErr, no BindingErr, no Detail
+	}
+	results := evalGatewayTDXReportDataBinding(in)
+	if results[0].Status != Fail {
+		t.Errorf("status = %v, want Fail", results[0].Status)
+	}
+}
