@@ -55,7 +55,7 @@ Not all providers support all endpoints. If a provider has no path configured fo
 
 **E2EE protocol:** Ed25519/X25519 ECDH + XChaCha20-Poly1305 (field-level encryption).
 
-**Connection model:** TLS-pinned. Attestation and inference share the same TCP connection. The TLS certificate is validated with standard CA-based verification, and the connection is additionally bound to the attested TEE with attestation-based SPKI pinning.
+**Connection model:** TLS-pinned. On an SPKI cache miss, attestation is fetched inline and the subsequent inference uses that same TCP connection. On an SPKI cache hit, the proxy may open a fresh TLS connection that is validated against the cached attested SPKI pin rather than re-running attestation inline. In both cases, the TLS certificate is validated with standard CA-based verification, and the connection is additionally bound to the attested TEE with attestation-based SPKI pinning.
 
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|

@@ -1179,8 +1179,8 @@ lands. Phase 1 is not independently deployable for `tinfoil_v2`.
    - Store results as `tee_hardware_config` factor details in the report.
 
 8. **MR_SEAM Whitelist** (in `policy.go`):
-   The Sigstore hardware-measurements registry (`tinfoilsh/hardware-measurements`,
-   already fetched in Phase 2 at lines 904-918) is the authoritative source for
+   The Sigstore hardware-measurements registry (`tinfoilsh/hardware-measurements`),
+   fetched and verified earlier in Phase 2, is the authoritative source for
    MR_SEAM values. At runtime, the implementation must source MR_SEAM values
    from the verified hardware-measurements predicate. If the registry fetch
    fails, Sigstore verification fails, or the predicate cannot be parsed into
