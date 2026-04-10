@@ -2,8 +2,10 @@ package capture
 
 import (
 	"bytes"
+	"crypto/tls"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -475,6 +477,55 @@ func TestReadFileBounded_Oversized(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "limit") {
 		t.Errorf("error = %q, want message containing 'limit'", err)
+	}
+}
+
+func TestTLSVersionName(t *testing.T) {
+	tests := []struct {
+		version uint16
+		want    string
+	}{
+		{tls.VersionTLS10, "TLS 1.0"},
+		{tls.VersionTLS11, "TLS 1.1"},
+		{tls.VersionTLS12, "TLS 1.2"},
+		{tls.VersionTLS13, "TLS 1.3"},
+		{0x9999, "0x9999"},
+	}
+	for _, tt := range tests {
+		got := tlsVersionName(tt.version)
+		t.Logf("tlsVersionName(0x%04x) = %q", tt.version, got)
+		if got != tt.want {
+			t.Errorf("tlsVersionName(0x%04x) = %q, want %q", tt.version, got, tt.want)
+		}
+	}
+}
+
+func TestRecordingTransport_TLS(t *testing.T) {
+	// Use httptest.NewTLSServer so resp.TLS is populated.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	rec := WrapRecording(srv.Client().Transport)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/attest", http.NoBody)
+	resp, err := rec.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if len(rec.Entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(rec.Entries))
+	}
+	e := rec.Entries[0]
+	t.Logf("TLS version: %q, cipher: %q", e.TLSVersion, e.TLSCipher)
+	if e.TLSVersion == "" {
+		t.Error("TLSVersion should be set for TLS connection")
+	}
+	if e.TLSCipher == "" {
+		t.Error("TLSCipher should be set for TLS connection")
 	}
 }
 

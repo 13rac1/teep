@@ -69,3 +69,38 @@ func TestHandler_NoContext(t *testing.T) {
 		t.Fatalf("expected no req= in log output: %s", out)
 	}
 }
+
+func TestHandler_WithAttrs(t *testing.T) {
+	var buf bytes.Buffer
+	base := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	// slog.Logger.With calls handler.WithAttrs on the underlying handler.
+	logger := slog.New(reqid.NewHandler(base)).With("service", "test")
+
+	ctx := reqid.WithID(context.Background(), "abc12345")
+	logger.InfoContext(ctx, "with-attrs message")
+
+	out := buf.String()
+	t.Logf("log output: %s", out)
+	if !bytes.Contains(buf.Bytes(), []byte("req=abc12345")) {
+		t.Errorf("expected req=abc12345 in log output: %s", out)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("service=test")) {
+		t.Errorf("expected service=test in log output: %s", out)
+	}
+}
+
+func TestHandler_WithGroup(t *testing.T) {
+	var buf bytes.Buffer
+	base := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	// slog.Logger.WithGroup calls handler.WithGroup on the underlying handler.
+	logger := slog.New(reqid.NewHandler(base)).WithGroup("request")
+
+	ctx := reqid.WithID(context.Background(), "abc12345")
+	logger.InfoContext(ctx, "with-group message", "key", "val")
+
+	out := buf.String()
+	t.Logf("log output: %s", out)
+	if !bytes.Contains(buf.Bytes(), []byte("req=abc12345")) {
+		t.Errorf("expected req=abc12345 in log output: %s", out)
+	}
+}

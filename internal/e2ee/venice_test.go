@@ -438,6 +438,44 @@ func TestVeniceEncryptDecryptViaSession(t *testing.T) {
 	session.Zero()
 }
 
+// TestVeniceSession_ClientPubKeyHex verifies ClientPubKeyHex returns the
+// session's uncompressed secp256k1 public key as 130 hex chars.
+func TestVeniceSession_ClientPubKeyHex(t *testing.T) {
+	s, err := NewVeniceSession()
+	if err != nil {
+		t.Fatalf("NewVeniceSession: %v", err)
+	}
+	got := s.ClientPubKeyHex()
+	t.Logf("ClientPubKeyHex: %s", got[:min(20, len(got))]+"...")
+	if len(got) != 130 {
+		t.Errorf("ClientPubKeyHex length: got %d, want 130", len(got))
+	}
+	if !strings.HasPrefix(got, "04") {
+		t.Errorf("ClientPubKeyHex must start with '04', got %q", got[:2])
+	}
+}
+
+// TestVeniceSession_ModelKeyHex verifies ModelKeyHex returns "" before
+// SetModelKey and the correct key hex after SetModelKey.
+func TestVeniceSession_ModelKeyHex(t *testing.T) {
+	s := &VeniceSession{}
+	if got := s.ModelKeyHex(); got != "" {
+		t.Errorf("ModelKeyHex before SetModelKey: got %q, want empty", got)
+	}
+
+	keyA := mustPrivKey(t, testKeyAScalar())
+	validKey := hex.EncodeToString(keyA.PubKey().SerializeUncompressed())
+	if err := s.SetModelKey(validKey); err != nil {
+		t.Fatalf("SetModelKey: %v", err)
+	}
+
+	got := s.ModelKeyHex()
+	t.Logf("ModelKeyHex after SetModelKey: %s...", got[:min(20, len(got))])
+	if got != validKey {
+		t.Errorf("ModelKeyHex = %q, want %q", got, validKey)
+	}
+}
+
 // TestModelPubKey verifies ModelPubKey returns nil before SetModelKey and
 // the correct key after SetModelKey.
 func TestModelPubKey(t *testing.T) {
