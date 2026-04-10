@@ -84,6 +84,390 @@ construction, like Chutes.
 
 ---
 
+## Authentication Chain Analysis
+
+This section documents the complete authentication chains from hardware root
+of trust through to the user's plaintext, explicitly comparing Tinfoil's
+model against the gaps documented in `docs/attestation_gaps/dstack_integrity.md`
+and `docs/attestation_gaps/model_weights.md`. The code agent must enforce every
+link in these chains.
+
+### Gap Comparison: Tinfoil vs. Dstack Providers
+
+The dstack integrity gap (dstack_integrity.md) identifies that dstack-based
+providers (Venice, Nearcloud, Neardirect) suffer from an **in-band discovery
+gap**: the boot-chain registers MRTD, RTMR0–RTMR2 must be compared against
+externally-sourced expected values, but no provider publishes those values in
+a signed, machine-readable format. Operators must manually maintain measurement
+allowlists, and provider infrastructure changes silently break verification.
+
+The model weights gap (model_weights.md) documents that no dstack provider
+includes model identity in the attestation chain. The Docker Compose manifest
+binds the container image, but model weights are downloaded at runtime inside
+the container — the attestation proves the correct software, not the correct
+model.
+
+**Tinfoil closes both gaps by design:**
+
+1. **Boot-chain measurements are published in Sigstore.** Tinfoil's
+   `pri-build-action` GitHub Actions workflow computes expected measurements
+   for every deployment configuration and publishes them as a signed Sigstore
+   bundle in the transparency log. Teep fetches the bundle and compares its
+   measurement predicates against the hardware attestation report. There are
+   no operator-maintained allowlists — the expected values are authenticated
+   and machine-readable.
+
+2. **Model weights are attested via dm-verity + Sigstore.** Tinfoil uses a
+   tool called `modelwrap` to create a read-only volume containing model
+   weights and compute a cryptographic commitment (dm-verity root hash) over
+   it. This commitment is pinned in `tinfoil-config.yml`, whose SHA-256 hash
+   is embedded in the kernel command line (measured into the attestation
+   report). At runtime, the CVM mounts the model volume read-only and
+   dm-verity validates every block read against the Merkle tree root hash.
+   Any tampered block causes an I/O error. The `tinfoil-config.yml` and its
+   model commitment are covered by the Sigstore bundle, so teep can verify
+   that the model weights running in the enclave are exactly what was
+   committed at build time.
+
+3. **All disks are read-only and stateless.** The CVM mounts all virtual
+   disks read-only and uses ramdisk for ephemeral data. There is no
+   persistent writable state between boots. This eliminates the runtime
+   weight substitution vector that model_weights.md identifies for dstack
+   providers, where the inference engine could download alternative weights.
+
+4. **Configuration is measured into the attestation.** The
+   `tinfoil-config.yml` file (containing the model commitment, container
+   images, CVM version, and resource allocation) has its SHA-256 embedded in
+   the kernel command line. Since the kernel command line is measured into
+   RTMR2 (TDX) or the launch measurement (SEV-SNP), any change to the
+   configuration produces a different attestation that will not match the
+   Sigstore bundle.
+
+5. **No per-deployment-class variation.** Unlike dstack, where RTMR0 varies
+   with CPU/RAM/GPU count and operators must pin multiple values, Tinfoil's
+   Sigstore bundle is scoped to a specific deployment configuration. The
+   bundle contains the exact expected measurements for that configuration.
+   If Tinfoil changes the hardware profile, a new Sigstore bundle is
+   published.
+
+| Gap | Dstack Providers | Tinfoil |
+|---|---|---|
+| Boot-chain register discovery | Out-of-band, operator-maintained | In-band via Sigstore bundle |
+| MRSEAM / firmware identity | Derivable from Intel, needs manual pin | Published in Sigstore bundle |
+| MRTD / CVM image identity | Derivable from dstack build, needs manual pin | Published in Sigstore bundle |
+| RTMR0 / hardware config | Per-deployment-class, no signed publication | Published in Sigstore bundle |
+| RTMR1-2 / kernel+rootfs | Per-image build, no signed publication | Published in Sigstore bundle |
+| Model weight authentication | Not attested (downloaded at runtime) | dm-verity root hash in attested config |
+| Model identity in attestation | Not present | config.yml commitment → kernel cmdline → RTMR2 |
+| Configuration authenticity | Compose hash in MRCONFIGID | config.yml hash in kernel cmdline + Sigstore |
+| Measurement baseline maintenance | Manual operator burden | Automated via Sigstore transparency log |
+
+### Authentication Chain 1: CVM Environment (Hardware → Code)
+
+This chain proves that the enclave is running the expected firmware, kernel,
+and application code on genuine hardware. Every link must be verified; a
+break at any point means the enclave identity is unproven.
+
+```
+Link 1: Hardware Root of Trust
+│   AMD PSP signs with VCEK (per-chip key → AMD root)
+│   Intel QE signs with attestation key → Intel PCK → Intel root
+│   Verified by: validating report signature against manufacturer cert chain
+│
+├── Link 2: Firmware Identity (OVMF)
+│   │   TDX: measured into MRTD
+│   │   SEV-SNP: measured into launch measurement
+│   │   Verified by: comparing against Sigstore bundle measurements
+│   │
+│   ├── Link 3: Hardware Configuration
+│   │   │   TDX: measured into RTMR0 (vCPU, RAM, GPU, PCI config)
+│   │   │   SEV-SNP: folded into launch measurement
+│   │   │   Verified by: comparing against Sigstore hardware measurements
+│   │   │
+│   │   ├── Link 4: Kernel + Initrd
+│   │   │   │   TDX: kernel measured into RTMR1
+│   │   │   │   SEV-SNP: folded into launch measurement
+│   │   │   │   Verified by: comparing against Sigstore bundle measurements
+│   │   │   │
+│   │   │   ├── Link 5: Kernel Cmdline + Rootfs
+│   │   │   │   │   TDX: measured into RTMR2
+│   │   │   │   │   Includes SHA-256 of tinfoil-config.yml
+│   │   │   │   │   SEV-SNP: folded into launch measurement
+│   │   │   │   │   Verified by: comparing against Sigstore bundle
+│   │   │   │   │
+│   │   │   │   ├── Link 6: Application Configuration
+│   │   │   │   │   │   tinfoil-config.yml specifies:
+│   │   │   │   │   │     - container images (by digest)
+│   │   │   │   │   │     - model weight dm-verity commitment
+│   │   │   │   │   │     - CVM version
+│   │   │   │   │   │     - resource allocation
+│   │   │   │   │   │   Authenticated by: hash in kernel cmdline (Link 5)
+│   │   │   │   │   │
+│   │   │   │   │   ├── Link 7: Model Weights
+│   │   │   │   │   │       Read-only volume, dm-verity validated
+│   │   │   │   │   │       Root hash pinned in config.yml (Link 6)
+│   │   │   │   │   │       Every block read verified at kernel level
+│   │   │   │   │   │
+│   │   │   │   │   └── Link 8: Container Images
+│   │   │   │   │           Digest-pinned in config.yml (Link 6)
+│   │   │   │   │           Covered by Sigstore bundle provenance
+│   │   │   │   │
+│   │   │   │   └── Link 5a: TDX-specific Policy
+│   │   │   │           TD_ATTRIBUTES, XFAM, MR_SEAM, TEE_TCB_SVN
+│   │   │   │           RTMR3 must be zero (no runtime extensions)
+│   │   │   │           MR_CONFIG_ID, MR_OWNER, MR_OWNER_CONFIG = 0
+│   │   │   │
+│   │   │   └── (SEV-SNP: guest policy, TCB SVN minimums)
+│   │   │
+│   │   └── Link 3a: Hardware Platform Registry (TDX only)
+│   │           MRTD + RTMR0 matched against Sigstore-attested
+│   │           hardware-measurements predicate
+│   │
+│   └── Link 2a: GPU Verification
+│           NVIDIA local-gpu-verifier run at boot inside CVM
+│           GPU CC mode validated before service startup
+│           Failure aborts boot (no enclave starts)
+│           Transitively verified via CPU attestation
+│
+└── Link 1a: Sigstore Supply Chain Anchor
+        Sigstore bundle from pri-build-action (GitHub Actions)
+        OIDC issuer: token.actions.githubusercontent.com
+        Workflow bound to specific GitHub repo + tag
+        Bundle contains expected measurements for all registers
+        Verified by: sigstore-go against Sigstore root trust anchor
+```
+
+**What teep must verify (enforcement checklist):**
+
+1. Validate hardware attestation report signature against manufacturer cert
+   chain (AMD ARK→ASK→VCEK or Intel root→PCK→QE). → `tee_quote_structure`
+2. Compare all measurement registers against values from Sigstore bundle:
+   - TDX: MRTD, RTMR0, RTMR1, RTMR2 against multi-platform predicate
+   - SEV-SNP: launch measurement against snp_measurement
+   → `sigstore_code_verified`
+3. Verify Sigstore bundle: DSSE signature, Fulcio certificate, SCT,
+   transparency log entry, observer timestamp. → `sigstore_code_verified`
+4. Apply platform-specific policy checks:
+   - TDX: TD_ATTRIBUTES, XFAM, MR_SEAM whitelist, RTMR3==0, zero fields
+   - SEV-SNP: guest policy (Debug=false, SMT, etc.), TCB minimums
+   → `tee_hardware_config`
+5. Match TDX MRTD + RTMR0 against hardware measurements registry.
+   → `cpu_id_registry`
+6. Verify RTMR3 is all zeros (no unexpected runtime extensions).
+
+### Authentication Chain 2: Encryption Keys (Hardware → Plaintext)
+
+This chain proves that only the attested enclave can decrypt user data. Every
+link must hold; a break means an intermediary could read plaintext.
+
+```
+Link 1: Key Generation Inside Enclave
+│   At boot, enclave generates:
+│     - ECDSA key pair for TLS (private key in encrypted memory)
+│     - X25519 key pair for HPKE/EHBP (private key in encrypted memory)
+│   Private keys never leave enclave memory.
+│   Destroyed when enclave terminates (stateless CVM).
+│
+├── Link 2: Key Binding to Attestation
+│   │   REPORTDATA[0:31] = SHA-256(TLS public key, PKIX DER)
+│   │   REPORTDATA[32:63] = HPKE X25519 public key (raw 32 bytes)
+│   │   REPORTDATA is part of the hardware-signed attestation report.
+│   │   Verified by: extracting REPORTDATA from verified quote.
+│   │
+│   ├── Link 3: TLS Key Binding
+│   │   │   Client connects to enclave via TLS.
+│   │   │   Computes SHA-256 of server's TLS public key (PKIX DER).
+│   │   │   Constant-time compares against REPORTDATA[0:31].
+│   │   │   Mismatch → reject connection (fail closed).
+│   │   │   Guarantees: TLS terminates inside the attested enclave.
+│   │   │   No intermediary can MITM or terminate TLS.
+│   │   │
+│   │   └── Link 3a: TLS-Bound Transport (teep implementation)
+│   │           Custom http.Transport with VerifyPeerCertificate callback
+│   │           Checks SPKI fingerprint on every connection
+│   │           Re-attestation on fingerprint mismatch
+│   │           Connection: close on attestation boundary
+│   │
+│   └── Link 4: HPKE Key Binding
+│       │   HPKE public key from REPORTDATA[32:63].
+│       │   Used as the recipient public key for EHBP encryption.
+│       │   Since it is part of the hardware-signed REPORTDATA, the key
+│       │   is authenticated by the same hardware root of trust as the
+│       │   CVM identity. No separate key endpoint needed.
+│       │
+│       ├── Link 5: EHBP Request Encryption
+│       │   │   Client calls HPKE SetupBaseS with attested public key.
+│       │   │   Request body encrypted as chunked AES-256-GCM stream.
+│       │   │   Ehbp-Encapsulated-Key header sent to server.
+│       │   │   Only the enclave holding the HPKE private key can decrypt.
+│       │   │
+│       │   └── Link 5a: Request Confidentiality
+│       │           HTTP headers (routing, auth) visible to intermediaries.
+│       │           Body (user prompts, data) encrypted end-to-end.
+│       │           No plaintext fallback. Missing encryption → fail closed.
+│       │
+│       └── Link 6: EHBP Response Decryption
+│           │   Server returns Ehbp-Response-Nonce header.
+│           │   Client derives response key from HPKE context + nonce
+│           │   (OHTTP/RFC 9458 key derivation).
+│           │   Response body decrypted as chunked AES-256-GCM stream.
+│           │
+│           ├── Link 6a: Response Authenticity
+│           │       AEAD tag on every chunk proves the response came from
+│           │       the holder of the HPKE private key (the enclave).
+│           │       Corrupted or forged chunks → decryption failure → fail closed.
+│           │
+│           └── Link 6b: Missing Nonce = Fail Closed
+│                   If Ehbp-Response-Nonce header is absent, the response
+│                   cannot be authenticated. Treat as unverified. Reject.
+```
+
+**What teep must verify (enforcement checklist):**
+
+1. Extract TLS public key fingerprint from REPORTDATA[0:31] of the verified
+   attestation report. → `tls_key_binding`
+2. On every TLS connection to the enclave, compute SHA-256 of the server's
+   PKIX-encoded public key and constant-time compare against the attested
+   fingerprint. Mismatch → re-attest → mismatch again → block.
+   → `tls_key_binding`
+3. Extract HPKE public key from REPORTDATA[32:63] of the verified attestation
+   report. → `e2ee_capable`
+4. Use **only** this attested HPKE key for EHBP encryption. Never accept a
+   key from any other source. The cipher suite is fixed:
+   X25519_HKDF_SHA256 / HKDF_SHA256 / AES_256_GCM. → `e2ee_capable`
+5. Encrypt every request body via EHBP before sending. No plaintext POST
+   requests. → `e2ee_usable`
+6. Require `Ehbp-Response-Nonce` header on every response. If absent, fail
+   closed. → `e2ee_usable`
+7. Decrypt and AEAD-verify every response chunk. On any auth failure, abort
+   the response. → `e2ee_usable`
+
+### Authentication Chain 3: Enclave Chaining (Router → Model)
+
+Tinfoil uses a confidential model router that forwards requests to
+per-model inference enclaves. Each hop is independently attested and
+encrypted.
+
+```
+Client (teep proxy)
+  │
+  │  1. Verify router attestation (Sigstore + hardware quote)
+  │  2. TLS-bind to router's attested TLS key
+  │  3. EHBP-encrypt request to router's attested HPKE key
+  │
+  ▼
+Model Router Enclave (tinfoilsh/confidential-model-router)
+  │
+  │  4. Router verifies target model enclave's attestation
+  │  5. Router TLS-binds to model enclave's attested TLS key
+  │  6. Router EHBP-encrypts forwarded request to model enclave
+  │
+  ▼
+Model Inference Enclave (e.g. tinfoilsh/confidential-nomic-embed-text)
+  │
+  │  7. Model enclave decrypts request
+  │  8. Inference runs on dm-verity-attested model weights
+  │  9. Response EHBP-encrypted back through chain
+  │
+  ▼
+Client receives AEAD-authenticated response
+```
+
+**Implication for teep:** Teep verifies the **router** enclave only. The
+router performs the second-hop verification internally, using the same
+Sigstore + hardware attestation + TLS binding logic. This is documented by
+Tinfoil at https://docs.tinfoil.sh/verification/verification-in-tinfoil
+(section "Chaining enclaves"). Teep trusts the router's code to do this
+correctly, which is justified because the router code itself is verified via
+Sigstore supply chain attestation.
+
+The router's Sigstore bundle attests the code that performs second-hop
+verification. If the router code were modified to skip model enclave
+verification, the code measurement would change and the Sigstore comparison
+would fail. This makes the chain self-enforcing: teep verifies the router,
+and the verified router code verifies the models.
+
+### Authentication Chain 4: Model Weight Integrity
+
+Unlike dstack providers where model weights are downloaded at runtime and
+not covered by attestation, Tinfoil binds model weights into the attestation
+chain through a combination of dm-verity and configuration pinning.
+
+```
+Sigstore Transparency Log
+  │
+  │  Contains: pri-build-action output with expected measurements
+  │  Including: hash of tinfoil-config.yml
+  │
+  ▼
+tinfoil-config.yml (committed to GitHub)
+  │
+  │  Contains: modelwrap dm-verity root hash for each model volume
+  │  Contains: container image digests
+  │  Contains: CVM version, resource allocation
+  │  SHA-256 hash embedded in kernel command line
+  │
+  ▼
+Kernel command line → measured into RTMR2 (TDX) / launch measurement (SEV-SNP)
+  │
+  │  At boot: CVM verifies config on disk matches attested hash
+  │  Mismatch → boot aborts
+  │
+  ▼
+dm-verity volume mount
+  │
+  │  Model weight volume mounted read-only
+  │  dm-verity Merkle tree root hash from tinfoil-config.yml
+  │  Every block read validated by kernel dm-verity subsystem
+  │  Tampered block → I/O error → inference fails
+  │
+  ▼
+vLLM loads model from verified volume
+  │
+  │  Volume is read-only; no runtime download possible
+  │  All .safetensors shards validated block-by-block
+  │
+  ▼
+Inference output from attested model weights
+```
+
+**What teep must verify (enforcement checklist):**
+
+Teep does not directly verify dm-verity — that happens inside the CVM kernel.
+Teep's role is to verify the chain that makes dm-verity trustworthy:
+
+1. Verify the Sigstore bundle for the deployment repo (contains the
+   measurements derived from the tinfoil-config.yml). → `sigstore_code_verified`
+2. Compare attestation register values against the Sigstore bundle to confirm
+   the CVM booted with the attested config (which pins the model dm-verity
+   hash). → `sigstore_code_verified`
+3. The `measured_model_weights` factor should be set to `Pass` for Tinfoil
+   when `sigstore_code_verified` passes, because the Sigstore chain
+   transitively authenticates the model weights via config.yml → dm-verity.
+   Detail string should explain the transitive chain.
+
+### Attestation Freshness Without Client Nonces
+
+Dstack providers and other teep providers use client-supplied nonces embedded
+in REPORTDATA to prove attestation freshness. Tinfoil does not use client
+nonces. Instead, freshness is established through the TLS key lifecycle:
+
+1. Each enclave boot generates a fresh TLS key pair and HPKE key pair.
+2. The TLS key fingerprint is embedded in REPORTDATA and signed by hardware.
+3. The TLS certificate is issued by a public CA and logged in CT logs.
+4. When the enclave reboots, new keys are generated and a new attestation
+   report is produced with different REPORTDATA.
+
+**What teep must enforce:**
+
+- On SPKI cache miss (new TLS certificate seen), trigger full re-attestation.
+- On attestation, verify TLS key binding matches the current connection.
+- The `nonce_in_reportdata` factor should be advisory (not enforced) for
+  Tinfoil, with detail explaining the TLS-key-lifecycle freshness model.
+- Do NOT treat the absence of a client nonce as a verification failure.
+
+---
+
 ## Protocol Descriptions
 
 ### Tinfoil Attestation Protocol
@@ -808,6 +1192,15 @@ New cross-provider factors:
 - `cpu_id_registry` — Hardware platform matched against Sigstore-attested
   registry (reuses existing factor name)
 
+Existing factors with Tinfoil-specific behavior:
+- `measured_model_weights` — Set to `Pass` when `sigstore_code_verified`
+  passes, because the Sigstore chain transitively authenticates model weights
+  via tinfoil-config.yml → dm-verity. Detail: "model weights attested via
+  dm-verity commitment in Sigstore-verified config"
+- `nonce_in_reportdata` — Set to advisory (not enforced). Tinfoil does not
+  embed client nonces. Freshness from TLS key lifecycle. Detail: "tinfoil
+  uses TLS key rotation for freshness, not client nonces"
+
 **Documentation updates**:
 - Add Tinfoil to the endpoint support matrix in `api_support.md`.
 - Add Tinfoil E2EE details (EHBP, HPKE, full-body encryption).
@@ -832,6 +1225,8 @@ New cross-provider factors:
 | `e2ee_usable` | Yes | EHBP request encrypted + response AEAD-authenticated |
 | `sigstore_code_verified` | Advisory initially | Code measurement verified via Sigstore DSSE |
 | `cpu_id_registry` | Advisory initially | Hardware platform matched against registry |
+| `measured_model_weights` | Yes (transitive) | Model weights attested via dm-verity + Sigstore chain |
+| `nonce_in_reportdata` | Advisory | TLS key lifecycle freshness; no client nonces |
 
 The `tee_*` factors are proposed renames of the existing `tdx_*` factors,
 generalized to cover both Intel TDX and AMD SEV-SNP. This rename should be
@@ -852,7 +1247,9 @@ New Go module dependencies:
 ## Public Documentation References
 
 - Tinfoil attestation specification: https://docs.tinfoil.sh/verification/predicate
-- Tinfoil verification overview: https://docs.tinfoil.sh/verification/how-to-verify
+- Tinfoil verification overview: https://docs.tinfoil.sh/verification/verification-in-tinfoil
+- Tinfoil backend infrastructure: https://docs.tinfoil.sh/verification/attestation-architecture
+- Tinfoil secure enclave primer: https://docs.tinfoil.sh/verification/secure-enclave-primer
 - EHBP spec: https://github.com/tinfoilsh/encrypted-http-body-protocol/blob/main/SPEC.md
 - EHBP documentation: https://docs.tinfoil.sh/resources/ehbp
 - EHBP Go reference: https://pkg.go.dev/github.com/tinfoilsh/encrypted-http-body-protocol
@@ -883,4 +1280,15 @@ New Go module dependencies:
 
 5. **Router architecture**: Tinfoil uses a confidential model router that
    handles multiple models. The attestation covers the router, not individual
-   models. This is similar to nearcloud's gateway model.
+   models. This is similar to nearcloud's gateway model. The router performs
+   second-hop verification of each model enclave internally — teep trusts
+   this because the router code is Sigstore-attested (see Authentication
+   Chain 3 above).
+
+6. **Model weight authentication is fully solved**: Unlike all existing teep
+   providers, Tinfoil's model weights are cryptographically bound into the
+   attestation chain via dm-verity + tinfoil-config.yml + Sigstore. The
+   `measured_model_weights` factor can be set to `Pass` when the Sigstore
+   supply chain verification succeeds (see Authentication Chain 4 above).
+   This is a significant advantage over dstack providers where
+   `measured_model_weights` always returns `Fail`.
