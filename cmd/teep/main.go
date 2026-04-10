@@ -281,7 +281,7 @@ func runReverify(captureDir string) {
 // replayVerification loads a capture directory, replays all HTTP traffic, and
 // returns the verification report and formatted text.
 func replayVerification(captureDir string) (*attestation.VerificationReport, string, error) {
-	return verify.Replay(captureDir, loadConfig)
+	return verify.Replay(context.Background(), captureDir, loadConfig)
 }
 
 // runVerification loads config, builds the appropriate attester, fetches
@@ -293,7 +293,7 @@ func runVerification(providerName, modelName, captureDir string, offline bool,
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	return verify.Run(context.Background(), verify.Options{
+	return verify.Run(context.Background(), &verify.Options{
 		Config:       cfg,
 		Provider:     cp,
 		ProviderName: providerName,

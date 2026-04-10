@@ -394,7 +394,7 @@ func TestRun_EmptyRaw_NoTDX(t *testing.T) {
 	attestation.TDXCollateralGetter = nil
 	t.Cleanup(func() { attestation.TDXCollateralGetter = origGetter })
 
-	report, err := Run(context.Background(), Options{
+	report, err := Run(context.Background(), &Options{
 		Config:       cfg,
 		Provider:     cp,
 		ProviderName: "venice",
@@ -431,7 +431,7 @@ func TestRun_EmptyRaw_WithCapture(t *testing.T) {
 	t.Cleanup(func() { attestation.TDXCollateralGetter = origGetter })
 
 	captureDir := t.TempDir()
-	report, err := Run(context.Background(), Options{
+	report, err := Run(context.Background(), &Options{
 		Config:       cfg,
 		Provider:     cp,
 		ProviderName: "venice",
@@ -474,4 +474,3 @@ func newMinimalAttestServer(t *testing.T) *minimalAttestServerResult {
 }
 
 func (s *minimalAttestServerResult) Close() {}
-

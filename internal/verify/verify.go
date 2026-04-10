@@ -25,8 +25,8 @@ type Options struct {
 	ModelName    string
 	CaptureDir   string
 	Offline      bool
-	Client       *http.Client              // nil = use default
-	Nonce        attestation.Nonce         // zero = generate new
+	Client       *http.Client                // nil = use default
+	Nonce        attestation.Nonce           // zero = generate new
 	CapturedE2EE *attestation.E2EETestResult // nil = run live test
 }
 
@@ -40,7 +40,7 @@ type CfgLoader func(providerName string) (*config.Config, *config.Provider, erro
 // there. When opts.Client is non-nil, it replaces the default attestation
 // client (used for replay). When opts.Nonce is non-zero, it replaces the
 // generated nonce.
-func Run(ctx context.Context, opts Options) (*attestation.VerificationReport, error) {
+func Run(ctx context.Context, opts *Options) (*attestation.VerificationReport, error) {
 	cfg := opts.Config
 	cfg.Offline = opts.Offline
 
@@ -165,7 +165,7 @@ func Run(ctx context.Context, opts Options) (*attestation.VerificationReport, er
 		cfgLoader := func(_ string) (*config.Config, *config.Provider, error) {
 			return opts.Config, opts.Provider, nil
 		}
-		if err := verifyCapture(subdir, reportText, cfgLoader); err != nil {
+		if err := verifyCapture(ctx, subdir, reportText, cfgLoader); err != nil {
 			return report, fmt.Errorf("capture self-check: %w", err)
 		}
 	}
@@ -175,7 +175,7 @@ func Run(ctx context.Context, opts Options) (*attestation.VerificationReport, er
 
 // Replay loads a capture directory, replays all HTTP traffic, and returns the
 // verification report and formatted text.
-func Replay(captureDir string, cfgLoader CfgLoader) (report *attestation.VerificationReport, reportText string, err error) {
+func Replay(ctx context.Context, captureDir string, cfgLoader CfgLoader) (report *attestation.VerificationReport, reportText string, err error) {
 	manifest, entries, err := capture.Load(captureDir)
 	if err != nil {
 		return nil, "", fmt.Errorf("load capture: %w", err)
@@ -203,7 +203,7 @@ func Replay(captureDir string, cfgLoader CfgLoader) (report *attestation.Verific
 	}
 
 	capturedE2EE := e2eeResultFromOutcome(manifest.E2EE)
-	report, err = Run(context.Background(), Options{
+	report, err = Run(ctx, &Options{
 		Config:       cfg,
 		Provider:     cp,
 		ProviderName: manifest.Provider,
@@ -222,8 +222,8 @@ func Replay(captureDir string, cfgLoader CfgLoader) (report *attestation.Verific
 
 // verifyCapture loads a just-saved capture and re-verifies it to confirm the
 // capture round-trips cleanly.
-func verifyCapture(captureDir, originalReport string, cfgLoader CfgLoader) error {
-	_, reverifyText, err := Replay(captureDir, cfgLoader)
+func verifyCapture(ctx context.Context, captureDir, originalReport string, cfgLoader CfgLoader) error {
+	_, reverifyText, err := Replay(ctx, captureDir, cfgLoader)
 	if err != nil {
 		return fmt.Errorf("verify capture: %w", err)
 	}

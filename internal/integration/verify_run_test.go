@@ -29,7 +29,7 @@ func TestVerifyRun_Venice_Fixture(t *testing.T) {
 
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, baseURL)
 
-	report, err := verify.Run(context.Background(), verify.Options{
+	report, err := verify.Run(context.Background(), &verify.Options{
 		Config:       cfg,
 		Provider:     cp,
 		ProviderName: env.manifest.Provider,
@@ -59,7 +59,7 @@ func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
 
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, baseURL)
 
-	report, err := verify.Run(context.Background(), verify.Options{
+	report, err := verify.Run(context.Background(), &verify.Options{
 		Config:       cfg,
 		Provider:     cp,
 		ProviderName: env.manifest.Provider,
@@ -99,7 +99,7 @@ func TestVerifyReplay_Venice_Fixture(t *testing.T) {
 		return cfg, cp, nil
 	}
 
-	report, reportText, err := verify.Replay(fdir, cfgLoader)
+	report, reportText, err := verify.Replay(context.Background(), fdir, cfgLoader)
 	if err != nil {
 		t.Fatalf("verify.Replay: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestVerifyRun_WithCapture_Venice(t *testing.T) {
 
 	captureDir := t.TempDir()
 
-	report, err := verify.Run(context.Background(), verify.Options{
+	report, err := verify.Run(context.Background(), &verify.Options{
 		Config:       cfg,
 		Provider:     cp,
 		ProviderName: env.manifest.Provider,

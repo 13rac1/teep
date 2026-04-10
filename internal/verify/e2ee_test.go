@@ -341,7 +341,7 @@ func TestDoE2EEStreamTest_FieldNotEncrypted(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(sseBody)) //nolint:errcheck
+		w.Write([]byte(sseBody))
 	}))
 	defer ts.Close()
 
@@ -363,7 +363,7 @@ func TestDoE2EEStreamTest_NoEncryptedFields(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(sseBody)) //nolint:errcheck
+		w.Write([]byte(sseBody))
 	}))
 	defer ts.Close()
 
@@ -384,7 +384,7 @@ func TestDoE2EEStreamTest_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(sseBody)) //nolint:errcheck
+		w.Write([]byte(sseBody))
 	}))
 	defer ts.Close()
 
