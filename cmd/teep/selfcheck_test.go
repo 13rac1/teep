@@ -501,3 +501,31 @@ func TestFormatReport_DefaultTitleUnchanged(t *testing.T) {
 		t.Errorf("default title should be Attestation Report; output:\n%s", out)
 	}
 }
+
+// --------------------------------------------------------------------------
+// shortCommit
+// --------------------------------------------------------------------------
+
+func TestShortCommit_Long(t *testing.T) {
+	got := shortCommit("abcdef123456789")
+	if len(got) != 12 {
+		t.Errorf("shortCommit(long) = %q (len %d), want 12 chars", got, len(got))
+	}
+	if got != "abcdef123456" {
+		t.Errorf("shortCommit(long) = %q, want %q", got, "abcdef123456")
+	}
+}
+
+func TestShortCommit_Short(t *testing.T) {
+	got := shortCommit("abc")
+	if got != "abc" {
+		t.Errorf("shortCommit(short) = %q, want %q", got, "abc")
+	}
+}
+
+func TestShortCommit_Exact12(t *testing.T) {
+	got := shortCommit("abcdef123456")
+	if got != "abcdef123456" {
+		t.Errorf("shortCommit(exact12) = %q, want %q", got, "abcdef123456")
+	}
+}
