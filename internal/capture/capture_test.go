@@ -338,12 +338,20 @@ func TestHostSlug(t *testing.T) {
 		{"https://api.venice.ai/tee/attestation", "api.venice.ai_tee_attestation"},
 		{"https://api.trustedservices.intel.com/tcb", "api.trustedservices.intel.com_tcb"},
 		{"https://nras.attestation.nvidia.com/v3/attest/gpu", "nras.attestation.nvidia.com_v3_attest_gpu"},
+		// URL parse error → sha256 fallback (control characters cause parse failure).
+		{"\x00invalid-url\x01", ""},
+		// Long slug truncation.
+		{"https://" + strings.Repeat("x", 90) + ".example.com/path", ""},
 	}
 	for _, tt := range tests {
 		got := hostSlug(tt.input)
-		t.Logf("hostSlug(%q) = %q", tt.input, got)
-		if got != tt.want {
+		t.Logf("hostSlug(%q) = %q", tt.input[:min(30, len(tt.input))]+"...", got)
+		if tt.want != "" && got != tt.want {
 			t.Errorf("hostSlug(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+		// For truncation test, just verify length constraint.
+		if tt.want == "" && len(tt.input) > 30 && len(got) > 80 {
+			t.Errorf("hostSlug truncation failed: len=%d > 80", len(got))
 		}
 	}
 }
@@ -527,6 +535,81 @@ func TestRecordingTransport_TLS(t *testing.T) {
 	if e.TLSCipher == "" {
 		t.Error("TLSCipher should be set for TLS connection")
 	}
+}
+
+func TestLoad_BadManifest(t *testing.T) {
+	dir := t.TempDir()
+	// Write a non-JSON manifest.
+	if err := os.MkdirAll(filepath.Join(dir, "responses"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for bad manifest")
+	}
+	t.Logf("bad manifest error: %v", err)
+}
+
+func TestLoad_BadReqBody(t *testing.T) {
+	dir := t.TempDir()
+	respDir := filepath.Join(dir, "responses")
+	if err := os.MkdirAll(respDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a valid manifest.
+	manifest := `{"provider":"test","model":"m","nonce_hex":"aabb","captured_at":"2026-01-01T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write an entry with invalid base64 in req_body_base64.
+	entryJSON := `{"method":"GET","url":"https://example.com","status":200,"headers":{},"req_body_base64":"not!!!base64"}`
+	if err := os.WriteFile(filepath.Join(respDir, "0001_example.com.json"), []byte(entryJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(respDir, "0001_example.com.body"), []byte("body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for bad req_body_base64")
+	}
+	t.Logf("bad req_body_base64 error: %v", err)
+}
+
+func TestLoad_MissingManifest(t *testing.T) {
+	dir := t.TempDir()
+	_, _, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for missing manifest")
+	}
+	t.Logf("missing manifest error: %v", err)
+}
+
+func TestLoad_BadEntryJSON(t *testing.T) {
+	dir := t.TempDir()
+	respDir := filepath.Join(dir, "responses")
+	if err := os.MkdirAll(respDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"provider":"test","model":"m","nonce_hex":"aabb","captured_at":"2026-01-01T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Write invalid JSON as entry metadata.
+	if err := os.WriteFile(filepath.Join(respDir, "0001_example.com.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for bad entry JSON")
+	}
+	t.Logf("bad entry JSON error: %v", err)
 }
 
 // roundTripFunc adapts a function to http.RoundTripper.
