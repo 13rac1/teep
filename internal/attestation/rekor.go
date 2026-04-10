@@ -275,7 +275,7 @@ func (rc *RekorClient) fetchRekorUUIDs(ctx context.Context, digest string) ([]st
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateStr(string(body), 256))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateStr(string(body)))
 	}
 
 	var uuids []string
@@ -310,7 +310,7 @@ func (rc *RekorClient) fetchRekorEntry(ctx context.Context, uuid string) (*rekor
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateStr(string(respBody), 256))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateStr(string(respBody)))
 	}
 
 	// Response is an array of maps: [{"<uuid>": {"body": "<base64>", ...}}]
@@ -744,8 +744,9 @@ func parseRekorPublicKey() (*ecdsa.PublicKey, error) {
 	return ecKey, nil
 }
 
-// truncateStr truncates s to maxLen characters, appending "..." if truncated.
-func truncateStr(s string, maxLen int) string {
+// truncateStr truncates s to 256 characters, appending "..." if truncated.
+func truncateStr(s string) string {
+	const maxLen = 256
 	if len(s) <= maxLen {
 		return s
 	}

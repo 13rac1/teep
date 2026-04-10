@@ -2,7 +2,9 @@ package attestation
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,13 +17,36 @@ import (
 	"time"
 )
 
+// testHexQuote is the canonical hex-encoded quote used by unit tests.
+const testHexQuote = "aabbccdd"
+
+// testQuoteHash returns the PoC-protocol quote_hash for a hex-encoded quote:
+// hex(sha256(hex.DecodeString(hexQuote))).
+func testQuoteHash(hexQuote string) string {
+	b, err := hex.DecodeString(hexQuote)
+	if err != nil {
+		panic(fmt.Sprintf("testQuoteHash: invalid hex %q: %v", hexQuote, err))
+	}
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
 // makePoCJWT returns a minimal structurally-valid JWT whose payload contains
-// the given machineID and an exp far in the future.
-func makePoCJWT(machineID string) string {
+// the given machineID, label, quote_hash, timestamp, and an exp far in the future.
+func makePoCJWT(machineID, label, hexQuote string) string {
+	claims := map[string]any{
+		"exp":        int64(9999999999),
+		"machine_id": machineID,
+		"label":      label,
+		"quote_hash": testQuoteHash(hexQuote),
+		"timestamp":  time.Now().Unix(),
+	}
+	payloadBytes, err := json.Marshal(claims)
+	if err != nil {
+		panic(fmt.Sprintf("makePoCJWT: marshal: %v", err))
+	}
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA"}`))
-	payload := base64.RawURLEncoding.EncodeToString(
-		fmt.Appendf(nil, `{"exp":9999999999,"machine_id":%q}`, machineID),
-	)
+	payload := base64.RawURLEncoding.EncodeToString(payloadBytes)
 	return header + "." + payload + ".fakesig"
 }
 
@@ -35,7 +60,7 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 
 	monikers := []string{"alice", "bob", "carol"}
 	nonces := []string{"nonce_alice", "nonce_bob", "nonce_carol"}
-	testJWT := makePoCJWT("deadbeef")
+	testJWT := makePoCJWT("deadbeef", "test-machine", hexQuote)
 
 	makePeer := func(idx int) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +92,7 @@ func TestCheckQuoteMultisigFullFlow(t *testing.T) {
 				}
 				json.NewEncoder(w).Encode(sigs)
 			} else {
-				// Final signer returns the JWT.
+				// Final signer returns the JWT with consistent wrapper values.
 				json.NewEncoder(w).Encode(map[string]string{
 					"machineId": "deadbeef",
 					"label":     "test-machine",
@@ -156,7 +181,7 @@ func TestCheckQuote_DeterministicStage2Order(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]string{
 					"machineId": "deadbeef",
 					"label":     "test-machine",
-					"jwt":       makePoCJWT("deadbeef"),
+					"jwt":       makePoCJWT("deadbeef", "test-machine", hexQuote),
 				})
 			} else {
 				json.NewEncoder(w).Encode(map[string]string{
@@ -282,8 +307,10 @@ func TestVerifyPoCJWTClaims_Valid(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
 		"exp":        time.Now().Add(time.Hour).Unix(),
 		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  time.Now().Unix(),
 	})
-	err := verifyPoCJWTClaims(context.Background(), token, "deadbeef")
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
@@ -291,10 +318,12 @@ func TestVerifyPoCJWTClaims_Valid(t *testing.T) {
 
 func TestVerifyPoCJWTClaims_ValidNoMachineIDCheck(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
-		"exp": time.Now().Add(time.Hour).Unix(),
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  time.Now().Unix(),
 	})
 	// Empty expected machineID skips the check.
-	err := verifyPoCJWTClaims(context.Background(), token, "")
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "")
 	if err != nil {
 		t.Errorf("expected no error with empty machineID, got: %v", err)
 	}
@@ -304,8 +333,10 @@ func TestVerifyPoCJWTClaims_Expired(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
 		"exp":        time.Now().Add(-time.Hour).Unix(),
 		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  time.Now().Unix(),
 	})
-	err := verifyPoCJWTClaims(context.Background(), token, "deadbeef")
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
 	if err == nil {
 		t.Fatal("expected error for expired JWT")
 	}
@@ -319,8 +350,10 @@ func TestVerifyPoCJWTClaims_ExpZero(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
 		"exp":        0,
 		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  time.Now().Unix(),
 	})
-	err := verifyPoCJWTClaims(context.Background(), token, "deadbeef")
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
 	if err == nil {
 		t.Fatal("expected error for exp=0 (Unix epoch), got nil")
 	}
@@ -332,9 +365,11 @@ func TestVerifyPoCJWTClaims_ExpZero(t *testing.T) {
 func TestVerifyPoCJWTClaims_MissingExp(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
 		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  time.Now().Unix(),
 	})
 	// Missing exp is accepted with a warning (PoC JWTs don't include exp yet).
-	err := verifyPoCJWTClaims(context.Background(), token, "deadbeef")
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
 	if err != nil {
 		t.Errorf("expected no error for missing exp (warn-only), got: %v", err)
 	}
@@ -344,8 +379,10 @@ func TestVerifyPoCJWTClaims_MachineIDMismatch(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
 		"exp":        time.Now().Add(time.Hour).Unix(),
 		"machine_id": "aaaaaaaa",
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  time.Now().Unix(),
 	})
-	err := verifyPoCJWTClaims(context.Background(), token, "bbbbbbbb")
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "bbbbbbbb")
 	if err == nil {
 		t.Fatal("expected error for machine_id mismatch")
 	}
@@ -356,9 +393,11 @@ func TestVerifyPoCJWTClaims_MachineIDMismatch(t *testing.T) {
 
 func TestVerifyPoCJWTClaims_MissingMachineID(t *testing.T) {
 	token := buildTestJWT(t, map[string]any{
-		"exp": time.Now().Add(time.Hour).Unix(),
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  time.Now().Unix(),
 	})
-	err := verifyPoCJWTClaims(context.Background(), token, "expected-id")
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "expected-id")
 	if err == nil {
 		t.Fatal("expected error for missing machine_id")
 	}
@@ -368,7 +407,7 @@ func TestVerifyPoCJWTClaims_MissingMachineID(t *testing.T) {
 }
 
 func TestVerifyPoCJWTClaims_MalformedJWT(t *testing.T) {
-	err := verifyPoCJWTClaims(context.Background(), "not.a.valid.jwt.token", "")
+	_, err := verifyPoCJWTClaims(context.Background(), "not.a.valid.jwt.token", testHexQuote, "")
 	if err == nil {
 		t.Fatal("expected error for malformed JWT")
 	}
@@ -378,7 +417,7 @@ func TestVerifyPoCJWTClaims_MalformedJWT(t *testing.T) {
 }
 
 func TestVerifyPoCJWTClaims_BadBase64(t *testing.T) {
-	err := verifyPoCJWTClaims(context.Background(), "header.!!!invalid!!!.sig", "")
+	_, err := verifyPoCJWTClaims(context.Background(), "header.!!!invalid!!!.sig", testHexQuote, "")
 	if err == nil {
 		t.Fatal("expected error for bad base64")
 	}
@@ -386,9 +425,488 @@ func TestVerifyPoCJWTClaims_BadBase64(t *testing.T) {
 
 func TestVerifyPoCJWTClaims_BadJSON(t *testing.T) {
 	badPayload := base64.RawURLEncoding.EncodeToString([]byte("not json"))
-	err := verifyPoCJWTClaims(context.Background(), "header."+badPayload+".sig", "")
+	_, err := verifyPoCJWTClaims(context.Background(), "header."+badPayload+".sig", testHexQuote, "")
 	if err == nil {
 		t.Fatal("expected error for bad JSON payload")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Regression tests for audit findings (AGENTS.md: one test per finding)
+// --------------------------------------------------------------------------
+
+func TestVerifyPoCJWTClaims_QuoteHashAbsent(t *testing.T) {
+	token := buildTestJWT(t, map[string]any{
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "deadbeef",
+		"timestamp":  time.Now().Unix(),
+		// no "quote_hash"
+	})
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
+	if err == nil {
+		t.Fatal("expected error for absent quote_hash")
+	}
+	if !strings.Contains(err.Error(), "quote_hash") {
+		t.Errorf("error should mention quote_hash: %v", err)
+	}
+}
+
+func TestVerifyPoCJWTClaims_QuoteHashMismatch(t *testing.T) {
+	token := buildTestJWT(t, map[string]any{
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash("ffffffff"), // hash of a different quote
+		"timestamp":  time.Now().Unix(),
+	})
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
+	if err == nil {
+		t.Fatal("expected error for quote_hash mismatch")
+	}
+	if !strings.Contains(err.Error(), "quote_hash") {
+		t.Errorf("error should mention quote_hash: %v", err)
+	}
+}
+
+func TestVerifyPoCJWTClaims_TimestampAbsent(t *testing.T) {
+	token := buildTestJWT(t, map[string]any{
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash(testHexQuote),
+		// no "timestamp"
+	})
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
+	if err == nil {
+		t.Fatal("expected error for absent timestamp")
+	}
+	if !strings.Contains(err.Error(), "timestamp") {
+		t.Errorf("error should mention timestamp: %v", err)
+	}
+}
+
+func TestVerifyPoCJWTClaims_TimestampStale(t *testing.T) {
+	stale := time.Now().Add(-11 * time.Minute).Unix()
+	token := buildTestJWT(t, map[string]any{
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  stale,
+	})
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
+	if err == nil {
+		t.Fatal("expected error for stale timestamp")
+	}
+	if !strings.Contains(err.Error(), "timestamp") {
+		t.Errorf("error should mention timestamp: %v", err)
+	}
+}
+
+func TestVerifyPoCJWTClaims_TimestampFuture(t *testing.T) {
+	future := time.Now().Add(11 * time.Minute).Unix()
+	token := buildTestJWT(t, map[string]any{
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  future,
+	})
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
+	if err == nil {
+		t.Fatal("expected error for future timestamp")
+	}
+	if !strings.Contains(err.Error(), "timestamp") {
+		t.Errorf("error should mention timestamp: %v", err)
+	}
+}
+
+func TestVerifyPoCJWTClaims_TimestampJustInsideBoundary(t *testing.T) {
+	// Timestamp exactly at the boundary (10min ago) is within the window (exclusive).
+	ts := time.Now().Add(-10*time.Minute + time.Second).Unix()
+	token := buildTestJWT(t, map[string]any{
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  ts,
+	})
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
+	if err != nil {
+		t.Errorf("timestamp just inside boundary should pass: %v", err)
+	}
+}
+
+func TestVerifyPoCJWTClaims_TimestampJustOutsideBoundary(t *testing.T) {
+	// Timestamp one second beyond the window must be rejected.
+	ts := time.Now().Add(-10*time.Minute - time.Second).Unix()
+	token := buildTestJWT(t, map[string]any{
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "deadbeef",
+		"quote_hash": testQuoteHash(testHexQuote),
+		"timestamp":  ts,
+	})
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
+	if err == nil {
+		t.Fatal("expected error for timestamp just outside boundary")
+	}
+	if !strings.Contains(err.Error(), "timestamp") {
+		t.Errorf("error should mention timestamp: %v", err)
+	}
+}
+
+func TestVerifyPoCJWTClaims_EmptyHexQuote(t *testing.T) {
+	// An empty hexQuote is a valid (if unusual) input: sha256 of empty bytes
+	// must match quote_hash for the token to be accepted.
+	emptyHash := testQuoteHash("")
+	token := buildTestJWT(t, map[string]any{
+		"exp":        time.Now().Add(time.Hour).Unix(),
+		"machine_id": "deadbeef",
+		"quote_hash": emptyHash,
+		"timestamp":  time.Now().Unix(),
+	})
+	_, err := verifyPoCJWTClaims(context.Background(), token, "", "deadbeef")
+	if err != nil {
+		t.Errorf("empty hexQuote with matching hash should pass: %v", err)
+	}
+}
+
+func TestVerifyPoCJWTClaims_UnknownField(t *testing.T) {
+	// Unknown fields must produce a warning but NOT an error (jsonstrict warns, not rejects).
+	token := buildTestJWT(t, map[string]any{
+		"exp":           time.Now().Add(time.Hour).Unix(),
+		"machine_id":    "deadbeef",
+		"quote_hash":    testQuoteHash(testHexQuote),
+		"timestamp":     time.Now().Unix(),
+		"extra_unknown": "future-field",
+	})
+	_, err := verifyPoCJWTClaims(context.Background(), token, testHexQuote, "deadbeef")
+	if err != nil {
+		t.Errorf("unknown fields should not cause an error (jsonstrict warns only), got: %v", err)
+	}
+}
+
+func TestCheckQuote_CrossPeerMachineIDMismatch(t *testing.T) {
+	machineIDs := []string{"machine-aaa", "machine-bbb"}
+	servers := make([]*httptest.Server, 2)
+	for i := range 2 {
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": machineIDs[i],
+				"moniker":   fmt.Sprintf("peer%d", i),
+				"nonce":     fmt.Sprintf("nonce%d", i),
+			})
+		}))
+	}
+	defer func() {
+		for _, s := range servers {
+			s.Close()
+		}
+	}()
+
+	poc := NewPoCClient([]string{servers[0].URL, servers[1].URL}, 2, &http.Client{})
+	result := poc.CheckQuote(context.Background(), testHexQuote)
+
+	if result.Err == nil {
+		t.Fatal("expected error for cross-peer machineId mismatch")
+	}
+	if !strings.Contains(result.Err.Error(), "machineId") {
+		t.Errorf("error should mention machineId: %v", result.Err)
+	}
+}
+
+func TestCheckQuote_CrossPeerMachineIDEmpty(t *testing.T) {
+	servers := []*httptest.Server{
+		httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": "machine-aaa",
+				"moniker":   "peer0",
+				"nonce":     "nonce0",
+			})
+		})),
+		httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": "", // empty
+				"moniker":   "peer1",
+				"nonce":     "nonce1",
+			})
+		})),
+	}
+	defer func() {
+		for _, s := range servers {
+			s.Close()
+		}
+	}()
+
+	poc := NewPoCClient([]string{servers[0].URL, servers[1].URL}, 2, &http.Client{})
+	result := poc.CheckQuote(context.Background(), testHexQuote)
+
+	if result.Err == nil {
+		t.Fatal("expected error for empty machineId from stage-1 peer")
+	}
+	if !strings.Contains(result.Err.Error(), "machineId") {
+		t.Errorf("error should mention machineId: %v", result.Err)
+	}
+}
+
+func TestCheckQuote_ResultFromJWT(t *testing.T) {
+	// Verifies that PoCResult.MachineID and PoCResult.Label come from the
+	// validated JWT payload, not from the stage-2 response wrapper.
+	hexQuote := testHexQuote
+	jwtMachineID := "from-jwt-id"
+	jwtLabel := "from-jwt-label"
+
+	testJWT := buildTestJWT(t, map[string]any{
+		"exp":        int64(9999999999),
+		"machine_id": jwtMachineID,
+		"quote_hash": testQuoteHash(hexQuote),
+		"label":      jwtLabel,
+		"timestamp":  time.Now().Unix(),
+	})
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call == 1 {
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": jwtMachineID,
+				"moniker":   "alice",
+				"nonce":     "nonce1",
+			})
+			return
+		}
+		// Final signer: wrapper values match JWT (required by cross-check).
+		json.NewEncoder(w).Encode(map[string]string{
+			"machineId": jwtMachineID,
+			"label":     jwtLabel,
+			"jwt":       testJWT,
+		})
+	}))
+	defer server.Close()
+
+	poc := NewPoCClient([]string{server.URL}, 1, &http.Client{})
+	result := poc.CheckQuote(context.Background(), hexQuote)
+
+	if result.Err != nil {
+		t.Fatalf("unexpected error: %v", result.Err)
+	}
+	if result.MachineID != jwtMachineID {
+		t.Errorf("MachineID: got %q, want %q (from JWT, not wrapper)", result.MachineID, jwtMachineID)
+	}
+	if result.Label != jwtLabel {
+		t.Errorf("Label: got %q, want %q (from JWT, not wrapper)", result.Label, jwtLabel)
+	}
+}
+
+func TestCheckQuote_Stage2WrapperMachineIDMismatch(t *testing.T) {
+	// Verifies that a wrapper machineId disagreeing with the JWT claim is rejected.
+	hexQuote := testHexQuote
+	jwtMachineID := "from-jwt-id"
+	testJWT := buildTestJWT(t, map[string]any{
+		"exp":        int64(9999999999),
+		"machine_id": jwtMachineID,
+		"quote_hash": testQuoteHash(hexQuote),
+		"label":      "some-label",
+		"timestamp":  time.Now().Unix(),
+	})
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call == 1 {
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": jwtMachineID,
+				"moniker":   "alice",
+				"nonce":     "nonce1",
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{
+			"machineId": "different-machine", // disagrees with JWT
+			"label":     "some-label",
+			"jwt":       testJWT,
+		})
+	}))
+	defer server.Close()
+
+	poc := NewPoCClient([]string{server.URL}, 1, &http.Client{})
+	result := poc.CheckQuote(context.Background(), hexQuote)
+
+	if result.Err == nil {
+		t.Fatal("expected error for wrapper machineId mismatch")
+	}
+	if !strings.Contains(result.Err.Error(), "machineId") {
+		t.Errorf("error should mention machineId: %v", result.Err)
+	}
+}
+
+func TestCheckQuote_Stage2WrapperLabelMismatch(t *testing.T) {
+	// Verifies that a wrapper label disagreeing with the JWT claim is rejected.
+	hexQuote := testHexQuote
+	jwtMachineID := "from-jwt-id"
+	testJWT := buildTestJWT(t, map[string]any{
+		"exp":        int64(9999999999),
+		"machine_id": jwtMachineID,
+		"quote_hash": testQuoteHash(hexQuote),
+		"label":      "jwt-label",
+		"timestamp":  time.Now().Unix(),
+	})
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call == 1 {
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": jwtMachineID,
+				"moniker":   "alice",
+				"nonce":     "nonce1",
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{
+			"machineId": jwtMachineID,
+			"label":     "different-label", // disagrees with JWT
+			"jwt":       testJWT,
+		})
+	}))
+	defer server.Close()
+
+	poc := NewPoCClient([]string{server.URL}, 1, &http.Client{})
+	result := poc.CheckQuote(context.Background(), hexQuote)
+
+	if result.Err == nil {
+		t.Fatal("expected error for wrapper label mismatch")
+	}
+	if !strings.Contains(result.Err.Error(), "label") {
+		t.Errorf("error should mention label: %v", result.Err)
+	}
+}
+
+func TestCheckQuote_MonikerCollision(t *testing.T) {
+	// Verifies that two stage-1 peers returning the same moniker is rejected.
+	servers := []*httptest.Server{
+		httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": "machine-aaa",
+				"moniker":   "alice", // same moniker as peer 1
+				"nonce":     "nonce0",
+			})
+		})),
+		httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": "machine-aaa",
+				"moniker":   "alice", // duplicate
+				"nonce":     "nonce1",
+			})
+		})),
+	}
+	defer func() {
+		for _, s := range servers {
+			s.Close()
+		}
+	}()
+
+	poc := NewPoCClient([]string{servers[0].URL, servers[1].URL}, 2, &http.Client{})
+	result := poc.CheckQuote(context.Background(), testHexQuote)
+
+	if result.Err == nil {
+		t.Fatal("expected error for duplicate moniker")
+	}
+	if !strings.Contains(result.Err.Error(), "moniker") {
+		t.Errorf("error should mention moniker: %v", result.Err)
+	}
+}
+
+func TestCheckQuote_Stage2IntermediateError(t *testing.T) {
+	// Verifies that an HTTP error from a non-final stage-2 peer propagates as an error.
+	hexQuote := testHexQuote
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call == 1 {
+			// Stage 1: return nonce.
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": "machine-aaa",
+				"moniker":   "alice",
+				"nonce":     "nonce0",
+			})
+			return
+		}
+		// Stage 2: return 500.
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	poc := NewPoCClient([]string{server.URL}, 1, &http.Client{})
+	result := poc.CheckQuote(context.Background(), hexQuote)
+
+	if result.Err == nil {
+		t.Fatal("expected error for stage-2 HTTP 500")
+	}
+}
+
+func TestCheckQuote_Stage2NoJWT(t *testing.T) {
+	// Verifies that exhausting all stage-2 peers without receiving a JWT is an error.
+	hexQuote := testHexQuote
+	monikers := []string{"alice", "bob"}
+	servers := make([]*httptest.Server, 2)
+	for i := range 2 {
+		var calls atomic.Int32
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			call := calls.Add(1)
+			if call == 1 {
+				json.NewEncoder(w).Encode(map[string]string{
+					"machineId": "machine-aaa",
+					"moniker":   monikers[i],
+					"nonce":     fmt.Sprintf("nonce%d", i),
+				})
+				return
+			}
+			// Stage 2: return partial sig instead of JWT.
+			json.NewEncoder(w).Encode(map[string]string{
+				monikers[i]: "partialsig",
+			})
+		}))
+	}
+	defer func() {
+		for _, s := range servers {
+			s.Close()
+		}
+	}()
+
+	poc := NewPoCClient([]string{servers[0].URL, servers[1].URL}, 2, &http.Client{})
+	result := poc.CheckQuote(context.Background(), hexQuote)
+
+	if result.Err == nil {
+		t.Fatal("expected error when no peer returns a JWT")
+	}
+	if !strings.Contains(result.Err.Error(), "without final JWT") {
+		t.Errorf("error should mention 'without final JWT': %v", result.Err)
+	}
+}
+
+func TestCheckQuote_Stage2Forbidden(t *testing.T) {
+	// Verifies that a 403 during stage 2 results in Registered=false with no error.
+	hexQuote := testHexQuote
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call == 1 {
+			json.NewEncoder(w).Encode(map[string]string{
+				"machineId": "machine-aaa",
+				"moniker":   "alice",
+				"nonce":     "nonce0",
+			})
+			return
+		}
+		// Stage 2: return 403.
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	poc := NewPoCClient([]string{server.URL}, 1, &http.Client{})
+	result := poc.CheckQuote(context.Background(), hexQuote)
+
+	if result.Err != nil {
+		t.Fatalf("expected no error for stage-2 403, got: %v", result.Err)
+	}
+	if result.Registered {
+		t.Error("expected Registered=false for stage-2 403")
 	}
 }
 
