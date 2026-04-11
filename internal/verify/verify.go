@@ -52,16 +52,20 @@ func Run(ctx context.Context, opts *Options) (*attestation.VerificationReport, e
 	if client == nil {
 		client = config.NewAttestationClient(opts.Offline)
 	}
-	prev := attestation.TDXCollateralGetter
-	attestation.TDXCollateralGetter = attestation.NewCollateralGetter(client)
-	defer func() { attestation.TDXCollateralGetter = prev }()
-
-	// Wrap transport with recording when capturing.
+	// Wrap transport with recording when capturing. Shallow-copy the client so
+	// the caller's *http.Client is not mutated. Must happen before setting
+	// TDXCollateralGetter so PCS collateral fetches are also recorded.
 	var recorder *capture.RecordingTransport
 	if opts.CaptureDir != "" {
 		recorder = capture.WrapRecording(client.Transport)
-		client.Transport = recorder
+		wrapped := *client
+		wrapped.Transport = recorder
+		client = &wrapped
 	}
+
+	prev := attestation.TDXCollateralGetter
+	attestation.TDXCollateralGetter = attestation.NewCollateralGetter(client)
+	defer func() { attestation.TDXCollateralGetter = prev }()
 
 	// Inject shared client into attester for capture/replay.
 	type clientSetter interface{ SetClient(*http.Client) }
@@ -166,7 +170,7 @@ func Run(ctx context.Context, opts *Options) (*attestation.VerificationReport, e
 			return opts.Config, opts.Provider, nil
 		}
 		if err := verifyCapture(ctx, subdir, reportText, cfgLoader); err != nil {
-			return report, fmt.Errorf("capture self-check: %w", err)
+			return nil, fmt.Errorf("capture self-check: %w", err)
 		}
 	}
 

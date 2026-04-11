@@ -311,7 +311,7 @@ func TestExtractObserved_EmptyMetadata(t *testing.T) {
 func TestRunVerify_CaptureOfflineMutuallyExclusive(t *testing.T) {
 	const envKey = "TEEP_TEST_CAPTURE_OFFLINE_CRASHER"
 	if os.Getenv(envKey) == "1" {
-		runVerify([]string{"someprovider", "--model", "m", "--capture", "/tmp/teep-test-cap", "--offline"})
+		runVerify([]string{"someprovider", "--model", "m", "--capture", os.TempDir(), "--offline"})
 		return
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=TestRunVerify_CaptureOfflineMutuallyExclusive", "-test.v")

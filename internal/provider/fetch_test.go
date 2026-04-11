@@ -14,7 +14,7 @@ import (
 func TestFetchAttestationJSON_OK(t *testing.T) {
 	want := []byte(`{"attestation":"data","nonce":"abc123"}`)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Logf("request: %s %s auth=%q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		t.Logf("request: %s %s", r.Method, r.URL.Path)
 		if r.Method != http.MethodGet {
 			http.Error(w, "wrong method", http.StatusMethodNotAllowed)
 			return
