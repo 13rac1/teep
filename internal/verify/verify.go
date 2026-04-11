@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/capture"
@@ -247,7 +248,7 @@ func FormatReport(r *attestation.VerificationReport) string {
 		title = "Attestation Report"
 	}
 	header := fmt.Sprintf("%s: %s / %s", title, r.Provider, r.Model)
-	separator := strings.Repeat("\u2550", len(header)) // U+2550 BOX DRAWINGS DOUBLE HORIZONTAL
+	separator := strings.Repeat("\u2550", utf8.RuneCountInString(header)) // U+2550 BOX DRAWINGS DOUBLE HORIZONTAL
 
 	b.WriteString(header)
 	b.WriteString("\n")

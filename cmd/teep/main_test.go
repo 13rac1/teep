@@ -30,7 +30,7 @@ func buildTestReport(prov, model string) *attestation.VerificationReport {
 		Model:     model,
 		Timestamp: time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC),
 		Factors:   factors,
-		Passed:    6,
+		Passed:    7,
 		Failed:    1,
 	}
 }
