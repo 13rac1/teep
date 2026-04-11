@@ -49,6 +49,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/reqid"
 	"github.com/13rac1/teep/internal/tlsct"
+	"github.com/google/go-tdx-guest/verify/trust"
 )
 
 const (
@@ -279,10 +280,12 @@ type Server struct {
 	spkiCache       *attestation.SPKICache
 	rekorClient     *attestation.RekorClient
 	mux             *http.ServeMux
-	attestClient    *http.Client // for attestation fetches
-	upstreamClient  *http.Client // for chat completions forwards
-	sseConns        atomic.Int64 // active SSE /events connections
-	e2eeFailed      sync.Map     // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
+	attestClient    *http.Client            // for attestation fetches
+	collateral      trust.HTTPSGetter       // for Intel PCS collateral fetches
+	verifyQuote     attestation.TDXVerifier // constructed from cfg.Offline + collateral
+	upstreamClient  *http.Client            // for chat completions forwards
+	sseConns        atomic.Int64            // active SSE /events connections
+	e2eeFailed      sync.Map                // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
 	stats           stats
 }
 
@@ -325,17 +328,14 @@ func New(cfg *config.Config) (*Server, error) {
 	s.upstreamClient = upstreamClient
 
 	s.rekorClient = attestation.NewRekorClient(attestClient)
-
-	// Unconditionally set — the proxy always routes PCS fetches through
-	// the attestation client for logging and observability.
-	// Tests override this directly; they don't call proxy.New.
-	attestation.TDXCollateralGetter = attestation.NewCollateralGetter(s.attestClient)
+	s.collateral = attestation.NewCollateralGetter(s.attestClient)
+	s.verifyQuote = attestation.NewTDXVerifier(cfg.Offline, s.collateral)
 
 	for name, cp := range cfg.Providers {
 		mDefaults, gwDefaults := defaults.MeasurementDefaults(name)
 		mergedPolicy := config.MergedMeasurementPolicy(name, cfg, mDefaults)
 		mergedGWPolicy := config.MergedGatewayMeasurementPolicy(name, cfg, gwDefaults)
-		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg, cfg.Offline), mergedPolicy, mergedGWPolicy, s.rekorClient)
+		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg, cfg.Offline), mergedPolicy, mergedGWPolicy, s.rekorClient, s.collateral)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
@@ -431,6 +431,7 @@ func fromConfig(
 	policy attestation.MeasurementPolicy,
 	gatewayPolicy attestation.MeasurementPolicy,
 	rekorClient *attestation.RekorClient,
+	getter trust.HTTPSGetter,
 ) (*provider.Provider, error) {
 	p := &provider.Provider{
 		Name:                     cp.Name,
@@ -470,6 +471,7 @@ func fromConfig(
 			policy,
 			rdVerifier,
 			rekorClient,
+			getter,
 		)
 		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
 			d, err := resolver.Resolve(ctx, model)
@@ -502,6 +504,7 @@ func fromConfig(
 			gatewayPolicy,
 			rdVerifier,
 			rekorClient,
+			getter,
 		)
 		p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
 			return nearcloud.GatewayHost(), true
@@ -652,7 +655,7 @@ func (s *Server) verifyTDX(
 	}
 	slog.DebugContext(ctx, "TDX verification starting", "provider", prov.Name)
 	start := time.Now()
-	result := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, s.cfg.Offline)
+	result := s.verifyQuote(ctx, raw.IntelQuote)
 	if prov.ReportDataVerifier != nil && result.ParseErr == nil {
 		detail, err := prov.ReportDataVerifier.VerifyReportData(result.ReportData, raw, nonce)
 		if errors.Is(err, multi.ErrNoVerifier) {
@@ -1985,11 +1988,11 @@ func (s *Server) buildUpstreamBody(
 			if raw.IntelQuote == "" {
 				return nil, errors.New("fresh attestation missing TDX quote; cannot verify signing key binding")
 			}
-			// offline=true: only REPORTDATA binding is needed here, not full
-			// online verification (Intel PCS collateral). The primary
+			// Only REPORTDATA binding is needed here, not full online
+			// verification (Intel PCS collateral). The primary
 			// fetchAndVerify() path already did online verification for
 			// the cached report.
-			tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, true)
+			tdxResult := attestation.VerifyTDXQuoteOffline(ctx, raw.IntelQuote)
 			if tdxResult.ParseErr != nil {
 				return nil, fmt.Errorf("fresh TDX quote parse failed: %w", tdxResult.ParseErr)
 			}

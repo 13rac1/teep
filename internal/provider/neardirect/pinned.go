@@ -20,6 +20,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/tlsct"
+	"github.com/google/go-tdx-guest/verify/trust"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -53,6 +54,7 @@ type PinnedHandler struct {
 	policy      attestation.MeasurementPolicy
 	rdVerifier  provider.ReportDataVerifier
 	rekorClient *attestation.RekorClient
+	verifyQuote attestation.TDXVerifier
 	ctChecker   *CTChecker
 	dialFn      func(ctx context.Context, domain string) (*tls.Conn, error) // nil → use default tlsDial
 
@@ -69,6 +71,7 @@ func NewPinnedHandler(
 	policy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
 	rekorClient *attestation.RekorClient,
+	getter trust.HTTPSGetter,
 ) *PinnedHandler {
 	checker := NewCTChecker()
 	checker.SetEnabled(!offline)
@@ -82,6 +85,7 @@ func NewPinnedHandler(
 		policy:      policy,
 		rdVerifier:  rdVerifier,
 		rekorClient: rekorClient,
+		verifyQuote: attestation.NewTDXVerifier(offline, getter),
 		ctChecker:   checker,
 	}
 }
@@ -450,7 +454,7 @@ func (h *PinnedHandler) verifyTDX(
 	if raw.IntelQuote == "" {
 		return nil
 	}
-	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, h.offline)
+	tdxResult := h.verifyQuote(ctx, raw.IntelQuote)
 	if h.rdVerifier != nil && tdxResult.ParseErr == nil {
 		detail, rdErr := h.rdVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
 		tdxResult.ReportDataBindingErr = rdErr
