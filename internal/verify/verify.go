@@ -55,8 +55,7 @@ func Run(ctx context.Context, opts *Options) (*attestation.VerificationReport, e
 		client = config.NewAttestationClient(opts.Offline)
 	}
 	// Wrap transport with recording when capturing. Shallow-copy the client so
-	// the caller's *http.Client is not mutated. Must happen before setting
-	// TDXCollateralGetter so PCS collateral fetches are also recorded.
+	// the caller's *http.Client is not mutated.
 	var recorder *capture.RecordingTransport
 	if opts.CaptureDir != "" {
 		recorder = capture.WrapRecording(client.Transport)
@@ -65,9 +64,8 @@ func Run(ctx context.Context, opts *Options) (*attestation.VerificationReport, e
 		client = &wrapped
 	}
 
-	prev := attestation.TDXCollateralGetter
-	attestation.TDXCollateralGetter = attestation.NewCollateralGetter(client)
-	defer func() { attestation.TDXCollateralGetter = prev }()
+	// Build a per-call verifier so concurrent Run calls don't race on a global.
+	verifier := attestation.NewTDXVerifier(opts.Offline, attestation.NewCollateralGetter(client))
 
 	// Inject shared client into attester for capture/replay.
 	type clientSetter interface{ SetClient(*http.Client) }
@@ -87,7 +85,7 @@ func Run(ctx context.Context, opts *Options) (*attestation.VerificationReport, e
 		return nil, fmt.Errorf("fetch attestation: %w", err)
 	}
 
-	tdxResult := verifyTDX(ctx, raw, nonce, opts.ProviderName, opts.Offline)
+	tdxResult := verifyTDX(ctx, raw, nonce, opts.ProviderName, verifier)
 	nvidiaResult, nrasResult := verifyNVIDIA(ctx, raw, nonce, client, opts.Offline)
 	pocResult := checkPoC(ctx, raw.IntelQuote, client, opts.Offline)
 
@@ -106,7 +104,7 @@ func Run(ctx context.Context, opts *Options) (*attestation.VerificationReport, e
 	}
 
 	// Gateway verification (nearcloud-specific fields).
-	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyNearcloudGateway(ctx, raw, nonce, client, opts.Offline)
+	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyNearcloudGateway(ctx, raw, nonce, client, opts.Offline, verifier)
 	var gatewayCD attestation.ComposeDigests
 	if gatewayCompose != nil && gatewayCompose.Err == nil {
 		gatewayCD = attestation.ExtractComposeDigests(raw.GatewayAppCompose)

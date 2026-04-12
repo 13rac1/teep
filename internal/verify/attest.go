@@ -26,15 +26,15 @@ func fetchAttestation(ctx context.Context, attester provider.Attester, providerN
 
 // verifyTDX runs TDX quote verification and report data binding.
 // Returns nil if no intel_quote is present.
-func verifyTDX(ctx context.Context, raw *attestation.RawAttestation, nonce attestation.Nonce, providerName string, offline bool) *attestation.TDXVerifyResult {
+func verifyTDX(ctx context.Context, raw *attestation.RawAttestation, nonce attestation.Nonce, providerName string, verifier attestation.TDXVerifier) *attestation.TDXVerifyResult {
 	if raw.IntelQuote == "" {
 		return nil
 	}
 	slog.Debug("TDX verification starting", "quote_len", len(raw.IntelQuote))
 	tdxStart := time.Now()
-	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, offline)
-	if verifier := newReportDataVerifier(providerName); verifier != nil && tdxResult.ParseErr == nil {
-		detail, err := verifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
+	tdxResult := verifier(ctx, raw.IntelQuote)
+	if rdVerifier := newReportDataVerifier(providerName); rdVerifier != nil && tdxResult.ParseErr == nil {
+		detail, err := rdVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
 		tdxResult.ReportDataBindingErr = err
 		tdxResult.ReportDataBindingDetail = detail
 	}
@@ -98,13 +98,13 @@ func checkPoC(ctx context.Context, quote string, client *http.Client, offline bo
 // providers that populate GatewayIntelQuote (nearcloud).
 func verifyNearcloudGateway(
 	ctx context.Context, raw *attestation.RawAttestation, nonce attestation.Nonce,
-	client *http.Client, offline bool,
+	client *http.Client, offline bool, verifier attestation.TDXVerifier,
 ) (tdx *attestation.TDXVerifyResult, compose *attestation.ComposeBindingResult, poc *attestation.PoCResult) {
 	if raw.GatewayIntelQuote == "" {
 		return nil, nil, nil
 	}
 	slog.Debug("gateway TDX verification starting", "quote_len", len(raw.GatewayIntelQuote))
-	tdx = attestation.VerifyTDXQuote(ctx, raw.GatewayIntelQuote, nonce, offline)
+	tdx = verifier(ctx, raw.GatewayIntelQuote)
 	if tdx.ParseErr == nil {
 		detail, rdErr := nearcloud.GatewayReportDataVerifier{}.VerifyReportData(
 			tdx.ReportData, raw, nonce)

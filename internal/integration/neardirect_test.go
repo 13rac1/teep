@@ -47,7 +47,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 		raw.Model, len(raw.IntelQuote), len(raw.NvidiaPayload), len(raw.AppCompose))
 
 	// TDX
-	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, env.nonce, false)
+	tdxResult := attestation.VerifyTDXQuoteOnline(ctx, raw.IntelQuote, attestation.NewCollateralGetter(env.client))
 	if tdxResult.ParseErr != nil {
 		t.Fatalf("TDX parse: %v", tdxResult.ParseErr)
 	}

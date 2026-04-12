@@ -19,6 +19,7 @@ import (
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct"
+	"github.com/google/go-tdx-guest/verify/trust"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -44,6 +45,7 @@ type PinnedHandler struct {
 	gatewayPolicy attestation.MeasurementPolicy
 	rdVerifier    provider.ReportDataVerifier
 	rekorClient   *attestation.RekorClient
+	verifyQuote   attestation.TDXVerifier
 	ctChecker     *neardirect.CTChecker
 	dialFn        func(ctx context.Context, domain string) (*tls.Conn, error)
 
@@ -60,6 +62,7 @@ func NewPinnedHandler(
 	gatewayPolicy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
 	rekorClient *attestation.RekorClient,
+	getter trust.HTTPSGetter,
 ) *PinnedHandler {
 	checker := neardirect.NewCTChecker()
 	checker.SetEnabled(!offline)
@@ -73,6 +76,7 @@ func NewPinnedHandler(
 		gatewayPolicy: gatewayPolicy,
 		rdVerifier:    rdVerifier,
 		rekorClient:   rekorClient,
+		verifyQuote:   attestation.NewTDXVerifier(offline, getter),
 		ctChecker:     checker,
 	}
 }
@@ -503,7 +507,7 @@ func (h *PinnedHandler) verifyModelTDX(
 	if raw.IntelQuote == "" {
 		return nil
 	}
-	tdxResult := attestation.VerifyTDXQuote(ctx, raw.IntelQuote, nonce, h.offline)
+	tdxResult := h.verifyQuote(ctx, raw.IntelQuote)
 	if h.rdVerifier != nil && tdxResult.ParseErr == nil {
 		detail, rdErr := h.rdVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
 		tdxResult.ReportDataBindingErr = rdErr
@@ -534,7 +538,7 @@ func (h *PinnedHandler) verifyGatewayTDX(
 	if gwRaw.IntelQuote == "" {
 		return nil
 	}
-	gatewayTDX := attestation.VerifyTDXQuote(ctx, gwRaw.IntelQuote, nonce, h.offline)
+	gatewayTDX := h.verifyQuote(ctx, gwRaw.IntelQuote)
 	if gatewayTDX.ParseErr == nil {
 		detail, rdErr := GatewayReportDataVerifier{}.Verify(
 			gatewayTDX.ReportData, gwRaw.TLSCertFingerprint, nonce)

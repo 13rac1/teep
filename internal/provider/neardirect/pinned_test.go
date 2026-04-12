@@ -395,7 +395,7 @@ func TestNewPinnedHandler(t *testing.T) {
 	rdVerifier := ReportDataVerifier{}
 	allowFail := []string{"nonce_match", "tdx_debug_disabled"}
 
-	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, allowFail, attestation.MeasurementPolicy{}, rdVerifier, nil)
+	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, allowFail, attestation.MeasurementPolicy{}, rdVerifier, nil, nil)
 
 	if h.apiKey != "test-api-key" {
 		t.Errorf("apiKey = %q, want %q", h.apiKey, "test-api-key")
@@ -497,6 +497,7 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
+		nil,
 	)
 
 	// Inject dialer that connects to our test TLS server.
@@ -569,6 +570,7 @@ func TestHandlePinned_CacheHitViaSetDialer(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
+		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -635,6 +637,7 @@ func TestHandlePinned_MismatchedFingerprint(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
+		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -688,6 +691,7 @@ func TestHandlePinned_BlockedReportDoesNotPopulateSPKICache(t *testing.T) {
 		[]string{}, // empty allow_fail → all factors enforced, including nonce_match
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
+		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -737,6 +741,7 @@ func TestHandlePinned_DomainResolveError(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
+		nil,
 	)
 
 	_, err := handler.HandlePinned(context.Background(), &provider.PinnedRequest{
@@ -869,6 +874,7 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
+		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -943,6 +949,7 @@ func TestHandlePinned_AttestationTimeout(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
+		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -999,6 +1006,7 @@ func TestHandlePinned_MalformedAttestationResponse(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
+		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -1079,6 +1087,7 @@ func TestHandlePinned_BlockedThenRecovery(t *testing.T) {
 		allFactorsExcept("nonce_match"), // only nonce_match is enforced
 		attestation.MeasurementPolicy{},
 		ReportDataVerifier{}, nil,
+		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tls.Conn, error) {
 		return tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -1165,7 +1174,7 @@ func TestVerifyTDX(t *testing.T) {
 	})
 
 	t.Run("InvalidQuote", func(t *testing.T) {
-		h := &PinnedHandler{offline: true}
+		h := &PinnedHandler{offline: true, verifyQuote: attestation.VerifyTDXQuoteOffline}
 		raw := &attestation.RawAttestation{IntelQuote: "aabbccdd"}
 		nonce := attestation.NewNonce()
 
@@ -1183,8 +1192,9 @@ func TestVerifyTDX(t *testing.T) {
 	t.Run("RealQuoteWithVerifier", func(t *testing.T) {
 		quoteHex := readRealTDXQuoteHex(t)
 		h := &PinnedHandler{
-			offline:    true,
-			rdVerifier: ReportDataVerifier{},
+			offline:     true,
+			rdVerifier:  ReportDataVerifier{},
+			verifyQuote: attestation.VerifyTDXQuoteOffline,
 		}
 		raw := &attestation.RawAttestation{
 			IntelQuote:     quoteHex,
