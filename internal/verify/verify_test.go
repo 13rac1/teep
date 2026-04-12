@@ -393,9 +393,6 @@ func TestRun_EmptyRaw_NoTDX(t *testing.T) {
 	defer ts.Close()
 
 	replayClient := &http.Client{Transport: ts.Transport}
-	origGetter := attestation.TDXCollateralGetter
-	attestation.TDXCollateralGetter = nil
-	t.Cleanup(func() { attestation.TDXCollateralGetter = origGetter })
 
 	report, err := Run(context.Background(), &Options{
 		Config:       cfg,
@@ -429,9 +426,6 @@ func TestRun_EmptyRaw_WithCapture(t *testing.T) {
 	defer ts.Close()
 
 	replayClient := &http.Client{Transport: ts.Transport}
-	origGetter := attestation.TDXCollateralGetter
-	attestation.TDXCollateralGetter = nil
-	t.Cleanup(func() { attestation.TDXCollateralGetter = origGetter })
 
 	captureDir := t.TempDir()
 	report, err := Run(context.Background(), &Options{

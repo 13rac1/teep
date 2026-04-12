@@ -5,7 +5,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/verify"
@@ -90,9 +89,6 @@ func TestVerifyReplay_Venice_Fixture(t *testing.T) {
 		t.Fatalf("load capture: %v", err)
 	}
 	baseURL := extractBaseURL(t, entries)
-
-	origGetter := attestation.TDXCollateralGetter
-	t.Cleanup(func() { attestation.TDXCollateralGetter = origGetter })
 
 	cfgLoader := func(providerName string) (*config.Config, *config.Provider, error) {
 		cfg, cp := buildVerifyRunConfig(providerName, baseURL)

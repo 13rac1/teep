@@ -40,9 +40,6 @@ func loadFixture(t *testing.T, prefix string) fixtureEnv {
 	}
 
 	client := &http.Client{Transport: capture.NewReplayTransport(entries)}
-	orig := attestation.TDXCollateralGetter
-	attestation.TDXCollateralGetter = attestation.NewCollateralGetter(client)
-	t.Cleanup(func() { attestation.TDXCollateralGetter = orig })
 
 	return fixtureEnv{manifest: manifest, entries: entries, client: client, nonce: nonce}
 }

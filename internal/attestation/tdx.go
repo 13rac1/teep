@@ -20,13 +20,6 @@ import (
 	"github.com/google/go-tdx-guest/verify/trust"
 )
 
-// TDXCollateralGetter overrides the Intel PCS HTTPS getter used by
-// VerifyTDXQuote for collateral fetching. When nil (production), a
-// RetryHTTPSGetter wrapping SimpleHTTPSGetter is used. Tests set this
-// to a fixture-backed getter; the proxy sets it to route through the
-// attestation client for caching and observability.
-var TDXCollateralGetter trust.HTTPSGetter
-
 // clientHTTPSGetter adapts an *http.Client to the trust.HTTPSGetter interface
 // so Intel PCS collateral fetches flow through our transport chain (caching,
 // logging, observability).
@@ -63,7 +56,7 @@ func (g *clientHTTPSGetter) GetContext(ctx context.Context, url string) (header 
 }
 
 // NewCollateralGetter wraps an *http.Client as a trust.HTTPSGetter with retry
-// logic, suitable for setting as TDXCollateralGetter.
+// logic for Intel PCS collateral fetches.
 func NewCollateralGetter(client *http.Client) trust.HTTPSGetter {
 	return &trust.RetryHTTPSGetter{
 		Timeout:       30 * time.Second,
@@ -103,6 +96,9 @@ type TDXVerifyResult struct {
 	ParseErr error
 
 	// CertChainErr is non-nil if PCK certificate chain verification failed.
+	// A nil value means the chain is structurally and cryptographically valid
+	// against the Intel SGX root CA, but does NOT imply revocation was checked
+	// (that requires VerifyTDXQuoteOnline, which sets CollateralErr on failure).
 	CertChainErr error
 
 	// SignatureErr is non-nil if the quote signature verification failed.
@@ -175,19 +171,16 @@ type TDXVerifyResult struct {
 // debug mode and its memory can be inspected by the host.
 const tdxDebugBit = 0x01
 
-// VerifyTDXQuote decodes the hex-encoded intel_quote, parses it as a TDX
-// QuoteV4, checks the certificate chain and signature, optionally fetches Intel
-// PCS collateral for TCB currency checks, and checks the debug flag.
+// VerifyTDXQuoteOffline decodes the hex-encoded intel_quote, parses it as a
+// TDX quote (QuoteV4 or QuoteV5), checks the certificate chain and signature, and checks the debug
+// flag. Intel PCS collateral is not fetched; TcbStatus and AdvisoryIDs remain
+// empty.
 //
 // REPORTDATA binding is NOT checked here — it is provider-specific and must be
 // performed by the provider's ReportDataVerifier after this function returns.
 //
-// When offline is false, collateral is fetched from api.trustedservices.intel.com
-// in a second verification pass. This populates TcbStatus and AdvisoryIDs.
-// When offline is true, collateral is not fetched and those fields remain empty.
-//
 // This function never panics. All errors are captured in the returned result.
-func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline bool) *TDXVerifyResult {
+func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string) *TDXVerifyResult {
 	result := &TDXVerifyResult{}
 
 	raw, err := decodeQuoteBytes(hexQuote)
@@ -293,8 +286,7 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 		result.DebugEnabled = true
 	}
 
-	// Factors 4 + 5: certificate chain and signature verification.
-	// Pass 1: verify cert chain + signature without collateral (no network).
+	// Factors 4 + 5: certificate chain and signature verification (no network).
 	opts := &tdxverify.Options{
 		GetCollateral:    false,
 		CheckRevocations: false,
@@ -305,40 +297,6 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 		// Record both as failed; they share the same root cause.
 		result.CertChainErr = verifyErr
 		result.SignatureErr = verifyErr
-	}
-
-	// Pass 2 (online only): fetch Intel PCS collateral for TCB currency checks.
-	// This is a separate pass so a collateral network error doesn't mask
-	// a successful cert chain / signature verification from pass 1.
-	if !offline {
-		getter := TDXCollateralGetter
-		if getter == nil {
-			getter = &trust.RetryHTTPSGetter{
-				Timeout:       30 * time.Second,
-				MaxRetryDelay: 5 * time.Second,
-				Getter:        &trust.SimpleHTTPSGetter{},
-			}
-		}
-		collateralOpts := &tdxverify.Options{
-			GetCollateral:    true,
-			CheckRevocations: true,
-			Getter:           getter,
-			TrustedRoots:     intelSGXRootPool,
-		}
-		if err := tdxverify.TdxQuoteContext(ctx, quoteAny, collateralOpts); err != nil {
-			result.CollateralErr = fmt.Errorf("intel PCS collateral: %w", err)
-			slog.DebugContext(ctx, "TDX collateral verification failed", "err", err)
-		} else {
-			tcbLevel, _, err := tdxverify.SupportedTcbLevelsFromCollateral(quoteAny, collateralOpts)
-			if err != nil {
-				result.CollateralErr = fmt.Errorf("TCB level extraction: %w", err)
-				slog.DebugContext(ctx, "TDX TCB level extraction failed", "err", err)
-			} else {
-				result.TcbStatus = tcbLevel.TcbStatus
-				result.AdvisoryIDs = tcbLevel.AdvisoryIDs
-				slog.DebugContext(ctx, "TDX TCB level extracted", "status", tcbLevel.TcbStatus, "date", tcbLevel.TcbDate, "advisories", tcbLevel.AdvisoryIDs)
-			}
-		}
 	}
 
 	// Extract PPID/FMSPC from PCK certificate (informational, non-fatal).
@@ -352,6 +310,57 @@ func VerifyTDXQuote(ctx context.Context, hexQuote string, nonce Nonce, offline b
 	}
 
 	return result
+}
+
+// VerifyTDXQuoteOnline calls VerifyTDXQuoteOffline for the base verification,
+// then fetches Intel PCS collateral to populate TcbStatus and AdvisoryIDs.
+// See VerifyTDXQuoteOffline for the base verification contract.
+//
+// This function never panics. All errors are captured in the returned result.
+func VerifyTDXQuoteOnline(ctx context.Context, hexQuote string, getter trust.HTTPSGetter) *TDXVerifyResult {
+	result := VerifyTDXQuoteOffline(ctx, hexQuote)
+	if result.ParseErr != nil {
+		return result
+	}
+
+	// Fetch Intel PCS collateral for TCB currency checks. This is a separate
+	// pass so a collateral network error doesn't mask the cert chain / signature
+	// result from the offline pass.
+	collateralOpts := &tdxverify.Options{
+		GetCollateral:    true,
+		CheckRevocations: true,
+		Getter:           getter,
+		TrustedRoots:     intelSGXRootPool,
+	}
+	if err := tdxverify.TdxQuoteContext(ctx, result.quote, collateralOpts); err != nil {
+		result.CollateralErr = fmt.Errorf("intel PCS collateral: %w", err)
+		slog.DebugContext(ctx, "TDX collateral verification failed", "err", err)
+		return result
+	}
+	tcbLevel, _, err := tdxverify.SupportedTcbLevelsFromCollateral(result.quote, collateralOpts)
+	if err != nil {
+		result.CollateralErr = fmt.Errorf("TCB level extraction: %w", err)
+		slog.DebugContext(ctx, "TDX TCB level extraction failed", "err", err)
+		return result
+	}
+	result.TcbStatus = tcbLevel.TcbStatus
+	result.AdvisoryIDs = tcbLevel.AdvisoryIDs
+	slog.DebugContext(ctx, "TDX TCB level extracted", "status", tcbLevel.TcbStatus, "date", tcbLevel.TcbDate, "advisories", tcbLevel.AdvisoryIDs)
+	return result
+}
+
+// TDXVerifier verifies a hex-encoded TDX quote. Obtain via NewTDXVerifier.
+type TDXVerifier func(ctx context.Context, hexQuote string) *TDXVerifyResult
+
+// NewTDXVerifier returns a TDXVerifier for the given mode. If offline is true,
+// Intel PCS collateral is not fetched and TcbStatus/AdvisoryIDs remain empty.
+func NewTDXVerifier(offline bool, getter trust.HTTPSGetter) TDXVerifier {
+	if offline {
+		return VerifyTDXQuoteOffline
+	}
+	return func(ctx context.Context, hexQuote string) *TDXVerifyResult {
+		return VerifyTDXQuoteOnline(ctx, hexQuote, getter)
+	}
 }
 
 // extractPCKExtensions navigates from a parsed TDX quote to the PCK leaf

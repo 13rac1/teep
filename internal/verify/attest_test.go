@@ -64,7 +64,7 @@ func TestFetchAttestation_Success(t *testing.T) {
 func TestVerifyTDX_EmptyQuote(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{IntelQuote: ""}
-	result := verifyTDX(ctx, raw, attestation.Nonce{}, "venice", true)
+	result := verifyTDX(ctx, raw, attestation.Nonce{}, "venice", attestation.VerifyTDXQuoteOffline)
 	if result != nil {
 		t.Errorf("verifyTDX with empty quote: expected nil, got %v", result)
 	}
@@ -122,7 +122,7 @@ func TestCheckPoC_Online_CanceledContext(t *testing.T) {
 func TestVerifyNearcloudGateway_NoQuote(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{GatewayIntelQuote: ""}
-	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true)
+	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, attestation.VerifyTDXQuoteOffline)
 	if tdx != nil {
 		t.Errorf("expected nil tdx, got %v", tdx)
 	}
@@ -267,7 +267,7 @@ func TestCheckSigstore_Offline(t *testing.T) {
 func TestVerifyTDX_WithQuote_ParseError(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{IntelQuote: "not-a-real-tdx-quote"}
-	result := verifyTDX(ctx, raw, attestation.Nonce{}, "venice", true)
+	result := verifyTDX(ctx, raw, attestation.Nonce{}, "venice", attestation.VerifyTDXQuoteOffline)
 	if result == nil {
 		t.Fatal("verifyTDX with non-empty quote should return non-nil result")
 	}
@@ -278,7 +278,7 @@ func TestVerifyTDX_WithQuote_NoVerifier(t *testing.T) {
 	ctx := context.Background()
 	// "chutes" has no ReportDataVerifier — exercises the verifier==nil branch.
 	raw := &attestation.RawAttestation{IntelQuote: "not-a-real-tdx-quote"}
-	result := verifyTDX(ctx, raw, attestation.Nonce{}, "chutes", true)
+	result := verifyTDX(ctx, raw, attestation.Nonce{}, "chutes", attestation.VerifyTDXQuoteOffline)
 	if result == nil {
 		t.Fatal("verifyTDX with non-empty quote should return non-nil result")
 	}
@@ -396,7 +396,7 @@ func TestVerifyNVIDIA_GPUEvidence_Online_CanceledCtx(t *testing.T) {
 func TestVerifyNearcloudGateway_WithQuote_ParseError(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{GatewayIntelQuote: "not-a-real-tdx-quote"}
-	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true)
+	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, attestation.VerifyTDXQuoteOffline)
 	if tdx == nil {
 		t.Fatal("expected non-nil TDX result for non-empty GatewayIntelQuote")
 	}
