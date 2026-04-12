@@ -31,6 +31,23 @@ A gap report drives remediation, it does not excuse the gap. -->
 <!-- Concrete risks. What could an attacker do? What do users lose? What should
 providers worry about? Frame severity clearly.
 
+Before listing impacts, verify that no compensating controls exist elsewhere in
+the protocol. Check for: signing key rotation schedules, alternative
+authentication, request nonces that prevent replay, independent freshness
+mechanisms, and any other means by which the protocol achieves the same goal
+through a different path. If compensating controls exist, the gap may be a
+best-practice violation rather than a security vulnerability.
+
+Distinguish security impact from operational impact:
+- Security impact: What can an attacker do? Can they impersonate hardware,
+  replay credentials, bypass checks? What is the concrete attack scenario?
+- Operational impact: What reliability, performance, or availability
+  consequences result? Does the gap force workarounds that increase fragility?
+
+If the gap is a standards violation but has no identifiable security impact
+beyond best practice, note this explicitly — it may belong in a nitpick
+category rather than a gap report.
+
 Examples of good impact framing from existing reports:
 - "A forged quote is cryptographically indistinguishable from a legitimate one"
 - "The gateway can observe all non-chat traffic"

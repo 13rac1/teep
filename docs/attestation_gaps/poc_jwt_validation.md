@@ -16,13 +16,27 @@ The registry check uses a three-party multisig protocol: teep contacts three ind
 
 ## Impact
 
-- **Hardware identity verification is functional.** The `cpu_id_registry` factor reaches `Pass` for registered hardware.
-- **Unregistered hardware fails closed.** If Stage 1 returns HTTP 403, teep reports `Fail` (`Registered: false`).
-- **Replay is bounded by `timestamp`, not `exp`.** Teep enforces a ±10 minute window on the JWT's `timestamp` claim. This prevents replay of a captured token but is a teep-side workaround — the signed JWT itself carries no expiry commitment from the quorum.
+### Compensating controls present
+
+Before assessing the security impact, it is important to document the mechanisms that DO provide freshness in the current protocol:
+
+- **Stage 1 whitelist check (HTTP 403):** When hardware is sold, decommissioned, or unenrolled from the PoC registry, the trust servers will return HTTP 403 at Stage 1, before any JWT is issued. Teep reports `Fail` (`Registered: false`). This correctly handles the "machine changes hands" scenario — an attacker cannot replay an old JWT for hardware that has been decommissioned, because no JWT will be issued for that hardware in the first place.
+- **`timestamp` freshness (teep-side workaround):** Teep enforces a ±10 minute window on the JWT's `timestamp` claim. An attacker who captures a valid JWT cannot replay it more than 10 minutes later. This closes the active replay window for currently-enrolled hardware.
+- **`quote_hash` binding:** The JWT includes a hash of the submitted TDX quote. A captured JWT cannot be presented alongside a different quote.
+
+### Security impact
+
+Given the above compensating controls, the security impact of missing `exp` is narrower than it first appears:
+
+- **The primary gap is a missing protocol commitment, not an exploitable replay vulnerability.** Teep's `timestamp` workaround is unilateral — the signed JWT payload contains no expiry assertion from the quorum. If a future teep version removes the workaround, or a consumer verifies the JWT without it, there is no protocol-level defense.
+- **Signing key rotation is unknown.** If the PoC alliance rotates its signing keys on a published schedule (e.g., monthly), any captured JWT becomes invalid at the next rotation regardless of `exp`. If keys are never rotated, a captured JWT — absent the `timestamp` workaround — would be valid indefinitely. The alliance has not published a key rotation policy.
+- **The Stage 1 nonce does not appear in the final JWT.** It is used to bind partial signatures during Stage 2 chaining but is not validated by teep in the final JWT payload, so it does not contribute to freshness.
+
+### Operational impact (primary consequence)
+
 - **JWTs cannot be cached.** Because there is no `exp` in the JWT, teep must complete the full 3-server multisig protocol on every attested request. A single peer being unavailable causes the entire check to fail for that request.
-- **TEE.fail mitigation is operational.** Proof of Cloud registry checks are passing for registered hardware.
-- **Gateway identity verification is also functional.** The `gateway_cpu_id_registry` factor for NearCloud's gateway CVM is subject to the same `exp` limitation.
-- **Traffic still flows.** Both factors are in `DefaultAllowFail` (non-enforced), so this does not block inference requests.
+- **The 3-of-3 quorum is a per-request dependency.** Without caching, any transient unavailability of a trust server fails every incoming request until the server recovers.
+- **Both factors are in `DefaultAllowFail`.** `cpu_id_registry` and `gateway_cpu_id_registry` are non-enforced, so this does not block inference requests — but the PoC check is degraded to a best-effort operation rather than a reliable control.
 
 ## Current Status
 
@@ -52,6 +66,19 @@ The PoC registry check uses a two-stage multisig protocol with three hardcoded t
 **Stage 1 — Nonce collection (parallel):** Teep sends the raw TDX quote to all three peers simultaneously. Each peer responds with a `machineId`, `moniker`, and `nonce`. If any peer returns HTTP 403, the hardware is not whitelisted and the check ends immediately with `Registered: false`.
 
 **Stage 2 — Chained partial signatures (sequential):** Teep visits peers in **sorted URL order** (iex.ec → nillion.network → scrtlabs.com), forwarding accumulated partial signatures at each step. The final peer (scrtlabs.com, always last alphabetically) returns the completed JWT.
+
+### Freshness mechanisms in the PoC protocol
+
+| Mechanism | Present? | Notes |
+|---|---|---|
+| `exp` claim in JWT | **No** | Absent from trust-server payload construction |
+| `timestamp` claim | Yes (teep workaround) | Teep enforces ±10 min; not a quorum commitment |
+| `quote_hash` binding | Yes | Binds JWT to a specific TDX quote, not to time |
+| Stage 1 nonce | Yes (partial) | Used to bind chained partial signatures in Stage 2; not validated in the final JWT payload by teep |
+| Signing key rotation | **Unknown** | PoC alliance has not published a key rotation schedule or policy |
+| Stage 1 whitelist (HTTP 403) | Yes | Handles decommissioned/unenrolled hardware before JWT issuance |
+
+The Stage 1 whitelist check is the primary freshness control for the "machine changes hands" threat model — it prevents a JWT from being issued for hardware that is no longer registered. The `timestamp` workaround prevents replay of captured JWTs within the current 10-minute window.
 
 ### JWT validation
 
