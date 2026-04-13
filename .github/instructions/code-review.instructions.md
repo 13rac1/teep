@@ -11,7 +11,7 @@ important than providing service. Failing closed is a feature, not a bug.
 
 ## Data Flow
 
-The teep proxy receives OpenAI-compatible chat request → resolves model to provider →
+The Teep proxy receives an OpenAI-compatible chat request → resolves model to provider →
 fetches and validates TEE attestation per policy → forwards (or blocks) the request.
 
 The proxy receives concurrent API inference requests to multiple providers and models from multiple client API consumers simultaneously. All code paths from the HTTP handler inward must be safe for concurrent use. All attestation caches, key pinning, connection pinning, supply chain validation, and supply chain caches must also be safe for concurrent use via multiple clients performing simultaneous access of multiple providers and models.
@@ -68,9 +68,11 @@ security validation.
 - JSON unmarshalling MUST use strict mode (warn on unknown fields, and reject failures).
 - Malformed attestation data MUST fail the entire response, not skip elements.
 - **Do not request nil checks for internal objects and arguments** that are
-  expected non-nil by normal program construction. A nil dereference panic is
+  expected to be always non-nil by normal program construction. A nil dereference panic is
   preferable to a nil guard that returns a default value or skips validation,
-  which would introduce fail-open behavior.
+  which would introduce fail-open behavior. Nil checks are acceptable when they fail
+  closed by returning/propagating a clear error that blocks the request; they must not
+  introduce fail-open behavior.
 
 ## Concurrency Safety
 

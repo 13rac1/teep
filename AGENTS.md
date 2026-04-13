@@ -10,7 +10,7 @@ Teep is designed to BLOCK REQUEST ACTIVITY when enforced validation factors fail
 
 ## Data Flow
 
-The teep proxy receives OpenAI-compatible chat request → resolves model to provider →
+The Teep proxy receives an OpenAI-compatible chat request → resolves model to provider →
 fetches and validates TEE attestation per policy → forwards (or blocks) the request.
 
 The proxy receives concurrent API inference requests to multiple providers and models from multiple client API consumers simultaneously. All code paths from the HTTP handler inward must be safe for concurrent use. All attestation caches, key pinning, connection pinning, supply chain validation, and supply chain caches must also be safe for concurrent use via multiple clients performing simultaneous access of multiple providers and models.
@@ -61,7 +61,7 @@ To ensure data privacy and integrity, adhere to the following rules:
 
 - **No mutable package-level variables.** State that varies per-request or per-provider must live on a struct or be passed as a parameter. A global that is written during request handling will race under concurrent load.
 - Prefer dependency injection (constructor parameters, struct fields, function arguments) over globals for anything that could differ between callers.
-- Use `go test -race ./...` (run automatically by `make check`) to verify new code is race-free. Add concurrent test cases (`sync.WaitGroup` + parallel goroutines) when introducing shared state.
+- Add concurrent test cases (`sync.WaitGroup` + parallel goroutines) when introducing shared state. Ensure integration-level coverage of these cases.
 
 ### Ensure Low Cyclomatic Complexity
 
