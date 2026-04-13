@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/13rac1/teep/internal/tlsct"
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
@@ -91,18 +93,21 @@ type nvidiaClaims struct {
 	Nonce         string `json:"eat_nonce"`
 }
 
-// jwksEntry pairs a keyfunc.Keyfunc with its cancel function for cleanup.
+// jwksEntry caches a parsed JWKS keyfunc with a creation timestamp for TTL checks.
 type jwksEntry struct {
 	kf        keyfunc.Keyfunc
-	cancel    context.CancelFunc
 	createdAt time.Time
 }
 
 var (
-	// jwksCacheTTL bounds in-process JWKS cache lifetime.
-	// keyfunc still performs background refresh; this adds a hard max age.
+	// jwksCacheTTL is the maximum age of a cached JWKS before it is re-fetched.
 	jwksCacheTTL = time.Hour
-	jwksMu       sync.Mutex
+	// jwksRefreshCooldown is the minimum time between JWKS re-fetches for a
+	// given URL. Prevents cache thrashing when ErrTokenUnverifiable is triggered
+	// by malformed JWTs rather than a genuine key rotation.
+	jwksRefreshCooldown = 30 * time.Second
+	jwksMu              sync.Mutex
+	jwksGroup           singleflight.Group
 	// jwksInstances caches keyfunc instances by JWKS URL. Production uses
 	// NvidiaJWKSURL; tests use httptest server URLs. Protected by jwksMu.
 	jwksInstances    = make(map[string]*jwksEntry)
@@ -110,64 +115,130 @@ var (
 )
 
 // getOrCreateKeyfunc returns a keyfunc.Keyfunc for the given JWKS URL.
-// Instances are cached by URL. The provided client (which may be nil) is
-// used for the JWKS HTTP fetch, allowing capture/replay transports to
-// intercept the request.
-func getOrCreateKeyfunc(jwksURL string, client *http.Client) (keyfunc.Keyfunc, error) {
+// Instances are cached by URL with a TTL. The JWKS is fetched on demand —
+// no background goroutine is started. The provided client (which may be nil)
+// is used for the fetch, allowing capture/replay transports to intercept it.
+// Concurrent cache misses for the same URL are coalesced via singleflight.
+//
+// Context note: singleflight coalesces concurrent callers under one shared
+// execution. ctx is the leader's context; if the leader's context is cancelled
+// mid-fetch, all waiting callers receive the cancellation error. This is an
+// acceptable trade-off — JWKS fetches are short-lived and rarely cancelled.
+func getOrCreateKeyfunc(ctx context.Context, jwksURL string, client *http.Client) (keyfunc.Keyfunc, error) {
 	jwksMu.Lock()
-	defer jwksMu.Unlock()
-
-	if entry, ok := jwksInstances[jwksURL]; ok {
-		if time.Since(entry.createdAt) < jwksCacheTTL {
-			return entry.kf, nil
-		}
+	if entry, ok := jwksInstances[jwksURL]; ok && time.Since(entry.createdAt) < jwksCacheTTL {
+		jwksMu.Unlock()
+		return entry.kf, nil
 	}
+	jwksMu.Unlock()
 
-	kfCtx, cancel := context.WithCancel(context.Background())
-	noErrSwallow := false
-	k, err := keyfunc.NewDefaultOverrideCtx(kfCtx, []string{jwksURL}, keyfunc.Override{
-		Client:                    client,
-		NoErrorReturnFirstHTTPReq: &noErrSwallow,
+	v, err, _ := jwksGroup.Do(jwksURL, func() (any, error) {
+		return fetchAndCacheJWKS(ctx, jwksURL, client)
 	})
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("initialize JWKS for %s: %w", jwksURL, err)
+		return nil, err
 	}
-	if prev, ok := jwksInstances[jwksURL]; ok {
-		prev.cancel()
-	} else if len(jwksInstances) >= maxJWKSInstances {
-		// Evict the oldest entry to stay within the cap.
-		var oldestURL string
-		var oldestTime time.Time
-		for u, e := range jwksInstances {
-			if oldestURL == "" || e.createdAt.Before(oldestTime) {
-				oldestURL = u
-				oldestTime = e.createdAt
-			}
-		}
-		jwksInstances[oldestURL].cancel()
-		delete(jwksInstances, oldestURL)
+	kf, ok := v.(keyfunc.Keyfunc)
+	if !ok {
+		return nil, fmt.Errorf("JWKS singleflight returned unexpected type %T", v)
 	}
-	entry := &jwksEntry{kf: k, cancel: cancel, createdAt: time.Now()}
-	jwksInstances[jwksURL] = entry
-	return k, nil
+	return kf, nil
 }
 
-// resetJWKS shuts down and removes all cached JWKS instances. Used by tests.
-func resetJWKS() {
+// fetchAndCacheJWKS performs the HTTP fetch, parses the JWKS, and stores the
+// result in the cache. It must only be called as the function argument to
+// jwksGroup.Do; calling it directly bypasses the singleflight coalescing
+// guarantee. It re-checks the cache on entry to handle the case where a
+// previous singleflight invocation already populated it.
+func fetchAndCacheJWKS(ctx context.Context, jwksURL string, client *http.Client) (keyfunc.Keyfunc, error) {
+	// Re-check: a previous singleflight invocation may have just populated the cache.
+	jwksMu.Lock()
+	if entry, ok := jwksInstances[jwksURL]; ok && time.Since(entry.createdAt) < jwksCacheTTL {
+		jwksMu.Unlock()
+		return entry.kf, nil
+	}
+	jwksMu.Unlock()
+
+	if client == nil {
+		client = tlsct.NewHTTPClient(30 * time.Second)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("build JWKS request for %s: %w", jwksURL, err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch JWKS from %s: %w", jwksURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if readErr != nil {
+			slog.DebugContext(ctx, "read JWKS error response body", "err", readErr)
+		}
+		return nil, fmt.Errorf("JWKS %s returned HTTP %d: %s", jwksURL, resp.StatusCode, truncate(string(errBody), 200))
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read JWKS response: %w", err)
+	}
+	kf, err := keyfunc.NewJWKSetJSON(body)
+	if err != nil {
+		return nil, fmt.Errorf("parse JWKS from %s: %w", jwksURL, err)
+	}
+
 	jwksMu.Lock()
 	defer jwksMu.Unlock()
-	for url, entry := range jwksInstances {
-		entry.cancel()
-		delete(jwksInstances, url)
+	if _, exists := jwksInstances[jwksURL]; !exists {
+		evictOldestLocked()
 	}
+	jwksInstances[jwksURL] = &jwksEntry{kf: kf, createdAt: time.Now()}
+	return kf, nil
 }
 
-// ShutdownJWKS cancels all background JWKS refresh goroutines and removes
-// all cached instances. Call this during graceful shutdown to prevent goroutine
-// leaks from the background keyfunc refresh loops (F-35).
+// evictOldestLocked removes the oldest entry from jwksInstances when the cap
+// has been reached. Caller must hold jwksMu.
+func evictOldestLocked() {
+	if len(jwksInstances) < maxJWKSInstances {
+		return
+	}
+	var oldestURL string
+	var oldestTime time.Time
+	for u, e := range jwksInstances {
+		if oldestURL == "" || e.createdAt.Before(oldestTime) {
+			oldestURL, oldestTime = u, e.createdAt
+		}
+	}
+	delete(jwksInstances, oldestURL)
+}
+
+// shouldRefetchJWKS reports whether a JWKS re-fetch should be attempted for
+// jwksURL and, if so, removes the stale cache entry so the next
+// getOrCreateKeyfunc call triggers a fresh fetch.
+//
+// Returns false when the entry was fetched within jwksRefreshCooldown,
+// suppressing cache thrashing from repeated ErrTokenUnverifiable on malformed
+// JWTs. Returns true when the entry is absent or old enough to re-fetch.
+func shouldRefetchJWKS(jwksURL string) bool {
+	jwksMu.Lock()
+	defer jwksMu.Unlock()
+	entry, ok := jwksInstances[jwksURL]
+	if !ok {
+		return true // no cached entry; fetch unconditionally
+	}
+	if time.Since(entry.createdAt) < jwksRefreshCooldown {
+		return false // fetched too recently; suppress re-fetch
+	}
+	delete(jwksInstances, jwksURL)
+	return true
+}
+
+// ShutdownJWKS clears the in-process JWKS cache. Safe to call multiple times.
+// Call during graceful shutdown or between tests to prevent stale keys.
 func ShutdownJWKS() {
-	resetJWKS()
+	jwksMu.Lock()
+	defer jwksMu.Unlock()
+	clear(jwksInstances)
 }
 
 // VerifyNVIDIAPayload verifies the NVIDIA attestation payload via local SPDM
@@ -195,15 +266,19 @@ func VerifyNVIDIAPayload(ctx context.Context, payload string, expectedNonce Nonc
 }
 
 // verifyNVIDIAJWT verifies an NVIDIA NRAS attestation JWT. It fetches (and
-// caches) the NVIDIA JWKS via keyfunc/v3, verifies the JWT signature, and
-// extracts claims. Nonce freshness is verified separately via the EAT layer
+// caches) the NVIDIA JWKS on demand, verifies the JWT signature, and extracts
+// claims. Nonce freshness is verified separately via the EAT layer
 // (factor: nvidia_nonce_client_bound).
 //
+// If the JWT's kid is not in the cached keyset (ErrTokenUnverifiable), the
+// cache is invalidated and the fetch is retried once to recover from key
+// rotation without waiting for the TTL to expire.
+//
 // The provided client (which may be nil) is used for JWKS fetches.
-func verifyNVIDIAJWT(jwtPayload, jwksURL string, client *http.Client, opts ...jwt.ParserOption) *NvidiaVerifyResult {
+func verifyNVIDIAJWT(ctx context.Context, jwtPayload, jwksURL string, client *http.Client, opts ...jwt.ParserOption) *NvidiaVerifyResult {
 	result := &NvidiaVerifyResult{Format: "JWT"}
 
-	kf, err := getOrCreateKeyfunc(jwksURL, client)
+	kf, err := getOrCreateKeyfunc(ctx, jwksURL, client)
 	if err != nil {
 		result.SignatureErr = fmt.Errorf("JWKS initialization: %w", err)
 		return result
@@ -215,6 +290,18 @@ func verifyNVIDIAJWT(jwtPayload, jwksURL string, client *http.Client, opts ...jw
 		jwt.WithExpirationRequired(),
 	}, opts...)
 	token, err := jwt.ParseWithClaims(jwtPayload, claims, kf.Keyfunc, parserOpts...)
+
+	// On unknown kid, NVIDIA may have rotated keys. Re-fetch and retry once.
+	// shouldRefetchJWKS returns false if the entry is too fresh to re-fetch,
+	// preventing cache thrashing from malformed JWTs.
+	if err != nil && errors.Is(err, jwt.ErrTokenUnverifiable) && shouldRefetchJWKS(jwksURL) {
+		if kf2, err2 := getOrCreateKeyfunc(ctx, jwksURL, client); err2 == nil {
+			claims = &nvidiaClaims{}
+			token, err = jwt.ParseWithClaims(jwtPayload, claims, kf2.Keyfunc, parserOpts...)
+		} else {
+			slog.DebugContext(ctx, "JWKS re-fetch after key rotation failed", "url", jwksURL, "err", err2)
+		}
+	}
 
 	if err != nil {
 		if isSignatureError(err) {
@@ -323,7 +410,7 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 		}
 	}
 
-	result := verifyNVIDIAJWT(overallJWT, NvidiaJWKSURL, client, opts...) //nolint:contextcheck // keyfunc manages its own background context for JWKS refresh
+	result := verifyNVIDIAJWT(ctx, overallJWT, NvidiaJWKSURL, client, opts...)
 	result.GPUDiags = extractGPUDiags(ctx, perGPU)
 	return result
 }
