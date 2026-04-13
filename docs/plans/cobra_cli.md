@@ -16,7 +16,7 @@ Cobra handles natively. All `internal/` packages are unchanged.
 | `--log-level` must be available to all subcommands | `parseLogLevel()` pre-scans `os.Args` before dispatch (lines 87–111) | `rootCmd.PersistentFlags()` |
 | Provider is a positional arg before flags | `extractProvider()` peels it off before `flag.Parse` (lines 197–204) | `cobra.ExactArgs(1)` + `cmd.Args[0]` |
 | Unknown subcommand produces a hand-written error | `default:` case in `switch os.Args[1]` (lines 67–82) | Cobra's built-in unknown-command error |
-| `--reverify` and positional provider are mutually exclusive but not enforced | Not validated | `cobra.RangeArgs(0, 1)` + check in `RunE` |
+| `--reverify` and positional provider supplied together are silently ignored | Current code ignores PROVIDER when `--reverify` is set (violates AGENTS.md: "never silently drop") | `cobra.RangeArgs(0, 1)` + `RunE` rejects `len(args) > 0 && reverifyDir != ""` with an explicit error |
 | Build-tag `--force` requires `registerForceFlag()` indirection | `force_debug.go` / `force_release.go` passing `*flag.FlagSet` | `init()` in `force_debug.go` calls `serveCmd.Flags().Bool(...)` directly |
 | Every `run*` function duplicates `flag.FlagSet` setup + `fs.Parse` | Boilerplate in each subcommand (e.g. lines 122–129, 212–225) | Flags declared once; `RunE` receives pre-parsed `*cobra.Command` |
 
@@ -53,12 +53,24 @@ teep [--log-level LEVEL]
 subcommands. `PROVIDER` is required on `serve` and on `verify` in live mode.
 When `--reverify DIR` is passed, `PROVIDER` is optional — the captured
 manifest's provider is used instead (`cobra.RangeArgs(0, 1)` + `RunE` check).
+Supplying both `PROVIDER` and `--reverify` is rejected with an explicit error
+(behavior change: current code silently ignores the provider in that case).
 
 ---
 
 ## 5. What the PR Does
 
 **Add `go get github.com/spf13/cobra`.**
+
+**Shrink `cmd/teep/main.go`** to just `main()` + helpers still needed by `RunE`:
+
+```go
+func main() {
+    if err := rootCmd.Execute(); err != nil {
+        os.Exit(1)
+    }
+}
+```
 
 **Create `cmd/teep/cmd.go`** with the root command and all subcommands wired
 to the existing `run*` internals:
@@ -76,12 +88,6 @@ func init() {
     rootCmd.PersistentFlags().String("log-level", "info",
         "log verbosity: debug, info, warn, error")
     rootCmd.AddCommand(serveCmd, verifyCmd, selfCheckCmd, versionCmd, helpCmd)
-}
-
-func main() {
-    if err := rootCmd.Execute(); err != nil {
-        os.Exit(1)
-    }
 }
 ```
 
@@ -104,8 +110,8 @@ func init() {
 
 ```go
 var helpCmd = &cobra.Command{
-    Use:                "help [TOPIC]",
-    DisableFlagParsing: true,
+    Use:  "help [TOPIC]",
+    Args: cobra.ArbitraryArgs,
     RunE: func(cmd *cobra.Command, args []string) error {
         runHelp(args)
         return nil
