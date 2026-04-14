@@ -22,14 +22,35 @@ sessions, or dstack event logs.
 
 Avoid jargon here — save protocol details for Technical Background below.
 
-Frame gaps honestly: teep documents what it cannot yet verify so that the gap
-can be closed. Failing closed on unverifiable claims is the correct behavior.
-A gap report drives remediation, it does not excuse the gap. -->
+Write for the product manager responsible for the provider's infrastructure —
+they may have no knowledge of teep or how it works. Describe what is missing
+or broken in the provider's system and why it matters for their users and
+customers. Do not mention teep in this section. -->
 
 ## Impact
 
 <!-- Concrete risks. What could an attacker do? What do users lose? What should
 providers worry about? Frame severity clearly.
+
+Before listing impacts, verify that no compensating controls exist elsewhere in
+the protocol. Check for: signing key rotation schedules, alternative
+authentication, request nonces that prevent replay, independent freshness
+mechanisms, and any other means by which the protocol achieves the same goal
+through a different path. If compensating controls exist, the gap may be a
+best-practice violation rather than a security vulnerability.
+
+Distinguish security impact from operational impact:
+- Security impact: What can an attacker do? Can they impersonate hardware,
+  replay credentials, bypass checks? What is the concrete attack scenario?
+- Operational impact: What reliability, performance, or availability
+  consequences result? Does the gap force workarounds that increase fragility?
+  Frame operational impact for any security-conscious consumer of the
+  provider's service — do not reference teep factor names, workarounds, or
+  internals.
+
+If the gap is a standards violation but has no identifiable security impact
+beyond best practice, note this explicitly — it may belong in a nitpick
+category rather than a gap report.
 
 Examples of good impact framing from existing reports:
 - "A forged quote is cryptographically indistinguishable from a legitimate one"
@@ -39,17 +60,20 @@ Examples of good impact framing from existing reports:
 
 ## Current Status
 
-<!-- Summary table showing what teep verifies today, what it can't, and the
-resulting teep verification factor status. Frame gaps as things teep fails
-closed on or skips — not things teep "allows."
+<!-- Summary table of the provider's current implementation status for the
+security properties in question. What does the provider verify? What is
+missing? Frame for the provider's engineers and product managers.
+
+Teep-specific factor status and workarounds belong in the optional
+"Teep Status" section at the end of the document.
 
 Example format:
 
-| What teep checks | Status | Teep factor | Detail |
-|---|---|---|---|
-| TDX quote authenticity | Verified | `intel_pcs_collateral`: Pass | Standard DCAP verification |
-| Container image identity | Not verifiable | `sigstore_verification`: Skip | Provider does not expose image digests |
-| Model weight hashes | Not verifiable | `measured_model_weights`: Fail | No mechanism exists |
+| Property | Provider status | Detail |
+|---|---|---|
+| TDX quote authenticity | Implemented | Standard DCAP verification |
+| Container image identity | Not implemented | Provider does not expose image digests |
+| Model weight hashes | Not implemented | No mechanism exists |
 -->
 
 ---
@@ -87,23 +111,19 @@ and Impact sections above. -->
 
 ## Remediation
 
-<!-- Split into provider-side and teep-side actions. Be specific about what
-providers must change and what teep will enforce once they do. Prioritize.
+<!-- What the provider should change to close the gap. Be specific: reference
+source files, API fields, protocol extensions, or configuration changes.
+Prioritize by implementation ease and security impact. Use stage-based
+trajectories when options build on each other.
 
 ### What providers should implement
 
 List concrete changes. Reference existing patterns where applicable.
 
-### What teep should implement
-
-List verification changes, new factors, policy updates. Reference the
-relevant teep packages and files.
-
 ### Deployment priority
 
 If there are multiple remediation options, order by implementation ease and
-security impact. Existing reports use stage-based trajectories when options
-build on each other. -->
+security impact. -->
 
 ## References
 
@@ -142,4 +162,11 @@ comparison tables).
 When original research (code analysis, live testing, public data correlation)
 informs the gap analysis. See dstack_integrity.md (publicly available golden
 values) and e2ee_plaintext_gaps.md (direct vs gateway E2EE test results).
+
+## Teep Status
+
+Current teep behavior in response to this gap: what factors are affected,
+whether teep has a workaround, and what teep will enforce once the provider
+fixes the gap. This section is for teep maintainers and reviewers, not for
+the provider.
 -->
