@@ -32,16 +32,6 @@ The proxy receives concurrent API inference requests to multiple models from mul
 - Run full integration tests: `make integration` (slow; optional API keys or config).
 - Generate provider verification reports: `make reports` (requires API keys or config).
 
-## TOP PRIORITY: Data Privacy and Correctness
-
-Teep is *critical infrastructure security software* for handling *highly confidential data*.
-
-**The measure of this software's correctness is how strictly it evaluates providers, not how many providers pass.**
-
-It is more important to protect confidential traffic than it is to provide service. Provider verification failures are not bugs. A provider that fails enforced factors does not meet security requirements. Never modify verification logic to accommodate a non-compliant provider.
-
-This means failing closed is a FEATURE, not a BUG.
-
 ## Git Workflow
 
 This repository is managed by Git and hosted on GitHub.
@@ -56,9 +46,15 @@ This repository is managed by Git and hosted on GitHub.
 
 ## Repository Rules
 
-To ensure data privacy and integrity, adhere to the following rules:
+Teep is *critical infrastructure security software* for handling *highly confidential data*.
+
+**The measure of this software's correctness is how strictly it evaluates and authenticates providers, not how many providers pass factor authentication checks or provide service.**
+
+To ensure data confidentiality and integrity, adhere to the following rules:
 
 ### Always Fail-Closed
+
+Failing closed is a FEATURE, not a BUG. It is more important to protect confidential traffic than it is to provide service. Provider verification failures are not bugs.
 
 - Validation issues of any kind must FAIL LOUDLY AND FAIL CLOSED.
 - Failed validation MUST block requests unless specifically whitelisted by `allow_fail`, by `--force` (debug builds only: bypasses all enforced factors), or by `--offline` (skips network-dependent checks such as Intel PCS, NRAS, sigstore, and Proof of Cloud).
@@ -71,6 +67,7 @@ To ensure data privacy and integrity, adhere to the following rules:
 ### Always Ensure Attestation Integrity
 
 - Attestation MUST be verified before any request is forwarded.
+- Use `Connection: close` to prevent TLS connection reuse across attestation boundaries.
 - Nonces MUST originate from the client, not the server response.
 - Never trust provider-asserted "verified" fields without independent cryptographic verification.
 - Cache misses MUST trigger full re-attestation, never pass-through.
@@ -125,8 +122,7 @@ Reference implementations to mirror when adding providers or verification logic:
 - Follow Effective Go idioms and best practices.
 - When uncertain, prefer DEFENSE IN DEPTH validation.
 - Bound all reads from untrusted sources (HTTP bodies, JSON arrays).
-- Use `Connection: close` to prevent TLS connection reuse across attestation boundaries.
-- ALWAYS add regression test coverage for audit findings.
+- ALWAYS add regression test coverage for code review issues and audit findings.
 
 ### No Fallbacks or Backwards Compatibility
 
