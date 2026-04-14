@@ -88,7 +88,9 @@ To ensure data privacy and integrity, adhere to the following rules:
 
 - **No mutable package-level variables.** State that varies per-request or per-provider must live on a struct or be passed as a parameter. A global that is written during request handling will race under concurrent load.
 - Prefer dependency injection (constructor parameters, struct fields, function arguments) over globals for anything that could differ between callers.
-- Add concurrent test cases (`sync.WaitGroup` + parallel goroutines) when introducing shared state. Ensure integration-level coverage of these cases.
+- Use `sync.Mutex`/`sync.RWMutex` for protecting shared data structures (caches, maps). Prefer channels for coordination between goroutines. Use `sync.Once` for safe lazy initialization.
+- Add concurrent test cases (`sync.WaitGroup` + parallel goroutines) when manipulating shared state. Ensure integration-level coverage of these cases.
+- Always run `make check` (uses `go test -race`) and `make integration` to ensure new and existing concurrency tests pass.
 
 ### Always Protect Sensitive Data
 

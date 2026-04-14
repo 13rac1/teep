@@ -95,18 +95,26 @@ from multiple consumers. Flag any code that:
   varies per-request or per-provider must live on a struct or be passed as a
   parameter. A global written during request handling will race under load.
 - Uses a package-level variable with `save/restore` cleanup (e.g.
-  `orig := pkg.Global; defer func() { pkg.Global = orig }()`) — this pattern
-  is inherently racy when callers run concurrently.
+  `orig := pkg.Global; defer func() { pkg.Global = orig }()`) in production
+  code or in any test that calls `t.Parallel()` — this pattern is inherently
+  racy when callers run concurrently.
 - Shares mutable state (maps, slices, pointers) between goroutines without
-  synchronization (`sync.Mutex`, `sync.Map`, channels, or atomics).
+  synchronization (`sync.Mutex`, `sync.Map`, channels, or `sync/atomic`).
 - Mutates a struct field that is read by concurrent request handlers without
   holding a lock.
 
 Preferred patterns:
 - **Dependency injection** — pass per-call or per-handler dependencies via
-  constructor parameters, struct fields, or function arguments.
-- **Immutable-after-init** — state set once during `New()`/`init()` and never
-  written again is safe. Document the invariant.
+  constructor parameters, struct fields, or function arguments. Tests that
+  cannot call `t.Parallel()` because they mutate a package-level variable
+  are a signal to inject that dependency instead.
+- **Channels for coordination** — prefer channels for signaling between
+  goroutines; use `sync.Mutex`/`sync.RWMutex` for protecting shared data.
+  Use `sync.Once` for safe lazy initialization.
+- **Immutable-after-init** — unexported state set once during `New()`/`init()`
+  and never written again is safe. Exported `var` declarations are not truly
+  immutable — any consumer package can write them; prefer unexported variables
+  with accessors or dependency injection.
 - Concurrent test coverage (`sync.WaitGroup` + parallel goroutines + `-race`)
   should accompany any new shared state.
 
