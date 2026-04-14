@@ -13,7 +13,7 @@ Teep is designed to BLOCK REQUEST ACTIVITY when enforced validation factors fail
 The Teep proxy receives an OpenAI-compatible chat request → resolves model to provider →
 fetches and validates TEE attestation per policy → forwards (or blocks) the request.
 
-The proxy receives concurrent API inference requests to multiple providers and models from multiple client API consumers simultaneously. All code paths from the HTTP handler inward must be safe for concurrent use. All attestation caches, key pinning, connection pinning, supply chain validation, and supply chain caches must also be safe for concurrent use via multiple clients performing simultaneous access of multiple providers and models.
+The proxy receives concurrent API inference requests to multiple models from multiple client API consumers simultaneously, and should support expansion to handle multiple concurrent providers. All code paths from the HTTP handler inward must be safe for concurrent use. All attestation caches, key pinning, connection pinning, supply chain validation, and supply chain caches must also be safe for concurrent use via multiple clients performing simultaneous access of multiple providers and models.
 
 ## Key Code Directories
 
