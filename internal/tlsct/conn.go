@@ -46,20 +46,44 @@ func Dial(ctx context.Context, host string) (*Conn, error) {
 	}
 
 	// Distinguish true bare hostnames from malformed host:port input.
-	// Also accept bare IP addresses (including IPv6 literals). Strip
-	// surrounding brackets so "[::1]" is handled like "::1".
-	bare := strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-	if bare == "" {
+	// Also accept bare IP addresses (including IPv6 literals). Only accept
+	// bracketed input when it is a fully bracketed IPv6 literal like "[::1]".
+	if host == "" {
 		return nil, fmt.Errorf("invalid host %q: empty host", host)
 	}
 	if strings.HasSuffix(host, ":") {
 		return nil, fmt.Errorf("invalid host %q: trailing colon", host)
 	}
 
-	isBareHostname := !strings.Contains(host, ":")
-	isBareIP := net.ParseIP(bare) != nil
-	if isBareHostname || isBareIP {
+	hasLeadingBracket := strings.HasPrefix(host, "[")
+	hasTrailingBracket := strings.HasSuffix(host, "]")
+	if hasLeadingBracket || hasTrailingBracket {
+		if !hasLeadingBracket || !hasTrailingBracket {
+			return nil, fmt.Errorf("invalid host %q: unbalanced brackets", host)
+		}
+
+		bare := host[1 : len(host)-1]
+		if bare == "" {
+			return nil, fmt.Errorf("invalid host %q: empty host", host)
+		}
+		if strings.ContainsAny(bare, "[]") {
+			return nil, fmt.Errorf("invalid host %q: malformed brackets", host)
+		}
+		if !strings.Contains(bare, ":") || net.ParseIP(bare) == nil {
+			return nil, fmt.Errorf("invalid host %q: bracketed host must be an IPv6 literal", host)
+		}
+
 		return DialAddr(ctx, bare, net.JoinHostPort(bare, "443"))
+	}
+
+	if strings.ContainsAny(host, "[]") {
+		return nil, fmt.Errorf("invalid host %q: malformed brackets", host)
+	}
+
+	isBareHostname := !strings.Contains(host, ":")
+	isBareIP := net.ParseIP(host) != nil
+	if isBareHostname || isBareIP {
+		return DialAddr(ctx, host, net.JoinHostPort(host, "443"))
 	}
 
 	return nil, fmt.Errorf("invalid host %q: %w", host, err)

@@ -228,6 +228,31 @@ func TestDial_BracketedIPv6(t *testing.T) {
 	}
 }
 
+func TestDial_BracketValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		want string // substring expected in error
+	}{
+		{"unbalanced leading", "[::1", "unbalanced brackets"},
+		{"unbalanced trailing", "::1]", "unbalanced brackets"},
+		{"bracketed hostname", "[example.com]", "bracketed host must be an IPv6 literal"},
+		{"nested brackets", "[[::1]]", "malformed brackets"},
+		{"embedded bracket", "exam[ple", "malformed brackets"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tlsct.Dial(context.Background(), tt.host)
+			if err == nil {
+				t.Fatalf("Dial(%q) = nil, want error", tt.host)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Dial(%q) error = %v, want substring %q", tt.host, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestDial_TrailingColon(t *testing.T) {
 	_, err := tlsct.Dial(context.Background(), "example.com:")
 	if err == nil {
