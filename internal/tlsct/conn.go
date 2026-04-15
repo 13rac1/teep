@@ -102,6 +102,13 @@ func DialAddr(ctx context.Context, serverName, addr string) (*Conn, error) {
 	if serverName == "" {
 		return nil, errors.New("invalid serverName: empty")
 	}
+	// Ensure ctx has a deadline so the full dial (TCP + TLS handshake)
+	// is bounded even when the caller provides context.Background().
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultDialTimeout)
+		defer cancel()
+	}
 	d := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: DefaultDialTimeout},
 		Config: &tls.Config{
@@ -149,7 +156,11 @@ func (c *Conn) SPKI() string { return c.spki }
 
 // TLSState returns the TLS connection state captured at creation time.
 // Callers use this with Checker.CheckTLSState for CT verification.
-func (c *Conn) TLSState() *tls.ConnectionState { return &c.tlsState }
+// Returns a shallow copy to prevent mutation of internal state.
+func (c *Conn) TLSState() *tls.ConnectionState {
+	state := c.tlsState
+	return &state
+}
 
 // net.Conn implementation — delegates to the underlying *tls.Conn.
 
