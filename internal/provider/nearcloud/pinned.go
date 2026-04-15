@@ -147,7 +147,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 		return nil, fmt.Errorf("write chat request: %w", err)
 	}
 
-	resp, err := readChatResponse(br) //nolint:bodyclose // body ownership transfers to NewConnClosingReader
+	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body ownership transfers to NewConnClosingReader
 	if err != nil {
 		return nil, fmt.Errorf("read chat response: %w", err)
 	}
@@ -209,12 +209,6 @@ func (h *PinnedHandler) encryptBody(
 	hdrs.Set("X-Encryption-Version", "2")
 
 	return result, sess, hdrs, nil
-}
-
-// readChatResponse reads an HTTP response from a buffered reader. The caller
-// is responsible for closing resp.Body (typically via NewConnClosingReader).
-func readChatResponse(br *bufio.Reader) (*http.Response, error) {
-	return http.ReadResponse(br, nil)
 }
 
 // setDialer overrides the TLS dial function. Only accessible from tests

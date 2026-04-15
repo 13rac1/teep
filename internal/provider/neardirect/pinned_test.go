@@ -156,6 +156,35 @@ func TestWriteHTTPRequest_RejectsCRLFInHeaderValue(t *testing.T) {
 	}
 }
 
+func TestWriteHTTPRequest_RejectsCRLFInMethodAndPath(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("Host", "example.com")
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"method with CR", "GET\r", "/path"},
+		{"method with LF", "GET\n", "/path"},
+		{"path with CR", "GET", "/path\r\nX-Injected: bad"},
+		{"path with LF", "GET", "/path\nX-Injected: bad"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			bw := bufio.NewWriter(&buf)
+			err := WriteHTTPRequest(bw, tt.method, tt.path, headers, nil)
+			if err == nil {
+				t.Fatal("expected error for CRLF injection")
+			}
+			if !strings.Contains(err.Error(), "CR/LF") {
+				t.Fatalf("error should mention CR/LF, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestExtractSPKI(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

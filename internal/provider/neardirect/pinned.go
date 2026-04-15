@@ -215,7 +215,7 @@ func (h *PinnedHandler) HandlePinned(ctx context.Context, req *provider.PinnedRe
 	}
 
 	// 7. Read the response.
-	resp, err := readChatResponse(br) //nolint:bodyclose // body ownership transfers to NewConnClosingReader
+	resp, err := http.ReadResponse(br, nil) //nolint:bodyclose // body ownership transfers to NewConnClosingReader
 	if err != nil {
 		if session != nil {
 			session.Zero()
@@ -497,18 +497,20 @@ func (h *PinnedHandler) verifySupplyChain(
 	return compose, imageRepos, digestToRepo, sigstore, rekor
 }
 
-// readChatResponse reads an HTTP response from a buffered reader. The caller
-// is responsible for closing resp.Body (typically via NewConnClosingReader).
-func readChatResponse(br *bufio.Reader) (*http.Response, error) {
-	return http.ReadResponse(br, nil)
-}
-
 // WriteHTTPRequest writes an HTTP/1.1 request (request line + headers + body)
 // to w. Used instead of http.Request.Write to maintain control over the exact
 // connection (no connection pooling, no automatic redirects).
 //
 // Host is derived from headers; Content-Length is derived from body.
 func WriteHTTPRequest(w *bufio.Writer, method, path string, headers http.Header, body []byte) error {
+	// Validate method and path for CRLF injection.
+	if strings.ContainsAny(method, "\r\n") {
+		return errors.New("method contains invalid CR/LF characters")
+	}
+	if strings.ContainsAny(path, "\r\n") {
+		return errors.New("path contains invalid CR/LF characters")
+	}
+
 	// Request line.
 	if _, err := fmt.Fprintf(w, "%s %s HTTP/1.1\r\n", method, path); err != nil {
 		return err
