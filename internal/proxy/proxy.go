@@ -488,7 +488,7 @@ func fromConfig(
 			}
 			return d, true
 		}
-		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = resolver
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
 		p.ImagesPath = "/v1/images/generations"

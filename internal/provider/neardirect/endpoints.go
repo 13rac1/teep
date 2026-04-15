@@ -2,11 +2,13 @@ package neardirect
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,11 @@ const (
 
 	// endpointsTTL is how long endpoint mappings are cached before refresh.
 	endpointsTTL = 5 * time.Minute
+
+	// refreshTimeout bounds how long a singleflight refresh can take,
+	// independent of the caller's context. This prevents a detached
+	// refresh from blocking longer than the HTTP handler's deadline.
+	refreshTimeout = 30 * time.Second
 )
 
 // endpointsResponse is the JSON shape returned by the endpoints URL.
@@ -91,11 +98,31 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 	}
 
 	// Collapse concurrent refreshes into a single HTTP call.
-	// Use a detached context so one caller's cancellation doesn't
-	// fail the refresh for all collapsed callers.
-	_, err, _ := r.sf.Do("refresh", func() (any, error) {
-		return nil, r.refresh(context.WithoutCancel(ctx))
+	// Use a detached context with a fixed timeout so one caller's
+	// cancellation doesn't fail the refresh for all collapsed callers,
+	// while still bounding how long the refresh can block.
+	// DoChan lets cancelled callers return immediately while the
+	// shared refresh continues in the background.
+	ch := r.sf.DoChan("refresh", func() (any, error) {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
+		defer cancel()
+		return nil, r.refresh(rctx)
 	})
+
+	var err error
+	select {
+	case <-ctx.Done():
+		if ok {
+			slog.WarnContext(ctx, "nearai endpoint discovery: caller cancelled, using stale mapping",
+				"model", model,
+				"domain", domain,
+			)
+			return domain, nil
+		}
+		return "", fmt.Errorf("endpoint discovery: %w", ctx.Err())
+	case res := <-ch:
+		err = res.Err
+	}
 	if err != nil {
 		if ok {
 			slog.WarnContext(ctx, "nearai endpoint discovery refresh failed",
@@ -115,6 +142,72 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 		return "", fmt.Errorf("unknown model %q (not in endpoint discovery)", model)
 	}
 	return domain, nil
+}
+
+// ListModels implements provider.ModelLister by returning all models from the
+// endpoint discovery cache. The /endpoints URL is public and requires no API
+// key, so this never sends an Authorization header upstream.
+func (r *EndpointResolver) ListModels(ctx context.Context) ([]json.RawMessage, error) {
+	r.mu.RLock()
+	stale := time.Since(r.fetchedAt) > endpointsTTL
+	size := len(r.mapping)
+	r.mu.RUnlock()
+
+	if stale || size == 0 {
+		ch := r.sf.DoChan("refresh", func() (any, error) {
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
+			defer cancel()
+			return nil, r.refresh(rctx)
+		})
+
+		var err error
+		select {
+		case <-ctx.Done():
+			r.mu.RLock()
+			size = len(r.mapping)
+			r.mu.RUnlock()
+			if size == 0 {
+				return nil, fmt.Errorf("endpoint discovery: %w", ctx.Err())
+			}
+			slog.WarnContext(ctx, "nearai: endpoint discovery: caller cancelled for ListModels, using stale mapping")
+		case res := <-ch:
+			err = res.Err
+			if err != nil {
+				r.mu.RLock()
+				size = len(r.mapping)
+				r.mu.RUnlock()
+				if size == 0 {
+					return nil, fmt.Errorf("endpoint discovery: %w", err)
+				}
+				slog.WarnContext(ctx, "nearai: endpoint discovery refresh failed for ListModels, using stale mapping", "err", err)
+			}
+		}
+	}
+
+	r.mu.RLock()
+	models := make([]string, 0, len(r.mapping))
+	for m := range r.mapping {
+		models = append(models, m)
+	}
+	r.mu.RUnlock()
+
+	sort.Strings(models)
+
+	out := make([]json.RawMessage, 0, len(models))
+	now := time.Now().Unix()
+	for _, m := range models {
+		b, err := json.Marshal(struct {
+			ID      string `json:"id"`
+			Object  string `json:"object"`
+			Created int64  `json:"created"`
+			OwnedBy string `json:"owned_by"`
+		}{ID: m, Object: "model", Created: now, OwnedBy: "near-ai"})
+		if err != nil {
+			return nil, fmt.Errorf("models: marshal %q: %w", m, err)
+		}
+		out = append(out, json.RawMessage(b))
+	}
+	return out, nil
 }
 
 // refresh fetches the endpoint mapping from the discovery URL and replaces

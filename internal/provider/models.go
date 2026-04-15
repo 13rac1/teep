@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/13rac1/teep/internal/jsonstrict"
 )
 
 // modelsPath is the standard OpenAI-compatible models API path.
@@ -13,7 +15,8 @@ const modelsPath = "/v1/models"
 
 // modelsResponse is the top-level JSON shape returned by /v1/models endpoints.
 type modelsResponse struct {
-	Data []json.RawMessage `json:"data"`
+	Object string            `json:"object"`
+	Data   []json.RawMessage `json:"data"`
 }
 
 // genericModelLister fetches available models from a /v1/models endpoint.
@@ -57,8 +60,10 @@ func (l *genericModelLister) ListModels(ctx context.Context) ([]json.RawMessage,
 	}
 
 	var mr modelsResponse
-	if err := json.Unmarshal(body, &mr); err != nil {
+	if unknown, err := jsonstrict.Unmarshal(body, &mr); err != nil {
 		return nil, fmt.Errorf("models: unmarshal response: %w", err)
+	} else if len(unknown) > 0 {
+		slog.Warn("unexpected JSON fields", "fields", unknown, "context", "models response")
 	}
 
 	return mr.Data, nil
