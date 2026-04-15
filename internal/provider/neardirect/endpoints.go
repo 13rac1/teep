@@ -71,7 +71,7 @@ func NewEndpointResolver(offline ...bool) *EndpointResolver {
 func newEndpointResolverForTest(url string) *EndpointResolver {
 	return &EndpointResolver{
 		endpointsURL:     url,
-		client:           tlsct.NewHTTPClient(10 * time.Second),
+		client:           tlsct.NewHTTPClient(1 * time.Second),
 		restrictToNearAI: false,
 		mapping:          make(map[string]string),
 	}

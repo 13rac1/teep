@@ -440,7 +440,11 @@ func (h *PinnedHandler) sendAttestationRequest(
 		return nil, nil, fmt.Errorf("write attestation request: %w", err)
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+	deadline := time.Now().Add(readTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := conn.SetReadDeadline(deadline); err != nil {
 		return nil, nil, fmt.Errorf("set read deadline: %w", err)
 	}
 
