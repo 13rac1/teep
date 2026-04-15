@@ -165,7 +165,9 @@ Group by topic when there are many. Examples:
 
 ## Teep Status
 
+<!--
 Current teep behavior in response to this gap: what factors are affected,
 whether teep has a workaround, and what teep will enforce once the provider
 fixes the gap. This section is for teep maintainers and reviewers, not for
 the provider.
+-->
