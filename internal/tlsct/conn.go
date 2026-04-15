@@ -110,7 +110,7 @@ func DialAddr(ctx context.Context, serverName, addr string) (*Conn, error) {
 		defer cancel()
 	}
 	d := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: DefaultDialTimeout},
+		NetDialer: &net.Dialer{},
 		Config: &tls.Config{
 			ServerName: serverName,
 			MinVersion: tls.VersionTLS13,
