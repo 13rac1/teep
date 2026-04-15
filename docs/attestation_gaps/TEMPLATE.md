@@ -78,15 +78,28 @@ existing reports:
 
 ---
 
-## Detailed Analysis
+## Detailed Gap Analysis
 
-<!-- The deep dive. Source code analysis, protocol traces, test results,
-research findings. Reference specific files, line numbers, and function names.
+<!-- Evidence that the gap exists. This section diagnoses the PROBLEM, not the
+solution. Analyze the provider's infrastructure, source code, deployment
+configuration, and/or protocol behavior to demonstrate exactly where and how
+the gap manifests.
 
-Subsection as needed — existing reports use subsections like:
+Focus on:
+- Provider source code analysis (specific files, functions, line numbers)
+- Protocol traces or observed behavior that proves the gap
+- Test results from integration tests that reproduce the issue
+- Teep report factor behavior that surfaces the gap
+
+Do NOT put remediation approaches, solution designs, or "how this could be
+fixed" content here — that belongs in the Remediation section below.
+
+Subsection as needed. Examples from existing reports:
 - "Server Source Code Analysis" with per-component breakdowns
-- "Test Descriptions"  - any integration tests in teep that prove the issue exists
-- "Teep Report Factor Behavior" - Description of any report factor code that proves the issue
+- "Gateway: Partial Header Forwarding" — pinpointing which handlers omit
+  required logic
+- "Test Descriptions" — integration tests in teep that prove the issue exists
+- "Teep Report Factor Behavior" — report factor code that surfaces the issue
 
 -->
 
@@ -94,24 +107,33 @@ Subsection as needed — existing reports use subsections like:
 
 ## Remediation
 
-<!-- What the provider should change to close the gap. Be specific: reference
-source files, API fields, protocol extensions, or configuration changes.
-Prioritize by implementation ease and security impact. Use stage-based
-trajectories when options build on each other.
+<!-- What the provider should change to close the gap. This is where solution
+approaches, fix designs, and alternative implementation strategies belong.
 
-In the event that multiple remediation options are available, provide
-the following subsections:
+For simple gaps with a single fix, describe the concrete change: reference
+source files, API fields, protocol extensions, or configuration changes.
+
+For gaps where multiple remediation approaches exist (e.g., different
+technical strategies with different trade-offs, or incremental stages that
+build on each other), structure this section as a survey of options. Each
+approach may need its own technical background, feasibility analysis, and
+barriers — that depth belongs here, not in Detailed Analysis above.
+
+When multiple approaches are available, use subsections such as:
 
 ### Implementation Options
 
-List concrete changes in further sub-sections. Reference existing patterns where applicable.
+One subsection per approach. Each may include its own background, mechanism
+description, feasibility assessment, and current barriers. Reference existing
+patterns and provider infrastructure where applicable.
 
-Provide Per-approach analysis with comparison tables.
+Provide per-approach analysis with comparison tables when useful.
 
-### Deployment priority
+### Deployment Priority
 
-If there are multiple remediation options, order by implementation ease and
-security impact. -->
+Order approaches by implementation ease and security impact. Identify the
+fastest path, the strongest path, and any approaches that are documented for
+reference but not yet viable. -->
 
 ---
 
