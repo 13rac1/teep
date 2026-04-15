@@ -42,6 +42,12 @@ func Dial(ctx context.Context, host string) (*Conn, error) {
 		if p == "" {
 			return nil, fmt.Errorf("invalid host %q: empty port", host)
 		}
+		// Reject bracketed non-IPv6 hosts like "[example.com]:443".
+		if strings.ContainsAny(host, "[]") {
+			if !strings.Contains(h, ":") || net.ParseIP(h) == nil {
+				return nil, fmt.Errorf("invalid host %q: bracketed host must be an IPv6 literal", host)
+			}
+		}
 		return DialAddr(ctx, h, net.JoinHostPort(h, p))
 	}
 

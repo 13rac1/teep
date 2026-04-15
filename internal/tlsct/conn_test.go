@@ -237,6 +237,7 @@ func TestDial_BracketValidation(t *testing.T) {
 		{"unbalanced leading", "[::1", "unbalanced brackets"},
 		{"unbalanced trailing", "::1]", "unbalanced brackets"},
 		{"bracketed hostname", "[example.com]", "bracketed host must be an IPv6 literal"},
+		{"bracketed hostname with port", "[example.com]:443", "bracketed host must be an IPv6 literal"},
 		{"nested brackets", "[[::1]]", "malformed brackets"},
 		{"embedded bracket", "exam[ple", "malformed brackets"},
 	}
