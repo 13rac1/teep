@@ -1,9 +1,8 @@
 package main
 
 import (
+	"context"
 	"log/slog"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -90,42 +89,6 @@ func TestFilterProviders_UnknownProvider(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// extractProvider tests
-// --------------------------------------------------------------------------
-
-func TestExtractProvider(t *testing.T) {
-	tests := []struct {
-		name     string
-		args     []string
-		wantName string
-		wantRest []string
-	}{
-		{"empty", []string{}, "", []string{}},
-		{"flag_first", []string{"--offline"}, "", []string{"--offline"}},
-		{"provider_only", []string{"venice"}, "venice", []string{}},
-		{"provider_plus_flags", []string{"neardirect", "--model", "x"}, "neardirect", []string{"--model", "x"}},
-		{"dash_flag_first", []string{"-v"}, "", []string{"-v"}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			name, rest := extractProvider(tc.args)
-			t.Logf("extractProvider(%v) = (%q, %v)", tc.args, name, rest)
-			if name != tc.wantName {
-				t.Errorf("name = %q, want %q", name, tc.wantName)
-			}
-			if len(rest) != len(tc.wantRest) {
-				t.Fatalf("rest len = %d, want %d", len(rest), len(tc.wantRest))
-			}
-			for i, r := range rest {
-				if r != tc.wantRest[i] {
-					t.Errorf("rest[%d] = %q, want %q", i, r, tc.wantRest[i])
-				}
-			}
-		})
-	}
-}
-
-// --------------------------------------------------------------------------
 // providerNotFoundError tests
 // --------------------------------------------------------------------------
 
@@ -171,45 +134,30 @@ func TestProviderNotFoundError_Unknown(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// parseLogLevel tests
+// parseSlogLevel tests
 // --------------------------------------------------------------------------
 
-func TestParseLogLevel(t *testing.T) {
+func TestParseSlogLevel(t *testing.T) {
 	tests := []struct {
-		name string
-		args []string
-		want slog.Level
+		name  string
+		input string
+		want  slog.Level
 	}{
-		{"default", []string{}, slog.LevelInfo},
-		{"debug_flag", []string{"--log-level", "debug"}, slog.LevelDebug},
-		{"info_flag", []string{"--log-level", "info"}, slog.LevelInfo},
-		{"warn_flag", []string{"--log-level", "warn"}, slog.LevelWarn},
-		{"error_flag", []string{"--log-level", "error"}, slog.LevelError},
-		{"equals_syntax", []string{"--log-level=warn"}, slog.LevelWarn},
-		{"among_other_args", []string{"venice", "--log-level", "debug"}, slog.LevelDebug},
-		{"case_insensitive", []string{"--log-level", "DEBUG"}, slog.LevelDebug},
+		{"debug", "debug", slog.LevelDebug},
+		{"info", "info", slog.LevelInfo},
+		{"warn", "warn", slog.LevelWarn},
+		{"error", "error", slog.LevelError},
+		{"default_empty", "", slog.LevelInfo},
+		{"default_unknown", "bogus", slog.LevelInfo},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseLogLevel(tc.args)
-			if err != nil {
-				t.Fatalf("parseLogLevel(%v) unexpected error: %v", tc.args, err)
-			}
+			got := parseSlogLevel(tc.input)
+			t.Logf("parseSlogLevel(%q) = %v", tc.input, got)
 			if got != tc.want {
-				t.Errorf("parseLogLevel(%v) = %v, want %v", tc.args, got, tc.want)
+				t.Errorf("parseSlogLevel(%q) = %v, want %v", tc.input, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestParseLogLevel_Invalid(t *testing.T) {
-	_, err := parseLogLevel([]string{"--log-level", "verbose"})
-	t.Logf("parseLogLevel(--log-level verbose) error: %v", err)
-	if err == nil {
-		t.Fatal("expected error for invalid log level")
-	}
-	if !strings.Contains(err.Error(), "verbose") {
-		t.Errorf("error should mention the invalid level: %v", err)
 	}
 }
 
@@ -305,23 +253,69 @@ func TestExtractObserved_EmptyMetadata(t *testing.T) {
 	}
 }
 
+// --------------------------------------------------------------------------
+// runVerify error returns (previously subprocess crasher tests)
+// --------------------------------------------------------------------------
+
 // TestRunVerify_CaptureOfflineMutuallyExclusive verifies that --capture and
-// --offline are rejected together. Uses the subprocess "crasher" pattern
-// because runVerify calls os.Exit.
+// --offline are rejected together. Now an in-process test since runVerify
+// returns error instead of calling os.Exit.
 func TestRunVerify_CaptureOfflineMutuallyExclusive(t *testing.T) {
-	const envKey = "TEEP_TEST_CAPTURE_OFFLINE_CRASHER"
-	if os.Getenv(envKey) == "1" {
-		runVerify([]string{"someprovider", "--model", "m", "--capture", os.TempDir(), "--offline"})
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run=TestRunVerify_CaptureOfflineMutuallyExclusive", "-test.v")
-	cmd.Env = append(os.Environ(), envKey+"=1")
-	out, err := cmd.CombinedOutput()
-	t.Logf("subprocess output: %s", out)
+	err := runVerify(context.Background(), "someprovider", "m", "/tmp/capture", true, false, "")
+	t.Logf("runVerify(capture+offline) error: %v", err)
 	if err == nil {
-		t.Fatal("expected non-zero exit for --capture + --offline")
+		t.Fatal("expected error for --capture + --offline")
 	}
-	if !strings.Contains(string(out), "--capture and --offline are mutually exclusive") {
-		t.Errorf("expected error message in output, got: %s", out)
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected 'mutually exclusive' in error, got: %v", err)
+	}
+}
+
+// TestRunVerify_ModelRequired verifies that an empty --model is rejected.
+func TestRunVerify_ModelRequired(t *testing.T) {
+	err := runVerify(context.Background(), "someprovider", "", "", false, false, "")
+	t.Logf("runVerify(no model) error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for missing --model")
+	}
+	if !strings.Contains(err.Error(), "--model is required") {
+		t.Errorf("expected '--model is required' in error, got: %v", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// rejectTrailingFlags tests
+// --------------------------------------------------------------------------
+
+func TestRejectTrailingFlags_NoFlags(t *testing.T) {
+	err := rejectTrailingFlags("serve", []string{"venice"})
+	if err != nil {
+		t.Errorf("expected no error for single provider, got: %v", err)
+	}
+}
+
+func TestRejectTrailingFlags_TrailingFlag(t *testing.T) {
+	err := rejectTrailingFlags("serve", []string{"venice", "--offline"})
+	t.Logf("rejectTrailingFlags error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for trailing flag")
+	}
+	if !strings.Contains(err.Error(), "flags must precede") {
+		t.Errorf("expected 'flags must precede' in error, got: %v", err)
+	}
+	// Error should suggest the correct order.
+	if !strings.Contains(err.Error(), "teep serve --offline venice") {
+		t.Errorf("expected suggested correct order in error, got: %v", err)
+	}
+}
+
+func TestRejectTrailingFlags_ExtraPositional(t *testing.T) {
+	err := rejectTrailingFlags("serve", []string{"venice", "neardirect"})
+	t.Logf("rejectTrailingFlags error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for extra positional arg")
+	}
+	if !strings.Contains(err.Error(), "expected one provider") {
+		t.Errorf("expected 'expected one provider' in error, got: %v", err)
 	}
 }

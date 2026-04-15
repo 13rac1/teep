@@ -14,7 +14,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -24,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/peterbourgon/ff/v4"
+
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
@@ -32,116 +33,218 @@ import (
 	"github.com/13rac1/teep/internal/verify"
 )
 
+// errSilentExit indicates the command has already printed its output and wants
+// a non-zero exit without additional error logging.
+var errSilentExit = errors.New("silent exit")
+
 func main() {
-	if len(os.Args) < 2 {
-		printOverview()
+	// Root flags — inherited by all subcommands via SetParent.
+	rootFlags := ff.NewFlagSet("teep")
+	logLevel := rootFlags.StringEnumLong("log-level",
+		"log verbosity: debug, info, warn, error",
+		"info", "debug", "warn", "error")
+
+	// Serve flags.
+	serveFlags := ff.NewFlagSet("serve").SetParent(rootFlags)
+	serveOffline := serveFlags.BoolLong("offline",
+		"skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
+	serveForce := registerForceFlag(serveFlags)
+
+	// Verify flags.
+	verifyFlags := ff.NewFlagSet("verify").SetParent(rootFlags)
+	model := verifyFlags.StringLong("model", "",
+		"model name as known to the provider (required)")
+	captureDir := verifyFlags.StringLong("capture", "",
+		"save all HTTP traffic to DIR for archival")
+	reverifyDir := verifyFlags.StringLong("reverify", "",
+		"re-verify from a captured attestation directory")
+	verifyOffline := verifyFlags.BoolLong("offline",
+		"skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
+	updateConfig := verifyFlags.BoolLong("update-config",
+		"write observed measurements to the config file ($TEEP_CONFIG)")
+	configOut := verifyFlags.StringLong("config-out", "",
+		"write updated config to this path instead of $TEEP_CONFIG")
+
+	root := &ff.Command{
+		Name:  "teep",
+		Usage: "teep [--log-level LEVEL] <subcommand> ...",
+		Flags: rootFlags,
+		Exec: func(_ context.Context, args []string) error {
+			if len(args) > 0 {
+				fmt.Fprintf(os.Stderr, "teep: unknown subcommand %q\n\n", args[0])
+			}
+			printOverview()
+			return errSilentExit
+		},
+		Subcommands: []*ff.Command{
+			{
+				Name:      "serve",
+				Usage:     "teep serve [--offline] [--force] PROVIDER",
+				ShortHelp: "Start the proxy server",
+				Flags:     serveFlags,
+				Exec: func(ctx context.Context, args []string) error {
+					if len(args) == 0 {
+						fmt.Fprintf(os.Stderr, "teep serve: provider is required\n\n")
+						printServeHelp()
+						return errSilentExit
+					}
+					if err := rejectTrailingFlags("serve", args); err != nil {
+						return err
+					}
+					return runServe(ctx, args[0], *serveOffline, forceValue(serveForce))
+				},
+			},
+			{
+				Name:      "verify",
+				Usage:     "teep verify [--model M] [flags] [PROVIDER]",
+				ShortHelp: "Fetch and verify attestation, print report",
+				Flags:     verifyFlags,
+				Exec: func(ctx context.Context, args []string) error {
+					if *reverifyDir != "" {
+						if len(args) > 0 {
+							return errors.New("PROVIDER and --reverify are mutually exclusive")
+						}
+						return runReverify(ctx, *reverifyDir)
+					}
+					if len(args) == 0 {
+						fmt.Fprintf(os.Stderr, "teep verify: provider is required\n\n")
+						printVerifyHelp()
+						return errSilentExit
+					}
+					if err := rejectTrailingFlags("verify", args); err != nil {
+						return err
+					}
+					return runVerify(ctx, args[0], *model, *captureDir,
+						*verifyOffline, *updateConfig, *configOut)
+				},
+			},
+			{
+				Name:      "self-check",
+				Usage:     "teep self-check",
+				ShortHelp: "Verify this binary's build provenance",
+				Exec: func(_ context.Context, args []string) error {
+					if len(args) != 0 {
+						return fmt.Errorf("self-check: unexpected arguments: %v", args)
+					}
+					return runSelfCheck()
+				},
+			},
+			{
+				Name:      "version",
+				Usage:     "teep version",
+				ShortHelp: "Print version information",
+				Exec: func(_ context.Context, args []string) error {
+					if len(args) != 0 {
+						return fmt.Errorf("version: unexpected arguments: %v", args)
+					}
+					return runVersion()
+				},
+			},
+			{
+				Name:      "help",
+				Usage:     "teep help [TOPIC]",
+				ShortHelp: "Show help for a command or topic",
+				Exec: func(_ context.Context, args []string) error {
+					runHelp(args)
+					return nil
+				},
+			},
+		},
+	}
+
+	// Parse arguments — handles flag parsing and subcommand selection.
+	if err := root.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, ff.ErrHelp) {
+			if sel := root.GetSelected(); sel != nil && sel.Name != "teep" {
+				runHelp([]string{sel.Name})
+			} else {
+				runHelp(nil)
+			}
+			return
+		}
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	// Parse --log-level before the subcommand. It can appear anywhere in os.Args.
-	level, err := parseLogLevel(os.Args[1:])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "teep: %v\n", err)
-		os.Exit(1)
-	}
-	slog.SetDefault(slog.New(reqid.NewHandler(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))))
+	// Set slog level between parse and execute — *logLevel is populated after Parse.
+	slog.SetDefault(slog.New(reqid.NewHandler(
+		slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: parseSlogLevel(*logLevel),
+		}))))
 
-	switch os.Args[1] {
-	case "serve":
-		runServe(os.Args[2:])
-	case "verify":
-		runVerify(os.Args[2:])
-	case "self-check":
-		runSelfCheck(os.Args[2:])
-	case "version":
-		runVersion(os.Args[2:])
-	case "-h", "--help", "help":
-		runHelp(os.Args[2:])
-	default:
-		fmt.Fprintf(os.Stderr, "teep: unknown subcommand %q\n\n", os.Args[1])
-		printOverview()
+	// Execute the selected subcommand.
+	ctx := context.Background()
+	if err := root.Run(ctx); err != nil {
+		if !errors.Is(err, errSilentExit) {
+			slog.Error(err.Error())
+		}
 		os.Exit(1)
 	}
 }
 
-// parseLogLevel extracts --log-level from args and returns the corresponding
-// slog.Level. Defaults to slog.LevelInfo.
-func parseLogLevel(args []string) (slog.Level, error) {
-	for i, arg := range args {
-		var val string
-		if arg == "--log-level" && i+1 < len(args) {
-			val = args[i+1]
-		} else if after, ok := strings.CutPrefix(arg, "--log-level="); ok {
-			val = after
-		} else {
-			continue
-		}
-		switch strings.ToLower(val) {
-		case "debug":
-			return slog.LevelDebug, nil
-		case "info":
-			return slog.LevelInfo, nil
-		case "warn":
-			return slog.LevelWarn, nil
-		case "error":
-			return slog.LevelError, nil
-		default:
-			return 0, fmt.Errorf("unknown log level %q (valid: debug, info, warn, error)", val)
+// parseSlogLevel converts a string log level to slog.Level, defaulting to Info.
+func parseSlogLevel(s string) slog.Level {
+	switch s {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// rejectTrailingFlags checks for flag-like arguments after the first positional
+// arg and returns a helpful error. ff stops parsing at the first non-flag
+// argument (POSIX convention), so flags placed after the provider are not
+// parsed. This catches the common mistake of writing "serve venice --offline"
+// instead of "serve --offline venice".
+func rejectTrailingFlags(cmd string, args []string) error {
+	for _, a := range args[1:] {
+		if strings.HasPrefix(a, "-") {
+			return fmt.Errorf("%s: flags must precede the provider argument (try: teep %s %s %s)",
+				cmd, cmd, strings.Join(args[1:], " "), args[0])
 		}
 	}
-	return slog.LevelInfo, nil
+	if len(args) > 1 {
+		return fmt.Errorf("%s: expected one provider argument, got %d", cmd, len(args))
+	}
+	return nil
 }
 
 // runServe loads config, creates the proxy, and starts listening.
-func runServe(args []string) {
-	providerName, args := extractProvider(args)
-	if providerName == "" {
-		fmt.Fprintf(os.Stderr, "teep serve: provider is required\n\n")
-		printServeHelp()
-		os.Exit(1)
-	}
-
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
-	force := registerForceFlag(fs)
-	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
-	fs.Usage = func() { printServeHelp() }
-	if err := fs.Parse(args); err != nil {
-		os.Exit(2)
-	}
-
+func runServe(ctx context.Context, provider string, offline, force bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		slog.Error("load config failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("load config: %w", err)
 	}
-	cfg.Offline = *offline
+	cfg.Offline = offline
 
-	if force != nil && *force {
+	if force {
 		cfg.Force = true
 		slog.Warn("--force enabled: requests will be forwarded even when enforced attestation factors fail")
 	}
 
-	if err := filterProviders(cfg, providerName); err != nil {
-		slog.Error("provider filter failed", "err", err)
-		os.Exit(1)
+	if err := filterProviders(cfg, provider); err != nil {
+		return err
 	}
 
 	srv, err := proxy.New(cfg)
 	if err != nil {
-		slog.Error("proxy init failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("proxy init: %w", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 
 	err = srv.ListenAndServe(ctx)
 	stop()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("server failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("server: %w", err)
 	}
 	slog.Info("server stopped")
+	return nil
 }
 
 // filterProviders narrows cfg.Providers to a single named provider.
@@ -166,148 +269,94 @@ func providerNotFoundError(name string, cfg *config.Config) error {
 	return fmt.Errorf("provider %q not found (known: %s)", name, knownProviders(cfg))
 }
 
-// extractProvider returns the first arg as a provider name if it doesn't look
-// like a flag, plus the remaining args for flag.Parse.
-func extractProvider(args []string) (name string, rest []string) {
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return "", args
+// runVerify fetches attestation from the named provider, builds the
+// verification report, prints it to stdout, and returns an error if any
+// enforced factor failed.
+func runVerify(ctx context.Context, provider, model, captureDir string, offline, updateConfig bool, configOut string) error {
+	if model == "" {
+		return errors.New("--model is required")
 	}
-	return args[0], args[1:]
-}
-
-// runVerify parses flags, fetches attestation from the named provider, builds
-// the verification report, prints it to stdout, and exits with code 1 if any
-// enforced factor failed (i.e. a factor not in the allow_fail list).
-func runVerify(args []string) {
-	providerName, args := extractProvider(args)
-
-	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
-	fs.Usage = func() { printVerifyHelp() }
-
-	modelName := fs.String("model", "", "model name as known to the provider (required)")
-	captureDir := fs.String("capture", "", "save all HTTP traffic to DIR for archival")
-	reverifyDir := fs.String("reverify", "", "re-verify from a captured attestation directory")
-	offline := fs.Bool("offline", false, "skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
-	updateConfig := fs.Bool("update-config", false, "write observed measurements to the config file ($TEEP_CONFIG)")
-	configOut := fs.String("config-out", "", "write updated config to this path instead of $TEEP_CONFIG")
-	fs.String("log-level", "info", "log verbosity: debug, info, warn, error")
-
-	if err := fs.Parse(args); err != nil {
-		os.Exit(2)
+	if captureDir != "" && offline {
+		return errors.New("--capture and --offline are mutually exclusive")
 	}
 
-	if *reverifyDir != "" {
-		runReverify(*reverifyDir)
-		return
-	}
-
-	if providerName == "" {
-		fmt.Fprintf(os.Stderr, "teep verify: provider is required\n\n")
-		printVerifyHelp()
-		os.Exit(1)
-	}
-	if *modelName == "" {
-		fmt.Fprintf(os.Stderr, "teep verify: --model is required\n")
-		fs.Usage()
-		os.Exit(1)
-	}
-	if *captureDir != "" && *offline {
-		fmt.Fprintf(os.Stderr, "teep verify: --capture and --offline are mutually exclusive\n")
-		os.Exit(1)
-	}
-
-	report, err := runVerification(providerName, *modelName, *captureDir, *offline, nil, attestation.Nonce{}, nil)
+	report, err := runVerification(ctx, &verify.Options{
+		ProviderName: provider,
+		ModelName:    model,
+		CaptureDir:   captureDir,
+		Offline:      offline,
+	})
 	if report != nil {
 		fmt.Print(verify.FormatReport(report))
 	}
 	if err != nil {
-		slog.Error("verification failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("verification failed: %w", err)
 	}
 
 	blocked := report.Blocked()
 
-	if *updateConfig || *configOut != "" {
+	if updateConfig || configOut != "" {
 		if blocked {
-			fmt.Fprintf(os.Stderr, "teep verify: refusing --update-config: attestation blocked (measurements may be untrustworthy)\n")
-			os.Exit(1)
+			return errors.New("refusing --update-config: attestation blocked (measurements may be untrustworthy)")
 		}
-		outPath := *configOut
+		outPath := configOut
 		if outPath == "" {
 			outPath = os.Getenv("TEEP_CONFIG")
 		}
 		if outPath == "" {
-			fmt.Fprintf(os.Stderr, "teep verify: --update-config requires $TEEP_CONFIG or --config-out\n")
-			os.Exit(1)
+			return errors.New("--update-config requires $TEEP_CONFIG or --config-out")
 		}
 		observed := extractObserved(report)
-		if err := config.UpdateConfig(outPath, providerName, &observed); err != nil {
-			fmt.Fprintf(os.Stderr, "teep verify: update config: %v\n", err)
-			os.Exit(1)
+		if err := config.UpdateConfig(outPath, provider, &observed); err != nil {
+			return fmt.Errorf("update config: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Config updated: %s (provider %s)\n", outPath, providerName)
+		fmt.Fprintf(os.Stderr, "Config updated: %s (provider %s)\n", outPath, provider)
 	}
 
 	if blocked {
-		os.Exit(1)
+		return errSilentExit
 	}
+	return nil
 }
 
 // runReverify re-verifies attestation from a previously captured directory.
 // All HTTP traffic is served from the saved responses via a replay transport.
-func runReverify(captureDir string) {
-	report, reverifyText, err := replayVerification(captureDir)
+func runReverify(ctx context.Context, captureDir string) error {
+	report, reverifyText, err := verify.Replay(ctx, captureDir, loadConfig)
 	if err != nil {
-		slog.Error("replay verification failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("replay verification failed: %w", err)
 	}
 
 	capturedText, loadErr := capture.LoadReport(captureDir)
 	switch {
 	case loadErr == nil:
 		if err := verify.CompareReports(capturedText, reverifyText); err != nil {
-			slog.Error("report comparison failed", "err", err)
-			os.Exit(1)
+			return fmt.Errorf("report comparison failed: %w", err)
 		}
 	case errors.Is(loadErr, os.ErrNotExist):
 		slog.Warn("no captured report to compare (report.txt absent)")
 	default:
-		slog.Error("read captured report failed", "err", loadErr)
-		os.Exit(1)
+		return fmt.Errorf("read captured report: %w", loadErr)
 	}
 
 	fmt.Print(reverifyText)
 	if report.Blocked() {
-		os.Exit(1)
+		return errSilentExit
 	}
+	return nil
 }
 
-// replayVerification loads a capture directory, replays all HTTP traffic, and
-// returns the verification report and formatted text.
-func replayVerification(captureDir string) (*attestation.VerificationReport, string, error) {
-	return verify.Replay(context.Background(), captureDir, loadConfig)
-}
-
-// runVerification loads config, builds the appropriate attester, fetches
-// attestation, runs TDX and NVIDIA verification, and returns the report.
-func runVerification(providerName, modelName, captureDir string, offline bool,
-	overrideClient *http.Client, overrideNonce attestation.Nonce, capturedE2EE *attestation.E2EETestResult,
-) (*attestation.VerificationReport, error) {
-	cfg, cp, err := loadConfig(providerName)
+// runVerification loads config then delegates to verify.Run.
+// Callers set override fields (Client, Nonce, CapturedE2EE) directly on opts
+// when needed for testing or replay; leave them zero for normal operation.
+func runVerification(ctx context.Context, opts *verify.Options) (*attestation.VerificationReport, error) {
+	cfg, cp, err := loadConfig(opts.ProviderName)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	return verify.Run(context.Background(), &verify.Options{
-		Config:       cfg,
-		Provider:     cp,
-		ProviderName: providerName,
-		ModelName:    modelName,
-		CaptureDir:   captureDir,
-		Offline:      offline,
-		Client:       overrideClient,
-		Nonce:        overrideNonce,
-		CapturedE2EE: capturedE2EE,
-	})
+	opts.Config = cfg
+	opts.Provider = cp
+	return verify.Run(ctx, opts)
 }
 
 // extractObserved builds an ObservedMeasurements from the verification report

@@ -28,24 +28,17 @@ var selfCheckAllowFail = map[string]bool{
 	"commit_set":  true,
 }
 
-func runSelfCheck(args []string) {
-	if len(args) != 0 {
-		fmt.Fprintf(os.Stderr, "teep self-check: unexpected arguments: %v\n", args)
-		os.Exit(2)
-	}
+func runSelfCheck() error {
 	info, ok := debug.ReadBuildInfo()
 	report := buildSelfCheckReport(info, ok)
 	fmt.Print(verify.FormatReport(report))
 	if report.Blocked() {
-		os.Exit(1)
+		return errSilentExit
 	}
+	return nil
 }
 
-func runVersion(args []string) {
-	if len(args) != 0 {
-		fmt.Fprintf(os.Stderr, "teep version: unexpected arguments: %v\n", args)
-		os.Exit(2)
-	}
+func runVersion() error {
 	info, ok := debug.ReadBuildInfo()
 	goVer := "unknown"
 	if ok {
@@ -58,6 +51,7 @@ func runVersion(args []string) {
 		}
 	}
 	fmt.Printf("teep %s (%s, %s)\n", Version, shortCommit(rev), goVer)
+	return nil
 }
 
 // selfCheckEvaluator evaluates one or more self-check factors.
