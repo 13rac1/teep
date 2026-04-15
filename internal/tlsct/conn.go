@@ -156,7 +156,8 @@ func (c *Conn) SPKI() string { return c.spki }
 
 // TLSState returns the TLS connection state captured at creation time.
 // Callers use this with Checker.CheckTLSState for CT verification.
-// Returns a shallow copy to prevent mutation of internal state.
+// Returns a shallow copy so callers cannot reassign top-level fields;
+// referenced objects (e.g. PeerCertificates slice elements) are shared.
 func (c *Conn) TLSState() *tls.ConnectionState {
 	state := c.tlsState
 	return &state
