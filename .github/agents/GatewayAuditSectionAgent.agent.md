@@ -42,13 +42,7 @@ For each required check in each prompt file:
 - For `Fail` or `Skip`, classify the severity: `Critical`, `High`, `Medium`, or `Low`.
 - Record the source file and approximate line for every claim.
 
-Apply these audit priorities (highest first):
-1. **Fail-closed violations** — code that continues on error, returns nil, falls through, or uses a fallback. These are **Critical**.
-2. **Cryptographic safety** — non-constant-time comparisons on secrets/keys/fingerprints/nonces/hashes; unauthenticated encryption; non-`crypto/rand` nonce generation. These are **Critical** or **High**.
-3. **Attestation integrity** — nonce sourced from server; cache miss pass-through; trust of provider-asserted fields without independent cryptographic verification. These are **High**.
-4. **Sensitive data handling** — logging secrets; ephemeral keys not zeroed; missing config file permission checks. These are **High** or **Medium**.
-5. **Error handling** — silent error swallowing; unknown config fields accepted; non-strict JSON; malformed elements silently dropped. These are **Medium**.
-6. **Go conventions** — unbounded reads; TLS connection reuse; missing test coverage. These are **Low**.
+Apply the audit priorities from [00_shared_preamble.md](../../docs/audit_prompts/gateway_inference/00_shared_preamble.md) strictly.
 
 ### Step 4 — Write the Section Report
 

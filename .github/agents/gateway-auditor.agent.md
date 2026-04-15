@@ -42,13 +42,7 @@ Work through **every section** of Parts 1–7 of `docs/audit_prompts/gateway_inf
 - Record source file + approximate line for every claim, positive or negative.
 - Mark the todo complete.
 
-Apply the audit priorities from Part 1 strictly:
-1. **Fail-closed violations** — anything that continues on error, returns nil instead of blocking, falls through on validation failure, serves stale data without blocking. These are **Critical**.
-2. **Cryptographic safety** — non-constant-time comparisons on secrets/keys/fingerprints/nonces/hashes; unauthenticated encryption; non-`crypto/rand` nonce generation. These are **Critical** or **High**.
-3. **Attestation integrity** — nonce sourced from server; cache miss pass-through; trust of provider-asserted fields without independent verification. These are **High**.
-4. **Sensitive data handling** — logging secrets; ephemeral keys not zeroed; config files missing permission checks. These are **High** or **Medium**.
-5. **Error handling** — silent error swallowing; unknown config fields accepted; non-strict JSON; malformed elements silently dropped. These are **Medium**.
-6. **Go conventions** — unbounded reads; TLS connection reuse; missing test coverage. These are **Low**.
+Apply the audit priorities from Part 1 of [gateway_inference.md](../../docs/audit_prompts/gateway_inference.md) strictly.
 
 ### Phase 4 — Write the Report
 Write the report to `docs/audit_reports/<provider>-gateway-audit.md`.
