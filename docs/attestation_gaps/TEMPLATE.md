@@ -73,7 +73,10 @@ existing reports:
 - TDX register table (dstack_integrity.md)
 - Client → Gateway → Model TEE flow (e2ee_plaintext_gaps.md)
 - Trust chain diagram with color-coded verification status (dstack_integrity.md)
+
 -->
+
+---
 
 ## Detailed Analysis
 
@@ -82,12 +85,10 @@ research findings. Reference specific files, line numbers, and function names.
 
 Subsection as needed — existing reports use subsections like:
 - "Server Source Code Analysis" with per-component breakdowns
-- "Research Findings" with per-register investigation results
-- "What Works" / "What Does Not Work" split
-- Per-approach analysis with comparison tables
+- "Test Descriptions"  - any integration tests in teep that prove the issue exists
+- "Teep Report Factor Behavior" - Description of any report factor code that proves the issue
 
-This is where you put the evidence that supports the claims in The Problem
-and Impact sections above. -->
+-->
 
 ---
 
@@ -98,18 +99,29 @@ source files, API fields, protocol extensions, or configuration changes.
 Prioritize by implementation ease and security impact. Use stage-based
 trajectories when options build on each other.
 
-### What providers should implement
+In the event that multiple remediation options are available, provide
+the following subsections:
 
-List concrete changes. Reference existing patterns where applicable.
+### Implementation Options
+
+List concrete changes in further sub-sections. Reference existing patterns where applicable.
+
+Provide Per-approach analysis with comparison tables.
 
 ### Deployment priority
 
 If there are multiple remediation options, order by implementation ease and
 security impact. -->
 
+---
+
 ## References
 
 <!-- Papers, repositories, specifications, documentation links.
+
+Use markdown links directly to URL sources throughout the document.
+This section should list all such links used in the document.
+
 Group by topic when there are many. Examples:
 
 - **Source code:** GitHub links to specific files/functions analyzed
@@ -119,36 +131,9 @@ Group by topic when there are many. Examples:
 
 ---
 
-<!-- OPTIONAL SECTIONS: Include when applicable.
-
-## Test Descriptions
-
-Integration test methodology and results. Describe what each test does, what
-it proves, and how to run it. Include a results summary table dated to when
-tests were last run. See e2ee_plaintext_gaps.md for a thorough example.
-
-## Trust Model
-
-Explicit trust assumptions and residual risks. What must the user trust the
-provider to implement correctly? What can teep not independently verify?
-Number each assumption. See sek8s_integrity.md for a thorough example.
-
-## Comparison
-
-Side-by-side comparison of providers, approaches, or architectures. Use tables.
-See sek8s_integrity.md (dstack vs sek8s) and model_weights.md (approach
-comparison tables).
-
-## Research Findings
-
-When original research (code analysis, live testing, public data correlation)
-informs the gap analysis. See dstack_integrity.md (publicly available golden
-values) and e2ee_plaintext_gaps.md (direct vs gateway E2EE test results).
-
 ## Teep Status
 
 Current teep behavior in response to this gap: what factors are affected,
 whether teep has a workaround, and what teep will enforce once the provider
 fixes the gap. This section is for teep maintainers and reviewers, not for
 the provider.
--->
