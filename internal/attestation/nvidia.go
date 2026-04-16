@@ -21,13 +21,18 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// NvidiaJWKSURL is NVIDIA's public JWKS endpoint for attestation JWT verification.
-var NvidiaJWKSURL = "https://nras.attestation.nvidia.com/.well-known/jwks.json"
+const (
+	// defaultNvidiaJWKSURL is NVIDIA's public JWKS endpoint for attestation JWT verification.
+	defaultNvidiaJWKSURL = "https://nras.attestation.nvidia.com/.well-known/jwks.json"
 
-// NRASAttestURL is NVIDIA's Remote Attestation Service endpoint for GPU
-// attestation. POST raw EAT JSON to receive a signed JWT with measurement
-// comparison results against NVIDIA's Reference Integrity Manifest (RIM).
-var NRASAttestURL = "https://nras.attestation.nvidia.com/v3/attest/gpu"
+	// defaultNRASAttestURL is NVIDIA's Remote Attestation Service endpoint for GPU
+	// attestation. POST raw EAT JSON to receive a signed JWT with measurement
+	// comparison results against NVIDIA's Reference Integrity Manifest (RIM).
+	defaultNRASAttestURL = "https://nras.attestation.nvidia.com/v3/attest/gpu"
+
+	// maxJWKSInstances is the maximum number of cached JWKS entries.
+	maxJWKSInstances = 16
+)
 
 // NvidiaVerifyResult holds the structured outcome of NVIDIA payload verification.
 // Fields are populated even on partial failure. Supports both EAT (local SPDM
@@ -99,262 +104,56 @@ type jwksEntry struct {
 	createdAt time.Time
 }
 
-var (
-	// jwksCacheTTL is the maximum age of a cached JWKS before it is re-fetched.
-	jwksCacheTTL = time.Hour
-	// jwksRefreshCooldown is the minimum time between JWKS re-fetches for a
-	// given URL. Prevents cache thrashing when ErrTokenUnverifiable is triggered
-	// by malformed JWTs rather than a genuine key rotation.
-	jwksRefreshCooldown = 30 * time.Second
-	jwksMu              sync.Mutex
-	jwksGroup           singleflight.Group
-	// jwksInstances caches keyfunc instances by JWKS URL. Production uses
-	// NvidiaJWKSURL; tests use httptest server URLs. Protected by jwksMu.
-	jwksInstances    = make(map[string]*jwksEntry)
-	maxJWKSInstances = 16
-)
+// NVIDIAVerifier manages NVIDIA NRAS attestation verification with per-instance
+// JWKS caching. Each verifier has its own URLs, cache, and singleflight group,
+// eliminating mutable package-level state and making tests parallel-safe.
+type NVIDIAVerifier struct {
+	nrasURL string
+	jwksURL string
 
-// getOrCreateKeyfunc returns a keyfunc.Keyfunc for the given JWKS URL.
-// Instances are cached by URL with a TTL. The JWKS is fetched on demand —
-// no background goroutine is started. The provided client (which may be nil)
-// is used for the fetch, allowing capture/replay transports to intercept it.
-// Concurrent cache misses for the same URL are coalesced via singleflight.
-//
-// Context note: singleflight coalesces concurrent callers under one shared
-// execution. ctx is the leader's context; if the leader's context is cancelled
-// mid-fetch, all waiting callers receive the cancellation error. This is an
-// acceptable trade-off — JWKS fetches are short-lived and rarely cancelled.
-func getOrCreateKeyfunc(ctx context.Context, jwksURL string, client *http.Client) (keyfunc.Keyfunc, error) {
-	jwksMu.Lock()
-	if entry, ok := jwksInstances[jwksURL]; ok && time.Since(entry.createdAt) < jwksCacheTTL {
-		jwksMu.Unlock()
-		return entry.kf, nil
-	}
-	jwksMu.Unlock()
-
-	v, err, _ := jwksGroup.Do(jwksURL, func() (any, error) {
-		return fetchAndCacheJWKS(ctx, jwksURL, client)
-	})
-	if err != nil {
-		return nil, err
-	}
-	kf, ok := v.(keyfunc.Keyfunc)
-	if !ok {
-		return nil, fmt.Errorf("JWKS singleflight returned unexpected type %T", v)
-	}
-	return kf, nil
+	mu       sync.RWMutex
+	group    singleflight.Group
+	cache    map[string]*jwksEntry
+	cacheTTL time.Duration
+	cooldown time.Duration
 }
 
-// fetchAndCacheJWKS performs the HTTP fetch, parses the JWKS, and stores the
-// result in the cache. It must only be called as the function argument to
-// jwksGroup.Do; calling it directly bypasses the singleflight coalescing
-// guarantee. It re-checks the cache on entry to handle the case where a
-// previous singleflight invocation already populated it.
-func fetchAndCacheJWKS(ctx context.Context, jwksURL string, client *http.Client) (keyfunc.Keyfunc, error) {
-	// Re-check: a previous singleflight invocation may have just populated the cache.
-	jwksMu.Lock()
-	if entry, ok := jwksInstances[jwksURL]; ok && time.Since(entry.createdAt) < jwksCacheTTL {
-		jwksMu.Unlock()
-		return entry.kf, nil
+// NewNVIDIAVerifier returns a verifier with custom NRAS and JWKS URLs.
+// Intended for tests and environments with private NRAS instances.
+func NewNVIDIAVerifier(nrasURL, jwksURL string) *NVIDIAVerifier {
+	return &NVIDIAVerifier{
+		nrasURL:  nrasURL,
+		jwksURL:  jwksURL,
+		cache:    make(map[string]*jwksEntry),
+		cacheTTL: time.Hour,
+		cooldown: 30 * time.Second,
 	}
-	jwksMu.Unlock()
-
-	if client == nil {
-		client = tlsct.NewHTTPClient(30 * time.Second)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("build JWKS request for %s: %w", jwksURL, err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch JWKS from %s: %w", jwksURL, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
-		if readErr != nil {
-			slog.DebugContext(ctx, "read JWKS error response body", "err", readErr)
-		}
-		return nil, fmt.Errorf("JWKS %s returned HTTP %d: %s", jwksURL, resp.StatusCode, truncate(string(errBody), 200))
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read JWKS response: %w", err)
-	}
-	kf, err := keyfunc.NewJWKSetJSON(body)
-	if err != nil {
-		return nil, fmt.Errorf("parse JWKS from %s: %w", jwksURL, err)
-	}
-
-	jwksMu.Lock()
-	defer jwksMu.Unlock()
-	if _, exists := jwksInstances[jwksURL]; !exists {
-		evictOldestLocked()
-	}
-	jwksInstances[jwksURL] = &jwksEntry{kf: kf, createdAt: time.Now()}
-	return kf, nil
 }
 
-// evictOldestLocked removes the oldest entry from jwksInstances when the cap
-// has been reached. Caller must hold jwksMu.
-func evictOldestLocked() {
-	if len(jwksInstances) < maxJWKSInstances {
-		return
-	}
-	var oldestURL string
-	var oldestTime time.Time
-	for u, e := range jwksInstances {
-		if oldestURL == "" || e.createdAt.Before(oldestTime) {
-			oldestURL, oldestTime = u, e.createdAt
-		}
-	}
-	delete(jwksInstances, oldestURL)
+// DefaultNVIDIAVerifier returns a verifier using NVIDIA's production URLs.
+func DefaultNVIDIAVerifier() *NVIDIAVerifier {
+	return NewNVIDIAVerifier(defaultNRASAttestURL, defaultNvidiaJWKSURL)
 }
 
-// shouldRefetchJWKS reports whether a JWKS re-fetch should be attempted for
-// jwksURL and, if so, removes the stale cache entry so the next
-// getOrCreateKeyfunc call triggers a fresh fetch.
-//
-// Returns false when the entry was fetched within jwksRefreshCooldown,
-// suppressing cache thrashing from repeated ErrTokenUnverifiable on malformed
-// JWTs. Returns true when the entry is absent or old enough to re-fetch.
-func shouldRefetchJWKS(jwksURL string) bool {
-	jwksMu.Lock()
-	defer jwksMu.Unlock()
-	entry, ok := jwksInstances[jwksURL]
-	if !ok {
-		return true // no cached entry; fetch unconditionally
-	}
-	if time.Since(entry.createdAt) < jwksRefreshCooldown {
-		return false // fetched too recently; suppress re-fetch
-	}
-	delete(jwksInstances, jwksURL)
-	return true
-}
-
-// ShutdownJWKS clears the in-process JWKS cache. Safe to call multiple times.
+// Shutdown clears the in-process JWKS cache. Safe to call multiple times.
 // Call during graceful shutdown or between tests to prevent stale keys.
-func ShutdownJWKS() {
-	jwksMu.Lock()
-	defer jwksMu.Unlock()
-	clear(jwksInstances)
+func (v *NVIDIAVerifier) Shutdown() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	clear(v.cache)
 }
 
-// VerifyNVIDIAPayload verifies the NVIDIA attestation payload via local SPDM
-// certificate chain and signature verification. The payload must be EAT JSON
-// (starting with '{'). NRAS cloud verification is handled separately by
-// VerifyNVIDIANRAS.
-func VerifyNVIDIAPayload(ctx context.Context, payload string, expectedNonce Nonce) *NvidiaVerifyResult {
-	if payload == "" {
-		return &NvidiaVerifyResult{SignatureErr: errors.New("empty NVIDIA payload")}
-	}
-
-	prefix := payload
-	if len(prefix) > 200 {
-		prefix = prefix[:200]
-	}
-	slog.DebugContext(ctx, "NVIDIA payload received", "length", len(payload), "prefix", prefix)
-
-	if payload[0] != '{' {
-		return &NvidiaVerifyResult{
-			SignatureErr: fmt.Errorf("NVIDIA payload is not EAT JSON (starts with %q)", payload[:min(10, len(payload))]),
-		}
-	}
-
-	return verifyNVIDIAEAT(ctx, payload, expectedNonce)
-}
-
-// verifyNVIDIAJWT verifies an NVIDIA NRAS attestation JWT. It fetches (and
-// caches) the NVIDIA JWKS on demand, verifies the JWT signature, and extracts
-// claims. Nonce freshness is verified separately via the EAT layer
-// (factor: nvidia_nonce_client_bound).
-//
-// If the JWT's kid is not in the cached keyset (ErrTokenUnverifiable), the
-// cache is invalidated and the fetch is retried once to recover from key
-// rotation without waiting for the TTL to expire.
-//
-// The provided client (which may be nil) is used for JWKS fetches.
-func verifyNVIDIAJWT(ctx context.Context, jwtPayload, jwksURL string, client *http.Client, opts ...jwt.ParserOption) *NvidiaVerifyResult {
-	result := &NvidiaVerifyResult{Format: "JWT"}
-
-	kf, err := getOrCreateKeyfunc(ctx, jwksURL, client)
-	if err != nil {
-		result.SignatureErr = fmt.Errorf("JWKS initialization: %w", err)
-		return result
-	}
-
-	claims := &nvidiaClaims{}
-	parserOpts := append([]jwt.ParserOption{
-		jwt.WithValidMethods([]string{"ES256", "ES384", "ES512"}),
-		jwt.WithExpirationRequired(),
-	}, opts...)
-	token, err := jwt.ParseWithClaims(jwtPayload, claims, kf.Keyfunc, parserOpts...)
-
-	// On unknown kid, NVIDIA may have rotated keys. Re-fetch and retry once.
-	// shouldRefetchJWKS returns false if the entry is too fresh to re-fetch,
-	// preventing cache thrashing from malformed JWTs.
-	if err != nil && errors.Is(err, jwt.ErrTokenUnverifiable) && shouldRefetchJWKS(jwksURL) {
-		if kf2, err2 := getOrCreateKeyfunc(ctx, jwksURL, client); err2 == nil {
-			claims = &nvidiaClaims{}
-			token, err = jwt.ParseWithClaims(jwtPayload, claims, kf2.Keyfunc, parserOpts...)
-		} else {
-			slog.DebugContext(ctx, "JWKS re-fetch after key rotation failed", "url", jwksURL, "err", err2)
-		}
-	}
-
-	if err != nil {
-		if isSignatureError(err) {
-			result.SignatureErr = fmt.Errorf("JWT signature verification failed: %w", err)
-		} else {
-			result.ClaimsErr = fmt.Errorf("JWT claims validation failed: %w", err)
-		}
-		if token != nil && token.Method != nil {
-			result.Algorithm = token.Method.Alg()
-		}
-		extractPartialClaims(claims, result)
-		return result
-	}
-
-	if !token.Valid {
-		result.ClaimsErr = errors.New("JWT is not valid after parsing")
-		return result
-	}
-
-	result.Algorithm = token.Method.Alg()
-	extractPartialClaims(claims, result)
-	return result
-}
-
-// extractPartialClaims copies fields from nvidiaClaims into the result.
-func extractPartialClaims(claims *nvidiaClaims, result *NvidiaVerifyResult) {
-	result.OverallResult = claims.OverallResult
-	result.Nonce = claims.Nonce
-	result.Issuer = claims.Issuer
-	if claims.ExpiresAt != nil {
-		result.ExpiresAt = claims.ExpiresAt.Time
-	}
-}
-
-// isSignatureError returns true when err indicates a key or signature failure
-// rather than a claims failure. In jwt/v5, use errors.Is for categorisation.
-func isSignatureError(err error) bool {
-	return errors.Is(err, jwt.ErrTokenSignatureInvalid) ||
-		errors.Is(err, jwt.ErrTokenUnverifiable) ||
-		errors.Is(err, jwt.ErrTokenMalformed)
-}
-
-// VerifyNVIDIANRAS posts the raw EAT payload to NVIDIA's Remote Attestation
+// VerifyNRAS posts the raw EAT payload to NVIDIA's Remote Attestation
 // Service for RIM-based measurement comparison and verifies the returned JWT.
 // This provides defense-in-depth: local SPDM verification proves evidence is
 // well-formed; NRAS compares GPU firmware measurements against NVIDIA's golden
 // Reference Integrity Manifest values.
-func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Client, opts ...jwt.ParserOption) *NvidiaVerifyResult {
+func (v *NVIDIAVerifier) VerifyNRAS(ctx context.Context, eatPayload string, client *http.Client, opts ...jwt.ParserOption) *NvidiaVerifyResult {
 	if client == nil {
 		client = tlsct.NewHTTPClient(30 * time.Second)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, NRASAttestURL, strings.NewReader(eatPayload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.nrasURL, strings.NewReader(eatPayload))
 	if err != nil {
 		return &NvidiaVerifyResult{
 			Format:       "JWT",
@@ -410,9 +209,231 @@ func VerifyNVIDIANRAS(ctx context.Context, eatPayload string, client *http.Clien
 		}
 	}
 
-	result := verifyNVIDIAJWT(ctx, overallJWT, NvidiaJWKSURL, client, opts...)
+	result := v.verifyNVIDIAJWT(ctx, overallJWT, v.jwksURL, client, opts...)
 	result.GPUDiags = extractGPUDiags(ctx, perGPU)
 	return result
+}
+
+// getOrCreateKeyfunc returns a keyfunc.Keyfunc for the given JWKS URL.
+// Instances are cached by URL with a TTL. The JWKS is fetched on demand —
+// no background goroutine is started. The provided client (which may be nil)
+// is used for the fetch, allowing capture/replay transports to intercept it.
+// Concurrent cache misses for the same URL are coalesced via singleflight.
+//
+// Context note: singleflight coalesces concurrent callers under one shared
+// execution. ctx is the leader's context; if the leader's context is cancelled
+// mid-fetch, all waiting callers receive the cancellation error. This is an
+// acceptable trade-off — JWKS fetches are short-lived and rarely cancelled.
+func (v *NVIDIAVerifier) getOrCreateKeyfunc(ctx context.Context, jwksURL string, client *http.Client) (keyfunc.Keyfunc, error) {
+	v.mu.RLock()
+	if entry, ok := v.cache[jwksURL]; ok && time.Since(entry.createdAt) < v.cacheTTL {
+		v.mu.RUnlock()
+		return entry.kf, nil
+	}
+	v.mu.RUnlock()
+
+	val, err, _ := v.group.Do(jwksURL, func() (any, error) {
+		return v.fetchAndCacheJWKS(ctx, jwksURL, client)
+	})
+	if err != nil {
+		return nil, err
+	}
+	kf, ok := val.(keyfunc.Keyfunc)
+	if !ok {
+		return nil, fmt.Errorf("JWKS singleflight returned unexpected type %T", val)
+	}
+	return kf, nil
+}
+
+// fetchAndCacheJWKS performs the HTTP fetch, parses the JWKS, and stores the
+// result in the cache. It must only be called as the function argument to
+// v.group.Do; calling it directly bypasses the singleflight coalescing
+// guarantee. It re-checks the cache on entry to handle the case where a
+// previous singleflight invocation already populated it.
+func (v *NVIDIAVerifier) fetchAndCacheJWKS(ctx context.Context, jwksURL string, client *http.Client) (keyfunc.Keyfunc, error) {
+	// Re-check: a previous singleflight invocation may have just populated the cache.
+	v.mu.RLock()
+	if entry, ok := v.cache[jwksURL]; ok && time.Since(entry.createdAt) < v.cacheTTL {
+		v.mu.RUnlock()
+		return entry.kf, nil
+	}
+	v.mu.RUnlock()
+
+	if client == nil {
+		client = tlsct.NewHTTPClient(30 * time.Second)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("build JWKS request for %s: %w", jwksURL, err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch JWKS from %s: %w", jwksURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if readErr != nil {
+			slog.DebugContext(ctx, "read JWKS error response body", "err", readErr)
+		}
+		return nil, fmt.Errorf("JWKS %s returned HTTP %d: %s", jwksURL, resp.StatusCode, truncate(string(errBody), 200))
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read JWKS response: %w", err)
+	}
+	kf, err := keyfunc.NewJWKSetJSON(body)
+	if err != nil {
+		return nil, fmt.Errorf("parse JWKS from %s: %w", jwksURL, err)
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if _, exists := v.cache[jwksURL]; !exists {
+		v.evictOldestLocked()
+	}
+	v.cache[jwksURL] = &jwksEntry{kf: kf, createdAt: time.Now()}
+	return kf, nil
+}
+
+// evictOldestLocked removes the oldest entry from the cache when the cap
+// has been reached. Caller must hold v.mu for writing.
+func (v *NVIDIAVerifier) evictOldestLocked() {
+	if len(v.cache) < maxJWKSInstances {
+		return
+	}
+	var oldestURL string
+	var oldestTime time.Time
+	for u, e := range v.cache {
+		if oldestURL == "" || e.createdAt.Before(oldestTime) {
+			oldestURL, oldestTime = u, e.createdAt
+		}
+	}
+	delete(v.cache, oldestURL)
+}
+
+// shouldRefetchJWKS reports whether a JWKS re-fetch should be attempted for
+// jwksURL and, if so, removes the stale cache entry so the next
+// getOrCreateKeyfunc call triggers a fresh fetch.
+//
+// Returns false when the entry was fetched within the cooldown period,
+// suppressing cache thrashing from repeated ErrTokenUnverifiable on malformed
+// JWTs. Returns true when the entry is absent or old enough to re-fetch.
+func (v *NVIDIAVerifier) shouldRefetchJWKS(jwksURL string) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	entry, ok := v.cache[jwksURL]
+	if !ok {
+		return true // no cached entry; fetch unconditionally
+	}
+	if time.Since(entry.createdAt) < v.cooldown {
+		return false // fetched too recently; suppress re-fetch
+	}
+	delete(v.cache, jwksURL)
+	return true
+}
+
+// verifyNVIDIAJWT verifies an NVIDIA NRAS attestation JWT. It fetches (and
+// caches) the NVIDIA JWKS on demand, verifies the JWT signature, and extracts
+// claims. Nonce freshness is verified separately via the EAT layer
+// (factor: nvidia_nonce_client_bound).
+//
+// If the JWT's kid is not in the cached keyset (ErrTokenUnverifiable), the
+// cache is invalidated and the fetch is retried once to recover from key
+// rotation without waiting for the TTL to expire.
+//
+// The provided client (which may be nil) is used for JWKS fetches.
+func (v *NVIDIAVerifier) verifyNVIDIAJWT(ctx context.Context, jwtPayload, jwksURL string, client *http.Client, opts ...jwt.ParserOption) *NvidiaVerifyResult {
+	result := &NvidiaVerifyResult{Format: "JWT"}
+
+	kf, err := v.getOrCreateKeyfunc(ctx, jwksURL, client)
+	if err != nil {
+		result.SignatureErr = fmt.Errorf("JWKS initialization: %w", err)
+		return result
+	}
+
+	claims := &nvidiaClaims{}
+	parserOpts := append([]jwt.ParserOption{
+		jwt.WithValidMethods([]string{"ES256", "ES384", "ES512"}),
+		jwt.WithExpirationRequired(),
+	}, opts...)
+	token, err := jwt.ParseWithClaims(jwtPayload, claims, kf.Keyfunc, parserOpts...)
+
+	// On unknown kid, NVIDIA may have rotated keys. Re-fetch and retry once.
+	// shouldRefetchJWKS returns false if the entry is too fresh to re-fetch,
+	// preventing cache thrashing from malformed JWTs.
+	if err != nil && errors.Is(err, jwt.ErrTokenUnverifiable) && v.shouldRefetchJWKS(jwksURL) {
+		if kf2, err2 := v.getOrCreateKeyfunc(ctx, jwksURL, client); err2 == nil {
+			claims = &nvidiaClaims{}
+			token, err = jwt.ParseWithClaims(jwtPayload, claims, kf2.Keyfunc, parserOpts...)
+		} else {
+			slog.DebugContext(ctx, "JWKS re-fetch after key rotation failed", "url", jwksURL, "err", err2)
+		}
+	}
+
+	if err != nil {
+		if isSignatureError(err) {
+			result.SignatureErr = fmt.Errorf("JWT signature verification failed: %w", err)
+		} else {
+			result.ClaimsErr = fmt.Errorf("JWT claims validation failed: %w", err)
+		}
+		if token != nil && token.Method != nil {
+			result.Algorithm = token.Method.Alg()
+		}
+		extractPartialClaims(claims, result)
+		return result
+	}
+
+	if !token.Valid {
+		result.ClaimsErr = errors.New("JWT is not valid after parsing")
+		return result
+	}
+
+	result.Algorithm = token.Method.Alg()
+	extractPartialClaims(claims, result)
+	return result
+}
+
+// extractPartialClaims copies fields from nvidiaClaims into the result.
+func extractPartialClaims(claims *nvidiaClaims, result *NvidiaVerifyResult) {
+	result.OverallResult = claims.OverallResult
+	result.Nonce = claims.Nonce
+	result.Issuer = claims.Issuer
+	if claims.ExpiresAt != nil {
+		result.ExpiresAt = claims.ExpiresAt.Time
+	}
+}
+
+// isSignatureError returns true when err indicates a key or signature failure
+// rather than a claims failure. In jwt/v5, use errors.Is for categorisation.
+func isSignatureError(err error) bool {
+	return errors.Is(err, jwt.ErrTokenSignatureInvalid) ||
+		errors.Is(err, jwt.ErrTokenUnverifiable) ||
+		errors.Is(err, jwt.ErrTokenMalformed)
+}
+
+// VerifyNVIDIAPayload verifies the NVIDIA attestation payload via local SPDM
+// certificate chain and signature verification. The payload must be EAT JSON
+// (starting with '{'). NRAS cloud verification is handled separately by
+// NVIDIAVerifier.VerifyNRAS.
+func VerifyNVIDIAPayload(ctx context.Context, payload string, expectedNonce Nonce) *NvidiaVerifyResult {
+	if payload == "" {
+		return &NvidiaVerifyResult{SignatureErr: errors.New("empty NVIDIA payload")}
+	}
+
+	prefix := payload
+	if len(prefix) > 200 {
+		prefix = prefix[:200]
+	}
+	slog.DebugContext(ctx, "NVIDIA payload received", "length", len(payload), "prefix", prefix)
+
+	if payload[0] != '{' {
+		return &NvidiaVerifyResult{
+			SignatureErr: fmt.Errorf("NVIDIA payload is not EAT JSON (starts with %q)", payload[:min(10, len(payload))]),
+		}
+	}
+
+	return verifyNVIDIAEAT(ctx, payload, expectedNonce)
 }
 
 // extractGPUDiags decodes per-GPU JWT payloads (without signature verification)

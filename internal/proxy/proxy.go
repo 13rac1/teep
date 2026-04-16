@@ -279,6 +279,7 @@ type Server struct {
 	signingKeyCache *attestation.SigningKeyCache
 	spkiCache       *attestation.SPKICache
 	rekorClient     *attestation.RekorClient
+	nvidiaVerifier  *attestation.NVIDIAVerifier
 	mux             *http.ServeMux
 	attestClient    *http.Client            // for attestation fetches
 	collateral      trust.HTTPSGetter       // for Intel PCS collateral fetches
@@ -328,6 +329,7 @@ func New(cfg *config.Config) (*Server, error) {
 	s.upstreamClient = upstreamClient
 
 	s.rekorClient = attestation.NewRekorClient(attestClient)
+	s.nvidiaVerifier = attestation.DefaultNVIDIAVerifier()
 	s.collateral = attestation.NewCollateralGetter(s.attestClient)
 	s.verifyQuote = attestation.NewTDXVerifier(cfg.Offline, s.collateral)
 
@@ -335,7 +337,7 @@ func New(cfg *config.Config) (*Server, error) {
 		mDefaults, gwDefaults := defaults.MeasurementDefaults(name)
 		mergedPolicy := config.MergedMeasurementPolicy(name, cfg, mDefaults)
 		mergedGWPolicy := config.MergedGatewayMeasurementPolicy(name, cfg, gwDefaults)
-		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg, cfg.Offline), mergedPolicy, mergedGWPolicy, s.rekorClient, s.collateral)
+		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg, cfg.Offline), mergedPolicy, mergedGWPolicy, s.rekorClient, s.nvidiaVerifier, s.collateral)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
@@ -431,6 +433,7 @@ func fromConfig(
 	policy attestation.MeasurementPolicy,
 	gatewayPolicy attestation.MeasurementPolicy,
 	rekorClient *attestation.RekorClient,
+	nvidiaVerifier *attestation.NVIDIAVerifier,
 	getter trust.HTTPSGetter,
 ) (*provider.Provider, error) {
 	p := &provider.Provider{
@@ -471,6 +474,7 @@ func fromConfig(
 			policy,
 			rdVerifier,
 			rekorClient,
+			nvidiaVerifier,
 			getter,
 		)
 		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
@@ -504,6 +508,7 @@ func fromConfig(
 			gatewayPolicy,
 			rdVerifier,
 			rekorClient,
+			nvidiaVerifier,
 			getter,
 		)
 		p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
@@ -714,7 +719,7 @@ func (s *Server) verifyNVIDIAOnline(
 	if raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
 		slog.DebugContext(ctx, "NVIDIA NRAS verification starting", "provider", provName)
 		start := time.Now()
-		result := attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, s.attestClient)
+		result := s.nvidiaVerifier.VerifyNRAS(ctx, raw.NvidiaPayload, s.attestClient)
 		dur := time.Since(start)
 		slog.DebugContext(ctx, "NVIDIA NRAS verification complete", "provider", provName, "elapsed", dur)
 		return result, dur
@@ -723,7 +728,7 @@ func (s *Server) verifyNVIDIAOnline(
 		slog.DebugContext(ctx, "NVIDIA NRAS verification starting (synthesized EAT)", "provider", provName)
 		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
 		start := time.Now()
-		result := attestation.VerifyNVIDIANRAS(ctx, eatJSON, s.attestClient)
+		result := s.nvidiaVerifier.VerifyNRAS(ctx, eatJSON, s.attestClient)
 		dur := time.Since(start)
 		slog.DebugContext(ctx, "NVIDIA NRAS verification complete (synthesized EAT)", "provider", provName, "elapsed", dur)
 		return result, dur

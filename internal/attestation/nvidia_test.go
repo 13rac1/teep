@@ -94,16 +94,17 @@ func makeTestJWKSServer(t *testing.T, key *ecdsa.PublicKey, kid string) *httptes
 	}))
 }
 
-// setupTestKeyfunc creates a JWKS server and registers it with the global
-// keyfunc cache. Returns the server URL. Cleanup is handled by t.Cleanup.
-func setupTestKeyfunc(t *testing.T, key *ecdsa.PublicKey, kid string) string {
+// setupTestVerifier creates a JWKS server and returns an NVIDIAVerifier
+// configured to use it. Cleanup is handled by t.Cleanup.
+func setupTestVerifier(t *testing.T, key *ecdsa.PublicKey, kid string) (v *NVIDIAVerifier, jwksURL string) {
 	t.Helper()
 	srv := makeTestJWKSServer(t, key, kid)
+	v = NewNVIDIAVerifier("", srv.URL)
 	t.Cleanup(func() {
 		srv.Close()
-		ShutdownJWKS()
+		v.Shutdown()
 	})
-	return srv.URL
+	return v, srv.URL
 }
 
 func TestGetOrCreateKeyfunc_RefreshesAfterTTL(t *testing.T) {
@@ -119,17 +120,14 @@ func TestGetOrCreateKeyfunc_RefreshesAfterTTL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origTTL := jwksCacheTTL
-	jwksCacheTTL = 0
-	t.Cleanup(func() {
-		jwksCacheTTL = origTTL
-		ShutdownJWKS()
-	})
+	v := NewNVIDIAVerifier("", srv.URL)
+	v.cacheTTL = 0 // force immediate expiry
+	t.Cleanup(v.Shutdown)
 
-	if _, err := getOrCreateKeyfunc(t.Context(), srv.URL, nil); err != nil {
+	if _, err := v.getOrCreateKeyfunc(t.Context(), srv.URL, nil); err != nil {
 		t.Fatalf("first getOrCreateKeyfunc: %v", err)
 	}
-	if _, err := getOrCreateKeyfunc(t.Context(), srv.URL, nil); err != nil {
+	if _, err := v.getOrCreateKeyfunc(t.Context(), srv.URL, nil); err != nil {
 		t.Fatalf("second getOrCreateKeyfunc: %v", err)
 	}
 
@@ -152,9 +150,11 @@ func TestShouldRefetchJWKS_Cooldown(t *testing.T) {
 		_, _ = w.Write(body)
 	}))
 	defer srv.Close()
-	t.Cleanup(ShutdownJWKS)
 
-	if _, err := getOrCreateKeyfunc(t.Context(), srv.URL, srv.Client()); err != nil {
+	v := NewNVIDIAVerifier("", srv.URL)
+	t.Cleanup(v.Shutdown)
+
+	if _, err := v.getOrCreateKeyfunc(t.Context(), srv.URL, srv.Client()); err != nil {
 		t.Fatalf("initial fetch: %v", err)
 	}
 	if got := calls.Load(); got != 1 {
@@ -162,12 +162,12 @@ func TestShouldRefetchJWKS_Cooldown(t *testing.T) {
 	}
 
 	// Immediate invalidation must be suppressed by the cooldown.
-	if shouldRefetchJWKS(srv.URL) {
+	if v.shouldRefetchJWKS(srv.URL) {
 		t.Error("shouldRefetchJWKS: expected false (within cooldown), got true")
 	}
 
 	// Cache should still be populated; no new fetch.
-	if _, err := getOrCreateKeyfunc(t.Context(), srv.URL, srv.Client()); err != nil {
+	if _, err := v.getOrCreateKeyfunc(t.Context(), srv.URL, srv.Client()); err != nil {
 		t.Fatalf("post-suppressed-invalidation fetch: %v", err)
 	}
 	if got := calls.Load(); got != 1 {
@@ -176,12 +176,8 @@ func TestShouldRefetchJWKS_Cooldown(t *testing.T) {
 }
 
 // TestShouldRefetchJWKS_AllowsAfterCooldown verifies that invalidation
-// succeeds once the cooldown has elapsed (simulated via jwksRefreshCooldown=0).
+// succeeds once the cooldown has elapsed (simulated via cooldown=0).
 func TestShouldRefetchJWKS_AllowsAfterCooldown(t *testing.T) {
-	origCooldown := jwksRefreshCooldown
-	jwksRefreshCooldown = 0
-	t.Cleanup(func() { jwksRefreshCooldown = origCooldown })
-
 	key := generateTestECKey(t)
 	var calls atomic.Int32
 	body := makeJWKSBody(t, &key.PublicKey, "post-cooldown-kid")
@@ -192,19 +188,22 @@ func TestShouldRefetchJWKS_AllowsAfterCooldown(t *testing.T) {
 		_, _ = w.Write(body)
 	}))
 	defer srv.Close()
-	t.Cleanup(ShutdownJWKS)
 
-	if _, err := getOrCreateKeyfunc(t.Context(), srv.URL, srv.Client()); err != nil {
+	v := NewNVIDIAVerifier("", srv.URL)
+	v.cooldown = 0
+	t.Cleanup(v.Shutdown)
+
+	if _, err := v.getOrCreateKeyfunc(t.Context(), srv.URL, srv.Client()); err != nil {
 		t.Fatalf("initial fetch: %v", err)
 	}
 
 	// With cooldown=0, invalidation must succeed.
-	if !shouldRefetchJWKS(srv.URL) {
+	if !v.shouldRefetchJWKS(srv.URL) {
 		t.Error("shouldRefetchJWKS: expected true (cooldown elapsed), got false")
 	}
 
 	// Next fetch must hit the server again.
-	if _, err := getOrCreateKeyfunc(t.Context(), srv.URL, srv.Client()); err != nil {
+	if _, err := v.getOrCreateKeyfunc(t.Context(), srv.URL, srv.Client()); err != nil {
 		t.Fatalf("post-invalidation fetch: %v", err)
 	}
 	if got := calls.Load(); got != 2 {
@@ -218,10 +217,10 @@ func TestVerifyJWT_ValidToken(t *testing.T) {
 	kid := "test-kid-1"
 	nonce := NewNonce()
 
-	jwksURL := setupTestKeyfunc(t, &key.PublicKey, kid)
+	v, jwksURL := setupTestVerifier(t, &key.PublicKey, kid)
 	tokenStr := makeTestJWT(t, key, kid, nonce.Hex(), "https://test.nvidia.com", time.Now().Add(time.Hour))
 
-	kf, err := getOrCreateKeyfunc(t.Context(), jwksURL, nil)
+	kf, err := v.getOrCreateKeyfunc(t.Context(), jwksURL, nil)
 	if err != nil {
 		t.Fatalf("getOrCreateKeyfunc: %v", err)
 	}
@@ -250,10 +249,10 @@ func TestVerifyJWT_ExpiredToken(t *testing.T) {
 	key := generateTestECKey(t)
 	kid := "test-kid-2"
 
-	jwksURL := setupTestKeyfunc(t, &key.PublicKey, kid)
+	v, jwksURL := setupTestVerifier(t, &key.PublicKey, kid)
 	tokenStr := makeTestJWT(t, key, kid, "", "https://test.nvidia.com", time.Now().Add(-time.Hour))
 
-	kf, err := getOrCreateKeyfunc(t.Context(), jwksURL, nil)
+	kf, err := v.getOrCreateKeyfunc(t.Context(), jwksURL, nil)
 	if err != nil {
 		t.Fatalf("getOrCreateKeyfunc: %v", err)
 	}
@@ -277,10 +276,10 @@ func TestVerifyJWT_WrongKey(t *testing.T) {
 	verifyKey := generateTestECKey(t) // different key
 	kid := "test-kid-3"
 
-	jwksURL := setupTestKeyfunc(t, &verifyKey.PublicKey, kid)
+	v, jwksURL := setupTestVerifier(t, &verifyKey.PublicKey, kid)
 	tokenStr := makeTestJWT(t, signingKey, kid, "", "test", time.Now().Add(time.Hour))
 
-	kf, err := getOrCreateKeyfunc(t.Context(), jwksURL, nil)
+	kf, err := v.getOrCreateKeyfunc(t.Context(), jwksURL, nil)
 	if err != nil {
 		t.Fatalf("getOrCreateKeyfunc: %v", err)
 	}
@@ -301,10 +300,10 @@ func TestVerifyJWT_WrongKey(t *testing.T) {
 func TestVerifyJWT_UnknownKid(t *testing.T) {
 	key := generateTestECKey(t)
 
-	jwksURL := setupTestKeyfunc(t, &key.PublicKey, "key-B")
+	v, jwksURL := setupTestVerifier(t, &key.PublicKey, "key-B")
 	tokenStr := makeTestJWT(t, key, "key-A", "", "test", time.Now().Add(time.Hour))
 
-	kf, err := getOrCreateKeyfunc(t.Context(), jwksURL, nil)
+	kf, err := v.getOrCreateKeyfunc(t.Context(), jwksURL, nil)
 	if err != nil {
 		t.Fatalf("getOrCreateKeyfunc: %v", err)
 	}
@@ -377,10 +376,10 @@ func TestVerifyNVIDIAJWT_Success(t *testing.T) {
 	kid := "nras-test-kid"
 	nonce := NewNonce()
 
-	jwksURL := setupTestKeyfunc(t, &key.PublicKey, kid)
+	v, jwksURL := setupTestVerifier(t, &key.PublicKey, kid)
 	jwtStr := makeTestJWT(t, key, kid, nonce.Hex(), "https://nras.attestation.nvidia.com", time.Now().Add(time.Hour))
 
-	result := verifyNVIDIAJWT(t.Context(), jwtStr, jwksURL, nil)
+	result := v.verifyNVIDIAJWT(t.Context(), jwtStr, jwksURL, nil)
 	if result.SignatureErr != nil {
 		t.Errorf("SignatureErr: %v", result.SignatureErr)
 	}
@@ -398,9 +397,9 @@ func TestVerifyNVIDIAJWT_Success(t *testing.T) {
 // TestVerifyNVIDIAJWT_EmptyToken verifies error on empty JWT string.
 func TestVerifyNVIDIAJWT_EmptyToken(t *testing.T) {
 	key := generateTestECKey(t)
-	jwksURL := setupTestKeyfunc(t, &key.PublicKey, "empty-test-kid")
+	v, jwksURL := setupTestVerifier(t, &key.PublicKey, "empty-test-kid")
 
-	result := verifyNVIDIAJWT(t.Context(), "", jwksURL, nil)
+	result := v.verifyNVIDIAJWT(t.Context(), "", jwksURL, nil)
 	if result.SignatureErr == nil && result.ClaimsErr == nil {
 		t.Error("expected error for empty JWT, got nil")
 	}
@@ -410,11 +409,6 @@ func TestVerifyNVIDIAJWT_EmptyToken(t *testing.T) {
 // invalidates the cache and retries when the JWT's kid is not in the cached
 // keyset, recovering from NVIDIA key rotations without waiting for TTL expiry.
 func TestVerifyNVIDIAJWT_RetryOnUnknownKid(t *testing.T) {
-	// Zero the cooldown so the fresh cache entry can be immediately invalidated.
-	origCooldown := jwksRefreshCooldown
-	jwksRefreshCooldown = 0
-	t.Cleanup(func() { jwksRefreshCooldown = origCooldown })
-
 	correctKey := generateTestECKey(t)
 	wrongKey := generateTestECKey(t)
 	kid := "rotated-kid"
@@ -433,11 +427,14 @@ func TestVerifyNVIDIAJWT_RetryOnUnknownKid(t *testing.T) {
 		}
 	}))
 	defer jwksSrv.Close()
-	t.Cleanup(ShutdownJWKS)
+
+	v := NewNVIDIAVerifier("", jwksSrv.URL)
+	v.cooldown = 0 // allow immediate re-fetch
+	t.Cleanup(v.Shutdown)
 
 	jwtStr := makeTestJWT(t, correctKey, kid, nonce.Hex(), "https://nras.attestation.nvidia.com", time.Now().Add(time.Hour))
 
-	result := verifyNVIDIAJWT(t.Context(), jwtStr, jwksSrv.URL, jwksSrv.Client())
+	result := v.verifyNVIDIAJWT(t.Context(), jwtStr, jwksSrv.URL, jwksSrv.Client())
 	t.Logf("callCount=%d SignatureErr=%v ClaimsErr=%v", callCount.Load(), result.SignatureErr, result.ClaimsErr)
 
 	if result.SignatureErr != nil {
@@ -568,10 +565,10 @@ func TestTruncate(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// VerifyNVIDIANRAS tests (mock NRAS server)
+// VerifyNRAS tests (mock NRAS server)
 // --------------------------------------------------------------------------
 
-func TestVerifyNVIDIANRAS_MockSuccess(t *testing.T) {
+func TestVerifyNRAS_MockSuccess(t *testing.T) {
 	key := generateTestECKey(t)
 	kid := "nras-mock-kid"
 	nonce := NewNonce()
@@ -579,14 +576,6 @@ func TestVerifyNVIDIANRAS_MockSuccess(t *testing.T) {
 	// Start a JWKS server for JWT verification.
 	jwksSrv := makeTestJWKSServer(t, &key.PublicKey, kid)
 	defer jwksSrv.Close()
-
-	// Override the JWKS URL to point to our test server.
-	origJWKS := NvidiaJWKSURL
-	NvidiaJWKSURL = jwksSrv.URL
-	t.Cleanup(func() {
-		NvidiaJWKSURL = origJWKS
-		ShutdownJWKS()
-	})
 
 	// Create a signed JWT that NRAS would return.
 	jwtStr := makeTestJWT(t, key, kid, nonce.Hex(), "https://nras.attestation.nvidia.com", time.Now().Add(time.Hour))
@@ -605,11 +594,10 @@ func TestVerifyNVIDIANRAS_MockSuccess(t *testing.T) {
 	}))
 	defer nrasSrv.Close()
 
-	origNRAS := NRASAttestURL
-	NRASAttestURL = nrasSrv.URL
-	t.Cleanup(func() { NRASAttestURL = origNRAS })
+	v := NewNVIDIAVerifier(nrasSrv.URL, jwksSrv.URL)
+	t.Cleanup(v.Shutdown)
 
-	result := VerifyNVIDIANRAS(context.Background(), `{"arch":"HOPPER"}`, nil)
+	result := v.VerifyNRAS(context.Background(), `{"arch":"HOPPER"}`, nil)
 
 	t.Logf("result: Format=%s SignatureErr=%v ClaimsErr=%v OverallResult=%v",
 		result.Format, result.SignatureErr, result.ClaimsErr, result.OverallResult)
@@ -628,7 +616,7 @@ func TestVerifyNVIDIANRAS_MockSuccess(t *testing.T) {
 	}
 }
 
-func TestVerifyNVIDIANRAS_ServerError(t *testing.T) {
+func TestVerifyNRAS_ServerError(t *testing.T) {
 	nrasSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Logf("NRAS mock: %s %s → 500", r.Method, r.URL.Path)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -636,11 +624,8 @@ func TestVerifyNVIDIANRAS_ServerError(t *testing.T) {
 	}))
 	defer nrasSrv.Close()
 
-	origNRAS := NRASAttestURL
-	NRASAttestURL = nrasSrv.URL
-	t.Cleanup(func() { NRASAttestURL = origNRAS })
-
-	result := VerifyNVIDIANRAS(context.Background(), `{"arch":"HOPPER"}`, nil)
+	v := NewNVIDIAVerifier(nrasSrv.URL, "")
+	result := v.VerifyNRAS(context.Background(), `{"arch":"HOPPER"}`, nil)
 
 	t.Logf("result: Format=%s SignatureErr=%v ClaimsErr=%v", result.Format, result.SignatureErr, result.ClaimsErr)
 
@@ -649,7 +634,7 @@ func TestVerifyNVIDIANRAS_ServerError(t *testing.T) {
 	}
 }
 
-func TestVerifyNVIDIANRAS_EmptyResponse(t *testing.T) {
+func TestVerifyNRAS_EmptyResponse(t *testing.T) {
 	nrasSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Logf("NRAS mock: %s %s → 200 empty", r.Method, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
@@ -657,11 +642,8 @@ func TestVerifyNVIDIANRAS_EmptyResponse(t *testing.T) {
 	}))
 	defer nrasSrv.Close()
 
-	origNRAS := NRASAttestURL
-	NRASAttestURL = nrasSrv.URL
-	t.Cleanup(func() { NRASAttestURL = origNRAS })
-
-	result := VerifyNVIDIANRAS(context.Background(), `{"arch":"HOPPER"}`, nil)
+	v := NewNVIDIAVerifier(nrasSrv.URL, "")
+	result := v.VerifyNRAS(context.Background(), `{"arch":"HOPPER"}`, nil)
 
 	t.Logf("result: Format=%s SignatureErr=%v ClaimsErr=%v", result.Format, result.SignatureErr, result.ClaimsErr)
 
@@ -881,13 +863,14 @@ func TestNvidiaErrorMessage_WithDescription(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ShutdownJWKS
+// Shutdown
 // ---------------------------------------------------------------------------
 
-func TestShutdownJWKS(t *testing.T) {
-	ShutdownJWKS() // must not panic; idempotent
-	ShutdownJWKS()
-	t.Log("ShutdownJWKS completed twice without panic")
+func TestShutdown(t *testing.T) {
+	v := DefaultNVIDIAVerifier()
+	v.Shutdown() // must not panic; idempotent
+	v.Shutdown()
+	t.Log("Shutdown completed twice without panic")
 }
 
 // ---------------------------------------------------------------------------

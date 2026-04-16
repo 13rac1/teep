@@ -20,15 +20,16 @@ import (
 
 // Options holds all parameters for Run.
 type Options struct {
-	Config       *config.Config
-	Provider     *config.Provider
-	ProviderName string
-	ModelName    string
-	CaptureDir   string
-	Offline      bool
-	Client       *http.Client                // nil = use default
-	Nonce        attestation.Nonce           // zero = generate new
-	CapturedE2EE *attestation.E2EETestResult // nil = run live test
+	Config         *config.Config
+	Provider       *config.Provider
+	ProviderName   string
+	ModelName      string
+	CaptureDir     string
+	Offline        bool
+	Client         *http.Client                // nil = use default
+	Nonce          attestation.Nonce           // zero = generate new
+	CapturedE2EE   *attestation.E2EETestResult // nil = run live test
+	NVIDIAVerifier *attestation.NVIDIAVerifier // nil = use default
 }
 
 // CfgLoader loads config and provider for the named provider.
@@ -86,7 +87,11 @@ func Run(ctx context.Context, opts *Options) (*attestation.VerificationReport, e
 	}
 
 	tdxResult := verifyTDX(ctx, raw, nonce, opts.ProviderName, verifier)
-	nvidiaResult, nrasResult := verifyNVIDIA(ctx, raw, nonce, client, opts.Offline)
+	nv := opts.NVIDIAVerifier
+	if nv == nil {
+		nv = attestation.DefaultNVIDIAVerifier()
+	}
+	nvidiaResult, nrasResult := verifyNVIDIA(ctx, raw, nonce, client, opts.Offline, nv)
 	pocResult := checkPoC(ctx, raw.IntelQuote, client, opts.Offline)
 
 	// Model compose evidence (gated on TDX).
