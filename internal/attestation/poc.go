@@ -87,8 +87,10 @@ func verifyPoCJWTClaims(ctx context.Context, jwtStr, hexQuote, expectedMachineID
 	}
 
 	var claims pocJWTClaims
-	if _, err := jsonstrict.Unmarshal(payload, &claims); err != nil {
+	if unknown, err := jsonstrict.Unmarshal(payload, &claims); err != nil {
 		return nil, fmt.Errorf("parse JWT claims: %w", err)
+	} else if len(unknown) > 0 {
+		slog.Warn("unexpected JSON fields", "fields", unknown, "context", "PoC claims")
 	}
 
 	now := time.Now()
@@ -224,13 +226,15 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 			}
 			if resp.statusCode != 200 {
 				collectCh <- collectResult{err: fmt.Errorf("stage 1: %s returned HTTP %d: %s",
-					peer, resp.statusCode, truncateStr(string(resp.body)))}
+					peer, resp.statusCode, truncate(string(resp.body), 256))}
 				return
 			}
 			var s1 stage1Response
-			if _, err := jsonstrict.Unmarshal(resp.body, &s1); err != nil {
+			if unknown, err := jsonstrict.Unmarshal(resp.body, &s1); err != nil {
 				collectCh <- collectResult{err: fmt.Errorf("stage 1: parse response from %s: %w", peer, err)}
 				return
+			} else if len(unknown) > 0 {
+				slog.Warn("unexpected JSON fields", "fields", unknown, "context", "PoC stage 1 response")
 			}
 			if s1.Moniker == "" || s1.Nonce == "" {
 				collectCh <- collectResult{err: fmt.Errorf("stage 1: missing moniker/nonce from %s", peer)}
@@ -322,7 +326,7 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 			return &PoCResult{Registered: false}
 		}
 		if resp.statusCode != 200 {
-			return &PoCResult{Err: fmt.Errorf("stage 2: %s returned HTTP %d: %s", n.peerURL, resp.statusCode, truncateStr(string(resp.body)))}
+			return &PoCResult{Err: fmt.Errorf("stage 2: %s returned HTTP %d: %s", n.peerURL, resp.statusCode, truncate(string(resp.body), 256))}
 		}
 
 		// Check if this is the final response (has jwt field). The body may be

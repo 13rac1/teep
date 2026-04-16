@@ -315,8 +315,10 @@ func Load(dir string) (Manifest, []RecordedEntry, error) {
 		return Manifest{}, nil, fmt.Errorf("read manifest: %w", err)
 	}
 	var m Manifest
-	if _, err := jsonstrict.Unmarshal(mData, &m); err != nil {
+	if unknown, err := jsonstrict.Unmarshal(mData, &m); err != nil {
 		return Manifest{}, nil, fmt.Errorf("parse manifest: %w", err)
+	} else if len(unknown) > 0 {
+		slog.Warn("unexpected JSON fields", "fields", unknown, "context", "capture metadata")
 	}
 
 	respDir := filepath.Join(dir, "responses")
@@ -335,8 +337,10 @@ func Load(dir string) (Manifest, []RecordedEntry, error) {
 			return Manifest{}, nil, fmt.Errorf("read %s: %w", jf, err)
 		}
 		var meta entryMeta
-		if _, err := jsonstrict.Unmarshal(metaData, &meta); err != nil {
+		if unknown, err := jsonstrict.Unmarshal(metaData, &meta); err != nil {
 			return Manifest{}, nil, fmt.Errorf("parse %s: %w", jf, err)
+		} else if len(unknown) > 0 {
+			slog.Warn("unexpected JSON fields", "fields", unknown, "context", "capture meta file")
 		}
 
 		bodyFile := strings.TrimSuffix(jf, ".json") + ".body"

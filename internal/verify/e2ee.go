@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -266,11 +267,13 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 			E2EError *string `json:"e2e_error,omitempty"`
 			Usage    any     `json:"usage,omitempty"`
 		}
-		if _, err := jsonstrict.Unmarshal([]byte(data), &event); err != nil {
+		if unknown, err := jsonstrict.Unmarshal([]byte(data), &event); err != nil {
 			return &attestation.E2EETestResult{
 				Attempted: true,
 				Err:       fmt.Errorf("parse SSE event: %w (prefix=%q)", err, safePrefix(data, 64)),
 			}
+		} else if len(unknown) > 0 {
+			slog.Debug("unexpected JSON fields", "fields", unknown, "context", "e2ee SSE event")
 		}
 
 		switch {
@@ -387,11 +390,13 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 			} `json:"choices"`
 			Usage any `json:"usage"`
 		}
-		if _, err := jsonstrict.Unmarshal([]byte(data), &chunk); err != nil {
+		if unknown, err := jsonstrict.Unmarshal([]byte(data), &chunk); err != nil {
 			return &attestation.E2EETestResult{
 				Attempted: true,
 				Err:       fmt.Errorf("parse SSE chunk %d: %w", chunkCount, err),
 			}
+		} else if len(unknown) > 0 {
+			slog.Debug("unexpected JSON fields", "fields", unknown, "context", "e2ee SSE chunk")
 		}
 		if len(chunk.Choices) == 0 {
 			continue

@@ -79,6 +79,13 @@ func NewRekorClientWithBase(baseURL string, httpClient *http.Client) *RekorClien
 	return &RekorClient{baseURL: baseURL, httpClient: httpClient}
 }
 
+// NewRekorClientWithKey returns a RekorClient with a custom base URL and
+// signing public key PEM. Intended for tests that need to verify entries
+// against a known key without hitting the production Rekor log.
+func NewRekorClientWithKey(baseURL, publicKeyPEM string, httpClient *http.Client) *RekorClient {
+	return &RekorClient{baseURL: baseURL, publicKeyPEM: publicKeyPEM, httpClient: httpClient}
+}
+
 // Fulcio OIDC extension OID prefix: 1.3.6.1.4.1.57264.1.
 var (
 	fulcioOIDPrefix  = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1}
@@ -276,7 +283,7 @@ func (rc *RekorClient) fetchRekorUUIDs(ctx context.Context, digest string) ([]st
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateStr(string(body)))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 256))
 	}
 
 	var uuids []string
@@ -311,7 +318,7 @@ func (rc *RekorClient) fetchRekorEntry(ctx context.Context, uuid string) (*rekor
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateStr(string(respBody)))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 256))
 	}
 
 	// Response is an array of maps: [{"<uuid>": {"body": "<base64>", ...}}]
@@ -732,13 +739,4 @@ func (rc *RekorClient) parseRekorPublicKey() (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("rekor public key is %T, expected *ecdsa.PublicKey", pub)
 	}
 	return ecKey, nil
-}
-
-// truncateStr truncates s to 256 characters, appending "..." if truncated.
-func truncateStr(s string) string {
-	const maxLen = 256
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

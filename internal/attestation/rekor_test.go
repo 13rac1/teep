@@ -605,8 +605,7 @@ func TestVerifyRekorEntry_InclusionIndependentOfSET(t *testing.T) {
 	}
 
 	// Use a client with an invalid key to force SET failure.
-	rc := NewRekorClient(http.DefaultClient)
-	rc.publicKeyPEM = "not-a-pem-key"
+	rc := NewRekorClientWithKey(defaultRekorBase, "not-a-pem-key", http.DefaultClient)
 
 	prov := &RekorProvenance{}
 	rc.verifyRekorEntry(entry, prov)
@@ -927,49 +926,6 @@ MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7
 	// The function should return some error (no usable entry found).
 	if prov.Err == nil {
 		t.Error("expected non-nil error for unexpected PEM type")
-	}
-}
-
-// TestRekorClientPublicKeyOverride verifies the publicKeyPEM field override.
-func TestRekorClientPublicKeyOverride(t *testing.T) {
-	rc := NewRekorClient(http.DefaultClient)
-	rc.publicKeyPEM = "fake-pem-key"
-	if rc.publicKeyPEM != "fake-pem-key" {
-		t.Errorf("publicKeyPEM = %q, want %q", rc.publicKeyPEM, "fake-pem-key")
-	}
-
-	rc.publicKeyPEM = ""
-	if rc.publicKeyPEM != "" {
-		t.Errorf("publicKeyPEM after reset = %q, want empty", rc.publicKeyPEM)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// truncateStr
-// ---------------------------------------------------------------------------
-
-func TestTruncateStr_Short(t *testing.T) {
-	s := "hello"
-	if got := truncateStr(s); got != s {
-		t.Errorf("truncateStr short = %q, want %q", got, s)
-	}
-}
-
-func TestTruncateStr_Exact256(t *testing.T) {
-	s := strings.Repeat("a", 256)
-	if got := truncateStr(s); got != s {
-		t.Errorf("truncateStr exact 256 chars should be unchanged, got len=%d", len(got))
-	}
-}
-
-func TestTruncateStr_Long(t *testing.T) {
-	s := strings.Repeat("b", 300)
-	got := truncateStr(s)
-	if len(got) != 259 { // 256 + len("...")
-		t.Errorf("truncateStr long: len = %d, want 259", len(got))
-	}
-	if !strings.HasSuffix(got, "...") {
-		t.Error("truncateStr long: should end with \"...\"")
 	}
 }
 
