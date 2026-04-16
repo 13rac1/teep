@@ -46,12 +46,12 @@ Pass the appropriate model string via the `model` parameter when invoking `Code 
 
    > "Review the current branch (origin/main..HEAD) and produce a structured report with a Verdict of APPROVE, REQUEST CHANGES, or BLOCK. Return the full report as your output."
 
-3. Receive the full review report text as the subagent's return value.
-4. Check the **Verdict** line:
+4. Receive the full review report text as the subagent's return value.
+5. Check the **Verdict** line:
    - `APPROVE` → proceed to Phase 4 (done, all clean).
    - `BLOCK` → proceed to Phase 4 (critical issues found; do NOT attempt automated fixes).
    - `REQUEST CHANGES` → proceed to Phase 3.
-5. Mark "Round N: review" as done.
+6. Mark "Round N: review" as done.
 
 ### Phase 3 — Fix
 

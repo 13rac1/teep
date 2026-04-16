@@ -45,13 +45,14 @@ For each valid finding:
 
 Run `make check`. If it fails:
 1. Read the error output carefully.
-2. Fix the compilation or test failures.
-3. Re-run `make check`.
-4. If `make check` still fails after two attempts, **stop and report the failure** — do NOT commit broken code.
+2. Only fix compilation or test failures that were introduced by your changes for the supplied review findings.
+3. If the failure is pre-existing or otherwise unrelated to your changes, **stop and report the failure** — do NOT make extra fixes outside the supplied review report.
+4. Re-run `make check` only after fixing an in-scope failure introduced by your changes.
+5. If `make check` still fails after two attempts on in-scope failures, **stop and report the failure** — do NOT commit broken code.
 
 ### Phase 5 — Commit
 
-Follow the `git-commit` skill (`.github/skills/git-commit/SKILL.md`). Stage only the files you modified — never `git add .` or `git add -A`. The commit message must:
+Follow the commit and staging guidance in `AGENTS.md`. Stage only the files you modified — never `git add .` or `git add -A`. The commit message must:
 - Subject: `fix: address code review findings (round N)`
 - Body: one bullet per finding fixed, each referencing the file and a brief description.
 - Omit any audit identifiers.
