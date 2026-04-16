@@ -100,7 +100,7 @@ Examples of what belongs here:
 - A primer on TDX measurement registers and what each one covers
   (dstack_integrity.md: "TDX in One Page", "Full Dstack TDX Authentication")
 - The provider's TEE architecture and request flow
-  (e2ee_plaintext_gaps.md: "Architecture" with Gateway → Model TEE diagram)
+  (gpu_cpu_binding.md: "Architecture" with a CPU ↔ GPU trust/binding diagram)
 - Protocol mechanics relevant to the gap (key exchange, attestation evidence
   format, event log structure)
 
@@ -208,7 +208,7 @@ For gaps where multiple remediation approaches exist (e.g., different
 technical strategies with different trade-offs, or incremental stages that
 build on each other), structure this section as a survey of options. Each
 approach may need its own technical background, feasibility analysis, and
-barriers — that depth belongs here, not in Detailed Analysis above.
+barriers — that depth belongs here, not in Detailed Gap Analysis above.
 
 When multiple approaches are available, use subsections such as:
 
