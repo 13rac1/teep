@@ -2,13 +2,11 @@ package neardirect
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -144,10 +142,10 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 	return domain, nil
 }
 
-// ListModels implements provider.ModelLister by returning all models from the
-// endpoint discovery cache. The /endpoints URL is public and requires no API
-// key, so this never sends an Authorization header upstream.
-func (r *EndpointResolver) ListModels(ctx context.Context) ([]json.RawMessage, error) {
+// Models returns the set of model names known to the endpoint discovery cache.
+// If the cache is stale or empty, a refresh is triggered first. Returns nil on
+// error if the cache is also empty.
+func (r *EndpointResolver) Models(ctx context.Context) (map[string]struct{}, error) {
 	r.mu.RLock()
 	stale := time.Since(r.fetchedAt) > endpointsTTL
 	size := len(r.mapping)
@@ -169,7 +167,7 @@ func (r *EndpointResolver) ListModels(ctx context.Context) ([]json.RawMessage, e
 			if size == 0 {
 				return nil, fmt.Errorf("endpoint discovery: %w", ctx.Err())
 			}
-			slog.WarnContext(ctx, "nearai: endpoint discovery: caller cancelled for ListModels, using stale mapping")
+			slog.WarnContext(ctx, "nearai: endpoint discovery: caller cancelled for Models, using stale mapping")
 		case res := <-ch:
 			err = res.Err
 			if err != nil {
@@ -179,34 +177,17 @@ func (r *EndpointResolver) ListModels(ctx context.Context) ([]json.RawMessage, e
 				if size == 0 {
 					return nil, fmt.Errorf("endpoint discovery: %w", err)
 				}
-				slog.WarnContext(ctx, "nearai: endpoint discovery refresh failed for ListModels, using stale mapping", "err", err)
+				slog.WarnContext(ctx, "nearai: endpoint discovery refresh failed for Models, using stale mapping", "err", err)
 			}
 		}
 	}
 
 	r.mu.RLock()
-	models := make([]string, 0, len(r.mapping))
+	out := make(map[string]struct{}, len(r.mapping))
 	for m := range r.mapping {
-		models = append(models, m)
+		out[m] = struct{}{}
 	}
 	r.mu.RUnlock()
-
-	sort.Strings(models)
-
-	out := make([]json.RawMessage, 0, len(models))
-	now := time.Now().Unix()
-	for _, m := range models {
-		b, err := json.Marshal(struct {
-			ID      string `json:"id"`
-			Object  string `json:"object"`
-			Created int64  `json:"created"`
-			OwnedBy string `json:"owned_by"`
-		}{ID: m, Object: "model", Created: now, OwnedBy: "near-ai"})
-		if err != nil {
-			return nil, fmt.Errorf("models: marshal %q: %w", m, err)
-		}
-		out = append(out, json.RawMessage(b))
-	}
 	return out, nil
 }
 

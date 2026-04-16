@@ -488,7 +488,10 @@ func fromConfig(
 			}
 			return d, true
 		}
-		p.ModelLister = resolver
+		p.ModelLister = provider.NewFilteredModelLister(
+			"https://"+nearcloud.GatewayHost(), cp.APIKey,
+			config.NewAttestationClient(offline), resolver,
+		)
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
 		p.ImagesPath = "/v1/images/generations"
@@ -518,7 +521,10 @@ func fromConfig(
 		p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
 			return nearcloud.GatewayHost(), true
 		}
-		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = provider.NewFilteredModelLister(
+			cp.BaseURL, cp.APIKey,
+			config.NewAttestationClient(offline), neardirect.NewEndpointResolver(offline),
+		)
 	case "nanogpt":
 		p.ChatPath = "/v1/chat/completions"
 		p.Attester = nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline)

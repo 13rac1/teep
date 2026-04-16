@@ -173,3 +173,124 @@ func TestModelLister_HTTPError(t *testing.T) {
 		t.Errorf("error %q does not include response body", err)
 	}
 }
+
+// staticFilter is a test helper implementing provider.ModelFilter.
+type staticFilter struct {
+	models map[string]struct{}
+	err    error
+}
+
+func (f *staticFilter) Models(_ context.Context) (map[string]struct{}, error) {
+	return f.models, f.err
+}
+
+func TestFilteredModelLister_FiltersModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(testModelsJSON))
+	}))
+	defer srv.Close()
+
+	filter := &staticFilter{
+		models: map[string]struct{}{
+			"qwen2p5-72b-instruct": {},
+			// llama-3.3-70b-instruct is NOT included
+		},
+	}
+
+	lister := provider.NewFilteredModelLister(srv.URL, "test-key", srv.Client(), filter)
+	models, err := lister.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1", len(models))
+	}
+	var entry struct {
+		ID            string `json:"id"`
+		ContextLength int    `json:"context_length"`
+	}
+	if err := json.Unmarshal(models[0], &entry); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if entry.ID != "qwen2p5-72b-instruct" {
+		t.Errorf("id = %q, want %q", entry.ID, "qwen2p5-72b-instruct")
+	}
+	// Verify upstream metadata is preserved.
+	if entry.ContextLength != 32768 {
+		t.Errorf("context_length = %d, want 32768", entry.ContextLength)
+	}
+}
+
+func TestFilteredModelLister_FilterErrorReturnsAll(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(testModelsJSON))
+	}))
+	defer srv.Close()
+
+	filter := &staticFilter{
+		err: http.ErrServerClosed,
+	}
+
+	lister := provider.NewFilteredModelLister(srv.URL, "test-key", srv.Client(), filter)
+	models, err := lister.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	// When filter fails, should return unfiltered catalog.
+	if len(models) != 2 {
+		t.Fatalf("got %d models, want 2 (unfiltered)", len(models))
+	}
+}
+
+func TestFilteredModelLister_EmptyFilterReturnsNone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(testModelsJSON))
+	}))
+	defer srv.Close()
+
+	filter := &staticFilter{
+		models: map[string]struct{}{},
+	}
+
+	lister := provider.NewFilteredModelLister(srv.URL, "test-key", srv.Client(), filter)
+	models, err := lister.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 0 {
+		t.Fatalf("got %d models, want 0", len(models))
+	}
+}
+
+func TestFilteredModelLister_InnerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"oops"}`))
+	}))
+	defer srv.Close()
+
+	filter := &staticFilter{
+		models: map[string]struct{}{"anything": {}},
+	}
+
+	lister := provider.NewFilteredModelLister(srv.URL, "test-key", srv.Client(), filter)
+	_, err := lister.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected error when inner lister fails")
+	}
+}

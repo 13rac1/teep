@@ -2,7 +2,6 @@ package neardirect
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -208,7 +207,7 @@ func TestEndpointResolver_ContextCancelled(t *testing.T) {
 	}
 }
 
-func TestEndpointResolver_ListModels(t *testing.T) {
+func TestEndpointResolver_Models(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Header.Get("Authorization") != "" {
@@ -227,41 +226,22 @@ func TestEndpointResolver_ListModels(t *testing.T) {
 
 	r := newEndpointResolverForTest(srv.URL)
 
-	models, err := r.ListModels(context.Background())
+	models, err := r.Models(context.Background())
 	if err != nil {
-		t.Fatalf("ListModels: %v", err)
+		t.Fatalf("Models: %v", err)
 	}
 	if len(models) != 3 {
 		t.Fatalf("len(models) = %d, want 3", len(models))
 	}
-	// Results must be sorted and contain correct ids.
 	want := []string{"model-a", "model-b", "model-c"}
-	for i, raw := range models {
-		var entry struct {
-			ID      string `json:"id"`
-			Object  string `json:"object"`
-			Created int64  `json:"created"`
-			OwnedBy string `json:"owned_by"`
-		}
-		if err := json.Unmarshal(raw, &entry); err != nil {
-			t.Fatalf("unmarshal entry %d: %v", i, err)
-		}
-		if entry.ID != want[i] {
-			t.Errorf("models[%d].id = %q, want %q", i, entry.ID, want[i])
-		}
-		if entry.Object != "model" {
-			t.Errorf("models[%d].object = %q, want %q", i, entry.Object, "model")
-		}
-		if entry.Created == 0 {
-			t.Errorf("models[%d].created = 0, want non-zero", i)
-		}
-		if entry.OwnedBy != "near-ai" {
-			t.Errorf("models[%d].owned_by = %q, want %q", i, entry.OwnedBy, "near-ai")
+	for _, name := range want {
+		if _, ok := models[name]; !ok {
+			t.Errorf("models missing %q", name)
 		}
 	}
 }
 
-func TestEndpointResolver_ListModels_ReusesCache(t *testing.T) {
+func TestEndpointResolver_Models_ReusesCache(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -273,19 +253,19 @@ func TestEndpointResolver_ListModels_ReusesCache(t *testing.T) {
 	r := newEndpointResolverForTest(srv.URL)
 
 	// First call fetches.
-	if _, err := r.ListModels(context.Background()); err != nil {
-		t.Fatalf("first ListModels: %v", err)
+	if _, err := r.Models(context.Background()); err != nil {
+		t.Fatalf("first Models: %v", err)
 	}
 	// Second call should reuse the cache (no second fetch).
-	if _, err := r.ListModels(context.Background()); err != nil {
-		t.Fatalf("second ListModels: %v", err)
+	if _, err := r.Models(context.Background()); err != nil {
+		t.Fatalf("second Models: %v", err)
 	}
 	if calls != 1 {
 		t.Errorf("expected 1 fetch, got %d", calls)
 	}
 }
 
-func TestEndpointResolver_ListModels_StaleOnRefreshError(t *testing.T) {
+func TestEndpointResolver_Models_StaleOnRefreshError(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -301,8 +281,8 @@ func TestEndpointResolver_ListModels_StaleOnRefreshError(t *testing.T) {
 
 	r := newEndpointResolverForTest(srv.URL)
 
-	if _, err := r.ListModels(context.Background()); err != nil {
-		t.Fatalf("initial ListModels: %v", err)
+	if _, err := r.Models(context.Background()); err != nil {
+		t.Fatalf("initial Models: %v", err)
 	}
 
 	r.mu.Lock()
@@ -310,16 +290,16 @@ func TestEndpointResolver_ListModels_StaleOnRefreshError(t *testing.T) {
 	r.mu.Unlock()
 
 	// Should return stale data, not an error.
-	models, err := r.ListModels(context.Background())
+	models, err := r.Models(context.Background())
 	if err != nil {
-		t.Fatalf("stale ListModels: %v", err)
+		t.Fatalf("stale Models: %v", err)
 	}
 	if len(models) != 1 {
 		t.Errorf("len(models) = %d, want 1", len(models))
 	}
 }
 
-func TestEndpointResolver_ListModels_ErrorWhenEmpty(t *testing.T) {
+func TestEndpointResolver_Models_ErrorWhenEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":"oops"}`))
@@ -328,7 +308,7 @@ func TestEndpointResolver_ListModels_ErrorWhenEmpty(t *testing.T) {
 
 	r := newEndpointResolverForTest(srv.URL)
 
-	_, err := r.ListModels(context.Background())
+	_, err := r.Models(context.Background())
 	if err == nil {
 		t.Fatal("expected error when discovery fails and cache is empty")
 	}
