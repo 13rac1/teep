@@ -88,9 +88,9 @@ A remote verifier receives a standard Intel TDX quote from the Chutes evidence A
 
 ### MRSEAM — Intel TDX module identity
 
-The Intel TDX module MRSEAM values are **platform constants**, identical across all TDX providers. Teep maintains an allowlist of known TDX module versions (`DstackMRSEAMAllow` in `dstack_defaults.go`) sourced from the Intel TDX module GitHub repository. These apply directly to Chutes without modification.
+The Intel TDX module MRSEAM values are **platform constants** at the TDX module level, but Chutes does not use `DstackMRSEAMAllow` directly. Teep's Chutes defaults use `Sek8sMRSEAMAllow`, which extends `attestation.DstackMRSEAMAllow` with additional accepted module versions. The base dstack defaults live in `internal/attestation/dstack_defaults.go`, and the Chutes provider enforces the sek8s-specific MRSEAM allowlist in `internal/provider/chutes/policy.go`.
 
-**Status:** Enforceable today with TOML config or Go-coded defaults.
+**Status:** Enforced. Applied via Go-coded defaults in `internal/provider/chutes/policy.go`, with TOML override support.
 
 ### MRTD — Virtual firmware image
 
@@ -102,13 +102,13 @@ Sek8s uses its own OVMF build, distinct from dstack. The MRTD value is determini
 
 Sek8s explicitly fixes VM parameters (memory, vCPU count, GPU MMIO regions, PCI hole sizing) to make RTMR0 deterministic within a deployment class. This is documented in `chutesai/sek8s/host-tools/README.md`. Enforceable per deployment class via the `rtmr0_allow` policy.
 
-**Status:** Enforced. Pinned in `internal/provider/chutes/policy.go`.
+**Status:** Pinned in `internal/provider/chutes/policy.go`, but allow-fail by default. The `tdx_hardware_config` factor is in `ChutesDefaultAllowFail`, so RTMR0 mismatches are reported but do not block requests unless the operator removes it from `allow_fail`.
 
 ### RTMR1 and RTMR2 — Kernel and command line
 
 RTMR1 (kernel + initramfs) and RTMR2 (kernel command line) are deterministic per sek8s image build and deployment class. Enforceable via `rtmr1_allow` and `rtmr2_allow` TOML policy lists.
 
-**Status:** Enforced. Pinned in `internal/provider/chutes/policy.go`. Values will change when Chutes updates the sek8s image.
+**Status:** Pinned in `internal/provider/chutes/policy.go`, but allow-fail by default. The `tdx_boot_config` factor is in `ChutesDefaultAllowFail`, so RTMR1/RTMR2 mismatches are reported but do not block requests unless the operator removes it from `allow_fail`. Values will change when Chutes updates the sek8s image.
 
 ### REPORTDATA binding
 
@@ -279,7 +279,7 @@ This would eliminate residual trust assumption 3 (golden measurement correctness
 
 ## Teep Status
 
-**Hardware measurement enforcement:** Fully enforced. MRTD, RTMR0, RTMR1, RTMR2, and MRSEAM pinned in `internal/provider/chutes/policy.go` and registered in `internal/defaults/defaults.go`. REPORTDATA binding enforced via `ReportDataVerifier` in `internal/provider/chutes/reportdata.go`.
+**Hardware measurement enforcement:** Partially enforced by default. MRTD and MRSEAM are pinned in `internal/provider/chutes/policy.go` and enforced fail-closed via `tdx_mrseam_mrtd`. RTMR0, RTMR1, and RTMR2 are also pinned and registered in Teep defaults, but their corresponding checks (`tdx_hardware_config` / `tdx_boot_config`) are allow-fail by default for Chutes. REPORTDATA binding is enforced via `ReportDataVerifier` in `internal/provider/chutes/reportdata.go`.
 
 **Supply chain factors:** Correctly return `Skip` for `build_transparency_log`, `compose_binding`, `sigstore_verification`, and `event_log_integrity` because the sek8s architecture does not expose the required evidence to clients.
 
