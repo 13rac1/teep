@@ -345,6 +345,10 @@ func New(cfg *config.Config) (*Server, error) {
 		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE)
 	}
 
+	if len(s.providers) == 0 {
+		return nil, errors.New("no providers configured")
+	}
+
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
 	s.mux.HandleFunc("GET /events", s.handleEvents)
 	s.mux.HandleFunc("POST /v1/chat/completions", s.handleEndpoint(&chatEndpoint))
@@ -565,22 +569,15 @@ func fromConfig(
 	return p, nil
 }
 
-// resolveModel finds the provider for a client model. The model name is passed
-// through to the upstream unchanged. Returns (nil, "", false) when no providers
-// are configured.
+// resolveModel returns the provider for a client model. The model name is
+// passed through to the upstream unchanged. With a single provider (the
+// current production configuration), this is deterministic. Multi-provider
+// routing by model name is not yet implemented; the first provider is returned.
 func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, bool) {
-	if len(s.providers) == 0 {
-		return nil, "", false
-	}
-	if len(s.providers) != 1 {
-		// Programming error — proxy.New enforces single provider.
-		slog.Error("resolveModel: expected exactly one provider", "count", len(s.providers))
-		return nil, "", false
-	}
 	for _, p := range s.providers {
 		return p, clientModel, true
 	}
-	return nil, "", false // unreachable
+	return nil, "", false
 }
 
 // fetchAndVerify fetches attestation from the provider and runs all
