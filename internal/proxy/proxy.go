@@ -777,9 +777,14 @@ func (s *Server) verifySupplyChain(
 	tdxResult *attestation.TDXVerifyResult,
 ) (supplyChainResult, time.Duration) {
 	if raw.AppCompose == "" || tdxResult == nil || tdxResult.ParseErr != nil {
-		slog.DebugContext(ctx, "supply chain verification skipped",
-			"has_compose", raw.AppCompose != "",
-			"has_tdx", tdxResult != nil)
+		if tdxResult != nil && tdxResult.ParseErr != nil {
+			slog.WarnContext(ctx, "supply chain verification skipped: TDX quote parse failed",
+				"parse_err", tdxResult.ParseErr)
+		} else {
+			slog.DebugContext(ctx, "supply chain verification skipped",
+				"has_compose", raw.AppCompose != "",
+				"has_tdx", tdxResult != nil)
+		}
 		return supplyChainResult{}, 0
 	}
 	start := time.Now()

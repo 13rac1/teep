@@ -34,12 +34,12 @@ const (
 // cache miss, two attestation requests are sent on the same TLS connection:
 // one for the gateway and one for the model.
 type PinnedHandler struct {
-	spkiCache     *attestation.SPKICache
-	apiKey        string
-	offline       bool
-	allowFail     []string
-	policy        attestation.MeasurementPolicy
-	gatewayPolicy attestation.MeasurementPolicy
+	spkiCache      *attestation.SPKICache
+	apiKey         string
+	offline        bool
+	allowFail      []string
+	policy         attestation.MeasurementPolicy
+	gatewayPolicy  attestation.MeasurementPolicy
 	rdVerifier     provider.ReportDataVerifier
 	rekorClient    *attestation.RekorClient
 	nvidiaVerifier *attestation.NVIDIAVerifier

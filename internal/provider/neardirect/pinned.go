@@ -42,11 +42,11 @@ type DomainResolver interface {
 // attestation on the same connection if needed, then sends the chat request
 // and returns the raw response.
 type PinnedHandler struct {
-	resolver    DomainResolver
-	spkiCache   *attestation.SPKICache
-	apiKey      string
-	offline     bool
-	allowFail   []string
+	resolver       DomainResolver
+	spkiCache      *attestation.SPKICache
+	apiKey         string
+	offline        bool
+	allowFail      []string
 	policy         attestation.MeasurementPolicy
 	rdVerifier     provider.ReportDataVerifier
 	rekorClient    *attestation.RekorClient

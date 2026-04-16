@@ -287,8 +287,8 @@ func TestAttester_FetchAttestation_InvalidBaseURL(t *testing.T) {
 }
 
 func TestAttester_FetchAttestation_UnknownFields(t *testing.T) {
-	// Add an extra field not in the response struct. jsonstrict.UnmarshalWarn
-	// should log a warning but not return an error.
+	// Add an extra field not in the response struct. jsonstrict.Unmarshal
+	// should return unknown fields but not return an error.
 	jsonWithExtra := `{
 		"request_nonce": "aabb",
 		"signing_public_key": "a6c0596e48e124f9",
