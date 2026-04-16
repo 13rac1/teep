@@ -276,8 +276,11 @@ of Cloud registry via a multi-peer quorum protocol:
    to produce a signed JWT confirming registration status.
 3. **Verification:** Validates the JWT (EdDSA signature + claims when a
    signing key is configured; claims-only otherwise) and reports `Pass` if
-   the PPID is found in the registry, `Fail` if explicitly not found, or
-   `Skip` if the query failed or was not attempted.
+   the PPID is found in the registry, `Fail` if explicitly not found, `Skip`
+   if the registry query was attempted but failed (or in equivalent
+   skip-classified cases such as offline mode with a PPID / a device ID with
+   no registry), and `Fail` when no PoC result and no PPID/device ID exist,
+   i.e. no CPU ID registry check is available/configured.
 
 ##### Limitations
 
@@ -1249,8 +1252,8 @@ CPU identity binding:
 
 CPU-to-GPU binding:
 
-- **`cpu_gpu_chain`** — hardcoded `Fail` at
-  [`report.go:595`](../../internal/attestation/report.go:595)
+- **`cpu_gpu_chain`** — hardcoded `Fail` in
+  [`report.go` `evalCPUGPUChain`](../../internal/attestation/report.go#L1024-L1032)
 
 GPU nonce binding:
 
