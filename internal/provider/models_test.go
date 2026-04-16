@@ -226,7 +226,7 @@ func TestFilteredModelLister_FiltersModels(t *testing.T) {
 	}
 }
 
-func TestFilteredModelLister_FilterErrorReturnsAll(t *testing.T) {
+func TestFilteredModelLister_FilterError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			http.NotFound(w, r)
@@ -242,13 +242,12 @@ func TestFilteredModelLister_FilterErrorReturnsAll(t *testing.T) {
 	}
 
 	lister := provider.NewFilteredModelLister(srv.URL, "test-key", srv.Client(), filter)
-	models, err := lister.ListModels(context.Background())
-	if err != nil {
-		t.Fatalf("ListModels: %v", err)
+	_, err := lister.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected error when filter fails")
 	}
-	// When filter fails, should return unfiltered catalog.
-	if len(models) != 2 {
-		t.Fatalf("got %d models, want 2 (unfiltered)", len(models))
+	if !strings.Contains(err.Error(), "endpoint filter") {
+		t.Errorf("error %q does not mention endpoint filter", err)
 	}
 }
 

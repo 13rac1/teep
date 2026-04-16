@@ -105,9 +105,8 @@ func NewFilteredModelLister(baseURL, apiKey string, client *http.Client, filter 
 }
 
 // ListModels fetches the full catalog, fetches the filter set, and returns
-// only the intersection. If the filter fetch fails, the full catalog is
-// returned rather than failing closed (model listing is not a security
-// boundary — it's a UX improvement).
+// only the intersection. If the filter fetch fails, the error is propagated
+// to ensure /v1/models only advertises models that can actually be served.
 func (f *filteredModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error) {
 	all, err := f.inner.ListModels(ctx)
 	if err != nil {
@@ -116,15 +115,16 @@ func (f *filteredModelLister) ListModels(ctx context.Context) ([]json.RawMessage
 
 	allowed, filterErr := f.filter.Models(ctx)
 	if filterErr != nil {
-		slog.WarnContext(ctx, "models: endpoint filter failed, returning unfiltered catalog", "err", filterErr)
-		return all, nil
+		return nil, fmt.Errorf("models: endpoint filter: %w", filterErr)
 	}
 
 	out := make([]json.RawMessage, 0, len(all))
 	for _, raw := range all {
 		var m modelID
-		if err := json.Unmarshal(raw, &m); err != nil {
-			continue // skip entries with no parseable id
+		if err := jsonstrict.UnmarshalWarn(raw, &m, "model entry"); err != nil {
+			return nil, fmt.Errorf("models: unmarshal entry to extract id: %w", err)
+		} else if len(unknown) > 0 {
+			slog.Warn("unexpected JSON fields", "fields", unknown, "context", "model entry")
 		}
 		if _, ok := allowed[m.ID]; ok {
 			out = append(out, raw)

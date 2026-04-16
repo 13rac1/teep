@@ -110,13 +110,6 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 	var err error
 	select {
 	case <-ctx.Done():
-		if ok {
-			slog.WarnContext(ctx, "nearai endpoint discovery: caller cancelled, using stale mapping",
-				"model", model,
-				"domain", domain,
-			)
-			return domain, nil
-		}
 		return "", fmt.Errorf("endpoint discovery: %w", ctx.Err())
 	case res := <-ch:
 		err = res.Err
@@ -161,13 +154,7 @@ func (r *EndpointResolver) Models(ctx context.Context) (map[string]struct{}, err
 		var err error
 		select {
 		case <-ctx.Done():
-			r.mu.RLock()
-			size = len(r.mapping)
-			r.mu.RUnlock()
-			if size == 0 {
-				return nil, fmt.Errorf("endpoint discovery: %w", ctx.Err())
-			}
-			slog.WarnContext(ctx, "nearai: endpoint discovery: caller cancelled for Models, using stale mapping")
+			return nil, fmt.Errorf("endpoint discovery: %w", ctx.Err())
 		case res := <-ch:
 			err = res.Err
 			if err != nil {
