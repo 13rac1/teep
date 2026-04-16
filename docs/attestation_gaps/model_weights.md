@@ -1,24 +1,173 @@
-# Model Weight Authentication
+# Model Weight Authentication: Runtime Weights Not Covered by TEE Measurements
 
-This document analyzes mechanisms for authenticating LLM model weights in TEE inference providers — verifying that the model loaded in GPU VRAM is the exact model and revision claimed by the provider.
+**Date:** 2026-04-16
+**Status:** Open
 
-Teep currently returns `Fail` for `measured_model_weights` with detail "no model weight hashes" for all providers. No provider currently exposes model weight hashes or per-token output binding to clients in a way that teep can independently verify.
+TEE attestation proves the correctness of an inference provider's software stack — firmware, kernel, and application code — but does not prove which model weights the inference engine loaded. A provider could pass all hardware attestation checks while serving inference from a cheaper, quantized, or backdoored model. No compensating controls currently exist across the industry, except for Tinfoil's dm-verity attested model volumes.
 
 ## The Problem
 
-A TEE attestation proves the *software stack* is correct (firmware, kernel, application code), but does not inherently prove which *data* (model weights) the inference engine loaded. A measured boot chain guarantees the correct SGLang or vLLM binary is running inside a genuine TDX enclave, but the weights file downloaded from HuggingFace at runtime is not covered by the MRTD/RTMR measurements.
+A TEE attestation proves the *software stack* is correct (firmware, kernel, application code), but does not inherently prove which *data* (model weights) the inference engine loaded. A measured boot chain guarantees the correct inference engine binary is running inside a genuine hardware enclave, but the weights file downloaded at runtime is not covered by the boot measurements.
 
-This creates a potential attack: a compromised or dishonest provider could boot the correct software stack (passing all TEE attestation), then load a cheaper, quantized, or backdoored model. The TEE measurements would still verify, but the inference output would come from the wrong model.
+This creates a gap that undermines the trust model: a compromised or dishonest provider could boot the correct software stack (passing all TEE attestation), then load a cheaper, quantized, or backdoored model. The TEE measurements would still verify, but the inference output would come from the wrong model. Users and downstream applications relying on a specific model's capabilities, safety alignment, or licensing terms have no way to independently verify which model is actually generating their responses.
 
-The severity of this gap depends on the provider's architecture:
+This is an industry-wide limitation of the current TEE attestation technology stack, not a failure of any individual provider. No current provider — across any TEE framework — exposes model weight hashes or per-token output binding to external clients in a way that enables independent verification. The one exception is Tinfoil, which closes this gap by design using dm-verity attested model volumes.
 
-- **Dstack providers** (venice, nearcloud, neardirect): The Docker Compose manifest is bound into `MRCONFIGID`, and image digests are independently verifiable via Sigstore/Rekor. However, the compose manifest specifies the *container image*, not the model weights. Weights are typically downloaded at runtime by the inference engine inside the container.
+## Impact
 
-- **Sek8s (Chutes)**: The cosign admission controller verifies container images inside the TEE, and the LUKS-encrypted root filesystem prevents boot-time substitution. Weights are downloaded by the inference engine inside the already-measured TEE. See [sek8s_integrity.md](sek8s_integrity.md) for the full Chutes-specific analysis. For Chutes-specific weight verification mechanisms (watchtower, cllmv), see [Chutes weight verification mechanisms (reference)](#chutes-weight-verification-mechanisms-reference) below.
+**Security impact:**
 
-- **Tinfoil**: Tinfoil closes the model weight gap by design using dm-verity attested model volumes. See [dm-verity attested model volumes (Tinfoil V3)](#dm-verity-attested-model-volumes-tinfoil-v3) below.
+- **Model substitution attack**: An attacker controlling or compromising a provider can load a different model than advertised while passing all TEE attestation checks. The substituted model could be quantized (lower quality), fine-tuned (with injected biases or backdoors), or entirely different. The TEE hardware attestation provides no signal of this substitution.
+- **Safety alignment bypass**: A backdoored model could pass standard safety evaluations while containing hidden behaviors triggered by specific inputs. Since the model weights are not covered by attestation, there is no cryptographic proof that the deployed model is the same one that passed safety evaluation.
+- **Intellectual property fraud**: A provider could claim to run a premium model (justifying higher pricing) while actually serving a cheaper alternative. Users have no verification mechanism.
 
-## Approaches for Client-Verifiable Weight Authentication
+**Operational impact:**
+
+- **No client-side verification path**: External clients interacting through inference APIs cannot verify model identity. All existing verification mechanisms (where they exist) are server-side and privileged.
+- **Trust dependency**: Users must trust provider claims about which model is loaded, despite TEE attestation being specifically designed to eliminate such trust dependencies.
+
+---
+
+## Technical Background
+
+This section covers the foundational knowledge shared across all remediation approaches: what TEE measurements cover, what they don't, and how the gap manifests in each provider architecture.
+
+### TDX measurement registers and model weights
+
+Intel TDX measurement registers cover the boot chain:
+
+| Register | Covers | Relevant to model weights? |
+|----------|--------|---------------------------|
+| MRTD | Virtual firmware measurement | No — firmware identity only |
+| RTMR0 | Virtual hardware config (CPU, RAM, GPU) | No — hardware config only |
+| RTMR1 | Linux kernel measurement | No — kernel identity only |
+| RTMR2 | Kernel cmdline + initrd + rootfs hash | No — OS image identity only |
+| RTMR3 | Runtime event log (compose hash, instance ID) | **Indirectly** — could be extended |
+| MRCONFIGID | `0x01 \|\| SHA256(app_compose)` — Docker Compose manifest | **Indirectly** — binds container images, not model files within them |
+
+The key gap: MRTD through RTMR2 measure the *software stack*. MRCONFIGID binds the Docker Compose manifest, which specifies *container images* — but model weights are typically downloaded at runtime by the inference engine *inside* the container, after boot measurements are complete.
+
+### Provider architecture differences
+
+The gap manifests differently across provider architectures:
+
+- **Dstack providers** (Venice, Nearcloud, Neardirect): The Docker Compose manifest is bound into `MRCONFIGID`, and image digests are independently verifiable via Sigstore/Rekor. However, the compose manifest specifies the *container image*, not the model weights. Weights are typically downloaded at runtime by the inference engine inside the container.
+
+- **Sek8s (Chutes)**: The cosign admission controller verifies container images inside the TEE, and the LUKS-encrypted root filesystem prevents boot-time substitution. Weights are downloaded by the inference engine inside the already-measured TEE. See [sek8s_integrity.md](sek8s_integrity.md) for the full Chutes-specific analysis.
+
+- **Tinfoil**: Tinfoil closes the model weight gap by design using dm-verity attested model volumes. The dm-verity root hash is pinned in a measured configuration whose SHA-256 is embedded in the kernel command line (measured into RTMR2). See [dm-verity attested model volumes (Tinfoil V3)](#dm-verity-attested-model-volumes-tinfoil-v3) in Remediation.
+
+---
+
+## Detailed Gap Analysis
+
+### Dstack providers: compose binding does not cover model data
+
+For dstack-based providers, the attestation chain from TDX hardware through compose binding to Sigstore-verified container images is complete and independently verifiable. However, this chain proves which *container image* is deployed — not which model weights the inference engine loaded. The inference engine downloads weights from HuggingFace (or another source) at runtime, inside the already-measured container. No current dstack provider includes a model-specific image or model identity in the Docker Compose manifest.
+
+### Chutes: existing verification mechanisms exclude TEE instances
+
+Chutes implements two server-side weight verification systems — the watchtower and cllmv. Neither is available to external clients for independent verification.
+
+#### Watchtower — server-side weight probing
+
+Source: [`chutesai/chutes-api/watchtower.py`](https://github.com/chutesai/chutes-api/blob/main/watchtower.py)
+
+The watchtower is Chutes' continuous validator-side monitoring system that probes running instances for integrity. It performs multiple verification passes on each chute:
+
+**What the watchtower checks:**
+
+1. **Model weight file hashes** (`check_llm_weights`): For vLLM/SGLang-templated chutes, the watchtower fetches `model.safetensors.index.json` and `config.json` from HuggingFace for the chute's declared model and revision. It SHA256-hashes the full file contents and compares against the hash of the same file read from the miner via the encrypted `/_slurp` endpoint. It then parses the safetensors index to enumerate individual weight shard files and spot-checks random byte ranges within randomly selected shards, comparing SHA256 hashes against HuggingFace.
+
+2. **Process command verification** (`check_commands`, `check_live_code`): Reads `/proc/1/cmdline` and the chute source file from the miner to verify the correct process and code are running.
+
+3. **Environment dump verification** (`check_chute`): Checks Kubernetes environment, LD_PRELOAD (chutes-aegis.so), SGLang process presence and PID stability, and running command line arguments.
+
+4. **Ping tests** (`check_pings`): Encrypted challenge-response liveness probes.
+
+**Why external clients cannot replicate the watchtower:**
+
+| Requirement | Watchtower has | External clients have |
+|------------|---------------|----------|
+| Filesystem access to miners | Yes, via encrypted `/_slurp` endpoint | No |
+| Validator-miner symmetric keys | Yes (AES-256 from hardware attestation handshake) | No |
+| Internal miner HTTP protocol | Yes (Bittensor hotkey-authenticated `miner_client`) | No |
+| Redis caching infrastructure | Yes (server-side, caches HF hashes) | No |
+| Direct HuggingFace model access | Yes | Yes, but no miner-side comparison target |
+
+**Critical: TEE instances are excluded from watchtower.** The watchtower's `load_chute_instances()` explicitly filters out TEE instances:
+
+```python
+LaunchConfig.env_type != "tee",  # Exclude TEE
+```
+
+For the exact class of instances that run in hardware TEEs, the watchtower's weight verification does not run. TEE instances rely entirely on the measured boot chain (LUKS gating + cosign admission) rather than runtime filesystem probing for weight integrity.
+
+The watchtower exclusion is architecturally coherent: the TEE's measured boot chain should make filesystem probing redundant because the cosign admission controller prevents loading unsigned images, and the LUKS-encrypted root filesystem prevents boot-time substitution. However, this means there is no runtime verification that the correct model weights are loaded in GPU VRAM after the initial boot sequence.
+
+#### cllmv — per-token LLM verification
+
+Source: [`chutesai/cllmv`](https://github.com/chutesai/cllmv) (Python wrapper), `chutes-aegis.so` / `chutes-aegis-verify.so` (closed-source native libraries)
+
+cllmv is a per-token output verification system that cryptographically binds each generated token to the model name and exact HuggingFace revision hash. It is designed to detect model substitution attacks where a miner loads a cheaper or different model than claimed.
+
+**How cllmv works:**
+
+The inference engine (SGLang or vLLM, via Chutes' fork) includes cllmv hooks that generate a verification token for each output token. The token is included in the streaming response as a `chutes_verification` field in each SSE chunk's JSON payload.
+
+The system has two protocol versions:
+
+**V1 (legacy, pre-0.5.5):** An MD5-based interleaving hash.
+- Inputs: chunk ID, created timestamp, token text, salt (derived from `config_id`), model name, revision hash
+- Output: 32-hex verification token
+
+**V2 (current, >= 0.5.5):** HMAC-SHA256 with an ephemeral session key.
+- Session initialization: The miner's `chutes-aegis.so` generates a 312-hex init blob containing an X25519 ephemeral public key. The validator calls `decrypt_session_key()` with its own X25519 private key to derive a shared HMAC session key.
+- Inputs: chunk ID, created timestamp, token text, expected token, session key (hex), sub (derived from `config_id + rint_nonce + package_hash`), model name, revision hash
+- Output: 32-hex HMAC-SHA256 verification token
+
+**Validator-side enforcement** (from `api/chute/util.py`): The validator checks cllmv tokens for the first 3 tokens of each response plus 1% of subsequent tokens. A failure raises `InvalidCLLMV` and terminates the miner instance — **but only for non-TEE chutes**.
+
+**cllmv is not enforced for TEE instances.** The validator code explicitly exempts TEE chutes:
+
+```python
+if not cllmv_ok:
+    if not chute.tee:
+        raise InvalidCLLMV(...)
+```
+
+For TEE instances, cllmv failures are logged but not enforced. TEE chutes rely on hardware attestation and the measured boot chain rather than per-token software verification.
+
+**Why external clients cannot implement cllmv verification:**
+
+1. **Closed-source algorithm**: The hash generation and validation logic lives in `chutes-aegis.so` and `chutes-aegis-verify.so` — proprietary native libraries. The `chutesai/cllmv` Python package is a thin ctypes wrapper; the actual cryptographic algorithm is not published.
+
+2. **Session key unavailable**: V2 cllmv requires an HMAC session key derived from an X25519 key exchange between the miner and the Chutes validator during instance activation. External clients do not participate in this handshake.
+
+3. **Salt/sub depends on internal state**: The `sub` parameter depends on `config_id`, `rint_nonce`, and `package_hashes` — internal Chutes validator state not exposed to clients.
+
+4. **TEE exemption makes it moot**: Since Chutes themselves do not enforce cllmv for TEE instances, implementing client-side cllmv checking for TEE instances would be verifying a property the provider intentionally does not guarantee.
+
+**Could cllmv ever be useful to external clients?** In theory, if Chutes published the cllmv hash algorithm specification (or open-sourced the native libraries), the session key or a client-derivable equivalent, and the salt/sub construction from publicly available data, then external clients could add a verification factor that validates per-token proofs. This would provide post-attestation runtime verification — proof that the inference engine is actually using the claimed model, not just that the correct software was booted. However, this would require Chutes to change their TEE trust model to include cllmv enforcement for TEE instances.
+
+### Tinfoil: gap closed by design
+
+Tinfoil closes the model weight gap using dm-verity attested model volumes (see [dm-verity attested model volumes (Tinfoil V3)](#dm-verity-attested-model-volumes-tinfoil-v3) in Remediation). Model weights are transitively authenticated through the Sigstore → code measurements → RTMR2 → kernel cmdline → config hash → dm-verity root hash chain.
+
+### Summary of per-provider model weight evidence
+
+| Provider | Weight auth mechanism | Available to external clients? |
+|----------|----------------------|-------------------------------|
+| Venice (dstack) | None | N/A |
+| Nearcloud (dstack) | None | N/A |
+| Neardirect (dstack) | None | N/A |
+| Chutes (sek8s) — watchtower | SHA256 weight file probing, random byte range spot-checks | No (server-side only, TEE-excluded) |
+| Chutes (sek8s) — cllmv | Per-token HMAC binding model+revision | No (closed-source, TEE-exempt) |
+| Tinfoil | dm-verity root hash in attested config → Sigstore bundle | Yes (transitive via Sigstore verification) |
+
+---
+
+## Remediation
 
 Three approaches are viable paths to model weight authentication with current or near-term infrastructure:
 
@@ -28,7 +177,7 @@ Three approaches are viable paths to model weight authentication with current or
 
 3. **[dm-verity attested model volumes (Tinfoil V3)](#dm-verity-attested-model-volumes-tinfoil-v3)** is the strongest approach. It provides block-level runtime integrity enforcement via dm-verity, with root hashes pinned in a measured configuration and authenticated through Sigstore. Already implemented by Tinfoil; the pattern is reusable by dstack providers.
 
-The remaining approaches — [Independent HuggingFace baseline computation](#independent-huggingface-baseline-computation), [Per-token output binding](#per-token-output-binding-requires-open-specification), and [Reproducible inference verification](#reproducible-inference-verification) — are documented for reference but are either insufficient on their own (HuggingFace baselines have no verification target without IMA or compose-attested images), depend on closed-source or nonexistent protocols (per-token binding), or face fundamental practical barriers that make them unsuitable as primary verification mechanisms (reproducible inference). Teep cannot independently audit any of these three today.
+The remaining approaches — [Independent HuggingFace baseline computation](#independent-huggingface-baseline-computation-reference), [Per-token output binding](#per-token-output-binding-reference), and [Reproducible inference verification](#reproducible-inference-verification-reference) — are documented for reference but are either insufficient on their own (HuggingFace baselines have no verification target without IMA or compose-attested images), depend on closed-source or nonexistent protocols (per-token binding), or face fundamental practical barriers that make them unsuitable as primary verification mechanisms (reproducible inference). Teep cannot independently audit any of these three today.
 
 ### IMA manifest verification (requires provider API enrichment)
 
@@ -228,7 +377,7 @@ This approach is strictly stronger than compose-attested images because it provi
 | Available today | Kernel infrastructure exists; needs provider enablement + API | Infrastructure exists; needs provider adoption | Implemented by Tinfoil; pattern reusable by dstack |
 | Granularity | Per-file (individual weight shard hashes) | Per-image (all weights verified as a unit) | Per-block (4K block Merkle tree) |
 
-### Independent HuggingFace baseline computation
+### Independent HuggingFace baseline computation (reference)
 
 Teep could independently compute expected model reference data from HuggingFace:
 
@@ -239,7 +388,7 @@ Teep could independently compute expected model reference data from HuggingFace:
 
 This would not verify what is actually loaded on the provider (teep has no filesystem access), but it would provide a **reference baseline** that could be checked against any future evidence API enrichment (IMA manifests, model identity metadata, or per-token output binding tokens).
 
-### Per-token output binding (requires open specification)
+### Per-token output binding (reference)
 
 If inference engines exposed a standardized per-token verification hash that clients can independently recompute, teep could verify that each token was generated by the claimed model. This requires:
 
@@ -249,7 +398,7 @@ If inference engines exposed a standardized per-token verification hash that cli
 
 No provider currently offers this. Chutes' cllmv is the closest existing implementation, but it uses closed-source algorithms and server-side secrets.
 
-### Reproducible inference verification
+### Reproducible inference verification (reference)
 
 Both SGLang and vLLM have recently added **batch-invariant inference** modes that aim to make LLM output deterministic regardless of concurrent server load. If a provider runs its inference engine in deterministic mode, teep could exploit this property to verify model identity without filesystem access, IMA manifests, or provider cooperation: send a challenge prompt with a fixed seed, and compare the output against a known-good reference.
 
@@ -328,113 +477,72 @@ For reproducible inference verification to become practical for teep:
 
 Even without complete provider support, teep could implement a partial verification by maintaining a set of challenge-response baselines per model, per engine version, per GPU SKU, and flagging any provider whose output deviates. This would not be a hard authentication factor (too many confounding variables), but could serve as a **soft signal** — a mismatch warrants further investigation, while a match provides additional confidence beyond attestation alone.
 
-### Chutes weight verification mechanisms (reference)
+### Deployment priority
 
-Chutes implements two server-side weight verification systems — the watchtower and cllmv. Neither is available to teep for independent verification: the watchtower is a server-side privileged service that teep has no access to, and cllmv uses closed-source algorithms with server-side secrets. Both are documented here for completeness.
+| Priority | Approach | Effort | Security strength | Available today? |
+|----------|---------|--------|-------------------|-----------------|
+| 1 (fastest) | Compose-attested model image identity | Minimal — add model image to compose, sign in Sigstore | Image-level (proves deployment, not runtime load) | Infrastructure exists; needs provider adoption |
+| 2 (strongest) | dm-verity attested model volumes | Moderate — build dm-verity volumes, pin root hash | Block-level runtime enforcement | Implemented by Tinfoil; pattern reusable |
+| 3 (most impactful) | IMA manifest verification | Significant — enable IMA, expose log, coordinate RTMR | Per-file runtime hashes, hardware-anchored | Kernel infrastructure exists; needs provider enablement + API |
 
-#### Chutes Watchtower — Server-Side Weight Probing
+For dstack and sek8s providers, `measured_model_weights` will remain `Fail` until one of the viable approaches is adopted:
 
-Source: [`chutesai/chutes-api/watchtower.py`](https://github.com/chutesai/chutes-api/blob/main/watchtower.py)
+1. **[Compose-attested model image identity](#compose-attested-model-image-identity-dstack-attestation-chain)** (fastest path for dstack): Include Sigstore-signed model weight images in the Docker Compose manifest (Tinfoil's [`modelwrap`](https://github.com/tinfoilsh/modelwrap) can create such images). Teep's existing verification chain already covers every link from TDX hardware to image identity. The only missing piece is provider adoption.
 
-The watchtower is Chutes' **continuous validator-side monitoring system** that probes running instances for integrity. It performs multiple verification passes on each chute:
+2. **[dm-verity attested model volumes](#dm-verity-attested-model-volumes-tinfoil-v3)** (strongest, reusable): Build dm-verity model weight volumes with [`modelwrap`](https://github.com/tinfoilsh/modelwrap) or equivalent, pin the root hash in a measured configuration, and mount read-only. Provides block-level runtime integrity. Already implemented by Tinfoil; the pattern is reusable by dstack providers.
 
-##### What the watchtower checks
+3. **[IMA manifest verification](#ima-manifest-verification-requires-provider-api-enrichment)** (per-file granularity): Enable Linux IMA in the CVM kernel and expose the IMA measurement log through the attestation evidence API. This gives per-file runtime hash verification of model weights, hardware-anchored to TDX RTMRs.
 
-1. **Model weight file hashes** (`check_llm_weights`): For vLLM/SGLang-templated chutes, the watchtower fetches `model.safetensors.index.json` and `config.json` from HuggingFace for the chute's declared model and revision. It SHA256-hashes the full file contents and compares against the hash of the same file read from the miner via the encrypted `/_slurp` endpoint. It then parses the safetensors index to enumerate individual weight shard files and spot-checks random byte ranges within randomly selected shards, comparing SHA256 hashes against HuggingFace.
+The remaining approaches documented above (HuggingFace baselines, per-token output binding, reproducible inference) are provided for reference but are either insufficient on their own, depend on closed-source protocols, or face fundamental practical barriers. They cannot serve as primary model weight authentication mechanisms for teep.
 
-2. **Process command verification** (`check_commands`, `check_live_code`): Reads `/proc/1/cmdline` and the chute source file from the miner to verify the correct process and code are running.
+---
 
-3. **Environment dump verification** (`check_chute`): Checks Kubernetes environment, LD_PRELOAD (chutes-aegis.so), SGLang process presence and PID stability, and running command line arguments.
+## References
 
-4. **Ping tests** (`check_pings`): Encrypted challenge-response liveness probes.
+- **Linux IMA**
+  - [How to use the Linux kernel's Integrity Measurement Architecture](https://www.redhat.com/en/blog/how-use-linux-kernels-integrity-measurement-architecture) — Red Hat IMA overview
+  - [IMA concepts documentation](https://ima-doc.readthedocs.io/en/latest/ima-concepts.html) — IMA policy and configuration
+  - [Keylime runtime integrity monitoring](https://keylime-docs.readthedocs.io/en/latest/user_guide/runtime_ima.html) — IMA integration with remote attestation
 
-##### Why teep cannot replicate the watchtower
+- **IMA in Intel TDX**
+  - [Runtime integrity measurement and attestation in Trust Domains](https://www.intel.com/content/www/us/en/developer/articles/community/runtime-integrity-measure-and-attest-trust-domain.html) — Intel IMA-TDX integration
+  - [Container Integrity Measurement Agent (CIMA)](https://github.com/cc-api/container-integrity-measurement-agent) — Intel container-level TDX measurements
 
-The watchtower operates from a **fundamentally different architectural position** than teep:
+- **Sigstore and supply chain**
+  - [Sigstore overview](https://docs.sigstore.dev/) — Keyless signing and transparency logging
+  - [Signing with containers (Cosign)](https://docs.sigstore.dev/cosign/signing/signing_with_containers/) — Keyless container image signing
+  - [Rekor transparency log](https://docs.sigstore.dev/logging/overview/) — Append-only transparency log
+  - [Fulcio certificate authority](https://docs.sigstore.dev/certificate_authority/overview/) — OIDC-based code signing certificates
 
-| Requirement | Watchtower has | Teep has |
-|------------|---------------|----------|
-| Filesystem access to miners | Yes, via encrypted `/_slurp` endpoint | No |
-| Validator-miner symmetric keys | Yes (AES-256 from hardware attestation handshake) | No |
-| Internal miner HTTP protocol | Yes (Bittensor hotkey-authenticated `miner_client`) | No |
-| Redis caching infrastructure | Yes (server-side, caches HF hashes) | No |
-| Direct HuggingFace model access | Yes | Yes, but no miner-side comparison target |
+- **Dstack attestation**
+  - [Dstack attestation guide](https://github.com/Dstack-TEE/dstack/blob/master/attestation.md) — Full measurement derivation
+  - [dstack-mr tool](https://github.com/Dstack-TEE/dstack/tree/master/dstack-mr) — Reproducible measurement computation
+  - [meta-dstack reproducible build](https://github.com/Dstack-TEE/meta-dstack) — Dstack base image build system
+  - [Dstack-TEE/dstack](https://github.com/Dstack-TEE/dstack) — Dstack source code
 
-The watchtower is a **server-side privileged service** that directly accesses miner filesystems. Teep is a **client-side proxy** that only sees the inference API and attestation evidence API. The watchtower's weight verification requires access paths that do not exist for external clients.
+- **Tinfoil model weight tooling**
+  - [modelwrap](https://github.com/tinfoilsh/modelwrap) — Tool for creating dm-verity model weight images
 
-##### Critical: TEE instances are excluded from watchtower
+- **Chutes verification systems**
+  - [chutesai/chutes-api/watchtower.py](https://github.com/chutesai/chutes-api/blob/main/watchtower.py) — Chutes watchtower source
+  - [chutesai/cllmv](https://github.com/chutesai/cllmv) — Chutes per-token LLM verification wrapper
 
-The watchtower's `load_chute_instances()` explicitly filters out TEE instances:
+- **Deterministic inference**
+  - [SGLang deterministic inference blog post](https://www.lmsys.org/blog/2025-09-22-sglang-deterministic/)
+  - [SGLang deterministic inference tracking issue](https://github.com/sgl-project/sglang/issues/10278)
+  - [SGLang deterministic inference docs](https://docs.sglang.ai/advanced_features/deterministic_inference.html)
+  - [Thinking Machines Lab batch-invariant operators](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/)
+  - [vLLM reproducibility docs](https://docs.vllm.ai/en/latest/usage/reproducibility/)
+  - [vLLM batch invariance docs](https://docs.vllm.ai/en/latest/features/batch_invariance/)
+  - [vLLM batch invariance tracking issue](https://github.com/vllm-project/vllm/issues/27433)
+  - [vLLM reproducibility example](https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/reproducibility.py)
+  - [SGLang Blackwell TP4 issue](https://github.com/sgl-project/sglang/issues/11513)
 
-```python
-LaunchConfig.env_type != "tee",  # Exclude TEE
-```
+---
 
-This means for the exact class of Chutes instances that teep verifies (TEE instances), the watchtower's weight verification **does not run**. TEE instances rely entirely on the measured boot chain (LUKS gating + cosign admission) rather than runtime filesystem probing for weight integrity.
+## Teep Status
 
-##### Implication for trust model
-
-The watchtower exclusion of TEE instances is architecturally coherent: the TEE's measured boot chain should make filesystem probing redundant because the cosign admission controller inside the TEE prevents loading unsigned images, and the LUKS-encrypted root filesystem prevents boot-time substitution. However, this means there is no runtime verification that the correct model weights are loaded in GPU VRAM after the initial boot sequence.
-
-#### cllmv — Chutes Per-Token LLM Verification
-
-Source: [`chutesai/cllmv`](https://github.com/chutesai/cllmv) (Python wrapper), `chutes-aegis.so` / `chutes-aegis-verify.so` (closed-source native libraries)
-
-cllmv is a **per-token output verification system** that cryptographically binds each generated token to the model name and exact HuggingFace revision hash. It is designed to detect model substitution attacks where a miner loads a cheaper or different model than claimed.
-
-##### How cllmv works
-
-The inference engine (SGLang or vLLM, via Chutes' fork) includes cllmv hooks that generate a verification token for each output token. The token is included in the streaming response as a `chutes_verification` field in each SSE chunk's JSON payload.
-
-The system has two protocol versions:
-
-**V1 (legacy, pre-0.5.5):** An MD5-based interleaving hash.
-- Inputs: chunk ID, created timestamp, token text, salt (derived from `config_id`), model name, revision hash
-- Output: 32-hex verification token
-
-**V2 (current, >= 0.5.5):** HMAC-SHA256 with an ephemeral session key.
-- Session initialization: The miner's `chutes-aegis.so` generates a 312-hex init blob containing an X25519 ephemeral public key. The validator calls `decrypt_session_key()` with its own X25519 private key to derive a shared HMAC session key.
-- Inputs: chunk ID, created timestamp, token text, expected token, session key (hex), sub (derived from `config_id + rint_nonce + package_hash`), model name, revision hash
-- Output: 32-hex HMAC-SHA256 verification token
-
-**Validator-side enforcement** (from `api/chute/util.py`): The validator checks cllmv tokens for the first 3 tokens of each response plus 1% of subsequent tokens. A failure raises `InvalidCLLMV` and terminates the miner instance — **but only for non-TEE chutes**.
-
-##### cllmv is not enforced for TEE instances
-
-The validator code explicitly exempts TEE chutes from cllmv enforcement:
-
-```python
-if not cllmv_ok:
-    if not chute.tee:
-        raise InvalidCLLMV(...)
-```
-
-For TEE instances, cllmv failures are **logged but not enforced**. This is by design: TEE chutes rely on hardware attestation and the measured boot chain rather than per-token software verification. The reasoning is that if the TEE attestation proves the correct software stack is running, the inference output is already trustworthy.
-
-##### Why teep cannot implement cllmv verification
-
-Even though the `chutes_verification` field is present in the E2EE-encrypted inference response that teep decrypts, teep cannot validate these tokens for multiple independent reasons:
-
-1. **Closed-source algorithm**: The hash generation and validation logic lives in `chutes-aegis.so` (miner-side) and `chutes-aegis-verify.so` (validator-side). These are proprietary native libraries. The `chutesai/cllmv` Python package is a thin ctypes wrapper; the actual cryptographic algorithm is not published. Teep cannot reimplement what it cannot inspect.
-
-2. **Session key unavailable**: V2 cllmv requires an HMAC session key derived from an X25519 key exchange between the miner and the Chutes validator during instance activation. Teep does not participate in this handshake and does not have access to the session key.
-
-3. **Salt/sub depends on internal state**: The `sub` parameter used in token generation depends on `config_id`, `rint_nonce`, and `package_hashes` — internal Chutes validator state that is not exposed to clients.
-
-4. **TEE exemption makes it moot**: Since Chutes themselves do not enforce cllmv for TEE instances, implementing client-side cllmv checking for TEE instances would be verifying a property that the provider intentionally does not guarantee.
-
-##### Could cllmv ever be useful to teep?
-
-In theory, if Chutes published:
-1. The cllmv hash algorithm specification (or open-sourced the native libraries)
-2. The session key or a client-derivable equivalent
-3. The salt/sub construction from publicly available data
-
-...then teep could add a `cllmv_output_binding` verification factor that validates per-token proofs in decrypted E2EE responses. This would provide **post-attestation runtime verification** — proof that the inference engine is actually using the claimed model, not just that the correct software was booted.
-
-However, this would require Chutes to change their TEE trust model to include cllmv enforcement for TEE instances, which they currently do not do.
-
-## Summary: Current State of `measured_model_weights`
+Teep currently returns `Fail` for `measured_model_weights` with detail "no model weight hashes" for all providers except Tinfoil. No provider currently exposes model weight hashes or per-token output binding to clients in a way that teep can independently verify.
 
 | Provider | Weight auth mechanism | Available to teep? | Status |
 |----------|----------------------|-------------------|--------|
@@ -444,13 +552,3 @@ However, this would require Chutes to change their TEE trust model to include cl
 | Chutes (sek8s) — watchtower | SHA256 weight file probing, random byte range spot-checks | No (server-side only, TEE-excluded) | `Fail`: "no model weight hashes" |
 | Chutes (sek8s) — cllmv | Per-token HMAC binding model+revision | No (closed-source, TEE-exempt) | `Fail`: "no model weight hashes" |
 | Tinfoil | dm-verity root hash in attested config → Sigstore bundle | Yes (transitive via `sigstore_code_verified`) | `Pass`: model weights authenticated via dm-verity + Sigstore chain |
-
-For dstack and sek8s providers, `measured_model_weights` will remain `Fail` until one of the viable approaches is adopted:
-
-1. **[IMA manifest verification](#ima-manifest-verification-requires-provider-api-enrichment)** (per-file granularity): Enable Linux IMA in the CVM kernel and expose the IMA measurement log through the attestation evidence API. This gives per-file runtime hash verification of model weights, hardware-anchored to TDX RTMRs.
-
-2. **[Compose-attested model image identity](#compose-attested-model-image-identity-dstack-attestation-chain)** (fastest path for dstack): Include Sigstore-signed model weight images in the Docker Compose manifest (Tinfoil's [`modelwrap`](https://github.com/tinfoilsh/modelwrap) can create such images). Teep's existing verification chain already covers every link from TDX hardware to image identity. The only missing piece is provider adoption.
-
-3. **[dm-verity attested model volumes](#dm-verity-attested-model-volumes-tinfoil-v3)** (strongest, reusable): Build dm-verity model weight volumes with [`modelwrap`](https://github.com/tinfoilsh/modelwrap) or equivalent, pin the root hash in a measured configuration, and mount read-only. Provides block-level runtime integrity. Already implemented by Tinfoil; the pattern is reusable by dstack providers.
-
-The remaining approaches documented above (HuggingFace baselines, per-token output binding, reproducible inference) are provided for reference but are either insufficient on their own, depend on closed-source protocols, or face fundamental practical barriers. They cannot serve as primary model weight authentication mechanisms for teep.
