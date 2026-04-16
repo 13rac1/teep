@@ -1,10 +1,7 @@
 package jsonstrict_test
 
 import (
-	"context"
-	"log/slog"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -54,243 +51,141 @@ type ptrEmbeddedParent struct {
 	Top string `json:"top"`
 }
 
-// recordingHandler captures slog records for test assertions.
-type recordingHandler struct {
-	records []slog.Record
-}
-
-func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
-func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler       { return h }
-func (h *recordingHandler) WithGroup(string) slog.Handler            { return h }
-func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error { //nolint:gocritic // hugeParam: slog.Handler interface requires value receiver
-	h.records = append(h.records, r)
-	return nil
-}
-
-// withRecorder swaps the default slog logger with a recording handler for the
-// duration of the test and returns the handler for inspection.
-func withRecorder(t *testing.T) *recordingHandler {
-	t.Helper()
-	jsonstrict.ResetWarned()
-	h := &recordingHandler{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(h))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return h
-}
-
-// warns returns records at Warn level.
-func warns(h *recordingHandler) []slog.Record {
-	var out []slog.Record
-	for i := range h.records {
-		if h.records[i].Level == slog.LevelWarn {
-			out = append(out, h.records[i])
-		}
-	}
-	return out
-}
-
-// recordFields extracts the "fields" attribute from a record as a string slice.
-func recordFields(r *slog.Record) []string {
-	var fields []string
-	r.Attrs(func(a slog.Attr) bool {
-		if a.Key == "fields" {
-			// slog stores []string as a Group of indexed attrs.
-			// Use the string representation and parse it.
-			s := a.Value.String()
-			s = strings.Trim(s, "[]")
-			if s != "" {
-				fields = strings.Split(s, " ")
-			}
-		}
-		return true
-	})
-	return fields
-}
-
-func TestUnmarshalWarn_NoUnknownFields(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_NoUnknownFields(t *testing.T) {
 	var v testStruct
-	err := jsonstrict.UnmarshalWarn([]byte(`{"name":"alice","value":42}`), &v, "test")
+	unknown, err := jsonstrict.Unmarshal([]byte(`{"name":"alice","value":42}`), &v)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if v.Name != "alice" || v.Value != 42 {
 		t.Errorf("decode wrong: got %+v", v)
 	}
-	if len(warns(h)) != 0 {
-		t.Errorf("expected no warnings, got %d", len(warns(h)))
+	if len(unknown) != 0 {
+		t.Errorf("expected no unknown fields, got %v", unknown)
 	}
 }
 
-func TestUnmarshalWarn_UnknownFields(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_UnknownFields(t *testing.T) {
 	var v testStruct
-	err := jsonstrict.UnmarshalWarn([]byte(`{"name":"bob","value":1,"extra":"x"}`), &v, "test ctx")
+	unknown, err := jsonstrict.Unmarshal([]byte(`{"name":"bob","value":1,"extra":"x"}`), &v)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if v.Name != "bob" {
 		t.Errorf("decode wrong: got %+v", v)
 	}
-	w := warns(h)
-	if len(w) != 1 {
-		t.Fatalf("expected 1 warning, got %d", len(w))
-	}
-	fields := recordFields(&w[0])
-	if !slices.Contains(fields, "extra") {
-		t.Errorf("warning should mention 'extra', got fields=%v", fields)
+	if !slices.Contains(unknown, "extra") {
+		t.Errorf("unknown fields should contain 'extra', got %v", unknown)
 	}
 }
 
-func TestUnmarshalWarn_MultipleUnknownFields(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_MultipleUnknownFields(t *testing.T) {
 	var v testStruct
 	data := `{"name":"c","value":0,"a":"1","b":"2","c":"3"}`
-	err := jsonstrict.UnmarshalWarn([]byte(data), &v, "multi")
+	unknown, err := jsonstrict.Unmarshal([]byte(data), &v)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	w := warns(h)
-	if len(w) != 1 {
-		t.Fatalf("expected 1 warning (not one per field), got %d", len(w))
+	if len(unknown) != 3 {
+		t.Errorf("expected 3 unknown fields, got %d: %v", len(unknown), unknown)
 	}
-	fields := recordFields(&w[0])
-	if len(fields) != 3 {
-		t.Errorf("expected 3 unknown fields, got %d: %v", len(fields), fields)
+	// Must be sorted.
+	if !slices.IsSorted(unknown) {
+		t.Errorf("unknown fields should be sorted, got %v", unknown)
 	}
 }
 
-func TestUnmarshalWarn_InvalidJSON(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_InvalidJSON(t *testing.T) {
 	var v testStruct
-	err := jsonstrict.UnmarshalWarn([]byte(`not json`), &v, "bad")
+	unknown, err := jsonstrict.Unmarshal([]byte(`not json`), &v)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
-	if len(warns(h)) != 0 {
-		t.Error("should not warn on invalid JSON")
+	if len(unknown) != 0 {
+		t.Errorf("should not report unknown fields on invalid JSON, got %v", unknown)
 	}
 }
 
-func TestUnmarshalWarn_ContextInWarning(t *testing.T) {
-	h := withRecorder(t)
-	var v testStruct
-	_ = jsonstrict.UnmarshalWarn([]byte(`{"name":"x","unknown":1}`), &v, "venice attestation response")
-	w := warns(h)
-	if len(w) != 1 {
-		t.Fatalf("expected 1 warning, got %d", len(w))
-	}
-	var ctx string
-	w[0].Attrs(func(a slog.Attr) bool {
-		if a.Key == "context" {
-			ctx = a.Value.String()
-		}
-		return true
-	})
-	if ctx != "venice attestation response" {
-		t.Errorf("context attr: got %q, want %q", ctx, "venice attestation response")
-	}
-}
-
-func TestUnmarshalWarn_EmbeddedStruct(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_EmbeddedStruct(t *testing.T) {
 	var v embeddedParent
 	data := `{"inner_field":"i","outer":"o"}`
-	err := jsonstrict.UnmarshalWarn([]byte(data), &v, "embed")
+	unknown, err := jsonstrict.Unmarshal([]byte(data), &v)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(warns(h)) != 0 {
-		t.Errorf("embedded fields should be known, got %d warnings", len(warns(h)))
+	if len(unknown) != 0 {
+		t.Errorf("embedded fields should be known, got %v", unknown)
 	}
 	if v.InnerField != "i" || v.Outer != "o" {
 		t.Errorf("decode wrong: got %+v", v)
 	}
 }
 
-func TestUnmarshalWarn_DashExcluded(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_DashExcluded(t *testing.T) {
 	var v dashStruct
 	// "Hidden" is the Go field name, which would be the fallback if not tagged "-".
 	// Since it IS tagged "-", "Hidden" in JSON should be unknown.
 	data := `{"visible":"v","Hidden":"h"}`
-	err := jsonstrict.UnmarshalWarn([]byte(data), &v, "dash")
+	unknown, err := jsonstrict.Unmarshal([]byte(data), &v)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	w := warns(h)
-	if len(w) != 1 {
-		t.Fatalf("expected 1 warning for json:\"-\" field, got %d", len(w))
+	if !slices.Contains(unknown, "Hidden") {
+		t.Errorf("json:\"-\" field should be unknown, got %v", unknown)
 	}
 }
 
-func TestUnmarshalWarn_OmitemptyStripped(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_OmitemptyStripped(t *testing.T) {
 	var v omitemptyStruct
 	data := `{"field":"val"}`
-	err := jsonstrict.UnmarshalWarn([]byte(data), &v, "omit")
+	unknown, err := jsonstrict.Unmarshal([]byte(data), &v)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(warns(h)) != 0 {
-		t.Errorf("field with omitempty should be known, got %d warnings", len(warns(h)))
+	if len(unknown) != 0 {
+		t.Errorf("field with omitempty should be known, got %v", unknown)
 	}
 }
 
-func TestUnmarshalWarn_UntaggedField(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_UntaggedField(t *testing.T) {
 	var v untaggedStruct
 	data := `{"GoName":"val"}`
-	err := jsonstrict.UnmarshalWarn([]byte(data), &v, "untag")
+	unknown, err := jsonstrict.Unmarshal([]byte(data), &v)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(warns(h)) != 0 {
-		t.Errorf("untagged field should use Go name, got %d warnings", len(warns(h)))
+	if len(unknown) != 0 {
+		t.Errorf("untagged field should use Go name, got %v", unknown)
 	}
 	if v.GoName != "val" {
 		t.Errorf("decode wrong: got %+v", v)
 	}
 }
 
-func TestUnmarshalWarn_PtrEmbeddedStruct(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_PtrEmbeddedStruct(t *testing.T) {
 	var v ptrEmbeddedParent
 	data := `{"deep":"d","top":"t"}`
-	err := jsonstrict.UnmarshalWarn([]byte(data), &v, "ptr-embed")
+	unknown, err := jsonstrict.Unmarshal([]byte(data), &v)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(warns(h)) != 0 {
-		t.Errorf("ptr-embedded fields should be known, got %d warnings", len(warns(h)))
+	if len(unknown) != 0 {
+		t.Errorf("ptr-embedded fields should be known, got %v", unknown)
 	}
-	t.Logf("decoded: deep=%q top=%q", v.Deep, v.Top)
 	if v.Deep != "d" || v.Top != "t" {
 		t.Errorf("decode wrong: got %+v", v)
 	}
 }
 
-func TestUnmarshalWarn_DedupsSameFields(t *testing.T) {
-	h := withRecorder(t)
+func TestUnmarshal_RepeatedCallsReturnFields(t *testing.T) {
 	var v testStruct
 	data := []byte(`{"name":"x","extra":"y"}`)
-	_ = jsonstrict.UnmarshalWarn(data, &v, "dedup-test")
-	_ = jsonstrict.UnmarshalWarn(data, &v, "dedup-test")
-	_ = jsonstrict.UnmarshalWarn(data, &v, "dedup-test")
-	w := warns(h)
-	if len(w) != 1 {
-		t.Errorf("expected 1 deduplicated warning, got %d", len(w))
-	}
-}
 
-func TestUnmarshalWarn_DifferentContextWarnsAgain(t *testing.T) {
-	h := withRecorder(t)
-	var v testStruct
-	_ = jsonstrict.UnmarshalWarn([]byte(`{"name":"x","extra":"y"}`), &v, "ctx-a")
-	_ = jsonstrict.UnmarshalWarn([]byte(`{"name":"x","extra":"y"}`), &v, "ctx-b")
-	w := warns(h)
-	if len(w) != 2 {
-		t.Errorf("expected 2 warnings (different contexts), got %d", len(w))
+	// Each call must independently report unknown fields (no dedup).
+	for i := range 3 {
+		unknown, _ := jsonstrict.Unmarshal(data, &v)
+		if !slices.Contains(unknown, "extra") {
+			t.Errorf("call %d: expected 'extra' in unknown fields, got %v", i, unknown)
+		}
 	}
 }

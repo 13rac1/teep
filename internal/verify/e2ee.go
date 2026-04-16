@@ -266,7 +266,7 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 			E2EError *string `json:"e2e_error,omitempty"`
 			Usage    any     `json:"usage,omitempty"`
 		}
-		if err := jsonstrict.UnmarshalWarn([]byte(data), &event, "chutes SSE event"); err != nil {
+		if _, err := jsonstrict.Unmarshal([]byte(data), &event); err != nil {
 			return &attestation.E2EETestResult{
 				Attempted: true,
 				Err:       fmt.Errorf("parse SSE event: %w (prefix=%q)", err, safePrefix(data, 64)),
@@ -387,7 +387,7 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 			} `json:"choices"`
 			Usage any `json:"usage"`
 		}
-		if err := jsonstrict.UnmarshalWarn([]byte(data), &chunk, "e2ee SSE chunk"); err != nil {
+		if _, err := jsonstrict.Unmarshal([]byte(data), &chunk); err != nil {
 			return &attestation.E2EETestResult{
 				Attempted: true,
 				Err:       fmt.Errorf("parse SSE chunk %d: %w", chunkCount, err),

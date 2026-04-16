@@ -87,7 +87,7 @@ func verifyPoCJWTClaims(ctx context.Context, jwtStr, hexQuote, expectedMachineID
 	}
 
 	var claims pocJWTClaims
-	if err := jsonstrict.UnmarshalWarn(payload, &claims, "PoC JWT"); err != nil {
+	if _, err := jsonstrict.Unmarshal(payload, &claims); err != nil {
 		return nil, fmt.Errorf("parse JWT claims: %w", err)
 	}
 
@@ -228,7 +228,7 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 				return
 			}
 			var s1 stage1Response
-			if err := jsonstrict.UnmarshalWarn(resp.body, &s1, "PoC stage-1 response"); err != nil {
+			if _, err := jsonstrict.Unmarshal(resp.body, &s1); err != nil {
 				collectCh <- collectResult{err: fmt.Errorf("stage 1: parse response from %s: %w", peer, err)}
 				return
 			}

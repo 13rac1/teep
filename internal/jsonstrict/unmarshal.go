@@ -1,56 +1,38 @@
-// Package jsonstrict provides JSON unmarshaling that warns on unknown fields.
+// Package jsonstrict provides JSON unmarshaling that detects unknown fields.
 //
 // Standard encoding/json silently ignores unknown JSON keys. For security-critical
 // payloads like TEE attestation responses, silent drops mean API format changes
-// go unnoticed. UnmarshalWarn logs unknown fields at Warn level without failing
-// the decode, so operators see format drift in logs while existing verification
-// continues to work.
+// go unnoticed. Unmarshal returns the names of unknown fields alongside the
+// decoded value, letting callers decide how to handle format drift.
 package jsonstrict
 
 import (
 	"encoding/json"
-	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
-	"sync"
 )
 
-// warned tracks (context, sorted-fields) pairs that have already been logged,
-// so each unique combination produces at most one warning per process lifetime.
-var warned sync.Map
-
-// UnmarshalWarn unmarshals data into v and logs a slog.Warn for every JSON key
+// Unmarshal unmarshals data into v and returns the names of any JSON keys
 // not represented by a json struct tag on v's type. Unknown fields never cause
 // an error — only the normal json.Unmarshal error (if any) is returned.
 //
-// context is a caller-supplied label included in the warning to identify which
-// response body contained the unexpected fields (e.g. "venice attestation response").
-//
 // v must be a non-nil pointer to a struct. Any other type panics.
-func UnmarshalWarn(data []byte, v any, context string) error {
+func Unmarshal(data []byte, v any) (unknownFields []string, err error) {
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err == nil {
+	if jsonErr := json.Unmarshal(data, &raw); jsonErr == nil {
 		known := knownJSONKeys(reflect.TypeOf(v).Elem())
-		var unknown []string
 		for key := range raw {
 			if _, ok := known[key]; !ok {
-				unknown = append(unknown, key)
+				unknownFields = append(unknownFields, key)
 			}
 		}
-		if len(unknown) > 0 {
-			sort.Strings(unknown)
-			key := context + "\x00" + strings.Join(unknown, "\x00")
-			if _, loaded := warned.LoadOrStore(key, struct{}{}); !loaded {
-				slog.Warn("unknown JSON fields in response",
-					"context", context,
-					"fields", unknown,
-				)
-			}
+		if len(unknownFields) > 0 {
+			sort.Strings(unknownFields)
 		}
 	}
 
-	return json.Unmarshal(data, v)
+	return unknownFields, json.Unmarshal(data, v)
 }
 
 // knownJSONKeys returns the set of JSON field names declared by t's struct tags.

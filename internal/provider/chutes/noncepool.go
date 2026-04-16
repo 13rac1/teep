@@ -191,7 +191,7 @@ func (p *NoncePool) doRefresh(ctx context.Context, chuteID string) error {
 	}
 
 	var resp e2eInstancesResponse
-	if err := jsonstrict.UnmarshalWarn(body, &resp, "nonce pool e2e instances"); err != nil {
+	if _, err := jsonstrict.Unmarshal(body, &resp); err != nil {
 		return fmt.Errorf("nonce pool: unmarshal instances: %w", err)
 	}
 	if len(resp.Instances) == 0 {

@@ -6,14 +6,14 @@ import (
 	"github.com/13rac1/teep/internal/jsonstrict"
 )
 
-// fuzzTarget is a minimal struct for exercising UnmarshalWarn.
+// fuzzTarget is a minimal struct for exercising Unmarshal.
 type fuzzTarget struct {
 	Name  string `json:"name"`
 	Value int    `json:"value"`
 	OK    bool   `json:"ok"`
 }
 
-func FuzzUnmarshalWarn(f *testing.F) {
+func FuzzUnmarshal(f *testing.F) {
 	f.Add([]byte(`{"name":"test","value":42,"ok":true}`))
 	f.Add([]byte(`{"name":"test","value":42,"ok":true,"extra":"field"}`))
 	f.Add([]byte(`{"unknown_field":123}`))
@@ -25,6 +25,6 @@ func FuzzUnmarshalWarn(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var target fuzzTarget
-		_ = jsonstrict.UnmarshalWarn(data, &target, "fuzz")
+		_, _ = jsonstrict.Unmarshal(data, &target)
 	})
 }

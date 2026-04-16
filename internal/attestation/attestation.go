@@ -178,6 +178,10 @@ type RawAttestation struct {
 	GatewayEventLog       []EventLogEntry `json:"-"`
 	GatewayTLSFingerprint string          `json:"-"`
 
+	// UnknownFields lists unexpected JSON keys found in the attestation
+	// response. Populated by provider parse functions via jsonstrict.Unmarshal.
+	UnknownFields []string `json:"-"`
+
 	// RawBody is the unmodified HTTP response body from the provider.
 	// Used by --capture to write the original JSON as-is.
 	RawBody []byte `json:"-"`

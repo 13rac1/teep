@@ -176,7 +176,7 @@ func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.Ra
 // double-encoded tcb_info).
 func parseDstack(ctx context.Context, body []byte) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
-	if err := jsonstrict.UnmarshalWarn(body, &ar, "nanogpt attestation response"); err != nil {
+	if _, err := jsonstrict.Unmarshal(body, &ar); err != nil {
 		return nil, fmt.Errorf("nanogpt: unmarshal attestation response: %w", err)
 	}
 

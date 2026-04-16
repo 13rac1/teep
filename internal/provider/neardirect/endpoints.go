@@ -141,7 +141,7 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 	}
 
 	var er endpointsResponse
-	if err := jsonstrict.UnmarshalWarn(body, &er, "nearai endpoints"); err != nil {
+	if _, err := jsonstrict.Unmarshal(body, &er); err != nil {
 		return fmt.Errorf("unmarshal: %w", err)
 	}
 

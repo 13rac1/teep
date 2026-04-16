@@ -531,7 +531,7 @@ type toolCallDelta struct {
 // tool calls map, keyed by index. Arguments are concatenated across chunks.
 func mergeToolCallDelta(calls map[int]*reassembledToolCall, raw json.RawMessage) error {
 	var d toolCallDelta
-	if err := jsonstrict.UnmarshalWarn(raw, &d, "tool_call delta"); err != nil {
+	if _, err := jsonstrict.Unmarshal(raw, &d); err != nil {
 		return fmt.Errorf("parse tool_call delta: %w", err)
 	}
 	if d.Index == nil {

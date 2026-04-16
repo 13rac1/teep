@@ -83,7 +83,8 @@ type GatewayRaw struct {
 // gateway-specific data and the model RawAttestation.
 func ParseGatewayResponse(ctx context.Context, body []byte, model string) (*GatewayRaw, *attestation.RawAttestation, error) {
 	var gr gatewayResponse
-	if err := jsonstrict.UnmarshalWarn(body, &gr, "nearcloud gateway response"); err != nil {
+	unknown, err := jsonstrict.Unmarshal(body, &gr)
+	if err != nil {
 		return nil, nil, fmt.Errorf("nearcloud: unmarshal gateway response: %w", err)
 	}
 
@@ -124,6 +125,12 @@ func ParseGatewayResponse(ctx context.Context, body []byte, model string) (*Gate
 	raw, err := neardirect.ParseAttestationResponse(ctx, body, model)
 	if err != nil {
 		return nil, nil, fmt.Errorf("nearcloud: parse model attestation: %w", err)
+	}
+	// Propagate gateway-level unknown fields. Neardirect already captures
+	// model-level unknown fields; duplicates are possible if both layers
+	// report the same key.
+	if len(unknown) > 0 {
+		raw.UnknownFields = append(raw.UnknownFields, unknown...)
 	}
 
 	return gw, raw, nil

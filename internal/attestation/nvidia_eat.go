@@ -59,7 +59,7 @@ func verifyNVIDIAEAT(ctx context.Context, payload string, expectedNonce Nonce) *
 	result := &NvidiaVerifyResult{}
 
 	var eat nvidiaEAT
-	if err := jsonstrict.UnmarshalWarn([]byte(payload), &eat, "nvidia EAT"); err != nil {
+	if _, err := jsonstrict.Unmarshal([]byte(payload), &eat); err != nil {
 		result.SignatureErr = fmt.Errorf("EAT JSON parse failed: %w", err)
 		return result
 	}
