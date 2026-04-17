@@ -55,7 +55,7 @@ type providerArchetype string
 
 const (
 	// archetypeDirect: owns its attestation format, has attestationResponse
-	// struct, calls jsonstrict.UnmarshalWarn directly.
+	// struct, calls jsonstrict.Unmarshal directly.
 	archetypeDirect providerArchetype = "direct"
 	// archetypeGateway: detects format via formatdetect.Detect(), delegates
 	// parsing to backend providers.
@@ -347,19 +347,19 @@ func checkParseFunc(r *result, p *providerInfo, want string) *ast.FuncDecl {
 	return nil
 }
 
-// Parse function calls jsonstrict.UnmarshalWarn.
+// Parse function calls jsonstrict.Unmarshal.
 func checkParseFuncUsesJSONStrict(r *result, p *providerInfo, fd *ast.FuncDecl) {
 	if fd == nil {
-		r.failf("jsonstrict.UnmarshalWarn — no parse function in %s", p.name)
+		r.failf("jsonstrict.Unmarshal — no parse function in %s", p.name)
 		return
 	}
-	if containsCall(fd.Body, "jsonstrict", "UnmarshalWarn") {
+	if containsCall(fd.Body, "jsonstrict", "Unmarshal") {
 		pos := p.fset.Position(fd.Name.Pos())
-		r.passf("%s uses jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+		r.passf("%s uses jsonstrict.Unmarshal (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 		return
 	}
 	pos := p.fset.Position(fd.Name.Pos())
-	r.failf("%s does not call jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+	r.failf("%s does not call jsonstrict.Unmarshal (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 }
 
 // Parse function calls formatdetect.Detect.
@@ -782,7 +782,7 @@ func importLocalNames(f *ast.File, importPath string) []string {
 	return names
 }
 
-// No json.Unmarshal in cmd/teep/main.go (use jsonstrict.UnmarshalWarn).
+// No json.Unmarshal in cmd/teep/main.go (use jsonstrict.Unmarshal).
 func checkNoJSONUnmarshalCLI(r *result, files []*ast.File, names []string, fset *token.FileSet) {
 	const target = "cmd/teep/main.go"
 	normalizedTarget := filepath.ToSlash(filepath.Clean(target))
@@ -812,11 +812,11 @@ func checkNoJSONUnmarshalCLI(r *result, files []*ast.File, names []string, fset 
 		})
 	}
 	if len(violations) == 0 {
-		r.passf("no json.Unmarshal in %s (use jsonstrict.UnmarshalWarn)", target)
+		r.passf("no json.Unmarshal in %s (use jsonstrict.Unmarshal)", target)
 		return
 	}
 	for _, v := range violations {
-		r.failf("json.Unmarshal in %s at %s (use jsonstrict.UnmarshalWarn)", target, v)
+		r.failf("json.Unmarshal in %s at %s (use jsonstrict.Unmarshal)", target, v)
 	}
 }
 

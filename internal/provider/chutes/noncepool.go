@@ -191,8 +191,10 @@ func (p *NoncePool) doRefresh(ctx context.Context, chuteID string) error {
 	}
 
 	var resp e2eInstancesResponse
-	if err := jsonstrict.UnmarshalWarn(body, &resp, "nonce pool e2e instances"); err != nil {
+	if unknown, err := jsonstrict.Unmarshal(body, &resp); err != nil {
 		return fmt.Errorf("nonce pool: unmarshal instances: %w", err)
+	} else if len(unknown) > 0 {
+		slog.Warn("unexpected JSON fields", "fields", unknown, "context", "chutes nonce pool")
 	}
 	if len(resp.Instances) == 0 {
 		return fmt.Errorf("nonce pool: no instances available for chute %s", chuteID)

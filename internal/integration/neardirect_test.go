@@ -71,7 +71,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 	// NVIDIA NRAS (time-pinned)
 	var nrasResult *attestation.NvidiaVerifyResult
 	if raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
-		nrasResult = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, env.client,
+		nrasResult = attestation.DefaultNVIDIAVerifier().VerifyNRAS(ctx, raw.NvidiaPayload, env.client,
 			jwt.WithTimeFunc(func() time.Time { return env.manifest.CapturedAt }),
 			jwt.WithLeeway(10*time.Second),
 		)

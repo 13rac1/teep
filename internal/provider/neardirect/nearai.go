@@ -184,7 +184,8 @@ func shouldResolveModelDomain(host string) bool {
 // client path) and PinnedHandler (raw connection path).
 func ParseAttestationResponse(_ context.Context, body []byte, model string) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
-	if err := jsonstrict.UnmarshalWarn(body, &ar, "nearai attestation response"); err != nil {
+	unknown, err := jsonstrict.Unmarshal(body, &ar)
+	if err != nil {
 		return nil, fmt.Errorf("nearai: unmarshal attestation response: %w", err)
 	}
 
@@ -200,7 +201,9 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 		if err != nil {
 			return nil, err
 		}
-		return rawFromModelAttestation(selected, ar.Verified, body)
+		raw := rawFromModelAttestation(selected, ar.Verified, body)
+		raw.UnknownFields = unknown
+		return raw, nil
 	}
 
 	// If the response contains model_attestations, pick the entry matching
@@ -210,7 +213,9 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 		if err != nil {
 			return nil, err
 		}
-		return rawFromModelAttestation(selected, ar.Verified, body)
+		raw := rawFromModelAttestation(selected, ar.Verified, body)
+		raw.UnknownFields = unknown
+		return raw, nil
 	}
 
 	// Flat response form: use top-level fields directly.
@@ -233,6 +238,7 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 		DeviceID:       ar.Info.DeviceID,
 		EventLog:       ar.EventLog,
 		EventLogCount:  len(ar.EventLog),
+		UnknownFields:  unknown,
 		RawBody:        body,
 	}
 	if raw.IntelQuote != "" {
@@ -250,7 +256,7 @@ func selectByModel(list []modelAttestation, model string) (*modelAttestation, er
 	return nil, fmt.Errorf("nearai: model %q not found in %d attestation entries", model, len(list))
 }
 
-func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*attestation.RawAttestation, error) {
+func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) *attestation.RawAttestation {
 	raw := &attestation.RawAttestation{
 		BackendFormat:  attestation.FormatNear,
 		Verified:       verified,
@@ -275,7 +281,7 @@ func rawFromModelAttestation(m *modelAttestation, verified bool, body []byte) (*
 	if raw.IntelQuote != "" {
 		raw.TEEHardware = "intel-tdx"
 	}
-	return raw, nil
+	return raw
 }
 
 // Preparer injects the NEAR AI Authorization header into an outgoing request.

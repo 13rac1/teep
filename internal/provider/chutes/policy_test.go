@@ -18,7 +18,8 @@ func TestDefaultMeasurementPolicy(t *testing.T) {
 	}
 
 	// MRSEAM must include both shared dstack values and chutes-specific values.
-	for h := range attestation.DstackMRSEAMAllow {
+	dstackBase := attestation.DstackBaseMeasurementPolicy()
+	for h := range dstackBase.MRSeamAllow {
 		if _, ok := p.MRSeamAllow[h]; !ok {
 			t.Errorf("MRSeamAllow missing shared dstack entry %s...", h[:16])
 		}
@@ -98,8 +99,9 @@ func TestDefaultMeasurementPolicyRTMRValues(t *testing.T) {
 
 func TestDefaultMeasurementPolicyMRTDNotDstack(t *testing.T) {
 	p := DefaultMeasurementPolicy()
+	dstackBase := attestation.DstackBaseMeasurementPolicy()
 	// sek8s MRTD must NOT overlap with dstack MRTD.
-	for h := range attestation.DstackMRTDAllow {
+	for h := range dstackBase.MRTDAllow {
 		if _, ok := p.MRTDAllow[h]; ok {
 			t.Errorf("sek8s MRTDAllow unexpectedly contains dstack value %s...", h[:16])
 		}
@@ -107,12 +109,13 @@ func TestDefaultMeasurementPolicyMRTDNotDstack(t *testing.T) {
 }
 
 func TestSek8sMRSEAMAllow(t *testing.T) {
-	// Must be a strict superset of DstackMRSEAMAllow.
-	if len(Sek8sMRSEAMAllow) <= len(attestation.DstackMRSEAMAllow) {
-		t.Errorf("Sek8sMRSEAMAllow (%d) should have more entries than DstackMRSEAMAllow (%d)",
-			len(Sek8sMRSEAMAllow), len(attestation.DstackMRSEAMAllow))
+	dstackBase := attestation.DstackBaseMeasurementPolicy()
+	// Must be a strict superset of dstack MRSEAM.
+	if len(Sek8sMRSEAMAllow) <= len(dstackBase.MRSeamAllow) {
+		t.Errorf("Sek8sMRSEAMAllow (%d) should have more entries than dstack MRSEAM (%d)",
+			len(Sek8sMRSEAMAllow), len(dstackBase.MRSeamAllow))
 	}
-	for h := range attestation.DstackMRSEAMAllow {
+	for h := range dstackBase.MRSeamAllow {
 		if _, ok := Sek8sMRSEAMAllow[h]; !ok {
 			t.Errorf("Sek8sMRSEAMAllow missing dstack entry %s...", h[:16])
 		}
@@ -120,7 +123,7 @@ func TestSek8sMRSEAMAllow(t *testing.T) {
 	// Chutes-specific entries must NOT be in the dstack list.
 	extra := 0
 	for h := range Sek8sMRSEAMAllow {
-		if _, ok := attestation.DstackMRSEAMAllow[h]; !ok {
+		if _, ok := dstackBase.MRSeamAllow[h]; !ok {
 			extra++
 		}
 	}

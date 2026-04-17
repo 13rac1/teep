@@ -14,11 +14,12 @@ import (
 // These baselines are derived from captured production attestation data; see
 // docs/attestation_gaps/sek8s_integrity.md for the trust model and provenance.
 
-// Sek8sMRSEAMAllow extends the shared DstackMRSEAMAllow with additional TDX
+// Sek8sMRSEAMAllow extends the shared dstack MRSEAM allowlist with additional TDX
 // module versions observed on the Chutes sek8s fleet. These older module
 // versions are only allowed for Chutes, not for dstack providers.
 var Sek8sMRSEAMAllow = func() map[string]struct{} {
-	m := copyMap(attestation.DstackMRSEAMAllow)
+	base := attestation.DstackBaseMeasurementPolicy()
+	m := base.MRSeamAllow // already a copy
 	// TDX module 1.5.0d — Sapphire/Emerald Rapids (observed on Chutes sek8s fleet)
 	m["489e585f1c54bc5a02066c8c6ec21619ff0334ec6f21e07e2a35202c59183789c8057e7d97dd591bb08314b185819e72"] = struct{}{}
 	// TDX module 2.0.06 — Granite Rapids (observed on Chutes sek8s fleet)

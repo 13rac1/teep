@@ -137,18 +137,17 @@ func TestTLSState_CheckerIntegration(t *testing.T) {
 	defer conn.Close()
 
 	checker := tlsct.NewChecker()
+	checker.InjectLogList(emptyLogList(t))
 	state := conn.TLSState()
 
 	// Use a non-private host so the result depends on checker enablement,
 	// not the localhost/private-host bypass.
 	const host = "example.com"
 
-	// The enabled-checker path fetches Google's CT log list over the
-	// network, so skip when running with -short.
-	if !testing.Short() {
-		if err := checker.CheckTLSState(context.Background(), host, state); err == nil {
-			t.Fatal("CheckTLSState with enabled checker should fail for test cert")
-		}
+	// With an injected log list the checker runs without network access.
+	// The self-signed test cert has no SCTs, so CheckTLSState should fail.
+	if err := checker.CheckTLSState(context.Background(), host, state); err == nil {
+		t.Fatal("CheckTLSState with enabled checker should fail for test cert")
 	}
 
 	checker.SetEnabled(false)

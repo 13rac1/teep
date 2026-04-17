@@ -98,12 +98,11 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 	})
 	if err != nil {
 		if ok {
-			slog.WarnContext(ctx, "nearai endpoint discovery refresh failed, using stale mapping",
+			slog.WarnContext(ctx, "nearai endpoint discovery refresh failed",
 				"model", model,
-				"domain", domain,
+				"stale_domain", domain,
 				"err", err,
 			)
-			return domain, nil
 		}
 		return "", fmt.Errorf("endpoint discovery: %w", err)
 	}
@@ -142,8 +141,10 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 	}
 
 	var er endpointsResponse
-	if err := jsonstrict.UnmarshalWarn(body, &er, "nearai endpoints"); err != nil {
+	if unknown, err := jsonstrict.Unmarshal(body, &er); err != nil {
 		return fmt.Errorf("unmarshal: %w", err)
+	} else if len(unknown) > 0 {
+		slog.Warn("unexpected JSON fields", "fields", unknown, "context", "nearai endpoint discovery")
 	}
 
 	mapping := make(map[string]string)

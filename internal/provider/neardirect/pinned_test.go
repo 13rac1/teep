@@ -417,7 +417,7 @@ func TestNewPinnedHandler(t *testing.T) {
 	rdVerifier := ReportDataVerifier{}
 	allowFail := []string{"nonce_match", "tdx_debug_disabled"}
 
-	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, allowFail, attestation.MeasurementPolicy{}, rdVerifier, nil, nil)
+	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, allowFail, attestation.MeasurementPolicy{}, rdVerifier, nil, attestation.DefaultNVIDIAVerifier(), nil)
 
 	if h.apiKey != "test-api-key" {
 		t.Errorf("apiKey = %q, want %q", h.apiKey, "test-api-key")
@@ -518,7 +518,7 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 		true, // offline — skip Sigstore/Rekor
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{}, nil,
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
 		nil,
 	)
 
@@ -594,7 +594,7 @@ func TestHandlePinned_CacheHitViaSetDialer(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{}, nil,
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
 		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
@@ -665,7 +665,7 @@ func TestHandlePinned_MismatchedFingerprint(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{}, nil,
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
 		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
@@ -723,7 +723,7 @@ func TestHandlePinned_BlockedReportDoesNotPopulateSPKICache(t *testing.T) {
 		true,
 		[]string{}, // empty allow_fail → all factors enforced, including nonce_match
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{}, nil,
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
 		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
@@ -777,7 +777,7 @@ func TestHandlePinned_DomainResolveError(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{}, nil,
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
 		nil,
 	)
 
@@ -910,7 +910,7 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 		true,
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{}, nil,
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
 		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
@@ -989,7 +989,7 @@ func TestHandlePinned_AttestationTimeout(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{}, nil,
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
 		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
@@ -1050,7 +1050,7 @@ func TestHandlePinned_MalformedAttestationResponse(t *testing.T) {
 		true,
 		[]string{},
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{}, nil,
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
 		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
@@ -1135,7 +1135,7 @@ func TestHandlePinned_BlockedThenRecovery(t *testing.T) {
 		true,
 		allFactorsExcept("nonce_match"), // only nonce_match is enforced
 		attestation.MeasurementPolicy{},
-		ReportDataVerifier{}, nil,
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
 		nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {

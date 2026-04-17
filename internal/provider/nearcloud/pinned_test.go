@@ -123,7 +123,7 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil /* no model RD verifier */, nil /* no RekorClient */, nil,
+		nil /* no model RD verifier */, nil /* no RekorClient */, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -194,7 +194,7 @@ func TestHandlePinned_CacheHit(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -267,7 +267,7 @@ func TestHandlePinned_MissingGatewayTLSFingerprint(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -316,7 +316,7 @@ func TestHandlePinned_MismatchedGatewayFingerprint(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -369,7 +369,7 @@ func TestHandlePinned_BlockedReport(t *testing.T) {
 		[]string{}, // empty allow_fail → all factors enforced, including nonce_match
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -446,7 +446,7 @@ func TestHandlePinned_AttestationQueryParams(t *testing.T) {
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -493,7 +493,7 @@ func TestNewPinnedHandler(t *testing.T) {
 	spkiCache := attestation.NewSPKICache()
 	allowFail := []string{"nonce_match", "tdx_debug_disabled"}
 
-	h := NewPinnedHandler(spkiCache, "test-key", true, allowFail, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{}, nil, nil, nil)
+	h := NewPinnedHandler(spkiCache, "test-key", true, allowFail, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{}, nil, nil, attestation.DefaultNVIDIAVerifier(), nil)
 
 	if h.apiKey != "test-key" {
 		t.Errorf("apiKey = %q, want %q", h.apiKey, "test-key")
@@ -551,7 +551,7 @@ func TestHandlePinned_AttestationHTTPError(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -598,7 +598,7 @@ func TestHandlePinned_InvalidAttestationJSON(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -631,7 +631,7 @@ func TestHandlePinned_DialError(t *testing.T) {
 		[]string{},
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		return nil, errors.New("connection refused")
@@ -712,7 +712,7 @@ func TestHandlePinned_ModelHasDifferentFingerprint(t *testing.T) {
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -921,7 +921,7 @@ func TestHandlePinned_WithGatewayComposeAndModelFingerprint(t *testing.T) {
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -1006,7 +1006,7 @@ func TestHandlePinned_WithNonEmptyQuotesAndPayload(t *testing.T) {
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -1328,7 +1328,7 @@ func TestHandlePinned_GatewayBlockedModelPasses(t *testing.T) {
 		[]string{}, // empty allow_fail → all factors enforced, including gateway_nonce_match
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -1407,7 +1407,7 @@ func TestHandlePinned_GatewayPassesModelBlocked(t *testing.T) {
 		[]string{}, // empty allow_fail → all factors enforced, including nonce_match
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -1474,7 +1474,7 @@ func TestHandlePinned_SigningKeyCachedOnSuccess(t *testing.T) {
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
@@ -1569,7 +1569,7 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 		attestation.KnownFactors,
 		attestation.MeasurementPolicy{},
 		attestation.MeasurementPolicy{},
-		nil, nil, nil,
+		nil, nil, attestation.DefaultNVIDIAVerifier(), nil,
 	)
 	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
 		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))

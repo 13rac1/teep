@@ -279,6 +279,7 @@ type Server struct {
 	signingKeyCache *attestation.SigningKeyCache
 	spkiCache       *attestation.SPKICache
 	rekorClient     *attestation.RekorClient
+	nvidiaVerifier  *attestation.NVIDIAVerifier
 	mux             *http.ServeMux
 	attestClient    *http.Client            // for attestation fetches
 	collateral      trust.HTTPSGetter       // for Intel PCS collateral fetches
@@ -328,6 +329,7 @@ func New(cfg *config.Config) (*Server, error) {
 	s.upstreamClient = upstreamClient
 
 	s.rekorClient = attestation.NewRekorClient(attestClient)
+	s.nvidiaVerifier = attestation.DefaultNVIDIAVerifier()
 	s.collateral = attestation.NewCollateralGetter(s.attestClient)
 	s.verifyQuote = attestation.NewTDXVerifier(cfg.Offline, s.collateral)
 
@@ -335,12 +337,16 @@ func New(cfg *config.Config) (*Server, error) {
 		mDefaults, gwDefaults := defaults.MeasurementDefaults(name)
 		mergedPolicy := config.MergedMeasurementPolicy(name, cfg, mDefaults)
 		mergedGWPolicy := config.MergedGatewayMeasurementPolicy(name, cfg, gwDefaults)
-		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg, cfg.Offline), mergedPolicy, mergedGWPolicy, s.rekorClient, s.collateral)
+		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg, cfg.Offline), mergedPolicy, mergedGWPolicy, s.rekorClient, s.nvidiaVerifier, s.collateral)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
 		s.providers[name] = p
 		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE)
+	}
+
+	if len(s.providers) == 0 {
+		return nil, errors.New("no providers configured")
 	}
 
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
@@ -431,6 +437,7 @@ func fromConfig(
 	policy attestation.MeasurementPolicy,
 	gatewayPolicy attestation.MeasurementPolicy,
 	rekorClient *attestation.RekorClient,
+	nvidiaVerifier *attestation.NVIDIAVerifier,
 	getter trust.HTTPSGetter,
 ) (*provider.Provider, error) {
 	p := &provider.Provider{
@@ -471,6 +478,7 @@ func fromConfig(
 			policy,
 			rdVerifier,
 			rekorClient,
+			nvidiaVerifier,
 			getter,
 		)
 		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
@@ -504,6 +512,7 @@ func fromConfig(
 			gatewayPolicy,
 			rdVerifier,
 			rekorClient,
+			nvidiaVerifier,
 			getter,
 		)
 		p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
@@ -560,9 +569,10 @@ func fromConfig(
 	return p, nil
 }
 
-// resolveModel finds the provider for a client model. The model name is passed
-// through to the upstream unchanged. Returns (nil, "", false) when no providers
-// are configured.
+// resolveModel returns the provider for a client model. The model name is
+// passed through to the upstream unchanged. With a single provider (the
+// current production configuration), this is deterministic. Multi-provider
+// routing by model name is not yet implemented; the first provider is returned.
 func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, bool) {
 	for _, p := range s.providers {
 		return p, clientModel, true
@@ -714,7 +724,7 @@ func (s *Server) verifyNVIDIAOnline(
 	if raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
 		slog.DebugContext(ctx, "NVIDIA NRAS verification starting", "provider", provName)
 		start := time.Now()
-		result := attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, s.attestClient)
+		result := s.nvidiaVerifier.VerifyNRAS(ctx, raw.NvidiaPayload, s.attestClient)
 		dur := time.Since(start)
 		slog.DebugContext(ctx, "NVIDIA NRAS verification complete", "provider", provName, "elapsed", dur)
 		return result, dur
@@ -723,7 +733,7 @@ func (s *Server) verifyNVIDIAOnline(
 		slog.DebugContext(ctx, "NVIDIA NRAS verification starting (synthesized EAT)", "provider", provName)
 		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
 		start := time.Now()
-		result := attestation.VerifyNVIDIANRAS(ctx, eatJSON, s.attestClient)
+		result := s.nvidiaVerifier.VerifyNRAS(ctx, eatJSON, s.attestClient)
 		dur := time.Since(start)
 		slog.DebugContext(ctx, "NVIDIA NRAS verification complete (synthesized EAT)", "provider", provName, "elapsed", dur)
 		return result, dur
@@ -767,6 +777,14 @@ func (s *Server) verifySupplyChain(
 	tdxResult *attestation.TDXVerifyResult,
 ) (supplyChainResult, time.Duration) {
 	if raw.AppCompose == "" || tdxResult == nil || tdxResult.ParseErr != nil {
+		if tdxResult != nil && tdxResult.ParseErr != nil {
+			slog.WarnContext(ctx, "supply chain verification skipped: TDX quote parse failed",
+				"parse_err", tdxResult.ParseErr)
+		} else {
+			slog.DebugContext(ctx, "supply chain verification skipped",
+				"has_compose", raw.AppCompose != "",
+				"has_tdx", tdxResult != nil)
+		}
 		return supplyChainResult{}, 0
 	}
 	start := time.Now()

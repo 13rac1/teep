@@ -24,7 +24,7 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	if raw.SigningKey == "" {
 		return "", errors.New("e2e_pubkey absent from attestation response")
 	}
-	if raw.Nonce != nonce.Hex() {
+	if subtle.ConstantTimeCompare([]byte(raw.Nonce), []byte(nonce.Hex())) != 1 {
 		return "", fmt.Errorf("nonce mismatch: attestation response nonce %q does not match client nonce", raw.Nonce)
 	}
 

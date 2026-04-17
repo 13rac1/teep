@@ -6,31 +6,31 @@ import (
 )
 
 func TestDstackMRSEAMAllow(t *testing.T) {
-	if len(DstackMRSEAMAllow) != 4 {
-		t.Errorf("DstackMRSEAMAllow has %d entries, want 4", len(DstackMRSEAMAllow))
+	if len(dstackMRSEAMAllow) != 4 {
+		t.Errorf("dstackMRSEAMAllow has %d entries, want 4", len(dstackMRSEAMAllow))
 	}
-	for h := range DstackMRSEAMAllow {
+	for h := range dstackMRSEAMAllow {
 		b, err := hex.DecodeString(h)
 		if err != nil {
-			t.Errorf("invalid hex in DstackMRSEAMAllow: %s", h)
+			t.Errorf("invalid hex in dstackMRSEAMAllow: %s", h)
 		}
 		if len(b) != 48 {
-			t.Errorf("DstackMRSEAMAllow entry %q decodes to %d bytes, want 48", h[:16], len(b))
+			t.Errorf("dstackMRSEAMAllow entry %q decodes to %d bytes, want 48", h[:16], len(b))
 		}
 	}
 }
 
 func TestDstackMRTDAllow(t *testing.T) {
-	if len(DstackMRTDAllow) != 2 {
-		t.Errorf("DstackMRTDAllow has %d entries, want 2", len(DstackMRTDAllow))
+	if len(dstackMRTDAllow) != 2 {
+		t.Errorf("dstackMRTDAllow has %d entries, want 2", len(dstackMRTDAllow))
 	}
-	for h := range DstackMRTDAllow {
+	for h := range dstackMRTDAllow {
 		b, err := hex.DecodeString(h)
 		if err != nil {
-			t.Errorf("invalid hex in DstackMRTDAllow: %s", h)
+			t.Errorf("invalid hex in dstackMRTDAllow: %s", h)
 		}
 		if len(b) != 48 {
-			t.Errorf("DstackMRTDAllow entry %q decodes to %d bytes, want 48", h[:16], len(b))
+			t.Errorf("dstackMRTDAllow entry %q decodes to %d bytes, want 48", h[:16], len(b))
 		}
 	}
 }

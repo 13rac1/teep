@@ -1,4 +1,4 @@
-.PHONY: help build build-debug self-check test test-fuzz integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes e2e-venice
+.PHONY: help build build-debug self-check test test-live test-fuzz integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes e2e-venice
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -18,6 +18,9 @@ self-check: build ## Build and run self-check
 
 test: ## Run unit tests with race detector (-short skips integration)
 	go test -short -race ./cmd/... ./internal/...
+
+test-live: ## Run live network tests (dials external hosts, requires internet)
+	TEEP_LIVE_TESTS=1 go test -race -v ./internal/tlsct/ -run TestLive
 
 integration: integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture ## Run all integration tests
 

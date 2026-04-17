@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -709,6 +710,9 @@ func TestLoadLogList(t *testing.T) {
 func TestLiveCheckTLSState(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping live CT check in short mode")
+	}
+	if os.Getenv("TEEP_LIVE_TESTS") == "" {
+		t.Skip("TEEP_LIVE_TESTS not set")
 	}
 
 	c := tlsct.NewChecker()

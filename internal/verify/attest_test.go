@@ -77,7 +77,7 @@ func TestVerifyTDX_EmptyQuote(t *testing.T) {
 func TestVerifyNVIDIA_EmptyPayload(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{} // no NvidiaPayload, no GPUEvidence
-	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, nil, true)
+	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, nil, true, attestation.DefaultNVIDIAVerifier())
 	if eat != nil {
 		t.Errorf("verifyNVIDIA empty: eat = %v, want nil", eat)
 	}
@@ -291,7 +291,7 @@ func TestVerifyTDX_WithQuote_NoVerifier(t *testing.T) {
 func TestVerifyNVIDIA_WithPayload_Offline(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{NvidiaPayload: `{"version":"1.0"}`}
-	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, nil, true)
+	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, nil, true, attestation.DefaultNVIDIAVerifier())
 	// With offline=true NRAS is skipped; VerifyNVIDIAPayload runs but will error.
 	if eat == nil {
 		t.Fatal("expected non-nil EAT result for non-empty NvidiaPayload")
@@ -306,7 +306,7 @@ func TestVerifyNVIDIA_WithPayload_NonJSON(t *testing.T) {
 	ctx := context.Background()
 	// Payload starts with non-'{' — NRAS call is skipped even when online.
 	raw := &attestation.RawAttestation{NvidiaPayload: "deadbeef"}
-	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, nil, false)
+	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, nil, false, attestation.DefaultNVIDIAVerifier())
 	if eat == nil {
 		t.Error("expected non-nil EAT result for non-empty NvidiaPayload")
 	}
@@ -325,7 +325,7 @@ func TestVerifyNVIDIA_GPUEvidence_ValidNonce(t *testing.T) {
 		}},
 		Nonce: nonce.Hex(),
 	}
-	eat, nras := verifyNVIDIA(ctx, raw, nonce, nil, true)
+	eat, nras := verifyNVIDIA(ctx, raw, nonce, nil, true, attestation.DefaultNVIDIAVerifier())
 	// VerifyNVIDIAGPUDirect runs but fails on fake data; NRAS skipped (offline).
 	if eat == nil {
 		t.Fatal("expected non-nil EAT result for GPUEvidence with valid nonce")
@@ -342,7 +342,7 @@ func TestVerifyNVIDIA_WithPayload_JSONOnline_CanceledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	raw := &attestation.RawAttestation{NvidiaPayload: `{"version":"1.0"}`}
-	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, &http.Client{}, false)
+	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, &http.Client{}, false, attestation.DefaultNVIDIAVerifier())
 	if eat == nil {
 		t.Fatal("expected non-nil EAT result for non-empty NvidiaPayload")
 	}
@@ -358,7 +358,7 @@ func TestVerifyNVIDIA_GPUEvidence_BadNonce(t *testing.T) {
 		}},
 		Nonce: "not-a-valid-hex-nonce",
 	}
-	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, nil, true)
+	eat, nras := verifyNVIDIA(ctx, raw, attestation.Nonce{}, nil, true, attestation.DefaultNVIDIAVerifier())
 	if eat == nil {
 		t.Fatal("expected non-nil EAT result for bad nonce")
 	}
@@ -388,7 +388,7 @@ func TestVerifyNVIDIA_GPUEvidence_Online_CanceledCtx(t *testing.T) {
 		}},
 		Nonce: nonce.Hex(),
 	}
-	eat, _ := verifyNVIDIA(ctx, raw, nonce, &http.Client{}, false)
+	eat, _ := verifyNVIDIA(ctx, raw, nonce, &http.Client{}, false, attestation.DefaultNVIDIAVerifier())
 	t.Logf("verifyNVIDIA GPU online canceled: eat=%v", eat)
 	// We only verify no panic; eat may be nil or non-nil depending on parsing.
 }

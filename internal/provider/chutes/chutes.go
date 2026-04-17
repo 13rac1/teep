@@ -180,7 +180,8 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 // fleet in between.
 func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody []byte, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	var instances e2eInstancesResponse
-	if err := jsonstrict.UnmarshalWarn(instancesBody, &instances, "chutes e2e instances response"); err != nil {
+	unknownInst, err := jsonstrict.Unmarshal(instancesBody, &instances)
+	if err != nil {
 		return nil, fmt.Errorf("chutes: unmarshal instances response: %w", err)
 	}
 	if len(instances.Instances) == 0 {
@@ -192,7 +193,8 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 	}
 
 	var ar attestationResponse
-	if err := jsonstrict.UnmarshalWarn(evidenceBody, &ar, "chutes evidence response"); err != nil {
+	unknownEvid, err := jsonstrict.Unmarshal(evidenceBody, &ar)
+	if err != nil {
 		return nil, fmt.Errorf("chutes: unmarshal evidence response: %w", err)
 	}
 	if len(ar.Evidence) == 0 {
@@ -294,7 +296,8 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 		InstanceID: matched.InstanceID,
 		E2ENonce:   matchedInst.Nonces[0],
 
-		RawBody: evidenceBody,
+		UnknownFields: append(unknownInst, unknownEvid...),
+		RawBody:       evidenceBody,
 	}, nil
 }
 

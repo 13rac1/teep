@@ -568,7 +568,8 @@ func TestVerifyInclusionProof_TooManyHashes(t *testing.T) {
 }
 
 func TestParseRekorPublicKey(t *testing.T) {
-	key, err := parseRekorPublicKey()
+	rc := NewRekorClient(http.DefaultClient)
+	key, err := rc.parseRekorPublicKey()
 	if err != nil {
 		t.Fatalf("parseRekorPublicKey: %v", err)
 	}
@@ -603,13 +604,11 @@ func TestVerifyRekorEntry_InclusionIndependentOfSET(t *testing.T) {
 		},
 	}
 
-	// Temporarily override with an invalid key to force SET failure.
-	orig := rekorPublicKeyOverride
-	rekorPublicKeyOverride = "not-a-pem-key"
-	defer func() { rekorPublicKeyOverride = orig }()
+	// Use a client with an invalid key to force SET failure.
+	rc := NewRekorClientWithKey(defaultRekorBase, "not-a-pem-key", http.DefaultClient)
 
 	prov := &RekorProvenance{}
-	verifyRekorEntry(entry, prov)
+	rc.verifyRekorEntry(entry, prov)
 
 	// SET should fail due to bad key.
 	if prov.SETErr == nil {
@@ -927,51 +926,6 @@ MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7
 	// The function should return some error (no usable entry found).
 	if prov.Err == nil {
 		t.Error("expected non-nil error for unexpected PEM type")
-	}
-}
-
-// TestSetRekorPublicKeyOverride verifies the override setter and restore.
-func TestSetRekorPublicKeyOverride(t *testing.T) {
-	orig := rekorPublicKeyOverride
-	t.Cleanup(func() { rekorPublicKeyOverride = orig })
-
-	SetRekorPublicKeyOverride("fake-pem-key")
-	if rekorPublicKeyOverride != "fake-pem-key" {
-		t.Errorf("rekorPublicKeyOverride = %q, want %q", rekorPublicKeyOverride, "fake-pem-key")
-	}
-
-	SetRekorPublicKeyOverride("")
-	if rekorPublicKeyOverride != "" {
-		t.Errorf("rekorPublicKeyOverride after reset = %q, want empty", rekorPublicKeyOverride)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// truncateStr
-// ---------------------------------------------------------------------------
-
-func TestTruncateStr_Short(t *testing.T) {
-	s := "hello"
-	if got := truncateStr(s); got != s {
-		t.Errorf("truncateStr short = %q, want %q", got, s)
-	}
-}
-
-func TestTruncateStr_Exact256(t *testing.T) {
-	s := strings.Repeat("a", 256)
-	if got := truncateStr(s); got != s {
-		t.Errorf("truncateStr exact 256 chars should be unchanged, got len=%d", len(got))
-	}
-}
-
-func TestTruncateStr_Long(t *testing.T) {
-	s := strings.Repeat("b", 300)
-	got := truncateStr(s)
-	if len(got) != 259 { // 256 + len("...")
-		t.Errorf("truncateStr long: len = %d, want 259", len(got))
-	}
-	if !strings.HasSuffix(got, "...") {
-		t.Error("truncateStr long: should end with \"...\"")
 	}
 }
 

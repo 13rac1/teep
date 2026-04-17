@@ -155,7 +155,7 @@ func TestEndpointResolver_InvalidDomain(t *testing.T) {
 	}
 }
 
-func TestEndpointResolver_StaleOnRefreshError(t *testing.T) {
+func TestEndpointResolver_FailClosedOnRefreshError(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -179,16 +179,15 @@ func TestEndpointResolver_StaleOnRefreshError(t *testing.T) {
 		t.Fatalf("domain = %q, want %q", domain, "old.near.ai")
 	}
 
+	// Force staleness.
 	r.mu.Lock()
 	r.fetchedAt = time.Now().Add(-10 * time.Minute)
 	r.mu.Unlock()
 
-	domain, err = r.Resolve(context.Background(), "m")
-	if err != nil {
-		t.Fatalf("Resolve with stale-on-error fallback: %v", err)
-	}
-	if domain != "old.near.ai" {
-		t.Errorf("fallback domain = %q, want %q", domain, "old.near.ai")
+	// Refresh fails — must return error, not stale data.
+	_, err = r.Resolve(context.Background(), "m")
+	if err == nil {
+		t.Fatal("expected error when refresh fails (fail-closed), got nil")
 	}
 }
 

@@ -42,17 +42,18 @@ type DomainResolver interface {
 // attestation on the same connection if needed, then sends the chat request
 // and returns the raw response.
 type PinnedHandler struct {
-	resolver    DomainResolver
-	spkiCache   *attestation.SPKICache
-	apiKey      string
-	offline     bool
-	allowFail   []string
-	policy      attestation.MeasurementPolicy
-	rdVerifier  provider.ReportDataVerifier
-	rekorClient *attestation.RekorClient
-	verifyQuote attestation.TDXVerifier
-	ctChecker   *tlsct.Checker
-	dialFn      func(ctx context.Context, domain string) (*tlsct.Conn, error) // nil → use default tlsDial
+	resolver       DomainResolver
+	spkiCache      *attestation.SPKICache
+	apiKey         string
+	offline        bool
+	allowFail      []string
+	policy         attestation.MeasurementPolicy
+	rdVerifier     provider.ReportDataVerifier
+	rekorClient    *attestation.RekorClient
+	nvidiaVerifier *attestation.NVIDIAVerifier
+	verifyQuote    attestation.TDXVerifier
+	ctChecker      *tlsct.Checker
+	dialFn         func(ctx context.Context, domain string) (*tlsct.Conn, error) // nil → use default tlsDial
 
 	verifySF singleflight.Group
 }
@@ -67,22 +68,24 @@ func NewPinnedHandler(
 	policy attestation.MeasurementPolicy,
 	rdVerifier provider.ReportDataVerifier,
 	rekorClient *attestation.RekorClient,
+	nvidiaVerifier *attestation.NVIDIAVerifier,
 	getter trust.HTTPSGetter,
 ) *PinnedHandler {
 	checker := tlsct.NewChecker()
 	checker.SetEnabled(!offline)
 
 	return &PinnedHandler{
-		resolver:    resolver,
-		spkiCache:   spkiCache,
-		apiKey:      apiKey,
-		offline:     offline,
-		allowFail:   allowFail,
-		policy:      policy,
-		rdVerifier:  rdVerifier,
-		rekorClient: rekorClient,
-		verifyQuote: attestation.NewTDXVerifier(offline, getter),
-		ctChecker:   checker,
+		resolver:       resolver,
+		spkiCache:      spkiCache,
+		apiKey:         apiKey,
+		offline:        offline,
+		allowFail:      allowFail,
+		policy:         policy,
+		rdVerifier:     rdVerifier,
+		rekorClient:    rekorClient,
+		nvidiaVerifier: nvidiaVerifier,
+		verifyQuote:    attestation.NewTDXVerifier(offline, getter),
+		ctChecker:      checker,
 	}
 }
 
@@ -445,7 +448,7 @@ func (h *PinnedHandler) verifyNVIDIA(
 		eat = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce)
 	}
 	if !h.offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
-		nras = attestation.VerifyNVIDIANRAS(ctx, raw.NvidiaPayload, tlsct.NewHTTPClient(30*time.Second))
+		nras = h.nvidiaVerifier.VerifyNRAS(ctx, raw.NvidiaPayload, tlsct.NewHTTPClient(30*time.Second))
 	}
 	return eat, nras
 }

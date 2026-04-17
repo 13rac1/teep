@@ -6,10 +6,10 @@ import "maps"
 // platform. These baselines are derived from captured attestation data; see
 // docs/attestation_gaps/dstack_integrity.md for provenance details.
 
-// DstackMRSEAMAllow contains the Intel TDX module measurement hashes observed
+// dstackMRSEAMAllow contains the Intel TDX module measurement hashes observed
 // across all dstack providers. Each entry corresponds to a known TDX module
 // version on Sapphire/Emerald/Granite Rapids platforms.
-var DstackMRSEAMAllow = map[string]struct{}{
+var dstackMRSEAMAllow = map[string]struct{}{
 	// TDX module 1.5.08 — Sapphire/Emerald Rapids
 	"49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6": {},
 	// TDX module 1.5.16 — Sapphire/Emerald Rapids
@@ -20,9 +20,9 @@ var DstackMRSEAMAllow = map[string]struct{}{
 	"685f891ea5c20e8fa27b151bf34bf3b50fbaf7143cc53662727cbdb167c0ad8385f1f6f3571539a91e104a1c96d75e04": {},
 }
 
-// DstackMRTDAllow contains the TD virtual firmware measurement hashes for
+// dstackMRTDAllow contains the TD virtual firmware measurement hashes for
 // known dstack-nvidia image versions.
-var DstackMRTDAllow = map[string]struct{}{
+var dstackMRTDAllow = map[string]struct{}{
 	// dstack-nvidia-0.5.4.1 (os_image_hash 9b69bb...)
 	"b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217": {},
 	// dstack-nvidia-0.5.5 (os_image_hash da9a3d...)
@@ -34,8 +34,8 @@ var DstackMRTDAllow = map[string]struct{}{
 // Callers should overlay provider-specific RTMR values.
 func DstackBaseMeasurementPolicy() MeasurementPolicy {
 	return MeasurementPolicy{
-		MRSeamAllow: copyMap(DstackMRSEAMAllow),
-		MRTDAllow:   copyMap(DstackMRTDAllow),
+		MRSeamAllow: copyMap(dstackMRSEAMAllow),
+		MRTDAllow:   copyMap(dstackMRTDAllow),
 	}
 }
 

@@ -63,8 +63,9 @@ type rekorInclusionProof struct {
 // The base URL is set at construction time and cannot be changed,
 // preventing runtime redirection of Rekor lookups.
 type RekorClient struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL      string
+	httpClient   *http.Client
+	publicKeyPEM string // overrides rekorLogPublicKeyPEM when non-empty (tests)
 }
 
 // NewRekorClient returns a RekorClient pointing at the production Rekor API.
@@ -76,6 +77,13 @@ func NewRekorClient(httpClient *http.Client) *RekorClient {
 // Intended for tests and environments with a private Rekor instance.
 func NewRekorClientWithBase(baseURL string, httpClient *http.Client) *RekorClient {
 	return &RekorClient{baseURL: baseURL, httpClient: httpClient}
+}
+
+// NewRekorClientWithKey returns a RekorClient with a custom base URL and
+// signing public key PEM. Intended for tests that need to verify entries
+// against a known key without hitting the production Rekor log.
+func NewRekorClientWithKey(baseURL, publicKeyPEM string, httpClient *http.Client) *RekorClient {
+	return &RekorClient{baseURL: baseURL, publicKeyPEM: publicKeyPEM, httpClient: httpClient}
 }
 
 // Fulcio OIDC extension OID prefix: 1.3.6.1.4.1.57264.1.
@@ -190,7 +198,7 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 					HasCert:        false,
 					KeyFingerprint: hex.EncodeToString(h[:]),
 				}
-				verifyRekorEntry(entry, &p)
+				rc.verifyRekorEntry(entry, &p)
 				rawKeyFallback = &p
 			}
 			continue
@@ -221,7 +229,7 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 					HasNonFulcioCert: true,
 					KeyFingerprint:   prov.KeyFingerprint,
 				}
-				verifyRekorEntry(entry, &p)
+				rc.verifyRekorEntry(entry, &p)
 				rawKeyFallback = &p
 			}
 			continue
@@ -234,7 +242,7 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 		}
 
 		// Verify the Signed Entry Timestamp (SET) and inclusion proof.
-		verifyRekorEntry(entry, prov)
+		rc.verifyRekorEntry(entry, prov)
 
 		return *prov
 	}
@@ -275,7 +283,7 @@ func (rc *RekorClient) fetchRekorUUIDs(ctx context.Context, digest string) ([]st
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateStr(string(body)))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 256))
 	}
 
 	var uuids []string
@@ -310,7 +318,7 @@ func (rc *RekorClient) fetchRekorEntry(ctx context.Context, uuid string) (*rekor
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateStr(string(respBody)))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 256))
 	}
 
 	// Response is an array of maps: [{"<uuid>": {"body": "<base64>", ...}}]
@@ -589,11 +597,11 @@ func buildPAE(payloadType string, payload []byte) []byte {
 // inclusion proof for a Rekor entry. Results are stored on the provided
 // RekorProvenance. Verification failures are non-fatal — the provenance is
 // still usable, but the report will reflect the verification status.
-func verifyRekorEntry(entry *rekorEntry, prov *RekorProvenance) {
+func (rc *RekorClient) verifyRekorEntry(entry *rekorEntry, prov *RekorProvenance) {
 	// SET verification requires the Rekor public key; inclusion proof does not.
 	// Verify them independently so a key parse failure doesn't mask a working
 	// inclusion proof (or vice versa).
-	rekorKey, err := parseRekorPublicKey()
+	rekorKey, err := rc.parseRekorPublicKey()
 	if err != nil {
 		prov.SETErr = fmt.Errorf("parse Rekor public key: %w", err)
 	} else {
@@ -711,23 +719,12 @@ func verifyInclusionProof(entry *rekorEntry) error {
 	return nil
 }
 
-// rekorPublicKeyOverride when non-empty replaces the embedded Rekor
-// transparency log public key for SET verification. Tests use this to
-// inject a key matching mock-signed entry timestamps.
-var rekorPublicKeyOverride string
-
-// SetRekorPublicKeyOverride replaces the embedded Rekor transparency log
-// public key for SET verification. Pass an empty string to restore the
-// default production key. This exists solely for test mocks.
-func SetRekorPublicKeyOverride(pemKey string) {
-	rekorPublicKeyOverride = pemKey
-}
-
-// parseRekorPublicKey parses the embedded Rekor transparency log public key.
-func parseRekorPublicKey() (*ecdsa.PublicKey, error) {
+// parseRekorPublicKey parses the Rekor transparency log public key.
+// Uses rc.publicKeyPEM if set, otherwise the embedded production key.
+func (rc *RekorClient) parseRekorPublicKey() (*ecdsa.PublicKey, error) {
 	keyPEM := rekorLogPublicKeyPEM
-	if rekorPublicKeyOverride != "" {
-		keyPEM = rekorPublicKeyOverride
+	if rc.publicKeyPEM != "" {
+		keyPEM = rc.publicKeyPEM
 	}
 	block, _ := pem.Decode([]byte(keyPEM))
 	if block == nil {
@@ -742,13 +739,4 @@ func parseRekorPublicKey() (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("rekor public key is %T, expected *ecdsa.PublicKey", pub)
 	}
 	return ecKey, nil
-}
-
-// truncateStr truncates s to 256 characters, appending "..." if truncated.
-func truncateStr(s string) string {
-	const maxLen = 256
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

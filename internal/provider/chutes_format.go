@@ -42,7 +42,8 @@ type chutesResponse struct {
 // NanoGPT when routing to chutes-based backends.
 func ParseChutesFormat(ctx context.Context, body []byte, prefix string) (*attestation.RawAttestation, error) {
 	var cr chutesResponse
-	if err := jsonstrict.UnmarshalWarn(body, &cr, prefix+" chutes attestation response"); err != nil {
+	unknown, err := jsonstrict.Unmarshal(body, &cr)
+	if err != nil {
 		return nil, fmt.Errorf("%s: unmarshal chutes response: %w", prefix, err)
 	}
 
@@ -96,6 +97,7 @@ func ParseChutesFormat(ctx context.Context, body []byte, prefix string) (*attest
 		CandidatesAvail: len(cr.AllAttestations),
 		CandidatesEval:  1,
 
-		RawBody: body,
+		UnknownFields: unknown,
+		RawBody:       body,
 	}, nil
 }
