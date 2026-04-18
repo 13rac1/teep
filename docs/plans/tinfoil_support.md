@@ -41,7 +41,9 @@ verification, policy checks, MR_SEAM whitelist.
 **Migration path**: When Tinfoil deploys V3 to all endpoints:
 1. Users switch their config from `tinfoil_v2` to `tinfoil_v3`.
 2. After a transition period, remove the `tinfoil_v2` case from
-   `proxy.go:fromConfig()` and delete `attester_v2.go` / `reportdata_v2.go`.
+   `proxy.go:fromConfig()`, the `tinfoil_v2` case from
+   `internal/verify/factory.go`, and delete `attester_v2.go` /
+   `reportdata_v2.go`.
 3. Rename `tinfoil_v3` to `tinfoil` (optional cleanup).
 
 ## Provider Characteristics
@@ -109,7 +111,8 @@ construction, like Chutes.
 - Full-body encryption (no field-level dispatch needed)
 - Standard TLS (not connection-pinned like neardirect/nearcloud)
 - No PinnedHandler needed
-- TDX attestation verification reuses `attestation.VerifyTDXQuote()`
+- TDX attestation verification reuses `attestation.VerifyTDXQuoteOffline()` /
+  `attestation.VerifyTDXQuoteOnline()` (via `attestation.TDXVerifier`)
 - `tinfoil_v2` has no client-supplied nonces (like Chutes)
 
 ### Key Differences from All Existing Providers
@@ -819,7 +822,8 @@ explicit.
 ### TDX Verification (Reuse Existing)
 
 For TDX-format attestation, hex-encode the decompressed binary and call the
-existing `attestation.VerifyTDXQuote()`. Extract measurements:
+existing `attestation.VerifyTDXQuoteOffline()` / `attestation.VerifyTDXQuoteOnline()` (via
+the `attestation.TDXVerifier` function type). Extract measurements:
 
 - Register 0: MRTD (48 bytes hex)
 - Register 1: RTMR0 (48 bytes hex)
@@ -860,9 +864,10 @@ For SEV-SNP-format attestation:
    - UcodeSpl >= 0x48
 6. Extract measurement: `report.Measurement` (single 48-byte hex register).
 
-The SEV-SNP verification is new code — teep currently only verifies TDX
-quotes. However, go-sev-guest (google/go-sev-guest) provides the verification
-primitives, similar to how go-tdx-guest is used for TDX.
+The SEV-SNP verification is new code — teep only verifies TDX quotes via
+`attestation.VerifyTDXQuoteOffline()` / `attestation.VerifyTDXQuoteOnline()`. However,
+go-sev-guest (google/go-sev-guest) provides the verification primitives,
+similar to how go-tdx-guest is used for TDX.
 
 ### Supply Chain Verification (Sigstore)
 
@@ -1099,7 +1104,8 @@ lands. Phase 1 is not independently deployable for `tinfoil_v2`.
      `https://tinfoil.sh/predicate/sev-snp-guest/v2`,
      `https://tinfoil.sh/predicate/tdx-guest/v2`.
    - Common `Preparer` (sets API key header, same for both providers).
-   - `attestation.FormatTinfoil` backend format constant.
+   - Use existing `attestation.FormatTinfoil` backend format constant
+     (defined in `internal/attestation/attestation.go`).
 
 2. **Shared parsing** (`attestation.go`):
    - `parseV2Body(body string) ([]byte, error)` — base64-decode + gzip
@@ -1244,8 +1250,11 @@ GitHub Releases.
 2. **Sigstore Bundle Verifier**:
    - Use the `sigstore-go` library to verify the DSSE bundle. This is a new
      dependency for Tinfoil bundle verification; teep's existing
-     `internal/attestation/sigstore.go` does not use `sigstore-go` and should
-     only be referenced for any reusable Rekor/Sigstore validation patterns.
+     `internal/attestation/sigstore.go` and `internal/attestation/rekor.go`
+     do not use `sigstore-go` and should only be referenced for reusable
+     Rekor/Sigstore validation patterns. The `RekorClient` struct (with
+     `NewRekorClient`, `NewRekorClientWithKey` constructors) manages Rekor
+     interactions and public key validation without globals.
    - Certificate identity: OIDC issuer =
      `https://token.actions.githubusercontent.com`.
    - Workflow regex: `^https://github.com/{repo}/.github/workflows/.*@refs/tags/*`.
@@ -1420,6 +1429,11 @@ config, and endpoint dispatch.
 **Files to modify**:
 - `internal/proxy/proxy.go` — Add `case "tinfoil_v2"` and `case "tinfoil_v3"`
   to `fromConfig()`
+- `internal/verify/factory.go` — Add `tinfoil_v2` and `tinfoil_v3` cases to
+  `newAttester`, `newReportDataVerifier`, `supplyChainPolicy`,
+  `e2eeEnabledByDefault`, and `chatPathForProvider`; add
+  `"tinfoil_v2": "TINFOIL_API_KEY"` and `"tinfoil_v3": "TINFOIL_API_KEY"`
+  to `ProviderEnvVars`
 - `internal/config/config.go` — Add `TINFOIL_API_KEY` env resolution
 - `teep.toml.example` — Add both provider examples (V2 active, V3 commented)
 - `internal/defaults/defaults.go` — Add default allow-fail factors per provider
@@ -1434,9 +1448,12 @@ config, and endpoint dispatch.
 
 2. **Provider Construction** (`proxy.go:fromConfig`):
 
-   Both `case` blocks share the same endpoint paths, base URL, API key,
-   E2EE encryptor, supply chain policy, model lister, SPKI domain, and
-   TLS-bound transport. They differ only in Attester and ReportDataVerifier.
+   `fromConfig()` takes `cp`, `spkiCache`, `offline`, `allowFail`, `policy`,
+   `gatewayPolicy`, `rekorClient`, `nvidiaVerifier`, and `getter`
+   (Intel PCS collateral getter). Both `case` blocks share the same endpoint
+   paths, base URL, API key, E2EE encryptor, supply chain policy, model
+   lister, SPKI domain, and TLS-bound transport. They differ only in Attester
+   and ReportDataVerifier.
 
    ```go
    case "tinfoil_v2":
@@ -1478,10 +1495,12 @@ config, and endpoint dispatch.
 4. **TLS-Fingerprint-Bound Transport**: Create a `tinfoil.NewTransport()`
    that returns an `http.Transport` with `VerifyPeerCertificate` enforcing the
    attested SPKI fingerprint on every connection (see the TLS-Fingerprint-
-   Bound Transport protocol section above). The transport is shared between
-   the Attester, E2EE Encryptor, and inference request forwarding. On
-   fingerprint mismatch during inference, trigger re-attestation before
-   retrying. Shared between both provider variants.
+   Bound Transport protocol section above). The `tlsct` package provides the
+   `Conn` type (via `tlsct.Dial`) and `NewHTTPClient` for building TLS-aware
+   transports. The transport is shared between the Attester, E2EE Encryptor,
+   and inference request forwarding. On fingerprint mismatch during inference,
+   trigger re-attestation before retrying. Shared between both provider
+   variants.
 
 5. **Allow-Fail Defaults**: Create separate defaults per provider:
    - `attestation.TinfoilV2DefaultAllowFail`:
@@ -1523,6 +1542,9 @@ config, and endpoint dispatch.
 **Unit tests**:
 - Test provider construction from config for both `tinfoil_v2` and
   `tinfoil_v3` (verifies correct Attester and ReportDataVerifier types).
+- Test `internal/verify/factory.go` switch cases: `newAttester`,
+  `newReportDataVerifier`, `supplyChainPolicy`, `e2eeEnabledByDefault`, and
+  `chatPathForProvider` return the correct types for both Tinfoil providers.
 - Test SPKI domain resolution.
 - Test that unknown Tinfoil config fields are rejected (strict TOML).
 - Test that `tinfoil_v2` uses `V2ReportDataVerifier` and `tinfoil_v3` uses
@@ -1636,7 +1658,9 @@ All `tinfoil_v2` tests above, plus:
 
 **Files to modify**:
 - `internal/attestation/report.go` — Add Tinfoil-specific verification
-  factors
+  factors to `KnownFactors` and `BuildReport`
+- `internal/verify/verify.go` — Update `FormatReport` if new factor display
+  logic is needed
 - `docs/api_support.md` — Add Tinfoil provider section
 - `docs/measurement_allowlists.md` — Add Tinfoil MR_SEAM values
 
@@ -1743,8 +1767,12 @@ The following references must all be updated together:
 3. **All factor emission sites** across provider packages (`nearcloud`,
    `neardirect`, `chutes`, `venice`, etc.) that emit `tdx_*` factor names.
 4. **`proxy.go`** — lines that gate E2EE on `ReportDataBindingPassed()`
-   (approximately lines 1312, 1372, 1617) are safe if the function is
-   updated, but verify no other string literals reference old names.
+   are safe if the function is updated, but verify no other string
+   literals reference old names.
+5. **`internal/verify/factory.go`** — the `newReportDataVerifier`,
+   `newAttester`, `supplyChainPolicy`, `e2eeEnabledByDefault`, and
+   `chatPathForProvider` switch blocks reference provider names. Factor name
+   strings emitted by these functions must also be updated.
 5. **`validateAllowFail()`** in `internal/config/config.go` — validates
    against `KnownFactors`. After the rename, existing user `teep.toml`
    files with `allow_fail = ["tdx_hardware_config"]` will fail validation

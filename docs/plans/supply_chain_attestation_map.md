@@ -4,92 +4,115 @@
 
 ### Dstack-Based Providers (Venice, Neardirect, Nearcloud, NanoGPT)
 
-All dstack providers use `DstackBaseMeasurementPolicy()` which provides:
-- **MRSEAM**: 4 Intel TDX module versions (1.5.08, 1.5.16, 2.0.08, 2.0.02)
-- **MRTD**: 2 dstack-nvidia image versions (0.5.4.1, 0.5.5)
-- **RTMR**: Provider-specific (hardware + OS + application configuration)
+All dstack-backed providers build their measurement defaults from `DstackBaseMeasurementPolicy()` in [internal/attestation/dstack_defaults.go](../../internal/attestation/dstack_defaults.go). That base policy includes:
+- **MRSEAM**: 4 Intel TDX module measurements covering TDX module versions 1.5.08, 1.5.16, 2.0.08, and 2.0.02
+- **MRTD**: 2 dstack virtual firmware measurements covering `dstack-nvidia-0.5.4.1` and `dstack-nvidia-0.5.5`
+- **RTMR**: provider-specific allowlists layered on top by each provider package
 
-### Venice ([venice/policy.go](../../internal/provider/venice/policy.go))
-- **SupplyChainPolicy** → Delegates to neardirect (same container images)
-- **Images** (3 total, all ModelTier):
-  1. `datadog/agent` (Sigstore signing required, fingerprint verified)
-  2. `certbot/dns-cloudflare` (ComposeBindingOnly)
-  3. `nearaidev/compose-manager` (FulcioSigned, GitHub Actions OIDC)
+Nearcloud also carries a separate gateway CVM measurement policy in [internal/provider/nearcloud/policy.go](../../internal/provider/nearcloud/policy.go). NanoGPT widens the RTMR allowlists beyond a single deployment class, but still inherits the shared MRSEAM and MRTD baselines.
 
-### Neardirect ([neardirect/policy.go](../../internal/provider/neardirect/policy.go))
-- **SupplyChainPolicy** (used by Venice too):
-  - `datadog/agent`: Sigstore + fingerprint verification
-  - `certbot/dns-cloudflare`: ComposeBindingOnly (digest pinned in compose)
-  - `nearaidev/compose-manager`: Fulcio-signed, GitHub Actions build
+### Venice ([internal/provider/venice/policy.go](../../internal/provider/venice/policy.go))
+- `SupplyChainPolicy()` delegates directly to neardirect because Venice and neardirect use the same model-tier container set.
+- The policy contains 3 model-tier repositories:
+  1. `datadog/agent` with `SigstorePresent` plus a pinned signing-key fingerprint
+  2. `certbot/dns-cloudflare` with `ComposeBindingOnly`
+  3. `nearaidev/compose-manager` with `FulcioSigned`, GitHub Actions OIDC identity checks, expected source repositories, and `NoDSSE=true`
 
-### Nearcloud ([nearcloud/policy.go](../../internal/provider/nearcloud/policy.go))
-- **SupplyChainPolicy**: Extends neardirect with gateway images:
-  - Model tier: inherits Venice/neardirect policy
-  - Gateway tier additions (6 total):
-    - `datadog/agent` (also GatewayTier)
-    - `nearaidev/dstack-vpc-client` (FulcioSigned)
-    - `nearaidev/dstack-vpc` (FulcioSigned)
-    - `alpine` (SigstorePresent only)
-    - `nearaidev/cloud-api` (FulcioSigned)
-    - `nearaidev/cvm-ingress` (FulcioSigned)
-  - All Fulcio images use NoDSSE=true (DSSE envelope has no signatures as of 2026-03)
-  - All use GitHub OIDC issuer
+### Neardirect ([internal/provider/neardirect/policy.go](../../internal/provider/neardirect/policy.go))
+- `SupplyChainPolicy()` defines the shared Venice/neardirect model-tier policy.
+- `datadog/agent` is accepted as `SigstorePresent` with an exact key fingerprint check.
+- `certbot/dns-cloudflare` is `ComposeBindingOnly`, so integrity comes from the attested compose manifest rather than Rekor/Fulcio identity checks.
+- `nearaidev/compose-manager` is `FulcioSigned` and must match the GitHub Actions issuer, workflow identity, and source repository allowlist.
 
-### NanoGPT ([nanogpt/policy.go](../../internal/provider/nanogpt/policy.go))
-- **SupplyChainPolicy**: ComposeBindingOnly for all (10 images):
-  - Security relies on MRConfigID binding to compose manifest
-  - Uses tag-based references, NOT @sha256 pinning
-  - All are ModelTier only
-  - Images: alpine, dstacktee/dstack-ingress, dstacktee/vllm-proxy, haproxy, lmsysorg/sglang, mondaylord/vllm-openai, phalanetwork/vllm-proxy, python, redis, vllm/vllm-openai
+### Nearcloud ([internal/provider/nearcloud/policy.go](../../internal/provider/nearcloud/policy.go))
+- `SupplyChainPolicy()` starts from the neardirect model-tier policy and adds gateway-tier images.
+- `datadog/agent` is marked as both model-tier and gateway-tier.
+- Additional gateway-tier repositories are:
+  - `nearaidev/dstack-vpc-client` (`FulcioSigned`, `NoDSSE=true`)
+  - `nearaidev/dstack-vpc` (`FulcioSigned`, `NoDSSE=true`)
+  - `alpine` (`SigstorePresent` only)
+  - `nearaidev/cloud-api` (`FulcioSigned`, `NoDSSE=true`)
+  - `nearaidev/cvm-ingress` (`FulcioSigned`, `NoDSSE=true`)
+- All Fulcio-enforced nearcloud gateway images require the GitHub Actions OIDC issuer and a workflow-specific subject URI plus matching source repository metadata.
 
-### Chutes ([chutes/policy.go](../../internal/provider/chutes/policy.go))
-- **NO SupplyChainPolicy** (returns nil)
-- Uses cosign image admission + IMA instead of docker-compose binding
-- Supply chain verification is validator-side only
-- Has distinct Sek8s TDX measurements (not dstack)
+### NanoGPT ([internal/provider/nanogpt/policy.go](../../internal/provider/nanogpt/policy.go))
+- `SupplyChainPolicy()` declares 10 model-tier repositories, all with `ComposeBindingOnly` provenance.
+- The current NanoGPT manifests use tag-based image references rather than `@sha256:` pins, so the policy depends on `compose_binding` rather than Sigstore/Rekor provenance for image identity.
+- The repositories are `alpine`, `dstacktee/dstack-ingress`, `dstacktee/vllm-proxy`, `haproxy`, `lmsysorg/sglang`, `mondaylord/vllm-openai`, `phalanetwork/vllm-proxy`, `python`, `redis`, and `vllm/vllm-openai`.
+
+### Chutes ([internal/provider/chutes/policy.go](../../internal/provider/chutes/policy.go))
+- Chutes has no `SupplyChainPolicy`; both verify and proxy paths pass `nil`.
+- Chutes uses sek8s-specific measurement allowlists for MRTD/RTMR, while still inheriting and expanding the shared `DstackBaseMeasurementPolicy()` MRSEAM baseline.
+- `compose_binding`, `sigstore_verification`, and `build_transparency_log` are not the primary enforcement mechanism for Chutes because container admission and runtime integrity are validator-side (`cosign` + IMA) rather than client-visible compose metadata.
 
 ## Compose Binding Verification
 
-### How It Works ([internal/attestation/compose.go](../../internal/attestation/compose.go))
+### Core Helpers ([internal/attestation/compose.go](../../internal/attestation/compose.go))
 
-1. **VerifyComposeBinding(appCompose, mrConfigID)**:
-   - Calculates SHA-256 hash of raw app_compose JSON
-   - Expected MRConfigID prefix: 0x01 (1 byte) + sha256 hash (32 bytes)
-   - Uses **const-time comparison** (`subtle.ConstantTimeCompare`)
-   - Fails if prefix doesn't match
+1. **`VerifyComposeBinding(appCompose, mrConfigID)`**
+   - Computes `sha256(appCompose)` over the raw `app_compose` string.
+   - Expects MRConfigID to begin with `0x01 || sha256(appCompose)`.
+   - Uses `subtle.ConstantTimeCompare` over the 33-byte prefix.
+   - Fails on empty or short MRConfigID values and on any prefix mismatch.
 
-2. **ExtractDockerCompose(appCompose)**:
-   - Parses JSON `app_compose` field
-   - Extracts `docker_compose_file` string (YAML content)
-   - Returns empty string if field absent (not an error)
+2. **`ExtractDockerCompose(appCompose)`**
+   - Parses the `app_compose` JSON payload.
+   - Returns the `docker_compose_file` string when present.
+   - Returns `""` with no error when the field is absent.
 
-3. **ExtractImageDigests(text)**:
-   - Regex: `@sha256:[0-9a-f]{64}`
-   - Deduplicates digests
-   - Limits to 64 images per manifest (defense in depth - F-25)
+3. **`ExtractImageDigests(text)`**
+   - Extracts `@sha256:<64 hex>` digests.
+   - Deduplicates digests.
+   - Caps the result set at `maxImageDigests = 64`.
 
-4. **ExtractImageRepositories(text)**:
-   - Normalizes image refs: strips tag, lowercases, trims whitespace
-   - Returns deduplicated repo names from @sha256-pinned references
+4. **`ExtractImageRepositories(text)`**
+   - Extracts repository names from `@sha256:`-pinned references.
+   - Lowercases and trims whitespace.
+   - Removes trailing tags while preserving registry ports.
 
-5. **ExtractImageDigestToRepoMap(text)**:
-   - Maps digest → normalized repo name
-   - Logs if same digest maps to multiple repos
+5. **`ExtractImageDigestToRepoMap(text)`**
+   - Builds a digest-to-repository map from pinned image references.
+   - Keeps the first repository seen for a digest and logs conflicts.
 
-## Attestation Report Factory System
+6. **`ExtractComposeDigests(appCompose)`**
+   - Prefers `docker_compose_file` when it is present in the JSON payload.
+   - Falls back to the raw `app_compose` text when no extracted compose file is available.
+   - Returns repositories, digest-to-repository mappings, and digests together as `ComposeDigests`.
 
-### Verification Factors Architecture
+7. **`MergeComposeDigests(model, gateway)`**
+   - Merges model-tier and gateway-tier digest sets.
+   - Uses model digests first, then appends new gateway digests.
+   - Preserves first-writer-wins semantics for digest-to-repository conflicts.
 
-**Tier 3: Supply Chain & Channel Integrity** evaluators:
-- `evalBuildTransparencyLog`: Rekor provenance (sigstore/fulcio)
-- `evalComposeBinding`: docker-compose hash binding to MRConfigID
-- `evalSigstoreVerification`: image digest presence in Sigstore
-- `evalCPUIDRegistry`: Proof of Cloud registry check
-- `evalTLSKeyBinding`: TLS SPKI binding
-- `evalCPUGPUChain`, `evalMeasuredModelWeights`: Stub factors (not implemented)
-- `evalEventLogIntegrity`: TDX event log replay verification
+## Attestation Report Evaluation
 
-### Supply Chain Policy Type ([internal/attestation/report.go](../../internal/attestation/report.go), line 1628)
+### Verification Factor Layout ([internal/attestation/report.go](../../internal/attestation/report.go))
+
+**Tier 3: Supply Chain & Channel Integrity** includes:
+- `evalTLSKeyBinding`
+- `evalCPUGPUChain`
+- `evalMeasuredModelWeights`
+- `evalBuildTransparencyLog`
+- `evalCPUIDRegistry`
+- `evalComposeBinding`
+- `evalSigstoreVerification`
+- `evalEventLogIntegrity`
+
+**Tier 4: Gateway Attestation** is appended only when `ReportInput.GatewayTDX != nil` and includes:
+- `evalGatewayNonceMatch`
+- `evalGatewayTDXQuotePresent`
+- `evalGatewayTDXParseDependent`
+- `evalGatewayTDXMrseamMrtd`
+- `evalGatewayTDXHardwareConfig`
+- `evalGatewayTDXBootConfig`
+- `evalGatewayTDXReportDataBinding`
+- `evalGatewayComposeBinding`
+- `evalGatewayCPUIDRegistry`
+- `evalGatewayEventLogIntegrity`
+
+### Supply Chain Policy Types
+
+The policy types live in [internal/attestation/report.go](../../internal/attestation/report.go):
 
 ```go
 type SupplyChainPolicy struct {
@@ -97,132 +120,189 @@ type SupplyChainPolicy struct {
 }
 
 type ImageProvenance struct {
-	Repo           string         // normalized image repo
-	ModelTier      bool           // allowed in model compose
-	GatewayTier    bool           // allowed in gateway compose
-	Provenance     ProvenanceType // FulcioSigned | SigstorePresent | ComposeBindingOnly
-	KeyFingerprint string         // SHA-256 hex for SigstorePresent
-	OIDCIssuer     string         // required for FulcioSigned
-	OIDCIdentity   string         // SAN URI (workflow identity)
-	SourceRepos    []string       // expected source repos
-	NoDSSE         bool           // skip DSSE envelope validation
+	Repo           string
+	ModelTier      bool
+	GatewayTier    bool
+	Provenance     ProvenanceType
+	KeyFingerprint string
+	OIDCIssuer     string
+	OIDCIdentity   string
+	SourceRepos    []string
+	NoDSSE         bool
 }
 
 type ProvenanceType int
-// FulcioSigned: must have Fulcio cert, matching OIDC issuer + identity + source repo
-// SigstorePresent: in transparency log, optional fingerprint check
-// ComposeBindingOnly: NOT in Sigstore, security via compose pinning
+// FulcioSigned: require Fulcio cert + OIDC issuer/identity + source repo match
+// SigstorePresent: require transparency-log presence, optionally fingerprint match
+// ComposeBindingOnly: do not require Sigstore presence; trust compose binding
 ```
 
-### Build Transparency Log Evaluation ([evalBuildTransparencyLog](../../internal/attestation/report.go), line 1001)
+The helper methods on `SupplyChainPolicy` (`Lookup`, `AllowedInModel`, `AllowedInGateway`, `HasGatewayImages`, `ModelRepoNames`, `GatewayRepoNames`) drive repo-level policy checks before Rekor provenance is evaluated.
 
-Flow:
-1. **checkImageRepoPolicy**: Validate all model/gateway image repos against policy
-   - Returns FAIL if any repo not in policy
-   - Returns FAIL if gateway images present but policy has none
+### Build Transparency Log Evaluation
 
-2. **buildTransparencyNoRekor**: When no Rekor entries
-   - FAIL if policy configured (expected entries)
-   - SKIP if composeHash present but no Rekor data
-   - SKIP for Chutes (cosign/IMA model)
-   - FAIL if no transparency log at all
+`evalBuildTransparencyLog` runs three stages:
 
-3. **rekorProvenanceResult**: Process all Rekor entries
-   - **classifyRekorEntry**: Per-entry classification
-     - FulcioSigned: verify certificate OIDC issuer, identity, source repo
-     - SigstorePresent: fingerprint check if policy has one
-     - Fails on policy violation or unexpected signer
-   - Accumulates: fulcio count, sigstore count, SET verified, inclusion verified
-   - Returns FAIL on any verification failure
-   - Returns PASS with count summary
+1. **`checkImageRepoPolicy`**
+   - Validates every extracted model repository against `AllowedInModel`.
+   - Validates every extracted gateway repository against `AllowedInGateway` when the policy has gateway images.
+   - Fails if no model repositories were extracted under a configured policy.
+   - Fails if gateway repositories are present but the policy does not permit any gateway images.
+
+2. **`buildTransparencyNoRekor`**
+   - Fails immediately when a `SupplyChainPolicy` exists but no Rekor provenance was fetched.
+   - Skips when no policy exists but a compose hash is present.
+   - Skips for Chutes because the attestation payload does not expose container image metadata to the client.
+   - Fails otherwise with `no build transparency log`.
+
+3. **`rekorProvenanceResult`**
+   - Maps each Rekor record back to an extracted repository using `DigestToRepo`.
+   - Uses `classifyRekorEntry` to split entries into Fulcio-verified, Sigstore-present, or failed.
+   - For `FulcioSigned` policy entries, `verifyFulcioEntry` enforces DSSE-signature presence unless `NoDSSE=true`, requires a Fulcio certificate, matches OIDC issuer and subject URI in constant time, and checks the source repository against the allowlist.
+   - For `SigstorePresent` entries with a configured fingerprint, performs a constant-time fingerprint comparison.
+   - Requires verified Rekor SET and inclusion proofs for both Fulcio and Sigstore-only paths.
+   - Produces a pass summary with Fulcio count, Sigstore count, and log-integrity counters; otherwise fails on the first policy or verification violation.
+
+When no policy exists, a Fulcio-backed Rekor entry still requires the GitHub Actions OIDC issuer if a certificate is present. Raw-key entries are treated as Sigstore-presence-only.
 
 ### Enforce-by-Default vs Allow-Fail
 
-**Enforced by default** (factors NOT in allow-fail list):
-- `compose_binding` (dstack only)
-- `build_transparency_log` (when policy configured)
+Factors are enforced unless their names appear in the effective `allow_fail` list. `BuildReport()` also promotes `Skip` to `Fail` for enforced factors unless the factor is marked `Deferred`.
+
+**Global `DefaultAllowFail`** includes:
+- `tdx_quote_present`
+- `tdx_quote_structure`
+- `tdx_hardware_config`
+- `tdx_boot_config`
+- `intel_pcs_collateral`
+- `tdx_tcb_current`
+- `nvidia_payload_present`
+- `nvidia_claims`
+- `nvidia_nras_verified`
+- `e2ee_capable`
+- `e2ee_usable`
+- `tls_key_binding`
+- `cpu_gpu_chain`
+- `measured_model_weights`
+- `cpu_id_registry`
+- `gateway_tdx_quote_present`
+- `gateway_tdx_quote_structure`
+- `gateway_tdx_hardware_config`
+- `gateway_tdx_boot_config`
+- `gateway_tdx_reportdata_binding`
+- `gateway_cpu_id_registry`
+
+Because they are absent from `DefaultAllowFail`, the following remain enforced globally unless a provider-specific or config override relaxes them:
+- `build_transparency_log`
+- `compose_binding`
 - `sigstore_verification`
 - `event_log_integrity`
+- all gateway factors not listed above, including `gateway_nonce_match`, `gateway_tdx_cert_chain`, `gateway_tdx_quote_signature`, `gateway_tdx_debug_disabled`, `gateway_tdx_mrseam_mrtd`, `gateway_compose_binding`, and `gateway_event_log_integrity`
 
-**Allowed to fail by default** (per provider):
-```go
-DefaultAllowFail          // global list
-NearcloudDefaultAllowFail // stricter for nearcloud
-NeardirectDefaultAllowFail // stricter for neardirect
-ChutesDefaultAllowFail    // includes compose_binding, build_transparency_log
-```
+**Provider-specific defaults**:
+- `NearcloudDefaultAllowFail` allows only `tdx_hardware_config`, `tdx_boot_config`, `cpu_gpu_chain`, `measured_model_weights`, `cpu_id_registry`, `gateway_tdx_hardware_config`, `gateway_tdx_boot_config`, `gateway_tdx_reportdata_binding`, and `gateway_cpu_id_registry`.
+- `NeardirectDefaultAllowFail` allows only `tdx_hardware_config`, `tdx_boot_config`, `cpu_gpu_chain`, `measured_model_weights`, and `cpu_id_registry`.
+- `ChutesDefaultAllowFail` allows `tdx_hardware_config`, `tdx_boot_config`, `nvidia_signature`, `nvidia_nras_verified`, `tls_key_binding`, `cpu_gpu_chain`, `measured_model_weights`, `build_transparency_log`, `cpu_id_registry`, `compose_binding`, `sigstore_verification`, and `event_log_integrity`.
 
-**Chutes specifically allows**:
-- compose_binding (uses cosign/IMA, not compose)
-- build_transparency_log
-- sigstore_verification
-- event_log_integrity
+**Offline mode** adds `OnlineFactors` to the effective allow-fail list:
+- `intel_pcs_collateral`
+- `tdx_tcb_current`
+- `tdx_tcb_not_revoked`
+- `nvidia_nras_verified`
+- `e2ee_usable`
+- `build_transparency_log`
+- `cpu_id_registry`
+- `sigstore_verification`
+- `gateway_cpu_id_registry`
 
 ## Key Security Properties
 
-1. **Cryptographic Safety**:
-   - All comparisons use `subtle.ConstantTimeCompare` (nonce, REPORTDATA binding, fingerprints, OIDC issuer/identity)
+1. **Cryptographic Safety**
+   - `subtle.ConstantTimeCompare` is used for nonce checks, compose-binding prefix checks, Sigstore fingerprint checks, and Fulcio OIDC issuer/identity checks.
 
-2. **Fail-Closed**:
-   - Policy violation = policy check FAIL (not SKIP)
-   - Missing `SupplyChainPolicy` skips policy-driven enforcement (for example,
-     repo/image allowlist and signer-identity rules), but does **not** disable
-     all supply-chain checks; some transparency-log presence checks may still
-     run and FAIL
-   - Enforced factors promoted from Skip → Fail
+2. **Fail-Closed Evaluation**
+   - Repository allowlist violations and signer-identity violations fail immediately.
+   - Missing `SupplyChainPolicy` disables only policy-driven allowlists and signer requirements; it does not suppress all supply-chain checks.
+   - Enforced skipped factors are promoted to failures unless the factor is explicitly deferred.
 
-3. **Constant-Time Compose Binding**:
-   - 33-byte prefix comparison (0x01 + 32-byte SHA-256)
-   - Protects against timing side-channels on MRConfigID verification
+3. **Gateway-Aware Evidence Handling**
+   - The verify path can evaluate model-tier and nearcloud gateway-tier compose bindings separately and merge their digest sets before Sigstore/Rekor checks.
+   - Gateway factors are emitted only when the caller populates gateway verification inputs.
 
-4. **Image Digest Bounding**:
-   - maxImageDigests = 64 (prevents regex explosion)
+4. **Digest Extraction Bounds**
+   - `maxImageDigests = 64` limits the number of digests that can trigger Sigstore and Rekor lookups from a single attested compose payload.
 
-5. **Defense in Depth Layers**:
-   - Measurement policy (RTMR binding to deployment)
-   - Compose binding (app configuration immutability)
-   - Rekor + Fulcio (build provenance)
-   - Sigstore transparency log (global audit)
-   - Fingerprint checking (keyless signing verification)
+5. **Defense in Depth**
+   - Measurement policies constrain TDX measurements.
+   - Compose binding constrains the attested deployment manifest.
+   - Rekor and Fulcio constrain build provenance.
+   - Sigstore presence and Rekor log verification constrain transparency-log integrity.
+   - Event-log replay constrains RTMR consistency.
 
+## SupplyChainPolicy Flow & Wiring
 
+### Verify / Reverify Path
 
-## SupplyChainPolicy Flow & Wiring (Updated 2026-04-03)
+The CLI entry point in [cmd/teep/main.go](../../cmd/teep/main.go) delegates verification to [internal/verify](../../internal/verify/):
+- `runVerification()` calls `verify.Run(...)`.
+- `--reverify` calls `verify.Replay(...)` through `runReverify()`.
+- `--capture` records attestation HTTP traffic for later replay, but it is mutually exclusive with `--offline`.
 
-### Two Parallel Code Paths
+Within the verify package:
+- [internal/verify/factory.go](../../internal/verify/factory.go) selects the provider-specific `SupplyChainPolicy()` by provider name.
+- [internal/verify/verify.go](../../internal/verify/verify.go) verifies model compose binding when `raw.AppCompose` is present and the model TDX quote parsed successfully.
+- [internal/verify/attest.go](../../internal/verify/attest.go) verifies nearcloud gateway TDX, gateway REPORTDATA binding, gateway compose binding, and gateway Proof of Cloud when `raw.GatewayIntelQuote` is present.
+- [internal/verify/verify.go](../../internal/verify/verify.go) extracts model and gateway compose digests separately, merges them with `MergeComposeDigests`, then checks Sigstore and Rekor across the merged digest set.
+- `verify.Run()` populates `ReportInput` with `SupplyChainPolicy`, `ImageRepos`, `GatewayImageRepos`, `DigestToRepo`, `Compose`, `GatewayCompose`, `GatewayTDX`, `GatewayPoC`, `GatewayNonceHex`, and `GatewayEventLog` before calling `BuildReport()`.
 
-**1. VERIFY COMMAND PATH** ([cmd/teep/main.go](../../cmd/teep/main.go#L607-L618))
-- `supplyChainPolicy(providerName)` function is called at attestation build time
-- Returns hardcoded provider-specific policy via switch statement
-- Passed to `BuildReport(&ReportInput{SupplyChainPolicy: ...})`
+### Proxy Path
 
-**2. PROXY PATH** ([internal/proxy/proxy.go](../../internal/proxy/proxy.go#L370-L450))
-- `fromConfig()` wires Provider struct during proxy initialization
-- Calls provider-specific `SupplyChainPolicy()` function in switch statement
-- Stores in `Provider.SupplyChainPolicy` field
-- Later: passed to `BuildReport()` as `prov.SupplyChainPolicy`
+The proxy path wires the policy through [internal/proxy/proxy.go](../../internal/proxy/proxy.go):
+- `fromConfig()` populates `Provider.SupplyChainPolicy` with provider-specific hardcoded policies for Venice, neardirect, nearcloud, and NanoGPT.
+- `fromConfig()` sets `nil` for phalacloud and chutes.
+- `fetchAndVerify()` passes `prov.SupplyChainPolicy` into `attestation.BuildReport()`.
+- `verifySupplyChain()` verifies model-side compose binding, extracts model-side compose digests, and performs Sigstore/Rekor checks for those model digests.
+
+The proxy path does not currently populate `GatewayTDX`, `GatewayCompose`, `GatewayImageRepos`, `GatewayPoC`, or `GatewayEventLog` into `BuildReport()`, so gateway-specific supply-chain factors are only emitted from the verify path.
 
 ### Provider Wiring Sources
 
-All provider-specific policies are hardcoded in `policy.go` files:
-- [internal/provider/venice/policy.go](../../internal/provider/venice/policy.go#L27)
-- [internal/provider/neardirect/policy.go](../../internal/provider/neardirect/policy.go#L27)
-- [internal/provider/nanogpt/policy.go](../../internal/provider/nanogpt/policy.go#L36)
-- [internal/provider/nearcloud/pinned.go](../../internal/provider/nearcloud/pinned.go#L423) (calls SupplyChainPolicy())
+The provider-specific policy constructors live in:
+- [internal/provider/venice/policy.go](../../internal/provider/venice/policy.go)
+- [internal/provider/neardirect/policy.go](../../internal/provider/neardirect/policy.go)
+- [internal/provider/nearcloud/policy.go](../../internal/provider/nearcloud/policy.go)
+- [internal/provider/nanogpt/policy.go](../../internal/provider/nanogpt/policy.go)
 
-### ReportInput Field
+The two `nil` policy cases are hardcoded in both [internal/verify/factory.go](../../internal/verify/factory.go) and [internal/proxy/proxy.go](../../internal/proxy/proxy.go):
+- `phalacloud`
+- `chutes`
 
-[attestation.ReportInput struct](../../internal/attestation/report.go#L328-L360) contains:
+### ReportInput Surface
+
+[internal/attestation/report.go](../../internal/attestation/report.go) accepts the supply-chain inputs through `ReportInput`:
+
 ```go
 SupplyChainPolicy *SupplyChainPolicy
+ImageRepos        []string
+GatewayImageRepos []string
+DigestToRepo      map[string]string
+Compose           *ComposeBindingResult
+Sigstore          []SigstoreResult
+Rekor             []RekorProvenance
+GatewayTDX        *TDXVerifyResult
+GatewayPoC        *PoCResult
+GatewayNonceHex   string
+GatewayNonce      Nonce
+GatewayCompose    *ComposeBindingResult
+GatewayEventLog   []EventLogEntry
+GatewayPolicy     MeasurementPolicy
 ```
 
-Both paths (verify/proxy) populate this before calling `BuildReport()`.
+Gateway evaluators are included only when `GatewayTDX` is non-nil.
 
-### CONFIG INTEGRATION STATUS
+### Config Integration Status
 
-**HARDCODED ONLY** - No config.toml integration exists today:
-- Zero matches for "SupplyChainPolicy" in [internal/config/](../../internal/config/) 
-- No `config.MergedSupplyChainPolicy()` equivalent (unlike measurement policies)
-- Phalacloud returns nil in both paths (awaiting implementation)
-- Chutes returns nil in both paths (uses cosign/IMA instead)
+Supply-chain policy selection remains hardcoded in Go:
+- [internal/config](../../internal/config/) does not define any `SupplyChainPolicy` fields or TOML schema.
+- There is no `MergedSupplyChainPolicy()` helper analogous to `MergedMeasurementPolicy()` or `MergedGatewayMeasurementPolicy()`.
+- Configuration integrates `allow_fail` lists and measurement policies, but not repository allowlists or Sigstore/Fulcio identity policy.
