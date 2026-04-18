@@ -33,6 +33,7 @@ Recommended new contract:
 teep serve [--offline] [--log-level LEVEL]
 ```
 
+Debug builds also support `--force`, which bypasses enforced verification factors. Keep that flag out of the release-build/public contract, but note its existence explicitly so help text and README updates do not accidentally drop it.
 No provider positional argument.
 
 The proxy starts with every provider whose resolved API key is non-empty after config plus env processing.
@@ -263,13 +264,13 @@ This must cover:
 
 ## 6. Concurrency and Shared-State Analysis
 
-## 6.1 Executive summary
+### 6.1 Executive summary
 
 Teep's architecture is already well-designed for concurrent multi-provider operation. After initialization, the proxy is effectively immutable for provider selection state. All mutable shared structures already use the correct synchronization primitives.
 
 Moving from single-provider to multi-provider routing requires no new locking. The main correctness change is deterministic model parsing and provider lookup.
 
-## 6.2 Shared state that is already safe
+### 6.2 Shared state that is already safe
 
 ### Immutable-after-init state
 
@@ -405,7 +406,7 @@ All of these should run under the repository's race-enabled workflow.
 
 ## 7. Implementation Plan
 
-## Phase 1: Remove the single-provider serve contract
+### 7.1 Phase 1: Remove the single-provider serve contract
 
 ### Objective
 
