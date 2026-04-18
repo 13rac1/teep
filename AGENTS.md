@@ -64,7 +64,7 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 - JSON unmarshalling MUST use the internal/jsonstrict parser.
 - All low-level parsers MUST return unknown field names to callers instead of logging or deduplicating them internally. Callers own the policy decision to fail, warn once per logical operation, or use lower-severity logging in hot paths.
 - If you can't make development progress due to a failing validation, STOP and ask for advice.
-- Fail loudly, not siliently: when an expected verification step is skipped because prerequisites are missing, malformed, or unexpectedly unavailable, emit a clear non-secret diagnostic at warn level or stronger.
+- Fail loudly, not silently: when an expected verification step is skipped because prerequisites are missing, malformed, or unexpectedly unavailable, emit a clear non-secret diagnostic at warn level or stronger.
 
 ### Always Ensure Attestation Integrity
 
