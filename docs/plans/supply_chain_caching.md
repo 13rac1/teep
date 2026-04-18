@@ -808,11 +808,7 @@ at the end.
 
 ### 9a. File Locking and Concurrency
 
-**In-process coordination (`teep serve`)**: Each `teep serve` process uses a
-single-writer goroutine pattern. All cache mutations from concurrent request
-handlers are serialized through a channel to a single goroutine that performs
-the read-merge-write cycle. This avoids lock contention between request
-handlers within a single process.
+**In-process coordination (`teep serve`)**: The in-memory cache uses a `sync.RWMutex` to protect its shared data structures, ensuring safe concurrent access via multiple clients performing simultaneous access of multiple providers and models. Cross-process disk writes are performed by first acquiring a `sync.Mutex` per-provider (or globally for disk access) and then proceeding with the read-merge-write file cycle.
 
 **Cross-process coordination**: Multiple `teep serve` processes (or a `teep
 serve` and a `teep cache`) may share the same cache file. All cache file
@@ -927,12 +923,12 @@ verification, or staleness degradation.
 - Implement read/write/merge operations with atomic file writes.
 - Permission checks using `os.Lstat` (symlink-safe).
 - Post-unmarshal validation of hex field lengths.
-- Unit tests for merge semantics, format round-tripping, concurrent access.
+- Unit tests for merge semantics, format round-tripping, and safe concurrent access involving multiple providers over `sync.WaitGroup` and parallel goroutines.
 
 ### Phase 2: `teep cache` Command
 
 - Add `teep cache` subcommand to `cmd/teep/main.go`.
-- Wire up attestation fetch → full verification → cache extraction → file write.
+- Call `verify.Run()` to fetch attestation and run full verification, then extract authenticated fields from the returned `VerificationReport` to populate the cache file.
 - Support `--model`, `--all-models`, `--cache-file`.
 - Emit warnings for tag-based and `version_unpinned` images.
 - Partial failure handling for `--all-models`: continue all models, collect
@@ -977,7 +973,7 @@ verification, or staleness degradation.
   Sigstore/Rekor, refreshed Intel PCS / NVIDIA NRAS, new PoC positive
   registrations), write these back to both the in-memory cache and the cache
   file (if configured). Use atomic write (write → rename) with `flock(2)` for
-  cross-process safety and a single-writer goroutine for in-process
+  cross-process safety and `sync.RWMutex` for in-process memory
   coordination (see Section 9a).
 - **Write-back failure handling**: Cache file write failures are logged at
   `slog.Error` level and do not fail requests or block proxy operation.
