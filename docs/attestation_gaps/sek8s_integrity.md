@@ -1,8 +1,5 @@
 # Sek8s Integrity Chain — Chutes Provider
 
-**Date:** 2025-04-16
-**Status:** Open
-
 Chutes runs a custom Kubernetes distribution called **sek8s** inside Intel TDX confidential VMs with a fundamentally different attestation model than dstack providers. While hardware-level TDX measurements can be independently verified by remote clients, the application-layer integrity chain — container image identity, model weights, runtime measurements, and boot gating — relies entirely on server-side controls that are not exposed in the client-facing evidence API.
 
 ## The Problem
