@@ -41,6 +41,7 @@ Flag any code that:
 - Silently drops malformed elements instead of rejecting the whole input.
 - Allows an unattested or partially-attested request to be forwarded.
 - Serves stale or cached data when re-validation fails, without blocking.
+- Accepts unknown, ambiguous, or semantically invalid configuration that should have been rejected at startup.
 
 If an error path does anything other than return/propagate an error, it is a
 defect. There are NO acceptable workarounds, fallbacks, or error recoveries for
@@ -71,12 +72,15 @@ security validation.
   cryptographic verification.
 - Cache misses MUST trigger full re-attestation, never pass-through.
 - Cache eviction under memory pressure MUST NOT allow unattested connections.
+- Provider or model routing MUST be unique and deterministic. Flag any selection logic that depends on map iteration order, unspecified ordering, or another non-deterministic mechanism.
 
 ## Error Handling Style
 
 - Error returns block the request — no silent swallowing.
-- Unknown or misspelled config values MUST be rejected at startup.
-- JSON unmarshalling MUST use strict mode (warn on unknown fields, and reject failures).
+- Unknown, misspelled, ambiguous, or semantically invalid config values MUST be rejected at startup.
+- Startup validation MUST reject any configuration that cannot produce exactly one deterministic attested route for a request or model, including zero-provider configs and overlapping provider matches.
+- JSON unmarshalling MUST use the internal/jsonstrict parser.
+- All low-level parsers MUST return unknown field names to callers instead of logging or deduplicating them internally. Callers own the policy decision to fail, warn once per logical operation, or use lower-severity logging in hot paths.
 - Malformed attestation data MUST fail the entire response, not skip elements.
 - **Do not request nil checks for internal objects and arguments** that are
   expected to be always non-nil by normal program construction when the proposed
@@ -94,6 +98,7 @@ from multiple consumers. Flag any code that:
 - Introduces or writes to a **mutable package-level variable**. State that
   varies per-request or per-provider must live on a struct or be passed as a
   parameter. A global written during request handling will race under load.
+- Exposes exported package-level `var` state for security policy or runtime behavior when callers can mutate the underlying value, especially maps, slices, or pointers.
 - Uses a package-level variable with `save/restore` cleanup (e.g.
   `orig := pkg.Global; defer func() { pkg.Global = orig }()`) in production
   code or in any test that calls `t.Parallel()` — this pattern is inherently
@@ -126,6 +131,18 @@ Preferred patterns:
 - Bound all reads from untrusted sources (HTTP bodies, JSON arrays).
 - Use `Connection: close` or equivalent to prevent TLS connection reuse
   across attestation boundaries.
+- Default test paths should not depend on live external network access. Flag live-network tests unless they are explicitly opt-in via either TEEP_LIVE_TESTS and/or API key environment variable presence.
+
+## Provider Routing Checklist
+
+When reviewing proxy or provider selection logic, verify all of the following:
+
+- Each request or model resolves to exactly one provider.
+- Zero-provider and multi-match configurations are rejected at startup, not deferred until request time.
+- Selection does not depend on Go map iteration order or any other non-deterministic ordering.
+- Security policy, attestation policy, and E2EE policy cannot vary across requests because of ambiguous routing.
+- Missing routing prerequisites return a blocking error instead of silently skipping checks or selecting a fallback provider.
+- Tests cover both valid single-route cases and invalid zero-route or multi-route configurations.
 
 ## Plan Compliance Review
 
@@ -144,3 +161,4 @@ In addition to ensuring that the code meets the above review requirements, verif
 - Be specific: cite the code location and explain the risk.
 - Prioritize fail-open and fallback defects above all other issues.
 - Flag any weakening of existing validation, even if "temporary".
+- Treat ambiguous routing, parser-owned unknown-field logging state, and exported mutable security policy as recurring review hotspots.
