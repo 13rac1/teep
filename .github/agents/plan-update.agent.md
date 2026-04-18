@@ -45,7 +45,7 @@ git log -1 --format='%H' -- docs/plans/<plan_file>
 2. Get the code diff since that commit:
 
 ```
-git diff <base_commit>..HEAD -- . ':!docs/' ':!.github/' ':!*_test.go' ':!*/testdata/*'
+git diff <base_commit>..HEAD -- . ':!docs/' ':!.github/' ':!*_test.go' ':!**/testdata/**'
 ```
 
 If the diff is very large, narrow it to the packages the plan touches:
@@ -57,7 +57,7 @@ git diff <base_commit>..HEAD -- <package1>/ <package2>/ ...
 3. Get the commit history since that commit:
 
 ```
-git log <base_commit>..HEAD --oneline -- . ':!docs/' ':!.github/' ':!*_test.go' ':!*/testdata/*'
+git log <base_commit>..HEAD --oneline -- . ':!docs/' ':!.github/' ':!*_test.go' ':!**/testdata/**'
 ```
 
 If the plan file has never been committed (no base commit found), ask the user for a base reference before proceeding.
