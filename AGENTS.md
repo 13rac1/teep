@@ -60,9 +60,11 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 - Failed validation MUST block requests unless specifically whitelisted by `allow_fail`, by `--force` (debug builds only: bypasses all enforced factors), or by `--offline` (skips network-dependent checks such as Intel PCS, NRAS, sigstore, and Proof of Cloud).
 - Error paths MUST only return or propagate errors. Any other behavior is a defect.
 - Reject malformed input entirely; never silently drop malformed elements.
-- Unknown or misspelled config values MUST be rejected at startup.
-- JSON unmarshalling MUST use strict mode (warn on unknown fields, and reject failures).
+- Unknown, misspelled, ambiguous, or semantically invalid config values MUST be rejected at startup.
+- JSON unmarshalling MUST use the internal/jsonstrict parser.
+- All low-level parsers MUST return unknown field names to callers instead of logging or deduplicating them internally. Callers own the policy decision to fail, warn once per logical operation, or use lower-severity logging in hot paths.
 - If you can't make development progress due to a failing validation, STOP and ask for advice.
+- Fail loudly, not siliently: when an expected verification step is skipped because prerequisites are missing, malformed, or unexpectedly unavailable, emit a clear non-secret diagnostic at warn level or stronger.
 
 ### Always Ensure Attestation Integrity
 
@@ -72,6 +74,7 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 - Never trust provider-asserted "verified" fields without independent cryptographic verification.
 - Cache misses MUST trigger full re-attestation, never pass-through.
 - Cache eviction MUST NOT allow unattested connections.
+- Provider and model routing MUST ensure uniqueness and determinism.
 
 ### Always Ensure Cryptographic Safety
 
@@ -84,6 +87,7 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 ### Always Ensure Concurrency Safety
 
 - **No mutable package-level variables.** State that varies per-request or per-provider must live on a struct or be passed as a parameter. A global that is written during request handling will race under concurrent load.
+- Exported package-level `var` declarations holding security policy or runtime state are forbidden unless they are truly immutable and callers cannot mutate the underlying value. Do not expose maps, slices, or pointers that callers can modify.
 - Prefer dependency injection (constructor parameters, struct fields, function arguments) over globals for anything that could differ between callers.
 - Use `sync.Mutex`/`sync.RWMutex` for protecting shared data structures (caches, maps). Prefer channels for coordination between goroutines. Use `sync.Once` for safe lazy initialization.
 - Add concurrent test cases (`sync.WaitGroup` + parallel goroutines) when manipulating shared state. Ensure integration-level coverage of these cases.
@@ -114,6 +118,7 @@ func (h *Handler) attestOnConn(...) (*Report, error) {
 ```
 
 Reference implementations to mirror when adding providers or verification logic:
+
 - **Attestation verification:** `internal/provider/nearcloud/pinned.go:attestOnConn` and `internal/provider/neardirect/pinned.go:attestOnConn`
 - **Proxy handler:** `internal/proxy/proxy.go:handleChat`
 
@@ -122,6 +127,7 @@ Reference implementations to mirror when adding providers or verification logic:
 - Follow Effective Go idioms and best practices.
 - When uncertain, prefer DEFENSE IN DEPTH validation.
 - Bound all reads from untrusted sources (HTTP bodies, JSON arrays).
+- Prefer mocks over live tests: any live-network test must be gated behind the TEEP_LIVE_TESTS environment variable.
 - ALWAYS add regression test coverage for code review issues and audit findings.
 
 ### No Fallbacks or Backwards Compatibility
