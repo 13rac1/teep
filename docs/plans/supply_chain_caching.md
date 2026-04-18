@@ -808,12 +808,13 @@ at the end.
 
 ### 9a. File Locking and Concurrency
 
-**In-process coordination (`teep serve`)**: The in-memory cache uses a `sync.RWMutex` to protect its shared data structures, ensuring safe concurrent access via multiple clients performing simultaneous access of multiple providers and models. Cross-process disk writes are performed by first acquiring a `sync.Mutex` per-provider (or globally for disk access) and then proceeding with the read-merge-write file cycle.
+**In-process coordination (`teep serve`)**: The in-memory cache uses a `sync.RWMutex` to protect its shared data structures, ensuring safe concurrent access via multiple clients performing simultaneous access of multiple providers and models.
 
 **Cross-process coordination**: Multiple `teep serve` processes (or a `teep
-serve` and a `teep cache`) may share the same cache file. All cache file
-writes use `flock(2)` (advisory file locking) to serialize cross-process
-access:
+serve` and a `teep cache`) may share the same cache file. Cross-process disk
+writes are performed by first acquiring a file lock and then proceeding with
+the read-merge-write file cycle. All cache file writes use `flock(2)`
+(advisory file locking) to serialize cross-process access:
 
 1. Acquire an exclusive `flock` on a lock file (`<cache-file>.lock`).
 2. Read the current cache file contents.
