@@ -42,7 +42,7 @@ Nearcloud also carries a separate gateway CVM measurement policy in [internal/pr
 
 ### Chutes ([internal/provider/chutes/policy.go](../../internal/provider/chutes/policy.go))
 - Chutes has no `SupplyChainPolicy`; both verify and proxy paths pass `nil`.
-- Chutes uses a sek8s-specific measurement policy rather than the dstack defaults.
+- Chutes uses sek8s-specific measurement allowlists for MRTD/RTMR, while still inheriting and expanding the shared `DstackBaseMeasurementPolicy()` MRSEAM baseline.
 - `compose_binding`, `sigstore_verification`, and `build_transparency_log` are not the primary enforcement mechanism for Chutes because container admission and runtime integrity are validator-side (`cosign` + IMA) rather than client-visible compose metadata.
 
 ## Compose Binding Verification
