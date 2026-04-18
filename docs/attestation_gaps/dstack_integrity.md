@@ -1,8 +1,5 @@
 # Dstack Integrity Chain: In-Band Discovery Gap
 
-**Date:** 2025-06-01
-**Status:** Open
-
 Dstack-based confidential inference providers do not publish expected boot-chain measurement values in a signed, machine-readable format. Verifiers can enforce measurement allowlists today, but all allowlist values must be sourced and maintained out-of-band. Provider infrastructure changes silently invalidate those values, forcing a choice between strict enforcement with unplanned outages and relaxed enforcement that masks potential compromises.
 
 ## The Problem

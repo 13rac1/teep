@@ -1,8 +1,5 @@
 # [Gap Title]: [Concise Description]
 
-**Date:** YYYY-MM-DD
-**Status:** Open | Remediation in progress | Resolved
-
 <!-- TITLE: Name the specific gap or provider assessment. Examples from
 existing reports:
   - "Dstack Integrity Chain: In-Band Discovery Gap"

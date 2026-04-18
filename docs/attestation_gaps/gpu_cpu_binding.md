@@ -1,8 +1,5 @@
 # Hardware Attestation Binding Issues and Mitigations
 
-**Date:** 2026-03-01
-**Status:** Open
-
 Two independent hardware security gaps in the Intel TDX + NVIDIA Hopper Confidential Computing stack — TDX attestation key extraction and missing CPU-to-GPU attestation binding — allow an attacker with physical access to completely subvert all attestation guarantees.  No compensating controls exist in the current hardware or protocol stack.  Five complementary mitigation options are evaluated, with a staged deployment trajectory from immediate verifier-side changes to medium-term hardware upgrades.
 
 ## The Problem
