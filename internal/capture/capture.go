@@ -51,6 +51,7 @@ type E2EEOutcome struct {
 	Failed    bool   `json:"failed,omitempty"`
 	ErrMsg    string `json:"error,omitempty"`
 	Detail    string `json:"detail,omitempty"`
+	Type      string `json:"type,omitempty"`
 }
 
 // Manifest holds top-level metadata for a capture directory.

@@ -357,6 +357,25 @@ type E2EETestResult struct {
 	Err error
 	// Detail is a human-readable summary of the test outcome.
 	Detail string
+	// KeyType is the canonical E2EE key type derived from the attestation
+	// (e.g. "ecdsa", "ed25519", "ml-kem-768").
+	KeyType string
+}
+
+// E2EEKeyType returns the canonical E2EE key-type string for the given raw
+// attestation. Returns "" when no signing key is present.
+func E2EEKeyType(raw *RawAttestation) string {
+	if raw.SigningKey == "" {
+		return ""
+	}
+	if raw.SigningAlgo != "" {
+		return raw.SigningAlgo
+	}
+	// Infer from key length when SigningAlgo is absent.
+	if len(raw.SigningKey) == 64 {
+		return "ed25519"
+	}
+	return "ecdsa"
 }
 
 // ComposeBindingResult holds the outcome of verifying the app_compose → MRConfigID binding.
