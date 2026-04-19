@@ -2,10 +2,10 @@
 //
 // Usage:
 //
-//	teep serve      PROVIDER                Start the proxy server.
-//	teep verify     PROVIDER --model M      Fetch and verify attestation, print report.
-//	teep self-check                         Verify this binary's build provenance.
-//	teep version                            Print version information.
+//	teep serve      [flags] PROVIDER             Start the proxy server.
+//	teep verify     --model M [flags] PROVIDER   Fetch and verify attestation, print report.
+//	teep self-check                              Verify this binary's build provenance.
+//	teep version                                 Print version information.
 //
 // Configuration is loaded from $TEEP_CONFIG (TOML) and environment variables.
 // See the config package for full documentation.
@@ -96,14 +96,14 @@ func main() {
 			},
 			{
 				Name:      "verify",
-				Usage:     "teep verify [--model M] [flags] [PROVIDER]",
+				Usage:     "teep verify (--model M [flags] PROVIDER | --reverify DIR [flags])",
 				ShortHelp: "Fetch and verify attestation, print report",
 				Flags:     verifyFlags,
 				Exec: func(ctx context.Context, args []string) error {
+					if err := verifyArgsConflict(*reverifyDir, args); err != nil {
+						return err
+					}
 					if *reverifyDir != "" {
-						if len(args) > 0 {
-							return errors.New("PROVIDER and --reverify are mutually exclusive")
-						}
 						return runReverify(ctx, *reverifyDir)
 					}
 					if len(args) == 0 {
@@ -113,6 +113,11 @@ func main() {
 					}
 					if err := rejectTrailingFlags("verify", args); err != nil {
 						return err
+					}
+					if *model == "" {
+						fmt.Fprintf(os.Stderr, "teep verify: --model is required\n\n")
+						printVerifyHelp()
+						return errSilentExit
 					}
 					return runVerify(ctx, args[0], *model, *captureDir,
 						*verifyOffline, *updateConfig, *configOut)
@@ -124,7 +129,8 @@ func main() {
 				ShortHelp: "Verify this binary's build provenance",
 				Exec: func(_ context.Context, args []string) error {
 					if len(args) != 0 {
-						return fmt.Errorf("self-check: unexpected arguments: %v", args)
+						fmt.Fprintf(os.Stderr, "teep self-check: unexpected arguments: %v\n", args)
+						return errSilentExit
 					}
 					return runSelfCheck()
 				},
@@ -135,7 +141,8 @@ func main() {
 				ShortHelp: "Print version information",
 				Exec: func(_ context.Context, args []string) error {
 					if len(args) != 0 {
-						return fmt.Errorf("version: unexpected arguments: %v", args)
+						fmt.Fprintf(os.Stderr, "teep version: unexpected arguments: %v\n", args)
+						return errSilentExit
 					}
 					return runVersion()
 				},
@@ -196,17 +203,34 @@ func parseSlogLevel(s string) slog.Level {
 	}
 }
 
+// verifyArgsConflict returns an error if reverifyDir and positional provider
+// args are both present (they are mutually exclusive).
+func verifyArgsConflict(reverifyDir string, args []string) error {
+	if reverifyDir != "" && len(args) > 0 {
+		return errors.New("PROVIDER and --reverify are mutually exclusive")
+	}
+	return nil
+}
+
 // rejectTrailingFlags checks for flag-like arguments after the first positional
 // arg and returns a helpful error. ff stops parsing at the first non-flag
 // argument (POSIX convention), so flags placed after the provider are not
 // parsed. This catches the common mistake of writing "serve venice --offline"
 // instead of "serve --offline venice".
 func rejectTrailingFlags(cmd string, args []string) error {
+	var trailingFlags, extraPositionals []string
 	for _, a := range args[1:] {
 		if strings.HasPrefix(a, "-") {
-			return fmt.Errorf("%s: flags must precede the provider argument (try: teep %s %s %s)",
-				cmd, cmd, strings.Join(args[1:], " "), args[0])
+			trailingFlags = append(trailingFlags, a)
+		} else {
+			extraPositionals = append(extraPositionals, a)
 		}
+	}
+	// Only suggest a reordering when the sole problem is trailing flags —
+	// if there are also extra positionals the reordering would be wrong.
+	if len(trailingFlags) > 0 && len(extraPositionals) == 0 {
+		return fmt.Errorf("%s: flags must precede the provider argument (try: teep %s %s %s)",
+			cmd, cmd, strings.Join(trailingFlags, " "), args[0])
 	}
 	if len(args) > 1 {
 		return fmt.Errorf("%s: expected one provider argument, got %d", cmd, len(args))

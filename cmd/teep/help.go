@@ -555,7 +555,7 @@ func printOverview() {
 
 Usage:
   teep serve      [flags] PROVIDER                 Start the HTTP proxy server.
-  teep verify     [flags] PROVIDER                 Fetch and print attestation report.
+  teep verify     [flags] --model MODEL PROVIDER   Fetch and print attestation report.
   teep self-check                                  Verify this binary's build provenance.
   teep version                                     Print version information.
   teep help       [topic]                          Show detailed help for a topic.
@@ -667,11 +667,11 @@ Exit codes:
   1   At least one enforced factor failed, or a fatal error occurred.
 
 Examples:
-  teep verify venice --model e2ee-deepseek-r1-0528
-  teep verify neardirect --model qwen2.5-72b-instruct --capture ./captures
+  teep verify --model e2ee-deepseek-r1-0528 venice
+  teep verify --model qwen2.5-72b-instruct --capture ./captures neardirect
   teep verify --reverify ./captures/neardirect_qwen2.5-72b-instruct_20260404_120000
-  teep verify nearcloud --model Qwen/Qwen3.5-122B-A10B --log-level debug
-  teep verify venice --model e2ee-qwen3-32b --update-config
+  teep verify --model Qwen/Qwen3.5-122B-A10B --log-level debug nearcloud
+  teep verify --model e2ee-qwen3-32b --update-config venice
 
 See 'teep help tiers' for how factors are scored, 'teep help factors'
 for descriptions of all verification factors, or 'teep help measurements'
@@ -697,18 +697,18 @@ Quickstart: Bootstrap Allowlists from Observed Values
 
   1. Run verification and save observed values to your config:
 
-       teep verify venice --model e2ee-qwen3-32b --update-config
+       teep verify --model e2ee-qwen3-32b --update-config venice
 
      This writes the observed MRSEAM, MRTD, and RTMR0-2 values to
      [providers.venice.policy] in $TEEP_CONFIG, with deduplication.
 
   2. To write to a different file instead of $TEEP_CONFIG:
 
-       teep verify venice --model e2ee-qwen3-32b --config-out ./teep.toml
+       teep verify --model e2ee-qwen3-32b --config-out ./teep.toml venice
 
   3. Run against additional models to capture all deployment classes:
 
-       teep verify venice --model e2ee-deepseek-r1-0528 --update-config
+       teep verify --model e2ee-deepseek-r1-0528 --update-config venice
 
      New values are appended and deduplicated.
 

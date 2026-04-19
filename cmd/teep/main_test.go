@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -261,7 +262,7 @@ func TestExtractObserved_EmptyMetadata(t *testing.T) {
 // --offline are rejected together. Now an in-process test since runVerify
 // returns error instead of calling os.Exit.
 func TestRunVerify_CaptureOfflineMutuallyExclusive(t *testing.T) {
-	err := runVerify(context.Background(), "someprovider", "m", "/tmp/capture", true, false, "")
+	err := runVerify(context.Background(), "someprovider", "m", os.TempDir(), true, false, "")
 	t.Logf("runVerify(capture+offline) error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for --capture + --offline")
@@ -317,5 +318,50 @@ func TestRejectTrailingFlags_ExtraPositional(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "expected one provider") {
 		t.Errorf("expected 'expected one provider' in error, got: %v", err)
+	}
+}
+
+func TestRejectTrailingFlags_ExtraPositionalAndFlag(t *testing.T) {
+	// Extra positional + trailing flag: should not suggest a reordering since
+	// it would include the extra positional in the suggestion.
+	err := rejectTrailingFlags("serve", []string{"venice", "extra", "--offline"})
+	t.Logf("rejectTrailingFlags error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for extra positional + trailing flag")
+	}
+	if !strings.Contains(err.Error(), "expected one provider") {
+		t.Errorf("expected 'expected one provider' in error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "flags must precede") {
+		t.Errorf("should not suggest reordering when extra positionals are present, got: %v", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// verifyArgsConflict tests
+// --------------------------------------------------------------------------
+
+func TestVerifyArgsConflict_ReverifyPlusProvider(t *testing.T) {
+	err := verifyArgsConflict("/some/capture/dir", []string{"venice"})
+	t.Logf("verifyArgsConflict error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for --reverify + PROVIDER")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected 'mutually exclusive' in error, got: %v", err)
+	}
+}
+
+func TestVerifyArgsConflict_ReverifyNoProvider(t *testing.T) {
+	err := verifyArgsConflict("/some/capture/dir", nil)
+	if err != nil {
+		t.Errorf("expected no error for --reverify without provider, got: %v", err)
+	}
+}
+
+func TestVerifyArgsConflict_ProviderNoReverify(t *testing.T) {
+	err := verifyArgsConflict("", []string{"venice"})
+	if err != nil {
+		t.Errorf("expected no error for provider without --reverify, got: %v", err)
 	}
 }
