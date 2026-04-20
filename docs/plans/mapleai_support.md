@@ -32,14 +32,15 @@ nearcloud/neardirect (TLS-pinned).
 - On session failure (HTTP 400, decryption error): re-attest + new key exchange
 - On attestation cache miss/expiry: full attestation + key exchange
 
-**Investigation findings:**
+**Architecture:**
 - MapleAI's backend at `enclave.trymaple.ai` serves all models from a single Nitro
   Enclave, so the X25519 public key is stable across models and requests within an
   enclave lifecycle
-- The Nitro enclave acts as a router/proxy; actual GPU inference runs on NVIDIA GPU
-  TEEs via a third party (per OpenSecret technical blog). This means Nitro attestation
-  covers the frontend enclave only — **GPU-side attestation is not currently exposed
-  through the MapleAI attestation endpoint**, which is a known gap
+- The Nitro enclave acts as a router/proxy; actual inference runs on AMD SEV-SNP
+  backends (Edgeless Privatemode AI, Tinfoil). Sidecar proxies inside the enclave
+  verify backend attestation (Contrast SDK, tinfoil-go SDK) and re-encrypt or
+  establish attested TLS before forwarding. This backend attestation is not exposed
+  through the MapleAI Nitro attestation endpoint — it is a known gap
 - A session key is generated per key exchange, tied to a server-issued `session_id`;
   the server may timeout sessions independently
 
@@ -217,8 +218,7 @@ enclave source code and trusting the PCR0 measurement to cover it.
 
 #### Source Code Availability
 
-Investigation of the OpenSecretCloud GitHub organization reveals that **all components
-of the Nitro Enclave are publicly available:**
+All components of the Nitro Enclave are publicly available:
 
 | Component | Repository | Language | Role |
 |-----------|-----------|----------|------|
@@ -233,7 +233,7 @@ handler (ECDH + ChaCha20-Poly1305 session establishment), and the chat completio
 handler that decrypts client E2EE and forwards plaintext JSON to sidecar proxies on
 localhost.
 
-#### Enclave-Internal Data Flow (From Source Audit)
+#### Enclave-Internal Data Flow
 
 ```
 Client
@@ -258,7 +258,7 @@ OpenSecret Rust Server (inside Nitro Enclave)
         └─→ VSOCK → traffic_forwarder.py → parent EC2 instance → internet
 ```
 
-**Key finding:** Plaintext inference data is exposed on localhost inside the enclave
+Plaintext inference data is exposed on localhost inside the enclave
 (between the Rust server and the sidecar proxies), but **never crosses the enclave
 boundary in plaintext**. The VSOCK traffic forwarders (`traffic_forwarder.py`) carry
 only TLS-encrypted traffic to the parent instance.
@@ -346,7 +346,7 @@ Go source is in-tree at `tinfoil-proxy/main.go` (with `go.mod` and `go.sum`).
 
 #### No Sigstore/Rekor Transparency Log Entries
 
-Zero results were found for sigstore, cosign, or Rekor transparency log entries in:
+No sigstore, cosign, or Rekor transparency log entries exist for:
 - The `OpenSecretCloud` GitHub organization (all 6 repos)
 - The `edgelesssys/privatemode-public` repository
 - The EIF build artifacts or PCR history entries
@@ -361,11 +361,7 @@ verification of the Tinfoil inference nodes), but this is internal to the enclav
 verification of the Tinfoil backend — it is not exposed through the MapleAI Nitro
 attestation.
 
-#### Revised Gap Assessment
-
-The previous plan assessment stated "this link is not authenticated" and "nothing is
-proved." This was **incorrect** based on the source code investigation. The actual
-situation is more nuanced:
+#### Gap Assessment
 
 **What IS verified (enclave-internal, auditable from source):**
 1. The `continuum-proxy` verifies Contrast/SEV-SNP attestation of the Privatemode
@@ -400,7 +396,7 @@ measures the EIF → EIF contains sidecar proxies → sidecar proxies verify bac
 attestation. The chain is auditable but not independently verifiable by the teep
 client in real-time.
 
-**Impact on teep factors (revised):**
+**Impact on teep factors:**
 
 | Factor | Status | Reason |
 |--------|--------|--------|
@@ -409,14 +405,12 @@ client in real-time.
 | `nvidia_payload_present` | Skip (allow_fail) | Not applicable — backend uses AMD SEV-SNP, not NVIDIA |
 | `nvidia_*` (all 5 factors) | Skip (allow_fail) | Backend is AMD SEV-SNP, not NVIDIA GPU TEE |
 
-Note: The backend (Edgeless Privatemode AI) runs on **AMD SEV-SNP** (on Scaleway),
-not NVIDIA GPU TEEs. The entrypoint.sh connects to `kdsintf.amd.com` (AMD Key
-Distribution Service). The original plan incorrectly identified the backend as NVIDIA
-GPU TEEs. NVIDIA OCSP headers are configured in the continuum-proxy, suggesting some
-NVIDIA GPU involvement, but the primary TEE platform is AMD SEV-SNP via the Contrast
-framework.
+Note: The backend (Edgeless Privatemode AI) runs on **AMD SEV-SNP** (on Scaleway).
+The entrypoint.sh connects to `kdsintf.amd.com` (AMD Key Distribution Service).
+NVIDIA OCSP headers are configured in the continuum-proxy, suggesting some NVIDIA GPU
+involvement, but the primary TEE platform is AMD SEV-SNP via the Contrast framework.
 
-**Comparison to other providers (revised):**
+**Comparison to other providers:**
 
 | Aspect | NearDirect (TDX + NVIDIA) | Chutes (TDX + NVIDIA) | MapleAI (Nitro + SEV-SNP backend) |
 |--------|--------------------------|----------------------|----------------------------------|
@@ -437,9 +431,9 @@ framework.
    pre-compiled binary provenance gap
 
 Until one of these is implemented, teep must treat backend attestation as a known
-gap in the allow_fail list. However, the plan should document that **the gap is
-significantly smaller than originally assessed** — the enclave does verify the
-backend, and the verification code is fully auditable.
+gap in the allow_fail list. The enclave does verify the backend, and the verification
+code is fully auditable — but this verification is not independently confirmable by
+the teep client through the Nitro attestation alone.
 
 ### Chain 4: Request Integrity (Session → Per-Request Encryption)
 
