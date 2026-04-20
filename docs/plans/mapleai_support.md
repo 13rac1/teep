@@ -477,8 +477,9 @@ session_key (from Chain 2)
 3. **No plaintext fallback**: If decryption fails, the implementation MUST NOT attempt
    to parse the response as unencrypted JSON. This would silently bypass E2EE if the
    server returned plaintext (e.g., due to a server bug or downgrade attack).
-4. **Bounded reads**: Encrypted response bodies must be bounded (e.g., 32 MiB) to
-   prevent memory exhaustion from a malicious server sending unbounded ciphertext.
+4. **Bounded reads**: Encrypted response bodies must be bounded (e.g., 10 MiB, in
+   line with existing relay limits in `internal/e2ee/relay.go`) to prevent memory
+   exhaustion from a malicious server sending unbounded ciphertext.
 5. **SSE `[DONE]` handling**: The `data: [DONE]` sentinel is NOT encrypted. The
    implementation must handle this correctly: do NOT attempt to base64-decode or
    decrypt `[DONE]`. But also do NOT accept any other unencrypted data lines as
@@ -1200,7 +1201,8 @@ type MapleAISession struct {
 5. On decryption failure → return `ErrDecryptionFailed`
 
 `RelayNonStreamMapleAI(body io.ReadCloser, session *MapleAISession) ([]byte, error)`:
-1. Read full response body (bounded read, e.g., 32 MiB max)
+1. Read full response body (bounded read, 10 MiB max — consistent with
+   `internal/e2ee/relay.go`'s `io.LimitReader(..., 10<<20)`)
 2. Parse as `{"encrypted": "<base64>"}`
 3. Base64-decode the `encrypted` field
 4. Decrypt via `session.DecryptResponse(decoded)`
@@ -1469,7 +1471,7 @@ case "mapleai":
     p.EmbeddingsPath = "/v1/embeddings"
     p.E2EE = true  // Always E2EE
     p.Attester = mapleai.NewAttester(cp.BaseURL, cp.APIKey, s.attestClient)
-    p.Preparer = mapleai.NewPreparer()
+    p.Preparer = mapleai.NewPreparer(cp.APIKey)
     p.Encryptor = mapleai.NewE2EE(cp.BaseURL, s.attestClient)
     p.ReportDataVerifier = mapleai.ReportDataVerifier{}
     p.SupplyChainPolicy = nil  // No supply chain attestation
@@ -1506,6 +1508,15 @@ This is analogous to the existing `if chutesE2EE != nil` check for Chutes.
 - `supplyChainPolicy` → `nil`
 - `e2eeEnabledByDefault` → `true`
 - `chatPathForProvider` → `"/v1/chat/completions"`
+
+`internal/verify/e2ee.go` — Add `"mapleai"` case to the `testE2EE` switch
+(alongside venice/nearcloud/neardirect/chutes). The MapleAI E2EE test path must:
+- Perform attestation fetch + Nitro verification (reusing the verify report's attestation)
+- Execute the `/key_exchange` endpoint to establish a session
+- Send a test chat request with the `x-session-id` header
+- Verify whole-body encrypted response can be decrypted
+- Verify `session.Zero()` cleans up key material
+- Report E2EE test pass/fail in the verification output
 
 `internal/attestation/report.go` — Add `MapleAIDefaultAllowFail` (listed above)
 
