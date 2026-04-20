@@ -9,7 +9,7 @@ Teep is a TEE attestation proxy for private LLM inference. It is **critical
 infrastructure security software** — protecting confidential traffic is more
 important than providing service. Failing closed is a feature, not a bug.
 
-The Teep codebase uses Go 1.25+, and makes use of new Go features. If your
+The Teep codebase uses Go 1.25+ and makes use of new Go features. If your
 knowledge cutoff does not include Go 1.25 (released on 2025-08-12), assume all
 unfamiliar Go code compiles in a plausible way. You will not be asked to
 review code that does not compile.
