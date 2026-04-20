@@ -164,11 +164,14 @@ exists only in enclave memory).
    attestation document must be verified (full COSE_Sign1 + cert chain validation)
    BEFORE it is used for ECDH. Using an unverified public key for key exchange
    allows trivial MITM.
-2. **Constant-time key comparison**: When the E2EE implementation uses the server
-   public key for ECDH, it MUST verify via `subtle.ConstantTimeCompare` that the
-   key matches the one from the verified attestation document. This prevents
-   time-of-check-to-time-of-use (TOCTOU) attacks where the key is swapped between
-   attestation verification and key exchange.
+2. **Single key provenance path**: The server public key used for ECDH MUST be
+   sourced exclusively from the verified attestation document's `public_key` field.
+   Unlike TDX providers (where REPORTDATA binds a separately-obtained signing key),
+   Nitro's `public_key` is inside the COSE_Sign1-signed payload — verification of
+   the COSE_Sign1 signature IS the binding. The implementation must ensure a single
+   code path from `NitroVerifyResult.PublicKey` → `RawAttestation.SigningKey` →
+   ECDH, with no alternative key source that could be substituted. Copy the key
+   bytes at extraction to prevent aliasing with mutable buffers.
 3. **ECDH shared secret zeroing**: The shared secret `[]byte` MUST be zeroed
    immediately after deriving the session key via `clear(sharedSecret)`. The shared
    secret is equivalent to the session key in privilege — if leaked, all session
@@ -661,12 +664,31 @@ Host: enclave.trymaple.ai
 - Content-Type: `application/json`
 
 **Nonce verification**: After parsing the attestation payload, the `nonce` field
-(UTF-8 decoded) must match the client-generated nonce. Mismatch → FAIL CLOSED.
+(UTF-8 decoded) must match the client-generated UUID v4 nonce. Mismatch → FAIL CLOSED.
 
-**NOTE**: Unlike teep's existing providers which use a 32-byte hex nonce
-(`attestation.Nonce`), MapleAI uses a UUID v4 string nonce. The MapleAI attester must
-generate a UUID v4 rather than using `attestation.NewNonce()`. However, the nonce
-still serves the same anti-replay purpose.
+**NOTE on nonce format and `nonce_match` factor**: teep's existing providers use a
+32-byte hex nonce (`attestation.Nonce`). MapleAI uses a UUID v4 string nonce instead.
+These are incompatible formats — the existing `evalNonceMatch` compares
+`in.Raw.Nonce` against `in.Nonce.Hex()` (64 hex chars), which would always fail for
+a UUID string.
+
+The MapleAI attester must:
+1. Accept the standard `nonce attestation.Nonce` argument from the proxy (preserving
+   the existing `Attester.FetchAttestation` interface unchanged)
+2. Generate a separate UUID v4 as the Nitro-specific challenge nonce
+3. Store the UUID v4 in a new `NitroNonce string` field on `RawAttestation`
+4. Store the original `attestation.Nonce` in `RawAttestation.Nonce` as hex (unchanged)
+
+The `nonce_match` evaluator must be extended with a Nitro path:
+- For Nitro attestations (`in.Raw.BackendFormat == FormatNitro`): compare
+  `in.Raw.NitroNonce` against the nonce extracted from the verified Nitro attestation
+  document's payload using `subtle.ConstantTimeCompare`. This verifies the UUID v4
+  round-trip (client generated it, enclave echoed it in the hardware-signed document).
+- The canonical `in.Nonce` (`attestation.Nonce`) remains available for cache keying
+  and report inputs but is NOT sent to the MapleAI endpoint.
+
+This avoids overloading the `Nonce` field with a different format and keeps the
+existing nonce pipeline intact for all other providers.
 
 ### 6. Key Exchange Protocol
 
@@ -695,11 +717,11 @@ Response:
 
 1. Generate ephemeral X25519 keypair (RFC 7748): `curve25519.ScalarBaseMult` or
    `ecdh.X25519().GenerateKey(crypto/rand)`
-2. Extract server's X25519 public key from verified attestation document's
-   `public_key` field
-3. **CRITICAL**: Verify the server public key used for ECDH matches the `public_key`
-   from the verified attestation document using `subtle.ConstantTimeCompare`.
-   This is the attestation-to-encryption binding.
+2. Extract server's X25519 public key from `raw.SigningKey` (populated from the
+   verified attestation document's `public_key` field during `FetchAttestation`)
+3. Use this key directly for ECDH — it is the sole source, already authenticated
+   by COSE_Sign1 verification. No separate comparison is needed (see Chain 2,
+   point 2: "Single key provenance path").
 4. Compute shared secret: `X25519(client_private_key, server_public_key)` → 32 bytes
 5. Base64-decode `encrypted_session_key`
 6. Split: first 12 bytes = nonce, remainder = ciphertext
@@ -1187,25 +1209,40 @@ type Attester struct {
 
 - `NewAttester(baseURL, apiKey string, client *http.Client) *Attester`
 - `FetchAttestation(ctx, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error)`:
-  1. Generate UUID v4 nonce (not from `attestation.Nonce` — different format)
-  2. `GET {baseURL}/attestation/{uuid}` via `provider.FetchAttestationJSON`
-  3. Parse JSON response: `{"attestation_document": "<base64>"}`
+  1. Preserve the `nonce attestation.Nonce` argument unchanged as teep's canonical
+     anti-replay nonce. This remains the value used by the shared attestation
+     pipeline for cache keys and report inputs.
+  2. Generate a separate UUID v4 `nitroNonce` for MapleAI's Nitro attestation
+     endpoint, because MapleAI requires a UUID string rather than teep's 32-byte
+     hex nonce format.
+  3. `GET {baseURL}/attestation/{nitroNonce}` via `provider.FetchAttestationJSON`
+  4. Parse JSON response: `{"attestation_document": "<base64>"}`
      (use `internal/jsonstrict` for parsing)
-  4. Call `attestation.VerifyNitroDocument(docBase64, uuid)` → `NitroVerifyResult`
-  5. Populate `RawAttestation`:
+  5. Call `attestation.VerifyNitroDocument(docBase64, nitroNonce)` →
+     `NitroVerifyResult`
+  6. Populate `RawAttestation`:
      - `BackendFormat`: `attestation.FormatNitro` (new constant)
      - `SigningKey`: hex-encode the X25519 public key from NitroVerifyResult
      - `TEEProvider`: `"nitro"`
      - `Model`: model
-     - `Nonce`: store UUID as nonce string
+     - `Nonce`: store the original `nonce.Hex()` value (unchanged, 64 hex chars)
+     - `NitroNonce`: store the UUID v4 string used for the MapleAI challenge
      - Store `NitroVerifyResult` in a new field (or use `RawBody` for the doc)
-  6. Return `RawAttestation`
+  7. Return `RawAttestation`
 
-**NOTE on nonce format**: The existing `attestation.Nonce` is a 32-byte value
-rendered as 64-char hex. MapleAI expects a UUID v4 string. The attester must
-generate its own UUID v4 nonce and store it alongside the standard `Nonce` field.
-Add a `NitroNonce string` field to `RawAttestation` for the UUID nonce, or
-repurpose `NonceSource` field.
+**Required data-model changes for nonce plumbing:**
+
+1. Add `NitroNonce string` field to `RawAttestation` — the provider-specific UUID v4
+   sent to `/attestation/{uuid}` and echoed back in the Nitro attestation document.
+   Do NOT repurpose `NonceSource`; it has different semantics.
+2. Add `NitroNonce string` to `ReportInput` — populated from `RawAttestation.NitroNonce`
+   so report generation can include the provider-specific UUID.
+3. Extend `evalNonceMatch` with a Nitro path: when `in.Raw.BackendFormat == FormatNitro`,
+   compare `in.Raw.NitroNonce` against `in.NitroNonce` (the UUID from `ReportInput`)
+   via `subtle.ConstantTimeCompare`. The standard `in.Nonce` / `in.Raw.Nonce` check
+   remains for all other providers.
+4. Keep `Attester.FetchAttestation(ctx, model, nonce attestation.Nonce)` interface
+   unchanged — callers continue supplying the standard proxy/client nonce.
 
 **Preparer (`mapleai.go`):**
 
@@ -1223,10 +1260,11 @@ type Preparer struct{}
 
 ```go
 type E2EE struct {
-    baseURL string
-    client  *http.Client
-    mu      sync.Mutex
+    baseURL  string
+    client   *http.Client
+    mu       sync.RWMutex
     sessions map[string]*sessionEntry // keyed by hex(serverPublicKey)
+    sf       singleflight.Group       // coalesces concurrent key exchanges per key
 }
 
 type sessionEntry struct {
@@ -1238,35 +1276,60 @@ type sessionEntry struct {
 - `NewE2EE(baseURL string, client *http.Client) *E2EE`
 - `EncryptRequest(body []byte, raw *attestation.RawAttestation, endpointPath string) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error)`:
   1. Extract server public key from `raw.SigningKey` (hex-decode to 32 bytes)
-  2. Lock mutex, check for cached session with matching server public key
-  3. If no session or expired: perform key exchange:
-     a. Create `e2ee.NewMapleAISession()`
-     b. `session.SetServerPublicKey(serverPubKey)` — constant-time compare against
-        attested key
-     c. `POST {baseURL}/key_exchange` with `{"client_public_key": "<base64>", "nonce": "<uuid>"}`
-     d. Parse response: `{"encrypted_session_key": "<base64>", "session_id": "<uuid>"}`
-     e. Base64-decode encrypted_session_key
-     f. `session.EstablishSession(encSessionKey, sessionID)`
-     g. Cache the session
+  2. Look up cached session by `hex(serverPublicKey)` under read lock (`mu.RLock`).
+     If a valid (non-expired) session exists, use it directly.
+  3. If no session or expired: use `singleflight.Group.Do` keyed by
+     `hex(serverPublicKey)` to coalesce concurrent key exchanges for the same
+     enclave instance. Inside the singleflight callback:
+     a. Re-check cache (another goroutine's singleflight may have just populated it)
+     b. Create `e2ee.NewMapleAISession()`
+     c. Copy the 32-byte server public key from step 1 into the session. The key is
+        derived from `raw.SigningKey`, which was populated from the verified Nitro
+        attestation document's `public_key` field during `FetchAttestation`. There is
+        no second independent source of the key to compare against — the attestation
+        binding is established by COSE_Sign1 verification, not by a runtime comparison.
+     d. `POST {baseURL}/key_exchange` with `{"client_public_key": "<base64>", "nonce": "<uuid>"}`
+     e. Parse response: `{"encrypted_session_key": "<base64>", "session_id": "<uuid>"}`
+        (use `internal/jsonstrict` for parsing)
+     f. Base64-decode encrypted_session_key
+     g. `session.EstablishSession(encSessionKey, sessionID)` — this derives the AEAD
+        cipher using the ECDH shared secret and decrypts the session key
+     h. Write lock (`mu.Lock`), cache the session, unlock
   4. Encrypt request body: `session.EncryptRequest(body)`
   5. Wrap: `{"encrypted": "<base64>"}`
   6. Set e2ee headers: `x-session-id: <sessionID>`
   7. Return `(wrappedBody, session, nil, nil)` — `ChutesE2EE` is nil
-  8. Unlock mutex
+
+**Concurrency design**: The mutex protects only the session map reads/writes, not the
+HTTP key exchange. `singleflight.Group` keyed by server public key hex ensures that
+concurrent requests for the same enclave instance coalesce into a single key exchange,
+while requests for different enclave instances (after a restart with a new key) proceed
+independently. This matches the `neardirect` attestation fetch pattern and the
+`chutes.NoncePool` refresh pattern.
 
 **Key binding verifier (`reportdata.go`):**
 
 For the `tee_reportdata_binding` factor, MapleAI's binding is: the X25519 `public_key`
 in the verified attestation document is the same key used in the ECDH key exchange.
-This is verified implicitly during `EncryptRequest` (step 3b above). The
-`ReportDataVerifier` interface (`VerifyReportData(reportData [64]byte, raw, nonce)`)
+
+Unlike TDX providers where REPORTDATA contains a hash of the signing key (requiring a
+runtime comparison between two independent values), the Nitro binding is structural:
+the `public_key` field is inside the COSE_Sign1-signed payload, so COSE_Sign1
+verification itself proves the key was placed there by the enclave hardware. The key
+flows from `VerifyNitroDocument` → `NitroVerifyResult.PublicKey` → `RawAttestation.SigningKey`
+→ `EncryptRequest` step 1 → ECDH. There is only one source of the key (the verified
+attestation document), so there are no two independent values to compare at runtime.
+The attestation-to-encryption binding is established by the COSE_Sign1 signature
+chain, not by a separate comparison step.
+
+The `ReportDataVerifier` interface (`VerifyReportData(reportData [64]byte, raw, nonce)`)
 doesn't fit Nitro (no TDX REPORTDATA). Options:
 
-- Implement a Nitro-specific verifier that returns Pass with detail "public_key bound
-  via COSE_Sign1 signature" (the binding is verified by the attestation signature,
-  not by a separate REPORTDATA check)
-- Or: the `tee_reportdata_binding` evaluator handles Nitro by checking
-  `in.Nitro.PublicKey != nil && in.Nitro.SignatureValid` directly
+- Implement a Nitro-specific verifier that returns Pass with detail "X25519 public_key
+  bound via COSE_Sign1 hardware signature" when `in.Nitro.PublicKey != nil &&
+  len(in.Nitro.PublicKey) == 32 && in.Nitro.SignatureValid`
+- Or: the `tee_reportdata_binding` evaluator handles Nitro directly by checking
+  `in.Nitro.PublicKey != nil && in.Nitro.SignatureValid`
 
 **Default measurement policy (`policy.go`):**
 
