@@ -868,12 +868,28 @@ similar to `relay_chutes.go`, NOT the generic per-field `RelayStream` from `rela
 
 ### 11. Session Retry Protocol
 
-On session or decryption errors (HTTP 400, ChaCha20-Poly1305 authentication failure):
-1. Invalidate the cached session for this model
-2. Invalidate the cached attestation report for this model
-3. Re-perform full attestation handshake (attestation fetch → verify → key exchange)
-4. Retry the original request with the new session
-5. If retry also fails, return error to client (do NOT retry indefinitely)
+MapleAI session retry handling requires explicit provider-specific logic in the proxy
+relay path. The current relay behavior forwards upstream non-200 responses directly for
+non-Chutes providers, so this plan must not treat every upstream HTTP 400 as a generic
+session failure signal.
+
+For MapleAI, retry behavior should apply only when the upstream response is identified
+as a MapleAI session/decryption failure (e.g., a documented stale-session or
+ChaCha20-Poly1305 authentication failure error body), not to arbitrary HTTP 400
+responses.
+
+Required MapleAI-specific proxy behavior:
+1. Detect MapleAI session/decryption failure responses in the relay loop (match on
+   specific error body content, not just HTTP status code)
+2. Invalidate the cached session for this model
+3. Invalidate the cached attestation report for this model
+4. Re-perform full attestation handshake (attestation fetch → verify → key exchange)
+5. Retry the original request once with the new session
+6. If retry also fails, return error to client (do NOT retry indefinitely)
+
+Until this provider-specific handling is implemented, generic upstream HTTP 400 and
+other non-200 responses from MapleAI should be forwarded as upstream errors rather than
+triggering session+attestation invalidation implicitly.
 
 ## Attestation Factor Design
 
@@ -1244,7 +1260,14 @@ type Attester struct {
   2. Generate a separate UUID v4 `nitroNonce` for MapleAI's Nitro attestation
      endpoint, because MapleAI requires a UUID string rather than teep's 32-byte
      hex nonce format.
-  3. `GET {baseURL}/attestation/{nitroNonce}` via `provider.FetchAttestationJSON`
+  3. `GET {baseURL}/attestation/{nitroNonce}` — do **not** use
+     `provider.FetchAttestationJSON` directly, because its error formatting
+     includes the full URL path (`"GET host+path: err"`), which would leak the
+     UUID nonce into logs/error strings. Instead, perform the GET manually and
+     wrap any network error with a fixed path prefix such as
+     `"GET .../attestation/<redacted>: %w"` before returning. Alternatively,
+     create a thin wrapper around `FetchAttestationJSON` that immediately
+     redacts the nonce from the returned error.
   4. Parse JSON response: `{"attestation_document": "<base64>"}`
      (use `internal/jsonstrict` for parsing)
   5. Call `attestation.VerifyNitroDocument(docBase64, nitroNonce)` →
@@ -1256,7 +1279,11 @@ type Attester struct {
      - `Model`: model
      - `Nonce`: store the original `nonce.Hex()` value (unchanged, 64 hex chars)
      - `NitroNonce`: store the UUID v4 string used for the MapleAI challenge
-     - Store `NitroVerifyResult` in a new field (or use `RawBody` for the doc)
+     - Store `NitroVerifyResult` in a dedicated `NitroResult *NitroVerifyResult`
+       field on `RawAttestation`. Do NOT overload `RawBody` — it is reserved for
+       the unmodified HTTP response body used by `--capture` to write the original
+       provider JSON as-is. `RawBody` should still store the raw JSON response
+       from `/attestation/{nonce}` for capture purposes.
   7. Return `RawAttestation`
 
 **Required data-model changes for nonce plumbing:**
@@ -1276,14 +1303,20 @@ type Attester struct {
 **Preparer (`mapleai.go`):**
 
 ```go
-type Preparer struct{}
+type Preparer struct {
+    apiKey string
+}
 ```
 
-- `PrepareRequest(req *http.Request, e2eeHeaders http.Header, meta *provider.RequestMeta, stream bool, path string) error`:
-  1. Set `Authorization: Bearer <apiKey>` (from req or meta)
+- `NewPreparer(apiKey string) *Preparer`
+- `PrepareRequest(req *http.Request, e2eeHeaders http.Header, meta *e2ee.ChutesE2EE, stream bool, path string) error`:
+  Matches the `provider.RequestPreparer` interface signature exactly:
+  `PrepareRequest(req *http.Request, e2eeHeaders http.Header, meta *e2ee.ChutesE2EE, stream bool, path string) error`
+  1. Set `Authorization: Bearer <p.apiKey>` — API key stored on struct, matching
+     the venice/neardirect/chutes Preparer pattern
   2. Set `Content-Type: application/json`
-  3. If E2EE headers present (from EncryptRequest):
-     - Set `x-session-id` from e2eeHeaders
+  3. Merge any E2EE headers from `e2eeHeaders` (populated by `prepareUpstreamHeaders`)
+  4. `meta` (`*e2ee.ChutesE2EE`) is unused for MapleAI — pass nil from caller
 
 **RequestEncryptor (`e2ee.go`):**
 
@@ -1325,10 +1358,21 @@ type sessionEntry struct {
      g. `session.EstablishSession(encSessionKey, sessionID)` — this derives the AEAD
         cipher using the ECDH shared secret and decrypts the session key
      h. Write lock (`mu.Lock`), cache the session, unlock
-  4. Encrypt request body: `session.EncryptRequest(body)`
-  5. Wrap: `{"encrypted": "<base64>"}`
-  6. Set e2ee headers: `x-session-id: <sessionID>`
-  7. Return `(wrappedBody, session, nil, nil)` — `ChutesE2EE` is nil
+  4. Create a **per-request copy** of the cached session via `session.Copy()`.
+     The copy holds its own references to session_id and session_key (immutable
+     values cloned from the cached entry). This is required because the proxy
+     calls `Decryptor.Zero()` on the returned session after each request/relay
+     attempt — if the cached pointer were returned directly, `Zero()` would wipe
+     it for all concurrent and subsequent users. The cached entry retains its
+     original key material until explicit invalidation.
+  5. Encrypt request body: `copy.EncryptRequest(body)`
+  6. Wrap: `{"encrypted": "<base64>"}`
+  7. Return `(wrappedBody, copy, nil, nil)` — `copy` is the per-request Decryptor;
+     `ChutesE2EE` is nil. `EncryptRequest` does NOT set headers directly.
+  8. Update `proxy.prepareUpstreamHeaders` to add a `*e2ee.MapleAISession` case
+     in the existing decryptor type switch (alongside `*e2ee.VeniceSession` and
+     `*e2ee.NearCloudSession`) that sets `x-session-id: <sessionID>` from the
+     session. This must fail closed if the session ID is empty/unavailable.
 
 **Concurrency design**: The mutex protects only the session map reads/writes, not the
 HTTP key exchange. `singleflight.Group` keyed by server public key hex ensures that
@@ -1336,6 +1380,14 @@ concurrent requests for the same enclave instance coalesce into a single key exc
 while requests for different enclave instances (after a restart with a new key) proceed
 independently. This matches the `neardirect` attestation fetch pattern and the
 `chutes.NoncePool` refresh pattern.
+
+**Session lifecycle**: The session cache stores the canonical `*MapleAISession` with
+immutable session material (session_id, session_key). Each `EncryptRequest` call
+returns a per-request `Copy()` as the `Decryptor`. The proxy's `Zero()` call after
+each request/relay attempt wipes only the copy, leaving the cached original intact for
+concurrent and subsequent requests. The `Copy()` method clones the session_id and
+session_key byte slices to prevent aliasing. On session invalidation (attestation cache
+miss or retry), the cached entry is removed and its `Zero()` is called.
 
 **Key binding verifier (`reportdata.go`):**
 
