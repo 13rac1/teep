@@ -9,6 +9,11 @@ Teep is a TEE attestation proxy for private LLM inference. It is **critical
 infrastructure security software** — protecting confidential traffic is more
 important than providing service. Failing closed is a feature, not a bug.
 
+The Teep codebase uses Go 1.25+, and makes use of new Go features. If your
+knowledge cutoff does not include Go 1.25 (released on 2025-08-12), assume all
+unfamiliar Go code compiles in a plausible way. You will not be asked to
+review code that does not compile.
+
 ## Data Flow
 
 The Teep proxy receives an OpenAI-compatible chat request → resolves model to provider →
@@ -82,13 +87,9 @@ security validation.
 - JSON unmarshalling MUST use the internal/jsonstrict parser.
 - All low-level parsers MUST return unknown field names to callers instead of logging or deduplicating them internally. Callers own the policy decision to fail, warn once per logical operation, or use lower-severity logging in hot paths.
 - Malformed attestation data MUST fail the entire response, not skip elements.
-- **Do not request nil checks for internal objects and arguments** that are
-  expected to be always non-nil by normal program construction when the proposed
-  guard would return a default value, skip validation, or otherwise continue
-  processing. That would introduce fail-open behavior. Nil checks are acceptable
-  when they fail closed by returning or propagating a clear error that blocks the
-  request. Nil dereference panics should be treated as programmer bugs, not as a
-  desired request-handling strategy.
+- **Do not request nil checks for internal objects and required arguments**.
+  In all cases, we prefer panics to fallbacks or workarounds. Never suggest
+  fallback-based nil handling.
 
 ## Concurrency Safety
 
