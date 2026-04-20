@@ -169,12 +169,19 @@ exists only in enclave memory).
    key matches the one from the verified attestation document. This prevents
    time-of-check-to-time-of-use (TOCTOU) attacks where the key is swapped between
    attestation verification and key exchange.
-3. **ECDH shared secret zeroing**: The shared secret MUST be zeroed immediately after
-   deriving the session key. The shared secret is equivalent to the session key in
-   privilege — if leaked, all session traffic can be decrypted.
+3. **ECDH shared secret zeroing**: The shared secret `[]byte` MUST be zeroed
+   immediately after deriving the session key via `clear(sharedSecret)`. The shared
+   secret is equivalent to the session key in privilege — if leaked, all session
+   traffic can be decrypted. This is achievable because the shared secret is a
+   caller-owned `[]byte` returned by `ecdh.PrivateKey.ECDH()`.
 4. **Client ephemeral key generation**: The X25519 client keypair MUST be generated
    fresh for each key exchange using `crypto/rand`. Reusing client keys across
    sessions would allow session key recovery if any single session is compromised.
+   Note: Go's `crypto/ecdh.PrivateKey` does not expose the private scalar bytes
+   for overwriting — `Bytes()` returns a copy and the internal field is unexported.
+   The implementation should nil the `*ecdh.PrivateKey` reference promptly after
+   use so the GC can collect it. This matches the existing `NearCloudSession.Zero()`
+   pattern. See "Key Material Zeroization Constraints" below for full analysis.
 5. **Session key decryption authentication**: The encrypted_session_key uses
    ChaCha20-Poly1305 (AEAD). The Poly1305 tag MUST be verified — if it fails,
    the key exchange is under attack and MUST fail closed. Do not fall back to
@@ -700,7 +707,64 @@ Response:
    symmetric key
 8. Decrypted result: 32-byte session key
 9. Store `(session_id, session_key)` for subsequent API calls
-10. **Zero the ephemeral X25519 private key and shared secret after use**
+10. **Clear the shared secret `[]byte` via `clear(sharedSecret)`, then nil the
+    ephemeral `*ecdh.PrivateKey` reference.** Go's `crypto/ecdh.PrivateKey` does
+    not expose the private scalar for in-place overwriting (see "Key Material
+    Zeroization Constraints" below). Nil-ing the reference allows GC collection.
+    This matches the existing `NearCloudSession.Zero()` and `ChutesSession.Zero()`
+    patterns.
+
+#### Key Material Zeroization Constraints
+
+Go's `crypto/ecdh.PrivateKey` stores the private scalar in an unexported `privateKey
+[]byte` field. The `Bytes()` method returns a copy — overwriting it has no effect on
+the internal state. There is no `Clear()` or `Zero()` method on the type.
+
+This is a known limitation shared by all teep E2EE providers that use `crypto/ecdh`:
+
+| Provider | Key type | Zero() behavior | Source |
+|----------|----------|----------------|--------|
+| NearCloud | `*ecdh.PrivateKey` (X25519) | Nils reference; internal scalar persists until GC | `e2ee/nearcloud.go:94` |
+| Chutes | `*mlkem.DecapsulationKey` | Nils reference; internal key persists until GC | `e2ee/chutes.go:70` |
+| Venice | `*secp256k1.PrivateKey` (dcrd) | Calls `privateKey.Zero()` (dcrd exposes this) | `e2ee/venice.go:88` |
+| **MapleAI** | `*ecdh.PrivateKey` (X25519) | Nil reference (same as NearCloud) | (this plan) |
+
+**What CAN be zeroed (caller-owned `[]byte` slices):**
+- ECDH shared secret returned by `PrivateKey.ECDH()` — `clear(sharedSecret)`
+- Derived session key bytes — `clear(sessionKey)` after constructing the AEAD cipher
+- Any intermediate HKDF output bytes
+
+**What CANNOT be zeroed through public API:**
+- `crypto/ecdh.PrivateKey` internal scalar (unexported field, `Bytes()` returns copy)
+- `crypto/mlkem.DecapsulationKey` internal state (same limitation)
+- `cipher.AEAD` internal key copy (chacha20poly1305 stores a copy internally)
+
+**Why we do not use alternative approaches:**
+
+1. **`unsafe.Pointer` to reach unexported fields:** Fragile, breaks across Go
+   versions and with BoringCrypto/FIPS mode. This is rolling our own crypto cleanup
+   code and would be a maintenance burden with no guarantee of correctness.
+2. **`golang.org/x/crypto/curve25519` with raw `[32]byte` scalar:** This package
+   now wraps `crypto/ecdh` internally — `NewPrivateKey` clones the input. Using
+   the raw API would bypass the standard library's validation and is not recommended.
+3. **`runtime/secret` (experimental, Go 1.24+):** The Go team's official solution,
+   but requires `GOEXPERIMENT=runtimesecret`, is linux-only (amd64/arm64), and is
+   not subject to the Go 1 compatibility promise. It is not appropriate for
+   production use at this time.
+
+**Accepted tradeoff:** The ephemeral `crypto/ecdh.PrivateKey` scalar persists in
+memory from key generation until GC collection. This is mitigated by:
+- The key is ephemeral (fresh per key exchange, not long-lived)
+- The reference is nil-ed promptly, making it eligible for GC
+- teep runs inside a process that handles only proxy traffic (limited attack surface
+  for memory disclosure)
+- The same limitation exists in WireGuard-go, age (filippo.io/age), and all other Go
+  programs using `crypto/ecdh`
+- All caller-owned intermediate secrets (shared secret, derived keys) ARE zeroed
+
+This is consistent with the WireGuard-go project's documented position: "Due to
+limitations in Go and /x/crypto there is currently no way to ensure that key
+material is securely erased in memory."
 
 ### 7. Encrypted API Request Format
 
