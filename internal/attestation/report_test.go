@@ -3547,3 +3547,30 @@ func TestEvalGatewayTDXParseDependent_Errors(t *testing.T) {
 		}
 	}
 }
+
+func TestE2EEKeyType(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		algo string
+		want string
+	}{
+		{"empty key", "", "", ""},
+		{"algo ecdsa", "abcd", "ecdsa", "ecdsa"},
+		{"algo ed25519", "abcd", "ed25519", "ed25519"},
+		{"algo ml-kem-768", "abcd", "ml-kem-768", "ml-kem-768"},
+		{"algo secp256k1", "abcd", "secp256k1", "secp256k1"},
+		{"algo unknown", "abcd", "rsa4096", "unknown"},
+		{"ed25519 by length", strings.Repeat("a", 64), "", "ed25519"},
+		{"ecdsa fallback short", "abcd", "", "ecdsa"},
+		{"ecdsa fallback long", strings.Repeat("a", 128), "", "ecdsa"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			raw := &RawAttestation{SigningKey: c.key, SigningAlgo: c.algo}
+			if got := raw.E2EEKeyType(); got != c.want {
+				t.Errorf("E2EEKeyType() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

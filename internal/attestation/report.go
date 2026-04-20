@@ -362,17 +362,34 @@ type E2EETestResult struct {
 	KeyType string
 }
 
-// E2EEKeyType returns the canonical E2EE key-type string for the given raw
-// attestation. Returns "" when no signing key is present.
-func E2EEKeyType(raw *RawAttestation) string {
-	if raw.SigningKey == "" {
+// knownSigningAlgos is the allowlist of canonical algorithm names that may
+// appear in RawAttestation.SigningAlgo. Values outside this set are reported
+// as "unknown" rather than passed through verbatim, since SigningAlgo is
+// provider-supplied and flows into on-disk manifests.
+var knownSigningAlgos = map[string]bool{
+	"ecdsa":      true,
+	"ed25519":    true,
+	"ml-kem-768": true,
+	"secp256k1":  true,
+}
+
+// E2EEKeyType returns the canonical E2EE key-type string for the attestation.
+// Returns "" when no signing key is present.
+// When SigningAlgo is absent, the type is inferred from key length as a
+// best-effort heuristic; this is informational only and must not be used for
+// security decisions.
+func (r *RawAttestation) E2EEKeyType() string {
+	if r.SigningKey == "" {
 		return ""
 	}
-	if raw.SigningAlgo != "" {
-		return raw.SigningAlgo
+	if r.SigningAlgo != "" {
+		if knownSigningAlgos[r.SigningAlgo] {
+			return r.SigningAlgo
+		}
+		return "unknown"
 	}
-	// Infer from key length when SigningAlgo is absent.
-	if len(raw.SigningKey) == 64 {
+	// Infer from key length as best-effort fallback (informational only).
+	if len(r.SigningKey) == 64 {
 		return "ed25519"
 	}
 	return "ecdsa"

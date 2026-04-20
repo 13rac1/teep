@@ -647,7 +647,7 @@ func TestSaveAndLoad_E2EEType(t *testing.T) {
 		Model:      "test-model",
 		NonceHex:   "0000000000000000",
 		CapturedAt: time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC),
-		E2EE:       &E2EEOutcome{Attempted: true, Type: "ecdsa", Detail: "E2EE venice: 5 fields"},
+		E2EE:       &E2EEOutcome{Attempted: true, KeyType: "ecdsa", Detail: "E2EE venice: 5 fields"},
 	}
 
 	subdir, err := Save(dir, m, "ok\n", nil)
@@ -663,8 +663,8 @@ func TestSaveAndLoad_E2EEType(t *testing.T) {
 	if loaded.E2EE == nil {
 		t.Fatal("E2EE should not be nil")
 	}
-	if loaded.E2EE.Type != "ecdsa" {
-		t.Errorf("E2EE.Type = %q, want %q", loaded.E2EE.Type, "ecdsa")
+	if loaded.E2EE.KeyType != "ecdsa" {
+		t.Errorf("E2EE.KeyType = %q, want %q", loaded.E2EE.KeyType, "ecdsa")
 	}
 }
 

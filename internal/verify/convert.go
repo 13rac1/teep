@@ -18,7 +18,7 @@ func outcomeFromE2EEResult(r *attestation.E2EETestResult) *capture.E2EEOutcome {
 		NoAPIKey:  r.NoAPIKey,
 		APIKeyEnv: r.APIKeyEnv,
 		Detail:    r.Detail,
-		Type:      r.KeyType,
+		KeyType:   r.KeyType,
 	}
 	if r.Err != nil {
 		o.Failed = true
@@ -38,7 +38,7 @@ func e2eeResultFromOutcome(o *capture.E2EEOutcome) *attestation.E2EETestResult {
 		NoAPIKey:  o.NoAPIKey,
 		APIKeyEnv: o.APIKeyEnv,
 		Detail:    o.Detail,
-		KeyType:   o.Type,
+		KeyType:   o.KeyType,
 	}
 	if o.Failed {
 		// Err is reconstructed from the serialized message; type information is

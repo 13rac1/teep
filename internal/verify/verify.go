@@ -129,8 +129,8 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 	} else {
 		e2eeResult = testE2EE(ctx, raw, opts.ProviderName, opts.Provider, opts.ModelName, opts.Offline)
 	}
-	if e2eeResult != nil {
-		e2eeResult.KeyType = attestation.E2EEKeyType(raw)
+	if e2eeResult != nil && e2eeResult.KeyType == "" {
+		e2eeResult.KeyType = raw.E2EEKeyType()
 	}
 
 	mDefaults, gwDefaults := defaults.MeasurementDefaults(opts.ProviderName)
