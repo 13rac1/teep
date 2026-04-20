@@ -43,6 +43,350 @@ nearcloud/neardirect (TLS-pinned).
 - A session key is generated per key exchange, tied to a server-issued `session_id`;
   the server may timeout sessions independently
 
+## Authentication Chain Analysis
+
+This section documents exactly what is and is not cryptographically authenticated in
+the MapleAI attestation and encryption architecture. It maps trust boundaries, identifies
+gaps relative to other teep providers, and specifies which checks the implementation
+must enforce to maintain each authentication chain. An independent code agent must
+understand these chains to know which verification steps are security-critical (must
+never be weakened) versus defense-in-depth (valuable but not on the critical path).
+
+### Chain 1: Enclave Identity (COSE_Sign1 → AWS Nitro Root)
+
+**What it proves:** The code running inside the Nitro Enclave matches specific
+measurements (PCR0/1/2), and the attestation document was produced by genuine AWS
+Nitro hardware.
+
+**Trust anchor:** AWS Nitro Attestation PKI root certificate (ECDSA P-384, 30-year
+lifetime, published by AWS with a known SHA-256 fingerprint).
+
+**Chain of authentication:**
+
+```
+AWS Nitro Root Certificate (embedded, byte-compared)
+  └─ signs → Intermediate certificate(s) in cabundle
+       └─ signs → Leaf certificate (from attestation payload)
+            └─ signs → COSE_Sign1 Sig_structure (protected headers + payload)
+                 └─ contains → Attestation payload:
+                      ├─ pcrs: {0: <enclave image hash>, 1: <kernel hash>, 2: <app hash>}
+                      ├─ public_key: <X25519 server public key, 32 bytes>
+                      ├─ nonce: <client-generated UUID, anti-replay>
+                      ├─ module_id: <enclave identifier>
+                      └─ timestamp: <UTC milliseconds>
+```
+
+**Critical enforcement points (must never be weakened):**
+
+1. **Root cert byte-identity**: `cabundle[0]` must be byte-identical to the embedded
+   AWS Nitro root certificate DER. Do NOT use flexible X.509 subject matching — only
+   exact byte comparison. This is the sole trust anchor.
+2. **Full chain signature verification**: Every link in the chain (root → intermediates
+   → leaf) must have its signature cryptographically verified. A missing or invalid
+   intermediate breaks the entire chain.
+3. **COSE_Sign1 signature verification**: The Sig_structure construction must follow
+   RFC 9052 §4.4 exactly: `["Signature1", protected, b"", payload]`. An incorrect
+   Sig_structure would verify against a tampered payload.
+4. **Client-originated nonce**: The nonce in the attestation document must match the
+   client-generated UUID. The client MUST generate the nonce locally via `crypto/rand`
+   (not accept one from the server). Nonce mismatch → FAIL CLOSED. This prevents
+   replay of old attestation documents.
+5. **Certificate time validity**: All certificates in the chain must be checked for
+   `NotBefore ≤ now ≤ NotAfter`. An expired certificate means the PKI no longer
+   vouches for this key.
+6. **Debug mode detection**: PCR0 all-zeros means the enclave is running in debug mode
+   (AWS allows operator memory inspection). This MUST fail `tee_debug_disabled`.
+7. **PCR0 measurement policy**: PCR0 must match the allowlist of known-good enclave
+   image hashes. A PCR0 mismatch means the enclave is running different code than
+   expected.
+
+**Comparison to dstack (NearCloud/NearDirect):**
+
+| Aspect | Dstack (TDX) | MapleAI (Nitro) |
+|--------|-------------|-----------------|
+| Hardware root of trust | Intel TDX via DCAP PKI | AWS Nitro via AWS PKI |
+| Measurement granularity | 7 registers (MRSEAM, MRTD, RTMR0-3, MRCONFIGID) | 6+ PCRs (PCR0-4, PCR8) |
+| Primary code measurement | MRTD (firmware) + RTMR1/2 (kernel/rootfs) + MRCONFIGID (compose) | PCR0 (entire EIF image hash) |
+| Online collateral check | Intel PCS (TCB status, revocation) | None — no equivalent of Intel PCS for Nitro |
+| Reproducible measurement derivation | `dstack-mr measure` from reproducible builds | Reproducible EIF build → PCR0 hash |
+
+**Gap vs. dstack:** Dstack providers have an online TCB freshness check via Intel PCS
+(`intel_pcs_collateral`, `tdx_tcb_current`, `tdx_tcb_not_revoked`). Nitro has no
+equivalent online service for TCB validation. The AWS Nitro PKI certificate chain
+provides the trust anchor, but there is no mechanism to check whether a specific
+enclave image has been revoked or superseded. This means a compromised enclave image
+that was once valid could continue to pass PCR0 checks until the operator manually
+removes it from the allowlist.
+
+**Gap: dstack integrity (operational, shared with dstack providers):** Like dstack
+providers (see `docs/attestation_gaps/dstack_integrity.md`), MapleAI's PCR allowlist
+values must be sourced out-of-band. OpenSecret publishes signed PCR0 history via
+GitHub (`pcrProdHistory.json`), which is better than dstack providers (who publish
+nothing), but:
+- The PCR history is signed with an OpenSecret-controlled P-384 key, not by AWS
+- PCR1/PCR2 values are not published
+- No advance notice of PCR changes
+
+For teep, this means PCR0 values must be maintained in the measurement policy and
+updated when OpenSecret deploys new enclave images. The `tee_hardware_config` (PCR1)
+and `tee_boot_config` (PCR2) factors start in `allow_fail` until values are collected.
+
+### Chain 2: Encryption Key Binding (Attestation → E2EE Session)
+
+**What it proves:** The session key used for E2EE was negotiated with the specific
+enclave instance that produced the verified attestation document. No MITM can
+substitute a different key.
+
+**Chain of authentication:**
+
+```
+Verified COSE_Sign1 attestation document
+  └─ contains (hardware-signed) → public_key: <X25519 server key, 32 bytes>
+       └─ used in ECDH → shared_secret = X25519(client_private, server_public)
+            └─ decrypts → encrypted_session_key (ChaCha20-Poly1305)
+                 └─ yields → session_key (32 bytes)
+                      └─ encrypts/decrypts → all API request/response payloads
+```
+
+**Why this chain is secure:** The server's X25519 public key is embedded in the
+COSE_Sign1 payload, which is signed by the Nitro hardware PKI. A MITM attacker
+cannot substitute their own public key without breaking the COSE_Sign1 signature
+(which would require the AWS Nitro root private key) or the certificate chain
+(which would require forging an AWS-signed certificate). Only the enclave instance
+that requested the attestation document from the NSM holds the corresponding
+X25519 private key (Nitro Enclaves have no persistent storage — the private key
+exists only in enclave memory).
+
+**Critical enforcement points (must never be weakened):**
+
+1. **Attestation MUST complete before key exchange**: The public_key from the
+   attestation document must be verified (full COSE_Sign1 + cert chain validation)
+   BEFORE it is used for ECDH. Using an unverified public key for key exchange
+   allows trivial MITM.
+2. **Constant-time key comparison**: When the E2EE implementation uses the server
+   public key for ECDH, it MUST verify via `subtle.ConstantTimeCompare` that the
+   key matches the one from the verified attestation document. This prevents
+   time-of-check-to-time-of-use (TOCTOU) attacks where the key is swapped between
+   attestation verification and key exchange.
+3. **ECDH shared secret zeroing**: The shared secret MUST be zeroed immediately after
+   deriving the session key. The shared secret is equivalent to the session key in
+   privilege — if leaked, all session traffic can be decrypted.
+4. **Client ephemeral key generation**: The X25519 client keypair MUST be generated
+   fresh for each key exchange using `crypto/rand`. Reusing client keys across
+   sessions would allow session key recovery if any single session is compromised.
+5. **Session key decryption authentication**: The encrypted_session_key uses
+   ChaCha20-Poly1305 (AEAD). The Poly1305 tag MUST be verified — if it fails,
+   the key exchange is under attack and MUST fail closed. Do not fall back to
+   unauthenticated decryption.
+6. **No TLS-only fallback**: If attestation or key exchange fails, the implementation
+   MUST NOT fall back to sending plaintext requests over TLS. The entire security
+   model depends on E2EE authenticated by attestation. TLS alone does not provide
+   the enclave identity guarantee.
+
+**Comparison to other providers:**
+
+| Aspect | NearCloud/NearDirect (TDX) | Chutes (TDX) | MapleAI (Nitro) |
+|--------|---------------------------|--------------|-----------------|
+| Key binding mechanism | Ed25519 signing key in TDX REPORTDATA[0:32] | SHA256(nonce+pubkey) in TDX REPORTDATA[0:32] | X25519 public_key in COSE_Sign1-signed payload |
+| Key type | Ed25519 (signing) → X25519 (ECDH) | ML-KEM-768 (post-quantum KEM) | X25519 (ECDH) |
+| Binding verification | Verifier checks REPORTDATA matches signing key hash | Verifier checks REPORTDATA matches SHA256(nonce+pubkey) | Verifier checks public_key field in verified attestation |
+| Session key derivation | ECDH → HKDF → XChaCha20-Poly1305 | ML-KEM encapsulate → HKDF → ChaCha20-Poly1305 | ECDH → ChaCha20-Poly1305 (shared secret as direct key) |
+| Channel binding | TLS SPKI pinned + E2EE | E2EE only (no TLS pinning) | E2EE only (no TLS pinning) |
+
+**Notable difference from NearCloud/NearDirect:** Those providers use TLS SPKI pinning
+as a primary channel binding mechanism — the TLS certificate fingerprint is in the
+TDX REPORTDATA, and the verifier checks the live TLS connection's SPKI matches. This
+provides defense-in-depth: even if E2EE were broken, the TLS channel is authenticated.
+MapleAI has **no TLS channel binding** — security relies entirely on the E2EE layer
+being correctly implemented and the attestation-to-key binding being maintained.
+This makes the E2EE implementation a single point of failure for channel security.
+
+**Notable difference from Chutes:** Chutes uses ML-KEM-768 (post-quantum KEM), which
+is resistant to quantum computing attacks on key exchange. MapleAI uses classical
+X25519, which is vulnerable to future quantum attacks on stored ciphertext
+("harvest now, decrypt later"). This is a known limitation, not a blocking issue
+for implementation.
+
+### Chain 3: Enclave-to-GPU Backend (UNVERIFIED — Critical Gap)
+
+**What it proves:** Nothing. This link is not authenticated.
+
+The MapleAI Nitro Enclave acts as a router/proxy. It receives encrypted requests from
+clients, decrypts them inside the enclave, and forwards them to an external GPU
+inference backend. According to the [OpenSecret technical blog](https://blog.opensecret.cloud/opensecret-technicals/),
+this backend runs on NVIDIA GPU TEEs provided by Edgeless Systems. The blog states:
+"the Nitro enclave re-encrypts data so it can be processed inside a GPU-based trusted
+execution environment (TEE) for inference."
+
+**However, there is no client-verifiable evidence of this claim.** The Nitro
+attestation document contains only Nitro enclave measurements. No GPU attestation
+evidence (NVIDIA EAT tokens, SPDM certificates, GPU measurements) is included in or
+referenced by the attestation response. The client cannot independently verify:
+
+1. Whether the GPU backend is actually running in a TEE
+2. Whether the enclave-to-GPU connection is encrypted
+3. Whether the GPU backend is running the claimed model
+4. Whether the correct GPU hardware is being used
+
+```
+Client ←──── E2EE (verified) ────→ Nitro Enclave ←──── ??? ────→ GPU Backend
+       ChaCha20-Poly1305                              (not attested,
+       bound to attestation                            not visible to client)
+```
+
+**This is structurally identical to the model weights gap** documented in
+`docs/attestation_gaps/model_weights.md`: the TEE attestation proves the software
+stack is correct, but does not prove what happens to the data after it leaves the
+attested boundary. For dstack providers, the gap is that model weights are downloaded
+at runtime inside the CVM. For MapleAI, the gap is that the entire inference
+computation happens outside the attested Nitro Enclave.
+
+**Impact on teep factors:**
+
+| Factor | Status | Reason |
+|--------|--------|--------|
+| `cpu_gpu_chain` | Fail (allow_fail) | No GPU evidence in attestation |
+| `measured_model_weights` | Fail (allow_fail) | Model weights not in enclave or attestation |
+| `nvidia_payload_present` | Skip (allow_fail) | No NVIDIA EAT token |
+| `nvidia_*` (all 5 factors) | Skip (allow_fail) | No GPU attestation exposed |
+
+**Comparison to other providers:**
+
+| Aspect | NearDirect (TDX + NVIDIA) | Chutes (TDX + NVIDIA) | MapleAI (Nitro only) |
+|--------|--------------------------|----------------------|---------------------|
+| GPU attestation | NVIDIA EAT + NRAS verification | NVIDIA EAT + NRAS verification | **None** |
+| GPU evidence in attestation | Yes — inline in attestation response | Yes — separate evidence endpoint | **No** |
+| CPU-GPU binding | Shared nonce (weak, see gpu_cpu_binding.md) | Shared nonce (weak) | **N/A — no GPU evidence at all** |
+| Inference location | Inside the same CVM | Inside GPU TEE with E2EE | **External, unverified** |
+| Model weight authentication | None (see model_weights.md) | None (TEE-exempt from watchtower/cllmv) | **None** |
+
+**MapleAI's gap is strictly worse than dstack providers' model weight gap.** For dstack
+providers, inference at least happens inside the attested CVM — the gap is that model
+weights are loaded at runtime but the inference engine itself is measured. For MapleAI,
+the inference computation happens entirely outside the attested boundary. The Nitro
+Enclave is a pass-through proxy; the GPU backend where user prompts are actually
+processed is not attested to the client at all.
+
+**The OpenSecret blog's claim** that "the Nitro enclave re-encrypts data so it can be
+processed inside a GPU-based trusted execution environment" may be true operationally,
+but this claim is not cryptographically verifiable by the client. It relies on trusting
+OpenSecret's operational practices, which is exactly the "just trust us" model that
+TEE attestation is designed to eliminate.
+
+**What would close this gap:** MapleAI would need to either:
+1. Include GPU attestation evidence (NVIDIA EAT tokens) in the attestation response,
+   allowing clients to independently verify the GPU TEE, OR
+2. Expose the enclave-to-GPU attestation binding (e.g., include the GPU TEE's
+   attestation document hash in the Nitro attestation's `user_data` field), OR
+3. Run inference inside the Nitro Enclave itself (impractical — Nitro Enclaves don't
+   have GPU access), OR
+4. Use a chain-of-trust protocol where the Nitro Enclave verifies GPU attestation
+   and commits the verification result into its own attestation (but this requires
+   the server code to implement it, and the client cannot verify the quality of the
+   enclave's GPU verification without seeing the GPU evidence directly)
+
+Until one of these is implemented, teep must document this gap and ensure all
+GPU-related and model weight factors remain in `allow_fail`. The implementation
+MUST NOT represent Nitro-only attestation as covering inference computation.
+
+### Chain 4: Request Integrity (Session → Per-Request Encryption)
+
+**What it proves:** Each request and response is encrypted with the session key that
+was derived from the attestation-authenticated key exchange. Tampering with any
+request or response is detected by the Poly1305 authentication tag.
+
+**Chain of authentication:**
+
+```
+session_key (from Chain 2)
+  └─ ChaCha20-Poly1305 Seal(random_nonce, plaintext_request) → encrypted_request
+       └─ sent as {"encrypted": "<base64>"} with x-session-id header
+            └─ server decrypts with same session_key
+                 └─ processes request (inside enclave boundary only)
+                      └─ ChaCha20-Poly1305 Seal(random_nonce, plaintext_response)
+                           └─ client decrypts with session_key
+```
+
+**Critical enforcement points:**
+
+1. **Random nonce per encryption**: Each ChaCha20-Poly1305 operation MUST use a fresh
+   12-byte random nonce from `crypto/rand`. Nonce reuse with the same key is
+   catastrophic — it allows plaintext recovery. The implementation MUST NOT use
+   a counter-based nonce (risk of collision across concurrent requests sharing a
+   session).
+2. **Authentication tag verification**: ChaCha20-Poly1305 `Open()` verifies the
+   Poly1305 tag. On tag mismatch, the implementation MUST return
+   `ErrDecryptionFailed` and MUST NOT return partial plaintext. Tag failure indicates
+   either corruption or active MITM.
+3. **No plaintext fallback**: If decryption fails, the implementation MUST NOT attempt
+   to parse the response as unencrypted JSON. This would silently bypass E2EE if the
+   server returned plaintext (e.g., due to a server bug or downgrade attack).
+4. **Bounded reads**: Encrypted response bodies must be bounded (e.g., 32 MiB) to
+   prevent memory exhaustion from a malicious server sending unbounded ciphertext.
+5. **SSE `[DONE]` handling**: The `data: [DONE]` sentinel is NOT encrypted. The
+   implementation must handle this correctly: do NOT attempt to base64-decode or
+   decrypt `[DONE]`. But also do NOT accept any other unencrypted data lines as
+   valid response content — non-decodeable lines should be skipped silently (they
+   may be heartbeats), but they must never be forwarded as API response data.
+
+### Summary: What MapleAI Attestation Does and Does Not Prove
+
+| Claim | Proven? | Mechanism | Comparable to |
+|-------|---------|-----------|---------------|
+| Client is talking to a genuine AWS Nitro Enclave | **Yes** | COSE_Sign1 chain to AWS root cert | TDX quote chain to Intel DCAP PKI |
+| Enclave is running expected proxy code | **Yes** | PCR0 matches measurement allowlist | MRTD + compose binding in dstack |
+| Enclave is not in debug mode | **Yes** | PCR0 ≠ all-zeros | TDX debug flag check |
+| E2EE key is bound to the attested enclave | **Yes** | X25519 public_key in signed attestation payload | Signing key in TDX REPORTDATA |
+| Session key was negotiated with the attested enclave | **Yes** | ECDH with attested public_key → ChaCha20-Poly1305 | ECDH/KEM with attested key |
+| Request/response confidentiality (client ↔ enclave) | **Yes** | ChaCha20-Poly1305 AEAD per request | XChaCha20-Poly1305 / ChaCha20-Poly1305 |
+| GPU backend is running in a TEE | **No** | Not attested | NearDirect/Chutes: partial (NVIDIA EAT) |
+| GPU backend is running the claimed model | **No** | Not attested | All providers: No (see model_weights.md) |
+| Enclave-to-GPU connection is encrypted | **No** | Not verifiable by client | NearDirect: same CVM; Chutes: same CVM |
+| Model weights are authentic | **No** | Not attested | Tinfoil only (dm-verity) |
+| Enclave code is reproducible/auditable | **Partially** | PCR0 from reproducible NixOS build; code is open-source | Dstack: open source + reproducible |
+| TCB is current (not revoked) | **No** | No Nitro equivalent of Intel PCS | Intel PCS for TDX providers |
+
+### Implementation Implications
+
+The authentication chain analysis has these specific implications for the implementation:
+
+1. **The `tee_reportdata_binding` factor for Nitro** should verify that
+   `NitroVerifyResult.PublicKey` is non-nil, 32 bytes, and that the same key was used
+   for the ECDH key exchange. The binding is via COSE_Sign1 signature (the public_key
+   is in the signed payload), NOT via a separate REPORTDATA field like TDX. The
+   factor should Pass with detail like "X25519 public key bound via COSE_Sign1
+   hardware signature" to distinguish from TDX's REPORTDATA binding.
+
+2. **The `signing_key_present` factor** should check
+   `NitroVerifyResult.PublicKey != nil && len(NitroVerifyResult.PublicKey) == 32`.
+   For Nitro, the "signing key" is the X25519 public key (used for ECDH, not signing),
+   so the factor detail should say "X25519 public key (32 bytes) present in attestation"
+   to avoid confusion with dstack providers where it's an Ed25519 or secp256k1 signing
+   key.
+
+3. **The E2EE session (`MapleAISession`) MUST store the attested server public key**
+   and enforce that the same key is used for ECDH. The session cache MUST be keyed
+   by the hex-encoded server public key. If a new attestation returns a different
+   server public key (enclave restarted), existing cached sessions for the old key
+   MUST be invalidated.
+
+4. **Session invalidation on attestation cache miss**: When the attestation cache
+   expires (1h TTL) or is manually invalidated, all E2EE sessions derived from that
+   attestation's public key MUST also be invalidated. Stale sessions with a
+   potentially-rotated enclave key are a security risk.
+
+5. **The report MUST clearly communicate the GPU attestation gap.** The `cpu_gpu_chain`
+   and `measured_model_weights` factors will Fail (allowed), but the report detail
+   strings should explicitly state that inference runs outside the attested Nitro
+   boundary, not just generic "not available" messages. Suggested details:
+   - `cpu_gpu_chain`: "inference runs on external GPU backend not covered by Nitro attestation"
+   - `measured_model_weights`: "model weights loaded by external GPU backend outside Nitro enclave boundary"
+
+6. **Factor enforcement parity with dstack providers**: Despite the GPU gap, the
+   Nitro-verifiable factors (enclave identity, key binding, E2EE) provide equivalent
+   or stronger assurance than the corresponding dstack factors. The implementation
+   should enforce these strictly — they are the only authentication chain available.
+
 ## Protocol Specifications
 
 All protocols below are described from publicly documented standards and the public
@@ -904,10 +1248,12 @@ This is analogous to the existing `if chutesE2EE != nil` check for Chutes.
   may use `nitro_*` initially.
 - **No supply chain attestation**: MapleAI does not expose compose hashes, Sigstore,
   Rekor, or event logs. These factors are in allow-fail.
-- **GPU attestation gap**: MapleAI's backend uses NVIDIA GPU TEEs (per public blog),
-  but GPU attestation is not exposed through the MapleAI attestation endpoint. All
-  NVIDIA and GPU-related factors are in allow-fail. This should be documented as a
-  known limitation.
+- **GPU attestation gap**: MapleAI's Nitro Enclave is a proxy — actual inference
+  runs on NVIDIA GPU TEEs (per public blog), and GPU attestation is NOT exposed
+  through the MapleAI attestation endpoint. See "Authentication Chain Analysis §Chain 3"
+  for full gap analysis and comparison with dstack providers. All NVIDIA and GPU-related
+  factors are in allow-fail. The report detail strings MUST communicate that inference
+  runs outside the attested boundary, not just "not available."
 - **No Maple source code referenced**: All protocol descriptions derived from public
   AWS Nitro documentation, OpenSecret SDK documentation, and RFC specifications.
 
