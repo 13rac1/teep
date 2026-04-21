@@ -84,7 +84,7 @@ func main() {
 		Subcommands: []*ff.Command{
 			{
 				Name:      "serve",
-				Usage:     "teep serve [--offline] [--force] PROVIDER",
+				Usage:     "teep serve [--offline] PROVIDER",
 				ShortHelp: "Start the proxy server",
 				Flags:     serveFlags,
 				Exec: func(ctx context.Context, args []string) error {
@@ -108,7 +108,9 @@ func main() {
 				Flags:     verifyFlags,
 				Exec: func(ctx context.Context, args []string) error {
 					if err := verifyArgsConflict(*reverifyDir, args); err != nil {
-						return err
+						fmt.Fprintf(os.Stderr, "teep %v\n\n", err)
+						printVerifyHelp()
+						return errSilentExit
 					}
 					if *reverifyDir != "" {
 						return runReverify(ctx, *reverifyDir)
@@ -125,6 +127,16 @@ func main() {
 					}
 					if *model == "" {
 						fmt.Fprintf(os.Stderr, "teep verify: --model is required\n\n")
+						printVerifyHelp()
+						return errSilentExit
+					}
+					if *captureDir != "" && *verifyOffline {
+						fmt.Fprintf(os.Stderr, "teep verify: --capture and --offline are mutually exclusive\n\n")
+						printVerifyHelp()
+						return errSilentExit
+					}
+					if *updateConfig && *configOut == "" && os.Getenv("TEEP_CONFIG") == "" {
+						fmt.Fprintf(os.Stderr, "teep verify: --update-config requires $TEEP_CONFIG or --config-out\n\n")
 						printVerifyHelp()
 						return errSilentExit
 					}
@@ -216,7 +228,7 @@ func parseSlogLevel(s string) slog.Level {
 // args are both present (they are mutually exclusive).
 func verifyArgsConflict(reverifyDir string, args []string) error {
 	if reverifyDir != "" && len(args) > 0 {
-		return errors.New("PROVIDER and --reverify are mutually exclusive")
+		return errors.New("verify: PROVIDER and --reverify are mutually exclusive")
 	}
 	return nil
 }
