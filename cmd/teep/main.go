@@ -65,6 +65,11 @@ func main() {
 	configOut := verifyFlags.StringLong("config-out", "",
 		"write updated config to this path instead of $TEEP_CONFIG")
 
+	subcmdFlags := map[string]*ff.FlagSet{
+		"serve":  serveFlags,
+		"verify": verifyFlags,
+	}
+
 	root := &ff.Command{
 		Name:  "teep",
 		Usage: "teep [--log-level LEVEL] <subcommand> ...",
@@ -88,8 +93,10 @@ func main() {
 						printServeHelp()
 						return errSilentExit
 					}
-					if err := rejectTrailingFlags("serve", args); err != nil {
-						return err
+					if len(args) > 1 {
+						fmt.Fprintf(os.Stderr, "teep serve: expected one provider argument, got %d\n\n", len(args))
+						printServeHelp()
+						return errSilentExit
 					}
 					return runServe(ctx, args[0], *serveOffline, forceValue(serveForce))
 				},
@@ -111,8 +118,10 @@ func main() {
 						printVerifyHelp()
 						return errSilentExit
 					}
-					if err := rejectTrailingFlags("verify", args); err != nil {
-						return err
+					if len(args) > 1 {
+						fmt.Fprintf(os.Stderr, "teep verify: expected one provider argument, got %d\n\n", len(args))
+						printVerifyHelp()
+						return errSilentExit
 					}
 					if *model == "" {
 						fmt.Fprintf(os.Stderr, "teep verify: --model is required\n\n")
@@ -160,7 +169,7 @@ func main() {
 	}
 
 	// Parse arguments — handles flag parsing and subcommand selection.
-	if err := root.Parse(os.Args[1:]); err != nil {
+	if err := root.Parse(normalizeArgs(os.Args[1:], rootFlags, subcmdFlags)); err != nil {
 		if errors.Is(err, ff.ErrHelp) {
 			if sel := root.GetSelected(); sel != nil && sel.Name != "teep" {
 				runHelp([]string{sel.Name})
@@ -212,30 +221,107 @@ func verifyArgsConflict(reverifyDir string, args []string) error {
 	return nil
 }
 
-// rejectTrailingFlags checks for flag-like arguments after the first positional
-// arg and returns a helpful error. ff stops parsing at the first non-flag
-// argument (POSIX convention), so flags placed after the provider are not
-// parsed. This catches the common mistake of writing "serve venice --offline"
-// instead of "serve --offline venice".
-func rejectTrailingFlags(cmd string, args []string) error {
-	var trailingFlags, extraPositionals []string
-	for _, a := range args[1:] {
-		if strings.HasPrefix(a, "-") {
-			trailingFlags = append(trailingFlags, a)
+// normalizeArgs reorders trailing flags in subcommand arguments so they precede
+// the first positional (provider) argument. The ff library uses POSIX convention —
+// it stops flag parsing at the first non-flag argument — so "serve venice --offline"
+// would leave "--offline" unclaimed. normalizeArgs moves trailing flags in front
+// of the positional, allowing flags anywhere relative to the provider name.
+//
+// rootFS is used to consume root-level flags before the subcommand name.
+// subcmdFS maps each subcommand name to its ff.FlagSet (with SetParent applied).
+func normalizeArgs(args []string, rootFS *ff.FlagSet, subcmdFS map[string]*ff.FlagSet) []string {
+	isFlagArg := func(a string) bool {
+		return strings.HasPrefix(a, "-") && a != "--"
+	}
+	flagName := func(a string) string {
+		name := strings.TrimLeft(a, "-")
+		if i := strings.IndexByte(name, '='); i >= 0 {
+			name = name[:i]
+		}
+		return name
+	}
+	flagTakesValue := func(fs *ff.FlagSet, name string) bool {
+		f, ok := fs.GetFlag(name)
+		return ok && f.GetPlaceholder() != ""
+	}
+	// consumeFlags advances i past flag tokens (and their values), appending to out.
+	// Stops at the first non-flag argument or "--".
+	consumeFlags := func(fs *ff.FlagSet, i int, out *[]string) int {
+		for i < len(args) {
+			a := args[i]
+			if !isFlagArg(a) {
+				break
+			}
+			*out = append(*out, a)
+			i++
+			if !strings.Contains(a, "=") && flagTakesValue(fs, flagName(a)) && i < len(args) {
+				*out = append(*out, args[i])
+				i++
+			}
+		}
+		return i
+	}
+
+	// Phase 1: consume root-level flags before the subcommand name.
+	prefix := make([]string, 0, 1)
+	i := consumeFlags(rootFS, 0, &prefix)
+
+	if i >= len(args) || args[i] == "--" {
+		return append(prefix, args[i:]...)
+	}
+
+	// args[i] is the subcommand name.
+	subcmd := args[i]
+	prefix = append(prefix, subcmd)
+	i++
+
+	fs, ok := subcmdFS[subcmd]
+	if !ok {
+		return append(prefix, args[i:]...)
+	}
+
+	// Phase 2: consume flags before the first positional.
+	var before []string
+	i = consumeFlags(fs, i, &before)
+
+	if i >= len(args) {
+		return append(prefix, before...)
+	}
+
+	// args[i] is the first positional (provider name).
+	positional := args[i]
+	i++
+
+	// Phase 3: collect trailing flags to move before the positional,
+	// and extra positionals to preserve after it.
+	var trailing, extra []string
+	for i < len(args) {
+		a := args[i]
+		if a == "--" {
+			extra = append(extra, args[i:]...)
+			break
+		}
+		if isFlagArg(a) {
+			trailing = append(trailing, a)
+			i++
+			if !strings.Contains(a, "=") && flagTakesValue(fs, flagName(a)) && i < len(args) {
+				trailing = append(trailing, args[i])
+				i++
+			}
 		} else {
-			extraPositionals = append(extraPositionals, a)
+			extra = append(extra, a)
+			i++
 		}
 	}
-	// Only suggest a reordering when the sole problem is trailing flags —
-	// if there are also extra positionals the reordering would be wrong.
-	if len(trailingFlags) > 0 && len(extraPositionals) == 0 {
-		return fmt.Errorf("%s: flags must precede the provider argument (try: teep %s %s %s)",
-			cmd, cmd, strings.Join(trailingFlags, " "), args[0])
-	}
-	if len(args) > 1 {
-		return fmt.Errorf("%s: expected one provider argument, got %d", cmd, len(args))
-	}
-	return nil
+
+	// Rebuild: root_flags + subcmd + pre_positional_flags + trailing_flags + positional + extras.
+	out := make([]string, 0, len(args))
+	out = append(out, prefix...)
+	out = append(out, before...)
+	out = append(out, trailing...)
+	out = append(out, positional)
+	out = append(out, extra...)
+	return out
 }
 
 // runServe loads config, creates the proxy, and starts listening.

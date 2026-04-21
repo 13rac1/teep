@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/peterbourgon/ff/v4"
+
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 )
@@ -285,55 +287,112 @@ func TestRunVerify_ModelRequired(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// rejectTrailingFlags tests
+// normalizeArgs tests
 // --------------------------------------------------------------------------
 
-func TestRejectTrailingFlags_NoFlags(t *testing.T) {
-	err := rejectTrailingFlags("serve", []string{"venice"})
-	if err != nil {
-		t.Errorf("expected no error for single provider, got: %v", err)
-	}
+// buildNormalizeFlagSets creates flag sets matching main() for use in
+// normalizeArgs tests.
+func buildNormalizeFlagSets() (rootFS *ff.FlagSet, subcmdFS map[string]*ff.FlagSet) {
+	rootFS = ff.NewFlagSet("teep")
+	_ = rootFS.StringEnumLong("log-level", "log verbosity", "info", "debug", "warn", "error")
+
+	serveFS := ff.NewFlagSet("serve").SetParent(rootFS)
+	_ = serveFS.BoolLong("offline", "skip external verification")
+	_ = serveFS.BoolLong("force", "force requests")
+
+	verifyFS := ff.NewFlagSet("verify").SetParent(rootFS)
+	_ = verifyFS.StringLong("model", "", "model name")
+	_ = verifyFS.StringLong("capture", "", "capture dir")
+	_ = verifyFS.StringLong("reverify", "", "reverify dir")
+	_ = verifyFS.BoolLong("offline", "skip external verification")
+	_ = verifyFS.BoolLong("update-config", "update config")
+	_ = verifyFS.StringLong("config-out", "", "config out path")
+
+	subcmdFS = map[string]*ff.FlagSet{"serve": serveFS, "verify": verifyFS}
+	return rootFS, subcmdFS
 }
 
-func TestRejectTrailingFlags_TrailingFlag(t *testing.T) {
-	err := rejectTrailingFlags("serve", []string{"venice", "--offline"})
-	t.Logf("rejectTrailingFlags error: %v", err)
-	if err == nil {
-		t.Fatal("expected error for trailing flag")
+func TestNormalizeArgs(t *testing.T) {
+	rootFS, subcmdFS := buildNormalizeFlagSets()
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{
+			"no_flags",
+			[]string{"serve", "venice"},
+			[]string{"serve", "venice"},
+		},
+		{
+			"trailing_bool_flag",
+			[]string{"serve", "venice", "--offline"},
+			[]string{"serve", "--offline", "venice"},
+		},
+		{
+			"trailing_value_flag",
+			[]string{"serve", "venice", "--log-level", "debug"},
+			[]string{"serve", "--log-level", "debug", "venice"},
+		},
+		{
+			"trailing_multiple_flags",
+			[]string{"serve", "venice", "--offline", "--log-level", "debug"},
+			[]string{"serve", "--offline", "--log-level", "debug", "venice"},
+		},
+		{
+			"root_flag_before_subcmd",
+			[]string{"--log-level", "debug", "serve", "venice", "--offline"},
+			[]string{"--log-level", "debug", "serve", "--offline", "venice"},
+		},
+		{
+			"flag_before_and_after_provider",
+			[]string{"serve", "--offline", "venice", "--log-level", "debug"},
+			[]string{"serve", "--offline", "--log-level", "debug", "venice"},
+		},
+		{
+			"equals_form",
+			[]string{"serve", "venice", "--log-level=debug"},
+			[]string{"serve", "--log-level=debug", "venice"},
+		},
+		{
+			"extra_positional",
+			[]string{"serve", "venice", "nanogpt"},
+			[]string{"serve", "venice", "nanogpt"},
+		},
+		{
+			"verify_model_after_provider",
+			[]string{"verify", "venice", "--model", "gpt-4o"},
+			[]string{"verify", "--model", "gpt-4o", "venice"},
+		},
+		{
+			"unknown_subcommand_passthrough",
+			[]string{"foobar", "venice", "--offline"},
+			[]string{"foobar", "venice", "--offline"},
+		},
+		{
+			"empty_args",
+			[]string{},
+			[]string{},
+		},
+		{
+			"end_of_flags_marker",
+			[]string{"serve", "venice", "--", "--not-a-flag"},
+			[]string{"serve", "venice", "--", "--not-a-flag"},
+		},
 	}
-	if !strings.Contains(err.Error(), "flags must precede") {
-		t.Errorf("expected 'flags must precede' in error, got: %v", err)
-	}
-	// Error should suggest the correct order.
-	if !strings.Contains(err.Error(), "teep serve --offline venice") {
-		t.Errorf("expected suggested correct order in error, got: %v", err)
-	}
-}
-
-func TestRejectTrailingFlags_ExtraPositional(t *testing.T) {
-	err := rejectTrailingFlags("serve", []string{"venice", "neardirect"})
-	t.Logf("rejectTrailingFlags error: %v", err)
-	if err == nil {
-		t.Fatal("expected error for extra positional arg")
-	}
-	if !strings.Contains(err.Error(), "expected one provider") {
-		t.Errorf("expected 'expected one provider' in error, got: %v", err)
-	}
-}
-
-func TestRejectTrailingFlags_ExtraPositionalAndFlag(t *testing.T) {
-	// Extra positional + trailing flag: should not suggest a reordering since
-	// it would include the extra positional in the suggestion.
-	err := rejectTrailingFlags("serve", []string{"venice", "extra", "--offline"})
-	t.Logf("rejectTrailingFlags error: %v", err)
-	if err == nil {
-		t.Fatal("expected error for extra positional + trailing flag")
-	}
-	if !strings.Contains(err.Error(), "expected one provider") {
-		t.Errorf("expected 'expected one provider' in error, got: %v", err)
-	}
-	if strings.Contains(err.Error(), "flags must precede") {
-		t.Errorf("should not suggest reordering when extra positionals are present, got: %v", err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeArgs(tc.in, rootFS, subcmdFS)
+			t.Logf("normalizeArgs(%v) = %v", tc.in, got)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("got[%d] = %q, want %q (full: %v)", i, got[i], tc.want[i], got)
+				}
+			}
+		})
 	}
 }
 
