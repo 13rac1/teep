@@ -554,8 +554,8 @@ func printOverview() {
 	fmt.Print(`teep — TEE attestation verifier and E2EE proxy for AI providers
 
 Usage:
-  teep serve      [flags] PROVIDER                 Start the HTTP proxy server.
-  teep verify     [flags] --model MODEL PROVIDER   Fetch and print attestation report.
+  teep serve      PROVIDER [flags]                 Start the HTTP proxy server.
+  teep verify     PROVIDER [flags]                 Fetch and print attestation report.
   teep self-check                                  Verify this binary's build provenance.
   teep version                                     Print version information.
   teep help       [topic]                          Show detailed help for a topic.
@@ -588,11 +588,10 @@ func printServeHelp() {
 	fmt.Print(`teep serve — Start the HTTP proxy server
 
 Usage:
-  teep serve [--offline] [--log-level LEVEL] PROVIDER
+  teep serve PROVIDER [flags]
 
-Arguments:
-  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt, phalacloud, chutes).
-             Must be the last argument (flags must precede the provider).
+PROVIDER:
+  venice, neardirect, nearcloud, nanogpt, phalacloud, chutes
 
 The proxy intercepts OpenAI-compatible chat completion requests, performs TEE
 attestation verification against the upstream provider, and optionally enables
@@ -621,8 +620,8 @@ Example TOML:
   e2ee = true
 
 Flags:
-	--offline           Skip external verification (Intel PCS, Proof of Cloud,
-											Certificate Transparency).
+  --offline           Skip external verification (Intel PCS, Proof of Cloud,
+                      Certificate Transparency).
   --log-level LEVEL   Set log verbosity: debug, info, warn, error (default: info).
 `)
 }
@@ -632,11 +631,10 @@ func printVerifyHelp() {
 	fmt.Print(`teep verify — Fetch and print a TEE attestation verification report
 
 Usage:
-  teep verify --model MODEL [flags] PROVIDER
+  teep verify PROVIDER --model MODEL [flags]
 
-Arguments:
-  PROVIDER   Provider name (venice, neardirect, nearcloud, nanogpt, phalacloud, chutes).
-             Must be the last argument (flags must precede the provider).
+PROVIDER:
+  venice, neardirect, nearcloud, nanogpt, phalacloud, chutes
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
 attestation for the given model, and runs all verification factors. The
@@ -667,11 +665,11 @@ Exit codes:
   1   At least one enforced factor failed, or a fatal error occurred.
 
 Examples:
-  teep verify --model e2ee-deepseek-r1-0528 venice
-  teep verify --model qwen2.5-72b-instruct --capture ./captures neardirect
+  teep verify venice --model e2ee-deepseek-r1-0528
+  teep verify neardirect --model qwen2.5-72b-instruct --capture ./captures
   teep verify --reverify ./captures/neardirect_qwen2.5-72b-instruct_20260404_120000
-  teep verify --model Qwen/Qwen3.5-122B-A10B --log-level debug nearcloud
-  teep verify --model e2ee-qwen3-32b --update-config venice
+  teep verify nearcloud --model Qwen/Qwen3.5-122B-A10B --log-level debug
+  teep verify venice --model e2ee-qwen3-32b --update-config
 
 See 'teep help tiers' for how factors are scored, 'teep help factors'
 for descriptions of all verification factors, or 'teep help measurements'
@@ -697,18 +695,18 @@ Quickstart: Bootstrap Allowlists from Observed Values
 
   1. Run verification and save observed values to your config:
 
-       teep verify --model e2ee-qwen3-32b --update-config venice
+       teep verify venice --model e2ee-qwen3-32b --update-config
 
      This writes the observed MRSEAM, MRTD, and RTMR0-2 values to
      [providers.venice.policy] in $TEEP_CONFIG, with deduplication.
 
   2. To write to a different file instead of $TEEP_CONFIG:
 
-       teep verify --model e2ee-qwen3-32b --config-out ./teep.toml venice
+       teep verify venice --model e2ee-qwen3-32b --config-out ./teep.toml
 
   3. Run against additional models to capture all deployment classes:
 
-       teep verify --model e2ee-deepseek-r1-0528 --update-config venice
+       teep verify venice --model e2ee-deepseek-r1-0528 --update-config
 
      New values are appended and deduplicated.
 
