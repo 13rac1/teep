@@ -110,20 +110,14 @@ func EncryptVenice(plaintext []byte, recipientPubKey *secp256k1.PublicKey) (stri
 		return "", fmt.Errorf("generate ephemeral key: %w", err)
 	}
 
-	aesKey, err := deriveKeyVenice(ephemeralPriv, recipientPubKey)
-	if err != nil {
-		return "", fmt.Errorf("derive key: %w", err)
-	}
+	aesKey := deriveKeyVenice(ephemeralPriv, recipientPubKey)
 
 	nonce := make([]byte, 12)
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
 
-	ciphertext, err := aesgcmSeal(aesKey, nonce, plaintext)
-	if err != nil {
-		return "", fmt.Errorf("encrypt: %w", err)
-	}
+	ciphertext := aesgcmSeal(aesKey, nonce, plaintext)
 
 	ephemeralPub := ephemeralPriv.PubKey().SerializeUncompressed() // 65 bytes
 	wire := make([]byte, 0, 65+12+len(ciphertext))
@@ -156,10 +150,7 @@ func DecryptVenice(ciphertextHex string, privateKey *secp256k1.PrivateKey) ([]by
 		return nil, fmt.Errorf("parse ephemeral public key: %w", err)
 	}
 
-	aesKey, err := deriveKeyVenice(privateKey, ephemeralPub)
-	if err != nil {
-		return nil, fmt.Errorf("derive key: %w", err)
-	}
+	aesKey := deriveKeyVenice(privateKey, ephemeralPub)
 
 	plaintext, err := aesgcmOpen(aesKey, nonce, ciphertext)
 	if err != nil {
@@ -190,7 +181,7 @@ func IsEncryptedChunkVenice(s string) bool {
 // deriveKeyVenice performs ECDH and derives a 32-byte AES key via HKDF-SHA256.
 // The ECDH shared secret is the x-coordinate of the shared point.
 // HKDF uses no salt and info="ecdsa_encryption" per the Venice protocol.
-func deriveKeyVenice(priv *secp256k1.PrivateKey, pub *secp256k1.PublicKey) ([]byte, error) {
+func deriveKeyVenice(priv *secp256k1.PrivateKey, pub *secp256k1.PublicKey) []byte {
 	var point, pubJacobian secp256k1.JacobianPoint
 	pub.AsJacobian(&pubJacobian)
 	secp256k1.ScalarMultNonConst(&priv.Key, &pubJacobian, &point)
@@ -200,33 +191,33 @@ func deriveKeyVenice(priv *secp256k1.PrivateKey, pub *secp256k1.PublicKey) ([]by
 	r := hkdf.New(sha256.New, sharedSecret[:], nil, []byte(hkdfInfoVenice))
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(r, key); err != nil {
-		return nil, fmt.Errorf("hkdf expand: %w", err)
+		panic(fmt.Sprintf("BUG: hkdf expand: %v", err))
 	}
-	return key, nil
+	return key
 }
 
 // aesgcmSeal encrypts plaintext with AES-256-GCM using the given key and nonce.
-func aesgcmSeal(key, nonce, plaintext []byte) ([]byte, error) {
+func aesgcmSeal(key, nonce, plaintext []byte) []byte {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		panic(fmt.Sprintf("BUG: aes.NewCipher: %v", err))
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, err
+		panic(fmt.Sprintf("BUG: cipher.NewGCM: %v", err))
 	}
-	return gcm.Seal(nil, nonce, plaintext, nil), nil
+	return gcm.Seal(nil, nonce, plaintext, nil)
 }
 
 // aesgcmOpen decrypts ciphertext (with appended tag) using AES-256-GCM.
 func aesgcmOpen(key, nonce, ciphertext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		panic(fmt.Sprintf("BUG: aes.NewCipher: %v", err))
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, err
+		panic(fmt.Sprintf("BUG: cipher.NewGCM: %v", err))
 	}
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {

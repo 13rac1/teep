@@ -109,10 +109,7 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ct
 		if err != nil {
 			return false, fmt.Errorf("decrypt %s.%s: %w", ctx, key, err)
 		}
-		plaintextJSON, err := json.Marshal(string(plaintext))
-		if err != nil {
-			return false, fmt.Errorf("marshal %s.%s plaintext: %w", ctx, key, err)
-		}
+		plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
 		fields[key] = plaintextJSON
 		changed = true
 	}
@@ -159,22 +156,13 @@ func DecryptSSEChunk(data string, session Decryptor) (string, error) {
 	}
 
 	// Re-serialize delta → choices[0] → choices → full.
-	deltaOut, err := json.Marshal(delta)
-	if err != nil {
-		return "", fmt.Errorf("marshal rewritten delta: %w", err)
-	}
+	deltaOut, _ := json.Marshal(delta) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	choices[0]["delta"] = deltaOut
 
-	choicesOut, err := json.Marshal(choices)
-	if err != nil {
-		return "", fmt.Errorf("marshal rewritten choices: %w", err)
-	}
+	choicesOut, _ := json.Marshal(choices) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	full["choices"] = choicesOut
 
-	out, err := json.Marshal(full)
-	if err != nil {
-		return "", fmt.Errorf("marshal rewritten chunk: %w", err)
-	}
+	out, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return string(out), nil
 }
 
@@ -302,10 +290,7 @@ func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor) (json
 			continue
 		}
 
-		msgOut, err := json.Marshal(msg)
-		if err != nil {
-			return nil, fmt.Errorf("choice[%d]: marshal rewritten message: %w", i, err)
-		}
+		msgOut, _ := json.Marshal(msg) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 		choices[i]["message"] = msgOut
 		changed = true
 	}
@@ -313,10 +298,7 @@ func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor) (json
 	if !changed {
 		return nil, nil
 	}
-	out, err := json.Marshal(choices)
-	if err != nil {
-		return nil, fmt.Errorf("marshal rewritten choices: %w", err)
-	}
+	out, _ := json.Marshal(choices) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, nil
 }
 
@@ -352,10 +334,7 @@ func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor) (json.
 			if err != nil {
 				return nil, fmt.Errorf("decrypt data[%d].%s: %w", i, field, err)
 			}
-			rewritten, err := json.Marshal(string(plaintext))
-			if err != nil {
-				return nil, fmt.Errorf("data[%d].%s: marshal plaintext: %w", i, field, err)
-			}
+			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
 			data[i][field] = rewritten
 			changed = true
 		}
@@ -364,10 +343,7 @@ func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor) (json.
 	if !changed {
 		return nil, nil
 	}
-	out, err := json.Marshal(data)
-	if err != nil {
-		return nil, fmt.Errorf("marshal rewritten image data: %w", err)
-	}
+	out, _ := json.Marshal(data) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, nil
 }
 
