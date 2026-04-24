@@ -119,10 +119,7 @@ func EncryptXChaCha20(plaintext []byte, recipientX25519Pub *ecdh.PublicKey) (str
 		return "", fmt.Errorf("x25519 ecdh: %w", err)
 	}
 
-	key, err := deriveKeyEd25519(shared)
-	if err != nil {
-		return "", fmt.Errorf("derive key: %w", err)
-	}
+	key := deriveKeyEd25519(shared)
 
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
@@ -172,10 +169,7 @@ func DecryptXChaCha20(ciphertextHex string, x25519Priv *ecdh.PrivateKey) ([]byte
 		return nil, fmt.Errorf("x25519 ecdh: %w", err)
 	}
 
-	key, err := deriveKeyEd25519(shared)
-	if err != nil {
-		return nil, fmt.Errorf("derive key: %w", err)
-	}
+	key := deriveKeyEd25519(shared)
 
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
@@ -244,19 +238,11 @@ func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *Near
 		}
 	}
 
-	messagesJSON, err := json.Marshal(messages)
-	if err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("marshal NearCloud encrypted messages: %w", err)
-	}
+	messagesJSON, _ := json.Marshal(messages) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	full["messages"] = messagesJSON
 	full["stream"] = json.RawMessage("true")
 
-	out, err := json.Marshal(full)
-	if err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("marshal NearCloud E2EE body: %w", err)
-	}
+	out, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, session, nil
 }
 
@@ -283,10 +269,7 @@ func encryptMessageContent(msg map[string]json.RawMessage, idx int, session *Nea
 	if err != nil {
 		return fmt.Errorf("encrypt NearCloud message %d: %w", idx, err)
 	}
-	ctJSON, err := json.Marshal(ct)
-	if err != nil {
-		return fmt.Errorf("marshal encrypted content %d: %w", idx, err)
-	}
+	ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
 	msg["content"] = ctJSON
 	return nil
 }
@@ -360,18 +343,10 @@ func EncryptImagePromptNearCloud(body []byte, signingKey string) ([]byte, *NearC
 		return nil, nil, fmt.Errorf("encrypt NearCloud image prompt: %w", err)
 	}
 
-	encPrompt, err := json.Marshal(ct)
-	if err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("marshal encrypted prompt: %w", err)
-	}
+	encPrompt, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
 	full["prompt"] = encPrompt
 
-	out, err := json.Marshal(full)
-	if err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("marshal NearCloud image E2EE body: %w", err)
-	}
+	out, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, session, nil
 }
 
@@ -394,13 +369,13 @@ func ValidateModelKeyEd25519(ed25519PubHex string) error {
 
 // deriveKeyEd25519 derives a 32-byte encryption key from a shared secret using
 // HKDF-SHA256 with info="ed25519_encryption" and no salt.
-func deriveKeyEd25519(sharedSecret []byte) ([]byte, error) {
+func deriveKeyEd25519(sharedSecret []byte) []byte {
 	r := hkdf.New(sha256.New, sharedSecret, nil, []byte(hkdfInfoEd25519))
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(r, key); err != nil {
-		return nil, fmt.Errorf("hkdf expand: %w", err)
+		panic(fmt.Sprintf("BUG: hkdf expand: %v", err))
 	}
-	return key, nil
+	return key
 }
 
 // ed25519SeedToX25519 derives an X25519 private key from an Ed25519 seed

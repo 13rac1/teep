@@ -367,3 +367,83 @@ func TestRelayNonStreamChutes_ReadError_ReturnsRelayFailed(t *testing.T) {
 	}
 	t.Logf("RelayNonStreamChutes read error: %v", err)
 }
+
+// noFlusherWriter wraps httptest.ResponseRecorder but does NOT implement
+// http.Flusher, so w.(http.Flusher) returns !ok.
+type noFlusherWriter struct {
+	w *httptest.ResponseRecorder
+}
+
+func (n *noFlusherWriter) Header() http.Header         { return n.w.Header() }
+func (n *noFlusherWriter) Write(b []byte) (int, error) { return n.w.Write(b) }
+func (n *noFlusherWriter) WriteHeader(code int)        { n.w.WriteHeader(code) }
+
+func TestRelayStreamChutes_NoFlusher(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+	body := strings.NewReader("data: [DONE]\n\n")
+	_, err = RelayStreamChutes(context.Background(), &noFlusherWriter{httptest.NewRecorder()}, body, session)
+	t.Logf("NoFlusher error: %v", err)
+	if !errors.Is(err, ErrRelayFailed) {
+		t.Errorf("expected ErrRelayFailed, got: %v", err)
+	}
+}
+
+func TestRelayStreamChutes_InitError(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+	// e2e_init with a too-short KEM ciphertext — DecryptStreamInitChutes will fail.
+	badKEM := base64.StdEncoding.EncodeToString([]byte("bad-kem-ciphertext"))
+	initEvent, _ := json.Marshal(map[string]string{"e2e_init": badKEM})
+	body := strings.NewReader("data: " + string(initEvent) + "\n\n")
+	rec := httptest.NewRecorder()
+	_, err = RelayStreamChutes(context.Background(), rec, body, session)
+	t.Logf("InitError: %v", err)
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("expected ErrDecryptionFailed, got: %v", err)
+	}
+}
+
+func TestRelayStreamChutes_ChunkError(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+	kemCtB64, _ := simulateServerStreamInit(t, session)
+	// Valid init event followed by a bad e2e chunk.
+	initEvent, _ := json.Marshal(map[string]string{"e2e_init": kemCtB64})
+	badChunk, _ := json.Marshal(map[string]string{"e2e": base64.StdEncoding.EncodeToString([]byte("tooshort"))})
+	body := strings.NewReader("data: " + string(initEvent) + "\n\ndata: " + string(badChunk) + "\n\n")
+	rec := httptest.NewRecorder()
+	_, err = RelayStreamChutes(context.Background(), rec, body, session)
+	t.Logf("ChunkError: %v", err)
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Errorf("expected ErrDecryptionFailed, got: %v", err)
+	}
+}
+
+func TestRelayStreamChutes_UsageWithTokens(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+	kemCtB64, streamKey := simulateServerStreamInit(t, session)
+	sse := buildChutesSSE(t, kemCtB64, streamKey, []string{`{"choices":[{"delta":{"content":"hi"}}]}`})
+	// Insert a usage event with completion_tokens > 0 before [DONE].
+	usageEvent, _ := json.Marshal(map[string]any{"usage": map[string]int{"completion_tokens": 42}})
+	sse = strings.Replace(sse, "data: [DONE]\n\n", "data: "+string(usageEvent)+"\n\ndata: [DONE]\n\n", 1)
+
+	rec := httptest.NewRecorder()
+	stats, err := RelayStreamChutes(context.Background(), rec, strings.NewReader(sse), session)
+	t.Logf("UsageWithTokens: err=%v stats=%+v", err, stats)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Tokens != 42 {
+		t.Errorf("stats.Tokens = %d, want 42", stats.Tokens)
+	}
+}

@@ -436,6 +436,17 @@ func TestNewPinnedHandler(t *testing.T) {
 	}
 }
 
+// TestSetCTChecker verifies SetCTChecker installs a custom CT checker.
+func TestSetCTChecker(t *testing.T) {
+	h := &PinnedHandler{}
+	checker := tlsct.NewChecker()
+	h.SetCTChecker(checker)
+	t.Logf("ctChecker set: %v", h.ctChecker != nil)
+	if h.ctChecker != checker {
+		t.Error("SetCTChecker did not install the provided checker")
+	}
+}
+
 // TestSetDialer verifies setDialer installs a custom dial function.
 func TestSetDialer(t *testing.T) {
 	h := &PinnedHandler{}

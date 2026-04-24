@@ -19,6 +19,24 @@ self-check: build ## Build and run self-check
 test: ## Run unit tests with race detector (-short skips integration)
 	go test -short -race ./cmd/... ./internal/...
 
+coverage: ## Generate coverage report (short mode; outputs coverage.html)
+	go test -short -race -count=1 \
+	    -coverprofile=coverage.out -covermode=atomic \
+	    -coverpkg=./cmd/...,./internal/... \
+	    ./cmd/... ./internal/...
+	go tool cover -func=coverage.out | tail -5
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage HTML written to coverage.html"
+
+coverage-full: ## Full coverage without -short (live integration tests still need API keys)
+	go test -race -count=1 \
+	    -coverprofile=coverage.out -covermode=atomic \
+	    -coverpkg=./cmd/...,./internal/... \
+	    ./cmd/... ./internal/...
+	go tool cover -func=coverage.out | tail -5
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage HTML written to coverage.html"
+
 test-live: ## Run live network tests (dials external hosts, requires internet)
 	TEEP_LIVE_TESTS=1 go test -race -v ./internal/tlsct/ -run TestLive
 

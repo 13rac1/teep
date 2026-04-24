@@ -5,6 +5,8 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 )
@@ -187,6 +189,62 @@ func TestPPIDExtraction(t *testing.T) {
 			t.Errorf("FMSPC length: got %d, want 12 hex chars", len(result.FMSPC))
 		}
 		t.Logf("FMSPC: %s", result.FMSPC)
+	}
+}
+
+// TestClientHTTPSGetter_Get verifies the Get method delegates to GetContext.
+func TestClientHTTPSGetter_Get(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Custom", "test")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("hello"))
+	}))
+	defer srv.Close()
+
+	g := &clientHTTPSGetter{client: srv.Client()}
+	headers, body, err := g.Get(srv.URL)
+	t.Logf("Get: headers=%v body=%q err=%v", headers, body, err)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if string(body) != "hello" {
+		t.Errorf("body = %q, want %q", body, "hello")
+	}
+}
+
+// TestClientHTTPSGetter_GetContext_NonOKStatus verifies that a non-2xx status
+// returns an error and discards the body.
+func TestClientHTTPSGetter_GetContext_NonOKStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("not found"))
+	}))
+	defer srv.Close()
+
+	g := &clientHTTPSGetter{client: srv.Client()}
+	_, _, err := g.GetContext(context.Background(), srv.URL)
+	t.Logf("GetContext(404): err=%v", err)
+	if err == nil {
+		t.Error("expected error for non-2xx status, got nil")
+	}
+}
+
+// TestClientHTTPSGetter_GetContext_BodyTooLarge verifies that an oversized
+// response body returns an error.
+func TestClientHTTPSGetter_GetContext_BodyTooLarge(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Write maxPCSResponseSize+2 bytes to trigger the size check.
+		w.WriteHeader(http.StatusOK)
+		buf := make([]byte, maxPCSResponseSize+2)
+		_, _ = w.Write(buf)
+	}))
+	defer srv.Close()
+
+	g := &clientHTTPSGetter{client: srv.Client()}
+	_, _, err := g.GetContext(context.Background(), srv.URL)
+	t.Logf("GetContext(too large): err=%v", err)
+	if err == nil {
+		t.Error("expected error for oversized body, got nil")
 	}
 }
 

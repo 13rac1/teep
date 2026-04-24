@@ -2882,6 +2882,21 @@ func TestNewUnknownProviderError(t *testing.T) {
 	}
 }
 
+func TestNew_NoProviders(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers:  map[string]*config.Provider{},
+	}
+	_, err := proxy.New(cfg)
+	t.Logf("New(no providers) err: %v", err)
+	if err == nil {
+		t.Fatal("expected error for empty providers, got nil")
+	}
+	if !strings.Contains(err.Error(), "no providers configured") {
+		t.Errorf("error should mention no providers: %v", err)
+	}
+}
+
 // --------------------------------------------------------------------------
 // PrepareUpstreamHeaders
 // --------------------------------------------------------------------------
@@ -4274,5 +4289,60 @@ func TestRespStatusCode_NonNil(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusOK}
 	if got := proxy.RespStatusCode(resp); got != http.StatusOK {
 		t.Errorf("RespStatusCode(200 resp) = %d, want 200", got)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Dashboard routes: GET / and GET /events
+// --------------------------------------------------------------------------
+
+func TestDashboardIndex(t *testing.T) {
+	attestSrv := makeAttestationServer(t, false)
+	defer attestSrv.Close()
+
+	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
+	defer proxySrv.Close()
+
+	resp, err := http.Get(proxySrv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	t.Logf("GET /: status=%d content-type=%s", resp.StatusCode, resp.Header.Get("Content-Type"))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html", ct)
+	}
+}
+
+func TestDashboardEvents(t *testing.T) {
+	attestSrv := makeAttestationServer(t, false)
+	defer attestSrv.Close()
+
+	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
+	defer proxySrv.Close()
+
+	// Use a short-lived context to cancel the SSE stream after reading first bytes.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxySrv.URL+"/events", http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil && ctx.Err() == nil {
+		// Only fatal if the error isn't due to context cancellation.
+		t.Fatalf("GET /events: %v", err)
+	}
+	if resp != nil {
+		t.Logf("GET /events: status=%d content-type=%s", resp.StatusCode, resp.Header.Get("Content-Type"))
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want 200", resp.StatusCode)
+		}
 	}
 }

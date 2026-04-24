@@ -423,10 +423,7 @@ func TestDeriveKeyEd25519(t *testing.T) {
 		t.Fatalf("rand.Read: %v", err)
 	}
 
-	key, err := deriveKeyEd25519(secret)
-	if err != nil {
-		t.Fatalf("deriveKeyEd25519: %v", err)
-	}
+	key := deriveKeyEd25519(secret)
 	t.Logf("derived key: %d bytes, hex=%s", len(key), hex.EncodeToString(key[:8]))
 
 	if len(key) != 32 {
@@ -434,10 +431,7 @@ func TestDeriveKeyEd25519(t *testing.T) {
 	}
 
 	// Same input should produce same output (deterministic).
-	key2, err := deriveKeyEd25519(secret)
-	if err != nil {
-		t.Fatalf("deriveKeyEd25519 (2nd call): %v", err)
-	}
+	key2 := deriveKeyEd25519(secret)
 	if !bytes.Equal(key, key2) {
 		t.Error("expected deterministic output from HKDF")
 	}

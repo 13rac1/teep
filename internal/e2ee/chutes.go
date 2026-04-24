@@ -114,18 +114,10 @@ func EncryptChatRequestChutes(body []byte, modelPubKeyBase64 string) ([]byte, *C
 		session.Zero()
 		return nil, nil, fmt.Errorf("parse body for Chutes E2EE: %w", err)
 	}
-	clientPubJSON, err := json.Marshal(session.MLKEMClientPubKeyBase64())
-	if err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("marshal Chutes client pubkey: %w", err)
-	}
+	clientPubJSON, _ := json.Marshal(session.MLKEMClientPubKeyBase64()) //nolint:errchkjson // strings always marshal
 	full["e2e_response_pk"] = clientPubJSON
 
-	enrichedBody, err := json.Marshal(full)
-	if err != nil {
-		session.Zero()
-		return nil, nil, fmt.Errorf("marshal Chutes enriched body: %w", err)
-	}
+	enrichedBody, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 
 	// Gzip + ChaCha20-Poly1305 encrypt.
 	encrypted, err := encryptPayloadChaCha20(enrichedBody, requestKey)
@@ -152,7 +144,7 @@ func decryptPayloadChaCha20(encrypted, key []byte) ([]byte, error) {
 
 	aead, err := chacha20poly1305.New(key)
 	if err != nil {
-		return nil, fmt.Errorf("create chacha20: %w", err)
+		panic(fmt.Sprintf("BUG: chacha20poly1305.New: %v", err))
 	}
 
 	nonce := encrypted[:nonceSize]
@@ -204,7 +196,7 @@ func DecryptStreamChunkChutes(encrypted, streamKey []byte) ([]byte, error) {
 
 	aead, err := chacha20poly1305.New(streamKey)
 	if err != nil {
-		return nil, fmt.Errorf("stream chacha20: %w", err)
+		panic(fmt.Sprintf("BUG: chacha20poly1305.New: %v", err))
 	}
 
 	nonce := encrypted[:nonceSize]
@@ -247,7 +239,7 @@ func deriveKeyMLKEM(sharedSecret, ciphertext []byte, info string) ([]byte, error
 	r := hkdf.New(sha256.New, sharedSecret, salt, []byte(info))
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(r, key); err != nil {
-		return nil, fmt.Errorf("hkdf expand: %w", err)
+		panic(fmt.Sprintf("BUG: hkdf expand: %v", err))
 	}
 	return key, nil
 }
@@ -257,16 +249,12 @@ func deriveKeyMLKEM(sharedSecret, ciphertext []byte, info string) ([]byte, error
 func encryptPayloadChaCha20(plaintext, key []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
-	if _, err := gz.Write(plaintext); err != nil {
-		return nil, fmt.Errorf("gzip write: %w", err)
-	}
-	if err := gz.Close(); err != nil {
-		return nil, fmt.Errorf("gzip close: %w", err)
-	}
+	_, _ = gz.Write(plaintext)
+	_ = gz.Close()
 
 	aead, err := chacha20poly1305.New(key)
 	if err != nil {
-		return nil, fmt.Errorf("create chacha20: %w", err)
+		panic(fmt.Sprintf("BUG: chacha20poly1305.New: %v", err))
 	}
 
 	nonce := make([]byte, chacha20poly1305.NonceSize) // 12 bytes

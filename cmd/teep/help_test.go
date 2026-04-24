@@ -291,3 +291,11 @@ func TestRunHelp_UnknownTopic(t *testing.T) {
 		t.Error("runHelp(nonexistent) should print overview as fallback")
 	}
 }
+
+func TestRunHelp_SelfCheck(t *testing.T) {
+	out := captureStdout(t, func() { runHelp([]string{"self-check"}) })
+	t.Logf("runHelp(self-check) output length: %d", len(out))
+	if !strings.Contains(out, "self-check") {
+		t.Error("runHelp(self-check) should print self-check help")
+	}
+}

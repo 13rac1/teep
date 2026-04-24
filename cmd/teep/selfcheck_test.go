@@ -529,3 +529,15 @@ func TestShortCommit_Exact12(t *testing.T) {
 		t.Errorf("shortCommit(exact12) = %q, want %q", got, "abcdef123456")
 	}
 }
+
+func TestBuildSelfCheckReport_EmptyVersion(t *testing.T) {
+	orig := Version
+	Version = ""
+	t.Cleanup(func() { Version = orig })
+
+	report := buildSelfCheckReport(nil, false)
+	t.Logf("model with empty Version: %q", report.Model)
+	if report.Model != "dev" {
+		t.Errorf("expected model=%q when Version is empty, got %q", "dev", report.Model)
+	}
+}

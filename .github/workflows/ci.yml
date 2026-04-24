@@ -30,7 +30,7 @@ jobs:
         run: make lint
 
       - name: Run tests with coverage
-        run: go test -short -race -coverprofile=coverage.out ./cmd/... ./internal/...
+        run: make coverage
 
       - name: Run octocov
         uses: k1LoW/octocov-action@v1

@@ -1,0 +1,26 @@
+{
+  "method": "POST",
+  "url": "https://rekor.sigstore.dev/api/v1/index/retrieve",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "headers": {
+    "Alt-Svc": [
+      "h3=\":443\"; ma=2592000"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Fri, 24 Apr 2026 02:06:07 GMT"
+    ],
+    "Vary": [
+      "Origin"
+    ],
+    "Via": [
+      "1.1 google"
+    ]
+  },
+  "req_body_base64": "eyJoYXNoIjoic2hhMjU2OjRiN2NlMDcwMDJjNjllOGYzZDcwNGE5YzVkNmZkMzA1M2JlNTAwYjdmMWM2OWZjMGQ4MDk5MGMyYWQ4ZGQ0MTIifQ=="
+}

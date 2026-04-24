@@ -266,3 +266,36 @@ func TestUpdateConfigCreatesParentDir(t *testing.T) {
 		t.Errorf("parent dir permissions = %o, want 700", perm)
 	}
 }
+
+// TestUpdateConfigEmptyPath verifies that UpdateConfig with empty path writes
+// TOML to stdout (used by the --dry-run / no-file workflow).
+func TestUpdateConfigEmptyPath(t *testing.T) {
+	// Capture stdout so the TOML output doesn't pollute test logs.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+
+	obs := ObservedMeasurements{MRSeam: strings.Repeat("ab", 48)}
+	updateErr := UpdateConfig("", "venice", &obs)
+
+	w.Close()
+	os.Stdout = orig
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+	r.Close()
+
+	t.Logf("UpdateConfig(empty path) error: %v", updateErr)
+	t.Logf("stdout: %s", buf.String())
+	if updateErr != nil {
+		t.Errorf("UpdateConfig with empty path returned error: %v", updateErr)
+	}
+	if !strings.Contains(buf.String(), "mrseam_allow") {
+		t.Error("expected TOML output to contain mrseam_allow")
+	}
+}

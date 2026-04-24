@@ -1,0 +1,28 @@
+{
+  "method": "GET",
+  "url": "https://qwen35-122b.completions.near.ai/v1/attestation/report?include_tls_fingerprint=true\u0026nonce=e74ad18b4223d48246f177649c815af8dcbb44ed4ffe1c98b8c7daaf6b5f775c\u0026signing_algo=ed25519",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "headers": {
+    "Connection": [
+      "keep-alive"
+    ],
+    "Content-Length": [
+      "322708"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Fri, 24 Apr 2026 02:10:30 GMT"
+    ],
+    "Server": [
+      "nginx/1.29.5"
+    ],
+    "X-Request-Id": [
+      "cd023e79-ff24-4591-9bc2-14e4915c86ba"
+    ]
+  }
+}

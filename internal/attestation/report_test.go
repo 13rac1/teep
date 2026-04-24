@@ -3548,6 +3548,346 @@ func TestEvalGatewayTDXParseDependent_Errors(t *testing.T) {
 	}
 }
 
+// --------------------------------------------------------------------------
+// validateSecp256k1Hex — invalid hex branch
+// --------------------------------------------------------------------------
+
+func TestValidateSecp256k1Hex_InvalidHex(t *testing.T) {
+	// 130 chars starting with "04" (correct prefix/length) but non-hex chars.
+	s := "04" + strings.Repeat("g", 128)
+	err := validateSecp256k1Hex(s)
+	t.Logf("validateSecp256k1Hex(non-hex chars): err=%v", err)
+	if err == nil {
+		t.Error("expected error for non-hex chars in secp256k1 key")
+	}
+}
+
+// --------------------------------------------------------------------------
+// containsFold — empty value branch
+// --------------------------------------------------------------------------
+
+func TestContainsFold_EmptyValue(t *testing.T) {
+	got := containsFold("", []string{"allowed"})
+	t.Logf("containsFold(empty): %v", got)
+	if got {
+		t.Error("expected false for empty value")
+	}
+}
+
+// --------------------------------------------------------------------------
+// nrasDiagDetail — more-than-8-GPUs branch
+// --------------------------------------------------------------------------
+
+func TestNrasDiagDetail_ManyGPUs(t *testing.T) {
+	// 9 GPUs with distinct errors (so allSameError returns false) →
+	// triggers the "... and N more GPUs" branch when i >= 8.
+	diags := make([]NRASGPUDiag, 9)
+	for i := range diags {
+		diags[i] = NRASGPUDiag{
+			GPUID:        "GPU-" + strings.Repeat("x", i+1),
+			ErrorDetails: strings.Repeat("error", i+1), // each GPU has a different error
+		}
+	}
+	result := nrasDiagDetail(&NvidiaVerifyResult{GPUDiags: diags})
+	t.Logf("nrasDiagDetail(9 GPUs): %q", result)
+	if !strings.Contains(result, "more GPU") {
+		t.Errorf("expected 'more GPU' in result, got: %q", result)
+	}
+}
+
+// --------------------------------------------------------------------------
+// evalTDXTCBCurrent — missing branches
+// --------------------------------------------------------------------------
+
+// TestEvalTDXTCBCurrent_OutOfDateWithAdvisories covers the AdvisoryIDs branch
+// inside the OutOfDate/Revoked case (L790-792 of report.go).
+func TestEvalTDXTCBCurrent_OutOfDateWithAdvisories(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+	tdx := &TDXVerifyResult{
+		TeeTCBSVN:   make([]byte, 16),
+		TcbStatus:   "OutOfDate",
+		AdvisoryIDs: []string{"INTEL-SA-00615"},
+	}
+	f := assertSingleFactor(t, evalTDXTCBCurrent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx}), Fail)
+	t.Logf("detail: %s", f.Detail)
+	if !strings.Contains(f.Detail, "INTEL-SA-00615") {
+		t.Errorf("detail should contain advisory ID: %s", f.Detail)
+	}
+}
+
+// TestEvalTDXTCBCurrent_CollateralErrFallthrough covers L795-799: TcbStatus
+// is empty but CollateralErr is set → Skip with error detail.
+func TestEvalTDXTCBCurrent_CollateralErrFallthrough(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+	tdx := &TDXVerifyResult{
+		TeeTCBSVN:     []byte{0x07, 0x01},
+		CollateralErr: errors.New("pcs timeout"),
+	}
+	f := assertSingleFactor(t, evalTDXTCBCurrent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx}), Skip)
+	t.Logf("detail: %s", f.Detail)
+	if !strings.Contains(f.Detail, "pcs timeout") {
+		t.Errorf("detail should contain error: %s", f.Detail)
+	}
+}
+
+// --------------------------------------------------------------------------
+// evalNvidiaPayloadPresent — GPUEvidence path
+// --------------------------------------------------------------------------
+
+// TestEvalNvidiaPayloadPresent_GPUEvidence covers L826-828: GPUEvidence is
+// non-empty and NvidiaPayload is absent → Pass for SPDM format.
+func TestEvalNvidiaPayloadPresent_GPUEvidence(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+	raw.GPUEvidence = []GPUEvidence{{Certificate: "abc", Evidence: "def", Arch: "HOPPER"}}
+	f := assertSingleFactor(t, evalNvidiaPayloadPresent(&ReportInput{Raw: raw}), Pass)
+	t.Logf("detail: %s", f.Detail)
+	if !strings.Contains(f.Detail, "SPDM") {
+		t.Errorf("detail should mention SPDM format: %s", f.Detail)
+	}
+}
+
+// --------------------------------------------------------------------------
+// evalNvidiaSignature, evalNvidiaClaims, evalNvidiaClientNonceBound:
+// Nvidia == nil but payload present → Fail/Skip
+// --------------------------------------------------------------------------
+
+// TestEvalNvidiaSignature_NilNvidiaWithPayload covers L836: Nvidia=nil but
+// NvidiaPayload is present → Fail (verification was not attempted).
+func TestEvalNvidiaSignature_NilNvidiaWithPayload(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+	raw.NvidiaPayload = `{"evidence_list":[]}`
+	f := assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw, Nvidia: nil}), Fail)
+	t.Logf("detail: %s", f.Detail)
+	if !strings.Contains(f.Detail, "not attempted") {
+		t.Errorf("detail should mention not attempted: %s", f.Detail)
+	}
+}
+
+// TestEvalNvidiaClaims_NilNvidiaWithPayload covers L848: Nvidia=nil but
+// NvidiaPayload is present → Fail (verification was not attempted).
+func TestEvalNvidiaClaims_NilNvidiaWithPayload(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+	raw.NvidiaPayload = `{"evidence_list":[]}`
+	f := assertSingleFactor(t, evalNvidiaClaims(&ReportInput{Raw: raw, Nvidia: nil}), Fail)
+	t.Logf("detail: %s", f.Detail)
+	if !strings.Contains(f.Detail, "not attempted") {
+		t.Errorf("detail should mention not attempted: %s", f.Detail)
+	}
+}
+
+// TestEvalNvidiaClientNonceBound_NilNvidiaWithPayload covers L860: Nvidia=nil
+// but NvidiaPayload is present → Skip (verification not attempted).
+func TestEvalNvidiaClientNonceBound_NilNvidiaWithPayload(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	raw := buildMinimalRaw(nonce, sigKey)
+	raw.NvidiaPayload = `{"evidence_list":[]}`
+	f := assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nil}), Skip)
+	t.Logf("detail: %s", f.Detail)
+	if !strings.Contains(f.Detail, "not attempted") {
+		t.Errorf("detail should mention not attempted: %s", f.Detail)
+	}
+}
+
+// --------------------------------------------------------------------------
+// nrasDiagDetail — default branch
+// --------------------------------------------------------------------------
+
+// TestNrasDiagDetail_NoClaimsGPU covers the default branch (L921-922) when
+// a GPU has neither ErrorDetails nor MeasRes.
+func TestNrasDiagDetail_NoClaimsGPU(t *testing.T) {
+	diags := []NRASGPUDiag{{GPUID: "GPU-00000001"}} // no ErrorDetails, no MeasRes
+	result := nrasDiagDetail(&NvidiaVerifyResult{GPUDiags: diags})
+	t.Logf("nrasDiagDetail(no claims GPU): %q", result)
+	if !strings.Contains(result, "no diagnostic claims") {
+		t.Errorf("expected 'no diagnostic claims' in result, got: %q", result)
+	}
+}
+
+// --------------------------------------------------------------------------
+// rekorProvenanceResult — Fulcio and Sigstore error paths
+// --------------------------------------------------------------------------
+
+// TestRekorProvenanceResult_FulcioSETErr covers L1214-1217: rekorFulcio case
+// with SETErr set → Fail.
+func TestRekorProvenanceResult_FulcioSETErr(t *testing.T) {
+	raw := buildMinimalRaw(NewNonce(), validSigningKey(t))
+	in := &ReportInput{
+		Raw: raw,
+		Rekor: []RekorProvenance{{
+			HasCert:    true,
+			OIDCIssuer: "https://token.actions.githubusercontent.com",
+			SourceRepo: "example/app",
+			SETErr:     errors.New("SET parse failed"),
+		}},
+		DigestToRepo: map[string]string{"": "example/app"},
+	}
+	result := rekorProvenanceResult(in, nil)
+	t.Logf("result: %+v", result)
+	if result.Status != Fail {
+		t.Errorf("status = %v, want Fail", result.Status)
+	}
+	if !strings.Contains(result.Detail, "SET verification failed") {
+		t.Errorf("detail should mention SET: %s", result.Detail)
+	}
+}
+
+// TestRekorProvenanceResult_FulcioInclusionErr covers L1218-1221: rekorFulcio
+// case with InclusionErr set → Fail.
+func TestRekorProvenanceResult_FulcioInclusionErr(t *testing.T) {
+	raw := buildMinimalRaw(NewNonce(), validSigningKey(t))
+	in := &ReportInput{
+		Raw: raw,
+		Rekor: []RekorProvenance{{
+			HasCert:      true,
+			OIDCIssuer:   "https://token.actions.githubusercontent.com",
+			SourceRepo:   "example/app",
+			SETVerified:  true,
+			InclusionErr: errors.New("inclusion proof failed"),
+		}},
+		DigestToRepo: map[string]string{"": "example/app"},
+	}
+	result := rekorProvenanceResult(in, nil)
+	t.Logf("result: %+v", result)
+	if result.Status != Fail {
+		t.Errorf("status = %v, want Fail", result.Status)
+	}
+	if !strings.Contains(result.Detail, "inclusion proof") {
+		t.Errorf("detail should mention inclusion proof: %s", result.Detail)
+	}
+}
+
+// TestRekorProvenanceResult_SigstoreSETErr covers L1233-1236: rekorSigstore
+// case with SETErr set → Fail.
+func TestRekorProvenanceResult_SigstoreSETErr(t *testing.T) {
+	raw := buildMinimalRaw(NewNonce(), validSigningKey(t))
+	in := &ReportInput{
+		Raw: raw,
+		Rekor: []RekorProvenance{{
+			HasCert: false,
+			SETErr:  errors.New("sigstore SET failed"),
+		}},
+		DigestToRepo: map[string]string{"": "example/app"},
+	}
+	result := rekorProvenanceResult(in, nil)
+	t.Logf("result: %+v", result)
+	if result.Status != Fail {
+		t.Errorf("status = %v, want Fail", result.Status)
+	}
+}
+
+// TestRekorProvenanceResult_SigstoreInclusionErr covers L1241-1244:
+// rekorSigstore case with InclusionErr set → Fail.
+func TestRekorProvenanceResult_SigstoreInclusionErr(t *testing.T) {
+	raw := buildMinimalRaw(NewNonce(), validSigningKey(t))
+	in := &ReportInput{
+		Raw: raw,
+		Rekor: []RekorProvenance{{
+			HasCert:      false,
+			SETVerified:  true,
+			InclusionErr: errors.New("merkle proof failed"),
+		}},
+		DigestToRepo: map[string]string{"": "example/app"},
+	}
+	result := rekorProvenanceResult(in, nil)
+	t.Logf("result: %+v", result)
+	if result.Status != Fail {
+		t.Errorf("status = %v, want Fail", result.Status)
+	}
+}
+
+// TestRekorProvenanceResult_SigstoreNotInclusionVerified covers L1245-1248:
+// rekorSigstore case where InclusionVerified is false → Fail.
+func TestRekorProvenanceResult_SigstoreNotInclusionVerified(t *testing.T) {
+	raw := buildMinimalRaw(NewNonce(), validSigningKey(t))
+	in := &ReportInput{
+		Raw: raw,
+		Rekor: []RekorProvenance{{
+			HasCert:           false,
+			SETVerified:       true,
+			InclusionVerified: false,
+		}},
+		DigestToRepo: map[string]string{"": "example/app"},
+	}
+	result := rekorProvenanceResult(in, nil)
+	t.Logf("result: %+v", result)
+	if result.Status != Fail {
+		t.Errorf("status = %v, want Fail", result.Status)
+	}
+}
+
+// --------------------------------------------------------------------------
+// verifyFulcioEntry — missing branches
+// --------------------------------------------------------------------------
+
+// TestVerifyFulcioEntry_NonFulcioCert covers L1264-1266: entry has a
+// non-Fulcio X.509 certificate (HasNonFulcioCert=true, HasCert=false).
+func TestVerifyFulcioEntry_NonFulcioCert(t *testing.T) {
+	img := &ImageProvenance{
+		OIDCIssuer:  "https://token.actions.githubusercontent.com",
+		SourceRepos: []string{"example/app"},
+	}
+	r := &RekorProvenance{HasNonFulcioCert: true}
+	detail, failed := verifyFulcioEntry(r, img, "example/app")
+	t.Logf("detail: %s, failed: %v", detail, failed)
+	if !failed {
+		t.Error("expected failure for non-Fulcio cert")
+	}
+	if !strings.Contains(detail, "non-Fulcio") {
+		t.Errorf("detail should mention non-Fulcio: %s", detail)
+	}
+}
+
+// TestVerifyFulcioEntry_NoCert covers L1267-1269: entry has no certificate
+// at all (HasCert=false, HasNonFulcioCert=false).
+func TestVerifyFulcioEntry_NoCert(t *testing.T) {
+	img := &ImageProvenance{
+		OIDCIssuer:  "https://token.actions.githubusercontent.com",
+		SourceRepos: []string{"example/app"},
+	}
+	r := &RekorProvenance{}
+	detail, failed := verifyFulcioEntry(r, img, "example/app")
+	t.Logf("detail: %s, failed: %v", detail, failed)
+	if !failed {
+		t.Error("expected failure for no certificate")
+	}
+	if !strings.Contains(detail, "raw key") {
+		t.Errorf("detail should mention raw key: %s", detail)
+	}
+}
+
+// TestVerifyFulcioEntry_OIDCIssuerMismatch covers L1273-1275: OIDC issuer
+// mismatch between the entry and the policy image.
+func TestVerifyFulcioEntry_OIDCIssuerMismatch(t *testing.T) {
+	img := &ImageProvenance{
+		OIDCIssuer:  "https://token.actions.githubusercontent.com",
+		SourceRepos: []string{"example/app"},
+	}
+	r := &RekorProvenance{
+		HasCert:    true,
+		OIDCIssuer: "https://unexpected.issuer.example.com",
+		SourceRepo: "example/app",
+	}
+	detail, failed := verifyFulcioEntry(r, img, "example/app")
+	t.Logf("detail: %s, failed: %v", detail, failed)
+	if !failed {
+		t.Error("expected failure for OIDC issuer mismatch")
+	}
+	if !strings.Contains(detail, "unexpected OIDC issuer") {
+		t.Errorf("detail should mention unexpected OIDC issuer: %s", detail)
+	}
+}
+
 func TestE2EEKeyType(t *testing.T) {
 	cases := []struct {
 		name string

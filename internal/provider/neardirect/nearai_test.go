@@ -2,6 +2,7 @@ package neardirect_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,16 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
+
+// makeAttestationEntry builds one JSON attestation entry with the given model name.
+func makeAttestationEntry(modelName string) string {
+	const key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	return fmt.Sprintf(
+		`{"model_name":%q,"intel_quote":"dA==","nvidia_payload":"j","signing_public_key":%q}`,
+		modelName,
+		key,
+	)
+}
 
 // validFlatResponseJSON simulates the flat (non-array) response form.
 const validFlatResponseJSON = `{
@@ -459,4 +470,92 @@ func TestAttester_SetClient(t *testing.T) {
 	a := neardirect.NewAttester("https://api.near.ai", "key")
 	a.SetClient(&http.Client{})
 	t.Log("SetClient accepted non-nil client")
+}
+
+func TestParseAttestationResponse_TooManyAllAttestations(t *testing.T) {
+	t.Logf("testing ParseAttestationResponse with more than maxAttestationEntries (256) all_attestations entries")
+	// Build 257 entries to exceed maxAttestationEntries (256).
+	var sb strings.Builder
+	for i := range 257 {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(makeAttestationEntry(fmt.Sprintf("model-%d", i)))
+	}
+	body := fmt.Sprintf(`{"verified":true,"all_attestations":[%s]}`, sb.String())
+
+	_, err := neardirect.ParseAttestationResponse(context.Background(), []byte(body), "model-0")
+	t.Logf("too-many-all_attestations error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for too many all_attestations entries")
+	}
+	if !strings.Contains(err.Error(), "all_attestations") {
+		t.Errorf("error = %q, want message containing 'all_attestations'", err)
+	}
+}
+
+func TestParseAttestationResponse_TooManyModelAttestations(t *testing.T) {
+	t.Logf("testing ParseAttestationResponse with more than maxAttestationEntries (256) model_attestations entries")
+	// Build 257 entries to exceed maxAttestationEntries (256).
+	var sb strings.Builder
+	for i := range 257 {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(makeAttestationEntry(fmt.Sprintf("model-%d", i)))
+	}
+	body := fmt.Sprintf(`{"verified":true,"model_attestations":[%s]}`, sb.String())
+
+	_, err := neardirect.ParseAttestationResponse(context.Background(), []byte(body), "model-0")
+	t.Logf("too-many-model_attestations error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for too many model_attestations entries")
+	}
+	if !strings.Contains(err.Error(), "model_attestations") {
+		t.Errorf("error = %q, want message containing 'model_attestations'", err)
+	}
+}
+
+// mockResolver implements neardirect.DomainResolver for testing.
+type mockResolver struct {
+	domain string
+	err    error
+}
+
+func (m *mockResolver) Resolve(_ context.Context, _ string) (string, error) {
+	return m.domain, m.err
+}
+
+func TestAttester_FetchAttestation_ResolverError(t *testing.T) {
+	// Use api.near.ai as the base URL so shouldResolveModelDomain returns true,
+	// then inject a resolver that always fails — covering the error branch.
+	attester := neardirect.NewAttesterWithResolver(
+		"https://api.near.ai", "test-key",
+		&mockResolver{err: errors.New("resolver down")},
+	)
+	_, err := attester.FetchAttestation(context.Background(), "some-model", attestation.NewNonce())
+	t.Logf("ResolverError: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "resolve model") {
+		t.Errorf("expected resolver error, got: %v", err)
+	}
+}
+
+func TestAttester_FetchAttestation_ResolverSuccess(t *testing.T) {
+	// Resolver returns a local test server domain — covering the success branch.
+	srv := makeServer(t, http.StatusOK, makeAttestationEntry("some-model"))
+	defer srv.Close()
+
+	host := strings.TrimPrefix(srv.URL, "http://")
+	attester := neardirect.NewAttesterWithResolver(
+		"https://api.near.ai", "test-key",
+		&mockResolver{domain: host},
+	)
+	attester.SetClient(srv.Client())
+	_, err := attester.FetchAttestation(context.Background(), "some-model", attestation.NewNonce())
+	t.Logf("ResolverSuccess: %v", err)
+	// The request goes to http:// but we set https:// scheme after resolve,
+	// so a TLS error or parse result is expected — not a resolver error.
+	if err != nil && strings.Contains(err.Error(), "resolve model") {
+		t.Errorf("should not be a resolver error: %v", err)
+	}
 }

@@ -1,0 +1,11 @@
+{
+  "provider": "venice",
+  "model": "e2ee-qwen3-5-122b-a10b",
+  "nonce_hex": "ac82eb750ec4cfbb273f90d33567776bfae8657e2a43f6dff2f3adad9b86095a",
+  "captured_at": "2026-04-24T01:58:41.564682Z",
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE venice: 390 encrypted fields decrypted across 393 chunks",
+    "key_type": "ecdsa"
+  }
+}

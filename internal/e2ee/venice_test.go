@@ -29,21 +29,15 @@ func mustPrivKey(t *testing.T, hexScalar string) *secp256k1.PrivateKey {
 // encryptWithFixedEphemeral is a test-only variant of EncryptVenice that uses a
 // caller-supplied ephemeral private key instead of a random one. This makes
 // the output deterministic for cross-language test vector validation.
-func encryptWithFixedEphemeral(plaintext []byte, recipientPubKey *secp256k1.PublicKey, ephemeralPriv *secp256k1.PrivateKey, nonce []byte) (string, error) {
-	aesKey, err := deriveKeyVenice(ephemeralPriv, recipientPubKey)
-	if err != nil {
-		return "", err
-	}
-	ciphertext, err := aesgcmSeal(aesKey, nonce, plaintext)
-	if err != nil {
-		return "", err
-	}
+func encryptWithFixedEphemeral(plaintext []byte, recipientPubKey *secp256k1.PublicKey, ephemeralPriv *secp256k1.PrivateKey, nonce []byte) string {
+	aesKey := deriveKeyVenice(ephemeralPriv, recipientPubKey)
+	ciphertext := aesgcmSeal(aesKey, nonce, plaintext)
 	ephemeralPub := ephemeralPriv.PubKey().SerializeUncompressed()
 	wire := make([]byte, 0, 65+12+len(ciphertext))
 	wire = append(wire, ephemeralPub...)
 	wire = append(wire, nonce...)
 	wire = append(wire, ciphertext...)
-	return hex.EncodeToString(wire), nil
+	return hex.EncodeToString(wire)
 }
 
 // ---- fixed test key scalars -------------------------------------------------
@@ -154,10 +148,7 @@ func TestVeniceDeterministicVector(t *testing.T) {
 	nonce := testNonce()
 	plaintext := []byte("cross-language test vector")
 
-	got, err := encryptWithFixedEphemeral(plaintext, recipientPriv.PubKey(), ephemeralPriv, nonce)
-	if err != nil {
-		t.Fatalf("encryptWithFixedEphemeral: %v", err)
-	}
+	got := encryptWithFixedEphemeral(plaintext, recipientPriv.PubKey(), ephemeralPriv, nonce)
 
 	// Verify the wire format structure before checking the full hex.
 	raw, err := hex.DecodeString(got)
@@ -508,20 +499,27 @@ func TestModelPubKey(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAesgcmSeal_BadKeySize(t *testing.T) {
-	// AES requires 16, 24, or 32 byte keys — 7 bytes triggers an error.
-	_, err := aesgcmSeal(make([]byte, 7), make([]byte, 12), []byte("data"))
-	if err == nil {
-		t.Error("expected error for bad AES key size")
-	}
-	t.Logf("aesgcmSeal bad key: %v", err)
+	// AES requires 16, 24, or 32 byte keys — 7 bytes is a bug, must panic.
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Error("expected panic for bad AES key size")
+		}
+		t.Logf("aesgcmSeal bad key panic: %v", r)
+	}()
+	aesgcmSeal(make([]byte, 7), make([]byte, 12), []byte("data"))
 }
 
 func TestAesgcmOpen_BadKeySize(t *testing.T) {
-	_, err := aesgcmOpen(make([]byte, 7), make([]byte, 12), []byte("ciphertext"))
-	if err == nil {
-		t.Error("expected error for bad AES key size")
-	}
-	t.Logf("aesgcmOpen bad key: %v", err)
+	// AES requires 16, 24, or 32 byte keys — 7 bytes is a bug, must panic.
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Error("expected panic for bad AES key size")
+		}
+		t.Logf("aesgcmOpen bad key panic: %v", r)
+	}()
+	aesgcmOpen(make([]byte, 7), make([]byte, 12), []byte("ciphertext"))
 }
 
 func TestAesgcmOpen_AuthFail(t *testing.T) {
