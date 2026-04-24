@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -278,6 +280,53 @@ func TestDialAddr_EmptyServerName(t *testing.T) {
 	_, err := tlsct.DialAddr(context.Background(), "", "127.0.0.1:443")
 	if err == nil {
 		t.Fatal("expected error for empty serverName")
+	}
+}
+
+func TestDialAddr_NoDeadline_AddsDefaultTimeout(t *testing.T) {
+	// context.Background() has no deadline — DialAddr should add DefaultDialTimeout internally.
+	// The connection attempt to port 1 will be refused quickly, exercising lines 107-111.
+	_, err := tlsct.DialAddr(context.Background(), "example.com", "127.0.0.1:1")
+	t.Logf("DialAddr(no deadline) error: %v", err)
+	if err == nil {
+		t.Fatal("expected connection refused error")
+	}
+}
+
+func TestConn_ReadWrite(t *testing.T) {
+	// Set up a TLS echo server.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Echo request body back in response.
+		io.Copy(w, r.Body)
+	}))
+	defer srv.Close()
+
+	// Dial and wrap as tlsct.Conn.
+	tc := dialTestServer(t, srv)
+	conn, err := tlsct.NewConn(tc)
+	if err != nil {
+		t.Fatalf("NewConn: %v", err)
+	}
+	defer conn.Close()
+
+	// Write some bytes directly through the Conn (sends raw TLS data).
+	// We can't write HTTP framing easily, so just verify Write doesn't error
+	// on the first write attempt (the server won't parse it as HTTP but the
+	// Write/Read methods on the Conn are exercised).
+	msg := []byte("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+	n, writeErr := conn.Write(msg)
+	t.Logf("Write(%d bytes): n=%d err=%v", len(msg), n, writeErr)
+	if writeErr != nil {
+		t.Fatalf("Write: %v", writeErr)
+	}
+
+	// Read the response (server will return something or close).
+	buf := make([]byte, 256)
+	n, readErr := conn.Read(buf)
+	t.Logf("Read: n=%d err=%v", n, readErr)
+	// Read should return data, EOF, or a closed-connection error — all acceptable.
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, net.ErrClosed) {
+		t.Fatalf("Read unexpected error: %v", readErr)
 	}
 }
 

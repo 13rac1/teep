@@ -3,6 +3,7 @@ package capture
 import (
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -693,6 +694,88 @@ func TestSaveAndLoad_ErrorOmittedWhenEmpty(t *testing.T) {
 	t.Logf("manifest JSON: %s", data)
 	if strings.Contains(string(data), `"error"`) {
 		t.Errorf("manifest JSON should omit 'error' field when empty, got: %s", data)
+	}
+}
+
+func TestRecordingTransport_BaseError(t *testing.T) {
+	t.Logf("testing RecordingTransport where base transport returns an error")
+	base := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return nil, errors.New("transport error")
+	})
+
+	rec := WrapRecording(base)
+	req, err := http.NewRequest(http.MethodGet, "https://api.example.com/data", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := rec.RoundTrip(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	t.Logf("base error result: resp=%v err=%v", resp, err)
+	if err == nil {
+		t.Fatal("expected error from base transport, got nil")
+	}
+	if !strings.Contains(err.Error(), "transport error") {
+		t.Errorf("error = %q, want 'transport error'", err)
+	}
+}
+
+// errReader is an io.Reader that always returns an error.
+type errReader struct{ err error }
+
+func (e errReader) Read(_ []byte) (int, error) { return 0, e.err }
+
+func TestRecordingTransport_ResponseBodyReadError(t *testing.T) {
+	t.Logf("testing RecordingTransport where reading the response body fails")
+	base := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(errReader{err: errors.New("read error")}),
+		}, nil
+	})
+
+	rec := WrapRecording(base)
+	req, err := http.NewRequest(http.MethodGet, "https://api.example.com/data", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := rec.RoundTrip(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	t.Logf("body read error result: resp=%v err=%v", resp, err)
+	if err == nil {
+		t.Fatal("expected error from body read failure, got nil")
+	}
+}
+
+func TestReplayTransport_GetQueryMismatch(t *testing.T) {
+	t.Logf("testing ReplayTransport skips GET entries when query string doesn't match")
+	rt := NewReplayTransport([]RecordedEntry{
+		{
+			Method: http.MethodGet,
+			URL:    "https://api.example.com/data?foo=bar",
+			Status: http.StatusOK,
+			Body:   []byte(`{"result":"ok"}`),
+		},
+	})
+
+	// Same path but different query string — should not match.
+	req, err := http.NewRequest(http.MethodGet, "https://api.example.com/data?foo=DIFFERENT", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	t.Logf("GET query mismatch error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for GET query string mismatch")
+	}
+	if !strings.Contains(err.Error(), "no matching entry") {
+		t.Errorf("error = %q, want 'no matching entry'", err)
 	}
 }
 

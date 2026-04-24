@@ -1276,3 +1276,241 @@ func TestMergedGatewayMeasurementPolicy_WithPerProvider(t *testing.T) {
 		t.Errorf("MRTDAllow should not contain 'default' after per-provider override")
 	}
 }
+
+// --------------------------------------------------------------------------
+// normalizeAllowlist / buildMeasurementPolicy / buildGatewayMeasurementPolicy
+// error-path coverage
+// --------------------------------------------------------------------------
+
+func TestLoadTOMLMRSeamAllowInvalidHex(t *testing.T) {
+	toml := `
+[policy]
+mrseam_allow = ["notvalidhex!"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	_, err := Load()
+	t.Logf("mrseam_allow invalid hex: %v", err)
+	if err == nil {
+		t.Fatal("expected error for invalid mrseam_allow hex")
+	}
+	if !strings.Contains(err.Error(), "mrseam_allow") {
+		t.Errorf("error should mention mrseam_allow, got: %v", err)
+	}
+}
+
+func TestLoadTOMLRTMR0AllowInvalidHex(t *testing.T) {
+	toml := `
+[policy]
+rtmr0_allow = ["notvalidhex!"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	_, err := Load()
+	t.Logf("rtmr0_allow invalid hex: %v", err)
+	if err == nil {
+		t.Fatal("expected error for invalid rtmr0_allow hex")
+	}
+	if !strings.Contains(err.Error(), "rtmr0_allow") {
+		t.Errorf("error should mention rtmr0_allow, got: %v", err)
+	}
+}
+
+func TestLoadTOMLGatewayMRTDAllowInvalidHex(t *testing.T) {
+	toml := `
+[policy]
+gateway_mrtd_allow = ["notvalidhex!"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	_, err := Load()
+	t.Logf("gateway_mrtd_allow invalid hex: %v", err)
+	if err == nil {
+		t.Fatal("expected error for invalid gateway_mrtd_allow hex")
+	}
+	if !strings.Contains(err.Error(), "gateway_mrtd_allow") {
+		t.Errorf("error should mention gateway_mrtd_allow, got: %v", err)
+	}
+}
+
+func TestLoadTOMLGatewayMRSeamAllowInvalidHex(t *testing.T) {
+	toml := `
+[policy]
+gateway_mrseam_allow = ["notvalidhex!"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	_, err := Load()
+	t.Logf("gateway_mrseam_allow invalid hex: %v", err)
+	if err == nil {
+		t.Fatal("expected error for invalid gateway_mrseam_allow hex")
+	}
+	if !strings.Contains(err.Error(), "gateway_mrseam_allow") {
+		t.Errorf("error should mention gateway_mrseam_allow, got: %v", err)
+	}
+}
+
+func TestLoadTOMLGatewayRTMR0AllowInvalidHex(t *testing.T) {
+	toml := `
+[policy]
+gateway_rtmr0_allow = ["notvalidhex!"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	_, err := Load()
+	t.Logf("gateway_rtmr0_allow invalid hex: %v", err)
+	if err == nil {
+		t.Fatal("expected error for invalid gateway_rtmr0_allow hex")
+	}
+	if !strings.Contains(err.Error(), "gateway_rtmr0_allow") {
+		t.Errorf("error should mention gateway_rtmr0_allow, got: %v", err)
+	}
+}
+
+func TestLoadTOMLPerProviderMRTDAllowInvalidHex(t *testing.T) {
+	toml := `
+[providers.venice]
+api_key = "k"
+[providers.venice.policy]
+mrtd_allow = ["notvalidhex!"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	_, err := Load()
+	t.Logf("per-provider mrtd_allow invalid hex: %v", err)
+	if err == nil {
+		t.Fatal("expected error for invalid per-provider mrtd_allow hex")
+	}
+}
+
+func TestLoadTOMLPerProviderGatewayMRTDAllowInvalidHex(t *testing.T) {
+	toml := `
+[providers.venice]
+api_key = "k"
+[providers.venice.policy]
+gateway_mrtd_allow = ["notvalidhex!"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	_, err := Load()
+	t.Logf("per-provider gateway_mrtd_allow invalid hex: %v", err)
+	if err == nil {
+		t.Fatal("expected error for invalid per-provider gateway_mrtd_allow hex")
+	}
+}
+
+func TestMergeAllowlists_MRSeamAndRTMR(t *testing.T) {
+	valid48a := strings.Repeat("aa", 48)
+	valid48b := strings.Repeat("bb", 48)
+
+	base := attestation.MeasurementPolicy{}
+	overlay := attestation.MeasurementPolicy{
+		MRSeamAllow: map[string]struct{}{valid48a: {}},
+		RTMRAllow: [4]map[string]struct{}{
+			{valid48b: {}}, nil, nil, nil,
+		},
+	}
+	merged := mergeAllowlists(base, overlay)
+	t.Logf("merged MRSeamAllow: %v", merged.MRSeamAllow)
+	t.Logf("merged RTMR0Allow: %v", merged.RTMRAllow[0])
+	if _, ok := merged.MRSeamAllow[valid48a]; !ok {
+		t.Error("overlay MRSeamAllow should win")
+	}
+	if _, ok := merged.RTMRAllow[0][valid48b]; !ok {
+		t.Error("overlay RTMR0 should win")
+	}
+}
+
+func TestRetryTransport_BodyCannotReset(t *testing.T) {
+	// A request with a non-nil body but no GetBody function cannot be retried
+	// after the first attempt consumes the body. The transport should return
+	// the last error without attempting a reset.
+	attempts := 0
+	rt := &RetryTransport{
+		Base: rtFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Body:       io.NopCloser(bytes.NewReader(nil)),
+			}, nil
+		}),
+		MaxAttempts: 3,
+		MaxDelay:    time.Millisecond,
+	}
+
+	// Manually create a request with body but no GetBody.
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com/attest", http.NoBody)
+	req.Body = io.NopCloser(bytes.NewReader([]byte(`{"nonce":"abc"}`)))
+	req.GetBody = nil
+
+	resp, err := rt.RoundTrip(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	t.Logf("BodyCannotReset: err=%v attempts=%d", err, attempts)
+	if attempts != 1 {
+		t.Errorf("expected 1 attempt (body cannot be reset), got %d", attempts)
+	}
+	// The 503 triggers retry logic, but since GetBody==nil, the transport
+	// gives up after the first attempt and returns the last error.
+	if err == nil {
+		t.Error("expected non-nil error when body cannot be reset")
+	}
+}
+
+func TestLoadTOMLUnknownKey(t *testing.T) {
+	tomlContent := `
+unknown_setting = "value"
+
+[providers.venice]
+api_key = "k"
+`
+	path := writeConfigFile(t, tomlContent, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	_, err := Load()
+	t.Logf("unknown key: %v", err)
+	if err == nil {
+		t.Fatal("expected error for unknown TOML key")
+	}
+	if !strings.Contains(err.Error(), "unknown config keys") {
+		t.Errorf("error should mention 'unknown config keys', got: %v", err)
+	}
+}
+
+func TestLoadTOMLPerProviderUnknownAllowFailFactor(t *testing.T) {
+	tomlContent := `
+[providers.venice]
+api_key = "k"
+allow_fail = ["nonexistent_factor_xyz"]
+`
+	path := writeConfigFile(t, tomlContent, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	_, err := Load()
+	t.Logf("per-provider unknown allow_fail factor: %v", err)
+	if err == nil {
+		t.Fatal("expected error for unknown allow_fail factor")
+	}
+	if !strings.Contains(err.Error(), "nonexistent_factor_xyz") {
+		t.Errorf("error should mention unknown factor name, got: %v", err)
+	}
+}
+
+func TestLoadTOMLPerProviderGatewayPolicy(t *testing.T) {
+	valid48 := strings.Repeat("ab", 48)
+	tomlContent := fmt.Sprintf(`
+[providers.venice]
+api_key = "k"
+[providers.venice.policy]
+gateway_mrtd_allow = ["%s"]
+`, valid48)
+	path := writeConfigFile(t, tomlContent, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	cfg, err := Load()
+	t.Logf("per-provider gateway policy: err=%v", err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := cfg.ProviderGatewayPolicies["venice"]; !ok {
+		t.Error("expected per-provider gateway policy to be stored")
+	}
+}

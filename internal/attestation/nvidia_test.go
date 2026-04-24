@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -971,4 +972,75 @@ func TestEvictOldestLocked_BelowCap(t *testing.T) {
 	if size != 1 {
 		t.Errorf("cache size = %d, want 1 (eviction should be no-op below cap)", size)
 	}
+}
+
+// TestFetchAndCacheJWKS_HTTPError covers the HTTP non-200 response path
+// in fetchAndCacheJWKS (lines 274-279).
+func TestFetchAndCacheJWKS_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("JWKS server: %s %s → 503", r.Method, r.URL.Path)
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	v := NewNVIDIAVerifier("", srv.URL)
+	t.Cleanup(v.Shutdown)
+
+	_, err := v.fetchAndCacheJWKS(context.Background(), srv.URL, srv.Client())
+	t.Logf("fetchAndCacheJWKS(HTTP 503): err=%v", err)
+	if err == nil {
+		t.Fatal("expected error for HTTP 503")
+	}
+	if !strings.Contains(err.Error(), "HTTP 503") {
+		t.Errorf("error should mention 'HTTP 503', got: %v", err)
+	}
+}
+
+// TestFetchAndCacheJWKS_InvalidJWKS covers the JWKS parse error path
+// (lines 285-288). The server returns HTTP 200 but the body is not a valid JWKS.
+func TestFetchAndCacheJWKS_InvalidJWKS(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("JWKS server: %s %s → 200 invalid JSON", r.Method, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"keys": "not-an-array"}`))
+	}))
+	defer srv.Close()
+
+	v := NewNVIDIAVerifier("", srv.URL)
+	t.Cleanup(v.Shutdown)
+
+	_, err := v.fetchAndCacheJWKS(context.Background(), srv.URL, srv.Client())
+	t.Logf("fetchAndCacheJWKS(invalid JWKS): err=%v", err)
+	if err == nil {
+		t.Fatal("expected error for invalid JWKS")
+	}
+	if !strings.Contains(err.Error(), "parse JWKS") {
+		t.Errorf("error should mention 'parse JWKS', got: %v", err)
+	}
+}
+
+// TestFetchAndCacheJWKS_ClientDoError covers the client.Do error path
+// (lines 269-271) by using a transport that always returns an error.
+func TestFetchAndCacheJWKS_ClientDoError(t *testing.T) {
+	// Create a client whose transport always errors.
+	errTransport := &errRoundTripper{err: errors.New("connection refused")}
+	client := &http.Client{Transport: errTransport}
+
+	v := NewNVIDIAVerifier("", "http://127.0.0.1:1")
+	t.Cleanup(v.Shutdown)
+
+	_, err := v.fetchAndCacheJWKS(context.Background(), "http://127.0.0.1:1/jwks", client)
+	t.Logf("fetchAndCacheJWKS(Do error): err=%v", err)
+	if err == nil {
+		t.Fatal("expected error when client.Do fails")
+	}
+}
+
+// errRoundTripper is a test helper that always returns an error.
+type errRoundTripper struct {
+	err error
+}
+
+func (e *errRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return nil, e.err
 }

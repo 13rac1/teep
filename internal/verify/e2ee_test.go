@@ -954,3 +954,173 @@ func TestDoE2EEChutesStreamTest_WithUsageEvent(t *testing.T) {
 	}
 	t.Logf("usage event result detail: %s", result.Detail)
 }
+
+// --------------------------------------------------------------------------
+// doE2EEChutesStreamTest — malformed JSON SSE event (L270-275, 2 stmts)
+// --------------------------------------------------------------------------
+
+func TestDoE2EEChutesStreamTest_MalformedEvent(t *testing.T) {
+	// Send malformed JSON that can't be parsed as the event struct.
+	sseBody := "data: {not valid json\n\ndata: [DONE]\n\n"
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	session, _ := e2ee.NewChutesSession()
+	defer session.Zero()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEChutesStreamTest(req, session)
+	t.Logf("doE2EEChutesStreamTest(malformed event): err=%v", result.Err)
+	if result.Err == nil {
+		t.Fatal("expected error for malformed SSE event")
+	}
+	if !strings.Contains(result.Err.Error(), "parse SSE event") {
+		t.Errorf("error should mention parse failure, got: %v", result.Err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// doE2EEChutesStreamTest — bad e2e_init value (L282-284, 1 stmt)
+// --------------------------------------------------------------------------
+
+func TestDoE2EEChutesStreamTest_BadE2EInit(t *testing.T) {
+	// Valid base64 but wrong size (ML-KEM-768 ciphertext is 1088 bytes).
+	shortCT := base64.StdEncoding.EncodeToString([]byte("too short"))
+	initEvent, _ := json.Marshal(map[string]string{"e2e_init": shortCT})
+	sseBody := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", initEvent)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	session, _ := e2ee.NewChutesSession()
+	defer session.Zero()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEChutesStreamTest(req, session)
+	t.Logf("doE2EEChutesStreamTest(bad e2e_init): err=%v", result.Err)
+	if result.Err == nil {
+		t.Fatal("expected error for bad e2e_init")
+	}
+	if !strings.Contains(result.Err.Error(), "derive stream key") {
+		t.Errorf("error should mention derive stream key, got: %v", result.Err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// doE2EEChutesStreamTest — bad base64 in e2e field (L290-292, 1 stmt)
+// --------------------------------------------------------------------------
+
+func TestDoE2EEChutesStreamTest_InvalidBase64Chunk(t *testing.T) {
+	// Set up proper server-side KEM for the e2e_init.
+	serverDecap, err := mlkem.GenerateKey768()
+	if err != nil {
+		t.Fatalf("generate ML-KEM key: %v", err)
+	}
+	serverEncap := serverDecap.EncapsulationKey()
+	serverPubB64 := base64.StdEncoding.EncodeToString(serverEncap.Bytes())
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "test-model",
+		"messages": []map[string]string{{"role": "user", "content": "Say hello"}},
+		"stream":   true,
+	})
+	_, session, err := e2ee.EncryptChatRequestChutes(body, serverPubB64)
+	if err != nil {
+		t.Fatalf("EncryptChatRequestChutes: %v", err)
+	}
+	defer session.Zero()
+
+	clientPubB64 := session.MLKEMClientPubKeyBase64()
+	clientPubBytes, _ := base64.StdEncoding.DecodeString(clientPubB64)
+	clientEncapKey, err := mlkem.NewEncapsulationKey768(clientPubBytes)
+	if err != nil {
+		t.Fatalf("parse client encap key: %v", err)
+	}
+	_, kemCt := clientEncapKey.Encapsulate()
+	kemCtB64 := base64.StdEncoding.EncodeToString(kemCt)
+
+	initEvent, _ := json.Marshal(map[string]string{"e2e_init": kemCtB64})
+	// After valid init, send e2e with invalid base64.
+	badChunkEvent, _ := json.Marshal(map[string]string{"e2e": "not-valid-base64!!"})
+	sseBody := fmt.Sprintf("data: %s\n\ndata: %s\n\ndata: [DONE]\n\n", initEvent, badChunkEvent)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEChutesStreamTest(req, session)
+	t.Logf("doE2EEChutesStreamTest(bad base64 chunk): err=%v", result.Err)
+	if result.Err == nil {
+		t.Fatal("expected error for bad base64 in e2e field")
+	}
+	if !strings.Contains(result.Err.Error(), "decode e2e chunk") {
+		t.Errorf("error should mention decode failure, got: %v", result.Err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// doE2EEChutesStreamTest — auth fail in e2e field (L294-296, 1 stmt)
+// --------------------------------------------------------------------------
+
+func TestDoE2EEChutesStreamTest_DecryptChunkFail(t *testing.T) {
+	// Full KEM setup.
+	serverDecap, err := mlkem.GenerateKey768()
+	if err != nil {
+		t.Fatalf("generate ML-KEM key: %v", err)
+	}
+	serverEncap := serverDecap.EncapsulationKey()
+	serverPubB64 := base64.StdEncoding.EncodeToString(serverEncap.Bytes())
+
+	body, _ := json.Marshal(map[string]any{"model": "test", "messages": []map[string]string{{"role": "user", "content": "hi"}}, "stream": true})
+	_, session, err := e2ee.EncryptChatRequestChutes(body, serverPubB64)
+	if err != nil {
+		t.Fatalf("EncryptChatRequestChutes: %v", err)
+	}
+	defer session.Zero()
+
+	clientPubB64 := session.MLKEMClientPubKeyBase64()
+	clientPubBytes, _ := base64.StdEncoding.DecodeString(clientPubB64)
+	clientEncapKey, err := mlkem.NewEncapsulationKey768(clientPubBytes)
+	if err != nil {
+		t.Fatalf("parse client encap key: %v", err)
+	}
+	_, kemCt := clientEncapKey.Encapsulate()
+	kemCtB64 := base64.StdEncoding.EncodeToString(kemCt)
+
+	initEvent, _ := json.Marshal(map[string]string{"e2e_init": kemCtB64})
+	// Valid base64 but garbage data that fails ChaCha20-Poly1305 authentication.
+	// Must be >= 28 bytes (nonce(12)+tag(16)) to pass the length check.
+	garbled := make([]byte, 40)
+	garbledB64 := base64.StdEncoding.EncodeToString(garbled)
+	badChunkEvent, _ := json.Marshal(map[string]string{"e2e": garbledB64})
+	sseBody := fmt.Sprintf("data: %s\n\ndata: %s\n\ndata: [DONE]\n\n", initEvent, badChunkEvent)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEChutesStreamTest(req, session)
+	t.Logf("doE2EEChutesStreamTest(bad decrypt): err=%v", result.Err)
+	if result.Err == nil {
+		t.Fatal("expected error for bad e2e ciphertext")
+	}
+	if !strings.Contains(result.Err.Error(), "decrypt e2e chunk") {
+		t.Errorf("error should mention decrypt failure, got: %v", result.Err)
+	}
+}

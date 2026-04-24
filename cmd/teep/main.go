@@ -449,16 +449,12 @@ func runReverify(ctx context.Context, captureDir string) error {
 		return fmt.Errorf("replay verification failed: %w", err)
 	}
 
-	capturedText, loadErr := capture.LoadReport(captureDir)
-	switch {
-	case loadErr == nil:
-		if err := verify.CompareReports(capturedText, reverifyText); err != nil {
-			return fmt.Errorf("report comparison failed: %w", err)
-		}
-	case errors.Is(loadErr, os.ErrNotExist):
-		slog.Warn("no captured report to compare (report.txt absent)")
-	default:
-		return fmt.Errorf("read captured report: %w", loadErr)
+	capturedText, err := capture.LoadReport(captureDir)
+	if err != nil {
+		return fmt.Errorf("read captured report: %w", err)
+	}
+	if err := verify.CompareReports(capturedText, reverifyText); err != nil {
+		return fmt.Errorf("report comparison failed: %w", err)
 	}
 
 	fmt.Print(reverifyText)

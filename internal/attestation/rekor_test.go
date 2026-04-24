@@ -950,3 +950,255 @@ func TestDecodeExtensionValue_InvalidUTF8(t *testing.T) {
 		t.Errorf("decodeExtensionValue invalid UTF-8 = %q, want \"\"", got)
 	}
 }
+
+// --------------------------------------------------------------------------
+// FetchRekorProvenance: additional error paths in the entry loop
+// --------------------------------------------------------------------------
+
+// TestFetchRekorProvenance_BadBodyBase64 covers the base64-decode-body error
+// path (lines 173-176 in rekor.go). The entry is returned but its Body is
+// not valid base64, so the loop continues and no usable entry is found.
+func TestFetchRekorProvenance_BadBodyBase64(t *testing.T) {
+	testUUID := "bad-body-uuid"
+	// Build an entry response where the body is not valid base64.
+	entry := []map[string]any{
+		{testUUID: map[string]any{"body": "not!valid!base64!!!"}},
+	}
+	entryRaw, _ := json.Marshal(entry)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("mock: %s %s", r.Method, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/v1/index/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			resp, _ := json.Marshal([]string{testUUID})
+			w.Write(resp)
+		case "/api/v1/log/entries/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(entryRaw)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
+	t.Logf("bad body base64: Err=%v", prov.Err)
+	if prov.Err == nil {
+		t.Error("expected non-nil error for bad body base64")
+	}
+}
+
+// TestFetchRekorProvenance_ExtractVerifierPEMError covers the extractVerifierPEM
+// error path (lines 179-182). The body is valid base64, but its JSON has no
+// signatures, causing extractVerifierPEM to return an error.
+func TestFetchRekorProvenance_ExtractVerifierPEMError(t *testing.T) {
+	testUUID := "no-sig-uuid"
+	// Body is valid base64 of JSON with no signatures field.
+	innerJSON := `{"spec":{"signatures":[]}}`
+	bodyB64 := base64.StdEncoding.EncodeToString([]byte(innerJSON))
+	entry := []map[string]any{
+		{testUUID: map[string]any{"body": bodyB64}},
+	}
+	entryRaw, _ := json.Marshal(entry)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/index/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			resp, _ := json.Marshal([]string{testUUID})
+			w.Write(resp)
+		case "/api/v1/log/entries/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(entryRaw)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
+	t.Logf("extract verifier error: Err=%v", prov.Err)
+	if prov.Err == nil {
+		t.Error("expected non-nil error for empty signatures")
+	}
+}
+
+// TestFetchRekorProvenance_NilPEMBlock covers the nil-PEM-block path
+// (lines 185-188). verifierPEM decodes successfully but pem.Decode returns nil.
+func TestFetchRekorProvenance_NilPEMBlock(t *testing.T) {
+	testUUID := "nil-pem-uuid"
+	// Build a DSSE body where the verifier is valid base64 but decodes to
+	// bytes that are not a PEM block (plain text).
+	notAPEM := "this is not a PEM block"
+	verifierB64 := base64.StdEncoding.EncodeToString([]byte(notAPEM))
+	dsse := map[string]any{
+		"spec": map[string]any{
+			"signatures": []map[string]any{
+				{"verifier": verifierB64},
+			},
+		},
+	}
+	dsseJSON, _ := json.Marshal(dsse)
+	bodyB64 := base64.StdEncoding.EncodeToString(dsseJSON)
+	entry := []map[string]any{
+		{testUUID: map[string]any{"body": bodyB64}},
+	}
+	entryRaw, _ := json.Marshal(entry)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/index/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			resp, _ := json.Marshal([]string{testUUID})
+			w.Write(resp)
+		case "/api/v1/log/entries/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(entryRaw)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
+	t.Logf("nil PEM block: Err=%v", prov.Err)
+	if prov.Err == nil {
+		t.Error("expected non-nil error when PEM block is nil")
+	}
+}
+
+// TestFetchRekorProvenance_ParseFulcioProvenanceError covers the
+// parseFulcioProvenance error path (lines 212-215). The verifierPEM is a
+// CERTIFICATE block but contains invalid DER bytes.
+func TestFetchRekorProvenance_ParseFulcioProvenanceError(t *testing.T) {
+	testUUID := "invalid-cert-uuid"
+	// Build a PEM block with type CERTIFICATE but invalid DER content.
+	invalidCertPEM := "-----BEGIN CERTIFICATE-----\naW52YWxpZA==\n-----END CERTIFICATE-----\n"
+	verifierB64 := base64.StdEncoding.EncodeToString([]byte(invalidCertPEM))
+	dsse := map[string]any{
+		"spec": map[string]any{
+			"signatures": []map[string]any{
+				{"verifier": verifierB64},
+			},
+		},
+	}
+	dsseJSON, _ := json.Marshal(dsse)
+	bodyB64 := base64.StdEncoding.EncodeToString(dsseJSON)
+	entry := []map[string]any{
+		{testUUID: map[string]any{"body": bodyB64}},
+	}
+	entryRaw, _ := json.Marshal(entry)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/index/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			resp, _ := json.Marshal([]string{testUUID})
+			w.Write(resp)
+		case "/api/v1/log/entries/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(entryRaw)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
+	t.Logf("invalid cert DER: Err=%v", prov.Err)
+	if prov.Err == nil {
+		t.Error("expected non-nil error for invalid certificate DER")
+	}
+}
+
+// TestFetchRekorProvenance_NonFulcioCert covers the OIDCIssuer=="" path
+// (lines 224-235). A valid CERTIFICATE is present but it has no Fulcio OIDC
+// extensions, so it's treated as a raw-key fallback. With no other entries,
+// the fallback is returned (no fatal error).
+func TestFetchRekorProvenance_NonFulcioCert(t *testing.T) {
+	testUUID := "non-fulcio-cert-uuid"
+	// Use selfSignedCert (defined in the test file) to build a valid cert
+	// with no Fulcio extensions.
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	certDER, err := selfSignedCert(key)
+	if err != nil {
+		t.Fatalf("selfSignedCert: %v", err)
+	}
+	certPEM := fmt.Sprintf("-----BEGIN CERTIFICATE-----\n%s\n-----END CERTIFICATE-----\n",
+		base64.StdEncoding.EncodeToString(certDER))
+
+	verifierB64 := base64.StdEncoding.EncodeToString([]byte(certPEM))
+	dsse := map[string]any{
+		"spec": map[string]any{
+			"signatures": []map[string]any{
+				{"verifier": verifierB64},
+			},
+		},
+	}
+	dsseJSON, _ := json.Marshal(dsse)
+	bodyB64 := base64.StdEncoding.EncodeToString(dsseJSON)
+	entry := []map[string]any{
+		{testUUID: map[string]any{"body": bodyB64}},
+	}
+	entryRaw, _ := json.Marshal(entry)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/index/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			resp, _ := json.Marshal([]string{testUUID})
+			w.Write(resp)
+		case "/api/v1/log/entries/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(entryRaw)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
+	prov := rc.FetchRekorProvenance(context.Background(), testDigest)
+	t.Logf("non-Fulcio cert: HasCert=%v HasNonFulcioCert=%v OIDCIssuer=%q Err=%v",
+		prov.HasCert, prov.HasNonFulcioCert, prov.OIDCIssuer, prov.Err)
+	// No error — the fallback is returned.
+	if prov.Err != nil {
+		t.Errorf("unexpected fatal error: %v", prov.Err)
+	}
+	// HasNonFulcioCert should be true since it's a cert but not Fulcio.
+	if !prov.HasNonFulcioCert {
+		t.Error("expected HasNonFulcioCert=true for self-signed cert without Fulcio extensions")
+	}
+	if prov.HasCert {
+		t.Error("expected HasCert=false for non-Fulcio cert returned as fallback")
+	}
+}
+
+// TestExtractVerifierPEM_DirectPEM covers the direct-PEM fallback path
+// (lines 418-420). When the verifier is a raw PEM string (not base64-encoded),
+// base64 decode fails but pem.Decode succeeds, so the PEM is returned as-is.
+func TestExtractVerifierPEM_DirectPEM(t *testing.T) {
+	// Pass a PEM directly as the verifier value (not base64-encoded).
+	// base64.StdEncoding.DecodeString("-----BEGIN PUBLIC KEY...") will fail
+	// because PEM has non-base64 chars like '-', so the fallback is taken.
+	dsse := fmt.Sprintf(`{"spec":{"signatures":[{"verifier":%q}]}}`, realPublicKeyPEM)
+	result, err := extractVerifierPEM([]byte(dsse))
+	t.Logf("extractVerifierPEM(direct PEM): len=%d err=%v", len(result), err)
+	if err != nil {
+		t.Fatalf("extractVerifierPEM: unexpected error: %v", err)
+	}
+	if len(result) == 0 {
+		t.Error("expected non-empty PEM result")
+	}
+	if !strings.Contains(string(result), "PUBLIC KEY") {
+		t.Errorf("result should contain PUBLIC KEY, got: %q", string(result))
+	}
+}

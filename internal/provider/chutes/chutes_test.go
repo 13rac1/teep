@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -573,5 +575,117 @@ func TestAttester_Resolver(t *testing.T) {
 	r := a.Resolver()
 	if r == nil {
 		t.Fatal("Resolver() returned nil")
+	}
+}
+
+func TestParseAttestationResponse_TooManyInstances(t *testing.T) {
+	t.Logf("testing ParseAttestationResponse with more than maxInstances (256) instances")
+	// Build 257 instances to exceed the maxInstances limit.
+	instances := make([]map[string]any, 257)
+	for i := range instances {
+		instances[i] = map[string]any{
+			"instance_id": fmt.Sprintf("inst-%03d", i),
+			"e2e_pubkey":  "dGVzdA==",
+			"nonces":      []string{"n1"},
+		}
+	}
+	instancesJSON, err := json.Marshal(map[string]any{"instances": instances})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nonce := attestation.NewNonce()
+	_, parseErr := chutes.ParseAttestationResponse(context.Background(), instancesJSON, []byte("{}"), nonce)
+	t.Logf("too-many-instances error: %v", parseErr)
+	if parseErr == nil {
+		t.Fatal("expected error for too many instances")
+	}
+	if !strings.Contains(parseErr.Error(), "instances") {
+		t.Errorf("error = %q, want message containing 'instances'", parseErr)
+	}
+}
+
+func TestParseAttestationResponse_TooManyEvidence(t *testing.T) {
+	t.Logf("testing ParseAttestationResponse with more than maxEvidence (256) evidence entries")
+	// Valid instancesJSON with 1 instance.
+	instancesJSON := []byte(`{"instances": [{"instance_id": "inst-001", "e2e_pubkey": "dGVzdA==", "nonces": ["n1"]}]}`)
+
+	// Build 257 evidence entries to exceed the maxEvidence limit.
+	evidence := make([]map[string]any, 257)
+	for i := range evidence {
+		evidence[i] = map[string]any{
+			"instance_id":  "inst-001",
+			"quote":        "dGVzdA==",
+			"gpu_evidence": []any{},
+			"certificate":  "",
+		}
+	}
+	evidenceJSON, err := json.Marshal(map[string]any{
+		"evidence":            evidence,
+		"failed_instance_ids": []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nonce := attestation.NewNonce()
+	_, parseErr := chutes.ParseAttestationResponse(context.Background(), instancesJSON, evidenceJSON, nonce)
+	t.Logf("too-many-evidence error: %v", parseErr)
+	if parseErr == nil {
+		t.Fatal("expected error for too many evidence entries")
+	}
+	if !strings.Contains(parseErr.Error(), "evidence") {
+		t.Errorf("error = %q, want message containing 'evidence'", parseErr)
+	}
+}
+
+func TestParseAttestationResponse_InvalidEvidenceJSON(t *testing.T) {
+	t.Logf("testing ParseAttestationResponse with invalid evidence JSON body")
+	// Valid instancesJSON with 1 instance.
+	instancesJSON := []byte(`{"instances": [{"instance_id": "inst-001", "e2e_pubkey": "dGVzdA==", "nonces": ["n1"]}]}`)
+
+	nonce := attestation.NewNonce()
+	_, parseErr := chutes.ParseAttestationResponse(context.Background(), instancesJSON, []byte("not json"), nonce)
+	t.Logf("invalid evidence JSON error: %v", parseErr)
+	if parseErr == nil {
+		t.Fatal("expected error for invalid evidence JSON")
+	}
+	if !strings.Contains(parseErr.Error(), "evidence") {
+		t.Errorf("error = %q, want message containing 'evidence'", parseErr)
+	}
+}
+
+func TestFetchAttestation_EvidenceError(t *testing.T) {
+	t.Logf("testing FetchAttestation when the evidence endpoint returns HTTP 500")
+	// Server where instances returns success but evidence returns 500.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("request: %s %s", r.Method, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v1/models":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data": [{"id": "test/model", "chute_id": "00000000-0000-0000-0000-000000000001"}]}`))
+		case strings.HasPrefix(r.URL.Path, "/e2e/instances/"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"instances": [{"instance_id": "inst-001", "e2e_pubkey": "dGVzdC1wdWJrZXk=", "nonces": ["n1"]}]}`))
+		case strings.Contains(r.URL.Path, "/evidence"):
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error": "server error"}`))
+		default:
+			t.Errorf("unexpected request path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	a := chutes.NewAttester(srv.URL, "test-key")
+	a.SetModelsBase(srv.URL)
+	_, err := a.FetchAttestation(context.Background(), "test/model", attestation.NewNonce())
+	t.Logf("evidence HTTP 500 error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for evidence HTTP 500")
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Errorf("error = %q, want message containing 'HTTP 500'", err)
 	}
 }

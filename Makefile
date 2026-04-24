@@ -20,18 +20,18 @@ test: ## Run unit tests with race detector (-short skips integration)
 	go test -short -race ./cmd/... ./internal/...
 
 coverage: ## Generate coverage report (short mode; outputs coverage.html)
-	go test -short -race \
+	go test -short -race -count=1 \
 	    -coverprofile=coverage.out -covermode=atomic \
-	    -coverpkg=$$(go list ./cmd/... ./internal/... | tr '\n' ',') \
+	    -coverpkg=./cmd/...,./internal/... \
 	    ./cmd/... ./internal/...
 	go tool cover -func=coverage.out | tail -5
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage HTML written to coverage.html"
 
 coverage-full: ## Full coverage without -short (live integration tests still need API keys)
-	go test -race \
+	go test -race -count=1 \
 	    -coverprofile=coverage.out -covermode=atomic \
-	    -coverpkg=$$(go list ./cmd/... ./internal/... | tr '\n' ',') \
+	    -coverpkg=./cmd/...,./internal/... \
 	    ./cmd/... ./internal/...
 	go tool cover -func=coverage.out | tail -5
 	go tool cover -html=coverage.out -o coverage.html

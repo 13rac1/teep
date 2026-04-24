@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -174,6 +177,23 @@ func TestLoadConfig_UnknownProvider(t *testing.T) {
 	t.Logf("loadConfig(nonexistent) error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for unknown provider")
+	}
+}
+
+func TestLoadConfig_ProviderNotFound_ValidConfig(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
+	cfgContent := "[providers.venice]\nbase_url = \"https://api.venice.ai\"\napi_key = \"test-key\"\n"
+	if err := os.WriteFile(cfgFile, []byte(cfgContent), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("TEEP_CONFIG", cfgFile)
+	_, _, err := loadConfig("nonexistent")
+	t.Logf("loadConfig(nonexistent, valid config): %v", err)
+	if err == nil {
+		t.Fatal("expected error for provider not in config")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("error %q should mention the provider name", err)
 	}
 }
 
@@ -501,6 +521,148 @@ func TestRunReverify_MissingDir(t *testing.T) {
 	t.Logf("runReverify(missing dir) error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for missing capture directory")
+	}
+}
+
+// TestRunReverify_Venice_Fixture exercises the full runReverify success path
+// using the Venice capture fixture. The NRAS JWT expires within ~24 hours of
+// capture; when it does, runReverify returns a report comparison failure
+// (the replayed nvidia_nras_verified factor differs). That specific failure is
+// accepted only when the JWT is confirmed expired. Any other error fails the test.
+func TestRunReverify_Venice_Fixture(t *testing.T) {
+	fdir := "../../internal/integration/testdata/venice_e2ee-qwen3-5-122b-a10b_20260424_015841"
+
+	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
+	cfgContent := "[providers.venice]\nbase_url = \"https://api.venice.ai\"\napi_key = \"test-key\"\n"
+	if err := os.WriteFile(cfgFile, []byte(cfgContent), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("TEEP_CONFIG", cfgFile)
+
+	err := runReverify(context.Background(), fdir)
+	t.Logf("runReverify(venice fixture): err=%v", err)
+	switch {
+	case err == nil, errors.Is(err, errSilentExit):
+		// Success.
+	case strings.Contains(err.Error(), "report comparison failed") && nrasJWTExpired(t, fdir):
+		// NRAS JWT expired — report differs on nvidia_nras_verified, expected.
+	default:
+		t.Fatalf("runReverify returned unexpected error: %v", err)
+	}
+}
+
+// nrasJWTExpired reports whether the NRAS JWT in the fixture's captured
+// response is expired. It finds the NRAS attestation body, decodes the JWT
+// payload (no signature check needed), and compares the exp claim to now.
+func nrasJWTExpired(t *testing.T, fixtureDir string) bool {
+	t.Helper()
+	pattern := filepath.Join(fixtureDir, "responses", "*nras.attestation.nvidia.com*attest*gpu*.body")
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		t.Logf("nrasJWTExpired: no NRAS body file found in %s", fixtureDir)
+		return false
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Logf("nrasJWTExpired: read %s: %v", matches[0], err)
+		return false
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(data)), ".", 3)
+	if len(parts) != 3 {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return false
+	}
+	exp := time.Unix(claims.Exp, 0)
+	t.Logf("nrasJWTExpired: exp=%v expired=%v", exp, time.Now().After(exp))
+	return time.Now().After(exp)
+}
+
+func TestRunReverify_NearCloud_Fixture(t *testing.T) {
+	fdir := "../../internal/integration/testdata/nearcloud_qwen_qwen3.5-122b-a10b_20260424_020614"
+
+	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
+	cfgContent := "[providers.nearcloud]\napi_key = \"test-key\"\n"
+	if err := os.WriteFile(cfgFile, []byte(cfgContent), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("TEEP_CONFIG", cfgFile)
+
+	err := runReverify(context.Background(), fdir)
+	t.Logf("runReverify(nearcloud fixture): err=%v", err)
+	switch {
+	case err == nil, errors.Is(err, errSilentExit):
+		// Success.
+	case strings.Contains(err.Error(), "report comparison failed") && nrasJWTExpired(t, fdir):
+		// NRAS JWT expired — report differs on nvidia_nras_verified, expected.
+	default:
+		t.Fatalf("runReverify returned unexpected error: %v", err)
+	}
+}
+
+func TestRunReverify_NearDirect_Fixture(t *testing.T) {
+	fdir := "../../internal/integration/testdata/neardirect_qwen_qwen3.5-122b-a10b_20260424_021037"
+
+	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
+	cfgContent := "[providers.neardirect]\nbase_url = \"https://qwen35-122b.completions.near.ai\"\napi_key = \"test-key\"\n"
+	if err := os.WriteFile(cfgFile, []byte(cfgContent), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("TEEP_CONFIG", cfgFile)
+
+	err := runReverify(context.Background(), fdir)
+	t.Logf("runReverify(neardirect fixture): err=%v", err)
+	switch {
+	case err == nil, errors.Is(err, errSilentExit):
+		// Success.
+	case strings.Contains(err.Error(), "report comparison failed") && nrasJWTExpired(t, fdir):
+		// NRAS JWT expired — report differs on nvidia_nras_verified, expected.
+	default:
+		t.Fatalf("runReverify returned unexpected error: %v", err)
+	}
+}
+
+func TestRunReverify_MissingReport(t *testing.T) {
+	// Build a capture dir with manifest.json + responses/ but no report.txt.
+	// verify.Replay should succeed, then capture.LoadReport should fail.
+	srcDir := "../../internal/integration/testdata/venice_e2ee-qwen3-5-122b-a10b_20260424_015841"
+	srcAbs, err := filepath.Abs(srcDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	tmpDir := t.TempDir()
+
+	manifest, err := os.ReadFile(filepath.Join(srcAbs, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "manifest.json"), manifest, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(srcAbs, "responses"), filepath.Join(tmpDir, "responses")); err != nil {
+		t.Fatalf("symlink responses: %v", err)
+	}
+	// Deliberately omit report.txt.
+
+	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
+	cfgContent := "[providers.venice]\nbase_url = \"https://api.venice.ai\"\napi_key = \"test-key\"\n"
+	if err := os.WriteFile(cfgFile, []byte(cfgContent), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("TEEP_CONFIG", cfgFile)
+
+	err = runReverify(context.Background(), tmpDir)
+	t.Logf("runReverify(missing report): %v", err)
+	if err == nil || !strings.Contains(err.Error(), "read captured report") {
+		t.Fatalf("expected 'read captured report' error, got: %v", err)
 	}
 }
 
