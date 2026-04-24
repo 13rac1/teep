@@ -146,6 +146,42 @@ func (s *Server) buildDashboardData() dashboardData {
 	}
 }
 
+// handleHealth returns a JSON health snapshot for process managers and monitoring.
+// The endpoint always returns 200; the presence of last_request_at (non-null)
+// tells an automated monitor that the proxy is actively processing requests.
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	type healthResponse struct {
+		Status        string  `json:"status"`
+		UptimeSeconds float64 `json:"uptime_seconds"`
+		LastRequestAt *string `json:"last_request_at"`
+		LastSuccessAt *string `json:"last_success_at"`
+		RequestsTotal int64   `json:"requests_total"`
+		ErrorsTotal   int64   `json:"errors_total"`
+	}
+
+	nanoToPtr := func(ns int64) *string {
+		if ns == 0 {
+			return nil
+		}
+		t := time.Unix(0, ns).UTC().Format(time.RFC3339)
+		return &t
+	}
+
+	resp := healthResponse{
+		Status:        "ok",
+		UptimeSeconds: time.Since(s.stats.startTime).Seconds(),
+		LastRequestAt: nanoToPtr(s.stats.lastRequestAt.Load()),
+		LastSuccessAt: nanoToPtr(s.stats.lastSuccessAt.Load()),
+		RequestsTotal: s.stats.requests.Load(),
+		ErrorsTotal:   s.stats.errors.Load(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.ErrorContext(r.Context(), "health encode", "err", err)
+	}
+}
+
 // maxSSEConns is the maximum number of concurrent SSE /events connections.
 const maxSSEConns = 10
 

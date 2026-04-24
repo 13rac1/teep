@@ -96,6 +96,9 @@ type stats struct {
 	cacheHits   atomic.Int64
 	cacheMisses atomic.Int64
 
+	lastRequestAt atomic.Int64 // unix nanos of the most recent request; 0 = never
+	lastSuccessAt atomic.Int64 // unix nanos of the most recent successful response; 0 = never
+
 	// HTTP transport counters (reported by countingTransport callbacks).
 	httpRequests atomic.Int64
 	httpErrors   atomic.Int64
@@ -350,6 +353,7 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
+	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /events", s.handleEvents)
 	s.mux.HandleFunc("POST /v1/chat/completions", s.handleEndpoint(&chatEndpoint))
 	s.mux.HandleFunc("POST /v1/embeddings", s.handleEndpoint(&embeddingsEndpoint))
@@ -1004,6 +1008,7 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 		}()
 
 		s.stats.requests.Add(1)
+		s.stats.lastRequestAt.Store(time.Now().UnixNano())
 		ms := s.stats.getModelStats(prov.Name, upstreamModel)
 		ms.requests.Add(1)
 		ms.lastRequestAt.Store(time.Now().Unix())
@@ -1067,6 +1072,7 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 			cloned.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
 			s.cache.Put(prov.Name, upstreamModel, cloned)
 		}
+		s.stats.lastSuccessAt.Store(time.Now().UnixNano())
 		status = "ok"
 	}
 }

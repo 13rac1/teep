@@ -1,6 +1,9 @@
 package proxy
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -8,6 +11,113 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
 )
+
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	return &Server{
+		cfg:      &config.Config{ListenAddr: "127.0.0.1:8337"},
+		cache:    attestation.NewCache(0),
+		negCache: attestation.NewNegativeCache(0),
+		stats:    stats{startTime: time.Now(), models: make(map[string]*modelStats)},
+	}
+}
+
+func TestHandleHealth_NoRequests(t *testing.T) {
+	s := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", http.NoBody)
+	rec := httptest.NewRecorder()
+	s.handleHealth(rec, req)
+
+	t.Logf("status=%d body=%s", rec.Code, rec.Body.String())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var resp struct {
+		Status        string  `json:"status"`
+		UptimeSeconds float64 `json:"uptime_seconds"`
+		LastRequestAt *string `json:"last_request_at"`
+		LastSuccessAt *string `json:"last_success_at"`
+		RequestsTotal int64   `json:"requests_total"`
+		ErrorsTotal   int64   `json:"errors_total"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	t.Logf("status=%s uptime=%.3f last_request_at=%v last_success_at=%v requests=%d errors=%d",
+		resp.Status, resp.UptimeSeconds, resp.LastRequestAt, resp.LastSuccessAt, resp.RequestsTotal, resp.ErrorsTotal)
+
+	if resp.Status != "ok" {
+		t.Errorf("status = %q, want ok", resp.Status)
+	}
+	if resp.UptimeSeconds <= 0 {
+		t.Errorf("uptime_seconds = %f, want > 0", resp.UptimeSeconds)
+	}
+	if resp.LastRequestAt != nil {
+		t.Errorf("last_request_at = %v, want null when no requests", resp.LastRequestAt)
+	}
+	if resp.LastSuccessAt != nil {
+		t.Errorf("last_success_at = %v, want null when no requests", resp.LastSuccessAt)
+	}
+	if resp.RequestsTotal != 0 {
+		t.Errorf("requests_total = %d, want 0", resp.RequestsTotal)
+	}
+}
+
+func TestHandleHealth_WithRequests(t *testing.T) {
+	s := newTestServer(t)
+
+	now := time.Now()
+	s.stats.requests.Store(5)
+	s.stats.errors.Store(1)
+	s.stats.lastRequestAt.Store(now.Add(-10 * time.Second).UnixNano())
+	s.stats.lastSuccessAt.Store(now.Add(-15 * time.Second).UnixNano())
+
+	req := httptest.NewRequest(http.MethodGet, "/health", http.NoBody)
+	rec := httptest.NewRecorder()
+	s.handleHealth(rec, req)
+
+	t.Logf("status=%d body=%s", rec.Code, rec.Body.String())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp struct {
+		Status        string  `json:"status"`
+		LastRequestAt *string `json:"last_request_at"`
+		LastSuccessAt *string `json:"last_success_at"`
+		RequestsTotal int64   `json:"requests_total"`
+		ErrorsTotal   int64   `json:"errors_total"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	t.Logf("status=%s last_request_at=%v last_success_at=%v requests=%d errors=%d",
+		resp.Status, resp.LastRequestAt, resp.LastSuccessAt, resp.RequestsTotal, resp.ErrorsTotal)
+
+	if resp.LastRequestAt == nil {
+		t.Error("last_request_at is null, want RFC3339 timestamp")
+	} else {
+		if _, err := time.Parse(time.RFC3339, *resp.LastRequestAt); err != nil {
+			t.Errorf("last_request_at %q is not valid RFC3339: %v", *resp.LastRequestAt, err)
+		}
+	}
+	if resp.LastSuccessAt == nil {
+		t.Error("last_success_at is null, want RFC3339 timestamp")
+	}
+	if resp.RequestsTotal != 5 {
+		t.Errorf("requests_total = %d, want 5", resp.RequestsTotal)
+	}
+	if resp.ErrorsTotal != 1 {
+		t.Errorf("errors_total = %d, want 1", resp.ErrorsTotal)
+	}
+}
 
 func TestHitRateString(t *testing.T) {
 	tests := []struct {
