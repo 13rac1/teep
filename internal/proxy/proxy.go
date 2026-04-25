@@ -195,6 +195,76 @@ func extractMultipartField(contentType string, body []byte, fieldName string) (s
 	}
 }
 
+// rewriteModelInBody replaces the model field in the request body with
+// upstreamModel (the provider-stripped model name). For JSON bodies the
+// "model" JSON field is rewritten. For multipart bodies (audio transcription)
+// the "model" form field is replaced while preserving all other parts and the
+// original boundary.
+func rewriteModelInBody(contentType string, body []byte, ep *endpointConfig, upstreamModel string) ([]byte, error) {
+	if ep.contentType == "application/json" {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(body, &m); err != nil {
+			return nil, fmt.Errorf("unmarshal request body: %w", err)
+		}
+		id, err := json.Marshal(upstreamModel)
+		if err != nil {
+			return nil, fmt.Errorf("marshal upstream model: %w", err)
+		}
+		m["model"] = id
+		return json.Marshal(m)
+	}
+	// Audio multipart/form-data: rebuild with model field replaced.
+	return rewriteMultipartModel(contentType, body, upstreamModel)
+}
+
+// rewriteMultipartModel rebuilds a multipart/form-data body, replacing the
+// value of the "model" form field with upstreamModel. All other parts and the
+// original boundary are preserved.
+func rewriteMultipartModel(contentType string, body []byte, upstreamModel string) ([]byte, error) {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return nil, fmt.Errorf("parse content-type: %w", err)
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return nil, errors.New("missing boundary in content-type")
+	}
+
+	mr := multipart.NewReader(bytes.NewReader(body), boundary)
+	var out bytes.Buffer
+	mw := multipart.NewWriter(&out)
+	if err := mw.SetBoundary(boundary); err != nil {
+		return nil, fmt.Errorf("set boundary: %w", err)
+	}
+	for {
+		p, err := mr.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read multipart: %w", err)
+		}
+		pw, err := mw.CreatePart(p.Header)
+		if err != nil {
+			_ = p.Close()
+			return nil, fmt.Errorf("create part: %w", err)
+		}
+		if p.FormName() == "model" {
+			_, err = pw.Write([]byte(upstreamModel))
+		} else {
+			_, err = io.Copy(pw, p)
+		}
+		_ = p.Close()
+		if err != nil {
+			return nil, fmt.Errorf("write part: %w", err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		return nil, fmt.Errorf("close multipart writer: %w", err)
+	}
+	return out.Bytes(), nil
+}
+
 // chutesRetryableError returns true if the upstream error or response status
 // indicates a Chutes instance-level failure that warrants failover to a
 // different instance. Returns false for client-induced cancellations
@@ -980,6 +1050,13 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 		prov, upstreamModel, ok := s.resolveModel(model)
 		if !ok {
 			http.Error(w, fmt.Sprintf("unknown model %q: use provider:model format (e.g. venice:qwen3-5b)", model), http.StatusBadRequest)
+			return
+		}
+
+		body, err = rewriteModelInBody(r.Header.Get("Content-Type"), body, ep, upstreamModel)
+		if err != nil {
+			slog.ErrorContext(ctx, "rewrite model in body", "provider", prov.Name, "model", upstreamModel, "err", err)
+			http.Error(w, "failed to normalize request body", http.StatusInternalServerError)
 			return
 		}
 
