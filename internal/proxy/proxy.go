@@ -30,6 +30,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -337,6 +338,9 @@ func New(cfg *config.Config) (*Server, error) {
 	s.verifyQuote = attestation.NewTDXVerifier(cfg.Offline, s.collateral)
 
 	for name, cp := range cfg.Providers {
+		if strings.Contains(name, ":") {
+			return nil, fmt.Errorf("provider name %q must not contain ':'", name)
+		}
 		mDefaults, gwDefaults := defaults.MeasurementDefaults(name)
 		mergedPolicy := config.MergedMeasurementPolicy(name, cfg, mDefaults)
 		mergedGWPolicy := config.MergedGatewayMeasurementPolicy(name, cfg, gwDefaults)
@@ -579,15 +583,20 @@ func fromConfig(
 	return p, nil
 }
 
-// resolveModel returns the provider for a client model. The model name is
-// passed through to the upstream unchanged. With a single provider (the
-// current production configuration), this is deterministic. Multi-provider
-// routing by model name is not yet implemented; the first provider is returned.
+// resolveModel parses a client model string of the form "provider:model" and
+// returns the matching provider and upstream model name. Both the provider
+// prefix and the model segment must be non-empty. Unknown provider names and
+// missing separators are rejected (returns false).
 func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, bool) {
-	for _, p := range s.providers {
-		return p, clientModel, true
+	provName, upstreamModel, ok := strings.Cut(clientModel, ":")
+	if !ok || provName == "" || upstreamModel == "" {
+		return nil, "", false
 	}
-	return nil, "", false
+	p, found := s.providers[provName]
+	if !found {
+		return nil, "", false
+	}
+	return p, upstreamModel, true
 }
 
 // fetchAndVerify fetches attestation from the provider and runs all
@@ -970,7 +979,7 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 
 		prov, upstreamModel, ok := s.resolveModel(model)
 		if !ok {
-			http.Error(w, fmt.Sprintf("unknown model %q", model), http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("unknown model %q: use provider:model format (e.g. venice:qwen3-5b)", model), http.StatusBadRequest)
 			return
 		}
 
@@ -2231,15 +2240,24 @@ type modelsListResponse struct {
 // modelsTimeout is the context deadline for upstream model listing calls.
 const modelsTimeout = 30 * time.Second
 
-// handleModels returns available models from all configured providers.
-// Each provider's model entries are relayed as raw JSON to preserve all
-// upstream fields (pricing, capabilities, constraints, etc.).
+// handleModels returns available models from all configured providers in
+// deterministic (sorted) provider order. Each model's "id" field is rewritten
+// to "provider:upstreamID" so clients can route requests back to the correct
+// provider. All other upstream model fields are preserved verbatim.
+// Partial-success: a provider that fails listing is logged and skipped.
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(reqid.WithID(r.Context(), reqid.New()), modelsTimeout)
 	defer cancel()
 
-	all := make([]json.RawMessage, 0)
-	for _, p := range s.providers {
+	provNames := make([]string, 0, len(s.providers))
+	for name := range s.providers {
+		provNames = append(provNames, name)
+	}
+	sort.Strings(provNames)
+
+	var all []json.RawMessage
+	for _, name := range provNames {
+		p := s.providers[name]
 		if p.ModelLister == nil {
 			continue
 		}
@@ -2248,13 +2266,44 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			slog.WarnContext(ctx, "model listing failed", "provider", p.Name, "err", err)
 			continue
 		}
-		all = append(all, models...)
+		for _, raw := range models {
+			prefixed, err := prefixModelID(name, raw)
+			if err != nil {
+				slog.WarnContext(ctx, "model ID prefix failed", "provider", name, "err", err)
+				continue
+			}
+			all = append(all, prefixed)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(modelsListResponse{Object: "list", Data: all}); err != nil {
 		slog.ErrorContext(ctx, "encoding models response", "err", err)
 	}
+}
+
+// prefixModelID rewrites the "id" field of a JSON model object to
+// "providerName:originalID", preserving all other fields. Returns an error if
+// the object cannot be parsed or the "id" field is missing or not a string.
+func prefixModelID(providerName string, raw json.RawMessage) (json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	idRaw, ok := obj["id"]
+	if !ok {
+		return nil, errors.New("model object missing 'id' field")
+	}
+	var id string
+	if err := json.Unmarshal(idRaw, &id); err != nil {
+		return nil, fmt.Errorf("model 'id' is not a string: %w", err)
+	}
+	prefixed, err := json.Marshal(providerName + ":" + id)
+	if err != nil {
+		return nil, err
+	}
+	obj["id"] = prefixed
+	return json.Marshal(obj)
 }
 
 // handleReport returns the cached VerificationReport for the given provider

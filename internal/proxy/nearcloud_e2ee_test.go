@@ -17,7 +17,7 @@ func TestNearCloudE2EE_ChatStream(t *testing.T) {
 	ts := newMockNearCloudProxyServer(t, true)
 	defer ts.Close()
 
-	body := `{"model":"test-model","messages":[{"role":"user","content":"hello world"}],"stream":true}`
+	body := `{"model":"nearcloud:test-model","messages":[{"role":"user","content":"hello world"}],"stream":true}`
 	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -50,7 +50,7 @@ func TestNearCloudE2EE_ChatNonStream(t *testing.T) {
 	ts := newMockNearCloudProxyServer(t, true)
 	defer ts.Close()
 
-	body := `{"model":"test-model","messages":[{"role":"user","content":"hello non-stream"}],"stream":false}`
+	body := `{"model":"nearcloud:test-model","messages":[{"role":"user","content":"hello non-stream"}],"stream":false}`
 	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -84,7 +84,7 @@ func TestNearCloudE2EE_ToolCallNullContent(t *testing.T) {
 	defer ts.Close()
 
 	body := `{
-		"model": "test-model",
+		"model": "nearcloud:test-model",
 		"messages": [
 			{"role": "user", "content": "What's the weather?"},
 			{"role": "assistant", "content": null, "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"SF\"}"}}]},
@@ -125,7 +125,7 @@ func TestNearCloudE2EE_VLContent(t *testing.T) {
 	defer ts.Close()
 
 	body := `{
-		"model": "test-model",
+		"model": "nearcloud:test-model",
 		"messages": [{
 			"role": "user",
 			"content": [
@@ -168,7 +168,7 @@ func TestNearCloudE2EE_ImageGeneration(t *testing.T) {
 	ts := newMockNearCloudProxyServer(t, true)
 	defer ts.Close()
 
-	body := `{"model":"test-model","prompt":"a cat sitting on a laptop","n":1,"size":"1024x1024"}`
+	body := `{"model":"nearcloud:test-model","prompt":"a cat sitting on a laptop","n":1,"size":"1024x1024"}`
 	resp, err := http.Post(ts.URL+"/v1/images/generations", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -216,7 +216,7 @@ func TestNearCloudE2EE_PlaintextFallback(t *testing.T) {
 	ts := newMockNearCloudProxyServer(t, false)
 	defer ts.Close()
 
-	body := `{"model":"test-model","messages":[{"role":"user","content":"hello"}],"stream":false}`
+	body := `{"model":"nearcloud:test-model","messages":[{"role":"user","content":"hello"}],"stream":false}`
 	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -247,7 +247,7 @@ func TestNearCloudE2EE_MultipleMessages(t *testing.T) {
 	defer ts.Close()
 
 	body := `{
-		"model": "test-model",
+		"model": "nearcloud:test-model",
 		"messages": [
 			{"role": "system", "content": "You are a helpful assistant."},
 			{"role": "user", "content": "What is 2+2?"},
@@ -285,7 +285,7 @@ func TestNearCloudE2EE_ExtraFields(t *testing.T) {
 	defer ts.Close()
 
 	body := `{
-		"model": "test-model",
+		"model": "nearcloud:test-model",
 		"messages": [{"role": "user", "content": "hi"}],
 		"temperature": 0.7,
 		"max_tokens": 100,

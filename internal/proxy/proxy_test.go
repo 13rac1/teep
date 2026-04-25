@@ -560,7 +560,7 @@ func TestEmbeddings_PinnedOK(t *testing.T) {
 	defer proxySrv.Close()
 
 	resp, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
-		strings.NewReader(`{"model":"test-model","input":"hello"}`))
+		strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
 	if err != nil {
 		t.Fatalf("POST embeddings: %v", err)
 	}
@@ -642,7 +642,7 @@ func TestImages_PinnedOK(t *testing.T) {
 	defer proxySrv.Close()
 
 	resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
-		strings.NewReader(`{"model":"test-model","prompt":"a cat","n":1}`))
+		strings.NewReader(`{"model":"neardirect:test-model","prompt":"a cat","n":1}`))
 	if err != nil {
 		t.Fatalf("POST images: %v", err)
 	}
@@ -669,7 +669,7 @@ func TestImages_PinnedE2EESessionRelayed(t *testing.T) {
 	defer proxySrv.Close()
 
 	resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
-		strings.NewReader(`{"model":"test-model","prompt":"a cat","n":1}`))
+		strings.NewReader(`{"model":"neardirect:test-model","prompt":"a cat","n":1}`))
 	if err != nil {
 		t.Fatalf("POST images: %v", err)
 	}
@@ -742,8 +742,8 @@ func TestNonChat_PinnedOK_ForwardsUpstreamHeaders(t *testing.T) {
 		path string
 		body string
 	}{
-		{"/v1/embeddings", `{"model":"test-model","input":"hello"}`},
-		{"/v1/images/generations", `{"model":"test-model","prompt":"a cat","n":1}`},
+		{"/v1/embeddings", `{"model":"neardirect:test-model","input":"hello"}`},
+		{"/v1/images/generations", `{"model":"neardirect:test-model","prompt":"a cat","n":1}`},
 	}
 	for _, ep := range endpoints {
 		t.Run(ep.path, func(t *testing.T) {
@@ -799,7 +799,7 @@ func TestAudio_PinnedOK(t *testing.T) {
 
 	// Multipart form with model field.
 	var buf bytes.Buffer
-	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ntest-model\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
+	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nneardirect:test-model\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
 	resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
 		"multipart/form-data; boundary=boundary", &buf)
 	if err != nil {
@@ -827,7 +827,7 @@ func TestAudio_PinnedOK_FileBeforeModel(t *testing.T) {
 
 	// Multipart form with file field before model field (reversed order).
 	var buf bytes.Buffer
-	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ntest-model\r\n--boundary--\r\n")
+	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nneardirect:test-model\r\n--boundary--\r\n")
 	resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
 		"multipart/form-data; boundary=boundary", &buf)
 	if err != nil {
@@ -978,7 +978,7 @@ func TestRerank_PinnedOK(t *testing.T) {
 	defer proxySrv.Close()
 
 	resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
-		strings.NewReader(`{"model":"test-model","query":"hello","documents":["a","b"]}`))
+		strings.NewReader(`{"model":"neardirect:test-model","query":"hello","documents":["a","b"]}`))
 	if err != nil {
 		t.Fatalf("POST rerank: %v", err)
 	}
@@ -1029,7 +1029,7 @@ func TestEmbeddings_NegativeCache503(t *testing.T) {
 
 	// First request: blocked attestation in pinned handler → 502.
 	resp1, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
-		strings.NewReader(`{"model":"test-model","input":"hello"}`))
+		strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
 	if err != nil {
 		t.Fatalf("first request: %v", err)
 	}
@@ -1040,7 +1040,7 @@ func TestEmbeddings_NegativeCache503(t *testing.T) {
 
 	// Second request: negative cache → 503.
 	resp2, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
-		strings.NewReader(`{"model":"test-model","input":"hello"}`))
+		strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
 	if err != nil {
 		t.Fatalf("second request: %v", err)
 	}
@@ -1114,11 +1114,11 @@ func TestHandleModels(t *testing.T) {
 			t.Errorf("model %q: created = %d, want 1727966436", m.ID, m.Created)
 		}
 	}
-	if !ids["e2ee-test-model"] {
-		t.Error("e2ee-test-model not in response")
+	if !ids["venice:e2ee-test-model"] {
+		t.Error("venice:e2ee-test-model not in response")
 	}
-	if !ids["tee-test-model"] {
-		t.Error("tee-test-model not in response")
+	if !ids["venice:tee-test-model"] {
+		t.Error("venice:tee-test-model not in response")
 	}
 }
 
@@ -1267,11 +1267,11 @@ func TestHandleModels_MultipleProviders(t *testing.T) {
 		t.Logf("  model: %s", m.ID)
 		ids[m.ID] = true
 	}
-	if !ids["model-a"] {
-		t.Error("model-a missing from response")
+	if !ids["neardirect:model-a"] {
+		t.Error("neardirect:model-a missing from response")
 	}
-	if !ids["model-b"] {
-		t.Error("model-b missing from response")
+	if !ids["nearcloud:model-b"] {
+		t.Error("nearcloud:model-b missing from response")
 	}
 }
 
@@ -1436,7 +1436,7 @@ func TestHandleReport_ReturnsCachedReport(t *testing.T) {
 	defer proxySrv.Close()
 
 	// Make a chat request to populate the cache.
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -1490,7 +1490,7 @@ func TestNegativeCache503(t *testing.T) {
 	defer proxySrv.Close()
 
 	// First request: attestation fails → 502.
-	resp1, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp1, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("first request: %v", err)
 	}
@@ -1500,7 +1500,7 @@ func TestNegativeCache503(t *testing.T) {
 	}
 
 	// Second request: negative cache → 503.
-	resp2, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp2, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("second request: %v", err)
 	}
@@ -1553,7 +1553,7 @@ func TestBlockedAttestation502(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -1615,7 +1615,7 @@ func TestPlaintextNonStream(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -1672,7 +1672,7 @@ func TestPlaintextStreaming(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", true)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", true)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -1778,7 +1778,7 @@ func TestE2EERefusesPlaintextFallback(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -1830,7 +1830,7 @@ func TestUpstreamNon200Forwarded(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -1875,7 +1875,7 @@ func TestSinglePinnedProvider_AllowsDynamicModelName(t *testing.T) {
 	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "zai-org/GLM-5-FP8", false)
+	resp, err := postChat(t, proxySrv.URL, "neardirect:zai-org/GLM-5-FP8", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -1915,7 +1915,7 @@ func TestPinnedProvider_BlockedReportReturns502(t *testing.T) {
 	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -1985,7 +1985,7 @@ func TestSSEMultipleChunks(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", true)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", true)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -2051,7 +2051,7 @@ func TestAttestationCacheHit(t *testing.T) {
 	defer proxySrv.Close()
 
 	for i := range 3 {
-		resp, err := postChat(t, proxySrv.URL, "test-model", false)
+		resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 		if err != nil {
 			t.Fatalf("request %d: %v", i, err)
 		}
@@ -2110,7 +2110,7 @@ func TestE2EEStreamingRefusesPlaintext(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", true)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", true)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -2177,7 +2177,7 @@ func TestPlaintextPassthrough_PreservesCiphertext(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -2436,7 +2436,7 @@ func TestUpstreamBodyDrained(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -2497,7 +2497,7 @@ func TestSSELargeChunk(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", true)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", true)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -2566,7 +2566,7 @@ func TestAuthorizationHeaderSetViaVenicePreparer(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -3305,7 +3305,7 @@ func TestHandleIndex_AfterRequest(t *testing.T) {
 	defer proxySrv.Close()
 
 	// Make a chat request to populate stats.
-	chatResp, err := postChat(t, proxySrv.URL, "test-model", false)
+	chatResp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -3370,7 +3370,7 @@ func TestSigningKeyCacheReuse(t *testing.T) {
 	defer proxySrv.Close()
 
 	// First request: attestation + signing key cached.
-	resp1, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp1, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
 	if err != nil {
 		t.Fatalf("first request: %v", err)
 	}
@@ -3387,7 +3387,7 @@ func TestSigningKeyCacheReuse(t *testing.T) {
 	}
 
 	// Second request: SPKI hit, signing key should come from cache.
-	resp2, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp2, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
 	if err != nil {
 		t.Fatalf("second request: %v", err)
 	}
@@ -3438,7 +3438,7 @@ func TestBlockedReport_NegCacheAndAttestCacheInteraction(t *testing.T) {
 	defer proxySrv.Close()
 
 	// Request 1: blocked → 502 + negative cache populated.
-	resp1, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp1, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
 	if err != nil {
 		t.Fatalf("request 1: %v", err)
 	}
@@ -3451,7 +3451,7 @@ func TestBlockedReport_NegCacheAndAttestCacheInteraction(t *testing.T) {
 	}
 
 	// Request 2: negative cache → 503. Handler should NOT be called again.
-	resp2, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp2, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
 	if err != nil {
 		t.Fatalf("request 2: %v", err)
 	}
@@ -3473,7 +3473,7 @@ func TestBlockedReport_NegCacheAndAttestCacheInteraction(t *testing.T) {
 		}
 
 		// Request 3 attempt: expect negative cache to have expired → re-attest → handler returns OK.
-		resp3, err := postChat(t, proxySrv.URL, "test-model", false)
+		resp3, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
 		lastErr = err
 		if err != nil {
 			// Retry until deadline to avoid flakiness due to timing.
@@ -3530,7 +3530,7 @@ func TestPinnedPath_E2EE_ReportDataBindingCacheCheck(t *testing.T) {
 	// Request 1: attestation returns report where reportdata binding fails.
 	// For an E2EE provider, the proxy must refuse the request even on first
 	// request (SPKI miss) to prevent plaintext downgrade.
-	resp1, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp1, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
 	if err != nil {
 		t.Fatalf("request 1: %v", err)
 	}
@@ -3544,7 +3544,7 @@ func TestPinnedPath_E2EE_ReportDataBindingCacheCheck(t *testing.T) {
 
 	// Request 2: provider/model is now negative-cached after the first
 	// REPORTDATA binding failure → request is blocked immediately with 503.
-	resp2, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp2, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
 	if err != nil {
 		t.Fatalf("request 2: %v", err)
 	}
@@ -3592,7 +3592,7 @@ func TestPinnedPath_E2EE_NilReportBlocked(t *testing.T) {
 	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -3744,7 +3744,7 @@ func TestNoncePoolAccept(t *testing.T) {
 	srv.PutAttestationCache("venice", "test-model", passingReport("venice", "test-model"))
 	srv.PutSigningKeyCache("venice", "test-model", signingKey)
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -3799,7 +3799,7 @@ func TestNoncePoolReject_ColdSigningKeyCache(t *testing.T) {
 	// Pre-populate attestation cache but NOT the signing key cache.
 	srv.PutAttestationCache("venice", "test-model", passingReport("venice", "test-model"))
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -3853,7 +3853,7 @@ func TestNoncePoolMismatch_Invalidate(t *testing.T) {
 	srv.PutAttestationCache("venice", "test-model", passingReport("venice", "test-model"))
 	srv.PutSigningKeyCache("venice", "test-model", "old-cached-key")
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -3998,7 +3998,7 @@ func TestChutesRetry_FailoverOnUpstream502(t *testing.T) {
 	srv.PutAttestationCache("chutes", "test-model", passingReport("chutes", "test-model"))
 	srv.PutSigningKeyCache("chutes", "test-model", signingKey)
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "chutes:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -4059,7 +4059,7 @@ func TestChutesRetry_NoRetryOnSuccess(t *testing.T) {
 	srv.PutAttestationCache("chutes", "test-model", passingReport("chutes", "test-model"))
 	srv.PutSigningKeyCache("chutes", "test-model", signingKey)
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "chutes:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -4113,7 +4113,7 @@ func TestChutesRetry_AllAttemptsFail(t *testing.T) {
 	srv.PutAttestationCache("chutes", "test-model", passingReport("chutes", "test-model"))
 	srv.PutSigningKeyCache("chutes", "test-model", signingKey)
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "chutes:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -4183,7 +4183,7 @@ func TestFetchAndVerify_FakeTDXQuote(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -4237,7 +4237,7 @@ func TestFetchAndVerify_FakeNvidiaPayload(t *testing.T) {
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
 
-	resp, err := postChat(t, proxySrv.URL, "test-model", false)
+	resp, err := postChat(t, proxySrv.URL, "venice:test-model", false)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -4344,5 +4344,26 @@ func TestDashboardEvents(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("status = %d, want 200", resp.StatusCode)
 		}
+	}
+}
+
+// TestNew_ProviderNameWithColon verifies that proxy.New rejects a provider
+// name containing ":" at startup, enforcing the invariant that resolveModel
+// can use strings.Cut on ":" as an unambiguous provider/model delimiter.
+func TestNew_ProviderNameWithColon(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"evil:venice": {
+				Name:    "evil:venice",
+				BaseURL: "https://example.com",
+				APIKey:  "test-key",
+			},
+		},
+	}
+	_, err := proxy.New(cfg)
+	t.Logf("proxy.New with colon provider name: %v", err)
+	if err == nil {
+		t.Error("expected error for provider name containing ':', got nil")
 	}
 }

@@ -645,25 +645,67 @@ func (*noopPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequ
 func TestResolveModel_NoProviders(t *testing.T) {
 	s := newMinimalServer()
 	s.providers = map[string]*provider.Provider{}
-	prov, model, ok := s.resolveModel("gpt-4")
+	prov, model, ok := s.resolveModel("venice:qwen3-122b")
 	t.Logf("resolveModel(no providers): prov=%v model=%q ok=%v", prov, model, ok)
 	if ok {
 		t.Error("expected ok=false when no providers configured")
 	}
 }
 
-func TestResolveModel_SingleProvider(t *testing.T) {
+func TestResolveModel_Valid(t *testing.T) {
+	s := newMinimalServer()
+	s.providers = map[string]*provider.Provider{
+		"venice": {Name: "venice"},
+	}
+	prov, model, ok := s.resolveModel("venice:qwen3-122b")
+	t.Logf("resolveModel(valid): prov=%v model=%q ok=%v", prov, model, ok)
+	if !ok {
+		t.Error("expected ok=true for valid provider:model")
+	}
+	if model != "qwen3-122b" {
+		t.Errorf("model = %q, want %q", model, "qwen3-122b")
+	}
+	if prov == nil || prov.Name != "venice" {
+		t.Errorf("prov.Name = %q, want 'venice'", prov.Name)
+	}
+}
+
+func TestResolveModel_UnknownProvider(t *testing.T) {
+	s := newMinimalServer()
+	s.providers = map[string]*provider.Provider{
+		"venice": {Name: "venice"},
+	}
+	prov, model, ok := s.resolveModel("bogus:qwen3-122b")
+	t.Logf("resolveModel(unknown provider): prov=%v model=%q ok=%v", prov, model, ok)
+	if ok {
+		t.Error("expected ok=false for unknown provider")
+	}
+}
+
+func TestResolveModel_MissingSeparator(t *testing.T) {
 	s := newMinimalServer()
 	s.providers = map[string]*provider.Provider{
 		"venice": {Name: "venice"},
 	}
 	prov, model, ok := s.resolveModel("qwen3-122b")
-	t.Logf("resolveModel(single): prov=%v model=%q ok=%v", prov, model, ok)
-	if !ok {
-		t.Error("expected ok=true with one provider")
+	t.Logf("resolveModel(no separator): prov=%v model=%q ok=%v", prov, model, ok)
+	if ok {
+		t.Error("expected ok=false for model without provider: prefix")
 	}
-	if model != "qwen3-122b" {
-		t.Errorf("model = %q, want %q", model, "qwen3-122b")
+}
+
+func TestResolveModel_EmptySegments(t *testing.T) {
+	s := newMinimalServer()
+	s.providers = map[string]*provider.Provider{
+		"venice": {Name: "venice"},
+	}
+	cases := []string{":qwen3-122b", "venice:", ":", ""}
+	for _, c := range cases {
+		prov, model, ok := s.resolveModel(c)
+		t.Logf("resolveModel(%q): prov=%v model=%q ok=%v", c, prov, model, ok)
+		if ok {
+			t.Errorf("resolveModel(%q): expected ok=false for empty segment", c)
+		}
 	}
 }
 

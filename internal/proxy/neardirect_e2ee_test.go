@@ -17,7 +17,7 @@ func TestNeardirectE2EE_ChatStream(t *testing.T) {
 	ts := newMockNeardirectE2EEServer(t, true)
 	defer ts.Close()
 
-	body := `{"model":"test-model","messages":[{"role":"user","content":"hello world"}],"stream":true}`
+	body := `{"model":"neardirect:test-model","messages":[{"role":"user","content":"hello world"}],"stream":true}`
 	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -49,7 +49,7 @@ func TestNeardirectE2EE_ChatNonStream(t *testing.T) {
 	ts := newMockNeardirectE2EEServer(t, true)
 	defer ts.Close()
 
-	body := `{"model":"test-model","messages":[{"role":"user","content":"hello non-stream"}],"stream":false}`
+	body := `{"model":"neardirect:test-model","messages":[{"role":"user","content":"hello non-stream"}],"stream":false}`
 	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -82,7 +82,7 @@ func TestNeardirectE2EE_ToolCallNullContent(t *testing.T) {
 	defer ts.Close()
 
 	body := `{
-		"model": "test-model",
+		"model": "neardirect:test-model",
 		"messages": [
 			{"role": "user", "content": "What's the weather?"},
 			{"role": "assistant", "content": null, "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"SF\"}"}}]},
@@ -121,7 +121,7 @@ func TestNeardirectE2EE_ImageGeneration(t *testing.T) {
 	ts := newMockNeardirectE2EEServer(t, true)
 	defer ts.Close()
 
-	body := `{"model":"test-model","prompt":"a cat sitting on a laptop","n":1,"size":"1024x1024"}`
+	body := `{"model":"neardirect:test-model","prompt":"a cat sitting on a laptop","n":1,"size":"1024x1024"}`
 	resp, err := http.Post(ts.URL+"/v1/images/generations", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -168,7 +168,7 @@ func TestNeardirectE2EE_PlaintextFallback(t *testing.T) {
 	ts := newMockNeardirectE2EEServer(t, false)
 	defer ts.Close()
 
-	body := `{"model":"test-model","messages":[{"role":"user","content":"hello"}],"stream":false}`
+	body := `{"model":"neardirect:test-model","messages":[{"role":"user","content":"hello"}],"stream":false}`
 	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -203,9 +203,9 @@ func TestNeardirectE2EE_UnsupportedEndpoint(t *testing.T) {
 		path string
 		body string
 	}{
-		{"/v1/embeddings", `{"model":"test-model","input":"hello"}`},
-		{"/v1/audio/transcriptions", `{"model":"test-model","file":"data"}`},
-		{"/v1/rerank", `{"model":"test-model","query":"hello","documents":["a","b"]}`},
+		{"/v1/embeddings", `{"model":"neardirect:test-model","input":"hello"}`},
+		{"/v1/audio/transcriptions", `{"model":"neardirect:test-model","file":"data"}`},
+		{"/v1/rerank", `{"model":"neardirect:test-model","query":"hello","documents":["a","b"]}`},
 	}
 
 	for _, tc := range unsupported {
