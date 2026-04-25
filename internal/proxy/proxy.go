@@ -281,13 +281,13 @@ type Server struct {
 	rekorClient     *attestation.RekorClient
 	nvidiaVerifier  *attestation.NVIDIAVerifier
 	mux             *http.ServeMux
-	attestClient    *http.Client            // for attestation fetches
-	collateral      trust.HTTPSGetter       // for Intel PCS collateral fetches
-	verifyQuote     attestation.TDXVerifier // constructed from cfg.Offline + collateral
-	upstreamClient  *http.Client            // for chat completions forwards
-	sseConns        atomic.Int64            // active SSE /events connections
-	e2eeFailed      sync.Map                // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
-	breakers        sync.Map                // provider name → *circuitBreaker
+	attestClient    *http.Client               // for attestation fetches
+	collateral      trust.HTTPSGetter          // for Intel PCS collateral fetches
+	verifyQuote     attestation.TDXVerifier    // constructed from cfg.Offline + collateral
+	upstreamClient  *http.Client               // for chat completions forwards
+	sseConns        atomic.Int64               // active SSE /events connections
+	e2eeFailed      sync.Map                   // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
+	breakers        map[string]*circuitBreaker // provider name → circuit breaker; fixed at startup, no sync needed
 	stats           stats
 }
 
@@ -348,6 +348,15 @@ func New(cfg *config.Config) (*Server, error) {
 
 	if len(s.providers) == 0 {
 		return nil, errors.New("no providers configured")
+	}
+
+	s.breakers = make(map[string]*circuitBreaker, len(s.providers))
+	for name := range s.providers {
+		s.breakers[name] = &circuitBreaker{
+			threshold:    defaultBreakerThreshold,
+			resetTimeout: defaultBreakerResetTimeout,
+			now:          time.Now,
+		}
 	}
 
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
@@ -587,22 +596,6 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 	return nil, "", false
 }
 
-// breakerFor returns the circuit breaker for the named provider, creating one
-// on the first call. The same *circuitBreaker is always returned for a given
-// name so callers can share state across requests.
-func (s *Server) breakerFor(name string) *circuitBreaker {
-	v, _ := s.breakers.LoadOrStore(name, &circuitBreaker{
-		threshold:    defaultBreakerThreshold,
-		resetTimeout: defaultBreakerResetTimeout,
-		now:          time.Now,
-	})
-	cb, ok := v.(*circuitBreaker)
-	if !ok {
-		panic("proxy: breakers sync.Map contains a non-*circuitBreaker value")
-	}
-	return cb
-}
-
 // fetchAndVerify fetches attestation from the provider and runs all
 // verification factors. On failure it records the provider/model in the
 // negative cache. Returns (nil, nil) on fetch error.
@@ -617,7 +610,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		return nil, nil
 	}
 
-	cb := s.breakerFor(prov.Name)
+	cb := s.breakers[prov.Name]
 	if !cb.allow() {
 		slog.WarnContext(ctx, "circuit breaker open; skipping attestation fetch", "provider", prov.Name)
 		// Also record in negCache so that the next request for this specific
@@ -637,7 +630,16 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	raw, err := prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
 	if err != nil {
 		slog.ErrorContext(ctx, "attestation fetch failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-		cb.failure()
+		// Do not count client-driven context terminations as provider failures.
+		// context.Canceled (client disconnect) and context.DeadlineExceeded
+		// (client-imposed timeout) both say nothing about provider health —
+		// the provider may be perfectly healthy. Counting them would let an
+		// attacker trip the circuit with threshold fire-and-disconnect or
+		// short-deadline requests. Use ctx.Err() to catch all context-error
+		// variants rather than enumerating specific sentinel values.
+		if ctx.Err() == nil {
+			cb.failure()
+		}
 		s.negCache.Record(prov.Name, upstreamModel)
 		return nil, nil
 	}

@@ -6,15 +6,16 @@ import (
 )
 
 // newTestBreaker creates a circuit breaker with controllable time. The returned
-// *time.Time pointer can be reassigned to advance the clock seen by the breaker.
-func newTestBreaker(threshold int) (*circuitBreaker, *time.Time) {
+// advance function moves the clock forward by the given duration.
+func newTestBreaker(threshold int) (cb *circuitBreaker, advance func(time.Duration)) {
 	now := time.Now()
-	cb := &circuitBreaker{
+	cb = &circuitBreaker{
 		threshold:    threshold,
 		resetTimeout: time.Minute,
 		now:          func() time.Time { return now },
 	}
-	return cb, &now
+	advance = func(d time.Duration) { now = now.Add(d) }
+	return
 }
 
 func TestCircuitBreaker_InitialState(t *testing.T) {
@@ -54,14 +55,14 @@ func TestCircuitBreaker_OpenBlocksRequests(t *testing.T) {
 }
 
 func TestCircuitBreaker_HalfOpenAfterReset(t *testing.T) {
-	cb, nowPtr := newTestBreaker(1)
+	cb, advance := newTestBreaker(1)
 	cb.failure() // open
 
 	if cb.allow() {
 		t.Error("circuit should be blocked immediately after opening")
 	}
 
-	*nowPtr = nowPtr.Add(time.Minute + time.Second) // advance past resetTimeout
+	advance(time.Minute + time.Second) // advance past resetTimeout
 
 	if !cb.allow() {
 		t.Error("circuit should allow probe after reset timeout")
@@ -73,11 +74,11 @@ func TestCircuitBreaker_HalfOpenAfterReset(t *testing.T) {
 }
 
 func TestCircuitBreaker_RecoveryClosesCircuit(t *testing.T) {
-	cb, nowPtr := newTestBreaker(1)
-	cb.failure()                                    // open
-	*nowPtr = nowPtr.Add(time.Minute + time.Second) // advance past reset
-	cb.allow()                                      // transitions to half-open
-	cb.success()                                    // probe succeeded → closed
+	cb, advance := newTestBreaker(1)
+	cb.failure()                       // open
+	advance(time.Minute + time.Second) // advance past reset
+	cb.allow()                         // transitions to half-open
+	cb.success()                       // probe succeeded → closed
 
 	if !cb.allow() {
 		t.Error("circuit should be closed after successful probe")
@@ -85,28 +86,14 @@ func TestCircuitBreaker_RecoveryClosesCircuit(t *testing.T) {
 }
 
 func TestCircuitBreaker_ProbeFailureReopens(t *testing.T) {
-	cb, nowPtr := newTestBreaker(1)
-	cb.failure()                                    // open
-	*nowPtr = nowPtr.Add(time.Minute + time.Second) // advance past reset
-	cb.allow()                                      // transitions to half-open
-	cb.failure()                                    // probe failed → reopen
+	cb, advance := newTestBreaker(1)
+	cb.failure()                       // open
+	advance(time.Minute + time.Second) // advance past reset
+	cb.allow()                         // transitions to half-open
+	cb.failure()                       // probe failed → reopen
 
 	if cb.allow() {
 		t.Error("circuit should be open after probe failure")
-	}
-}
-
-func TestBreakerFor(t *testing.T) {
-	s := &Server{}
-	b1 := s.breakerFor("provider-a")
-	b2 := s.breakerFor("provider-a")
-	b3 := s.breakerFor("provider-b")
-
-	if b1 != b2 {
-		t.Error("breakerFor should return the same *circuitBreaker for the same provider name")
-	}
-	if b1 == b3 {
-		t.Error("breakerFor should return different *circuitBreakers for different provider names")
 	}
 }
 

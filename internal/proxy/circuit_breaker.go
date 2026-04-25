@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -31,6 +32,19 @@ const (
 	cbHalfOpen                // one probe allowed; waiting for outcome
 )
 
+func (s cbState) String() string {
+	switch s {
+	case cbClosed:
+		return "closed"
+	case cbOpen:
+		return "open"
+	case cbHalfOpen:
+		return "half-open"
+	default:
+		return fmt.Sprintf("cbState(%d)", int(s))
+	}
+}
+
 // circuitBreaker tracks consecutive attestation fetch failures for a single
 // provider and opens the circuit after a configurable threshold. While open,
 // allow() returns false immediately so no upstream HTTP call is made. After
@@ -44,9 +58,17 @@ const (
 // would require threshold failures per model before any protection engaged,
 // meaning tens of failures for a provider with many models before the first
 // request was blocked.
+//
+// Caller contract: a caller that receives true from allow must call exactly
+// one of success or failure when the upstream call completes. Failure to do so
+// while the circuit is half-open will leave it permanently half-open.
 type circuitBreaker struct {
-	mu           sync.Mutex
-	state        cbState
+	mu    sync.Mutex
+	state cbState
+	// failures counts fetch failures since the last success() call. It is only
+	// incremented in cbClosed (counting toward the threshold) and cbHalfOpen
+	// (counting probe failures). It is not incremented while cbOpen because the
+	// circuit is already tripped and the count is irrelevant until it resets.
 	failures     int
 	openedAt     time.Time
 	threshold    int
@@ -70,8 +92,9 @@ func (cb *circuitBreaker) allow() bool {
 		return false
 	case cbHalfOpen:
 		return false // probe already in flight
+	default:
+		panic("proxy: unhandled cbState in allow()")
 	}
-	return false
 }
 
 // success closes the circuit and resets the failure counter. Call after a
@@ -80,8 +103,8 @@ func (cb *circuitBreaker) success() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	if cb.state != cbClosed {
-		slog.Warn("circuit breaker closed after successful probe",
-			"failures_cleared", cb.failures)
+		slog.Warn("circuit breaker recovered",
+			"previous_state", cb.state, "failures_cleared", cb.failures)
 	}
 	cb.state = cbClosed
 	cb.failures = 0
@@ -89,12 +112,14 @@ func (cb *circuitBreaker) success() {
 
 // failure records a fetch failure. When the threshold is reached the circuit
 // opens. A failure during the half-open probe reopens the circuit immediately.
+// Failures while already open are discarded — the counter is only meaningful
+// when counting toward the threshold or tracking probe outcomes.
 func (cb *circuitBreaker) failure() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	cb.failures++
 	switch cb.state {
 	case cbClosed:
+		cb.failures++
 		if cb.failures >= cb.threshold {
 			slog.Warn("circuit breaker open",
 				"failures", cb.failures, "threshold", cb.threshold)
@@ -102,11 +127,14 @@ func (cb *circuitBreaker) failure() {
 			cb.openedAt = cb.now()
 		}
 	case cbHalfOpen:
+		cb.failures++
 		slog.Warn("circuit breaker reopened after probe failure",
 			"failures", cb.failures)
 		cb.state = cbOpen
 		cb.openedAt = cb.now()
 	case cbOpen:
-		// Already open; failure counter incremented above but no state change needed.
+		// Already open; discard. The counter is irrelevant until the circuit closes.
+	default:
+		panic("proxy: unhandled cbState in failure()")
 	}
 }
