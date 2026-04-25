@@ -4296,6 +4296,30 @@ func TestRespStatusCode_NonNil(t *testing.T) {
 // Dashboard routes: GET / and GET /events
 // --------------------------------------------------------------------------
 
+func TestNew_ProviderAllowFail(t *testing.T) {
+	// Exercises the per-provider allow_fail warn loop in New().
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		MaxConns:   10,
+		Providers: map[string]*config.Provider{
+			"venice": {
+				Name:    "venice",
+				BaseURL: "https://api.venice.ai",
+				APIKey:  "test-key",
+				E2EE:    false,
+			},
+		},
+		AllowFail: attestation.KnownFactors,
+		ProviderAllowFail: map[string][]string{
+			"venice": {"cpu_gpu_chain"},
+		},
+	}
+	_, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+}
+
 func TestDashboardIndex(t *testing.T) {
 	attestSrv := makeAttestationServer(t, false)
 	defer attestSrv.Close()

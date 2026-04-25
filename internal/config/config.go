@@ -5,7 +5,7 @@
 //
 //  1. Built-in defaults (listen addr 127.0.0.1:8337, default enforced factors).
 //  2. TOML file at $TEEP_CONFIG, if set.
-//  3. Environment variables (TEEP_LISTEN_ADDR, VENICE_API_KEY, NEARAI_API_KEY, NANOGPT_API_KEY).
+//  3. Environment variables (TEEP_LISTEN_ADDR, TEEP_MAX_CONNS, VENICE_API_KEY, NEARAI_API_KEY, NANOGPT_API_KEY).
 //
 // API keys are never logged; use RedactKey to produce a safe representation.
 package config
@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,15 @@ const (
 	// DefaultListenAddr is the proxy's default listen address.
 	// It deliberately binds only to loopback — never to all interfaces.
 	DefaultListenAddr = "127.0.0.1:8337"
+
+	// DefaultMaxConns is the default maximum number of concurrent inbound
+	// connections. When the limit is reached new connections block until an
+	// existing one closes. Override with TEEP_MAX_CONNS.
+	DefaultMaxConns = 100
+
+	// MaxMaxConns is the upper bound accepted for TEEP_MAX_CONNS.
+	// Values above this are clamped to MaxMaxConns with a warning.
+	MaxMaxConns = 10000
 
 	// AttestationTimeout is the HTTP client timeout for attestation fetches.
 	// 45 seconds accommodates Chutes' multi-GPU evidence endpoint which
@@ -118,6 +128,10 @@ type Config struct {
 	// ListenAddr is the TCP address the proxy HTTP server binds to.
 	ListenAddr string
 
+	// MaxConns is the maximum number of concurrent inbound connections.
+	// Defaults to DefaultMaxConns. Override with TEEP_MAX_CONNS.
+	MaxConns int
+
 	// Providers is the map of provider name → resolved provider config.
 	Providers map[string]*Provider
 
@@ -169,6 +183,7 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		ListenAddr:              DefaultListenAddr,
+		MaxConns:                DefaultMaxConns,
 		Providers:               make(map[string]*Provider),
 		ProviderAllowFail:       make(map[string][]string),
 		ProviderPolicies:        make(map[string]attestation.MeasurementPolicy),
@@ -462,10 +477,25 @@ func resolveProvider(name string, pc *ProviderConfig) *Provider {
 
 // applyEnvOverrides applies environment variable overrides to cfg.
 // TEEP_LISTEN_ADDR overrides the listen address.
+// TEEP_MAX_CONNS overrides the maximum concurrent connections.
 // VENICE_API_KEY, NEARAI_API_KEY, and NANOGPT_API_KEY inject or override provider API keys.
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("TEEP_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
+	}
+	if v := os.Getenv("TEEP_MAX_CONNS"); v != "" {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			slog.Warn("TEEP_MAX_CONNS is not a valid integer; using default", "value", v, "default", DefaultMaxConns)
+		case n <= 0:
+			slog.Warn("TEEP_MAX_CONNS must be a positive integer; using default", "value", n, "default", DefaultMaxConns)
+		case n > MaxMaxConns:
+			slog.Warn("TEEP_MAX_CONNS exceeds maximum; clamping", "value", n, "max", MaxMaxConns)
+			cfg.MaxConns = MaxMaxConns
+		default:
+			cfg.MaxConns = n
+		}
 	}
 
 	applyAPIKeyEnv(cfg, "venice", "VENICE_API_KEY", "https://api.venice.ai", true)

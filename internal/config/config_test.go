@@ -510,6 +510,83 @@ func TestEnvListenAddr(t *testing.T) {
 	}
 }
 
+func TestEnvMaxConns(t *testing.T) {
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	// Valid value overrides the default.
+	setenv(t, "TEEP_MAX_CONNS", "50")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=50: %d", cfg.MaxConns)
+	if cfg.MaxConns != 50 {
+		t.Errorf("MaxConns = %d, want 50", cfg.MaxConns)
+	}
+
+	// Invalid value falls back to default.
+	setenv(t, "TEEP_MAX_CONNS", "not-a-number")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=not-a-number: %d", cfg.MaxConns)
+	if cfg.MaxConns != DefaultMaxConns {
+		t.Errorf("MaxConns = %d, want default %d", cfg.MaxConns, DefaultMaxConns)
+	}
+
+	// Zero is rejected; falls back to default.
+	setenv(t, "TEEP_MAX_CONNS", "0")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=0: %d", cfg.MaxConns)
+	if cfg.MaxConns != DefaultMaxConns {
+		t.Errorf("MaxConns = %d, want default %d", cfg.MaxConns, DefaultMaxConns)
+	}
+
+	// Negative is rejected; falls back to default.
+	setenv(t, "TEEP_MAX_CONNS", "-1")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=-1: %d", cfg.MaxConns)
+	if cfg.MaxConns != DefaultMaxConns {
+		t.Errorf("MaxConns = %d, want default %d", cfg.MaxConns, DefaultMaxConns)
+	}
+
+	// Value exceeding MaxMaxConns is clamped.
+	setenv(t, "TEEP_MAX_CONNS", "99999")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=99999: %d", cfg.MaxConns)
+	if cfg.MaxConns != MaxMaxConns {
+		t.Errorf("MaxConns = %d, want MaxMaxConns %d", cfg.MaxConns, MaxMaxConns)
+	}
+}
+
+func TestLoadDefaultsMaxConns(t *testing.T) {
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "TEEP_MAX_CONNS")
+	clearProviderEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("default MaxConns: %d", cfg.MaxConns)
+	if cfg.MaxConns != DefaultMaxConns {
+		t.Errorf("MaxConns = %d, want default %d", cfg.MaxConns, DefaultMaxConns)
+	}
+}
+
 func TestEnvVeniceAPIKey(t *testing.T) {
 	unsetenv(t, "TEEP_CONFIG")
 	unsetenv(t, "TEEP_LISTEN_ADDR")

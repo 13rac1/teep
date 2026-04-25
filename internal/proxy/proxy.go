@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -490,18 +491,29 @@ func New(cfg *config.Config) (*Server, error) {
 // initiates a graceful shutdown with a 5-second deadline to drain in-flight
 // requests (which zeros any active E2EE sessions via their defers).
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", s.cfg.ListenAddr)
+	if err != nil {
+		return err
+	}
+	if host, _, err := net.SplitHostPort(s.cfg.ListenAddr); err == nil {
+		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+			slog.Warn("proxy is listening on a non-loopback address; dashboard and metrics endpoints are unauthenticated", "addr", s.cfg.ListenAddr)
+		}
+	}
+	ln = newLimitListener(ln, s.cfg.MaxConns)
+
 	srv := &http.Server{
-		Addr:              s.cfg.ListenAddr,
 		Handler:           s,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 	}
-	slog.Info("teep proxy listening", "addr", s.cfg.ListenAddr)
+	slog.Info("teep proxy listening", "addr", s.cfg.ListenAddr, "max_conns", s.cfg.MaxConns)
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- srv.Serve(ln) }()
 
 	select {
 	case err := <-errCh:
@@ -512,6 +524,39 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}
+}
+
+// limitListener wraps a net.Listener and caps concurrent open connections to n.
+// When the limit is reached, Accept blocks until an existing connection closes.
+// This prevents file descriptor exhaustion under pathological client load.
+type limitListener struct {
+	net.Listener
+	sem chan struct{}
+}
+
+func newLimitListener(l net.Listener, n int) net.Listener {
+	return &limitListener{Listener: l, sem: make(chan struct{}, n)}
+}
+
+func (l *limitListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.sem <- struct{}{}
+	return &limitConn{Conn: c, sem: l.sem}, nil
+}
+
+// limitConn releases its semaphore slot on Close.
+type limitConn struct {
+	net.Conn
+	once sync.Once
+	sem  chan struct{}
+}
+
+func (c *limitConn) Close() error {
+	c.once.Do(func() { <-c.sem })
+	return c.Conn.Close()
 }
 
 // ServeHTTP implements http.Handler so Server can be used with httptest.NewServer.
