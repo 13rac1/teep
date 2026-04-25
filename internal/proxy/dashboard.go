@@ -306,6 +306,28 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleMetrics serves Prometheus-format counters at /metrics.
+// Access control relies on the proxy binding to loopback by default; see ListenAndServe.
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+
+	write := func(name, help, kind string, value float64) {
+		fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+		fmt.Fprintf(w, "# TYPE %s %s\n", name, kind)
+		fmt.Fprintf(w, "%s %g\n", name, value)
+	}
+
+	write("teep_requests_total", "Total proxy requests received", "counter", float64(s.stats.requests.Load()))
+	write("teep_errors_total", "Total proxy requests that resulted in an error", "counter", float64(s.stats.errors.Load()))
+	write("teep_attestation_cache_hits_total", "Total attestation cache hits", "counter", float64(s.stats.cacheHits.Load()))
+	write("teep_attestation_cache_misses_total", "Total attestation cache misses", "counter", float64(s.stats.cacheMisses.Load()))
+	write("teep_e2ee_sessions_total", "Total E2EE-encrypted sessions", "counter", float64(s.stats.e2ee.Load()))
+	write("teep_plaintext_sessions_total", "Total plaintext (non-E2EE) sessions", "counter", float64(s.stats.plaintext.Load()))
+	write("teep_upstream_requests_total", "Total HTTP requests sent to upstream providers", "counter", float64(s.stats.httpRequests.Load()))
+	write("teep_upstream_errors_total", "Total HTTP errors from upstream providers", "counter", float64(s.stats.httpErrors.Load()))
+	write("teep_uptime_seconds", "Seconds since the proxy started", "gauge", time.Since(s.stats.startTime).Seconds())
+}
+
 // handleIndex serves a live stats dashboard at /.
 // Initial data is embedded as JSON so the page renders immediately.
 // An EventSource connection to /events takes over for live updates.

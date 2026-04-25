@@ -4427,3 +4427,53 @@ func TestNew_ProviderKeyNameMismatch(t *testing.T) {
 		t.Error("expected error for mismatched provider map key and name, got nil")
 	}
 }
+
+func TestMetrics(t *testing.T) {
+	attestSrv := makeAttestationServer(t, false)
+	defer attestSrv.Close()
+
+	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
+	defer proxySrv.Close()
+
+	resp, err := http.Get(proxySrv.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	t.Logf("GET /metrics: status=%d content-type=%s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/plain") || !strings.Contains(ct, "version=0.0.4") {
+		t.Errorf("Content-Type = %q, want text/plain; version=0.0.4", ct)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	t.Logf("metrics body:\n%s", body)
+
+	wantMetrics := []string{
+		"# HELP teep_requests_total",
+		"# TYPE teep_requests_total counter",
+		"teep_requests_total ",
+		"# HELP teep_errors_total",
+		"# TYPE teep_errors_total counter",
+		"# HELP teep_attestation_cache_hits_total",
+		"# HELP teep_attestation_cache_misses_total",
+		"# HELP teep_e2ee_sessions_total",
+		"# HELP teep_plaintext_sessions_total",
+		"# HELP teep_upstream_requests_total",
+		"# HELP teep_upstream_errors_total",
+		"# HELP teep_uptime_seconds",
+		"# TYPE teep_uptime_seconds gauge",
+	}
+	for _, want := range wantMetrics {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}

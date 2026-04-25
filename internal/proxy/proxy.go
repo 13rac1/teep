@@ -472,9 +472,13 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, errors.New("no providers configured")
 	}
 
+	// Monitoring endpoints (/, /events, /metrics) are unauthenticated.
+	// Access control relies on the proxy binding to loopback (127.0.0.1) by default.
+	// If ListenAddr is overridden to a non-loopback address, ListenAndServe logs a warning.
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /events", s.handleEvents)
+	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.mux.HandleFunc("POST /v1/chat/completions", s.handleEndpoint(&chatEndpoint))
 	s.mux.HandleFunc("POST /v1/embeddings", s.handleEndpoint(&embeddingsEndpoint))
 	s.mux.HandleFunc("POST /v1/audio/transcriptions", s.handleEndpoint(&audioEndpoint))
