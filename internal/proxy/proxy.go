@@ -287,6 +287,7 @@ type Server struct {
 	upstreamClient  *http.Client            // for chat completions forwards
 	sseConns        atomic.Int64            // active SSE /events connections
 	e2eeFailed      sync.Map                // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
+	breakers        sync.Map                // provider name → *circuitBreaker
 	stats           stats
 }
 
@@ -586,6 +587,22 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 	return nil, "", false
 }
 
+// breakerFor returns the circuit breaker for the named provider, creating one
+// on the first call. The same *circuitBreaker is always returned for a given
+// name so callers can share state across requests.
+func (s *Server) breakerFor(name string) *circuitBreaker {
+	v, _ := s.breakers.LoadOrStore(name, &circuitBreaker{
+		threshold:    defaultBreakerThreshold,
+		resetTimeout: defaultBreakerResetTimeout,
+		now:          time.Now,
+	})
+	cb, ok := v.(*circuitBreaker)
+	if !ok {
+		panic("proxy: breakers sync.Map contains a non-*circuitBreaker value")
+	}
+	return cb
+}
+
 // fetchAndVerify fetches attestation from the provider and runs all
 // verification factors. On failure it records the provider/model in the
 // negative cache. Returns (nil, nil) on fetch error.
@@ -600,6 +617,18 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		return nil, nil
 	}
 
+	cb := s.breakerFor(prov.Name)
+	if !cb.allow() {
+		slog.WarnContext(ctx, "circuit breaker open; skipping attestation fetch", "provider", prov.Name)
+		// Also record in negCache so that the next request for this specific
+		// (provider, model) pair is rejected at the negCache.IsBlocked check
+		// before it even reaches fetchAndVerify. This avoids repeated mutex
+		// acquisitions on the circuit breaker for the same model while the
+		// circuit is open.
+		s.negCache.Record(prov.Name, upstreamModel)
+		return nil, nil
+	}
+
 	totalStart := time.Now()
 	nonce := attestation.NewNonce()
 
@@ -608,9 +637,18 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	raw, err := prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
 	if err != nil {
 		slog.ErrorContext(ctx, "attestation fetch failed", "provider", prov.Name, "model", upstreamModel, "err", err)
+		cb.failure()
 		s.negCache.Record(prov.Name, upstreamModel)
 		return nil, nil
 	}
+	// success() is called on a clean network fetch, not contingent on
+	// verification passing. Verification failure (bad TDX quote, failed
+	// supply-chain check) means the TEE returned wrong content, not that
+	// the endpoint is unavailable. Requiring a non-blocked report before
+	// closing the circuit would keep it open indefinitely for a provider
+	// that consistently fails verification — which is a policy problem,
+	// not a reliability problem.
+	cb.success()
 	fetchDur := time.Since(fetchStart)
 	slog.DebugContext(ctx, "attestation fetch complete", "provider", prov.Name, "elapsed", fetchDur)
 

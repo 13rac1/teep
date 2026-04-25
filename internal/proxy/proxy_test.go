@@ -4346,3 +4346,69 @@ func TestDashboardEvents(t *testing.T) {
 		}
 	}
 }
+
+// TestCircuitBreaker_BlocksAfterThreshold verifies that after
+// defaultBreakerThreshold consecutive attestation fetch failures the circuit
+// opens and subsequent requests are rejected without contacting the attestation
+// endpoint.
+func TestCircuitBreaker_BlocksAfterThreshold(t *testing.T) {
+	// Must match defaultBreakerThreshold in proxy package.
+	const threshold = 5
+
+	var calls atomic.Int64
+	attestSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/tee/attestation" {
+			calls.Add(1)
+			t.Logf("attestation server: call #%d (model=%s)", calls.Load(), r.URL.Query().Get("model"))
+			// Use 400 (not 5xx) so RetryTransport does not retry the request.
+			// A 5xx response would cause 3 HTTP calls per FetchAttestation invocation,
+			// making the assertion on total call count incorrect.
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		// Model listing and other endpoints return an empty list.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer attestSrv.Close()
+
+	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
+	defer proxySrv.Close()
+
+	// Fire `threshold` requests with distinct model names so each bypasses the
+	// negative cache (which is keyed per provider+model). Each failure
+	// increments the provider-level circuit breaker.
+	for i := range threshold {
+		model := fmt.Sprintf("cb-test-model-%d", i)
+		resp, err := postChat(t, proxySrv.URL, model, false)
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		resp.Body.Close()
+		t.Logf("request %d (model=%s): status %d", i, model, resp.StatusCode)
+		if resp.StatusCode != http.StatusBadGateway {
+			t.Errorf("request %d: got status %d, want %d", i, resp.StatusCode, http.StatusBadGateway)
+		}
+	}
+
+	if got := calls.Load(); got != int64(threshold) {
+		t.Errorf("expected %d attestation calls to open the circuit, got %d", threshold, got)
+	}
+
+	// Send one more request with a brand-new model (no negCache entry). The
+	// circuit should be open, so the attestation endpoint must not be called.
+	newModel := fmt.Sprintf("cb-test-model-%d", threshold)
+	resp, err := postChat(t, proxySrv.URL, newModel, false)
+	if err != nil {
+		t.Fatalf("circuit-open request: %v", err)
+	}
+	resp.Body.Close()
+	t.Logf("circuit-open request (model=%s): status %d", newModel, resp.StatusCode)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("circuit-open request: got status %d, want %d", resp.StatusCode, http.StatusBadGateway)
+	}
+
+	if got := calls.Load(); got != int64(threshold) {
+		t.Errorf("circuit open: attestation endpoint should not have received additional calls; got %d total, want %d", got, threshold)
+	}
+}
