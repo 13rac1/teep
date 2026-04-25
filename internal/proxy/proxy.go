@@ -1008,10 +1008,10 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 		}()
 
 		s.stats.requests.Add(1)
-		s.stats.lastRequestAt.Store(time.Now().UnixNano())
+		s.stats.lastRequestAt.Store(requestStart.UnixNano())
 		ms := s.stats.getModelStats(prov.Name, upstreamModel)
 		ms.requests.Add(1)
-		ms.lastRequestAt.Store(time.Now().Unix())
+		ms.lastRequestAt.Store(requestStart.Unix())
 		if stream {
 			s.stats.streaming.Add(1)
 		} else {
@@ -1593,6 +1593,7 @@ func (s *Server) handlePinnedPostRelay(
 		cloned.MarkE2EEUsable("E2EE roundtrip succeeded via pinned connection")
 		s.cache.Put(prov.Name, upstreamModel, cloned)
 	}
+	s.stats.lastSuccessAt.Store(time.Now().UnixNano())
 }
 
 // attestResult holds the outcome of attestAndCache on success.

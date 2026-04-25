@@ -18,7 +18,7 @@ func newTestServer(t *testing.T) *Server {
 		cfg:      &config.Config{ListenAddr: "127.0.0.1:8337"},
 		cache:    attestation.NewCache(0),
 		negCache: attestation.NewNegativeCache(0),
-		stats:    stats{startTime: time.Now(), models: make(map[string]*modelStats)},
+		stats:    stats{startTime: time.Now().Add(-time.Second), models: make(map[string]*modelStats)},
 	}
 }
 
