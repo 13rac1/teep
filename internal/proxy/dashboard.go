@@ -377,11 +377,31 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
   .footer code { background: transparent; padding: 0; }
   .text-green { color: #3fb950; }
   .text-red { color: #f85149; }
+  .status-banner {
+    border-radius: 8px; padding: 14px 20px; margin-top: 1.5em;
+    font-size: 1em; font-weight: 500; color: #e6edf3;
+    border-left: 3px solid transparent;
+  }
+  .status-banner.green { background: #0d2b0d; border-left-color: #3fb950; }
+  .status-banner.yellow { background: #2b2200; border-left-color: #d29922; }
+  .status-banner.red { background: #2b0d0d; border-left-color: #f85149; }
+  .status-banner.grey { background: #161b22; border-left-color: #484f58; color: #8b949e; }
+  .status-row {
+    padding: 10px 20px; background: #161b22; border: 1px solid #30363d;
+    border-radius: 8px; margin-top: 8px;
+  }
+  .status-row-head { display: flex; justify-content: space-between; align-items: baseline; }
+  .status-row-name { font-weight: 500; color: #e6edf3; }
+  .status-row-time { font-size: 0.8em; color: #8b949e; flex-shrink: 0; margin-left: 12px; }
+  .status-row-detail { font-size: 0.85em; color: #8b949e; margin-top: 3px; }
 </style>
 </head>
 <body>
 <h1>teep</h1>
 <p class="subtitle">TEE attestation proxy on <code id="listen-addr"></code> &mdash; up <span id="uptime"></span></p>
+
+<div id="status-banner"></div>
+<div id="status-models"></div>
 
 <h2>Attestation</h2>
 <section>
@@ -465,6 +485,90 @@ function esc(s) {
 function render(d) {
   document.getElementById("listen-addr").textContent = d.listen_addr;
   document.getElementById("uptime").textContent = d.uptime;
+
+  // --- Status overview ---
+  var atts = d.attestations || [];
+  var nBlocked = 0, nE2EE = 0, nVerified = 0;
+  for (var i = 0; i < atts.length; i++) {
+    if (atts[i].blocked) { nBlocked++; }
+    else { nVerified++; if (atts[i].e2ee === "usable") nE2EE++; }
+  }
+  var bannerText, bannerClass;
+  if (atts.length === 0) {
+    bannerText = "No models verified yet \u2014 send a request to begin";
+    bannerClass = "grey";
+  } else if (nBlocked > 0 && nVerified === 0) {
+    bannerText = "Security verification failed for " + nBlocked + " model" + (nBlocked > 1 ? "s" : "");
+    bannerClass = "red";
+  } else if (nBlocked > 0) {
+    bannerText = nVerified + " model" + (nVerified > 1 ? "s" : "") + " verified" +
+      (nE2EE > 0 ? " \u00b7 end-to-end encrypted" : "") + " \u00b7 " +
+      nBlocked + " blocked";
+    bannerClass = "yellow";
+  } else if (nE2EE === nVerified) {
+    bannerText = nVerified + " model" + (nVerified > 1 ? "s" : "") +
+      " running in secure enclave" + (nVerified > 1 ? "s" : "") +
+      " \u00b7 End-to-end encrypted";
+    bannerClass = "green";
+  } else {
+    bannerText = nVerified + " model" + (nVerified > 1 ? "s" : "") +
+      " running in secure enclave" + (nVerified > 1 ? "s" : "") +
+      (nE2EE > 0 ? " \u00b7 " + nE2EE + " encrypted" : "");
+    bannerClass = "yellow";
+  }
+  var banner = document.getElementById("status-banner");
+  banner.textContent = bannerText;
+  banner.className = "status-banner " + bannerClass;
+
+  var statusModels = document.getElementById("status-models");
+  statusModels.innerHTML = "";
+  for (var i = 0; i < atts.length; i++) {
+    var a = atts[i];
+    var ms = d.models[a.provider + "/" + a.model] || {};
+    var reqCount = ms.requests || 0;
+    var dot, dotColor, detail;
+    if (a.blocked) {
+      dot = "\u2717"; dotColor = "#f85149";
+      detail = "Security blocked \u2014 " + esc(a.blocked_factors || "unknown");
+    } else if (a.e2ee === "usable") {
+      dot = "\u25cf"; dotColor = "#3fb950";
+      detail = "Secure enclave \u00b7 End-to-end encrypted";
+    } else if (a.e2ee === "capable") {
+      dot = "\u26a0"; dotColor = "#d29922";
+      detail = "Secure enclave \u00b7 Encryption available";
+    } else if (a.allowed_failed > 0) {
+      dot = "\u26a0"; dotColor = "#d29922";
+      detail = "Secure enclave \u00b7 Some checks pending";
+    } else {
+      dot = "\u25cf"; dotColor = "#3fb950";
+      detail = "Secure enclave \u00b7 Standard connection";
+    }
+    if (reqCount > 0) detail += " \u00b7 " + reqCount + " req";
+    var div = document.createElement("div");
+    div.className = "status-row";
+    div.innerHTML = '<div class="status-row-head">' +
+      '<span class="status-row-name"><span style="color:' + dotColor + '">' + dot + '</span> ' +
+      esc(a.provider) + " / " + esc(a.model) + '</span>' +
+      '<span class="status-row-time">verified ' + esc(a.verified) + '</span>' +
+      '</div><div class="status-row-detail">' + detail + '</div>';
+    statusModels.appendChild(div);
+  }
+  // Models with requests but no attestation yet
+  for (var k in d.models) {
+    var seen = false;
+    for (var i = 0; i < atts.length; i++) {
+      if (atts[i].provider + "/" + atts[i].model === k) { seen = true; break; }
+    }
+    if (!seen && d.models[k].requests > 0) {
+      var div = document.createElement("div");
+      div.className = "status-row";
+      div.innerHTML = '<div class="status-row-head">' +
+        '<span class="status-row-name"><span style="color:#484f58">\u25cc</span> ' + esc(k) + '</span>' +
+        '</div><div class="status-row-detail">Awaiting verification \u00b7 ' + d.models[k].requests + ' req</div>';
+      statusModels.appendChild(div);
+    }
+  }
+
   var provRows = document.getElementById("prov-rows");
   provRows.innerHTML = "";
   var provNames = Object.keys(d.providers).sort();
