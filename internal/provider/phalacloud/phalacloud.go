@@ -34,7 +34,7 @@ import (
 
 const (
 	// attestationPath is the Phala Cloud API path for TEE attestation reports.
-	attestationPath = "/attestation/report"
+	attestationPath = "/v1/attestation/report"
 
 	// attestationTimeout is longer than the default because Phala Cloud's
 	// multi-instance attestation endpoint is slow (typically 30-60s).

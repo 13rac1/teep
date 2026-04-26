@@ -613,8 +613,11 @@ func fromConfig(
 		}
 		p.SupplyChainPolicy = nanogpt.SupplyChainPolicy()
 	case "phalacloud":
-		p.ChatPath = "/chat/completions"
-		p.EmbeddingsPath = "/embeddings"
+		if trimmed, ok := strings.CutSuffix(cp.BaseURL, "/v1"); ok {
+			return nil, fmt.Errorf("phalacloud base_url %q must not include a path suffix; use %q", cp.BaseURL, trimmed)
+		}
+		p.ChatPath = "/v1/chat/completions"
+		p.EmbeddingsPath = "/v1/embeddings"
 		p.Attester = phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = phalacloud.NewPreparer(cp.APIKey)
 		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))

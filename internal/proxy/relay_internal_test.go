@@ -1115,7 +1115,7 @@ func TestFromConfig_Nanogpt(t *testing.T) {
 }
 
 func TestFromConfig_Phalacloud(t *testing.T) {
-	cp := &config.Provider{Name: "phalacloud", BaseURL: "https://phala.network", APIKey: "test-key"}
+	cp := &config.Provider{Name: "phalacloud", BaseURL: "https://api.redpill.ai", APIKey: "test-key"}
 	p, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
 		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
 		nil, nil, nil)
@@ -1123,8 +1123,8 @@ func TestFromConfig_Phalacloud(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error for phalacloud: %v", err)
 	}
-	if p.ChatPath != "/chat/completions" {
-		t.Errorf("ChatPath = %q, want /chat/completions", p.ChatPath)
+	if p.ChatPath != "/v1/chat/completions" {
+		t.Errorf("ChatPath = %q, want /v1/chat/completions", p.ChatPath)
 	}
 }
 

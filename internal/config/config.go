@@ -472,7 +472,7 @@ func applyEnvOverrides(cfg *Config) {
 	applyAPIKeyEnv(cfg, "neardirect", "NEARAI_API_KEY", "https://completions.near.ai", false)
 	applyAPIKeyEnv(cfg, "nearcloud", "NEARAI_API_KEY", "https://cloud-api.near.ai", true)
 	applyAPIKeyEnv(cfg, "nanogpt", "NANOGPT_API_KEY", "https://nano-gpt.com/api", false)
-	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://api.redpill.ai/v1", false)
+	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://api.redpill.ai", false)
 	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai", true)
 }
 
