@@ -6,19 +6,35 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
+
+	"github.com/13rac1/teep/internal/attestation"
 )
 
 // dashboardData is the JSON-serializable snapshot of all dashboard stats.
 // Used by both the initial page render and the SSE /events endpoint.
 type dashboardData struct {
-	ListenAddr string                       `json:"listen_addr"`
-	Uptime     string                       `json:"uptime"`
-	Providers  map[string]dashboardProvider `json:"providers"`
-	Requests   dashboardRequests            `json:"requests"`
-	Cache      dashboardCache               `json:"cache"`
-	HTTP       dashboardHTTP                `json:"http"`
-	Models     map[string]dashModel         `json:"models"`
+	ListenAddr   string                       `json:"listen_addr"`
+	Uptime       string                       `json:"uptime"`
+	Providers    map[string]dashboardProvider `json:"providers"`
+	Attestations []dashAttestation            `json:"attestations"`
+	Requests     dashboardRequests            `json:"requests"`
+	Cache        dashboardCache               `json:"cache"`
+	HTTP         dashboardHTTP                `json:"http"`
+	Models       map[string]dashModel         `json:"models"`
+}
+
+type dashAttestation struct {
+	Provider       string `json:"provider"`
+	Model          string `json:"model"`
+	Passed         int    `json:"passed"`
+	EnforcedFailed int    `json:"enforced_failed"`
+	AllowedFailed  int    `json:"allowed_failed"`
+	Blocked        bool   `json:"blocked"`
+	BlockedFactors string `json:"blocked_factors"` // comma-separated names, non-empty when Blocked
+	E2EE           string `json:"e2ee"`
+	Verified       string `json:"verified"`
 }
 
 type dashboardProvider struct {
@@ -129,10 +145,55 @@ func (s *Server) buildDashboardData() dashboardData {
 	}
 	s.stats.modelsMu.RUnlock()
 
+	cacheInfos := s.cache.Models()
+	slices.SortFunc(cacheInfos, func(a, b attestation.CacheInfo) int {
+		return b.FetchedAt.Compare(a.FetchedAt) // descending: most recent first
+	})
+
+	var attestations []dashAttestation
+	for _, info := range cacheInfos {
+		report, ok := s.cache.Get(info.Provider, info.Model)
+		if !ok {
+			continue
+		}
+		e2ee := ""
+		for _, f := range report.Factors {
+			if f.Name == "e2ee_usable" && f.Status == attestation.Pass {
+				e2ee = "usable"
+				break
+			}
+			if f.Name == "e2ee_capable" && f.Status == attestation.Pass {
+				e2ee = "capable"
+			}
+		}
+		blocked := report.Blocked()
+		blockedFactors := ""
+		if blocked {
+			for i, f := range report.BlockedFactors() {
+				if i > 0 {
+					blockedFactors += ", "
+				}
+				blockedFactors += f.Name
+			}
+		}
+		attestations = append(attestations, dashAttestation{
+			Provider:       info.Provider,
+			Model:          info.Model,
+			Passed:         report.Passed,
+			EnforcedFailed: report.EnforcedFailed,
+			AllowedFailed:  report.AllowedFailed,
+			Blocked:        blocked,
+			BlockedFactors: blockedFactors,
+			E2EE:           e2ee,
+			Verified:       time.Since(info.FetchedAt).Truncate(time.Second).String() + " ago",
+		})
+	}
+
 	return dashboardData{
-		ListenAddr: s.cfg.ListenAddr,
-		Uptime:     time.Since(s.stats.startTime).Truncate(time.Second).String(),
-		Providers:  providers,
+		ListenAddr:   s.cfg.ListenAddr,
+		Uptime:       time.Since(s.stats.startTime).Truncate(time.Second).String(),
+		Providers:    providers,
+		Attestations: attestations,
 		Requests: dashboardRequests{
 			Total:         s.stats.requests.Load(),
 			Streaming:     s.stats.streaming.Load(),
@@ -322,11 +383,19 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 <h1>teep</h1>
 <p class="subtitle">TEE attestation proxy on <code id="listen-addr"></code> &mdash; up <span id="uptime"></span></p>
 
-<h2>Providers</h2>
+<h2>Attestation</h2>
 <section>
 <table class="model-table">
-  <tr><th>Name</th><th>Upstream</th><th>E2EE</th></tr>
-  <tbody id="prov-rows"></tbody>
+  <tr><th>Provider</th><th>Model</th><th>Score</th><th>E2EE</th><th>Verified</th></tr>
+  <tbody id="attest-rows"></tbody>
+</table>
+</section>
+
+<h2>Models</h2>
+<section>
+<table class="model-table">
+  <tr><th>Model</th><th>Requests</th><th>Errors</th><th>Verify</th><th>Tok/s</th><th>Last request</th></tr>
+  <tbody id="model-rows"></tbody>
 </table>
 </section>
 
@@ -367,20 +436,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 </table>
 </section>
 
-<h2>Models</h2>
-<section>
-<table class="model-table">
-  <tr><th>Model</th><th>Requests</th><th>Errors</th><th>Verify</th><th>Tok/s</th><th>Last request</th></tr>
-  <tbody id="model-rows"></tbody>
-</table>
-</section>
-
 <h2>Endpoints</h2>
 <section>
 <table>
   <tr><td><code>POST /v1/chat/completions</code></td><td>Proxy with TEE attestation</td></tr>
   <tr><td><code>GET /v1/models</code></td><td>List models</td></tr>
   <tr><td><code>GET /v1/tee/report</code></td><td>Cached attestation report</td></tr>
+</table>
+</section>
+
+<h2>Providers</h2>
+<section>
+<table class="model-table">
+  <tr><th>Name</th><th>Upstream</th><th>E2EE</th></tr>
+  <tbody id="prov-rows"></tbody>
 </table>
 </section>
 
@@ -406,6 +475,39 @@ function render(d) {
     var tr = document.createElement("tr");
     tr.innerHTML = "<td>" + esc(pname) + "</td><td>" + esc(p.upstream) + "</td><td class=\"" + e2eeClass + "\">" + esc(p.e2ee) + "</td>";
     provRows.appendChild(tr);
+  }
+  var attestRows = document.getElementById("attest-rows");
+  attestRows.innerHTML = "";
+  var atts = d.attestations || [];
+  if (atts.length === 0) {
+    var tr = document.createElement("tr");
+    tr.innerHTML = "<td colspan=\"5\" style=\"color:#8b949e\">No attestations cached yet.</td>";
+    attestRows.appendChild(tr);
+  } else {
+    for (var j = 0; j < atts.length; j++) {
+      var a = atts[j];
+      var scoreCell;
+      if (a.blocked) {
+        var detail = a.blocked_factors ? " \u2014 " + esc(a.blocked_factors) : "";
+        scoreCell = "<td class=\"text-red\">BLOCKED" + detail + "</td>";
+      } else if (a.allowed_failed > 0) {
+        scoreCell = "<td>" + a.passed + " passed <span style=\"color:#8b949e\">(" + a.allowed_failed + " allowed)</span></td>";
+      } else {
+        scoreCell = "<td class=\"text-green\">" + a.passed + " passed</td>";
+      }
+      var e2eeCell;
+      if (a.e2ee === "usable") {
+        e2eeCell = "<td class=\"text-green\">usable</td>";
+      } else if (a.e2ee === "capable") {
+        e2eeCell = "<td style=\"color:#d29922\">capable</td>";
+      } else {
+        e2eeCell = "<td style=\"color:#484f58\">\u2014</td>";
+      }
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + esc(a.provider) + "</td><td>" + esc(a.model) +
+        "</td>" + scoreCell + e2eeCell + "<td>" + esc(a.verified) + "</td>";
+      attestRows.appendChild(tr);
+    }
   }
   document.getElementById("req-total").textContent = d.requests.total;
   document.getElementById("req-streaming").textContent = d.requests.streaming;
