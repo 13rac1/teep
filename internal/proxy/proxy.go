@@ -38,6 +38,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/netutil"
+
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/defaults"
@@ -503,7 +505,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ln = newLimitListener(ln, s.cfg.MaxConns)
+	ln = netutil.LimitListener(ln, s.cfg.MaxConns)
 
 	srv := &http.Server{
 		Handler:           s,
@@ -526,39 +528,6 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}
-}
-
-// limitListener wraps a net.Listener and caps concurrent open connections to n.
-// When the limit is reached, Accept blocks until an existing connection closes.
-// This prevents file descriptor exhaustion under pathological client load.
-type limitListener struct {
-	net.Listener
-	sem chan struct{}
-}
-
-func newLimitListener(l net.Listener, n int) net.Listener {
-	return &limitListener{Listener: l, sem: make(chan struct{}, n)}
-}
-
-func (l *limitListener) Accept() (net.Conn, error) {
-	c, err := l.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	l.sem <- struct{}{}
-	return &limitConn{Conn: c, sem: l.sem}, nil
-}
-
-// limitConn releases its semaphore slot on Close.
-type limitConn struct {
-	net.Conn
-	once sync.Once
-	sem  chan struct{}
-}
-
-func (c *limitConn) Close() error {
-	defer c.once.Do(func() { <-c.sem })
-	return c.Conn.Close()
 }
 
 // ServeHTTP implements http.Handler so Server can be used with httptest.NewServer.
