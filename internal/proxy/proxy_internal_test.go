@@ -2,8 +2,8 @@ package proxy
 
 import (
 	"net"
-	"sync"
 	"testing"
+	"time"
 )
 
 func TestLimitListener(t *testing.T) {
@@ -37,8 +37,7 @@ func TestLimitListener(t *testing.T) {
 	// but then blocks on the semaphore send until a slot is freed.
 	// Closing one server-side limitConn releases a slot and unblocks it.
 	extraDone := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Go(func() {
+	go func() {
 		sc, err := ln.Accept()
 		if err != nil {
 			t.Errorf("Accept extra: %v", err)
@@ -48,7 +47,7 @@ func TestLimitListener(t *testing.T) {
 		t.Logf("accepted extra connection after slot freed")
 		sc.Close()
 		close(extraDone)
-	})
+	}()
 
 	// Dial the extra connection so it can be accepted from the OS backlog.
 	extra, err := net.Dial("tcp", addr)
@@ -61,11 +60,10 @@ func TestLimitListener(t *testing.T) {
 	serverConns[0].Close()
 	t.Logf("closed server conn 0; waiting for extra accept to unblock")
 
-	wg.Wait()
 	select {
 	case <-extraDone:
-	default:
-		t.Error("extra connection was not accepted after slot freed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for extra accept to unblock after slot freed")
 	}
 
 	for _, c := range serverConns[1:] {

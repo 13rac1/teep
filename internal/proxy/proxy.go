@@ -473,8 +473,8 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	// Monitoring endpoints (/, /events, /metrics) are unauthenticated.
-	// Access control relies on the proxy binding to loopback (127.0.0.1) by default.
-	// If ListenAddr is overridden to a non-loopback address, ListenAndServe logs a warning.
+	// Access control relies on the proxy binding to loopback (127.0.0.1) by default;
+	// config.Load warns when ListenAddr is non-loopback.
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /events", s.handleEvents)
@@ -495,15 +495,13 @@ func New(cfg *config.Config) (*Server, error) {
 // initiates a graceful shutdown with a 5-second deadline to drain in-flight
 // requests (which zeros any active E2EE sessions via their defers).
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	if s.cfg.MaxConns <= 0 {
+		return fmt.Errorf("max_conns must be positive, got %d", s.cfg.MaxConns)
+	}
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", s.cfg.ListenAddr)
 	if err != nil {
 		return err
-	}
-	if host, _, err := net.SplitHostPort(s.cfg.ListenAddr); err == nil {
-		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-			slog.Warn("proxy is listening on a non-loopback address; dashboard and metrics endpoints are unauthenticated", "addr", s.cfg.ListenAddr)
-		}
 	}
 	ln = newLimitListener(ln, s.cfg.MaxConns)
 
@@ -559,7 +557,7 @@ type limitConn struct {
 }
 
 func (c *limitConn) Close() error {
-	c.once.Do(func() { <-c.sem })
+	defer c.once.Do(func() { <-c.sem })
 	return c.Conn.Close()
 }
 

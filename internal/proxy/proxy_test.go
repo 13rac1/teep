@@ -4309,7 +4309,6 @@ func TestNew_ProviderAllowFail(t *testing.T) {
 				E2EE:    false,
 			},
 		},
-		AllowFail: attestation.KnownFactors,
 		ProviderAllowFail: map[string][]string{
 			"venice": {"cpu_gpu_chain"},
 		},
