@@ -526,48 +526,48 @@ func TestEnvMaxConns(t *testing.T) {
 		t.Errorf("MaxConns = %d, want 50", cfg.MaxConns)
 	}
 
-	// Invalid value falls back to default.
+	// Invalid value is ignored; computed default is kept.
 	setenv(t, "TEEP_MAX_CONNS", "not-a-number")
 	cfg, err = Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
 	t.Logf("MaxConns with TEEP_MAX_CONNS=not-a-number: %d", cfg.MaxConns)
-	if cfg.MaxConns != DefaultMaxConns {
-		t.Errorf("MaxConns = %d, want default %d", cfg.MaxConns, DefaultMaxConns)
+	if cfg.MaxConns <= 0 || cfg.MaxConns > MaxConnections {
+		t.Errorf("MaxConns = %d, want positive value <= MaxConnections (%d)", cfg.MaxConns, MaxConnections)
 	}
 
-	// Zero is rejected; falls back to default.
+	// Zero is rejected; computed default is kept.
 	setenv(t, "TEEP_MAX_CONNS", "0")
 	cfg, err = Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
 	t.Logf("MaxConns with TEEP_MAX_CONNS=0: %d", cfg.MaxConns)
-	if cfg.MaxConns != DefaultMaxConns {
-		t.Errorf("MaxConns = %d, want default %d", cfg.MaxConns, DefaultMaxConns)
+	if cfg.MaxConns <= 0 || cfg.MaxConns > MaxConnections {
+		t.Errorf("MaxConns = %d, want positive value <= MaxConnections (%d)", cfg.MaxConns, MaxConnections)
 	}
 
-	// Negative is rejected; falls back to default.
+	// Negative is rejected; computed default is kept.
 	setenv(t, "TEEP_MAX_CONNS", "-1")
 	cfg, err = Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
 	t.Logf("MaxConns with TEEP_MAX_CONNS=-1: %d", cfg.MaxConns)
-	if cfg.MaxConns != DefaultMaxConns {
-		t.Errorf("MaxConns = %d, want default %d", cfg.MaxConns, DefaultMaxConns)
+	if cfg.MaxConns <= 0 || cfg.MaxConns > MaxConnections {
+		t.Errorf("MaxConns = %d, want positive value <= MaxConnections (%d)", cfg.MaxConns, MaxConnections)
 	}
 
-	// Value exceeding MaxMaxConns is clamped.
+	// Value exceeding MaxConnections is clamped.
 	setenv(t, "TEEP_MAX_CONNS", "99999")
 	cfg, err = Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
 	t.Logf("MaxConns with TEEP_MAX_CONNS=99999: %d", cfg.MaxConns)
-	if cfg.MaxConns != MaxMaxConns {
-		t.Errorf("MaxConns = %d, want MaxMaxConns %d", cfg.MaxConns, MaxMaxConns)
+	if cfg.MaxConns != MaxConnections {
+		t.Errorf("MaxConns = %d, want MaxConnections %d", cfg.MaxConns, MaxConnections)
 	}
 }
 
@@ -582,8 +582,10 @@ func TestLoadDefaultsMaxConns(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 	t.Logf("default MaxConns: %d", cfg.MaxConns)
-	if cfg.MaxConns != DefaultMaxConns {
-		t.Errorf("MaxConns = %d, want default %d", cfg.MaxConns, DefaultMaxConns)
+	// The default is ulimit-based so the exact value varies by environment.
+	// Verify it is within the valid range.
+	if cfg.MaxConns <= 0 || cfg.MaxConns > MaxConnections {
+		t.Errorf("MaxConns = %d, want positive value <= MaxConnections (%d)", cfg.MaxConns, MaxConnections)
 	}
 }
 

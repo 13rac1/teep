@@ -310,27 +310,33 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // Access control relies on the proxy binding to loopback by default; see ListenAndServe.
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-
-	writeCounter := func(name, help string, value int64) {
-		fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-		fmt.Fprintf(w, "# TYPE %s counter\n", name)
-		fmt.Fprintf(w, "%s %d\n", name, value)
-	}
-	writeGauge := func(name, help string, value float64) {
-		fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-		fmt.Fprintf(w, "# TYPE %s gauge\n", name)
-		fmt.Fprintf(w, "%s %g\n", name, value)
-	}
-
-	writeCounter("teep_requests_total", "Total proxy requests received", s.stats.requests.Load())
-	writeCounter("teep_errors_total", "Total proxy requests that resulted in an error", s.stats.errors.Load())
-	writeCounter("teep_attestation_cache_hits_total", "Total attestation cache hits", s.stats.cacheHits.Load())
-	writeCounter("teep_attestation_cache_misses_total", "Total attestation cache misses", s.stats.cacheMisses.Load())
-	writeCounter("teep_e2ee_sessions_total", "Total E2EE-encrypted sessions", s.stats.e2ee.Load())
-	writeCounter("teep_plaintext_sessions_total", "Total plaintext (non-E2EE) sessions", s.stats.plaintext.Load())
-	writeCounter("teep_upstream_requests_total", "Total HTTP requests sent to upstream providers", s.stats.httpRequests.Load())
-	writeCounter("teep_upstream_errors_total", "Total HTTP errors from upstream providers", s.stats.httpErrors.Load())
-	writeGauge("teep_uptime_seconds", "Seconds since the proxy started", time.Since(s.stats.startTime).Seconds())
+	fmt.Fprintf(w, "# HELP teep_requests_total Total proxy requests received\n")
+	fmt.Fprintf(w, "# TYPE teep_requests_total counter\n")
+	fmt.Fprintf(w, "teep_requests_total %d\n", s.stats.requests.Load())
+	fmt.Fprintf(w, "# HELP teep_errors_total Total proxy requests that resulted in an error\n")
+	fmt.Fprintf(w, "# TYPE teep_errors_total counter\n")
+	fmt.Fprintf(w, "teep_errors_total %d\n", s.stats.errors.Load())
+	fmt.Fprintf(w, "# HELP teep_attestation_cache_hits_total Total attestation cache hits\n")
+	fmt.Fprintf(w, "# TYPE teep_attestation_cache_hits_total counter\n")
+	fmt.Fprintf(w, "teep_attestation_cache_hits_total %d\n", s.stats.cacheHits.Load())
+	fmt.Fprintf(w, "# HELP teep_attestation_cache_misses_total Total attestation cache misses\n")
+	fmt.Fprintf(w, "# TYPE teep_attestation_cache_misses_total counter\n")
+	fmt.Fprintf(w, "teep_attestation_cache_misses_total %d\n", s.stats.cacheMisses.Load())
+	fmt.Fprintf(w, "# HELP teep_e2ee_sessions_total Total E2EE-encrypted sessions\n")
+	fmt.Fprintf(w, "# TYPE teep_e2ee_sessions_total counter\n")
+	fmt.Fprintf(w, "teep_e2ee_sessions_total %d\n", s.stats.e2ee.Load())
+	fmt.Fprintf(w, "# HELP teep_plaintext_sessions_total Total plaintext (non-E2EE) sessions\n")
+	fmt.Fprintf(w, "# TYPE teep_plaintext_sessions_total counter\n")
+	fmt.Fprintf(w, "teep_plaintext_sessions_total %d\n", s.stats.plaintext.Load())
+	fmt.Fprintf(w, "# HELP teep_upstream_requests_total Total HTTP requests sent to upstream providers\n")
+	fmt.Fprintf(w, "# TYPE teep_upstream_requests_total counter\n")
+	fmt.Fprintf(w, "teep_upstream_requests_total %d\n", s.stats.httpRequests.Load())
+	fmt.Fprintf(w, "# HELP teep_upstream_errors_total Total HTTP errors from upstream providers\n")
+	fmt.Fprintf(w, "# TYPE teep_upstream_errors_total counter\n")
+	fmt.Fprintf(w, "teep_upstream_errors_total %d\n", s.stats.httpErrors.Load())
+	fmt.Fprintf(w, "# HELP teep_uptime_seconds Seconds since the proxy started\n")
+	fmt.Fprintf(w, "# TYPE teep_uptime_seconds gauge\n")
+	fmt.Fprintf(w, "teep_uptime_seconds %g\n", time.Since(s.stats.startTime).Seconds())
 }
 
 // handleIndex serves a live stats dashboard at /.

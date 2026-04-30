@@ -436,10 +436,6 @@ func New(cfg *config.Config) (*Server, error) {
 	s.collateral = attestation.NewCollateralGetter(s.attestClient)
 	s.verifyQuote = attestation.NewTDXVerifier(cfg.Offline, s.collateral)
 
-	for _, factor := range cfg.AllowFail {
-		slog.Warn("security factor in global allow_fail; failures will not block requests", "factor", factor)
-	}
-
 	for name, cp := range cfg.Providers {
 		if cp == nil {
 			return nil, fmt.Errorf("provider %q: config is nil", name)
@@ -465,9 +461,6 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 		s.providers[name] = p
 		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE)
-		for _, factor := range cfg.ProviderAllowFail[name] {
-			slog.Warn("security factor in provider allow_fail; failures will not block requests", "provider", name, "factor", factor)
-		}
 	}
 
 	if len(s.providers) == 0 {
@@ -505,7 +498,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ln = netutil.LimitListener(ln, s.cfg.MaxConns)
+	ln = &monitoredListener{
+		Listener: netutil.LimitListener(ln, s.cfg.MaxConns),
+		maxConns: s.cfg.MaxConns,
+	}
 
 	srv := &http.Server{
 		Handler:           s,
@@ -528,6 +524,45 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}
+}
+
+// monitoredListener wraps netutil.LimitListener to log a rate-throttled warning
+// when the connection limit is reached. The active counter tracks open connections
+// so the check before each Accept is best-effort (racy but sufficient for logging).
+type monitoredListener struct {
+	net.Listener
+	maxConns int
+	active   atomic.Int64
+	lastWarn atomic.Int64
+}
+
+func (m *monitoredListener) Accept() (net.Conn, error) {
+	if m.active.Load() >= int64(m.maxConns) {
+		now := time.Now().Unix()
+		if last := m.lastWarn.Load(); now-last >= 60 && m.lastWarn.CompareAndSwap(last, now) {
+			slog.Warn("connection limit reached; new connections are queuing",
+				"max_conns", m.maxConns)
+		}
+	}
+	c, err := m.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	m.active.Add(1)
+	return &monitoredConn{Conn: c, active: &m.active}, nil
+}
+
+// monitoredConn decrements the active connection counter exactly once on Close.
+type monitoredConn struct {
+	net.Conn
+	once   sync.Once
+	active *atomic.Int64
+}
+
+func (c *monitoredConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { c.active.Add(-1) })
+	return err
 }
 
 // ServeHTTP implements http.Handler so Server can be used with httptest.NewServer.

@@ -32,14 +32,14 @@ const (
 	// It deliberately binds only to loopback — never to all interfaces.
 	DefaultListenAddr = "127.0.0.1:8337"
 
-	// DefaultMaxConns is the default maximum number of concurrent inbound
-	// connections. When the limit is reached new connections block until an
-	// existing one closes. Override with TEEP_MAX_CONNS.
-	DefaultMaxConns = 100
+	// MaxConnections is the upper bound accepted for TEEP_MAX_CONNS.
+	// Values above this are clamped with a warning.
+	MaxConnections = 10000
 
-	// MaxMaxConns is the upper bound accepted for TEEP_MAX_CONNS.
-	// Values above this are clamped to MaxMaxConns with a warning.
-	MaxMaxConns = 10000
+	// rlimitHeadroom is the number of file descriptors reserved for non-connection
+	// use (log files, config files, attestation HTTP clients, etc.) when computing
+	// the default connection limit from RLIMIT_NOFILE.
+	rlimitHeadroom = 50
 
 	// AttestationTimeout is the HTTP client timeout for attestation fetches.
 	// 45 seconds accommodates Chutes' multi-GPU evidence endpoint which
@@ -176,6 +176,35 @@ type Config struct {
 	Force bool
 }
 
+// warnIfRlimitLow logs a warning when the soft RLIMIT_NOFILE is below 1000,
+// regardless of whether MaxConns was set by default or by TEEP_MAX_CONNS.
+func warnIfRlimitLow(soft int) {
+	if soft < 1000 {
+		slog.Warn("RLIMIT_NOFILE is very low; consider raising 'ulimit -n'",
+			"rlimit_nofile", soft)
+	}
+}
+
+// defaultMaxConns computes the default connection limit from RLIMIT_NOFILE,
+// reserving rlimitHeadroom FDs for non-connection use and emitting startup
+// warnings when the system FD limit is very low or explicitly unlimited.
+func defaultMaxConns() int {
+	soft, unlimited, err := nofileRlimit()
+	if err != nil {
+		slog.Warn("cannot read RLIMIT_NOFILE; using built-in default",
+			"default", 100, "err", err)
+		return 100
+	}
+	if unlimited {
+		slog.Info("RLIMIT_NOFILE is unlimited; connection limit defaults to 100; "+
+			"set TEEP_MAX_CONNS to configure explicitly",
+			"default", 100)
+		return 100
+	}
+	warnIfRlimitLow(soft)
+	return max(1, min(soft-rlimitHeadroom, MaxConnections))
+}
+
 // Load reads configuration from the optional TOML file (path from $TEEP_CONFIG)
 // and applies environment variable overrides. It logs a warning to stderr if
 // the listen address is non-loopback or if the config file has insecure
@@ -183,7 +212,7 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		ListenAddr:              DefaultListenAddr,
-		MaxConns:                DefaultMaxConns,
+		MaxConns:                defaultMaxConns(),
 		Providers:               make(map[string]*Provider),
 		ProviderAllowFail:       make(map[string][]string),
 		ProviderPolicies:        make(map[string]attestation.MeasurementPolicy),
@@ -199,6 +228,16 @@ func Load() (*Config, error) {
 
 	applyEnvOverrides(cfg)
 	warnNonLoopback(cfg.ListenAddr)
+	if cfg.GlobalAllowFailDefined {
+		for _, factor := range cfg.AllowFail {
+			slog.Warn("security factor in global allow_fail; failures will not block requests", "factor", factor)
+		}
+	}
+	for name, factors := range cfg.ProviderAllowFail {
+		for _, factor := range factors {
+			slog.Warn("security factor in provider allow_fail; failures will not block requests", "provider", name, "factor", factor)
+		}
+	}
 	return cfg, nil
 }
 
@@ -487,13 +526,21 @@ func applyEnvOverrides(cfg *Config) {
 		n, err := strconv.Atoi(v)
 		switch {
 		case err != nil:
-			slog.Warn("TEEP_MAX_CONNS is not a valid integer; using default", "value", v, "default", DefaultMaxConns)
+			slog.Warn("TEEP_MAX_CONNS is not a valid integer; ignoring override",
+				"value", v, "keeping", cfg.MaxConns)
 		case n <= 0:
-			slog.Warn("TEEP_MAX_CONNS must be a positive integer; using default", "value", n, "default", DefaultMaxConns)
-		case n > MaxMaxConns:
-			slog.Warn("TEEP_MAX_CONNS exceeds maximum; clamping", "value", n, "max", MaxMaxConns)
-			cfg.MaxConns = MaxMaxConns
+			slog.Warn("TEEP_MAX_CONNS must be a positive integer; ignoring override",
+				"value", n, "keeping", cfg.MaxConns)
+		case n > MaxConnections:
+			slog.Warn("TEEP_MAX_CONNS exceeds maximum; clamping", "value", n, "max", MaxConnections)
+			cfg.MaxConns = MaxConnections
 		default:
+			if soft, unlimited, rerr := nofileRlimit(); rerr == nil && !unlimited {
+				if n > soft-rlimitHeadroom {
+					slog.Warn("TEEP_MAX_CONNS exceeds usable file descriptor headroom",
+						"teep_max_conns", n, "rlimit_nofile", soft, "headroom", rlimitHeadroom)
+				}
+			}
 			cfg.MaxConns = n
 		}
 	}
