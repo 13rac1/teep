@@ -29,6 +29,9 @@ func skipNearDirectIntegration(t *testing.T) {
 // known-good model if NEARAI_E2EE_MODEL is unset.
 func nearDirectIntegrationModel() string {
 	if m := os.Getenv("NEARAI_E2EE_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "neardirect:" + m
 	}
 	return "neardirect:Qwen/Qwen3.5-122B-A10B"

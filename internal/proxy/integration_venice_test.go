@@ -39,6 +39,9 @@ func skipIntegration(t *testing.T) {
 // known-good model if VENICE_E2EE_MODEL is unset.
 func integrationModel() string {
 	if m := os.Getenv("VENICE_E2EE_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "venice:" + m
 	}
 	return "venice:e2ee-qwen3-5-122b-a10b"

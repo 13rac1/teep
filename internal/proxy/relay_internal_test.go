@@ -667,7 +667,10 @@ func TestResolveModel_Valid(t *testing.T) {
 	if model != "qwen3-122b" {
 		t.Errorf("model = %q, want %q", model, "qwen3-122b")
 	}
-	if prov == nil || prov.Name != "venice" {
+	if prov == nil {
+		t.Fatal("prov = nil, want non-nil provider named 'venice'")
+	}
+	if prov.Name != "venice" {
 		t.Errorf("prov.Name = %q, want 'venice'", prov.Name)
 	}
 }
@@ -1129,13 +1132,18 @@ func TestFromConfig_Phalacloud(t *testing.T) {
 }
 
 func TestFromConfig_Phalacloud_PathSuffix(t *testing.T) {
-	cp := &config.Provider{Name: "phalacloud", BaseURL: "https://api.redpill.ai/v1", APIKey: "test-key"}
-	_, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
-		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
-		nil, nil, nil)
-	t.Logf("fromConfig(phalacloud, bad base_url): err=%v", err)
-	if err == nil {
-		t.Fatal("expected error when phalacloud base_url includes /v1 path suffix")
+	for _, badURL := range []string{
+		"https://api.redpill.ai/v1",
+		"https://api.redpill.ai/v1/",
+	} {
+		cp := &config.Provider{Name: "phalacloud", BaseURL: badURL, APIKey: "test-key"}
+		_, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
+			attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
+			nil, nil, nil)
+		t.Logf("fromConfig(phalacloud, base_url=%q): err=%v", badURL, err)
+		if err == nil {
+			t.Errorf("expected error when phalacloud base_url includes /v1 path suffix: %q", badURL)
+		}
 	}
 }
 

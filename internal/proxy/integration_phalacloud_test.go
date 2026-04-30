@@ -29,6 +29,9 @@ func skipPhalaCloudIntegration(t *testing.T) {
 // to a known-good dstack-backed model if PHALA_MODEL is unset.
 func phalaCloudIntegrationModel() string {
 	if m := os.Getenv("PHALA_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "phalacloud:" + m
 	}
 	return "phalacloud:phala/gemma-3-27b-it"

@@ -22,6 +22,9 @@ import (
 
 func nearDirectVLModel() string {
 	if m := os.Getenv("NEARAI_VL_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "neardirect:" + m
 	}
 	return "neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct"
@@ -92,6 +95,9 @@ func TestIntegration_NearDirect_VL(t *testing.T) {
 
 func chutesVLModel() string {
 	if m := os.Getenv("CHUTES_VL_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "chutes:" + m
 	}
 	return "chutes:Qwen/Qwen3.5-397B-A17B-TEE"
@@ -168,6 +174,9 @@ func TestIntegration_Chutes_VL_E2EE(t *testing.T) {
 
 func nearDirectImagesModel() string {
 	if m := os.Getenv("NEARAI_IMAGES_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "neardirect:" + m
 	}
 	return "neardirect:black-forest-labs/FLUX.2-klein-4B"
@@ -207,6 +216,9 @@ func TestIntegration_NearDirect_Images(t *testing.T) {
 
 func nearDirectAudioModel() string {
 	if m := os.Getenv("NEARAI_AUDIO_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "neardirect:" + m
 	}
 	return "neardirect:openai/whisper-large-v3"
@@ -268,6 +280,9 @@ func TestIntegration_NearDirect_Audio(t *testing.T) {
 
 func nearDirectRerankModel() string {
 	if m := os.Getenv("NEARAI_RERANK_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "neardirect:" + m
 	}
 	return "neardirect:Qwen/Qwen3-Reranker-0.6B"

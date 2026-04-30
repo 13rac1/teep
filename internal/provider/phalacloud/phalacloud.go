@@ -11,7 +11,7 @@
 //
 // Phala Cloud attestation endpoint:
 //
-//	GET {base_url}/attestation/report?model={model}&nonce={nonce}
+//	GET {base_url}/v1/attestation/report?model={model}&nonce={nonce}
 //	Authorization: Bearer {api_key}
 package phalacloud
 

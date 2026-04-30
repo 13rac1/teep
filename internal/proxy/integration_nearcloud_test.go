@@ -28,6 +28,9 @@ func skipNearCloudIntegration(t *testing.T) {
 // nearCloudIntegrationModel returns the model to use for nearcloud tests.
 func nearCloudIntegrationModel() string {
 	if m := os.Getenv("NEARAI_E2EE_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "nearcloud:" + m
 	}
 	return "nearcloud:Qwen/Qwen3.5-122B-A10B"

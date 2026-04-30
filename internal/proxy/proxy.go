@@ -613,7 +613,8 @@ func fromConfig(
 		}
 		p.SupplyChainPolicy = nanogpt.SupplyChainPolicy()
 	case "phalacloud":
-		if trimmed, ok := strings.CutSuffix(cp.BaseURL, "/v1"); ok {
+		if strings.HasSuffix(cp.BaseURL, "/v1") || strings.HasSuffix(cp.BaseURL, "/v1/") {
+			trimmed := strings.TrimSuffix(strings.TrimSuffix(cp.BaseURL, "/"), "/v1")
 			return nil, fmt.Errorf("phalacloud base_url %q must not include a path suffix; use %q", cp.BaseURL, trimmed)
 		}
 		p.ChatPath = "/v1/chat/completions"

@@ -30,6 +30,9 @@ func skipChutesIntegration(t *testing.T) {
 // Supports human-readable names (resolved via /v1/models) or UUIDs.
 func chutesIntegrationModel() string {
 	if m := os.Getenv("CHUTES_E2EE_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "chutes:" + m
 	}
 	return chutesVLModel()

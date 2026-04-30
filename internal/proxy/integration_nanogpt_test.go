@@ -29,6 +29,9 @@ func skipNanogptIntegration(t *testing.T) {
 // known-good dstack-backed TEE model if NANOGPT_MODEL is unset.
 func nanogptIntegrationModel() string {
 	if m := os.Getenv("NANOGPT_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "nanogpt:" + m
 	}
 	return "nanogpt:TEE/gemma-3-27b-it"

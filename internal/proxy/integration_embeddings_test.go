@@ -15,6 +15,9 @@ import (
 
 func nearDirectEmbeddingsModel() string {
 	if m := os.Getenv("NEARAI_EMBEDDING_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "neardirect:" + m
 	}
 	return "neardirect:Qwen/Qwen3-Embedding-0.6B"
@@ -56,6 +59,9 @@ func chutesEmbeddingsModel(t *testing.T) string {
 	m := os.Getenv("CHUTES_EMBEDDING_MODEL")
 	if m == "" {
 		t.Skip("CHUTES_EMBEDDING_MODEL not set; Chutes does not currently list embedding models")
+	}
+	if strings.Contains(m, ":") {
+		return m
 	}
 	return "chutes:" + m
 }
@@ -122,6 +128,9 @@ func TestIntegration_Chutes_EmbeddingsE2EE(t *testing.T) {
 // phalaCloudEmbeddingsModel returns the model for phalacloud embedding tests.
 func phalaCloudEmbeddingsModel() string {
 	if m := os.Getenv("PHALA_EMBEDDING_MODEL"); m != "" {
+		if strings.Contains(m, ":") {
+			return m
+		}
 		return "phalacloud:" + m
 	}
 	return "phalacloud:qwen/qwen3-embedding-8b"
