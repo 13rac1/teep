@@ -1810,3 +1810,15 @@ func TestRewriteModelInBody_Audio_WithBinaryFile(t *testing.T) {
 	}
 	t.Error("file part not found in rewritten body")
 }
+
+func TestRewriteModelInBody_Audio_InvalidBoundaryIsBadRequest(t *testing.T) {
+	body := []byte("--bad\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nfoo\r\n--bad--\r\n")
+	_, err := rewriteModelInBody("multipart/form-data; boundary=bad space", body, "", "whisper-large-v3")
+	if err == nil {
+		t.Fatal("expected error for invalid multipart boundary")
+	}
+	if got := normalizationStatusCode(err); got != http.StatusBadRequest {
+		t.Fatalf("normalizationStatusCode(err) = %d, want %d", got, http.StatusBadRequest)
+	}
+	t.Logf("invalid boundary error: %v", err)
+}

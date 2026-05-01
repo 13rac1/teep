@@ -125,6 +125,20 @@ func TestPruneInactiveProviders_NoProviders(t *testing.T) {
 	}
 }
 
+func TestPruneInactiveProviders_NilProvider(t *testing.T) {
+	cfg := &config.Config{
+		Providers: map[string]*config.Provider{
+			"venice": nil,
+		},
+	}
+
+	err := pruneInactiveProviders(cfg.Providers)
+	t.Logf("pruneInactiveProviders(nil provider): %v", err)
+	if err == nil {
+		t.Fatal("expected error for nil provider entry")
+	}
+}
+
 // --------------------------------------------------------------------------
 // providerNotFoundError tests
 // --------------------------------------------------------------------------

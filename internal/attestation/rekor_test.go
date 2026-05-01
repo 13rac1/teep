@@ -1202,3 +1202,94 @@ func TestExtractVerifierPEM_DirectPEM(t *testing.T) {
 		t.Errorf("result should contain PUBLIC KEY, got: %q", string(result))
 	}
 }
+
+func TestFetchRekorProvenances_PreservesOrderAndErrors(t *testing.T) {
+	const (
+		digestSlow  = "1111111111111111111111111111111111111111111111111111111111111111"
+		digestError = "2222222222222222222222222222222222222222222222222222222222222222"
+		digestRaw   = "3333333333333333333333333333333333333333333333333333333333333333"
+		uuidSlow    = "uuid-slow"
+		uuidRaw     = "uuid-raw"
+	)
+
+	slowEntry := buildMockEntryResponse(uuidSlow, buildMockDSSEBody(realFulcioCertPEM))
+	rawEntry := buildMockEntryResponse(uuidRaw, buildMockDSSEBody(realPublicKeyPEM))
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/index/retrieve":
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode index payload: %v", err)
+			}
+			hash := payload["hash"]
+			w.Header().Set("Content-Type", "application/json")
+			switch hash {
+			case "sha256:" + digestSlow:
+				time.Sleep(40 * time.Millisecond)
+				_ = json.NewEncoder(w).Encode([]string{uuidSlow})
+			case "sha256:" + digestError:
+				fmt.Fprint(w, "[]")
+			case "sha256:" + digestRaw:
+				time.Sleep(5 * time.Millisecond)
+				_ = json.NewEncoder(w).Encode([]string{uuidRaw})
+			default:
+				t.Fatalf("unexpected digest lookup: %q", hash)
+			}
+		case "/api/v1/log/entries/retrieve":
+			var payload struct {
+				EntryUUIDs []string `json:"entryUUIDs"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode entries payload: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			switch payload.EntryUUIDs[0] {
+			case uuidSlow:
+				w.Write(slowEntry)
+			case uuidRaw:
+				w.Write(rawEntry)
+			default:
+				t.Fatalf("unexpected uuid lookup: %q", payload.EntryUUIDs[0])
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
+	results := rc.FetchRekorProvenances(context.Background(), []string{digestSlow, digestError, digestRaw})
+
+	if len(results) != 3 {
+		t.Fatalf("len(results) = %d, want 3", len(results))
+	}
+	if results[0].Digest != digestSlow {
+		t.Fatalf("results[0].Digest = %q, want %q", results[0].Digest, digestSlow)
+	}
+	if results[1].Digest != digestError {
+		t.Fatalf("results[1].Digest = %q, want %q", results[1].Digest, digestError)
+	}
+	if results[2].Digest != digestRaw {
+		t.Fatalf("results[2].Digest = %q, want %q", results[2].Digest, digestRaw)
+	}
+
+	if results[0].Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", results[0].Err)
+	}
+	if !results[0].HasCert {
+		t.Fatal("results[0].HasCert = false, want true for Fulcio provenance")
+	}
+	if results[1].Err == nil {
+		t.Fatal("results[1].Err = nil, want no-entries error")
+	}
+	if !strings.Contains(results[1].Err.Error(), "no Rekor entries") {
+		t.Fatalf("results[1].Err = %v, want no Rekor entries error", results[1].Err)
+	}
+	if results[2].Err != nil {
+		t.Fatalf("results[2].Err = %v, want nil", results[2].Err)
+	}
+	if results[2].HasCert {
+		t.Fatal("results[2].HasCert = true, want false for raw public key provenance")
+	}
+}

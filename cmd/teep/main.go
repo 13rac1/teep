@@ -369,6 +369,9 @@ func runServe(ctx context.Context, offline, force bool) error {
 // Returns an error if no providers remain after pruning.
 func pruneInactiveProviders(providers map[string]*config.Provider) error {
 	for name, p := range providers {
+		if p == nil {
+			return fmt.Errorf("provider %q: config is nil", name)
+		}
 		if p.APIKey == "" {
 			delete(providers, name)
 		}
