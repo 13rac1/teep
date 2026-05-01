@@ -22,7 +22,7 @@ import (
 
 func nearDirectVLModel() string {
 	if m := os.Getenv("NEARAI_VL_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "neardirect:") {
 			return m
 		}
 		return "neardirect:" + m
@@ -30,7 +30,23 @@ func nearDirectVLModel() string {
 	return "neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct"
 }
 
-// testPNG returns a base64-encoded 8x8 solid red PNG image.
+func TestNearDirectVLModel_PrefixHandling(t *testing.T) {
+	t.Setenv("NEARAI_VL_MODEL", "Qwen/Qwen3-VL-30B-A3B-Instruct")
+	if got, want := nearDirectVLModel(), "neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct"; got != want {
+		t.Fatalf("nearDirectVLModel() = %q, want %q", got, want)
+	}
+
+	t.Setenv("NEARAI_VL_MODEL", "neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct")
+	if got, want := nearDirectVLModel(), "neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct"; got != want {
+		t.Fatalf("nearDirectVLModel() = %q, want %q", got, want)
+	}
+
+	// Model ID containing ':' but without the neardirect: prefix must still be prefixed.
+	t.Setenv("NEARAI_VL_MODEL", "hf:org/vl-model")
+	if got, want := nearDirectVLModel(), "neardirect:hf:org/vl-model"; got != want {
+		t.Fatalf("nearDirectVLModel() = %q, want %q", got, want)
+	}
+}
 func testPNG() string {
 	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
 	red := color.RGBA{R: 255, A: 255}
@@ -95,7 +111,7 @@ func TestIntegration_NearDirect_VL(t *testing.T) {
 
 func chutesVLModel() string {
 	if m := os.Getenv("CHUTES_VL_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "chutes:") {
 			return m
 		}
 		return "chutes:" + m
@@ -174,7 +190,7 @@ func TestIntegration_Chutes_VL_E2EE(t *testing.T) {
 
 func nearDirectImagesModel() string {
 	if m := os.Getenv("NEARAI_IMAGES_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "neardirect:") {
 			return m
 		}
 		return "neardirect:" + m
@@ -216,7 +232,7 @@ func TestIntegration_NearDirect_Images(t *testing.T) {
 
 func nearDirectAudioModel() string {
 	if m := os.Getenv("NEARAI_AUDIO_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "neardirect:") {
 			return m
 		}
 		return "neardirect:" + m
@@ -280,7 +296,7 @@ func TestIntegration_NearDirect_Audio(t *testing.T) {
 
 func nearDirectRerankModel() string {
 	if m := os.Getenv("NEARAI_RERANK_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "neardirect:") {
 			return m
 		}
 		return "neardirect:" + m

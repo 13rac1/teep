@@ -29,7 +29,7 @@ func skipNanogptIntegration(t *testing.T) {
 // known-good dstack-backed TEE model if NANOGPT_MODEL is unset.
 func nanogptIntegrationModel() string {
 	if m := os.Getenv("NANOGPT_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "nanogpt:") {
 			return m
 		}
 		return "nanogpt:" + m
@@ -37,7 +37,24 @@ func nanogptIntegrationModel() string {
 	return "nanogpt:TEE/gemma-3-27b-it"
 }
 
-// nanogptIntegrationConfig returns a config pointing at the live NanoGPT API
+func TestNanogptIntegrationModel_PrefixHandling(t *testing.T) {
+	t.Setenv("NANOGPT_MODEL", "TEE/gemma-3-27b-it")
+	if got, want := nanogptIntegrationModel(), "nanogpt:TEE/gemma-3-27b-it"; got != want {
+		t.Fatalf("nanogptIntegrationModel() = %q, want %q", got, want)
+	}
+
+	t.Setenv("NANOGPT_MODEL", "nanogpt:TEE/gemma-3-27b-it")
+	if got, want := nanogptIntegrationModel(), "nanogpt:TEE/gemma-3-27b-it"; got != want {
+		t.Fatalf("nanogptIntegrationModel() = %q, want %q", got, want)
+	}
+
+	// Model ID containing ':' but without the nanogpt: prefix must still be prefixed.
+	t.Setenv("NANOGPT_MODEL", "TEE:model-v2")
+	if got, want := nanogptIntegrationModel(), "nanogpt:TEE:model-v2"; got != want {
+		t.Fatalf("nanogptIntegrationModel() = %q, want %q", got, want)
+	}
+}
+
 // with E2EE disabled and Offline true (skips Intel PCS, NRAS, PoC network
 // calls).
 func nanogptIntegrationConfig(t *testing.T) *config.Config {

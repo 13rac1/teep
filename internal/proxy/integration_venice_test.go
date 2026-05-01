@@ -39,7 +39,7 @@ func skipIntegration(t *testing.T) {
 // known-good model if VENICE_E2EE_MODEL is unset.
 func integrationModel() string {
 	if m := os.Getenv("VENICE_E2EE_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "venice:") {
 			return m
 		}
 		return "venice:" + m
@@ -47,7 +47,24 @@ func integrationModel() string {
 	return "venice:e2ee-qwen3-5-122b-a10b"
 }
 
-// integrationPlaintextConfig returns a config pointing at the live Venice API
+func TestIntegrationModel_PrefixHandling(t *testing.T) {
+	t.Setenv("VENICE_E2EE_MODEL", "e2ee-qwen3-5-122b-a10b")
+	if got, want := integrationModel(), "venice:e2ee-qwen3-5-122b-a10b"; got != want {
+		t.Fatalf("integrationModel() = %q, want %q", got, want)
+	}
+
+	t.Setenv("VENICE_E2EE_MODEL", "venice:e2ee-qwen3-5-122b-a10b")
+	if got, want := integrationModel(), "venice:e2ee-qwen3-5-122b-a10b"; got != want {
+		t.Fatalf("integrationModel() = %q, want %q", got, want)
+	}
+
+	// Model ID containing ':' but without the venice: prefix must still be prefixed.
+	t.Setenv("VENICE_E2EE_MODEL", "hf:org/model:v1")
+	if got, want := integrationModel(), "venice:hf:org/model:v1"; got != want {
+		t.Fatalf("integrationModel() = %q, want %q", got, want)
+	}
+}
+
 // with E2EE disabled and Offline true (skips Intel PCS, NRAS, PoC network
 // calls).
 func integrationPlaintextConfig(t *testing.T) *config.Config {

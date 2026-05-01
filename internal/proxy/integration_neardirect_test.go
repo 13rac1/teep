@@ -29,7 +29,7 @@ func skipNearDirectIntegration(t *testing.T) {
 // known-good model if NEARAI_E2EE_MODEL is unset.
 func nearDirectIntegrationModel() string {
 	if m := os.Getenv("NEARAI_E2EE_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "neardirect:") {
 			return m
 		}
 		return "neardirect:" + m
@@ -37,7 +37,24 @@ func nearDirectIntegrationModel() string {
 	return "neardirect:Qwen/Qwen3.5-122B-A10B"
 }
 
-// integrationNearDirectConfig returns a config pointing at the live NEAR AI API
+func TestNearDirectIntegrationModel_PrefixHandling(t *testing.T) {
+	t.Setenv("NEARAI_E2EE_MODEL", "Qwen/Qwen3.5-122B-A10B")
+	if got, want := nearDirectIntegrationModel(), "neardirect:Qwen/Qwen3.5-122B-A10B"; got != want {
+		t.Fatalf("nearDirectIntegrationModel() = %q, want %q", got, want)
+	}
+
+	t.Setenv("NEARAI_E2EE_MODEL", "neardirect:Qwen/Qwen3.5-122B-A10B")
+	if got, want := nearDirectIntegrationModel(), "neardirect:Qwen/Qwen3.5-122B-A10B"; got != want {
+		t.Fatalf("nearDirectIntegrationModel() = %q, want %q", got, want)
+	}
+
+	// Model ID containing ':' but without the neardirect: prefix must still be prefixed.
+	t.Setenv("NEARAI_E2EE_MODEL", "other-provider/model:v2")
+	if got, want := nearDirectIntegrationModel(), "neardirect:other-provider/model:v2"; got != want {
+		t.Fatalf("nearDirectIntegrationModel() = %q, want %q", got, want)
+	}
+}
+
 // with Offline true (skips Intel PCS, NRAS, PoC network calls).
 func integrationNearDirectConfig(t *testing.T) *config.Config {
 	t.Helper()

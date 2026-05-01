@@ -30,7 +30,7 @@ func skipChutesIntegration(t *testing.T) {
 // Supports human-readable names (resolved via /v1/models) or UUIDs.
 func chutesIntegrationModel() string {
 	if m := os.Getenv("CHUTES_E2EE_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "chutes:") {
 			return m
 		}
 		return "chutes:" + m
@@ -38,7 +38,24 @@ func chutesIntegrationModel() string {
 	return chutesVLModel()
 }
 
-// integrationChutesPlaintextConfig returns a config pointing at the live
+func TestChutesIntegrationModel_PrefixHandling(t *testing.T) {
+	t.Setenv("CHUTES_E2EE_MODEL", "Qwen/Qwen3.5-397B-A17B-TEE")
+	if got, want := chutesIntegrationModel(), "chutes:Qwen/Qwen3.5-397B-A17B-TEE"; got != want {
+		t.Fatalf("chutesIntegrationModel() = %q, want %q", got, want)
+	}
+
+	t.Setenv("CHUTES_E2EE_MODEL", "chutes:Qwen/Qwen3.5-397B-A17B-TEE")
+	if got, want := chutesIntegrationModel(), "chutes:Qwen/Qwen3.5-397B-A17B-TEE"; got != want {
+		t.Fatalf("chutesIntegrationModel() = %q, want %q", got, want)
+	}
+
+	// Model ID containing ':' but without the chutes: prefix must still be prefixed.
+	t.Setenv("CHUTES_E2EE_MODEL", "hf:org/model-name")
+	if got, want := chutesIntegrationModel(), "chutes:hf:org/model-name"; got != want {
+		t.Fatalf("chutesIntegrationModel() = %q, want %q", got, want)
+	}
+}
+
 // Chutes API with E2EE disabled and Offline true (skips Intel PCS, NRAS, PoC
 // network calls). Used to diagnose 403s: if non-E2EE requests also fail,
 // the issue is the API key or account rather than the E2EE path.

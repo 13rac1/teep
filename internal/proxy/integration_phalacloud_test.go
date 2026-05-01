@@ -29,7 +29,7 @@ func skipPhalaCloudIntegration(t *testing.T) {
 // to a known-good dstack-backed model if PHALA_MODEL is unset.
 func phalaCloudIntegrationModel() string {
 	if m := os.Getenv("PHALA_MODEL"); m != "" {
-		if strings.Contains(m, ":") {
+		if strings.HasPrefix(m, "phalacloud:") {
 			return m
 		}
 		return "phalacloud:" + m
@@ -37,7 +37,24 @@ func phalaCloudIntegrationModel() string {
 	return "phalacloud:phala/gemma-3-27b-it"
 }
 
-// integrationPhalaCloudConfig returns a config pointing at the live Phala Cloud
+func TestPhalaCloudIntegrationModel_PrefixHandling(t *testing.T) {
+	t.Setenv("PHALA_MODEL", "phala/gemma-3-27b-it")
+	if got, want := phalaCloudIntegrationModel(), "phalacloud:phala/gemma-3-27b-it"; got != want {
+		t.Fatalf("phalaCloudIntegrationModel() = %q, want %q", got, want)
+	}
+
+	t.Setenv("PHALA_MODEL", "phalacloud:phala/gemma-3-27b-it")
+	if got, want := phalaCloudIntegrationModel(), "phalacloud:phala/gemma-3-27b-it"; got != want {
+		t.Fatalf("phalaCloudIntegrationModel() = %q, want %q", got, want)
+	}
+
+	// Model ID containing ':' but without the phalacloud: prefix must still be prefixed.
+	t.Setenv("PHALA_MODEL", "other:model-id")
+	if got, want := phalaCloudIntegrationModel(), "phalacloud:other:model-id"; got != want {
+		t.Fatalf("phalaCloudIntegrationModel() = %q, want %q", got, want)
+	}
+}
+
 // API with Offline true (skips Intel PCS, NRAS, PoC network calls).
 func integrationPhalaCloudConfig(t *testing.T) *config.Config {
 	t.Helper()
