@@ -4,6 +4,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestMonitoredConn_CloseIdempotent(t *testing.T) {
@@ -56,10 +57,13 @@ func TestMonitoredListener_ThrottleLog(t *testing.T) {
 		Listener: base,
 		maxConns: 1,
 	}
-	// Simulate active == maxConns so the next Accept triggers the throttle check.
+	// Simulate active == maxConns so each Accept evaluates the throttle check.
 	ml.active.Store(1)
+	now := time.Now().Unix()
+	ml.lastWarn.Store(now)
 
-	// Dial a connection so Accept doesn't block forever.
+	// First Accept is inside the 60-second throttle window, so lastWarn should
+	// not be updated.
 	go func() {
 		c, err := net.Dial("tcp", base.Addr().String())
 		if err == nil {
@@ -71,15 +75,32 @@ func TestMonitoredListener_ThrottleLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
-
-	// The warning should have fired and set lastWarn.
-	if ml.lastWarn.Load() == 0 {
-		t.Error("expected lastWarn to be set when active >= maxConns at Accept time")
+	if got := ml.lastWarn.Load(); got != now {
+		t.Errorf("lastWarn updated within throttle window: got %d, want %d", got, now)
 	}
-
-	// active is now 2 (pre-stored 1 + Accept increment). Close decrements back to 1.
 	conn.Close()
 	if got := ml.active.Load(); got != 1 {
 		t.Errorf("active = %d after Close, want 1", got)
+	}
+
+	// Move lastWarn outside the throttle window; next Accept should update it.
+	ml.lastWarn.Store(now - 61)
+	go func() {
+		c, err := net.Dial("tcp", base.Addr().String())
+		if err == nil {
+			c.Close()
+		}
+	}()
+
+	conn2, err := ml.Accept()
+	if err != nil {
+		t.Fatalf("second Accept: %v", err)
+	}
+	if got := ml.lastWarn.Load(); got < now {
+		t.Errorf("lastWarn was not updated after throttle window: got %d, want >= %d", got, now)
+	}
+	conn2.Close()
+	if got := ml.active.Load(); got != 1 {
+		t.Errorf("active = %d after second Close, want 1", got)
 	}
 }
