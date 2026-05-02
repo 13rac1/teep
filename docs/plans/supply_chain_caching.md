@@ -122,6 +122,54 @@ teep cache --model <p1:m1> --model <p2:m2>                   # repeated model fl
   factor failure (or warning if in `allow_fail`) but will not overwrite the
   cached values.
 
+### 2d. Current Cache and State Inventory (Implemented Baseline)
+
+The current repository already has several in-memory caches/state stores used
+by `teep serve`. These are distinct from the planned long-lived supply-chain
+cache in this plan.
+
+| Component | Location | Keying | TTL / Lifetime | Purpose |
+|---|---|---|---|---|
+| Positive attestation report cache (`Cache`) | `internal/attestation/attestation.go` | `(provider, upstream model)` | `attestation.AttestationCacheTTL` (currently 1h) | Reuse verified `VerificationReport` and avoid re-attesting on every request |
+| Negative attestation cache (`NegativeCache`) | `internal/attestation/attestation.go` | `(provider, upstream model)` | 30s in proxy (`negativeCacheTTL`) | Fail-closed backoff after attestation failures |
+| E2EE signing key cache (`SigningKeyCache`) | `internal/attestation/attestation.go` | `(provider, upstream model)` | `attestation.AttestationCacheTTL` (currently 1h) | Reuse REPORTDATA-bound signing keys for E2EE setup |
+| SPKI pin cache (`SPKICache`) | `internal/attestation/spki.go` | `(domain, spki)` (domain bucket with SPKI set) | `attestation.AttestationCacheTTL` (currently 1h) | Skip repeated attestation on pinned TLS identities for pinned providers |
+| E2EE failure state (`e2eeFailed` sync.Map) | `internal/proxy/proxy.go` | `(provider, upstream model)` via `providerModelKey` | Until cleared by successful re-attestation/recovery path | Prevent reuse of stale cache artifacts after E2EE decrypt failures |
+| NearDirect endpoint discovery cache (`EndpointResolver`) | `internal/provider/neardirect/endpoints.go` | model→domain map | 5m (`endpointsTTL`) | Route model traffic to current backend domain |
+| Chutes model resolver cache (`ModelResolver`) | `internal/provider/chutes/resolve.go` | model→chute_id map | 5m (`modelMapTTL`) | Resolve model names to chute UUIDs |
+
+Notes:
+- The first five rows are the security-critical proxy state relevant to
+  attestation, pinned connections, and E2EE behavior.
+- The resolver caches are routing/discovery caches, not attestation-evidence
+  stores.
+
+### 2e. Cache Unification Strategy and Constraints
+
+Goal: unify caches where this reduces duplication without weakening security
+boundaries.
+
+**Unify where feasible**:
+- Provider/model keyed in-memory security caches (`Cache`, `NegativeCache`,
+  `SigningKeyCache`, `e2eeFailed`, and planned `supplyChainCache`) should share
+  one canonical key type and one concurrency discipline.
+- Preferred direction: introduce a shared provider/model key struct in a
+  common package and typed cache helpers for TTL + eviction behavior.
+
+**Do not force-unify where infeasible or security-risky**:
+- `SPKICache` should remain domain-scoped (not provider/model-scoped). Reason:
+  SPKI trust is a TLS endpoint identity property; pinned providers resolve
+  domains dynamically and must support reuse by domain.
+- Resolver caches (`EndpointResolver`, `ModelResolver`) should remain separate
+  from attestation/supply-chain caches. Reason: they cache mutable discovery
+  metadata, not cryptographically authenticated attestation evidence.
+- File-backed supply-chain cache and short-lived in-memory attestation/E2EE
+  caches should not be physically merged into one store. Reason: different
+  mutability, freshness, persistence, and trust semantics.
+
+Operational implication: unify key types and helper primitives, not security
+domains.
+
 ---
 
 ## 3. Cache File Design
@@ -842,11 +890,12 @@ cache will use a `sync.RWMutex` to protect shared data structures, ensuring
 safe concurrent access via multiple clients performing simultaneous access of
 multiple providers and models.
 
-Request routing and planned cache/report keying will remain provider-isolated under
-concurrency because requests are first resolved from `provider:model` to
-`(provider, upstream model)` and then all cache operations use that tuple.
-This prevents cross-provider collisions when providers expose identical
-upstream model IDs.
+Request routing remains provider-isolated under concurrency because requests
+are first resolved from `provider:model` to `(provider, upstream model)`.
+Most security caches use that tuple key (`Cache`, `NegativeCache`,
+`SigningKeyCache`, and `e2eeFailed`), while `SPKICache` is intentionally keyed
+by domain/SPKI. This split prevents cross-provider model collisions while
+preserving correct TLS identity reuse for pinned providers.
 
 **Cross-process coordination**: Multiple `teep serve` processes (or a `teep
 serve` and a `teep cache`) may share the same cache file. Cross-process disk
@@ -954,6 +1003,15 @@ verification, or staleness degradation.
 
 ## 11. Implementation Phases
 
+### Phase 0: Baseline Cache Inventory and Keying Contract
+
+- Document and test current cache/state semantics before adding new cache
+  features (Section 2d inventory).
+- Introduce a canonical provider/model cache key type shared across proxy
+  security caches that are model scoped.
+- Explicitly retain domain-scoped `SPKICache` and resolver caches as separate
+  domains (Section 2e constraints).
+
 ### Phase 1: Cache File Format and I/O
 
 - Define Go types for the cache file structure in `internal/cache/`.
@@ -963,6 +1021,8 @@ verification, or staleness degradation.
 - Permission checks using `os.Lstat` (symlink-safe).
 - Post-unmarshal validation of hex field lengths.
 - Unit tests for merge semantics, format round-tripping, and safe concurrent access involving multiple providers over `sync.WaitGroup` and parallel goroutines.
+- Ensure cache-file schema and loaders are isolated from existing short-lived
+  attestation/E2EE caches; only shared key/helper primitives may be reused.
 
 ### Phase 2: `teep cache` Command
 
@@ -995,8 +1055,11 @@ verification, or staleness degradation.
 
 - Add a `supplyChainCache` field to the existing `Server` struct in
   `internal/proxy/proxy.go`. This is distinct from the existing short-lived
-  proxy caches (`cache` for attestation reports at 5m TTL, `negCache` at 30s,
-  `signingKeyCache` at 1h, `spkiCache` at 1h). The supply chain cache stores
+  proxy caches (`cache` for attestation reports at
+  `attestation.AttestationCacheTTL` (currently 1h), `negCache` at 30s,
+  `signingKeyCache` at `attestation.AttestationCacheTTL` (currently 1h),
+  `spkiCache` at `attestation.AttestationCacheTTL` (currently 1h)). The
+  supply chain cache stores
   long-lived authenticated verification data.
 - Create the supply chain cache at `teep serve` startup (same data structures
   as the cache file). If a cache file is configured, load it into memory;
@@ -1011,6 +1074,11 @@ verification, or staleness degradation.
   `attestAndCache` itself or in the `fetchAndVerify` / `BuildReport` path it
   calls. This single integration point automatically covers all endpoint types
   without per-endpoint cache code.
+- Reuse the canonical provider/model cache key contract from Phase 0 across
+  attestation, negative, signing-key, e2ee-failure, and supply-chain cache
+  code paths where applicable.
+- Keep `SPKICache` domain keyed and resolver caches independent; document this
+  explicitly in code comments and tests as an intentional non-unification.
 - Populate the in-memory cache after each successful attestation, using the
   same code paths as `teep cache` for extracting authenticated results.
 - **Authenticated write-back**: When live re-attestation produces changes that
@@ -1030,6 +1098,9 @@ verification, or staleness degradation.
 
 - Integration tests with live providers.
 - `make reports` regression check.
+- Add cache-domain tests that explicitly verify keying boundaries:
+  provider/model caches do not collide across providers with identical model
+  names, and SPKI domain cache behavior remains domain-scoped.
 - Update `README.md`, `README_ADVANCED.md`, help text.
 - `teep.toml.example` — remove update-config examples, add `cache_file`
   and `max_cache_age` documentation.

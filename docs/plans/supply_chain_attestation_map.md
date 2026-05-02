@@ -271,12 +271,24 @@ The proxy path wires the policy through [internal/proxy/proxy.go](../../internal
 - `fetchAndVerify()` passes `prov.SupplyChainPolicy` into `attestation.BuildReport()`.
 - `verifySupplyChain()` verifies model-side compose binding, extracts model-side compose digests, and performs Sigstore/Rekor checks for those model digests.
 
-Under concurrent multi-provider traffic, attestation caches and report inputs
-stay isolated because they are keyed by `(provider, upstream model)` after
-prefix stripping. This prevents cross-provider collisions when two providers
-offer the same upstream model ID.
+Under concurrent multi-provider traffic, provider/model keyed report caches
+and report inputs stay isolated after prefix stripping, preventing
+cross-provider collisions when two providers offer the same upstream model ID.
 
-The proxy path does not currently populate `GatewayTDX`, `GatewayCompose`, `GatewayImageRepos`, `GatewayPoC`, or `GatewayEventLog` into `BuildReport()`, so gateway-specific supply-chain factors are only emitted from the verify path.
+Gateway field population in proxy traffic is path-dependent:
+- Generic proxy `fetchAndVerify()` in [internal/proxy/proxy.go](../../internal/proxy/proxy.go)
+   does not populate gateway fields.
+- Nearcloud pinned attestation in
+   [internal/provider/nearcloud/pinned.go](../../internal/provider/nearcloud/pinned.go)
+   does populate `GatewayTDX`, `GatewayCompose`, `GatewayImageRepos`,
+   `GatewayPoC`, and `GatewayEventLog` before `BuildReport()`.
+- Neardirect pinned attestation in
+   [internal/provider/neardirect/pinned.go](../../internal/provider/neardirect/pinned.go)
+   remains model-tier only.
+
+Therefore, gateway-specific supply-chain factors are emitted in verify/reverify
+and in nearcloud pinned-proxy flows, but not in the generic proxy
+`fetchAndVerify()` path.
 
 ### Provider Wiring Sources
 
