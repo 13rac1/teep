@@ -13,7 +13,8 @@ require (
 	github.com/google/go-tdx-guest v0.3.2-0.20260305110651-91f9a52f36c7
 	github.com/peterbourgon/ff/v4 v4.0.0-beta.1
 	github.com/transparency-dev/merkle v0.0.2
-	golang.org/x/crypto v0.49.0
+	golang.org/x/crypto v0.50.0
+	golang.org/x/net v0.53.0
 	golang.org/x/sync v0.20.0
 )
 
@@ -22,7 +23,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/google/logger v1.1.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect

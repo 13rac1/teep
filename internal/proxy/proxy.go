@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -36,6 +37,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/netutil"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
@@ -464,9 +467,13 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, errors.New("no providers configured")
 	}
 
+	// Monitoring endpoints (/, /events, /metrics) are unauthenticated.
+	// Access control relies on the proxy binding to loopback (127.0.0.1) by default;
+	// config.Load warns when ListenAddr is non-loopback.
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /events", s.handleEvents)
+	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.mux.HandleFunc("POST /v1/chat/completions", s.handleEndpoint(&chatEndpoint))
 	s.mux.HandleFunc("POST /v1/embeddings", s.handleEndpoint(&embeddingsEndpoint))
 	s.mux.HandleFunc("POST /v1/audio/transcriptions", s.handleEndpoint(&audioEndpoint))
@@ -483,18 +490,30 @@ func New(cfg *config.Config) (*Server, error) {
 // initiates a graceful shutdown with a 5-second deadline to drain in-flight
 // requests (which zeros any active E2EE sessions via their defers).
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	if s.cfg.MaxConns <= 0 {
+		return fmt.Errorf("max_conns must be positive, got %d", s.cfg.MaxConns)
+	}
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", s.cfg.ListenAddr)
+	if err != nil {
+		return err
+	}
+	ln = &monitoredListener{
+		Listener: netutil.LimitListener(ln, s.cfg.MaxConns),
+		maxConns: s.cfg.MaxConns,
+	}
+
 	srv := &http.Server{
-		Addr:              s.cfg.ListenAddr,
 		Handler:           s,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 	}
-	slog.Info("teep proxy listening", "addr", s.cfg.ListenAddr)
+	slog.Info("teep proxy listening", "addr", s.cfg.ListenAddr, "max_conns", s.cfg.MaxConns)
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- srv.Serve(ln) }()
 
 	select {
 	case err := <-errCh:
@@ -505,6 +524,45 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}
+}
+
+// monitoredListener wraps netutil.LimitListener to log a rate-throttled warning
+// when the connection limit is reached. The active counter tracks open connections
+// so the check before each Accept is best-effort (racy but sufficient for logging).
+type monitoredListener struct {
+	net.Listener
+	maxConns int
+	active   atomic.Int64
+	lastWarn atomic.Int64
+}
+
+func (m *monitoredListener) Accept() (net.Conn, error) {
+	if m.active.Load() >= int64(m.maxConns) {
+		now := time.Now().Unix()
+		if last := m.lastWarn.Load(); now-last >= 60 && m.lastWarn.CompareAndSwap(last, now) {
+			slog.Warn("connection limit reached; new connections are queuing",
+				"max_conns", m.maxConns)
+		}
+	}
+	c, err := m.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	m.active.Add(1)
+	return &monitoredConn{Conn: c, active: &m.active}, nil
+}
+
+// monitoredConn decrements the active connection counter exactly once on Close.
+type monitoredConn struct {
+	net.Conn
+	once   sync.Once
+	active *atomic.Int64
+}
+
+func (c *monitoredConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { c.active.Add(-1) })
+	return err
 }
 
 // ServeHTTP implements http.Handler so Server can be used with httptest.NewServer.

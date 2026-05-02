@@ -5,7 +5,7 @@
 //
 //  1. Built-in defaults (listen addr 127.0.0.1:8337, default enforced factors).
 //  2. TOML file at $TEEP_CONFIG, if set.
-//  3. Environment variables (TEEP_LISTEN_ADDR, VENICE_API_KEY, NEARAI_API_KEY, NANOGPT_API_KEY).
+//  3. Environment variables (TEEP_LISTEN_ADDR, TEEP_MAX_CONNS, VENICE_API_KEY, NEARAI_API_KEY, NANOGPT_API_KEY).
 //
 // API keys are never logged; use RedactKey to produce a safe representation.
 package config
@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,15 @@ const (
 	// DefaultListenAddr is the proxy's default listen address.
 	// It deliberately binds only to loopback — never to all interfaces.
 	DefaultListenAddr = "127.0.0.1:8337"
+
+	// MaxConnections is the upper bound accepted for TEEP_MAX_CONNS.
+	// Values above this are clamped with a warning.
+	MaxConnections = 10000
+
+	// rlimitHeadroom is the number of file descriptors reserved for non-connection
+	// use (log files, config files, attestation HTTP clients, etc.) when computing
+	// the default connection limit from RLIMIT_NOFILE.
+	rlimitHeadroom = 50
 
 	// AttestationTimeout is the HTTP client timeout for attestation fetches.
 	// 45 seconds accommodates Chutes' multi-GPU evidence endpoint which
@@ -101,6 +111,7 @@ type PolicyConfig struct {
 type tomlFile struct {
 	Providers map[string]ProviderConfig `toml:"providers"`
 	AllowFail []string                  `toml:"allow_fail"`
+	MaxConns  int                       `toml:"max_conns"`
 	Policy    PolicyConfig              `toml:"policy"`
 }
 
@@ -117,6 +128,16 @@ type Provider struct {
 type Config struct {
 	// ListenAddr is the TCP address the proxy HTTP server binds to.
 	ListenAddr string
+
+	// MaxConns is the maximum number of concurrent inbound connections.
+	// By default this is computed by defaultMaxConns() from RLIMIT_NOFILE
+	// and can be overridden by TOML max_conns or TEEP_MAX_CONNS.
+	MaxConns int
+
+	// maxConnsDefined tracks whether max_conns was explicitly configured via
+	// TOML or TEEP_MAX_CONNS. When true, RLIMIT-derived default diagnostics are
+	// suppressed because the default value is not selected.
+	maxConnsDefined bool
 
 	// Providers is the map of provider name → resolved provider config.
 	Providers map[string]*Provider
@@ -162,6 +183,70 @@ type Config struct {
 	Force bool
 }
 
+// warnIfRlimitLow logs a warning when the soft RLIMIT_NOFILE is below 1000,
+// regardless of whether MaxConns was set by default or by TEEP_MAX_CONNS.
+func warnIfRlimitLow(soft int) {
+	if soft < 1000 {
+		slog.Warn("RLIMIT_NOFILE is very low; consider raising 'ulimit -n'",
+			"rlimit_nofile", soft)
+	}
+}
+
+func usableFDHeadroom(soft int) int {
+	if soft <= rlimitHeadroom {
+		return 0
+	}
+	return soft - rlimitHeadroom
+}
+
+// warnIfMaxConnsExceedsHeadroom emits RLIMIT diagnostics for an explicit
+// max_conns value when RLIMIT_NOFILE is available and finite.
+func warnIfMaxConnsExceedsHeadroom(source string, maxConns int) {
+	soft, unlimited, rerr := nofileRlimit()
+	if rerr != nil || unlimited {
+		return
+	}
+	warnIfRlimitLow(soft)
+	usable := usableFDHeadroom(soft)
+	if maxConns > usable {
+		slog.Warn("max_conns exceeds usable file descriptor headroom",
+			"source", source, "max_conns", maxConns,
+			"rlimit_nofile", soft, "headroom", rlimitHeadroom, "usable_fds", usable)
+	}
+}
+
+// defaultMaxConns computes the default connection limit from RLIMIT_NOFILE,
+// reserving rlimitHeadroom FDs for non-connection use.
+//
+// It intentionally does not log: callers should emit RLIMIT diagnostics only
+// when this computed default is actually selected after TOML/env overrides.
+func defaultMaxConns() int {
+	soft, unlimited, err := nofileRlimit()
+	if err != nil {
+		return 1000
+	}
+	if unlimited {
+		return 1000
+	}
+	return max(1, min(soft-rlimitHeadroom, MaxConnections))
+}
+
+func logDefaultMaxConnsDiagnostics() {
+	soft, unlimited, err := nofileRlimit()
+	if err != nil {
+		slog.Warn("cannot read RLIMIT_NOFILE; using built-in default",
+			"default", 1000, "err", err)
+		return
+	}
+	if unlimited {
+		slog.Info("RLIMIT_NOFILE is unlimited; connection limit defaults to 1000; "+
+			"set TEEP_MAX_CONNS to configure explicitly",
+			"default", 1000)
+		return
+	}
+	warnIfRlimitLow(soft)
+}
+
 // Load reads configuration from the optional TOML file (path from $TEEP_CONFIG)
 // and applies environment variable overrides. It logs a warning to stderr if
 // the listen address is non-loopback or if the config file has insecure
@@ -169,6 +254,7 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		ListenAddr:              DefaultListenAddr,
+		MaxConns:                defaultMaxConns(),
 		Providers:               make(map[string]*Provider),
 		ProviderAllowFail:       make(map[string][]string),
 		ProviderPolicies:        make(map[string]attestation.MeasurementPolicy),
@@ -183,7 +269,20 @@ func Load() (*Config, error) {
 	}
 
 	applyEnvOverrides(cfg)
+	if !cfg.maxConnsDefined {
+		logDefaultMaxConnsDiagnostics()
+	}
 	warnNonLoopback(cfg.ListenAddr)
+	if cfg.GlobalAllowFailDefined {
+		for _, factor := range cfg.AllowFail {
+			slog.Warn("security factor in global allow_fail; failures will not block requests", "factor", factor)
+		}
+	}
+	for name, factors := range cfg.ProviderAllowFail {
+		for _, factor := range factors {
+			slog.Warn("security factor in provider allow_fail; failures will not block requests", "provider", name, "factor", factor)
+		}
+	}
 	return cfg, nil
 }
 
@@ -202,6 +301,18 @@ func loadTOML(cfg *Config, path string) error {
 	}
 	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
 		return fmt.Errorf("unknown config keys: %v", undecoded)
+	}
+
+	if meta.IsDefined("max_conns") {
+		if f.MaxConns <= 0 {
+			return fmt.Errorf("max_conns must be a positive integer, got %d", f.MaxConns)
+		}
+		if f.MaxConns > MaxConnections {
+			return fmt.Errorf("max_conns exceeds maximum %d: got %d", MaxConnections, f.MaxConns)
+		}
+		cfg.MaxConns = f.MaxConns
+		cfg.maxConnsDefined = true
+		warnIfMaxConnsExceedsHeadroom("TOML max_conns", cfg.MaxConns)
 	}
 
 	for name := range f.Providers {
@@ -462,10 +573,31 @@ func resolveProvider(name string, pc *ProviderConfig) *Provider {
 
 // applyEnvOverrides applies environment variable overrides to cfg.
 // TEEP_LISTEN_ADDR overrides the listen address.
+// TEEP_MAX_CONNS overrides the maximum concurrent connections.
 // VENICE_API_KEY, NEARAI_API_KEY, and NANOGPT_API_KEY inject or override provider API keys.
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("TEEP_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
+	}
+	if v := os.Getenv("TEEP_MAX_CONNS"); v != "" {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			slog.Warn("TEEP_MAX_CONNS is not a valid integer; ignoring override",
+				"value", v, "keeping", cfg.MaxConns)
+		case n <= 0:
+			slog.Warn("TEEP_MAX_CONNS must be a positive integer; ignoring override",
+				"value", n, "keeping", cfg.MaxConns)
+		case n > MaxConnections:
+			slog.Warn("TEEP_MAX_CONNS exceeds maximum; clamping", "value", n, "max", MaxConnections)
+			cfg.MaxConns = MaxConnections
+			cfg.maxConnsDefined = true
+			warnIfMaxConnsExceedsHeadroom("TEEP_MAX_CONNS", cfg.MaxConns)
+		default:
+			warnIfMaxConnsExceedsHeadroom("TEEP_MAX_CONNS", n)
+			cfg.MaxConns = n
+			cfg.maxConnsDefined = true
+		}
 	}
 
 	applyAPIKeyEnv(cfg, "venice", "VENICE_API_KEY", "https://api.venice.ai", true)

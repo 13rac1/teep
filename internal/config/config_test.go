@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -153,6 +154,62 @@ allow_fail = ["nonce_match", "tls_key_binding"]
 	}
 	if cfg.AllowFail[1] != "tls_key_binding" {
 		t.Errorf("AllowFail[1]: got %q, want %q", cfg.AllowFail[1], "tls_key_binding")
+	}
+}
+
+func TestLoadTOMLMaxConns(t *testing.T) {
+	toml := `
+max_conns = 1234
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "TEEP_MAX_CONNS")
+	clearProviderEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.MaxConns != 1234 {
+		t.Errorf("MaxConns from TOML: got %d, want %d", cfg.MaxConns, 1234)
+	}
+}
+
+func TestLoadTOMLMaxConnsInvalid(t *testing.T) {
+	tests := []struct {
+		name    string
+		toml    string
+		wantErr string
+	}{
+		{
+			name:    "non-positive",
+			toml:    "max_conns = 0\n",
+			wantErr: "max_conns must be a positive integer",
+		},
+		{
+			name:    "too-large",
+			toml:    fmt.Sprintf("max_conns = %d\n", MaxConnections+1),
+			wantErr: "max_conns exceeds maximum",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfigFile(t, tc.toml, 0o600)
+			setenv(t, "TEEP_CONFIG", path)
+			unsetenv(t, "TEEP_LISTEN_ADDR")
+			unsetenv(t, "TEEP_MAX_CONNS")
+			clearProviderEnv(t)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatal("expected error for invalid max_conns, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -507,6 +564,85 @@ func TestEnvListenAddr(t *testing.T) {
 	}
 	if cfg.ListenAddr != "127.0.0.1:9090" {
 		t.Errorf("ListenAddr: got %q, want %q", cfg.ListenAddr, "127.0.0.1:9090")
+	}
+}
+
+func TestEnvMaxConns(t *testing.T) {
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	// Valid value overrides the default.
+	setenv(t, "TEEP_MAX_CONNS", "50")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=50: %d", cfg.MaxConns)
+	if cfg.MaxConns != 50 {
+		t.Errorf("MaxConns = %d, want 50", cfg.MaxConns)
+	}
+
+	// Invalid value is ignored; computed default is kept.
+	setenv(t, "TEEP_MAX_CONNS", "not-a-number")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=not-a-number: %d", cfg.MaxConns)
+	if cfg.MaxConns <= 0 || cfg.MaxConns > MaxConnections {
+		t.Errorf("MaxConns = %d, want positive value <= MaxConnections (%d)", cfg.MaxConns, MaxConnections)
+	}
+
+	// Zero is rejected; computed default is kept.
+	setenv(t, "TEEP_MAX_CONNS", "0")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=0: %d", cfg.MaxConns)
+	if cfg.MaxConns <= 0 || cfg.MaxConns > MaxConnections {
+		t.Errorf("MaxConns = %d, want positive value <= MaxConnections (%d)", cfg.MaxConns, MaxConnections)
+	}
+
+	// Negative is rejected; computed default is kept.
+	setenv(t, "TEEP_MAX_CONNS", "-1")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=-1: %d", cfg.MaxConns)
+	if cfg.MaxConns <= 0 || cfg.MaxConns > MaxConnections {
+		t.Errorf("MaxConns = %d, want positive value <= MaxConnections (%d)", cfg.MaxConns, MaxConnections)
+	}
+
+	// Value exceeding MaxConnections is clamped.
+	setenv(t, "TEEP_MAX_CONNS", "99999")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("MaxConns with TEEP_MAX_CONNS=99999: %d", cfg.MaxConns)
+	if cfg.MaxConns != MaxConnections {
+		t.Errorf("MaxConns = %d, want MaxConnections %d", cfg.MaxConns, MaxConnections)
+	}
+}
+
+func TestLoadDefaultsMaxConns(t *testing.T) {
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "TEEP_MAX_CONNS")
+	clearProviderEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	t.Logf("default MaxConns: %d", cfg.MaxConns)
+	// The default is ulimit-based so the exact value varies by environment.
+	// Verify it is within the valid range.
+	if cfg.MaxConns <= 0 || cfg.MaxConns > MaxConnections {
+		t.Errorf("MaxConns = %d, want positive value <= MaxConnections (%d)", cfg.MaxConns, MaxConnections)
 	}
 }
 
@@ -1512,5 +1648,124 @@ gateway_mrtd_allow = ["%s"]
 	}
 	if _, ok := cfg.ProviderGatewayPolicies["venice"]; !ok {
 		t.Error("expected per-provider gateway policy to be stored")
+	}
+}
+
+// --- allow_fail startup WARN logging ---
+
+// captureSlogWarn redirects the default slog logger to a buffer for the
+// duration of the test, returning a function that reads the captured output.
+func captureSlogWarn(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	old := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	return buf.String
+}
+
+// TestLoad_AllowFailWarnLogging_GlobalTOML verifies that loading a TOML with a
+// global [policy] allow_fail list emits a WARN for each configured factor.
+func TestLoad_AllowFailWarnLogging_GlobalTOML(t *testing.T) {
+	getLogs := captureSlogWarn(t)
+
+	tomlCfg := `
+[policy]
+allow_fail = ["nonce_match", "tls_key_binding"]
+`
+	path := writeConfigFile(t, tomlCfg, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	logs := getLogs()
+	for _, factor := range []string{"nonce_match", "tls_key_binding"} {
+		if !strings.Contains(logs, factor) {
+			t.Errorf("expected WARN log containing factor %q; output:\n%s", factor, logs)
+		}
+	}
+	if !strings.Contains(logs, "global allow_fail") {
+		t.Errorf("expected 'global allow_fail' in WARN log; output:\n%s", logs)
+	}
+}
+
+// TestLoad_AllowFailWarnLogging_PerProviderTOML verifies that loading a TOML
+// with a per-provider allow_fail list emits a WARN that includes the provider
+// name and the configured factor.
+func TestLoad_AllowFailWarnLogging_PerProviderTOML(t *testing.T) {
+	getLogs := captureSlogWarn(t)
+
+	tomlCfg := `
+[providers.venice]
+api_key = "k"
+base_url = "https://api.venice.ai"
+allow_fail = ["cpu_gpu_chain"]
+`
+	path := writeConfigFile(t, tomlCfg, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	logs := getLogs()
+	if !strings.Contains(logs, "cpu_gpu_chain") {
+		t.Errorf("expected WARN log containing factor %q; output:\n%s", "cpu_gpu_chain", logs)
+	}
+	if !strings.Contains(logs, "venice") {
+		t.Errorf("expected provider name %q in WARN log; output:\n%s", "venice", logs)
+	}
+	if !strings.Contains(logs, "provider allow_fail") {
+		t.Errorf("expected 'provider allow_fail' in WARN log; output:\n%s", logs)
+	}
+}
+
+// TestLoad_AllowFailWarnLogging_NoTOML verifies that loading with no TOML
+// (Go defaults only, GlobalAllowFailDefined=false) emits no allow_fail WARNs.
+func TestLoad_AllowFailWarnLogging_NoTOML(t *testing.T) {
+	getLogs := captureSlogWarn(t)
+
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	logs := getLogs()
+	if strings.Contains(logs, "allow_fail") {
+		t.Errorf("expected no allow_fail WARN when no TOML loaded; output:\n%s", logs)
+	}
+}
+
+func TestUsableFDHeadroom(t *testing.T) {
+	tests := []struct {
+		name string
+		soft int
+		want int
+	}{
+		{name: "below-headroom", soft: 40, want: 0},
+		{name: "equal-headroom", soft: rlimitHeadroom, want: 0},
+		{name: "above-headroom", soft: 1000, want: 950},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := usableFDHeadroom(tc.soft)
+			if got != tc.want {
+				t.Fatalf("usableFDHeadroom(%d) = %d, want %d", tc.soft, got, tc.want)
+			}
+		})
 	}
 }

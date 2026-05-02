@@ -79,6 +79,7 @@ func UpdateConfig(path, providerName string, observed *ObservedMeasurements) err
 // the .bak backup preserves the original file for manual recovery.
 type updateFile struct {
 	Providers map[string]updateProvider `toml:"providers,omitempty"`
+	MaxConns  int                       `toml:"max_conns,omitempty"`
 	AllowFail []string                  `toml:"allow_fail,omitempty"`
 	Policy    updatePolicy              `toml:"policy,omitempty"`
 }
