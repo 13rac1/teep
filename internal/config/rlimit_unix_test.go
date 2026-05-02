@@ -4,12 +4,11 @@ package config
 
 import (
 	"math"
-	"syscall"
 	"testing"
 )
 
 func TestRlimitCurToSoft_Infinity(t *testing.T) {
-	soft, unlimited := rlimitCurToSoft(syscall.RLIM_INFINITY)
+	soft, unlimited := rlimitCurToSoft(^uint64(0))
 	if !unlimited {
 		t.Fatal("unlimited = false, want true")
 	}

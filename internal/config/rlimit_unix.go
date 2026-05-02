@@ -4,6 +4,8 @@ package config
 
 import "syscall"
 
+const rlimitInfinity = ^uint64(0)
+
 // nofileRlimit returns the process's soft RLIMIT_NOFILE (open-file limit).
 // Returns unlimited=true when the limit is effectively unbounded.
 func nofileRlimit() (soft int, unlimited bool, err error) {
@@ -16,7 +18,7 @@ func nofileRlimit() (soft int, unlimited bool, err error) {
 }
 
 func rlimitCurToSoft(cur uint64) (soft int, unlimited bool) {
-	if cur == syscall.RLIM_INFINITY {
+	if cur == rlimitInfinity {
 		return 0, true
 	}
 
