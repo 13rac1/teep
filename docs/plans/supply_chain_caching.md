@@ -15,6 +15,10 @@ This replaces the current `--update-config` / `--config-out` flags on
 `teep verify` with a standalone `teep cache` command and a dedicated cache file
 separate from the user config (`teep.toml`). TDX register pinning data formerly stored in the config will now be stored in this cache file. Do not preserve backwards compatibility or old code. Remove all support for config file TDX pinning fields.
 
+**Status note**: this is a plan document. Statements explicitly marked as
+"current baseline" describe implemented behavior; all other command and cache
+behavior in this document is planned work.
+
 ---
 
 ## 2. Command Design
@@ -75,46 +79,48 @@ teep cache --model <p1:m1> --model <p2:m2>                   # repeated model fl
 
 - Add `--cache-file <path>` flag (defaults to `$TEEP_CACHE_FILE` or
   `~/.config/teep/cache.yaml`; overridable with `cache_file` in config).
-- `teep serve` now runs one proxy for all active providers (all providers
-  with non-empty resolved API keys) and routes inference requests by
-  `provider:model` prefix. Supply-chain cache lookups and writes are keyed by
-  `(provider, upstream model)`, where `upstream model` is the model after the
-  provider prefix is stripped.
+- **Current baseline**: `teep serve` runs one proxy for all active providers
+  (all providers with non-empty resolved API keys) and routes inference
+  requests by `provider:model` prefix.
+- **Planned cache behavior**: supply-chain cache lookups and writes in
+  `teep serve` will be keyed by `(provider, upstream model)`, where
+  `upstream model` is the model after the provider prefix is stripped.
 - `teep serve` will use cached data for online factors, re-fetch stale entries live, emit
   notice logs on staleness.
-- **Handler factory integration**: The proxy uses a `handleEndpoint` factory
-  (`internal/proxy/proxy.go`) that produces handlers for all endpoint types
-  (chat, embeddings, audio, images, rerank). The `attestAndCache` function
-  within this flow is the natural integration point for supply chain cache
-  consultation — cache lookup happens once per attestation, automatically
-  covering all endpoint types. The supply chain cache is distinct from the
-  existing short-lived proxy caches (`attestation.Cache` for reports,
-  `SigningKeyCache`, `SPKICache`, `NegativeCache`); it stores long-lived
+- **Handler factory integration**: The proxy currently uses a
+  `handleEndpoint` factory (`internal/proxy/proxy.go`) that produces handlers
+  for all endpoint types (chat, embeddings, audio, images, rerank). Planned
+  supply-chain cache consultation will integrate into `attestAndCache` in this
+  flow so lookup happens once per attestation and automatically covers all
+  endpoint types. This planned supply-chain cache is distinct from existing
+  short-lived proxy caches (`attestation.Cache` for reports,
+  `SigningKeyCache`, `SPKICache`, `NegativeCache`) and will store long-lived
   authenticated verification data (Sigstore/Rekor results, Intel PCS
   collateral, NVIDIA NRAS results, Proof of Cloud registrations).
 - **Memory-only cache**: Even without a cache file, `teep serve` will create an
   in-memory cache at startup (using the same cache data structures and code
   paths as `teep cache`). Subsequent re-attestations of the same (provider,
-  upstream model) benefit from cached Sigstore/Rekor, Intel PCS, NVIDIA NRAS, and
-  Proof of Cloud results without re-fetching. The memory-only cache is
-  initialized empty and populated as attestations are performed.
+  upstream model) will benefit from cached Sigstore/Rekor, Intel PCS, NVIDIA
+  NRAS, and Proof of Cloud results without re-fetching. The memory-only cache
+  will be initialized empty and populated as attestations are performed.
 - **Authenticated write-back**: When `teep serve` encounters changes it can
-  fully authenticate, it updates the in-memory cache and, if a cache file is
-  configured, writes back to the file:
+  fully authenticate, it will update the in-memory cache and, if a cache file is
+  configured, will write back to the file:
   - New compose hash where all images pass Sigstore/Rekor verification.
   - Refreshed Intel PCS or NVIDIA NRAS results.
   - New Proof of Cloud positive registrations.
   - New or updated image entries with full Sigstore/Rekor provenance.
 - **Write-back failure handling**: If a cache file write-back fails (I/O
-  error, permission denied, etc.), `teep serve` logs the error at
-  `slog.Error` level and continues serving requests. Cache write-back failures
+  error, permission denied, etc.), `teep serve` will log the error at
+  `slog.Error` level and continue serving requests. Cache write-back failures
   MUST NOT cause request failures or block proxy operation.
 - **Unauthenticated values are NOT written back**: Changes to TDX measurement
-  registers (MRSEAM, MRTD, RTMR0–2) are not updated by `teep serve`. These
-  values can only be updated by `teep cache`, which performs the explicit
-  operator-initiated trust-on-first-use flow. If `teep serve` observes a TDX
-  measurement mismatch against the cache, it reports a factor failure (or
-  warning if in `allow_fail`) but does not overwrite the cached values.
+  registers (MRSEAM, MRTD, RTMR0–2) will not be updated by `teep serve`.
+  These values can only be updated by `teep cache`, which performs the
+  explicit operator-initiated trust-on-first-use flow. If `teep serve`
+  observes a TDX measurement mismatch against the cache, it will report a
+  factor failure (or warning if in `allow_fail`) but will not overwrite the
+  cached values.
 
 ---
 
@@ -258,7 +264,7 @@ images, Intel PCS, NVIDIA (if applicable), Proof of Cloud, etc.
 
 ---
 
-## 4. Staleness and Re-fetch Behavior
+## 4. Planned Staleness and Re-fetch Behavior
 
 When `teep serve` encounters a stale or invalidated cache entry during online
 operation:
@@ -831,9 +837,12 @@ provider, then do one gateway update per provider that has gateway evidence.
 
 ### 9a. File Locking and Concurrency
 
-**In-process coordination (`teep serve`)**: The in-memory cache uses a `sync.RWMutex` to protect its shared data structures, ensuring safe concurrent access via multiple clients performing simultaneous access of multiple providers and models.
+**In-process coordination (`teep serve`)**: The planned in-memory supply chain
+cache will use a `sync.RWMutex` to protect shared data structures, ensuring
+safe concurrent access via multiple clients performing simultaneous access of
+multiple providers and models.
 
-Request routing and cache/report keying remain provider-isolated under
+Request routing and planned cache/report keying will remain provider-isolated under
 concurrency because requests are first resolved from `provider:model` to
 `(provider, upstream model)` and then all cache operations use that tuple.
 This prevents cross-provider collisions when providers expose identical
@@ -894,7 +903,8 @@ and run `teep cache` to populate the cache file instead.
 
 The cache file's per-model TDX register value lists (`mrseam`, `mrtd`,
 `rtmr0`–`rtmr2`, and gateway equivalents) serve the role formerly filled by
-the config measurement allowlists. At verification time in `teep serve`:
+the config measurement allowlists. In planned cache-enabled `teep serve`
+verification:
 
 1. Teep fetches a live attestation from the provider (as before).
 2. The live TDX quote is parsed and verified locally (signature, cert chain,
