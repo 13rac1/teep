@@ -61,6 +61,11 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
 
 - Add `--cache-file <path>` flag (defaults to `$TEEP_CACHE_FILE` or
   `~/.config/teep/cache.yaml`; overridable with `cache_file` in config).
+- `teep serve` now runs one proxy for all active providers (all providers
+  with non-empty resolved API keys) and routes inference requests by
+  `provider:model` prefix. Supply-chain cache lookups and writes are keyed by
+  `(provider, upstream model)`, where `upstream model` is the model after the
+  provider prefix is stripped.
 - Use cached data for online factors, re-fetch stale entries live, emit
   notice logs on staleness.
 - **Handler factory integration**: The proxy uses a `handleEndpoint` factory
@@ -76,7 +81,7 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
 - **Memory-only cache**: Even without a cache file, `teep serve` creates an
   in-memory cache at startup (using the same cache data structures and code
   paths as `teep cache`). Subsequent re-attestations of the same (provider,
-  model) benefit from cached Sigstore/Rekor, Intel PCS, NVIDIA NRAS, and
+  upstream model) benefit from cached Sigstore/Rekor, Intel PCS, NVIDIA NRAS, and
   Proof of Cloud results without re-fetching. The memory-only cache is
   initialized empty and populated as attestations are performed.
 - **Authenticated write-back**: When `teep serve` encounters changes it can
@@ -114,6 +119,9 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
    results, and E2EE test results. Sigstore/Rekor data is immutable — the
    simplicity of inline storage outweighs the duplication cost when the same
    image appears across multiple providers or models.
+
+  In multi-provider serve mode, this `model` key is the provider-local
+  upstream model (the `provider:` prefix has already been removed by routing).
 
 3. **Per-provider gateway section**: For providers with gateway attestation
    (e.g., nearcloud), a `gateway` section sits alongside model sections with
@@ -223,7 +231,7 @@ images, Intel PCS, NVIDIA (if applicable), Proof of Cloud, etc.
 
 | Cached Data | Cache Key | Valid When | Staleness Behavior |
 |-------------|-----------|-----------|-------------------|
-| TDX measurements | (provider, model) | Compose hash matches | Invalidated if compose hash changes |
+| TDX measurements | (provider, upstream model) | Compose hash matches | Invalidated if compose hash changes |
 | Compose hash | `sha256(app_compose)` | Content-addressed (immutable per-content) | New hash → re-extract images, re-validate |
 | Image (digest-pinned) | compose reference (`repo@sha256:...`) | Reference matches compose | Immutable by definition |
 | Image (release tag) | compose reference (`repo:tag`) | Reference matches compose | Tag re-push not detectable; `image_binding` factor captures risk |
@@ -810,6 +818,12 @@ at the end.
 
 **In-process coordination (`teep serve`)**: The in-memory cache uses a `sync.RWMutex` to protect its shared data structures, ensuring safe concurrent access via multiple clients performing simultaneous access of multiple providers and models.
 
+Request routing and cache/report keying remain provider-isolated under
+concurrency because requests are first resolved from `provider:model` to
+`(provider, upstream model)` and then all cache operations use that tuple.
+This prevents cross-provider collisions when providers expose identical
+upstream model IDs.
+
 **Cross-process coordination**: Multiple `teep serve` processes (or a `teep
 serve` and a `teep cache`) may share the same cache file. Cross-process disk
 writes are performed by first acquiring a file lock and then proceeding with
@@ -872,7 +886,7 @@ the config measurement allowlists. At verification time in `teep serve`:
 2. The live TDX quote is parsed and verified locally (signature, cert chain,
    nonce binding — all offline-capable factors).
 3. The live TDX measurement values are compared against the cached allowlists
-   for that (provider, model) pair.
+  for that (provider, upstream model) pair.
 
 **Enforcement follows the configured `allow_fail` list**:
 

@@ -258,10 +258,20 @@ Within the verify package:
 ### Proxy Path
 
 The proxy path wires the policy through [internal/proxy/proxy.go](../../internal/proxy/proxy.go):
+- `teep serve` initializes one proxy instance with all active providers
+   (non-empty resolved API keys), not a single selected provider.
+- Inference routing resolves the client model as `provider:model`, selects the
+   provider by exact prefix match, and rewrites request bodies so upstreams
+   receive only the provider-local upstream model.
 - `fromConfig()` populates `Provider.SupplyChainPolicy` with provider-specific hardcoded policies for Venice, neardirect, nearcloud, and NanoGPT.
 - `fromConfig()` sets `nil` for phalacloud and chutes.
 - `fetchAndVerify()` passes `prov.SupplyChainPolicy` into `attestation.BuildReport()`.
 - `verifySupplyChain()` verifies model-side compose binding, extracts model-side compose digests, and performs Sigstore/Rekor checks for those model digests.
+
+Under concurrent multi-provider traffic, attestation caches and report inputs
+stay isolated because they are keyed by `(provider, upstream model)` after
+prefix stripping. This prevents cross-provider collisions when two providers
+offer the same upstream model ID.
 
 The proxy path does not currently populate `GatewayTDX`, `GatewayCompose`, `GatewayImageRepos`, `GatewayPoC`, or `GatewayEventLog` into `BuildReport()`, so gateway-specific supply-chain factors are only emitted from the verify path.
 
@@ -299,6 +309,10 @@ GatewayPolicy     MeasurementPolicy
 ```
 
 Gateway evaluators are included only when `GatewayTDX` is non-nil.
+
+In serve mode, `ReportInput.Provider` is always the resolved provider prefix
+and `ReportInput.Model` is the provider-local upstream model (without the
+`provider:` prefix).
 
 ### Config Integration Status
 
