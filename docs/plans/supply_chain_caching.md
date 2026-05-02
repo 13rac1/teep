@@ -32,7 +32,7 @@ teep cache --model <p1:m1> --model <p2:m2>                   # repeated model fl
 1. Resolve active providers the same way `teep serve` does: all configured
   providers with non-empty resolved API keys.
   If none are active, fail closed with a startup/command error.
-2. For each requested `(provider, model)` pair, fetch attestation, run full
+2. For each requested `(provider, upstream model)` pair, fetch attestation, run full
    online verification (TDX, NVIDIA NRAS, Intel PCS, Sigstore/Rekor, Proof
    of Cloud, E2EE test).
 3. `--model` values MUST be fully qualified as `provider:model`. Unprefixed
@@ -80,7 +80,7 @@ teep cache --model <p1:m1> --model <p2:m2>                   # repeated model fl
   `provider:model` prefix. Supply-chain cache lookups and writes are keyed by
   `(provider, upstream model)`, where `upstream model` is the model after the
   provider prefix is stripped.
-- Use cached data for online factors, re-fetch stale entries live, emit
+- `teep serve` will use cached data for online factors, re-fetch stale entries live, emit
   notice logs on staleness.
 - **Handler factory integration**: The proxy uses a `handleEndpoint` factory
   (`internal/proxy/proxy.go`) that produces handlers for all endpoint types
@@ -92,7 +92,7 @@ teep cache --model <p1:m1> --model <p2:m2>                   # repeated model fl
   `SigningKeyCache`, `SPKICache`, `NegativeCache`); it stores long-lived
   authenticated verification data (Sigstore/Rekor results, Intel PCS
   collateral, NVIDIA NRAS results, Proof of Cloud registrations).
-- **Memory-only cache**: Even without a cache file, `teep serve` creates an
+- **Memory-only cache**: Even without a cache file, `teep serve` will create an
   in-memory cache at startup (using the same cache data structures and code
   paths as `teep cache`). Subsequent re-attestations of the same (provider,
   upstream model) benefit from cached Sigstore/Rekor, Intel PCS, NVIDIA NRAS, and
@@ -127,7 +127,7 @@ teep cache --model <p1:m1> --model <p2:m2>                   # repeated model fl
    settings (allow_fail, base_url, api_key_env, etc.). The cache file stores
    authenticated observations.
 
-2. **Per-provider, per-model sections**: Each (provider, model) pair has its
+2. **Per-provider, per-model sections**: Each (provider, upstream model) pair has its
    own self-contained section with TDX measurements, compose hash, inline
    image provenance data, NVIDIA results, Intel PCS results, Proof of Cloud
    results, and E2EE test results. Sigstore/Rekor data is immutable — the
@@ -937,7 +937,7 @@ verification, or staleness degradation.
 | TDX register handling | **Removed** (no allowlists) | Cached allowlists compared against live attestation |
 | Enforcement | `allow_fail` controls which factors block | Cached data compared; `allow_fail` controls block/warn |
 | Used by | `teep verify`, `teep serve`, `teep cache` | `teep serve`, `teep cache` (NOT `teep verify`) |
-| Merge on update | N/A (user-managed) | Provider+model replacement with merge |
+| Merge on update | N/A (user-managed) | Provider+upstream-model replacement with merge |
 | Format | TOML | YAML |
 
 ---
