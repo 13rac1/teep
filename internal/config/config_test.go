@@ -1748,3 +1748,24 @@ func TestLoad_AllowFailWarnLogging_NoTOML(t *testing.T) {
 		t.Errorf("expected no allow_fail WARN when no TOML loaded; output:\n%s", logs)
 	}
 }
+
+func TestUsableFDHeadroom(t *testing.T) {
+	tests := []struct {
+		name string
+		soft int
+		want int
+	}{
+		{name: "below-headroom", soft: 40, want: 0},
+		{name: "equal-headroom", soft: rlimitHeadroom, want: 0},
+		{name: "above-headroom", soft: 1000, want: 950},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := usableFDHeadroom(tc.soft)
+			if got != tc.want {
+				t.Fatalf("usableFDHeadroom(%d) = %d, want %d", tc.soft, got, tc.want)
+			}
+		})
+	}
+}

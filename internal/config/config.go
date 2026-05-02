@@ -192,6 +192,13 @@ func warnIfRlimitLow(soft int) {
 	}
 }
 
+func usableFDHeadroom(soft int) int {
+	if soft <= rlimitHeadroom {
+		return 0
+	}
+	return soft - rlimitHeadroom
+}
+
 // warnIfMaxConnsExceedsHeadroom emits RLIMIT diagnostics for an explicit
 // max_conns value when RLIMIT_NOFILE is available and finite.
 func warnIfMaxConnsExceedsHeadroom(source string, maxConns int) {
@@ -200,10 +207,11 @@ func warnIfMaxConnsExceedsHeadroom(source string, maxConns int) {
 		return
 	}
 	warnIfRlimitLow(soft)
-	if maxConns > soft-rlimitHeadroom {
+	usable := usableFDHeadroom(soft)
+	if maxConns > usable {
 		slog.Warn("max_conns exceeds usable file descriptor headroom",
 			"source", source, "max_conns", maxConns,
-			"rlimit_nofile", soft, "headroom", rlimitHeadroom)
+			"rlimit_nofile", soft, "headroom", rlimitHeadroom, "usable_fds", usable)
 	}
 }
 
