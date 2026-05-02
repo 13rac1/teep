@@ -192,6 +192,21 @@ func warnIfRlimitLow(soft int) {
 	}
 }
 
+// warnIfMaxConnsExceedsHeadroom emits RLIMIT diagnostics for an explicit
+// max_conns value when RLIMIT_NOFILE is available and finite.
+func warnIfMaxConnsExceedsHeadroom(source string, maxConns int) {
+	soft, unlimited, rerr := nofileRlimit()
+	if rerr != nil || unlimited {
+		return
+	}
+	warnIfRlimitLow(soft)
+	if maxConns > soft-rlimitHeadroom {
+		slog.Warn("max_conns exceeds usable file descriptor headroom",
+			"source", source, "max_conns", maxConns,
+			"rlimit_nofile", soft, "headroom", rlimitHeadroom)
+	}
+}
+
 // defaultMaxConns computes the default connection limit from RLIMIT_NOFILE,
 // reserving rlimitHeadroom FDs for non-connection use.
 //
@@ -289,6 +304,7 @@ func loadTOML(cfg *Config, path string) error {
 		}
 		cfg.MaxConns = f.MaxConns
 		cfg.maxConnsDefined = true
+		warnIfMaxConnsExceedsHeadroom("TOML max_conns", cfg.MaxConns)
 	}
 
 	for name := range f.Providers {
@@ -568,14 +584,9 @@ func applyEnvOverrides(cfg *Config) {
 			slog.Warn("TEEP_MAX_CONNS exceeds maximum; clamping", "value", n, "max", MaxConnections)
 			cfg.MaxConns = MaxConnections
 			cfg.maxConnsDefined = true
+			warnIfMaxConnsExceedsHeadroom("TEEP_MAX_CONNS", cfg.MaxConns)
 		default:
-			if soft, unlimited, rerr := nofileRlimit(); rerr == nil && !unlimited {
-				warnIfRlimitLow(soft)
-				if n > soft-rlimitHeadroom {
-					slog.Warn("TEEP_MAX_CONNS exceeds usable file descriptor headroom",
-						"teep_max_conns", n, "rlimit_nofile", soft, "headroom", rlimitHeadroom)
-				}
-			}
+			warnIfMaxConnsExceedsHeadroom("TEEP_MAX_CONNS", n)
 			cfg.MaxConns = n
 			cfg.maxConnsDefined = true
 		}
