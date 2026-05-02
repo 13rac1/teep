@@ -218,6 +218,29 @@ base_url = "https://api.venice.ai"
 	}
 }
 
+func TestUpdateConfigPreservesTopLevelMaxConns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "teep.toml")
+	existing := `max_conns = 4321
+
+[providers.venice]
+base_url = "https://api.venice.ai"
+`
+	os.WriteFile(path, []byte(existing), 0o600)
+
+	obs := ObservedMeasurements{MRSeam: strings.Repeat("ab", 48)}
+	if err := UpdateConfig(path, "venice", &obs); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	var f updateFile
+	toml.Decode(string(data), &f)
+	if f.MaxConns != 4321 {
+		t.Fatalf("top-level max_conns lost/changed: got %d, want 4321", f.MaxConns)
+	}
+}
+
 func TestUpdateConfigPreservesPerProviderAllowFail(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "teep.toml")
