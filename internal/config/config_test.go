@@ -157,6 +157,62 @@ allow_fail = ["nonce_match", "tls_key_binding"]
 	}
 }
 
+func TestLoadTOMLMaxConns(t *testing.T) {
+	toml := `
+max_conns = 1234
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "TEEP_MAX_CONNS")
+	clearProviderEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.MaxConns != 1234 {
+		t.Errorf("MaxConns from TOML: got %d, want %d", cfg.MaxConns, 1234)
+	}
+}
+
+func TestLoadTOMLMaxConnsInvalid(t *testing.T) {
+	tests := []struct {
+		name    string
+		toml    string
+		wantErr string
+	}{
+		{
+			name:    "non-positive",
+			toml:    "max_conns = 0\n",
+			wantErr: "max_conns must be a positive integer",
+		},
+		{
+			name:    "too-large",
+			toml:    fmt.Sprintf("max_conns = %d\n", MaxConnections+1),
+			wantErr: "max_conns exceeds maximum",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfigFile(t, tc.toml, 0o600)
+			setenv(t, "TEEP_CONFIG", path)
+			unsetenv(t, "TEEP_LISTEN_ADDR")
+			unsetenv(t, "TEEP_MAX_CONNS")
+			clearProviderEnv(t)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatal("expected error for invalid max_conns, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadTOMLUnknownAllowFailFactor(t *testing.T) {
 	toml := `
 [policy]

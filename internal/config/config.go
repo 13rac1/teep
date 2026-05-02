@@ -111,6 +111,7 @@ type PolicyConfig struct {
 type tomlFile struct {
 	Providers map[string]ProviderConfig `toml:"providers"`
 	AllowFail []string                  `toml:"allow_fail"`
+	MaxConns  int                       `toml:"max_conns"`
 	Policy    PolicyConfig              `toml:"policy"`
 }
 
@@ -130,7 +131,7 @@ type Config struct {
 
 	// MaxConns is the maximum number of concurrent inbound connections.
 	// By default this is computed by defaultMaxConns() from RLIMIT_NOFILE
-	// and can be overridden with TEEP_MAX_CONNS.
+	// and can be overridden by TOML max_conns or TEEP_MAX_CONNS.
 	MaxConns int
 
 	// Providers is the map of provider name → resolved provider config.
@@ -257,6 +258,16 @@ func loadTOML(cfg *Config, path string) error {
 	}
 	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
 		return fmt.Errorf("unknown config keys: %v", undecoded)
+	}
+
+	if meta.IsDefined("max_conns") {
+		if f.MaxConns <= 0 {
+			return fmt.Errorf("max_conns must be a positive integer, got %d", f.MaxConns)
+		}
+		if f.MaxConns > MaxConnections {
+			return fmt.Errorf("max_conns exceeds maximum %d: got %d", MaxConnections, f.MaxConns)
+		}
+		cfg.MaxConns = f.MaxConns
 	}
 
 	for name := range f.Providers {
