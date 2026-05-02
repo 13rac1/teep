@@ -22,30 +22,44 @@ separate from the user config (`teep.toml`). TDX register pinning data formerly 
 ### 2a. `teep cache`
 
 ```
-teep cache <provider> --model <model>     # cache one model
-teep cache <provider> --all-models        # cache all known models for provider
-teep cache <provider> --model <m1>,<m2>   # cache specific models
+teep cache --all-models                                      # cache all models for all active providers
+teep cache --model <provider:model>                          # cache one model for one provider
+teep cache --model <p1:m1>,<p2:m2>                           # cache specific models across providers
+teep cache --model <p1:m1> --model <p2:m2>                   # repeated model flags
 ```
 
 **Behavior**:
-1. For each requested (provider, model) pair, fetch attestation, run full
+1. Resolve active providers the same way `teep serve` does: all configured
+  providers with non-empty resolved API keys.
+  If none are active, fail closed with a startup/command error.
+2. For each requested `(provider, model)` pair, fetch attestation, run full
    online verification (TDX, NVIDIA NRAS, Intel PCS, Sigstore/Rekor, Proof
    of Cloud, E2EE test).
-2. Write all authenticated verification results to the cache file.
-3. **Merge semantics**: replace entries for the specified provider + model(s)
-   but preserve unrelated providers and models already in the cache file.
-4. The cache file location defaults to `$TEEP_CACHE_FILE` or
+3. `--model` values MUST be fully qualified as `provider:model`. Unprefixed
+  model values are rejected (fail closed).
+  If the provider prefix is unknown or inactive for this run, reject that
+  target (fail closed).
+4. `--all-models` runs model discovery for every active provider and caches
+  every discovered model across those providers.
+5. Write all authenticated verification results to the cache file.
+6. **Merge semantics**: replace entries only for the provider/model targets
+  in the current run, while preserving unrelated providers and models already
+  in the cache file.
+7. The cache file location defaults to `$TEEP_CACHE_FILE` or
    `~/.config/teep/cache.yaml`. Overridable with `--cache-file <path>`
    or with `cache_file` field in the teep toml config.
-5. If attestation is blocked (report would be blocked), refuse to write cache
+8. If attestation is blocked (report would be blocked), refuse to write cache
    for that model — same safety guard as the current `--update-config`.
-6. **Partial failure for `--all-models`**: If some models fail attestation and
-   others succeed, write cache entries for successful models, skip failed
-   models, collect per-model errors, and exit non-zero with a summary of
-   which models succeeded and which failed (and why).
+9. **Partial failure for `--all-models` and multi-model runs**: If some
+  provider/model targets fail attestation and others succeed, write cache
+  entries for successful targets, skip failed targets, collect per-target
+  errors, and exit non-zero with a summary of which `provider:model` targets
+  succeeded and which failed (and why).
 
 **Flags**:
-- `--model <name>` (required unless `--all-models` is set; supports one or more models, either as a comma-separated list such as `--model <m1>,<m2>` and/or by repeating the flag) / `--all-models` (required unless `--model` is set; mutually exclusive with `--model`)
+- No provider positional argument.
+- `--model <provider:model>` (required unless `--all-models` is set; supports one or more values, either as a comma-separated list and/or by repeating the flag). Every value must include the provider prefix.
+- `--all-models` (required unless `--model` is set; mutually exclusive with `--model`)
 - `--cache-file <path>` (optional override)
 - `--offline` is NOT supported on `teep cache` — caching requires online access
 
@@ -127,9 +141,10 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
    (e.g., nearcloud), a `gateway` section sits alongside model sections with
    its own TDX measurements, compose hash, and inline image provenance.
 
-4. **Deterministic merge**: `teep cache provider --model X` replaces only
-   the `providers.<provider>.models.<X>` section (and the gateway section
-   if the provider has one). All other providers and models are preserved.
+4. **Deterministic merge**: `teep cache --model provider:X` replaces only
+  the `providers.<provider>.models.<X>` section (and the gateway section
+  if the provider has one and gateway evidence is collected). All other
+  providers and models are preserved.
 
 ### 3b. Data Stored Per Scope
 
@@ -801,7 +816,7 @@ data and is evaluated during both `teep verify` and `teep serve`.
 
 ## 9. Merge Semantics
 
-When `teep cache neardirect --model meta-llama/Llama-3.3-70B-Instruct` runs:
+When `teep cache --model neardirect:meta-llama/Llama-3.3-70B-Instruct` runs:
 
 1. Read existing cache file (if present).
 2. Replace `providers.neardirect.models["meta-llama/Llama-3.3-70B-Instruct"]`
@@ -811,8 +826,8 @@ When `teep cache neardirect --model meta-llama/Llama-3.3-70B-Instruct` runs:
 4. Preserve all other providers and models untouched.
 5. Write the merged cache file atomically (write to temp file → rename).
 
-For `--all-models`, repeat step 2 for each model, then do one gateway update
-at the end.
+For `--all-models`, repeat step 2 for every discovered model of every active
+provider, then do one gateway update per provider that has gateway evidence.
 
 ### 9a. File Locking and Concurrency
 
@@ -842,10 +857,9 @@ read-merge-write-rename cycle to prevent lost updates.
 
 `teep cache` uses the same `flock`-based write path, so concurrent `teep
 cache` and `teep serve` invocations are safely serialized. Concurrent `teep
-cache` invocations for different providers are safe (each replaces only its
-own provider section). Concurrent invocations for the same provider are
-serialized by the lock — the second invocation reads the first's output and
-merges on top of it.
+cache` invocations that target disjoint provider/model sets are safe, and
+overlapping invocations are serialized by the lock — the later invocation
+reads the earlier output and merges on top of it.
 
 ---
 
@@ -901,7 +915,7 @@ the config measurement allowlists. At verification time in `teep serve`:
   "cached", cached, "live", live, "factor", factor)`), but the request is
   not blocked.
 
-- **No cache entry for the (provider, model)**: The comparison is skipped —
+- **No cache entry for the (provider, upstream model)**: The comparison is skipped —
   there is nothing to compare against. This is equivalent to the former
   behavior when no measurement allowlists were configured. Factors that depend
   on external verification (Intel PCS, NVIDIA NRAS, etc.) proceed with their
@@ -943,12 +957,18 @@ verification, or staleness degradation.
 ### Phase 2: `teep cache` Command
 
 - Add `teep cache` subcommand to `cmd/teep/main.go`.
-- Call `verify.Run()` to fetch attestation and run full verification, then extract authenticated fields from the returned `VerificationReport` to populate the cache file.
+- Remove provider positional argument from `teep cache`.
+- Resolve active providers exactly like `teep serve` (non-empty resolved API keys).
+- Require `--model` values to use `provider:model`; reject unprefixed models.
+- For `--all-models`, enumerate models across all active providers.
+- Call `verify.Run()` to fetch attestation and run full verification for each target, then extract authenticated fields from each `VerificationReport` to populate the cache file.
 - Support `--model`, `--all-models`, `--cache-file`.
 - Emit warnings for tag-based and `version_unpinned` images.
-- Partial failure handling for `--all-models`: continue all models, collect
-  per-model errors, write cache for successes, exit non-zero with summary.
-- Unit and integration tests.
+- Partial failure handling for multi-provider runs: continue all
+  provider/model targets, collect per-target errors, write cache for
+  successes, exit non-zero with summary.
+- Unit and integration tests, including mixed-provider target sets and
+  provider-prefix validation failures.
 
 ### Phase 3: Config Removal
 
@@ -1003,6 +1023,9 @@ verification, or staleness degradation.
 - Update `README.md`, `README_ADVANCED.md`, help text.
 - `teep.toml.example` — remove update-config examples, add `cache_file`
   and `max_cache_age` documentation.
+- Document `teep cache` multi-provider behavior explicitly:
+  no provider positional argument, `--model` requires `provider:model`, and
+  `--all-models` operates across all active providers.
 - Rewrite `docs/measurement_allowlists.md` to describe how to use
   `teep cache` combined with `allow_fail` configuration to pin cached
   values with and without strict enforcement.
