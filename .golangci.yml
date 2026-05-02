@@ -111,9 +111,10 @@ linters:
           - errchkjson
           - forcetypeassert
           - noctx
-      # rlimit_unix.go converts rlim.Cur to int after an explicit bounds check
-      # (> 1_000_000), making the conversion safe. G115 fires on Linux where
-      # Rlimit.Cur is uint64 but not on macOS where it is int64.
+      # rlimit_unix.go treats only RLIM_INFINITY as unlimited and otherwise
+      # clamps values above platform maxInt before int conversion, making the
+      # conversion safe. G115 fires on Linux where Rlimit.Cur is uint64 but
+      # not on macOS where it is int64.
       - path: internal/config/rlimit_unix\.go
         text: "G115"
         linters:

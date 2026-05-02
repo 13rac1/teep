@@ -537,6 +537,7 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.MaxConns = MaxConnections
 		default:
 			if soft, unlimited, rerr := nofileRlimit(); rerr == nil && !unlimited {
+				warnIfRlimitLow(soft)
 				if n > soft-rlimitHeadroom {
 					slog.Warn("TEEP_MAX_CONNS exceeds usable file descriptor headroom",
 						"teep_max_conns", n, "rlimit_nofile", soft, "headroom", rlimitHeadroom)

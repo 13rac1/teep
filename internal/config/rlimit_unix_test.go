@@ -29,10 +29,6 @@ func TestRlimitCurToSoft_LargeFinite(t *testing.T) {
 }
 
 func TestRlimitCurToSoft_ClampToIntMax(t *testing.T) {
-	if math.MaxInt == math.MaxInt64 {
-		t.Skip("skip on 64-bit: uint64 cannot exceed int max without RLIM_INFINITY")
-	}
-
 	soft, unlimited := rlimitCurToSoft(uint64(math.MaxInt) + 1)
 	if unlimited {
 		t.Fatal("unlimited = true, want false")
