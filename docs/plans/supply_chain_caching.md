@@ -15,6 +15,10 @@ This replaces the current `--update-config` / `--config-out` flags on
 `teep verify` with a standalone `teep cache` command and a dedicated cache file
 separate from the user config (`teep.toml`). TDX register pinning data formerly stored in the config will now be stored in this cache file. Do not preserve backwards compatibility or old code. Remove all support for config file TDX pinning fields.
 
+**Status note**: this is a plan document. Statements explicitly marked as
+"current baseline" describe implemented behavior; all other command and cache
+behavior in this document is planned work.
+
 ---
 
 ## 2. Command Design
@@ -22,30 +26,44 @@ separate from the user config (`teep.toml`). TDX register pinning data formerly 
 ### 2a. `teep cache`
 
 ```
-teep cache <provider> --model <model>     # cache one model
-teep cache <provider> --all-models        # cache all known models for provider
-teep cache <provider> --model <m1>,<m2>   # cache specific models
+teep cache --all-models                                      # cache all models for all active providers
+teep cache --model <provider:model>                          # cache one model for one provider
+teep cache --model <p1:m1>,<p2:m2>                           # cache specific models across providers
+teep cache --model <p1:m1> --model <p2:m2>                   # repeated model flags
 ```
 
 **Behavior**:
-1. For each requested (provider, model) pair, fetch attestation, run full
+1. Resolve active providers the same way `teep serve` does: all configured
+  providers with non-empty resolved API keys.
+  If none are active, fail closed with a startup/command error.
+2. For each requested `(provider, upstream model)` pair, fetch attestation, run full
    online verification (TDX, NVIDIA NRAS, Intel PCS, Sigstore/Rekor, Proof
    of Cloud, E2EE test).
-2. Write all authenticated verification results to the cache file.
-3. **Merge semantics**: replace entries for the specified provider + model(s)
-   but preserve unrelated providers and models already in the cache file.
-4. The cache file location defaults to `$TEEP_CACHE_FILE` or
+3. `--model` values MUST be fully qualified as `provider:model`. Unprefixed
+  model values are rejected (fail closed).
+  If the provider prefix is unknown or inactive for this run, reject that
+  target (fail closed).
+4. `--all-models` runs model discovery for every active provider and caches
+  every discovered model across those providers.
+5. Write all authenticated verification results to the cache file.
+6. **Merge semantics**: replace entries only for the provider/model targets
+  in the current run, while preserving unrelated providers and models already
+  in the cache file.
+7. The cache file location defaults to `$TEEP_CACHE_FILE` or
    `~/.config/teep/cache.yaml`. Overridable with `--cache-file <path>`
    or with `cache_file` field in the teep toml config.
-5. If attestation is blocked (report would be blocked), refuse to write cache
+8. If attestation is blocked (report would be blocked), refuse to write cache
    for that model — same safety guard as the current `--update-config`.
-6. **Partial failure for `--all-models`**: If some models fail attestation and
-   others succeed, write cache entries for successful models, skip failed
-   models, collect per-model errors, and exit non-zero with a summary of
-   which models succeeded and which failed (and why).
+9. **Partial failure for `--all-models` and multi-model runs**: If some
+  provider/model targets fail attestation and others succeed, write cache
+  entries for successful targets, skip failed targets, collect per-target
+  errors, and exit non-zero with a summary of which `provider:model` targets
+  succeeded and which failed (and why).
 
 **Flags**:
-- `--model <name>` (required unless `--all-models` is set; supports one or more models, either as a comma-separated list such as `--model <m1>,<m2>` and/or by repeating the flag) / `--all-models` (required unless `--model` is set; mutually exclusive with `--model`)
+- No provider positional argument.
+- `--model <provider:model>` (required unless `--all-models` is set; supports one or more values, either as a comma-separated list and/or by repeating the flag). Every value must include the provider prefix.
+- `--all-models` (required unless `--model` is set; mutually exclusive with `--model`)
 - `--cache-file <path>` (optional override)
 - `--offline` is NOT supported on `teep cache` — caching requires online access
 
@@ -61,41 +79,96 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
 
 - Add `--cache-file <path>` flag (defaults to `$TEEP_CACHE_FILE` or
   `~/.config/teep/cache.yaml`; overridable with `cache_file` in config).
-- Use cached data for online factors, re-fetch stale entries live, emit
+- **Current baseline**: `teep serve` runs one proxy for all active providers
+  (all providers with non-empty resolved API keys) and routes inference
+  requests by `provider:model` prefix.
+- **Planned cache behavior**: supply-chain cache lookups and writes in
+  `teep serve` will be keyed by `(provider, upstream model)`, where
+  `upstream model` is the model after the provider prefix is stripped.
+- `teep serve` will use cached data for online factors, re-fetch stale entries live, emit
   notice logs on staleness.
-- **Handler factory integration**: The proxy uses a `handleEndpoint` factory
-  (`internal/proxy/proxy.go`) that produces handlers for all endpoint types
-  (chat, embeddings, audio, images, rerank). The `attestAndCache` function
-  within this flow is the natural integration point for supply chain cache
-  consultation — cache lookup happens once per attestation, automatically
-  covering all endpoint types. The supply chain cache is distinct from the
-  existing short-lived proxy caches (`attestation.Cache` for reports,
-  `SigningKeyCache`, `SPKICache`, `NegativeCache`); it stores long-lived
+- **Handler factory integration**: The proxy currently uses a
+  `handleEndpoint` factory (`internal/proxy/proxy.go`) that produces handlers
+  for all endpoint types (chat, embeddings, audio, images, rerank). Planned
+  supply-chain cache consultation will integrate into `attestAndCache` in this
+  flow so lookup happens once per attestation and automatically covers all
+  endpoint types. This planned supply-chain cache is distinct from existing
+  short-lived proxy caches (`attestation.Cache` for reports,
+  `SigningKeyCache`, `SPKICache`, `NegativeCache`) and will store long-lived
   authenticated verification data (Sigstore/Rekor results, Intel PCS
   collateral, NVIDIA NRAS results, Proof of Cloud registrations).
-- **Memory-only cache**: Even without a cache file, `teep serve` creates an
+- **Memory-only cache**: Even without a cache file, `teep serve` will create an
   in-memory cache at startup (using the same cache data structures and code
   paths as `teep cache`). Subsequent re-attestations of the same (provider,
-  model) benefit from cached Sigstore/Rekor, Intel PCS, NVIDIA NRAS, and
-  Proof of Cloud results without re-fetching. The memory-only cache is
-  initialized empty and populated as attestations are performed.
+  upstream model) will benefit from cached Sigstore/Rekor, Intel PCS, NVIDIA
+  NRAS, and Proof of Cloud results without re-fetching. The memory-only cache
+  will be initialized empty and populated as attestations are performed.
 - **Authenticated write-back**: When `teep serve` encounters changes it can
-  fully authenticate, it updates the in-memory cache and, if a cache file is
-  configured, writes back to the file:
+  fully authenticate, it will update the in-memory cache and, if a cache file is
+  configured, will write back to the file:
   - New compose hash where all images pass Sigstore/Rekor verification.
   - Refreshed Intel PCS or NVIDIA NRAS results.
   - New Proof of Cloud positive registrations.
   - New or updated image entries with full Sigstore/Rekor provenance.
 - **Write-back failure handling**: If a cache file write-back fails (I/O
-  error, permission denied, etc.), `teep serve` logs the error at
-  `slog.Error` level and continues serving requests. Cache write-back failures
+  error, permission denied, etc.), `teep serve` will log the error at
+  `slog.Error` level and continue serving requests. Cache write-back failures
   MUST NOT cause request failures or block proxy operation.
 - **Unauthenticated values are NOT written back**: Changes to TDX measurement
-  registers (MRSEAM, MRTD, RTMR0–2) are not updated by `teep serve`. These
-  values can only be updated by `teep cache`, which performs the explicit
-  operator-initiated trust-on-first-use flow. If `teep serve` observes a TDX
-  measurement mismatch against the cache, it reports a factor failure (or
-  warning if in `allow_fail`) but does not overwrite the cached values.
+  registers (MRSEAM, MRTD, RTMR0–2) will not be updated by `teep serve`.
+  These values can only be updated by `teep cache`, which performs the
+  explicit operator-initiated trust-on-first-use flow. If `teep serve`
+  observes a TDX measurement mismatch against the cache, it will report a
+  factor failure (or warning if in `allow_fail`) but will not overwrite the
+  cached values.
+
+### 2d. Current Cache and State Inventory (Implemented Baseline)
+
+The current repository already has several in-memory caches/state stores used
+by `teep serve`. These are distinct from the planned long-lived supply-chain
+cache in this plan.
+
+| Component | Location | Keying | TTL / Lifetime | Purpose |
+|---|---|---|---|---|
+| Positive attestation report cache (`Cache`) | `internal/attestation/attestation.go` | `(provider, upstream model)` | `attestation.AttestationCacheTTL` (currently 1h) | Reuse verified `VerificationReport` and avoid re-attesting on every request |
+| Negative attestation cache (`NegativeCache`) | `internal/attestation/attestation.go` | `(provider, upstream model)` | 30s in proxy (`negativeCacheTTL`) | Fail-closed backoff after attestation failures |
+| E2EE signing key cache (`SigningKeyCache`) | `internal/attestation/attestation.go` | `(provider, upstream model)` | `attestation.AttestationCacheTTL` (currently 1h) | Reuse REPORTDATA-bound signing keys for E2EE setup |
+| SPKI pin cache (`SPKICache`) | `internal/attestation/spki.go` | `(domain, spki)` (domain bucket with SPKI set) | `attestation.AttestationCacheTTL` (currently 1h) | Skip repeated attestation on pinned TLS identities for pinned providers |
+| E2EE failure state (`e2eeFailed` sync.Map) | `internal/proxy/proxy.go` | `(provider, upstream model)` via `providerModelKey` | Until cleared by successful re-attestation/recovery path | Prevent reuse of stale cache artifacts after E2EE decrypt failures |
+| NearDirect endpoint discovery cache (`EndpointResolver`) | `internal/provider/neardirect/endpoints.go` | model→domain map | 5m (`endpointsTTL`) | Route model traffic to current backend domain |
+| Chutes model resolver cache (`ModelResolver`) | `internal/provider/chutes/resolve.go` | model→chute_id map | 5m (`modelMapTTL`) | Resolve model names to chute UUIDs |
+
+Notes:
+- The first five rows are the security-critical proxy state relevant to
+  attestation, pinned connections, and E2EE behavior.
+- The resolver caches are routing/discovery caches, not attestation-evidence
+  stores.
+
+### 2e. Cache Unification Strategy and Constraints
+
+Goal: unify caches where this reduces duplication without weakening security
+boundaries.
+
+**Unify where feasible**:
+- Provider/model keyed in-memory security caches (`Cache`, `NegativeCache`,
+  `SigningKeyCache`, `e2eeFailed`, and planned `supplyChainCache`) should share
+  one canonical key type and one concurrency discipline.
+- Preferred direction: introduce a shared provider/model key struct in a
+  common package and typed cache helpers for TTL + eviction behavior.
+
+**Do not force-unify where infeasible or security-risky**:
+- `SPKICache` should remain domain-scoped (not provider/model-scoped). Reason:
+  SPKI trust is a TLS endpoint identity property; pinned providers resolve
+  domains dynamically and must support reuse by domain.
+- Resolver caches (`EndpointResolver`, `ModelResolver`) should remain separate
+  from attestation/supply-chain caches. Reason: they cache mutable discovery
+  metadata, not cryptographically authenticated attestation evidence.
+- File-backed supply-chain cache and short-lived in-memory attestation/E2EE
+  caches should not be physically merged into one store. Reason: different
+  mutability, freshness, persistence, and trust semantics.
+
+Operational implication: unify key types and helper primitives, not security
+domains.
 
 ---
 
@@ -108,20 +181,24 @@ teep cache <provider> --model <m1>,<m2>   # cache specific models
    settings (allow_fail, base_url, api_key_env, etc.). The cache file stores
    authenticated observations.
 
-2. **Per-provider, per-model sections**: Each (provider, model) pair has its
+2. **Per-provider, per-model sections**: Each (provider, upstream model) pair has its
    own self-contained section with TDX measurements, compose hash, inline
    image provenance data, NVIDIA results, Intel PCS results, Proof of Cloud
    results, and E2EE test results. Sigstore/Rekor data is immutable — the
    simplicity of inline storage outweighs the duplication cost when the same
    image appears across multiple providers or models.
 
+  In multi-provider serve mode, this `model` key is the provider-local
+  upstream model (the `provider:` prefix has already been removed by routing).
+
 3. **Per-provider gateway section**: For providers with gateway attestation
    (e.g., nearcloud), a `gateway` section sits alongside model sections with
    its own TDX measurements, compose hash, and inline image provenance.
 
-4. **Deterministic merge**: `teep cache provider --model X` replaces only
-   the `providers.<provider>.models.<X>` section (and the gateway section
-   if the provider has one). All other providers and models are preserved.
+4. **Deterministic merge**: `teep cache --model provider:X` replaces only
+  the `providers.<provider>.models.<X>` section (and the gateway section
+  if the provider has one and gateway evidence is collected). All other
+  providers and models are preserved.
 
 ### 3b. Data Stored Per Scope
 
@@ -223,7 +300,7 @@ images, Intel PCS, NVIDIA (if applicable), Proof of Cloud, etc.
 
 | Cached Data | Cache Key | Valid When | Staleness Behavior |
 |-------------|-----------|-----------|-------------------|
-| TDX measurements | (provider, model) | Compose hash matches | Invalidated if compose hash changes |
+| TDX measurements | (provider, upstream model) | Compose hash matches | Invalidated if compose hash changes |
 | Compose hash | `sha256(app_compose)` | Content-addressed (immutable per-content) | New hash → re-extract images, re-validate |
 | Image (digest-pinned) | compose reference (`repo@sha256:...`) | Reference matches compose | Immutable by definition |
 | Image (release tag) | compose reference (`repo:tag`) | Reference matches compose | Tag re-push not detectable; `image_binding` factor captures risk |
@@ -235,7 +312,7 @@ images, Intel PCS, NVIDIA (if applicable), Proof of Cloud, etc.
 
 ---
 
-## 4. Staleness and Re-fetch Behavior
+## 4. Planned Staleness and Re-fetch Behavior
 
 When `teep serve` encounters a stale or invalidated cache entry during online
 operation:
@@ -793,7 +870,7 @@ data and is evaluated during both `teep verify` and `teep serve`.
 
 ## 9. Merge Semantics
 
-When `teep cache neardirect --model meta-llama/Llama-3.3-70B-Instruct` runs:
+When `teep cache --model neardirect:meta-llama/Llama-3.3-70B-Instruct` runs:
 
 1. Read existing cache file (if present).
 2. Replace `providers.neardirect.models["meta-llama/Llama-3.3-70B-Instruct"]`
@@ -803,12 +880,22 @@ When `teep cache neardirect --model meta-llama/Llama-3.3-70B-Instruct` runs:
 4. Preserve all other providers and models untouched.
 5. Write the merged cache file atomically (write to temp file → rename).
 
-For `--all-models`, repeat step 2 for each model, then do one gateway update
-at the end.
+For `--all-models`, repeat step 2 for every discovered model of every active
+provider, then do one gateway update per provider that has gateway evidence.
 
 ### 9a. File Locking and Concurrency
 
-**In-process coordination (`teep serve`)**: The in-memory cache uses a `sync.RWMutex` to protect its shared data structures, ensuring safe concurrent access via multiple clients performing simultaneous access of multiple providers and models.
+**In-process coordination (`teep serve`)**: The planned in-memory supply chain
+cache will use a `sync.RWMutex` to protect shared data structures, ensuring
+safe concurrent access via multiple clients performing simultaneous access of
+multiple providers and models.
+
+Request routing remains provider-isolated under concurrency because requests
+are first resolved from `provider:model` to `(provider, upstream model)`.
+Most security caches use that tuple key (`Cache`, `NegativeCache`,
+`SigningKeyCache`, and `e2eeFailed`), while `SPKICache` is intentionally keyed
+by domain/SPKI. This split prevents cross-provider model collisions while
+preserving correct TLS identity reuse for pinned providers.
 
 **Cross-process coordination**: Multiple `teep serve` processes (or a `teep
 serve` and a `teep cache`) may share the same cache file. Cross-process disk
@@ -828,10 +915,9 @@ read-merge-write-rename cycle to prevent lost updates.
 
 `teep cache` uses the same `flock`-based write path, so concurrent `teep
 cache` and `teep serve` invocations are safely serialized. Concurrent `teep
-cache` invocations for different providers are safe (each replaces only its
-own provider section). Concurrent invocations for the same provider are
-serialized by the lock — the second invocation reads the first's output and
-merges on top of it.
+cache` invocations that target disjoint provider/model sets are safe, and
+overlapping invocations are serialized by the lock — the later invocation
+reads the earlier output and merges on top of it.
 
 ---
 
@@ -866,13 +952,14 @@ and run `teep cache` to populate the cache file instead.
 
 The cache file's per-model TDX register value lists (`mrseam`, `mrtd`,
 `rtmr0`–`rtmr2`, and gateway equivalents) serve the role formerly filled by
-the config measurement allowlists. At verification time in `teep serve`:
+the config measurement allowlists. In planned cache-enabled `teep serve`
+verification:
 
 1. Teep fetches a live attestation from the provider (as before).
 2. The live TDX quote is parsed and verified locally (signature, cert chain,
    nonce binding — all offline-capable factors).
 3. The live TDX measurement values are compared against the cached allowlists
-   for that (provider, model) pair.
+  for that (provider, upstream model) pair.
 
 **Enforcement follows the configured `allow_fail` list**:
 
@@ -887,7 +974,7 @@ the config measurement allowlists. At verification time in `teep serve`:
   "cached", cached, "live", live, "factor", factor)`), but the request is
   not blocked.
 
-- **No cache entry for the (provider, model)**: The comparison is skipped —
+- **No cache entry for the (provider, upstream model)**: The comparison is skipped —
   there is nothing to compare against. This is equivalent to the former
   behavior when no measurement allowlists were configured. Factors that depend
   on external verification (Intel PCS, NVIDIA NRAS, etc.) proceed with their
@@ -909,12 +996,21 @@ verification, or staleness degradation.
 | TDX register handling | **Removed** (no allowlists) | Cached allowlists compared against live attestation |
 | Enforcement | `allow_fail` controls which factors block | Cached data compared; `allow_fail` controls block/warn |
 | Used by | `teep verify`, `teep serve`, `teep cache` | `teep serve`, `teep cache` (NOT `teep verify`) |
-| Merge on update | N/A (user-managed) | Provider+model replacement with merge |
+| Merge on update | N/A (user-managed) | Provider+upstream-model replacement with merge |
 | Format | TOML | YAML |
 
 ---
 
 ## 11. Implementation Phases
+
+### Phase 0: Baseline Cache Inventory and Keying Contract
+
+- Document and test current cache/state semantics before adding new cache
+  features (Section 2d inventory).
+- Introduce a canonical provider/model cache key type shared across proxy
+  security caches that are model scoped.
+- Explicitly retain domain-scoped `SPKICache` and resolver caches as separate
+  domains (Section 2e constraints).
 
 ### Phase 1: Cache File Format and I/O
 
@@ -925,16 +1021,24 @@ verification, or staleness degradation.
 - Permission checks using `os.Lstat` (symlink-safe).
 - Post-unmarshal validation of hex field lengths.
 - Unit tests for merge semantics, format round-tripping, and safe concurrent access involving multiple providers over `sync.WaitGroup` and parallel goroutines.
+- Ensure cache-file schema and loaders are isolated from existing short-lived
+  attestation/E2EE caches; only shared key/helper primitives may be reused.
 
 ### Phase 2: `teep cache` Command
 
 - Add `teep cache` subcommand to `cmd/teep/main.go`.
-- Call `verify.Run()` to fetch attestation and run full verification, then extract authenticated fields from the returned `VerificationReport` to populate the cache file.
+- Remove provider positional argument from `teep cache`.
+- Resolve active providers exactly like `teep serve` (non-empty resolved API keys).
+- Require `--model` values to use `provider:model`; reject unprefixed models.
+- For `--all-models`, enumerate models across all active providers.
+- Call `verify.Run()` to fetch attestation and run full verification for each target, then extract authenticated fields from each `VerificationReport` to populate the cache file.
 - Support `--model`, `--all-models`, `--cache-file`.
 - Emit warnings for tag-based and `version_unpinned` images.
-- Partial failure handling for `--all-models`: continue all models, collect
-  per-model errors, write cache for successes, exit non-zero with summary.
-- Unit and integration tests.
+- Partial failure handling for multi-provider runs: continue all
+  provider/model targets, collect per-target errors, write cache for
+  successes, exit non-zero with summary.
+- Unit and integration tests, including mixed-provider target sets and
+  provider-prefix validation failures.
 
 ### Phase 3: Config Removal
 
@@ -951,8 +1055,11 @@ verification, or staleness degradation.
 
 - Add a `supplyChainCache` field to the existing `Server` struct in
   `internal/proxy/proxy.go`. This is distinct from the existing short-lived
-  proxy caches (`cache` for attestation reports at 5m TTL, `negCache` at 30s,
-  `signingKeyCache` at 1h, `spkiCache` at 1h). The supply chain cache stores
+  proxy caches (`cache` for attestation reports at
+  `attestation.AttestationCacheTTL` (currently 1h), `negCache` at 30s,
+  `signingKeyCache` at `attestation.AttestationCacheTTL` (currently 1h),
+  `spkiCache` at `attestation.AttestationCacheTTL` (currently 1h)). The
+  supply chain cache stores
   long-lived authenticated verification data.
 - Create the supply chain cache at `teep serve` startup (same data structures
   as the cache file). If a cache file is configured, load it into memory;
@@ -967,6 +1074,11 @@ verification, or staleness degradation.
   `attestAndCache` itself or in the `fetchAndVerify` / `BuildReport` path it
   calls. This single integration point automatically covers all endpoint types
   without per-endpoint cache code.
+- Reuse the canonical provider/model cache key contract from Phase 0 across
+  attestation, negative, signing-key, e2ee-failure, and supply-chain cache
+  code paths where applicable.
+- Keep `SPKICache` domain keyed and resolver caches independent; document this
+  explicitly in code comments and tests as an intentional non-unification.
 - Populate the in-memory cache after each successful attestation, using the
   same code paths as `teep cache` for extracting authenticated results.
 - **Authenticated write-back**: When live re-attestation produces changes that
@@ -986,9 +1098,15 @@ verification, or staleness degradation.
 
 - Integration tests with live providers.
 - `make reports` regression check.
+- Add cache-domain tests that explicitly verify keying boundaries:
+  provider/model caches do not collide across providers with identical model
+  names, and SPKI domain cache behavior remains domain-scoped.
 - Update `README.md`, `README_ADVANCED.md`, help text.
 - `teep.toml.example` — remove update-config examples, add `cache_file`
   and `max_cache_age` documentation.
+- Document `teep cache` multi-provider behavior explicitly:
+  no provider positional argument, `--model` requires `provider:model`, and
+  `--all-models` operates across all active providers.
 - Rewrite `docs/measurement_allowlists.md` to describe how to use
   `teep cache` combined with `allow_fail` configuration to pin cached
   values with and without strict enforcement.
