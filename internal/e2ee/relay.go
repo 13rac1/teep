@@ -527,14 +527,50 @@ func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
 		}
 	}
 
-	// Images: decrypt data[].b64_json and data[].revised_prompt fields.
+	// Images, embeddings, rerank, score: decrypt data[] fields.
 	if dataRaw, ok := full["data"]; ok {
+		// Try images first (has b64_json/revised_prompt).
 		d, err := decryptResponseImageData(dataRaw, session)
 		if err != nil {
 			return nil, err
 		}
 		if d != nil {
 			full["data"] = d
+			changed = true
+		} else {
+			// If not images, try embeddings (has embedding vectors).
+			d, err := decryptResponseEmbeddingsData(dataRaw, session)
+			if err != nil {
+				return nil, err
+			}
+			if d != nil {
+				full["data"] = d
+				changed = true
+			}
+		}
+	}
+
+	// Reranking: decrypt results[] document text fields.
+	if resultsRaw, ok := full["results"]; ok {
+		r, err := decryptResponseRerankResults(resultsRaw, session)
+		if err != nil {
+			return nil, err
+		}
+		if r != nil {
+			full["results"] = r
+			changed = true
+		}
+	}
+
+	// Score: decrypt data[].score fields.
+	if scoreDataRaw, ok := full["data"]; ok && !changed {
+		// Only try score if we haven't already processed data as images/embeddings.
+		s, err := decryptResponseScoreData(scoreDataRaw, session)
+		if err != nil {
+			return nil, err
+		}
+		if s != nil {
+			full["data"] = s
 			changed = true
 		}
 	}
@@ -625,6 +661,157 @@ func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor) (json.
 			data[i][field] = rewritten
 			changed = true
 		}
+	}
+
+	if !changed {
+		return nil, nil
+	}
+	out, _ := json.Marshal(data) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	return out, nil
+}
+
+// decryptResponseEmbeddingsData decrypts encrypted embedding vectors in data[] items.
+// Each embedding is stored as an encrypted JSON string that deserializes to a float array.
+// Returns the rewritten data JSON, or nil if nothing was decrypted.
+func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
+	var data []map[string]json.RawMessage
+	if err := json.Unmarshal(dataRaw, &data); err != nil {
+		// Not an array of objects -- skip.
+		return nil, nil //nolint:nilerr // unmarshal error means data is not embeddings
+	}
+
+	changed := false
+	for i, item := range data {
+		embRaw, ok := item["embedding"]
+		if !ok || IsJSONNull(embRaw) {
+			continue
+		}
+		// Check if embedding is a string (encrypted form) or array (plaintext).
+		if len(embRaw) == 0 || embRaw[0] != '"' {
+			// Not a string, assume plaintext array -- skip.
+			continue
+		}
+		var embStr string
+		if err := json.Unmarshal(embRaw, &embStr); err != nil {
+			continue // not a valid string field
+		}
+		if !session.IsEncryptedChunk(embStr) {
+			continue // not encrypted
+		}
+		plaintext, err := session.Decrypt(embStr)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt data[%d].embedding: %w", i, err)
+		}
+		// The plaintext is a JSON-serialized float array. Unmarshal and re-marshal to normalize.
+		if json.Valid(plaintext) {
+			data[i]["embedding"] = json.RawMessage(plaintext)
+		} else {
+			// Fallback: treat as string.
+			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+			data[i]["embedding"] = rewritten
+		}
+		changed = true
+	}
+
+	if !changed {
+		return nil, nil
+	}
+	out, _ := json.Marshal(data) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	return out, nil
+}
+
+// decryptResponseRerankResults decrypts document text fields in results[] items of a reranking response.
+// Returns the rewritten results JSON, or nil if nothing was decrypted.
+func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
+	var results []map[string]json.RawMessage
+	if err := json.Unmarshal(resultsRaw, &results); err != nil {
+		// Not an array of objects -- skip.
+		return nil, nil //nolint:nilerr // unmarshal error means results is not rerank format
+	}
+
+	changed := false
+	for i, item := range results {
+		docRaw, ok := item["document"]
+		if !ok || IsJSONNull(docRaw) {
+			continue
+		}
+		// Document is an object with a text field.
+		if len(docRaw) == 0 || docRaw[0] != '{' {
+			continue
+		}
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal(docRaw, &doc); err != nil {
+			continue
+		}
+		textRaw, ok := doc["text"]
+		if !ok || IsJSONNull(textRaw) {
+			continue
+		}
+		var textStr string
+		if err := json.Unmarshal(textRaw, &textStr); err != nil {
+			continue // not a valid string field
+		}
+		if !session.IsEncryptedChunk(textStr) {
+			continue // not encrypted
+		}
+		plaintext, err := session.Decrypt(textStr)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt results[%d].document.text: %w", i, err)
+		}
+		rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+		doc["text"] = rewritten
+		docOut, _ := json.Marshal(doc) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+		results[i]["document"] = docOut
+		changed = true
+	}
+
+	if !changed {
+		return nil, nil
+	}
+	out, _ := json.Marshal(results) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	return out, nil
+}
+
+// decryptResponseScoreData decrypts score fields in data[] items of a score response.
+// Returns the rewritten data JSON, or nil if nothing was decrypted.
+func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
+	var data []map[string]json.RawMessage
+	if err := json.Unmarshal(dataRaw, &data); err != nil {
+		// Not an array of objects -- skip.
+		return nil, nil //nolint:nilerr // unmarshal error means data is not score format
+	}
+
+	changed := false
+	for i, item := range data {
+		scoreRaw, ok := item["score"]
+		if !ok || IsJSONNull(scoreRaw) {
+			continue
+		}
+		// Score can be a number or a string (encrypted).
+		if len(scoreRaw) == 0 || scoreRaw[0] != '"' {
+			// Not a string (likely plaintext number) -- skip.
+			continue
+		}
+		var scoreStr string
+		if err := json.Unmarshal(scoreRaw, &scoreStr); err != nil {
+			continue // not a valid string field
+		}
+		if !session.IsEncryptedChunk(scoreStr) {
+			continue // not encrypted
+		}
+		plaintext, err := session.Decrypt(scoreStr)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt data[%d].score: %w", i, err)
+		}
+		// Score plaintext should be a JSON number or string; preserve as-is if valid JSON.
+		if json.Valid(plaintext) {
+			data[i]["score"] = json.RawMessage(plaintext)
+		} else {
+			// Fallback: treat as string.
+			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+			data[i]["score"] = rewritten
+		}
+		changed = true
 	}
 
 	if !changed {

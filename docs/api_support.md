@@ -36,10 +36,11 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud |
 |---|---|---|---|---|---|
 | Chat completions | Encrypted | Encrypted | Encrypted | Encrypted | No E2EE |
-| Embeddings | Fail closed | — | Encrypted | — | No E2EE |
+| Embeddings | Encrypted | — | Encrypted | — | No E2EE |
 | Audio transcriptions | Plaintext (pinned) | — | — | — | — |
 | Image generation | Encrypted | Encrypted | — | — | — |
-| Reranking | Fail closed | — | — | — | — |
+| Reranking | Encrypted | — | — | — | — |
+| Score | Encrypted | — | — | — | — |
 
 **Encrypted** = E2EE is applied to request and response fields.
 **Fail closed** = Proxy rejects the request with an error because E2EE is not supported for this endpoint in the end-to-end path, either because the proxy does not implement E2EE field dispatch for that request type or because the upstream TEE cannot decrypt it.
@@ -62,17 +63,21 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|
 | Chat completions | `/v1/chat/completions` | Yes | Full-field encryption; streaming forced when E2EE active |
-| Embeddings | `/v1/embeddings` | Fail closed | Inference-proxy supports E2EE for embeddings, but proxy fails closed because the field-level E2EE dispatch does not cover this endpoint |
+| Embeddings | `/v1/embeddings` | Yes | Full-field encryption; supports string and array input formats |
 | Audio transcriptions | `/v1/audio/transcriptions` | No (pinned TLS) | Multipart body; E2EE not applied. Connection is TLS-pinned to attested TEE |
 | Image generation | `/v1/images/generations` | Yes | Full-field encryption; prompt, `b64_json`, and `revised_prompt` encrypted |
-| Reranking | `/v1/rerank` | Fail closed | Same as embeddings — inference-proxy supports it but proxy fails closed |
+| Reranking | `/v1/rerank` | Yes | Full-field encryption; query and documents encrypted |
+| Score | `/v1/score` | Yes | Full-field encryption; text_1 and text_2 encrypted |
 
 **E2EE request fields encrypted:**
 
-| Endpoint | Encrypted message fields | Encrypted top-level fields |
-|---|---|---|
-| Chat completions | `messages[].content`, `messages[].reasoning_content`, `messages[].reasoning`, `messages[].refusal`, `messages[].name`, `messages[].audio.data`, `messages[].tool_calls[].function.name`, `messages[].tool_calls[].function.arguments`, `messages[].function_call.name`, `messages[].function_call.arguments` | `tools[].function.name`, `tools[].function.description`, `tools[].function.parameters`, `tool_choice.function.name`, `function_call.name` (object form) |
-| Image generation | `prompt` | —
+| Endpoint | Encrypted fields |
+|---|---|
+| Chat completions | `messages[].content`, `messages[].reasoning_content`, `messages[].reasoning`, `messages[].refusal`, `messages[].name`, `messages[].audio.data`, `messages[].tool_calls[].function.name`, `messages[].tool_calls[].function.arguments`, `messages[].function_call.name`, `messages[].function_call.arguments`; top-level: `tools[].function.name`, `tools[].function.description`, `tools[].function.parameters`, `tool_choice.function.name`, `function_call.name` (object form) |
+| Embeddings | `input` (each element if array; string form if single string) |
+| Image generation | `prompt` |
+| Reranking | `query`, `documents[]` |
+| Score | `text_1`, `text_2` |
 
 **E2EE response fields encrypted:**
 
@@ -103,6 +108,9 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | `choices[].logprobs.content[].top_logprobs[*].bytes` | Yes | Recursive |
 | `data[].b64_json` | Yes | Images |
 | `data[].revised_prompt` | Yes | Images |
+| `data[].embedding` | Yes | Embeddings |
+| `results[].document.text` | Yes | Reranking |
+| `data[].score` | Yes | Score |
 
 ---
 
