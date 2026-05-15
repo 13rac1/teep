@@ -49,6 +49,8 @@ Not all providers support all endpoints. If a provider has no path configured fo
 
 ## Provider Details
 
+**Teep E2EE Header:** Teep automatically sets `X-Encrypt-All-Fields: true` on all E2EE-enabled requests to NearDirect and NearCloud. This enables full-field encryption of all sensitive request and response fields. The encryption coverage documented below reflects teep's behavior with this header active.
+
 ### NearDirect
 
 **Upstream:** Model TEE inference-proxy instances at `*.completions.near.ai`, resolved per-model via the `/endpoints` discovery API.
@@ -59,20 +61,20 @@ Not all providers support all endpoints. If a provider has no path configured fo
 
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|
-| Chat completions | `/v1/chat/completions` | Yes | Streaming forced when E2EE active |
+| Chat completions | `/v1/chat/completions` | Yes | Full-field encryption; streaming forced when E2EE active |
 | Embeddings | `/v1/embeddings` | Fail closed | Inference-proxy supports E2EE for embeddings, but proxy fails closed because the field-level E2EE dispatch does not cover this endpoint |
 | Audio transcriptions | `/v1/audio/transcriptions` | No (pinned TLS) | Multipart body; E2EE not applied. Connection is TLS-pinned to attested TEE |
-| Image generation | `/v1/images/generations` | Yes | Prompt encrypted; response `b64_json` and `revised_prompt` encrypted |
+| Image generation | `/v1/images/generations` | Yes | Full-field encryption; prompt, `b64_json`, and `revised_prompt` encrypted |
 | Reranking | `/v1/rerank` | Fail closed | Same as embeddings — inference-proxy supports it but proxy fails closed |
 
 **E2EE request fields encrypted:**
 
-| Endpoint | Encrypted fields |
-|---|---|
-| Chat completions | `messages[].content` (text string or serialized VL content array) |
-| Image generation | `prompt` |
+| Endpoint | Encrypted message fields | Encrypted top-level fields |
+|---|---|---|
+| Chat completions | `messages[].content`, `messages[].reasoning_content`, `messages[].reasoning`, `messages[].refusal`, `messages[].name`, `messages[].audio.data`, `messages[].tool_calls[].function.name`, `messages[].tool_calls[].function.arguments`, `messages[].function_call.name`, `messages[].function_call.arguments` | `tools[].function.name`, `tools[].function.description`, `tools[].function.parameters`, `tool_choice.function.name`, `function_call.name` (object form) |
+| Image generation | `prompt` | —
 
-**E2EE response fields encrypted (by inference-proxy):**
+**E2EE response fields encrypted:**
 
 | Field | Encrypted | Notes |
 |---|---|---|
@@ -81,21 +83,26 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | `choices[].message.reasoning_content` | Yes | |
 | `choices[].delta.reasoning_content` | Yes | Streaming |
 | `choices[].message.reasoning` | Yes | |
+| `choices[].message.refusal` | Yes | |
+| `choices[].delta.refusal` | Yes | Streaming |
+| `choices[].message.name` | Yes | |
 | `choices[].message.audio.data` | Yes | |
+| `choices[].message.tool_calls[].function.name` | Yes | |
+| `choices[].message.tool_calls[].function.arguments` | Yes | |
+| `choices[].delta.tool_calls[].function.name` | Yes | Streaming |
+| `choices[].delta.tool_calls[].function.arguments` | Yes | Streaming |
+| `choices[].message.function_call.name` | Yes | Deprecated format |
+| `choices[].message.function_call.arguments` | Yes | Deprecated format |
+| `choices[].delta.function_call.name` | Yes | Deprecated format, streaming |
+| `choices[].delta.function_call.arguments` | Yes | Deprecated format, streaming |
+| `choices[].logprobs.content[].token` | Yes | |
+| `choices[].logprobs.content[].bytes` | Yes | |
+| `choices[].logprobs.refusal[].token` | Yes | |
+| `choices[].logprobs.refusal[].bytes` | Yes | |
+| `choices[].logprobs.content[].top_logprobs[*].token` | Yes | Recursive |
+| `choices[].logprobs.content[].top_logprobs[*].bytes` | Yes | Recursive |
 | `data[].b64_json` | Yes | Images |
 | `data[].revised_prompt` | Yes | Images |
-
-**Chat response fields NOT encrypted (plaintext gaps):**
-
-| Field | Contains sensitive data | Risk |
-|---|---|---|
-| `tool_calls[].function.arguments` | Yes — model-generated arguments derived from user input | Leaks user data |
-| `tool_calls[].function.name` | Yes — reveals query intent | Leaks query intent |
-| `refusal` | Yes — reveals what the user asked | Leaks query intent |
-| `logprobs.content[].token` | Yes — reveals output text token-by-token | Bypasses content encryption |
-| `function_call` (deprecated) | Yes — same as tool_calls | Leaks user data |
-
-These gaps are in the upstream [inference-proxy](https://github.com/nearai/inference-proxy) `encrypt_chat_response_choices` function, not in teep. See [e2ee_plaintext_gaps.md](attestation_gaps/e2ee_plaintext_gaps.md) for details and reproduction steps.
 
 ---
 
@@ -114,9 +121,7 @@ These gaps are in the upstream [inference-proxy](https://github.com/nearai/infer
 
 Embeddings, audio, and reranking are **not wired** in the proxy for NearCloud. The gateway silently drops E2EE headers for these endpoints, so wiring them would send plaintext through a channel the user believes is encrypted.
 
-**E2EE request/response field coverage:** Identical to NearDirect (same inference-proxy). See the NearDirect tables above for encrypted and unencrypted fields.
-
-**Gateway header-forwarding gaps:** The gateway (`cloud-api.near.ai`) only calls `validate_encryption_headers` and forwards E2EE headers for chat completions and image generation. All other endpoints discard E2EE headers silently. The model TEE supports E2EE for embeddings, audio, rerank, and score — headers just never reach it through the gateway. See [e2ee_plaintext_gaps.md](attestation_gaps/e2ee_plaintext_gaps.md) for test evidence comparing gateway vs. direct inference-proxy behavior.
+**E2EE field coverage:** Identical to NearDirect (same inference-proxy backend). See the NearDirect tables above for complete list of encrypted fields.
 
 ---
 
@@ -164,9 +169,7 @@ Venice only exposes chat completions. No other endpoints are available.
 |---|---|
 | `messages[].content` | Yes (text string or serialized VL content array) |
 
-**E2EE response field coverage:** Venice uses the same [inference-proxy](https://github.com/nearai/inference-proxy) as NearDirect and NearCloud. The encrypted and unencrypted response fields are identical to NearDirect — see the NearDirect tables above.
-
-**Plaintext gaps:** Same as NearDirect — `tool_calls[].function.arguments`, `tool_calls[].function.name`, `refusal`, `logprobs`, and `function_call` are not encrypted.
+**E2EE field coverage:** Venice uses the same [inference-proxy](https://github.com/nearai/inference-proxy) as NearDirect and NearCloud. All encrypted fields are identical to NearDirect — see the NearDirect tables above for the complete list.
 
 ---
 
@@ -198,12 +201,12 @@ When a Chutes-format backend is detected, the attestation is parsed using the Ch
 
 | Property | NearDirect / NearCloud / Venice | Chutes |
 |---|---|---|
-| Encryption scope | Per-field | Full-body |
+| Encryption scope | Per-field (all fields with teep) | Full-body |
 | Key exchange | ECDH (Ed25519→X25519 or secp256k1) | ML-KEM-768 (post-quantum) |
 | Symmetric cipher | XChaCha20-Poly1305 or AES-256-GCM | ChaCha20-Poly1305 |
-| Request encryption | Selected JSON fields only | Entire body (gzipped) |
-| Response encryption | Selected JSON fields in SSE chunks | Entire SSE chunks |
-| Field coverage gaps | Yes — tool_calls, refusal, logprobs unencrypted | None — all fields encrypted by construction |
+| Request encryption | All sensitive JSON fields | Entire body (gzipped) |
+| Response encryption | All sensitive JSON fields in SSE chunks | Entire SSE chunks |
+| Field coverage | Complete with teep's `X-Encrypt-All-Fields: true` | Complete — all fields encrypted by construction |
 | New field coverage | Requires explicit code change per field | Automatic — new fields covered by construction |
 | Streaming | `stream=true` forced; relay decrypts SSE | `e2e_init` + `e2e` SSE events; relay decrypts chunks |
 | Post-quantum | No | Yes (ML-KEM-768) |
