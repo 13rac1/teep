@@ -605,6 +605,197 @@ func EncryptImagePromptNearCloud(body []byte, signingKey string) ([]byte, *NearC
 	return out, session, nil
 }
 
+// EncryptEmbeddingsNearCloud creates a NearCloud E2EE session and encrypts the
+// "input" field of an embeddings request. The signingKey is the model's Ed25519
+// public key (64 hex chars) from the attestation response.
+//
+// Encrypted field: input (string or array of strings/integers).
+// Sets X-Encrypt-All-Fields header and returns the session for response decryption.
+func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
+	session, err := NewNearCloudSession()
+	if err != nil {
+		return nil, nil, fmt.Errorf("create NearCloud E2EE session: %w", err)
+	}
+	if err := session.SetModelKeyEd25519(signingKey); err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("set model key ed25519: %w", err)
+	}
+
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(body, &full); err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("parse body for embeddings E2EE: %w", err)
+	}
+
+	inputRaw, ok := full["input"]
+	if ok && !IsJSONNull(inputRaw) {
+		// Input can be a string, array of strings, or array of integers/token arrays.
+		// We only encrypt string elements and string-form input.
+		if len(inputRaw) > 0 && inputRaw[0] == '"' {
+			// Single string: encrypt it directly.
+			var s string
+			if err := json.Unmarshal(inputRaw, &s); err != nil {
+				session.Zero()
+				return nil, nil, fmt.Errorf("parse input string: %w", err)
+			}
+			ct, err := EncryptXChaCha20([]byte(s), session.ModelX25519Pub())
+			if err != nil {
+				session.Zero()
+				return nil, nil, fmt.Errorf("encrypt input: %w", err)
+			}
+			ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
+			full["input"] = ctJSON
+		} else if len(inputRaw) > 0 && inputRaw[0] == '[' {
+			// Array: encrypt only string elements.
+			var arr []json.RawMessage
+			if err := json.Unmarshal(inputRaw, &arr); err != nil {
+				session.Zero()
+				return nil, nil, fmt.Errorf("parse input array: %w", err)
+			}
+			for i, item := range arr {
+				if len(item) == 0 || item[0] != '"' {
+					continue // not a string element, skip
+				}
+				var s string
+				if err := json.Unmarshal(item, &s); err != nil {
+					session.Zero()
+					return nil, nil, fmt.Errorf("parse input[%d]: %w", i, err)
+				}
+				ct, err := EncryptXChaCha20([]byte(s), session.ModelX25519Pub())
+				if err != nil {
+					session.Zero()
+					return nil, nil, fmt.Errorf("encrypt input[%d]: %w", i, err)
+				}
+				ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
+				arr[i] = ctJSON
+			}
+			arrOut, _ := json.Marshal(arr) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+			full["input"] = arrOut
+		}
+	}
+
+	out, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	return out, session, nil
+}
+
+// EncryptRerankNearCloud creates a NearCloud E2EE session and encrypts the
+// "query" and "documents" fields of a rerank request. The signingKey is the
+// model's Ed25519 public key (64 hex chars) from the attestation response.
+//
+// Encrypted fields: query (string), documents (array of strings).
+func EncryptRerankNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
+	session, err := NewNearCloudSession()
+	if err != nil {
+		return nil, nil, fmt.Errorf("create NearCloud E2EE session: %w", err)
+	}
+	if err := session.SetModelKeyEd25519(signingKey); err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("set model key ed25519: %w", err)
+	}
+
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(body, &full); err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("parse body for rerank E2EE: %w", err)
+	}
+
+	// Encrypt query field.
+	if queryRaw, ok := full["query"]; ok && !IsJSONNull(queryRaw) {
+		var query string
+		if err := json.Unmarshal(queryRaw, &query); err != nil {
+			session.Zero()
+			return nil, nil, fmt.Errorf("parse query: %w", err)
+		}
+		ct, err := EncryptXChaCha20([]byte(query), session.ModelX25519Pub())
+		if err != nil {
+			session.Zero()
+			return nil, nil, fmt.Errorf("encrypt query: %w", err)
+		}
+		ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
+		full["query"] = ctJSON
+	}
+
+	// Encrypt documents array.
+	if docsRaw, ok := full["documents"]; ok && !IsJSONNull(docsRaw) {
+		var docs []string
+		if err := json.Unmarshal(docsRaw, &docs); err != nil {
+			session.Zero()
+			return nil, nil, fmt.Errorf("parse documents: %w", err)
+		}
+		encDocs := make([]string, len(docs))
+		for i, doc := range docs {
+			ct, err := EncryptXChaCha20([]byte(doc), session.ModelX25519Pub())
+			if err != nil {
+				session.Zero()
+				return nil, nil, fmt.Errorf("encrypt document %d: %w", i, err)
+			}
+			encDocs[i] = ct
+		}
+		docsOut, _ := json.Marshal(encDocs) //nolint:errchkjson // re-marshaling strings
+		full["documents"] = docsOut
+	}
+
+	out, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	return out, session, nil
+}
+
+// EncryptScoreNearCloud creates a NearCloud E2EE session and encrypts the
+// "text_1" and "text_2" fields of a score request. The signingKey is the
+// model's Ed25519 public key (64 hex chars) from the attestation response.
+//
+// Encrypted fields: text_1 (string), text_2 (string).
+func EncryptScoreNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
+	session, err := NewNearCloudSession()
+	if err != nil {
+		return nil, nil, fmt.Errorf("create NearCloud E2EE session: %w", err)
+	}
+	if err := session.SetModelKeyEd25519(signingKey); err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("set model key ed25519: %w", err)
+	}
+
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(body, &full); err != nil {
+		session.Zero()
+		return nil, nil, fmt.Errorf("parse body for score E2EE: %w", err)
+	}
+
+	// Encrypt text_1 field.
+	if text1Raw, ok := full["text_1"]; ok && !IsJSONNull(text1Raw) {
+		var text1 string
+		if err := json.Unmarshal(text1Raw, &text1); err != nil {
+			session.Zero()
+			return nil, nil, fmt.Errorf("parse text_1: %w", err)
+		}
+		ct, err := EncryptXChaCha20([]byte(text1), session.ModelX25519Pub())
+		if err != nil {
+			session.Zero()
+			return nil, nil, fmt.Errorf("encrypt text_1: %w", err)
+		}
+		ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
+		full["text_1"] = ctJSON
+	}
+
+	// Encrypt text_2 field.
+	if text2Raw, ok := full["text_2"]; ok && !IsJSONNull(text2Raw) {
+		var text2 string
+		if err := json.Unmarshal(text2Raw, &text2); err != nil {
+			session.Zero()
+			return nil, nil, fmt.Errorf("parse text_2: %w", err)
+		}
+		ct, err := EncryptXChaCha20([]byte(text2), session.ModelX25519Pub())
+		if err != nil {
+			session.Zero()
+			return nil, nil, fmt.Errorf("encrypt text_2: %w", err)
+		}
+		ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
+		full["text_2"] = ctJSON
+	}
+
+	out, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	return out, session, nil
+}
+
 // ValidateModelKeyEd25519 checks if the given hex string is a valid Ed25519
 // public key suitable for NearCloud E2EE.
 func ValidateModelKeyEd25519(ed25519PubHex string) error {
