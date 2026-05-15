@@ -1,6 +1,7 @@
 package e2ee
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -64,29 +65,21 @@ type usageInfo struct {
 	} `json:"usage"`
 }
 
-// NonEncryptedFields is the set of known string-valued fields in OpenAI chat
-// delta/message objects that are never encrypted by the E2EE layer. Expanding
-// this allowlist prevents false-positive IsEncryptedChunk matches on
-// non-content hex-like fields (e.g. trace IDs).
-//
-// The upstream NEAR AI inference-proxy encrypts only: content,
-// reasoning_content, reasoning, and audio.data. All other string fields
-// pass through unencrypted.
-//
-// Source: https://github.com/nearai/inference-proxy/blob/main/src/encryption.rs
-//   - encrypt_chat_response_choices (server → client encryption)
-//   - decrypt_chat_message_fields   (client → server decryption)
-//
-// Protocol docs: https://github.com/nearai/docs/blob/main/docs/cloud/guides/e2ee-chat-completions.mdx
+// NonEncryptedFields are known plaintext metadata fields in OpenAI chat
+// delta/message objects.
 var NonEncryptedFields = map[string]bool{
 	"role":          true,
-	"refusal":       true,
-	"name":          true,
 	"tool_call_id":  true,
 	"type":          true,
 	"finish_reason": true,
-	"function_call": true,
 	"id":            true,
+}
+
+// OptionalEncryptedFields may be plaintext or encrypted. When encrypted, relay
+// decrypts them; when plaintext, relay preserves them for compatibility.
+var OptionalEncryptedFields = map[string]bool{
+	"refusal": true,
+	"name":    true,
 }
 
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
@@ -103,6 +96,9 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ct
 			continue
 		}
 		if !session.IsEncryptedChunk(s) {
+			if OptionalEncryptedFields[key] {
+				continue
+			}
 			return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 		}
 		plaintext, err := session.Decrypt(s)
@@ -114,6 +110,286 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ct
 		changed = true
 	}
 	return changed, nil
+}
+
+func decryptAudioDataField(fields map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+	audioRaw, ok := fields["audio"]
+	if !ok || IsJSONNull(audioRaw) {
+		return false, nil
+	}
+	var audio map[string]json.RawMessage
+	if err := json.Unmarshal(audioRaw, &audio); err != nil {
+		return false, fmt.Errorf("%s.audio: parse object: %w", ctx, err)
+	}
+	raw, ok := audio["data"]
+	if !ok || IsJSONNull(raw) {
+		return false, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return false, fmt.Errorf("%s.audio.data: parse string: %w", ctx, err)
+	}
+	if s == "" {
+		return false, nil
+	}
+	if !session.IsEncryptedChunk(s) {
+		return false, fmt.Errorf("%s.audio.data: expected encrypted but not recognised (len=%d prefix=%q)", ctx, len(s), SafePrefix(s, 8))
+	}
+	plaintext, err := session.Decrypt(s)
+	if err != nil {
+		return false, fmt.Errorf("decrypt %s.audio.data: %w", ctx, err)
+	}
+	plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+	audio["data"] = plaintextJSON
+	audioOut, _ := json.Marshal(audio) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	fields["audio"] = audioOut
+	return true, nil
+}
+
+func decryptFunctionObject(obj map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+	changed := false
+	for _, key := range []string{"name", "arguments"} {
+		raw, ok := obj[key]
+		if !ok || IsJSONNull(raw) {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return false, fmt.Errorf("%s.%s: parse string: %w", ctx, key, err)
+		}
+		if s == "" || !session.IsEncryptedChunk(s) {
+			continue
+		}
+		plaintext, err := session.Decrypt(s)
+		if err != nil {
+			return false, fmt.Errorf("decrypt %s.%s: %w", ctx, key, err)
+		}
+		plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+		obj[key] = plaintextJSON
+		changed = true
+	}
+	return changed, nil
+}
+
+func decryptToolCallsField(fields map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+	raw, ok := fields["tool_calls"]
+	if !ok || IsJSONNull(raw) {
+		return false, nil
+	}
+	var calls []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &calls); err != nil {
+		return false, fmt.Errorf("%s.tool_calls: parse array: %w", ctx, err)
+	}
+	changed := false
+	for i := range calls {
+		fnRaw, ok := calls[i]["function"]
+		if !ok || IsJSONNull(fnRaw) {
+			continue
+		}
+		var fn map[string]json.RawMessage
+		if err := json.Unmarshal(fnRaw, &fn); err != nil {
+			return false, fmt.Errorf("%s.tool_calls[%d].function: parse object: %w", ctx, i, err)
+		}
+		c, err := decryptFunctionObject(fn, session, fmt.Sprintf("%s.tool_calls[%d].function", ctx, i))
+		if err != nil {
+			return false, err
+		}
+		if c {
+			fnOut, _ := json.Marshal(fn) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+			calls[i]["function"] = fnOut
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	callsOut, _ := json.Marshal(calls) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	fields["tool_calls"] = callsOut
+	return true, nil
+}
+
+func decryptFunctionCallField(fields map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+	raw, ok := fields["function_call"]
+	if !ok || IsJSONNull(raw) {
+		return false, nil
+	}
+	if !jsonRawStartsWithToken(raw, '{') {
+		// Deprecated function_call can be a string; keep unchanged.
+		return false, nil
+	}
+	var fc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fc); err != nil {
+		return false, fmt.Errorf("%s.function_call: parse object: %w", ctx, err)
+	}
+	changed, err := decryptFunctionObject(fc, session, ctx+".function_call")
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
+	}
+	fcOut, _ := json.Marshal(fc) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	fields["function_call"] = fcOut
+	return true, nil
+}
+
+func decryptChoiceLogprobs(choice map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+	raw, ok := choice["logprobs"]
+	if !ok || IsJSONNull(raw) {
+		return false, nil
+	}
+	if !jsonRawStartsWithToken(raw, '{') {
+		return false, nil
+	}
+	var logprobs map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &logprobs); err != nil {
+		return false, fmt.Errorf("%s.logprobs: parse object: %w", ctx, err)
+	}
+	changed := false
+	for _, key := range []string{"content", "refusal"} {
+		entriesRaw, ok := logprobs[key]
+		if !ok || IsJSONNull(entriesRaw) {
+			continue
+		}
+		var entries []map[string]json.RawMessage
+		if err := json.Unmarshal(entriesRaw, &entries); err != nil {
+			return false, fmt.Errorf("%s.logprobs.%s: parse array: %w", ctx, key, err)
+		}
+		for i := range entries {
+			entryChanged, err := decryptLogprobsTokenEntry(entries[i], session, fmt.Sprintf("%s.logprobs.%s[%d]", ctx, key, i))
+			if err != nil {
+				return false, err
+			}
+			if entryChanged {
+				changed = true
+			}
+		}
+		entriesOut, _ := json.Marshal(entries) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+		logprobs[key] = entriesOut
+	}
+	if !changed {
+		return false, nil
+	}
+	logprobsOut, _ := json.Marshal(logprobs) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	choice["logprobs"] = logprobsOut
+	return true, nil
+}
+
+func decryptLogprobsTokenEntry(entry map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+	changed := false
+	if c, err := decryptMaybeEncryptedStringField(entry, "token", session, ctx); err != nil {
+		return false, err
+	} else if c {
+		changed = true
+	}
+	if c, err := decryptLogprobsBytesField(entry, session, ctx); err != nil {
+		return false, err
+	} else if c {
+		changed = true
+	}
+	topRaw, ok := entry["top_logprobs"]
+	if !ok || IsJSONNull(topRaw) {
+		return changed, nil
+	}
+	var top []map[string]json.RawMessage
+	if err := json.Unmarshal(topRaw, &top); err != nil {
+		return false, fmt.Errorf("%s.top_logprobs: parse array: %w", ctx, err)
+	}
+	for i := range top {
+		c, err := decryptLogprobsTokenEntry(top[i], session, fmt.Sprintf("%s.top_logprobs[%d]", ctx, i))
+		if err != nil {
+			return false, err
+		}
+		if c {
+			changed = true
+		}
+	}
+	topOut, _ := json.Marshal(top) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	entry["top_logprobs"] = topOut
+	return changed, nil
+}
+
+func decryptMaybeEncryptedStringField(obj map[string]json.RawMessage, key string, session Decryptor, ctx string) (bool, error) {
+	raw, ok := obj[key]
+	if !ok || IsJSONNull(raw) {
+		return false, nil
+	}
+	if !jsonRawStartsWithToken(raw, '"') {
+		return false, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return false, fmt.Errorf("parse %s.%s as string: %w", ctx, key, err)
+	}
+	if s == "" || !session.IsEncryptedChunk(s) {
+		return false, nil
+	}
+	plaintext, err := session.Decrypt(s)
+	if err != nil {
+		return false, fmt.Errorf("decrypt %s.%s: %w", ctx, key, err)
+	}
+	plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+	obj[key] = plaintextJSON
+	return true, nil
+}
+
+func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+	raw, ok := entry["bytes"]
+	if !ok || IsJSONNull(raw) {
+		return false, nil
+	}
+	if !jsonRawStartsWithToken(raw, '"') {
+		// Plaintext bytes are usually JSON arrays, so only attempt string decryptions.
+		return false, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return false, fmt.Errorf("parse %s.bytes as string: %w", ctx, err)
+	}
+	if s == "" || !session.IsEncryptedChunk(s) {
+		return false, nil
+	}
+	plaintext, err := session.Decrypt(s)
+	if err != nil {
+		return false, fmt.Errorf("decrypt %s.bytes: %w", ctx, err)
+	}
+	if json.Valid(plaintext) {
+		entry["bytes"] = json.RawMessage(plaintext)
+	} else {
+		plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+		entry["bytes"] = plaintextJSON
+	}
+	return true, nil
+}
+
+func decryptChatObject(fields map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+	changed := false
+	if c, err := decryptDeltaFields(fields, session, ctx); err != nil {
+		return false, err
+	} else if c {
+		changed = true
+	}
+	if c, err := decryptAudioDataField(fields, session, ctx); err != nil {
+		return false, err
+	} else if c {
+		changed = true
+	}
+	if c, err := decryptToolCallsField(fields, session, ctx); err != nil {
+		return false, err
+	} else if c {
+		changed = true
+	}
+	if c, err := decryptFunctionCallField(fields, session, ctx); err != nil {
+		return false, err
+	} else if c {
+		changed = true
+	}
+	return changed, nil
+}
+
+func jsonRawStartsWithToken(raw json.RawMessage, token byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == token
 }
 
 // DecryptSSEChunk parses one SSE data JSON payload, decrypts all encrypted
@@ -147,9 +423,14 @@ func DecryptSSEChunk(data string, session Decryptor) (string, error) {
 		return "", fmt.Errorf("parse delta object: %w", err)
 	}
 
-	changed, err := decryptDeltaFields(delta, session, "delta")
+	changed, err := decryptChatObject(delta, session, "delta")
 	if err != nil {
 		return "", err
+	}
+	if c, err := decryptChoiceLogprobs(choices[0], session, "choice[0]"); err != nil {
+		return "", err
+	} else if c {
+		changed = true
 	}
 	if !changed {
 		return data, nil
@@ -198,6 +479,10 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 		return nil, fmt.Errorf("parse delta object: %w", err)
 	}
 
+	if _, err := decryptChatObject(delta, session, "delta"); err != nil {
+		return nil, err
+	}
+
 	result := make(map[string]string)
 	for key, raw := range delta {
 		var s string
@@ -207,14 +492,11 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 		if NonEncryptedFields[key] {
 			continue
 		}
-		if !session.IsEncryptedChunk(s) {
-			return nil, fmt.Errorf("delta.%s: expected encrypted but not recognised (len=%d prefix=%q)", key, len(s), SafePrefix(s, 8))
+		if OptionalEncryptedFields[key] && !session.IsEncryptedChunk(s) {
+			result[key] = s
+			continue
 		}
-		plaintext, err := session.Decrypt(s)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt delta.%s: %w", key, err)
-		}
-		result[key] = string(plaintext)
+		result[key] = s
 	}
 
 	if len(result) == 0 {
@@ -282,9 +564,14 @@ func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor) (json
 			return nil, fmt.Errorf("parse choice[%d].message: %w", i, err)
 		}
 
-		c, err := decryptDeltaFields(msg, session, fmt.Sprintf("choice[%d].message", i))
+		c, err := decryptChatObject(msg, session, fmt.Sprintf("choice[%d].message", i))
 		if err != nil {
 			return nil, err
+		}
+		if lc, err := decryptChoiceLogprobs(choices[i], session, fmt.Sprintf("choice[%d]", i)); err != nil {
+			return nil, err
+		} else if lc {
+			c = true
 		}
 		if !c {
 			continue
@@ -387,7 +674,7 @@ func ReassembleNonStream(body io.Reader, session Decryptor) ([]byte, StreamStats
 			b.WriteString(v)
 		}
 
-		meta, err := extractChunkMeta(data)
+		meta, err := extractChunkMeta(data, session)
 		if err != nil {
 			return nil, stats, fmt.Errorf("reassemble: %w", err)
 		}
@@ -470,7 +757,7 @@ type chunkMeta struct {
 
 // extractChunkMeta extracts tool_calls and finish_reason from the first
 // choice's delta in an SSE chunk.
-func extractChunkMeta(data string) (chunkMeta, error) {
+func extractChunkMeta(data string, session Decryptor) (chunkMeta, error) {
 	var parsed struct {
 		Choices []struct {
 			Delta struct {
@@ -485,11 +772,46 @@ func extractChunkMeta(data string) (chunkMeta, error) {
 	var m chunkMeta
 	if len(parsed.Choices) > 0 {
 		m.ToolCalls = parsed.Choices[0].Delta.ToolCalls
+		if session != nil {
+			for i := range m.ToolCalls {
+				decrypted, err := decryptToolCallMetaRaw(m.ToolCalls[i], session, fmt.Sprintf("delta.tool_calls[%d]", i))
+				if err != nil {
+					return chunkMeta{}, err
+				}
+				m.ToolCalls[i] = decrypted
+			}
+		}
 		if parsed.Choices[0].FinishReason != nil {
 			m.FinishReason = *parsed.Choices[0].FinishReason
 		}
 	}
 	return m, nil
+}
+
+func decryptToolCallMetaRaw(raw json.RawMessage, session Decryptor, ctx string) (json.RawMessage, error) {
+	var tc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &tc); err != nil {
+		return nil, fmt.Errorf("%s: parse object: %w", ctx, err)
+	}
+	fnRaw, ok := tc["function"]
+	if !ok || IsJSONNull(fnRaw) {
+		return raw, nil
+	}
+	var fn map[string]json.RawMessage
+	if err := json.Unmarshal(fnRaw, &fn); err != nil {
+		return nil, fmt.Errorf("%s.function: parse object: %w", ctx, err)
+	}
+	changed, err := decryptFunctionObject(fn, session, ctx+".function")
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return raw, nil
+	}
+	fnOut, _ := json.Marshal(fn) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	tc["function"] = fnOut
+	tcOut, _ := json.Marshal(tc) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	return tcOut, nil
 }
 
 // toolCallDelta is the streaming delta format for a single tool call entry.

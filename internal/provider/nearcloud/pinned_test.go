@@ -1283,6 +1283,9 @@ func TestEncryptBody_UsesRequestSigningKey(t *testing.T) {
 	if headers.Get("X-Encryption-Version") != "2" {
 		t.Errorf("X-Encryption-Version = %q, want 2", headers.Get("X-Encryption-Version"))
 	}
+	if headers.Get("X-Encrypt-All-Fields") != "true" {
+		t.Errorf("X-Encrypt-All-Fields = %q, want true", headers.Get("X-Encrypt-All-Fields"))
+	}
 }
 
 func TestHandlePinned_GatewayBlockedModelPasses(t *testing.T) {

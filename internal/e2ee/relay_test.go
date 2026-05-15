@@ -862,6 +862,186 @@ func TestDecryptSSEChunk_PreservesNonDeltaFields(t *testing.T) {
 	}
 }
 
+func TestDecryptSSEChunk_EncryptedExtendedDeltaFields(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "hello", session)
+	encRefusal := encryptForClient(t, "not allowed", session)
+	encFnName := encryptForClient(t, "get_weather", session)
+	encFnArgs := encryptForClient(t, `{"city":"SF"}`, session)
+	encAudio := encryptForClient(t, "BASE64AUDIO", session)
+	encFCName := encryptForClient(t, "legacy_fn", session)
+	encFCArgs := encryptForClient(t, `{"k":1}`, session)
+
+	chunk := map[string]any{
+		"id":    "chatcmpl-1",
+		"model": "test-model",
+		"choices": []map[string]any{
+			{
+				"index": 0,
+				"delta": map[string]any{
+					"role":    "assistant",
+					"content": encContent,
+					"refusal": encRefusal,
+					"audio": map[string]any{
+						"data": encAudio,
+					},
+					"tool_calls": []map[string]any{
+						{
+							"index": 0,
+							"function": map[string]any{
+								"name":      encFnName,
+								"arguments": encFnArgs,
+							},
+						},
+					},
+					"function_call": map[string]any{
+						"name":      encFCName,
+						"arguments": encFCArgs,
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(chunk)
+	if err != nil {
+		t.Fatalf("marshal chunk: %v", err)
+	}
+
+	decrypted, err := DecryptSSEChunk(string(b), session)
+	if err != nil {
+		t.Fatalf("DecryptSSEChunk: %v", err)
+	}
+
+	var out struct {
+		Choices []struct {
+			Delta struct {
+				Content      string `json:"content"`
+				Refusal      string `json:"refusal"`
+				FunctionCall struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function_call"`
+				Audio struct {
+					Data string `json:"data"`
+				} `json:"audio"`
+				ToolCalls []struct {
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(decrypted), &out); err != nil {
+		t.Fatalf("unmarshal decrypted chunk: %v", err)
+	}
+	if out.Choices[0].Delta.Content != "hello" {
+		t.Errorf("content = %q, want hello", out.Choices[0].Delta.Content)
+	}
+	if out.Choices[0].Delta.Refusal != "not allowed" {
+		t.Errorf("refusal = %q, want not allowed", out.Choices[0].Delta.Refusal)
+	}
+	if out.Choices[0].Delta.Audio.Data != "BASE64AUDIO" {
+		t.Errorf("audio.data = %q, want BASE64AUDIO", out.Choices[0].Delta.Audio.Data)
+	}
+	if out.Choices[0].Delta.FunctionCall.Name != "legacy_fn" {
+		t.Errorf("function_call.name = %q, want legacy_fn", out.Choices[0].Delta.FunctionCall.Name)
+	}
+	if out.Choices[0].Delta.FunctionCall.Arguments != `{"k":1}` {
+		t.Errorf("function_call.arguments = %q, want {\"k\":1}", out.Choices[0].Delta.FunctionCall.Arguments)
+	}
+	if got := out.Choices[0].Delta.ToolCalls[0].Function.Name; got != "get_weather" {
+		t.Errorf("tool_calls[0].function.name = %q, want get_weather", got)
+	}
+	if got := out.Choices[0].Delta.ToolCalls[0].Function.Arguments; got != `{"city":"SF"}` {
+		t.Errorf("tool_calls[0].function.arguments = %q, want {\"city\":\"SF\"}", got)
+	}
+}
+
+func TestDecryptNonStreamResponse_EncryptedLogprobs(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "ok", session)
+	encToken := encryptForClient(t, "hello", session)
+	encBytes := encryptForClient(t, "[104,101,108,108,111]", session)
+	encTopToken := encryptForClient(t, "world", session)
+	encTopBytes := encryptForClient(t, "[119,111,114,108,100]", session)
+
+	body := map[string]any{
+		"id":    "chatcmpl-1",
+		"model": "test-model",
+		"choices": []map[string]any{
+			{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": encContent,
+				},
+				"logprobs": map[string]any{
+					"content": []map[string]any{
+						{
+							"token": encToken,
+							"bytes": encBytes,
+							"top_logprobs": []map[string]any{
+								{
+									"token": encTopToken,
+									"bytes": encTopBytes,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	decrypted, err := DecryptNonStreamResponse(b, session)
+	if err != nil {
+		t.Fatalf("DecryptNonStreamResponse: %v", err)
+	}
+
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Logprobs struct {
+				Content []struct {
+					Token       string `json:"token"`
+					Bytes       []int  `json:"bytes"`
+					TopLogprobs []struct {
+						Token string `json:"token"`
+						Bytes []int  `json:"bytes"`
+					} `json:"top_logprobs"`
+				} `json:"content"`
+			} `json:"logprobs"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(decrypted, &out); err != nil {
+		t.Fatalf("unmarshal decrypted response: %v", err)
+	}
+	if out.Choices[0].Message.Content != "ok" {
+		t.Errorf("content = %q, want ok", out.Choices[0].Message.Content)
+	}
+	if out.Choices[0].Logprobs.Content[0].Token != "hello" {
+		t.Errorf("token = %q, want hello", out.Choices[0].Logprobs.Content[0].Token)
+	}
+	if len(out.Choices[0].Logprobs.Content[0].Bytes) != 5 || out.Choices[0].Logprobs.Content[0].Bytes[0] != 104 {
+		t.Errorf("bytes = %v, want [104 101 108 108 111]", out.Choices[0].Logprobs.Content[0].Bytes)
+	}
+	if out.Choices[0].Logprobs.Content[0].TopLogprobs[0].Token != "world" {
+		t.Errorf("top token = %q, want world", out.Choices[0].Logprobs.Content[0].TopLogprobs[0].Token)
+	}
+}
+
 func TestDecryptDeltaFields_NonEncryptedSkipped(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
