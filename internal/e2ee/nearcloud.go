@@ -198,15 +198,16 @@ func IsEncryptedChunkXChaCha20(s string) bool {
 	return true
 }
 
-// EncryptChatMessagesNearCloud creates a NearCloud E2EE session, encrypts each
-// message's content, and forces stream=true. The signingKey is the model's
-// Ed25519 public key (64 hex chars) from the attestation response.
+// EncryptChatMessagesNearCloud creates a NearCloud E2EE session, encrypts chat
+// request fields supported by inference-proxy's X-Encrypt-All-Fields mode, and
+// forces stream=true. The signingKey is the model's Ed25519 public key
+// (64 hex chars) from the attestation response.
 //
-// All message fields (tool_calls, tool_call_id, name, reasoning_content, etc.)
-// are preserved in the output. Only the content field is encrypted — matching
-// the fields that the inference-proxy's decrypt_chat_message_fields decrypts.
-// Messages with null content (e.g. assistant tool-call messages) pass through
-// with content unchanged.
+// Encrypted message fields: content, reasoning_content, reasoning, refusal,
+// name, audio.data, tool_calls[].function.{name,arguments}, and
+// function_call.{name,arguments}. Encrypted top-level fields: tools[].function
+// name/description/parameters, tool_choice.function.name,
+// function_call.name (object form only). Other fields are preserved unchanged.
 func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
 	session, err := NewNearCloudSession()
 	if err != nil {
@@ -232,10 +233,15 @@ func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *Near
 	}
 
 	for i, msg := range messages {
-		if err := encryptMessageContent(msg, i, session); err != nil {
+		if err := encryptMessageFields(msg, i, session); err != nil {
 			session.Zero()
 			return nil, nil, err
 		}
+	}
+
+	if err := encryptTopLevelFields(full, session); err != nil {
+		session.Zero()
+		return nil, nil, err
 	}
 
 	messagesJSON, _ := json.Marshal(messages) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
@@ -244,6 +250,35 @@ func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *Near
 
 	out, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, session, nil
+}
+
+// encryptMessageFields encrypts all supported fields of a single chat message.
+func encryptMessageFields(msg map[string]json.RawMessage, idx int, session *NearCloudSession) error {
+	if err := encryptMessageContent(msg, idx, session); err != nil {
+		return err
+	}
+	if err := encryptOptionalStringField(msg, "reasoning_content", session); err != nil {
+		return fmt.Errorf("message %d reasoning_content: %w", idx, err)
+	}
+	if err := encryptOptionalStringField(msg, "reasoning", session); err != nil {
+		return fmt.Errorf("message %d reasoning: %w", idx, err)
+	}
+	if err := encryptOptionalStringField(msg, "refusal", session); err != nil {
+		return fmt.Errorf("message %d refusal: %w", idx, err)
+	}
+	if err := encryptOptionalStringField(msg, "name", session); err != nil {
+		return fmt.Errorf("message %d name: %w", idx, err)
+	}
+	if err := encryptAudioDataField(msg, idx, session); err != nil {
+		return err
+	}
+	if err := encryptToolCallsField(msg, idx, session); err != nil {
+		return err
+	}
+	if err := encryptFunctionCallField(msg, idx, session); err != nil {
+		return err
+	}
+	return nil
 }
 
 // encryptMessageContent encrypts the content field of a single chat message
@@ -271,6 +306,226 @@ func encryptMessageContent(msg map[string]json.RawMessage, idx int, session *Nea
 	}
 	ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
 	msg["content"] = ctJSON
+	return nil
+}
+
+func encryptTopLevelFields(full map[string]json.RawMessage, session *NearCloudSession) error {
+	if err := encryptToolsDefinitions(full, session); err != nil {
+		return err
+	}
+	if err := encryptToolChoiceFunctionName(full, session); err != nil {
+		return err
+	}
+	if err := encryptTopLevelFunctionCallName(full, session); err != nil {
+		return err
+	}
+	return nil
+}
+
+func encryptToolsDefinitions(full map[string]json.RawMessage, session *NearCloudSession) error {
+	toolsRaw, ok := full["tools"]
+	if !ok || IsJSONNull(toolsRaw) {
+		return nil
+	}
+	var tools []map[string]json.RawMessage
+	if err := json.Unmarshal(toolsRaw, &tools); err != nil {
+		return fmt.Errorf("parse tools: %w", err)
+	}
+	for i := range tools {
+		fnRaw, ok := tools[i]["function"]
+		if !ok || IsJSONNull(fnRaw) {
+			continue
+		}
+		var fn map[string]json.RawMessage
+		if err := json.Unmarshal(fnRaw, &fn); err != nil {
+			return fmt.Errorf("parse tools[%d].function: %w", i, err)
+		}
+		if err := encryptOptionalStringField(fn, "name", session); err != nil {
+			return fmt.Errorf("tools[%d].function.name: %w", i, err)
+		}
+		if err := encryptOptionalStringField(fn, "description", session); err != nil {
+			return fmt.Errorf("tools[%d].function.description: %w", i, err)
+		}
+		if err := encryptParametersField(fn, session); err != nil {
+			return fmt.Errorf("tools[%d].function.parameters: %w", i, err)
+		}
+		fnOut, _ := json.Marshal(fn) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+		tools[i]["function"] = fnOut
+	}
+	toolsOut, _ := json.Marshal(tools) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	full["tools"] = toolsOut
+	return nil
+}
+
+func encryptToolChoiceFunctionName(full map[string]json.RawMessage, session *NearCloudSession) error {
+	tcRaw, ok := full["tool_choice"]
+	if !ok || IsJSONNull(tcRaw) {
+		return nil
+	}
+	if !jsonRawStartsWith(tcRaw, '{') {
+		// tool_choice can be a string ("auto", "none", "required").
+		return nil
+	}
+	var tc map[string]json.RawMessage
+	if err := json.Unmarshal(tcRaw, &tc); err != nil {
+		return fmt.Errorf("parse tool_choice: %w", err)
+	}
+	fnRaw, ok := tc["function"]
+	if !ok || IsJSONNull(fnRaw) {
+		return nil
+	}
+	var fn map[string]json.RawMessage
+	if err := json.Unmarshal(fnRaw, &fn); err != nil {
+		return fmt.Errorf("parse tool_choice.function: %w", err)
+	}
+	if err := encryptOptionalStringField(fn, "name", session); err != nil {
+		return fmt.Errorf("tool_choice.function.name: %w", err)
+	}
+	fnOut, _ := json.Marshal(fn) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	tc["function"] = fnOut
+	tcOut, _ := json.Marshal(tc) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	full["tool_choice"] = tcOut
+	return nil
+}
+
+func encryptTopLevelFunctionCallName(full map[string]json.RawMessage, session *NearCloudSession) error {
+	fcRaw, ok := full["function_call"]
+	if !ok || IsJSONNull(fcRaw) {
+		return nil
+	}
+	if !jsonRawStartsWith(fcRaw, '{') {
+		// function_call can be a string ("auto"/"none"). Keep unchanged.
+		return nil
+	}
+	var fc map[string]json.RawMessage
+	if err := json.Unmarshal(fcRaw, &fc); err != nil {
+		return fmt.Errorf("parse function_call: %w", err)
+	}
+	if err := encryptOptionalStringField(fc, "name", session); err != nil {
+		return fmt.Errorf("function_call.name: %w", err)
+	}
+	fcOut, _ := json.Marshal(fc) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	full["function_call"] = fcOut
+	return nil
+}
+
+func encryptAudioDataField(msg map[string]json.RawMessage, idx int, session *NearCloudSession) error {
+	audioRaw, ok := msg["audio"]
+	if !ok || IsJSONNull(audioRaw) {
+		return nil
+	}
+	var audio map[string]json.RawMessage
+	if err := json.Unmarshal(audioRaw, &audio); err != nil {
+		return fmt.Errorf("message %d audio: %w", idx, err)
+	}
+	if err := encryptOptionalStringField(audio, "data", session); err != nil {
+		return fmt.Errorf("message %d audio.data: %w", idx, err)
+	}
+	audioOut, _ := json.Marshal(audio) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	msg["audio"] = audioOut
+	return nil
+}
+
+func encryptToolCallsField(msg map[string]json.RawMessage, idx int, session *NearCloudSession) error {
+	toolCallsRaw, ok := msg["tool_calls"]
+	if !ok || IsJSONNull(toolCallsRaw) {
+		return nil
+	}
+	var toolCalls []map[string]json.RawMessage
+	if err := json.Unmarshal(toolCallsRaw, &toolCalls); err != nil {
+		return fmt.Errorf("message %d tool_calls: %w", idx, err)
+	}
+	for j := range toolCalls {
+		fnRaw, ok := toolCalls[j]["function"]
+		if !ok || IsJSONNull(fnRaw) {
+			continue
+		}
+		var fn map[string]json.RawMessage
+		if err := json.Unmarshal(fnRaw, &fn); err != nil {
+			return fmt.Errorf("message %d tool_calls[%d].function: %w", idx, j, err)
+		}
+		if err := encryptOptionalStringField(fn, "name", session); err != nil {
+			return fmt.Errorf("message %d tool_calls[%d].function.name: %w", idx, j, err)
+		}
+		if err := encryptOptionalStringField(fn, "arguments", session); err != nil {
+			return fmt.Errorf("message %d tool_calls[%d].function.arguments: %w", idx, j, err)
+		}
+		fnOut, _ := json.Marshal(fn) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+		toolCalls[j]["function"] = fnOut
+	}
+	toolCallsOut, _ := json.Marshal(toolCalls) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	msg["tool_calls"] = toolCallsOut
+	return nil
+}
+
+func encryptFunctionCallField(msg map[string]json.RawMessage, idx int, session *NearCloudSession) error {
+	fcRaw, ok := msg["function_call"]
+	if !ok || IsJSONNull(fcRaw) {
+		return nil
+	}
+	if !jsonRawStartsWith(fcRaw, '{') {
+		// Deprecated function_call can be a string ("auto"/"none"). Keep unchanged.
+		return nil
+	}
+	var fc map[string]json.RawMessage
+	if err := json.Unmarshal(fcRaw, &fc); err != nil {
+		return fmt.Errorf("message %d function_call: %w", idx, err)
+	}
+	if err := encryptOptionalStringField(fc, "name", session); err != nil {
+		return fmt.Errorf("message %d function_call.name: %w", idx, err)
+	}
+	if err := encryptOptionalStringField(fc, "arguments", session); err != nil {
+		return fmt.Errorf("message %d function_call.arguments: %w", idx, err)
+	}
+	fcOut, _ := json.Marshal(fc) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	msg["function_call"] = fcOut
+	return nil
+}
+
+func encryptOptionalStringField(obj map[string]json.RawMessage, key string, session *NearCloudSession) error {
+	raw, ok := obj[key]
+	if !ok || IsJSONNull(raw) {
+		return nil
+	}
+	var plaintext string
+	if err := json.Unmarshal(raw, &plaintext); err != nil {
+		return fmt.Errorf("parse string field %q: %w", key, err)
+	}
+	ct, err := EncryptXChaCha20([]byte(plaintext), session.ModelX25519Pub())
+	if err != nil {
+		return fmt.Errorf("encrypt field %q: %w", key, err)
+	}
+	ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
+	obj[key] = ctJSON
+	return nil
+}
+
+func jsonRawStartsWith(raw json.RawMessage, token byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == token
+}
+
+func encryptParametersField(fn map[string]json.RawMessage, session *NearCloudSession) error {
+	paramsRaw, ok := fn["parameters"]
+	if !ok || IsJSONNull(paramsRaw) {
+		return nil
+	}
+	var plaintext []byte
+	if len(paramsRaw) > 0 && paramsRaw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(paramsRaw, &s); err != nil {
+			return fmt.Errorf("parse string parameters: %w", err)
+		}
+		plaintext = []byte(s)
+	} else {
+		plaintext = paramsRaw
+	}
+	ct, err := EncryptXChaCha20(plaintext, session.ModelX25519Pub())
+	if err != nil {
+		return fmt.Errorf("encrypt parameters: %w", err)
+	}
+	ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
+	fn["parameters"] = ctJSON
 	return nil
 }
 

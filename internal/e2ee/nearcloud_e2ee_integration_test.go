@@ -199,6 +199,7 @@ func e2eeRequest(t *testing.T, baseURL, path string, body []byte, contentType st
 	req.Header.Set("X-Signing-Algo", "ed25519")
 	req.Header.Set("X-Client-Pub-Key", session.ClientEd25519PubHex())
 	req.Header.Set("X-Encryption-Version", "2")
+	req.Header.Set("X-Encrypt-All-Fields", "true")
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
