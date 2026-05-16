@@ -629,9 +629,10 @@ func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCl
 
 	inputRaw, ok := full["input"]
 	if ok && !IsJSONNull(inputRaw) {
-		// Input can be a string, array of strings, or array of integers/token arrays.
-		// We only encrypt string elements and string-form input.
-		if len(inputRaw) > 0 && inputRaw[0] == '"' {
+		// Input can be a string or an array. In E2EE mode we currently only
+		// support string payloads; unsupported element types fail closed.
+		switch {
+		case len(inputRaw) > 0 && inputRaw[0] == '"':
 			// Single string: encrypt it directly.
 			var s string
 			if err := json.Unmarshal(inputRaw, &s); err != nil {
@@ -645,8 +646,8 @@ func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCl
 			}
 			ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
 			full["input"] = ctJSON
-		} else if len(inputRaw) > 0 && inputRaw[0] == '[' {
-			// Array: encrypt only string elements.
+		case len(inputRaw) > 0 && inputRaw[0] == '[':
+			// Array: every element must be a string.
 			var arr []json.RawMessage
 			if err := json.Unmarshal(inputRaw, &arr); err != nil {
 				session.Zero()
@@ -654,7 +655,8 @@ func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCl
 			}
 			for i, item := range arr {
 				if len(item) == 0 || item[0] != '"' {
-					continue // not a string element, skip
+					session.Zero()
+					return nil, nil, fmt.Errorf("input[%d]: unsupported embeddings input element type for E2EE", i)
 				}
 				var s string
 				if err := json.Unmarshal(item, &s); err != nil {
@@ -671,6 +673,9 @@ func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCl
 			}
 			arrOut, _ := json.Marshal(arr) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 			full["input"] = arrOut
+		default:
+			session.Zero()
+			return nil, nil, errors.New("unsupported embeddings input type for E2EE")
 		}
 	}
 

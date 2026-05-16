@@ -317,6 +317,9 @@ func TestReassembleNonStream(t *testing.T) {
 func TestReassembleNonStream_ToolCalls(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
+	encName := encryptForClient(t, "get_weather", session)
+	encArgsPart1 := encryptForClient(t, `{"location"`, session)
+	encArgsPart2 := encryptForClient(t, `: "SF"}`, session)
 
 	// Build SSE stream with reasoning (encrypted) then tool_calls (plaintext).
 	reasoning := encryptForClient(t, "Use the weather tool.", session)
@@ -345,7 +348,7 @@ func TestReassembleNonStream_ToolCalls(t *testing.T) {
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{{
 					"id": "call-abc", "type": "function", "index": 0,
-					"function": map[string]string{"name": "get_weather", "arguments": ""},
+					"function": map[string]string{"name": encName, "arguments": ""},
 				}},
 			},
 		}},
@@ -361,7 +364,7 @@ func TestReassembleNonStream_ToolCalls(t *testing.T) {
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{{
 					"index":    0,
-					"function": map[string]string{"arguments": `{"location"`},
+					"function": map[string]string{"arguments": encArgsPart1},
 				}},
 			},
 		}},
@@ -377,7 +380,7 @@ func TestReassembleNonStream_ToolCalls(t *testing.T) {
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{{
 					"index":    0,
-					"function": map[string]string{"arguments": `: "SF"}`},
+					"function": map[string]string{"arguments": encArgsPart2},
 				}},
 			},
 		}},
@@ -452,6 +455,10 @@ func TestReassembleNonStream_ToolCalls(t *testing.T) {
 func TestReassembleNonStream_MultipleToolCalls(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
+	encNameA := encryptForClient(t, "fn_a", session)
+	encNameB := encryptForClient(t, "fn_b", session)
+	encArgsA := encryptForClient(t, `{"x":1}`, session)
+	encArgsB := encryptForClient(t, `{"y":2}`, session)
 
 	var sb strings.Builder
 
@@ -462,8 +469,8 @@ func TestReassembleNonStream_MultipleToolCalls(t *testing.T) {
 			"index": 0,
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{
-					{"id": "call-1", "type": "function", "index": 0, "function": map[string]string{"name": "fn_a", "arguments": ""}},
-					{"id": "call-2", "type": "function", "index": 1, "function": map[string]string{"name": "fn_b", "arguments": ""}},
+					{"id": "call-1", "type": "function", "index": 0, "function": map[string]string{"name": encNameA, "arguments": ""}},
+					{"id": "call-2", "type": "function", "index": 1, "function": map[string]string{"name": encNameB, "arguments": ""}},
 				},
 			},
 		}},
@@ -478,8 +485,8 @@ func TestReassembleNonStream_MultipleToolCalls(t *testing.T) {
 			"index": 0,
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{
-					{"index": 0, "function": map[string]string{"arguments": `{"x":1}`}},
-					{"index": 1, "function": map[string]string{"arguments": `{"y":2}`}},
+					{"index": 0, "function": map[string]string{"arguments": encArgsA}},
+					{"index": 1, "function": map[string]string{"arguments": encArgsB}},
 				},
 			},
 		}},
@@ -1061,6 +1068,141 @@ func TestDecryptDeltaFields_NonEncryptedSkipped(t *testing.T) {
 		t.Error("expected no changes for non-encrypted fields")
 	}
 	t.Logf("non-encrypted fields correctly skipped")
+}
+
+func TestDecryptSSEChunk_FunctionCallPlaintextRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encArgs := encryptForClient(t, `{"k":1}`, session)
+	chunk := map[string]any{
+		"choices": []map[string]any{
+			{
+				"delta": map[string]any{
+					"function_call": map[string]any{
+						"name":      "legacy_fn",
+						"arguments": encArgs,
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(chunk)
+	if err != nil {
+		t.Fatalf("marshal chunk: %v", err)
+	}
+
+	_, err = DecryptSSEChunk(string(b), session)
+	if err == nil {
+		t.Fatal("expected error for plaintext function_call.name")
+	}
+	if !strings.Contains(err.Error(), "function_call.name: expected encrypted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptSSEChunk_ToolCallPlaintextArgumentsRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encName := encryptForClient(t, "get_weather", session)
+	chunk := map[string]any{
+		"choices": []map[string]any{
+			{
+				"delta": map[string]any{
+					"tool_calls": []map[string]any{
+						{
+							"function": map[string]any{
+								"name":      encName,
+								"arguments": `{"city":"SF"}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(chunk)
+	if err != nil {
+		t.Fatalf("marshal chunk: %v", err)
+	}
+
+	_, err = DecryptSSEChunk(string(b), session)
+	if err == nil {
+		t.Fatal("expected error for plaintext tool_calls function.arguments")
+	}
+	if !strings.Contains(err.Error(), "tool_calls[0].function.arguments: expected encrypted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponse_LogprobsPlaintextTokenRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "ok", session)
+	body := map[string]any{
+		"choices": []map[string]any{
+			{
+				"message": map[string]any{"content": encContent},
+				"logprobs": map[string]any{
+					"content": []map[string]any{
+						{
+							"token": "plaintext-token",
+							"bytes": []int{112, 116},
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error for plaintext logprobs token")
+	}
+	if !strings.Contains(err.Error(), "logprobs.content[0].token: expected encrypted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponse_LogprobsPlaintextBytesStringRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "ok", session)
+	encToken := encryptForClient(t, "hello", session)
+	body := map[string]any{
+		"choices": []map[string]any{
+			{
+				"message": map[string]any{"content": encContent},
+				"logprobs": map[string]any{
+					"content": []map[string]any{
+						{
+							"token": encToken,
+							"bytes": "plaintext-bytes",
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error for plaintext logprobs bytes string")
+	}
+	if !strings.Contains(err.Error(), "logprobs.content[0].bytes: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 // benchVeniceSession creates a Venice session for benchmarks (no *testing.T).

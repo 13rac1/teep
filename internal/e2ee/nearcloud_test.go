@@ -1013,6 +1013,71 @@ func TestEncryptImagePromptNearCloud_InvalidBody(t *testing.T) {
 	}
 }
 
+func TestEncryptEmbeddingsNearCloud_StringArray(t *testing.T) {
+	pubHex, seed := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":["hello","world"]}`)
+
+	encBody, session, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptEmbeddingsNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	var arr []string
+	if err := json.Unmarshal(out["input"], &arr); err != nil {
+		t.Fatalf("unmarshal input array: %v", err)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("input length = %d, want 2", len(arr))
+	}
+	x25519Priv, err := ed25519SeedToX25519(seed)
+	if err != nil {
+		t.Fatalf("derive x25519: %v", err)
+	}
+	for i, want := range []string{"hello", "world"} {
+		if !IsEncryptedChunkXChaCha20(arr[i]) {
+			t.Fatalf("input[%d] is not encrypted: %q", i, SafePrefix(arr[i], 20))
+		}
+		pt, err := DecryptXChaCha20(arr[i], x25519Priv)
+		if err != nil {
+			t.Fatalf("decrypt input[%d]: %v", i, err)
+		}
+		if string(pt) != want {
+			t.Errorf("decrypted input[%d] = %q, want %q", i, pt, want)
+		}
+	}
+}
+
+func TestEncryptEmbeddingsNearCloud_UnsupportedArrayElementType(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":["hello",123]}`)
+
+	_, _, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err == nil {
+		t.Fatal("expected error for non-string input array element")
+	}
+	if !strings.Contains(err.Error(), "unsupported embeddings input element type") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEncryptEmbeddingsNearCloud_UnsupportedInputType(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":123}`)
+
+	_, _, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err == nil {
+		t.Fatal("expected error for unsupported input type")
+	}
+	if !strings.Contains(err.Error(), "unsupported embeddings input type") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestContentPlaintext(t *testing.T) {
 	tests := []struct {
 		name    string
