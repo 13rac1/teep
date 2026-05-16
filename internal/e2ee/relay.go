@@ -694,22 +694,26 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor) (
 	}
 
 	changed := false
+	sawEmbedding := false
 	for i, item := range data {
 		embRaw, ok := item["embedding"]
-		if !ok || IsJSONNull(embRaw) {
+		if !ok {
 			continue
+		}
+		sawEmbedding = true
+		if IsJSONNull(embRaw) {
+			return nil, fmt.Errorf("data[%d].embedding: expected encrypted string, got null", i)
 		}
 		// Check if embedding is a string (encrypted form) or array (plaintext).
 		if len(embRaw) == 0 || embRaw[0] != '"' {
-			// Not a string, assume plaintext array -- skip.
-			continue
+			return nil, fmt.Errorf("data[%d].embedding: expected encrypted string", i)
 		}
 		var embStr string
 		if err := json.Unmarshal(embRaw, &embStr); err != nil {
-			continue // not a valid string field
+			return nil, fmt.Errorf("parse data[%d].embedding: %w", i, err)
 		}
 		if !session.IsEncryptedChunk(embStr) {
-			continue // not encrypted
+			return nil, fmt.Errorf("data[%d].embedding: expected encrypted string", i)
 		}
 		plaintext, err := session.Decrypt(embStr)
 		if err != nil {
@@ -726,8 +730,11 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor) (
 		changed = true
 	}
 
-	if !changed {
+	if !sawEmbedding {
 		return nil, nil
+	}
+	if !changed {
+		return nil, errors.New("data.embedding: expected encrypted content")
 	}
 	out, _ := json.Marshal(data) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, nil
@@ -738,34 +745,39 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor) (
 func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
 	var results []map[string]json.RawMessage
 	if err := json.Unmarshal(resultsRaw, &results); err != nil {
-		// Not an array of objects -- skip.
-		return nil, nil //nolint:nilerr // unmarshal error means results is not rerank format
+		return nil, fmt.Errorf("parse results: %w", err)
 	}
 
 	changed := false
 	for i, item := range results {
 		docRaw, ok := item["document"]
-		if !ok || IsJSONNull(docRaw) {
-			continue
+		if !ok {
+			return nil, fmt.Errorf("results[%d].document: missing", i)
+		}
+		if IsJSONNull(docRaw) {
+			return nil, fmt.Errorf("results[%d].document: expected object, got null", i)
 		}
 		// Document is an object with a text field.
 		if len(docRaw) == 0 || docRaw[0] != '{' {
-			continue
+			return nil, fmt.Errorf("results[%d].document: expected object", i)
 		}
 		var doc map[string]json.RawMessage
 		if err := json.Unmarshal(docRaw, &doc); err != nil {
-			continue
+			return nil, fmt.Errorf("parse results[%d].document: %w", i, err)
 		}
 		textRaw, ok := doc["text"]
-		if !ok || IsJSONNull(textRaw) {
-			continue
+		if !ok {
+			return nil, fmt.Errorf("results[%d].document.text: missing", i)
+		}
+		if IsJSONNull(textRaw) {
+			return nil, fmt.Errorf("results[%d].document.text: expected encrypted string, got null", i)
 		}
 		var textStr string
 		if err := json.Unmarshal(textRaw, &textStr); err != nil {
-			continue // not a valid string field
+			return nil, fmt.Errorf("parse results[%d].document.text: %w", i, err)
 		}
 		if !session.IsEncryptedChunk(textStr) {
-			continue // not encrypted
+			return nil, fmt.Errorf("results[%d].document.text: expected encrypted string", i)
 		}
 		plaintext, err := session.Decrypt(textStr)
 		if err != nil {
@@ -795,22 +807,26 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor) (json.
 	}
 
 	changed := false
+	sawScore := false
 	for i, item := range data {
 		scoreRaw, ok := item["score"]
-		if !ok || IsJSONNull(scoreRaw) {
+		if !ok {
 			continue
+		}
+		sawScore = true
+		if IsJSONNull(scoreRaw) {
+			return nil, fmt.Errorf("data[%d].score: expected encrypted string, got null", i)
 		}
 		// Score can be a number or a string (encrypted).
 		if len(scoreRaw) == 0 || scoreRaw[0] != '"' {
-			// Not a string (likely plaintext number) -- skip.
-			continue
+			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
 		}
 		var scoreStr string
 		if err := json.Unmarshal(scoreRaw, &scoreStr); err != nil {
-			continue // not a valid string field
+			return nil, fmt.Errorf("parse data[%d].score: %w", i, err)
 		}
 		if !session.IsEncryptedChunk(scoreStr) {
-			continue // not encrypted
+			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
 		}
 		plaintext, err := session.Decrypt(scoreStr)
 		if err != nil {
@@ -827,8 +843,11 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor) (json.
 		changed = true
 	}
 
-	if !changed {
+	if !sawScore {
 		return nil, nil
+	}
+	if !changed {
+		return nil, errors.New("data.score: expected encrypted content")
 	}
 	out, _ := json.Marshal(data) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, nil
