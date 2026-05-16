@@ -309,7 +309,7 @@ func decryptMaybeEncryptedStringField(obj map[string]json.RawMessage, key string
 		return false, nil
 	}
 	if !jsonRawStartsWithToken(raw, '"') {
-		return false, nil
+		return false, fmt.Errorf("%s.%s: expected string", ctx, key)
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
@@ -328,6 +328,60 @@ func decryptMaybeEncryptedStringField(obj map[string]json.RawMessage, key string
 	plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
 	obj[key] = plaintextJSON
 	return true, nil
+}
+
+type nonStreamEndpointType int
+
+const (
+	nonStreamEndpointUnknown nonStreamEndpointType = iota
+	nonStreamEndpointChat
+	nonStreamEndpointImages
+	nonStreamEndpointEmbeddings
+	nonStreamEndpointRerank
+	nonStreamEndpointScore
+)
+
+func classifyNonStreamEndpoint(endpointPath string) nonStreamEndpointType {
+	switch endpointPath {
+	case "/v1/chat/completions", "/api/v1/chat/completions":
+		return nonStreamEndpointChat
+	case "/v1/images/generations":
+		return nonStreamEndpointImages
+	case "/v1/embeddings":
+		return nonStreamEndpointEmbeddings
+	case "/v1/rerank":
+		return nonStreamEndpointRerank
+	case "/v1/score":
+		return nonStreamEndpointScore
+	default:
+		return nonStreamEndpointUnknown
+	}
+}
+
+func jsonTopLevelNumber(raw []byte) bool {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false
+	}
+	_, ok := v.(float64)
+	return ok
+}
+
+func jsonArrayOfNumbers(raw []byte) bool {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return false
+	}
+	for _, elem := range arr {
+		if _, ok := elem.(float64); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
@@ -526,12 +580,19 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 // DecryptNonStreamResponse decrypts all encrypted string fields in each
 // choice's message of an OpenAI-format non-streaming response body.
 func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
+	return DecryptNonStreamResponseForEndpoint(body, session, "")
+}
+
+// DecryptNonStreamResponseForEndpoint decrypts all encrypted string fields in
+// an OpenAI-format non-streaming response body for a specific endpoint path.
+func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpointPath string) ([]byte, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(body, &full); err != nil {
 		return nil, fmt.Errorf("parse response JSON: %w", err)
 	}
 
 	var changed bool
+	endpointType := classifyNonStreamEndpoint(endpointPath)
 
 	// Chat completions: decrypt choices[].message content fields.
 	if choicesRaw, ok := full["choices"]; ok {
@@ -545,25 +606,55 @@ func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
 		}
 	}
 
-	// Images, embeddings, rerank, score: decrypt data[] fields.
+	// Images and embeddings: decrypt data[] fields.
 	if dataRaw, ok := full["data"]; ok {
-		// Try images first (has b64_json/revised_prompt).
-		d, err := decryptResponseImageData(dataRaw, session)
-		if err != nil {
-			return nil, err
-		}
-		if d != nil {
-			full["data"] = d
-			changed = true
-		} else {
-			// If not images, try embeddings (has embedding vectors).
-			d, err := decryptResponseEmbeddingsData(dataRaw, session)
+		switch endpointType {
+		case nonStreamEndpointImages:
+			d, err := decryptResponseImageData(dataRaw, session)
 			if err != nil {
 				return nil, err
 			}
 			if d != nil {
 				full["data"] = d
 				changed = true
+			}
+		case nonStreamEndpointEmbeddings:
+			d, err := decryptResponseEmbeddingsData(dataRaw, session, true)
+			if err != nil {
+				return nil, err
+			}
+			if d != nil {
+				full["data"] = d
+				changed = true
+			}
+		case nonStreamEndpointScore:
+			d, err := decryptResponseScoreData(dataRaw, session, true)
+			if err != nil {
+				return nil, err
+			}
+			if d != nil {
+				full["data"] = d
+				changed = true
+			}
+		default:
+			// Try images first (has b64_json/revised_prompt).
+			d, err := decryptResponseImageData(dataRaw, session)
+			if err != nil {
+				return nil, err
+			}
+			if d != nil {
+				full["data"] = d
+				changed = true
+			} else {
+				// If not images, try embeddings (has embedding vectors).
+				d, err := decryptResponseEmbeddingsData(dataRaw, session, false)
+				if err != nil {
+					return nil, err
+				}
+				if d != nil {
+					full["data"] = d
+					changed = true
+				}
 			}
 		}
 	}
@@ -580,15 +671,17 @@ func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
 		}
 	}
 
-	// Score: decrypt data[].score fields.
-	if scoreDataRaw, ok := full["data"]; ok {
-		s, err := decryptResponseScoreData(scoreDataRaw, session)
-		if err != nil {
-			return nil, err
-		}
-		if s != nil {
-			full["data"] = s
-			changed = true
+	// Score: when endpoint is unknown, attempt score fallback after others.
+	if endpointType == nonStreamEndpointUnknown {
+		if scoreDataRaw, ok := full["data"]; ok {
+			s, err := decryptResponseScoreData(scoreDataRaw, session, false)
+			if err != nil {
+				return nil, err
+			}
+			if s != nil {
+				full["data"] = s
+				changed = true
+			}
 		}
 	}
 
@@ -690,11 +783,14 @@ func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor) (json.
 // decryptResponseEmbeddingsData decrypts encrypted embedding vectors in data[] items.
 // Each embedding is stored as an encrypted JSON string that deserializes to a float array.
 // Returns the rewritten data JSON, or nil if nothing was decrypted.
-func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
+func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, strictDataShape bool) (json.RawMessage, error) {
 	var data []map[string]json.RawMessage
 	if err := json.Unmarshal(dataRaw, &data); err != nil {
+		if strictDataShape {
+			return nil, fmt.Errorf("parse data as embeddings array: %w", err)
+		}
 		// Not an array of objects -- skip.
-		return nil, nil //nolint:nilerr // unmarshal error means data is not embeddings
+		return nil, nil
 	}
 
 	changed := false
@@ -723,14 +819,10 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor) (
 		if err != nil {
 			return nil, fmt.Errorf("decrypt data[%d].embedding: %w", i, err)
 		}
-		// The plaintext is a JSON-serialized float array. Unmarshal and re-marshal to normalize.
-		if json.Valid(plaintext) {
-			data[i]["embedding"] = json.RawMessage(plaintext)
-		} else {
-			// Fallback: treat as string.
-			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
-			data[i]["embedding"] = rewritten
+		if !jsonArrayOfNumbers(plaintext) {
+			return nil, fmt.Errorf("data[%d].embedding: expected JSON array of numbers", i)
 		}
+		data[i]["embedding"] = json.RawMessage(plaintext)
 		changed = true
 	}
 
@@ -803,11 +895,14 @@ func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor)
 
 // decryptResponseScoreData decrypts score fields in data[] items of a score response.
 // Returns the rewritten data JSON, or nil if nothing was decrypted.
-func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
+func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strictDataShape bool) (json.RawMessage, error) {
 	var data []map[string]json.RawMessage
 	if err := json.Unmarshal(dataRaw, &data); err != nil {
+		if strictDataShape {
+			return nil, fmt.Errorf("parse data as score array: %w", err)
+		}
 		// Not an array of objects -- skip.
-		return nil, nil //nolint:nilerr // unmarshal error means data is not score format
+		return nil, nil
 	}
 
 	changed := false
@@ -836,14 +931,10 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor) (json.
 		if err != nil {
 			return nil, fmt.Errorf("decrypt data[%d].score: %w", i, err)
 		}
-		// Score plaintext should be a JSON number or string; preserve as-is if valid JSON.
-		if json.Valid(plaintext) {
-			data[i]["score"] = json.RawMessage(plaintext)
-		} else {
-			// Fallback: treat as string.
-			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
-			data[i]["score"] = rewritten
+		if !jsonTopLevelNumber(plaintext) {
+			return nil, fmt.Errorf("data[%d].score: expected JSON number", i)
 		}
+		data[i]["score"] = json.RawMessage(plaintext)
 		changed = true
 	}
 
@@ -1215,6 +1306,13 @@ func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body 
 // non-nil error: ErrDecryptionFailed on decryption failure, ErrRelayFailed on
 // other terminal failures.
 func RelayNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor) (StreamStats, error) {
+	return RelayNonStreamForEndpoint(ctx, w, body, session, "")
+}
+
+// RelayNonStreamForEndpoint reads a non-streaming JSON response from body,
+// decrypts endpoint-specific content fields if session is non-nil, and writes
+// the result to w.
+func RelayNonStreamForEndpoint(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor, endpointPath string) (StreamStats, error) {
 	responseBody, err := io.ReadAll(io.LimitReader(body, 10<<20))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
@@ -1228,7 +1326,7 @@ func RelayNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, 
 		return StreamStats{}, nil
 	}
 
-	decrypted, err := DecryptNonStreamResponse(responseBody, session)
+	decrypted, err := DecryptNonStreamResponseForEndpoint(responseBody, session, endpointPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "non-stream decryption failed", "err", err)
 		http.Error(w, "response decryption failed", http.StatusBadGateway)

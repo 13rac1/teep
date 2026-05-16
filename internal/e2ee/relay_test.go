@@ -1191,6 +1191,40 @@ func TestDecryptNonStreamResponse_LogprobsPlaintextTokenRejected(t *testing.T) {
 	}
 }
 
+func TestDecryptNonStreamResponse_LogprobsNonStringTokenRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "ok", session)
+	body := map[string]any{
+		"choices": []map[string]any{
+			{
+				"message": map[string]any{"content": encContent},
+				"logprobs": map[string]any{
+					"content": []map[string]any{
+						{
+							"token": map[string]any{"unexpected": true},
+							"bytes": []int{112, 116},
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error for non-string logprobs token")
+	}
+	if !strings.Contains(err.Error(), "logprobs.content[0].token: expected string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDecryptNonStreamResponse_LogprobsPlaintextBytesStringRejected(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
@@ -1335,6 +1369,78 @@ func TestDecryptNonStreamResponse_ScorePlaintextRejected_WhenChoicesDecrypted(t 
 		t.Fatal("expected error for plaintext score response even when choices decrypt")
 	}
 	if !strings.Contains(err.Error(), "data[0].score: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponseForEndpoint_EmbeddingsMalformedDataRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := []byte(`{"data":{"embedding":"unexpected"}}`)
+	_, err := DecryptNonStreamResponseForEndpoint(body, session, "/v1/embeddings")
+	if err == nil {
+		t.Fatal("expected error for malformed embeddings data shape")
+	}
+	if !strings.Contains(err.Error(), "parse data as embeddings array") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponseForEndpoint_ScoreMalformedDataRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := []byte(`{"data":{"score":"unexpected"}}`)
+	_, err := DecryptNonStreamResponseForEndpoint(body, session, "/v1/score")
+	if err == nil {
+		t.Fatal("expected error for malformed score data shape")
+	}
+	if !strings.Contains(err.Error(), "parse data as score array") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponseForEndpoint_EmbeddingsDecryptedWrongTypeRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encEmbedding := encryptForClient(t, `{"unexpected":true}`, session)
+	body := map[string]any{
+		"data": []map[string]any{{"embedding": encEmbedding}},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponseForEndpoint(b, session, "/v1/embeddings")
+	if err == nil {
+		t.Fatal("expected error for decrypted embeddings wrong type")
+	}
+	if !strings.Contains(err.Error(), "data[0].embedding: expected JSON array of numbers") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponseForEndpoint_ScoreDecryptedWrongTypeRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encScore := encryptForClient(t, `{"unexpected":true}`, session)
+	body := map[string]any{
+		"data": []map[string]any{{"score": encScore}},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponseForEndpoint(b, session, "/v1/score")
+	if err == nil {
+		t.Fatal("expected error for decrypted score wrong type")
+	}
+	if !strings.Contains(err.Error(), "data[0].score: expected JSON number") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
