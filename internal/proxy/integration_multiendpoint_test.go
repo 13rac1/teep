@@ -105,6 +105,35 @@ func TestIntegration_NearDirect_VL(t *testing.T) {
 	t.Logf("VL response: %q", content)
 }
 
+func TestIntegration_NearDirect_VL_E2EE(t *testing.T) {
+	skipNearDirectIntegration(t)
+
+	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+	defer proxySrv.Close()
+
+	model := nearDirectVLModel()
+	body := fmt.Sprintf(`{
+		"model": %q,
+		"messages": [{
+			"role": "user",
+			"content": [
+				{"type": "text", "text": "What color is this image? Answer in one word."},
+				{"type": "image_url", "image_url": {"url": "data:image/png;base64,%s"}}
+			]
+		}],
+		"stream": true,
+		"max_tokens": 50
+	}`, model, testPNG())
+
+	resp, err := integrationClient.Post(proxySrv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST chat (VL E2EE): %v", err)
+	}
+	defer resp.Body.Close()
+
+	assertStreamResponse(t, resp)
+}
+
 // --------------------------------------------------------------------------
 // Chutes VL integration
 // --------------------------------------------------------------------------
@@ -202,6 +231,34 @@ func TestIntegration_NearDirect_Images(t *testing.T) {
 	skipNearDirectIntegration(t)
 
 	proxySrv := newProxyServer(t, integrationNearDirectConfig(t))
+	defer proxySrv.Close()
+
+	model := nearDirectImagesModel()
+	body := fmt.Sprintf(`{"model":%q,"prompt":"a solid red square","n":1,"size":"256x256","response_format":"b64_json"}`, model)
+
+	resp, err := integrationClient.Post(proxySrv.URL+"/v1/images/generations", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST images: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	assertImagesResponse(t, respBody)
+}
+
+func TestIntegration_NearDirect_Images_E2EE(t *testing.T) {
+	skipNearDirectIntegration(t)
+
+	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
 	defer proxySrv.Close()
 
 	model := nearDirectImagesModel()
@@ -330,6 +387,100 @@ func TestIntegration_NearDirect_Rerank(t *testing.T) {
 	}
 
 	assertRerankResponse(t, respBody)
+}
+
+func TestIntegration_NearDirect_Rerank_E2EE(t *testing.T) {
+	skipNearDirectIntegration(t)
+
+	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+	defer proxySrv.Close()
+
+	model := nearDirectRerankModel()
+	body := fmt.Sprintf(`{"model":%q,"query":"What is deep learning?","documents":["Deep learning is a subset of machine learning.","The weather today is sunny.","Neural networks have multiple layers."],"top_n":2}`, model)
+
+	resp, err := integrationClient.Post(proxySrv.URL+"/v1/rerank", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST rerank: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	assertRerankResponse(t, respBody)
+}
+
+func nearDirectScoreModel() string {
+	if m := os.Getenv("NEARAI_SCORE_MODEL"); m != "" {
+		if strings.HasPrefix(m, "neardirect:") {
+			return m
+		}
+		return "neardirect:" + m
+	}
+	return "neardirect:Qwen/Qwen3-Reranker-0.6B"
+}
+
+func TestIntegration_NearDirect_Score(t *testing.T) {
+	skipNearDirectIntegration(t)
+
+	proxySrv := newProxyServer(t, integrationNearDirectConfig(t))
+	defer proxySrv.Close()
+
+	model := nearDirectScoreModel()
+	body := fmt.Sprintf(`{"model":%q,"text_1":"Deep learning is powerful.","text_2":"Neural networks learn layered representations."}`, model)
+
+	resp, err := integrationClient.Post(proxySrv.URL+"/v1/score", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST score: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	assertScoreResponse(t, respBody)
+}
+
+func TestIntegration_NearDirect_Score_E2EE(t *testing.T) {
+	skipNearDirectIntegration(t)
+
+	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+	defer proxySrv.Close()
+
+	model := nearDirectScoreModel()
+	body := fmt.Sprintf(`{"model":%q,"text_1":"Deep learning is powerful.","text_2":"Neural networks learn layered representations."}`, model)
+
+	resp, err := integrationClient.Post(proxySrv.URL+"/v1/score", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST score: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	assertScoreResponse(t, respBody)
 }
 
 // --------------------------------------------------------------------------
@@ -462,4 +613,26 @@ func assertRerankResponse(t *testing.T, body []byte) {
 	}
 	t.Logf("rerank: model=%s results=%d top_score=%.4f",
 		resp.Model, len(resp.Results), resp.Results[0].RelevanceScore)
+}
+
+// assertScoreResponse validates the response body matches a score response spec.
+func assertScoreResponse(t *testing.T, body []byte) {
+	t.Helper()
+
+	var resp struct {
+		ID    string `json:"id"`
+		Model string `json:"model"`
+		Data  []struct {
+			Index int     `json:"index"`
+			Score float64 `json:"score"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode score response: %v\nraw: %s", err, body[:min(500, len(body))])
+	}
+
+	if len(resp.Data) == 0 {
+		t.Fatal("no score data in response")
+	}
+	t.Logf("score: model=%s items=%d first_score=%.4f", resp.Model, len(resp.Data), resp.Data[0].Score)
 }
