@@ -200,7 +200,7 @@ func TestE2EE_EncryptRequest_Embeddings(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := neardirect.NewE2EE()
 
-	encBody, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","input":["alpha",42,"beta"]}`), raw, "/v1/embeddings")
+	encBody, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","input":["alpha","beta"]}`), raw, "/v1/embeddings")
 	if err != nil {
 		t.Fatalf("EncryptRequest embeddings: %v", err)
 	}
@@ -212,10 +212,10 @@ func TestE2EE_EncryptRequest_Embeddings(t *testing.T) {
 	if err := json.Unmarshal(encBody, &out); err != nil {
 		t.Fatalf("unmarshal encrypted embeddings body: %v", err)
 	}
-	if len(out.Input) != 3 {
-		t.Fatalf("input length = %d, want 3", len(out.Input))
+	if len(out.Input) != 2 {
+		t.Fatalf("input length = %d, want 2", len(out.Input))
 	}
-	for _, idx := range []int{0, 2} {
+	for _, idx := range []int{0, 1} {
 		var value string
 		if err := json.Unmarshal(out.Input[idx], &value); err != nil {
 			t.Fatalf("unmarshal input[%d]: %v", idx, err)
@@ -223,6 +223,20 @@ func TestE2EE_EncryptRequest_Embeddings(t *testing.T) {
 		if !e2ee.IsEncryptedChunkXChaCha20(value) {
 			t.Fatalf("input[%d] does not look encrypted: %q", idx, value)
 		}
+	}
+}
+
+func TestE2EE_EncryptRequest_Embeddings_MixedInputRejected(t *testing.T) {
+	pubHex := ed25519ModelPubHex(t)
+	raw := &attestation.RawAttestation{SigningKey: pubHex}
+	enc := neardirect.NewE2EE()
+
+	_, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","input":["alpha",42,"beta"]}`), raw, "/v1/embeddings")
+	if decryptor != nil {
+		decryptor.Zero()
+	}
+	if err == nil {
+		t.Fatal("expected error for mixed-type embeddings input in E2EE mode")
 	}
 }
 

@@ -75,11 +75,15 @@ var NonEncryptedFields = map[string]bool{
 	"id":            true,
 }
 
-// OptionalEncryptedFields may be plaintext or encrypted. When encrypted, relay
-// decrypts them; when plaintext, relay preserves them for compatibility.
-var OptionalEncryptedFields = map[string]bool{
-	"refusal": true,
-	"name":    true,
+// optionalEncryptedField reports fields that may remain plaintext for
+// compatibility when providers do not encrypt them.
+func optionalEncryptedField(field string) bool {
+	switch field {
+	case "refusal", "name":
+		return true
+	default:
+		return false
+	}
 }
 
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
@@ -96,7 +100,7 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ct
 			continue
 		}
 		if !session.IsEncryptedChunk(s) {
-			if OptionalEncryptedFields[key] {
+			if optionalEncryptedField(key) {
 				continue
 			}
 			return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
@@ -157,8 +161,11 @@ func decryptFunctionObject(obj map[string]json.RawMessage, session Decryptor, ct
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return false, fmt.Errorf("%s.%s: parse string: %w", ctx, key, err)
 		}
-		if s == "" || !session.IsEncryptedChunk(s) {
+		if s == "" {
 			continue
+		}
+		if !session.IsEncryptedChunk(s) {
+			return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 		}
 		plaintext, err := session.Decrypt(s)
 		if err != nil {
@@ -321,8 +328,11 @@ func decryptMaybeEncryptedStringField(obj map[string]json.RawMessage, key string
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return false, fmt.Errorf("parse %s.%s as string: %w", ctx, key, err)
 	}
-	if s == "" || !session.IsEncryptedChunk(s) {
+	if s == "" {
 		return false, nil
+	}
+	if !session.IsEncryptedChunk(s) {
+		return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 	}
 	plaintext, err := session.Decrypt(s)
 	if err != nil {
@@ -346,8 +356,11 @@ func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decrypt
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return false, fmt.Errorf("parse %s.bytes as string: %w", ctx, err)
 	}
-	if s == "" || !session.IsEncryptedChunk(s) {
+	if s == "" {
 		return false, nil
+	}
+	if !session.IsEncryptedChunk(s) {
+		return false, fmt.Errorf("%s.bytes: expected encrypted string but not recognised (len=%d prefix=%q)", ctx, len(s), SafePrefix(s, 8))
 	}
 	plaintext, err := session.Decrypt(s)
 	if err != nil {
@@ -492,7 +505,7 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 		if NonEncryptedFields[key] {
 			continue
 		}
-		if OptionalEncryptedFields[key] && !session.IsEncryptedChunk(s) {
+		if optionalEncryptedField(key) && !session.IsEncryptedChunk(s) {
 			result[key] = s
 			continue
 		}
