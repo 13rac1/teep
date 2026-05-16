@@ -923,7 +923,8 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 		if IsJSONNull(scoreRaw) {
 			return nil, fmt.Errorf("data[%d].score: expected encrypted string, got null", i)
 		}
-		// Score can be a number or a string (encrypted).
+		// In this E2EE decryption path, score must be an encrypted string.
+		// Plaintext numeric scores are rejected fail-closed when a session is active.
 		if len(scoreRaw) == 0 || scoreRaw[0] != '"' {
 			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
 		}

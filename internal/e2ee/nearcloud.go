@@ -609,8 +609,10 @@ func EncryptImagePromptNearCloud(body []byte, signingKey string) ([]byte, *NearC
 // "input" field of an embeddings request. The signingKey is the model's Ed25519
 // public key (64 hex chars) from the attestation response.
 //
-// Encrypted field: input (string or array of strings/integers).
-// Sets X-Encrypt-All-Fields header and returns the session for response decryption.
+// Encrypted field: input when present and non-null. Supported shapes are a JSON
+// string or an array of JSON strings.
+// The pinned handler sets the X-Encrypt-All-Fields header; this helper only
+// rewrites the request body and returns the session for response decryption.
 func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
 	session, err := NewNearCloudSession()
 	if err != nil {
