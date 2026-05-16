@@ -1305,6 +1305,40 @@ func TestDecryptNonStreamResponse_ScorePlaintextRejected(t *testing.T) {
 	}
 }
 
+func TestDecryptNonStreamResponse_ScorePlaintextRejected_WhenChoicesDecrypted(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "assistant plaintext", session)
+	body := map[string]any{
+		"choices": []map[string]any{
+			{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": encContent,
+				},
+			},
+		},
+		"data": []map[string]any{
+			{
+				"score": 0.42,
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error for plaintext score response even when choices decrypt")
+	}
+	if !strings.Contains(err.Error(), "data[0].score: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // benchVeniceSession creates a Venice session for benchmarks (no *testing.T).
 func benchVeniceSession(b *testing.B) *VeniceSession {
 	b.Helper()
@@ -1890,5 +1924,24 @@ func TestDecryptSSEChunkContent_DecryptError(t *testing.T) {
 	t.Logf("decryptSSEChunkContent(decrypt error): err=%v", err)
 	if err == nil {
 		t.Fatal("expected error from decrypt failure")
+	}
+}
+
+func TestDecryptSSEChunkContent_UnchangedCiphertextRejected(t *testing.T) {
+	mock := &testDecryptor{
+		isEncrypted: func(s string) bool { return strings.HasPrefix(s, "enc:") },
+		decrypt: func(s string) ([]byte, error) {
+			// Simulate a broken decryptor that returns ciphertext unchanged.
+			return []byte(s), nil
+		},
+	}
+	data := `{"choices":[{"delta":{"content":"enc:still-ciphertext"}}]}`
+
+	_, err := decryptSSEChunkContent(data, mock)
+	if err == nil {
+		t.Fatal("expected error for unchanged ciphertext")
+	}
+	if !strings.Contains(err.Error(), "expected decrypted plaintext, got unchanged ciphertext") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
