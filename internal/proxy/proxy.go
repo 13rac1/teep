@@ -2386,9 +2386,9 @@ func (s *Server) handlePinnedNonChat(
 		s.stats.plaintext.Add(1)
 	}
 
-	// RelayNonStream reads the full body, decrypts if session is non-nil
-	// (handling both chat choices and image data fields), and writes to w.
-	_, relayErr := e2ee.RelayNonStream(ctx, w, pinnedResp.Body, session)
+	// RelayNonStreamForEndpoint reads the full body, decrypts endpoint-specific
+	// fields if session is non-nil, and writes to w.
+	_, relayErr := e2ee.RelayNonStreamForEndpoint(ctx, w, pinnedResp.Body, session, endpointPath)
 
 	s.handlePinnedPostRelay(ctx, prov, upstreamModel, report, session, ms, relayErr)
 }
