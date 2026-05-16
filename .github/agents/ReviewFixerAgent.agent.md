@@ -11,7 +11,7 @@ Teep is *fail-closed* security software. Never weaken security checks, bypass va
 ## Inputs
 
 You receive:
-- The **full text of a code review report** (APPROVE / REQUEST CHANGES / BLOCK verdict, with findings).
+- The **full text of a code review report** (APPROVE / REQUEST CHANGES verdict, with findings).
 - The **round number** N (for the commit message).
 
 ## Workflow
@@ -25,8 +25,13 @@ Extract every finding with severity `Critical`, `High`, or `Medium` from the rev
 For each finding:
 1. Read the referenced file at the referenced line(s).
 2. Confirm the issue actually exists in the current code.
-3. If the finding is a **false positive** (the code is already correct), mark the todo as `skip (false positive)` and move on.
-4. If the finding is **valid**, proceed to Phase 3.
+3. Evaluate whether the review's **suggested fix** (if present) is valid for this code path:
+   - It must actually address the issue.
+   - It must not weaken fail-closed behavior, cryptographic safety, or attestation guarantees.
+   - It must be in scope and not introduce unrelated behavior changes.
+4. If the finding is a **false positive** (the code is already correct), mark the todo as `skip (false positive)` and move on.
+5. If the finding itself is invalid for this code path, do **not** implement behavioral changes for that finding. At most, add clarifying code comments when they materially reduce future false positives. If the finding is valid but the requested change is invalid, reject only the requested change and continue to Phase 3 with an alternative safe remediation.
+6. If the finding is **valid**, proceed to Phase 3 using a valid remediation strategy (the review suggestion if valid; otherwise an alternative safe fix).
 
 ### Phase 3 — Implement Fixes
 
@@ -38,8 +43,9 @@ For each valid finding:
    - Use `subtle.ConstantTimeCompare` for all secrets, keys, and hashes.
    - Authenticated encryption only; no plaintext paths.
    - No backwards-compatibility shims.
-4. If the finding targets a code path without test coverage, add a regression test.
-5. Mark the finding's todo item as done.
+4. Do not blindly apply the reviewer-suggested change; implement it only if validated in Phase 2. If the suggestion is invalid, implement a different valid fix or skip behavioral changes when the underlying finding is invalid.
+5. If the finding targets a code path without test coverage, add a regression test.
+6. Mark the finding's todo item as done.
 
 ### Phase 4 — Run Checks
 
@@ -61,6 +67,7 @@ Follow the commit and staging guidance in `AGENTS.md`. Stage only the files you 
 
 - DO NOT weaken any security check or attestation step.
 - DO NOT add fallbacks, workarounds, or backwards-compatibility shims.
+- DO NOT blindly implement review-suggested fixes without validating they are correct and safe for the current code.
 - DO NOT commit if `make check` fails.
 - DO NOT fix issues not present in the supplied review report.
 - Stage only modified files — never `git add .` or `git add -A`.
