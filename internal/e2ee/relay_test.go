@@ -1205,6 +1205,85 @@ func TestDecryptNonStreamResponse_LogprobsPlaintextBytesStringRejected(t *testin
 	}
 }
 
+func TestDecryptNonStreamResponse_EmbeddingsPlaintextRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{
+			{
+				"embedding": []float64{0.1, 0.2, 0.3},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error for plaintext embeddings response")
+	}
+	if !strings.Contains(err.Error(), "data[0].embedding: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponse_RerankPlaintextRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"results": []map[string]any{
+			{
+				"document": map[string]any{
+					"text": "plaintext-rerank-text",
+				},
+				"index":           0,
+				"relevance_score": 0.9,
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error for plaintext rerank document text")
+	}
+	if !strings.Contains(err.Error(), "results[0].document.text: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponse_ScorePlaintextRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{
+			{
+				"score": 0.42,
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error for plaintext score response")
+	}
+	if !strings.Contains(err.Error(), "data[0].score: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // benchVeniceSession creates a Venice session for benchmarks (no *testing.T).
 func benchVeniceSession(b *testing.B) *VeniceSession {
 	b.Helper()
