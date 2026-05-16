@@ -1049,25 +1049,46 @@ func TestDecryptNonStreamResponse_EncryptedLogprobs(t *testing.T) {
 	}
 }
 
-func TestDecryptDeltaFields_NonEncryptedSkipped(t *testing.T) {
+func TestDecryptDeltaFields_PlaintextRefusalRejected(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
 
-	// Build fields map with non-encrypted fields that should be skipped.
 	fields := map[string]json.RawMessage{
 		"role":    json.RawMessage(`"assistant"`),
 		"refusal": json.RawMessage(`"none"`),
-		"name":    json.RawMessage(`"bot"`),
 	}
 
 	changed, err := decryptDeltaFields(fields, session, "test")
-	if err != nil {
-		t.Fatalf("decryptDeltaFields: %v", err)
+	if err == nil {
+		t.Fatal("expected error for plaintext refusal")
+	}
+	if !strings.Contains(err.Error(), "test.refusal: expected encrypted") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if changed {
-		t.Error("expected no changes for non-encrypted fields")
+		t.Error("changed = true, want false on rejection")
 	}
-	t.Logf("non-encrypted fields correctly skipped")
+}
+
+func TestDecryptDeltaFields_PlaintextNameRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	fields := map[string]json.RawMessage{
+		"role": json.RawMessage(`"assistant"`),
+		"name": json.RawMessage(`"bot"`),
+	}
+
+	changed, err := decryptDeltaFields(fields, session, "test")
+	if err == nil {
+		t.Fatal("expected error for plaintext name")
+	}
+	if !strings.Contains(err.Error(), "test.name: expected encrypted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Error("changed = true, want false on rejection")
+	}
 }
 
 func TestDecryptSSEChunk_FunctionCallPlaintextRejected(t *testing.T) {
