@@ -154,6 +154,10 @@ type Provider struct {
 	// (e.g. "/v1/rerank"). Empty means unsupported.
 	RerankPath string
 
+	// ScorePath is the upstream API path for score requests
+	// (e.g. "/v1/score"). Empty means unsupported.
+	ScorePath string
+
 	// E2EE indicates whether this provider supports end-to-end encryption.
 	E2EE bool
 
