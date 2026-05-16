@@ -3,6 +3,7 @@ package e2ee
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -478,6 +479,18 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 		return nil, fmt.Errorf("parse delta object: %w", err)
 	}
 
+	originalEncrypted := make(map[string]string, len(delta))
+	for key, raw := range delta {
+		if NonEncryptedFields[key] {
+			continue
+		}
+		var s string
+		if json.Unmarshal(raw, &s) != nil || s == "" {
+			continue
+		}
+		originalEncrypted[key] = s
+	}
+
 	if _, err := decryptChatObject(delta, session, "delta"); err != nil {
 		return nil, err
 	}
@@ -490,6 +503,16 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 		}
 		if NonEncryptedFields[key] {
 			continue
+		}
+		original, ok := originalEncrypted[key]
+		if !ok {
+			return nil, fmt.Errorf("delta.%s: expected encrypted string before decryption", key)
+		}
+		if !session.IsEncryptedChunk(original) {
+			return nil, fmt.Errorf("delta.%s: expected encrypted string before decryption", key)
+		}
+		if subtle.ConstantTimeCompare([]byte(original), []byte(s)) == 1 {
+			return nil, fmt.Errorf("delta.%s: expected decrypted plaintext, got unchanged ciphertext", key)
 		}
 		result[key] = s
 	}
@@ -558,8 +581,7 @@ func DecryptNonStreamResponse(body []byte, session Decryptor) ([]byte, error) {
 	}
 
 	// Score: decrypt data[].score fields.
-	if scoreDataRaw, ok := full["data"]; ok && !changed {
-		// Only try score if we haven't already processed data as images/embeddings.
+	if scoreDataRaw, ok := full["data"]; ok {
 		s, err := decryptResponseScoreData(scoreDataRaw, session)
 		if err != nil {
 			return nil, err
