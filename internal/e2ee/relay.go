@@ -66,14 +66,15 @@ type usageInfo struct {
 	} `json:"usage"`
 }
 
-// NonEncryptedFields are known plaintext metadata fields in OpenAI chat
-// delta/message objects.
-var NonEncryptedFields = map[string]bool{
-	"role":          true,
-	"tool_call_id":  true,
-	"type":          true,
-	"finish_reason": true,
-	"id":            true,
+// IsNonEncryptedField reports whether key is known plaintext metadata in
+// OpenAI chat delta/message objects.
+func IsNonEncryptedField(key string) bool {
+	switch key {
+	case "role", "tool_call_id", "type", "finish_reason", "id":
+		return true
+	default:
+		return false
+	}
 }
 
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
@@ -86,7 +87,7 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ct
 		if json.Unmarshal(raw, &s) != nil || s == "" {
 			continue
 		}
-		if NonEncryptedFields[key] {
+		if IsNonEncryptedField(key) {
 			continue
 		}
 		if !session.IsEncryptedChunk(s) {
@@ -535,7 +536,7 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 
 	originalEncrypted := make(map[string]string, len(delta))
 	for key, raw := range delta {
-		if NonEncryptedFields[key] {
+		if IsNonEncryptedField(key) {
 			continue
 		}
 		var s string
@@ -555,7 +556,7 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 		if json.Unmarshal(raw, &s) != nil || s == "" {
 			continue
 		}
-		if NonEncryptedFields[key] {
+		if IsNonEncryptedField(key) {
 			continue
 		}
 		original, ok := originalEncrypted[key]
@@ -798,6 +799,9 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, s
 	for i, item := range data {
 		embRaw, ok := item["embedding"]
 		if !ok {
+			if strictDataShape {
+				return nil, fmt.Errorf("data[%d].embedding: missing", i)
+			}
 			continue
 		}
 		sawEmbedding = true
@@ -910,6 +914,9 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 	for i, item := range data {
 		scoreRaw, ok := item["score"]
 		if !ok {
+			if strictDataShape {
+				return nil, fmt.Errorf("data[%d].score: missing", i)
+			}
 			continue
 		}
 		sawScore = true
