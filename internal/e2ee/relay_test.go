@@ -1401,6 +1401,48 @@ func TestDecryptNonStreamResponseForEndpoint_ScoreMalformedDataRejected(t *testi
 	}
 }
 
+func TestDecryptNonStreamResponseForEndpoint_EmbeddingsMissingFieldRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{{"index": 0}},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponseForEndpoint(b, session, "/v1/embeddings")
+	if err == nil {
+		t.Fatal("expected error for embeddings item missing required field")
+	}
+	if !strings.Contains(err.Error(), "data[0].embedding: missing") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponseForEndpoint_ScoreMissingFieldRejected(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{{"index": 0}},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponseForEndpoint(b, session, "/v1/score")
+	if err == nil {
+		t.Fatal("expected error for score item missing required field")
+	}
+	if !strings.Contains(err.Error(), "data[0].score: missing") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDecryptNonStreamResponseForEndpoint_EmbeddingsDecryptedWrongTypeRejected(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()

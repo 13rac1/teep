@@ -419,7 +419,7 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 			if !ok || s == "" {
 				continue
 			}
-			if e2ee.NonEncryptedFields[key] {
+			if e2ee.IsNonEncryptedField(key) {
 				continue
 			}
 			// This field should be encrypted.
