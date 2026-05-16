@@ -75,17 +75,6 @@ var NonEncryptedFields = map[string]bool{
 	"id":            true,
 }
 
-// optionalEncryptedField reports fields that may remain plaintext for
-// compatibility when providers do not encrypt them.
-func optionalEncryptedField(field string) bool {
-	switch field {
-	case "refusal", "name":
-		return true
-	default:
-		return false
-	}
-}
-
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
 // map, decrypts any that pass the session's IsEncryptedChunk check,
 // and returns true if any field was decrypted.
@@ -100,9 +89,6 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ct
 			continue
 		}
 		if !session.IsEncryptedChunk(s) {
-			if optionalEncryptedField(key) {
-				continue
-			}
 			return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 		}
 		plaintext, err := session.Decrypt(s)
@@ -503,10 +489,6 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 			continue
 		}
 		if NonEncryptedFields[key] {
-			continue
-		}
-		if optionalEncryptedField(key) && !session.IsEncryptedChunk(s) {
-			result[key] = s
 			continue
 		}
 		result[key] = s
