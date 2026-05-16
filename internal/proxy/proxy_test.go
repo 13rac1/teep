@@ -744,6 +744,7 @@ func TestNonChat_PinnedOK_ForwardsUpstreamHeaders(t *testing.T) {
 	}{
 		{"/v1/embeddings", `{"model":"neardirect:test-model","input":"hello"}`},
 		{"/v1/images/generations", `{"model":"neardirect:test-model","prompt":"a cat","n":1}`},
+		{"/v1/score", `{"model":"neardirect:test-model","text_1":"hello","text_2":"world"}`},
 	}
 	for _, ep := range endpoints {
 		t.Run(ep.path, func(t *testing.T) {
@@ -1009,6 +1010,88 @@ func TestRerank_ProviderDoesNotSupport400(t *testing.T) {
 		strings.NewReader(`{"model":"test-model","query":"hello","documents":["a","b"]}`))
 	if err != nil {
 		t.Fatalf("POST rerank: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("status = %d, want 400; body=%s", resp.StatusCode, body)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Score endpoint tests
+// --------------------------------------------------------------------------
+
+func TestScore_MissingModel400(t *testing.T) {
+	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
+	defer proxySrv.Close()
+
+	resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
+		strings.NewReader(`{"text_1":"hello","text_2":"world"}`))
+	if err != nil {
+		t.Fatalf("POST score: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestScore_InvalidJSON400(t *testing.T) {
+	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
+	defer proxySrv.Close()
+
+	resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
+		strings.NewReader(`not json`))
+	if err != nil {
+		t.Fatalf("POST score: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestScore_PinnedOK(t *testing.T) {
+	handler := &pathCapturingPinnedHandler{}
+	proxySrv := newNeardirectProxyServer(t, handler)
+	defer proxySrv.Close()
+
+	resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
+		strings.NewReader(`{"model":"neardirect:test-model","text_1":"hello","text_2":"world"}`))
+	if err != nil {
+		t.Fatalf("POST score: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	handler.mu.Lock()
+	gotPath := handler.path
+	handler.mu.Unlock()
+	if gotPath != "/v1/score" {
+		t.Errorf("PinnedRequest.Path = %q, want /v1/score", gotPath)
+	}
+}
+
+func TestScore_ProviderDoesNotSupport400(t *testing.T) {
+	// Venice has no ScorePath set.
+	attestSrv := makeAttestationServer(t, false)
+	defer attestSrv.Close()
+
+	proxySrv := newProxyServer(t, buildConfig(attestSrv.URL, false))
+	defer proxySrv.Close()
+
+	resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
+		strings.NewReader(`{"model":"test-model","text_1":"hello","text_2":"world"}`))
+	if err != nil {
+		t.Fatalf("POST score: %v", err)
 	}
 	defer resp.Body.Close()
 

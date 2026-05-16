@@ -1189,6 +1189,15 @@ func TestFromConfig_Nearcloud(t *testing.T) {
 	if p.ChatPath != "/v1/chat/completions" {
 		t.Errorf("ChatPath = %q, want /v1/chat/completions", p.ChatPath)
 	}
+	if p.EmbeddingsPath != "/v1/embeddings" {
+		t.Errorf("EmbeddingsPath = %q, want /v1/embeddings", p.EmbeddingsPath)
+	}
+	if p.RerankPath != "/v1/rerank" {
+		t.Errorf("RerankPath = %q, want /v1/rerank", p.RerankPath)
+	}
+	if p.ScorePath != "/v1/score" {
+		t.Errorf("ScorePath = %q, want /v1/score", p.ScorePath)
+	}
 }
 
 func TestFromConfig_Chutes(t *testing.T) {

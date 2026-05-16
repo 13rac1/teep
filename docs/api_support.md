@@ -13,21 +13,23 @@ Teep exposes these proxy endpoints to clients:
 | `/v1/audio/transcriptions` | POST | Audio transcription (multipart) |
 | `/v1/images/generations` | POST | Image generation |
 | `/v1/rerank` | POST | Document reranking |
+| `/v1/score` | POST | Text similarity scoring |
 | `/v1/models` | GET | List available models |
 
 `/v1/models` is a proxy-aggregated endpoint that returns the combined model list from all configured providers. Each model's `id` field is rewritten to `provider:upstreamID` (e.g. `venice:e2ee-qwen3-5-122b-a10b`, `neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct`) so clients can route requests to the correct provider. It is not included in the per-provider matrices below because it is handled entirely by the proxy, does not forward requests to individual providers, and is not E2EE-encrypted (GET request, no sensitive data).
 
-Not all providers support all endpoints. If a provider has no path configured for an endpoint, the proxy returns HTTP 400 with an error indicating that the named provider does not support the requested endpoint (for example, `provider "nearcloud" does not support reranking`).
+Not all providers support all endpoints. If a provider has no path configured for an endpoint, the proxy returns HTTP 400 with an error indicating that the named provider does not support the requested endpoint (for example, `provider "venice" does not support embeddings`).
 
 ## Endpoint Support Matrix
 
 | Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud |
 |---|---|---|---|---|---|
 | Chat completions | Yes | Yes | Yes | Yes | Yes |
-| Embeddings | Yes | — | Yes | — | Yes |
+| Embeddings | Yes | Yes | Yes | — | Yes |
 | Audio transcriptions | Yes | — | — | — | — |
 | Image generation | Yes | Yes | — | — | — |
-| Reranking | Yes | — | — | — | — |
+| Reranking | Yes | Yes | — | — | — |
+| Score | Yes | Yes | — | — | — |
 
 **—** = Not wired. Provider returns HTTP 400.
 
@@ -36,11 +38,11 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud |
 |---|---|---|---|---|---|
 | Chat completions | Encrypted | Encrypted | Encrypted | Encrypted | No E2EE |
-| Embeddings | Encrypted | — | Encrypted | — | No E2EE |
+| Embeddings | Encrypted | Encrypted | Encrypted | — | No E2EE |
 | Audio transcriptions | Plaintext (pinned) | — | — | — | — |
 | Image generation | Encrypted | Encrypted | — | — | — |
-| Reranking | Encrypted | — | — | — | — |
-| Score | Encrypted | — | — | — | — |
+| Reranking | Encrypted | Encrypted | — | — | — |
+| Score | Encrypted | Encrypted | — | — | — |
 
 **Encrypted** = E2EE is applied to request and response fields.
 **Fail closed** = Proxy rejects the request with an error because E2EE is not supported for this endpoint in the end-to-end path, either because the proxy does not implement E2EE field dispatch for that request type or because the upstream TEE cannot decrypt it.
@@ -127,7 +129,7 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | Chat completions | `/v1/chat/completions` | Yes | Gateway forwards E2EE headers to model TEE |
 | Image generation | `/v1/images/generations` | Yes | Gateway forwards E2EE headers to model TEE |
 
-Embeddings, audio, and reranking are **not wired** in the proxy for NearCloud. The gateway silently drops E2EE headers for these endpoints, so wiring them would send plaintext through a channel the user believes is encrypted.
+Embeddings, reranking, and score are wired in the proxy for NearCloud. The gateway preserves `X-Encrypt-All-Fields: true` and forwards the encrypted field values to the model TEE. Audio is still not wired for NearCloud because the multipart body cannot be field-encrypted safely in the current pinned flow.
 
 **E2EE field coverage:** Identical to NearDirect (same inference-proxy backend). See the NearDirect tables above for complete list of encrypted fields.
 

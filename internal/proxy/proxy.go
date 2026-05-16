@@ -479,6 +479,7 @@ func New(cfg *config.Config) (*Server, error) {
 	s.mux.HandleFunc("POST /v1/audio/transcriptions", s.handleEndpoint(&audioEndpoint))
 	s.mux.HandleFunc("POST /v1/images/generations", s.handleEndpoint(&imagesEndpoint))
 	s.mux.HandleFunc("POST /v1/rerank", s.handleEndpoint(&rerankEndpoint))
+	s.mux.HandleFunc("POST /v1/score", s.handleEndpoint(&scoreEndpoint))
 	s.mux.HandleFunc("GET /v1/models", s.handleModels)
 	s.mux.HandleFunc("GET /v1/tee/report", s.handleReport)
 
@@ -637,6 +638,7 @@ func fromConfig(
 		p.AudioPath = "/v1/audio/transcriptions"
 		p.ImagesPath = "/v1/images/generations"
 		p.RerankPath = "/v1/rerank"
+		p.ScorePath = "/v1/score"
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
@@ -669,11 +671,9 @@ func fromConfig(
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
 		p.ImagesPath = "/v1/images/generations"
-		// nearcloud non-chat E2EE: the gateway only forwards E2EE headers for
-		// chat completions and image generations. Embeddings (input), audio,
-		// and rerank fields would be sent in plaintext through a channel the
-		// user believes is E2EE. Non-chat paths (other than images) are not
-		// wired until the gateway is fixed to forward E2EE headers.
+		p.EmbeddingsPath = "/v1/embeddings"
+		p.RerankPath = "/v1/rerank"
+		p.ScorePath = "/v1/score"
 		p.Encryptor = neardirect.NewE2EE()
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
@@ -1060,7 +1060,7 @@ func parseChatRequest(_ *http.Request, body []byte) (model string, stream bool, 
 }
 
 // parseJSONModelRequest extracts only the model field from a JSON body.
-// Used for embeddings, images, and rerank endpoints that don't support streaming.
+// Used for embeddings, images, rerank, and score endpoints that don't support streaming.
 func parseJSONModelRequest(_ *http.Request, body []byte) (model string, stream bool, err error) {
 	var req struct {
 		Model string `json:"model"`
@@ -1110,6 +1110,13 @@ var (
 		name:         "rerank",
 		endpointPath: func(p *provider.Provider) string { return p.RerankPath },
 		unsupported:  "reranking",
+		parseRequest: parseJSONModelRequest,
+		contentType:  "application/json",
+	}
+	scoreEndpoint = endpointConfig{
+		name:         "score",
+		endpointPath: func(p *provider.Provider) string { return p.ScorePath },
+		unsupported:  "score",
 		parseRequest: parseJSONModelRequest,
 		contentType:  "application/json",
 	}

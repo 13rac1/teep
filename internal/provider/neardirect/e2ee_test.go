@@ -195,16 +195,101 @@ func TestE2EE_EncryptRequest_Images(t *testing.T) {
 	}
 }
 
+func TestE2EE_EncryptRequest_Embeddings(t *testing.T) {
+	pubHex := ed25519ModelPubHex(t)
+	raw := &attestation.RawAttestation{SigningKey: pubHex}
+	enc := neardirect.NewE2EE()
+
+	encBody, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","input":["alpha",42,"beta"]}`), raw, "/v1/embeddings")
+	if err != nil {
+		t.Fatalf("EncryptRequest embeddings: %v", err)
+	}
+	defer decryptor.Zero()
+
+	var out struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal encrypted embeddings body: %v", err)
+	}
+	if len(out.Input) != 3 {
+		t.Fatalf("input length = %d, want 3", len(out.Input))
+	}
+	for _, idx := range []int{0, 2} {
+		var value string
+		if err := json.Unmarshal(out.Input[idx], &value); err != nil {
+			t.Fatalf("unmarshal input[%d]: %v", idx, err)
+		}
+		if !e2ee.IsEncryptedChunkXChaCha20(value) {
+			t.Fatalf("input[%d] does not look encrypted: %q", idx, value)
+		}
+	}
+}
+
+func TestE2EE_EncryptRequest_Rerank(t *testing.T) {
+	pubHex := ed25519ModelPubHex(t)
+	raw := &attestation.RawAttestation{SigningKey: pubHex}
+	enc := neardirect.NewE2EE()
+
+	encBody, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","query":"hello","documents":["doc1","doc2"]}`), raw, "/v1/rerank")
+	if err != nil {
+		t.Fatalf("EncryptRequest rerank: %v", err)
+	}
+	defer decryptor.Zero()
+
+	var out struct {
+		Query     string   `json:"query"`
+		Documents []string `json:"documents"`
+	}
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal encrypted rerank body: %v", err)
+	}
+	if !e2ee.IsEncryptedChunkXChaCha20(out.Query) {
+		t.Fatalf("query does not look encrypted: %q", out.Query)
+	}
+	if len(out.Documents) != 2 {
+		t.Fatalf("documents length = %d, want 2", len(out.Documents))
+	}
+	for i, doc := range out.Documents {
+		if !e2ee.IsEncryptedChunkXChaCha20(doc) {
+			t.Fatalf("documents[%d] does not look encrypted: %q", i, doc)
+		}
+	}
+}
+
+func TestE2EE_EncryptRequest_Score(t *testing.T) {
+	pubHex := ed25519ModelPubHex(t)
+	raw := &attestation.RawAttestation{SigningKey: pubHex}
+	enc := neardirect.NewE2EE()
+
+	encBody, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","text_1":"left text","text_2":"right text"}`), raw, "/v1/score")
+	if err != nil {
+		t.Fatalf("EncryptRequest score: %v", err)
+	}
+	defer decryptor.Zero()
+
+	var out struct {
+		Text1 string `json:"text_1"`
+		Text2 string `json:"text_2"`
+	}
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal encrypted score body: %v", err)
+	}
+	if !e2ee.IsEncryptedChunkXChaCha20(out.Text1) {
+		t.Fatalf("text_1 does not look encrypted: %q", out.Text1)
+	}
+	if !e2ee.IsEncryptedChunkXChaCha20(out.Text2) {
+		t.Fatalf("text_2 does not look encrypted: %q", out.Text2)
+	}
+}
+
 func TestE2EE_EncryptRequest_UnsupportedEndpoint(t *testing.T) {
 	pubHex := ed25519ModelPubHex(t)
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := neardirect.NewE2EE()
 
 	unsupported := []string{
-		"/v1/embeddings",
 		"/v1/audio/transcriptions",
-		"/v1/rerank",
-		"/v1/scoring",
 		"/unknown",
 	}
 	for _, ep := range unsupported {
