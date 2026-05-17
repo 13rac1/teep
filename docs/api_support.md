@@ -55,24 +55,31 @@ Not all providers support all endpoints. If a provider has no path configured fo
 
 **Teep E2EE Header:** Teep automatically sets `X-Encrypt-All-Fields: true` on all E2EE-enabled requests to NearDirect and NearCloud. This enables full-field encryption of all sensitive request and response fields. The encryption coverage documented below reflects teep's behavior with this header active.
 
-### NearDirect
+### NearAI Shared E2EE Behavior
 
-**Upstream:** Model TEE inference-proxy instances at `*.completions.near.ai`, resolved per-model via the `/endpoints` discovery API.
+NearDirect and NearCloud both use the NearAI field-encryption protocol: Ed25519/X25519 ECDH + XChaCha20-Poly1305 with `X-Encrypt-All-Fields: true` on supported endpoints. In both providers, teep encrypts the sensitive fields listed below and leaves structural or numeric metadata plaintext.
 
-**E2EE protocol:** Ed25519/X25519 ECDH + XChaCha20-Poly1305 (field-level encryption).
+**Known plaintext request fields (NearDirect and NearCloud):**
 
-**Connection model:** TLS-pinned. On an SPKI cache miss, attestation is fetched inline and the subsequent inference uses that same TCP connection. On an SPKI cache hit, the proxy may open a fresh TLS connection that is validated against the cached attested SPKI pin rather than re-running attestation inline. In both cases, the TLS certificate is validated with standard CA-based verification, and the connection is additionally bound to the attested TEE with attestation-based SPKI pinning.
+| Endpoint | Plaintext request fields |
+|---|---|
+| Chat completions | Structural request metadata such as `role`, `tool_call_id`, `type`, `id`, and other non-sensitive wrapper fields |
+| Embeddings | Request wrapper metadata such as `encoding_format`, `dimensions`, and other non-sensitive wrapper fields |
+| Image generation | Request wrapper metadata such as `n`, `size`, `quality`, `style`, and other non-sensitive wrapper fields |
+| Reranking | Request wrapper metadata such as non-sensitive top-level parameters |
+| Score | Request wrapper metadata; sensitive inputs `text_1` and `text_2` are encrypted |
 
-| Endpoint | Upstream Path | E2EE | Notes |
-|---|---|---|---|
-| Chat completions | `/v1/chat/completions` | Yes | Sensitive fields encrypted; streaming forced when E2EE active |
-| Embeddings | `/v1/embeddings` | Yes | Sensitive fields encrypted; supports string and array input formats |
-| Audio transcriptions | `/v1/audio/transcriptions` | No (pinned TLS) | Multipart body; E2EE not applied. Connection is TLS-pinned to attested TEE |
-| Image generation | `/v1/images/generations` | Yes | Sensitive fields encrypted; `prompt`, `b64_json`, and `revised_prompt` encrypted |
-| Reranking | `/v1/rerank` | Yes | Sensitive fields encrypted; `query` and `documents[]` encrypted |
-| Score | `/v1/score` | Request only | Request fields (`text_1`, `text_2`) encrypted; response `data[].score` currently plaintext (known upstream NearAI limitation) |
+**Known plaintext response fields (NearDirect and NearCloud):**
 
-**E2EE request fields encrypted:**
+| Endpoint | Plaintext response fields |
+|---|---|
+| Chat completions | Structural metadata including top-level `id`, `object`, `created`, `model`, optional `system_fingerprint`; `choices[].index`, `choices[].finish_reason`, `choices[].message.role`/`choices[].delta.role`, tool-call metadata (`tool_call_id`, `id`, `type`), usage counters (`usage.*`), and other numeric/index metadata |
+| Embeddings | Top-level metadata (`id`, `object`, `created`, `model`, `usage.*`) and per-item metadata (`data[].index`, `data[].object`) |
+| Image generation | Top-level metadata (for example `created`); if upstream returns URL-form image output, `data[].url` remains plaintext while `b64_json`/`revised_prompt` are encrypted |
+| Reranking | Numeric/index metadata (for example `results[].index`, `results[].relevance_score`) |
+| Score | `data[].score` plaintext numeric response (known upstream NearAI limitation) |
+
+**E2EE request fields encrypted (NearDirect and NearCloud):**
 
 | Endpoint | Encrypted fields |
 |---|---|
@@ -82,7 +89,7 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | Reranking | `query`, `documents[]` |
 | Score | `text_1`, `text_2` |
 
-**E2EE response fields encrypted:**
+**E2EE response fields encrypted (NearDirect and NearCloud):**
 
 | Field | Encrypted | Notes |
 |---|---|---|
@@ -115,15 +122,22 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | `results[].document.text` | Yes | Reranking |
 | `data[].score` | No | Score response is currently plaintext from upstream (known upstream NearAI limitation) |
 
-**Known plaintext fields when E2EE is active (NearDirect and NearCloud):**
+### NearDirect
 
-| Endpoint | Plaintext fields (not E2EE-encrypted) |
-|---|---|
-| Chat completions | Structural metadata including top-level `id`, `object`, `created`, `model`, optional `system_fingerprint`; `choices[].index`, `choices[].finish_reason`, `choices[].message.role`/`choices[].delta.role`, tool-call metadata (`tool_call_id`, `id`, `type`), usage counters (`usage.*`), and other numeric/index metadata |
-| Embeddings | Top-level metadata (`id`, `object`, `created`, `model`, `usage.*`) and per-item metadata (`data[].index`, `data[].object`) |
-| Image generation | Top-level metadata (for example `created`); if upstream returns URL-form image output, `data[].url` remains plaintext while `b64_json`/`revised_prompt` are encrypted |
-| Reranking | Numeric/index metadata (for example `results[].index`, `results[].relevance_score`) |
-| Score | `data[].score` plaintext numeric response (known upstream NearAI limitation) |
+**Upstream:** Model TEE inference-proxy instances at `*.completions.near.ai`, resolved per-model via the `/endpoints` discovery API.
+
+**E2EE protocol:** Ed25519/X25519 ECDH + XChaCha20-Poly1305 (field-level encryption).
+
+**Connection model:** TLS-pinned to the inference machine. On an SPKI cache miss, attestation is fetched inline and the subsequent inference uses that same TCP connection. On an SPKI cache hit, the proxy may open a fresh TLS connection that is validated against the cached attested SPKI pin rather than re-running attestation inline. In both cases, the TLS certificate is validated with standard CA-based verification, and the connection is additionally bound to the attested TEE with attestation-based SPKI pinning.
+
+| Endpoint | Upstream Path | E2EE | Notes |
+|---|---|---|---|
+| Chat completions | `/v1/chat/completions` | Yes | Sensitive fields encrypted; streaming forced when E2EE active |
+| Embeddings | `/v1/embeddings` | Yes | Sensitive fields encrypted; supports string and array input formats |
+| Audio transcriptions | `/v1/audio/transcriptions` | No (pinned TLS) | Multipart body; E2EE not applied. Connection is TLS-pinned to attested TEE |
+| Image generation | `/v1/images/generations` | Yes | Sensitive fields encrypted; `prompt`, `b64_json`, and `revised_prompt` encrypted |
+| Reranking | `/v1/rerank` | Yes | Sensitive fields encrypted; `query` and `documents[]` encrypted |
+| Score | `/v1/score` | Request only | Request fields (`text_1`, `text_2`) encrypted; response `data[].score` currently plaintext (known upstream NearAI limitation) |
 
 ---
 
@@ -133,16 +147,20 @@ Not all providers support all endpoints. If a provider has no path configured fo
 
 **E2EE protocol:** Same as NearDirect — Ed25519/X25519 ECDH + XChaCha20-Poly1305 (field-level encryption).
 
-**Connection model:** TLS-pinned to gateway TEE. Gateway forwards requests to model TEE internally.
+**Connection model:** TLS-pinned to the gateway TEE only. This pinning binds clients to the cloud gateway, not to the underlying per-model inference machine. Gateway forwards requests to model TEE internally.
 
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|
 | Chat completions | `/v1/chat/completions` | Yes | Gateway forwards E2EE headers to model TEE |
+| Embeddings | `/v1/embeddings` | Yes | Gateway forwards E2EE headers to model TEE |
+| Audio transcriptions | `/v1/audio/transcriptions` | No (pinned TLS) | Multipart body; E2EE not applied. Gateway pinning only covers the cloud gateway |
 | Image generation | `/v1/images/generations` | Yes | Gateway forwards E2EE headers to model TEE |
+| Reranking | `/v1/rerank` | Yes | Gateway forwards E2EE headers to model TEE |
+| Score | `/v1/score` | Request only | Request fields (`text_1`, `text_2`) encrypted; response `data[].score` currently plaintext (known upstream NearAI limitation) |
 
-Embeddings, reranking, and score are wired in the proxy for NearCloud. The gateway preserves `X-Encrypt-All-Fields: true` and forwards encrypted request field values to the model TEE. For score, request fields are encrypted but response `data[].score` is currently plaintext due to a known upstream NearAI limitation. As with NearDirect, non-sensitive structural and numeric metadata across chat/embeddings/images/rerank responses remains plaintext (for example IDs, indexes, finish reasons, and usage counters). Audio is still not wired for NearCloud because the multipart body cannot be field-encrypted safely in the current pinned flow.
+NearCloud keeps the same NearAI field-encryption behavior as NearDirect for the supported endpoints, but its TLS binding is to the gateway only rather than to the underlying per-model inference machine. Audio remains unwired because the multipart request body cannot be field-encrypted safely in the current pinned flow.
 
-**E2EE field coverage:** Matches NearDirect for request encryption and response sensitive-field encryption. Plaintext metadata fields match NearDirect (see NearDirect plaintext-field table above), and score response `data[].score` is currently plaintext due to a known upstream NearAI limitation.
+**E2EE field coverage:** Matches the shared NearAI tables above; score response `data[].score` is currently plaintext due to a known upstream NearAI limitation.
 
 ---
 
