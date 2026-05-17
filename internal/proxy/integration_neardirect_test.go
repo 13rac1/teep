@@ -155,6 +155,15 @@ func TestIntegration_NearDirect(t *testing.T) {
 		assertStreamResponse(t, resp)
 	})
 
+	t.Run("E2EENonStream", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+		defer proxySrv.Close()
+
+		resp := postChatIntegration(t, proxySrv.URL, nearDirectIntegrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponse(t, resp)
+	})
+
 	t.Run("AttestationReport", func(t *testing.T) {
 		// Online mode so the report includes Intel PCS, NRAS, and PoC results.
 		cfg := integrationNearDirectConfig(t)
@@ -255,5 +264,14 @@ func TestIntegration_NearDirect(t *testing.T) {
 		resp := postChatWithTools(t, proxySrv.URL, nearDirectIntegrationModel(), true)
 		defer resp.Body.Close()
 		assertStreamResponse(t, resp)
+	})
+
+	t.Run("E2EENonStreamWithTools", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+		defer proxySrv.Close()
+
+		resp := postChatWithTools(t, proxySrv.URL, nearDirectIntegrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponseOrToolCall(t, resp)
 	})
 }

@@ -1352,7 +1352,7 @@ func TestDecryptNonStreamResponse_RerankPlaintextRejected(t *testing.T) {
 	}
 }
 
-func TestDecryptNonStreamResponse_ScorePlaintextRejected(t *testing.T) {
+func TestDecryptNonStreamResponse_ScorePlaintextAccepted(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
 
@@ -1368,16 +1368,25 @@ func TestDecryptNonStreamResponse_ScorePlaintextRejected(t *testing.T) {
 		t.Fatalf("marshal body: %v", err)
 	}
 
-	_, err = DecryptNonStreamResponse(b, session)
-	if err == nil {
-		t.Fatal("expected error for plaintext score response")
+	out, err := DecryptNonStreamResponse(b, session)
+	if err != nil {
+		t.Fatalf("unexpected error for plaintext score response: %v", err)
 	}
-	if !strings.Contains(err.Error(), "data[0].score: expected encrypted string") {
-		t.Fatalf("unexpected error: %v", err)
+
+	var parsed struct {
+		Data []struct {
+			Score float64 `json:"score"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Data) != 1 || parsed.Data[0].Score != 0.42 {
+		t.Fatalf("unexpected score output: %s", out)
 	}
 }
 
-func TestDecryptNonStreamResponse_ScorePlaintextRejected_WhenChoicesDecrypted(t *testing.T) {
+func TestDecryptNonStreamResponse_ScorePlaintextAccepted_WhenChoicesDecrypted(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
 
@@ -1402,12 +1411,29 @@ func TestDecryptNonStreamResponse_ScorePlaintextRejected_WhenChoicesDecrypted(t 
 		t.Fatalf("marshal body: %v", err)
 	}
 
-	_, err = DecryptNonStreamResponse(b, session)
-	if err == nil {
-		t.Fatal("expected error for plaintext score response even when choices decrypt")
+	out, err := DecryptNonStreamResponse(b, session)
+	if err != nil {
+		t.Fatalf("unexpected error when choice decrypts and score is plaintext: %v", err)
 	}
-	if !strings.Contains(err.Error(), "data[0].score: expected encrypted string") {
-		t.Fatalf("unexpected error: %v", err)
+
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Data []struct {
+			Score float64 `json:"score"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Choices) != 1 || parsed.Choices[0].Message.Content != "assistant plaintext" {
+		t.Fatalf("unexpected choices output: %s", out)
+	}
+	if len(parsed.Data) != 1 || parsed.Data[0].Score != 0.42 {
+		t.Fatalf("unexpected score output: %s", out)
 	}
 }
 
