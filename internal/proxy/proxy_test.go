@@ -12,6 +12,8 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +28,92 @@ import (
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/proxy"
 )
+
+// init loads environment variables from .env file if it exists.
+// This allows developers to run integration tests without manually setting
+// environment variables. The .env file should use bash-compatible format:
+//
+//	export VAR_NAME=value
+//	export ANOTHER_VAR=another_value
+func init() {
+	loadEnv()
+}
+
+// loadEnv searches for and reads .env file from the repository root,
+// sourcing environment variables into the process. Lines that don't start
+// with "export " are ignored (e.g. comments, unset lines). Environment
+// variables that are already set take precedence over .env values.
+// If .env doesn't exist, loadEnv is a no-op.
+func loadEnv() {
+	// Search for .env starting from current directory and moving up to root
+	wd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+
+	var envPath string
+	for {
+		candidate := filepath.Join(wd, ".env")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			envPath = candidate
+			break
+		}
+
+		// Move up one directory
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			// Reached root directory without finding .env
+			return
+		}
+		wd = parent
+	}
+
+	f, err := os.Open(envPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip comments and blank lines
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Parse "export VAR=value" format
+		if !strings.HasPrefix(line, "export ") {
+			continue
+		}
+
+		// Remove "export " prefix
+		line = strings.TrimPrefix(line, "export ")
+
+		// Split on first '=' to get name and value
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		name := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		// Remove leading/trailing quotes if present
+		if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+			value = value[1 : len(value)-1]
+		} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
+			value = value[1 : len(value)-1]
+		}
+
+		// Set environment variable only if not already set
+		// (prioritize explicitly-set environment variables)
+		if _, exists := os.LookupEnv(name); !exists {
+			os.Setenv(name, value)
+		}
+	}
+}
 
 type stubPinnedHandler struct{}
 
