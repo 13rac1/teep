@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,12 @@ import (
 // instance failover retries the total may exceed 120s. 5 minutes gives
 // generous headroom without hanging forever on a stuck connection.
 var integrationClient = tlsct.NewHTTPClient(5 * time.Minute)
+
+const (
+	integrationRequestTimeoutDefault  = 2 * time.Minute
+	integrationRequestTimeoutHeadroom = 10 * time.Second
+	integrationRequestTimeoutMin      = 5 * time.Second
+)
 
 // skipIntegration skips the test if VENICE_API_KEY is unset or if running
 // under go test -short.
@@ -108,12 +115,44 @@ func integrationE2EEConfig(t *testing.T) *config.Config {
 // integrationPrompt is a short prompt that minimizes cost and response time.
 const integrationPrompt = "Say hello in exactly two words"
 
+func integrationRequestTimeout(t *testing.T) time.Duration {
+	t.Helper()
+
+	timeout := integrationRequestTimeoutDefault
+	if deadline, ok := t.Deadline(); ok {
+		remaining := time.Until(deadline) - integrationRequestTimeoutHeadroom
+		switch {
+		case remaining <= integrationRequestTimeoutMin:
+			return integrationRequestTimeoutMin
+		case remaining < timeout:
+			return remaining
+		}
+	}
+
+	return timeout
+}
+
+func integrationPostJSON(t *testing.T, url, body string) (*http.Response, error) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout(t))
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	return integrationClient.Do(req)
+}
+
 // postChatIntegration sends a POST /v1/chat/completions with the standard
 // integration prompt. Uses integrationClient (60s timeout).
 func postChatIntegration(t *testing.T, proxyURL, model string, stream bool) *http.Response {
 	t.Helper()
 	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":%v}`, model, integrationPrompt, stream)
-	resp, err := integrationClient.Post(proxyURL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	resp, err := integrationPostJSON(t, proxyURL+"/v1/chat/completions", body)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
 	}
@@ -126,7 +165,7 @@ func postChatIntegration(t *testing.T, proxyURL, model string, stream bool) *htt
 func postChatWithTools(t *testing.T, proxyURL, model string, stream bool) *http.Response {
 	t.Helper()
 	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":%v,"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]}`, model, integrationPrompt, stream)
-	resp, err := integrationClient.Post(proxyURL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	resp, err := integrationPostJSON(t, proxyURL+"/v1/chat/completions", body)
 	if err != nil {
 		t.Fatalf("POST chat with tools: %v", err)
 	}
