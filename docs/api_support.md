@@ -179,7 +179,7 @@ Venice only exposes chat completions. No other endpoints are available.
 |---|---|
 | `messages[].content` | Yes (text string or serialized VL content array) |
 
-**E2EE field coverage:** Venice uses the same [inference-proxy](https://github.com/nearai/inference-proxy) as NearDirect and NearCloud. All encrypted fields are identical to NearDirect — see the NearDirect tables above for the complete list.
+**E2EE field coverage:** Venice's E2EE implementation encrypts only `messages[].content`. Other message fields (tool_calls, name, reasoning_content, etc.) and top-level fields are preserved as plaintext. Venice uses X-Venice-TEE-* headers and secp256k1/AES-256-GCM — it does not use the NearDirect/NearCloud XChaCha20-Poly1305 protocol or the `X-Encrypt-All-Fields` header.
 
 ---
 
@@ -209,14 +209,15 @@ When a Chutes-format backend is detected, the attestation is parsed using the Ch
 
 ## E2EE Protocol Comparison
 
-| Property | NearDirect / NearCloud / Venice | Chutes |
-|---|---|---|
-| Encryption scope | Per-field (all fields with teep) | Full-body |
-| Key exchange | ECDH (Ed25519→X25519 or secp256k1) | ML-KEM-768 (post-quantum) |
-| Symmetric cipher | XChaCha20-Poly1305 or AES-256-GCM | ChaCha20-Poly1305 |
-| Request encryption | All sensitive JSON fields | Entire body (gzipped) |
-| Response encryption | All sensitive JSON fields in SSE chunks | Entire SSE chunks |
-| Field coverage | Complete with teep's `X-Encrypt-All-Fields: true` | Complete — all fields encrypted by construction |
-| New field coverage | Requires explicit code change per field | Automatic — new fields covered by construction |
-| Streaming | `stream=true` forced; relay decrypts SSE | `e2e_init` + `e2e` SSE events; relay decrypts chunks |
-| Post-quantum | No | Yes (ML-KEM-768) |
+| Property | NearDirect / NearCloud | Venice | Chutes |
+|---|---|---|---|
+| Encryption scope | Per-field (all fields with teep) | Per-field (`messages[].content` only) | Full-body |
+| Key exchange | ECDH (Ed25519→X25519) | ECDH (secp256k1) | ML-KEM-768 (post-quantum) |
+| Symmetric cipher | XChaCha20-Poly1305 | AES-256-GCM | ChaCha20-Poly1305 |
+| E2EE headers | `X-Signing-Algo`, `X-Client-Pub-Key`, `X-Encryption-Version`, `X-Encrypt-All-Fields` | `X-Venice-TEE-Client-Pub-Key`, `X-Venice-TEE-Model-Pub-Key`, `X-Venice-TEE-Signing-Algo` | None (body-level AEAD) |
+| Request encryption | All sensitive JSON fields | `messages[].content` | Entire body (gzipped) |
+| Response encryption | All sensitive JSON fields in SSE chunks | `choices[].delta.content` in SSE chunks | Entire SSE chunks |
+| Field coverage | Complete with teep's `X-Encrypt-All-Fields: true` | `messages[].content` only | Complete — all fields encrypted by construction |
+| New field coverage | Requires explicit code change per field | Requires explicit code change per field | Automatic — new fields covered by construction |
+| Streaming | `stream=true` forced; relay decrypts SSE | `stream=true` forced; relay decrypts SSE | `e2e_init` + `e2e` SSE events; relay decrypts chunks |
+| Post-quantum | No | No | Yes (ML-KEM-768) |
