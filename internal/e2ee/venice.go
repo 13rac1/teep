@@ -92,12 +92,6 @@ func (s *VeniceSession) Zero() {
 	}
 }
 
-// SupportsEncryptAllFields returns false, indicating that Venice only encrypts
-// messages[].content and does not support full-field encryption.
-func (s *VeniceSession) SupportsEncryptAllFields() bool {
-	return false
-}
-
 // IsRequestFieldEncrypted reports whether the given message field is encrypted
 // in Venice E2EE requests. Venice only encrypts messages[].content; all other
 // fields are plaintext. Per api_support.md.

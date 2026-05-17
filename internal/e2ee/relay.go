@@ -83,14 +83,11 @@ func IsNonEncryptedField(key string) bool {
 // In full-field mode (NearCloud/NearDirect/Chutes), every non-metadata string
 // field must be encrypted. In content-only mode (Venice), only content is
 // strictly required to be encrypted; other string fields may be plaintext.
-func RequiresEncryptedField(key string, supportsEncryptAllFields bool) bool {
+func RequiresEncryptedField(key string, session Decryptor) bool {
 	if IsNonEncryptedField(key) {
 		return false
 	}
-	if supportsEncryptAllFields {
-		return true
-	}
-	return key == "content"
+	return session.IsRequestFieldEncrypted(key)
 }
 
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
@@ -98,7 +95,6 @@ func RequiresEncryptedField(key string, supportsEncryptAllFields bool) bool {
 // and returns true if any field was decrypted.
 func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
 	changed := false
-	fullFieldMode := session.SupportsEncryptAllFields()
 	for key, raw := range fields {
 		var s string
 		if json.Unmarshal(raw, &s) != nil || s == "" {
@@ -107,7 +103,7 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ct
 		if IsNonEncryptedField(key) {
 			continue
 		}
-		requiresEncrypted := RequiresEncryptedField(key, fullFieldMode)
+		requiresEncrypted := RequiresEncryptedField(key, session)
 		if !session.IsEncryptedChunk(s) {
 			if !requiresEncrypted {
 				continue
@@ -177,7 +173,7 @@ func decryptFunctionObject(obj map[string]json.RawMessage, session Decryptor, ct
 			// For protocols that don't support full-field encryption (e.g., Venice),
 			// plaintext tool_call function fields are acceptable. Only enforce encryption
 			// for protocols with X-Encrypt-All-Fields support.
-			if session.SupportsEncryptAllFields() {
+			if session.IsRequestFieldEncrypted("function") {
 				return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 			}
 			continue
@@ -214,7 +210,7 @@ func decryptToolCallsField(fields map[string]json.RawMessage, session Decryptor,
 		}
 		// Only decrypt tool call function names/arguments if protocol supports full-field encryption.
 		// Venice E2EE preserves tool_calls plaintext.
-		if !session.SupportsEncryptAllFields() {
+		if !session.IsRequestFieldEncrypted("tool_calls") {
 			continue
 		}
 		c, err := decryptFunctionObject(fn, session, fmt.Sprintf("%s.tool_calls[%d].function", ctx, i))
@@ -465,7 +461,7 @@ func decryptChatObject(fields map[string]json.RawMessage, session Decryptor, ctx
 	}
 	// Only decrypt nested fields (audio, tool_calls, function_call) if the protocol supports
 	// full-field encryption (e.g., NearCloud/Chutes). Venice only encrypts messages[].content.
-	if session.SupportsEncryptAllFields() {
+	if session.IsRequestFieldEncrypted("tool_calls") {
 		if c, err := decryptAudioDataField(fields, session, ctx); err != nil {
 			return false, err
 		} else if c {
@@ -551,7 +547,7 @@ func DecryptSSEChunk(data string, session Decryptor) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if session.SupportsEncryptAllFields() {
+	if session.IsResponseFieldEncrypted("logprobs", "/v1/chat/completions") {
 		if c, err := decryptChoiceLogprobs(choices[0], session, "choice[0]"); err != nil {
 			return "", err
 		} else if c {
@@ -622,7 +618,6 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 	}
 
 	result := make(map[string]string)
-	fullFieldMode := session.SupportsEncryptAllFields()
 	for key, original := range originalStringFields {
 		if IsNonEncryptedField(key) {
 			continue
@@ -633,7 +628,7 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 			continue
 		}
 		if !session.IsEncryptedChunk(original) {
-			if RequiresEncryptedField(key, fullFieldMode) {
+			if RequiresEncryptedField(key, session) {
 				return nil, fmt.Errorf("delta.%s: expected encrypted string before decryption", key)
 			}
 			result[key] = s
@@ -788,7 +783,7 @@ func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor) (json
 		if err != nil {
 			return nil, err
 		}
-		if session.SupportsEncryptAllFields() {
+		if session.IsResponseFieldEncrypted("logprobs", "") {
 			if lc, err := decryptChoiceLogprobs(choices[i], session, fmt.Sprintf("choice[%d]", i)); err != nil {
 				return nil, err
 			} else if lc {
@@ -1181,7 +1176,7 @@ func extractChunkMeta(data string, session Decryptor) (chunkMeta, error) {
 	var m chunkMeta
 	if len(parsed.Choices) > 0 {
 		m.ToolCalls = parsed.Choices[0].Delta.ToolCalls
-		if session != nil && session.SupportsEncryptAllFields() {
+		if session != nil && session.IsRequestFieldEncrypted("tool_calls") {
 			for i := range m.ToolCalls {
 				decrypted, err := decryptToolCallMetaRaw(m.ToolCalls[i], session, fmt.Sprintf("delta.tool_calls[%d]", i))
 				if err != nil {

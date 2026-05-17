@@ -75,12 +75,6 @@ func (s *ChutesSession) Zero() {
 	s.RequestCiphertext = nil
 }
 
-// SupportsEncryptAllFields returns true, indicating that Chutes supports
-// full-field encryption by construction.
-func (s *ChutesSession) SupportsEncryptAllFields() bool {
-	return true
-}
-
 // IsRequestFieldEncrypted returns true for all fields because Chutes uses
 // full-body encryption. No field is plaintext. Per api_support.md:
 // "Chutes encrypts the entire HTTP body as a single binary blob — no field-level gaps.

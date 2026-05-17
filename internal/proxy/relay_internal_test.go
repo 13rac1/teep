@@ -229,7 +229,6 @@ type noopDecryptor struct{ zeroed bool }
 
 func (n *noopDecryptor) IsEncryptedChunk(string) bool                 { return false }
 func (n *noopDecryptor) Decrypt(string) ([]byte, error)               { return nil, nil }
-func (n *noopDecryptor) SupportsEncryptAllFields() bool               { return false }
 func (n *noopDecryptor) IsRequestFieldEncrypted(string) bool          { return false }
 func (n *noopDecryptor) IsResponseFieldEncrypted(string, string) bool { return false }
 func (n *noopDecryptor) Zero()                                        { n.zeroed = true }
@@ -787,7 +786,6 @@ type mockDecryptor struct{}
 
 func (mockDecryptor) IsEncryptedChunk(_ string) bool               { return false }
 func (mockDecryptor) Decrypt(_ string) ([]byte, error)             { return nil, errors.New("mock decrypt") }
-func (mockDecryptor) SupportsEncryptAllFields() bool               { return false }
 func (mockDecryptor) IsRequestFieldEncrypted(string) bool          { return false }
 func (mockDecryptor) IsResponseFieldEncrypted(string, string) bool { return false }
 func (mockDecryptor) Zero()                                        {}

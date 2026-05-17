@@ -319,7 +319,6 @@ func (m *mockDecryptor) Decrypt(val string) ([]byte, error) {
 	}
 	return []byte("decrypted"), nil
 }
-func (m *mockDecryptor) SupportsEncryptAllFields() bool { return true }
 
 func (m *mockDecryptor) IsRequestFieldEncrypted(fieldPath string) bool {
 	switch fieldPath {
