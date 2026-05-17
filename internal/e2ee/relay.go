@@ -926,7 +926,9 @@ func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor)
 	return out, nil
 }
 
-// decryptResponseScoreData decrypts score fields in data[] items of a score response.
+// decryptResponseScoreData processes score fields in data[] items of a score response.
+// It decrypts encrypted score strings when present, and accepts plaintext numeric
+// scores (current NearDirect/NearCloud behavior) without rewriting.
 // Returns the rewritten data JSON, or nil if nothing was decrypted.
 func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strictDataShape bool) (json.RawMessage, error) {
 	var data []map[string]json.RawMessage
@@ -952,17 +954,23 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 		if IsJSONNull(scoreRaw) {
 			return nil, fmt.Errorf("data[%d].score: expected encrypted string, got null", i)
 		}
-		// In this E2EE decryption path, score must be an encrypted string.
-		// Plaintext numeric scores are rejected fail-closed when a session is active.
-		if !jsonRawStartsWithToken(scoreRaw, '"') {
-			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
+
+		// Accept plaintext numeric scores as-is. Some upstream score endpoints
+		// currently return plaintext scores even when E2EE request encryption is active.
+		if jsonTopLevelNumber(scoreRaw) {
+			continue
 		}
+
+		if !jsonRawStartsWithToken(scoreRaw, '"') {
+			return nil, fmt.Errorf("data[%d].score: expected JSON number or encrypted string", i)
+		}
+
 		var scoreStr string
 		if err := json.Unmarshal(scoreRaw, &scoreStr); err != nil {
 			return nil, fmt.Errorf("parse data[%d].score: %w", i, err)
 		}
 		if !session.IsEncryptedChunk(scoreStr) {
-			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
+			return nil, fmt.Errorf("data[%d].score: expected JSON number or encrypted string", i)
 		}
 		plaintext, err := session.Decrypt(scoreStr)
 		if err != nil {
@@ -979,7 +987,7 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 		return nil, nil
 	}
 	if !changed {
-		return nil, errors.New("data.score: expected encrypted content")
+		return nil, nil
 	}
 	out, _ := json.Marshal(data) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, nil

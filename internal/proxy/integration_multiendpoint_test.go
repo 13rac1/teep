@@ -469,15 +469,13 @@ func TestIntegration_NearDirect_Score_E2EE(t *testing.T) {
 		t.Fatalf("POST score: %v", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
-	}
-
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
 	}
 
 	assertScoreResponse(t, respBody)

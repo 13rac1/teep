@@ -178,6 +178,52 @@ func assertNonStreamResponse(t *testing.T, resp *http.Response) {
 	t.Logf("response: %q", content)
 }
 
+// assertNonStreamResponseOrToolCall validates a non-streaming chat response
+// where models may either return text content or a tool call message.
+func assertNonStreamResponseOrToolCall(t *testing.T, resp *http.Response) {
+	t.Helper()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content   *string           `json:"content"`
+				ToolCalls []json.RawMessage `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("decode non-stream response: %v; body=%s", err, body)
+	}
+	if len(parsed.Choices) == 0 {
+		t.Fatalf("no choices in response: %s", body)
+	}
+
+	msg := parsed.Choices[0].Message
+	if msg.Content != nil && *msg.Content != "" {
+		if !isPrintableUTF8(*msg.Content) {
+			t.Errorf("content is not valid printable UTF-8: %q", *msg.Content)
+		}
+		t.Logf("response content: %q", *msg.Content)
+		return
+	}
+	if len(msg.ToolCalls) > 0 {
+		t.Logf("response contains %d tool call(s)", len(msg.ToolCalls))
+		return
+	}
+
+	t.Fatalf("expected printable content or tool_calls, got body=%s", body)
+}
+
 // assertStreamResponse validates a streaming chat response has valid printable
 // UTF-8 content across all SSE chunks.
 func assertStreamResponse(t *testing.T, resp *http.Response) {
@@ -269,6 +315,14 @@ func TestIntegration_Venice(t *testing.T) {
 		assertStreamResponse(t, resp)
 	})
 
+	t.Run("E2EENonStream", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatIntegration(t, proxySrv.URL, integrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponse(t, resp)
+	})
+
 	t.Run("AttestationReport", func(t *testing.T) {
 		cfg := integrationE2EEConfig(t)
 		cfg.Offline = false
@@ -308,5 +362,13 @@ func TestIntegration_Venice(t *testing.T) {
 		resp := postChatWithTools(t, proxySrv.URL, integrationModel(), true)
 		defer resp.Body.Close()
 		assertStreamResponse(t, resp)
+	})
+
+	t.Run("E2EENonStreamWithTools", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatWithTools(t, proxySrv.URL, integrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponseOrToolCall(t, resp)
 	})
 }

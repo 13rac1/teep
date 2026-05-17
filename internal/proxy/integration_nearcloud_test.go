@@ -153,6 +153,15 @@ func TestIntegration_NearCloud(t *testing.T) {
 		assertStreamResponse(t, resp)
 	})
 
+	t.Run("E2EENonStream", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+		defer proxySrv.Close()
+
+		resp := postChatIntegration(t, proxySrv.URL, nearCloudIntegrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponse(t, resp)
+	})
+
 	t.Run("AttestationReport", func(t *testing.T) {
 		// Online mode with E2EE so the report includes Intel PCS, NRAS, PoC,
 		// gateway results, and e2ee_usable transitions to Pass after a live
@@ -292,6 +301,15 @@ func TestIntegration_NearCloud(t *testing.T) {
 			t.Errorf("aggregated content is not valid printable UTF-8: %q", content)
 		}
 		t.Logf("response with tools (%d chunks): %q", len(chunks), content)
+	})
+
+	t.Run("E2EENonStreamWithTools", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+		defer proxySrv.Close()
+
+		resp := postChatWithTools(t, proxySrv.URL, nearCloudIntegrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponseOrToolCall(t, resp)
 	})
 }
 
@@ -485,15 +503,13 @@ func TestIntegration_NearCloud_Score_E2EE(t *testing.T) {
 		t.Fatalf("POST score: %v", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
-	}
-
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
 	}
 	assertScoreResponse(t, respBody)
 }

@@ -42,11 +42,12 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | Audio transcriptions | Plaintext (pinned) | — | — | — | — |
 | Image generation | Encrypted | Encrypted | — | — | — |
 | Reranking | Encrypted | Encrypted | — | — | — |
-| Score | Encrypted | Encrypted | — | — | — |
+| Score | Request encrypted; response plaintext (pinned) | Request encrypted; response plaintext (pinned) | — | — | — |
 
 **Encrypted** = E2EE is applied to request and response fields.
 **Fail closed** = Proxy rejects the request with an error because E2EE is not supported for this endpoint in the end-to-end path, either because the proxy does not implement E2EE field dispatch for that request type or because the upstream TEE cannot decrypt it.
 **Plaintext (pinned)** = Request and response transit in plaintext, but the connection is TLS-pinned to the attested TEE (no E2EE field encryption).
+**Request encrypted; response plaintext (pinned)** = Request fields are encrypted end-to-end, but upstream currently returns plaintext response fields for this endpoint. This is a known upstream NearAI limitation (inference-proxy/cloud-api score response path), not a teep policy preference. Responses still transit on pinned TLS to attested TEEs.
 **No E2EE** = Provider does not support E2EE. Requests transit in plaintext over TLS to the attested TEE.
 **—** = Endpoint not available for this provider.
 
@@ -64,12 +65,12 @@ Not all providers support all endpoints. If a provider has no path configured fo
 
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|
-| Chat completions | `/v1/chat/completions` | Yes | Full-field encryption; streaming forced when E2EE active |
-| Embeddings | `/v1/embeddings` | Yes | Full-field encryption; supports string and array input formats |
+| Chat completions | `/v1/chat/completions` | Yes | Sensitive fields encrypted; streaming forced when E2EE active |
+| Embeddings | `/v1/embeddings` | Yes | Sensitive fields encrypted; supports string and array input formats |
 | Audio transcriptions | `/v1/audio/transcriptions` | No (pinned TLS) | Multipart body; E2EE not applied. Connection is TLS-pinned to attested TEE |
-| Image generation | `/v1/images/generations` | Yes | Full-field encryption; prompt, `b64_json`, and `revised_prompt` encrypted |
-| Reranking | `/v1/rerank` | Yes | Full-field encryption; query and documents encrypted |
-| Score | `/v1/score` | Yes | Full-field encryption; text_1 and text_2 encrypted |
+| Image generation | `/v1/images/generations` | Yes | Sensitive fields encrypted; `prompt`, `b64_json`, and `revised_prompt` encrypted |
+| Reranking | `/v1/rerank` | Yes | Sensitive fields encrypted; `query` and `documents[]` encrypted |
+| Score | `/v1/score` | Request only | Request fields (`text_1`, `text_2`) encrypted; response `data[].score` currently plaintext (known upstream NearAI limitation) |
 
 **E2EE request fields encrypted:**
 
@@ -112,7 +113,17 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | `data[].revised_prompt` | Yes | Images |
 | `data[].embedding` | Yes | Embeddings |
 | `results[].document.text` | Yes | Reranking |
-| `data[].score` | Yes | Score |
+| `data[].score` | No | Score response is currently plaintext from upstream (known upstream NearAI limitation) |
+
+**Known plaintext fields when E2EE is active (NearDirect and NearCloud):**
+
+| Endpoint | Plaintext fields (not E2EE-encrypted) |
+|---|---|
+| Chat completions | Structural metadata including top-level `id`, `object`, `created`, `model`, optional `system_fingerprint`; `choices[].index`, `choices[].finish_reason`, `choices[].message.role`/`choices[].delta.role`, tool-call metadata (`tool_call_id`, `id`, `type`), usage counters (`usage.*`), and other numeric/index metadata |
+| Embeddings | Top-level metadata (`id`, `object`, `created`, `model`, `usage.*`) and per-item metadata (`data[].index`, `data[].object`) |
+| Image generation | Top-level metadata (for example `created`); if upstream returns URL-form image output, `data[].url` remains plaintext while `b64_json`/`revised_prompt` are encrypted |
+| Reranking | Numeric/index metadata (for example `results[].index`, `results[].relevance_score`) |
+| Score | `data[].score` plaintext numeric response (known upstream NearAI limitation) |
 
 ---
 
@@ -129,9 +140,9 @@ Not all providers support all endpoints. If a provider has no path configured fo
 | Chat completions | `/v1/chat/completions` | Yes | Gateway forwards E2EE headers to model TEE |
 | Image generation | `/v1/images/generations` | Yes | Gateway forwards E2EE headers to model TEE |
 
-Embeddings, reranking, and score are wired in the proxy for NearCloud. The gateway preserves `X-Encrypt-All-Fields: true` and forwards the encrypted field values to the model TEE. Audio is still not wired for NearCloud because the multipart body cannot be field-encrypted safely in the current pinned flow.
+Embeddings, reranking, and score are wired in the proxy for NearCloud. The gateway preserves `X-Encrypt-All-Fields: true` and forwards encrypted request field values to the model TEE. For score, request fields are encrypted but response `data[].score` is currently plaintext due to a known upstream NearAI limitation. As with NearDirect, non-sensitive structural and numeric metadata across chat/embeddings/images/rerank responses remains plaintext (for example IDs, indexes, finish reasons, and usage counters). Audio is still not wired for NearCloud because the multipart body cannot be field-encrypted safely in the current pinned flow.
 
-**E2EE field coverage:** Identical to NearDirect (same inference-proxy backend). See the NearDirect tables above for complete list of encrypted fields.
+**E2EE field coverage:** Matches NearDirect for request encryption and response sensitive-field encryption. Plaintext metadata fields match NearDirect (see NearDirect plaintext-field table above), and score response `data[].score` is currently plaintext due to a known upstream NearAI limitation.
 
 ---
 
@@ -211,13 +222,13 @@ When a Chutes-format backend is detected, the attestation is parsed using the Ch
 
 | Property | NearDirect / NearCloud | Venice | Chutes |
 |---|---|---|---|
-| Encryption scope | Per-field (all fields with teep) | Per-field (`messages[].content` only) | Full-body |
+| Encryption scope | Per-field (requests; most responses) | Per-field (`messages[].content` only) | Full-body |
 | Key exchange | ECDH (Ed25519→X25519) | ECDH (secp256k1) | ML-KEM-768 (post-quantum) |
 | Symmetric cipher | XChaCha20-Poly1305 | AES-256-GCM | ChaCha20-Poly1305 |
 | E2EE headers | `X-Signing-Algo`, `X-Client-Pub-Key`, `X-Encryption-Version`, `X-Encrypt-All-Fields` | `X-Venice-TEE-Client-Pub-Key`, `X-Venice-TEE-Model-Pub-Key`, `X-Venice-TEE-Signing-Algo` | None (body-level AEAD) |
 | Request encryption | All sensitive JSON fields | `messages[].content` | Entire body (gzipped) |
-| Response encryption | All sensitive JSON fields in SSE chunks | `choices[].delta.content` in SSE chunks | Entire SSE chunks |
-| Field coverage | Complete with teep's `X-Encrypt-All-Fields: true` | `messages[].content` only | Complete — all fields encrypted by construction |
+| Response encryption | Selected sensitive fields encrypted (chat text/tool-call payloads/logprobs tokens, embeddings vectors, rerank document text, image `b64_json`/`revised_prompt`); structural and numeric metadata plaintext; score `data[].score` currently plaintext (known upstream NearAI limitation) | `choices[].delta.content` in SSE chunks | Entire SSE chunks |
+| Field coverage | Broad sensitive-field coverage with `X-Encrypt-All-Fields: true`; metadata fields (IDs, indexes, roles, finish reasons, usage counters, scores) remain plaintext | `messages[].content` only | Complete — all fields encrypted by construction |
 | New field coverage | Requires explicit code change per field | Requires explicit code change per field | Automatic — new fields covered by construction |
 | Streaming | `stream=true` forced; relay decrypts SSE | `stream=true` forced; relay decrypts SSE | `e2e_init` + `e2e` SSE events; relay decrypts chunks |
 | Post-quantum | No | No | Yes (ML-KEM-768) |
