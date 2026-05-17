@@ -17,6 +17,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/tlsct"
 	"github.com/google/go-tdx-guest/verify/trust"
@@ -448,7 +449,7 @@ func (h *PinnedHandler) verifyNVIDIA(
 		eat = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce)
 	}
 	if !h.offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
-		nras = h.nvidiaVerifier.VerifyNRAS(ctx, raw.NvidiaPayload, tlsct.NewHTTPClient(30*time.Second))
+		nras = h.nvidiaVerifier.VerifyNRAS(ctx, raw.NvidiaPayload, httpclient.NewHTTPClient(30*time.Second))
 	}
 	return eat, nras
 }
@@ -459,7 +460,7 @@ func (h *PinnedHandler) checkPoC(ctx context.Context, quote string) *attestation
 	if h.offline || quote == "" {
 		return nil
 	}
-	poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, tlsct.NewHTTPClient(30*time.Second))
+	poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, httpclient.NewHTTPClient(30*time.Second))
 	return poc.CheckQuote(ctx, quote)
 }
 

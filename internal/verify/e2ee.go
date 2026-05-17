@@ -18,6 +18,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct"
@@ -209,8 +210,9 @@ func testE2EEChutes(ctx context.Context, raw *attestation.RawAttestation, cp *co
 // e2e, e2e_error, usage) instead of the per-field encryption used by other
 // providers.
 func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *attestation.E2EETestResult {
-	client := tlsct.NewHTTPClient(60 * time.Second)
-	resp, err := client.Do(req)
+	client := httpclient.NewHTTPClient(60 * time.Second)
+	client.Transport = tlsct.WrapTransport(client.Transport)
+	resp, err := httpclient.Do(client, req)
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP request: %w", err)}
 	}
@@ -343,8 +345,9 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 // doE2EEStreamTest sends an E2EE chat completions request and validates
 // that the SSE response contains properly encrypted content fields.
 func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string) *attestation.E2EETestResult {
-	client := tlsct.NewHTTPClient(60 * time.Second)
-	resp, err := client.Do(req)
+	client := httpclient.NewHTTPClient(60 * time.Second)
+	client.Transport = tlsct.WrapTransport(client.Transport)
+	resp, err := httpclient.Do(client, req)
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP request: %w", err)}
 	}

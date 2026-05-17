@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/tlsct"
@@ -65,10 +66,13 @@ type EndpointResolver struct {
 // NewEndpointResolver returns a resolver that discovers endpoints from
 // the default NEAR AI URL (https://completions.near.ai/endpoints).
 func NewEndpointResolver(offline ...bool) *EndpointResolver {
-	ctEnabled := len(offline) == 0 || !offline[0]
+	client := httpclient.NewHTTPClient(30 * time.Second)
+	if len(offline) == 0 || !offline[0] {
+		client.Transport = tlsct.WrapTransport(client.Transport)
+	}
 	return &EndpointResolver{
 		endpointsURL:     defaultEndpointsURL,
-		client:           tlsct.NewHTTPClient(30*time.Second, ctEnabled),
+		client:           client,
 		restrictToNearAI: true,
 		mapping:          make(map[string]string),
 	}
@@ -78,7 +82,7 @@ func NewEndpointResolver(offline ...bool) *EndpointResolver {
 func newEndpointResolverForTest(url string) *EndpointResolver {
 	return &EndpointResolver{
 		endpointsURL:     url,
-		client:           tlsct.NewHTTPClient(1 * time.Second),
+		client:           httpclient.NewHTTPClient(1 * time.Second),
 		restrictToNearAI: false,
 		mapping:          make(map[string]string),
 	}
@@ -188,7 +192,7 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 		return fmt.Errorf("build request: %w", err)
 	}
 
-	resp, err := r.client.Do(req)
+	resp, err := httpclient.Do(r.client, req)
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", r.endpointsURL, err)
 	}

@@ -170,27 +170,6 @@ func TestToCTChain(t *testing.T) {
 
 // ---------- Group 3: ctEnabledFromOpt ----------
 
-func TestCtEnabledFromOpt(t *testing.T) {
-	tests := []struct {
-		name string
-		args []bool
-		want bool
-	}{
-		{"no args defaults to true", nil, true},
-		{"explicit true", []bool{true}, true},
-		{"explicit false", []bool{false}, false},
-		{"multiple args uses first", []bool{false, true}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tlsct.CtEnabledFromOpt(tt.args...)
-			if got != tt.want {
-				t.Errorf("ctEnabledFromOpt(%v) = %v, want %v", tt.args, got, tt.want)
-			}
-		})
-	}
-}
-
 // ---------- Group 4: SetEnabled nil safety ----------
 
 func TestSetEnabled_NilSafe(t *testing.T) {
@@ -524,87 +503,6 @@ func TestCTRoundTripper(t *testing.T) {
 		rt := tlsct.WrapTransport(nil)
 		if rt == nil {
 			t.Fatal("expected non-nil RoundTripper")
-		}
-	})
-}
-
-// ---------- Group 13: NewHTTPClientWithTransport ----------
-
-func TestNewHTTPClientWithTransport(t *testing.T) {
-	t.Run("nil base does not panic", func(t *testing.T) {
-		c := tlsct.NewHTTPClientWithTransport(5*time.Second, nil, false)
-		if c == nil {
-			t.Fatal("expected non-nil client")
-		}
-	})
-
-	t.Run("TLS 1.2 upgraded to 1.3", func(t *testing.T) {
-		base := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-		c := tlsct.NewHTTPClientWithTransport(5*time.Second, base, false)
-		tr := c.Transport.(*http.Transport)
-		if tr.TLSClientConfig.MinVersion != tls.VersionTLS13 {
-			t.Fatalf("expected TLS 1.3, got %d", tr.TLSClientConfig.MinVersion)
-		}
-	})
-
-	t.Run("TLS 1.3 not downgraded", func(t *testing.T) {
-		base := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
-		c := tlsct.NewHTTPClientWithTransport(5*time.Second, base, false)
-		tr := c.Transport.(*http.Transport)
-		if tr.TLSClientConfig.MinVersion != tls.VersionTLS13 {
-			t.Fatalf("expected TLS 1.3, got %d", tr.TLSClientConfig.MinVersion)
-		}
-	})
-
-	t.Run("nil TLSClientConfig gets TLS 1.3", func(t *testing.T) {
-		base := &http.Transport{}
-		c := tlsct.NewHTTPClientWithTransport(5*time.Second, base, false)
-		tr := c.Transport.(*http.Transport)
-		if tr.TLSClientConfig == nil || tr.TLSClientConfig.MinVersion != tls.VersionTLS13 {
-			t.Fatal("expected TLS 1.3 config")
-		}
-	})
-
-	t.Run("CT disabled returns plain transport", func(t *testing.T) {
-		c := tlsct.NewHTTPClientWithTransport(5*time.Second, nil, false)
-		if _, ok := c.Transport.(*http.Transport); !ok {
-			t.Fatalf("expected *http.Transport when CT disabled, got %T", c.Transport)
-		}
-	})
-
-	t.Run("CT enabled wraps transport", func(t *testing.T) {
-		c := tlsct.NewHTTPClientWithTransport(5*time.Second, nil, true)
-		if _, ok := c.Transport.(*http.Transport); ok {
-			t.Fatal("expected wrapped transport when CT enabled")
-		}
-	})
-
-	t.Run("timeout propagated", func(t *testing.T) {
-		c := tlsct.NewHTTPClient(42*time.Second, false)
-		if c.Timeout != 42*time.Second {
-			t.Fatalf("expected 42s timeout, got %v", c.Timeout)
-		}
-	})
-
-	t.Run("default CT enabled without explicit arg", func(t *testing.T) {
-		c := tlsct.NewHTTPClient(5 * time.Second)
-		if _, ok := c.Transport.(*http.Transport); ok {
-			t.Fatal("expected CT-wrapped transport by default (no explicit bool)")
-		}
-	})
-
-	t.Run("NewHTTPClientWithTransport default CT enabled", func(t *testing.T) {
-		c := tlsct.NewHTTPClientWithTransport(5*time.Second, nil)
-		if _, ok := c.Transport.(*http.Transport); ok {
-			t.Fatal("expected CT-wrapped transport by default")
-		}
-	})
-
-	t.Run("TLS 1.3 enforced when CT enabled by default", func(t *testing.T) {
-		base := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS10}}
-		_ = tlsct.NewHTTPClientWithTransport(5*time.Second, base)
-		if base.TLSClientConfig.MinVersion != tls.VersionTLS13 {
-			t.Fatalf("expected TLS 1.3 enforcement, got %d", base.TLSClientConfig.MinVersion)
 		}
 	})
 }

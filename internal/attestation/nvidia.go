@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/13rac1/teep/internal/tlsct"
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -150,7 +150,7 @@ func (v *NVIDIAVerifier) Shutdown() {
 // Reference Integrity Manifest values.
 func (v *NVIDIAVerifier) VerifyNRAS(ctx context.Context, eatPayload string, client *http.Client, opts ...jwt.ParserOption) *NvidiaVerifyResult {
 	if client == nil {
-		client = tlsct.NewHTTPClient(30 * time.Second)
+		client = httpclient.NewHTTPClient(30 * time.Second)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.nrasURL, strings.NewReader(eatPayload))
@@ -163,7 +163,7 @@ func (v *NVIDIAVerifier) VerifyNRAS(ctx context.Context, eatPayload string, clie
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := httpclient.Do(client, req)
 	if err != nil {
 		return &NvidiaVerifyResult{
 			Format:       "JWT",
@@ -260,13 +260,13 @@ func (v *NVIDIAVerifier) fetchAndCacheJWKS(ctx context.Context, jwksURL string, 
 	v.mu.RUnlock()
 
 	if client == nil {
-		client = tlsct.NewHTTPClient(30 * time.Second)
+		client = httpclient.NewHTTPClient(30 * time.Second)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("build JWKS request for %s: %w", jwksURL, err)
 	}
-	resp, err := client.Do(req)
+	resp, err := httpclient.Do(client, req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch JWKS from %s: %w", jwksURL, err)
 	}
@@ -356,6 +356,7 @@ func (v *NVIDIAVerifier) verifyNVIDIAJWT(ctx context.Context, jwtPayload, jwksUR
 	parserOpts := append([]jwt.ParserOption{
 		jwt.WithValidMethods([]string{"ES256", "ES384", "ES512"}),
 		jwt.WithExpirationRequired(),
+		jwt.WithLeeway(30 * time.Second),
 	}, opts...)
 	token, err := jwt.ParseWithClaims(jwtPayload, claims, kf.Keyfunc, parserOpts...)
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
@@ -147,7 +148,7 @@ type Attester struct {
 func NewAttester(apiKey string, offline ...bool) *Attester {
 	return &Attester{
 		apiKey: apiKey,
-		client: config.NewAttestationClient(len(offline) > 0 && offline[0]),
+		client: httpclient.NewAttestationClient(config.AttestationTimeout, len(offline) > 0 && offline[0]),
 	}
 }
 

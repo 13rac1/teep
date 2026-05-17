@@ -44,6 +44,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
 	chutesProvider "github.com/13rac1/teep/internal/provider/chutes"
@@ -398,10 +399,7 @@ type Server struct {
 func New(cfg *config.Config) (*Server, error) {
 	spkiCache := attestation.NewSPKICache()
 
-	attestClient := tlsct.NewHTTPClientWithTransport(config.AttestationTimeout, &http.Transport{
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-	}, !cfg.Offline)
+	attestClient := httpclient.NewAttestationClient(config.AttestationTimeout, cfg.Offline)
 
 	s := &Server{
 		cfg:             cfg,
@@ -418,16 +416,17 @@ func New(cfg *config.Config) (*Server, error) {
 	onReq := func() { s.stats.httpRequests.Add(1) }
 	onErr := func() { s.stats.httpErrors.Add(1) }
 
-	attestClient.Transport = tlsct.WrapCounting(
-		tlsct.WrapLogging(attestClient.Transport),
-		onReq, onErr)
+	attestClient.Transport = httpclient.WrapCounting(attestClient.Transport, onReq, onErr)
 
-	upstreamClient := tlsct.NewHTTPClientWithTransport(0, &http.Transport{
+	upstreamClient := httpclient.NewHTTPClientWithTransport(0, &http.Transport{
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
-	}, !cfg.Offline)
-	upstreamClient.Transport = tlsct.WrapCounting(
-		tlsct.WrapLogging(upstreamClient.Transport),
+	})
+	if !cfg.Offline {
+		upstreamClient.Transport = tlsct.WrapTransport(upstreamClient.Transport)
+	}
+	upstreamClient.Transport = httpclient.WrapCounting(
+		httpclient.WrapLogging(upstreamClient.Transport),
 		onReq, onErr)
 	s.upstreamClient = upstreamClient
 
@@ -630,7 +629,7 @@ func fromConfig(
 		p.Encryptor = venice.NewE2EE()
 		p.ReportDataVerifier = venice.ReportDataVerifier{}
 		p.SupplyChainPolicy = venice.SupplyChainPolicy()
-		p.ModelLister = venice.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = venice.NewModelLister(cp.BaseURL, cp.APIKey, httpclient.NewAttestationClient(config.AttestationTimeout, offline))
 	case "neardirect":
 		p.ChatPath = "/v1/chat/completions"
 		p.EmbeddingsPath = "/v1/embeddings"
@@ -664,7 +663,7 @@ func fromConfig(
 		}
 		p.ModelLister = provider.NewFilteredModelLister(
 			"https://"+nearcloud.GatewayHost(), cp.APIKey,
-			config.NewAttestationClient(offline), resolver,
+			httpclient.NewAttestationClient(config.AttestationTimeout, offline), resolver,
 		)
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
@@ -697,7 +696,7 @@ func fromConfig(
 		}
 		p.ModelLister = provider.NewFilteredModelLister(
 			"https://"+nearcloud.GatewayHost(), cp.APIKey,
-			config.NewAttestationClient(offline), neardirect.NewEndpointResolver(offline),
+			httpclient.NewAttestationClient(config.AttestationTimeout, offline), neardirect.NewEndpointResolver(offline),
 		)
 	case "nanogpt":
 		p.ChatPath = "/v1/chat/completions"
@@ -725,7 +724,7 @@ func fromConfig(
 		p.EmbeddingsPath = "/v1/embeddings"
 		p.Attester = phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = phalacloud.NewPreparer(cp.APIKey)
-		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, httpclient.NewAttestationClient(config.AttestationTimeout, offline))
 		p.ReportDataVerifier = multi.Verifier{
 			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
 				attestation.FormatDstack: venice.ReportDataVerifier{},
@@ -743,9 +742,9 @@ func fromConfig(
 		p.Preparer = chutesProvider.NewPreparer(cp.APIKey, cp.BaseURL)
 		p.ReportDataVerifier = chutesProvider.ReportDataVerifier{}
 		p.SupplyChainPolicy = nil // cosign+IMA model, no docker-compose
-		p.ModelLister = chutesProvider.NewModelLister(chutesProvider.DefaultModelsBaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = chutesProvider.NewModelLister(chutesProvider.DefaultModelsBaseURL, cp.APIKey, httpclient.NewAttestationClient(config.AttestationTimeout, offline))
 		p.E2EEMaterialFetcher = chutesProvider.NewNoncePool(
-			cp.BaseURL, cp.APIKey, attester.Resolver(), config.NewAttestationClient(offline),
+			cp.BaseURL, cp.APIKey, attester.Resolver(), httpclient.NewAttestationClient(config.AttestationTimeout, offline),
 		)
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", cp.Name)
@@ -2072,7 +2071,7 @@ func (s *Server) doUpstreamRoundtrip(
 		}
 
 		upstreamDoStart := time.Now()
-		resp, err = s.upstreamClient.Do(upstreamReq)
+		resp, err = httpclient.Do(s.upstreamClient, upstreamReq)
 		upstreamDur += time.Since(upstreamDoStart)
 
 		retryable := chutesRetryableError(err, resp)

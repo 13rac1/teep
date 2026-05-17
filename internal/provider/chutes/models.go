@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/provider"
 )
 
@@ -54,7 +55,7 @@ func (l *ModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error)
 	}
 	req.Header.Set("Authorization", "Bearer "+l.apiKey)
 
-	resp, err := l.client.Do(req)
+	resp, err := httpclient.Do(l.client, req)
 	if err != nil {
 		return nil, fmt.Errorf("chutes: GET %s: %w", l.modelsBase+modelsPath, err)
 	}

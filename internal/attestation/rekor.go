@@ -19,6 +19,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
 	"github.com/transparency-dev/merkle/proof"
 	"github.com/transparency-dev/merkle/rfc6962"
@@ -289,7 +290,7 @@ func (rc *RekorClient) fetchRekorUUIDs(ctx context.Context, digest string) ([]st
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := rc.httpClient.Do(req)
+	resp, err := httpclient.Do(rc.httpClient, req)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +325,7 @@ func (rc *RekorClient) fetchRekorEntry(ctx context.Context, uuid string) (*rekor
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := rc.httpClient.Do(req)
+	resp, err := httpclient.Do(rc.httpClient, req)
 	if err != nil {
 		return nil, err
 	}

@@ -648,6 +648,7 @@ func checkNoMathRand(r *result, files []*ast.File, names []string) {
 func checkNoCryptoTLSImport(r *result, files []*ast.File, names []string) {
 	allowlist := []string{
 		"internal/tlsct/",
+		"internal/httpclient/",
 		"internal/capture/capture.go",
 	}
 	var violations []string
@@ -663,7 +664,7 @@ func checkNoCryptoTLSImport(r *result, files []*ast.File, names []string) {
 		}
 	}
 	if len(violations) == 0 {
-		r.passf("no crypto/tls import outside tlsct (use tlsct wrappers)")
+		r.passf("no crypto/tls import outside tlsct/httpclient (use tlsct wrappers)")
 		return
 	}
 	for _, v := range violations {
@@ -671,11 +672,12 @@ func checkNoCryptoTLSImport(r *result, files []*ast.File, names []string) {
 	}
 }
 
-// No http.Client{} composite literal outside of tlsct.
-// Production code must use tlsct.NewHTTPClient or tlsct.NewHTTPClientWithTransport.
+// No http.Client{} composite literal outside of httpclient and tlsct.
+// Production code must use httpclient.NewHTTPClient or httpclient.NewHTTPClientWithTransport.
 func checkNoHTTPClientLiteral(r *result, files []*ast.File, names []string) {
 	allowlist := []string{
 		"internal/tlsct/",
+		"internal/httpclient/",
 		"internal/verify/verify.go",
 	}
 	var violations []string
@@ -688,11 +690,11 @@ func checkNoHTTPClientLiteral(r *result, files []*ast.File, names []string) {
 		}
 	}
 	if len(violations) == 0 {
-		r.passf("no http.Client{} literal outside tlsct (use tlsct.NewHTTPClient)")
+		r.passf("no http.Client{} literal outside httpclient/tlsct (use httpclient.NewHTTPClient)")
 		return
 	}
 	for _, v := range violations {
-		r.failf("http.Client{} literal in %s (use tlsct.NewHTTPClient)", v)
+		r.failf("http.Client{} literal in %s (use httpclient.NewHTTPClient)", v)
 	}
 }
 

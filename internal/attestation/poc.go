@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/jsonstrict"
 )
 
@@ -400,7 +401,7 @@ func (c *PoCClient) postJSON(ctx context.Context, baseURL, path string, payload 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(req)
+	resp, err := httpclient.Do(c.client, req)
 	if err != nil {
 		return nil, err
 	}

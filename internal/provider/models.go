@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/jsonstrict"
 )
 
@@ -46,7 +47,7 @@ func (l *genericModelLister) ListModels(ctx context.Context) ([]json.RawMessage,
 	}
 	req.Header.Set("Authorization", "Bearer "+l.apiKey)
 
-	resp, err := l.client.Do(req)
+	resp, err := httpclient.Do(l.client, req)
 	if err != nil {
 		return nil, fmt.Errorf("models: GET %s: %w", l.baseURL+modelsPath, err)
 	}

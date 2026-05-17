@@ -26,6 +26,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 )
@@ -192,7 +193,7 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 	return &Attester{
 		baseURL: baseURL,
 		apiKey:  apiKey,
-		client:  config.NewAttestationClient(len(offline) > 0 && offline[0]),
+		client:  httpclient.NewAttestationClient(config.AttestationTimeout, len(offline) > 0 && offline[0]),
 	}
 }
 

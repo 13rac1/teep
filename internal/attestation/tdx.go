@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/13rac1/teep/internal/httpclient"
 	tdxabi "github.com/google/go-tdx-guest/abi"
 	"github.com/google/go-tdx-guest/pcs"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
@@ -36,7 +37,7 @@ func (g *clientHTTPSGetter) GetContext(ctx context.Context, url string) (header 
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := g.client.Do(req)
+	resp, err := httpclient.Do(g.client, req)
 	if err != nil {
 		return nil, nil, err
 	}

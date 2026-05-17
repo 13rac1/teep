@@ -12,7 +12,6 @@ import (
 // Expose pure functions for external tests.
 var IsPrivateHost = isPrivateHost
 var ToCTChain = toCTChain
-var CtEnabledFromOpt = ctEnabledFromOpt
 
 // AddCacheEntry exposes addCacheEntry for eviction tests.
 var AddCacheEntry = (*Checker).addCacheEntry

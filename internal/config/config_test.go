@@ -2,17 +2,12 @@ package config
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 )
@@ -808,31 +803,6 @@ func TestRedactKeyDoesNotContainFullKey(t *testing.T) {
 	}
 }
 
-// --- HTTP client ---
-
-func TestNewAttestationClient(t *testing.T) {
-	client := NewAttestationClient(false)
-	if client == nil {
-		t.Fatal("NewAttestationClient returned nil")
-	}
-	if client.Timeout != AttestationTimeout {
-		t.Errorf("client Timeout: got %v, want %v", client.Timeout, AttestationTimeout)
-	}
-}
-
-func TestNewAttestationClientOfflineDisablesCT(t *testing.T) {
-	client := NewAttestationClient(true)
-	if client == nil {
-		t.Fatal("NewAttestationClient returned nil")
-	}
-	if client.Timeout != AttestationTimeout {
-		t.Errorf("client Timeout: got %v, want %v", client.Timeout, AttestationTimeout)
-	}
-	if got := fmt.Sprintf("%T", client.Transport); strings.Contains(got, "ctRoundTripper") {
-		t.Fatalf("offline client transport unexpectedly wrapped with CT checker: %s", got)
-	}
-}
-
 // --- Non-loopback warning ---
 
 // TestWarnNonLoopbackLoopback verifies that loopback addresses do not produce
@@ -854,185 +824,6 @@ func TestWarnNonLoopbackNonLoopback(t *testing.T) {
 func TestWarnNonLoopbackUnparseable(t *testing.T) {
 	// Unparseable address should not panic, just log.
 	warnNonLoopback("not-an-address")
-}
-
-// rtFunc adapts a function to http.RoundTripper for RetryTransport tests.
-type rtFunc func(*http.Request) (*http.Response, error)
-
-func (f rtFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
-
-// --- RetryTransport ---
-
-func TestRetryTransport_SuccessFirstAttempt(t *testing.T) {
-	calls := 0
-	rt := &RetryTransport{
-		Base: rtFunc(func(_ *http.Request) (*http.Response, error) {
-			calls++
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(nil))}, nil
-		}),
-		MaxAttempts: 3,
-		MaxDelay:    time.Millisecond,
-	}
-
-	req, _ := http.NewRequest(http.MethodGet, "https://example.com/", http.NoBody)
-	resp, err := rt.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	resp.Body.Close()
-	t.Logf("calls: %d", calls)
-	if calls != 1 {
-		t.Errorf("expected 1 call, got %d", calls)
-	}
-}
-
-func TestRetryTransport_RetriesOn5xx(t *testing.T) {
-	calls := 0
-	rt := &RetryTransport{
-		Base: rtFunc(func(_ *http.Request) (*http.Response, error) {
-			calls++
-			if calls == 1 {
-				return &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(bytes.NewReader(nil))}, nil
-			}
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte("ok")))}, nil
-		}),
-		MaxAttempts: 3,
-		MaxDelay:    time.Millisecond,
-	}
-
-	req, _ := http.NewRequest(http.MethodGet, "https://example.com/", http.NoBody)
-	resp, err := rt.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	t.Logf("calls: %d, body: %s", calls, body)
-	if calls != 2 {
-		t.Errorf("expected 2 calls, got %d", calls)
-	}
-	if string(body) != "ok" {
-		t.Errorf("body = %q, want %q", body, "ok")
-	}
-}
-
-func TestRetryTransport_RetriesOnNetworkError(t *testing.T) {
-	calls := 0
-	netErr := errors.New("connection refused")
-	rt := &RetryTransport{
-		Base: rtFunc(func(_ *http.Request) (*http.Response, error) {
-			calls++
-			if calls == 1 {
-				return nil, netErr
-			}
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(nil))}, nil
-		}),
-		MaxAttempts: 3,
-		MaxDelay:    time.Millisecond,
-	}
-
-	req, _ := http.NewRequest(http.MethodGet, "https://example.com/", http.NoBody)
-	resp, err := rt.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	resp.Body.Close()
-	t.Logf("calls: %d", calls)
-	if calls != 2 {
-		t.Errorf("expected 2 calls, got %d", calls)
-	}
-}
-
-func TestRetryTransport_ExhaustsMaxAttempts(t *testing.T) {
-	calls := 0
-	rt := &RetryTransport{
-		Base: rtFunc(func(_ *http.Request) (*http.Response, error) {
-			calls++
-			return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(bytes.NewReader(nil))}, nil
-		}),
-		MaxAttempts: 3,
-		MaxDelay:    time.Millisecond,
-	}
-
-	req, _ := http.NewRequest(http.MethodGet, "https://example.com/", http.NoBody)
-	resp, err := rt.RoundTrip(req)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	t.Logf("calls: %d, err: %v", calls, err)
-	if err == nil {
-		t.Fatal("expected error after exhausting all attempts")
-	}
-	if calls != 3 {
-		t.Errorf("expected 3 calls, got %d", calls)
-	}
-	if !strings.Contains(err.Error(), "503") {
-		t.Errorf("error = %q, should mention 503", err)
-	}
-}
-
-func TestRetryTransport_ContextCancelledDuringDelay(t *testing.T) {
-	calls := 0
-	rt := &RetryTransport{
-		Base: rtFunc(func(_ *http.Request) (*http.Response, error) {
-			calls++
-			return nil, errors.New("transient")
-		}),
-		MaxAttempts: 3,
-		MaxDelay:    time.Millisecond,
-	}
-
-	// Cancel before RoundTrip so the retry-delay select immediately fires ctx.Done.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://example.com/", http.NoBody)
-	resp, err := rt.RoundTrip(req)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	t.Logf("calls: %d, err: %v", calls, err)
-	if err == nil {
-		t.Fatal("expected context cancellation error")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("err = %v, want context.Canceled", err)
-	}
-}
-
-func TestRetryTransport_ResetsBodyBetweenRetries(t *testing.T) {
-	// Verify the request body is readable on both attempts.
-	var bodies []string
-	rt := &RetryTransport{
-		Base: rtFunc(func(req *http.Request) (*http.Response, error) {
-			b, _ := io.ReadAll(req.Body)
-			bodies = append(bodies, string(b))
-			if len(bodies) == 1 {
-				return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(bytes.NewReader(nil))}, nil
-			}
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(nil))}, nil
-		}),
-		MaxAttempts: 3,
-		MaxDelay:    time.Millisecond,
-	}
-
-	payload := []byte(`{"nonce":"abc"}`)
-	req, _ := http.NewRequest(http.MethodPost, "https://example.com/attest", bytes.NewReader(payload))
-	resp, err := rt.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	resp.Body.Close()
-	t.Logf("bodies: %v", bodies)
-	if len(bodies) != 2 {
-		t.Fatalf("expected 2 attempts, got %d", len(bodies))
-	}
-	if bodies[0] != string(payload) {
-		t.Errorf("attempt 1 body = %q, want %q", bodies[0], payload)
-	}
-	if bodies[1] != string(payload) {
-		t.Errorf("attempt 2 body = %q, want %q (body should be reset)", bodies[1], payload)
-	}
 }
 
 // TestLoadNonLoopbackEnvAddrLoads verifies Load succeeds even when the listen
@@ -1554,43 +1345,6 @@ func TestMergeAllowlists_MRSeamAndRTMR(t *testing.T) {
 	}
 	if _, ok := merged.RTMRAllow[0][valid48b]; !ok {
 		t.Error("overlay RTMR0 should win")
-	}
-}
-
-func TestRetryTransport_BodyCannotReset(t *testing.T) {
-	// A request with a non-nil body but no GetBody function cannot be retried
-	// after the first attempt consumes the body. The transport should return
-	// the last error without attempting a reset.
-	attempts := 0
-	rt := &RetryTransport{
-		Base: rtFunc(func(req *http.Request) (*http.Response, error) {
-			attempts++
-			return &http.Response{
-				StatusCode: http.StatusServiceUnavailable,
-				Body:       io.NopCloser(bytes.NewReader(nil)),
-			}, nil
-		}),
-		MaxAttempts: 3,
-		MaxDelay:    time.Millisecond,
-	}
-
-	// Manually create a request with body but no GetBody.
-	req, _ := http.NewRequest(http.MethodPost, "https://example.com/attest", http.NoBody)
-	req.Body = io.NopCloser(bytes.NewReader([]byte(`{"nonce":"abc"}`)))
-	req.GetBody = nil
-
-	resp, err := rt.RoundTrip(req)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	t.Logf("BodyCannotReset: err=%v attempts=%d", err, attempts)
-	if attempts != 1 {
-		t.Errorf("expected 1 attempt (body cannot be reset), got %d", attempts)
-	}
-	// The 503 triggers retry logic, but since GetBody==nil, the transport
-	// gives up after the first attempt and returns the last error.
-	if err == nil {
-		t.Error("expected non-nil error when body cannot be reset")
 	}
 }
 

@@ -66,7 +66,7 @@ func NewChecker() *Checker {
 		entries: make(map[string]certCacheEntry),
 		logListHTTP: &http.Client{
 			Timeout:   20 * time.Second,
-			Transport: WrapLogging(base),
+			Transport: base,
 		},
 	}
 	c.enabled.Store(ctEnabledDefault)
@@ -82,50 +82,6 @@ func (c *Checker) SetEnabled(enabled bool) {
 		return
 	}
 	c.enabled.Store(enabled)
-}
-
-// NewHTTPClient returns an HTTP client that enforces CT for all HTTPS requests.
-// All outgoing requests are logged at DEBUG level via WrapLogging.
-func NewHTTPClient(timeout time.Duration, ctEnabled ...bool) *http.Client {
-	dt, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		panic("http.DefaultTransport is not *http.Transport")
-	}
-	client := NewHTTPClientWithTransport(timeout, dt.Clone(), ctEnabled...)
-	client.Transport = WrapLogging(client.Transport)
-	return client
-}
-
-// NewHTTPClientWithTransport returns an HTTP client that enforces CT for all
-// HTTPS requests while using the provided base transport settings.
-func NewHTTPClientWithTransport(timeout time.Duration, base *http.Transport, ctEnabled ...bool) *http.Client {
-	if base == nil {
-		dt, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			panic("http.DefaultTransport is not *http.Transport")
-		}
-		base = dt.Clone()
-	}
-	if base.TLSClientConfig == nil {
-		base.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
-	} else if base.TLSClientConfig.MinVersion < tls.VersionTLS13 {
-		base.TLSClientConfig.MinVersion = tls.VersionTLS13
-	}
-	transport := http.RoundTripper(base)
-	if ctEnabledFromOpt(ctEnabled...) {
-		transport = WrapTransport(base)
-	}
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-	}
-}
-
-func ctEnabledFromOpt(enabled ...bool) bool {
-	if len(enabled) == 0 {
-		return ctEnabledDefault
-	}
-	return enabled[0]
 }
 
 // WrapTransport wraps an existing transport with post-handshake CT checks.

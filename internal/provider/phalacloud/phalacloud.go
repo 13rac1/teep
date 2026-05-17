@@ -22,23 +22,19 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/formatdetect"
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
-	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
 	// attestationPath is the Phala Cloud API path for TEE attestation reports.
 	attestationPath = "/v1/attestation/report"
-
-	// attestationTimeout is longer than the default because Phala Cloud's
-	// multi-instance attestation endpoint is slow (typically 30-60s).
-	attestationTimeout = 120 * time.Second
 )
 
 // Attester fetches attestation data from Phala Cloud's attestation endpoint.
@@ -53,16 +49,11 @@ type Attester struct {
 // and API key. Uses an extended timeout because Phala Cloud's multi-instance
 // attestation endpoint is slow.
 func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
-	ctEnabled := len(offline) == 0 || !offline[0]
-	client := tlsct.NewHTTPClientWithTransport(attestationTimeout, &http.Transport{
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-	}, ctEnabled)
-	client.Transport = tlsct.WrapLogging(client.Transport)
+	isOffline := len(offline) > 0 && offline[0]
 	return &Attester{
 		baseURL: baseURL,
 		apiKey:  apiKey,
-		client:  client,
+		client:  httpclient.NewAttestationClient(config.AttestationTimeout, isOffline),
 	}
 }
 
@@ -73,7 +64,7 @@ func (a *Attester) SetClient(c *http.Client) { a.client = c }
 // as a query parameter. Format detection is performed on the response body to
 // delegate to the correct backend parser.
 func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
-	ctx, cancel := context.WithTimeout(ctx, attestationTimeout)
+	ctx, cancel := context.WithTimeout(ctx, config.AttestationTimeout)
 	defer cancel()
 
 	endpoint, err := url.Parse(a.baseURL + attestationPath)

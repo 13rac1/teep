@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/13rac1/teep/internal/httpclient"
 )
 
 // FetchAttestationJSON performs a GET to url with a Bearer token, reads up to
@@ -17,10 +19,9 @@ func FetchAttestationJSON(ctx context.Context, client *http.Client, url, apiKey 
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	resp, err := client.Do(req)
+	resp, err := httpclient.Do(client, req)
 	if err != nil {
-		// Host+Path only — never include query parameters (may contain nonce).
-		return nil, fmt.Errorf("GET %s%s: %w", req.URL.Host, req.URL.Path, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 

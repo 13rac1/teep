@@ -28,6 +28,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/httpclient"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 )
@@ -97,7 +98,7 @@ type Attester struct {
 // and API key. modelsBase is the URL for /v1/models model-name resolution
 // (defaults to https://llm.chutes.ai if empty).
 func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
-	client := config.NewAttestationClient(len(offline) > 0 && offline[0])
+	client := httpclient.NewAttestationClient(config.AttestationTimeout, len(offline) > 0 && offline[0])
 	return &Attester{
 		baseURL:  baseURL,
 		apiKey:   apiKey,

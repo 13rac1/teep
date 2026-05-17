@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/13rac1/teep/internal/httpclient"
 )
 
 const (
@@ -129,7 +131,7 @@ func (r *ModelResolver) fetchModels(ctx context.Context) (map[string]string, err
 	}
 	req.Header.Set("Authorization", "Bearer "+r.apiKey)
 
-	resp, err := r.client.Do(req)
+	resp, err := httpclient.Do(r.client, req)
 	if err != nil {
 		return nil, fmt.Errorf("chutes: GET %s: %w", r.modelsBase+modelsPath, err)
 	}

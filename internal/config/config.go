@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -24,7 +23,6 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/13rac1/teep/internal/attestation"
-	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
@@ -42,9 +40,9 @@ const (
 	rlimitHeadroom = 50
 
 	// AttestationTimeout is the HTTP client timeout for attestation fetches.
-	// 45 seconds accommodates Chutes' multi-GPU evidence endpoint which
-	// consistently takes ~30 seconds for large TEE deployments.
-	AttestationTimeout = 45 * time.Second
+	// 120 seconds accommodates slow provider endpoints (e.g. Venice, Chutes)
+	// that can take over a minute for large TEE deployments.
+	AttestationTimeout = 120 * time.Second
 )
 
 // DefaultAllowFail lists the factor names that are allowed to fail without
@@ -668,89 +666,4 @@ func RedactKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "****"
-}
-
-// RetryTransport retries requests on 5xx responses and network errors. For
-// requests with a body it requires req.GetBody to be set so the body can be
-// reset between attempts (http.NewRequestWithContext sets GetBody automatically
-// when passed a *bytes.Reader). If a retry is needed and GetBody is nil for a
-// request with a body, the last error is returned immediately rather than
-// sending an empty body. GET requests have no body and are always retried
-// unconditionally.
-//
-// Base must be non-nil.
-//
-// All attestation endpoints retried by this transport are effectively
-// idempotent reads. Do not use for POST endpoints with side effects (nonce
-// consumption, billing) without explicit consideration.
-type RetryTransport struct {
-	Base        http.RoundTripper
-	MaxAttempts int           // 0 → default 3
-	MaxDelay    time.Duration // 0 → default 4s
-}
-
-// RoundTrip executes the request, retrying on 5xx and network errors.
-func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	maxAttempts := t.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = 3
-	}
-	maxDelay := t.MaxDelay
-	if maxDelay <= 0 {
-		maxDelay = 4 * time.Second
-	}
-	hasBody := req.Body != nil && req.Body != http.NoBody
-	var lastErr error
-	for attempt := range maxAttempts {
-		if attempt > 0 {
-			if hasBody && req.GetBody == nil {
-				// Body was consumed on the first attempt and cannot be reset.
-				return nil, lastErr
-			}
-			exp := min(attempt-1, 30) // cap to avoid int64 overflow; 2^30s >> any realistic maxDelay
-			timer := time.NewTimer(min(time.Duration(1<<exp)*time.Second, maxDelay))
-			select {
-			case <-req.Context().Done():
-				timer.Stop()
-				return nil, req.Context().Err()
-			case <-timer.C:
-			}
-			slog.WarnContext(req.Context(), "retrying after error",
-				"host", req.URL.Host, "path", req.URL.Path, "attempt", attempt+1, "err", lastErr)
-			if req.GetBody != nil {
-				body, err := req.GetBody()
-				if err != nil {
-					return nil, err
-				}
-				req.Body = body
-			}
-		}
-		resp, err := t.Base.RoundTrip(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode >= 500 {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d from %s", resp.StatusCode, req.URL.Host)
-			continue
-		}
-		return resp, nil
-	}
-	return nil, lastErr
-}
-
-// NewAttestationClient returns an *http.Client with a 30-second timeout and
-// tuned transport, suitable for fetching attestation data from TEE provider
-// endpoints. The default MaxIdleConnsPerHost (2) is too low for providers
-// that serve multiple models from the same host. In offline mode, CT checks
-// are disabled to avoid external CT log list downloads.
-func NewAttestationClient(offline bool) *http.Client {
-	client := tlsct.NewHTTPClientWithTransport(AttestationTimeout, &http.Transport{
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-	}, !offline)
-	client.Transport = tlsct.WrapLogging(client.Transport)
-	client.Transport = &RetryTransport{Base: client.Transport}
-	return client
 }

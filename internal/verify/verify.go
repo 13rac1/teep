@@ -16,6 +16,7 @@ import (
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/defaults"
+	"github.com/13rac1/teep/internal/httpclient"
 )
 
 // Options holds all parameters for Run.
@@ -53,7 +54,7 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 
 	client := opts.Client
 	if client == nil {
-		client = config.NewAttestationClient(opts.Offline)
+		client = httpclient.NewAttestationClient(config.AttestationTimeout, opts.Offline)
 	}
 
 	nonce := opts.Nonce
