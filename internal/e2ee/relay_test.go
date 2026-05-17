@@ -32,18 +32,6 @@ type fullFieldVeniceSession struct {
 	*VeniceSession
 }
 
-func (s *fullFieldVeniceSession) SupportsEncryptAllFields() bool {
-	return true
-}
-
-func (s *fullFieldVeniceSession) AllowsPlaintextScoreResponse() bool {
-	return false
-}
-
-func (s *fullFieldVeniceSession) AllowsPlaintextLogprobsBytes() bool {
-	return false
-}
-
 func (s *fullFieldVeniceSession) IsRequestFieldEncrypted(fieldPath string) bool {
 	// Simulate full-field mode: encrypt everything except metadata
 	switch fieldPath {
@@ -2089,7 +2077,6 @@ type testDecryptor struct {
 
 func (m *testDecryptor) IsEncryptedChunk(val string) bool  { return m.isEncrypted(val) }
 func (m *testDecryptor) Decrypt(ct string) ([]byte, error) { return m.decrypt(ct) }
-func (m *testDecryptor) SupportsEncryptAllFields() bool    { return true }
 
 func (m *testDecryptor) IsRequestFieldEncrypted(fieldPath string) bool {
 	switch fieldPath {

@@ -96,12 +96,6 @@ func (s *NearCloudSession) Zero() {
 	s.modelX25519 = nil
 }
 
-// SupportsEncryptAllFields returns true, indicating that NearCloud supports
-// full-field encryption via the X-Encrypt-All-Fields protocol.
-func (s *NearCloudSession) SupportsEncryptAllFields() bool {
-	return true
-}
-
 // IsRequestFieldEncrypted reports whether a message field is encrypted in
 // NearCloud E2EE requests under X-Encrypt-All-Fields mode.
 // Per api_support.md, encrypted fields include: content, reasoning_content,
