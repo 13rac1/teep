@@ -115,6 +115,17 @@ func integrationE2EEConfig(t *testing.T) *config.Config {
 // integrationPrompt is a short prompt that minimizes cost and response time.
 const integrationPrompt = "Say hello in exactly two words"
 
+type cancelOnCloseReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnCloseReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.cancel()
+	return err
+}
+
 func integrationRequestTimeout(t *testing.T) time.Duration {
 	t.Helper()
 
@@ -136,15 +147,22 @@ func integrationPostJSON(t *testing.T, url, body string) (*http.Response, error)
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout(t))
-	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	return integrationClient.Do(req)
+	resp, err := integrationClient.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	resp.Body = &cancelOnCloseReadCloser{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
 }
 
 // postChatIntegration sends a POST /v1/chat/completions with the standard
