@@ -236,7 +236,9 @@ func (n *noopDecryptor) AllowsPlaintextScoreResponse() bool {
 func (n *noopDecryptor) AllowsPlaintextLogprobsBytes() bool {
 	return false
 }
-func (n *noopDecryptor) Zero() { n.zeroed = true }
+func (n *noopDecryptor) IsRequestFieldEncrypted(string) bool          { return false }
+func (n *noopDecryptor) IsResponseFieldEncrypted(string, string) bool { return false }
+func (n *noopDecryptor) Zero()                                        { n.zeroed = true }
 
 func TestZeroE2EESessions_NilBoth(t *testing.T) {
 	zeroE2EESessions(nil, nil) // must not panic
@@ -793,10 +795,12 @@ func (mockDecryptor) IsEncryptedChunk(_ string) bool { return false }
 func (mockDecryptor) Decrypt(_ string) ([]byte, error) {
 	return nil, errors.New("mock decrypt")
 }
-func (mockDecryptor) SupportsEncryptAllFields() bool     { return false }
-func (mockDecryptor) AllowsPlaintextScoreResponse() bool { return false }
-func (mockDecryptor) AllowsPlaintextLogprobsBytes() bool { return false }
-func (mockDecryptor) Zero()                              {}
+func (mockDecryptor) SupportsEncryptAllFields() bool               { return false }
+func (mockDecryptor) AllowsPlaintextScoreResponse() bool           { return false }
+func (mockDecryptor) AllowsPlaintextLogprobsBytes() bool           { return false }
+func (mockDecryptor) IsRequestFieldEncrypted(string) bool          { return false }
+func (mockDecryptor) IsResponseFieldEncrypted(string, string) bool { return false }
+func (mockDecryptor) Zero()                                        {}
 
 func TestHandlePinnedPostRelay_NoError_NoSession(t *testing.T) {
 	s := newMinimalServer()

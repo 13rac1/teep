@@ -497,12 +497,14 @@ type sessionPinnedHandler struct{}
 // fakeDecryptor satisfies e2ee.Decryptor for testing.
 type fakeDecryptor struct{}
 
-func (fakeDecryptor) IsEncryptedChunk(string) bool       { return false }
-func (fakeDecryptor) Decrypt(string) ([]byte, error)     { return nil, errors.New("fake") }
-func (fakeDecryptor) SupportsEncryptAllFields() bool     { return false }
-func (fakeDecryptor) AllowsPlaintextScoreResponse() bool { return false }
-func (fakeDecryptor) AllowsPlaintextLogprobsBytes() bool { return false }
-func (fakeDecryptor) Zero()                              {}
+func (fakeDecryptor) IsEncryptedChunk(string) bool                 { return false }
+func (fakeDecryptor) Decrypt(string) ([]byte, error)               { return nil, errors.New("fake") }
+func (fakeDecryptor) SupportsEncryptAllFields() bool               { return false }
+func (fakeDecryptor) AllowsPlaintextScoreResponse() bool           { return false }
+func (fakeDecryptor) AllowsPlaintextLogprobsBytes() bool           { return false }
+func (fakeDecryptor) IsRequestFieldEncrypted(string) bool          { return false }
+func (fakeDecryptor) IsResponseFieldEncrypted(string, string) bool { return false }
+func (fakeDecryptor) Zero()                                        {}
 
 func (sessionPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
 	body := io.NopCloser(strings.NewReader(`{"data":"encrypted"}`))

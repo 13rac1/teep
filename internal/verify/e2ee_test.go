@@ -322,7 +322,23 @@ func (m *mockDecryptor) Decrypt(val string) ([]byte, error) {
 func (m *mockDecryptor) SupportsEncryptAllFields() bool     { return true }
 func (m *mockDecryptor) AllowsPlaintextScoreResponse() bool { return false }
 func (m *mockDecryptor) AllowsPlaintextLogprobsBytes() bool { return false }
-func (m *mockDecryptor) Zero()                              {}
+func (m *mockDecryptor) IsRequestFieldEncrypted(fieldPath string) bool {
+	switch fieldPath {
+	case "role", "tool_call_id", "type", "id", "index":
+		return false
+	default:
+		return true
+	}
+}
+func (m *mockDecryptor) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	switch fieldPath {
+	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint":
+		return false
+	default:
+		return true
+	}
+}
+func (m *mockDecryptor) Zero() {}
 
 func TestDoE2EEStreamTest_HTTPError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
