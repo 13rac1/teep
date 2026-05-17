@@ -81,18 +81,6 @@ func (s *ChutesSession) SupportsEncryptAllFields() bool {
 	return true
 }
 
-// AllowsPlaintextScoreResponse returns false because the current Chutes E2EE
-// protocol does not define a plaintext score response path here.
-func (s *ChutesSession) AllowsPlaintextScoreResponse() bool {
-	return false
-}
-
-// AllowsPlaintextLogprobsBytes returns false because logprobs token bytes
-// must be encrypted under full-field E2EE.
-func (s *ChutesSession) AllowsPlaintextLogprobsBytes() bool {
-	return false
-}
-
 // IsRequestFieldEncrypted returns true for all fields because Chutes uses
 // full-body encryption. No field is plaintext. Per api_support.md:
 // "Chutes encrypts the entire HTTP body as a single binary blob — no field-level gaps.

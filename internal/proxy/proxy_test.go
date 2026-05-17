@@ -588,8 +588,6 @@ type fakeDecryptor struct{}
 func (fakeDecryptor) IsEncryptedChunk(string) bool                 { return false }
 func (fakeDecryptor) Decrypt(string) ([]byte, error)               { return nil, errors.New("fake") }
 func (fakeDecryptor) SupportsEncryptAllFields() bool               { return false }
-func (fakeDecryptor) AllowsPlaintextScoreResponse() bool           { return false }
-func (fakeDecryptor) AllowsPlaintextLogprobsBytes() bool           { return false }
 func (fakeDecryptor) IsRequestFieldEncrypted(string) bool          { return false }
 func (fakeDecryptor) IsResponseFieldEncrypted(string, string) bool { return false }
 func (fakeDecryptor) Zero()                                        {}
