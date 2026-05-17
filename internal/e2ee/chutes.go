@@ -81,6 +81,12 @@ func (s *ChutesSession) SupportsEncryptAllFields() bool {
 	return true
 }
 
+// AllowsPlaintextScoreResponse returns false because the current Chutes E2EE
+// protocol does not define a plaintext score response path here.
+func (s *ChutesSession) AllowsPlaintextScoreResponse() bool {
+	return false
+}
+
 // HKDF info strings for the Chutes E2EE protocol.
 const (
 	hkdfInfoChutesReq    = "e2e-req-v1"
