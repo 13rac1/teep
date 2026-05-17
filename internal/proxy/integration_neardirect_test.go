@@ -246,4 +246,14 @@ func TestIntegration_NearDirect(t *testing.T) {
 		t.Logf("score: %d/%d passed, %d skipped, %d failed",
 			report.Passed, report.Passed+report.Failed+report.Skipped, report.Skipped, report.Failed)
 	})
+
+	t.Run("E2EEStreamingWithTools", func(t *testing.T) {
+		// Test that requests with tool schemas don't break E2EE decryption.
+		// This exercises protocol-aware nested field decryption for tool_calls.
+		proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatWithTools(t, proxySrv.URL, nearDirectIntegrationModel(), true)
+		defer resp.Body.Close()
+		assertStreamResponse(t, resp)
+	})
 }
