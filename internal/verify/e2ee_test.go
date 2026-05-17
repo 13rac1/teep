@@ -319,6 +319,23 @@ func (m *mockDecryptor) Decrypt(val string) ([]byte, error) {
 	}
 	return []byte("decrypted"), nil
 }
+
+func (m *mockDecryptor) IsRequestFieldEncrypted(fieldPath string) bool {
+	switch fieldPath {
+	case "role", "tool_call_id", "type", "id", "index":
+		return false
+	default:
+		return true
+	}
+}
+func (m *mockDecryptor) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	switch fieldPath {
+	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint":
+		return false
+	default:
+		return true
+	}
+}
 func (m *mockDecryptor) Zero() {}
 
 func TestDoE2EEStreamTest_HTTPError(t *testing.T) {

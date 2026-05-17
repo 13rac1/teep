@@ -73,6 +73,25 @@ func integrationNearDirectConfig(t *testing.T) *config.Config {
 	}
 }
 
+// integrationNearDirectE2EEConfig returns a config pointing at the live
+// completions.near.ai endpoints with E2EE enabled and Offline true.
+func integrationNearDirectE2EEConfig(t *testing.T) *config.Config {
+	t.Helper()
+	return &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Offline:    true,
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  os.Getenv("NEARAI_API_KEY"),
+				E2EE:    true,
+			},
+		},
+		AllowFail: attestation.KnownFactors,
+	}
+}
+
 func TestIntegration_NearDirect(t *testing.T) {
 	skipNearDirectIntegration(t)
 
@@ -125,6 +144,24 @@ func TestIntegration_NearDirect(t *testing.T) {
 			t.Errorf("aggregated content is not valid printable UTF-8: %q", content)
 		}
 		t.Logf("response (%d chunks): %q", len(chunks), content)
+	})
+
+	t.Run("E2EEStreaming", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+		defer proxySrv.Close()
+
+		resp := postChatIntegration(t, proxySrv.URL, nearDirectIntegrationModel(), true)
+		defer resp.Body.Close()
+		assertStreamResponse(t, resp)
+	})
+
+	t.Run("E2EENonStream", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+		defer proxySrv.Close()
+
+		resp := postChatIntegration(t, proxySrv.URL, nearDirectIntegrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponse(t, resp)
 	})
 
 	t.Run("AttestationReport", func(t *testing.T) {
@@ -217,5 +254,24 @@ func TestIntegration_NearDirect(t *testing.T) {
 
 		t.Logf("score: %d/%d passed, %d skipped, %d failed",
 			report.Passed, report.Passed+report.Failed+report.Skipped, report.Skipped, report.Failed)
+	})
+
+	t.Run("E2EEStreamingWithTools", func(t *testing.T) {
+		// Test that requests with tool schemas don't break E2EE decryption.
+		// This exercises protocol-aware nested field decryption for tool_calls.
+		proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatWithTools(t, proxySrv.URL, nearDirectIntegrationModel(), true)
+		defer resp.Body.Close()
+		assertStreamResponse(t, resp)
+	})
+
+	t.Run("E2EENonStreamWithTools", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+		defer proxySrv.Close()
+
+		resp := postChatWithTools(t, proxySrv.URL, nearDirectIntegrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponseOrToolCall(t, resp)
 	})
 }

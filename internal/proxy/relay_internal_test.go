@@ -227,9 +227,11 @@ func TestHTTPError_Unwrap(t *testing.T) {
 
 type noopDecryptor struct{ zeroed bool }
 
-func (n *noopDecryptor) IsEncryptedChunk(string) bool   { return false }
-func (n *noopDecryptor) Decrypt(string) ([]byte, error) { return nil, nil }
-func (n *noopDecryptor) Zero()                          { n.zeroed = true }
+func (n *noopDecryptor) IsEncryptedChunk(string) bool                 { return false }
+func (n *noopDecryptor) Decrypt(string) ([]byte, error)               { return nil, nil }
+func (n *noopDecryptor) IsRequestFieldEncrypted(string) bool          { return false }
+func (n *noopDecryptor) IsResponseFieldEncrypted(string, string) bool { return false }
+func (n *noopDecryptor) Zero()                                        { n.zeroed = true }
 
 func TestZeroE2EESessions_NilBoth(t *testing.T) {
 	zeroE2EESessions(nil, nil) // must not panic
@@ -782,11 +784,11 @@ func TestEnforceReport_BlockedWithoutForce(t *testing.T) {
 // mockDecryptor satisfies e2ee.Decryptor for tests that need a non-nil session.
 type mockDecryptor struct{}
 
-func (mockDecryptor) IsEncryptedChunk(_ string) bool { return false }
-func (mockDecryptor) Decrypt(_ string) ([]byte, error) {
-	return nil, errors.New("mock decrypt")
-}
-func (mockDecryptor) Zero() {}
+func (mockDecryptor) IsEncryptedChunk(_ string) bool               { return false }
+func (mockDecryptor) Decrypt(_ string) ([]byte, error)             { return nil, errors.New("mock decrypt") }
+func (mockDecryptor) IsRequestFieldEncrypted(string) bool          { return false }
+func (mockDecryptor) IsResponseFieldEncrypted(string, string) bool { return false }
+func (mockDecryptor) Zero()                                        {}
 
 func TestHandlePinnedPostRelay_NoError_NoSession(t *testing.T) {
 	s := newMinimalServer()
@@ -1188,6 +1190,15 @@ func TestFromConfig_Nearcloud(t *testing.T) {
 	}
 	if p.ChatPath != "/v1/chat/completions" {
 		t.Errorf("ChatPath = %q, want /v1/chat/completions", p.ChatPath)
+	}
+	if p.EmbeddingsPath != "/v1/embeddings" {
+		t.Errorf("EmbeddingsPath = %q, want /v1/embeddings", p.EmbeddingsPath)
+	}
+	if p.RerankPath != "/v1/rerank" {
+		t.Errorf("RerankPath = %q, want /v1/rerank", p.RerankPath)
+	}
+	if p.ScorePath != "/v1/score" {
+		t.Errorf("ScorePath = %q, want /v1/score", p.ScorePath)
 	}
 }
 

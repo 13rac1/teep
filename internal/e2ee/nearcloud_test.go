@@ -562,8 +562,9 @@ func TestEncryptChatMessagesNearCloud_VLContent(t *testing.T) {
 // EncryptChatMessagesNearCloud correctly handles multi-turn tool calling
 // conversations:
 //   - assistant messages with null content pass through unchanged
-//   - tool_calls, tool_call_id, and name fields are preserved
-//   - only the content field is encrypted
+//   - tool_call_id metadata is preserved
+//   - tool/function sensitive fields are encrypted
+//   - content is encrypted
 func TestEncryptChatMessagesNearCloud_ToolCallConversation(t *testing.T) {
 	pubHex, seed := ed25519KeyPairHex(t)
 
@@ -633,22 +634,27 @@ func TestEncryptChatMessagesNearCloud_ToolCallConversation(t *testing.T) {
 	assertRole(t, messages[0], "user")
 	assertContentEncrypted(t, messages[0], x25519Priv, "What's the weather in NYC?")
 
-	// Message 1: assistant with null content and tool_calls — null preserved, tool_calls preserved.
+	// Message 1: assistant with null content and tool_calls.
 	assertRole(t, messages[1], "assistant")
 	assertContentNull(t, messages[1])
 	assertFieldPresent(t, messages[1], "tool_calls")
-	var toolCalls []map[string]any
+	var toolCalls []map[string]json.RawMessage
 	if err := json.Unmarshal(messages[1]["tool_calls"], &toolCalls); err != nil {
 		t.Fatalf("unmarshal tool_calls: %v", err)
 	}
 	if len(toolCalls) != 1 {
 		t.Fatalf("tool_calls count = %d, want 1", len(toolCalls))
 	}
-	if toolCalls[0]["id"] != "call_123" {
-		t.Errorf("tool_calls[0].id = %v, want call_123", toolCalls[0]["id"])
+	var tcID string
+	if err := json.Unmarshal(toolCalls[0]["id"], &tcID); err != nil {
+		t.Fatalf("unmarshal tool_calls[0].id: %v", err)
 	}
+	if tcID != "call_123" {
+		t.Errorf("tool_calls[0].id = %q, want call_123", tcID)
+	}
+	assertToolCallFunctionEncrypted(t, toolCalls[0], x25519Priv, "get_weather", `{"location":"New York City"}`)
 
-	// Message 2: tool — content encrypted, tool_call_id and name preserved.
+	// Message 2: tool — content encrypted, tool_call_id preserved, name encrypted.
 	assertRole(t, messages[2], "tool")
 	assertContentEncrypted(t, messages[2], x25519Priv, "72°F and sunny")
 	assertFieldPresent(t, messages[2], "tool_call_id")
@@ -660,6 +666,7 @@ func TestEncryptChatMessagesNearCloud_ToolCallConversation(t *testing.T) {
 	if toolCallID != "call_123" {
 		t.Errorf("tool_call_id = %q, want call_123", toolCallID)
 	}
+	assertStringFieldEncrypted(t, messages[2], "name", x25519Priv, "get_weather")
 
 	// Message 3: user — content encrypted.
 	assertRole(t, messages[3], "user")
@@ -670,7 +677,7 @@ func TestEncryptChatMessagesNearCloud_ToolCallConversation(t *testing.T) {
 // EncryptChatMessagesNearCloud preserves ALL message fields, not just
 // role and content.
 func TestEncryptChatMessagesNearCloud_PreservesExtraFields(t *testing.T) {
-	pubHex, _ := ed25519KeyPairHex(t)
+	pubHex, seed := ed25519KeyPairHex(t)
 
 	body := map[string]any{
 		"model": "test-model",
@@ -707,6 +714,10 @@ func TestEncryptChatMessagesNearCloud_PreservesExtraFields(t *testing.T) {
 	if err := json.Unmarshal(encBody, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+	x25519Priv, err := ed25519SeedToX25519(seed)
+	if err != nil {
+		t.Fatalf("derive x25519: %v", err)
+	}
 
 	// Top-level fields must be preserved.
 	for _, field := range []string{"model", "tools", "temperature", "stream"} {
@@ -720,15 +731,24 @@ func TestEncryptChatMessagesNearCloud_PreservesExtraFields(t *testing.T) {
 		t.Fatalf("unmarshal messages: %v", err)
 	}
 
-	// Message-level name field must be preserved.
+	// Message-level name field must be encrypted.
 	assertFieldPresent(t, messages[0], "name")
-	var name string
-	if err := json.Unmarshal(messages[0]["name"], &name); err != nil {
-		t.Fatalf("unmarshal name: %v", err)
+	assertStringFieldEncrypted(t, messages[0], "name", x25519Priv, "test_user")
+
+	// Tool function name/description must be encrypted.
+	var tools []map[string]json.RawMessage
+	if err := json.Unmarshal(out["tools"], &tools); err != nil {
+		t.Fatalf("unmarshal tools: %v", err)
 	}
-	if name != "test_user" {
-		t.Errorf("name = %q, want test_user", name)
+	if len(tools) != 1 {
+		t.Fatalf("tools len = %d, want 1", len(tools))
 	}
+	var fn map[string]json.RawMessage
+	if err := json.Unmarshal(tools[0]["function"], &fn); err != nil {
+		t.Fatalf("unmarshal tools[0].function: %v", err)
+	}
+	assertStringFieldEncrypted(t, fn, "name", x25519Priv, "get_weather")
+	assertStringFieldEncrypted(t, fn, "description", x25519Priv, "Get weather")
 }
 
 // TestEncryptChatMessagesNearCloud_NullContentVariants tests handling of
@@ -877,6 +897,38 @@ func assertFieldPresent(t *testing.T, msg map[string]json.RawMessage, field stri
 	}
 }
 
+func assertStringFieldEncrypted(t *testing.T, obj map[string]json.RawMessage, field string, x25519Priv *ecdh.PrivateKey, wantPlaintext string) {
+	t.Helper()
+	raw, ok := obj[field]
+	if !ok {
+		t.Fatalf("field %q missing", field)
+	}
+	var ct string
+	if err := json.Unmarshal(raw, &ct); err != nil {
+		t.Fatalf("unmarshal %s: %v", field, err)
+	}
+	if !IsEncryptedChunkXChaCha20(ct) {
+		t.Fatalf("field %q not encrypted: %q", field, SafePrefix(ct, 40))
+	}
+	pt, err := DecryptXChaCha20(ct, x25519Priv)
+	if err != nil {
+		t.Fatalf("decrypt %s: %v", field, err)
+	}
+	if string(pt) != wantPlaintext {
+		t.Errorf("decrypted %s = %q, want %q", field, pt, wantPlaintext)
+	}
+}
+
+func assertToolCallFunctionEncrypted(t *testing.T, toolCall map[string]json.RawMessage, x25519Priv *ecdh.PrivateKey, wantName, wantArguments string) {
+	t.Helper()
+	var fn map[string]json.RawMessage
+	if err := json.Unmarshal(toolCall["function"], &fn); err != nil {
+		t.Fatalf("unmarshal tool_call.function: %v", err)
+	}
+	assertStringFieldEncrypted(t, fn, "name", x25519Priv, wantName)
+	assertStringFieldEncrypted(t, fn, "arguments", x25519Priv, wantArguments)
+}
+
 func TestEncryptImagePromptNearCloud(t *testing.T) {
 	pubHex, seed := ed25519KeyPairHex(t)
 
@@ -958,6 +1010,71 @@ func TestEncryptImagePromptNearCloud_InvalidBody(t *testing.T) {
 	_, _, err := EncryptImagePromptNearCloud([]byte("not json"), pubHex)
 	if err == nil {
 		t.Fatal("expected error for invalid body")
+	}
+}
+
+func TestEncryptEmbeddingsNearCloud_StringArray(t *testing.T) {
+	pubHex, seed := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":["hello","world"]}`)
+
+	encBody, session, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptEmbeddingsNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(encBody, &out); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	var arr []string
+	if err := json.Unmarshal(out["input"], &arr); err != nil {
+		t.Fatalf("unmarshal input array: %v", err)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("input length = %d, want 2", len(arr))
+	}
+	x25519Priv, err := ed25519SeedToX25519(seed)
+	if err != nil {
+		t.Fatalf("derive x25519: %v", err)
+	}
+	for i, want := range []string{"hello", "world"} {
+		if !IsEncryptedChunkXChaCha20(arr[i]) {
+			t.Fatalf("input[%d] is not encrypted: %q", i, SafePrefix(arr[i], 20))
+		}
+		pt, err := DecryptXChaCha20(arr[i], x25519Priv)
+		if err != nil {
+			t.Fatalf("decrypt input[%d]: %v", i, err)
+		}
+		if string(pt) != want {
+			t.Errorf("decrypted input[%d] = %q, want %q", i, pt, want)
+		}
+	}
+}
+
+func TestEncryptEmbeddingsNearCloud_UnsupportedArrayElementType(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":["hello",123]}`)
+
+	_, _, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err == nil {
+		t.Fatal("expected error for non-string input array element")
+	}
+	if !strings.Contains(err.Error(), "unsupported embeddings input element type") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEncryptEmbeddingsNearCloud_UnsupportedInputType(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":123}`)
+
+	_, _, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err == nil {
+		t.Fatal("expected error for unsupported input type")
+	}
+	if !strings.Contains(err.Error(), "unsupported embeddings input type") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
