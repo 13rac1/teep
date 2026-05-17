@@ -46,10 +46,10 @@ integration-venice: ## Run Venice integration tests (requires VENICE_API_KEY)
 	go test -v -race -timeout 120s -run TestIntegration_Venice ./internal/proxy/
 
 integration-neardirect: ## Run NEAR Direct integration tests (requires NEARAI_API_KEY)
-	go test -v -race -timeout 120s -run TestIntegration_NearDirect ./internal/proxy/
+	go test -v -race -timeout 300s -run TestIntegration_NearDirect ./internal/proxy/
 
 integration-nearcloud: ## Run NearCloud gateway integration tests (requires NEARAI_API_KEY)
-	go test -v -race -timeout 180s -run TestIntegration_NearCloud ./internal/proxy/
+	go test -v -race -timeout 300s -run TestIntegration_NearCloud ./internal/proxy/
 
 integration-nanogpt: ## Run NanoGPT integration tests (requires NANOGPT_API_KEY)
 	go test -v -race -timeout 120s -run TestIntegration_NanoGPT ./internal/proxy/
