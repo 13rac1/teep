@@ -174,7 +174,13 @@ func decryptFunctionObject(obj map[string]json.RawMessage, session Decryptor, ct
 			continue
 		}
 		if !session.IsEncryptedChunk(s) {
-			return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
+			// For protocols that don't support full-field encryption (e.g., Venice),
+			// plaintext tool_call function fields are acceptable. Only enforce encryption
+			// for protocols with X-Encrypt-All-Fields support.
+			if session.SupportsEncryptAllFields() {
+				return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
+			}
+			continue
 		}
 		plaintext, err := session.Decrypt(s)
 		if err != nil {
@@ -205,6 +211,11 @@ func decryptToolCallsField(fields map[string]json.RawMessage, session Decryptor,
 		var fn map[string]json.RawMessage
 		if err := json.Unmarshal(fnRaw, &fn); err != nil {
 			return false, fmt.Errorf("%s.tool_calls[%d].function: parse object: %w", ctx, i, err)
+		}
+		// Only decrypt tool call function names/arguments if protocol supports full-field encryption.
+		// Venice E2EE preserves tool_calls plaintext.
+		if !session.SupportsEncryptAllFields() {
+			continue
 		}
 		c, err := decryptFunctionObject(fn, session, fmt.Sprintf("%s.tool_calls[%d].function", ctx, i))
 		if err != nil {
