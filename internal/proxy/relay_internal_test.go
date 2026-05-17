@@ -233,6 +233,9 @@ func (n *noopDecryptor) SupportsEncryptAllFields() bool { return false }
 func (n *noopDecryptor) AllowsPlaintextScoreResponse() bool {
 	return false
 }
+func (n *noopDecryptor) AllowsPlaintextLogprobsBytes() bool {
+	return false
+}
 func (n *noopDecryptor) Zero() { n.zeroed = true }
 
 func TestZeroE2EESessions_NilBoth(t *testing.T) {
@@ -792,6 +795,7 @@ func (mockDecryptor) Decrypt(_ string) ([]byte, error) {
 }
 func (mockDecryptor) SupportsEncryptAllFields() bool     { return false }
 func (mockDecryptor) AllowsPlaintextScoreResponse() bool { return false }
+func (mockDecryptor) AllowsPlaintextLogprobsBytes() bool { return false }
 func (mockDecryptor) Zero()                              {}
 
 func TestHandlePinnedPostRelay_NoError_NoSession(t *testing.T) {

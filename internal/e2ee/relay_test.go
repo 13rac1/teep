@@ -40,6 +40,10 @@ func (s *fullFieldVeniceSession) AllowsPlaintextScoreResponse() bool {
 	return false
 }
 
+func (s *fullFieldVeniceSession) AllowsPlaintextLogprobsBytes() bool {
+	return false
+}
+
 func testFullFieldVeniceSession(t *testing.T) *fullFieldVeniceSession {
 	t.Helper()
 	return &fullFieldVeniceSession{VeniceSession: testVeniceSession(t)}
@@ -1302,6 +1306,45 @@ func TestDecryptNonStreamResponse_LogprobsPlaintextBytesStringRejected(t *testin
 	}
 }
 
+// TestDecryptNonStreamResponse_LogprobsPlaintextBytesArrayRejected verifies that
+// plaintext JSON arrays in logprobs.*.bytes are rejected in full-field E2EE mode,
+// rather than silently passed through as they were before the fix.
+func TestDecryptNonStreamResponse_LogprobsPlaintextBytesArrayRejected(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "ok", session.VeniceSession)
+	encToken := encryptForClient(t, "hello", session.VeniceSession)
+	body := map[string]any{
+		"choices": []map[string]any{
+			{
+				"message": map[string]any{"content": encContent},
+				"logprobs": map[string]any{
+					"content": []map[string]any{
+						{
+							"token": encToken,
+							// bytes is a plaintext JSON array, not an encrypted string
+							"bytes": []int{72, 101, 108, 108, 111}, // ["H", "e", "l", "l", "o"] in UTF-8
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error for plaintext logprobs bytes array in full-field mode")
+	}
+	if !strings.Contains(err.Error(), "logprobs.content[0].bytes: expected encrypted string but got plaintext") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDecryptNonStreamResponse_EmbeddingsPlaintextRejected(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
@@ -2028,6 +2071,7 @@ func (m *testDecryptor) IsEncryptedChunk(val string) bool   { return m.isEncrypt
 func (m *testDecryptor) Decrypt(ct string) ([]byte, error)  { return m.decrypt(ct) }
 func (m *testDecryptor) SupportsEncryptAllFields() bool     { return true }
 func (m *testDecryptor) AllowsPlaintextScoreResponse() bool { return false }
+func (m *testDecryptor) AllowsPlaintextLogprobsBytes() bool { return false }
 func (m *testDecryptor) Zero()                              {}
 
 // ---------------------------------------------------------------------------

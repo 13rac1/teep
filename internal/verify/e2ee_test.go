@@ -321,6 +321,7 @@ func (m *mockDecryptor) Decrypt(val string) ([]byte, error) {
 }
 func (m *mockDecryptor) SupportsEncryptAllFields() bool     { return true }
 func (m *mockDecryptor) AllowsPlaintextScoreResponse() bool { return false }
+func (m *mockDecryptor) AllowsPlaintextLogprobsBytes() bool { return false }
 func (m *mockDecryptor) Zero()                              {}
 
 func TestDoE2EEStreamTest_HTTPError(t *testing.T) {

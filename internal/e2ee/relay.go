@@ -423,7 +423,13 @@ func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decrypt
 		return false, nil
 	}
 	if !jsonRawStartsWithToken(raw, '"') {
-		// Plaintext bytes are usually JSON arrays, so only attempt string decryptions.
+		// Plaintext bytes are usually JSON arrays. Check if the session allows plaintext logprobs bytes.
+		if !session.AllowsPlaintextLogprobsBytes() {
+			// In full-field E2EE mode, plaintext token bytes would leak sensitive data.
+			// Fail closed instead of silently passing through.
+			return false, fmt.Errorf("%s.bytes: expected encrypted string but got plaintext (type %q)", ctx, rawTypeDescription(raw))
+		}
+		// Plaintext bytes are allowed for this session; accept and pass through.
 		return false, nil
 	}
 	var s string
@@ -481,6 +487,32 @@ func decryptChatObject(fields map[string]json.RawMessage, session Decryptor, ctx
 func jsonRawStartsWithToken(raw json.RawMessage, token byte) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) > 0 && trimmed[0] == token
+}
+
+// rawTypeDescription returns a human-readable description of the JSON type
+// represented by a json.RawMessage (e.g. "array", "object", "number").
+// Used in error messages to clarify what was found when an encrypted string was expected.
+func rawTypeDescription(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "empty"
+	}
+	switch trimmed[0] {
+	case '[':
+		return "array"
+	case '{':
+		return "object"
+	case '"':
+		return "string"
+	case 't', 'f':
+		return "boolean"
+	case 'n':
+		return "null"
+	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return "number"
+	default:
+		return "unknown"
+	}
 }
 
 // DecryptSSEChunk parses one SSE data JSON payload, decrypts all encrypted
