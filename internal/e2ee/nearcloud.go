@@ -96,6 +96,12 @@ func (s *NearCloudSession) Zero() {
 	s.modelX25519 = nil
 }
 
+// SupportsEncryptAllFields returns true, indicating that NearCloud supports
+// full-field encryption via the X-Encrypt-All-Fields protocol.
+func (s *NearCloudSession) SupportsEncryptAllFields() bool {
+	return true
+}
+
 // hkdfInfoEd25519 is the HKDF info string for the NearCloud Ed25519/XChaCha20
 // E2EE protocol.
 const hkdfInfoEd25519 = "ed25519_encryption"
@@ -633,8 +639,9 @@ func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCl
 	if ok && !IsJSONNull(inputRaw) {
 		// Input can be a string or an array. In E2EE mode we currently only
 		// support string payloads; unsupported element types fail closed.
+		trimmed := bytes.TrimSpace(inputRaw)
 		switch {
-		case len(inputRaw) > 0 && inputRaw[0] == '"':
+		case len(trimmed) > 0 && trimmed[0] == '"':
 			// Single string: encrypt it directly.
 			var s string
 			if err := json.Unmarshal(inputRaw, &s); err != nil {
@@ -648,7 +655,7 @@ func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCl
 			}
 			ctJSON, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
 			full["input"] = ctJSON
-		case len(inputRaw) > 0 && inputRaw[0] == '[':
+		case len(trimmed) > 0 && trimmed[0] == '[':
 			// Array: every element must be a string.
 			var arr []json.RawMessage
 			if err := json.Unmarshal(inputRaw, &arr); err != nil {
@@ -656,7 +663,8 @@ func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCl
 				return nil, nil, fmt.Errorf("parse input array: %w", err)
 			}
 			for i, item := range arr {
-				if len(item) == 0 || item[0] != '"' {
+				itemTrimmed := bytes.TrimSpace(item)
+				if len(itemTrimmed) == 0 || itemTrimmed[0] != '"' {
 					session.Zero()
 					return nil, nil, fmt.Errorf("input[%d]: unsupported embeddings input element type for E2EE", i)
 				}

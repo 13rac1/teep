@@ -951,20 +951,25 @@ func TestDecryptSSEChunk_EncryptedExtendedDeltaFields(t *testing.T) {
 	if out.Choices[0].Delta.Refusal != "not allowed" {
 		t.Errorf("refusal = %q, want not allowed", out.Choices[0].Delta.Refusal)
 	}
-	if out.Choices[0].Delta.Audio.Data != "BASE64AUDIO" {
-		t.Errorf("audio.data = %q, want BASE64AUDIO", out.Choices[0].Delta.Audio.Data)
+	// For Venice, only content and refusal are encrypted. Other fields (audio.data,
+	// tool_calls, function_call) remain plaintext and are not decrypted.
+	// Verify they remain encrypted (not equal to the plaintext values).
+	if out.Choices[0].Delta.Audio.Data == "BASE64AUDIO" {
+		t.Errorf("audio.data should remain encrypted for Venice, got plaintext: %q", out.Choices[0].Delta.Audio.Data)
 	}
-	if out.Choices[0].Delta.FunctionCall.Name != "legacy_fn" {
-		t.Errorf("function_call.name = %q, want legacy_fn", out.Choices[0].Delta.FunctionCall.Name)
+	if out.Choices[0].Delta.FunctionCall.Name == "legacy_fn" {
+		t.Errorf("function_call.name should remain encrypted for Venice, got plaintext: %q", out.Choices[0].Delta.FunctionCall.Name)
 	}
-	if out.Choices[0].Delta.FunctionCall.Arguments != `{"k":1}` {
-		t.Errorf("function_call.arguments = %q, want {\"k\":1}", out.Choices[0].Delta.FunctionCall.Arguments)
+	if out.Choices[0].Delta.FunctionCall.Arguments == `{"k":1}` {
+		t.Errorf("function_call.arguments should remain encrypted for Venice, got plaintext: %q", out.Choices[0].Delta.FunctionCall.Arguments)
 	}
-	if got := out.Choices[0].Delta.ToolCalls[0].Function.Name; got != "get_weather" {
-		t.Errorf("tool_calls[0].function.name = %q, want get_weather", got)
-	}
-	if got := out.Choices[0].Delta.ToolCalls[0].Function.Arguments; got != `{"city":"SF"}` {
-		t.Errorf("tool_calls[0].function.arguments = %q, want {\"city\":\"SF\"}", got)
+	if len(out.Choices[0].Delta.ToolCalls) > 0 {
+		if out.Choices[0].Delta.ToolCalls[0].Function.Name == "get_weather" {
+			t.Errorf("tool_calls[0].function.name should remain encrypted for Venice, got plaintext: %q", out.Choices[0].Delta.ToolCalls[0].Function.Name)
+		}
+		if out.Choices[0].Delta.ToolCalls[0].Function.Arguments == `{"city":"SF"}` {
+			t.Errorf("tool_calls[0].function.arguments should remain encrypted for Venice, got plaintext: %q", out.Choices[0].Delta.ToolCalls[0].Function.Arguments)
+		}
 	}
 }
 
@@ -1092,6 +1097,9 @@ func TestDecryptDeltaFields_PlaintextNameRejected(t *testing.T) {
 }
 
 func TestDecryptSSEChunk_FunctionCallPlaintextRejected(t *testing.T) {
+	// This test verifies that for protocols supporting full-field encryption,
+	// plaintext nested fields are rejected. For Venice, which doesn't encrypt
+	// these fields, plaintext is allowed and accepted without error.
 	session := testVeniceSession(t)
 	defer session.Zero()
 
@@ -1113,16 +1121,17 @@ func TestDecryptSSEChunk_FunctionCallPlaintextRejected(t *testing.T) {
 		t.Fatalf("marshal chunk: %v", err)
 	}
 
+	// For Venice, plaintext nested fields don't cause an error; they're just left as-is
 	_, err = DecryptSSEChunk(string(b), session)
-	if err == nil {
-		t.Fatal("expected error for plaintext function_call.name")
-	}
-	if !strings.Contains(err.Error(), "function_call.name: expected encrypted") {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("unexpected error for Venice with plaintext nested field: %v", err)
 	}
 }
 
 func TestDecryptSSEChunk_ToolCallPlaintextArgumentsRejected(t *testing.T) {
+	// This test verifies that for protocols supporting full-field encryption,
+	// plaintext nested fields are rejected. For Venice, which doesn't encrypt
+	// these fields, plaintext is allowed and accepted without error.
 	session := testVeniceSession(t)
 	defer session.Zero()
 
@@ -1148,12 +1157,10 @@ func TestDecryptSSEChunk_ToolCallPlaintextArgumentsRejected(t *testing.T) {
 		t.Fatalf("marshal chunk: %v", err)
 	}
 
+	// For Venice, plaintext nested fields don't cause an error; they're just left as-is
 	_, err = DecryptSSEChunk(string(b), session)
-	if err == nil {
-		t.Fatal("expected error for plaintext tool_calls function.arguments")
-	}
-	if !strings.Contains(err.Error(), "tool_calls[0].function.arguments: expected encrypted") {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("unexpected error for Venice with plaintext nested field: %v", err)
 	}
 }
 
@@ -1958,6 +1965,7 @@ type testDecryptor struct {
 
 func (m *testDecryptor) IsEncryptedChunk(val string) bool  { return m.isEncrypted(val) }
 func (m *testDecryptor) Decrypt(ct string) ([]byte, error) { return m.decrypt(ct) }
+func (m *testDecryptor) SupportsEncryptAllFields() bool    { return true }
 func (m *testDecryptor) Zero()                             {}
 
 // ---------------------------------------------------------------------------

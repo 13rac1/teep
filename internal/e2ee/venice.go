@@ -92,6 +92,12 @@ func (s *VeniceSession) Zero() {
 	}
 }
 
+// SupportsEncryptAllFields returns false, indicating that Venice only encrypts
+// messages[].content and does not support full-field encryption.
+func (s *VeniceSession) SupportsEncryptAllFields() bool {
+	return false
+}
+
 // hkdfInfoVenice is the HKDF info string required by the Venice E2EE protocol.
 // Do not change — this value must match the TEE server implementation.
 const hkdfInfoVenice = "ecdsa_encryption"
