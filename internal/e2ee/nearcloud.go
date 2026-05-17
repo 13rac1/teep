@@ -108,6 +108,12 @@ func (s *NearCloudSession) AllowsPlaintextScoreResponse() bool {
 	return true
 }
 
+// AllowsPlaintextLogprobsBytes returns false because logprobs token bytes
+// must be encrypted under the X-Encrypt-All-Fields protocol.
+func (s *NearCloudSession) AllowsPlaintextLogprobsBytes() bool {
+	return false
+}
+
 // hkdfInfoEd25519 is the HKDF info string for the NearCloud Ed25519/XChaCha20
 // E2EE protocol.
 const hkdfInfoEd25519 = "ed25519_encryption"

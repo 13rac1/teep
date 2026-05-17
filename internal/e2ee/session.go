@@ -16,6 +16,7 @@ type Decryptor interface {
 	Decrypt(ciphertextHex string) ([]byte, error)
 	SupportsEncryptAllFields() bool
 	AllowsPlaintextScoreResponse() bool
+	AllowsPlaintextLogprobsBytes() bool
 	Zero()
 }
 

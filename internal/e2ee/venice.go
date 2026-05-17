@@ -105,6 +105,14 @@ func (s *VeniceSession) AllowsPlaintextScoreResponse() bool {
 	return true
 }
 
+// AllowsPlaintextLogprobsBytes returns true because Venice only encrypts
+// messages[].content and does not encrypt logprobs data. Note: this method is
+// not actually used since Venice does not support full-field encryption and
+// decryptChoiceLogprobs is only called when SupportsEncryptAllFields==true.
+func (s *VeniceSession) AllowsPlaintextLogprobsBytes() bool {
+	return true
+}
+
 // hkdfInfoVenice is the HKDF info string required by the Venice E2EE protocol.
 // Do not change — this value must match the TEE server implementation.
 const hkdfInfoVenice = "ecdsa_encryption"

@@ -87,6 +87,12 @@ func (s *ChutesSession) AllowsPlaintextScoreResponse() bool {
 	return false
 }
 
+// AllowsPlaintextLogprobsBytes returns false because logprobs token bytes
+// must be encrypted under full-field E2EE.
+func (s *ChutesSession) AllowsPlaintextLogprobsBytes() bool {
+	return false
+}
+
 // HKDF info strings for the Chutes E2EE protocol.
 const (
 	hkdfInfoChutesReq    = "e2e-req-v1"
