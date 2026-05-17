@@ -423,14 +423,15 @@ func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decrypt
 		return false, nil
 	}
 	if !jsonRawStartsWithToken(raw, '"') {
-		// Plaintext bytes are usually JSON arrays. Check if the session allows plaintext logprobs bytes.
-		if !session.AllowsPlaintextLogprobsBytes() {
-			// In full-field E2EE mode, plaintext token bytes would leak sensitive data.
-			// Fail closed instead of silently passing through.
-			return false, fmt.Errorf("%s.bytes: expected encrypted string but got plaintext (type %q)", ctx, rawTypeDescription(raw))
+		// Plaintext bytes are usually JSON arrays. Check the session's field encryption policy.
+		// Logprobs bytes are only in /v1/chat/completions responses.
+		if !session.IsResponseFieldEncrypted("bytes", "/v1/chat/completions") {
+			// Field encryption policy allows plaintext for this provider
+			return false, nil
 		}
-		// Plaintext bytes are allowed for this session; accept and pass through.
-		return false, nil
+		// In full-field E2EE mode, plaintext token bytes would leak sensitive data.
+		// Fail closed instead of silently passing through.
+		return false, fmt.Errorf("%s.bytes: expected encrypted string but got plaintext (type %q)", ctx, rawTypeDescription(raw))
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
@@ -701,7 +702,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 				changed = true
 			}
 		case nonStreamEndpointScore:
-			d, err := decryptResponseScoreData(dataRaw, session, true)
+			d, err := decryptResponseScoreData(dataRaw, session, true, "/v1/score")
 			if err != nil {
 				return nil, err
 			}
@@ -747,7 +748,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 	// Score: when endpoint is unknown, attempt score fallback after others.
 	if endpointType == nonStreamEndpointUnknown {
 		if scoreDataRaw, ok := full["data"]; ok {
-			s, err := decryptResponseScoreData(scoreDataRaw, session, false)
+			s, err := decryptResponseScoreData(scoreDataRaw, session, false, "/v1/score")
 			if err != nil {
 				return nil, err
 			}
@@ -972,10 +973,10 @@ func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor)
 }
 
 // decryptResponseScoreData processes score fields in data[] items of a score response.
-// It decrypts encrypted score strings when present, and accepts plaintext numeric
-// scores only for providers that explicitly allow that response policy.
-// Returns the rewritten data JSON, or nil if nothing was decrypted.
-func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strictDataShape bool) (json.RawMessage, error) {
+// It decrypts encrypted score strings when present. If the score is plaintext,
+// it checks the session's field encryption policy for the endpoint to determine
+// if plaintext is allowed. Returns the rewritten data JSON, or nil if nothing was decrypted.
+func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strictDataShape bool, endpoint string) (json.RawMessage, error) {
 	var data []map[string]json.RawMessage
 	if err := json.Unmarshal(dataRaw, &data); err != nil {
 		if strictDataShape {
@@ -1001,10 +1002,13 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 		}
 
 		if jsonTopLevelNumber(scoreRaw) {
-			if !session.AllowsPlaintextScoreResponse() {
-				return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
+			// Plaintext numeric score. Check if the session's policy allows it for this endpoint.
+			if !session.IsResponseFieldEncrypted("score", endpoint) {
+				// Field encryption policy allows plaintext for this provider/endpoint
+				continue
 			}
-			continue
+			// In E2EE mode, plaintext numeric score is not allowed
+			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
 		}
 
 		if !jsonRawStartsWithToken(scoreRaw, '"') {

@@ -44,6 +44,26 @@ func (s *fullFieldVeniceSession) AllowsPlaintextLogprobsBytes() bool {
 	return false
 }
 
+func (s *fullFieldVeniceSession) IsRequestFieldEncrypted(fieldPath string) bool {
+	// Simulate full-field mode: encrypt everything except metadata
+	switch fieldPath {
+	case "role", "tool_call_id", "type", "id", "index":
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *fullFieldVeniceSession) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	// Simulate full-field mode: encrypt everything except metadata
+	switch fieldPath {
+	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint":
+		return false
+	default:
+		return true
+	}
+}
+
 func testFullFieldVeniceSession(t *testing.T) *fullFieldVeniceSession {
 	t.Helper()
 	return &fullFieldVeniceSession{VeniceSession: testVeniceSession(t)}
@@ -2072,7 +2092,23 @@ func (m *testDecryptor) Decrypt(ct string) ([]byte, error)  { return m.decrypt(c
 func (m *testDecryptor) SupportsEncryptAllFields() bool     { return true }
 func (m *testDecryptor) AllowsPlaintextScoreResponse() bool { return false }
 func (m *testDecryptor) AllowsPlaintextLogprobsBytes() bool { return false }
-func (m *testDecryptor) Zero()                              {}
+func (m *testDecryptor) IsRequestFieldEncrypted(fieldPath string) bool {
+	switch fieldPath {
+	case "role", "tool_call_id", "type", "id", "index":
+		return false
+	default:
+		return true
+	}
+}
+func (m *testDecryptor) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	switch fieldPath {
+	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint":
+		return false
+	default:
+		return true
+	}
+}
+func (m *testDecryptor) Zero() {}
 
 // ---------------------------------------------------------------------------
 // recordChunk with usage tokens (line 55-57)
