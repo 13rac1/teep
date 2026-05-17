@@ -26,6 +26,21 @@ func testVeniceSession(t *testing.T) *VeniceSession {
 	return session
 }
 
+// fullFieldVeniceSession wraps a Venice session for tests that need strict
+// full-field encryption behavior irrespective of provider protocol defaults.
+type fullFieldVeniceSession struct {
+	*VeniceSession
+}
+
+func (s *fullFieldVeniceSession) SupportsEncryptAllFields() bool {
+	return true
+}
+
+func testFullFieldVeniceSession(t *testing.T) *fullFieldVeniceSession {
+	t.Helper()
+	return &fullFieldVeniceSession{VeniceSession: testVeniceSession(t)}
+}
+
 // encryptForClient simulates server-side encryption: encrypts plaintext for
 // the client's public key so the client's session can decrypt it.
 func encryptForClient(t *testing.T, plaintext string, session *VeniceSession) string {
@@ -317,9 +332,8 @@ func TestReassembleNonStream(t *testing.T) {
 func TestReassembleNonStream_ToolCalls(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
-	encName := encryptForClient(t, "get_weather", session)
-	encArgsPart1 := encryptForClient(t, `{"location"`, session)
-	encArgsPart2 := encryptForClient(t, `: "SF"}`, session)
+	argsPart1 := `{"location"`
+	argsPart2 := `: "SF"}`
 
 	// Build SSE stream with reasoning (encrypted) then tool_calls (plaintext).
 	reasoning := encryptForClient(t, "Use the weather tool.", session)
@@ -348,7 +362,7 @@ func TestReassembleNonStream_ToolCalls(t *testing.T) {
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{{
 					"id": "call-abc", "type": "function", "index": 0,
-					"function": map[string]string{"name": encName, "arguments": ""},
+					"function": map[string]string{"name": "get_weather", "arguments": ""},
 				}},
 			},
 		}},
@@ -364,7 +378,7 @@ func TestReassembleNonStream_ToolCalls(t *testing.T) {
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{{
 					"index":    0,
-					"function": map[string]string{"arguments": encArgsPart1},
+					"function": map[string]string{"arguments": argsPart1},
 				}},
 			},
 		}},
@@ -380,7 +394,7 @@ func TestReassembleNonStream_ToolCalls(t *testing.T) {
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{{
 					"index":    0,
-					"function": map[string]string{"arguments": encArgsPart2},
+					"function": map[string]string{"arguments": argsPart2},
 				}},
 			},
 		}},
@@ -455,10 +469,8 @@ func TestReassembleNonStream_ToolCalls(t *testing.T) {
 func TestReassembleNonStream_MultipleToolCalls(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
-	encNameA := encryptForClient(t, "fn_a", session)
-	encNameB := encryptForClient(t, "fn_b", session)
-	encArgsA := encryptForClient(t, `{"x":1}`, session)
-	encArgsB := encryptForClient(t, `{"y":2}`, session)
+	argsA := `{"x":1}`
+	argsB := `{"y":2}`
 
 	var sb strings.Builder
 
@@ -469,8 +481,8 @@ func TestReassembleNonStream_MultipleToolCalls(t *testing.T) {
 			"index": 0,
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{
-					{"id": "call-1", "type": "function", "index": 0, "function": map[string]string{"name": encNameA, "arguments": ""}},
-					{"id": "call-2", "type": "function", "index": 1, "function": map[string]string{"name": encNameB, "arguments": ""}},
+					{"id": "call-1", "type": "function", "index": 0, "function": map[string]string{"name": "fn_a", "arguments": ""}},
+					{"id": "call-2", "type": "function", "index": 1, "function": map[string]string{"name": "fn_b", "arguments": ""}},
 				},
 			},
 		}},
@@ -485,8 +497,8 @@ func TestReassembleNonStream_MultipleToolCalls(t *testing.T) {
 			"index": 0,
 			"delta": map[string]any{
 				"tool_calls": []map[string]any{
-					{"index": 0, "function": map[string]string{"arguments": encArgsA}},
-					{"index": 1, "function": map[string]string{"arguments": encArgsB}},
+					{"index": 0, "function": map[string]string{"arguments": argsA}},
+					{"index": 1, "function": map[string]string{"arguments": argsB}},
 				},
 			},
 		}},
@@ -974,14 +986,14 @@ func TestDecryptSSEChunk_EncryptedExtendedDeltaFields(t *testing.T) {
 }
 
 func TestDecryptNonStreamResponse_EncryptedLogprobs(t *testing.T) {
-	session := testVeniceSession(t)
+	session := testFullFieldVeniceSession(t)
 	defer session.Zero()
 
-	encContent := encryptForClient(t, "ok", session)
-	encToken := encryptForClient(t, "hello", session)
-	encBytes := encryptForClient(t, "[104,101,108,108,111]", session)
-	encTopToken := encryptForClient(t, "world", session)
-	encTopBytes := encryptForClient(t, "[119,111,114,108,100]", session)
+	encContent := encryptForClient(t, "ok", session.VeniceSession)
+	encToken := encryptForClient(t, "hello", session.VeniceSession)
+	encBytes := encryptForClient(t, "[104,101,108,108,111]", session.VeniceSession)
+	encTopToken := encryptForClient(t, "world", session.VeniceSession)
+	encTopBytes := encryptForClient(t, "[119,111,114,108,100]", session.VeniceSession)
 
 	body := map[string]any{
 		"id":    "chatcmpl-1",
@@ -1055,7 +1067,7 @@ func TestDecryptNonStreamResponse_EncryptedLogprobs(t *testing.T) {
 }
 
 func TestDecryptDeltaFields_PlaintextRefusalRejected(t *testing.T) {
-	session := testVeniceSession(t)
+	session := testFullFieldVeniceSession(t)
 	defer session.Zero()
 
 	fields := map[string]json.RawMessage{
@@ -1076,7 +1088,7 @@ func TestDecryptDeltaFields_PlaintextRefusalRejected(t *testing.T) {
 }
 
 func TestDecryptDeltaFields_PlaintextNameRejected(t *testing.T) {
-	session := testVeniceSession(t)
+	session := testFullFieldVeniceSession(t)
 	defer session.Zero()
 
 	fields := map[string]json.RawMessage{
@@ -1096,7 +1108,26 @@ func TestDecryptDeltaFields_PlaintextNameRejected(t *testing.T) {
 	}
 }
 
-func TestDecryptSSEChunk_FunctionCallPlaintextRejected(t *testing.T) {
+func TestDecryptDeltaFields_VeniceAllowsPlaintextRefusalAndName(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	fields := map[string]json.RawMessage{
+		"role":    json.RawMessage(`"assistant"`),
+		"name":    json.RawMessage(`"bot"`),
+		"refusal": json.RawMessage(`"none"`),
+	}
+
+	changed, err := decryptDeltaFields(fields, session, "test")
+	if err != nil {
+		t.Fatalf("unexpected error for Venice plaintext fields: %v", err)
+	}
+	if changed {
+		t.Error("changed = true, want false for plaintext passthrough")
+	}
+}
+
+func TestDecryptSSEChunk_FunctionCallPlaintextAcceptedForVenice(t *testing.T) {
 	// This test verifies that for protocols supporting full-field encryption,
 	// plaintext nested fields are rejected. For Venice, which doesn't encrypt
 	// these fields, plaintext is allowed and accepted without error.
@@ -1128,7 +1159,7 @@ func TestDecryptSSEChunk_FunctionCallPlaintextRejected(t *testing.T) {
 	}
 }
 
-func TestDecryptSSEChunk_ToolCallPlaintextArgumentsRejected(t *testing.T) {
+func TestDecryptSSEChunk_ToolCallPlaintextArgumentsAcceptedForVenice(t *testing.T) {
 	// This test verifies that for protocols supporting full-field encryption,
 	// plaintext nested fields are rejected. For Venice, which doesn't encrypt
 	// these fields, plaintext is allowed and accepted without error.
@@ -1165,10 +1196,10 @@ func TestDecryptSSEChunk_ToolCallPlaintextArgumentsRejected(t *testing.T) {
 }
 
 func TestDecryptNonStreamResponse_LogprobsPlaintextTokenRejected(t *testing.T) {
-	session := testVeniceSession(t)
+	session := testFullFieldVeniceSession(t)
 	defer session.Zero()
 
-	encContent := encryptForClient(t, "ok", session)
+	encContent := encryptForClient(t, "ok", session.VeniceSession)
 	body := map[string]any{
 		"choices": []map[string]any{
 			{
@@ -1199,10 +1230,10 @@ func TestDecryptNonStreamResponse_LogprobsPlaintextTokenRejected(t *testing.T) {
 }
 
 func TestDecryptNonStreamResponse_LogprobsNonStringTokenRejected(t *testing.T) {
-	session := testVeniceSession(t)
+	session := testFullFieldVeniceSession(t)
 	defer session.Zero()
 
-	encContent := encryptForClient(t, "ok", session)
+	encContent := encryptForClient(t, "ok", session.VeniceSession)
 	body := map[string]any{
 		"choices": []map[string]any{
 			{
@@ -1233,11 +1264,11 @@ func TestDecryptNonStreamResponse_LogprobsNonStringTokenRejected(t *testing.T) {
 }
 
 func TestDecryptNonStreamResponse_LogprobsPlaintextBytesStringRejected(t *testing.T) {
-	session := testVeniceSession(t)
+	session := testFullFieldVeniceSession(t)
 	defer session.Zero()
 
-	encContent := encryptForClient(t, "ok", session)
-	encToken := encryptForClient(t, "hello", session)
+	encContent := encryptForClient(t, "ok", session.VeniceSession)
+	encToken := encryptForClient(t, "hello", session.VeniceSession)
 	body := map[string]any{
 		"choices": []map[string]any{
 			{
