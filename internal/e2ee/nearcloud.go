@@ -102,6 +102,12 @@ func (s *NearCloudSession) SupportsEncryptAllFields() bool {
 	return true
 }
 
+// AllowsPlaintextScoreResponse returns true because the current NEAR AI score
+// response path returns plaintext numeric scores for this provider.
+func (s *NearCloudSession) AllowsPlaintextScoreResponse() bool {
+	return true
+}
+
 // hkdfInfoEd25519 is the HKDF info string for the NearCloud Ed25519/XChaCha20
 // E2EE protocol.
 const hkdfInfoEd25519 = "ed25519_encryption"

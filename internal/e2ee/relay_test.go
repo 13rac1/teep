@@ -36,6 +36,10 @@ func (s *fullFieldVeniceSession) SupportsEncryptAllFields() bool {
 	return true
 }
 
+func (s *fullFieldVeniceSession) AllowsPlaintextScoreResponse() bool {
+	return false
+}
+
 func testFullFieldVeniceSession(t *testing.T) *fullFieldVeniceSession {
 	t.Helper()
 	return &fullFieldVeniceSession{VeniceSession: testVeniceSession(t)}
@@ -2020,10 +2024,11 @@ type testDecryptor struct {
 	decrypt     func(string) ([]byte, error)
 }
 
-func (m *testDecryptor) IsEncryptedChunk(val string) bool  { return m.isEncrypted(val) }
-func (m *testDecryptor) Decrypt(ct string) ([]byte, error) { return m.decrypt(ct) }
-func (m *testDecryptor) SupportsEncryptAllFields() bool    { return true }
-func (m *testDecryptor) Zero()                             {}
+func (m *testDecryptor) IsEncryptedChunk(val string) bool   { return m.isEncrypted(val) }
+func (m *testDecryptor) Decrypt(ct string) ([]byte, error)  { return m.decrypt(ct) }
+func (m *testDecryptor) SupportsEncryptAllFields() bool     { return true }
+func (m *testDecryptor) AllowsPlaintextScoreResponse() bool { return false }
+func (m *testDecryptor) Zero()                              {}
 
 // ---------------------------------------------------------------------------
 // recordChunk with usage tokens (line 55-57)
@@ -2137,6 +2142,44 @@ func TestDecryptSSEChunkContent_DecryptError(t *testing.T) {
 	t.Logf("decryptSSEChunkContent(decrypt error): err=%v", err)
 	if err == nil {
 		t.Fatal("expected error from decrypt failure")
+	}
+}
+
+func TestDecryptSSEChunkContent_VeniceAllowsPlaintextNameAndRefusal(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	input := `{"choices":[{"delta":{"role":"assistant","name":"bot","refusal":"none"}}]}`
+	result, err := decryptSSEChunkContent(input, session)
+	if err != nil {
+		t.Fatalf("unexpected error for Venice plaintext optional fields: %v", err)
+	}
+	if result["name"] != "bot" {
+		t.Fatalf("name = %q, want plaintext bot", result["name"])
+	}
+	if result["refusal"] != "none" {
+		t.Fatalf("refusal = %q, want plaintext none", result["refusal"])
+	}
+}
+
+func TestDecryptNonStreamResponse_ScorePlaintextRejectedForFullFieldSession(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{{"score": 0.42}},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error for plaintext score on full-field session")
+	}
+	if !strings.Contains(err.Error(), "data[0].score: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

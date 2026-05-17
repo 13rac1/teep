@@ -319,8 +319,9 @@ func (m *mockDecryptor) Decrypt(val string) ([]byte, error) {
 	}
 	return []byte("decrypted"), nil
 }
-func (m *mockDecryptor) SupportsEncryptAllFields() bool { return true }
-func (m *mockDecryptor) Zero()                          {}
+func (m *mockDecryptor) SupportsEncryptAllFields() bool     { return true }
+func (m *mockDecryptor) AllowsPlaintextScoreResponse() bool { return false }
+func (m *mockDecryptor) Zero()                              {}
 
 func TestDoE2EEStreamTest_HTTPError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

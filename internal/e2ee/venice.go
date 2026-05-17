@@ -98,6 +98,13 @@ func (s *VeniceSession) SupportsEncryptAllFields() bool {
 	return false
 }
 
+// AllowsPlaintextScoreResponse returns true because Venice's current score
+// response behavior is plaintext and the protocol does not encrypt the rest of
+// the message envelope either.
+func (s *VeniceSession) AllowsPlaintextScoreResponse() bool {
+	return true
+}
+
 // hkdfInfoVenice is the HKDF info string required by the Venice E2EE protocol.
 // Do not change — this value must match the TEE server implementation.
 const hkdfInfoVenice = "ecdsa_encryption"

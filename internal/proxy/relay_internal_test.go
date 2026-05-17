@@ -230,7 +230,10 @@ type noopDecryptor struct{ zeroed bool }
 func (n *noopDecryptor) IsEncryptedChunk(string) bool   { return false }
 func (n *noopDecryptor) Decrypt(string) ([]byte, error) { return nil, nil }
 func (n *noopDecryptor) SupportsEncryptAllFields() bool { return false }
-func (n *noopDecryptor) Zero()                          { n.zeroed = true }
+func (n *noopDecryptor) AllowsPlaintextScoreResponse() bool {
+	return false
+}
+func (n *noopDecryptor) Zero() { n.zeroed = true }
 
 func TestZeroE2EESessions_NilBoth(t *testing.T) {
 	zeroE2EESessions(nil, nil) // must not panic
@@ -787,8 +790,9 @@ func (mockDecryptor) IsEncryptedChunk(_ string) bool { return false }
 func (mockDecryptor) Decrypt(_ string) ([]byte, error) {
 	return nil, errors.New("mock decrypt")
 }
-func (mockDecryptor) SupportsEncryptAllFields() bool { return false }
-func (mockDecryptor) Zero()                          {}
+func (mockDecryptor) SupportsEncryptAllFields() bool     { return false }
+func (mockDecryptor) AllowsPlaintextScoreResponse() bool { return false }
+func (mockDecryptor) Zero()                              {}
 
 func TestHandlePinnedPostRelay_NoError_NoSession(t *testing.T) {
 	s := newMinimalServer()

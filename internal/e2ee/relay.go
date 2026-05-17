@@ -572,7 +572,7 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 		return nil, fmt.Errorf("parse delta object: %w", err)
 	}
 
-	originalEncrypted := make(map[string]string, len(delta))
+	originalStringFields := make(map[string]string, len(delta))
 	for key, raw := range delta {
 		if IsNonEncryptedField(key) {
 			continue
@@ -581,7 +581,7 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 		if json.Unmarshal(raw, &s) != nil || s == "" {
 			continue
 		}
-		originalEncrypted[key] = s
+		originalStringFields[key] = s
 	}
 
 	if _, err := decryptChatObject(delta, session, "delta"); err != nil {
@@ -589,20 +589,22 @@ func decryptSSEChunkContent(data string, session Decryptor) (map[string]string, 
 	}
 
 	result := make(map[string]string)
-	for key, raw := range delta {
+	fullFieldMode := session.SupportsEncryptAllFields()
+	for key, original := range originalStringFields {
+		if IsNonEncryptedField(key) {
+			continue
+		}
+		raw := delta[key]
 		var s string
 		if json.Unmarshal(raw, &s) != nil || s == "" {
 			continue
 		}
-		if IsNonEncryptedField(key) {
-			continue
-		}
-		original, ok := originalEncrypted[key]
-		if !ok {
-			return nil, fmt.Errorf("delta.%s: expected encrypted string before decryption", key)
-		}
 		if !session.IsEncryptedChunk(original) {
-			return nil, fmt.Errorf("delta.%s: expected encrypted string before decryption", key)
+			if RequiresEncryptedField(key, fullFieldMode) {
+				return nil, fmt.Errorf("delta.%s: expected encrypted string before decryption", key)
+			}
+			result[key] = s
+			continue
 		}
 		if subtle.ConstantTimeCompare([]byte(original), []byte(s)) == 1 {
 			return nil, fmt.Errorf("delta.%s: expected decrypted plaintext, got unchanged ciphertext", key)
@@ -939,7 +941,7 @@ func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor)
 
 // decryptResponseScoreData processes score fields in data[] items of a score response.
 // It decrypts encrypted score strings when present, and accepts plaintext numeric
-// scores (current NearDirect/NearCloud behavior) without rewriting.
+// scores only for providers that explicitly allow that response policy.
 // Returns the rewritten data JSON, or nil if nothing was decrypted.
 func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strictDataShape bool) (json.RawMessage, error) {
 	var data []map[string]json.RawMessage
@@ -966,9 +968,10 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 			return nil, fmt.Errorf("data[%d].score: expected encrypted string, got null", i)
 		}
 
-		// Accept plaintext numeric scores as-is. Some upstream score endpoints
-		// currently return plaintext scores even when E2EE request encryption is active.
 		if jsonTopLevelNumber(scoreRaw) {
+			if !session.AllowsPlaintextScoreResponse() {
+				return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
+			}
 			continue
 		}
 
