@@ -319,9 +319,8 @@ func (m *mockDecryptor) Decrypt(val string) ([]byte, error) {
 	}
 	return []byte("decrypted"), nil
 }
-func (m *mockDecryptor) SupportsEncryptAllFields() bool     { return true }
-func (m *mockDecryptor) AllowsPlaintextScoreResponse() bool { return false }
-func (m *mockDecryptor) AllowsPlaintextLogprobsBytes() bool { return false }
+func (m *mockDecryptor) SupportsEncryptAllFields() bool { return true }
+
 func (m *mockDecryptor) IsRequestFieldEncrypted(fieldPath string) bool {
 	switch fieldPath {
 	case "role", "tool_call_id", "type", "id", "index":

@@ -15,8 +15,6 @@ type Decryptor interface {
 	IsEncryptedChunk(val string) bool
 	Decrypt(ciphertextHex string) ([]byte, error)
 	SupportsEncryptAllFields() bool
-	AllowsPlaintextScoreResponse() bool
-	AllowsPlaintextLogprobsBytes() bool
 	IsRequestFieldEncrypted(fieldPath string) bool
 	IsResponseFieldEncrypted(fieldPath, endpoint string) bool
 	Zero()

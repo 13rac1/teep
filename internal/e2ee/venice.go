@@ -98,21 +98,6 @@ func (s *VeniceSession) SupportsEncryptAllFields() bool {
 	return false
 }
 
-// AllowsPlaintextScoreResponse returns true because Venice's current score
-// response behavior is plaintext and the protocol does not encrypt the rest of
-// the message envelope either.
-func (s *VeniceSession) AllowsPlaintextScoreResponse() bool {
-	return true
-}
-
-// AllowsPlaintextLogprobsBytes returns true because Venice only encrypts
-// messages[].content and does not encrypt logprobs data. Note: this method is
-// not actually used since Venice does not support full-field encryption and
-// decryptChoiceLogprobs is only called when SupportsEncryptAllFields==true.
-func (s *VeniceSession) AllowsPlaintextLogprobsBytes() bool {
-	return true
-}
-
 // IsRequestFieldEncrypted reports whether the given message field is encrypted
 // in Venice E2EE requests. Venice only encrypts messages[].content; all other
 // fields are plaintext. Per api_support.md.

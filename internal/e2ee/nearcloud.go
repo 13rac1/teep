@@ -102,18 +102,6 @@ func (s *NearCloudSession) SupportsEncryptAllFields() bool {
 	return true
 }
 
-// AllowsPlaintextScoreResponse returns true because the current NEAR AI score
-// response path returns plaintext numeric scores for this provider.
-func (s *NearCloudSession) AllowsPlaintextScoreResponse() bool {
-	return true
-}
-
-// AllowsPlaintextLogprobsBytes returns false because logprobs token bytes
-// must be encrypted under the X-Encrypt-All-Fields protocol.
-func (s *NearCloudSession) AllowsPlaintextLogprobsBytes() bool {
-	return false
-}
-
 // IsRequestFieldEncrypted reports whether a message field is encrypted in
 // NearCloud E2EE requests under X-Encrypt-All-Fields mode.
 // Per api_support.md, encrypted fields include: content, reasoning_content,
