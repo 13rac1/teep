@@ -424,20 +424,24 @@ func decryptChatObject(fields map[string]json.RawMessage, session Decryptor, ctx
 	} else if c {
 		changed = true
 	}
-	if c, err := decryptAudioDataField(fields, session, ctx); err != nil {
-		return false, err
-	} else if c {
-		changed = true
-	}
-	if c, err := decryptToolCallsField(fields, session, ctx); err != nil {
-		return false, err
-	} else if c {
-		changed = true
-	}
-	if c, err := decryptFunctionCallField(fields, session, ctx); err != nil {
-		return false, err
-	} else if c {
-		changed = true
+	// Only decrypt nested fields (audio, tool_calls, function_call) if the protocol supports
+	// full-field encryption (e.g., NearCloud/Chutes). Venice only encrypts messages[].content.
+	if session.SupportsEncryptAllFields() {
+		if c, err := decryptAudioDataField(fields, session, ctx); err != nil {
+			return false, err
+		} else if c {
+			changed = true
+		}
+		if c, err := decryptToolCallsField(fields, session, ctx); err != nil {
+			return false, err
+		} else if c {
+			changed = true
+		}
+		if c, err := decryptFunctionCallField(fields, session, ctx); err != nil {
+			return false, err
+		} else if c {
+			changed = true
+		}
 	}
 	return changed, nil
 }

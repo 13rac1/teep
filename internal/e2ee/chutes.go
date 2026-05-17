@@ -75,6 +75,12 @@ func (s *ChutesSession) Zero() {
 	s.RequestCiphertext = nil
 }
 
+// SupportsEncryptAllFields returns true, indicating that Chutes supports
+// full-field encryption by construction.
+func (s *ChutesSession) SupportsEncryptAllFields() bool {
+	return true
+}
+
 // HKDF info strings for the Chutes E2EE protocol.
 const (
 	hkdfInfoChutesReq    = "e2e-req-v1"
