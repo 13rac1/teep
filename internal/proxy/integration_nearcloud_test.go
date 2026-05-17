@@ -264,6 +264,35 @@ func TestIntegration_NearCloud(t *testing.T) {
 		t.Logf("score: %d/%d passed, %d skipped, %d failed",
 			report.Passed, report.Passed+report.Failed+report.Skipped, report.Skipped, report.Failed)
 	})
+
+	t.Run("E2EEStreamingWithTools", func(t *testing.T) {
+		// Test that requests with tool schemas don't break E2EE decryption.
+		// This exercises protocol-aware nested field decryption for tool_calls.
+		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatWithTools(t, proxySrv.URL, nearCloudIntegrationModel(), true)
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
+
+		chunks := readSSEChunks(t, resp.Body)
+		if len(chunks) == 0 {
+			t.Fatal("no SSE chunks received")
+		}
+
+		var sb strings.Builder
+		for _, c := range chunks {
+			sb.WriteString(extractDeltaContent(t, c))
+		}
+		content := sb.String()
+		if !isPrintableUTF8(content) {
+			t.Errorf("aggregated content is not valid printable UTF-8: %q", content)
+		}
+		t.Logf("response with tools (%d chunks): %q", len(chunks), content)
+	})
 }
 
 // --------------------------------------------------------------------------

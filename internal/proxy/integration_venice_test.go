@@ -120,6 +120,19 @@ func postChatIntegration(t *testing.T, proxyURL, model string, stream bool) *htt
 	return resp
 }
 
+// postChatWithTools sends a POST /v1/chat/completions with a tool schema.
+// This exercises the protocol-aware nested field decryption code paths for
+// handling tool_calls, audio.data, and function_call fields in responses.
+func postChatWithTools(t *testing.T, proxyURL, model string, stream bool) *http.Response {
+	t.Helper()
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":%v,"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]}`, model, integrationPrompt, stream)
+	resp, err := integrationClient.Post(proxyURL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST chat with tools: %v", err)
+	}
+	return resp
+}
+
 // findFactor returns the named factor from a report's factor list.
 func findFactor(factors []attestation.FactorResult, name string) (attestation.FactorResult, bool) {
 	for _, f := range factors {
@@ -285,5 +298,15 @@ func TestIntegration_Venice(t *testing.T) {
 			t.Fatalf("decode report: %v", err)
 		}
 		assertReportFactors(t, &report)
+	})
+
+	t.Run("E2EEStreamingWithTools", func(t *testing.T) {
+		// Test that requests with tool schemas don't break E2EE decryption.
+		// This exercises protocol-aware nested field decryption for tool_calls.
+		proxySrv := newProxyServer(t, integrationE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatWithTools(t, proxySrv.URL, integrationModel(), true)
+		defer resp.Body.Close()
+		assertStreamResponse(t, resp)
 	})
 }
