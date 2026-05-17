@@ -77,11 +77,28 @@ func IsNonEncryptedField(key string) bool {
 	}
 }
 
+// RequiresEncryptedField reports whether a string-valued chat field must be
+// encrypted for the active protocol mode.
+//
+// In full-field mode (NearCloud/NearDirect/Chutes), every non-metadata string
+// field must be encrypted. In content-only mode (Venice), only content is
+// strictly required to be encrypted; other string fields may be plaintext.
+func RequiresEncryptedField(key string, supportsEncryptAllFields bool) bool {
+	if IsNonEncryptedField(key) {
+		return false
+	}
+	if supportsEncryptAllFields {
+		return true
+	}
+	return key == "content"
+}
+
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
 // map, decrypts any that pass the session's IsEncryptedChunk check,
 // and returns true if any field was decrypted.
 func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
 	changed := false
+	fullFieldMode := session.SupportsEncryptAllFields()
 	for key, raw := range fields {
 		var s string
 		if json.Unmarshal(raw, &s) != nil || s == "" {
@@ -90,7 +107,11 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ct
 		if IsNonEncryptedField(key) {
 			continue
 		}
+		requiresEncrypted := RequiresEncryptedField(key, fullFieldMode)
 		if !session.IsEncryptedChunk(s) {
+			if !requiresEncrypted {
+				continue
+			}
 			return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 		}
 		plaintext, err := session.Decrypt(s)
@@ -486,10 +507,12 @@ func DecryptSSEChunk(data string, session Decryptor) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if c, err := decryptChoiceLogprobs(choices[0], session, "choice[0]"); err != nil {
-		return "", err
-	} else if c {
-		changed = true
+	if session.SupportsEncryptAllFields() {
+		if c, err := decryptChoiceLogprobs(choices[0], session, "choice[0]"); err != nil {
+			return "", err
+		} else if c {
+			changed = true
+		}
 	}
 	if !changed {
 		return data, nil
@@ -719,10 +742,12 @@ func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor) (json
 		if err != nil {
 			return nil, err
 		}
-		if lc, err := decryptChoiceLogprobs(choices[i], session, fmt.Sprintf("choice[%d]", i)); err != nil {
-			return nil, err
-		} else if lc {
-			c = true
+		if session.SupportsEncryptAllFields() {
+			if lc, err := decryptChoiceLogprobs(choices[i], session, fmt.Sprintf("choice[%d]", i)); err != nil {
+				return nil, err
+			} else if lc {
+				c = true
+			}
 		}
 		if !c {
 			continue
@@ -813,7 +838,7 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, s
 			return nil, fmt.Errorf("data[%d].embedding: expected encrypted string, got null", i)
 		}
 		// Check if embedding is a string (encrypted form) or array (plaintext).
-		if len(embRaw) == 0 || embRaw[0] != '"' {
+		if !jsonRawStartsWithToken(embRaw, '"') {
 			return nil, fmt.Errorf("data[%d].embedding: expected encrypted string", i)
 		}
 		var embStr string
@@ -862,7 +887,7 @@ func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor)
 			return nil, fmt.Errorf("results[%d].document: expected object, got null", i)
 		}
 		// Document is an object with a text field.
-		if len(docRaw) == 0 || docRaw[0] != '{' {
+		if !jsonRawStartsWithToken(docRaw, '{') {
 			return nil, fmt.Errorf("results[%d].document: expected object", i)
 		}
 		var doc map[string]json.RawMessage
@@ -929,7 +954,7 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 		}
 		// In this E2EE decryption path, score must be an encrypted string.
 		// Plaintext numeric scores are rejected fail-closed when a session is active.
-		if len(scoreRaw) == 0 || scoreRaw[0] != '"' {
+		if !jsonRawStartsWithToken(scoreRaw, '"') {
 			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
 		}
 		var scoreStr string
@@ -1098,7 +1123,7 @@ func extractChunkMeta(data string, session Decryptor) (chunkMeta, error) {
 	var m chunkMeta
 	if len(parsed.Choices) > 0 {
 		m.ToolCalls = parsed.Choices[0].Delta.ToolCalls
-		if session != nil {
+		if session != nil && session.SupportsEncryptAllFields() {
 			for i := range m.ToolCalls {
 				decrypted, err := decryptToolCallMetaRaw(m.ToolCalls[i], session, fmt.Sprintf("delta.tool_calls[%d]", i))
 				if err != nil {

@@ -422,6 +422,21 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 			if e2ee.IsNonEncryptedField(key) {
 				continue
 			}
+			requiresEncrypted := e2ee.RequiresEncryptedField(key, session.SupportsEncryptAllFields())
+			if !requiresEncrypted {
+				// For content-only protocols, non-required fields may still be encrypted;
+				// try decrypting when they look encrypted so we still verify authenticity.
+				if session.IsEncryptedChunk(s) {
+					if _, err := session.Decrypt(s); err != nil {
+						return &attestation.E2EETestResult{
+							Attempted: true,
+							Err:       fmt.Errorf("decrypt optional field %q: %w", key, err),
+						}
+					}
+					encryptedCount++
+				}
+				continue
+			}
 			// This field should be encrypted.
 			if !session.IsEncryptedChunk(s) {
 				return &attestation.E2EETestResult{
