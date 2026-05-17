@@ -114,6 +114,48 @@ func (s *NearCloudSession) AllowsPlaintextLogprobsBytes() bool {
 	return false
 }
 
+// IsRequestFieldEncrypted reports whether a message field is encrypted in
+// NearCloud E2EE requests under X-Encrypt-All-Fields mode.
+// Per api_support.md, encrypted fields include: content, reasoning_content,
+// reasoning, refusal, name, audio.data, tool_calls[].function.*, function_call.*
+// Plaintext fields are structural metadata: role, tool_call_id, type, id, index.
+func (s *NearCloudSession) IsRequestFieldEncrypted(fieldPath string) bool {
+	// Plaintext fields per api_support.md and IsNonEncryptedField()
+	switch fieldPath {
+	case "role", "tool_call_id", "type", "id", "index":
+		return false
+	}
+	// All other fields are encrypted in X-Encrypt-All-Fields mode
+	return true
+}
+
+// IsResponseFieldEncrypted reports whether a response field is encrypted in
+// NearCloud E2EE responses under X-Encrypt-All-Fields mode.
+// Per api_support.md, encrypted fields include: content, refusal, tool_calls.*,
+// audio.data, logprobs.*.{token,bytes}, etc.
+// Plaintext fields are structural: role, finish_reason, index, usage.*, object,
+// created, id, system_fingerprint.
+// SPECIAL CASE: score endpoint data[].score is plaintext due to known upstream limitation.
+func (s *NearCloudSession) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	// Plaintext structural/metadata fields
+	switch fieldPath {
+	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint":
+		return false
+	case "usage":
+		// usage.* fields (prompt_tokens, completion_tokens, etc.) are plaintext
+		return false
+	}
+
+	// Special case: score endpoint response data[].score is plaintext per api_support.md
+	// "Score: data[].score plaintext numeric response (known upstream NearAI limitation)"
+	if endpoint == "/v1/score" && fieldPath == "score" {
+		return false
+	}
+
+	// All other fields are encrypted in X-Encrypt-All-Fields mode
+	return true
+}
+
 // hkdfInfoEd25519 is the HKDF info string for the NearCloud Ed25519/XChaCha20
 // E2EE protocol.
 const hkdfInfoEd25519 = "ed25519_encryption"
