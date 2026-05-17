@@ -371,4 +371,93 @@ func TestIntegration_Venice(t *testing.T) {
 		defer resp.Body.Close()
 		assertNonStreamResponseOrToolCall(t, resp)
 	})
+
+	t.Run("E2EEPlaintextToolCalls", func(t *testing.T) {
+		// Venice E2EE preserves plaintext for tool_calls function name and arguments
+		// (unlike NearCloud/NearDirect which use full-field encryption).
+		// This test validates that when Venice returns tool_calls, the function
+		// name and arguments are accessible as plaintext strings without decryption.
+		proxySrv := newProxyServer(t, integrationE2EEConfig(t))
+		defer proxySrv.Close()
+
+		// Use a prompt that encourages tool use and a tool that would be called.
+		// Model behavior varies; if it chooses to return content instead of calling
+		// a tool, we still validate the response structure is valid.
+		toolPrompt := `Use the weather tool to get the current weather for San Francisco.`
+		model := integrationModel()
+		toolJSON := fmt.Sprintf(
+			`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":false,"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the current weather in a location","parameters":{"type":"object","properties":{"location":{"type":"string","description":"The location to get weather for"}}}}}]}`,
+			model, toolPrompt)
+
+		resp, err := integrationClient.Post(proxySrv.URL+"/v1/chat/completions", "application/json", strings.NewReader(toolJSON))
+		if err != nil {
+			t.Fatalf("POST chat with tool request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+
+		var parsed struct {
+			Choices []struct {
+				Message struct {
+					Content   *string `json:"content"`
+					ToolCalls []struct {
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			t.Fatalf("decode tool response: %v; body=%s", err, body)
+		}
+		if len(parsed.Choices) == 0 {
+			t.Fatalf("no choices in response: %s", body)
+		}
+
+		msg := parsed.Choices[0].Message
+		if msg.Content != nil && *msg.Content != "" {
+			// Model returned text instead of tool call, which is valid.
+			t.Logf("model returned content instead of tool call: %q", *msg.Content)
+			return
+		}
+
+		if len(msg.ToolCalls) > 0 {
+			// Validate that tool_calls are accessible (plaintext, not encrypted).
+			// The key assertion here is that we can unmarshal the tool_calls structure
+			// without errors, which proves that:
+			// 1. decryptToolCallsField correctly skipped decryption for Venice
+			// 2. The plaintext function name and arguments are preserved
+			// 3. No encryption-related errors were raised during relay decryption
+			toolCall := msg.ToolCalls[0]
+			if toolCall.Function.Name == "" {
+				t.Fatalf("tool_call function name is empty; structure: %+v", toolCall)
+			}
+			if toolCall.Function.Arguments == "" {
+				t.Fatalf("tool_call function arguments are empty; structure: %+v", toolCall)
+			}
+			// Validate arguments are valid JSON (they should be plaintext JSON, not encrypted).
+			var args map[string]any
+			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+				t.Fatalf("tool_call arguments not valid JSON (expected plaintext): %v; args=%q", err, toolCall.Function.Arguments)
+			}
+			t.Logf("Venice E2EE tool_calls: function=%q, arguments=%q", toolCall.Function.Name, toolCall.Function.Arguments)
+			return
+		}
+
+		// Model didn't use tools with this prompt, which is acceptable.
+		t.Logf("model did not use tools with this prompt")
+	})
 }
