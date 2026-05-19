@@ -37,10 +37,16 @@ const testsLoadDotEnvEnv = "TEEP_TESTS_LOAD_DOTENV"
 //
 //	export VAR_NAME=value
 //	export ANOTHER_VAR=another_value
+//
+// Activation: set TEEP_TESTS_LOAD_DOTENV=1 before running tests:
+//
+//	export TEEP_TESTS_LOAD_DOTENV=1
+//	go test ./internal/proxy/
 func init() {
 	if os.Getenv(testsLoadDotEnvEnv) != "1" {
 		return
 	}
+	fmt.Fprintf(os.Stderr, "teep test: %s=1, loading .env\n", testsLoadDotEnvEnv)
 	loadEnv()
 }
 
@@ -53,6 +59,7 @@ func init() {
 func loadEnv() {
 	repoRoot, err := findRepoRoot()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "teep test: loadEnv: findRepoRoot failed: %v\n", err)
 		return
 	}
 
@@ -60,10 +67,14 @@ func loadEnv() {
 
 	f, err := os.Open(envPath)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "teep test: loadEnv: open %s failed: %v\n", envPath, err)
+		}
 		return
 	}
 	defer f.Close()
 
+	var count int
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		name, value, ok := parseEnvLine(scanner.Text())
@@ -75,15 +86,22 @@ func loadEnv() {
 		// (prioritize explicitly-set environment variables)
 		if _, exists := os.LookupEnv(name); !exists {
 			_ = os.Setenv(name, value)
+			count++
 		}
+	}
+
+	if count > 0 {
+		fmt.Fprintf(os.Stderr, "teep test: loadEnv: loaded %d env vars from %s\n", count, envPath)
 	}
 }
 
 func findRepoRoot() (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("getwd: %w", err)
 	}
+
+	orig := wd
 	for {
 		candidate := filepath.Join(wd, "go.mod")
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
@@ -91,7 +109,7 @@ func findRepoRoot() (string, error) {
 		}
 		parent := filepath.Dir(wd)
 		if parent == wd {
-			return "", os.ErrNotExist
+			return "", fmt.Errorf("go.mod not found walking up from %s", orig)
 		}
 		wd = parent
 	}
