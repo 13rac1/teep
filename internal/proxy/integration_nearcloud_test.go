@@ -461,7 +461,7 @@ func TestIntegration_NearCloud_Rerank_E2EE(t *testing.T) {
 	model := nearCloudRerankModel()
 	body := fmt.Sprintf(`{"model":%q,"query":"What is deep learning?","documents":["Deep learning is a subset of machine learning.","The weather today is sunny.","Neural networks have multiple layers."],"top_n":2}`, model)
 
-	resp, err := integrationClient.Post(proxySrv.URL+"/v1/rerank", "application/json", strings.NewReader(body))
+	resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/rerank", body)
 	if err != nil {
 		t.Fatalf("POST rerank: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestIntegration_NearCloud_Score_E2EE(t *testing.T) {
 	model := nearCloudScoreModel()
 	body := fmt.Sprintf(`{"model":%q,"text_1":"Deep learning is powerful.","text_2":"Neural networks learn layered representations."}`, model)
 
-	resp, err := integrationClient.Post(proxySrv.URL+"/v1/score", "application/json", strings.NewReader(body))
+	resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/score", body)
 	if err != nil {
 		t.Fatalf("POST score: %v", err)
 	}

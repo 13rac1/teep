@@ -8,9 +8,12 @@
 // Dependency flow: attestation → e2ee → provider → proxy → cmd
 package e2ee
 
-// Decryptor is implemented by all E2EE session types. It provides the
-// minimum surface that relay functions and the proxy need to decrypt
-// response content and clean up key material.
+// Decryptor is implemented by field-level E2EE sessions used by relay
+// decryption (for example, Venice and NearCloud/NearDirect sessions). Chutes
+// uses a dedicated full-body relay path via ChutesE2EE/ChutesSession.
+//
+// It provides the minimum surface that relay functions and the proxy need to
+// decrypt response content and clean up key material.
 type Decryptor interface {
 	IsEncryptedChunk(val string) bool
 	Decrypt(ciphertextHex string) ([]byte, error)

@@ -91,7 +91,7 @@ func TestIntegration_NearDirect_Embeddings_E2EE(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := integrationClient.Post(proxySrv.URL+"/v1/embeddings", "application/json", strings.NewReader(tc.body))
+			resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/embeddings", tc.body)
 			if err != nil {
 				t.Fatalf("POST embeddings (%s): %v", tc.name, err)
 			}
@@ -144,7 +144,7 @@ func TestIntegration_NearCloud_Embeddings_E2EE(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := integrationClient.Post(proxySrv.URL+"/v1/embeddings", "application/json", strings.NewReader(tc.body))
+			resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/embeddings", tc.body)
 			if err != nil {
 				t.Fatalf("POST embeddings (%s): %v", tc.name, err)
 			}
