@@ -352,28 +352,12 @@ func decryptMaybeEncryptedStringField(obj map[string]json.RawMessage, key string
 		return false, nil
 	}
 	requiresEncrypted := session.IsResponseFieldEncrypted(policyPath, chatCompletionsEndpoint)
-	if !jsonRawStartsWithToken(raw, '"') {
-		if !requiresEncrypted {
-			return false, nil
-		}
-		return false, fmt.Errorf("%s.%s: expected string", ctx, key)
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return false, fmt.Errorf("parse %s.%s as string: %w", ctx, key, err)
-	}
-	if s == "" {
-		return false, nil
-	}
-	if !session.IsEncryptedChunk(s) {
-		if !requiresEncrypted {
-			return false, nil
-		}
-		return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
-	}
-	plaintext, err := session.Decrypt(s)
+	plaintext, err := decryptFieldOrSkip(raw, session, requiresEncrypted, ctx+"."+key)
 	if err != nil {
-		return false, fmt.Errorf("decrypt %s.%s: %w", ctx, key, err)
+		return false, err
+	}
+	if plaintext == nil {
+		return false, nil
 	}
 	plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
 	obj[key] = plaintextJSON
@@ -414,42 +398,14 @@ func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decrypt
 		return false, nil
 	}
 	requiresEncrypted := session.IsResponseFieldEncrypted(policyPath, chatCompletionsEndpoint)
-	if !jsonRawStartsWithToken(raw, '"') {
-		// Plaintext bytes are usually JSON arrays. Check the session's field encryption policy.
-		// Logprobs bytes are only in /v1/chat/completions responses.
-		if !requiresEncrypted {
-			// Field encryption policy allows plaintext for this provider
-			return false, nil
-		}
-		// In full-field E2EE mode, plaintext token bytes would leak sensitive data.
-		// Fail closed instead of silently passing through.
-		return false, fmt.Errorf("%s.bytes: expected encrypted string but got plaintext (type %q)", ctx, rawTypeDescription(raw))
+	plaintext, err := decryptFieldOrSkip(raw, session, requiresEncrypted, ctx+".bytes")
+	if err != nil {
+		return false, err
 	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return false, fmt.Errorf("parse %s.bytes as string: %w", ctx, err)
-	}
-	if s == "" {
+	if plaintext == nil {
 		return false, nil
 	}
-	if !session.IsEncryptedChunk(s) {
-		if !requiresEncrypted {
-			return false, nil
-		}
-		return false, fmt.Errorf("%s.bytes: expected encrypted string but not recognised (len=%d prefix=%q)", ctx, len(s), SafePrefix(s, 8))
-	}
-	plaintext, err := session.Decrypt(s)
-	if err != nil {
-		return false, fmt.Errorf("decrypt %s.bytes: %w", ctx, err)
-	}
-	// MAC-validated decryption guarantees integrity; no post-decrypt type assertion needed.
-	// Preserve any valid JSON payload as-is; non-JSON values become a JSON string.
-	if json.Valid(plaintext) {
-		entry["bytes"] = json.RawMessage(plaintext)
-	} else {
-		plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
-		entry["bytes"] = plaintextJSON
-	}
+	entry["bytes"] = applyDecryptedJSON(plaintext)
 	return true, nil
 }
 
@@ -513,6 +469,52 @@ func rawTypeDescription(raw json.RawMessage) string {
 	default:
 		return "unknown"
 	}
+}
+
+// decryptFieldOrSkip attempts to decrypt raw as an encrypted JSON string ciphertext.
+// Returns:
+//   - (plaintext, nil) if decryption succeeded (AEAD MAC validated).
+//   - (nil, nil) if the value is empty, non-string, or not recognised as a ciphertext,
+//     and requiresEncrypted is false (policy allows plaintext passthrough).
+//   - (nil, err) if requiresEncrypted is true and the value is not encrypted, or if
+//     Decrypt fails.
+//
+// Callers must handle null/absent checks before calling; raw must not be null.
+func decryptFieldOrSkip(raw json.RawMessage, session Decryptor, requiresEncrypted bool, ctx string) ([]byte, error) {
+	if !jsonRawStartsWithToken(raw, '"') {
+		if !requiresEncrypted {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s: expected encrypted string, got %s", ctx, rawTypeDescription(raw))
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, fmt.Errorf("parse %s as string: %w", ctx, err)
+	}
+	if s == "" {
+		return nil, nil
+	}
+	if !session.IsEncryptedChunk(s) {
+		if !requiresEncrypted {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s: expected encrypted string but not recognised (len=%d prefix=%q)", ctx, len(s), SafePrefix(s, 8))
+	}
+	plaintext, err := session.Decrypt(s)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt %s: %w", ctx, err)
+	}
+	return plaintext, nil
+}
+
+// applyDecryptedJSON stores a successfully decrypted payload as a json.RawMessage.
+// If plaintext is valid JSON it is used directly; otherwise it is wrapped as a JSON string.
+func applyDecryptedJSON(plaintext []byte) json.RawMessage {
+	if json.Valid(plaintext) {
+		return json.RawMessage(plaintext)
+	}
+	b, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+	return b
 }
 
 // DecryptSSEChunk parses one SSE data JSON payload, decrypts all encrypted
@@ -839,22 +841,12 @@ func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor, endpoi
 				continue
 			}
 			requiresEncrypted := session.IsResponseFieldEncrypted(field, endpoint)
-			var val string
-			if err := json.Unmarshal(raw, &val); err != nil {
-				if requiresEncrypted {
-					return nil, fmt.Errorf("data[%d].%s: expected encrypted string", i, field)
-				}
-				continue
-			}
-			if !session.IsEncryptedChunk(val) {
-				if requiresEncrypted {
-					return nil, fmt.Errorf("data[%d].%s: expected encrypted string", i, field)
-				}
-				continue
-			}
-			plaintext, err := session.Decrypt(val)
+			plaintext, err := decryptFieldOrSkip(raw, session, requiresEncrypted, fmt.Sprintf("data[%d].%s", i, field))
 			if err != nil {
-				return nil, fmt.Errorf("decrypt data[%d].%s: %w", i, field, err)
+				return nil, err
+			}
+			if plaintext == nil {
+				continue
 			}
 			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
 			data[i][field] = rewritten
@@ -899,32 +891,14 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, s
 			// Treat null as absent to avoid rejecting valid nullable upstream output.
 			continue
 		}
-		if !jsonRawStartsWithToken(embRaw, '"') {
-			if requiresEncrypted {
-				return nil, fmt.Errorf("data[%d].embedding: expected encrypted string", i)
-			}
-			continue
-		}
-		var embStr string
-		if err := json.Unmarshal(embRaw, &embStr); err != nil {
-			return nil, fmt.Errorf("parse data[%d].embedding: %w", i, err)
-		}
-		if !session.IsEncryptedChunk(embStr) {
-			if requiresEncrypted {
-				return nil, fmt.Errorf("data[%d].embedding: expected encrypted string", i)
-			}
-			continue
-		}
-		plaintext, err := session.Decrypt(embStr)
+		plaintext, err := decryptFieldOrSkip(embRaw, session, requiresEncrypted, fmt.Sprintf("data[%d].embedding", i))
 		if err != nil {
-			return nil, fmt.Errorf("decrypt data[%d].embedding: %w", i, err)
+			return nil, err
 		}
-		if json.Valid(plaintext) {
-			data[i]["embedding"] = json.RawMessage(plaintext)
-		} else {
-			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
-			data[i]["embedding"] = rewritten
+		if plaintext == nil {
+			continue
 		}
+		data[i]["embedding"] = applyDecryptedJSON(plaintext)
 		changed = true
 	}
 
@@ -979,28 +953,12 @@ func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor,
 			// NearAI encrypt_field skips null text values. Preserve null as-is.
 			continue
 		}
-		if !jsonRawStartsWithToken(textRaw, '"') {
-			if requiresEncrypted {
-				return nil, fmt.Errorf("results[%d].document.text: expected encrypted string", i)
-			}
-			continue
-		}
-		var textStr string
-		if err := json.Unmarshal(textRaw, &textStr); err != nil {
-			return nil, fmt.Errorf("parse results[%d].document.text: %w", i, err)
-		}
-		if textStr == "" {
-			continue
-		}
-		if !session.IsEncryptedChunk(textStr) {
-			if requiresEncrypted {
-				return nil, fmt.Errorf("results[%d].document.text: expected encrypted string", i)
-			}
-			continue
-		}
-		plaintext, err := session.Decrypt(textStr)
+		plaintext, err := decryptFieldOrSkip(textRaw, session, requiresEncrypted, fmt.Sprintf("results[%d].document.text", i))
 		if err != nil {
-			return nil, fmt.Errorf("decrypt results[%d].document.text: %w", i, err)
+			return nil, err
+		}
+		if plaintext == nil {
+			continue
 		}
 		rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
 		doc["text"] = rewritten
@@ -1047,33 +1005,14 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 			continue
 		}
 
-		if !jsonRawStartsWithToken(scoreRaw, '"') {
-			if !requiresEncrypted {
-				continue
-			}
-			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
-		}
-
-		var scoreStr string
-		if err := json.Unmarshal(scoreRaw, &scoreStr); err != nil {
-			return nil, fmt.Errorf("parse data[%d].score: %w", i, err)
-		}
-		if !session.IsEncryptedChunk(scoreStr) {
-			if !requiresEncrypted {
-				continue
-			}
-			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
-		}
-		plaintext, err := session.Decrypt(scoreStr)
+		plaintext, err := decryptFieldOrSkip(scoreRaw, session, requiresEncrypted, fmt.Sprintf("data[%d].score", i))
 		if err != nil {
-			return nil, fmt.Errorf("decrypt data[%d].score: %w", i, err)
+			return nil, err
 		}
-		if json.Valid(plaintext) {
-			data[i]["score"] = json.RawMessage(plaintext)
-		} else {
-			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
-			data[i]["score"] = rewritten
+		if plaintext == nil {
+			continue
 		}
+		data[i]["score"] = applyDecryptedJSON(plaintext)
 		changed = true
 	}
 

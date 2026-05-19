@@ -1423,7 +1423,7 @@ func TestDecryptNonStreamResponse_LogprobsNonStringTokenRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-string logprobs token")
 	}
-	if !strings.Contains(err.Error(), "logprobs.content[0].token: expected string") {
+	if !strings.Contains(err.Error(), "logprobs.content[0].token: expected encrypted string") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1497,7 +1497,7 @@ func TestDecryptNonStreamResponse_LogprobsPlaintextBytesArrayRejected(t *testing
 	if err == nil {
 		t.Fatal("expected error for plaintext logprobs bytes array in full-field mode")
 	}
-	if !strings.Contains(err.Error(), "logprobs.content[0].bytes: expected encrypted string but got plaintext") {
+	if !strings.Contains(err.Error(), "logprobs.content[0].bytes: expected encrypted string") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
