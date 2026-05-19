@@ -446,7 +446,7 @@ func TestIntegration_Venice(t *testing.T) {
 			`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":false,"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the current weather in a location","parameters":{"type":"object","properties":{"location":{"type":"string","description":"The location to get weather for"}}}}}]}`,
 			model, toolPrompt)
 
-		resp, err := integrationClient.Post(proxySrv.URL+"/v1/chat/completions", "application/json", strings.NewReader(toolJSON))
+		resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/chat/completions", toolJSON)
 		if err != nil {
 			t.Fatalf("POST chat with tool request: %v", err)
 		}

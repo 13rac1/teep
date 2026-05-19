@@ -785,7 +785,7 @@ func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor) (json
 		if err != nil {
 			return nil, err
 		}
-		if session.IsResponseFieldEncrypted("logprobs", "") {
+		if session.IsResponseFieldEncrypted("logprobs", chatCompletionsEndpoint) {
 			if lc, err := decryptChoiceLogprobs(choices[i], session, fmt.Sprintf("choice[%d]", i)); err != nil {
 				return nil, err
 			} else if lc {
@@ -1178,7 +1178,7 @@ func extractChunkMeta(data string, session Decryptor) (chunkMeta, error) {
 	var m chunkMeta
 	if len(parsed.Choices) > 0 {
 		m.ToolCalls = parsed.Choices[0].Delta.ToolCalls
-		if session != nil && session.IsRequestFieldEncrypted("tool_calls") {
+		if session != nil && session.IsResponseFieldEncrypted("tool_calls", chatCompletionsEndpoint) {
 			for i := range m.ToolCalls {
 				decrypted, err := decryptToolCallMetaRaw(m.ToolCalls[i], session, fmt.Sprintf("delta.tool_calls[%d]", i))
 				if err != nil {
