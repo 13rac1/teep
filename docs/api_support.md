@@ -2,9 +2,16 @@
 
 This document describes the OpenAI-compatible API endpoints supported by each provider, their E2EE protocols, and the field-level encryption coverage when E2EE is active.
 
-## Overview
+## Endpoint Surface
 
-Teep exposes these proxy endpoints to clients:
+Teep exposes two endpoint categories:
+
+1. OpenAI-compatible API endpoints for inference and model discovery.
+2. Operational endpoints for health checks, dashboard/status streaming, Prometheus metrics, and attestation status.
+
+### OpenAI-Compatible API Endpoints
+
+These are the OpenAI-style endpoints that clients use for inference:
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -18,9 +25,25 @@ Teep exposes these proxy endpoints to clients:
 
 `/v1/models` is a proxy-aggregated endpoint that returns the combined model list from all configured providers. Each model's `id` field is rewritten to `provider:upstreamID` (e.g. `venice:e2ee-qwen3-5-122b-a10b`, `neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct`) so clients can route requests to the correct provider. It is not included in the per-provider matrices below because it is handled entirely by the proxy, does not forward requests to individual providers, and is not E2EE-encrypted (GET request, no sensitive data).
 
+### Operational Status, Monitoring, and Teep-Specific Endpoints
+
+These are teep runtime/observability endpoints, not OpenAI-compatible inference APIs:
+
+| Endpoint | Method | Type | Description |
+|---|---|---|---|
+| `/` | GET | Dashboard page | Live HTML status dashboard |
+| `/health` | GET | Health API | JSON process health snapshot |
+| `/events` | GET | Dashboard status API | Server-Sent Events stream for live dashboard updates |
+| `/metrics` | GET | Prometheus API | Prometheus text-format counters |
+| `/v1/tee/report` | GET | Teep status API | Cached attestation report for a provider/model (`provider` and `model` query params required) |
+
+Operational endpoints are intended for local monitoring and process supervision. In the current server implementation, these endpoints are unauthenticated and access control relies on binding to loopback by default.
+
 Not all providers support all endpoints. If a provider has no path configured for an endpoint, the proxy returns HTTP 400 with an error indicating that the named provider does not support the requested endpoint (for example, `provider "venice" does not support embeddings`).
 
 ## Endpoint Support Matrix
+
+This matrix applies to OpenAI-compatible inference endpoints.
 
 | Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud |
 |---|---|---|---|---|---|
