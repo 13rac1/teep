@@ -440,12 +440,10 @@ func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decrypt
 	if err != nil {
 		return false, fmt.Errorf("decrypt %s.bytes: %w", ctx, err)
 	}
-	if json.Valid(plaintext) {
-		entry["bytes"] = json.RawMessage(plaintext)
-	} else {
-		plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
-		entry["bytes"] = plaintextJSON
+	if !jsonArrayOfNumbers(plaintext) {
+		return false, fmt.Errorf("%s.bytes: decrypted payload must be a JSON array of numbers", ctx)
 	}
+	entry["bytes"] = json.RawMessage(plaintext)
 	return true, nil
 }
 
