@@ -427,7 +427,7 @@ func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decrypt
 	if !jsonRawStartsWithToken(raw, '"') {
 		// Plaintext bytes are usually JSON arrays. Check the session's field encryption policy.
 		// Logprobs bytes are only in /v1/chat/completions responses.
-		if !session.IsResponseFieldEncrypted("bytes", "/v1/chat/completions") {
+		if !session.IsResponseFieldEncrypted("bytes", chatCompletionsEndpoint) {
 			// Field encryption policy allows plaintext for this provider
 			return false, nil
 		}
