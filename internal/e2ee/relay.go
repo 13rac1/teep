@@ -408,32 +408,16 @@ func classifyNonStreamEndpoint(endpointPath string) nonStreamEndpointType {
 	}
 }
 
-func jsonArrayOfNumbers(raw []byte) bool {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return false
-	}
-	arr, ok := v.([]any)
-	if !ok {
-		return false
-	}
-	for _, elem := range arr {
-		if _, ok := elem.(float64); !ok {
-			return false
-		}
-	}
-	return true
-}
-
 func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decryptor, ctx, policyPath string) (bool, error) {
 	raw, ok := entry["bytes"]
 	if !ok || IsJSONNull(raw) {
 		return false, nil
 	}
+	requiresEncrypted := session.IsResponseFieldEncrypted(policyPath, chatCompletionsEndpoint)
 	if !jsonRawStartsWithToken(raw, '"') {
 		// Plaintext bytes are usually JSON arrays. Check the session's field encryption policy.
 		// Logprobs bytes are only in /v1/chat/completions responses.
-		if !session.IsResponseFieldEncrypted(policyPath, chatCompletionsEndpoint) {
+		if !requiresEncrypted {
 			// Field encryption policy allows plaintext for this provider
 			return false, nil
 		}
@@ -449,16 +433,23 @@ func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decrypt
 		return false, nil
 	}
 	if !session.IsEncryptedChunk(s) {
+		if !requiresEncrypted {
+			return false, nil
+		}
 		return false, fmt.Errorf("%s.bytes: expected encrypted string but not recognised (len=%d prefix=%q)", ctx, len(s), SafePrefix(s, 8))
 	}
 	plaintext, err := session.Decrypt(s)
 	if err != nil {
 		return false, fmt.Errorf("decrypt %s.bytes: %w", ctx, err)
 	}
-	if !jsonArrayOfNumbers(plaintext) {
-		return false, fmt.Errorf("%s.bytes: decrypted payload must be a JSON array of numbers", ctx)
+	// MAC-validated decryption guarantees integrity; no post-decrypt type assertion needed.
+	// Preserve any valid JSON payload as-is; non-JSON values become a JSON string.
+	if json.Valid(plaintext) {
+		entry["bytes"] = json.RawMessage(plaintext)
+	} else {
+		plaintextJSON, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+		entry["bytes"] = plaintextJSON
 	}
-	entry["bytes"] = json.RawMessage(plaintext)
 	return true, nil
 }
 

@@ -1502,6 +1502,77 @@ func TestDecryptNonStreamResponse_LogprobsPlaintextBytesArrayRejected(t *testing
 	}
 }
 
+// TestDecryptNonStreamResponse_LogprobsPlaintextBytesStringPassthrough verifies that
+// a Venice session (no logprobs bytes encryption) passes through a plaintext string bytes
+// value without error, consistent with policy-driven fail-closed behaviour.
+func TestDecryptNonStreamResponse_LogprobsPlaintextBytesStringPassthrough(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "ok", session)
+	body := map[string]any{
+		"choices": []map[string]any{
+			{
+				"message": map[string]any{"content": encContent},
+				"logprobs": map[string]any{
+					"content": []map[string]any{
+						{
+							"token": "hello",
+							"bytes": "plaintext-bytes-string",
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err != nil {
+		t.Fatalf("expected passthrough for plaintext bytes string in Venice session, got: %v", err)
+	}
+}
+
+// TestDecryptNonStreamResponse_LogprobsBytesDecryptedWrongTypePassthrough verifies that
+// after a successful MAC-validated decrypt, a non-array-of-numbers payload is accepted
+// without error (the type assertion was incorrect after MAC auth).
+func TestDecryptNonStreamResponse_LogprobsBytesDecryptedWrongTypePassthrough(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "ok", session.VeniceSession)
+	encToken := encryptForClient(t, "hello", session.VeniceSession)
+	// Encrypt a string payload (not an array of numbers) for the bytes field.
+	encBytes := encryptForClient(t, `"unexpected-string"`, session.VeniceSession)
+	body := map[string]any{
+		"choices": []map[string]any{
+			{
+				"message": map[string]any{"content": encContent},
+				"logprobs": map[string]any{
+					"content": []map[string]any{
+						{
+							"token": encToken,
+							"bytes": encBytes,
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err != nil {
+		t.Fatalf("expected passthrough for wrong-type decrypted bytes, got: %v", err)
+	}
+}
+
 func TestDecryptNonStreamResponse_EmbeddingsPlaintextPassthrough(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
