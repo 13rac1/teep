@@ -114,6 +114,7 @@ func testNearCloudSessionForRegression(t *testing.T) *NearCloudSession {
 	if err != nil {
 		t.Fatalf("NewNearCloudSession: %v", err)
 	}
+	t.Cleanup(session.Zero)
 	// Generate a valid Ed25519 key pair for testing.
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
