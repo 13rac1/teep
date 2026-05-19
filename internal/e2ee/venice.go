@@ -109,9 +109,26 @@ func (s *VeniceSession) IsRequestFieldEncrypted(fieldPath string) bool {
 // preserved as plaintext." The endpoint parameter is ignored for Venice since all
 // endpoints follow the same policy.
 func (s *VeniceSession) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
-	// Venice only encrypts content in the delta object during streaming
-	// All other fields are plaintext (logprobs, tool_calls, refusal, etc.)
-	return fieldPath == "content"
+	// Venice only encrypts content in chat deltas.
+	if fieldPath == "content" {
+		return true
+	}
+
+	// Explicit nested leaves in Venice chat responses that remain plaintext.
+	switch fieldPath {
+	case "audio.data",
+		"function_call.name", "function_call.arguments",
+		"tool_calls[].function.name", "tool_calls[].function.arguments",
+		"tool_calls[].id", "tool_calls[].type", "tool_calls[].index",
+		"role", "finish_reason", "index", "id", "object", "created", "system_fingerprint",
+		"usage",
+		"refusal", "name",
+		"logprobs.content[].token", "logprobs.content[].bytes",
+		"logprobs.refusal[].token", "logprobs.refusal[].bytes":
+		return false
+	}
+
+	return false
 }
 
 // hkdfInfoVenice is the HKDF info string required by the Venice E2EE protocol.

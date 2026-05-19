@@ -247,6 +247,33 @@ func TestEncryptChatMessagesNearCloud(t *testing.T) {
 	}
 }
 
+func TestNearCloudSessionIsResponseFieldEncrypted_NestedPaths(t *testing.T) {
+	s := &NearCloudSession{}
+	tests := []struct {
+		name     string
+		field    string
+		endpoint string
+		want     bool
+	}{
+		{name: "content encrypted", field: "content", endpoint: "/v1/chat/completions", want: true},
+		{name: "tool function name encrypted", field: "tool_calls[].function.name", endpoint: "/v1/chat/completions", want: true},
+		{name: "tool function args encrypted", field: "tool_calls[].function.arguments", endpoint: "/v1/chat/completions", want: true},
+		{name: "audio data encrypted", field: "audio.data", endpoint: "/v1/chat/completions", want: true},
+		{name: "tool id plaintext", field: "tool_calls[].id", endpoint: "/v1/chat/completions", want: false},
+		{name: "tool type plaintext", field: "tool_calls[].type", endpoint: "/v1/chat/completions", want: false},
+		{name: "score plaintext on score endpoint", field: "score", endpoint: "/v1/score", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s.IsResponseFieldEncrypted(tc.field, tc.endpoint)
+			if got != tc.want {
+				t.Fatalf("IsResponseFieldEncrypted(%q, %q)=%v want %v", tc.field, tc.endpoint, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEncryptChatMessagesNearCloud_InvalidKey(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
 	_, _, err := EncryptChatMessagesNearCloud(body, "bad-key")

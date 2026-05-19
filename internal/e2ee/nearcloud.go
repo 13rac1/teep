@@ -119,13 +119,22 @@ func (s *NearCloudSession) IsRequestFieldEncrypted(fieldPath string) bool {
 // created, id, system_fingerprint.
 // SPECIAL CASE: score endpoint data[].score is plaintext due to known upstream limitation.
 func (s *NearCloudSession) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
-	// Plaintext structural/metadata fields
+	// Plaintext structural/metadata fields.
 	switch fieldPath {
-	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint":
+	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint", "usage",
+		"tool_call_id", "tool_calls[].id", "tool_calls[].type", "tool_calls[].index":
 		return false
-	case "usage":
-		// usage.* fields (prompt_tokens, completion_tokens, etc.) are plaintext
-		return false
+	}
+
+	// Known encrypted chat response leaves under X-Encrypt-All-Fields.
+	switch fieldPath {
+	case "content", "refusal", "reasoning", "reasoning_content", "name",
+		"audio.data",
+		"function_call.name", "function_call.arguments",
+		"tool_calls[].function.name", "tool_calls[].function.arguments",
+		"logprobs.content[].token", "logprobs.content[].bytes",
+		"logprobs.refusal[].token", "logprobs.refusal[].bytes":
+		return true
 	}
 
 	// Special case: score endpoint response data[].score is plaintext per api_support.md
@@ -134,7 +143,7 @@ func (s *NearCloudSession) IsResponseFieldEncrypted(fieldPath, endpoint string) 
 		return false
 	}
 
-	// All other fields are encrypted in X-Encrypt-All-Fields mode
+	// Fail closed for full-field mode: unknown leaves are expected encrypted.
 	return true
 }
 
