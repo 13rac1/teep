@@ -98,14 +98,23 @@ func RequiresEncryptedField(key string, session Decryptor) bool {
 func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
 	changed := false
 	for key, raw := range fields {
-		var s string
-		if json.Unmarshal(raw, &s) != nil || s == "" {
-			continue
-		}
 		if IsNonEncryptedField(key) {
 			continue
 		}
 		requiresEncrypted := RequiresEncryptedField(key, session)
+		if !jsonRawStartsWithToken(raw, '"') {
+			if requiresEncrypted {
+				return false, fmt.Errorf("%s.%s: expected encrypted string but got %s", ctx, key, rawTypeDescription(raw))
+			}
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return false, fmt.Errorf("%s.%s: parse string: %w", ctx, key, err)
+		}
+		if s == "" {
+			continue
+		}
 		if !session.IsEncryptedChunk(s) {
 			if !requiresEncrypted {
 				continue

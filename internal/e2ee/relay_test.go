@@ -1144,6 +1144,85 @@ func TestDecryptDeltaFields_VeniceAllowsPlaintextRefusalAndName(t *testing.T) {
 	}
 }
 
+func TestDecryptDeltaFields_RequiredNonStringRejectedInFullFieldMode(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+
+	tests := []struct {
+		name    string
+		raw     json.RawMessage
+		wantTyp string
+	}{
+		{name: "object", raw: json.RawMessage(`{"nested":"value"}`), wantTyp: "object"},
+		{name: "array", raw: json.RawMessage(`["value"]`), wantTyp: "array"},
+		{name: "number", raw: json.RawMessage(`123`), wantTyp: "number"},
+		{name: "boolean", raw: json.RawMessage(`true`), wantTyp: "boolean"},
+		{name: "null", raw: json.RawMessage(`null`), wantTyp: "null"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := map[string]json.RawMessage{
+				"role":    json.RawMessage(`"assistant"`),
+				"content": tc.raw,
+			}
+
+			changed, err := decryptDeltaFields(fields, session, "test")
+			if err == nil {
+				t.Fatal("expected error for non-string required field")
+			}
+			if !strings.Contains(err.Error(), "test.content: expected encrypted string but got "+tc.wantTyp) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if changed {
+				t.Error("changed = true, want false on rejection")
+			}
+		})
+	}
+}
+
+func TestDecryptDeltaFields_VeniceContentStillRejectsNonString(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	fields := map[string]json.RawMessage{
+		"role":    json.RawMessage(`"assistant"`),
+		"content": json.RawMessage(`123`),
+	}
+
+	changed, err := decryptDeltaFields(fields, session, "test")
+	if err == nil {
+		t.Fatal("expected error for non-string Venice content")
+	}
+	if !strings.Contains(err.Error(), "test.content: expected encrypted string but got number") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Error("changed = true, want false on rejection")
+	}
+}
+
+func TestDecryptDeltaFields_VeniceOptionalNonStringPassthrough(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	fields := map[string]json.RawMessage{
+		"role":    json.RawMessage(`"assistant"`),
+		"refusal": json.RawMessage(`123`),
+	}
+
+	changed, err := decryptDeltaFields(fields, session, "test")
+	if err != nil {
+		t.Fatalf("unexpected error for optional non-string Venice field: %v", err)
+	}
+	if changed {
+		t.Error("changed = true, want false for passthrough")
+	}
+	if string(fields["refusal"]) != `123` {
+		t.Fatalf("refusal was rewritten unexpectedly: %s", string(fields["refusal"]))
+	}
+}
+
 func TestDecryptSSEChunk_FunctionCallPlaintextAcceptedForVenice(t *testing.T) {
 	// This test verifies that for protocols supporting full-field encryption,
 	// plaintext nested fields are rejected. For Venice, which doesn't encrypt
