@@ -230,6 +230,31 @@ func TestVeniceSessionNewAndPublicKey(t *testing.T) {
 	}
 }
 
+func TestVeniceSessionIsResponseFieldEncrypted_NestedPaths(t *testing.T) {
+	s := &VeniceSession{}
+	tests := []struct {
+		name  string
+		field string
+		want  bool
+	}{
+		{name: "content encrypted", field: "content", want: true},
+		{name: "tool function name plaintext", field: "tool_calls[].function.name", want: false},
+		{name: "tool function arguments plaintext", field: "tool_calls[].function.arguments", want: false},
+		{name: "function_call args plaintext", field: "function_call.arguments", want: false},
+		{name: "audio data plaintext", field: "audio.data", want: false},
+		{name: "logprobs token plaintext", field: "logprobs.content[].token", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s.IsResponseFieldEncrypted(tc.field, "/v1/chat/completions")
+			if got != tc.want {
+				t.Fatalf("IsResponseFieldEncrypted(%q)=%v want %v", tc.field, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSetModelKeyValidation tests all validation paths of SetModelKey.
 func TestSetModelKeyValidation(t *testing.T) {
 	keyA := mustPrivKey(t, testKeyAScalar())

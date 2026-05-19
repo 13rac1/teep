@@ -308,16 +308,47 @@ func TestDoE2EEChutesStreamTest_HTTPError(t *testing.T) {
 
 // mockDecryptor is a test implementation of e2ee.Decryptor.
 type mockDecryptor struct {
-	encrypted bool
-	decryptFn func(string) ([]byte, error)
+	encrypted        bool
+	isEncryptedFn    func(string) bool
+	decryptFn        func(string) ([]byte, error)
+	requestPolicyFn  func(string) bool
+	responsePolicyFn func(string, string) bool
 }
 
-func (m *mockDecryptor) IsEncryptedChunk(val string) bool { return m.encrypted }
+func (m *mockDecryptor) IsEncryptedChunk(val string) bool {
+	if m.isEncryptedFn != nil {
+		return m.isEncryptedFn(val)
+	}
+	return m.encrypted
+}
 func (m *mockDecryptor) Decrypt(val string) ([]byte, error) {
 	if m.decryptFn != nil {
 		return m.decryptFn(val)
 	}
 	return []byte("decrypted"), nil
+}
+
+func (m *mockDecryptor) IsRequestFieldEncrypted(fieldPath string) bool {
+	if m.requestPolicyFn != nil {
+		return m.requestPolicyFn(fieldPath)
+	}
+	switch fieldPath {
+	case "role", "tool_call_id", "type", "id", "index":
+		return false
+	default:
+		return true
+	}
+}
+func (m *mockDecryptor) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	if m.responsePolicyFn != nil {
+		return m.responsePolicyFn(fieldPath, endpoint)
+	}
+	switch fieldPath {
+	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint":
+		return false
+	default:
+		return true
+	}
 }
 func (m *mockDecryptor) Zero() {}
 
@@ -371,7 +402,7 @@ func TestDoE2EEStreamTest_NoEncryptedFields(t *testing.T) {
 	defer ts.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
-	result := doE2EEStreamTest(req, &mockDecryptor{encrypted: true}, "venice")
+	result := doE2EEStreamTest(req, &mockDecryptor{isEncryptedFn: func(string) bool { return false }}, "venice")
 	if result.Err == nil {
 		t.Fatal("expected error when no encrypted content fields received")
 	}
@@ -404,9 +435,136 @@ func TestDoE2EEStreamTest_Success(t *testing.T) {
 	}
 }
 
+func TestDoE2EEStreamTest_NestedRequiredFieldNotEncrypted(t *testing.T) {
+	chunk := `{"choices":[{"delta":{"content":"enc-content","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"plain-name","arguments":"{}"}}]}}]}`
+	sseBody := "data: " + chunk + "\n\ndata: [DONE]\n\n"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEStreamTest(req, &mockDecryptor{
+		isEncryptedFn: func(v string) bool { return v == "enc-content" },
+		responsePolicyFn: func(fieldPath, endpoint string) bool {
+			switch fieldPath {
+			case "content", "tool_calls[].function.name", "tool_calls[].function.arguments":
+				return true
+			default:
+				return false
+			}
+		},
+	}, "nearcloud")
+	if result.Err == nil {
+		t.Fatal("expected error for unencrypted nested required field")
+	}
+	if !strings.Contains(result.Err.Error(), "tool_calls[].function.") {
+		t.Fatalf("error should mention nested tool_call function path, got: %v", result.Err)
+	}
+}
+
+func TestDoE2EEStreamTest_NestedOptionalFieldPlaintextAllowed(t *testing.T) {
+	chunk := `{"choices":[{"delta":{"content":"enc-content","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"plain-name","arguments":"{}"}}]}}]}`
+	sseBody := "data: " + chunk + "\n\ndata: [DONE]\n\n"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEStreamTest(req, &mockDecryptor{
+		isEncryptedFn: func(v string) bool { return v == "enc-content" },
+		responsePolicyFn: func(fieldPath, endpoint string) bool {
+			return fieldPath == "content"
+		},
+	}, "venice")
+	if result.Err != nil {
+		t.Fatalf("unexpected error for optional nested plaintext fields: %v", result.Err)
+	}
+	if !strings.Contains(result.Detail, "1 encrypted fields") {
+		t.Fatalf("detail should mention one encrypted field, got: %s", result.Detail)
+	}
+}
+
 // --------------------------------------------------------------------------
 // testE2EEVenice / testE2EENearCloud — error path (invalid signing key)
 // --------------------------------------------------------------------------
+
+// TestDoE2EEStreamTest_RequiredPathArrivesAsArray verifies that
+// verifyDeltaLeafEncryption fails closed when a field the policy declares as
+// an encrypted leaf (e.g. logprobs.content[].bytes) arrives as a JSON array
+// instead of an encrypted string.
+func TestDoE2EEStreamTest_RequiredPathArrivesAsArray(t *testing.T) {
+	// Simulate a response where logprobs.content[].bytes is a plaintext int array
+	// instead of an encrypted string, while content is correctly encrypted.
+	chunk := `{"choices":[{"delta":{"content":"enc-content","logprobs":{"content":[{"token":"enc-token","bytes":[104,101,108,108,111]}]}}}]}`
+	sseBody := "data: " + chunk + "\n\ndata: [DONE]\n\n"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEStreamTest(req, &mockDecryptor{
+		isEncryptedFn: func(v string) bool { return v == "enc-content" || v == "enc-token" },
+		responsePolicyFn: func(fieldPath, endpoint string) bool {
+			switch fieldPath {
+			case "content", "logprobs.content[].token", "logprobs.content[].bytes":
+				return true
+			case "logprobs", "logprobs.content", "logprobs.content[]":
+				return false
+			default:
+				return false
+			}
+		},
+	}, "nearcloud")
+	if result.Err == nil {
+		t.Fatal("expected error when required-encrypted path arrives as array")
+	}
+	if !strings.Contains(result.Err.Error(), "logprobs.content[].bytes") {
+		t.Fatalf("error should mention the path logprobs.content[].bytes, got: %v", result.Err)
+	}
+}
+
+func TestDoE2EEStreamTest_RequiredPathArrivesAsScalar(t *testing.T) {
+	chunk := `{"choices":[{"delta":{"content":"enc-content","audio":{"data":true}}}]}`
+	sseBody := "data: " + chunk + "\n\ndata: [DONE]\n\n"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEStreamTest(req, &mockDecryptor{
+		isEncryptedFn: func(v string) bool { return v == "enc-content" },
+		responsePolicyFn: func(fieldPath, endpoint string) bool {
+			switch fieldPath {
+			case "content", "audio.data":
+				return true
+			default:
+				return false
+			}
+		},
+	}, "nearcloud")
+	if result.Err == nil {
+		t.Fatal("expected error when required-encrypted path arrives as scalar")
+	}
+	if !strings.Contains(result.Err.Error(), "audio.data") {
+		t.Fatalf("error should mention the path audio.data, got: %v", result.Err)
+	}
+}
 
 func TestTestE2EEVenice_InvalidSigningKey(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: "not-a-valid-secp256k1-key"}

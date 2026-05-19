@@ -23,6 +23,8 @@ import (
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
+const chatCompletionsEndpoint = "/v1/chat/completions"
+
 // testE2EE runs a live E2EE test inference if the provider is E2EE-capable.
 // Returns nil if the provider doesn't support E2EE, signalling callers to skip.
 // Returns a result with NoAPIKey=true if the API key is missing, or with Err
@@ -415,27 +417,11 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 		}
 
 		for key, val := range fields {
-			s, ok := val.(string)
-			if !ok || s == "" {
-				continue
+			c, err := verifyDeltaLeafEncryption(key, val, session)
+			if err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: err}
 			}
-			if e2ee.NonEncryptedFields[key] {
-				continue
-			}
-			// This field should be encrypted.
-			if !session.IsEncryptedChunk(s) {
-				return &attestation.E2EETestResult{
-					Attempted: true,
-					Err:       fmt.Errorf("field %q not encrypted (len=%d, prefix=%q)", key, len(s), safePrefix(s, 16)),
-				}
-			}
-			if _, err := session.Decrypt(s); err != nil {
-				return &attestation.E2EETestResult{
-					Attempted: true,
-					Err:       fmt.Errorf("decrypt field %q: %w", key, err),
-				}
-			}
-			encryptedCount++
+			encryptedCount += c
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -452,6 +438,69 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 	return &attestation.E2EETestResult{
 		Attempted: true,
 		Detail:    fmt.Sprintf("E2EE %s: %d encrypted fields decrypted across %d chunks", version, encryptedCount, chunkCount),
+	}
+}
+
+func verifyDeltaLeafEncryption(path string, val any, session e2ee.Decryptor) (int, error) {
+	requiresEncrypted := session.IsResponseFieldEncrypted(path, chatCompletionsEndpoint)
+	switch v := val.(type) {
+	case string:
+		if v == "" {
+			return 0, nil
+		}
+		if !requiresEncrypted {
+			// Optional plaintext fields may still arrive encrypted; verify when present.
+			if !session.IsEncryptedChunk(v) {
+				return 0, nil
+			}
+			if _, err := session.Decrypt(v); err != nil {
+				return 0, fmt.Errorf("decrypt optional field %q: %w", path, err)
+			}
+			return 1, nil
+		}
+		if !session.IsEncryptedChunk(v) {
+			return 0, fmt.Errorf("field %q not encrypted (len=%d, prefix=%q)", path, len(v), safePrefix(v, 16))
+		}
+		if _, err := session.Decrypt(v); err != nil {
+			return 0, fmt.Errorf("decrypt field %q: %w", path, err)
+		}
+		return 1, nil
+	case map[string]any:
+		if requiresEncrypted {
+			return 0, fmt.Errorf("field %q expected encrypted string but got object", path)
+		}
+		total := 0
+		for key, child := range v {
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			count, err := verifyDeltaLeafEncryption(childPath, child, session)
+			if err != nil {
+				return 0, err
+			}
+			total += count
+		}
+		return total, nil
+	case []any:
+		if requiresEncrypted {
+			return 0, fmt.Errorf("field %q expected encrypted string but got array", path)
+		}
+		total := 0
+		pathWithArray := path + "[]"
+		for _, child := range v {
+			count, err := verifyDeltaLeafEncryption(pathWithArray, child, session)
+			if err != nil {
+				return 0, err
+			}
+			total += count
+		}
+		return total, nil
+	default:
+		if requiresEncrypted && v != nil {
+			return 0, fmt.Errorf("field %q expected encrypted string but got %T", path, v)
+		}
+		return 0, nil
 	}
 }
 

@@ -92,6 +92,45 @@ func (s *VeniceSession) Zero() {
 	}
 }
 
+// IsRequestFieldEncrypted reports whether the given message field is encrypted
+// in Venice E2EE requests. Venice only encrypts messages[].content; all other
+// fields are plaintext. Per api_support.md.
+func (s *VeniceSession) IsRequestFieldEncrypted(fieldPath string) bool {
+	// Venice only encrypts messages[].content
+	// All other fields (tool_calls, refusal, name, etc.) are plaintext
+	return fieldPath == "content"
+}
+
+// IsResponseFieldEncrypted reports whether the given response field is encrypted
+// in Venice E2EE responses. Venice only encrypts choices[].delta.content in
+// streaming responses; logprobs, tool_calls, and other fields are plaintext.
+// Per api_support.md: "Venice's E2EE implementation encrypts only messages[].content
+// and choices[].delta.content. Other message fields and top-level fields are
+// preserved as plaintext." The endpoint parameter is ignored for Venice since all
+// endpoints follow the same policy.
+func (s *VeniceSession) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	// Venice only encrypts content in chat deltas.
+	if fieldPath == "content" {
+		return true
+	}
+
+	// Explicit nested leaves in Venice chat responses that remain plaintext.
+	switch fieldPath {
+	case "audio.data",
+		"function_call.name", "function_call.arguments",
+		"tool_calls[].function.name", "tool_calls[].function.arguments",
+		"tool_calls[].id", "tool_calls[].type", "tool_calls[].index",
+		"role", "finish_reason", "index", "id", "object", "created", "system_fingerprint",
+		"usage",
+		"refusal", "name",
+		"logprobs.content[].token", "logprobs.content[].bytes",
+		"logprobs.refusal[].token", "logprobs.refusal[].bytes":
+		return false
+	}
+
+	return false
+}
+
 // hkdfInfoVenice is the HKDF info string required by the Venice E2EE protocol.
 // Do not change — this value must match the TEE server implementation.
 const hkdfInfoVenice = "ecdsa_encryption"

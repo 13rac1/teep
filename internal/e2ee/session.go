@@ -14,6 +14,8 @@ package e2ee
 type Decryptor interface {
 	IsEncryptedChunk(val string) bool
 	Decrypt(ciphertextHex string) ([]byte, error)
+	IsRequestFieldEncrypted(fieldPath string) bool
+	IsResponseFieldEncrypted(fieldPath, endpoint string) bool
 	Zero()
 }
 
