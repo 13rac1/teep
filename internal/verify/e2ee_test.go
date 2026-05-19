@@ -535,6 +535,37 @@ func TestDoE2EEStreamTest_RequiredPathArrivesAsArray(t *testing.T) {
 	}
 }
 
+func TestDoE2EEStreamTest_RequiredPathArrivesAsScalar(t *testing.T) {
+	chunk := `{"choices":[{"delta":{"content":"enc-content","audio":{"data":true}}}]}`
+	sseBody := "data: " + chunk + "\n\ndata: [DONE]\n\n"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEStreamTest(req, &mockDecryptor{
+		isEncryptedFn: func(v string) bool { return v == "enc-content" },
+		responsePolicyFn: func(fieldPath, endpoint string) bool {
+			switch fieldPath {
+			case "content", "audio.data":
+				return true
+			default:
+				return false
+			}
+		},
+	}, "nearcloud")
+	if result.Err == nil {
+		t.Fatal("expected error when required-encrypted path arrives as scalar")
+	}
+	if !strings.Contains(result.Err.Error(), "audio.data") {
+		t.Fatalf("error should mention the path audio.data, got: %v", result.Err)
+	}
+}
+
 func TestTestE2EEVenice_InvalidSigningKey(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: "not-a-valid-secp256k1-key"}
 	cp := &config.Provider{APIKey: "key", BaseURL: "http://localhost"}

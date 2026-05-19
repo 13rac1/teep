@@ -497,6 +497,9 @@ func verifyDeltaLeafEncryption(path string, val any, session e2ee.Decryptor) (in
 		}
 		return total, nil
 	default:
+		if requiresEncrypted && v != nil {
+			return 0, fmt.Errorf("field %q expected encrypted string but got %T", path, v)
+		}
 		return 0, nil
 	}
 }

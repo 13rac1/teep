@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"filippo.io/edwards25519"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -119,13 +120,17 @@ func (s *NearCloudSession) IsRequestFieldEncrypted(fieldPath string) bool {
 // created, id, system_fingerprint.
 // SPECIAL CASE: score endpoint data[].score is plaintext due to known upstream limitation.
 func (s *NearCloudSession) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	if fieldPath == "usage" || strings.HasPrefix(fieldPath, "usage.") {
+		return false
+	}
+
 	// Plaintext structural/metadata fields and container paths.
 	// Container paths (arrays and objects) are listed here so callers traversing
 	// the response tree can distinguish structural nodes from encrypted leaves;
 	// the fail-closed default at the end of this function applies only to unknown
 	// leaf candidates, not to these known structural containers.
 	switch fieldPath {
-	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint", "usage",
+	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint",
 		"tool_call_id", "tool_calls[].id", "tool_calls[].type", "tool_calls[].index",
 		// Structural container paths (arrays / objects — not encrypted leaves).
 		"tool_calls", "tool_calls[]", "tool_calls[].function",
