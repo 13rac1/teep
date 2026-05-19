@@ -153,6 +153,15 @@ func TestIntegration_NearCloud(t *testing.T) {
 		assertStreamResponse(t, resp)
 	})
 
+	t.Run("E2EENonStream", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+		defer proxySrv.Close()
+
+		resp := postChatIntegration(t, proxySrv.URL, nearCloudIntegrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponse(t, resp)
+	})
+
 	t.Run("AttestationReport", func(t *testing.T) {
 		// Online mode with E2EE so the report includes Intel PCS, NRAS, PoC,
 		// gateway results, and e2ee_usable transitions to Pass after a live
@@ -263,6 +272,44 @@ func TestIntegration_NearCloud(t *testing.T) {
 
 		t.Logf("score: %d/%d passed, %d skipped, %d failed",
 			report.Passed, report.Passed+report.Failed+report.Skipped, report.Skipped, report.Failed)
+	})
+
+	t.Run("E2EEStreamingWithTools", func(t *testing.T) {
+		// Test that requests with tool schemas don't break E2EE decryption.
+		// This exercises protocol-aware nested field decryption for tool_calls.
+		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatWithTools(t, proxySrv.URL, nearCloudIntegrationModel(), true)
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
+
+		chunks := readSSEChunks(t, resp.Body)
+		if len(chunks) == 0 {
+			t.Fatal("no SSE chunks received")
+		}
+
+		var sb strings.Builder
+		for _, c := range chunks {
+			sb.WriteString(extractDeltaContent(t, c))
+		}
+		content := sb.String()
+		if !isPrintableUTF8(content) {
+			t.Errorf("aggregated content is not valid printable UTF-8: %q", content)
+		}
+		t.Logf("response with tools (%d chunks): %q", len(chunks), content)
+	})
+
+	t.Run("E2EENonStreamWithTools", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+		defer proxySrv.Close()
+
+		resp := postChatWithTools(t, proxySrv.URL, nearCloudIntegrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponseOrToolCall(t, resp)
 	})
 }
 
@@ -393,4 +440,76 @@ func TestIntegration_NearCloud_VL(t *testing.T) {
 
 		assertStreamResponse(t, resp)
 	})
+}
+
+func nearCloudRerankModel() string {
+	if m := os.Getenv("NEARAI_RERANK_MODEL"); m != "" {
+		if strings.HasPrefix(m, "nearcloud:") {
+			return m
+		}
+		return "nearcloud:" + m
+	}
+	return "nearcloud:Qwen/Qwen3-Reranker-0.6B"
+}
+
+func TestIntegration_NearCloud_Rerank_E2EE(t *testing.T) {
+	skipNearCloudIntegration(t)
+
+	proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+	defer proxySrv.Close()
+
+	model := nearCloudRerankModel()
+	body := fmt.Sprintf(`{"model":%q,"query":"What is deep learning?","documents":["Deep learning is a subset of machine learning.","The weather today is sunny.","Neural networks have multiple layers."],"top_n":2}`, model)
+
+	resp, err := integrationClient.Post(proxySrv.URL+"/v1/rerank", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST rerank: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	assertRerankResponse(t, respBody)
+}
+
+func nearCloudScoreModel() string {
+	if m := os.Getenv("NEARAI_SCORE_MODEL"); m != "" {
+		if strings.HasPrefix(m, "nearcloud:") {
+			return m
+		}
+		return "nearcloud:" + m
+	}
+	return "nearcloud:Qwen/Qwen3-Reranker-0.6B"
+}
+
+func TestIntegration_NearCloud_Score_E2EE(t *testing.T) {
+	skipNearCloudIntegration(t)
+
+	proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+	defer proxySrv.Close()
+
+	model := nearCloudScoreModel()
+	body := fmt.Sprintf(`{"model":%q,"text_1":"Deep learning is powerful.","text_2":"Neural networks learn layered representations."}`, model)
+
+	resp, err := integrationClient.Post(proxySrv.URL+"/v1/score", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST score: %v", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+	}
+	assertScoreResponse(t, respBody)
 }

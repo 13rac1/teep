@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,12 @@ import (
 // instance failover retries the total may exceed 120s. 5 minutes gives
 // generous headroom without hanging forever on a stuck connection.
 var integrationClient = tlsct.NewHTTPClient(5 * time.Minute)
+
+const (
+	integrationRequestTimeoutDefault  = 2 * time.Minute
+	integrationRequestTimeoutHeadroom = 10 * time.Second
+	integrationRequestTimeoutMin      = 5 * time.Second
+)
 
 // skipIntegration skips the test if VENICE_API_KEY is unset or if running
 // under go test -short.
@@ -108,14 +115,77 @@ func integrationE2EEConfig(t *testing.T) *config.Config {
 // integrationPrompt is a short prompt that minimizes cost and response time.
 const integrationPrompt = "Say hello in exactly two words"
 
+type cancelOnCloseReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnCloseReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.cancel()
+	return err
+}
+
+func integrationRequestTimeout(t *testing.T) time.Duration {
+	t.Helper()
+
+	timeout := integrationRequestTimeoutDefault
+	if deadline, ok := t.Deadline(); ok {
+		remaining := time.Until(deadline) - integrationRequestTimeoutHeadroom
+		switch {
+		case remaining <= integrationRequestTimeoutMin:
+			return integrationRequestTimeoutMin
+		case remaining < timeout:
+			return remaining
+		}
+	}
+
+	return timeout
+}
+
+func integrationPostJSON(t *testing.T, url, body string) (*http.Response, error) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout(t))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := integrationClient.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	resp.Body = &cancelOnCloseReadCloser{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
 // postChatIntegration sends a POST /v1/chat/completions with the standard
 // integration prompt. Uses integrationClient (60s timeout).
 func postChatIntegration(t *testing.T, proxyURL, model string, stream bool) *http.Response {
 	t.Helper()
 	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":%v}`, model, integrationPrompt, stream)
-	resp, err := integrationClient.Post(proxyURL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	resp, err := integrationPostJSON(t, proxyURL+"/v1/chat/completions", body)
 	if err != nil {
 		t.Fatalf("POST chat: %v", err)
+	}
+	return resp
+}
+
+// postChatWithTools sends a POST /v1/chat/completions with a tool schema.
+// This exercises the protocol-aware nested field decryption code paths for
+// handling tool_calls, audio.data, and function_call fields in responses.
+func postChatWithTools(t *testing.T, proxyURL, model string, stream bool) *http.Response {
+	t.Helper()
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":%v,"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]}`, model, integrationPrompt, stream)
+	resp, err := integrationPostJSON(t, proxyURL+"/v1/chat/completions", body)
+	if err != nil {
+		t.Fatalf("POST chat with tools: %v", err)
 	}
 	return resp
 }
@@ -163,6 +233,52 @@ func assertNonStreamResponse(t *testing.T, resp *http.Response) {
 		t.Errorf("content is not valid printable UTF-8: %q", content)
 	}
 	t.Logf("response: %q", content)
+}
+
+// assertNonStreamResponseOrToolCall validates a non-streaming chat response
+// where models may either return text content or a tool call message.
+func assertNonStreamResponseOrToolCall(t *testing.T, resp *http.Response) {
+	t.Helper()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content   *string           `json:"content"`
+				ToolCalls []json.RawMessage `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("decode non-stream response: %v; body=%s", err, body)
+	}
+	if len(parsed.Choices) == 0 {
+		t.Fatalf("no choices in response: %s", body)
+	}
+
+	msg := parsed.Choices[0].Message
+	if msg.Content != nil && *msg.Content != "" {
+		if !isPrintableUTF8(*msg.Content) {
+			t.Errorf("content is not valid printable UTF-8: %q", *msg.Content)
+		}
+		t.Logf("response content: %q", *msg.Content)
+		return
+	}
+	if len(msg.ToolCalls) > 0 {
+		t.Logf("response contains %d tool call(s)", len(msg.ToolCalls))
+		return
+	}
+
+	t.Fatalf("expected printable content or tool_calls, got body=%s", body)
 }
 
 // assertStreamResponse validates a streaming chat response has valid printable
@@ -256,6 +372,14 @@ func TestIntegration_Venice(t *testing.T) {
 		assertStreamResponse(t, resp)
 	})
 
+	t.Run("E2EENonStream", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatIntegration(t, proxySrv.URL, integrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponse(t, resp)
+	})
+
 	t.Run("AttestationReport", func(t *testing.T) {
 		cfg := integrationE2EEConfig(t)
 		cfg.Offline = false
@@ -285,5 +409,112 @@ func TestIntegration_Venice(t *testing.T) {
 			t.Fatalf("decode report: %v", err)
 		}
 		assertReportFactors(t, &report)
+	})
+
+	t.Run("E2EEStreamingWithTools", func(t *testing.T) {
+		// Test that requests with tool schemas don't break E2EE decryption.
+		// This exercises protocol-aware nested field decryption for tool_calls.
+		proxySrv := newProxyServer(t, integrationE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatWithTools(t, proxySrv.URL, integrationModel(), true)
+		defer resp.Body.Close()
+		assertStreamResponse(t, resp)
+	})
+
+	t.Run("E2EENonStreamWithTools", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationE2EEConfig(t))
+		defer proxySrv.Close()
+		resp := postChatWithTools(t, proxySrv.URL, integrationModel(), false)
+		defer resp.Body.Close()
+		assertNonStreamResponseOrToolCall(t, resp)
+	})
+
+	t.Run("E2EEPlaintextToolCalls", func(t *testing.T) {
+		// Venice E2EE preserves plaintext for tool_calls function name and arguments
+		// (unlike NearCloud/NearDirect which use full-field encryption).
+		// This test validates that when Venice returns tool_calls, the function
+		// name and arguments are accessible as plaintext strings without decryption.
+		proxySrv := newProxyServer(t, integrationE2EEConfig(t))
+		defer proxySrv.Close()
+
+		// Use a prompt that encourages tool use and a tool that would be called.
+		// Model behavior varies; if it chooses to return content instead of calling
+		// a tool, we still validate the response structure is valid.
+		toolPrompt := `Use the weather tool to get the current weather for San Francisco.`
+		model := integrationModel()
+		toolJSON := fmt.Sprintf(
+			`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":false,"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the current weather in a location","parameters":{"type":"object","properties":{"location":{"type":"string","description":"The location to get weather for"}}}}}]}`,
+			model, toolPrompt)
+
+		resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/chat/completions", toolJSON)
+		if err != nil {
+			t.Fatalf("POST chat with tool request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+
+		var parsed struct {
+			Choices []struct {
+				Message struct {
+					Content   *string `json:"content"`
+					ToolCalls []struct {
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			t.Fatalf("decode tool response: %v; body=%s", err, body)
+		}
+		if len(parsed.Choices) == 0 {
+			t.Fatalf("no choices in response: %s", body)
+		}
+
+		msg := parsed.Choices[0].Message
+		if msg.Content != nil && *msg.Content != "" {
+			// Model returned text instead of tool call, which is valid.
+			t.Logf("model returned content instead of tool call: %q", *msg.Content)
+			return
+		}
+
+		if len(msg.ToolCalls) > 0 {
+			// Validate that tool_calls are accessible (plaintext, not encrypted).
+			// The key assertion here is that we can unmarshal the tool_calls structure
+			// without errors, which proves that:
+			// 1. decryptToolCallsField correctly skipped decryption for Venice
+			// 2. The plaintext function name and arguments are preserved
+			// 3. No encryption-related errors were raised during relay decryption
+			toolCall := msg.ToolCalls[0]
+			if toolCall.Function.Name == "" {
+				t.Fatalf("tool_call function name is empty; structure: %+v", toolCall)
+			}
+			if toolCall.Function.Arguments == "" {
+				t.Fatalf("tool_call function arguments are empty; structure: %+v", toolCall)
+			}
+			// Validate arguments are valid JSON (they should be plaintext JSON, not encrypted).
+			var args map[string]any
+			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+				t.Fatalf("tool_call arguments not valid JSON (expected plaintext): %v; args=%q", err, toolCall.Function.Arguments)
+			}
+			t.Logf("Venice E2EE tool_calls: function=%q, arguments=%q", toolCall.Function.Name, toolCall.Function.Arguments)
+			return
+		}
+
+		// Model didn't use tools with this prompt, which is acceptable.
+		t.Logf("model did not use tools with this prompt")
 	})
 }
