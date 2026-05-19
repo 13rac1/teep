@@ -262,6 +262,18 @@ func TestNearCloudSessionIsResponseFieldEncrypted_NestedPaths(t *testing.T) {
 		{name: "tool id plaintext", field: "tool_calls[].id", endpoint: "/v1/chat/completions", want: false},
 		{name: "tool type plaintext", field: "tool_calls[].type", endpoint: "/v1/chat/completions", want: false},
 		{name: "score plaintext on score endpoint", field: "score", endpoint: "/v1/score", want: false},
+		// Structural container paths must return false so callers can distinguish
+		// containers from encrypted leaf candidates.
+		{name: "tool_calls container plaintext", field: "tool_calls", endpoint: "/v1/chat/completions", want: false},
+		{name: "tool_calls[] element container plaintext", field: "tool_calls[]", endpoint: "/v1/chat/completions", want: false},
+		{name: "tool_calls[].function container plaintext", field: "tool_calls[].function", endpoint: "/v1/chat/completions", want: false},
+		{name: "audio container plaintext", field: "audio", endpoint: "/v1/chat/completions", want: false},
+		{name: "function_call container plaintext", field: "function_call", endpoint: "/v1/chat/completions", want: false},
+		{name: "logprobs container plaintext", field: "logprobs", endpoint: "/v1/chat/completions", want: false},
+		{name: "logprobs.content array plaintext", field: "logprobs.content", endpoint: "/v1/chat/completions", want: false},
+		{name: "logprobs.content[] element container plaintext", field: "logprobs.content[]", endpoint: "/v1/chat/completions", want: false},
+		{name: "logprobs.refusal array plaintext", field: "logprobs.refusal", endpoint: "/v1/chat/completions", want: false},
+		{name: "logprobs.refusal[] element container plaintext", field: "logprobs.refusal[]", endpoint: "/v1/chat/completions", want: false},
 	}
 
 	for _, tc := range tests {

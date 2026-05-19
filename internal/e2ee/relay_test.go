@@ -979,9 +979,10 @@ func TestDecryptSSEChunk_EncryptedExtendedDeltaFields(t *testing.T) {
 	if out.Choices[0].Delta.Refusal != "not allowed" {
 		t.Errorf("refusal = %q, want not allowed", out.Choices[0].Delta.Refusal)
 	}
-	// For Venice, only content and refusal are encrypted. Other fields (audio.data,
-	// tool_calls, function_call) remain plaintext and are not decrypted.
-	// Verify they remain encrypted (not equal to the plaintext values).
+	// Venice only requires content to be encrypted in production. The refusal field
+	// was also encrypted in this fixture to exercise the optional-field decryption path.
+	// Other fields (audio.data, tool_calls, function_call) arrive encrypted here but
+	// are not decrypted by Venice — verify they remain as ciphertext.
 	if out.Choices[0].Delta.Audio.Data == "BASE64AUDIO" {
 		t.Errorf("audio.data should remain encrypted for Venice, got plaintext: %q", out.Choices[0].Delta.Audio.Data)
 	}

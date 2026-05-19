@@ -442,12 +442,12 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 }
 
 func verifyDeltaLeafEncryption(path string, val any, session e2ee.Decryptor) (int, error) {
+	requiresEncrypted := session.IsResponseFieldEncrypted(path, chatCompletionsEndpoint)
 	switch v := val.(type) {
 	case string:
 		if v == "" {
 			return 0, nil
 		}
-		requiresEncrypted := session.IsResponseFieldEncrypted(path, chatCompletionsEndpoint)
 		if !requiresEncrypted {
 			// Optional plaintext fields may still arrive encrypted; verify when present.
 			if !session.IsEncryptedChunk(v) {
@@ -466,6 +466,9 @@ func verifyDeltaLeafEncryption(path string, val any, session e2ee.Decryptor) (in
 		}
 		return 1, nil
 	case map[string]any:
+		if requiresEncrypted {
+			return 0, fmt.Errorf("field %q expected encrypted string but got object", path)
+		}
 		total := 0
 		for key, child := range v {
 			childPath := key
@@ -480,6 +483,9 @@ func verifyDeltaLeafEncryption(path string, val any, session e2ee.Decryptor) (in
 		}
 		return total, nil
 	case []any:
+		if requiresEncrypted {
+			return 0, fmt.Errorf("field %q expected encrypted string but got array", path)
+		}
 		total := 0
 		pathWithArray := path + "[]"
 		for _, child := range v {

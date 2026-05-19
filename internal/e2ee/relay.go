@@ -157,7 +157,7 @@ func decryptAudioDataField(fields map[string]json.RawMessage, session Decryptor,
 	return true, nil
 }
 
-func decryptFunctionObject(obj map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+func decryptFunctionObject(obj map[string]json.RawMessage, session Decryptor, ctx, policyBase string) (bool, error) {
 	changed := false
 	for _, key := range []string{"name", "arguments"} {
 		raw, ok := obj[key]
@@ -173,9 +173,9 @@ func decryptFunctionObject(obj map[string]json.RawMessage, session Decryptor, ct
 		}
 		if !session.IsEncryptedChunk(s) {
 			// For protocols that don't support full-field encryption (e.g., Venice),
-			// plaintext tool_call function fields are acceptable. Only enforce encryption
-			// for protocols with X-Encrypt-All-Fields support.
-			if session.IsResponseFieldEncrypted("function", chatCompletionsEndpoint) {
+			// plaintext tool_call function fields are acceptable. Enforce encryption
+			// only when the canonical leaf path requires it.
+			if session.IsResponseFieldEncrypted(policyBase+"."+key, chatCompletionsEndpoint) {
 				return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 			}
 			continue
@@ -210,12 +210,7 @@ func decryptToolCallsField(fields map[string]json.RawMessage, session Decryptor,
 		if err := json.Unmarshal(fnRaw, &fn); err != nil {
 			return false, fmt.Errorf("%s.tool_calls[%d].function: parse object: %w", ctx, i, err)
 		}
-		// Only decrypt tool call function names/arguments if protocol supports full-field encryption.
-		// Venice E2EE preserves tool_calls plaintext.
-		if !session.IsResponseFieldEncrypted("tool_calls", chatCompletionsEndpoint) {
-			continue
-		}
-		c, err := decryptFunctionObject(fn, session, fmt.Sprintf("%s.tool_calls[%d].function", ctx, i))
+		c, err := decryptFunctionObject(fn, session, fmt.Sprintf("%s.tool_calls[%d].function", ctx, i), "tool_calls[].function")
 		if err != nil {
 			return false, err
 		}
@@ -246,7 +241,7 @@ func decryptFunctionCallField(fields map[string]json.RawMessage, session Decrypt
 	if err := json.Unmarshal(raw, &fc); err != nil {
 		return false, fmt.Errorf("%s.function_call: parse object: %w", ctx, err)
 	}
-	changed, err := decryptFunctionObject(fc, session, ctx+".function_call")
+	changed, err := decryptFunctionObject(fc, session, ctx+".function_call", "function_call")
 	if err != nil {
 		return false, err
 	}
@@ -463,7 +458,9 @@ func decryptChatObject(fields map[string]json.RawMessage, session Decryptor, ctx
 	}
 	// Only decrypt nested fields (audio, tool_calls, function_call) if the protocol supports
 	// full-field encryption (e.g., NearCloud/Chutes). Venice only encrypts messages[].content.
-	if session.IsResponseFieldEncrypted("tool_calls", chatCompletionsEndpoint) {
+	// Use audio.data as the canonical leaf-level probe: it is encrypted in full-field mode
+	// (NearCloud) and plaintext in content-only mode (Venice).
+	if session.IsResponseFieldEncrypted("audio.data", chatCompletionsEndpoint) {
 		if c, err := decryptAudioDataField(fields, session, ctx); err != nil {
 			return false, err
 		} else if c {
@@ -1207,7 +1204,7 @@ func decryptToolCallMetaRaw(raw json.RawMessage, session Decryptor, ctx string) 
 	if err := json.Unmarshal(fnRaw, &fn); err != nil {
 		return nil, fmt.Errorf("%s.function: parse object: %w", ctx, err)
 	}
-	changed, err := decryptFunctionObject(fn, session, ctx+".function")
+	changed, err := decryptFunctionObject(fn, session, ctx+".function", "tool_calls[].function")
 	if err != nil {
 		return nil, err
 	}

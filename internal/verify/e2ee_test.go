@@ -496,6 +496,45 @@ func TestDoE2EEStreamTest_NestedOptionalFieldPlaintextAllowed(t *testing.T) {
 // testE2EEVenice / testE2EENearCloud — error path (invalid signing key)
 // --------------------------------------------------------------------------
 
+// TestDoE2EEStreamTest_RequiredPathArrivesAsArray verifies that
+// verifyDeltaLeafEncryption fails closed when a field the policy declares as
+// an encrypted leaf (e.g. logprobs.content[].bytes) arrives as a JSON array
+// instead of an encrypted string.
+func TestDoE2EEStreamTest_RequiredPathArrivesAsArray(t *testing.T) {
+	// Simulate a response where logprobs.content[].bytes is a plaintext int array
+	// instead of an encrypted string, while content is correctly encrypted.
+	chunk := `{"choices":[{"delta":{"content":"enc-content","logprobs":{"content":[{"token":"enc-token","bytes":[104,101,108,108,111]}]}}}]}`
+	sseBody := "data: " + chunk + "\n\ndata: [DONE]\n\n"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, http.NoBody)
+	result := doE2EEStreamTest(req, &mockDecryptor{
+		isEncryptedFn: func(v string) bool { return v == "enc-content" || v == "enc-token" },
+		responsePolicyFn: func(fieldPath, endpoint string) bool {
+			switch fieldPath {
+			case "content", "logprobs.content[].token", "logprobs.content[].bytes":
+				return true
+			case "logprobs", "logprobs.content", "logprobs.content[]":
+				return false
+			default:
+				return false
+			}
+		},
+	}, "nearcloud")
+	if result.Err == nil {
+		t.Fatal("expected error when required-encrypted path arrives as array")
+	}
+	if !strings.Contains(result.Err.Error(), "logprobs.content[].bytes") {
+		t.Fatalf("error should mention the path logprobs.content[].bytes, got: %v", result.Err)
+	}
+}
+
 func TestTestE2EEVenice_InvalidSigningKey(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: "not-a-valid-secp256k1-key"}
 	cp := &config.Provider{APIKey: "key", BaseURL: "http://localhost"}
