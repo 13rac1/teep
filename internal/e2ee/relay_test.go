@@ -1197,7 +1197,6 @@ func TestDecryptDeltaFields_RequiredNonStringRejectedInFullFieldMode(t *testing.
 		{name: "array", raw: json.RawMessage(`["value"]`), wantTyp: "array"},
 		{name: "number", raw: json.RawMessage(`123`), wantTyp: "number"},
 		{name: "boolean", raw: json.RawMessage(`true`), wantTyp: "boolean"},
-		{name: "null", raw: json.RawMessage(`null`), wantTyp: "null"},
 	}
 
 	for _, tc := range tests {
@@ -1239,6 +1238,36 @@ func TestDecryptDeltaFields_VeniceContentStillRejectsNonString(t *testing.T) {
 	}
 	if changed {
 		t.Error("changed = true, want false on rejection")
+	}
+}
+
+func TestDecryptDeltaFields_NullContentAllowedInFullFieldMode(t *testing.T) {
+	// OpenAI spec: choices[].message.content and choices[].delta.content are
+	// string|null. The NearCloud/NearDirect server explicitly does NOT encrypt
+	// null — it skips null the same way it skips absent fields. Teep must treat
+	// null as absent and not fail closed on a perfectly valid tool-call response.
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+
+	for _, field := range []string{"content", "refusal", "reasoning_content"} {
+		t.Run(field, func(t *testing.T) {
+			fields := map[string]json.RawMessage{
+				"role": json.RawMessage(`"assistant"`),
+				field:  json.RawMessage(`null`),
+			}
+
+			changed, err := decryptDeltaFields(fields, session, "test")
+			if err != nil {
+				t.Fatalf("unexpected error for null %s in full-field mode: %v", field, err)
+			}
+			if changed {
+				t.Error("changed = true, want false for null passthrough")
+			}
+			// Null value must be preserved unchanged.
+			if string(fields[field]) != "null" {
+				t.Errorf("fields[%q] = %s, want null", field, fields[field])
+			}
+		})
 	}
 }
 
@@ -1473,7 +1502,7 @@ func TestDecryptNonStreamResponse_LogprobsPlaintextBytesArrayRejected(t *testing
 	}
 }
 
-func TestDecryptNonStreamResponse_EmbeddingsPlaintextRejected(t *testing.T) {
+func TestDecryptNonStreamResponse_EmbeddingsPlaintextPassthrough(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
 
@@ -1489,16 +1518,93 @@ func TestDecryptNonStreamResponse_EmbeddingsPlaintextRejected(t *testing.T) {
 		t.Fatalf("marshal body: %v", err)
 	}
 
-	_, err = DecryptNonStreamResponse(b, session)
-	if err == nil {
-		t.Fatal("expected error for plaintext embeddings response")
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/embeddings")
+	if err != nil {
+		t.Fatalf("unexpected error for plaintext embeddings response: %v", err)
 	}
-	if !strings.Contains(err.Error(), "data[0].embedding: expected encrypted string") {
-		t.Fatalf("unexpected error: %v", err)
+
+	var parsed struct {
+		Data []struct {
+			Embedding []float64 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Data) != 1 || len(parsed.Data[0].Embedding) != 3 || parsed.Data[0].Embedding[0] != 0.1 {
+		t.Fatalf("unexpected embeddings output: %s", out)
 	}
 }
 
-func TestDecryptNonStreamResponse_RerankPlaintextRejected(t *testing.T) {
+func TestDecryptNonStreamResponse_EmbeddingsBase64StringPassthrough(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{
+			{
+				"embedding": "AQIDBA==",
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/embeddings")
+	if err != nil {
+		t.Fatalf("unexpected error for base64 embeddings response: %v", err)
+	}
+
+	var parsed struct {
+		Data []struct {
+			Embedding string `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Data) != 1 || parsed.Data[0].Embedding != "AQIDBA==" {
+		t.Fatalf("unexpected embeddings output: %s", out)
+	}
+}
+
+func TestDecryptNonStreamResponse_EmbeddingsNullPassthrough(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{
+			{
+				"embedding": nil,
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/embeddings")
+	if err != nil {
+		t.Fatalf("unexpected error for null embeddings field: %v", err)
+	}
+
+	var parsed struct {
+		Data []struct {
+			Embedding any `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Data) != 1 || parsed.Data[0].Embedding != nil {
+		t.Fatalf("unexpected embeddings output: %s", out)
+	}
+}
+
+func TestDecryptNonStreamResponse_RerankPlaintextPassthrough(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
 
@@ -1518,12 +1624,153 @@ func TestDecryptNonStreamResponse_RerankPlaintextRejected(t *testing.T) {
 		t.Fatalf("marshal body: %v", err)
 	}
 
-	_, err = DecryptNonStreamResponse(b, session)
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/rerank")
+	if err != nil {
+		t.Fatalf("unexpected error for plaintext rerank document text: %v", err)
+	}
+
+	var parsed struct {
+		Results []struct {
+			Document struct {
+				Text string `json:"text"`
+			} `json:"document"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Results) != 1 || parsed.Results[0].Document.Text != "plaintext-rerank-text" {
+		t.Fatalf("unexpected rerank output: %s", out)
+	}
+}
+
+func TestDecryptNonStreamResponse_RerankDocumentStringPassthrough(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"results": []map[string]any{
+			{
+				"document":        "plain-document",
+				"index":           0,
+				"relevance_score": 0.9,
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/rerank")
+	if err != nil {
+		t.Fatalf("unexpected error for string rerank document: %v", err)
+	}
+
+	var parsed struct {
+		Results []struct {
+			Document string `json:"document"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Results) != 1 || parsed.Results[0].Document != "plain-document" {
+		t.Fatalf("unexpected rerank output: %s", out)
+	}
+}
+
+func TestDecryptNonStreamResponse_EmbeddingsPlaintextRejectedForFullFieldSession(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{
+			{
+				"embedding": []float64{0.1, 0.2, 0.3},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponseForEndpoint(b, session, "/v1/embeddings")
 	if err == nil {
-		t.Fatal("expected error for plaintext rerank document text")
+		t.Fatal("expected error for plaintext embedding in full-field session")
+	}
+	if !strings.Contains(err.Error(), "data[0].embedding: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponse_RerankPlaintextRejectedForFullFieldSession(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"results": []map[string]any{
+			{
+				"document": map[string]any{
+					"text": "plaintext-rerank-text",
+				},
+				"index":           0,
+				"relevance_score": 0.9,
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponseForEndpoint(b, session, "/v1/rerank")
+	if err == nil {
+		t.Fatal("expected error for plaintext rerank text in full-field session")
 	}
 	if !strings.Contains(err.Error(), "results[0].document.text: expected encrypted string") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponse_RerankNullTextPassthrough(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"results": []map[string]any{
+			{
+				"document": map[string]any{
+					"text": nil,
+				},
+				"index":           0,
+				"relevance_score": 0.9,
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/rerank")
+	if err != nil {
+		t.Fatalf("unexpected error for null rerank document text: %v", err)
+	}
+
+	var parsed struct {
+		Results []struct {
+			Document struct {
+				Text *string `json:"text"`
+			} `json:"document"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Results) != 1 || parsed.Results[0].Document.Text != nil {
+		t.Fatalf("unexpected rerank output: %s", out)
 	}
 }
 
@@ -1557,6 +1804,40 @@ func TestDecryptNonStreamResponse_ScorePlaintextAccepted(t *testing.T) {
 		t.Fatalf("unmarshal output: %v", err)
 	}
 	if len(parsed.Data) != 1 || parsed.Data[0].Score != 0.42 {
+		t.Fatalf("unexpected score output: %s", out)
+	}
+}
+
+func TestDecryptNonStreamResponse_ScoreNullPassthrough(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{
+			{
+				"score": nil,
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/score")
+	if err != nil {
+		t.Fatalf("unexpected error for null score field: %v", err)
+	}
+
+	var parsed struct {
+		Data []struct {
+			Score any `json:"score"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Data) != 1 || parsed.Data[0].Score != nil {
 		t.Fatalf("unexpected score output: %s", out)
 	}
 }
@@ -1682,7 +1963,7 @@ func TestDecryptNonStreamResponseForEndpoint_ScoreMissingFieldRejected(t *testin
 	}
 }
 
-func TestDecryptNonStreamResponseForEndpoint_EmbeddingsDecryptedWrongTypeRejected(t *testing.T) {
+func TestDecryptNonStreamResponseForEndpoint_EmbeddingsDecryptedWrongTypePassthrough(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
 
@@ -1695,16 +1976,25 @@ func TestDecryptNonStreamResponseForEndpoint_EmbeddingsDecryptedWrongTypeRejecte
 		t.Fatalf("marshal body: %v", err)
 	}
 
-	_, err = DecryptNonStreamResponseForEndpoint(b, session, "/v1/embeddings")
-	if err == nil {
-		t.Fatal("expected error for decrypted embeddings wrong type")
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/embeddings")
+	if err != nil {
+		t.Fatalf("unexpected error for decrypted embeddings alternative shape: %v", err)
 	}
-	if !strings.Contains(err.Error(), "data[0].embedding: expected JSON array of numbers") {
-		t.Fatalf("unexpected error: %v", err)
+
+	var parsed struct {
+		Data []struct {
+			Embedding map[string]bool `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Data) != 1 || !parsed.Data[0].Embedding["unexpected"] {
+		t.Fatalf("unexpected embeddings output: %s", out)
 	}
 }
 
-func TestDecryptNonStreamResponseForEndpoint_ScoreDecryptedWrongTypeRejected(t *testing.T) {
+func TestDecryptNonStreamResponseForEndpoint_ScoreDecryptedWrongTypePassthrough(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
 
@@ -1717,12 +2007,21 @@ func TestDecryptNonStreamResponseForEndpoint_ScoreDecryptedWrongTypeRejected(t *
 		t.Fatalf("marshal body: %v", err)
 	}
 
-	_, err = DecryptNonStreamResponseForEndpoint(b, session, "/v1/score")
-	if err == nil {
-		t.Fatal("expected error for decrypted score wrong type")
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/score")
+	if err != nil {
+		t.Fatalf("unexpected error for decrypted score alternative shape: %v", err)
 	}
-	if !strings.Contains(err.Error(), "data[0].score: expected JSON number") {
-		t.Fatalf("unexpected error: %v", err)
+
+	var parsed struct {
+		Data []struct {
+			Score map[string]bool `json:"score"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Data) != 1 || !parsed.Data[0].Score["unexpected"] {
+		t.Fatalf("unexpected score output: %s", out)
 	}
 }
 
@@ -2271,7 +2570,7 @@ func TestDecryptResponseImageData_FieldNotString(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
 	dataJSON := `[{"b64_json": 123}]`
-	out, err := decryptResponseImageData(json.RawMessage(dataJSON), session)
+	out, err := decryptResponseImageData(json.RawMessage(dataJSON), session, "/v1/images/generations")
 	t.Logf("decryptResponseImageData(not string): out=%v err=%v", out, err)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -2287,7 +2586,7 @@ func TestDecryptResponseImageData_FieldNotEncrypted(t *testing.T) {
 	session := testVeniceSession(t)
 	defer session.Zero()
 	dataJSON := `[{"b64_json": "plaintext_not_encrypted"}]`
-	out, err := decryptResponseImageData(json.RawMessage(dataJSON), session)
+	out, err := decryptResponseImageData(json.RawMessage(dataJSON), session, "/v1/images/generations")
 	t.Logf("decryptResponseImageData(not encrypted): out=%v err=%v", out, err)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -2305,10 +2604,24 @@ func TestDecryptResponseImageData_DecryptError(t *testing.T) {
 		decrypt:     func(s string) ([]byte, error) { return nil, decryptErr },
 	}
 	dataJSON := `[{"b64_json": "some_encrypted_value"}]`
-	_, err := decryptResponseImageData(json.RawMessage(dataJSON), mock)
+	_, err := decryptResponseImageData(json.RawMessage(dataJSON), mock, "/v1/images/generations")
 	t.Logf("decryptResponseImageData(decrypt error): err=%v", err)
 	if err == nil {
 		t.Fatal("expected error from decrypt failure")
+	}
+}
+
+func TestDecryptResponseImageData_PlaintextRejectedForFullFieldSession(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+
+	dataJSON := `[{"b64_json": "plaintext_not_encrypted"}]`
+	_, err := decryptResponseImageData(json.RawMessage(dataJSON), session, "/v1/images/generations")
+	if err == nil {
+		t.Fatal("expected error for plaintext image field in full-field session")
+	}
+	if !strings.Contains(err.Error(), "data[0].b64_json: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -2395,6 +2708,8 @@ type logprobsPathAwareSession struct {
 
 func (s *logprobsPathAwareSession) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
 	switch fieldPath {
+	case "logprobs.content[].token":
+		return false
 	case "logprobs.content[].bytes":
 		return false
 	case "logprobs.refusal[].bytes":
@@ -2515,6 +2830,57 @@ func TestDecryptNonStreamResponse_LogprobsBytesPolicyUsesCanonicalPath(t *testin
 	}
 	if !strings.Contains(err.Error(), "logprobs.refusal[0].bytes: expected encrypted string") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecryptNonStreamResponse_LogprobsTokenPolicyUsesCanonicalPath(t *testing.T) {
+	session := testLogprobsPathAwareSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "ok", session.VeniceSession)
+	body := map[string]any{
+		"choices": []map[string]any{
+			{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": encContent,
+				},
+				"logprobs": map[string]any{
+					"content": []map[string]any{
+						{
+							"token": "plaintext-token",
+							"bytes": []int{112, 116},
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/chat/completions")
+	if err != nil {
+		t.Fatalf("expected plaintext logprobs token accepted for content path policy exception: %v", err)
+	}
+
+	var parsed struct {
+		Choices []struct {
+			Logprobs struct {
+				Content []struct {
+					Token string `json:"token"`
+				} `json:"content"`
+			} `json:"logprobs"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Choices) != 1 || len(parsed.Choices[0].Logprobs.Content) != 1 || parsed.Choices[0].Logprobs.Content[0].Token != "plaintext-token" {
+		t.Fatalf("unexpected output: %s", out)
 	}
 }
 

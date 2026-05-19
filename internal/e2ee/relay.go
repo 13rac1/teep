@@ -103,7 +103,10 @@ func decryptDeltaFields(fields map[string]json.RawMessage, session Decryptor, ct
 		}
 		requiresEncrypted := RequiresEncryptedField(key, session)
 		if !jsonRawStartsWithToken(raw, '"') {
-			if requiresEncrypted {
+			// JSON null is spec-valid for nullable fields like content and refusal
+			// (OpenAI: string|null). The server never encrypts null — it skips them
+			// the same way it skips absent fields. Treat null as absent.
+			if requiresEncrypted && !IsJSONNull(raw) {
 				return false, fmt.Errorf("%s.%s: expected encrypted string but got %s", ctx, key, rawTypeDescription(raw))
 			}
 			continue
@@ -311,7 +314,7 @@ func decryptChoiceLogprobs(choice map[string]json.RawMessage, session Decryptor,
 
 func decryptLogprobsTokenEntry(entry map[string]json.RawMessage, session Decryptor, ctx, policyBase string) (bool, error) {
 	changed := false
-	if c, err := decryptMaybeEncryptedStringField(entry, "token", session, ctx); err != nil {
+	if c, err := decryptMaybeEncryptedStringField(entry, "token", session, ctx, policyBase+".token"); err != nil {
 		return false, err
 	} else if c {
 		changed = true
@@ -343,12 +346,16 @@ func decryptLogprobsTokenEntry(entry map[string]json.RawMessage, session Decrypt
 	return changed, nil
 }
 
-func decryptMaybeEncryptedStringField(obj map[string]json.RawMessage, key string, session Decryptor, ctx string) (bool, error) {
+func decryptMaybeEncryptedStringField(obj map[string]json.RawMessage, key string, session Decryptor, ctx, policyPath string) (bool, error) {
 	raw, ok := obj[key]
 	if !ok || IsJSONNull(raw) {
 		return false, nil
 	}
+	requiresEncrypted := session.IsResponseFieldEncrypted(policyPath, chatCompletionsEndpoint)
 	if !jsonRawStartsWithToken(raw, '"') {
+		if !requiresEncrypted {
+			return false, nil
+		}
 		return false, fmt.Errorf("%s.%s: expected string", ctx, key)
 	}
 	var s string
@@ -359,6 +366,9 @@ func decryptMaybeEncryptedStringField(obj map[string]json.RawMessage, key string
 		return false, nil
 	}
 	if !session.IsEncryptedChunk(s) {
+		if !requiresEncrypted {
+			return false, nil
+		}
 		return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 	}
 	plaintext, err := session.Decrypt(s)
@@ -396,15 +406,6 @@ func classifyNonStreamEndpoint(endpointPath string) nonStreamEndpointType {
 	default:
 		return nonStreamEndpointUnknown
 	}
-}
-
-func jsonTopLevelNumber(raw []byte) bool {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return false
-	}
-	_, ok := v.(float64)
-	return ok
 }
 
 func jsonArrayOfNumbers(raw []byte) bool {
@@ -693,7 +694,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 	if dataRaw, ok := full["data"]; ok {
 		switch endpointType {
 		case nonStreamEndpointImages:
-			d, err := decryptResponseImageData(dataRaw, session)
+			d, err := decryptResponseImageData(dataRaw, session, endpointPath)
 			if err != nil {
 				return nil, err
 			}
@@ -702,7 +703,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 				changed = true
 			}
 		case nonStreamEndpointEmbeddings:
-			d, err := decryptResponseEmbeddingsData(dataRaw, session, true)
+			d, err := decryptResponseEmbeddingsData(dataRaw, session, true, endpointPath)
 			if err != nil {
 				return nil, err
 			}
@@ -721,7 +722,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 			}
 		default:
 			// Try images first (has b64_json/revised_prompt).
-			d, err := decryptResponseImageData(dataRaw, session)
+			d, err := decryptResponseImageData(dataRaw, session, endpointPath)
 			if err != nil {
 				return nil, err
 			}
@@ -730,7 +731,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 				changed = true
 			} else {
 				// If not images, try embeddings (has embedding vectors).
-				d, err := decryptResponseEmbeddingsData(dataRaw, session, false)
+				d, err := decryptResponseEmbeddingsData(dataRaw, session, false, endpointPath)
 				if err != nil {
 					return nil, err
 				}
@@ -744,7 +745,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 
 	// Reranking: decrypt results[] document text fields.
 	if resultsRaw, ok := full["results"]; ok {
-		r, err := decryptResponseRerankResults(resultsRaw, session)
+		r, err := decryptResponseRerankResults(resultsRaw, session, endpointPath)
 		if err != nil {
 			return nil, err
 		}
@@ -797,9 +798,12 @@ func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor) (json
 		if err != nil {
 			return nil, err
 		}
-		// Gate on a concrete encrypted leaf path instead of the container.
-		// NearCloud/NearDirect report "logprobs" container as false but encrypt leaves.
-		if session.IsResponseFieldEncrypted("logprobs.content[].token", chatCompletionsEndpoint) {
+		// Gate on concrete encrypted leaf paths instead of the container.
+		// Providers can encrypt only a subset of logprobs leaves.
+		if session.IsResponseFieldEncrypted("logprobs.content[].token", chatCompletionsEndpoint) ||
+			session.IsResponseFieldEncrypted("logprobs.refusal[].token", chatCompletionsEndpoint) ||
+			session.IsResponseFieldEncrypted("logprobs.content[].bytes", chatCompletionsEndpoint) ||
+			session.IsResponseFieldEncrypted("logprobs.refusal[].bytes", chatCompletionsEndpoint) {
 			if lc, err := decryptChoiceLogprobs(choices[i], session, fmt.Sprintf("choice[%d]", i)); err != nil {
 				return nil, err
 			} else if lc {
@@ -829,7 +833,7 @@ var imageEncryptedFields = []string{"b64_json", "revised_prompt"}
 // decryptResponseImageData decrypts encrypted fields in data[] items of an
 // images generation response. Returns the rewritten data JSON, or nil if
 // nothing was decrypted.
-func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
+func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor, endpoint string) (json.RawMessage, error) {
 	var data []map[string]json.RawMessage
 	if err := json.Unmarshal(dataRaw, &data); err != nil {
 		// Not an array of objects (e.g. embeddings float array) -- skip.
@@ -843,11 +847,18 @@ func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor) (json.
 			if !ok || IsJSONNull(raw) {
 				continue
 			}
+			requiresEncrypted := session.IsResponseFieldEncrypted(field, endpoint)
 			var val string
 			if err := json.Unmarshal(raw, &val); err != nil {
-				continue // not a string field
+				if requiresEncrypted {
+					return nil, fmt.Errorf("data[%d].%s: expected encrypted string", i, field)
+				}
+				continue
 			}
 			if !session.IsEncryptedChunk(val) {
+				if requiresEncrypted {
+					return nil, fmt.Errorf("data[%d].%s: expected encrypted string", i, field)
+				}
 				continue
 			}
 			plaintext, err := session.Decrypt(val)
@@ -870,7 +881,7 @@ func decryptResponseImageData(dataRaw json.RawMessage, session Decryptor) (json.
 // decryptResponseEmbeddingsData decrypts encrypted embedding vectors in data[] items.
 // Each embedding is stored as an encrypted JSON string that deserializes to a float array.
 // Returns the rewritten data JSON, or nil if nothing was decrypted.
-func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, strictDataShape bool) (json.RawMessage, error) {
+func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, strictDataShape bool, endpoint string) (json.RawMessage, error) {
 	var data []map[string]json.RawMessage
 	if err := json.Unmarshal(dataRaw, &data); err != nil {
 		if strictDataShape {
@@ -881,8 +892,10 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, s
 	}
 
 	sawEmbedding := false
+	changed := false
 	for i, item := range data {
 		embRaw, ok := item["embedding"]
+		requiresEncrypted := session.IsResponseFieldEncrypted("embedding", endpoint)
 		if !ok {
 			if strictDataShape {
 				return nil, fmt.Errorf("data[%d].embedding: missing", i)
@@ -891,30 +904,43 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, s
 		}
 		sawEmbedding = true
 		if IsJSONNull(embRaw) {
-			return nil, fmt.Errorf("data[%d].embedding: expected encrypted string, got null", i)
+			// NearAI encrypts embedding only when value is an array. Null is left as-is.
+			// Treat null as absent to avoid rejecting valid nullable upstream output.
+			continue
 		}
-		// Check if embedding is a string (encrypted form) or array (plaintext).
 		if !jsonRawStartsWithToken(embRaw, '"') {
-			return nil, fmt.Errorf("data[%d].embedding: expected encrypted string", i)
+			if requiresEncrypted {
+				return nil, fmt.Errorf("data[%d].embedding: expected encrypted string", i)
+			}
+			continue
 		}
 		var embStr string
 		if err := json.Unmarshal(embRaw, &embStr); err != nil {
 			return nil, fmt.Errorf("parse data[%d].embedding: %w", i, err)
 		}
 		if !session.IsEncryptedChunk(embStr) {
-			return nil, fmt.Errorf("data[%d].embedding: expected encrypted string", i)
+			if requiresEncrypted {
+				return nil, fmt.Errorf("data[%d].embedding: expected encrypted string", i)
+			}
+			continue
 		}
 		plaintext, err := session.Decrypt(embStr)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt data[%d].embedding: %w", i, err)
 		}
-		if !jsonArrayOfNumbers(plaintext) {
-			return nil, fmt.Errorf("data[%d].embedding: expected JSON array of numbers", i)
+		if json.Valid(plaintext) {
+			data[i]["embedding"] = json.RawMessage(plaintext)
+		} else {
+			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+			data[i]["embedding"] = rewritten
 		}
-		data[i]["embedding"] = json.RawMessage(plaintext)
+		changed = true
 	}
 
 	if !sawEmbedding {
+		return nil, nil
+	}
+	if !changed {
 		return nil, nil
 	}
 	out, _ := json.Marshal(data) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
@@ -923,7 +949,7 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, s
 
 // decryptResponseRerankResults decrypts document text fields in results[] items of a reranking response.
 // Returns the rewritten results JSON, or nil if nothing was decrypted.
-func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor) (json.RawMessage, error) {
+func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor, endpoint string) (json.RawMessage, error) {
 	var results []map[string]json.RawMessage
 	if err := json.Unmarshal(resultsRaw, &results); err != nil {
 		return nil, fmt.Errorf("parse results: %w", err)
@@ -931,16 +957,21 @@ func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor)
 
 	changed := false
 	for i, item := range results {
+		requiresEncrypted := session.IsResponseFieldEncrypted("results[].document.text", endpoint)
 		docRaw, ok := item["document"]
 		if !ok {
 			return nil, fmt.Errorf("results[%d].document: missing", i)
 		}
 		if IsJSONNull(docRaw) {
-			return nil, fmt.Errorf("results[%d].document: expected object, got null", i)
+			// NearAI only encrypts document.text when document is an object.
+			// Null document is treated as absent and passed through.
+			continue
 		}
-		// Document is an object with a text field.
 		if !jsonRawStartsWithToken(docRaw, '{') {
-			return nil, fmt.Errorf("results[%d].document: expected object", i)
+			if requiresEncrypted {
+				return nil, fmt.Errorf("results[%d].document: expected object", i)
+			}
+			continue
 		}
 		var doc map[string]json.RawMessage
 		if err := json.Unmarshal(docRaw, &doc); err != nil {
@@ -948,17 +979,33 @@ func decryptResponseRerankResults(resultsRaw json.RawMessage, session Decryptor)
 		}
 		textRaw, ok := doc["text"]
 		if !ok {
-			return nil, fmt.Errorf("results[%d].document.text: missing", i)
+			if requiresEncrypted {
+				return nil, fmt.Errorf("results[%d].document.text: missing", i)
+			}
+			continue
 		}
 		if IsJSONNull(textRaw) {
-			return nil, fmt.Errorf("results[%d].document.text: expected encrypted string, got null", i)
+			// NearAI encrypt_field skips null text values. Preserve null as-is.
+			continue
+		}
+		if !jsonRawStartsWithToken(textRaw, '"') {
+			if requiresEncrypted {
+				return nil, fmt.Errorf("results[%d].document.text: expected encrypted string", i)
+			}
+			continue
 		}
 		var textStr string
 		if err := json.Unmarshal(textRaw, &textStr); err != nil {
 			return nil, fmt.Errorf("parse results[%d].document.text: %w", i, err)
 		}
+		if textStr == "" {
+			continue
+		}
 		if !session.IsEncryptedChunk(textStr) {
-			return nil, fmt.Errorf("results[%d].document.text: expected encrypted string", i)
+			if requiresEncrypted {
+				return nil, fmt.Errorf("results[%d].document.text: expected encrypted string", i)
+			}
+			continue
 		}
 		plaintext, err := session.Decrypt(textStr)
 		if err != nil {
@@ -1003,22 +1050,17 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 			continue
 		}
 		sawScore = true
+		requiresEncrypted := session.IsResponseFieldEncrypted("score", endpoint)
 		if IsJSONNull(scoreRaw) {
-			return nil, fmt.Errorf("data[%d].score: expected encrypted string, got null", i)
-		}
-
-		if jsonTopLevelNumber(scoreRaw) {
-			// Plaintext numeric score. Check if the session's policy allows it for this endpoint.
-			if !session.IsResponseFieldEncrypted("score", endpoint) {
-				// Field encryption policy allows plaintext for this provider/endpoint
-				continue
-			}
-			// In E2EE mode, plaintext numeric score is not allowed
-			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
+			// Score can be nullable in provider output. Preserve null as-is.
+			continue
 		}
 
 		if !jsonRawStartsWithToken(scoreRaw, '"') {
-			return nil, fmt.Errorf("data[%d].score: expected JSON number or encrypted string", i)
+			if !requiresEncrypted {
+				continue
+			}
+			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
 		}
 
 		var scoreStr string
@@ -1026,16 +1068,21 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, strict
 			return nil, fmt.Errorf("parse data[%d].score: %w", i, err)
 		}
 		if !session.IsEncryptedChunk(scoreStr) {
-			return nil, fmt.Errorf("data[%d].score: expected JSON number or encrypted string", i)
+			if !requiresEncrypted {
+				continue
+			}
+			return nil, fmt.Errorf("data[%d].score: expected encrypted string", i)
 		}
 		plaintext, err := session.Decrypt(scoreStr)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt data[%d].score: %w", i, err)
 		}
-		if !jsonTopLevelNumber(plaintext) {
-			return nil, fmt.Errorf("data[%d].score: expected JSON number", i)
+		if json.Valid(plaintext) {
+			data[i]["score"] = json.RawMessage(plaintext)
+		} else {
+			rewritten, _ := json.Marshal(string(plaintext)) //nolint:errchkjson // strings always marshal
+			data[i]["score"] = rewritten
 		}
-		data[i]["score"] = json.RawMessage(plaintext)
 		changed = true
 	}
 
