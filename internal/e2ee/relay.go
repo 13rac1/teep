@@ -276,6 +276,7 @@ func decryptChoiceLogprobs(choice map[string]json.RawMessage, session Decryptor,
 	}
 	changed := false
 	for _, key := range []string{"content", "refusal"} {
+		policyBase := "logprobs." + key + "[]"
 		entriesRaw, ok := logprobs[key]
 		if !ok || IsJSONNull(entriesRaw) {
 			continue
@@ -285,7 +286,7 @@ func decryptChoiceLogprobs(choice map[string]json.RawMessage, session Decryptor,
 			return false, fmt.Errorf("%s.logprobs.%s: parse array: %w", ctx, key, err)
 		}
 		for i := range entries {
-			entryChanged, err := decryptLogprobsTokenEntry(entries[i], session, fmt.Sprintf("%s.logprobs.%s[%d]", ctx, key, i))
+			entryChanged, err := decryptLogprobsTokenEntry(entries[i], session, fmt.Sprintf("%s.logprobs.%s[%d]", ctx, key, i), policyBase)
 			if err != nil {
 				return false, err
 			}
@@ -304,14 +305,14 @@ func decryptChoiceLogprobs(choice map[string]json.RawMessage, session Decryptor,
 	return true, nil
 }
 
-func decryptLogprobsTokenEntry(entry map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+func decryptLogprobsTokenEntry(entry map[string]json.RawMessage, session Decryptor, ctx, policyBase string) (bool, error) {
 	changed := false
 	if c, err := decryptMaybeEncryptedStringField(entry, "token", session, ctx); err != nil {
 		return false, err
 	} else if c {
 		changed = true
 	}
-	if c, err := decryptLogprobsBytesField(entry, session, ctx); err != nil {
+	if c, err := decryptLogprobsBytesField(entry, session, ctx, policyBase+".bytes"); err != nil {
 		return false, err
 	} else if c {
 		changed = true
@@ -325,7 +326,7 @@ func decryptLogprobsTokenEntry(entry map[string]json.RawMessage, session Decrypt
 		return false, fmt.Errorf("%s.top_logprobs: parse array: %w", ctx, err)
 	}
 	for i := range top {
-		c, err := decryptLogprobsTokenEntry(top[i], session, fmt.Sprintf("%s.top_logprobs[%d]", ctx, i))
+		c, err := decryptLogprobsTokenEntry(top[i], session, fmt.Sprintf("%s.top_logprobs[%d]", ctx, i), policyBase+".top_logprobs[]")
 		if err != nil {
 			return false, err
 		}
@@ -419,7 +420,7 @@ func jsonArrayOfNumbers(raw []byte) bool {
 	return true
 }
 
-func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decryptor, ctx string) (bool, error) {
+func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decryptor, ctx, policyPath string) (bool, error) {
 	raw, ok := entry["bytes"]
 	if !ok || IsJSONNull(raw) {
 		return false, nil
@@ -427,7 +428,7 @@ func decryptLogprobsBytesField(entry map[string]json.RawMessage, session Decrypt
 	if !jsonRawStartsWithToken(raw, '"') {
 		// Plaintext bytes are usually JSON arrays. Check the session's field encryption policy.
 		// Logprobs bytes are only in /v1/chat/completions responses.
-		if !session.IsResponseFieldEncrypted("bytes", chatCompletionsEndpoint) {
+		if !session.IsResponseFieldEncrypted(policyPath, chatCompletionsEndpoint) {
 			// Field encryption policy allows plaintext for this provider
 			return false, nil
 		}

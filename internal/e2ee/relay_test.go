@@ -2347,6 +2347,28 @@ func testNearCloudLikeSession(t *testing.T) *nearCloudLikeSession {
 	return &nearCloudLikeSession{fullFieldVeniceSession: testFullFieldVeniceSession(t)}
 }
 
+// logprobsPathAwareSession lets tests vary policy by canonical logprobs leaf path.
+// It intentionally allows plaintext content bytes but requires encrypted refusal bytes.
+type logprobsPathAwareSession struct {
+	*fullFieldVeniceSession
+}
+
+func (s *logprobsPathAwareSession) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	switch fieldPath {
+	case "logprobs.content[].bytes":
+		return false
+	case "logprobs.refusal[].bytes":
+		return true
+	default:
+		return s.fullFieldVeniceSession.IsResponseFieldEncrypted(fieldPath, endpoint)
+	}
+}
+
+func testLogprobsPathAwareSession(t *testing.T) *logprobsPathAwareSession {
+	t.Helper()
+	return &logprobsPathAwareSession{fullFieldVeniceSession: testFullFieldVeniceSession(t)}
+}
+
 // TestDecryptNonStreamResponseForEndpoint_ScorePlaintext_EndpointThreaded verifies
 // that the endpoint path is forwarded to decryptResponseScoreData rather than being
 // hard-coded. A NearCloud-like session allows plaintext score on /v1/score but should
@@ -2402,6 +2424,56 @@ func TestDecryptNonStreamResponse_ScorePlaintext_NoEndpointFailsClosed(t *testin
 		t.Fatal("expected error: plaintext score must be rejected when no endpoint is provided to a full-field session")
 	}
 	if !strings.Contains(err.Error(), "data[0].score: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestDecryptNonStreamResponse_LogprobsBytesPolicyUsesCanonicalPath verifies
+// bytes policy checks are keyed by canonical paths (logprobs.content[].bytes /
+// logprobs.refusal[].bytes) rather than an ambiguous bare "bytes" key.
+func TestDecryptNonStreamResponse_LogprobsBytesPolicyUsesCanonicalPath(t *testing.T) {
+	session := testLogprobsPathAwareSession(t)
+	defer session.Zero()
+
+	encContent := encryptForClient(t, "ok", session.VeniceSession)
+	encContentToken := encryptForClient(t, "content-token", session.VeniceSession)
+	encRefusalToken := encryptForClient(t, "refusal-token", session.VeniceSession)
+
+	body := map[string]any{
+		"choices": []map[string]any{
+			{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": encContent,
+				},
+				"logprobs": map[string]any{
+					"content": []map[string]any{
+						{
+							"token": encContentToken,
+							"bytes": []int{99, 111, 110, 116, 101, 110, 116},
+						},
+					},
+					"refusal": []map[string]any{
+						{
+							"token": encRefusalToken,
+							"bytes": []int{114, 101, 102, 117, 115, 97, 108},
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected refusal bytes plaintext to be rejected")
+	}
+	if !strings.Contains(err.Error(), "logprobs.refusal[0].bytes: expected encrypted string") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
