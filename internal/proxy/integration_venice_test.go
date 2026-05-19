@@ -166,7 +166,8 @@ func integrationPostJSON(t *testing.T, url, body string) (*http.Response, error)
 }
 
 // postChatIntegration sends a POST /v1/chat/completions with the standard
-// integration prompt. Uses integrationClient (60s timeout).
+// integration prompt. Requests are bounded by integrationRequestTimeout(t),
+// with integrationClient's 5-minute timeout as an additional upper bound.
 func postChatIntegration(t *testing.T, proxyURL, model string, stream bool) *http.Response {
 	t.Helper()
 	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":%v}`, model, integrationPrompt, stream)
