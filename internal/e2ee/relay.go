@@ -277,6 +277,7 @@ func decryptChoiceLogprobs(choice map[string]json.RawMessage, session Decryptor,
 	changed := false
 	for _, key := range []string{"content", "refusal"} {
 		policyBase := "logprobs." + key + "[]"
+		keyChanged := false
 		entriesRaw, ok := logprobs[key]
 		if !ok || IsJSONNull(entriesRaw) {
 			continue
@@ -292,10 +293,13 @@ func decryptChoiceLogprobs(choice map[string]json.RawMessage, session Decryptor,
 			}
 			if entryChanged {
 				changed = true
+				keyChanged = true
 			}
 		}
-		entriesOut, _ := json.Marshal(entries) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
-		logprobs[key] = entriesOut
+		if keyChanged {
+			entriesOut, _ := json.Marshal(entries) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+			logprobs[key] = entriesOut
+		}
 	}
 	if !changed {
 		return false, nil
@@ -876,7 +880,6 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, s
 		return nil, nil
 	}
 
-	changed := false
 	sawEmbedding := false
 	for i, item := range data {
 		embRaw, ok := item["embedding"]
@@ -909,14 +912,10 @@ func decryptResponseEmbeddingsData(dataRaw json.RawMessage, session Decryptor, s
 			return nil, fmt.Errorf("data[%d].embedding: expected JSON array of numbers", i)
 		}
 		data[i]["embedding"] = json.RawMessage(plaintext)
-		changed = true
 	}
 
 	if !sawEmbedding {
 		return nil, nil
-	}
-	if !changed {
-		return nil, errors.New("data.embedding: expected encrypted content")
 	}
 	out, _ := json.Marshal(data) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, nil

@@ -31,23 +31,23 @@ import (
 
 const testsLoadDotEnvEnv = "TEEP_TESTS_LOAD_DOTENV"
 
-// init loads environment variables from .env file if it exists.
+// maybeLoadDotEnv loads environment variables from .env file if it exists.
 // This allows developers to run integration tests without manually setting
 // environment variables. The .env file should use bash-compatible format:
 //
 //	export VAR_NAME=value
 //	export ANOTHER_VAR=another_value
-//
-// Activation: set TEEP_TESTS_LOAD_DOTENV=1 before running tests:
-//
-//	export TEEP_TESTS_LOAD_DOTENV=1
-//	go test ./internal/proxy/
-func init() {
+func maybeLoadDotEnv() {
 	if os.Getenv(testsLoadDotEnvEnv) != "1" {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "teep test: %s=1, loading .env\n", testsLoadDotEnvEnv)
 	loadEnv()
+}
+
+func TestMain(m *testing.M) {
+	maybeLoadDotEnv()
+	os.Exit(m.Run())
 }
 
 // loadEnv searches for and reads .env file from the repository root,
