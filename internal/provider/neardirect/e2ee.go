@@ -19,9 +19,12 @@ func NewE2EE() *E2EE { return &E2EE{} }
 // determines which fields are encrypted:
 //   - /v1/chat/completions: encrypts messages[].content (text or serialized VL array)
 //   - /v1/images/generations: encrypts the prompt field
+//   - /v1/embeddings: encrypts input (string or string array)
+//   - /v1/rerank: encrypts query and documents[]
+//   - /v1/score: encrypts text_1 and text_2
 //
 // Unsupported endpoint paths fail closed — the TEE does not forward E2EE
-// headers for other endpoints (embeddings, audio, rerank), so encrypting them
+// headers for other endpoints (audio and unknown paths), so encrypting them
 // would leave the model TEE unable to decrypt.
 func (n *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpointPath string) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
 	switch endpointPath {
@@ -33,6 +36,24 @@ func (n *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endp
 		return encBody, session, nil, nil
 	case "/v1/images/generations":
 		encBody, session, err := e2ee.EncryptImagePromptNearCloud(body, raw.SigningKey)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return encBody, session, nil, nil
+	case "/v1/embeddings":
+		encBody, session, err := e2ee.EncryptEmbeddingsNearCloud(body, raw.SigningKey)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return encBody, session, nil, nil
+	case "/v1/rerank":
+		encBody, session, err := e2ee.EncryptRerankNearCloud(body, raw.SigningKey)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return encBody, session, nil, nil
+	case "/v1/score":
+		encBody, session, err := e2ee.EncryptScoreNearCloud(body, raw.SigningKey)
 		if err != nil {
 			return nil, nil, nil, err
 		}

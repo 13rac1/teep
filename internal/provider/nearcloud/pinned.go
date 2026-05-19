@@ -210,6 +210,7 @@ func (h *PinnedHandler) encryptBody(
 	hdrs.Set("X-Signing-Algo", "ed25519")
 	hdrs.Set("X-Client-Pub-Key", ncSess.ClientEd25519PubHex())
 	hdrs.Set("X-Encryption-Version", "2")
+	hdrs.Set("X-Encrypt-All-Fields", "true")
 
 	return result, sess, hdrs, nil
 }
