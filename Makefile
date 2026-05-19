@@ -43,7 +43,7 @@ test-live: ## Run live network tests (dials external hosts, requires internet)
 integration: integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture ## Run all integration tests
 
 integration-venice: ## Run Venice integration tests (requires VENICE_API_KEY)
-	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 120s -run TestIntegration_Venice ./internal/proxy/
+	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_Venice ./internal/proxy/
 
 integration-neardirect: ## Run NEAR Direct integration tests (requires NEARAI_API_KEY)
 	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_NearDirect ./internal/proxy/
