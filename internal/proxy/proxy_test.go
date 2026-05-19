@@ -12,6 +12,8 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +28,223 @@ import (
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/proxy"
 )
+
+const testsLoadDotEnvEnv = "TEEP_TESTS_LOAD_DOTENV"
+
+// maybeLoadDotEnv loads environment variables from .env file if it exists.
+// This allows developers to run integration tests without manually setting
+// environment variables. The .env file should use bash-compatible format:
+//
+//	export VAR_NAME=value
+//	export ANOTHER_VAR=another_value
+func maybeLoadDotEnv() {
+	if os.Getenv(testsLoadDotEnvEnv) != "1" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "teep test: %s=1, loading .env\n", testsLoadDotEnvEnv)
+	loadEnv()
+}
+
+func TestMain(m *testing.M) {
+	maybeLoadDotEnv()
+	os.Exit(m.Run())
+}
+
+// loadEnv searches for and reads .env file from the repository root,
+// sourcing environment variables into the process. Lines that don't start
+// with an assignment are ignored (e.g. comments, unset lines). Both
+// "export VAR=value" and "VAR=value" are supported. Environment variables
+// that are already set take precedence over .env values.
+// If .env doesn't exist, loadEnv is a no-op.
+func loadEnv() {
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "teep test: loadEnv: findRepoRoot failed: %v\n", err)
+		return
+	}
+
+	envPath := filepath.Join(repoRoot, ".env")
+
+	f, err := os.Open(envPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "teep test: loadEnv: open %s failed: %v\n", envPath, err)
+		}
+		return
+	}
+	defer f.Close()
+
+	var count int
+	scanner := bufio.NewScanner(f)
+	// Use a larger buffer to handle long env var values.
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024) // 1MB max line size
+	for scanner.Scan() {
+		name, value, ok := parseEnvLine(scanner.Text())
+		if !ok {
+			continue
+		}
+
+		// Set environment variable only if not already set
+		// (prioritize explicitly-set environment variables)
+		if _, exists := os.LookupEnv(name); !exists {
+			_ = os.Setenv(name, value)
+			count++
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "teep test: loadEnv: scanner error reading %s: %v\n", envPath, err)
+		return
+	}
+
+	if count > 0 {
+		fmt.Fprintf(os.Stderr, "teep test: loadEnv: loaded %d env vars from %s\n", count, envPath)
+	}
+}
+
+func findRepoRoot() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getwd: %w", err)
+	}
+
+	orig := wd
+	for {
+		candidate := filepath.Join(wd, "go.mod")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return wd, nil
+		}
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			return "", fmt.Errorf("go.mod not found walking up from %s", orig)
+		}
+		wd = parent
+	}
+}
+
+func parseEnvLine(raw string) (name, value string, ok bool) {
+	line := strings.TrimSpace(raw)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", "", false
+	}
+	if rest, ok := strings.CutPrefix(line, "export "); ok {
+		line = strings.TrimSpace(rest)
+	}
+	parts := strings.SplitN(line, "=", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	name = strings.TrimSpace(parts[0])
+	value = strings.TrimSpace(parts[1])
+	if name == "" {
+		return "", "", false
+	}
+	if len(value) >= 2 {
+		if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+			value = value[1 : len(value)-1]
+		} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
+			value = value[1 : len(value)-1]
+		}
+	}
+	return name, value, true
+}
+
+func TestParseEnvLine(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		wantKey string
+		wantVal string
+		wantOK  bool
+	}{
+		{name: "plain assignment", line: "FOO=bar", wantKey: "FOO", wantVal: "bar", wantOK: true},
+		{name: "export assignment", line: "export FOO=bar", wantKey: "FOO", wantVal: "bar", wantOK: true},
+		{name: "double quoted", line: "FOO=\"bar baz\"", wantKey: "FOO", wantVal: "bar baz", wantOK: true},
+		{name: "single quoted", line: "FOO='bar baz'", wantKey: "FOO", wantVal: "bar baz", wantOK: true},
+		{name: "comment", line: "# comment", wantOK: false},
+		{name: "invalid", line: "not an assignment", wantOK: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotKey, gotVal, gotOK := parseEnvLine(tc.line)
+			if gotOK != tc.wantOK {
+				t.Fatalf("parseEnvLine(%q) ok=%v want %v", tc.line, gotOK, tc.wantOK)
+			}
+			if !tc.wantOK {
+				return
+			}
+			if gotKey != tc.wantKey || gotVal != tc.wantVal {
+				t.Fatalf("parseEnvLine(%q) got (%q,%q) want (%q,%q)", tc.line, gotKey, gotVal, tc.wantKey, tc.wantVal)
+			}
+		})
+	}
+}
+
+func TestLoadEnvStopsAtRepoRoot(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	repo := filepath.Join(home, "repo")
+	workdir := filepath.Join(repo, "internal", "proxy")
+
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("TEEP_TEST_PARENT_ENV=from-parent\n"), 0o644); err != nil {
+		t.Fatalf("write parent .env: %v", err)
+	}
+	t.Chdir(workdir)
+
+	_ = os.Unsetenv("TEEP_TEST_PARENT_ENV")
+	t.Cleanup(func() { _ = os.Unsetenv("TEEP_TEST_PARENT_ENV") })
+
+	loadEnv()
+
+	if _, ok := os.LookupEnv("TEEP_TEST_PARENT_ENV"); ok {
+		t.Fatal("loadEnv should not load .env above repository root")
+	}
+}
+
+func TestLoadEnvLoadsRepoRootAndSupportsNonExport(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	workdir := filepath.Join(repo, "internal", "proxy")
+
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	envBody := strings.Join([]string{
+		"TEEP_TEST_PLAIN=plain",
+		"export TEEP_TEST_EXPORT=\"quoted value\"",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(repo, ".env"), []byte(envBody), 0o644); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+	t.Chdir(workdir)
+
+	_ = os.Unsetenv("TEEP_TEST_PLAIN")
+	_ = os.Unsetenv("TEEP_TEST_EXPORT")
+	t.Cleanup(func() {
+		_ = os.Unsetenv("TEEP_TEST_PLAIN")
+		_ = os.Unsetenv("TEEP_TEST_EXPORT")
+	})
+
+	loadEnv()
+
+	if got, _ := os.LookupEnv("TEEP_TEST_PLAIN"); got != "plain" {
+		t.Fatalf("TEEP_TEST_PLAIN=%q want %q", got, "plain")
+	}
+	if got, _ := os.LookupEnv("TEEP_TEST_EXPORT"); got != "quoted value" {
+		t.Fatalf("TEEP_TEST_EXPORT=%q want %q", got, "quoted value")
+	}
+}
 
 type stubPinnedHandler struct{}
 
