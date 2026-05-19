@@ -76,6 +76,8 @@ func loadEnv() {
 
 	var count int
 	scanner := bufio.NewScanner(f)
+	// Use a larger buffer to handle long env var values.
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024) // 1MB max line size
 	for scanner.Scan() {
 		name, value, ok := parseEnvLine(scanner.Text())
 		if !ok {
@@ -88,6 +90,11 @@ func loadEnv() {
 			_ = os.Setenv(name, value)
 			count++
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "teep test: loadEnv: scanner error reading %s: %v\n", envPath, err)
+		return
 	}
 
 	if count > 0 {

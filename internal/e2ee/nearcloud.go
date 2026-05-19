@@ -573,14 +573,15 @@ func encryptParametersField(fn map[string]json.RawMessage, session *NearCloudSes
 		return nil
 	}
 	var plaintext []byte
-	if len(paramsRaw) > 0 && paramsRaw[0] == '"' {
+	trimmed := bytes.TrimSpace(paramsRaw)
+	if len(trimmed) > 0 && trimmed[0] == '"' {
 		var s string
-		if err := json.Unmarshal(paramsRaw, &s); err != nil {
+		if err := json.Unmarshal(trimmed, &s); err != nil {
 			return fmt.Errorf("parse string parameters: %w", err)
 		}
 		plaintext = []byte(s)
 	} else {
-		plaintext = paramsRaw
+		plaintext = trimmed
 	}
 	ct, err := EncryptXChaCha20(plaintext, session.ModelX25519Pub())
 	if err != nil {

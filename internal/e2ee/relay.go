@@ -546,7 +546,10 @@ func DecryptSSEChunk(data string, session Decryptor) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if session.IsResponseFieldEncrypted("logprobs", chatCompletionsEndpoint) {
+	// Gate on a concrete encrypted leaf path instead of the container.
+	// NearCloud/NearDirect report "logprobs" container as false but encrypt leaves
+	// like "logprobs.content[].token". Check a concrete leaf.
+	if session.IsResponseFieldEncrypted("logprobs.content[].token", chatCompletionsEndpoint) {
 		if c, err := decryptChoiceLogprobs(choices[0], session, "choice[0]"); err != nil {
 			return "", err
 		} else if c {
@@ -782,7 +785,9 @@ func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor) (json
 		if err != nil {
 			return nil, err
 		}
-		if session.IsResponseFieldEncrypted("logprobs", chatCompletionsEndpoint) {
+		// Gate on a concrete encrypted leaf path instead of the container.
+		// NearCloud/NearDirect report "logprobs" container as false but encrypt leaves.
+		if session.IsResponseFieldEncrypted("logprobs.content[].token", chatCompletionsEndpoint) {
 			if lc, err := decryptChoiceLogprobs(choices[i], session, fmt.Sprintf("choice[%d]", i)); err != nil {
 				return nil, err
 			} else if lc {
@@ -1175,7 +1180,10 @@ func extractChunkMeta(data string, session Decryptor) (chunkMeta, error) {
 	var m chunkMeta
 	if len(parsed.Choices) > 0 {
 		m.ToolCalls = parsed.Choices[0].Delta.ToolCalls
-		if session != nil && session.IsResponseFieldEncrypted("tool_calls", chatCompletionsEndpoint) {
+		// Gate on a leaf path to detect if tool_calls function fields are encrypted.
+		// NearCloud/NearDirect report "tool_calls" container as false but encrypt leaves
+		// like "tool_calls[].function.name". Check a concrete leaf instead of the container.
+		if session != nil && session.IsResponseFieldEncrypted("tool_calls[].function.name", chatCompletionsEndpoint) {
 			for i := range m.ToolCalls {
 				decrypted, err := decryptToolCallMetaRaw(m.ToolCalls[i], session, fmt.Sprintf("delta.tool_calls[%d]", i))
 				if err != nil {
