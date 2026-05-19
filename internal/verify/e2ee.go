@@ -147,6 +147,7 @@ func testE2EENearAI(ctx context.Context, raw *attestation.RawAttestation, cp *co
 	req.Header.Set("X-Signing-Algo", "ed25519")
 	req.Header.Set("X-Client-Pub-Key", session.ClientEd25519PubHex())
 	req.Header.Set("X-Encryption-Version", "2")
+	req.Header.Set("X-Encrypt-All-Fields", "true")
 	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
 	req.Header.Set("Connection", "close")
 
