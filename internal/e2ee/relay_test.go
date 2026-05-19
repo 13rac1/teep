@@ -2329,6 +2329,83 @@ func TestDecryptNonStreamResponse_ScorePlaintextRejectedForFullFieldSession(t *t
 	}
 }
 
+// nearCloudLikeSession simulates a full-field session that has the NearCloud
+// score-endpoint exception: data[].score is plaintext on /v1/score only.
+type nearCloudLikeSession struct {
+	*fullFieldVeniceSession
+}
+
+func (s *nearCloudLikeSession) IsResponseFieldEncrypted(fieldPath, endpoint string) bool {
+	if endpoint == "/v1/score" && fieldPath == "score" {
+		return false
+	}
+	return s.fullFieldVeniceSession.IsResponseFieldEncrypted(fieldPath, endpoint)
+}
+
+func testNearCloudLikeSession(t *testing.T) *nearCloudLikeSession {
+	t.Helper()
+	return &nearCloudLikeSession{fullFieldVeniceSession: testFullFieldVeniceSession(t)}
+}
+
+// TestDecryptNonStreamResponseForEndpoint_ScorePlaintext_EndpointThreaded verifies
+// that the endpoint path is forwarded to decryptResponseScoreData rather than being
+// hard-coded. A NearCloud-like session allows plaintext score on /v1/score but should
+// reject it when no endpoint is provided (via DecryptNonStreamResponse).
+func TestDecryptNonStreamResponseForEndpoint_ScorePlaintext_EndpointThreaded(t *testing.T) {
+	session := testNearCloudLikeSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{{"score": 0.42}},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	// Explicit /v1/score endpoint: NearCloud exception applies → plaintext score accepted.
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, "/v1/score")
+	if err != nil {
+		t.Fatalf("expected plaintext score accepted for /v1/score endpoint: %v", err)
+	}
+	var parsed struct {
+		Data []struct {
+			Score float64 `json:"score"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if len(parsed.Data) != 1 || parsed.Data[0].Score != 0.42 {
+		t.Fatalf("unexpected score output: %s", out)
+	}
+}
+
+// TestDecryptNonStreamResponse_ScorePlaintext_NoEndpointFailsClosed verifies that
+// when no endpoint is provided (DecryptNonStreamResponse) the score-endpoint exception
+// is NOT applied: a full-field session must reject a plaintext score in the fallback
+// path. Previously this failed open because the fallback hard-coded "/v1/score".
+func TestDecryptNonStreamResponse_ScorePlaintext_NoEndpointFailsClosed(t *testing.T) {
+	session := testNearCloudLikeSession(t)
+	defer session.Zero()
+
+	body := map[string]any{
+		"data": []map[string]any{{"score": 0.42}},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponse(b, session)
+	if err == nil {
+		t.Fatal("expected error: plaintext score must be rejected when no endpoint is provided to a full-field session")
+	}
+	if !strings.Contains(err.Error(), "data[0].score: expected encrypted string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDecryptSSEChunkContent_UnchangedCiphertextRejected(t *testing.T) {
 	mock := &testDecryptor{
 		isEncrypted: func(s string) bool { return strings.HasPrefix(s, "enc:") },

@@ -706,7 +706,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 				changed = true
 			}
 		case nonStreamEndpointScore:
-			d, err := decryptResponseScoreData(dataRaw, session, true, "/v1/score")
+			d, err := decryptResponseScoreData(dataRaw, session, true, endpointPath)
 			if err != nil {
 				return nil, err
 			}
@@ -752,7 +752,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 	// Score: when endpoint is unknown, attempt score fallback after others.
 	if endpointType == nonStreamEndpointUnknown {
 		if scoreDataRaw, ok := full["data"]; ok {
-			s, err := decryptResponseScoreData(scoreDataRaw, session, false, "/v1/score")
+			s, err := decryptResponseScoreData(scoreDataRaw, session, false, endpointPath)
 			if err != nil {
 				return nil, err
 			}
