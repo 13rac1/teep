@@ -1083,6 +1083,46 @@ func TestDecryptNonStreamResponse_EncryptedLogprobs(t *testing.T) {
 	}
 }
 
+func TestDecryptChoiceLogprobs_DoesNotRewriteUntouchedBranch(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+
+	encRefusalToken := encryptForClient(t, "blocked", session.VeniceSession)
+	choice := map[string]json.RawMessage{
+		// content contains duplicate keys. If this branch is unnecessarily re-marshaled,
+		// duplicate keys collapse and this exact token sequence disappears.
+		"logprobs": json.RawMessage(`{"content":[{"dup":1,"dup":2}],"refusal":[{"token":"` + encRefusalToken + `"}]}`),
+	}
+
+	changed, err := decryptChoiceLogprobs(choice, session, "choice[0]")
+	if err != nil {
+		t.Fatalf("decryptChoiceLogprobs: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true when refusal token is decrypted")
+	}
+
+	var logprobs map[string]json.RawMessage
+	if err := json.Unmarshal(choice["logprobs"], &logprobs); err != nil {
+		t.Fatalf("unmarshal logprobs: %v", err)
+	}
+
+	contentRaw := string(logprobs["content"])
+	if !strings.Contains(contentRaw, `"dup":1,"dup":2`) {
+		t.Fatalf("content branch was rewritten unexpectedly: %s", contentRaw)
+	}
+
+	var refusal []struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(logprobs["refusal"], &refusal); err != nil {
+		t.Fatalf("unmarshal refusal: %v", err)
+	}
+	if len(refusal) != 1 || refusal[0].Token != "blocked" {
+		t.Fatalf("unexpected refusal token output: %s", logprobs["refusal"])
+	}
+}
+
 func TestDecryptDeltaFields_PlaintextRefusalRejected(t *testing.T) {
 	session := testFullFieldVeniceSession(t)
 	defer session.Zero()
