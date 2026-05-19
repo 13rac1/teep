@@ -77,6 +77,8 @@ func IsNonEncryptedField(key string) bool {
 	}
 }
 
+const chatCompletionsEndpoint = "/v1/chat/completions"
+
 // RequiresEncryptedField reports whether a string-valued chat field must be
 // encrypted for the active protocol mode.
 //
@@ -87,7 +89,7 @@ func RequiresEncryptedField(key string, session Decryptor) bool {
 	if IsNonEncryptedField(key) {
 		return false
 	}
-	return session.IsRequestFieldEncrypted(key)
+	return session.IsResponseFieldEncrypted(key, chatCompletionsEndpoint)
 }
 
 // decryptDeltaFields iterates all string-valued fields in a delta (or message)
@@ -173,7 +175,7 @@ func decryptFunctionObject(obj map[string]json.RawMessage, session Decryptor, ct
 			// For protocols that don't support full-field encryption (e.g., Venice),
 			// plaintext tool_call function fields are acceptable. Only enforce encryption
 			// for protocols with X-Encrypt-All-Fields support.
-			if session.IsRequestFieldEncrypted("function") {
+			if session.IsResponseFieldEncrypted("function", chatCompletionsEndpoint) {
 				return false, fmt.Errorf("%s.%s: expected encrypted but not recognised (len=%d prefix=%q)", ctx, key, len(s), SafePrefix(s, 8))
 			}
 			continue
@@ -210,7 +212,7 @@ func decryptToolCallsField(fields map[string]json.RawMessage, session Decryptor,
 		}
 		// Only decrypt tool call function names/arguments if protocol supports full-field encryption.
 		// Venice E2EE preserves tool_calls plaintext.
-		if !session.IsRequestFieldEncrypted("tool_calls") {
+		if !session.IsResponseFieldEncrypted("tool_calls", chatCompletionsEndpoint) {
 			continue
 		}
 		c, err := decryptFunctionObject(fn, session, fmt.Sprintf("%s.tool_calls[%d].function", ctx, i))
@@ -461,7 +463,7 @@ func decryptChatObject(fields map[string]json.RawMessage, session Decryptor, ctx
 	}
 	// Only decrypt nested fields (audio, tool_calls, function_call) if the protocol supports
 	// full-field encryption (e.g., NearCloud/Chutes). Venice only encrypts messages[].content.
-	if session.IsRequestFieldEncrypted("tool_calls") {
+	if session.IsResponseFieldEncrypted("tool_calls", chatCompletionsEndpoint) {
 		if c, err := decryptAudioDataField(fields, session, ctx); err != nil {
 			return false, err
 		} else if c {
@@ -547,7 +549,7 @@ func DecryptSSEChunk(data string, session Decryptor) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if session.IsResponseFieldEncrypted("logprobs", "/v1/chat/completions") {
+	if session.IsResponseFieldEncrypted("logprobs", chatCompletionsEndpoint) {
 		if c, err := decryptChoiceLogprobs(choices[0], session, "choice[0]"); err != nil {
 			return "", err
 		} else if c {
