@@ -1,0 +1,46 @@
+Attestation Report: chutes / zai-org/GLM-5-TEE
+══════════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  PPID:          30243a409394d073...
+  Nonce source:  client
+  Candidates:    1/4 evaluated
+
+Tier 1: Core Attestation
+  ✓ nonce_match                nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✓ tdx_quote_present          TDX quote present (10486 hex chars)  [ENFORCED]
+  ✓ tdx_quote_structure        valid QuoteV4, MRTD: ddc6efcdd2309e10...  [ENFORCED]
+  ✓ tdx_cert_chain             certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tdx_quote_signature        quote signature verified  [ENFORCED]
+  ✓ tdx_debug_disabled         debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ tdx_mrseam_mrtd            MRTD/MRSEAM policy matched  [ENFORCED]
+  ✗ tdx_hardware_config        RTMR[0] not in policy allowlist: 2864b11878e81290...  [ALLOWED]
+  ✗ tdx_boot_config            RTMR[1] not in policy allowlist: f858ed2aecba4ecd...  [ALLOWED]
+  ✓ signing_key_present        enclave pubkey present (uqutCaslnR...)  [ENFORCED]
+
+Tier 2: Binding & Crypto
+  ✓ tdx_reportdata_binding     REPORTDATA binds SHA256(nonce_hex + e2e_pubkey_base64)  [ENFORCED]
+  ✓ intel_pcs_collateral       Intel PCS collateral fetched (TCB status: UpToDate)  [ENFORCED]
+  ✓ tdx_tcb_current            TCB is UpToDate per Intel PCS  [ENFORCED]
+  ✓ tdx_tcb_not_revoked        TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present     GPU evidence present (8 GPUs, SPDM format)  [ENFORCED]
+  ✗ nvidia_signature           signature invalid: GPU 0 verification failed: SPDM evidence: requester nonce mismatch: got 96e18e92764c51f22ea0823903df1b42ae246ad27e13a201f725f0cbea978110, want cda7576dbb7d1ea2852e4a70502723f8d1678fb1ecdb69d6b3224620ac368379  [ALLOWED]
+  ✓ nvidia_claims              claims valid  [ENFORCED]
+  ✓ nvidia_nonce_client_bound  NVIDIA nonce matches client nonce  [ENFORCED]
+  ✗ nvidia_nras_verified       NRAS result: false; all 8 GPUs: NONCE_NOT_MATCHING  [ALLOWED]
+  ✓ e2ee_capable               ML-KEM-768 public key valid (1184 bytes); post-quantum E2EE key exchange possible  [ENFORCED]
+  ✓ e2ee_usable                E2EE chutes ML-KEM-768: 74 encrypted chunks decrypted; non-standard response headers: Alt-Svc: clear; Via: 1.1 google; X-Chutes-Quota-Remaining: 0; X-Chutes-Quota-Total: 0; X-Chutes-Quota-Used: 0; X-Chutes-Rl-User: 60  [ENFORCED]
+
+Tier 3: Supply Chain & Channel Integrity
+  ? tls_key_binding            provider uses E2EE key exchange; TLS binding not applicable  [ALLOWED]
+  ✗ cpu_gpu_chain              CPU-GPU attestation not bound  [ALLOWED]
+  ✗ measured_model_weights     no model weight hashes  [ALLOWED]
+  ? build_transparency_log     chutes attestation does not include container image metadata; supply chain verification is validator-side only  [ALLOWED]
+  ✗ cpu_id_registry            hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  ? compose_binding            chutes uses cosign image admission + IMA, not docker-compose; compose binding not applicable  [ALLOWED]
+  ? sigstore_verification      chutes attestation does not include container image digests; cosign verification is validator-side only  [ALLOWED]
+  ? event_log_integrity        chutes performs RTMR verification validator-side against a golden baseline; event log not exposed to clients  [ALLOWED]
+
+Score: 17/29 passed, 5 skipped, 7 failed (0 enforced, 7 allowed)
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

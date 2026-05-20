@@ -39,6 +39,9 @@ func loadFixture(t *testing.T, prefix string) fixtureEnv {
 		t.Fatalf("parse nonce: %v", err)
 	}
 
+	// Fixtures may include an NRAS JWT from Proof-of-Cloud replay traffic.
+	// This token is attestation evidence tied to the captured quote hash/nonce,
+	// not a reusable API credential for model inference.
 	client := &http.Client{Transport: capture.NewReplayTransport(entries)}
 
 	return fixtureEnv{manifest: manifest, entries: entries, client: client, nonce: nonce}
@@ -88,7 +91,7 @@ func assertMustFail(t *testing.T, r *attestation.VerificationReport, names []str
 	}
 }
 
-func assertFactorStatus(t *testing.T, r *attestation.VerificationReport, name string, want attestation.Status) {
+func assertFactorStatus(t *testing.T, r *attestation.VerificationReport, name string, want attestation.Status) { //nolint:unparam // want is a generic parameter for this assertion helper
 	t.Helper()
 	f := findFactor(t, r, name)
 	if f.Status != want {

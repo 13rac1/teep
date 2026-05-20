@@ -1,0 +1,38 @@
+{
+  "method": "GET",
+  "url": "https://api.chutes.ai/e2e/instances/e51e818e-fa63-570d-9f68-49d7d1b4d12f",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "headers": {
+    "Access-Control-Allow-Methods": [
+      "GET, POST, OPTIONS"
+    ],
+    "Access-Control-Allow-Origin": [
+      "https://chutes-e2ee-test.onrender.com"
+    ],
+    "Access-Control-Expose-Headers": [
+      "X-Chutes-Quota-Total, X-Chutes-Quota-Used, X-Chutes-Quota-Remaining, X-Chutes-RL-User, X-Chutes-RL-Chute, X-Chutes-InvocationID"
+    ],
+    "Alt-Svc": [
+      "clear"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Wed, 20 May 2026 02:17:45 GMT"
+    ],
+    "Server": [
+      "nginx"
+    ],
+    "Vary": [
+      "Accept-Encoding"
+    ],
+    "Via": [
+      "1.1 google"
+    ]
+  },
+  "duration_ms": 2054
+}

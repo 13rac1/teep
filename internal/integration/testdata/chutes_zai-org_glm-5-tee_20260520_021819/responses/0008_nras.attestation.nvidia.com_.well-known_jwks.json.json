@@ -1,0 +1,38 @@
+{
+  "method": "GET",
+  "url": "https://nras.attestation.nvidia.com/.well-known/jwks.json",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "headers": {
+    "Alt-Svc": [
+      "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Wed, 20 May 2026 02:18:14 GMT"
+    ],
+    "Server": [
+      "envoy"
+    ],
+    "Set-Cookie": [
+      "JSESSIONID=0F83C743E6BA55474573607417A0D545; Path=/; Secure; HttpOnly"
+    ],
+    "Vary": [
+      "Origin,Access-Control-Request-Method,Access-Control-Request-Headers"
+    ],
+    "Via": [
+      "1.1 google"
+    ],
+    "X-Envoy-Upstream-Service-Time": [
+      "58"
+    ],
+    "X-Request-Id": [
+      "4b2cd30d-7b88-4ec3-8273-8818f134ca2b"
+    ]
+  },
+  "duration_ms": 193
+}

@@ -1,0 +1,35 @@
+{
+  "method": "GET",
+  "url": "https://api.chutes.ai/chutes/e51e818e-fa63-570d-9f68-49d7d1b4d12f/evidence?nonce=cda7576dbb7d1ea2852e4a70502723f8d1678fb1ecdb69d6b3224620ac368379",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "headers": {
+    "Access-Control-Allow-Methods": [
+      "GET, POST, OPTIONS, PUT, DELETE, PATCH"
+    ],
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Alt-Svc": [
+      "clear"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Wed, 20 May 2026 02:18:05 GMT"
+    ],
+    "Server": [
+      "nginx"
+    ],
+    "Vary": [
+      "Accept-Encoding"
+    ],
+    "Via": [
+      "1.1 google"
+    ]
+  },
+  "duration_ms": 19545
+}
