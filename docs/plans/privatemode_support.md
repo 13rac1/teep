@@ -146,8 +146,9 @@ Teep does **not** receive individual worker SEV-SNP reports. The worker admissio
 
 #### Contrast SDK Verification Transcript
 
-1. Teep (or Privatemode proxy) sends `POST /attest` with a 32-byte nonce.
-1. Coordinator returns `AttestationResponse` containing `raw_attestation_doc`, `manifests[]`, `root_ca`, and `mesh_ca`.
+1. Teep sends `POST /privatemode/v1/attest` with a 32-byte nonce.
+1. The endpoint returns `AttestationDoc` (opaque attestation transcript bytes).
+1. Validation logic extracts attested coordinator state (including `manifests[]`, `root_ca`, and `mesh_ca`) from `AttestationDoc`.
 1. `ValidateAttestation()` in Contrast SDK validates the latest manifest and builds SNP/TDX validators from that manifest.
 1. The SDK computes expected `REPORT_DATA` using:
 
@@ -249,16 +250,19 @@ The following table documents the SEV-SNP attestation report fields relevant to 
 | `platform_info` | 8 bytes | SMT enabled, TSME enabled flags. | Yes — within `tee_hardware_config`. |
 | VCEK signature | variable | ECDSA P-384 over all fields. VCEK derived from chip and TCB version via AMD KDS. | Yes — `tee_cert_chain` verifies AMD ARK→ASK→VCEK→quote signature. |
 
-### Coordinator `/attest` Wire Contract
+### Contrast Coordinator `/attest` Transcript Semantics (Internal)
 
-The Coordinator HTTP endpoint uses this flow:
+This section describes Contrast attestation transcript semantics represented inside `AttestationDoc`.
+It is not a second public HTTP API contract; Teep calls the public endpoint `POST /privatemode/v1/attest` defined in the protocol contract section below.
+
+The internal coordinator attestation flow represented by `AttestationDoc` uses this sequence:
 
 1. Enforce `Content-Type: application/json` and nonce length exactly 32 bytes.
 1. Read latest Coordinator state and manifest history from state guard.
 1. Build `CoordinatorState` with manifests, root CA, and mesh CA.
 1. Compute `report_data` via `ConstructReportData(nonce, transitionHash, coordinatorState)`.
 1. Issue raw SNP/TDX attestation with that `report_data`.
-1. Return JSON payload containing `raw_attestation_doc` and full coordinator state.
+1. Return attestation transcript bytes that encode coordinator state including attestation evidence, manifest history, `root_ca`, and `mesh_ca`.
 
 This confirms that the attestation document returned to Teep is cryptographically tied to the Coordinator's current transition hash and CA material, not only to a static coordinator measurement.
 
@@ -730,7 +734,7 @@ The following table uses the canonical generalized names from the tinfoil and ma
 
 | Factor | Meaning | Default Policy | PrivateMode Step |
 |---|---|---|---|
-| `tee_quote_present` | Coordinator attestation document received and non-empty | Enforced | `POST /privatemode/v1/attest` returns non-empty `raw_attestation_doc` |
+| `tee_quote_present` | Coordinator attestation document received and non-empty | Enforced | `POST /privatemode/v1/attest` returns non-empty `AttestationDoc` |
 | `tee_quote_structure` | Attestation document parses correctly; signature and cert chain verify | Enforced | CBOR/JSON structure valid; hardware root signature validates |
 | `tee_cert_chain` | Attestation certificate chain validates to a trusted hardware root | Enforced | TDX: Intel PCK→root; SEV-SNP: AMD ARK→ASK→VCEK |
 | `tee_mrseam_mrtd` | Coordinator firmware and enclave identity measurements match expected | Enforced | MRTD/RTMR0 or SEV-SNP measurement field matches allowlist |
@@ -783,7 +787,7 @@ var PrivatemodeDefaultAllowFail = []string{
 
 ## Detailed Implementation Phases
 
-## Phase 0: Protocol Freeze and Security Invariants
+### Phase 0: Protocol Freeze and Security Invariants
 
 Deliverables:
 
@@ -802,7 +806,7 @@ Blocking criteria:
 
 1. No implementation begins until unknown protocol assumptions are either validated or explicitly marked unsupported.
 
-## Phase 1: Endpoint Plumbing Expansion in Teep
+### Phase 1: Endpoint Plumbing Expansion in Teep
 
 Files:
 
@@ -824,7 +828,7 @@ Tests:
 1. Unsupported provider returns HTTP 400 with deterministic error.
 1. Endpoint dispatch coverage tests for encrypted and plaintext modes.
 
-## Phase 2: New Provider Package Skeleton
+### Phase 2: New Provider Package Skeleton
 
 Files to create:
 
@@ -850,7 +854,7 @@ Tests:
 1. One test file per source file with success and malformed-input cases.
 1. Fuzz entry points for parser and decryptor functions.
 
-## Phase 3: Attestation and Trust-Chain Integration
+### Phase 3: Attestation and Trust-Chain Integration
 
 Files:
 
@@ -875,7 +879,7 @@ Tests:
 1. Secret-exchange signer mismatch fixture (invalid `mesh_cert` chain or invalid signature).
 1. Binding mismatch fixture.
 
-## Phase 4: E2EE Implementation
+### Phase 4: E2EE Implementation
 
 Files:
 
@@ -899,7 +903,7 @@ Tests:
 1. Stream chunk corruption aborts stream.
 1. Concurrent encryption requests show no nonce collisions or races.
 
-## Phase 5: Provider Wiring in Proxy, Verify, Defaults, and Config
+### Phase 5: Provider Wiring in Proxy, Verify, Defaults, and Config
 
 Files:
 
@@ -925,7 +929,7 @@ Tests:
 1. Config load tests for API key env resolution and strict validation.
 1. Docs matrix consistency test if available; otherwise lint check on table changes.
 
-## Phase 6: Testing Matrix
+### Phase 6: Testing Matrix
 
 ### Unit Tests
 
@@ -951,7 +955,7 @@ Tests:
 1. Add stream and non-stream tests where supported.
 1. Verify `e2ee_usable` with at least one real encrypted response path per endpoint class.
 
-## Phase 7: Verification, Hardening, and Release Gates
+### Phase 7: Verification, Hardening, and Release Gates
 
 Mandatory commands:
 
