@@ -1105,6 +1105,271 @@ Both Tinfoil providers use client-supplied nonces:
   with a fresh nonce. The `VerifyPeerCertificate` callback computes the TLS
   fingerprint on every connection and compares it against `report_data.tls_key_fp`.
 
+### Alternate Authentication Chain: ATC Attestation Bundle (Legacy V2 Bootstrap)
+
+Tinfoil's client applications use a public **Attestation Transparency Cache
+(ATC)** service that bundles hardware attestation evidence with supply-chain
+artifacts. The cache is not a verifier — clients fetch the bundle and verify
+every link independently. This sub-section documents what ATC serves, how
+clients use it, and the freshness/expiry guarantees that apply.
+
+**Teep should not implement usage of the ATC** - the ATC currently uses the legacy
+V2 attestation protocol which does not ensure freshness. It is documented here
+for reference only.
+
+#### What ATC Serves
+
+**Endpoint**: `https://atc.tinfoil.sh/attestation` (or custom `attestationBundleURL`)
+
+**Request format (for default router bundle)**:
+```
+GET /attestation
+```
+
+**Request format (for specific enclave or repo)**:
+```
+POST /attestation
+Content-Type: application/json
+
+{
+  "enclaveUrl": "https://gemma4-31b.inference.tinfoil.sh",
+  "repo": "tinfoilsh/confidential-gemma4-31b"
+}
+```
+
+Both `enclaveUrl` and `repo` are optional in the POST body; ATC routes to
+the default router if neither is specified.
+
+**Response format** (both GET and POST):
+```json
+{
+  "domain": "<e.g., inference.tinfoil.sh or gemma4-31b.inference.tinfoil.sh>",
+  "enclaveAttestationReport": {
+    "format": "https://tinfoil.sh/predicate/sev-snp-guest/v2",
+    "body": "<base64+gzip raw binary SEV-SNP attestation report>"
+  },
+  "digest": "<SHA-256 hex of code image>",
+  "sigstoreBundle": { ... },
+  "vcek": "<base64 AMD VCEK certificate in DER>",
+  "enclaveCert": "<PEM-encoded TLS leaf certificate>"
+}
+```
+
+**What's in the bundle:**
+
+| Field | Content | Authenticated by |
+|---|---|---|
+| `domain` | Target enclave hostname | REPORTDATA (V2: TLS FP at bytes 0–31) |
+| `enclaveAttestationReport` | V2-format gzip+base64 SEV-SNP attestation report | Hardware-signed AMD VCEK signature |
+| `digest` | Git commit SHA-256 of code image | Sigstore bundle |
+| `sigstoreBundle` | In-toto DSSE bundle: code measurement predicates | Sigstore root of trust (Fulcio + Rekor) |
+| `vcek` | AMD VCEK cert chain (SEV-SNP) | AMD root of trust |
+| `enclaveCert` | TLS leaf certificate containing HPKE key and attestation hash in SANs | Cross-checked against hardware quote |
+
+**ATC is a cache, not a verifier:**
+
+ATC does not perform attestation verification. It assembles the bundle by
+fetching the raw attestation from the enclave endpoint
+(`/.well-known/tinfoil-attestation`, **no nonce parameter**), fetching the
+corresponding Sigstore bundle from GitHub Releases, and fetching the VCEK
+certificate from AMD KDS. Clients fetch from ATC and verify each component
+independently.
+
+#### ATC Attestation Format: V2, Not V3
+
+ATC bundles use the **V2 attestation format** — the legacy format predating
+client nonces. The key difference from the V3 format used by teep:
+
+| Property | V2 (ATC bundles) | V3 (teep direct fetch) |
+|---|---|---|
+| Nonce | None — no `?nonce=` parameter sent to enclave | Client-supplied 32-byte nonce |
+| REPORTDATA layout | `[0:32]` = TLS FP, `[32:64]` = HPKE key (directly) | `[0:32]` = SHA-256(TLS FP \|\| HPKE \|\| nonce \|\| GPU hashes), `[32:64]` = zeros |
+| HPKE key extraction | Read directly from REPORTDATA bytes 32–63 | Read from `report_data.hpke_key` JSON field (authenticated by hash) |
+| GPU evidence | Not included | Included and hash-bound into REPORTDATA |
+| Freshness guarantee | None from nonce; relies on HTTPS+cert SANs | Client nonce bound into hardware quote |
+| Format URI | `https://tinfoil.sh/predicate/sev-snp-guest/v2` | `https://tinfoil.sh/predicate/attestation/v3` |
+
+The V2 `REPORTDATA` layout was defined in `BodyV2` in the cvmimage codebase:
+`REPORTDATA[0:32] = TLS_KEY_FP`, `REPORTDATA[32:64] = HPKE_KEY`. The JS
+verifier (`attestation.ts`) extracts these directly:
+```typescript
+const tlsKeyFp = bytesToHex(keys.slice(0, 32));
+const hpkePublicKey = bytesToHex(keys.slice(32, 64));
+```
+
+**HPKE key authentication in V2 bundles** uses a dual mechanism:
+1. The HPKE key is embedded directly in REPORTDATA bytes 32–63, which are
+   part of the hardware-signed AMD VCEK quote — hardware-authenticated.
+2. The TLS leaf certificate (`enclaveCert`) encodes the same HPKE key in its
+   Subject Alternative Name (SAN) DNS entries using a `.hpke.` label scheme.
+   It also encodes `SHA-256(format + body)` of the attestation document in
+   `.hatt.` SANs. The `cert-verify.ts` verifier cross-checks both:
+   - Decodes the HPKE key from the `.hpke.` SANs and compares it to the key
+     extracted from REPORTDATA.
+   - Decodes the attestation hash from the `.hatt.` SANs and verifies it
+     matches a freshly-computed hash of the `enclaveAttestationReport`.
+
+This dual binding means the HPKE key is authenticated both by the hardware
+quote (REPORTDATA) and by the TLS certificate (SANs), with the TLS fingerprint
+itself also embedded in REPORTDATA bytes 0–31.
+
+#### How Clients Use ATC
+
+Both clients use ATC to bootstrap attestation. Each call to `SecureClient`
+specifies which enclave to verify; the HPKE key returned belongs to **that
+specific enclave**, not necessarily the router.
+
+**Webapp client** (tinfoil-js SDK):
+
+The webapp creates multiple `SecureClient` instances for different enclaves:
+
+| Service | `enclaveURL` | `configRepo` | EHBP key is for |
+|---|---|---|---|
+| Main chat | *(none — default)* | `tinfoilsh/confidential-model-router` | **Router** HPKE key |
+| Summarizer | `https://summarizer.tinfoil.sh` | `tinfoilsh/confidential-summarizer` | **Summarizer enclave** HPKE key |
+| Metadata | `https://opengraph-metadata.tinfoil.sh` | `tinfoilsh/confidential-website-metadata-fetcher` | **Metadata enclave** HPKE key |
+
+Main chat (`tinfoil-client.ts`):
+```typescript
+secureClient = new SecureClient({});  // No options → default router
+await secureClient.ready();  // POST /attestation with { repo: "tinfoilsh/confidential-model-router" }
+// EHBP key = router's HPKE key from REPORTDATA[32:64]
+```
+
+Specific enclave (`metadata-client.ts`, `summary-client.ts`):
+```typescript
+new SecureClient({
+  enclaveURL: 'https://summarizer.tinfoil.sh',
+  configRepo: 'tinfoilsh/confidential-summarizer',
+})
+// POST /attestation with { enclaveUrl: "...", repo: "..." }
+// EHBP key = summarizer enclave's own HPKE key from REPORTDATA[32:64]
+```
+
+**iOS client** (tinfoil-swift SDK):
+
+| Service | `enclaveURL` | `githubRepo` | EHBP key is for |
+|---|---|---|---|
+| Main chat | *(none — default)* | `tinfoilsh/confidential-model-router` | **Router** HPKE key |
+| Summarizer | `https://summarizer.tinfoil.sh` | *(from Constants)* | **Summarizer enclave** HPKE key |
+| Document conversion | `https://doc-upload.tinfoil.sh` | *(from Constants)* | **Doc-upload enclave** HPKE key |
+
+Main chat (`ChatViewModel.swift`):
+```swift
+client = try await TinfoilAI.create(apiKey: apiKey)
+// Defaults: githubRepo = "tinfoilsh/confidential-model-router"
+// ATC returns router bundle; EHBP to router's HPKE key
+```
+
+Specific enclave (`SummarizerService.swift`):
+```swift
+let newClient = SecureClient(
+  githubRepo: Constants.Summarizer.githubRepo,
+  enclaveURL: Constants.Summarizer.enclaveURL
+)
+// ATC returns summarizer-specific bundle; EHBP to summarizer's HPKE key
+```
+
+**Key point on EHBP key scope:** When a client fetches a specific enclave's
+bundle from ATC (via POST with `enclaveUrl`), it authenticates and EHBP-encrypts
+to **that enclave's own HPKE key** — not the router's. This is the EHBP equivalent
+of `tinfoildirect_v3` in teep. The main chat flow (no `enclaveURL`) uses the
+router's key, analogous to `tinfoilcloud_v3`.
+
+**Teep client** (this plan):
+
+Teep does NOT use ATC:
+
+- For `tinfoilcloud_v3`: Teep directly fetches V3 attestation from the router
+  with a client-supplied nonce. EHBP encrypts to the router's HPKE key.
+- For `tinfoildirect_v3`: Teep directly fetches V3 attestation from per-model
+  inference enclaves with a client-supplied nonce. EHBP encrypts to that
+  model enclave's own HPKE key.
+
+Teep uses V3 format (not V2) providing: nonce-bound freshness, GPU evidence
+binding in REPORTDATA, and structured JSON attestation parsing. Teep does not
+depend on the TLS certificate SAN authentication mechanism because V3
+REPORTDATA hash provides equivalent binding without relying on the certificate.
+
+#### Freshness Properties
+
+**Hardware attestation freshness via ATC (V2 bundles — no client nonce):**
+
+ATC fetches from `/.well-known/tinfoil-attestation` **without** a `?nonce=`
+parameter. The returned V2 attestation report has no client-supplied nonce
+bound into REPORTDATA. Freshness is not enforced by a nonce; the bundle may
+represent a cached attestation of any age.
+
+The V2 HPKE/TLS binding is still hardware-authenticated (the AMD VCEK private
+key signs the REPORTDATA bytes), but the binding proves only that *a* router
+with those keys was genuine at *some* point — not that the attestation was
+fresh at the moment the client fetched it. Clients using ATC rely on:
+- HTTPS transport to ATC for integrity in transit.
+- TLS certificate SAN binding (`.hatt.` hash = SHA-256 of attestation document)
+  to confirm that the `enclaveCert` and the `enclaveAttestationReport` refer
+  to the same attestation event.
+- TLS connection to the enclave itself (implicit "is the server still alive"
+  check) for liveness — but not for key freshness.
+
+**Hardware attestation freshness via direct V3 fetch (teep):**
+
+Client supplies a random 32-byte nonce as `?nonce=<64hex>`. The nonce is
+included in the V3 hardware quote's REPORTDATA[0:32] hash:
+```
+REPORTDATA[0:32] = SHA-256(tls_fp || hpke_key || nonce || gpu_hash || nvswitch_hash)
+```
+This provides cryptographic proof that the attestation was generated *after*
+the client chose the nonce. Replay attacks are detected via nonce mismatch.
+This freshness model is strictly stronger than the V2/ATC model and is what
+teep enforces for both providers.
+
+**Bundle cache expiry (ATC TTL):**
+
+ATC bundles are not cached with an explicit TTL; the service fetches from the
+enclave on demand each time a client requests a bundle. If a client fetches
+a new bundle later, it receives a fresh attestation report (though still
+without a client nonce). A cached bundle's age is bounded only by the client's
+re-attestation policy.
+
+**V2 nonce absence — implications:**
+
+- The V2 attestation report's REPORTDATA bytes are hardware-signed but
+  contain no nonce. An attacker who captured a valid V2 bundle and held it
+  could replay it to a client if the enclave TLS certificate and HPKE key
+  have not rotated since.
+- The `.hatt.` SAN in `enclaveCert` binds the certificate to a specific
+  attestation document (by hash), preventing the certificate from being
+  paired with a different (forged) attestation. But it does not prevent
+  replaying both the certificate and the original attestation together.
+- This is an accepted design tradeoff in the Tinfoil SDK (ATC is primarily
+  a convenience cache for browser/mobile clients that cannot implement nonce
+  generation easily). Teep uses the stricter V3 path.
+
+**Rekeying and re-attestation (ATC clients):**
+
+When the enclave rotates its TLS certificate or HPKE key, ATC will serve a
+new bundle containing the updated attestation report and certificate. Clients
+detect this on first connection when the TLS fingerprint from the new bundle
+does not match the server's certificate. Both the JS SDK (`KeyConfigMismatchError`
+recovery) and the Swift SDK implement re-verification on key mismatch.
+
+#### Client Coverage
+
+Both production Tinfoil clients (webapp and iOS) use ATC. The EHBP key each
+client authenticates depends on which enclave the `SecureClient` is created for:
+
+| Client | Use case | Target enclave | EHBP key scope |
+|---|---|---|---|
+| Webapp (`tinfoil-client.ts`) | Main chat | Router (default) | Router HPKE key |
+| Webapp (`summary-client.ts`) | Summarization | `summarizer.tinfoil.sh` | Summarizer HPKE key |
+| Webapp (`metadata-client.ts`) | Link metadata | `opengraph-metadata.tinfoil.sh` | Metadata enclave HPKE key |
+| iOS (`ChatViewModel.swift`) | Main chat | Router (default) | Router HPKE key |
+| iOS (`SummarizerService.swift`) | Summarization | `summarizer.tinfoil.sh` | Summarizer HPKE key |
+| iOS (`DocumentConversionService.swift`) | Document upload | `doc-upload.tinfoil.sh` | Doc-upload HPKE key |
+| **Teep** (`tinfoilcloud_v3`) | Chat via router | Router (V3 direct) | Router HPKE key |
+| **Teep** (`tinfoildirect_v3`) | Chat direct | Per-model enclave (V3 direct) | Model enclave HPKE key |
+
+
 ---
 
 ## Protocol Descriptions
