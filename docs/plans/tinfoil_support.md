@@ -279,6 +279,38 @@ model.
 | TEE.fail defense | Proof of Cloud (conditional) | None (same vulnerability) |
 | vTPM / DCEA | Not implemented | Not implemented |
 
+### Gap Status Determination Rules
+
+This section makes the gap conclusions mechanically decidable from verifier
+outputs, rather than narrative interpretation.
+
+1. **Dstack in-band discovery gap analogue (boot-measurement publication):**
+   `Closed` only when both conditions hold:
+   - `sigstore_code_verified` is `Pass` from a verified DSSE bundle for the
+     deployment repo, and
+   - for TDX, hardware platform matching (MRTD+RTMR0) against
+     `hardware-measurements` passes; for SEV-SNP, launch measurement matching
+     against the verified multi-platform predicate passes.
+   Any failure or `Skip` in those checks means `Open`.
+
+2. **Model-weights identity gap (runtime weight substitution):**
+   `Closed` only when `sigstore_code_verified` is `Pass` and the measured chain
+   explicitly ties the verified config to dm-verity root commitments
+   (`measured_model_weights=Pass` with transitive detail). If the Sigstore
+   chain fails/skip, this gap is `Open`.
+
+3. **GPU-to-CPU binding gap (Option 2):**
+   `Closed` only when both `cpu_gpu_chain` and `nvidia_gpu_attestation` are
+   `Pass` in the same verification event, including topology-conditional
+   NVSwitch requirements. Any missing required evidence, hash mismatch,
+   malformed normalization input, or SPDM failure makes it `Open`.
+
+4. **TEE.fail key-extraction gap:**
+   Always `Open` until an independent CPU identity registry / anti-relay
+   mitigation is enforced (for example Proof-of-Cloud identity registration,
+   DCEA/vTPM-backed identity, or equivalent hardware-rooted anti-forgery
+   control). Passing quote/supply-chain/E2EE checks does not close this gap.
+
 ### Authentication Chain 1: CVM Environment (Hardware → Code)
 
 This chain proves that the enclave is running the expected firmware, kernel,
@@ -352,7 +384,8 @@ Link 1: Hardware Root of Trust
         Sigstore bundle from pri-build-action (GitHub Actions)
         OIDC issuer: token.actions.githubusercontent.com
         Workflow bound to specific GitHub repo + tag
-        Bundle contains expected measurements for all registers
+   Code bundle contains code measurements (RTMR1/RTMR2 or SNP measurement)
+   Hardware-measurements bundle contains platform measurements (MRTD/RTMR0)
         Verified by: sigstore-go against Sigstore root trust anchor
 ```
 
@@ -361,9 +394,9 @@ Link 1: Hardware Root of Trust
 1. Validate hardware attestation report signature against manufacturer cert
    chain (AMD ARK→ASK→VCEK or Intel root→PCK→QE). → `tee_quote_structure`
 2. Compare all measurement registers against values from Sigstore bundle:
-   - TDX: MRTD, RTMR0, RTMR1, RTMR2 against multi-platform predicate
-   - SEV-SNP: launch measurement against snp_measurement
-   → `sigstore_code_verified`
+   - TDX code registers: RTMR1, RTMR2 against the multi-platform predicate
+   - SEV-SNP code register: launch measurement against `snp_measurement`
+   → `sigstore_code_verified` (code measurement match)
 3. Verify Sigstore bundle: DSSE signature, Fulcio certificate, SCT,
    transparency log entry, observer timestamp. → `sigstore_code_verified`
 4. Apply platform-specific policy checks:
@@ -371,7 +404,7 @@ Link 1: Hardware Root of Trust
    - SEV-SNP: guest policy (Debug=false, SMT, etc.), TCB minimums
    → `tee_hardware_config`
 5. Match TDX MRTD + RTMR0 against hardware measurements registry.
-   → `tee_boot_config` (register/measurement validation)
+   → `tee_boot_config` (hardware-platform measurement validation)
 6. Verify RTMR3 is all zeros (no unexpected runtime extensions).
 
 ### Authentication Chain 2: Encryption Keys (Hardware → Plaintext)
@@ -859,7 +892,12 @@ follows:
 5. Parse `certificate` as PEM and extract the leaf public key.
 6. Verify leaf public key fingerprint equals `report_data.tls_key_fp`
    (constant-time). This binds the envelope signer key to REPORTDATA.
-7. Validate envelope cross-field consistency before signature checks:
+7. Verify attestation-envelope key/channel consistency:
+   - Extract the live TLS peer leaf public key from the HTTPS connection used
+     to fetch attestation.
+   - Constant-time compare its SPKI fingerprint to `report_data.tls_key_fp`.
+   - Fail closed on mismatch.
+8. Validate envelope cross-field consistency before signature checks:
     - `gpu` field is REQUIRED. If absent/empty, fail closed and mark
        GPU-related factors `Fail`.
     - If `gpu` field is present, `report_data.gpu_evidence_hash` must be
@@ -870,7 +908,7 @@ follows:
        `report_data.nvswitch_evidence_hash` are required and must match.
     - If `nvswitch_expected` is false (including Blackwell B200/B300 MPT
        systems), `nvswitch` may be absent.
-8. Verify `signature` using ECDSA ASN.1 over SHA-256 of the JSON payload
+9. Verify `signature` using ECDSA ASN.1 over SHA-256 of the JSON payload
    produced from the parsed envelope with the `signature` field set to empty
    string (`""`), using the implementation's deterministic serializer
    (for Go, `encoding/json` marshaling of the typed struct).
@@ -878,7 +916,7 @@ follows:
    - Decode `signature` from base64 and verify DER ASN.1 form.
    - Signature verification input must be derived from typed fields, not raw
      map iteration order, to avoid parser-dependent ambiguity.
-9. If envelope signature verification fails, fail closed before any CPU/GPU
+10. If envelope signature verification fails, fail closed before any CPU/GPU
    evidence trust decisions.
 
 Rationale: REPORTDATA hash authenticates key fields via CPU hardware
