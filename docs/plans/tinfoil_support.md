@@ -19,14 +19,16 @@ Reference providers for implementation patterns: **nearcloud**, **neardirect**,
 ### Two-Provider Model: `tinfoil_v2` and `tinfoil_v3`
 
 Tinfoil has two attestation formats that differ in REPORTDATA layout, nonce
-support, and GPU evidence binding. V2 is deployed today; V3 is specified but
-not yet released. This plan implements them as **two separate provider
+support, and GPU evidence binding. V2 and V3 are now both deployed in
+production, with V3 served when clients request nonce-based fresh attestation
+(`?nonce=<64hex>`) and legacy V2 preserved for backward compatibility when no
+nonce is provided. This plan implements them as **two separate provider
 names** that share underlying infrastructure:
 
 - **`tinfoil_v2`** — Deployed now. V2 attestation format (`{format, body}`),
   no client nonces, HPKE key directly in REPORTDATA[32:64], no GPU evidence
   in the attestation response. The router runs on SEV-SNP.
-- **`tinfoil_v3`** — Not yet deployed. V3 attestation format with structured
+- **`tinfoil_v3`** — Deployed now. V3 attestation format with structured
   JSON response, client nonce via `?nonce=<hex>`, GPU/NVSwitch evidence bound
   into REPORTDATA hash, HPKE key in the response `report_data` field
   (authenticated via REPORTDATA hash).
@@ -38,7 +40,7 @@ verification, policy checks, MR_SEAM whitelist.
 **Provider-specific code** (in the same package): `NewV2Attester` /
 `NewV3Attester`, `V2ReportDataVerifier` / `V3ReportDataVerifier`.
 
-**Migration path**: When Tinfoil deploys V3 to all endpoints:
+**Migration path**: With V3 deployed, migration can proceed now:
 1. Users switch their config from `tinfoil_v2` to `tinfoil_v3`.
 2. After a transition period, remove the `tinfoil_v2` case from
    `proxy.go:fromConfig()`, the `tinfoil_v2` case from
@@ -75,7 +77,7 @@ verification, policy checks, MR_SEAM whitelist.
 | GPU attestation | Boot-time fail-closed inside CVM. Not externally verifiable. |
 | Deployed platform | Router runs SEV-SNP (no GPUs). Model enclaves behind router have GPUs. |
 
-### `tinfoil_v3` (Not Yet Deployed)
+### `tinfoil_v3` (Deployed)
 
 | Property | Value |
 |---|---|
@@ -86,6 +88,10 @@ verification, policy checks, MR_SEAM whitelist.
 | HPKE key source | From `report_data.hpke_key` field in response (authenticated via REPORTDATA hash) |
 | GPU attestation | SPDM evidence in response; GPU evidence hash bound into REPORTDATA (Option 2 from gpu_cpu_binding.md) |
 | GPU-CPU binding | Yes — SHA-256 of GPU/NVSwitch evidence in REPORTDATA hash |
+
+### Current Rollout Snapshot (2026-06-09)
+
+On June 9th, Tinfoil rolled out v3 support across their fleet with the release of cvmimage 0.10.4. v3 is supported.
 
 ## Supported Endpoints
 
@@ -640,19 +646,22 @@ The two providers handle GPU attestation very differently:
 - At CVM boot, the `nvattest` tool performs local NVIDIA GPU attestation
   (`nvattest attest --device gpu --verifier local`).
 - SPDM reports are collected from each GPU and validated locally.
-- For 8-GPU HGX systems: NVSwitch attestation and full PCIe topology
-  validation (8 GPUs + 4 NVSwitches mesh integrity) are also enforced.
+- For 8-GPU HGX Hopper systems: NVSwitch attestation and full PCIe topology
+   validation (8 GPUs + 4 NVSwitches mesh integrity) are enforced.
+- For 8-GPU HGX Blackwell systems (B200/B300): in-guest NVSwitch evidence is
+   not exposed under Blackwell MPT, so NVSwitch collection is skipped by design.
 - If GPU attestation fails, the CVM sets GPU ready state to
   `ACCEPTING_CLIENT_REQUESTS_FALSE` and boot aborts. **No enclave starts
   without passing GPU attestation.**
 
 **Runtime GPU evidence collection (`tinfoil_v3` only):**
 - The V3 attestation endpoint (`/.well-known/tinfoil-attestation?nonce=<hex>`)
-  collects fresh SPDM evidence from all GPUs and NVSwitches.
+   collects fresh SPDM evidence from all GPUs and collects NVSwitch evidence
+   only when topology/architecture requires it.
 - Evidence is collected via NVML APIs (`GetConfComputeGpuAttestationReport`)
   with the client-supplied nonce passed through to the GPU.
 - GPU evidence is returned in the attestation response as `gpu` and
-  `nvswitch` JSON fields alongside the CPU report.
+   optionally `nvswitch` JSON fields alongside the CPU report.
 
 **GPU evidence hash in REPORTDATA (`tinfoil_v3` only):**
 - For V3 attestation, REPORTDATA is computed as:
@@ -686,7 +695,7 @@ help router→model verification, not teep→router.
 
 #### V2 vs V3 Attestation Formats
 
-| Aspect | `tinfoil_v2` (deployed) | `tinfoil_v3` (not yet deployed) |
+| Aspect | `tinfoil_v2` (deployed) | `tinfoil_v3` (deployed) |
 |---|---|---|
 | Endpoint | `GET /.well-known/tinfoil-attestation` | `GET /.well-known/tinfoil-attestation?nonce=<64hex>` |
 | REPORTDATA layout | `[0:32] SHA-256(TLS pubkey)` \| `[32:64] HPKE key` | `[0:32] SHA-256(tls_fp\|\|hpke\|\|nonce\|\|gpu_hash\|\|nvswitch_hash)` \| `[32:64] zeros` |
@@ -694,11 +703,12 @@ help router→model verification, not teep→router.
 | GPU binding | None | SHA-256 hash in REPORTDATA |
 | Freshness | TLS key lifecycle | Client-supplied nonce |
 | HPKE key location | REPORTDATA[32:64] (raw bytes) | `report_data.hpke_key` (JSON field) |
-| Client verification | tinfoil-go verifier (existing) | Not yet verified by tinfoil-go |
+| Client verification | tinfoil-go verifier (existing) | Rolling out; compatibility lag may exist in older SDKs |
 
 **Important**: Public client libraries currently verify V2 attestation
-(no nonce, no GPU). V3 with GPU evidence binding is not released yet. When
-V3 deploys, `tinfoil_v3` will gain GPU binding and client nonce freshness.
+(no nonce, no GPU). V3 has now rolled out, but SDK parity is still catching up;
+teep should treat V3 verification as authoritative and keep fixture coverage
+for both formats.
 
 #### Gap Analysis: GPU CPU Binding (gpu_cpu_binding.md)
 
@@ -763,9 +773,10 @@ mitigation.
 5. `nvidia_gpu_attestation`: `Pass` only when GPU SPDM evidence is present
    and verifies per GPU (missing GPU evidence = `Fail`).
 6. NVSwitch evidence is topology-conditional: if GPU evidence indicates an
-   NVSwitch-backed topology (for example 8-GPU HGX / mesh fabric),
+   NVSwitch-backed topology (for example 8-GPU HGX Hopper / mesh fabric),
    `nvswitch` evidence and `report_data.nvswitch_evidence_hash` are required;
-   if missing or mismatched, both `cpu_gpu_chain` and
+   8-GPU Blackwell (B200/B300) may legitimately omit NVSwitch evidence under
+   MPT; if required evidence is missing or mismatched, both `cpu_gpu_chain` and
    `nvidia_gpu_attestation` must be `Fail`.
 
 #### V3 REPORTDATA Verification (`tinfoil_v3` Only)
@@ -797,9 +808,12 @@ For `tinfoil_v3` attestation, the REPORTDATA verification differs from
       2. Set `gpu_count = len(gpu.evidences)`.
       3. If `nvswitch` field is present and parses to JSON object with
          non-empty `nvswitch.evidences`, set `nvswitch_expected = true`.
-      4. Else if `gpu_count >= 8`, set `nvswitch_expected = true`.
-      5. Else set `nvswitch_expected = false`.
-      6. If required fields for this derivation are malformed, missing, or
+      4. Else inspect `gpu.evidences[*].arch` values (raw evidence metadata).
+      5. If `gpu_count == 8` and any arch is `HOPPER`, set
+         `nvswitch_expected = true`.
+      6. Else set `nvswitch_expected = false` (including Blackwell B200/B300
+         and unknown arches).
+      7. If required fields for this derivation are malformed, missing, or
          ambiguous (for example `gpu` present but `gpu.evidences` missing),
          fail closed and set both `cpu_gpu_chain` and
          `nvidia_gpu_attestation` to `Fail`.
@@ -807,7 +821,8 @@ For `tinfoil_v3` attestation, the REPORTDATA verification differs from
        `report_data.nvswitch_evidence_hash` must be present and equal the
        recomputed hash; missing/mismatch is a fail-closed error and sets both
        `cpu_gpu_chain` and `nvidia_gpu_attestation` to `Fail`.
-    - If `nvswitch_expected` is false (for example single-GPU systems),
+    - If `nvswitch_expected` is false (for example single-GPU systems or
+       8-GPU Blackwell MPT systems),
        `nvswitch` may be absent.
     This prevents downgrade/omission ambiguity for GPU evidence.
 5. Recompute the expected REPORTDATA:
@@ -901,7 +916,7 @@ The response format depends on provider mode:
       "hpke_key": "<64 hex>",
       "nonce": "<64 hex>",
       "gpu_evidence_hash": "<64 hex>",
-      "nvswitch_evidence_hash": "<64 hex, conditional (required if nvswitch_expected is true)>"
+      "nvswitch_evidence_hash": "<64 hex, conditional (required only when nvswitch_expected is true)>"
    },
    "cpu": {
       "platform": "tdx|sev-snp",
@@ -956,7 +971,7 @@ layout depends on the provider:
 
 The HPKE key is embedded directly in REPORTDATA — no separate fetch needed.
 
-**`tinfoil_v3` REPORTDATA** (not yet deployed):
+**`tinfoil_v3` REPORTDATA** (deployed):
 
 | Offset | Size | Content |
 |---|---|---|
@@ -991,11 +1006,12 @@ follows:
        fail closed and mark GPU-related factors `Fail`.
     - If `gpu` field is present, `report_data.gpu_evidence_hash` must be
        present and equal `SHA-256(raw_gpu_json)`.
-    - Determine `nvswitch_expected` with the same ordered normalization
+      - Determine `nvswitch_expected` with the same ordered normalization
       algorithm defined in "V3 REPORTDATA Verification" above.
     - If `nvswitch_expected` is true, `nvswitch` field and
        `report_data.nvswitch_evidence_hash` are required and must match.
-    - If `nvswitch_expected` is false, `nvswitch` may be absent.
+      - If `nvswitch_expected` is false (including Blackwell B200/B300 MPT
+         systems), `nvswitch` may be absent.
 7. Verify `signature` using ECDSA ASN.1 over SHA-256 of the JSON payload
    produced from the parsed envelope with the `signature` field set to empty
    string (`""`), using the implementation's deterministic serializer
@@ -1826,11 +1842,11 @@ config, and endpoint dispatch.
    api_key_env = "TINFOIL_API_KEY"
    e2ee = true
 
-   # Tinfoil V3 (not yet deployed — uncomment when V3 is available)
-   # [providers.tinfoil_v3]
-   # base_url = "https://inference.tinfoil.sh"
-   # api_key_env = "TINFOIL_API_KEY"
-   # e2ee = true
+   # Tinfoil V3 (deployed)
+   [providers.tinfoil_v3]
+   base_url = "https://inference.tinfoil.sh"
+   api_key_env = "TINFOIL_API_KEY"
+   e2ee = true
    ```
 
 7. **Responses + TTS Endpoints**:
@@ -1864,7 +1880,6 @@ config, and endpoint dispatch.
 **Files to create**:
 - `internal/integration/tinfoil_v2_test.go` — `tinfoil_v2` integration tests
 - `internal/integration/tinfoil_v3_test.go` — `tinfoil_v3` integration tests
-  (initially `t.Skip("V3 not yet deployed")`)
 - `internal/integration/testdata/tinfoil/` — Captured attestation fixtures
 
 **`tinfoil_v2` Tests** (all require `TINFOIL_API_KEY`, run now):
@@ -1935,7 +1950,7 @@ config, and endpoint dispatch.
       unless explicitly wired and covered by equivalent attestation/E2EE
       requirements.
 
-**`tinfoil_v3` Tests** (initially skipped, activate when V3 deploys):
+**`tinfoil_v3` Tests** (active):
 
 All `tinfoil_v2` tests above, plus:
 
@@ -1966,7 +1981,8 @@ All `tinfoil_v2` tests above, plus:
 **Fixture Tests** (offline, no API key, both providers):
 - Capture a real V2 attestation response and save as testdata.
 - Test the full V2 verification pipeline against the fixture.
-- When V3 deploys, capture a V3 attestation response and add V3 fixture tests.
+- Capture and refresh V3 attestation fixtures from live rollout and keep V3
+   fixture tests active to detect schema/policy drift.
 
 **Commit**: Phase 6 — Tinfoil integration tests.
 
@@ -2041,7 +2057,7 @@ Normalization rules for this document:
 - Add Tinfoil E2EE details (EHBP, HPKE, full-body encryption).
 - Document that Tinfoil has **no field-level encryption gaps** (full-body).
 - Note both `tinfoil_v2` and `tinfoil_v3` in the provider list, with V3
-  marked as "not yet deployed".
+   marked as deployed and V2 marked as legacy compatibility mode.
 
 **Commit**: Phase 7 — Verification report factors and documentation.
 
@@ -2206,21 +2222,19 @@ New Go module dependencies:
    evidence into REPORTDATA (Option 2 from gpu_cpu_binding.md), preventing
    GPU splicing attacks in the absence of TEE.fail. `tinfoil_v2` has no GPU
    binding (`cpu_gpu_chain` = Skip). This is a key reason to migrate to
-   `tinfoil_v3` when available.
+   `tinfoil_v3` now that it is deployed.
 
-9. **V3 attestation is not yet deployed or verified by any client**: The V3
-   format is specified but not released. The
-   tinfoil-go library only verifies V2. When V3 deploys, teep will be the
-   first independent client to verify it, including GPU evidence binding and
-   REPORTDATA hash verification. The `tinfoil_v3` provider is implemented
-   now but cannot be tested against live endpoints until V3 deploys. Fixture-
-   based offline tests cover the verification logic. Extra care is needed.
+9. **V3 SDK/library parity is still catching up**: V3 is deployed, but not all
+   public client tooling has complete V3 verification parity yet. The
+   tinfoil-go verifier historically focused on V2 flows, so teep should keep
+   independent V3 verification coverage (envelope signature, REPORTDATA hash,
+   GPU evidence hash binding, and nonce checks) and fixture-based regression
+   tests to prevent drift.
 
-10. **V3 format may evolve before deployment**: Since V3 is unreleased, the
-    format may change before it is deployed. The `tinfoil_v3` attester and
-    verifier should be treated as provisional. If the format changes, update
-    the V3 code without affecting `tinfoil_v2` (this is a key benefit of the
-    two-provider model).
+10. **V3 format can still evolve post-rollout**: Even after rollout, protocol
+    fields and evidence policy can evolve (for example architecture-specific
+    NVSwitch requirements). Keep the `tinfoil_v3` attester/verifier isolated so
+    updates can be shipped without destabilizing `tinfoil_v2` compatibility.
 
 11. **Two-provider maintenance burden**: Having two provider variants adds
     code to maintain. This is mitigated by sharing ~90% of the logic in
