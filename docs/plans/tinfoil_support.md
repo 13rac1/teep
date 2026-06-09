@@ -695,7 +695,7 @@ mitigation.
    the `gpu` field as a `json.RawMessage` and hash those raw bytes directly
    (i.e., `sha256.Sum256([]byte(rawGPUMessage))`) without re-encoding.
 3. Recompute `nvswitch_evidence_hash = SHA-256(raw_nvswitch_json)` from the
-   `nvswitch` field (if present; zeros for single-GPU systems). Same raw-byte
+   `nvswitch` field (if present; omitted from hash input when absent). Same raw-byte
    requirement as the GPU evidence hash above.
 4. Enforce field/hash consistency:
     - `gpu` evidence is REQUIRED. If `gpu` is absent or empty, fail closed
@@ -730,7 +730,7 @@ mitigation.
    expected[0:32] = SHA-256(tls_key_fp || hpke_key || nonce || gpu_evidence_hash || nvswitch_evidence_hash)
    expected[32:64] = zeros
    ```
-   Where `nvswitch_evidence_hash` is the SHA-256 of empty bytes (32 zero bytes)
+   Where `nvswitch_evidence_hash` contributes zero bytes (empty concatenation)
    when `nvswitch` is absent.
 6. Constant-time compare against the CPU quote's actual REPORTDATA.
 7. Verify each GPU evidence SPDM report (nonce matches client nonce,
@@ -794,7 +794,7 @@ field.
       "hpke_key": "<64 hex>",
       "nonce": "<64 hex>",
       "gpu_evidence_hash": "<64 hex>",
-      "nvswitch_evidence_hash": "<64 hex, conditional (required only when nvswitch_expected is true)>"
+      "nvswitch_evidence_hash": "<64 hex, conditional (required only when nvswitch_expected is true; omitted otherwise)>"
    },
    "cpu": {
       "platform": "tdx|sev-snp",
@@ -823,7 +823,8 @@ field.
 #### CPU Report
 
 Base64-decode `cpu.report`. Bound the decoded size (10 MiB max) to prevent
-decompression bombs. The result is a raw binary attestation report:
+oversized attestation payload abuse. The result is a raw binary attestation
+report:
 - For TDX (`cpu.platform == "tdx"`): a TDX QuoteV4 structure (min 1020 bytes).
 - For SEV-SNP (`cpu.platform == "sev-snp"`): an SEV attestation report (1184 bytes).
 
@@ -838,7 +839,8 @@ Both TDX and SEV-SNP reports contain a 64-byte `report_data` field.
 
 The HPKE key is in the response `report_data.hpke_key` JSON field,
 authenticated by being part of the REPORTDATA[0:32] hash. When `nvswitch` is
-absent, `nvswitch_evidence_hash` is the SHA-256 of empty bytes (32 zero bytes).
+absent, the REPORTDATA hash input omits `nvswitch_evidence_hash` bytes entirely
+(empty concatenation).
 
 #### Envelope Integrity Verification
 
@@ -973,8 +975,13 @@ envelope.
 Verify the DSSE bundle using Sigstore's verification library:
 
 - **OIDC issuer**: `https://token.actions.githubusercontent.com`
-- **Workflow pattern**: `^https://github.com/<repo>/\.github/workflows/.+@refs/tags/.+$`
-  (where `<repo>` is a placeholder; substitute the repository name and use `regexp.QuoteMeta()` on the substituted value before compilation).
+- **Workflow identity**: enforce both repository and tag-ref binding. The
+   certificate identity must match the exact repository under verification and
+   a tagged workflow ref (no branch refs, no pull-request refs). Use an anchored
+   regex built from `regexp.QuoteMeta(repo)`, for example:
+   `^https://github.com/<repo>/\.github/workflows/[^@]+@refs/tags/[^/]+$`.
+   If Tinfoil publishes workflow-path allowlists per repo, pin to those exact
+   workflow files instead of wildcard matching.
 - **Artifact digest**: Must match the `sha256:{digest}` from Step 1.
 - **Require**: At least 1 signed certificate timestamp, 1 transparency log
   entry, 1 observer timestamp.
@@ -1121,6 +1128,8 @@ non-empty-body `/v1/audio/*` request.
    - AAD is empty. The HPKE sealer's internal nonce counter auto-increments.
    - Zero-length chunks may appear and should be skipped by receivers.
    - End of message is indicated by HTTP stream termination (no sentinel).
+   - Enforce bounded chunk size in the decryptor (implementation limit) before
+     allocating buffers; oversized chunk lengths are protocol errors.
 4. Set request header `Ehbp-Encapsulated-Key` to the lowercase hex encoding
    of the HPKE encapsulated key (32 bytes → 64 hex chars for X25519).
 5. Send encrypted bodies with unknown length (`Content-Length` unset/unknown).
@@ -1150,6 +1159,7 @@ non-empty-body `/v1/audio/*` request.
    - Each chunk decrypted with AES-256-GCM using `aead_key`.
    - Nonce for chunk `i` (zero-indexed): `aead_nonce XOR i`.
    - AAD is empty.
+   - Reject chunk lengths above implementation bounds before allocation.
 4. On any decryption failure: fail closed, abort the response.
 
 Response mode detection:
@@ -1166,10 +1176,12 @@ Response mode detection:
 2. `Ehbp-Response-Nonce` must decode as exactly 32 bytes.
 3. Invalid hex, wrong length, or unexpected header presence/absence is a
    protocol error and must fail closed.
-4. For encrypted requests where server returns plaintext error JSON without
+4. Multiple instances of `Ehbp-Encapsulated-Key` or `Ehbp-Response-Nonce`
+   headers in a single message are malformed input and must fail closed.
+5. For encrypted requests where server returns plaintext error JSON without
    `Ehbp-Response-Nonce`, treat as unauthenticated diagnostic only and fail the
    request.
-5. Recommended server-side error mapping (for compatibility with EHBP
+6. Recommended server-side error mapping (for compatibility with EHBP
     implementations):
     - `400 Bad Request`: malformed encapsulated key, framing, or AEAD failure
        attributable to request input.
@@ -1275,7 +1287,7 @@ deployable against the live Tinfoil infrastructure.
      - Determine `nvswitch_expected` using the normalization algorithm.
      - Compute `nvswitch_evidence_hash`:
        - If `nvswitch_expected` is true: `SHA-256(raw_nvswitch_json)`.
-       - If false: SHA-256 of empty bytes (32 zero bytes).
+       - else if false: append zero bytes (empty concatenation) for this component.
      - Recompute `expected[0:32] = SHA-256(tls_fp || hpke_key || nonce || gpu_hash || nvswitch_hash)`.
      - Constant-time compare `expected[0:32]` against `reportData[0:32]`.
      - Verify `reportData[32:64]` is all zeros.
@@ -1368,8 +1380,10 @@ GitHub Releases.
      interactions and public key validation without globals.
    - Certificate identity: OIDC issuer =
      `https://token.actions.githubusercontent.com`.
-   - Workflow regex: `^https://github.com/<repo>/\.github/workflows/.+@refs/tags/.+$`
-     (where `<repo>` is a placeholder; substitute the repository name and use `regexp.QuoteMeta()` on the substituted value before compilation).
+    - Workflow identity: enforce repository and tag-ref binding with an anchored
+       pattern built from `regexp.QuoteMeta(repo)`, e.g.
+       `^https://github.com/<repo>/\.github/workflows/[^@]+@refs/tags/[^/]+$`.
+       Reject branch refs, pull-request refs, and repository mismatches.
    - Require SCT, transparency log entry, observer timestamp.
    - Extract the in-toto predicate after verification.
 
@@ -1478,17 +1492,16 @@ encryption and response decryption.
 **Implementation**:
 
 1. **EHBP Encryption** (`ehbp.go`):
-   - `EncryptRequest(body []byte, serverPubKey [32]byte) (encBody []byte, encapKey [32]byte, senderCtx, error)`:
+   - `EncryptRequest(body io.Reader, serverPubKey [32]byte) (encBody io.ReadCloser, encapKey [32]byte, senderCtx, error)`:
      - Call HPKE `SetupBaseS` with X25519_HKDF_SHA256 / HKDF_SHA256 /
        AES_256_GCM and the server's public key.
-     - Encrypt the body as a single chunk:
-       `[4-byte len] [AES-256-GCM ciphertext]`.
-       (Or stream multiple chunks if the body is large.)
-     - Return the encrypted body bytes, the encapsulated key, and the
-       retained HPKE sender context for response decryption.
+     - Stream-encrypt the body into EHBP chunk framing; do not buffer entire
+       multipart/audio payloads in memory.
+     - Return an encrypted body reader, the encapsulated key, and the retained
+       HPKE sender context for response decryption.
 
 2. **EHBP Decryption** (`ehbp.go`):
-   - `DecryptResponse(encBody io.Reader, responseNonce [32]byte, encapKey [32]byte, senderCtx) ([]byte, error)`:
+   - `DecryptResponse(encBody io.Reader, responseNonce [32]byte, encapKey [32]byte, senderCtx) (io.ReadCloser, error)`:
      - Export secret: `secret = senderCtx.Export("ehbp response", 32)`.
      - Construct salt: `salt = encapKey || responseNonce`.
      - Derive PRK: `prk = HKDF-Extract(salt, secret)`.
@@ -1497,6 +1510,7 @@ encryption and response decryption.
      - Read chunks: `[4-byte len] [ciphertext]`.
      - Decrypt each chunk with AES-256-GCM:
        nonce = `aead_nonce XOR chunk_index`.
+     - Reject oversized chunk lengths before allocation.
      - On any auth failure: fail closed, return error immediately.
 
 3. **Streaming Response Decryption**:
@@ -1520,9 +1534,11 @@ encryption and response decryption.
      uses the returned Decryptor. The EHBP encryptor follows this same pattern.
    - Set `Ehbp-Encapsulated-Key` header on the outgoing request.
    - Ensure encrypted requests have unknown content length (chunked transfer);
-     never send encrypted body with fixed `Content-Length`.
+      never send encrypted body with fixed `Content-Length`.
    - On response: read `Ehbp-Response-Nonce` header, pass to Decryptor.
    - If `Ehbp-Response-Nonce` is missing: fail closed.
+   - If `Ehbp-Response-Nonce` appears on a bodyless request path, fail closed
+      (header presence mismatch).
    - For bodyless requests, do not attach EHBP headers and do not attempt
      decryption.
 
@@ -1530,9 +1546,12 @@ encryption and response decryption.
 - Test encryption round-trip: encrypt with a test key, decrypt with known
   private key.
 - Test chunked framing: single chunk, multiple chunks, zero-length chunks.
+- Test chunk length bounds: oversized length prefix is rejected fail-closed
+   before allocation.
 - Test response key derivation: verify against known test vectors (derive key
   from a known HPKE context and nonce, compare expected output).
-- Test fail-closed: missing Ehbp-Response-Nonce, corrupted ciphertext.
+- Test fail-closed: missing Ehbp-Response-Nonce, duplicate EHBP headers,
+  unexpected Ehbp-Response-Nonce on bodyless requests, corrupted ciphertext.
 
 **Commit**: Phase 4 — EHBP E2EE implementation.
 
