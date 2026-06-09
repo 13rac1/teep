@@ -377,6 +377,13 @@ model.
 | TEE.fail defense | Proof of Cloud (conditional) | None (same vulnerability) |
 | vTPM / DCEA | Not implemented | Not implemented |
 
+Provider applicability for this comparison table:
+- Rows in this table describe Tinfoil's attestation design shared by both
+   providers unless a later provider-specific status section narrows scope.
+- Provider boundary differences are authoritative in
+   "Provider-Specific Cryptographic Gap Status" and the Chain 4/5
+   provider-scope rules.
+
 ### Gap Status Determination Rules
 
 This section makes the gap conclusions mechanically decidable from verifier
@@ -789,6 +796,26 @@ Teep's role is to verify the chain that makes dm-verity trustworthy:
    transitively authenticates the model weights via config.yml → dm-verity.
    Detail string should explain the transitive chain.
 
+#### Attestation-Gap Status Rules: Model Weights (Provider Scope)
+
+This section makes model-weight gap status mechanically decidable and
+provider-specific.
+
+- Applies to: both providers (`tinfoilcloud_v3`, `tinfoildirect_v3`).
+- For `tinfoildirect_v3`, model-weight identity gap is `Closed` only when:
+  1. `sigstore_code_verified=Pass` for the per-model inference repo,
+  2. platform measurement comparison passes for the attested inference enclave,
+  3. and `measured_model_weights=Pass` with transitive chain detail
+     `Sigstore -> config hash -> dm-verity root`.
+- For `tinfoilcloud_v3`, model-weight identity at the teep boundary is
+  `Closed` only at the router-mediated trust boundary, meaning:
+  1. router attestation/supply-chain checks pass,
+  2. router-verified backend identity policy is part of the attested router
+     code path,
+  3. and teep records that model-weight proof is transitive via router policy
+     (not direct enclave verification by teep).
+- Any `Fail` or `Skip` in required checks yields `Open`.
+
 ### Authentication Chain 5: GPU Attestation and CPU-GPU Binding
 
 Tinfoil uses NVIDIA GPUs (Hopper H100/H200, Blackwell) with NVIDIA
@@ -843,17 +870,28 @@ no GPUs (e.g., SEV-SNP router without GPUs), GPU evidence in REPORTDATA will
 reflect the router's GPU state; `nvswitch_expected` normalization must still
 apply, and absent GPU evidence must fail closed.
 
-#### Gap Analysis: GPU CPU Binding (gpu_cpu_binding.md)
+#### Gap Analysis: GPU CPU Binding (Provider Scope + Status)
 
-| Issue from gpu_cpu_binding.md | Tinfoil |
-|---|---|
-| **Gap 1: TEE.fail** | **Unmitigated** |
-| **Gap 2: CPU-to-GPU binding** | **Pass** (GPU evidence hash in REPORTDATA) |
-| **GPU nonce freshness** | **Yes** (nonce passed through to GPU SPDM) |
-| **GPU topology validation** | Boot-time + NVSwitch evidence in response |
-| **vTPM / DCEA (Option 3)** | Not implemented |
-| **TDX Connect / TDISP (Option 5)** | Not implemented |
-| **Proof of Cloud (Option 1)** | Not implemented |
+| Issue from gpu_cpu_binding.md | `tinfoilcloud_v3` | `tinfoildirect_v3` |
+|---|---|---|
+| **Gap 1: TEE.fail** | `Open` (unmitigated) | `Open` (unmitigated) |
+| **Gap 2: CPU-to-GPU binding** | `Closed` only for router enclave evidence path; model enclave GPU proof is router-mediated | `Closed` when inference-enclave GPU hash binding verifies |
+| **GPU nonce freshness** | `Closed` for router attestation nonce path | `Closed` for inference-enclave nonce path |
+| **GPU topology validation** | `Closed` when topology-conditional NVSwitch rules pass for attested target | `Closed` when topology-conditional NVSwitch rules pass for attested target |
+| **vTPM / DCEA (Option 3)** | `Open` (not implemented) | `Open` (not implemented) |
+| **TDX Connect / TDISP (Option 5)** | `Open` (not implemented) | `Open` (not implemented) |
+| **Proof of Cloud (Option 1)** | `Open` (not implemented) | `Open` (not implemented) |
+
+Status rules:
+- `cpu_gpu_chain` is `Closed` only when `cpu_gpu_chain=Pass` and
+   `nvidia_gpu_attestation=Pass` in the same verification event.
+- For `tinfoilcloud_v3`, GPU-chain closure is scoped to the router enclave at
+   the teep verification boundary.
+- For `tinfoildirect_v3`, GPU-chain closure is scoped to the inference enclave
+   directly verified by teep.
+- Missing required evidence, malformed normalization inputs, hash mismatch,
+   SPDM failure, or required NVSwitch absence makes the gap `Open`.
+
 #### TEE.fail Implications for Tinfoil
 
 Tinfoil's security posture against TEE.fail is identical to other providers
@@ -880,6 +918,16 @@ must also provide a complete Tinfoil CVM environment (or intercept
 connections), which is harder than with dstack where the attacker could run
 arbitrary code. However, this is defense-in-obscurity, not a cryptographic
 mitigation.
+
+Provider applicability:
+- Applies to both providers equally (`tinfoilcloud_v3` and
+   `tinfoildirect_v3`): TEE.fail remains `Open` regardless of whether teep
+   terminates EHBP at router or inference enclave.
+
+Status rule:
+- TEE.fail gap status is always `Open` for both providers until an
+   independent anti-relay / CPU-identity mechanism is enforced, and cannot be
+   closed by quote validity, REPORTDATA binding, Sigstore matching, or EHBP.
 
 **What teep should do:**
 1. `cpu_id_registry`: Reserve this factor for **Proof of Cloud CPU identity
@@ -2286,7 +2334,12 @@ New Go module dependencies:
    This is a significant advantage over dstack providers where
    `measured_model_weights` always returns `Fail`.
 
-6. **TEE.fail is unmitigated**: Tinfoil has no Proof of Cloud participation,
+   Status rule:
+   - `tinfoildirect_v3`: `Closed` only when the per-model enclave chain passes.
+   - `tinfoilcloud_v3`: `Closed` only at router-mediated trust boundary;
+     direct model-enclave proof at teep boundary remains `Open`.
+
+7. **TEE.fail is unmitigated**: Tinfoil has no Proof of Cloud participation,
    no vTPM, and no DCEA. DDR5 memory bus key extraction attacks can forge
    TDX/SEV-SNP quotes with arbitrary measurements and REPORTDATA, defeating
    all software-layer security guarantees including Sigstore measurement
@@ -2295,11 +2348,17 @@ New Go module dependencies:
    because Tinfoil currently has no PoC participation, it remains a default
    `allow_fail` factor. See "Authentication Chain 5" for full analysis.
 
-7. **GPU-CPU binding**: GPU evidence is bound into REPORTDATA (Option 2 from
+   Applies to: both providers equally.
+
+8. **GPU-CPU binding**: GPU evidence is bound into REPORTDATA (Option 2 from
    gpu_cpu_binding.md), preventing GPU splicing attacks in the absence of
    TEE.fail. The nonce in REPORTDATA also provides freshness for GPU evidence.
 
-8. **Format evolution risk**: The V3 attestation format is fully deployed, but
+   Applies to: both providers, with boundary scope difference:
+   `tinfoilcloud_v3` closes at router enclave boundary; `tinfoildirect_v3`
+   closes at inference enclave boundary.
+
+9. **Format evolution risk**: The V3 attestation format is fully deployed, but
    protocol fields and evidence policy can evolve (for example
    architecture-specific NVSwitch requirements). Keep the attester/verifier
    isolated so updates can be shipped without disrupting other providers.
@@ -2308,7 +2367,7 @@ New Go module dependencies:
    downgrade: the attester always requests nonce-based attestation and rejects
    any response without a `report_data` structured field.
 
-9. **Independent V3 verification coverage**: Public client libraries may have
+10. **Independent V3 verification coverage**: Public client libraries may have
    incomplete V3 verification coverage. Teep must maintain independent V3
    verification (envelope signature, REPORTDATA hash, GPU evidence hash
    binding, and nonce checks) and fixture-based regression tests.
