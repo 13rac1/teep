@@ -2,53 +2,98 @@
 
 ## Overview
 
-Add Tinfoil as a teep provider with full attestation verification and E2EE
-support. Tinfoil runs OpenAI-compatible inference in secure enclaves
-(TDX and SEV-SNP). Attestation is fetched from a well-known HTTP endpoint on
-the enclave, verified against hardware roots of trust and Sigstore supply-chain
-attestations, and bound to TLS via the enclave's certificate fingerprint. E2EE
-uses the EHBP protocol (HPKE-based full-body encryption).
+Add two Tinfoil providers to teep with full attestation verification and E2EE
+support. Tinfoil runs OpenAI-compatible inference in secure enclaves (TDX and
+SEV-SNP). Attestation is fetched from a well-known HTTP endpoint on the enclave,
+verified against hardware roots of trust and Sigstore supply-chain attestations,
+and bound to TLS via the enclave's certificate fingerprint. E2EE uses the EHBP
+protocol (HPKE-based full-body encryption).
 
-Reference providers for implementation patterns: **nearcloud**, **neardirect**,
-**chutes**.
+This plan defines two providers that differ in their trust boundary:
+
+- **`tinfoilcloud_v3`**: Routes through the Tinfoil confidential model router
+  (`inference.tinfoil.sh`). Teep verifies the router enclave only; the router
+  internally re-attests and EHBP-encrypts to each inference enclave. The HPKE
+  key bound in REPORTDATA is the router's key, not the inference enclave's key.
+  This is architecturally analogous to the `nearcloud` provider in teep.
+
+- **`tinfoildirect_v3`**: Connects directly to per-model inference enclaves
+  (e.g. `gemma4-31b.inference.tinfoil.sh`). Teep verifies the inference enclave
+  directly. The HPKE key bound in REPORTDATA belongs to the inference enclave
+  itself, giving end-to-end encryption from teep to the model. This is
+  architecturally analogous to the `neardirect` provider in teep.
+
+Reference providers for implementation patterns:
+- `nearcloud` (`internal/provider/nearcloud/`) — router-based gateway pattern
+- `neardirect` (`internal/provider/neardirect/`) — direct per-model endpoint
+  pattern with dynamic discovery (`internal/provider/neardirect/endpoints.go`)
+- `chutes` — EHBP full-body encryption pattern
 
 **Byte range notation**: This document uses Go slice notation throughout.
 `REPORTDATA[0:32]` means bytes at indices 0 through 31 (32 bytes).
 `REPORTDATA[32:64]` means bytes at indices 32 through 63 (32 bytes).
 
-### Provider: `tinfoil`
+### Provider: `tinfoilcloud_v3`
 
 Tinfoil's attestation endpoint supports both a legacy format and the current V3
 format. V3 is the fully deployed format as of June 2026, providing client-nonce
 freshness, GPU evidence binding, and a structured JSON response that enables
-full external verification. The `tinfoil` provider **always supplies a client
-nonce** (`?nonce=<64hex>`) when fetching attestation to guarantee V3 format is
-returned. The server returns V3 format when a nonce is present; omitting the
-nonce may result in a legacy format response. Implementations MUST reject any
-response that does not contain the `report_data` structured field (i.e., any
-non-V3 response).
+full external verification. Both `tinfoilcloud_v3` and `tinfoildirect_v3`
+**always supply a client nonce** (`?nonce=<64hex>`) when fetching attestation
+to guarantee V3 format is returned. The server returns V3 format when a nonce
+is present; omitting the nonce may result in a legacy format response.
+Implementations MUST reject any response that does not contain the `report_data`
+structured field (i.e., any non-V3 response).
 
 ## Provider Characteristics
 
+### `tinfoilcloud_v3` — Router-Based (analogous to `nearcloud`)
+
 | Property | Value |
 |---|---|
-| Provider name | `tinfoil` |
+| Provider name | `tinfoilcloud_v3` |
 | Base URL | `https://inference.tinfoil.sh` |
 | API key env | `TINFOIL_API_KEY` |
-| E2EE | Yes (EHBP: HPKE + AES-256-GCM full-body encryption) |
-| Connection model | Standard TLS with SPKI pinning (not connection-pinned) |
-| Attestation endpoint | `GET /.well-known/tinfoil-attestation?nonce=<64hex>` on the enclave |
+| E2EE | Yes (EHBP: HPKE + AES-256-GCM full-body encryption to router enclave) |
+| Connection model | Standard TLS with SPKI pinning to router enclave |
+| Attestation endpoint | `GET /.well-known/tinfoil-attestation?nonce=<64hex>` on the **router** enclave |
 | PinnedHandler | No — uses standard HTTP client with SPKI verification |
-| Supply chain | Sigstore DSSE bundles from GitHub attestations API |
+| Supply chain | Sigstore DSSE bundles for `tinfoilsh/confidential-model-router` |
 | Hardware platforms | Intel TDX and AMD SEV-SNP (multi-platform code measurements) |
-| GPU support | NVIDIA H100/H200 (Hopper), Blackwell; 1-GPU and 8-GPU (HGX) configurations |
+| GPU support | Router enclave attestation; inference enclaves attested by router internally |
 | TEE.fail mitigation | None (same as all current providers) |
 | Attestation format | V3: structured JSON with `report_data`, `cpu`, `gpu`, `nvswitch`, `certificate`, `signature` fields |
 | Nonce model | Client nonce via `?nonce=<64hex>` query parameter (32 bytes → 64 hex chars); REQUIRED to receive V3 format |
 | REPORTDATA layout | `[0:32]` SHA-256(tls_fp \|\| hpke \|\| nonce \|\| gpu_hash \|\| nvswitch_hash), `[32:64]` zeros |
-| HPKE key source | From `report_data.hpke_key` field in response (authenticated via REPORTDATA hash) |
-| GPU attestation | SPDM evidence in response; GPU evidence hash bound into REPORTDATA (Option 2 from gpu_cpu_binding.md) |
-| GPU-CPU binding | Yes — SHA-256 of GPU/NVSwitch evidence in REPORTDATA hash |
+| HPKE key source | Router enclave's HPKE key from `report_data.hpke_key` (authenticated via REPORTDATA hash) |
+| GPU attestation | Router enclave's SPDM evidence in response; GPU evidence hash bound into REPORTDATA |
+| GPU-CPU binding | Yes — SHA-256 of router GPU/NVSwitch evidence in REPORTDATA hash |
+| Trust boundary | Router enclave only; router re-attests inference enclaves internally |
+| Router-to-inference | Router verifies each inference enclave via V3 attestation + Sigstore + hardware measurements, then uses a `TLSBoundRoundTripper` pinned to the attested inference enclave TLS fingerprint for forwarding (no EHBP on router-to-inference hop) |
+
+### `tinfoildirect_v3` — Direct Inference Connection (analogous to `neardirect`)
+
+| Property | Value |
+|---|---|
+| Provider name | `tinfoildirect_v3` |
+| Base URL | Model-specific (e.g. `https://gemma4-31b.inference.tinfoil.sh`) |
+| API key env | `TINFOIL_API_KEY` |
+| E2EE | Yes (EHBP: HPKE + AES-256-GCM full-body encryption directly to inference enclave) |
+| Connection model | Standard TLS with SPKI pinning to per-model inference enclave |
+| Attestation endpoint | `GET /.well-known/tinfoil-attestation?nonce=<64hex>` on the **inference** enclave |
+| PinnedHandler | No — uses standard HTTP client with per-model SPKI verification |
+| Supply chain | Sigstore DSSE bundles for the per-model inference repo |
+| Hardware platforms | Intel TDX and AMD SEV-SNP (multi-platform code measurements) |
+| GPU support | NVIDIA H100/H200 (Hopper), Blackwell; 1-GPU and 8-GPU (HGX) configurations |
+| TEE.fail mitigation | None (same as all current providers) |
+| Attestation format | V3: same structured JSON as `tinfoilcloud_v3` |
+| Nonce model | Client nonce via `?nonce=<64hex>` query parameter; REQUIRED |
+| REPORTDATA layout | `[0:32]` SHA-256(tls_fp \|\| hpke \|\| nonce \|\| gpu_hash \|\| nvswitch_hash), `[32:64]` zeros |
+| HPKE key source | Inference enclave's own HPKE key from `report_data.hpke_key`; authenticated directly by inference enclave hardware |
+| GPU attestation | Inference enclave's own SPDM evidence; GPU evidence hash bound into REPORTDATA |
+| GPU-CPU binding | Yes — SHA-256 of inference enclave GPU/NVSwitch evidence in REPORTDATA hash |
+| Trust boundary | Inference enclave directly; no router intermediary; smaller TCB |
+| Model discovery | `GET https://inference.tinfoil.sh/v1/models` (plaintext over attested TLS) maps model names to per-model inference subdomains. The domain pattern is `<model-slug>.inference.tinfoil.sh`. |
 
 ## Supported Endpoints
 
@@ -61,18 +106,28 @@ Teep Target terminology in this plan:
 - Not in teep (reject fail-closed): endpoint exists upstream but is out of
    scope for this integration and must be rejected explicitly.
 
-| Endpoint | Upstream Path | E2EE | Teep Target | Notes |
-|---|---|---|---|---|
-| Chat completions | `/v1/chat/completions` | Yes (EHBP) | Implement in teep | OpenAI-compatible chat; supports multimodal content arrays |
-| Responses API | `/v1/responses` | Yes (EHBP) | Implement in teep | OpenAI Responses API shape; includes tool-calling flows |
-| Embeddings | `/v1/embeddings` | Yes (EHBP) | Implement in teep | OpenAI embeddings |
-| Audio transcriptions | `/v1/audio/transcriptions` | Yes (EHBP) | Implement in teep | Multipart form-data accepted and encrypted as full body |
-| Audio endpoints (generic) | `/v1/audio/*` | Yes (EHBP) | Implement known paths; reject unknown fail-closed | Upstream router accepts catch-all audio subpaths; teep must explicitly enumerate and implement only known OpenAI-compatible audio paths and reject unknown audio semantics fail-closed |
-| TTS (text-to-speech) | `/v1/audio/speech` | Yes (EHBP) | Implement in teep | OpenAI-compatible speech synthesis; upstream default model is `qwen3-tts` if omitted |
-| Models list | `/v1/models` | No (bodyless GET) | Implement in teep | Plaintext over attested TLS binding; no request body to encrypt |
-| Realtime (WebSocket) | `/v1/realtime` | No EHBP (WS transport) | Not in teep (reject fail-closed) | Tinfoil supports realtime websocket routing; teep rejects until websocket attestation+binding design is implemented |
-| File conversion | `/v1/convert/file` | Endpoint-specific | Not in teep (reject fail-closed) | Tinfoil-specific service endpoint, not part of teep OpenAI-compatible core |
-| Router operational endpoints | `/health`, `/.well-known/tinfoil-proxy`, `/.well-known/prometheus-targets`, `/metrics` | No | Not in teep (reject fail-closed) | Operational/monitoring endpoints; out of scope for OpenAI-compatible provider integration |
+The endpoint coverage differs between providers:
+
+| Endpoint | Upstream Path | E2EE | `tinfoilcloud_v3` | `tinfoildirect_v3` | Notes |
+|---|---|---|---|---|---|
+| Chat completions | `/v1/chat/completions` | Yes (EHBP) | Implement | Implement | OpenAI-compatible chat; multimodal content arrays |
+| Responses API | `/v1/responses` | Yes (EHBP) | Implement | Implement | OpenAI Responses API shape; tool-calling flows |
+| Embeddings | `/v1/embeddings` | Yes (EHBP) | Implement | Implement | OpenAI embeddings |
+| Audio transcriptions | `/v1/audio/transcriptions` | Yes (EHBP) | Implement | Implement | Multipart form-data encrypted as full body |
+| TTS (text-to-speech) | `/v1/audio/speech` | Yes (EHBP) | Implement | Implement | OpenAI-compatible speech synthesis |
+| Audio endpoints (generic) | `/v1/audio/*` | Yes (EHBP) | Implement known; reject unknown | Implement known; reject unknown | Enumerate known paths; reject unknown audio semantics fail-closed |
+| Models list | `/v1/models` | No (bodyless GET) | Implement (router list) | Implement (direct enclave) | Plaintext over attested TLS; used by direct provider for model-to-domain mapping |
+| Realtime (WebSocket) | `/v1/realtime` | No EHBP (WS transport) | Reject fail-closed | Reject fail-closed | Reject until websocket attestation+binding design is implemented |
+| File conversion | `/v1/convert/file` | Endpoint-specific | Reject fail-closed | Reject fail-closed | Tinfoil-specific service; out of scope for OpenAI-compatible core |
+| Router operational endpoints | `/health`, `/.well-known/tinfoil-proxy`, etc. | No | Reject fail-closed | N/A | Operational endpoints; out of scope |
+
+**Endpoint availability by provider**: `tinfoilcloud_v3` uses the router which
+accepts all paths on `inference.tinfoil.sh`. `tinfoildirect_v3` connects directly
+to per-model enclaves whose own `tinfoil-config.yml` `api_routes` determines
+which paths are served; for example, the `gemma4-31b` and `deepseek-v4-pro`
+model enclaves expose `/v1/chat/completions`, `/v1/responses`, and `/v1/models`
+but not audio or embeddings. The direct provider must discover per-model endpoint
+availability and fail closed on unsupported paths.
 
 Vision models (qwen3-vl-30b, gemma4-31b, kimi-k2-6) use the chat completions
 endpoint with multimodal content arrays — no separate vision endpoint is needed.
@@ -152,15 +207,57 @@ Compatibility validation behavior:
 
 ## Architecture Comparison with Existing Providers
 
-### Similarities to Chutes
+### `tinfoilcloud_v3` — Similarities to `nearcloud`
 
-- Full-body encryption (no field-level dispatch needed)
-- Standard TLS (not connection-pinned like neardirect/nearcloud)
-- No PinnedHandler needed
-- TDX attestation verification reuses `attestation.VerifyTDXQuoteOffline()` /
-  `attestation.VerifyTDXQuoteOnline()` (via `attestation.TDXVerifier`)
+Both route through a single TEE-attested gateway/router that performs its own
+second-hop attestation. The structural pattern is: teep verifies gateway →
+gateway verifies model enclaves internally.
+
+- Full-body encryption (EHBP replaces NEAR's Ed25519/XChaCha20-Poly1305)
+- Standard TLS with SPKI pinning to gateway (not connection-pinned like neardirect)
+- No PinnedHandler needed — standard `http.Transport` with `VerifyPeerCertificate`
+- Supply chain verification via Sigstore (replaces nearcloud's compose-hash/IMA)
+- Router re-attests inference enclaves and uses a `TLSBoundRoundTripper`
+  (analogous to `tinfoil-go/verifier/client.TLSBoundRoundTripper`) pinned to
+  each inference enclave's attested TLS fingerprint for forwarding
+
+**Critical difference from nearcloud**: `tinfoilcloud_v3` EHBP-encrypts the
+body to the **router** HPKE key, not the inference enclave key. The router
+decrypts the body in the router enclave, then re-encrypts to the inference
+enclave using TLS (not EHBP). The HPKE key in `report_data` belongs to the
+router enclave. This means plaintext request bodies are visible inside the
+router enclave before re-encryption to the inference host.
+
+### `tinfoildirect_v3` — Similarities to `neardirect`
+
+Both connect directly to per-model backend enclaves with per-model attestation
+and SPKI pinning. The structural pattern: teep resolves model → attestation
+domain, verifies inference enclave directly, EHBP-encrypts to inference enclave.
+
+Parallel with `neardirect` implementation (`internal/provider/neardirect/`):
+- Dynamic model-to-domain resolution analogous to `neardirect/endpoints.go`
+  `EndpointResolver.Resolve()` — but sourced from Tinfoil's own model list
+  endpoint rather than NEAR's endpoint discovery API
+- Per-model SPKI cache keyed on inference enclave domain
+- On SPKI cache miss: full attestation + Sigstore + hardware measurements per
+  inference enclave before any inference request is sent
+- EHBP encrypts to the **inference enclave's** HPKE key (not a gateway key)
+- Same TLS-fingerprint-bound transport pattern as in `neardirect/pinned.go`
+  `attestOnConn` and the Tinfoil SDK's `TLSBoundRoundTripper` in
+  `tinfoil-go/verifier/client/roundtrip.go`
+
+**Critical security advantage over `tinfoilcloud_v3`**: HPKE encryption targets
+the inference enclave directly. Plaintext request bodies are never visible to
+any intermediary — not even a Tinfoil-operated router enclave. Smaller TCB.
+
+**Operational constraint**: `tinfoildirect_v3` cannot use router-owned
+functionality (tool routing, code execution orchestration, PII check proxy).
+It is suitable for simple chat/responses/embeddings workloads where trust-
+boundary minimization is more important than router feature coverage.
 
 ### Key Differences from All Existing Providers
+
+Both Tinfoil providers share these differences from all existing teep providers:
 
 1. **Attestation format**: Tinfoil uses its own V3 format — a structured JSON
    response with separate `cpu`, `gpu`, `nvswitch`, `report_data`,
@@ -176,7 +273,9 @@ Compatibility validation behavior:
 5. **HPKE key from attestation**: HPKE key in the `report_data.hpke_key`
    response field, authenticated by being part of the REPORTDATA[0:32] hash.
    Cipher suite is fixed (X25519_HKDF_SHA256 / HKDF_SHA256 / AES_256_GCM)
-   per the EHBP spec. No key config endpoint needed.
+   per the EHBP spec. No key config endpoint needed. **For `tinfoilcloud_v3`
+   this is the router's key; for `tinfoildirect_v3` this is the inference
+   enclave's own key.**
 6. **Hardware measurement verification**: TDX hardware platforms (MRTD, RTMR0)
    matched against a separate Sigstore-attested hardware measurements registry
    (`tinfoilsh/hardware-measurements`).
@@ -498,50 +597,109 @@ Link 1: Key Generation Inside Enclave
 7. Decrypt and AEAD-verify every response chunk. On any auth failure, abort
    the response. → `e2ee_usable`
 
-### Authentication Chain 3: Enclave Chaining (Router → Model)
+### Authentication Chain 3: Enclave Chaining (Router → Model) — `tinfoilcloud_v3` only
 
 Tinfoil uses a confidential model router that forwards requests to
 per-model inference enclaves. Each hop is independently attested and
-encrypted.
+encrypted. This chain applies only to `tinfoilcloud_v3`. In `tinfoildirect_v3`
+the client verifies the inference enclave directly and there is no router hop.
+
+**How the router re-attests inference enclaves** (from
+`tinfoil/confidential-model-router/manager/manager.go:addEnclave`):
+
+1. The router calls `attestationFetch(host)` → `GET /.well-known/tinfoil-attestation`
+   on each inference host (without nonce; using V2 format internally).
+2. It verifies the returned document via `remoteAttestation.Verify()`.
+3. For TDX-type attestations, it additionally calls
+   `attestation.VerifyHardware(hwMeasurements, ...)` against the latest
+   `tinfoilsh/hardware-measurements` Sigstore bundle.
+4. It checks `verification.Measurement.Equals(model.SourceMeasurement)` to
+   confirm the inference enclave runs the expected code measurement.
+5. The verified TLS fingerprint (`verification.TLSPublicKeyFP`) is stored in
+   the `Enclave.tlsKeyFP` field.
+6. A `TLSBoundRoundTripper{ExpectedPublicKey: tlsKeyFP}` (from
+   `tinfoil-go/verifier/client/roundtrip.go`) is created for each inference
+   host and used for all forwarded requests. This enforces SPKI pinning on
+   every request to the inference enclave via `tls.Config.VerifyConnection`.
+7. There is **no EHBP** on the router-to-inference hop — only TLS with SPKI
+   pinning. The inference enclave's HPKE key is not used by the router.
+8. The router re-attests periodically via `StartWorker` ticker and on TLS
+   fingerprint change detection. Circuit-breaker logic (`circuitbreaker.go`)
+   removes unhealthy enclaves from the pool.
 
 ```
-Client (teep proxy)
+Client (teep proxy — tinfoilcloud_v3)
   │
-  │  1. Verify router attestation (Sigstore + hardware quote)
-  │  2. TLS-bind to router's attested TLS key
+  │  1. Verify router attestation (V3: Sigstore + hardware quote)
+  │  2. TLS-bind to router's attested TLS fingerprint
   │  3. EHBP-encrypt request to router's attested HPKE key
+  │     (Router HPKE key is in REPORTDATA; NOT inference enclave's key)
   │
   ▼
 Model Router Enclave (tinfoilsh/confidential-model-router)
+  │  Router decrypts body (EHBP unwrap) — plaintext visible here
   │
-  │  4. Router verifies target model enclave's attestation
-  │  5. Router TLS-binds to model enclave's attested TLS key
-  │  6. Router EHBP-encrypts forwarded request to model enclave
-  │
-  ▼
-Model Inference Enclave (e.g. tinfoilsh/confidential-nomic-embed-text)
-  │
-  │  7. Model enclave decrypts request
-  │  8. Inference runs on dm-verity-attested model weights
-  │  9. Response EHBP-encrypted back through chain
+  │  4. Router verifies inference enclave attestation (V2 internally)
+  │  5. Router pins to inference enclave TLS fingerprint via TLSBoundRoundTripper
+  │  6. Router forwards request over TLS (no EHBP) to inference enclave
   │
   ▼
-Client receives AEAD-authenticated response
+Model Inference Enclave (e.g. gemma4-31b.inference.tinfoil.sh)
+  │
+  │  7. Inference runs on dm-verity-attested model weights
+  │  8. Response returned over TLS to router, then to teep client
+  │
+  ▼
+Client receives response (EHBP-authenticated from router boundary only)
 ```
 
-**Implication for teep:** Teep verifies the **router** enclave only. The
-router performs the second-hop verification internally, using the same
-Sigstore + hardware attestation + TLS binding logic. This is documented by
-Tinfoil at https://docs.tinfoil.sh/verification/verification-in-tinfoil
-(section "Chaining enclaves"). Teep trusts the router's code to do this
-correctly, which is justified because the router code itself is verified via
-Sigstore supply chain attestation.
+**Implication for teep (`tinfoilcloud_v3`):** Teep verifies the **router**
+enclave only. The router performs second-hop verification internally. The
+router's Sigstore bundle attests the code that performs this verification;
+if the router code were modified to skip model enclave verification, the code
+measurement would change and teep's Sigstore comparison would fail. This makes
+the chain self-enforcing.
 
-The router's Sigstore bundle attests the code that performs second-hop
-verification. If the router code were modified to skip model enclave
-verification, the code measurement would change and the Sigstore comparison
-would fail. This makes the chain self-enforcing: teep verifies the router,
-and the verified router code verifies the models.
+**Trust boundary note**: Request body plaintext is accessible inside the
+router enclave (after EHBP decryption). The router is Tinfoil-operated and
+its code is Sigstore-attested, so this is an accepted risk. Users requiring
+inference-enclave-direct encryption should use `tinfoildirect_v3`.
+
+### Authentication Chain 3b: Direct Inference Connection — `tinfoildirect_v3` only
+
+In `tinfoildirect_v3`, teep verifies the inference enclave directly and
+EHBP-encrypts to its own attested HPKE key. There is no router intermediary.
+
+```
+Client (teep proxy — tinfoildirect_v3)
+  │
+  │  1. Resolve model → inference enclave domain
+  │     (GET https://inference.tinfoil.sh/v1/models, or static config)
+  │
+  │  2. Verify inference enclave attestation (V3: Sigstore + hardware quote)
+  │     (per-model Sigstore repo, e.g. tinfoilsh/confidential-gemma4-31b)
+  │  3. TLS-bind to inference enclave's attested TLS fingerprint
+  │  4. EHBP-encrypt request to inference enclave's own attested HPKE key
+  │     (Inference enclave HPKE key is in REPORTDATA — end-to-end encrypted)
+  │
+  ▼
+Model Inference Enclave (e.g. gemma4-31b.inference.tinfoil.sh)
+  │
+  │  5. Inference enclave decrypts body (EHBP unwrap)
+  │     No intermediary has seen plaintext
+  │  6. Inference runs on dm-verity-attested model weights
+  │  7. Response EHBP-encrypted to client with inference enclave's key
+  │
+  ▼
+Client receives AEAD-authenticated response (from inference enclave directly)
+```
+
+**Implication for teep (`tinfoildirect_v3`):** Teep verifies the inference
+enclave directly. The supply chain repo and expected measurements correspond
+to the per-model enclave repository (e.g. `tinfoilsh/confidential-gemma4-31b`),
+not the router. EHBP encryption targets the inference enclave's own HPKE key,
+so plaintext request bodies are never visible to the router or any other
+Tinfoil infrastructure.
 
 ### Authentication Chain 4: Model Weight Integrity
 
@@ -772,14 +930,14 @@ mitigation.
    on missing/invalid evidence. If `nvswitch_expected` is false, NVSwitch
    verification is not required.
 
-This gives the `tinfoil` provider three properties:
+This gives both `tinfoilcloud_v3` and `tinfoildirect_v3` three properties:
 - **GPU attestation binding**: GPU evidence is hardware-authenticated via CPU quote.
 - **Client nonce freshness**: Nonce in REPORTDATA proves attestation is fresh.
 - **NVSwitch topology**: NVSwitch evidence validates the GPU interconnect.
 
 ### Attestation Freshness
 
-The `tinfoil` provider uses client-supplied nonces:
+Both Tinfoil providers use client-supplied nonces:
 
 1. Client generates a random 32-byte nonce and appends `?nonce=<64hex>` to the
    attestation URL. The nonce is required — if omitted, the server may return
@@ -1597,34 +1755,42 @@ encryption and response decryption.
 
 ### Phase 5: Provider Wiring and Configuration
 
-**Goal**: Wire the `tinfoil` provider into the proxy, config, and endpoint
-dispatch.
+**Goal**: Wire both `tinfoilcloud_v3` and `tinfoildirect_v3` providers into
+the proxy, config, and endpoint dispatch.
 
 **Files to modify**:
-- `internal/proxy/proxy.go` — Add `case "tinfoil"` to `fromConfig()`
-- `internal/verify/factory.go` — Add `tinfoil` cases to `newAttester`,
+- `internal/proxy/proxy.go` — Add `case "tinfoilcloud_v3"` and `case "tinfoildirect_v3"` to `fromConfig()`
+- `internal/provider/tinfoil/` — Create new package directory for shared V3 types and both provider variants
+- `internal/verify/factory.go` — Add both provider cases to `newAttester`,
   `newReportDataVerifier`, `supplyChainPolicy`, `e2eeEnabledByDefault`, and
-  `chatPathForProvider`; add `"tinfoil": "TINFOIL_API_KEY"` to `ProviderEnvVars`
+  `chatPathForProvider`; add `"tinfoilcloud_v3": "TINFOIL_API_KEY"` and
+  `"tinfoildirect_v3": "TINFOIL_API_KEY"` to `ProviderEnvVars`
 - `internal/config/config.go` — Add `TINFOIL_API_KEY` env resolution
-- `teep.toml.example` — Add Tinfoil provider example
-- `internal/defaults/defaults.go` — Add default allow-fail factors
+- `teep.toml.example` — Add both Tinfoil provider examples
+- `internal/defaults/defaults.go` — Add default allow-fail factors for both providers
 - `docs/api_support.md` — Update endpoint and E2EE support matrices
 
-**Implementation**:
+**Shared package** (`internal/provider/tinfoil/`):
+
+The attestation parsing, REPORTDATA verifier, policy checks, and EHBP
+encryptor are shared between both providers. The package structure mirrors
+`internal/provider/neardirect/` for the direct provider and adds router-specific
+wiring as a thin layer on top.
 
 1. **Config** (`config.go`):
-   - Env var: `TINFOIL_API_KEY`.
-   - Default base URL: `https://inference.tinfoil.sh`.
-   - E2EE default: `true`.
+   - Both providers use env var `TINFOIL_API_KEY`.
+   - `tinfoilcloud_v3` default base URL: `https://inference.tinfoil.sh`.
+   - `tinfoildirect_v3` base URL: model-specific per model discovery.
+   - E2EE default: `true` for both.
 
-2. **Provider Construction** (`proxy.go:fromConfig`):
+2. **`tinfoilcloud_v3` Provider Construction** (`proxy.go:fromConfig`):
 
    `fromConfig()` takes `cp`, `spkiCache`, `offline`, `allowFail`, `policy`,
    `gatewayPolicy`, `rekorClient`, `nvidiaVerifier`, and `getter`
    (Intel PCS collateral getter).
 
    ```go
-   case "tinfoil":
+   case "tinfoilcloud_v3":
        p.ChatPath = "/v1/chat/completions"
        p.ResponsesPath = "/v1/responses"
        p.EmbeddingsPath = "/v1/embeddings"
@@ -1638,171 +1804,239 @@ dispatch.
        p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
    ```
 
-3. **SPKI Caching**: Returns the base URL host for all models:
+   SPKI caching for cloud provider — single router domain for all models:
    ```go
    p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
        return "inference.tinfoil.sh", true
    }
    ```
 
-4. **TLS-Fingerprint-Bound Transport**: Create a `tinfoil.NewTransport()`
-   that returns an `http.Transport` with `VerifyPeerCertificate` enforcing the
-   attested SPKI fingerprint on every connection (see the TLS-Fingerprint-
-   Bound Transport protocol section above). The `tlsct` package provides the
-   `Conn` type (via `tlsct.Dial`) and `NewHTTPClient` for building TLS-aware
-   transports. On fingerprint mismatch during inference, trigger
+3. **`tinfoildirect_v3` Provider Construction** (`proxy.go:fromConfig`):
+
+   Direct provider requires a model-to-domain resolver analogous to
+   `neardirect/endpoints.go:EndpointResolver`. The resolver queries
+   `GET https://inference.tinfoil.sh/v1/models` over the attested router
+   connection to discover the model list, then maps model slugs to their
+   per-model inference subdomain (`<model-slug>.inference.tinfoil.sh`).
+   Results are cached with a TTL (5 minutes, matching neardirect) and
+   refreshed lazily, using `singleflight` to collapse concurrent refreshes
+   (same pattern as `neardirect/endpoints.go:EndpointResolver.refresh()`).
+
+   ```go
+   case "tinfoildirect_v3":
+       resolver := tinfoil.NewDirectResolver(cp.APIKey, offline)
+       p.ChatPath = "/v1/chat/completions"
+       p.ResponsesPath = "/v1/responses"
+       p.EmbeddingsPath = "/v1/embeddings"
+       // Audio and TTS: only on inference enclaves that expose them (per-model)
+       p.Attester = tinfoil.NewDirectAttester(resolver, cp.APIKey, offline)
+       p.Preparer = tinfoil.NewPreparer(cp.APIKey)
+       p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
+       p.Encryptor = tinfoil.NewE2EE("", config.NewAttestationClient(offline))
+       p.SupplyChainPolicy = nil // Sigstore-based, per-model repo
+       p.ModelLister = provider.NewModelLister(
+           "https://inference.tinfoil.sh", cp.APIKey,
+           config.NewAttestationClient(offline))
+   ```
+
+   SPKI caching for direct provider — per-model domain:
+   ```go
+   p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
+       domain, err := resolver.Resolve(ctx, model)
+       if err != nil {
+           return "", false
+       }
+       return domain, true
+   }
+   ```
+
+4. **`tinfoildirect_v3` Model-to-Domain Resolver**
+   (`internal/provider/tinfoil/resolver.go`):
+
+   Mirrors the structure of `neardirect/endpoints.go:EndpointResolver` with
+   these Tinfoil-specific differences:
+   - Discovery source: `GET https://inference.tinfoil.sh/v1/models` (OpenAI
+     model-list response). Parse `data[].id` fields as model names.
+   - Domain derivation: map model slug to `<slug>.inference.tinfoil.sh`.
+     The slug is derived from the model `id` field.
+   - Restrict to `*.inference.tinfoil.sh` domains (analogous to
+     `neardirect/endpoints.go:isValidDomain(d, restrictToNearAI=true)`).
+   - TTL: 5 minutes; collapsed concurrent refreshes via `singleflight`
+     (same pattern as `neardirect/endpoints.go:DoChan`).
+   - Offline mode: return cached mapping if available; fail otherwise.
+   - The `/v1/models` request itself goes through the attested router
+     transport (SPKI-pinned), so the model list is authenticated.
+
+5. **`tinfoildirect_v3` Supply Chain Repo Mapping**:
+
+   For the direct provider, the Sigstore supply chain repo corresponds to the
+   per-model inference enclave repository, not the router. The mapping of
+   model slug to repo must be discoverable without hardcoding all model repos.
+
+   Strategy: during model discovery, check whether a release Sigstore bundle
+   exists at `github-proxy.tinfoil.sh/repos/tinfoilsh/confidential-<slug>/...`.
+   If so, use that repo for supply chain verification. If the Sigstore bundle
+   fetch fails (no repo found), fail closed and mark `sigstore_code_verified`
+   as `Fail` — do not accept inference from unknown repos.
+
+   Known per-model repos (as reference; authoritative source is live discovery):
+   - `gemma4-31b` → `tinfoilsh/confidential-gemma4-31b`
+   - `nomic-embed-text` → `tinfoilsh/confidential-nomic-embed-text`
+   - `kimi-k2-6` → `tinfoilsh/confidential-kimi-k2-6`
+   - `deepseek-v4-pro` → `tinfoilsh/confidential-deepseek-v4-pro`
+
+   For `tinfoilcloud_v3`, the single repo is always `tinfoilsh/confidential-model-router`.
+
+6. **TLS-Fingerprint-Bound Transport** (shared pattern, both providers):
+
+   Create `tinfoil.NewTransport(fingerprintHex string)` that returns an
+   `http.Transport` with `tls.Config.VerifyConnection` enforcing the attested
+   SPKI fingerprint on every connection. This is the same pattern as the
+   Tinfoil SDK's `TLSBoundRoundTripper` in
+   `tinfoil-go/verifier/client/roundtrip.go`, adapted to use teep's `tlsct`
+   package conventions (analogous to `neardirect/pinned.go:tlsDial`). On
+   fingerprint mismatch, return `ErrCertMismatch`-equivalent error and trigger
    re-attestation before retrying.
 
-5. **Allow-Fail Defaults**: `attestation.TinfoilDefaultAllowFail`:
+7. **Allow-Fail Defaults** (both providers share the same set):
+
+   `attestation.TinfoilDefaultAllowFail`:
    - `cpu_id_registry` — `allow_fail` (Proof of Cloud identity-registry
      factor; Tinfoil currently has no PoC participation)
 
-   > **Note on naturally-enforced factors**: All GPU and nonce factors are
-   > `enforced` because the tinfoil provider supplies full GPU evidence and
-   > request nonces. `sigstore_code_verified` is `enforced` — Tinfoil's core
-   > security advantage is Sigstore-based code measurement; an attacker running
-   > modified code in a valid enclave passes attestation if this factor is
-   > `allow_fail`.
+   > All GPU and nonce factors are `enforced` for both providers.
+   > `sigstore_code_verified` is `enforced` for both providers.
 
-6. **Config example** (`teep.toml.example`):
+8. **Config examples** (`teep.toml.example`):
    ```toml
-   [providers.tinfoil]
+   [providers.tinfoilcloud_v3]
    base_url = "https://inference.tinfoil.sh"
+   api_key_env = "TINFOIL_API_KEY"
+   e2ee = true
+
+   [providers.tinfoildirect_v3]
+   # base_url is not used for tinfoildirect_v3; model discovery is automatic
    api_key_env = "TINFOIL_API_KEY"
    e2ee = true
    ```
 
-7. **Responses + TTS Endpoints**:
-    - Add `/v1/responses` as a first-class endpoint (same security gates as
-       `/v1/chat/completions`).
-    - Add `/v1/audio/speech` if not already exposed.
-    - Keep `/v1/realtime` and `/v1/convert/file` rejected fail-closed until
-       explicit websocket/non-OpenAI compatibility design is implemented.
+9. **Responses + TTS Endpoints**:
+   - `tinfoilcloud_v3`: supports `/v1/responses`, `/v1/audio/speech`, and
+     all router-served endpoints.
+   - `tinfoildirect_v3`: supports `/v1/responses` and `/v1/chat/completions`
+     on all inference enclaves; audio/TTS only on enclaves that expose them
+     per their `tinfoil-config.yml` `api_routes` configuration.
+   - Both providers: keep `/v1/realtime` and `/v1/convert/file` rejected
+     fail-closed.
 
 **Unit tests**:
-- Test provider construction from config for `tinfoil` (verifies correct
-  Attester and ReportDataVerifier types).
-- Test `internal/verify/factory.go` switch cases: `newAttester`,
-  `newReportDataVerifier`, `supplyChainPolicy`, `e2eeEnabledByDefault`, and
-  `chatPathForProvider` return the correct types for the Tinfoil provider.
-- Test SPKI domain resolution.
+- Test provider construction from config for both `tinfoilcloud_v3` and
+  `tinfoildirect_v3` (verifies correct Attester and ReportDataVerifier types).
+- Test `internal/verify/factory.go` switch cases for both provider names.
+- Test SPKI domain resolution: cloud provider returns single domain;
+  direct provider delegates to resolver.
+- Test direct resolver: model list parsing, domain derivation, cache TTL,
+  singleflight collapse, offline fallback.
+- Test direct resolver domain restriction: non-`*.inference.tinfoil.sh`
+  domains rejected.
+- Test supply chain repo mapping for both providers.
 - Test that unknown Tinfoil config fields are rejected (strict TOML).
 
-**Commit**: Phase 5 — Tinfoil provider wiring and configuration.
+**Commit**: Phase 5 — Tinfoil provider wiring and configuration (both providers).
 
 ---
 
 ### Phase 6: Integration Tests
 
-**Goal**: Full API-key-based integration tests for the `tinfoil` provider
-against all Tinfoil endpoints.
+**Goal**: Full API-key-based integration tests for both `tinfoilcloud_v3` and
+`tinfoildirect_v3` providers against all Tinfoil endpoints.
 
 **Files to create**:
-- `internal/integration/tinfoil_test.go` — Tinfoil integration tests
-- `internal/integration/testdata/tinfoil/` — Captured attestation fixtures
+- `internal/integration/tinfoilcloud_test.go` — `tinfoilcloud_v3` integration tests
+- `internal/integration/tinfoildirect_test.go` — `tinfoildirect_v3` integration tests
+- `internal/integration/testdata/tinfoil/` — Captured attestation fixtures (shared)
 
-**Tests** (all require `TINFOIL_API_KEY`):
+**Tests for `tinfoilcloud_v3`** (require `TINFOIL_API_KEY`):
 
-1. **Attestation Fetch and Verify**:
-   - Fetch attestation from `inference.tinfoil.sh` using the attester.
+1. **Router Attestation Fetch and Verify**:
+   - Fetch attestation from `inference.tinfoil.sh` using the cloud attester.
    - Verify TDX or SEV-SNP quote.
-   - Verify REPORTDATA binding (HPKE key + nonce + GPU hashes).
-   - Log all verification results.
+   - Verify REPORTDATA binding (router HPKE key + nonce + GPU hashes).
+   - Confirm `report_data.hpke_key` belongs to the **router** enclave.
 
-2. **Supply Chain Verification**:
+2. **Supply Chain Verification (router repo)**:
    - Fetch code measurements from `tinfoilsh/confidential-model-router`.
-   - Verify Sigstore bundle.
-   - Compare against enclave measurements.
+   - Verify Sigstore bundle, compare against enclave measurements.
 
-3. **TLS Fingerprint Binding**:
-   - Fetch attestation, extract TLS fingerprint from `report_data.tls_key_fp`.
-   - Connect to enclave, extract TLS certificate fingerprint.
-   - Verify match.
+3. **TLS Fingerprint Binding**, **Client Nonce**, **GPU Evidence Verification**,
+   **HPKE Key Authentication**: same as in original Phase 6.
 
-4. **Client Nonce in Attestation**:
-   - Generate random nonce, fetch attestation with `?nonce=<hex>`.
-   - Verify nonce is in the REPORTDATA hash.
-   - Verify `nonce_in_reportdata` factor is `Pass`.
+4. **Chat Completions (non-streaming and streaming)**
+5. **Responses API (non-streaming and streaming)**
+6. **Embeddings**, **Audio Transcription**, **TTS**, **Models List**, **Vision**
 
-5. **GPU Evidence Verification**:
-   - Fetch attestation, extract GPU evidence from response.
-   - Verify GPU evidence hash matches REPORTDATA binding.
-   - Verify SPDM certificate chain validates against NVIDIA root.
-   - Derive `nvswitch_expected` using the ordered normalization algorithm.
-   - If `nvswitch_expected` is true, verify NVSwitch evidence is present and
-     `nvswitch_evidence_hash` matches REPORTDATA binding; missing/malformed
-     evidence must fail closed.
-   - If normalization inputs are ambiguous/malformed, verify both
-     `cpu_gpu_chain` and `nvidia_gpu_attestation` are `Fail`.
-   - Verify `cpu_gpu_chain` factor is `Pass` only when all required checks pass.
+7. **Negative Tests** (same as in original Phase 6).
 
-6. **HPKE Key from Response Field**:
-   - Verify HPKE key is extracted from `report_data.hpke_key` (not from
-     REPORTDATA bytes directly).
-   - Verify the HPKE key is authenticated by the REPORTDATA hash.
-   - Use the key for E2EE and verify round-trip encryption works.
+**Tests for `tinfoildirect_v3`** (require `TINFOIL_API_KEY`):
 
-7. **Chat Completions (non-streaming)**:
-   - Send a simple chat request through the proxy.
-   - Verify response contains expected fields.
-   - Verify request and response were EHBP encrypted/decrypted.
+1. **Model Discovery**:
+   - Call `GET https://inference.tinfoil.sh/v1/models`.
+   - Verify resolver maps model slugs to `*.inference.tinfoil.sh` domains.
+   - Verify TTL cache and refresh behavior.
 
-8. **Chat Completions (streaming)**:
-   - Send a streaming chat request.
-   - Verify SSE events are received and decrypted.
+2. **Per-Model Attestation Fetch and Verify**:
+   - Fetch attestation from a direct inference enclave (e.g.
+     `gemma4-31b.inference.tinfoil.sh`) using the direct attester.
+   - Verify TDX or SEV-SNP quote.
+   - Verify REPORTDATA binding (inference enclave HPKE key + nonce + GPU hashes).
+   - Confirm `report_data.hpke_key` belongs to the **inference** enclave
+     (different from the router key returned by `tinfoilcloud_v3`).
 
-9. **Responses API (non-streaming and streaming)**:
-   - Send `/v1/responses` requests for tool-free and tool-enabled flows.
-   - Verify encrypted request body, authenticated response body, and expected
-     output-item semantics in both non-streaming and streaming modes.
+3. **Supply Chain Verification (per-model repo)**:
+   - Fetch code measurements from the per-model Sigstore repo.
+   - Verify Sigstore bundle, compare against inference enclave measurements.
 
-10. **Embeddings**:
-    - Send an embedding request with model `nomic-embed-text`.
-    - Verify response contains embedding vectors.
-    - Verify E2EE.
+4. **TLS Fingerprint Binding (per inference enclave)**:
+   - Extract TLS fingerprint from per-enclave `report_data.tls_key_fp`.
+   - Verify it differs from router TLS fingerprint.
+   - Verify TLS connection to inference enclave uses the inference enclave cert.
 
-11. **Audio Transcription**:
-    - Send a multipart audio transcription request.
-    - Verify response contains transcription text.
-    - Verify E2EE (entire multipart body encrypted).
+5. **HPKE Key Ownership Verification**:
+   - Verify HPKE key from inference enclave attestation differs from router
+     attestation key for the same model.
+   - This demonstrates the key security property of `tinfoildirect_v3`.
 
-12. **TTS (text-to-speech)**:
-    - Send a TTS request.
-    - Verify response contains audio data.
+6. **E2EE End-to-End**:
+   - Verify chat request EHBP-encrypted to inference enclave's own HPKE key.
+   - Verify response decrypted from inference enclave's EHBP response.
 
-13. **Models List**:
-    - Send GET /v1/models.
-    - Verify response contains expected model IDs.
-    - Verify response is plaintext (EHBP does not encrypt GET responses).
+7. **Chat Completions (non-streaming and streaming)**:
+   - Test with a model whose inference enclave is directly accessible.
 
-14. **Vision (via chat completions)**:
-    - Send a chat completion with image content array.
-    - Verify response describes the image.
+8. **Embeddings** (model `nomic-embed-text.inference.tinfoil.sh`)
 
-15. **Negative Tests**:
-    - Verify that a request with a corrupted `Ehbp-Encapsulated-Key` is
-      rejected by the server.
-    - Verify that a response with a missing `Ehbp-Response-Nonce` is
-      rejected by the proxy (fail-closed).
-    - Verify `/v1/realtime` is rejected with an explicit unsupported error.
-    - Verify `/v1/convert/file` is rejected with explicit unsupported error.
-    - Verify that a response without `report_data` field (legacy format) is
-      rejected fail-closed.
-    - Verify that a wrong nonce in `report_data.nonce` causes attestation
-      failure.
+9. **Negative Tests**:
+   - Verify that supplying a model with no known direct enclave domain fails
+     closed with explicit error.
+   - Verify that a mismatched TLS fingerprint on the inference enclave
+     triggers re-attestation and fails closed on continued mismatch.
+   - Verify `/v1/audio/speech` fails closed when the target inference enclave
+     does not expose that path.
 
-**Fixture Tests** (offline, no API key):
-- Capture a real V3 attestation response and save as testdata.
-- Test the full V3 verification pipeline against the fixture.
-- Refresh V3 attestation fixtures periodically to detect schema/policy drift.
+**Fixture Tests** (offline, no API key, shared):
+- Capture V3 attestation responses from both router and inference enclave
+  and save as separate testdata fixtures.
+- Test the full V3 verification pipeline against both fixtures.
+- Refresh fixtures periodically to detect schema/policy drift.
 
-**Commit**: Phase 6 — Tinfoil integration tests.
+**Commit**: Phase 6 — Tinfoil integration tests (both providers).
 
 ---
 
 ### Phase 7: Verification Report and Documentation
 
-**Goal**: Update verification report generation and documentation.
+**Goal**: Update verification report generation and documentation for both
+`tinfoilcloud_v3` and `tinfoildirect_v3` providers.
 
 **Files to modify**:
 - `internal/attestation/report.go` — Add Tinfoil-specific verification
@@ -1841,7 +2075,7 @@ Existing factors with provider-specific behavior:
   via tinfoil-config.yml → dm-verity. Detail: "model weights attested via
   dm-verity commitment in Sigstore-verified config"
 - `nonce_in_reportdata` — `enforced`. Client nonce in REPORTDATA hash.
-  Detail: "tinfoil: client nonce in REPORTDATA hash".
+  Detail: "tinfoil v3: client nonce in REPORTDATA hash".
 
 ### Factor Status to Teep Policy Mapping
 
@@ -1861,10 +2095,11 @@ Normalization rules for this document:
 4. `allow_fail` must always be justified in text (threat-model rationale).
 
 **Documentation updates**:
-- Add Tinfoil to the endpoint support matrix in `api_support.md`.
+- Add `tinfoilcloud_v3` and `tinfoildirect_v3` to the endpoint support matrix in `api_support.md`.
 - Add Tinfoil E2EE details (EHBP, HPKE, full-body encryption).
-- Document that Tinfoil has **no field-level encryption gaps** (full-body).
-- Note `tinfoil` as the provider name.
+- Document that both Tinfoil providers have **no field-level encryption gaps** (full-body).
+- Document the HPKE key ownership distinction: `tinfoilcloud_v3` EHBP key is the router's; `tinfoildirect_v3` EHBP key is the inference enclave's.
+- Note provider names `tinfoilcloud_v3` (router) and `tinfoildirect_v3` (direct).
 
 **Commit**: Phase 7 — Verification report factors and documentation.
 
@@ -1872,7 +2107,12 @@ Normalization rules for this document:
 
 ## Verification Factors Summary
 
-### `tinfoil` Factors
+Both providers use the same factor names and policy modes. The key difference is
+**what enclave is attested**: `tinfoilcloud_v3` attests the router; `tinfoildirect_v3`
+attests the inference enclave. The `e2ee_capable` and `tls_key_binding` factor
+descriptions reflect this distinction at the detail-string level.
+
+### `tinfoilcloud_v3` and `tinfoildirect_v3` Factors (shared)
 
 | Factor | Teep Policy Mode | Description |
 |---|---|---|
@@ -1958,10 +2198,11 @@ New Go module dependencies:
 ## Risk Assessment
 
 1. **SEV-SNP is new attestation hardware for teep**: No existing SEV-SNP
-   verification code. Phase 3 adds this. The deployed Tinfoil router currently
-   runs on SEV-SNP, so the `tinfoil` provider cannot be validated against the
-   live deployment until SEV-SNP verification lands. TDX-only support is
-   insufficient for the deployed Tinfoil infrastructure.
+   verification code. Phase 3 adds this. The deployed Tinfoil router and
+   inference enclaves currently run on SEV-SNP, so neither `tinfoilcloud_v3`
+   nor `tinfoildirect_v3` can be validated against live deployments until
+   SEV-SNP verification lands. TDX-only support is insufficient for the
+   deployed Tinfoil infrastructure.
 
 2. **EHBP is a new E2EE protocol**: Unlike existing field-level or ML-KEM
    protocols, EHBP uses HPKE (RFC 9180). The protocol is well-specified with
@@ -1971,18 +2212,28 @@ New Go module dependencies:
    attestations rather than compose-hash/IMA. This is a stronger model (code
    measurement signed by transparent CI) but requires new verification code.
 
-4. **Router architecture**: Tinfoil uses a confidential model router that
-   handles multiple models. The attestation covers the router, not individual
-   models. This is similar to nearcloud's gateway model. The router performs
-   second-hop verification of each model enclave internally — teep trusts
-   this because the router code is Sigstore-attested (see Authentication
-   Chain 3 above).
+4. **Router architecture** (`tinfoilcloud_v3`): Tinfoil uses a confidential
+   model router that handles multiple models. The attestation covers the
+   router, not individual models. This is similar to nearcloud's gateway model.
+   The router performs second-hop verification of each model enclave internally
+   (via `tinfoil/confidential-model-router/manager/manager.go:addEnclave`) —
+   teep trusts this because the router code is Sigstore-attested.
 
-5. **Model weight authentication is fully solved**: Unlike all existing teep
-   providers, Tinfoil's model weights are cryptographically bound into the
-   attestation chain via dm-verity + tinfoil-config.yml + Sigstore. The
-   `measured_model_weights` factor can be set to `Pass` when the Sigstore
+5. **Per-model endpoint availability** (`tinfoildirect_v3`): Not all inference
+   enclaves expose all endpoints. The `api_routes` field in each model's
+   `tinfoil-config.yml` determines which paths are served. The direct provider
+   must fail closed on any attempt to use an unsupported path for a given model.
+   Integration tests must validate path availability before treating an absence
+   as a provider error.
+
+6. **Model weight authentication is fully solved** (both providers): Unlike all
+   existing teep providers, Tinfoil's model weights are cryptographically bound
+   into the attestation chain via dm-verity + tinfoil-config.yml + Sigstore.
+   The `measured_model_weights` factor can be set to `Pass` when the Sigstore
    supply chain verification succeeds (see Authentication Chain 4 above).
+   For `tinfoildirect_v3`, this applies to the per-model inference enclave's
+   Sigstore bundle. For `tinfoilcloud_v3`, this applies transitively via the
+   router's supply chain (which attests the code that verifies inference enclaves).
    This is a significant advantage over dstack providers where
    `measured_model_weights` always returns `Fail`.
 
