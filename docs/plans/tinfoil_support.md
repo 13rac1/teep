@@ -13,7 +13,8 @@ This plan defines two providers that differ in their trust boundary:
 
 - **`tinfoilcloud_v3`**: Routes through the Tinfoil confidential model router
   (`inference.tinfoil.sh`). Teep verifies the router enclave only; the router
-  internally re-attests and EHBP-encrypts to each inference enclave. The HPKE
+   internally re-attests and forwards to each inference enclave over
+   TLS with per-enclave SPKI pinning (no EHBP on router-to-inference hop). The HPKE
   key bound in REPORTDATA is the router's key, not the inference enclave's key.
   This is architecturally analogous to the `nearcloud` provider in teep.
 
@@ -218,8 +219,8 @@ gateway verifies model enclaves internally.
 - No PinnedHandler needed — standard `http.Transport` with `VerifyPeerCertificate`
 - Supply chain verification via Sigstore (replaces nearcloud's compose-hash/IMA)
 - Router re-attests inference enclaves and uses a `TLSBoundRoundTripper`
-  (analogous to `tinfoil-go/verifier/client.TLSBoundRoundTripper`) pinned to
-  each inference enclave's attested TLS fingerprint for forwarding
+   pattern pinned to each inference enclave's attested TLS fingerprint for
+   forwarding
 
 **Critical difference from nearcloud**: `tinfoilcloud_v3` EHBP-encrypts the
 body to the **router** HPKE key, not the inference enclave key. The router
@@ -234,17 +235,15 @@ Both connect directly to per-model backend enclaves with per-model attestation
 and SPKI pinning. The structural pattern: teep resolves model → attestation
 domain, verifies inference enclave directly, EHBP-encrypts to inference enclave.
 
-Parallel with `neardirect` implementation (`internal/provider/neardirect/`):
-- Dynamic model-to-domain resolution analogous to `neardirect/endpoints.go`
-  `EndpointResolver.Resolve()` — but sourced from Tinfoil's own model list
-  endpoint rather than NEAR's endpoint discovery API
+Parallel with `neardirect` provider behavior:
+- Dynamic model-to-domain resolution, but sourced from Tinfoil's own model
+   list endpoint rather than NEAR's endpoint discovery API
 - Per-model SPKI cache keyed on inference enclave domain
 - On SPKI cache miss: full attestation + Sigstore + hardware measurements per
   inference enclave before any inference request is sent
 - EHBP encrypts to the **inference enclave's** HPKE key (not a gateway key)
-- Same TLS-fingerprint-bound transport pattern as in `neardirect/pinned.go`
-  `attestOnConn` and the Tinfoil SDK's `TLSBoundRoundTripper` in
-  `tinfoil-go/verifier/client/roundtrip.go`
+- Same TLS-fingerprint-bound transport pattern used by direct-attestation
+   providers
 
 **Critical security advantage over `tinfoilcloud_v3`**: HPKE encryption targets
 the inference enclave directly. Plaintext request bodies are never visible to
@@ -409,6 +408,36 @@ outputs, rather than narrative interpretation.
    mitigation is enforced (for example Proof-of-Cloud identity registration,
    DCEA/vTPM-backed identity, or equivalent hardware-rooted anti-forgery
    control). Passing quote/supply-chain/E2EE checks does not close this gap.
+
+### Provider-Specific Cryptographic Gap Status
+
+This section makes provider differences explicit so risk status is decidable
+without implementation-specific interpretation.
+
+| Gap / Property | `tinfoilcloud_v3` | `tinfoildirect_v3` |
+|---|---|---|
+| Teep-to-target request-body confidentiality | `Closed` to router enclave, `Open` to inference enclave (router can read plaintext after EHBP unwrap) | `Closed` to inference enclave (EHBP terminates at model enclave) |
+| Teep cryptographic proof of model-enclave identity | `Open` at teep boundary (teep proves router identity only) | `Closed` when attestation + SPKI + Sigstore checks pass for that model enclave |
+| Teep cryptographic proof of model-enclave freshness | `Open` at teep boundary (freshness proven for router only) | `Closed` when nonce-bound V3 attestation verifies for the model enclave |
+| Router-to-model confidentiality/integrity channel | TLS + SPKI pinned by router (not EHBP) | N/A |
+| Supply-chain identity checked by teep | Router repo | Per-model repo |
+| TEE.fail key-extraction risk | `Open` | `Open` |
+
+Status interpretation rules:
+- A row marked `Closed` means all listed cryptographic verifications for that
+   provider/hop are required and fail-closed.
+- A row marked `Open` means the property is not cryptographically established
+   at that verifier boundary, even if adjacent checks pass.
+
+Replay/downgrade status rules (both providers):
+- Attestation replay resistance is `Closed` only when nonce generation is
+   cryptographically random, unique per attestation fetch, and
+   `report_data.nonce` plus REPORTDATA hash binding both verify.
+- Attestation format-downgrade resistance is `Closed` only when non-V3
+   responses are rejected (missing structured `report_data` fails closed).
+- EHBP downgrade resistance is `Closed` only when encrypted exchanges never
+   fall back to plaintext on missing/invalid EHBP headers and mode mismatches
+   fail closed.
 
 ### Authentication Chain 1: CVM Environment (Hardware → Code)
 
@@ -601,31 +630,31 @@ Link 1: Key Generation Inside Enclave
 
 Tinfoil uses a confidential model router that forwards requests to
 per-model inference enclaves. Each hop is independently attested and
-encrypted. This chain applies only to `tinfoilcloud_v3`. In `tinfoildirect_v3`
+channel-authenticated. This chain applies only to `tinfoilcloud_v3`. In `tinfoildirect_v3`
 the client verifies the inference enclave directly and there is no router hop.
 
-**How the router re-attests inference enclaves** (from
-`tinfoil/confidential-model-router/manager/manager.go:addEnclave`):
+**How the router re-attests inference enclaves**:
 
-1. The router calls `attestationFetch(host)` → `GET /.well-known/tinfoil-attestation`
-   on each inference host (without nonce; using V2 format internally).
-2. It verifies the returned document via `remoteAttestation.Verify()`.
-3. For TDX-type attestations, it additionally calls
-   `attestation.VerifyHardware(hwMeasurements, ...)` against the latest
-   `tinfoilsh/hardware-measurements` Sigstore bundle.
-4. It checks `verification.Measurement.Equals(model.SourceMeasurement)` to
-   confirm the inference enclave runs the expected code measurement.
-5. The verified TLS fingerprint (`verification.TLSPublicKeyFP`) is stored in
-   the `Enclave.tlsKeyFP` field.
-6. A `TLSBoundRoundTripper{ExpectedPublicKey: tlsKeyFP}` (from
-   `tinfoil-go/verifier/client/roundtrip.go`) is created for each inference
-   host and used for all forwarded requests. This enforces SPKI pinning on
-   every request to the inference enclave via `tls.Config.VerifyConnection`.
-7. There is **no EHBP** on the router-to-inference hop — only TLS with SPKI
+1. The router fetches each inference enclave's attestation from
+   `/.well-known/tinfoil-attestation` and verifies signature, measurement,
+   and hardware-policy constraints before admitting that enclave to routing.
+2. For TDX hosts, router verification includes hardware-measurement matching
+   against the published `hardware-measurements` registry.
+3. The router compares verified enclave measurements to the model's expected
+   measurement profile before marking the target routable.
+4. The router stores the verified inference TLS SPKI fingerprint and binds
+   forwarding connections to that fingerprint on every TLS handshake.
+5. There is **no EHBP** on the router-to-inference hop — only TLS with SPKI
    pinning. The inference enclave's HPKE key is not used by the router.
-8. The router re-attests periodically via `StartWorker` ticker and on TLS
-   fingerprint change detection. Circuit-breaker logic (`circuitbreaker.go`)
-   removes unhealthy enclaves from the pool.
+6. The router continuously revalidates backend health/identity (periodic
+   refresh and fingerprint-change checks) and removes failing backends.
+
+Freshness caveat for `tinfoilcloud_v3`:
+- Teep proves nonce freshness for the router hop only.
+- Inference-hop freshness is enforced by router policy, not directly by teep.
+- Therefore, teep must report this as an `Open` boundary-level gap in
+  provider-level risk summaries (while still allowing `tinfoilcloud_v3` when
+  policy permits router-mediated trust).
 
 ```
 Client (teep proxy — tinfoilcloud_v3)
@@ -1912,10 +1941,10 @@ wiring as a thin layer on top.
 
    Create `tinfoil.NewTransport(fingerprintHex string)` that returns an
    `http.Transport` with `tls.Config.VerifyConnection` enforcing the attested
-   SPKI fingerprint on every connection. This is the same pattern as the
-   Tinfoil SDK's `TLSBoundRoundTripper` in
-   `tinfoil-go/verifier/client/roundtrip.go`, adapted to use teep's `tlsct`
-   package conventions (analogous to `neardirect/pinned.go:tlsDial`). On
+   SPKI fingerprint on every connection. This follows the same
+   fingerprint-bound TLS transport pattern used by attestation-driven clients,
+   adapted to teep's `tlsct` package conventions (analogous to
+   `neardirect/pinned.go:tlsDial`). On
    fingerprint mismatch, return `ErrCertMismatch`-equivalent error and trigger
    re-attestation before retrying.
 
@@ -2237,8 +2266,7 @@ New Go module dependencies:
    model router that handles multiple models. The attestation covers the
    router, not individual models. This is similar to nearcloud's gateway model.
    The router performs second-hop verification of each model enclave internally
-   (via `tinfoil/confidential-model-router/manager/manager.go:addEnclave`) —
-   teep trusts this because the router code is Sigstore-attested.
+   — teep trusts this because the router code is Sigstore-attested.
 
 5. **Per-model endpoint availability** (`tinfoildirect_v3`): Not all inference
    enclaves expose all endpoints. The `api_routes` field in each model's
