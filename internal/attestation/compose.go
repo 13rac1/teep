@@ -125,6 +125,21 @@ func normalizeImageRepository(ref string) string {
 	if ref == "" {
 		return ""
 	}
+	// Docker compose can encode image defaults like:
+	//   ${COMPOSE_MANAGER_IMAGE:-nearaidev/compose-manager}
+	// After regex extraction, this may appear as
+	//   compose_manager_image:-nearaidev/compose-manager
+	// Keep only the default image reference so policy matching uses the repo.
+	if idx := strings.Index(ref, ":-"); idx > 0 {
+		left := ref[:idx]
+		right := ref[idx+2:]
+		// Only rewrite ${VAR:-default} expansions when the left side does not
+		// already look like a qualified image reference. Real repo/image refs
+		// include a slash; compose variable names do not.
+		if !strings.Contains(left, "/") {
+			ref = right
+		}
+	}
 	// Drop optional tag from the final path segment while preserving registry
 	// ports (e.g. registry:5000/ns/img:tag).
 	lastSlash := strings.LastIndex(ref, "/")

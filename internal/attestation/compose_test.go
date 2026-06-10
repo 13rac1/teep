@@ -259,6 +259,48 @@ func TestNormalizeImageRepository_Empty(t *testing.T) {
 	}
 }
 
+func TestNormalizeImageRepository_ComposeVarDefault(t *testing.T) {
+	got := normalizeImageRepository("compose_manager_image:-nearaidev/compose-manager")
+	if got != "nearaidev/compose-manager" {
+		t.Fatalf("normalizeImageRepository(compose var default) = %q, want %q", got, "nearaidev/compose-manager")
+	}
+}
+
+func TestNormalizeImageRepository_ComposeVarDefault_OfficialImage(t *testing.T) {
+	got := normalizeImageRepository("image:-ubuntu")
+	if got != "ubuntu" {
+		t.Fatalf("normalizeImageRepository(compose var default official image) = %q, want %q", got, "ubuntu")
+	}
+}
+
+func TestExtractImageRepositories_ComposeVarDefault(t *testing.T) {
+	text := `services:
+  compose-manager:
+    image: compose_manager_image:-nearaidev/compose-manager@sha256:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
+`
+	repos := ExtractImageRepositories(text)
+	if len(repos) != 1 {
+		t.Fatalf("expected 1 repository, got %d: %v", len(repos), repos)
+	}
+	if repos[0] != "nearaidev/compose-manager" {
+		t.Fatalf("unexpected repository: %s", repos[0])
+	}
+}
+
+func TestExtractImageRepositories_ComposeVarDefault_OfficialImage(t *testing.T) {
+	text := `services:
+  base:
+    image: image:-ubuntu@sha256:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
+`
+	repos := ExtractImageRepositories(text)
+	if len(repos) != 1 {
+		t.Fatalf("expected 1 repository, got %d: %v", len(repos), repos)
+	}
+	if repos[0] != "ubuntu" {
+		t.Fatalf("unexpected repository: %s", repos[0])
+	}
+}
+
 func TestExtractImageDigests_Capped(t *testing.T) {
 	// Build text with maxImageDigests+1 unique digests; only maxImageDigests should be returned.
 	var b strings.Builder

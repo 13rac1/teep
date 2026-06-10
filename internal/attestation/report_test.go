@@ -3888,6 +3888,47 @@ func TestVerifyFulcioEntry_OIDCIssuerMismatch(t *testing.T) {
 	}
 }
 
+func TestVerifyFulcioEntry_OIDCIdentitiesAllowlistMatch(t *testing.T) {
+	img := &ImageProvenance{
+		OIDCIssuer:     "https://token.actions.githubusercontent.com",
+		OIDCIdentities: []string{"  HTTPS://github.com/example/app/.github/workflows/release.yml@refs/heads/main  "},
+		SourceRepos:    []string{"example/app"},
+	}
+	r := &RekorProvenance{
+		HasCert:       true,
+		OIDCIssuer:    "https://token.actions.githubusercontent.com",
+		SubjectURI:    "https://github.com/example/app/.github/workflows/release.yml@refs/heads/main",
+		SourceRepo:    "example/app",
+		SourceRepoURL: "https://github.com/example/app",
+	}
+	detail, failed := verifyFulcioEntry(r, img, "example/app")
+	if failed {
+		t.Fatalf("expected allowlist identity match to pass, got detail: %s", detail)
+	}
+}
+
+func TestVerifyFulcioEntry_OIDCIdentitiesAllowlistMismatch(t *testing.T) {
+	img := &ImageProvenance{
+		OIDCIssuer:     "https://token.actions.githubusercontent.com",
+		OIDCIdentities: []string{"https://github.com/example/app/.github/workflows/release.yml@refs/heads/main"},
+		SourceRepos:    []string{"example/app"},
+	}
+	r := &RekorProvenance{
+		HasCert:       true,
+		OIDCIssuer:    "https://token.actions.githubusercontent.com",
+		SubjectURI:    "https://github.com/example/app/.github/workflows/other.yml@refs/heads/main",
+		SourceRepo:    "example/app",
+		SourceRepoURL: "https://github.com/example/app",
+	}
+	detail, failed := verifyFulcioEntry(r, img, "example/app")
+	if !failed {
+		t.Fatal("expected allowlist identity mismatch to fail")
+	}
+	if !strings.Contains(detail, "unexpected OIDC identity") {
+		t.Fatalf("detail = %q, want substring %q", detail, "unexpected OIDC identity")
+	}
+}
+
 func TestE2EEKeyType(t *testing.T) {
 	cases := []struct {
 		name string

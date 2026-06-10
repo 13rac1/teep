@@ -1279,7 +1279,11 @@ func verifyFulcioEntry(r *RekorProvenance, img *ImageProvenance, imageRepo strin
 	) != 1 {
 		return fmt.Sprintf("image %q: unexpected OIDC issuer %q (expected %q)", imageRepo, r.OIDCIssuer, img.OIDCIssuer), true
 	}
-	if img.OIDCIdentity != "" && subtle.ConstantTimeCompare(
+	if len(img.OIDCIdentities) > 0 {
+		if !containsFoldCT(strings.TrimSpace(r.SubjectURI), img.OIDCIdentities) {
+			return fmt.Sprintf("image %q: unexpected OIDC identity %q (expected one of %v)", imageRepo, r.SubjectURI, img.OIDCIdentities), true
+		}
+	} else if img.OIDCIdentity != "" && subtle.ConstantTimeCompare(
 		[]byte(strings.ToLower(strings.TrimSpace(r.SubjectURI))),
 		[]byte(strings.ToLower(strings.TrimSpace(img.OIDCIdentity))),
 	) != 1 {
@@ -1712,6 +1716,7 @@ type ImageProvenance struct {
 	KeyFingerprint string         // SHA-256 hex of PKIX public key; checked for SigstorePresent
 	OIDCIssuer     string         // required when Provenance == FulcioSigned
 	OIDCIdentity   string         // SAN URI (workflow identity); checked for FulcioSigned
+	OIDCIdentities []string       // optional allowlist of SAN URIs; if set, any matching identity is accepted
 	SourceRepos    []string       // required when Provenance == FulcioSigned (repo ID and/or URL)
 	NoDSSE         bool           // true = DSSE envelope lacks signatures; skip DSSE check
 }
@@ -1783,6 +1788,20 @@ func containsFold(value string, allowed []string) bool {
 	}
 	for _, entry := range allowed {
 		if v == strings.ToLower(strings.TrimSpace(entry)) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsFoldCT(value string, allowed []string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" {
+		return false
+	}
+	for _, entry := range allowed {
+		e := strings.ToLower(strings.TrimSpace(entry))
+		if subtle.ConstantTimeCompare([]byte(v), []byte(e)) == 1 {
 			return true
 		}
 	}
