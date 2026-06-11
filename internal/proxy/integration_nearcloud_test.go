@@ -145,6 +145,49 @@ func TestIntegration_NearCloud(t *testing.T) {
 		t.Logf("response (%d chunks): %q", len(chunks), content)
 	})
 
+	t.Run("Models", func(t *testing.T) {
+		proxySrv := newProxyServer(t, integrationNearCloudConfig(t))
+		defer proxySrv.Close()
+
+		resp, err := integrationClient.Get(proxySrv.URL + "/v1/models")
+		if err != nil {
+			t.Fatalf("GET /v1/models: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
+
+		var result struct {
+			Object string `json:"object"`
+			Data   []struct {
+				ID      string `json:"id"`
+				OwnedBy string `json:"owned_by"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatalf("decode /v1/models: %v", err)
+		}
+
+		if result.Object != "list" {
+			t.Fatalf("object = %q, want %q", result.Object, "list")
+		}
+		if len(result.Data) == 0 {
+			t.Fatal("/v1/models returned no models")
+		}
+
+		for _, m := range result.Data {
+			if !strings.HasPrefix(m.ID, "nearcloud:") {
+				t.Errorf("model id = %q, want nearcloud: prefix", m.ID)
+			}
+			if m.OwnedBy != "nearai" {
+				t.Errorf("model %q owned_by = %q, want %q", m.ID, m.OwnedBy, "nearai")
+			}
+		}
+	})
+
 	t.Run("E2EEStreaming", func(t *testing.T) {
 		proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
 		defer proxySrv.Close()
