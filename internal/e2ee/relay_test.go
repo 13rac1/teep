@@ -3,6 +3,7 @@ package e2ee
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -3001,6 +3002,25 @@ func TestDecryptNonStreamResponseForEndpoint_TopLevelScorePlaintextAccepted(t *t
 	}
 	if parsed.Score != 0.42 {
 		t.Fatalf("score = %v, want 0.42", parsed.Score)
+	}
+}
+
+func TestDecryptNonStreamResponseForEndpoint_AudioAccepted(t *testing.T) {
+	session := testNearCloudLikeSession(t)
+	defer session.Zero()
+
+	body := map[string]any{"text": "hello"}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	out, err := DecryptNonStreamResponseForEndpoint(b, session, EndpointAudio)
+	if err != nil {
+		t.Fatalf("DecryptNonStreamResponseForEndpoint audio: %v", err)
+	}
+	if subtle.ConstantTimeCompare(b, out) != 1 {
+		t.Fatalf("audio response changed unexpectedly: got %s want %s", out, b)
 	}
 }
 

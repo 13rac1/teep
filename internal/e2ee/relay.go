@@ -819,6 +819,10 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 				changed = true
 			}
 		}
+	case EndpointAudio:
+		// Audio transcription endpoint path: /v1/audio/transcriptions.
+		// This route is multipart and does not use field-level response E2EE,
+		// so there is no endpoint-specific body field decryption here.
 	default:
 		return nil, fmt.Errorf("decrypt non-stream response: unsupported endpoint type %q", endpoint)
 	}
