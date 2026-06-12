@@ -2968,6 +2968,25 @@ func TestDecryptNonStreamResponse_ScorePlaintext_NoEndpointFailsClosed(t *testin
 	}
 }
 
+func TestDecryptNonStreamResponseForEndpoint_RejectsUnknownEndpointValue(t *testing.T) {
+	session := testNearCloudLikeSession(t)
+	defer session.Zero()
+
+	body := map[string]any{"choices": []any{}}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	_, err = DecryptNonStreamResponseForEndpoint(b, session, EndpointType("typo"))
+	if err == nil {
+		t.Fatal("expected error for unsupported endpoint value")
+	}
+	if !strings.Contains(err.Error(), "unsupported endpoint type") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDecryptNonStreamResponseForEndpoint_TopLevelScoreDecrypted(t *testing.T) {
 	session := testFullFieldVeniceSession(t)
 	defer session.Zero()
