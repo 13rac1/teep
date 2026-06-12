@@ -97,21 +97,6 @@ func (s *NearCloudSession) Zero() {
 	s.modelX25519 = nil
 }
 
-// IsRequestFieldEncrypted reports whether a message field is encrypted in
-// NearCloud E2EE requests under X-Encrypt-All-Fields mode.
-// Per api_support.md, encrypted fields include: content, reasoning_content,
-// reasoning, refusal, name, audio.data, tool_calls[].function.*, function_call.*
-// Plaintext fields are structural metadata: role, tool_call_id, type, id, index.
-func (s *NearCloudSession) IsRequestFieldEncrypted(fieldPath string) bool {
-	// Plaintext fields per api_support.md and IsNonEncryptedField()
-	switch fieldPath {
-	case "role", "tool_call_id", "type", "id", "index":
-		return false
-	}
-	// All other fields are encrypted in X-Encrypt-All-Fields mode
-	return true
-}
-
 // IsResponseFieldEncrypted reports whether a response field is encrypted in
 // NearCloud E2EE responses under X-Encrypt-All-Fields mode.
 // Per api_support.md, encrypted fields include: content, refusal, tool_calls.*,

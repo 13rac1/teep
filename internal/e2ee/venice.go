@@ -92,15 +92,6 @@ func (s *VeniceSession) Zero() {
 	}
 }
 
-// IsRequestFieldEncrypted reports whether the given message field is encrypted
-// in Venice E2EE requests. Venice only encrypts messages[].content; all other
-// fields are plaintext. Per api_support.md.
-func (s *VeniceSession) IsRequestFieldEncrypted(fieldPath string) bool {
-	// Venice only encrypts messages[].content
-	// All other fields (tool_calls, refusal, name, etc.) are plaintext
-	return fieldPath == EncFieldContent
-}
-
 // IsResponseFieldEncrypted reports whether the given response field is encrypted
 // in Venice E2EE responses. Venice only encrypts choices[].delta.content in
 // chat completions (/api/v1/chat/completions); all other fields are plaintext.

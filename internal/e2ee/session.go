@@ -66,7 +66,6 @@ const (
 type Decryptor interface {
 	IsEncryptedChunk(val string) bool
 	Decrypt(ciphertextHex string) ([]byte, error)
-	IsRequestFieldEncrypted(fieldPath string) bool
 	// IsResponseFieldEncrypted checks if the given field path requires encryption
 	// at the specified endpoint type (chat, embeddings, images, etc.).
 	// Endpoint types are canonical OpenAI route kinds; actual provider paths

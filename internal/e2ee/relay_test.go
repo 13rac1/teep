@@ -32,16 +32,6 @@ type fullFieldVeniceSession struct {
 	*VeniceSession
 }
 
-func (s *fullFieldVeniceSession) IsRequestFieldEncrypted(fieldPath string) bool {
-	// Simulate full-field mode: encrypt everything except metadata
-	switch fieldPath {
-	case "role", "tool_call_id", "type", "id", "index":
-		return false
-	default:
-		return true
-	}
-}
-
 func (s *fullFieldVeniceSession) IsResponseFieldEncrypted(fieldPath string, endpoint EndpointType) bool {
 	// Simulate full-field mode: encrypt everything except metadata
 	switch fieldPath {
@@ -2671,14 +2661,6 @@ type testDecryptor struct {
 func (m *testDecryptor) IsEncryptedChunk(val string) bool  { return m.isEncrypted(val) }
 func (m *testDecryptor) Decrypt(ct string) ([]byte, error) { return m.decrypt(ct) }
 
-func (m *testDecryptor) IsRequestFieldEncrypted(fieldPath string) bool {
-	switch fieldPath {
-	case "role", "tool_call_id", "type", "id", "index":
-		return false
-	default:
-		return true
-	}
-}
 func (m *testDecryptor) IsResponseFieldEncrypted(fieldPath string, endpoint EndpointType) bool {
 	switch fieldPath {
 	case "role", "finish_reason", "index", "object", "created", "id", "system_fingerprint":
