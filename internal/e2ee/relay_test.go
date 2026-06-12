@@ -59,6 +59,22 @@ func encryptForClient(t *testing.T, plaintext string, session *VeniceSession) st
 	return ct
 }
 
+func TestIsNonEncryptedField_KnownMetadataAllowed(t *testing.T) {
+	for _, key := range []string{"role", "tool_call_id", "type", "finish_reason", "id"} {
+		if !IsNonEncryptedField(key) {
+			t.Fatalf("IsNonEncryptedField(%q) = false, want true", key)
+		}
+	}
+}
+
+func TestIsNonEncryptedField_IntentionalEncryptedOmissions(t *testing.T) {
+	for _, key := range []string{"refusal", "name", "function_call"} {
+		if IsNonEncryptedField(key) {
+			t.Fatalf("IsNonEncryptedField(%q) = true, want false", key)
+		}
+	}
+}
+
 // sseChunkJSON builds a single SSE data JSON with encrypted content in the delta.
 func sseChunkJSON(t *testing.T, encrypted string) string {
 	t.Helper()
