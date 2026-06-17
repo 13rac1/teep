@@ -105,6 +105,12 @@ type TDXVerifyResult struct {
 	// DebugEnabled is true if TD_ATTRIBUTES byte 0 bit 0 is set (debug enclave).
 	DebugEnabled bool
 
+	// TDAttributes is the raw 8-byte TD_ATTRIBUTES field from the quote body.
+	TDAttributes []byte
+
+	// XFAM is the raw 8-byte XFAM (eXtended Features Allowed Mask) from the quote body.
+	XFAM []byte
+
 	// ReportData is the raw 64-byte REPORTDATA field from the TDX quote body.
 	ReportData [64]byte
 
@@ -198,7 +204,7 @@ func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string) *TDXVerifyResul
 	result.quote = quoteAny
 
 	// Extract common fields from whichever quote version we got.
-	var reportData, tdAttrs, teeTCBSVN []byte
+	var reportData, tdAttrs, xfam, teeTCBSVN []byte
 	var mrTD, mrSeam, mrSignerSeam, mrConfigID, mrOwner, mrOwnerConfig []byte
 	var rtmrs [][]byte
 	switch q := quoteAny.(type) {
@@ -211,6 +217,7 @@ func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string) *TDXVerifyResul
 		}
 		reportData = body.GetReportData()
 		tdAttrs = body.GetTdAttributes()
+		xfam = body.GetXfam()
 		teeTCBSVN = body.GetTeeTcbSvn()
 		mrTD = body.GetMrTd()
 		rtmrs = body.GetRtmrs()
@@ -233,6 +240,7 @@ func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string) *TDXVerifyResul
 		}
 		reportData = body.GetReportData()
 		tdAttrs = body.GetTdAttributes()
+		xfam = body.GetXfam()
 		teeTCBSVN = body.GetTeeTcbSvn()
 		mrTD = body.GetMrTd()
 		rtmrs = body.GetRtmrs()
@@ -249,8 +257,10 @@ func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string) *TDXVerifyResul
 	// Extract REPORTDATA (64 bytes).
 	copy(result.ReportData[:], reportData)
 
-	// Extract TEE_TCB_SVN.
+	// Extract TEE_TCB_SVN, TD_ATTRIBUTES, XFAM.
 	result.TeeTCBSVN = teeTCBSVN
+	result.TDAttributes = tdAttrs
+	result.XFAM = xfam
 
 	// Extract measurement registers.
 	result.MRTD = mrTD

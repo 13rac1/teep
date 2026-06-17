@@ -170,6 +170,18 @@ type RawAttestation struct {
 	E2ENonce   string `json:"-"` // single-use nonce token from instance discovery
 	ChuteID    string `json:"-"` // resolved chute UUID (may differ from model name)
 
+	// Tinfoil-specific fields — populated by the tinfoil provider's Attester.
+	SEVReportBytes  []byte `json:"-"` // raw binary SEV-SNP report (tinfoil sev-snp platform)
+	GPURawJSON      []byte `json:"-"` // raw JSON bytes of the "gpu" field (tinfoil V3)
+	NVSwitchRawJSON []byte `json:"-"` // raw JSON bytes of the "nvswitch" field (tinfoil V3)
+
+	// Tinfoil V3 report_data hex fields (each 64 hex chars = 32 bytes).
+	TinfoilTLSKeyFP             string `json:"-"` // report_data.tls_key_fp
+	TinfoilHPKEKey              string `json:"-"` // report_data.hpke_key
+	TinfoilNonce                string `json:"-"` // report_data.nonce
+	TinfoilGPUEvidenceHash      string `json:"-"` // report_data.gpu_evidence_hash
+	TinfoilNVSwitchEvidenceHash string `json:"-"` // report_data.nvswitch_evidence_hash (optional)
+
 	// Gateway fields — populated by providers with TEE-attested API gateways.
 	// Empty for providers without a gateway (e.g. Venice, NEAR AI direct).
 	GatewayIntelQuote     string          `json:"-"`
