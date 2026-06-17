@@ -390,7 +390,7 @@ func pruneInactiveProviders(providers map[string]*config.Provider) error {
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
 func providerNotFoundError(name string, cfg *config.Config) error {
-	envVar, known := verify.ProviderEnvVars[name]
+	envVar, known := verify.ProviderEnvVar(name)
 	if known && len(cfg.Providers) == 0 {
 		return fmt.Errorf("provider %q not configured (set %s or add [providers.%s] to config)", name, envVar, name)
 	}

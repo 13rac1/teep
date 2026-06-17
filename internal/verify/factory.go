@@ -4,6 +4,7 @@ package verify
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
@@ -14,17 +15,46 @@ import (
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
-// ProviderEnvVars maps provider names to their API key environment variables.
-var ProviderEnvVars = map[string]string{
-	"venice":     "VENICE_API_KEY",
-	"neardirect": "NEARAI_API_KEY",
-	"nearcloud":  "NEARAI_API_KEY",
-	"nanogpt":    "NANOGPT_API_KEY",
-	"phalacloud": "PHALA_API_KEY",
-	"chutes":     "CHUTES_API_KEY",
+// providerEnvVars maps provider names to their API key environment variables.
+// Unexported to prevent accidental mutation by importers; use ProviderEnvVar
+// to look up individual entries. This satisfies the repo's "no exported
+// mutable package-level vars (maps/slices/pointers)" guidance.
+var providerEnvVars = map[string]string{
+	"venice":            "VENICE_API_KEY",
+	"neardirect":        "NEARAI_API_KEY",
+	"nearcloud":         "NEARAI_API_KEY",
+	"nanogpt":           "NANOGPT_API_KEY",
+	"phalacloud":        "PHALA_API_KEY",
+	"chutes":            "CHUTES_API_KEY",
+	"tinfoil_v3_cloud":  "TINFOIL_API_KEY",
+	"tinfoil_v3_direct": "TINFOIL_API_KEY",
+}
+
+// ProviderEnvVar returns the API key environment variable name for the given
+// provider, and whether the provider is known. Safe for concurrent use;
+// callers cannot mutate the underlying map.
+func ProviderEnvVar(name string) (string, bool) {
+	v, ok := providerEnvVars[name]
+	return v, ok
+}
+
+// HasProviderEnvVar reports whether the given provider (or any provider with
+// the given prefix) has an entry in the env var map. Used by the teeplint
+// checker to verify all providers have env var entries.
+func HasProviderEnvVar(prov string) bool {
+	if _, ok := providerEnvVars[prov]; ok {
+		return true
+	}
+	for k := range providerEnvVars {
+		if strings.HasPrefix(k, prov) {
+			return true
+		}
+	}
+	return false
 }
 
 func newAttester(name string, cp *config.Provider, offline bool) (provider.Attester, error) {
@@ -41,8 +71,10 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 		return phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	case "chutes":
 		return chutes.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
+	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
+		return tinfoil.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", name)
 	}
 }
 
@@ -63,6 +95,8 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 		}
 	case "chutes":
 		return chutes.ReportDataVerifier{}
+	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
+		return tinfoil.ReportDataVerifier{}
 	default:
 		return nil
 	}
@@ -82,6 +116,8 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 		return nil // no supply chain policy yet
 	case "chutes":
 		return nil // cosign+IMA model, no docker-compose
+	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
+		return nil // Sigstore-based, not compose-based
 	default:
 		return nil
 	}
@@ -106,6 +142,8 @@ func chatPathForProvider(name string) string {
 	case "nearcloud", "neardirect", "nanogpt":
 		return "/v1/chat/completions"
 	case "chutes":
+		return "/v1/chat/completions"
+	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
 		return "/v1/chat/completions"
 	default:
 		return ""

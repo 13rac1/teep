@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -84,14 +86,16 @@ func TestVerifyReportData_ValidWithNVSwitch(t *testing.T) {
 	raw, nonce, reportData := makeRawForReportData(t, true)
 
 	// Need to build a GPU with 8 HOPPERs to trigger nvswitch expected.
-	gpu8 := `{"evidences":[`
+	var gpu8Builder strings.Builder
+	gpu8Builder.WriteString(`{"evidences":[`)
 	for i := range 8 {
 		if i > 0 {
-			gpu8 += ","
+			gpu8Builder.WriteString(",")
 		}
-		gpu8 += `{"arch":"HOPPER","certificate":"Y2VydA==","evidence":"ZXZpZA==","nonce":"` + makeHex32(byte(i)) + `"}`
+		gpu8Builder.WriteString(`{"arch":"HOPPER","certificate":"Y2VydA==","evidence":"ZXZpZA==","nonce":"` + makeHex32(byte(i)) + `"}`)
 	}
-	gpu8 += `]}`
+	gpu8Builder.WriteString(`]}`)
+	gpu8 := gpu8Builder.String()
 	gpuHash := sha256.Sum256([]byte(gpu8))
 	raw.GPURawJSON = []byte(gpu8)
 	raw.TinfoilGPUEvidenceHash = hex.EncodeToString(gpuHash[:])
@@ -235,19 +239,20 @@ func TestIsNVSwitchExpected_8GPUBlackwell(t *testing.T) {
 
 func TestIsNVSwitchExpected_8GPUMixedHopperBlackwell(t *testing.T) {
 	// Mix of HOPPER and BLACKWELL — at least one HOPPER means nvswitch expected.
-	evidences := "["
+	var evBuilder strings.Builder
+	evBuilder.WriteString("[")
 	for i := range 8 {
 		if i > 0 {
-			evidences += ","
+			evBuilder.WriteString(",")
 		}
 		arch := ArchBlackwell
 		if i == 0 {
 			arch = ArchHopper
 		}
-		evidences += fmt.Sprintf(`{"arch":%q,"certificate":"","evidence":"","nonce":"%s"}`, arch, makeHex32(byte(i)))
+		evBuilder.Write(fmt.Appendf(nil, `{"arch":%q,"certificate":"","evidence":"","nonce":%q}`, arch, makeHex32(byte(i))))
 	}
-	evidences += "]"
-	gpu := []byte(fmt.Sprintf(`{"evidences":%s}`, evidences))
+	evBuilder.WriteString("]")
+	gpu := fmt.Appendf(nil, `{"evidences":%s}`, evBuilder.String())
 
 	expected, err := isNVSwitchExpected(gpu)
 	if err != nil {
@@ -282,15 +287,16 @@ func TestIsNVSwitchExpected_EmptyGPU(t *testing.T) {
 
 // buildGPUJSON builds a GPU evidences JSON with count GPUs all of the given arch.
 func buildGPUJSON(count int, arch string) []byte {
-	evidences := "["
+	var evBuilder strings.Builder
+	evBuilder.WriteString("[")
 	for i := range count {
 		if i > 0 {
-			evidences += ","
+			evBuilder.WriteString(",")
 		}
-		evidences += fmt.Sprintf(`{"arch":%q,"certificate":"","evidence":"","nonce":"%s"}`, arch, makeHex32(byte(i)))
+		evBuilder.Write(fmt.Appendf(nil, `{"arch":%q,"certificate":"","evidence":"","nonce":%q}`, arch, makeHex32(byte(i))))
 	}
-	evidences += "]"
-	return []byte(fmt.Sprintf(`{"evidences":%s}`, evidences))
+	evBuilder.WriteString("]")
+	return fmt.Appendf(nil, `{"evidences":%s}`, evBuilder.String())
 }
 
 // validTDXForPolicy builds a TDXVerifyResult that passes all Tinfoil TDX policy checks.
@@ -416,7 +422,7 @@ func TestTDXPolicyResult_Err(t *testing.T) {
 	if result.Err() != nil {
 		t.Error("expected nil Err for all-passing policy")
 	}
-	result.MRConfigIDErr = fmt.Errorf("test error")
+	result.MRConfigIDErr = errors.New("test error")
 	if result.Err() == nil {
 		t.Error("expected non-nil Err when a field has an error")
 	}

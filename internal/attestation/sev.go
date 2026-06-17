@@ -3,6 +3,7 @@ package attestation
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -188,16 +189,16 @@ func VerifySEVReportOffline(ctx context.Context, report []byte) *SEVVerifyResult
 // validateSEVPolicy checks that the guest policy meets our security requirements.
 func validateSEVPolicy(policy sevabi.SnpPolicy, report *pb.Report) error {
 	if policy.MigrateMA {
-		return fmt.Errorf("SEV-SNP policy: MigrateMA must be disabled")
+		return errors.New("SEV-SNP policy: MigrateMA must be disabled")
 	}
 	if !policy.SMT {
-		return fmt.Errorf("SEV-SNP policy: SMT must be enabled")
+		return errors.New("SEV-SNP policy: SMT must be enabled")
 	}
 	if policy.Debug {
-		return fmt.Errorf("SEV-SNP policy: debug must be disabled")
+		return errors.New("SEV-SNP policy: debug must be disabled")
 	}
 	if policy.SingleSocket {
-		return fmt.Errorf("SEV-SNP policy: SingleSocket must be disabled")
+		return errors.New("SEV-SNP policy: SingleSocket must be disabled")
 	}
 
 	build := report.GetCurrentBuild()

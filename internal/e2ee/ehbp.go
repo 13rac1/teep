@@ -76,7 +76,7 @@ func (s *EHBPSession) EncryptRequest(body io.Reader) (io.Reader, error) {
 	// Frame: [4-byte big-endian length][ciphertext]
 	var buf bytes.Buffer
 	buf.Grow(4 + len(ciphertext))
-	if err := binary.Write(&buf, binary.BigEndian, uint32(len(ciphertext))); err != nil {
+	if err := binary.Write(&buf, binary.BigEndian, uint32(len(ciphertext))); err != nil { //nolint:gosec // bounded by maxRequestBodySize (64 MiB) + AEAD overhead
 		return nil, fmt.Errorf("ehbp: write chunk length: %w", err)
 	}
 	buf.Write(ciphertext)
@@ -209,7 +209,7 @@ func (r *ehbpResponseReader) Read(p []byte) (int, error) {
 	copy(nonce, r.baseNonce)
 	var counterBuf [8]byte
 	binary.BigEndian.PutUint64(counterBuf[:], r.chunkIdx)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		nonce[4+i] ^= counterBuf[i]
 	}
 	r.chunkIdx++

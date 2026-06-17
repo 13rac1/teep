@@ -55,9 +55,11 @@ var DefaultAllowFail = attestation.DefaultAllowFail
 // Go-level default allow_fail lists. Providers not in this map fall back to
 // the global DefaultAllowFail.
 var providerDefaultAllowFail = map[string][]string{
-	"chutes":     attestation.ChutesDefaultAllowFail,
-	"nearcloud":  attestation.NearcloudDefaultAllowFail,
-	"neardirect": attestation.NeardirectDefaultAllowFail,
+	"chutes":            attestation.ChutesDefaultAllowFail,
+	"nearcloud":         attestation.NearcloudDefaultAllowFail,
+	"neardirect":        attestation.NeardirectDefaultAllowFail,
+	"tinfoil_v3_cloud":  attestation.TinfoilDefaultAllowFail,
+	"tinfoil_v3_direct": attestation.TinfoilDefaultAllowFail,
 }
 
 // ProviderDefaultAllowFail returns a defensive copy of the provider-specific
@@ -606,6 +608,8 @@ func applyEnvOverrides(cfg *Config) {
 	applyAPIKeyEnv(cfg, "nanogpt", "NANOGPT_API_KEY", "https://nano-gpt.com/api", false)
 	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://api.redpill.ai", false)
 	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai", true)
+	applyAPIKeyEnv(cfg, "tinfoil_v3_cloud", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", false)
+	applyAPIKeyEnv(cfg, "tinfoil_v3_direct", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", false)
 }
 
 // applyAPIKeyEnv sets or updates the API key for the named provider from the

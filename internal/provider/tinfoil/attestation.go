@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -81,7 +82,7 @@ func parseV3Response(body []byte) (*attestation.RawAttestation, *v3Response, err
 
 	// Reject legacy V2 format (has "body" field).
 	if resp.Body != nil {
-		return nil, nil, fmt.Errorf("tinfoil: response contains 'body' field — this is a V2 response, not V3")
+		return nil, nil, errors.New("tinfoil: response contains 'body' field — this is a V2 response, not V3")
 	}
 
 	// Validate format URI.

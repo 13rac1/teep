@@ -580,6 +580,7 @@ Environment variables:
   NANOGPT_API_KEY    NanoGPT API key.
   PHALA_API_KEY      Phala Cloud API key.
   CHUTES_API_KEY     Chutes API key.
+  TINFOIL_API_KEY    Tinfoil API key (used by tinfoil_v3_cloud and tinfoil_v3_direct).
 `)
 }
 
@@ -592,8 +593,8 @@ Usage:
 
 The proxy activates every provider whose API key is configured (via TOML or
 environment variable). Supported providers: venice, neardirect, nearcloud,
-nanogpt, phalacloud, chutes. All active providers are served simultaneously
-from a single proxy instance.
+nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct. All active
+providers are served simultaneously from a single proxy instance.
 
 Clients send requests to http://127.0.0.1:8337/v1/chat/completions (or the
 address set by TEEP_LISTEN_ADDR) using the same format as the OpenAI API.
@@ -602,6 +603,7 @@ Model names must include the provider prefix: provider:model
   venice:e2ee-qwen3-5-122b-a10b
   neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct
   chutes:deepseek-ai/DeepSeek-V3-0324-TEE
+  tinfoil_v3_cloud:meta-llama/Llama-4-Scout-17B-16E-Instruct
 
 The proxy:
   1. Parses the model prefix to determine the upstream provider.
@@ -639,7 +641,8 @@ Usage:
   teep verify PROVIDER --model MODEL [flags]
 
 PROVIDER:
-  venice, neardirect, nearcloud, nanogpt, phalacloud, chutes
+  venice, neardirect, nearcloud, nanogpt, phalacloud, chutes,
+  tinfoil_v3_cloud, tinfoil_v3_direct
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
 attestation for the given model, and runs all verification factors. The

@@ -1,4 +1,4 @@
-.PHONY: help build build-debug self-check test test-live test-fuzz integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture integration-chutes-fixture vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes e2e-venice
+.PHONY: help build build-debug self-check test test-live test-fuzz integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-tinfoil integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture integration-chutes-fixture vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes report-tinfoil e2e-venice
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -40,7 +40,7 @@ coverage-full: ## Full coverage without -short (live integration tests still nee
 test-live: ## Run live network tests (dials external hosts, requires internet)
 	TEEP_LIVE_TESTS=1 go test -race -v ./internal/tlsct/ -run TestLive
 
-integration: integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture integration-chutes-fixture ## Run all integration tests
+integration: integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-tinfoil integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture integration-chutes-fixture ## Run all integration tests
 
 integration-venice: ## Run Venice integration tests (requires VENICE_API_KEY)
 	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_Venice ./internal/proxy/
@@ -72,6 +72,9 @@ integration-nearcloud-fixture: ## Run NearCloud fixture integration test (no API
 integration-chutes-fixture: ## Run Chutes fixture integration test (no API key needed)
 	go test -v -race -timeout 60s -run TestIntegration_Chutes_Fixture ./internal/integration/
 
+integration-tinfoil: ## Run Tinfoil integration tests (requires TINFOIL_API_KEY)
+	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_Tinfoil ./internal/proxy/
+
 vet: ## Run go vet
 	go vet ./cmd/... ./internal/...
 
@@ -96,7 +99,7 @@ test-fuzz: ## Fuzz all attestation parsers (FUZZTIME=30s by default)
 
 check: lint test ## Run lint + test
 
-reports: report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes ## Run all attestation reports
+reports: report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes report-tinfoil ## Run all attestation reports
 
 report-venice: build ## Verify Venice attestation (requires VENICE_API_KEY)
 	./teep verify venice --model e2ee-qwen3-5-122b-a10b --log-level debug --capture /tmp/teep-attestation-venice
@@ -115,6 +118,9 @@ report-phalacloud: build ## Verify Phala Cloud attestation (requires PHALA_API_K
 
 report-chutes: build ## Verify Chutes attestation (requires CHUTES_API_KEY)
 	./teep verify chutes --model zai-org/GLM-5-TEE --log-level debug --capture /tmp/teep-attestation-chutes
+
+report-tinfoil: build ## Verify Tinfoil attestation (requires TINFOIL_API_KEY)
+	./teep verify tinfoil_v3_cloud --model meta-llama/Llama-4-Scout-17B-16E-Instruct --log-level debug --capture /tmp/teep-attestation-tinfoil
 
 e2e-venice: ## Run Venice E2E test (requires VENICE_API_KEY)
 	./test/e2e-venice.sh

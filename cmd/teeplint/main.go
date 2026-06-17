@@ -225,8 +225,22 @@ func checkProviderStructure(r *result, p *providerInfo) {
 
 	switch p.archetype {
 	case archetypeDirect:
-		checkResponseStruct(r, p, "attestationResponse")
-		fd := checkParseFunc(r, p, "ParseAttestationResponse")
+		// Tinfoil uses v3Response/parseV3Response instead of the standard
+		// attestationResponse/ParseAttestationResponse names because its V3
+		// attestation format is distinct from the dstack-based providers.
+		switch {
+		case hasStruct(p.files, "attestationResponse"):
+			checkResponseStruct(r, p, "attestationResponse")
+		case hasStruct(p.files, "v3Response"):
+			checkResponseStruct(r, p, "v3Response")
+		default:
+			r.failf("attestationResponse (or v3Response) struct not found in %s", p.name)
+		}
+		parseName := "ParseAttestationResponse"
+		if !hasFunc(p.files, parseName) && hasFunc(p.files, "parseV3Response") {
+			parseName = "parseV3Response"
+		}
+		fd := checkParseFunc(r, p, parseName)
 		checkParseFuncUsesJSONStrict(r, p, fd)
 	case archetypeGateway:
 		fd := checkParseFunc(r, p, "ParseAttestationResponse")
@@ -443,11 +457,23 @@ func checkNoSlogAPIKeyArgs(r *result, p *providerInfo) {
 }
 
 // No json.RawMessage in provider response structs.
-// Skips models.go which uses json.RawMessage for pass-through relay (not attestation parsing).
+// Skips models.go (pass-through relay) and sigstore.go (Sigstore bundle).
+// Tinfoil attestation.go is also skipped: gpu and nvswitch are kept as
+// raw bytes for SHA-256 hash verification (the raw JSON bytes are the
+// hash preimage for REPORTDATA binding).
 func checkNoJSONRawMessage(r *result, p *providerInfo) {
+	skipFiles := map[string]bool{
+		"models.go":   true,
+		"sigstore.go": true,
+	}
+	// Tinfoil attestation.go has intentional json.RawMessage for GPU/NVSwitch
+	// raw byte hashing.
+	if p.name == "tinfoil" {
+		skipFiles["attestation.go"] = true
+	}
 	var violations []string
 	for i, f := range p.files {
-		if filepath.Base(p.fileNames[i]) == "models.go" {
+		if skipFiles[filepath.Base(p.fileNames[i])] {
 			continue
 		}
 		for _, decl := range f.Decls {
@@ -502,7 +528,16 @@ func collectRawMessageViolations(fset *token.FileSet, st *ast.StructType, struct
 }
 
 // At least one test file uses external package.
+// Providers with unexported parse functions (e.g. parseV3Response) need
+// internal test access, so the external package requirement is skipped.
 func checkExternalTestPackage(r *result, p *providerInfo) {
+	// If the provider uses an unexported parse function, it needs internal
+	// test access and cannot use external test packages for parse tests.
+	if hasFunc(p.files, "parseV3Response") && !hasFunc(p.files, "ParseAttestationResponse") {
+		r.skipf("external test package not required (%s uses unexported parse function)", p.name)
+		return
+	}
+
 	testFiles, _ := filepath.Glob(filepath.Join(p.dir, "*_test.go"))
 	wantPkg := p.name + "_test"
 	for _, tf := range testFiles {
@@ -914,8 +949,9 @@ func checkCLIMain(r *result, providers []string) {
 	}
 
 	// ProviderEnvVars map has key for each provider (checked via direct import).
+	// Supports multi-name providers where one directory maps to multiple config names.
 	for _, prov := range providers {
-		if _, ok := verify.ProviderEnvVars[prov]; ok {
+		if hasProviderEnvVar(prov) {
 			r.passf("ProviderEnvVars has key %q", prov)
 		} else {
 			r.failf("ProviderEnvVars missing key %q", prov)
@@ -929,7 +965,7 @@ func checkCLIMain(r *result, providers []string) {
 	} else {
 		cases := collectSwitchCases(newAttesterFunc.Body)
 		for _, prov := range providers {
-			if cases[prov] {
+			if hasPrefixMatch(cases, prov) {
 				r.passf("newAttester switch includes %q", prov)
 			} else {
 				r.failf("newAttester switch missing %q", prov)
@@ -944,7 +980,7 @@ func checkCLIMain(r *result, providers []string) {
 	} else {
 		cases := collectSwitchCases(rdvFunc.Body)
 		for _, prov := range providers {
-			if cases[prov] {
+			if hasPrefixMatch(cases, prov) {
 				r.passf("newReportDataVerifier switch includes %q", prov)
 			} else {
 				r.failf("newReportDataVerifier switch missing %q", prov)
@@ -959,7 +995,7 @@ func checkCLIMain(r *result, providers []string) {
 	} else {
 		cases := collectSwitchCases(scpFunc.Body)
 		for _, prov := range providers {
-			if cases[prov] {
+			if hasPrefixMatch(cases, prov) {
 				r.passf("supplyChainPolicy switch includes %q", prov)
 			} else {
 				r.failf("supplyChainPolicy switch missing %q", prov)
@@ -986,8 +1022,8 @@ func checkHelpText(r *result, providers []string, envVars map[string]string) {
 
 	for _, prov := range providers {
 		// printOverview environment section mentions provider env var.
-		envVar := envVars[prov]
-		if envVar != "" {
+		envVar, envFound := hasEnvVarForProvider(envVars, prov)
+		if envFound && envVar != "" {
 			if strings.Contains(overviewText, envVar) {
 				r.passf("printOverview mentions %s", envVar)
 			} else {
@@ -1012,6 +1048,42 @@ func checkHelpText(r *result, providers []string, envVars map[string]string) {
 		}
 	}
 	fmt.Println()
+}
+
+// hasPrefixMatch reports whether any key in the cases map has prov as a prefix.
+// This supports multi-name providers where one directory (e.g. "tinfoil") maps
+// to multiple config names (e.g. "tinfoil_v3_cloud", "tinfoil_v3_direct").
+func hasPrefixMatch(cases map[string]bool, prov string) bool {
+	if cases[prov] {
+		return true
+	}
+	for k := range cases {
+		if strings.HasPrefix(k, prov) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasProviderEnvVar reports whether the provider env var map contains an
+// entry whose key matches prov exactly or has prov as a prefix. Uses the
+// exported HasProviderEnvVar accessor to avoid touching the unexported map.
+func hasProviderEnvVar(prov string) bool {
+	return verify.HasProviderEnvVar(prov)
+}
+
+// hasEnvVarForProvider returns the env var value for a provider, checking
+// both exact matches and prefix matches.
+func hasEnvVarForProvider(envVars map[string]string, prov string) (string, bool) {
+	if v, ok := envVars[prov]; ok {
+		return v, true
+	}
+	for k, v := range envVars {
+		if strings.HasPrefix(k, prov) {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // =============================================================================
@@ -1194,7 +1266,18 @@ func checkFromConfigDefaultError(r *result, fd *ast.FuncDecl, providers []string
 	}
 
 	for _, prov := range providers {
-		if strings.Contains(fmtStr, prov) {
+		// Check for exact match or prefix match (e.g. "tinfoil" in "tinfoil_v3_cloud").
+		found := strings.Contains(fmtStr, prov)
+		if !found {
+			// Check if any prefixed variant appears (multi-name providers).
+			for word := range strings.FieldsSeq(strings.ReplaceAll(fmtStr, ",", " ")) {
+				if strings.HasPrefix(word, prov) {
+					found = true
+					break
+				}
+			}
+		}
+		if found {
 			r.passf("fromConfig default error mentions %q", prov)
 		} else {
 			r.failf("fromConfig default error missing %q (update the error message)", prov)
@@ -1257,7 +1340,17 @@ func checkFromConfigFieldAssignment(r *result, fd *ast.FuncDecl, providers []str
 	})
 
 	for _, prov := range providers {
-		if assigned[prov] {
+		found := assigned[prov]
+		if !found {
+			// Check prefix matches for multi-name providers.
+			for k := range assigned {
+				if strings.HasPrefix(k, prov) {
+					found = true
+					break
+				}
+			}
+		}
+		if found {
 			r.passf("fromConfig %q sets p.%s", prov, field)
 		} else {
 			r.failf("fromConfig %q missing p.%s assignment", prov, field)
@@ -1328,7 +1421,7 @@ func extractFuncStringLiterals(f *ast.File, funcName string) string {
 	return b.String()
 }
 
-// readProviderEnvVars extracts the ProviderEnvVars map from internal/verify/factory.go.
+// readProviderEnvVars extracts the providerEnvVars map from internal/verify/factory.go.
 func readProviderEnvVars() map[string]string {
 	path := "internal/verify/factory.go"
 	fset := token.NewFileSet()
@@ -1348,7 +1441,7 @@ func readProviderEnvVars() map[string]string {
 				continue
 			}
 			for i, name := range vs.Names {
-				if name.Name != "ProviderEnvVars" || i >= len(vs.Values) {
+				if name.Name != "providerEnvVars" || i >= len(vs.Values) {
 					continue
 				}
 				cl, ok := vs.Values[i].(*ast.CompositeLit)

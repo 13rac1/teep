@@ -277,6 +277,15 @@ var ChutesDefaultAllowFail = []string{
 	"event_log_integrity",
 }
 
+// TinfoilDefaultAllowFail is the tinfoil-specific default allow_fail list.
+// Tinfoil runs its own TEE stack (TDX or SEV-SNP) with Sigstore supply chain
+// verification instead of compose-based binding. Core TDX/SEV-SNP quote
+// integrity and REPORTDATA binding are enforced. cpu_id_registry is
+// allowed to fail because Tinfoil does not participate in Proof of Cloud.
+var TinfoilDefaultAllowFail = []string{
+	"cpu_id_registry",
+}
+
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{

@@ -116,7 +116,7 @@ func buildReportDataPreimage(raw *attestation.RawAttestation) ([]byte, error) {
 // SHA-256 of the raw GPU JSON bytes.
 func verifyGPUEvidenceHash(raw *attestation.RawAttestation) error {
 	if len(raw.GPURawJSON) == 0 {
-		return fmt.Errorf("gpu field is empty")
+		return errors.New("gpu field is empty")
 	}
 
 	computed := sha256.Sum256(raw.GPURawJSON)
@@ -133,10 +133,10 @@ func verifyGPUEvidenceHash(raw *attestation.RawAttestation) error {
 // matches SHA-256 of the raw NVSwitch JSON bytes.
 func verifyNVSwitchEvidenceHash(raw *attestation.RawAttestation) error {
 	if len(raw.NVSwitchRawJSON) == 0 {
-		return fmt.Errorf("nvswitch field is empty but nvswitch_expected=true")
+		return errors.New("nvswitch field is empty but nvswitch_expected=true")
 	}
 	if raw.TinfoilNVSwitchEvidenceHash == "" {
-		return fmt.Errorf("nvswitch_evidence_hash is empty but nvswitch_expected=true")
+		return errors.New("nvswitch_evidence_hash is empty but nvswitch_expected=true")
 	}
 
 	computed := sha256.Sum256(raw.NVSwitchRawJSON)
@@ -160,7 +160,7 @@ func verifyNVSwitchEvidenceHash(raw *attestation.RawAttestation) error {
 //  7. Malformed gpu evidences: fail closed
 func isNVSwitchExpected(gpuRawJSON []byte) (bool, error) {
 	if len(gpuRawJSON) == 0 {
-		return false, fmt.Errorf("gpu field is empty")
+		return false, errors.New("gpu field is empty")
 	}
 
 	var gpu v3GPUEvidences

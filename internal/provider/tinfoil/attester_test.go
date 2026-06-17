@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -26,22 +27,16 @@ import (
 
 // testKeyAndCert generates an ECDSA P-256 key pair and self-signed certificate.
 // Returns the PEM certificate string, the key fingerprint (SHA-256 of SPKI),
-// and the private key for signing.
-func testKeyAndCert(t *testing.T) (pemCert string, fpHex string, key *ecdsa.PrivateKey) {
+// the private key for signing, and the DER-encoded leaf certificate (for
+// constructing a tls.Certificate that the test TLS server presents so the live
+// peer SPKI matches the attested tls_key_fp).
+func testKeyAndCert(t *testing.T) (pemCert, fpHex string, key *ecdsa.PrivateKey, certDER []byte) {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate ECDSA key: %v", err)
 	}
-
-	// Compute SPKI fingerprint.
-	spkiDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		t.Fatalf("marshal SPKI: %v", err)
-	}
-	fpHash := sha256.Sum256(spkiDER)
-	fpHex = fmt.Sprintf("%x", fpHash)
 
 	// Create self-signed certificate.
 	template := &x509.Certificate{
@@ -76,8 +71,10 @@ func testKeyAndCert(t *testing.T) (pemCert string, fpHex string, key *ecdsa.Priv
 }
 
 // makeSignedV3JSON builds a valid V3 attestation JSON document with a real
-// ECDSA envelope signature. Returns the raw JSON bytes and the nonce used.
-func makeSignedV3JSON(t *testing.T, platform string) ([]byte, attestation.Nonce) {
+// ECDSA envelope signature. Returns the raw JSON bytes, the nonce used, and a
+// tls.Certificate whose leaf SPKI matches the attested tls_key_fp (so a test
+// TLS server can present it and the live peer SPKI check passes).
+func makeSignedV3JSON(t *testing.T) ([]byte, attestation.Nonce, tls.Certificate) {
 	t.Helper()
 
 	pemCert, fpHex, privKey, certDER := testKeyAndCert(t)
@@ -102,7 +99,7 @@ func makeSignedV3JSON(t *testing.T, platform string) ([]byte, attestation.Nonce)
 		"format":      FormatURI,
 		"report_data": rd,
 		"cpu": map[string]any{
-			"platform": platform,
+			"platform": PlatformTDX,
 			"report":   base64.StdEncoding.EncodeToString(cpuReport),
 		},
 		"gpu":         json.RawMessage(gpu),
@@ -136,7 +133,7 @@ func makeSignedV3JSON(t *testing.T, platform string) ([]byte, attestation.Nonce)
 }
 
 func TestFetchAttestation_Success(t *testing.T) {
-	body, nonce := makeSignedV3JSON(t, PlatformTDX)
+	body, nonce, tlsCert := makeSignedV3JSON(t)
 
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != attestationPath {
@@ -174,7 +171,7 @@ func TestFetchAttestation_Success(t *testing.T) {
 
 func TestFetchAttestation_NonceMismatch(t *testing.T) {
 	// Build a signed response with a different nonce.
-	body, _ := makeSignedV3JSON(t, PlatformTDX)
+	body, _, tlsCert := makeSignedV3JSON(t)
 
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -196,7 +193,7 @@ func TestFetchAttestation_NonceMismatch(t *testing.T) {
 }
 
 func TestVerifyEnvelopeSignature_Valid(t *testing.T) {
-	body, _ := makeSignedV3JSON(t, PlatformTDX)
+	body, _, _ := makeSignedV3JSON(t)
 	_, resp, err := parseV3Response(body)
 	if err != nil {
 		t.Fatalf("parseV3Response failed: %v", err)
@@ -209,7 +206,7 @@ func TestVerifyEnvelopeSignature_Valid(t *testing.T) {
 }
 
 func TestVerifyEnvelopeSignature_TamperedBody(t *testing.T) {
-	body, _ := makeSignedV3JSON(t, PlatformTDX)
+	body, _, _ := makeSignedV3JSON(t)
 
 	// Tamper with the body by replacing a character.
 	tampered := make([]byte, len(body))

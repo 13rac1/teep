@@ -3,7 +3,7 @@ package attestation
 import (
 	"context"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"testing"
 
 	sevabi "github.com/google/go-sev-guest/abi"
@@ -294,6 +294,7 @@ func TestVerifySEVReportLowTCBRejected(t *testing.T) {
 		{
 			name: "low BlSpl",
 			mutate: func(t *testing.T, r *pb.Report) {
+				t.Helper()
 				tcb, err := kds.ComposeTCBParts(kds.TCBParts{
 					BlSpl:    sevMinBlSpl - 1,
 					TeeSpl:   sevMinTeeSpl,
@@ -309,6 +310,7 @@ func TestVerifySEVReportLowTCBRejected(t *testing.T) {
 		{
 			name: "low SnpSpl",
 			mutate: func(t *testing.T, r *pb.Report) {
+				t.Helper()
 				tcb, err := kds.ComposeTCBParts(kds.TCBParts{
 					BlSpl:    sevMinBlSpl,
 					TeeSpl:   sevMinTeeSpl,
@@ -324,6 +326,7 @@ func TestVerifySEVReportLowTCBRejected(t *testing.T) {
 		{
 			name: "low UcodeSpl",
 			mutate: func(t *testing.T, r *pb.Report) {
+				t.Helper()
 				tcb, err := kds.ComposeTCBParts(kds.TCBParts{
 					BlSpl:    sevMinBlSpl,
 					TeeSpl:   sevMinTeeSpl,
@@ -453,11 +456,11 @@ func TestNewSEVVerifierOffline(t *testing.T) {
 type sevNoopGetter struct{}
 
 func (*sevNoopGetter) Get(_ string) ([]byte, error) {
-	return nil, fmt.Errorf("noop getter")
+	return nil, errors.New("noop getter")
 }
 
 func (*sevNoopGetter) GetContext(_ context.Context, _ string) ([]byte, error) {
-	return nil, fmt.Errorf("noop getter")
+	return nil, errors.New("noop getter")
 }
 
 // TestNewSEVVerifierOnline verifies that NewSEVVerifier in online mode

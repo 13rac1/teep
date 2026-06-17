@@ -54,7 +54,7 @@ func serverDecryptRequest(t *testing.T, privKey *ecdh.PrivateKey, encapKey []byt
 // serverEncryptResponse is a test helper simulating the server side:
 // it derives response keys and encrypts a response body into EHBP chunk framing.
 // Returns the encrypted body and the hex-encoded response nonce.
-func serverEncryptResponse(t *testing.T, privKey *ecdh.PrivateKey, encapKey []byte, chunks [][]byte) ([]byte, string) {
+func serverEncryptResponse(t *testing.T, privKey *ecdh.PrivateKey, encapKey []byte, chunks [][]byte) (encBody []byte, nonceHex string) {
 	t.Helper()
 
 	hpkePriv, err := hpke.NewDHKEMPrivateKey(privKey)
@@ -108,7 +108,7 @@ func serverEncryptResponse(t *testing.T, privKey *ecdh.PrivateKey, encapKey []by
 		copy(nonce, aeadNonce)
 		var counterBuf [8]byte
 		binary.BigEndian.PutUint64(counterBuf[:], uint64(i))
-		for j := 0; j < 8; j++ {
+		for j := range 8 {
 			nonce[4+j] ^= counterBuf[j]
 		}
 
@@ -470,12 +470,12 @@ func TestEHBPNonceXORCounter(t *testing.T) {
 	}
 
 	seen := make(map[string]uint64)
-	for i := uint64(0); i < 1000; i++ {
+	for i := range uint64(1000) {
 		nonce := make([]byte, 12)
 		copy(nonce, baseNonce)
 		var counterBuf [8]byte
 		binary.BigEndian.PutUint64(counterBuf[:], i)
-		for j := 0; j < 8; j++ {
+		for j := range 8 {
 			nonce[4+j] ^= counterBuf[j]
 		}
 		key := string(nonce)

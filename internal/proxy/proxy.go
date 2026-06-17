@@ -51,6 +51,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/reqid"
 	"github.com/13rac1/teep/internal/tlsct"
@@ -747,8 +748,44 @@ func fromConfig(
 		p.E2EEMaterialFetcher = chutesProvider.NewNoncePool(
 			cp.BaseURL, cp.APIKey, attester.Resolver(), config.NewAttestationClient(offline),
 		)
+	case "tinfoil_v3_cloud":
+		p.ChatPath = "/v1/chat/completions"
+		p.EmbeddingsPath = "/v1/embeddings"
+		p.AudioPath = "/v1/audio/transcriptions"
+		p.Attester = tinfoil.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		p.Preparer = tinfoil.NewPreparer(cp.APIKey)
+		p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
+		p.SupplyChainPolicy = nil // Sigstore-based, not compose-based
+		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
+			return "inference.tinfoil.sh", true
+		}
+	case "tinfoil_v3_direct":
+		resolver := tinfoil.NewDirectResolver(cp.APIKey, offline)
+		// Direct provider routes API traffic through the router; attestation
+		// verifies the per-model inference enclave. Dynamic per-model routing
+		// (sending traffic directly to *.inference.tinfoil.sh) requires EHBP
+		// proxy integration and is not yet implemented.
+		p.BaseURL = tinfoil.DefaultBaseURL
+		p.ChatPath = "/v1/chat/completions"
+		p.EmbeddingsPath = "/v1/embeddings"
+		p.AudioPath = "/v1/audio/transcriptions"
+		p.Attester = tinfoil.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		p.Preparer = tinfoil.NewPreparer(cp.APIKey)
+		p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
+		p.SupplyChainPolicy = nil // Sigstore-based, not compose-based
+		p.ModelLister = provider.NewModelLister(tinfoil.DefaultBaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
+			d, err := resolver.Resolve(ctx, model)
+			if err != nil {
+				slog.WarnContext(ctx, "tinfoil direct: SPKI domain resolution failed",
+					"model", model, "err", err)
+				return "", false
+			}
+			return d, true
+		}
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes)", cp.Name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", cp.Name)
 	}
 
 	// Invariant: any provider with a PinnedHandler must have SPKIDomainForModel

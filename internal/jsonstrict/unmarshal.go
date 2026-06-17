@@ -41,9 +41,7 @@ func Unmarshal(data []byte, v any) (unknownFields []string, err error) {
 // fall back to the Go field name, matching encoding/json behavior.
 func knownJSONKeys(t reflect.Type) map[string]struct{} {
 	keys := make(map[string]struct{})
-	for i := range t.NumField() {
-		field := t.Field(i)
-
+	for field := range t.Fields() {
 		if field.Anonymous {
 			ft := field.Type
 			if ft.Kind() == reflect.Pointer {

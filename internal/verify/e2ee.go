@@ -41,7 +41,7 @@ func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName
 	if offline {
 		return &attestation.E2EETestResult{Detail: "offline mode; E2EE test skipped"}
 	}
-	envVar := ProviderEnvVars[providerName]
+	envVar, _ := ProviderEnvVar(providerName)
 	if cp.APIKey == "" {
 		return &attestation.E2EETestResult{NoAPIKey: true, APIKeyEnv: envVar}
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
@@ -33,6 +34,12 @@ var registry = map[string]providerDefaults{
 	},
 	"chutes": {
 		model: chutes.DefaultMeasurementPolicy(),
+	},
+	"tinfoil_v3_cloud": {
+		model: tinfoil.DefaultMeasurementPolicy(),
+	},
+	"tinfoil_v3_direct": {
+		model: tinfoil.DefaultMeasurementPolicy(),
 	},
 }
 

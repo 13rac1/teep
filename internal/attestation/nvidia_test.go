@@ -56,15 +56,14 @@ func makeTestJWT(t *testing.T, key *ecdsa.PrivateKey, kid, nonce, issuer string,
 // makeJWKSBody returns JSON for a JWKS containing the given EC public key.
 func makeJWKSBody(t *testing.T, key *ecdsa.PublicKey, kid string) []byte {
 	t.Helper()
-	byteLen := (key.Curve.Params().BitSize + 7) / 8
-	xBytes := key.X.Bytes()
-	yBytes := key.Y.Bytes()
-	for len(xBytes) < byteLen {
-		xBytes = append([]byte{0}, xBytes...)
+	// SEC1 uncompressed encoding: 0x04 || X || Y (each coordinate padded).
+	raw, err := key.Bytes()
+	if err != nil {
+		t.Fatalf("PublicKey.Bytes: %v", err)
 	}
-	for len(yBytes) < byteLen {
-		yBytes = append([]byte{0}, yBytes...)
-	}
+	byteLen := (len(raw) - 1) / 2
+	xBytes := raw[1 : 1+byteLen]
+	yBytes := raw[1+byteLen:]
 	jwks := map[string]any{
 		"keys": []map[string]string{
 			{

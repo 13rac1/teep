@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -92,7 +93,7 @@ func verifyEnvelopeSignature(rawBody []byte, resp *v3Response) error {
 	// Parse leaf certificate from PEM.
 	block, _ := pem.Decode([]byte(resp.Certificate))
 	if block == nil {
-		return fmt.Errorf("tinfoil: no PEM block in certificate field")
+		return errors.New("tinfoil: no PEM block in certificate field")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
@@ -107,12 +108,12 @@ func verifyEnvelopeSignature(rawBody []byte, resp *v3Response) error {
 
 	// Verify leaf public key fingerprint matches report_data.tls_key_fp.
 	// The fingerprint is SHA-256 of the SPKI (SubjectPublicKeyInfo DER).
-	spkiDER, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
-	if err != nil {
-		return fmt.Errorf("tinfoil: marshal SPKI for fingerprint: %w", err)
-	}
-	fpHash := sha256.Sum256(spkiDER)
-	fpHex := fmt.Sprintf("%x", fpHash)
+	// Use the certificate's already-parsed RawSubjectPublicKeyInfo (the
+	// exact DER bytes from the certificate) rather than re-marshaling via
+	// x509.MarshalPKIXPublicKey. This avoids a silent error path and matches
+	// the "SHA-256 of SPKI DER" definition exactly.
+	fpHash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	fpHex := hex.EncodeToString(fpHash[:])
 
 	if subtle.ConstantTimeCompare([]byte(fpHex), []byte(resp.ReportData.TLSKeyFP)) != 1 {
 		return fmt.Errorf("tinfoil: certificate SPKI fingerprint %s does not match report_data.tls_key_fp %s",
@@ -134,7 +135,7 @@ func verifyEnvelopeSignature(rawBody []byte, resp *v3Response) error {
 	}
 
 	if !ecdsa.VerifyASN1(ecdsaKey, hash[:], sigBytes) {
-		return fmt.Errorf("tinfoil: envelope ECDSA signature verification failed")
+		return errors.New("tinfoil: envelope ECDSA signature verification failed")
 	}
 
 	return nil
@@ -148,7 +149,7 @@ func replaceSignatureValue(rawBody []byte, sigValue string) ([]byte, error) {
 	// not a coincidental occurrence inside a nested string value.
 	idx := bytes.LastIndex(rawBody, signatureSearchPrefix)
 	if idx < 0 {
-		return nil, fmt.Errorf("tinfoil: cannot find signature field in raw JSON for envelope verification")
+		return nil, errors.New("tinfoil: cannot find signature field in raw JSON for envelope verification")
 	}
 
 	// The value starts right after the prefix.
@@ -158,14 +159,14 @@ func replaceSignatureValue(rawBody []byte, sigValue string) ([]byte, error) {
 	// The base64 value should not contain backslash-escaped quotes.
 	valueEnd := bytes.IndexByte(rawBody[valueStart:], '"')
 	if valueEnd < 0 {
-		return nil, fmt.Errorf("tinfoil: cannot find end of signature value in raw JSON")
+		return nil, errors.New("tinfoil: cannot find end of signature value in raw JSON")
 	}
 	valueEnd += valueStart
 
 	// Verify the extracted value matches what we parsed.
 	extractedSig := string(rawBody[valueStart:valueEnd])
 	if extractedSig != sigValue {
-		return nil, fmt.Errorf("tinfoil: extracted signature value does not match parsed value")
+		return nil, errors.New("tinfoil: extracted signature value does not match parsed value")
 	}
 
 	// Build modified body: everything before the value + everything after.

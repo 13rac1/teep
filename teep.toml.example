@@ -35,6 +35,16 @@ e2ee = true
 base_url = "https://nano-gpt.com/api"
 api_key_env = "NANOGPT_API_KEY"
 
+[providers.tinfoil_v3_cloud]
+base_url = "https://inference.tinfoil.sh"
+api_key_env = "TINFOIL_API_KEY"
+e2ee = true
+
+[providers.tinfoil_v3_direct]
+# base_url is not used for tinfoil_v3_direct; model discovery is automatic
+api_key_env = "TINFOIL_API_KEY"
+e2ee = true
+
 # ---------------------------------------------------------------------------
 # Global Policy
 # ---------------------------------------------------------------------------

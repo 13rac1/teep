@@ -13,7 +13,7 @@ const (
 	PredicateHardwareMeasurements = "https://tinfoil.sh/predicate/hardware-measurements/v1"
 )
 
-// Known configuration repo mappings.
+// KnownRepos lists the known Tinfoil configuration repo mappings.
 var KnownRepos = []string{
 	"tinfoilsh/confidential-model-router",
 	"tinfoilsh/confidential-nomic-embed-text",

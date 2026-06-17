@@ -1569,7 +1569,7 @@ func writeCLIMainDir(t *testing.T, src string) {
 
 func TestCheckCLIMain_MissingNewAttester(t *testing.T) {
 	writeCLIMainDir(t, `package verify
-var ProviderEnvVars = map[string]string{"alpha": "ALPHA_KEY"}
+var providerEnvVars = map[string]string{"alpha": "ALPHA_KEY"}
 func newReportDataVerifier(p string) {}
 func supplyChainPolicy(p string) {}
 `)
@@ -1582,7 +1582,7 @@ func supplyChainPolicy(p string) {}
 
 func TestCheckCLIMain_MissingRDV(t *testing.T) {
 	writeCLIMainDir(t, `package verify
-var ProviderEnvVars = map[string]string{"alpha": "ALPHA_KEY"}
+var providerEnvVars = map[string]string{"alpha": "ALPHA_KEY"}
 func newAttester(p string) {
 	switch p {
 	case "alpha":
@@ -1599,7 +1599,7 @@ func supplyChainPolicy(p string) {}
 
 func TestCheckCLIMain_MissingSCP(t *testing.T) {
 	writeCLIMainDir(t, `package verify
-var ProviderEnvVars = map[string]string{"alpha": "ALPHA_KEY"}
+var providerEnvVars = map[string]string{"alpha": "ALPHA_KEY"}
 func newAttester(p string) {
 	switch p {
 	case "alpha":
@@ -1620,7 +1620,7 @@ func newReportDataVerifier(p string) {
 
 func TestCheckCLIMain_MissingProviderInSwitches(t *testing.T) {
 	writeCLIMainDir(t, `package verify
-var ProviderEnvVars = map[string]string{"alpha": "ALPHA_KEY"}
+var providerEnvVars = map[string]string{"alpha": "ALPHA_KEY"}
 func newAttester(p string) {
 	switch p {
 	case "other":
@@ -1762,10 +1762,10 @@ func TestReadProviderEnvVars_NonLitKeyVal(t *testing.T) {
 	if err := os.MkdirAll(factoryDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// ProviderEnvVars with identifier (non-literal) key — should be skipped.
+	// providerEnvVars with identifier (non-literal) key — should be skipped.
 	src := `package verify
 const k = "alpha"
-var ProviderEnvVars = map[string]string{k: "ALPHA_KEY"}
+var providerEnvVars = map[string]string{k: "ALPHA_KEY"}
 `
 	if err := os.WriteFile(filepath.Join(factoryDir, "factory.go"), []byte(src), 0o600); err != nil {
 		t.Fatal(err)
@@ -1783,10 +1783,10 @@ func TestReadProviderEnvVars_NonLitValue(t *testing.T) {
 	if err := os.MkdirAll(factoryDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// ProviderEnvVars with identifier (non-literal) value — should be skipped.
+	// providerEnvVars with identifier (non-literal) value — should be skipped.
 	src := `package verify
 const v = "ALPHA_KEY"
-var ProviderEnvVars = map[string]string{"alpha": v}
+var providerEnvVars = map[string]string{"alpha": v}
 `
 	if err := os.WriteFile(filepath.Join(factoryDir, "factory.go"), []byte(src), 0o600); err != nil {
 		t.Fatal(err)

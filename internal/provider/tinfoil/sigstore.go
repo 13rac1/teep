@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -83,7 +84,7 @@ func (sv *SigstoreVerifier) fetchLatestTag(ctx context.Context, repo string) (st
 		return "", fmt.Errorf("unmarshal release response: %w", err)
 	}
 	if release.TagName == "" {
-		return "", fmt.Errorf("release has empty tag_name")
+		return "", errors.New("release has empty tag_name")
 	}
 	return release.TagName, nil
 }
@@ -111,7 +112,7 @@ func validateTinfoilHash(digest string) (string, error) {
 	return digest, nil
 }
 
-func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo, digest string) ([]byte, string, error) {
+func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo, digest string) (predicateBytes []byte, predicateType string, err error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/attestations/sha256:%s", repo, digest)
 	body, err := sv.fetchBounded(ctx, url, maxAttestationResponseSize)
 	if err != nil {
@@ -159,7 +160,7 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 	}
 
 	// Configure verifier with SCT, transparency log, and observer timestamps.
-	sigVerifier, err := verify.NewSignedEntityVerifier(
+	sigVerifier, err := verify.NewVerifier(
 		trustedRoot,
 		verify.WithSignedCertificateTimestamps(1),
 		verify.WithTransparencyLog(1),
@@ -181,20 +182,20 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 	// Extract the verified statement.
 	statement := result.Statement
 	if statement == nil {
-		return nil, "", fmt.Errorf("verified bundle has no in-toto statement")
+		return nil, "", errors.New("verified bundle has no in-toto statement")
 	}
 
-	if statement.Predicate == nil {
-		return nil, "", fmt.Errorf("verified statement has nil predicate")
+	if statement.GetPredicate() == nil {
+		return nil, "", errors.New("verified statement has nil predicate")
 	}
 
 	// Marshal the protobuf Struct predicate to JSON bytes.
-	predicateJSON, err := protojson.Marshal(statement.Predicate)
+	predicateJSON, err := protojson.Marshal(statement.GetPredicate())
 	if err != nil {
 		return nil, "", fmt.Errorf("marshal predicate to JSON: %w", err)
 	}
 
-	return predicateJSON, statement.PredicateType, nil
+	return predicateJSON, statement.GetPredicateType(), nil
 }
 
 func (sv *SigstoreVerifier) fetchBounded(ctx context.Context, url string, limit int64) ([]byte, error) {
