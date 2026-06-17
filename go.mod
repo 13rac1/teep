@@ -21,7 +21,9 @@ require (
 require (
 	github.com/MicahParks/jwkset v0.11.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/google/go-sev-guest v0.15.0 // indirect
 	github.com/google/logger v1.1.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/time v0.14.0 // indirect

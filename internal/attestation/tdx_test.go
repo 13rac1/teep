@@ -233,9 +233,9 @@ func TestClientHTTPSGetter_GetContext_NonOKStatus(t *testing.T) {
 // response body returns an error.
 func TestClientHTTPSGetter_GetContext_BodyTooLarge(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Write maxPCSResponseSize+2 bytes to trigger the size check.
+		// Write maxCertResponseSize+2 bytes to trigger the size check.
 		w.WriteHeader(http.StatusOK)
-		buf := make([]byte, maxPCSResponseSize+2)
+		buf := make([]byte, maxCertResponseSize+2)
 		_, _ = w.Write(buf)
 	}))
 	defer srv.Close()

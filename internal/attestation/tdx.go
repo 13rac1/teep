@@ -29,8 +29,6 @@ func (g *clientHTTPSGetter) Get(url string) (header map[string][]string, body []
 	return g.GetContext(context.Background(), url)
 }
 
-const maxPCSResponseSize = 10 << 20 // 10 MiB
-
 func (g *clientHTTPSGetter) GetContext(ctx context.Context, url string) (header map[string][]string, body []byte, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
@@ -45,12 +43,12 @@ func (g *clientHTTPSGetter) GetContext(ctx context.Context, url string) (header 
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 		return nil, nil, fmt.Errorf("failed to retrieve %s, status code received %d", url, resp.StatusCode)
 	}
-	body, err = io.ReadAll(io.LimitReader(resp.Body, maxPCSResponseSize+1))
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxCertResponseSize+1))
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(body) > maxPCSResponseSize {
-		return nil, nil, fmt.Errorf("PCS response body exceeds %d bytes", maxPCSResponseSize)
+	if len(body) > maxCertResponseSize {
+		return nil, nil, fmt.Errorf("PCS response body exceeds %d bytes", maxCertResponseSize)
 	}
 	return resp.Header, body, nil
 }
