@@ -338,17 +338,21 @@ type upstreamBody struct {
 	Body       []byte
 	Session    e2ee.Decryptor
 	Meta       *e2ee.ChutesE2EE
+	EHBP       *e2ee.EHBPSession
 	ChuteID    string // For MarkFailed (from raw attestation, not meta)
 	InstanceID string // For MarkFailed (from raw attestation, not meta)
 }
 
-// zeroE2EESessions zeroes crypto material from a failed E2EE attempt.
-func zeroE2EESessions(session e2ee.Decryptor, meta *e2ee.ChutesE2EE) {
+// zeroE2EE zeroes crypto material from all E2EE session types.
+func zeroE2EE(session e2ee.Decryptor, meta *e2ee.ChutesE2EE, ehbp *e2ee.EHBPSession) {
 	if session != nil {
 		session.Zero()
 	}
 	if meta != nil && meta.Session != nil {
 		meta.Session.Zero()
+	}
+	if ehbp != nil {
+		ehbp.Zero()
 	}
 }
 
@@ -754,6 +758,7 @@ func fromConfig(
 		p.AudioPath = "/v1/audio/transcriptions"
 		p.Attester = tinfoil.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = tinfoil.NewPreparer(cp.APIKey)
+		p.Encryptor = tinfoil.NewE2EE()
 		p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
 		p.SupplyChainPolicy = nil // Sigstore-based, not compose-based
 		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
@@ -772,6 +777,7 @@ func fromConfig(
 		p.AudioPath = "/v1/audio/transcriptions"
 		p.Attester = tinfoil.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = tinfoil.NewPreparer(cp.APIKey)
+		p.Encryptor = tinfoil.NewE2EE()
 		p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
 		p.SupplyChainPolicy = nil // Sigstore-based, not compose-based
 		p.ModelLister = provider.NewModelLister(tinfoil.DefaultBaseURL, cp.APIKey, config.NewAttestationClient(offline))
@@ -1399,6 +1405,7 @@ func (s *Server) relayWithRetry(
 		resp := ur.Resp
 		session := ur.Session
 		meta := ur.Meta
+		ehbp := ur.EHBP
 		if meta != nil && meta.ChuteID != "" {
 			lastChuteID = meta.ChuteID
 		}
@@ -1408,7 +1415,7 @@ func (s *Server) relayWithRetry(
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 			resp.Body.Close()
 			ur.Cancel()
-			zeroE2EESessions(session, meta)
+			zeroE2EE(session, meta, ehbp)
 		}
 
 		if resp.StatusCode != http.StatusOK {
@@ -1447,6 +1454,22 @@ func (s *Server) relayWithRetry(
 			return result
 		}
 
+		// EHBP response unwrapping: decrypt the full response body before
+		// relay so standard relay functions see plaintext SSE/JSON.
+		if ehbp != nil {
+			status, ok := s.unwrapEHBPResponse(ctx, resp, ehbp, prov.Name, upstreamModel, ri, riWriter)
+			if !ok {
+				cleanupAttempt()
+				ehbpErr := fmt.Errorf("EHBP: %s", status)
+				result.status = s.handleE2EEDecryptionFailure(ctx, prov, upstreamModel, ms, false, "", ehbpErr)
+				return result
+			}
+			ehbp.Zero()
+			ehbp = nil
+			session = nil
+			meta = nil
+		}
+
 		upstreamRelayStart := time.Now()
 		ss, relayErr = relayResponse(ctx, riWriter, resp.Body, session, meta, stream, endpoint)
 		result.upstreamDur += time.Since(upstreamRelayStart)
@@ -1456,12 +1479,7 @@ func (s *Server) relayWithRetry(
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
 		ur.Cancel()
-		if session != nil {
-			session.Zero()
-		}
-		if meta != nil && meta.Session != nil {
-			meta.Session.Zero()
-		}
+		zeroE2EE(session, meta, ehbp)
 
 		if relayErr == nil {
 			// Relay succeeded.
@@ -1963,6 +1981,51 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
 	}
 }
 
+// unwrapEHBPResponse decrypts an EHBP-encrypted response body in place,
+// replacing resp.Body with a plaintext reader. Returns a status string and
+// false on failure; the caller must clean up and return. On success returns
+// ("", true) and resp.Body is ready for standard relay.
+func (s *Server) unwrapEHBPResponse(
+	ctx context.Context,
+	resp *http.Response,
+	ehbp *e2ee.EHBPSession,
+	provName, upstreamModel string,
+	ri *responseInterceptor,
+	riWriter http.ResponseWriter,
+) (string, bool) {
+	nonceHex := resp.Header.Get("Ehbp-Response-Nonce")
+	if nonceHex == "" {
+		slog.ErrorContext(ctx, "EHBP response missing Ehbp-Response-Nonce header",
+			"provider", provName, "model", upstreamModel)
+		if !ri.headerSent {
+			ri.WriteHeader(http.StatusBadGateway)
+			_, _ = riWriter.Write([]byte("EHBP response missing Ehbp-Response-Nonce header\n"))
+		}
+		return "ehbp_missing_nonce", false
+	}
+	if len(nonceHex) != 64 {
+		slog.ErrorContext(ctx, "EHBP response nonce wrong length",
+			"provider", provName, "model", upstreamModel, "len", len(nonceHex))
+		if !ri.headerSent {
+			ri.WriteHeader(http.StatusBadGateway)
+			_, _ = riWriter.Write([]byte("EHBP response nonce invalid\n"))
+		}
+		return "ehbp_invalid_nonce", false
+	}
+	decryptedBody, err := ehbp.DecryptResponse(resp.Body, nonceHex)
+	if err != nil {
+		slog.ErrorContext(ctx, "EHBP response decryption failed",
+			"provider", provName, "model", upstreamModel, "err", err)
+		if !ri.headerSent {
+			ri.WriteHeader(http.StatusBadGateway)
+			_, _ = riWriter.Write([]byte("EHBP response decryption failed\n"))
+		}
+		return "ehbp_decrypt_failed", false
+	}
+	resp.Body = decryptedBody
+	return "", true
+}
+
 // responseInterceptor wraps an http.ResponseWriter to detect whether headers
 // have been flushed to the client. Used by the Chutes E2EE retry loop to
 // determine if a failed streaming relay can be retried.
@@ -2044,6 +2107,7 @@ type upstreamResult struct {
 	Resp        *http.Response
 	Session     e2ee.Decryptor
 	Meta        *e2ee.ChutesE2EE
+	EHBP        *e2ee.EHBPSession
 	Cancel      context.CancelFunc
 	E2EEDur     time.Duration
 	UpstreamDur time.Duration
@@ -2079,6 +2143,7 @@ func (s *Server) doUpstreamRoundtrip(
 	var (
 		session     e2ee.Decryptor
 		meta        *e2ee.ChutesE2EE
+		ehbp        *e2ee.EHBPSession
 		resp        *http.Response
 		cancel      context.CancelFunc
 		err         error
@@ -2111,6 +2176,7 @@ func (s *Server) doUpstreamRoundtrip(
 
 		session = ub.Session
 		meta = ub.Meta
+		ehbp = ub.EHBP
 
 		var attemptCtx context.Context
 		attemptCtx, cancel = context.WithTimeout(ctx, upstreamTimeout)
@@ -2118,15 +2184,20 @@ func (s *Server) doUpstreamRoundtrip(
 		upstreamReq, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, upstreamURL, bytes.NewReader(ub.Body))
 		if reqErr != nil {
 			cancel()
-			zeroE2EESessions(session, meta)
+			zeroE2EE(session, meta, ehbp)
 			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
 				&httpError{http.StatusInternalServerError, "e2ee_failed", fmt.Errorf("build upstream request: %w", reqErr)}
 		}
 		upstreamReq.Header.Set("Content-Type", contentType)
 
+		if ehbp != nil {
+			upstreamReq.Header.Set("Ehbp-Encapsulated-Key", ehbp.EncapKeyBase64())
+			upstreamReq.ContentLength = -1 // force chunked transfer encoding
+		}
+
 		if prepErr := prepareUpstreamHeaders(upstreamReq, prov, session, meta, stream, endpointPath); prepErr != nil {
 			cancel()
-			zeroE2EESessions(session, meta)
+			zeroE2EE(session, meta, ehbp)
 			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
 				&httpError{http.StatusInternalServerError, "e2ee_failed", fmt.Errorf("prepare upstream headers: %w", prepErr)}
 		}
@@ -2151,7 +2222,7 @@ func (s *Server) doUpstreamRoundtrip(
 					"instance_id", ub.InstanceID, "attempt", attempt+1,
 					"err", err, "status", respStatusCode(resp))
 			}
-			zeroE2EESessions(session, meta)
+			zeroE2EE(session, meta, ehbp)
 			if resp != nil {
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 				resp.Body.Close()
@@ -2166,7 +2237,7 @@ func (s *Server) doUpstreamRoundtrip(
 		if cancel != nil {
 			cancel()
 		}
-		zeroE2EESessions(session, meta)
+		zeroE2EE(session, meta, ehbp)
 		if resp != nil {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 			resp.Body.Close()
@@ -2179,6 +2250,7 @@ func (s *Server) doUpstreamRoundtrip(
 		Resp:        resp,
 		Session:     session,
 		Meta:        meta,
+		EHBP:        ehbp,
 		Cancel:      cancel,
 		E2EEDur:     e2eeDur,
 		UpstreamDur: upstreamDur,
@@ -2299,14 +2371,15 @@ func (s *Server) buildUpstreamBody(
 		return nil, errors.New("attestation response missing signing_key")
 	}
 
-	encrypted, session, meta, err := prov.Encryptor.EncryptRequest(rawBody, raw, endpoint)
+	result, err := prov.Encryptor.EncryptRequest(rawBody, raw, endpoint)
 	if err != nil {
 		return nil, err
 	}
 	return &upstreamBody{
-		Body:       encrypted,
-		Session:    session,
-		Meta:       meta,
+		Body:       result.Body,
+		Session:    result.Session,
+		Meta:       result.Chutes,
+		EHBP:       result.EHBP,
 		ChuteID:    raw.ChuteID,
 		InstanceID: raw.InstanceID,
 	}, nil

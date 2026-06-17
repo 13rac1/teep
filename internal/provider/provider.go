@@ -54,19 +54,14 @@ type RequestPreparer interface {
 
 // RequestEncryptor encrypts an outgoing request body for a provider's E2EE
 // protocol. The endpoint identifies the canonical route kind (chat,
-// embeddings, images, etc.) used to select field-encryption policy. Returns
-// the encrypted body, a Decryptor for response decryption, optional Chutes
-// metadata, and any error.
+// embeddings, images, etc.) used to select field-encryption policy.
 //
-// For Chutes, Decryptor is nil; crypto state is carried in *e2ee.ChutesE2EE
-// instead (the Chutes protocol uses a different relay path).
-// For Venice and NearCloud, *e2ee.ChutesE2EE is nil.
+// Exactly one of EncryptResult.Session, .Chutes, or .EHBP is non-nil:
+//   - Venice/NearCloud: Session (field-level Decryptor)
+//   - Chutes: Chutes (full-body relay state)
+//   - Tinfoil/EHBP: EHBP (full-body state, decrypted before relay)
 type RequestEncryptor interface {
-	// EncryptRequest encrypts the request body for the given endpoint type
-	// and provider attestation. The endpoint parameter identifies the proxy route kind
-	// (chat, embeddings, images, etc.); actual provider paths are documented
-	// in each provider's EncryptRequest implementation.
-	EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error)
+	EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error)
 }
 
 // PinnedHandler handles chat requests on a connection-pinned TLS connection

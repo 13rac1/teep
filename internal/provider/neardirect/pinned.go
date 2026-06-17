@@ -263,14 +263,14 @@ func (h *PinnedHandler) encryptBody(
 
 	raw := &attestation.RawAttestation{SigningKey: sk}
 	enc := NewE2EE()
-	result, sess, _, err := enc.EncryptRequest(req.Body, raw, req.Endpoint)
+	er, err := enc.EncryptRequest(req.Body, raw, req.Endpoint)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("neardirect E2EE encrypt: %w", err)
 	}
 
-	ncSess, ok := sess.(*e2ee.NearCloudSession)
+	ncSess, ok := er.Session.(*e2ee.NearCloudSession)
 	if !ok {
-		sess.Zero()
+		er.Session.Zero()
 		return nil, nil, nil, errors.New("neardirect E2EE: unexpected session type")
 	}
 	hdrs := make(http.Header)
@@ -279,7 +279,7 @@ func (h *PinnedHandler) encryptBody(
 	hdrs.Set("X-Encryption-Version", "2")
 	hdrs.Set("X-Encrypt-All-Fields", "true")
 
-	return result, ncSess, hdrs, nil
+	return er.Body, ncSess, hdrs, nil
 }
 
 // setDialer overrides the TLS dial function used by HandlePinned. Only

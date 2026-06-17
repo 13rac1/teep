@@ -49,45 +49,48 @@ func TestChutesE2EE_EncryptRequest(t *testing.T) {
 	raw := chutesRaw(t, pubB64, "inst-1", "nonce-1")
 
 	enc := chutes.NewE2EE()
-	encPayload, decryptor, meta, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
+	er, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
 	if err != nil {
 		t.Fatalf("EncryptRequest: %v", err)
 	}
 
-	if decryptor != nil {
+	if er.Session != nil {
 		t.Error("expected nil Decryptor for Chutes (uses ChutesE2EE instead)")
 	}
-	if meta == nil {
+	if er.EHBP != nil {
+		t.Error("expected nil EHBP for Chutes")
+	}
+	if er.Chutes == nil {
 		t.Fatal("expected non-nil ChutesE2EE")
 	}
-	defer meta.Session.Zero()
+	defer er.Chutes.Session.Zero()
 
 	t.Logf("ChuteID=%q InstanceID=%q E2ENonce=%q payload_len=%d",
-		meta.ChuteID, meta.InstanceID, meta.E2ENonce, len(encPayload))
+		er.Chutes.ChuteID, er.Chutes.InstanceID, er.Chutes.E2ENonce, len(er.Body))
 
-	if meta.ChuteID != "chutes-model-uuid" {
-		t.Errorf("ChuteID = %q, want chutes-model-uuid", meta.ChuteID)
+	if er.Chutes.ChuteID != "chutes-model-uuid" {
+		t.Errorf("ChuteID = %q, want chutes-model-uuid", er.Chutes.ChuteID)
 	}
-	if meta.InstanceID != "inst-1" {
-		t.Errorf("InstanceID = %q, want inst-1", meta.InstanceID)
+	if er.Chutes.InstanceID != "inst-1" {
+		t.Errorf("InstanceID = %q, want inst-1", er.Chutes.InstanceID)
 	}
-	if meta.E2ENonce != "nonce-1" {
-		t.Errorf("E2ENonce = %q, want nonce-1", meta.E2ENonce)
+	if er.Chutes.E2ENonce != "nonce-1" {
+		t.Errorf("E2ENonce = %q, want nonce-1", er.Chutes.E2ENonce)
 	}
-	if meta.Session == nil {
+	if er.Chutes.Session == nil {
 		t.Fatal("expected non-nil Session")
 	}
-	if len(encPayload) == 0 {
+	if len(er.Body) == 0 {
 		t.Fatal("encrypted payload is empty")
 	}
 	// Payload should be binary (ML-KEM-768 ct + ChaCha20 blob), not JSON.
 	// Check length rather than first byte — the first byte is random and
 	// happens to be '{' or '[' with probability ~1/128, causing flakes.
 	// ML-KEM-768 ct = 1088 bytes, nonce = 12, tag = 16; minimum > 1100.
-	if len(encPayload) < 1100 {
-		t.Errorf("encrypted payload too short (%d bytes), expected binary blob ≥1100", len(encPayload))
+	if len(er.Body) < 1100 {
+		t.Errorf("encrypted payload too short (%d bytes), expected binary blob ≥1100", len(er.Body))
 	}
-	if json.Valid(encPayload) {
+	if json.Valid(er.Body) {
 		t.Error("encrypted payload is valid JSON, expected binary blob")
 	}
 }
@@ -96,7 +99,7 @@ func TestChutesE2EE_EncryptRequest_MissingInstanceID(t *testing.T) {
 	pubB64 := mlkemModelPubB64(t)
 	raw := chutesRaw(t, pubB64, "", "nonce-1")
 	enc := chutes.NewE2EE()
-	_, _, _, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for missing InstanceID")
 	}
@@ -107,7 +110,7 @@ func TestChutesE2EE_EncryptRequest_MissingE2ENonce(t *testing.T) {
 	pubB64 := mlkemModelPubB64(t)
 	raw := chutesRaw(t, pubB64, "inst-1", "")
 	enc := chutes.NewE2EE()
-	_, _, _, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for missing E2ENonce")
 	}
@@ -123,7 +126,7 @@ func TestChutesE2EE_EncryptRequest_MissingChuteID(t *testing.T) {
 		ChuteID:    "",
 	}
 	enc := chutes.NewE2EE()
-	_, _, _, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for missing ChuteID")
 	}
@@ -133,7 +136,7 @@ func TestChutesE2EE_EncryptRequest_MissingChuteID(t *testing.T) {
 func TestChutesE2EE_EncryptRequest_InvalidSigningKey(t *testing.T) {
 	raw := chutesRaw(t, "not-base64!", "inst-1", "nonce-1")
 	enc := chutes.NewE2EE()
-	_, _, _, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest(chutesChatBody(t), raw, e2ee.EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for invalid signing key")
 	}
@@ -146,7 +149,7 @@ func TestChutesE2EE_EncryptRequest_NonJSONBody(t *testing.T) {
 	enc := chutes.NewE2EE()
 	// EncryptChatRequestChutes needs valid JSON to inject e2e_response_pk,
 	// so a non-JSON body must fail.
-	_, _, _, err := enc.EncryptRequest([]byte("not json"), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest([]byte("not json"), raw, e2ee.EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for non-JSON body")
 	}

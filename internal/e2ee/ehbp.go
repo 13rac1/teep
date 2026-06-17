@@ -106,6 +106,7 @@ func (s *EHBPSession) DecryptResponse(body io.Reader, responseNonceHex string) (
 	if err != nil {
 		return nil, fmt.Errorf("ehbp: HPKE export: %w", err)
 	}
+	defer clear(secret)
 
 	// Construct salt: encapKey || responseNonce
 	salt := make([]byte, 0, len(s.encapKey)+len(responseNonce))
@@ -114,11 +115,13 @@ func (s *EHBPSession) DecryptResponse(body io.Reader, responseNonceHex string) (
 
 	// HKDF-Extract + Expand for key and nonce.
 	prk := hkdf.Extract(sha256.New, secret, salt)
+	defer clear(prk)
 
 	aeadKey := make([]byte, 32)
 	if _, err := io.ReadFull(hkdf.Expand(sha256.New, prk, []byte("key")), aeadKey); err != nil {
 		return nil, fmt.Errorf("ehbp: hkdf expand key: %w", err)
 	}
+	defer clear(aeadKey)
 	aeadNonce := make([]byte, 12)
 	if _, err := io.ReadFull(hkdf.Expand(sha256.New, prk, []byte("nonce")), aeadNonce); err != nil {
 		return nil, fmt.Errorf("ehbp: hkdf expand nonce: %w", err)

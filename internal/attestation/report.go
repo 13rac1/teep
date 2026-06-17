@@ -382,10 +382,11 @@ type E2EETestResult struct {
 // as "unknown" rather than passed through verbatim, since SigningAlgo is
 // provider-supplied and flows into on-disk manifests.
 var knownSigningAlgos = map[string]bool{
-	"ecdsa":      true,
-	"ed25519":    true,
-	"ml-kem-768": true,
-	"secp256k1":  true,
+	"ecdsa":       true,
+	"ed25519":     true,
+	"ml-kem-768":  true,
+	"secp256k1":   true,
+	"x25519-hpke": true,
 }
 
 // E2EEKeyType returns the canonical E2EE key-type string for the attestation.
@@ -967,6 +968,18 @@ func evalE2EECapable(in *ReportInput) []FactorResult {
 			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("ML-KEM-768 public key wrong size: %d bytes, want 1184", len(b)))
 		}
 		return factor(TierBinding, "e2ee_capable", Pass, "ML-KEM-768 public key valid (1184 bytes); post-quantum E2EE key exchange possible")
+	// x25519-hpke must precede ed25519: both are 64 hex chars, but the
+	// ed25519 branch uses a length-based fallback (len == 64) that would
+	// incorrectly match X25519 keys when SigningAlgo is absent.
+	case in.Raw.SigningAlgo == "x25519-hpke":
+		// X25519 HPKE key (32 bytes = 64 hex chars).
+		if _, err := hex.DecodeString(in.Raw.SigningKey); err != nil {
+			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave X25519 HPKE key invalid hex: %v", err))
+		}
+		if len(in.Raw.SigningKey) != 64 {
+			return factor(TierBinding, "e2ee_capable", Fail, fmt.Sprintf("enclave X25519 HPKE key wrong size: %d hex chars, want 64", len(in.Raw.SigningKey)))
+		}
+		return factor(TierBinding, "e2ee_capable", Pass, "X25519 HPKE public key valid (32 bytes); EHBP E2EE key exchange possible")
 	case in.Raw.SigningAlgo == "ed25519" || len(in.Raw.SigningKey) == 64:
 		// Ed25519 key (64 hex chars).
 		if err := validateEd25519Hex(in.Raw.SigningKey); err != nil {

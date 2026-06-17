@@ -75,6 +75,15 @@ type Decryptor interface {
 	Zero()
 }
 
+// EncryptResult carries the outcome of a single EncryptRequest call.
+// Exactly one of Session, Chutes, or EHBP is non-nil for E2EE requests.
+type EncryptResult struct {
+	Body    []byte
+	Session Decryptor    // Venice, NearCloud field-level E2EE
+	Chutes  *ChutesE2EE  // Chutes full-body relay state
+	EHBP    *EHBPSession // Tinfoil EHBP full-body state
+}
+
 // ChutesE2EE carries the per-request state for the Chutes E2EE protocol:
 // routing metadata (headers) and the crypto session (for relay decryption).
 // It is returned by EncryptRequest and passed through the proxy to both

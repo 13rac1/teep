@@ -3948,8 +3948,8 @@ func (m *mockE2EEFetcher) Invalidate(chuteID string) {
 // from meta.
 type passthroughEncryptor struct{}
 
-func (passthroughEncryptor) EncryptRequest(body []byte, _ *attestation.RawAttestation, _ e2ee.EndpointType) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
-	return body, nil, nil, nil
+func (passthroughEncryptor) EncryptRequest(body []byte, _ *attestation.RawAttestation, _ e2ee.EndpointType) (e2ee.EncryptResult, error) {
+	return e2ee.EncryptResult{Body: body}, nil
 }
 
 // noopPreparer sets only Authorization, without rewriting the URL.

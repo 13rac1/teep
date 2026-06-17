@@ -127,7 +127,7 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 // by default in config.go's applyAPIKeyEnv.
 func e2eeEnabledByDefault(name string) bool {
 	switch name {
-	case "venice", "nearcloud", "neardirect", "chutes":
+	case "venice", "nearcloud", "neardirect", "chutes", "tinfoil_v3_cloud", "tinfoil_v3_direct":
 		return true
 	default:
 		return false

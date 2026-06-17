@@ -40,24 +40,27 @@ func TestE2EE_EncryptRequest(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 
 	enc := neardirect.NewE2EE()
-	encBody, decryptor, chutesE2EE, err := enc.EncryptRequest(nearE2EEChatBody(t), raw, e2ee.EndpointChat)
+	er, err := enc.EncryptRequest(nearE2EEChatBody(t), raw, e2ee.EndpointChat)
 	if err != nil {
 		t.Fatalf("EncryptRequest: %v", err)
 	}
-	defer decryptor.Zero()
+	defer er.Session.Zero()
 
-	if decryptor == nil {
+	if er.Session == nil {
 		t.Fatal("expected non-nil Decryptor")
 	}
-	if chutesE2EE != nil {
+	if er.Chutes != nil {
 		t.Error("expected nil ChutesE2EE for NEAR AI")
 	}
+	if er.EHBP != nil {
+		t.Error("expected nil EHBP for NEAR AI")
+	}
 
-	t.Logf("encrypted body length: %d", len(encBody))
+	t.Logf("encrypted body length: %d", len(er.Body))
 
 	// Parse and verify structure.
 	var out map[string]json.RawMessage
-	if err := json.Unmarshal(encBody, &out); err != nil {
+	if err := json.Unmarshal(er.Body, &out); err != nil {
 		t.Fatalf("unmarshal encrypted body: %v", err)
 	}
 
@@ -105,7 +108,7 @@ func TestE2EE_EncryptRequest(t *testing.T) {
 func TestE2EE_EncryptRequest_InvalidSigningKey(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: "bad-key"}
 	enc := neardirect.NewE2EE()
-	_, _, _, err := enc.EncryptRequest(nearE2EEChatBody(t), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest(nearE2EEChatBody(t), raw, e2ee.EndpointChat)
 	t.Logf("invalid signing key error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for invalid signing key")
@@ -116,7 +119,7 @@ func TestE2EE_EncryptRequest_InvalidBody(t *testing.T) {
 	pubHex := ed25519ModelPubHex(t)
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := neardirect.NewE2EE()
-	_, _, _, err := enc.EncryptRequest([]byte("not json"), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest([]byte("not json"), raw, e2ee.EndpointChat)
 	t.Logf("invalid body error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for invalid body")
@@ -127,7 +130,7 @@ func TestE2EE_EncryptRequest_InvalidMessages(t *testing.T) {
 	pubHex := ed25519ModelPubHex(t)
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := neardirect.NewE2EE()
-	_, _, _, err := enc.EncryptRequest([]byte(`{"model":"m","messages":"not-an-array"}`), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest([]byte(`{"model":"m","messages":"not-an-array"}`), raw, e2ee.EndpointChat)
 	t.Logf("invalid messages error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for invalid messages")
@@ -154,22 +157,25 @@ func TestE2EE_EncryptRequest_Images(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 
 	enc := neardirect.NewE2EE()
-	encBody, decryptor, chutesE2EE, err := enc.EncryptRequest(nearE2EEImageBody(t), raw, e2ee.EndpointImages)
+	er, err := enc.EncryptRequest(nearE2EEImageBody(t), raw, e2ee.EndpointImages)
 	if err != nil {
 		t.Fatalf("EncryptRequest images: %v", err)
 	}
-	defer decryptor.Zero()
+	defer er.Session.Zero()
 
-	if decryptor == nil {
+	if er.Session == nil {
 		t.Fatal("expected non-nil Decryptor")
 	}
-	if chutesE2EE != nil {
+	if er.Chutes != nil {
 		t.Error("expected nil ChutesE2EE for NEAR AI")
+	}
+	if er.EHBP != nil {
+		t.Error("expected nil EHBP for NEAR AI")
 	}
 
 	// Parse and verify structure.
 	var out map[string]json.RawMessage
-	if err := json.Unmarshal(encBody, &out); err != nil {
+	if err := json.Unmarshal(er.Body, &out); err != nil {
 		t.Fatalf("unmarshal encrypted body: %v", err)
 	}
 
@@ -200,16 +206,16 @@ func TestE2EE_EncryptRequest_Embeddings(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := neardirect.NewE2EE()
 
-	encBody, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","input":["alpha","beta"]}`), raw, e2ee.EndpointEmbeddings)
+	er, err := enc.EncryptRequest([]byte(`{"model":"test-model","input":["alpha","beta"]}`), raw, e2ee.EndpointEmbeddings)
 	if err != nil {
 		t.Fatalf("EncryptRequest embeddings: %v", err)
 	}
-	defer decryptor.Zero()
+	defer er.Session.Zero()
 
 	var out struct {
 		Input []json.RawMessage `json:"input"`
 	}
-	if err := json.Unmarshal(encBody, &out); err != nil {
+	if err := json.Unmarshal(er.Body, &out); err != nil {
 		t.Fatalf("unmarshal encrypted embeddings body: %v", err)
 	}
 	if len(out.Input) != 2 {
@@ -231,9 +237,9 @@ func TestE2EE_EncryptRequest_Embeddings_MixedInputRejected(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := neardirect.NewE2EE()
 
-	_, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","input":["alpha",42,"beta"]}`), raw, e2ee.EndpointEmbeddings)
-	if decryptor != nil {
-		decryptor.Zero()
+	er, err := enc.EncryptRequest([]byte(`{"model":"test-model","input":["alpha",42,"beta"]}`), raw, e2ee.EndpointEmbeddings)
+	if er.Session != nil {
+		er.Session.Zero()
 	}
 	if err == nil {
 		t.Fatal("expected error for mixed-type embeddings input in E2EE mode")
@@ -245,17 +251,17 @@ func TestE2EE_EncryptRequest_Rerank(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := neardirect.NewE2EE()
 
-	encBody, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","query":"hello","documents":["doc1","doc2"]}`), raw, e2ee.EndpointRerank)
+	er, err := enc.EncryptRequest([]byte(`{"model":"test-model","query":"hello","documents":["doc1","doc2"]}`), raw, e2ee.EndpointRerank)
 	if err != nil {
 		t.Fatalf("EncryptRequest rerank: %v", err)
 	}
-	defer decryptor.Zero()
+	defer er.Session.Zero()
 
 	var out struct {
 		Query     string   `json:"query"`
 		Documents []string `json:"documents"`
 	}
-	if err := json.Unmarshal(encBody, &out); err != nil {
+	if err := json.Unmarshal(er.Body, &out); err != nil {
 		t.Fatalf("unmarshal encrypted rerank body: %v", err)
 	}
 	if !e2ee.IsEncryptedChunkXChaCha20(out.Query) {
@@ -276,17 +282,17 @@ func TestE2EE_EncryptRequest_Score(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := neardirect.NewE2EE()
 
-	encBody, decryptor, _, err := enc.EncryptRequest([]byte(`{"model":"test-model","text_1":"left text","text_2":"right text"}`), raw, e2ee.EndpointScore)
+	er, err := enc.EncryptRequest([]byte(`{"model":"test-model","text_1":"left text","text_2":"right text"}`), raw, e2ee.EndpointScore)
 	if err != nil {
 		t.Fatalf("EncryptRequest score: %v", err)
 	}
-	defer decryptor.Zero()
+	defer er.Session.Zero()
 
 	var out struct {
 		Text1 string `json:"text_1"`
 		Text2 string `json:"text_2"`
 	}
-	if err := json.Unmarshal(encBody, &out); err != nil {
+	if err := json.Unmarshal(er.Body, &out); err != nil {
 		t.Fatalf("unmarshal encrypted score body: %v", err)
 	}
 	if !e2ee.IsEncryptedChunkXChaCha20(out.Text1) {
@@ -307,7 +313,7 @@ func TestE2EE_EncryptRequest_UnsupportedEndpoint(t *testing.T) {
 		e2ee.EndpointType("unknown"),
 	}
 	for _, ep := range testCases {
-		_, _, _, err := enc.EncryptRequest(nearE2EEChatBody(t), raw, ep)
+		_, err := enc.EncryptRequest(nearE2EEChatBody(t), raw, ep)
 		if err == nil {
 			t.Errorf("expected error for unsupported endpoint %q, got nil", ep)
 		}

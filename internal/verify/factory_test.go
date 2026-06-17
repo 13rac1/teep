@@ -159,6 +159,8 @@ func TestE2EEEnabledByDefault(t *testing.T) {
 		{"nearcloud", true},
 		{"chutes", true},
 		{"neardirect", true},
+		{"tinfoil_v3_cloud", true},
+		{"tinfoil_v3_direct", true},
 		{"nanogpt", false},
 		{"unknown", false},
 	}

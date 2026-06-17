@@ -21,25 +21,25 @@ func NewE2EE() *E2EE { return &E2EE{} }
 // The raw.SigningKey must be a 130-char hex secp256k1 public key.
 // The endpoint must be EndpointChat; Venice E2EE is only defined for
 // /api/v1/chat/completions.
-func (v *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
+func (v *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error) {
 	if endpoint != e2ee.EndpointChat {
-		return nil, nil, nil, fmt.Errorf("venice E2EE unsupported endpoint %q", endpoint)
+		return e2ee.EncryptResult{}, fmt.Errorf("venice E2EE unsupported endpoint %q", endpoint)
 	}
 
 	session, err := e2ee.NewVeniceSession()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create venice E2EE session: %w", err)
+		return e2ee.EncryptResult{}, fmt.Errorf("create venice E2EE session: %w", err)
 	}
 	if err := session.SetModelKey(raw.SigningKey); err != nil {
 		session.Zero()
-		return nil, nil, nil, fmt.Errorf("set model key: %w", err)
+		return e2ee.EncryptResult{}, fmt.Errorf("set model key: %w", err)
 	}
 
 	// Single unmarshal: extract messages for encryption, preserve all other fields.
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(body, &full); err != nil {
 		session.Zero()
-		return nil, nil, nil, fmt.Errorf("parse body for venice E2EE: %w", err)
+		return e2ee.EncryptResult{}, fmt.Errorf("parse body for venice E2EE: %w", err)
 	}
 
 	// Parse messages preserving ALL fields — each message is a raw JSON map.
@@ -48,20 +48,20 @@ func (v *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endp
 	var messages []map[string]json.RawMessage
 	if err := json.Unmarshal(full["messages"], &messages); err != nil {
 		session.Zero()
-		return nil, nil, nil, fmt.Errorf("parse messages for venice E2EE: %w", err)
+		return e2ee.EncryptResult{}, fmt.Errorf("parse messages for venice E2EE: %w", err)
 	}
 
 	for i, msg := range messages {
 		if err := encryptVeniceMessageContent(msg, i, session); err != nil {
 			session.Zero()
-			return nil, nil, nil, err
+			return e2ee.EncryptResult{}, err
 		}
 	}
 
 	messagesJSON, err := json.Marshal(messages)
 	if err != nil {
 		session.Zero()
-		return nil, nil, nil, fmt.Errorf("marshal encrypted messages: %w", err)
+		return e2ee.EncryptResult{}, fmt.Errorf("marshal encrypted messages: %w", err)
 	}
 	full["messages"] = messagesJSON
 	full["stream"] = json.RawMessage("true")
@@ -69,9 +69,9 @@ func (v *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endp
 	out, err := json.Marshal(full)
 	if err != nil {
 		session.Zero()
-		return nil, nil, nil, fmt.Errorf("marshal venice E2EE request body: %w", err)
+		return e2ee.EncryptResult{}, fmt.Errorf("marshal venice E2EE request body: %w", err)
 	}
-	return out, session, nil, nil
+	return e2ee.EncryptResult{Body: out, Session: session}, nil
 }
 
 // encryptVeniceMessageContent encrypts the content field of a single chat

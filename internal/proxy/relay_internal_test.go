@@ -222,7 +222,7 @@ func TestHTTPError_Unwrap(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// zeroE2EESessions
+// zeroE2EE
 // ---------------------------------------------------------------------------
 
 type noopDecryptor struct{ zeroed bool }
@@ -233,27 +233,26 @@ func (n *noopDecryptor) IsRequestFieldEncrypted(string) bool                    
 func (n *noopDecryptor) IsResponseFieldEncrypted(string, e2ee.EndpointType) bool { return false }
 func (n *noopDecryptor) Zero()                                                   { n.zeroed = true }
 
-func TestZeroE2EESessions_NilBoth(t *testing.T) {
-	zeroE2EESessions(nil, nil) // must not panic
+func TestZeroE2EE_NilAll(t *testing.T) {
+	zeroE2EE(nil, nil, nil) // must not panic
 }
 
-func TestZeroE2EESessions_WithSession(t *testing.T) {
+func TestZeroE2EE_WithSession(t *testing.T) {
 	dec := &noopDecryptor{}
-	zeroE2EESessions(dec, nil)
+	zeroE2EE(dec, nil, nil)
 	if !dec.zeroed {
 		t.Error("Zero() not called on non-nil session")
 	}
 }
 
-func TestZeroE2EESessions_WithMeta(t *testing.T) {
+func TestZeroE2EE_WithMeta(t *testing.T) {
 	sess, err := e2ee.NewChutesSession()
 	if err != nil {
 		t.Fatalf("NewChutesSession: %v", err)
 	}
 	meta := &e2ee.ChutesE2EE{Session: sess}
-	// Zero() should be called on meta.Session without panicking.
-	zeroE2EESessions(nil, meta)
-	t.Log("zeroE2EESessions with meta.Session completed without panic")
+	zeroE2EE(nil, meta, nil)
+	t.Log("zeroE2EE with meta.Session completed without panic")
 }
 
 // ---------------------------------------------------------------------------
@@ -1299,8 +1298,8 @@ func (m *mockReportDataVerifier) VerifyReportData(_ [64]byte, _ *attestation.Raw
 
 type mockRequestEncryptor struct{ err error }
 
-func (m *mockRequestEncryptor) EncryptRequest(_ []byte, _ *attestation.RawAttestation, _ e2ee.EndpointType) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
-	return []byte("encrypted"), nil, nil, m.err
+func (m *mockRequestEncryptor) EncryptRequest(_ []byte, _ *attestation.RawAttestation, _ e2ee.EndpointType) (e2ee.EncryptResult, error) {
+	return e2ee.EncryptResult{Body: []byte("encrypted")}, m.err
 }
 
 type mockAttester struct{ err error }

@@ -26,39 +26,39 @@ func NewE2EE() *E2EE { return &E2EE{} }
 //   - score: encrypts text_1 and text_2
 //
 // Unsupported endpoints fail closed.
-func (n *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
+func (n *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error) {
 	switch endpoint {
 	case e2ee.EndpointChat:
 		encBody, session, err := e2ee.EncryptChatMessagesNearCloud(body, raw.SigningKey)
 		if err != nil {
-			return nil, nil, nil, err
+			return e2ee.EncryptResult{}, err
 		}
-		return encBody, session, nil, nil
+		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
 	case e2ee.EndpointImages:
 		encBody, session, err := e2ee.EncryptImagePromptNearCloud(body, raw.SigningKey)
 		if err != nil {
-			return nil, nil, nil, err
+			return e2ee.EncryptResult{}, err
 		}
-		return encBody, session, nil, nil
+		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
 	case e2ee.EndpointEmbeddings:
 		encBody, session, err := e2ee.EncryptEmbeddingsNearCloud(body, raw.SigningKey)
 		if err != nil {
-			return nil, nil, nil, err
+			return e2ee.EncryptResult{}, err
 		}
-		return encBody, session, nil, nil
+		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
 	case e2ee.EndpointRerank:
 		encBody, session, err := e2ee.EncryptRerankNearCloud(body, raw.SigningKey)
 		if err != nil {
-			return nil, nil, nil, err
+			return e2ee.EncryptResult{}, err
 		}
-		return encBody, session, nil, nil
+		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
 	case e2ee.EndpointScore:
 		encBody, session, err := e2ee.EncryptScoreNearCloud(body, raw.SigningKey)
 		if err != nil {
-			return nil, nil, nil, err
+			return e2ee.EncryptResult{}, err
 		}
-		return encBody, session, nil, nil
+		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
 	default:
-		return nil, nil, nil, fmt.Errorf("NearAI E2EE not supported for endpoint %q", endpoint)
+		return e2ee.EncryptResult{}, fmt.Errorf("NearAI E2EE not supported for endpoint %q", endpoint)
 	}
 }

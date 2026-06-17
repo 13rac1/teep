@@ -42,22 +42,25 @@ func TestVeniceE2EE_EncryptRequest(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 
 	enc := venice.NewE2EE()
-	encBody, decryptor, chutesE2EE, err := enc.EncryptRequest(chatBody(t), raw, e2ee.EndpointChat)
+	er, err := enc.EncryptRequest(chatBody(t), raw, e2ee.EndpointChat)
 	if err != nil {
 		t.Fatalf("EncryptRequest: %v", err)
 	}
-	defer decryptor.Zero()
+	defer er.Session.Zero()
 
-	if decryptor == nil {
+	if er.Session == nil {
 		t.Fatal("expected non-nil Decryptor")
 	}
-	if chutesE2EE != nil {
+	if er.Chutes != nil {
 		t.Fatal("expected nil ChutesE2EE for Venice")
+	}
+	if er.EHBP != nil {
+		t.Fatal("expected nil EHBP for Venice")
 	}
 
 	// Verify output JSON structure.
 	var out map[string]json.RawMessage
-	if err := json.Unmarshal(encBody, &out); err != nil {
+	if err := json.Unmarshal(er.Body, &out); err != nil {
 		t.Fatalf("unmarshal encrypted body: %v", err)
 	}
 	t.Logf("encrypted body keys: %v", mapKeys(out))
@@ -108,7 +111,7 @@ func TestVeniceE2EE_EncryptRequest(t *testing.T) {
 func TestVeniceE2EE_EncryptRequest_InvalidSigningKey(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: "not-a-valid-key"}
 	enc := venice.NewE2EE()
-	_, _, _, err := enc.EncryptRequest(chatBody(t), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest(chatBody(t), raw, e2ee.EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for invalid signing key")
 	}
@@ -119,7 +122,7 @@ func TestVeniceE2EE_EncryptRequest_InvalidBody(t *testing.T) {
 	pubHex := modelPubKeyHex(t)
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := venice.NewE2EE()
-	_, _, _, err := enc.EncryptRequest([]byte("not json"), raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest([]byte("not json"), raw, e2ee.EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for invalid body")
 	}
@@ -131,7 +134,7 @@ func TestVeniceE2EE_EncryptRequest_InvalidMessages(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := venice.NewE2EE()
 	body := []byte(`{"model":"m","messages":"not-an-array"}`)
-	_, _, _, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for invalid messages")
 	}
@@ -142,7 +145,7 @@ func TestVeniceE2EE_EncryptRequest_UnsupportedEndpoint(t *testing.T) {
 	pubHex := modelPubKeyHex(t)
 	raw := &attestation.RawAttestation{SigningKey: pubHex}
 	enc := venice.NewE2EE()
-	_, _, _, err := enc.EncryptRequest(chatBody(t), raw, e2ee.EndpointEmbeddings)
+	_, err := enc.EncryptRequest(chatBody(t), raw, e2ee.EndpointEmbeddings)
 	if err == nil {
 		t.Fatal("expected error for unsupported endpoint")
 	}
@@ -197,14 +200,14 @@ func TestVeniceE2EE_ToolCallConversation(t *testing.T) {
 	}`)
 
 	enc := venice.NewE2EE()
-	encBody, decryptor, _, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
+	er, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
 	if err != nil {
 		t.Fatalf("EncryptRequest: %v", err)
 	}
-	defer decryptor.Zero()
+	defer er.Session.Zero()
 
 	var out map[string]json.RawMessage
-	if err := json.Unmarshal(encBody, &out); err != nil {
+	if err := json.Unmarshal(er.Body, &out); err != nil {
 		t.Fatalf("unmarshal encrypted body: %v", err)
 	}
 
@@ -258,14 +261,14 @@ func TestVeniceE2EE_PreservesExtraFields(t *testing.T) {
 	}`)
 
 	enc := venice.NewE2EE()
-	encBody, decryptor, _, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
+	er, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
 	if err != nil {
 		t.Fatalf("EncryptRequest: %v", err)
 	}
-	defer decryptor.Zero()
+	defer er.Session.Zero()
 
 	var out map[string]json.RawMessage
-	if err := json.Unmarshal(encBody, &out); err != nil {
+	if err := json.Unmarshal(er.Body, &out); err != nil {
 		t.Fatalf("unmarshal encrypted body: %v", err)
 	}
 
@@ -301,21 +304,21 @@ func TestVeniceE2EE_NullContentVariants(t *testing.T) {
 	t.Run("explicit null", func(t *testing.T) {
 		body := []byte(`{"model":"m","messages":[{"role":"assistant","content":null}]}`)
 		enc := venice.NewE2EE()
-		_, decryptor, _, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
+		er, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
 		if err != nil {
 			t.Fatalf("EncryptRequest with null content: %v", err)
 		}
-		decryptor.Zero()
+		er.Session.Zero()
 	})
 
 	t.Run("absent content", func(t *testing.T) {
 		body := []byte(`{"model":"m","messages":[{"role":"assistant"}]}`)
 		enc := venice.NewE2EE()
-		_, decryptor, _, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
+		er, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
 		if err != nil {
 			t.Fatalf("EncryptRequest with absent content: %v", err)
 		}
-		decryptor.Zero()
+		er.Session.Zero()
 	})
 }
 
@@ -391,14 +394,14 @@ func TestVeniceE2EE_VLArrayContent(t *testing.T) {
 	}`)
 
 	enc := venice.NewE2EE()
-	encBody, decryptor, _, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
+	er, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
 	if err != nil {
 		t.Fatalf("EncryptRequest with VL array content: %v", err)
 	}
-	defer decryptor.Zero()
+	defer er.Session.Zero()
 
 	var out map[string]json.RawMessage
-	if err := json.Unmarshal(encBody, &out); err != nil {
+	if err := json.Unmarshal(er.Body, &out); err != nil {
 		t.Fatalf("unmarshal encrypted body: %v", err)
 	}
 
@@ -444,7 +447,7 @@ func TestVeniceE2EE_UnsupportedContentType(t *testing.T) {
 	}`)
 
 	enc := venice.NewE2EE()
-	_, _, _, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
+	_, err := enc.EncryptRequest(body, raw, e2ee.EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for unsupported content type (object)")
 	}

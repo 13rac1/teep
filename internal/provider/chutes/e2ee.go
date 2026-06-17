@@ -21,20 +21,20 @@ func NewE2EE() *E2EE {
 // Returns ChutesE2EE for the Preparer to inject headers.
 // Requires raw.InstanceID, raw.E2ENonce, and raw.ChuteID from attestation.
 // The endpoint parameter is not used; Chutes uses full-body encryption for all endpoints.
-func (c *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ e2ee.EndpointType) ([]byte, e2ee.Decryptor, *e2ee.ChutesE2EE, error) {
+func (c *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ e2ee.EndpointType) (e2ee.EncryptResult, error) {
 	encPayload, session, err := e2ee.EncryptChatRequestChutes(body, raw.SigningKey)
 	if err != nil {
-		return nil, nil, nil, err
+		return e2ee.EncryptResult{}, err
 	}
 
 	if raw.InstanceID == "" || raw.E2ENonce == "" {
 		session.Zero()
-		return nil, nil, nil, errors.New("chutes E2EE requires instance_id and e2e_nonce from attestation")
+		return e2ee.EncryptResult{}, errors.New("chutes E2EE requires instance_id and e2e_nonce from attestation")
 	}
 
 	if raw.ChuteID == "" {
 		session.Zero()
-		return nil, nil, nil, errors.New("chutes E2EE requires resolved chute_id from attestation")
+		return e2ee.EncryptResult{}, errors.New("chutes E2EE requires resolved chute_id from attestation")
 	}
 
 	meta := &e2ee.ChutesE2EE{
@@ -43,5 +43,5 @@ func (c *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ e2
 		E2ENonce:   raw.E2ENonce,
 		Session:    session,
 	}
-	return encPayload, nil, meta, nil
+	return e2ee.EncryptResult{Body: encPayload, Chutes: meta}, nil
 }
