@@ -1130,11 +1130,11 @@ func TestMergedAllowFailNearcloudGoDefaults(t *testing.T) {
 
 	// Factors removed from nearcloud defaults must not be present.
 	enforced := []string{
-		"tdx_quote_present", "tdx_quote_structure",
-		"intel_pcs_collateral", "tdx_tcb_current",
+		"tee_quote_present", "tee_quote_structure",
+		"intel_pcs_collateral", "tee_tcb_current",
 		"nvidia_payload_present", "nvidia_claims", "nvidia_nras_verified",
 		"e2ee_capable", "tls_key_binding",
-		"gateway_tdx_quote_present", "gateway_tdx_quote_structure",
+		"gateway_tee_quote_present", "gateway_tee_quote_structure",
 	}
 	afSet := make(map[string]bool, len(af))
 	for _, name := range af {
@@ -1193,7 +1193,7 @@ allow_fail = ["e2ee_usable", "cpu_gpu_chain"]
 [providers.nearcloud]
 api_key = "k"
 base_url = "https://cloud-api.near.ai"
-allow_fail = ["tdx_hardware_config"]
+allow_fail = ["tee_hardware_config"]
 `
 	path := writeConfigFile(t, toml, 0o600)
 	setenv(t, "TEEP_CONFIG", path)
@@ -1206,8 +1206,8 @@ allow_fail = ["tdx_hardware_config"]
 	}
 
 	af := MergedAllowFail("nearcloud", cfg, false)
-	if len(af) != 1 || af[0] != "tdx_hardware_config" {
-		t.Errorf("MergedAllowFail(\"nearcloud\"): got %v, want [tdx_hardware_config]", af)
+	if len(af) != 1 || af[0] != "tee_hardware_config" {
+		t.Errorf("MergedAllowFail(\"nearcloud\"): got %v, want [tee_hardware_config]", af)
 	}
 }
 
@@ -1236,8 +1236,8 @@ func TestMergedAllowFailNeardirectGoDefaults(t *testing.T) {
 
 	// Factors removed from neardirect defaults must not be present.
 	enforced := []string{
-		"tdx_quote_present", "tdx_quote_structure",
-		"intel_pcs_collateral", "tdx_tcb_current",
+		"tee_quote_present", "tee_quote_structure",
+		"intel_pcs_collateral", "tee_tcb_current",
 		"nvidia_payload_present", "nvidia_claims", "nvidia_nras_verified",
 		"e2ee_capable", "tls_key_binding",
 	}

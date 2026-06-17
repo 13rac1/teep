@@ -63,18 +63,18 @@ The audit MUST verify:
 #### Neardirect Allowed-to-Fail Factors
 
 The current `NeardirectDefaultAllowFail` factors are:
-- `tdx_hardware_config` — RTMR0 (varies per deployment hardware),
-- `tdx_boot_config` — RTMR1/RTMR2,
+- `tee_hardware_config` — RTMR0 (varies per deployment hardware),
+- `tee_boot_config` — RTMR1/RTMR2,
 - `e2ee_usable` — allowed to fail for neardirect; uses the Deferred factor mechanism in the proxy path (starts as Skip, not promoted to Fail when enforced),
 - `cpu_gpu_chain` — not yet implemented,
 - `measured_model_weights` — not yet implemented,
 - `cpu_id_registry` — Proof-of-Cloud hardware registry.
 
 All other factors are enforced by default for neardirect, including:
-- `nonce_match`, `tdx_quote_present`, `tdx_quote_structure`, `tdx_cert_chain`, `tdx_quote_signature`, `tdx_debug_disabled`,
-- `tdx_mrseam_mrtd` — enforces MRSEAM and MRTD allowlists,
-- `signing_key_present`, `tdx_reportdata_binding`,
-- `tdx_tcb_not_revoked`, `intel_pcs_collateral`, `tdx_tcb_current`,
+- `nonce_match`, `tee_quote_present`, `tee_quote_structure`, `tee_cert_chain`, `tee_quote_signature`, `tee_debug_disabled`,
+- `tee_mrseam_mrtd` — enforces MRSEAM and MRTD allowlists,
+- `signing_key_present`, `tee_reportdata_binding`,
+- `tee_tcb_not_revoked`, `intel_pcs_collateral`, `tee_tcb_current`,
 - `nvidia_payload_present`, `nvidia_signature`, `nvidia_claims`, `nvidia_nonce_client_bound`, `nvidia_nras_verified`,
 - `e2ee_capable`, `tls_key_binding`,
 - `compose_binding`, `sigstore_verification`, `build_transparency_log`, `event_log_integrity`.

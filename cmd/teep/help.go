@@ -35,7 +35,7 @@ var factorRegistry = []factorInfo{
 			"from a previous session.",
 	},
 	{
-		Name:    "tdx_quote_present",
+		Name:    "tee_quote_present",
 		Tier:    1,
 		Summary: "TDX quote is present in response",
 		Description: "Checks that the intel_quote field exists in the attestation " +
@@ -45,7 +45,7 @@ var factorRegistry = []factorInfo{
 			"is possible.",
 	},
 	{
-		Name:    "tdx_quote_structure",
+		Name:    "tee_quote_structure",
 		Tier:    1,
 		Summary: "TDX quote parses as valid QuoteV4/V5",
 		Description: "Parses the TDX quote binary and verifies it conforms to the " +
@@ -57,7 +57,7 @@ var factorRegistry = []factorInfo{
 			"non-genuine attestation source.",
 	},
 	{
-		Name:    "tdx_cert_chain",
+		Name:    "tee_cert_chain",
 		Tier:    1,
 		Summary: "Intel root CA certificate chain valid",
 		Description: "Verifies the X.509 certificate chain embedded in the TDX " +
@@ -66,7 +66,7 @@ var factorRegistry = []factorInfo{
 			"spoofed.",
 	},
 	{
-		Name:    "tdx_quote_signature",
+		Name:    "tee_quote_signature",
 		Tier:    1,
 		Summary: "TDX quote signature verified",
 		Description: "Verifies the ECDSA signature over the TDX quote body using " +
@@ -74,7 +74,7 @@ var factorRegistry = []factorInfo{
 			"quote has not been tampered with since generation.",
 	},
 	{
-		Name:    "tdx_debug_disabled",
+		Name:    "tee_debug_disabled",
 		Tier:    1,
 		Summary: "Debug bit is 0 (production enclave)",
 		Description: "Checks that the TD_ATTRIBUTES debug bit in the TDX quote is " +
@@ -83,7 +83,7 @@ var factorRegistry = []factorInfo{
 			"workloads must never run in debug mode.",
 	},
 	{
-		Name:    "tdx_mrseam_mrtd",
+		Name:    "tee_mrseam_mrtd",
 		Tier:    1,
 		Summary: "MRSEAM/MRTD match measurement policy",
 		Description: "Checks that the TDX MRSEAM and MRTD values from the quote " +
@@ -94,7 +94,7 @@ var factorRegistry = []factorInfo{
 			"MRSEAM/MRTD policy is configured.",
 	},
 	{
-		Name:    "tdx_hardware_config",
+		Name:    "tee_hardware_config",
 		Tier:    1,
 		Summary: "RTMR0 matches measurement policy",
 		Description: "Checks that RTMR0 from the TDX quote matches the configured " +
@@ -105,7 +105,7 @@ var factorRegistry = []factorInfo{
 			"no RTMR0 policy is configured.",
 	},
 	{
-		Name:    "tdx_boot_config",
+		Name:    "tee_boot_config",
 		Tier:    1,
 		Summary: "RTMR1/RTMR2 match measurement policy",
 		Description: "Checks that RTMR1 and RTMR2 from the TDX quote match the " +
@@ -126,7 +126,7 @@ var factorRegistry = []factorInfo{
 	},
 	// Tier 2: Binding & Crypto
 	{
-		Name:    "tdx_reportdata_binding",
+		Name:    "tee_reportdata_binding",
 		Tier:    2,
 		Summary: "REPORTDATA binds enclave key to quote",
 		Description: "Verifies that the TDX REPORTDATA field contains a " +
@@ -147,7 +147,7 @@ var factorRegistry = []factorInfo{
 			"Skipped in --offline mode or when the Intel PCS is unreachable.",
 	},
 	{
-		Name:    "tdx_tcb_current",
+		Name:    "tee_tcb_current",
 		Tier:    2,
 		Summary: "TEE TCB status from Intel PCS",
 		Description: "Evaluates the TCB status returned by Intel PCS collateral " +
@@ -158,11 +158,11 @@ var factorRegistry = []factorInfo{
 			"mode, shows only the raw TEE_TCB_SVN bytes.",
 	},
 	{
-		Name:    "tdx_tcb_not_revoked",
+		Name:    "tee_tcb_not_revoked",
 		Tier:    2,
 		Summary: "TCB firmware not revoked by Intel",
 		Description: "Checks that the TDX TCB status from Intel PCS collateral is " +
-			"not Revoked. Unlike tdx_tcb_current (which also fails on " +
+			"not Revoked. Unlike tee_tcb_current (which also fails on " +
 			"SWHardeningNeeded or OutOfDate), this factor only blocks on " +
 			"Revoked — meaning Intel has determined the firmware is " +
 			"fundamentally compromised with no available mitigation. This " +
@@ -359,7 +359,7 @@ var factorRegistry = []factorInfo{
 			"own TDX enclave and has a separate nonce from the model attestation.",
 	},
 	{
-		Name:    "gateway_tdx_quote_present",
+		Name:    "gateway_tee_quote_present",
 		Tier:    4,
 		Summary: "Gateway TDX quote present and parsed",
 		Description: "Checks that the gateway's intel_quote field exists in the " +
@@ -368,7 +368,7 @@ var factorRegistry = []factorInfo{
 			"TDX enclave.",
 	},
 	{
-		Name:    "gateway_tdx_quote_structure",
+		Name:    "gateway_tee_quote_structure",
 		Tier:    4,
 		Summary: "Gateway TDX quote valid QuoteV4/V5",
 		Description: "Parses the gateway's TDX quote and verifies it conforms to " +
@@ -376,7 +376,7 @@ var factorRegistry = []factorInfo{
 			"prefix for comparison against published reference values.",
 	},
 	{
-		Name:    "gateway_tdx_cert_chain",
+		Name:    "gateway_tee_cert_chain",
 		Tier:    4,
 		Summary: "Gateway Intel root CA chain valid",
 		Description: "Verifies the X.509 certificate chain in the gateway's TDX quote " +
@@ -384,7 +384,7 @@ var factorRegistry = []factorInfo{
 			"attestation comes from genuine Intel hardware.",
 	},
 	{
-		Name:    "gateway_tdx_quote_signature",
+		Name:    "gateway_tee_quote_signature",
 		Tier:    4,
 		Summary: "Gateway TDX quote signature verified",
 		Description: "Verifies the ECDSA signature on the gateway's TDX quote body " +
@@ -392,7 +392,7 @@ var factorRegistry = []factorInfo{
 			"gateway quote has not been tampered with.",
 	},
 	{
-		Name:    "gateway_tdx_debug_disabled",
+		Name:    "gateway_tee_debug_disabled",
 		Tier:    4,
 		Summary: "Gateway debug bit is 0 (production)",
 		Description: "Checks that the gateway's TD_ATTRIBUTES debug bit is not set. " +
@@ -400,7 +400,7 @@ var factorRegistry = []factorInfo{
 			"passing through the API gateway.",
 	},
 	{
-		Name:    "gateway_tdx_mrseam_mrtd",
+		Name:    "gateway_tee_mrseam_mrtd",
 		Tier:    4,
 		Summary: "Gateway MRSEAM/MRTD match policy",
 		Description: "Checks that the gateway TDX MRSEAM and MRTD values match " +
@@ -409,7 +409,7 @@ var factorRegistry = []factorInfo{
 			"image. Skipped when no gateway MRSEAM/MRTD policy is configured.",
 	},
 	{
-		Name:    "gateway_tdx_hardware_config",
+		Name:    "gateway_tee_hardware_config",
 		Tier:    4,
 		Summary: "Gateway RTMR0 matches policy",
 		Description: "Checks that the gateway RTMR0 from the TDX quote matches the " +
@@ -418,7 +418,7 @@ var factorRegistry = []factorInfo{
 			"RTMR0 policy is configured.",
 	},
 	{
-		Name:    "gateway_tdx_boot_config",
+		Name:    "gateway_tee_boot_config",
 		Tier:    4,
 		Summary: "Gateway RTMR1/RTMR2 match policy",
 		Description: "Checks that the gateway RTMR1 and RTMR2 from the TDX quote " +
@@ -427,7 +427,7 @@ var factorRegistry = []factorInfo{
 			"when no gateway RTMR1/RTMR2 policy is configured.",
 	},
 	{
-		Name:    "gateway_tdx_reportdata_binding",
+		Name:    "gateway_tee_reportdata_binding",
 		Tier:    4,
 		Summary: "Gateway REPORTDATA binds TLS fingerprint + nonce",
 		Description: "Verifies the gateway TDX quote REPORTDATA field. " +

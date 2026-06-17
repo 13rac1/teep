@@ -68,7 +68,7 @@ Verify and report:
 - the model backend REPORTDATA verifier is the shared nearai `ReportDataVerifier` (not a different implementation),
 - a missing or unconfigured verifier fails safely (no default pass-through).
 
-The `tdx_reportdata_binding` factor is one of the default enforced factors. The audit MUST verify that a model REPORTDATA mismatch triggers failure through the enforcement code path.
+The `tee_reportdata_binding` factor is one of the default enforced factors. The audit MUST verify that a model REPORTDATA mismatch triggers failure through the enforcement code path.
 
 ### Gateway REPORTDATA Scheme Validation
 
@@ -81,7 +81,7 @@ Verify and report:
 - the gateway REPORTDATA verifier is a **separate** implementation from the model REPORTDATA verifier (because the binding scheme differs — no signing address for the gateway),
 - the correct verifier is used for each quote (model vs gateway).
 
-The `gateway_tdx_reportdata_binding` factor is a separate enforcement factor. Verify that it is in the default enforced set.
+The `gateway_tee_reportdata_binding` factor is a separate enforcement factor. Verify that it is in the default enforced set.
 
 ### Trust Delegation for Model TLS Fingerprint
 
@@ -161,14 +161,14 @@ Audit focus:
 - Verify the concatenation format: `hex(nonce) + base64(pubkey)` with no separator.
 - Verify constant-time comparison for the first 32 bytes.
 - Verify the second half is checked to be all zeros (or document if it is not checked).
-- The `tdx_reportdata_binding` factor is enforced for chutes.
+- The `tee_reportdata_binding` factor is enforced for chutes.
 
 Primary reference: `internal/provider/chutes/reportdata.go`.
 
 ### No Gateway REPORTDATA, TLS Pinning, or SPKI Cache
 
 The Chutes gateway (`api.chutes.ai`/`llm.chutes.ai`) is unattested and produces no TDX quote. Therefore:
-- No `gateway_tdx_reportdata_binding` factor exists.
+- No `gateway_tee_reportdata_binding` factor exists.
 - No SPKI pin cache is maintained for chutes providers.
 - No `tls_key_binding` enforcement — `tls_key_binding` is in `ChutesDefaultAllowFail`.
 - Standard HTTPS is used without attestation-bound TLS pinning.

@@ -145,12 +145,12 @@ func assertNeardirectReport(t *testing.T, report *attestation.VerificationReport
 	// to get a 64-char Ed25519 key and restore the e2ee_capable assertion.
 	assertMustPass(t, report, []string{
 		"nonce_match",
-		"tdx_quote_present",
-		"tdx_quote_structure",
-		"tdx_debug_disabled",
-		"tdx_mrseam_mrtd",
+		"tee_quote_present",
+		"tee_quote_structure",
+		"tee_debug_disabled",
+		"tee_mrseam_mrtd",
 		"signing_key_present",
-		"tdx_reportdata_binding",
+		"tee_reportdata_binding",
 		"nvidia_payload_present",
 		"nvidia_nonce_client_bound",
 		"tls_key_binding",

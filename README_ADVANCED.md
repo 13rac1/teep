@@ -98,24 +98,24 @@ Each factor produces PASS, FAIL, or SKIP. Factors marked `[ENFORCED]` cause the 
 | # | Factor | Description |
 |---|--------|-------------|
 | 1 | `nonce_match` | Attestation response nonce matches submitted nonce. Prevents replay attacks. |
-| 2 | `tdx_quote_present` | Attestation includes an Intel TDX quote — the hardware proof. |
-| 3 | `tdx_quote_structure` | TDX quote parses as valid QuoteV4. Displays MRTD (SHA-384 hash of VM image). |
-| 4 | `tdx_cert_chain` | Certificate chain verifies against Intel SGX/TDX root CA. Proves genuine Intel hardware. |
-| 5 | `tdx_quote_signature` | ECDSA signature over the TDX quote body is valid. Proves the quote hasn't been tampered with. |
-| 6 | `tdx_debug_disabled` | TD_ATTRIBUTES debug bit is 0. A debug enclave lets the host read enclave memory. |
-| 7 | `tdx_mrseam_mrtd` | MRTD and MRSEAM match configured measurement policy allowlists. Skipped when no allowlist is configured. |
-| 8 | `tdx_hardware_config` | RTMR[0] matches the hardware config allowlist. Skipped when no allowlist is configured. |
-| 9 | `tdx_boot_config` | RTMR[1] and RTMR[2] match the boot config allowlists. Skipped when no allowlist is configured. |
+| 2 | `tee_quote_present` | Attestation includes an Intel TDX quote — the hardware proof. |
+| 3 | `tee_quote_structure` | TDX quote parses as valid QuoteV4. Displays MRTD (SHA-384 hash of VM image). |
+| 4 | `tee_cert_chain` | Certificate chain verifies against Intel SGX/TDX root CA. Proves genuine Intel hardware. |
+| 5 | `tee_quote_signature` | ECDSA signature over the TDX quote body is valid. Proves the quote hasn't been tampered with. |
+| 6 | `tee_debug_disabled` | TD_ATTRIBUTES debug bit is 0. A debug enclave lets the host read enclave memory. |
+| 7 | `tee_mrseam_mrtd` | MRTD and MRSEAM match configured measurement policy allowlists. Skipped when no allowlist is configured. |
+| 8 | `tee_hardware_config` | RTMR[0] matches the hardware config allowlist. Skipped when no allowlist is configured. |
+| 9 | `tee_boot_config` | RTMR[1] and RTMR[2] match the boot config allowlists. Skipped when no allowlist is configured. |
 | 10 | `signing_key_present` | Enclave ECDH public key present in response. Required for E2EE key exchange. |
 
 ### Tier 2: Binding & Crypto
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 11 | `tdx_reportdata_binding` | REPORTDATA cryptographically binds enclave public key to TDX quote. Without this, an attacker can substitute the key while leaving the quote intact — making E2EE security theater. |
+| 11 | `tee_reportdata_binding` | REPORTDATA cryptographically binds enclave public key to TDX quote. Without this, an attacker can substitute the key while leaving the quote intact — making E2EE security theater. |
 | 12 | `intel_pcs_collateral` | Intel PCS collateral (TCB info, CRLs) fetched for TCB currency check. Skipped in `--offline` mode. |
-| 13 | `tdx_tcb_current` | TCB SVN meets minimum threshold. Passes for `UpToDate` and `SWHardeningNeeded`. Fails for `OutOfDate` or `Revoked`. Reports Intel Security Advisory IDs when applicable. |
-| 14 | `tdx_tcb_not_revoked` | TCB SVN is not in the revoked set per Intel PCS. Skipped in `--offline` mode. |
+| 13 | `tee_tcb_current` | TCB SVN meets minimum threshold. Passes for `UpToDate` and `SWHardeningNeeded`. Fails for `OutOfDate` or `Revoked`. Reports Intel Security Advisory IDs when applicable. |
+| 14 | `tee_tcb_not_revoked` | TCB SVN is not in the revoked set per Intel PCS. Skipped in `--offline` mode. |
 | 15 | `nvidia_payload_present` | NVIDIA GPU attestation payload (EAT or JWT) is present. Proves inference runs on genuine NVIDIA GPU with confidential computing enabled. |
 | 16 | `nvidia_signature` | NVIDIA EAT SPDM ECDSA P-384 signatures verified on each GPU cert chain. For JWTs, verifies against NVIDIA JWKS. |
 | 17 | `nvidia_claims` | NVIDIA EAT claims valid — architecture, GPU count, driver version, confidential computing mode. |
@@ -144,15 +144,15 @@ Verifies the TEE gateway itself (`cloud-api.near.ai`), in addition to the model 
 | # | Factor | Description |
 |---|--------|-------------|
 | 30 | `gateway_nonce_match` | Gateway `request_nonce` matches the client nonce. Prevents replay attacks against the gateway. |
-| 31 | `gateway_tdx_quote_present` | Gateway TDX quote is present in the attestation response. |
-| 32 | `gateway_tdx_quote_structure` | Gateway TDX quote parses as valid QuoteV4. |
-| 33 | `gateway_tdx_cert_chain` | Gateway certificate chain verifies against Intel SGX/TDX root CA. |
-| 34 | `gateway_tdx_quote_signature` | ECDSA signature over the gateway TDX quote body is valid. |
-| 35 | `gateway_tdx_debug_disabled` | Gateway TD_ATTRIBUTES debug bit is 0 (production enclave). |
-| 36 | `gateway_tdx_mrseam_mrtd` | Gateway MRTD and MRSEAM match configured measurement policy allowlists. |
-| 37 | `gateway_tdx_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
-| 38 | `gateway_tdx_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. |
-| 39 | `gateway_tdx_reportdata_binding` | Gateway REPORTDATA binds `sha256(signing_address ‖ tls_fingerprint)` — same scheme as NEAR AI Direct. |
+| 31 | `gateway_tee_quote_present` | Gateway TDX quote is present in the attestation response. |
+| 32 | `gateway_tee_quote_structure` | Gateway TDX quote parses as valid QuoteV4. |
+| 33 | `gateway_tee_cert_chain` | Gateway certificate chain verifies against Intel SGX/TDX root CA. |
+| 34 | `gateway_tee_quote_signature` | ECDSA signature over the gateway TDX quote body is valid. |
+| 35 | `gateway_tee_debug_disabled` | Gateway TD_ATTRIBUTES debug bit is 0 (production enclave). |
+| 36 | `gateway_tee_mrseam_mrtd` | Gateway MRTD and MRSEAM match configured measurement policy allowlists. |
+| 37 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
+| 38 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. |
+| 39 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binds `sha256(signing_address ‖ tls_fingerprint)` — same scheme as NEAR AI Direct. |
 | 40 | `gateway_compose_binding` | Gateway `sha256(app_compose)` matches TDX MRConfigID. |
 | 41 | `gateway_cpu_id_registry` | Gateway CPU PPID verified against the Proof of Cloud registry. |
 | 42 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match the gateway TDX quote. |
@@ -185,11 +185,11 @@ e2ee = false
 [policy]
 enforce = [
   "nonce_match",
-  "tdx_cert_chain",
-  "tdx_quote_signature",
-  "tdx_debug_disabled",
+  "tee_cert_chain",
+  "tee_quote_signature",
+  "tee_debug_disabled",
   "signing_key_present",
-  "tdx_reportdata_binding",
+  "tee_reportdata_binding",
   "compose_binding",
   "nvidia_signature",
   "nvidia_nonce_match",
@@ -222,7 +222,7 @@ rtmr3_allow = []
 ```
 
 When configured:
-- `mrtd_allow` and `mrseam_allow` are enforced in `tdx_quote_structure`.
+- `mrtd_allow` and `mrseam_allow` are enforced in `tee_quote_structure`.
 - `rtmr*_allow` values are enforced in `event_log_integrity` after event-log replay matches quote RTMRs.
 
 Empty allowlists disable policy for that measurement.

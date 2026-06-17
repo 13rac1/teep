@@ -74,7 +74,7 @@ Verify and report:
 - debug-bit evaluation and enforcement behavior (debug enclaves MUST be rejected for production trust),
 - that the TD Attributes field in the quote body is parsed and the DEBUG bit (bit 0) is explicitly checked,
 - that debug-bit check is enforced fail-closed (not merely logged),
-- the enforcement factor name for this check (expected: `tdx_debug_disabled`).
+- the enforcement factor name for this check (expected: `tee_debug_disabled`).
 
 ### TCB Currency and Status Classification
 
@@ -82,7 +82,7 @@ Verify and report:
 - how the TCB level from the quote is compared against the TCBInfo collateral to determine TCB status,
 - the set of possible TCB status values and how each is handled (UpToDate → pass, OutOfDate → warning/fail, Revoked → hard fail, ConfigurationNeeded → advisory, SWHardeningNeeded → advisory/fail, OutOfDateConfigurationNeeded → warning),
 - whether a non-UpToDate TCB status blocks traffic or is advisory-only,
-- the enforcement factor name for TCB currency (expected: something like `tdx_tcb_current` or similar),
+- the enforcement factor name for TCB currency (expected: something like `tee_tcb_current` or similar),
 - whether TCB evaluation is skipped in offline mode and the residual risk of doing so.
 
 ### Trust Root Acquisition Model
@@ -141,6 +141,6 @@ Provide:
 3. full certificate chain validation assessment (root CA → intermediate → PCK leaf),
 4. QE Identity and PCS collateral handling assessment,
 5. TCB status classification and enforcement behavior,
-6. enforcement classification for each verification factor (`tdx_cert_chain`, `tdx_quote_signature`, `tdx_debug_disabled`, TCB currency),
+6. enforcement classification for each verification factor (`tee_cert_chain`, `tee_quote_signature`, `tee_debug_disabled`, TCB currency),
 7. include at least one concrete positive control and one concrete negative/residual-risk observation,
 8. source citations for all claims.

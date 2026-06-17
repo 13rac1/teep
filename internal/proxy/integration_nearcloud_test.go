@@ -256,11 +256,11 @@ func runNearCloudAttestationReport(t *testing.T) {
 	mustPass := []string{
 		// Tier 1: Core TDX.
 		"nonce_match",
-		"tdx_quote_present",
-		"tdx_quote_structure",
-		"tdx_cert_chain",
-		"tdx_quote_signature",
-		"tdx_debug_disabled",
+		"tee_quote_present",
+		"tee_quote_structure",
+		"tee_cert_chain",
+		"tee_quote_signature",
+		"tee_debug_disabled",
 		"signing_key_present",
 		// Tier 2: Binding & Crypto.
 		"e2ee_capable",
@@ -284,11 +284,11 @@ func runNearCloudAttestationReport(t *testing.T) {
 	// Verify gateway Tier 4 factors exist and critical ones pass.
 	gatewayFactors := []string{
 		"gateway_nonce_match",
-		"gateway_tdx_quote_present",
-		"gateway_tdx_quote_structure",
-		"gateway_tdx_cert_chain",
-		"gateway_tdx_quote_signature",
-		"gateway_tdx_debug_disabled",
+		"gateway_tee_quote_present",
+		"gateway_tee_quote_structure",
+		"gateway_tee_cert_chain",
+		"gateway_tee_quote_signature",
+		"gateway_tee_debug_disabled",
 		"gateway_compose_binding",
 	}
 	for _, name := range gatewayFactors {
@@ -302,11 +302,11 @@ func runNearCloudAttestationReport(t *testing.T) {
 
 	// Gateway TDX core factors should pass.
 	for _, name := range []string{
-		"gateway_tdx_quote_present",
-		"gateway_tdx_quote_structure",
-		"gateway_tdx_cert_chain",
-		"gateway_tdx_quote_signature",
-		"gateway_tdx_debug_disabled",
+		"gateway_tee_quote_present",
+		"gateway_tee_quote_structure",
+		"gateway_tee_cert_chain",
+		"gateway_tee_quote_signature",
+		"gateway_tee_debug_disabled",
 	} {
 		f, ok := findFactor(report.Factors, name)
 		if !ok {

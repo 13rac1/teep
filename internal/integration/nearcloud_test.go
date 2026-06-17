@@ -173,12 +173,12 @@ func assertNearcloudReport(t *testing.T, report *attestation.VerificationReport)
 	// Model factors that must pass.
 	assertMustPass(t, report, []string{
 		"nonce_match",
-		"tdx_quote_present",
-		"tdx_quote_structure",
-		"tdx_debug_disabled",
-		"tdx_mrseam_mrtd",
+		"tee_quote_present",
+		"tee_quote_structure",
+		"tee_debug_disabled",
+		"tee_mrseam_mrtd",
 		"signing_key_present",
-		"tdx_reportdata_binding",
+		"tee_reportdata_binding",
 		"nvidia_payload_present",
 		"nvidia_nonce_client_bound",
 		"e2ee_capable",
@@ -192,12 +192,12 @@ func assertNearcloudReport(t *testing.T, report *attestation.VerificationReport)
 	// Gateway factors (Tier 4) that must pass.
 	assertMustPass(t, report, []string{
 		"gateway_nonce_match",
-		"gateway_tdx_quote_present",
-		"gateway_tdx_quote_structure",
-		"gateway_tdx_cert_chain",
-		"gateway_tdx_quote_signature",
-		"gateway_tdx_debug_disabled",
-		"gateway_tdx_mrseam_mrtd",
+		"gateway_tee_quote_present",
+		"gateway_tee_quote_structure",
+		"gateway_tee_cert_chain",
+		"gateway_tee_quote_signature",
+		"gateway_tee_debug_disabled",
+		"gateway_tee_mrseam_mrtd",
 		"gateway_compose_binding",
 		"gateway_event_log_integrity",
 	})
@@ -206,9 +206,9 @@ func assertNearcloudReport(t *testing.T, report *attestation.VerificationReport)
 
 	// Gateway allow-fail factors — log for visibility.
 	logFactorStatus(t, report,
-		"gateway_tdx_reportdata_binding",
-		"gateway_tdx_hardware_config",
-		"gateway_tdx_boot_config",
+		"gateway_tee_reportdata_binding",
+		"gateway_tee_hardware_config",
+		"gateway_tee_boot_config",
 		"gateway_cpu_id_registry",
 	)
 

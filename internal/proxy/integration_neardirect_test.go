@@ -265,11 +265,11 @@ func runNearDirectAttestationReport(t *testing.T) {
 	// Verify Tier 1 factors all pass.
 	tier1 := []string{
 		"nonce_match",
-		"tdx_quote_present",
-		"tdx_quote_structure",
-		"tdx_cert_chain",
-		"tdx_quote_signature",
-		"tdx_debug_disabled",
+		"tee_quote_present",
+		"tee_quote_structure",
+		"tee_cert_chain",
+		"tee_quote_signature",
+		"tee_debug_disabled",
 		"signing_key_present",
 	}
 	for _, name := range tier1 {
@@ -284,11 +284,11 @@ func runNearDirectAttestationReport(t *testing.T) {
 	}
 
 	// Verify REPORTDATA binding passes.
-	f, ok := findFactor(report.Factors, "tdx_reportdata_binding")
+	f, ok := findFactor(report.Factors, "tee_reportdata_binding")
 	if !ok {
-		t.Error("factor tdx_reportdata_binding not found")
+		t.Error("factor tee_reportdata_binding not found")
 	} else if f.Status != attestation.Pass {
-		t.Errorf("tdx_reportdata_binding: status = %v, want Pass; detail: %s", f.Status, f.Detail)
+		t.Errorf("tee_reportdata_binding: status = %v, want Pass; detail: %s", f.Status, f.Detail)
 	}
 
 	// Verify TLS key binding passes (NEAR AI-specific; Venice fails this).

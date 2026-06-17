@@ -9,7 +9,7 @@
 //  3. Check negative cache. Blocked → 503.
 //  4. Check attestation cache. On miss, fetch + verify + cache.
 //  5. Any enforced factor Fail (not in allow_fail) → 502 with report JSON.
-//  6. If E2EE and tdx_reportdata_binding Pass: encrypt messages, set headers.
+//  6. If E2EE and tee_reportdata_binding Pass: encrypt messages, set headers.
 //     If E2EE required but binding fails: block request (no plaintext fallback).
 //  7. Forward to upstream. Parse streaming SSE or buffer non-streaming body.
 //  8. Decrypt each chunk (E2EE). Abort on any decryption failure.
@@ -1559,7 +1559,7 @@ func (s *Server) pinnedPreDispatchE2EE(ctx context.Context, w http.ResponseWrite
 	}
 	if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok {
 		if !cached.ReportDataBindingPassed() {
-			slog.ErrorContext(ctx, "E2EE required but tdx_reportdata_binding not passed; refusing request",
+			slog.ErrorContext(ctx, "E2EE required but tee_reportdata_binding not passed; refusing request",
 				"provider", prov.Name, "model", upstreamModel)
 			http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
 			return false
@@ -1620,7 +1620,7 @@ func (s *Server) pinnedPostDispatchE2EE(
 	// E2EE degrades to plaintext.
 	if !report.ReportDataBindingPassed() {
 		s.negCache.Record(prov.Name, upstreamModel)
-		slog.ErrorContext(ctx, "E2EE required but tdx_reportdata_binding not passed; refusing request",
+		slog.ErrorContext(ctx, "E2EE required but tee_reportdata_binding not passed; refusing request",
 			"provider", prov.Name, "model", upstreamModel)
 		http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
 		return false
@@ -2165,7 +2165,7 @@ func (s *Server) buildUpstreamBody(
 ) (*upstreamBody, error) {
 	if !e2eeActive {
 		if prov.E2EE {
-			return nil, fmt.Errorf("E2EE required for %s but tdx_reportdata_binding not passed; refusing plaintext", prov.Name)
+			return nil, fmt.Errorf("E2EE required for %s but tee_reportdata_binding not passed; refusing plaintext", prov.Name)
 		}
 		return &upstreamBody{Body: rawBody}, nil
 	}

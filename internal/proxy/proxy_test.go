@@ -300,7 +300,7 @@ func (h *signingKeyPinnedHandler) HandlePinned(_ context.Context, req *provider.
 				Model:    "test-model",
 				Factors: []attestation.FactorResult{
 					{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-					{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
+					{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
 				},
 			},
 		}, nil
@@ -349,7 +349,7 @@ func (h *blockedThenOKPinnedHandler) HandlePinned(_ context.Context, _ *provider
 }
 
 // reportDataFailPinnedHandler returns a passing report where
-// tdx_reportdata_binding fails. Used for E2EE cache checks.
+// tee_reportdata_binding fails. Used for E2EE cache checks.
 type reportDataFailPinnedHandler struct {
 	calls int
 }
@@ -368,7 +368,7 @@ func (h *reportDataFailPinnedHandler) HandlePinned(_ context.Context, _ *provide
 				Model:    "test-model",
 				Factors: []attestation.FactorResult{
 					{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-					{Name: "tdx_reportdata_binding", Status: attestation.Fail, Detail: "binding mismatch"},
+					{Name: "tee_reportdata_binding", Status: attestation.Fail, Detail: "binding mismatch"},
 				},
 			},
 		}, nil
@@ -407,9 +407,9 @@ func modelPubKeyHex() string {
 // intel_quote and nvidia_payload are left empty so TDX/NVIDIA factors all
 // fail/skip, but nonce_match passes when echoNonce is true.
 // When reportdataOK is true it injects a fake intel_quote field that causes
-// the proxy to treat tdx_reportdata_binding as having been checked (but since
+// the proxy to treat tee_reportdata_binding as having been checked (but since
 // the quote is not a real TDX quote, VerifyTDXQuote will set ParseErr, which
-// causes tdx_reportdata_binding to Fail). Use withPassingTDX for the E2EE path.
+// causes tee_reportdata_binding to Fail). Use withPassingTDX for the E2EE path.
 func attestationJSON(nonce attestation.Nonce, echoNonce bool) string {
 	nonceField := ""
 	if echoNonce {
@@ -472,7 +472,7 @@ func buildConfig(attestBaseURL string, _ bool) *config.Config {
 				E2EE:    false,
 			},
 		},
-		AllowFail: allowFailExcept("nonce_match", "tdx_debug_disabled", "signing_key_present", "tdx_reportdata_binding"),
+		AllowFail: allowFailExcept("nonce_match", "tee_debug_disabled", "signing_key_present", "tee_reportdata_binding"),
 	}
 }
 
@@ -1878,7 +1878,7 @@ func TestBlockedAttestation502(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// Plaintext non-streaming (E2EE false or tdx_reportdata_binding fails)
+// Plaintext non-streaming (E2EE false or tee_reportdata_binding fails)
 // --------------------------------------------------------------------------
 
 func TestPlaintextNonStream(t *testing.T) {
@@ -2008,43 +2008,43 @@ func TestPlaintextStreaming(t *testing.T) {
 // --------------------------------------------------------------------------
 
 // makeE2EEConfig returns a config pointing at the given base URL with E2EE
-// enabled. tdx_reportdata_binding is NOT in Enforced (it will Fail since we
+// enabled. tee_reportdata_binding is NOT in Enforced (it will Fail since we
 // don't have a real TDX quote, but we need E2EE to work in tests). We
 // override reportdata handling by not enforcing it, and force E2EE by
 // making reportdataBindingPassed return true when the factor passes.
 //
-// Since we can't pass a real TDX quote in tests, tdx_reportdata_binding will
+// Since we can't pass a real TDX quote in tests, tee_reportdata_binding will
 // always Fail. That means E2EE will be disabled by the proxy's safety check.
 // To test E2EE in unit tests without a real TDX environment, we need a way
 // to override this check.
 //
-// Solution: inject a fake attestation that has tdx_reportdata_binding Pass.
+// Solution: inject a fake attestation that has tee_reportdata_binding Pass.
 // We can do this by returning an IntelQuote that is not empty but also not
 // a valid TDX quote, causing VerifyTDXQuote to fail at ParseErr, which makes
-// tdx_reportdata_binding Fail. This means we cannot test the full E2EE path
+// tee_reportdata_binding Fail. This means we cannot test the full E2EE path
 // through the proxy without a real TDX environment.
 //
 // Instead, we test the E2EE path using a custom attester that bypasses the
 // proxy's attestation fetch and injects a pre-built VerificationReport with
-// tdx_reportdata_binding Passing.
+// tee_reportdata_binding Passing.
 //
 // Since proxy.Server's attestation is fetched via prov.Attester.FetchAttestation
 // and the report is built via attestation.BuildReport, the only way to inject
-// a passing tdx_reportdata_binding in a test is to provide a real TDX quote or
+// a passing tee_reportdata_binding in a test is to provide a real TDX quote or
 // to use the proxy's internal test hooks.
 //
 // For E2EE tests we use a different approach: we construct a combined server
 // that returns a valid-looking attestation with a real REPORTDATA binding by
 // computing SHA-256(signingKey || nonce) correctly. The proxy will call
 // VerifyTDXQuote which will fail to parse our fake base64 quote with ParseErr.
-// So tdx_reportdata_binding will still Fail.
+// So tee_reportdata_binding will still Fail.
 //
 // The conclusion: full E2EE integration requires real TDX hardware. We test the
 // decrypt functions directly and test the proxy with E2EE disabled.
 // See TestDecryptSSEChunk and TestDecryptNonStreamResponse below.
 
 // TestE2EERefusesPlaintextFallback verifies the proxy refuses to send a
-// plaintext request when E2EE is configured but tdx_reportdata_binding fails.
+// plaintext request when E2EE is configured but tee_reportdata_binding fails.
 func TestE2EERefusesPlaintextFallback(t *testing.T) {
 	combined := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/tee/attestation") {
@@ -2075,7 +2075,7 @@ func TestE2EERefusesPlaintextFallback(t *testing.T) {
 				E2EE:    true, // E2EE requested but reportdata binding will fail
 			},
 		},
-		// tdx_reportdata_binding is not enforced, but E2EE must still refuse
+		// tee_reportdata_binding is not enforced, but E2EE must still refuse
 		AllowFail: attestation.KnownFactors,
 	}
 
@@ -3801,7 +3801,7 @@ func TestBlockedReport_NegCacheAndAttestCacheInteraction(t *testing.T) {
 
 func TestPinnedPath_E2EE_ReportDataBindingCacheCheck(t *testing.T) {
 	// E2EE provider: first request caches report where
-	// tdx_reportdata_binding fails. Second request (SPKI cache hit)
+	// tee_reportdata_binding fails. Second request (SPKI cache hit)
 	// should be rejected with 502 because cached report has no binding.
 	handler := &reportDataFailPinnedHandler{}
 	cfg := &config.Config{
@@ -3976,14 +3976,14 @@ func (m *mockAttester) FetchAttestation(_ context.Context, _ string, _ attestati
 	return nil, errors.New("mock: fresh attestation not available")
 }
 
-// passingReport returns a minimal VerificationReport with tdx_reportdata_binding
+// passingReport returns a minimal VerificationReport with tee_reportdata_binding
 // passing so that e2eeActive is true on attestation cache hits.
 func passingReport(provName, model string) *attestation.VerificationReport { //nolint:unparam // model varies by test intent
 	return &attestation.VerificationReport{
 		Provider: provName,
 		Model:    model,
 		Factors: []attestation.FactorResult{
-			{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "test"},
+			{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "test"},
 		},
 	}
 }

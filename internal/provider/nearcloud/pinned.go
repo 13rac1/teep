@@ -177,7 +177,7 @@ func (h *PinnedHandler) encryptBody(
 
 	// E2EE providers must never downgrade to plaintext.
 	if report != nil && !report.ReportDataBindingPassed() {
-		return nil, nil, nil, errors.New("E2EE required but tdx_reportdata_binding not passed; refusing plaintext")
+		return nil, nil, nil, errors.New("E2EE required but tee_reportdata_binding not passed; refusing plaintext")
 	}
 
 	sk := signingKey

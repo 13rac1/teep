@@ -171,13 +171,13 @@ func assertPhalaCloudReportFactors(t *testing.T, report *attestation.Verificatio
 
 	mustPass := []string{
 		"nonce_match",
-		"tdx_quote_present",
-		"tdx_quote_structure",
-		"tdx_cert_chain",
-		"tdx_quote_signature",
-		"tdx_debug_disabled",
+		"tee_quote_present",
+		"tee_quote_structure",
+		"tee_cert_chain",
+		"tee_quote_signature",
+		"tee_debug_disabled",
 		"signing_key_present",
-		"tdx_reportdata_binding",
+		"tee_reportdata_binding",
 	}
 	for _, name := range mustPass {
 		f, ok := findFactor(report.Factors, name)

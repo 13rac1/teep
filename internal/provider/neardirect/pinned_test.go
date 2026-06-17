@@ -416,7 +416,7 @@ func TestNewPinnedHandler(t *testing.T) {
 	spkiCache := attestation.NewSPKICache()
 	resolver := newEndpointResolverForTest("http://localhost")
 	rdVerifier := ReportDataVerifier{}
-	allowFail := []string{"nonce_match", "tdx_debug_disabled"}
+	allowFail := []string{"nonce_match", "tee_debug_disabled"}
 
 	h := NewPinnedHandler(resolver, spkiCache, "test-api-key", true, allowFail, attestation.MeasurementPolicy{}, rdVerifier, nil, attestation.DefaultNVIDIAVerifier(), nil)
 
@@ -1568,13 +1568,13 @@ func TestEncryptBody_UsesRequestSigningKey(t *testing.T) {
 func TestEncryptBody_FailsOnBadBinding(t *testing.T) {
 	h := &PinnedHandler{}
 
-	// Report with tdx_reportdata_binding failed.
+	// Report with tee_reportdata_binding failed.
 	report := &attestation.VerificationReport{
 		Provider: "neardirect",
 		Model:    "test-model",
 		Factors: []attestation.FactorResult{
 			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			{Name: "tdx_reportdata_binding", Status: attestation.Fail, Detail: "binding failed"},
+			{Name: "tee_reportdata_binding", Status: attestation.Fail, Detail: "binding failed"},
 		},
 	}
 
@@ -1591,8 +1591,8 @@ func TestEncryptBody_FailsOnBadBinding(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when REPORTDATA binding not passed")
 	}
-	if !strings.Contains(err.Error(), "tdx_reportdata_binding") {
-		t.Errorf("error should mention tdx_reportdata_binding: %v", err)
+	if !strings.Contains(err.Error(), "tee_reportdata_binding") {
+		t.Errorf("error should mention tee_reportdata_binding: %v", err)
 	}
 }
 

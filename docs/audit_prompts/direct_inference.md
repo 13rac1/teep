@@ -124,11 +124,11 @@ For complete attestation of a dstack-based CVM, the verification process should:
 
 The code supports an allowlist-based `MeasurementPolicy` for MRTD, MRSEAM, and RTMR0-3. The direct inference provider (neardirect / NEAR AI) does not publish authenticated measurement baselines in-band, but teep now provides Go-coded stopgap defaults and operator tooling to partially close this gap:
 
-**MRSEAM — Go-coded defaults from Intel releases.** `DstackBaseMeasurementPolicy()` in `internal/attestation/dstack_defaults.go` ships an allowlist of four Intel-published MRSEAM values corresponding to TDX module versions 1.5.08, 1.5.16, 2.0.08, and 2.0.02. These are sourced from Intel's official `confidential-computing.tdx.tdx-module` release notes. The `tdx_mrseam_mrtd` factor is enforced by default for neardirect (it is NOT in `NeardirectDefaultAllowFail`).
+**MRSEAM — Go-coded defaults from Intel releases.** `DstackBaseMeasurementPolicy()` in `internal/attestation/dstack_defaults.go` ships an allowlist of four Intel-published MRSEAM values corresponding to TDX module versions 1.5.08, 1.5.16, 2.0.08, and 2.0.02. These are sourced from Intel's official `confidential-computing.tdx.tdx-module` release notes. The `tee_mrseam_mrtd` factor is enforced by default for neardirect (it is NOT in `NeardirectDefaultAllowFail`).
 
-**MRTD — Go-coded defaults from dstack reproducible builds.** The same base policy ships two MRTD values corresponding to dstack-nvidia image versions 0.5.4.1 and 0.5.5, derived from reproducible build artifacts. MRTD is deterministic for a given dstack OS image version (it measures only the virtual firmware binary). The `tdx_mrseam_mrtd` factor covers MRTD enforcement.
+**MRTD — Go-coded defaults from dstack reproducible builds.** The same base policy ships two MRTD values corresponding to dstack-nvidia image versions 0.5.4.1 and 0.5.5, derived from reproducible build artifacts. MRTD is deterministic for a given dstack OS image version (it measures only the virtual firmware binary). The `tee_mrseam_mrtd` factor covers MRTD enforcement.
 
-**RTMR0, RTMR1, RTMR2 — Per-provider observed-value defaults.** Each provider's `DefaultMeasurementPolicy()` in `internal/provider/neardirect/policy.go` ships observed RTMR values pinned from captured attestation data. These serve as drift-detection baselines. The `tdx_hardware_config` (RTMR0) and `tdx_boot_config` (RTMR1/RTMR2) factors are in `NeardirectDefaultAllowFail` — meaning they are computed and reported but do not block traffic by default. Operators can enforce them by removing these factors from their `allow_fail` configuration.
+**RTMR0, RTMR1, RTMR2 — Per-provider observed-value defaults.** Each provider's `DefaultMeasurementPolicy()` in `internal/provider/neardirect/policy.go` ships observed RTMR values pinned from captured attestation data. These serve as drift-detection baselines. The `tee_hardware_config` (RTMR0) and `tee_boot_config` (RTMR1/RTMR2) factors are in `NeardirectDefaultAllowFail` — meaning they are computed and reported but do not block traffic by default. Operators can enforce them by removing these factors from their `allow_fail` configuration.
 
 **Measurement policy merge.** Policies are resolved via a three-tier precedence: per-provider TOML config → global TOML config → Go-coded defaults. This allows operators to override or extend the built-in baselines. See `MergedMeasurementPolicy()` in `internal/config/config.go`.
 
@@ -240,9 +240,9 @@ For each field, the report MUST distinguish between:
 - MRCONFIGID is expected to be cryptographically checked via compose binding,
 - RTMR fields are expected to be consistency-checked via event log replay when event logs are present,
 - REPORTDATA is expected to be cryptographically verified via the provider-specific binding scheme,
-- MRSEAM and MRTD are enforced by default via Go-coded allowlists sourced from Intel TDX module releases and dstack reproducible builds — the `tdx_mrseam_mrtd` factor is enforced (not in `NeardirectDefaultAllowFail`),
-- RTMR0 is checked via `tdx_hardware_config` against per-provider observed values — allowed to fail by default (in `NeardirectDefaultAllowFail`), but operators can enforce it,
-- RTMR1 and RTMR2 are checked via `tdx_boot_config` against per-provider observed values — allowed to fail by default, but operators can enforce them,
+- MRSEAM and MRTD are enforced by default via Go-coded allowlists sourced from Intel TDX module releases and dstack reproducible builds — the `tee_mrseam_mrtd` factor is enforced (not in `NeardirectDefaultAllowFail`),
+- RTMR0 is checked via `tee_hardware_config` against per-provider observed values — allowed to fail by default (in `NeardirectDefaultAllowFail`), but operators can enforce it,
+- RTMR1 and RTMR2 are checked via `tee_boot_config` against per-provider observed values — allowed to fail by default, but operators can enforce them,
 - MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros for standard dstack deployments and should be documented as informational-only.
 
 The audit MUST verify:
@@ -390,8 +390,8 @@ The audit MUST also verify:
 Teep uses an inverted enforcement model: any factor NOT in the provider's `DefaultAllowFail` list is enforced by default. Adding a new factor automatically enforces it — this is safer than a positive enforce list. The neardirect provider uses `NeardirectDefaultAllowFail` (defined in `internal/attestation/report.go`), which is stricter than the global `DefaultAllowFail`.
 
 The current neardirect-specific allowed-to-fail factors are:
-- `tdx_hardware_config` — RTMR0 (varies per deployment hardware configuration),
-- `tdx_boot_config` — RTMR1/RTMR2 (varies per dstack image build),
+- `tee_hardware_config` — RTMR0 (varies per deployment hardware configuration),
+- `tee_boot_config` — RTMR1/RTMR2 (varies per dstack image build),
 - `e2ee_usable` — uses the Deferred factor mechanism: starts as Skip with `Deferred: true` in the proxy path, exempt from Skip→Fail promotion even when enforced; promoted to Pass after successful E2EE relay, or demoted to Fail on decryption failure,
 - `cpu_gpu_chain` — not yet implemented,
 - `measured_model_weights` — not yet implemented,
@@ -399,15 +399,15 @@ The current neardirect-specific allowed-to-fail factors are:
 
 All other factors are enforced by default, including:
 - `nonce_match` — prevents replay of stale attestations,
-- `tdx_quote_present`, `tdx_quote_structure` — TDX quote integrity,
-- `tdx_cert_chain` — validates PCK chain to Intel roots,
-- `tdx_quote_signature` — validates quote signature,
-- `tdx_debug_disabled` — prevents debug enclaves from being trusted,
-- `tdx_mrseam_mrtd` — enforces MRSEAM and MRTD allowlists (Go-coded defaults from Intel and dstack),
+- `tee_quote_present`, `tee_quote_structure` — TDX quote integrity,
+- `tee_cert_chain` — validates PCK chain to Intel roots,
+- `tee_quote_signature` — validates quote signature,
+- `tee_debug_disabled` — prevents debug enclaves from being trusted,
+- `tee_mrseam_mrtd` — enforces MRSEAM and MRTD allowlists (Go-coded defaults from Intel and dstack),
 - `signing_key_present` — ensures the enclave provided a public key,
-- `tdx_reportdata_binding` — prevents key-substitution MITM,
-- `tdx_tcb_not_revoked` — rejects revoked TCB levels,
-- `intel_pcs_collateral`, `tdx_tcb_current` — Intel PCS collateral and TCB currency,
+- `tee_reportdata_binding` — prevents key-substitution MITM,
+- `tee_tcb_not_revoked` — rejects revoked TCB levels,
+- `intel_pcs_collateral`, `tee_tcb_current` — Intel PCS collateral and TCB currency,
 - `nvidia_payload_present`, `nvidia_signature`, `nvidia_claims`, `nvidia_nonce_client_bound`, `nvidia_nras_verified` — NVIDIA attestation factors,
 - `e2ee_capable` — model backend advertises E2EE support,
 - `tls_key_binding` — TLS certificate SPKI binding,

@@ -122,14 +122,14 @@ func assertChutesReport(t *testing.T, report *attestation.VerificationReport) {
 
 	assertMustPass(t, report, []string{
 		"nonce_match",
-		"tdx_quote_present",
-		"tdx_quote_structure",
-		"tdx_cert_chain",
-		"tdx_quote_signature",
-		"tdx_debug_disabled",
-		"tdx_mrseam_mrtd",
+		"tee_quote_present",
+		"tee_quote_structure",
+		"tee_cert_chain",
+		"tee_quote_signature",
+		"tee_debug_disabled",
+		"tee_mrseam_mrtd",
 		"signing_key_present",
-		"tdx_reportdata_binding",
+		"tee_reportdata_binding",
 		"nvidia_payload_present",
 		"e2ee_capable",
 	})

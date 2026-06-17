@@ -122,12 +122,12 @@ func assertVeniceReport(t *testing.T, report *attestation.VerificationReport) {
 
 	assertMustPass(t, report, []string{
 		"nonce_match",
-		"tdx_quote_present",
-		"tdx_quote_structure",
-		"tdx_debug_disabled",
-		"tdx_mrseam_mrtd",
+		"tee_quote_present",
+		"tee_quote_structure",
+		"tee_debug_disabled",
+		"tee_mrseam_mrtd",
 		"signing_key_present",
-		"tdx_reportdata_binding",
+		"tee_reportdata_binding",
 		"nvidia_payload_present",
 		"nvidia_nonce_client_bound",
 		"e2ee_capable",

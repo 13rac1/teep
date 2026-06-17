@@ -122,13 +122,13 @@ func (r *VerificationReport) BlockedFactors() []FactorResult {
 	return out
 }
 
-// ReportDataBindingPassed returns true if the tdx_reportdata_binding factor
+// ReportDataBindingPassed returns true if the tee_reportdata_binding factor
 // passed. Without this, a MITM can substitute the enclave public key and
 // E2EE becomes security theater. E2EE must never be activated unless this
 // returns true.
 func (r *VerificationReport) ReportDataBindingPassed() bool {
 	for _, f := range r.Factors {
-		if f.Name == "tdx_reportdata_binding" {
+		if f.Name == "tee_reportdata_binding" {
 			return f.Status == Pass
 		}
 	}
@@ -203,12 +203,12 @@ func (r *VerificationReport) recomputeCounters() {
 // list: any new factor added to KnownFactors is automatically enforced
 // unless explicitly exempted here.
 var DefaultAllowFail = []string{
-	"tdx_quote_present",
-	"tdx_quote_structure",
-	"tdx_hardware_config",
-	"tdx_boot_config",
+	"tee_quote_present",
+	"tee_quote_structure",
+	"tee_hardware_config",
+	"tee_boot_config",
 	"intel_pcs_collateral",
-	"tdx_tcb_current",
+	"tee_tcb_current",
 	"nvidia_payload_present",
 	"nvidia_claims",
 	"nvidia_nras_verified",
@@ -219,11 +219,11 @@ var DefaultAllowFail = []string{
 	"measured_model_weights",
 	"cpu_id_registry",
 	// Gateway factors (nearcloud only).
-	"gateway_tdx_quote_present",
-	"gateway_tdx_quote_structure",
-	"gateway_tdx_hardware_config",
-	"gateway_tdx_boot_config",
-	"gateway_tdx_reportdata_binding",
+	"gateway_tee_quote_present",
+	"gateway_tee_quote_structure",
+	"gateway_tee_hardware_config",
+	"gateway_tee_boot_config",
+	"gateway_tee_reportdata_binding",
 	"gateway_cpu_id_registry",
 }
 
@@ -231,15 +231,15 @@ var DefaultAllowFail = []string{
 // It enforces more factors than the global DefaultAllowFail, reflecting the
 // nearcloud provider's stronger attestation support.
 var NearcloudDefaultAllowFail = []string{
-	"tdx_hardware_config",
-	"tdx_boot_config",
+	"tee_hardware_config",
+	"tee_boot_config",
 	"cpu_gpu_chain",
 	"measured_model_weights",
 	"cpu_id_registry",
 	// Gateway factors (nearcloud only).
-	"gateway_tdx_hardware_config",
-	"gateway_tdx_boot_config",
-	"gateway_tdx_reportdata_binding",
+	"gateway_tee_hardware_config",
+	"gateway_tee_boot_config",
+	"gateway_tee_reportdata_binding",
 	"gateway_cpu_id_registry",
 }
 
@@ -247,8 +247,8 @@ var NearcloudDefaultAllowFail = []string{
 // list. It enforces more factors than the global DefaultAllowFail, reflecting
 // the neardirect provider's stronger attestation support.
 var NeardirectDefaultAllowFail = []string{
-	"tdx_hardware_config",
-	"tdx_boot_config",
+	"tee_hardware_config",
+	"tee_boot_config",
 	"cpu_gpu_chain",
 	"measured_model_weights",
 	"cpu_id_registry",
@@ -263,8 +263,8 @@ var NeardirectDefaultAllowFail = []string{
 // factors remain allowed-to-fail until the sek8s platform exposes the
 // necessary evidence.
 var ChutesDefaultAllowFail = []string{
-	"tdx_hardware_config",
-	"tdx_boot_config",
+	"tee_hardware_config",
+	"tee_boot_config",
 	"nvidia_signature",
 	"nvidia_nras_verified",
 	"tls_key_binding",
@@ -280,20 +280,20 @@ var ChutesDefaultAllowFail = []string{
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{
-	"nonce_match", "tdx_quote_present", "tdx_quote_structure", "tdx_cert_chain",
-	"tdx_quote_signature", "tdx_debug_disabled",
-	"tdx_mrseam_mrtd", "tdx_hardware_config", "tdx_boot_config",
+	"nonce_match", "tee_quote_present", "tee_quote_structure", "tee_cert_chain",
+	"tee_quote_signature", "tee_debug_disabled",
+	"tee_mrseam_mrtd", "tee_hardware_config", "tee_boot_config",
 	"signing_key_present",
-	"tdx_reportdata_binding", "intel_pcs_collateral", "tdx_tcb_current",
-	"tdx_tcb_not_revoked", "nvidia_payload_present", "nvidia_signature", "nvidia_claims",
+	"tee_reportdata_binding", "intel_pcs_collateral", "tee_tcb_current",
+	"tee_tcb_not_revoked", "nvidia_payload_present", "nvidia_signature", "nvidia_claims",
 	"nvidia_nonce_client_bound", "nvidia_nras_verified", FactorE2EECapable, FactorE2EEUsable, "tls_key_binding", "cpu_gpu_chain",
 	"measured_model_weights", "build_transparency_log", "cpu_id_registry",
 	"compose_binding", "sigstore_verification", "event_log_integrity",
 	// Gateway factors (nearcloud only).
-	"gateway_nonce_match", "gateway_tdx_quote_present", "gateway_tdx_quote_structure",
-	"gateway_tdx_cert_chain", "gateway_tdx_quote_signature", "gateway_tdx_debug_disabled",
-	"gateway_tdx_mrseam_mrtd", "gateway_tdx_hardware_config", "gateway_tdx_boot_config",
-	"gateway_tdx_reportdata_binding", "gateway_compose_binding", "gateway_cpu_id_registry",
+	"gateway_nonce_match", "gateway_tee_quote_present", "gateway_tee_quote_structure",
+	"gateway_tee_cert_chain", "gateway_tee_quote_signature", "gateway_tee_debug_disabled",
+	"gateway_tee_mrseam_mrtd", "gateway_tee_hardware_config", "gateway_tee_boot_config",
+	"gateway_tee_reportdata_binding", "gateway_compose_binding", "gateway_cpu_id_registry",
 	"gateway_event_log_integrity",
 }
 
@@ -312,8 +312,8 @@ var KnownFactors = []string{
 // requests.
 var OnlineFactors = []string{
 	"intel_pcs_collateral",
-	"tdx_tcb_current",
-	"tdx_tcb_not_revoked",
+	"tee_tcb_current",
+	"tee_tcb_not_revoked",
 	"nvidia_nras_verified",
 	"e2ee_usable",
 	"build_transparency_log",
@@ -599,26 +599,26 @@ func evalNonceMatch(in *ReportInput) []FactorResult {
 }
 func evalTDXQuotePresent(in *ReportInput) []FactorResult {
 	if in.Raw.IntelQuote == "" {
-		return factor(TierCore, "tdx_quote_present", Fail, "intel_quote field is absent from attestation response")
+		return factor(TierCore, "tee_quote_present", Fail, "intel_quote field is absent from attestation response")
 	}
-	return factor(TierCore, "tdx_quote_present", Pass, fmt.Sprintf("TDX quote present (%d hex chars)", len(in.Raw.IntelQuote)))
+	return factor(TierCore, "tee_quote_present", Pass, fmt.Sprintf("TDX quote present (%d hex chars)", len(in.Raw.IntelQuote)))
 }
 func evalTDXParseDependent(in *ReportInput) []FactorResult {
 	if in.TDX == nil {
 		return []FactorResult{
-			{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: "no TDX quote available to parse"},
-			{Tier: TierCore, Name: "tdx_cert_chain", Status: Fail, Detail: "no TDX quote available; cannot verify cert chain"},
-			{Tier: TierCore, Name: "tdx_quote_signature", Status: Fail, Detail: "no TDX quote available; cannot verify signature"},
-			{Tier: TierCore, Name: "tdx_debug_disabled", Status: Fail, Detail: "no TDX quote available; cannot check debug flag"},
+			{Tier: TierCore, Name: "tee_quote_structure", Status: Fail, Detail: "no TDX quote available to parse"},
+			{Tier: TierCore, Name: "tee_cert_chain", Status: Fail, Detail: "no TDX quote available; cannot verify cert chain"},
+			{Tier: TierCore, Name: "tee_quote_signature", Status: Fail, Detail: "no TDX quote available; cannot verify signature"},
+			{Tier: TierCore, Name: "tee_debug_disabled", Status: Fail, Detail: "no TDX quote available; cannot check debug flag"},
 		}
 	}
 
 	if in.TDX.ParseErr != nil {
 		return []FactorResult{
-			{Tier: TierCore, Name: "tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("TDX quote parse failed: %v", in.TDX.ParseErr)},
-			{Tier: TierCore, Name: "tdx_cert_chain", Status: Skip, Detail: "quote parse failed; cert chain not extracted"},
-			{Tier: TierCore, Name: "tdx_quote_signature", Status: Skip, Detail: "quote parse failed; signature not verified"},
-			{Tier: TierCore, Name: "tdx_debug_disabled", Status: Skip, Detail: "quote parse failed; debug flag not checked"},
+			{Tier: TierCore, Name: "tee_quote_structure", Status: Fail, Detail: fmt.Sprintf("TDX quote parse failed: %v", in.TDX.ParseErr)},
+			{Tier: TierCore, Name: "tee_cert_chain", Status: Skip, Detail: "quote parse failed; cert chain not extracted"},
+			{Tier: TierCore, Name: "tee_quote_signature", Status: Skip, Detail: "quote parse failed; signature not verified"},
+			{Tier: TierCore, Name: "tee_debug_disabled", Status: Skip, Detail: "quote parse failed; debug flag not checked"},
 		}
 	}
 
@@ -626,29 +626,29 @@ func evalTDXParseDependent(in *ReportInput) []FactorResult {
 	results := []FactorResult{tdxQuoteStructure(in)}
 
 	if in.TDX.CertChainErr != nil {
-		results = append(results, FactorResult{Tier: TierCore, Name: "tdx_cert_chain", Status: Fail, Detail: fmt.Sprintf("cert chain verification failed: %v", in.TDX.CertChainErr)})
+		results = append(results, FactorResult{Tier: TierCore, Name: "tee_cert_chain", Status: Fail, Detail: fmt.Sprintf("cert chain verification failed: %v", in.TDX.CertChainErr)})
 	} else {
-		results = append(results, FactorResult{Tier: TierCore, Name: "tdx_cert_chain", Status: Pass, Detail: "certificate chain valid (Intel root CA)"})
+		results = append(results, FactorResult{Tier: TierCore, Name: "tee_cert_chain", Status: Pass, Detail: "certificate chain valid (Intel root CA)"})
 	}
 
 	if in.TDX.SignatureErr != nil {
-		results = append(results, FactorResult{Tier: TierCore, Name: "tdx_quote_signature", Status: Fail, Detail: fmt.Sprintf("quote signature invalid: %v", in.TDX.SignatureErr)})
+		results = append(results, FactorResult{Tier: TierCore, Name: "tee_quote_signature", Status: Fail, Detail: fmt.Sprintf("quote signature invalid: %v", in.TDX.SignatureErr)})
 	} else {
-		results = append(results, FactorResult{Tier: TierCore, Name: "tdx_quote_signature", Status: Pass, Detail: "quote signature verified"})
+		results = append(results, FactorResult{Tier: TierCore, Name: "tee_quote_signature", Status: Pass, Detail: "quote signature verified"})
 	}
 
 	if in.TDX.DebugEnabled {
-		results = append(results, FactorResult{Tier: TierCore, Name: "tdx_debug_disabled", Status: Fail, Detail: "TD_ATTRIBUTES debug bit is set — this is a debug enclave; do not trust for production"})
+		results = append(results, FactorResult{Tier: TierCore, Name: "tee_debug_disabled", Status: Fail, Detail: "TD_ATTRIBUTES debug bit is set — this is a debug enclave; do not trust for production"})
 	} else {
-		results = append(results, FactorResult{Tier: TierCore, Name: "tdx_debug_disabled", Status: Pass, Detail: "debug bit is 0 (production enclave)"})
+		results = append(results, FactorResult{Tier: TierCore, Name: "tee_debug_disabled", Status: Pass, Detail: "debug bit is 0 (production enclave)"})
 	}
 
 	return results
 }
 
-// tdxQuoteStructure evaluates the tdx_quote_structure factor — structural
+// tdxQuoteStructure evaluates the tee_quote_structure factor — structural
 // validity only. Measurement policy checks are handled by the dedicated
-// tdx_mrseam_mrtd, tdx_hardware_config, and tdx_boot_config factors.
+// tee_mrseam_mrtd, tee_hardware_config, and tee_boot_config factors.
 // Precondition: in.TDX.ParseErr == nil.
 func tdxQuoteStructure(in *ReportInput) FactorResult {
 	mrtdHex := hex.EncodeToString(in.TDX.MRTD)
@@ -657,7 +657,7 @@ func tdxQuoteStructure(in *ReportInput) FactorResult {
 	if len(mrtdHex) >= 16 {
 		detail = fmt.Sprintf("valid %s, MRTD: %s...", tdxQuoteVersion(in.TDX), mrtdHex[:16])
 	}
-	return FactorResult{Tier: TierCore, Name: "tdx_quote_structure", Status: Pass, Detail: detail}
+	return FactorResult{Tier: TierCore, Name: "tee_quote_structure", Status: Pass, Detail: detail}
 }
 
 // evalTDXMrseamMrtd checks MRSEAM and MRTD against measurement policy
@@ -665,21 +665,21 @@ func tdxQuoteStructure(in *ReportInput) FactorResult {
 // Precondition: in.TDX != nil && in.TDX.ParseErr == nil.
 func evalTDXMrseamMrtd(in *ReportInput) []FactorResult {
 	if in.TDX == nil || in.TDX.ParseErr != nil {
-		return factor(TierCore, "tdx_mrseam_mrtd", Skip, "no parseable TDX quote; cannot check MRSEAM/MRTD")
+		return factor(TierCore, "tee_mrseam_mrtd", Skip, "no parseable TDX quote; cannot check MRSEAM/MRTD")
 	}
 	if !in.Policy.HasMRTDPolicy() && !in.Policy.HasMRSeamPolicy() {
-		return factor(TierCore, "tdx_mrseam_mrtd", Skip, "no MRSEAM/MRTD measurement policy configured")
+		return factor(TierCore, "tee_mrseam_mrtd", Skip, "no MRSEAM/MRTD measurement policy configured")
 	}
 
 	mrtdHex := hex.EncodeToString(in.TDX.MRTD)
 	mrSeamHex := hex.EncodeToString(in.TDX.MRSeam)
 
 	if in.Policy.HasMRTDPolicy() && !containsAllowlist(in.Policy.MRTDAllow, mrtdHex) {
-		return factor(TierCore, "tdx_mrseam_mrtd", Fail,
+		return factor(TierCore, "tee_mrseam_mrtd", Fail,
 			fmt.Sprintf("MRTD not in policy allowlist: %s...", prefixHex(mrtdHex)))
 	}
 	if in.Policy.HasMRSeamPolicy() && !containsAllowlist(in.Policy.MRSeamAllow, mrSeamHex) {
-		return factor(TierCore, "tdx_mrseam_mrtd", Fail,
+		return factor(TierCore, "tee_mrseam_mrtd", Fail,
 			fmt.Sprintf("MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex)))
 	}
 
@@ -692,34 +692,34 @@ func evalTDXMrseamMrtd(in *ReportInput) []FactorResult {
 	default:
 		matched = "MRSEAM"
 	}
-	return factor(TierCore, "tdx_mrseam_mrtd", Pass, matched+" policy matched")
+	return factor(TierCore, "tee_mrseam_mrtd", Pass, matched+" policy matched")
 }
 
 // evalTDXHardwareConfig checks RTMR0 against measurement policy allowlists.
 // Skips when no RTMR0 policy is configured.
 func evalTDXHardwareConfig(in *ReportInput) []FactorResult {
 	if in.TDX == nil || in.TDX.ParseErr != nil {
-		return factor(TierCore, "tdx_hardware_config", Skip, "no parseable TDX quote; cannot check RTMR0")
+		return factor(TierCore, "tee_hardware_config", Skip, "no parseable TDX quote; cannot check RTMR0")
 	}
 	if !in.Policy.HasRTMRPolicy(0) {
-		return factor(TierCore, "tdx_hardware_config", Skip, "no RTMR0 measurement policy configured")
+		return factor(TierCore, "tee_hardware_config", Skip, "no RTMR0 measurement policy configured")
 	}
 	rtmrHex := hex.EncodeToString(in.TDX.RTMRs[0][:])
 	if _, ok := in.Policy.RTMRAllow[0][rtmrHex]; !ok {
-		return factor(TierCore, "tdx_hardware_config", Fail,
+		return factor(TierCore, "tee_hardware_config", Fail,
 			fmt.Sprintf("RTMR[0] not in policy allowlist: %s...", prefixHex(rtmrHex)))
 	}
-	return factor(TierCore, "tdx_hardware_config", Pass, "RTMR0 policy matched")
+	return factor(TierCore, "tee_hardware_config", Pass, "RTMR0 policy matched")
 }
 
 // evalTDXBootConfig checks RTMR1 and RTMR2 against measurement policy
 // allowlists. Skips when neither RTMR1 nor RTMR2 policy is configured.
 func evalTDXBootConfig(in *ReportInput) []FactorResult {
 	if in.TDX == nil || in.TDX.ParseErr != nil {
-		return factor(TierCore, "tdx_boot_config", Skip, "no parseable TDX quote; cannot check RTMR1/RTMR2")
+		return factor(TierCore, "tee_boot_config", Skip, "no parseable TDX quote; cannot check RTMR1/RTMR2")
 	}
 	if !in.Policy.HasRTMRPolicy(1) && !in.Policy.HasRTMRPolicy(2) {
-		return factor(TierCore, "tdx_boot_config", Skip, "no RTMR1/RTMR2 measurement policy configured")
+		return factor(TierCore, "tee_boot_config", Skip, "no RTMR1/RTMR2 measurement policy configured")
 	}
 	for _, i := range []int{1, 2} {
 		if !in.Policy.HasRTMRPolicy(i) {
@@ -727,11 +727,11 @@ func evalTDXBootConfig(in *ReportInput) []FactorResult {
 		}
 		rtmrHex := hex.EncodeToString(in.TDX.RTMRs[i][:])
 		if _, ok := in.Policy.RTMRAllow[i][rtmrHex]; !ok {
-			return factor(TierCore, "tdx_boot_config", Fail,
+			return factor(TierCore, "tee_boot_config", Fail,
 				fmt.Sprintf("RTMR[%d] not in policy allowlist: %s...", i, prefixHex(rtmrHex)))
 		}
 	}
-	return factor(TierCore, "tdx_boot_config", Pass, "RTMR1/RTMR2 policy matched")
+	return factor(TierCore, "tee_boot_config", Pass, "RTMR1/RTMR2 policy matched")
 }
 func evalSigningKeyPresent(in *ReportInput) []FactorResult {
 	if in.Raw.SigningKey == "" {
@@ -746,18 +746,18 @@ func evalSigningKeyPresent(in *ReportInput) []FactorResult {
 
 func evalTDXReportDataBinding(in *ReportInput) []FactorResult {
 	if in.TDX == nil || in.TDX.ParseErr != nil {
-		return factor(TierBinding, "tdx_reportdata_binding", Fail, "no parseable TDX quote; REPORTDATA binding cannot be verified")
+		return factor(TierBinding, "tee_reportdata_binding", Fail, "no parseable TDX quote; REPORTDATA binding cannot be verified")
 	}
 	if in.Raw.SigningKey == "" {
-		return factor(TierBinding, "tdx_reportdata_binding", Fail, "enclave public key absent; REPORTDATA binding cannot be verified")
+		return factor(TierBinding, "tee_reportdata_binding", Fail, "enclave public key absent; REPORTDATA binding cannot be verified")
 	}
 	if in.TDX.ReportDataBindingErr != nil {
-		return factor(TierBinding, "tdx_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind enclave public key: %v", in.TDX.ReportDataBindingErr))
+		return factor(TierBinding, "tee_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind enclave public key: %v", in.TDX.ReportDataBindingErr))
 	}
 	if in.TDX.ReportDataBindingDetail != "" {
-		return factor(TierBinding, "tdx_reportdata_binding", Pass, in.TDX.ReportDataBindingDetail)
+		return factor(TierBinding, "tee_reportdata_binding", Pass, in.TDX.ReportDataBindingDetail)
 	}
-	return factor(TierBinding, "tdx_reportdata_binding", Fail, "no REPORTDATA verifier configured for this provider")
+	return factor(TierBinding, "tee_reportdata_binding", Fail, "no REPORTDATA verifier configured for this provider")
 }
 func evalIntelPCSCollateral(in *ReportInput) []FactorResult {
 	if in.TDX == nil || in.TDX.ParseErr != nil {
@@ -775,54 +775,54 @@ func evalIntelPCSCollateral(in *ReportInput) []FactorResult {
 }
 func evalTDXTCBCurrent(in *ReportInput) []FactorResult {
 	if in.TDX == nil || in.TDX.ParseErr != nil {
-		return factor(TierBinding, "tdx_tcb_current", Skip, "no parseable TDX quote; TCB SVN not extracted")
+		return factor(TierBinding, "tee_tcb_current", Skip, "no parseable TDX quote; TCB SVN not extracted")
 	}
 	if in.TDX.TcbStatus == pcs.TcbComponentStatusUpToDate {
 		detail := "TCB is UpToDate per Intel PCS"
 		if len(in.TDX.AdvisoryIDs) > 0 {
 			detail += fmt.Sprintf(" (advisories: %s)", strings.Join(in.TDX.AdvisoryIDs, ", "))
 		}
-		return factor(TierBinding, "tdx_tcb_current", Pass, detail)
+		return factor(TierBinding, "tee_tcb_current", Pass, detail)
 	}
 	if in.TDX.TcbStatus == pcs.TcbComponentStatusSwHardeningNeeded || in.TDX.TcbStatus == pcs.TcbComponentStatusConfigurationAndSWHardeningNeeded {
 		detail := fmt.Sprintf("TCB status: %s — software/config mitigations required for known advisories", in.TDX.TcbStatus)
 		if len(in.TDX.AdvisoryIDs) > 0 {
 			detail += fmt.Sprintf(" (%s)", strings.Join(in.TDX.AdvisoryIDs, ", "))
 		}
-		return factor(TierBinding, "tdx_tcb_current", Fail, detail)
+		return factor(TierBinding, "tee_tcb_current", Fail, detail)
 	}
 	if in.TDX.TcbStatus == pcs.TcbComponentStatusOutOfDate || in.TDX.TcbStatus == pcs.TcbComponentStatusRevoked || in.TDX.TcbStatus == pcs.TcbComponentStatusOutOfDateConfigurationNeeded {
 		detail := fmt.Sprintf("TCB status: %s — firmware has known vulnerabilities", in.TDX.TcbStatus)
 		if len(in.TDX.AdvisoryIDs) > 0 {
 			detail += fmt.Sprintf(" (%s)", strings.Join(in.TDX.AdvisoryIDs, ", "))
 		}
-		return factor(TierBinding, "tdx_tcb_current", Fail, detail)
+		return factor(TierBinding, "tee_tcb_current", Fail, detail)
 	}
 	if in.TDX.CollateralErr != nil {
 		svnHex := hex.EncodeToString(in.TDX.TeeTCBSVN)
-		return factor(TierBinding, "tdx_tcb_current", Skip,
+		return factor(TierBinding, "tee_tcb_current", Skip,
 			fmt.Sprintf("TEE_TCB_SVN: %s (Intel PCS collateral fetch failed: %v)", svnHex, in.TDX.CollateralErr))
 	}
 	svnHex := hex.EncodeToString(in.TDX.TeeTCBSVN)
-	return factor(TierBinding, "tdx_tcb_current", Skip,
+	return factor(TierBinding, "tee_tcb_current", Skip,
 		fmt.Sprintf("TEE_TCB_SVN: %s (offline; full check requires Intel PCS)", svnHex))
 }
 func evalTDXTCBNotRevoked(in *ReportInput) []FactorResult {
 	if in.TDX == nil || in.TDX.ParseErr != nil {
-		return factor(TierBinding, "tdx_tcb_not_revoked", Skip, "no parseable TDX quote")
+		return factor(TierBinding, "tee_tcb_not_revoked", Skip, "no parseable TDX quote")
 	}
 	if in.TDX.TcbStatus == "" {
 		if in.TDX.CollateralErr != nil {
-			return factor(TierBinding, "tdx_tcb_not_revoked", Skip,
+			return factor(TierBinding, "tee_tcb_not_revoked", Skip,
 				fmt.Sprintf("Intel PCS collateral fetch failed: %v", in.TDX.CollateralErr))
 		}
-		return factor(TierBinding, "tdx_tcb_not_revoked", Skip, "offline; Intel PCS collateral not fetched")
+		return factor(TierBinding, "tee_tcb_not_revoked", Skip, "offline; Intel PCS collateral not fetched")
 	}
 	if in.TDX.TcbStatus == pcs.TcbComponentStatusRevoked {
-		return factor(TierBinding, "tdx_tcb_not_revoked", Fail,
+		return factor(TierBinding, "tee_tcb_not_revoked", Fail,
 			"TCB status: Revoked — Intel has determined this firmware is fundamentally compromised")
 	}
-	return factor(TierBinding, "tdx_tcb_not_revoked", Pass,
+	return factor(TierBinding, "tee_tcb_not_revoked", Pass,
 		fmt.Sprintf("TCB status %s is not Revoked", in.TDX.TcbStatus))
 }
 func evalNvidiaPayloadPresent(in *ReportInput) []FactorResult {
@@ -1464,9 +1464,9 @@ func evalGatewayNonceMatch(in *ReportInput) []FactorResult {
 }
 func evalGatewayTDXQuotePresent(in *ReportInput) []FactorResult {
 	if in.GatewayTDX == nil {
-		return factor(TierGateway, "gateway_tdx_quote_present", Fail, "gateway TDX quote not available")
+		return factor(TierGateway, "gateway_tee_quote_present", Fail, "gateway TDX quote not available")
 	}
-	return factor(TierGateway, "gateway_tdx_quote_present", Pass,
+	return factor(TierGateway, "gateway_tee_quote_present", Pass,
 		fmt.Sprintf("gateway TDX quote present (%d hex chars)", len(in.Raw.GatewayIntelQuote)))
 }
 
@@ -1474,44 +1474,44 @@ func evalGatewayTDXQuotePresent(in *ReportInput) []FactorResult {
 func evalGatewayTDXParseDependent(in *ReportInput) []FactorResult {
 	if in.GatewayTDX.ParseErr != nil {
 		return []FactorResult{
-			{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Fail, Detail: fmt.Sprintf("gateway TDX quote parse failed: %v", in.GatewayTDX.ParseErr)},
-			{Tier: TierGateway, Name: "gateway_tdx_cert_chain", Status: Skip, Detail: "gateway quote parse failed; cert chain not extracted"},
-			{Tier: TierGateway, Name: "gateway_tdx_quote_signature", Status: Skip, Detail: "gateway quote parse failed; signature not verified"},
-			{Tier: TierGateway, Name: "gateway_tdx_debug_disabled", Status: Skip, Detail: "gateway quote parse failed; debug flag not checked"},
+			{Tier: TierGateway, Name: "gateway_tee_quote_structure", Status: Fail, Detail: fmt.Sprintf("gateway TDX quote parse failed: %v", in.GatewayTDX.ParseErr)},
+			{Tier: TierGateway, Name: "gateway_tee_cert_chain", Status: Skip, Detail: "gateway quote parse failed; cert chain not extracted"},
+			{Tier: TierGateway, Name: "gateway_tee_quote_signature", Status: Skip, Detail: "gateway quote parse failed; signature not verified"},
+			{Tier: TierGateway, Name: "gateway_tee_debug_disabled", Status: Skip, Detail: "gateway quote parse failed; debug flag not checked"},
 		}
 	}
 
 	results := make([]FactorResult, 0, 4)
 	results = append(results, gatewayTDXQuoteStructure(in))
 
-	// gateway_tdx_cert_chain
+	// gateway_tee_cert_chain
 	if in.GatewayTDX.CertChainErr != nil {
-		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tdx_cert_chain", Status: Fail, Detail: fmt.Sprintf("gateway cert chain verification failed: %v", in.GatewayTDX.CertChainErr)})
+		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tee_cert_chain", Status: Fail, Detail: fmt.Sprintf("gateway cert chain verification failed: %v", in.GatewayTDX.CertChainErr)})
 	} else {
-		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tdx_cert_chain", Status: Pass, Detail: "gateway certificate chain valid (Intel root CA)"})
+		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tee_cert_chain", Status: Pass, Detail: "gateway certificate chain valid (Intel root CA)"})
 	}
 
-	// gateway_tdx_quote_signature
+	// gateway_tee_quote_signature
 	if in.GatewayTDX.SignatureErr != nil {
-		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_signature", Status: Fail, Detail: fmt.Sprintf("gateway quote signature invalid: %v", in.GatewayTDX.SignatureErr)})
+		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tee_quote_signature", Status: Fail, Detail: fmt.Sprintf("gateway quote signature invalid: %v", in.GatewayTDX.SignatureErr)})
 	} else {
-		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_signature", Status: Pass, Detail: "gateway quote signature verified"})
+		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tee_quote_signature", Status: Pass, Detail: "gateway quote signature verified"})
 	}
 
-	// gateway_tdx_debug_disabled
+	// gateway_tee_debug_disabled
 	if in.GatewayTDX.DebugEnabled {
-		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tdx_debug_disabled", Status: Fail, Detail: "gateway TD_ATTRIBUTES debug bit is set — debug enclave"})
+		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tee_debug_disabled", Status: Fail, Detail: "gateway TD_ATTRIBUTES debug bit is set — debug enclave"})
 	} else {
-		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tdx_debug_disabled", Status: Pass, Detail: "gateway debug bit is 0 (production enclave)"})
+		results = append(results, FactorResult{Tier: TierGateway, Name: "gateway_tee_debug_disabled", Status: Pass, Detail: "gateway debug bit is 0 (production enclave)"})
 	}
 
 	return results
 }
 
-// gatewayTDXQuoteStructure evaluates the gateway_tdx_quote_structure factor —
+// gatewayTDXQuoteStructure evaluates the gateway_tee_quote_structure factor —
 // structural validity only. Measurement policy checks are handled by the
-// dedicated gateway_tdx_mrseam_mrtd, gateway_tdx_hardware_config, and
-// gateway_tdx_boot_config factors.
+// dedicated gateway_tee_mrseam_mrtd, gateway_tee_hardware_config, and
+// gateway_tee_boot_config factors.
 // Precondition: in.GatewayTDX.ParseErr == nil.
 func gatewayTDXQuoteStructure(in *ReportInput) FactorResult {
 	mrtdHex := hex.EncodeToString(in.GatewayTDX.MRTD)
@@ -1520,29 +1520,29 @@ func gatewayTDXQuoteStructure(in *ReportInput) FactorResult {
 	if len(mrtdHex) >= 16 {
 		detail = fmt.Sprintf("valid %s, MRTD: %s...", tdxQuoteVersion(in.GatewayTDX), mrtdHex[:16])
 	}
-	return FactorResult{Tier: TierGateway, Name: "gateway_tdx_quote_structure", Status: Pass, Detail: detail}
+	return FactorResult{Tier: TierGateway, Name: "gateway_tee_quote_structure", Status: Pass, Detail: detail}
 }
 
 // evalGatewayTDXMrseamMrtd checks gateway MRSEAM and MRTD against the
 // gateway measurement policy allowlists. Skips when no policy is configured.
 func evalGatewayTDXMrseamMrtd(in *ReportInput) []FactorResult {
 	if in.GatewayTDX == nil || in.GatewayTDX.ParseErr != nil {
-		return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Skip, "no parseable gateway TDX quote; cannot check MRSEAM/MRTD")
+		return factor(TierGateway, "gateway_tee_mrseam_mrtd", Skip, "no parseable gateway TDX quote; cannot check MRSEAM/MRTD")
 	}
 	gp := in.GatewayPolicy
 	if !gp.HasMRTDPolicy() && !gp.HasMRSeamPolicy() {
-		return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Skip, "no gateway MRSEAM/MRTD measurement policy configured")
+		return factor(TierGateway, "gateway_tee_mrseam_mrtd", Skip, "no gateway MRSEAM/MRTD measurement policy configured")
 	}
 
 	mrtdHex := hex.EncodeToString(in.GatewayTDX.MRTD)
 	mrSeamHex := hex.EncodeToString(in.GatewayTDX.MRSeam)
 
 	if gp.HasMRTDPolicy() && !containsAllowlist(gp.MRTDAllow, mrtdHex) {
-		return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Fail,
+		return factor(TierGateway, "gateway_tee_mrseam_mrtd", Fail,
 			fmt.Sprintf("gateway MRTD not in policy allowlist: %s...", prefixHex(mrtdHex)))
 	}
 	if gp.HasMRSeamPolicy() && !containsAllowlist(gp.MRSeamAllow, mrSeamHex) {
-		return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Fail,
+		return factor(TierGateway, "gateway_tee_mrseam_mrtd", Fail,
 			fmt.Sprintf("gateway MRSEAM not in policy allowlist: %s...", prefixHex(mrSeamHex)))
 	}
 
@@ -1555,36 +1555,36 @@ func evalGatewayTDXMrseamMrtd(in *ReportInput) []FactorResult {
 	default:
 		matched = "gateway MRSEAM"
 	}
-	return factor(TierGateway, "gateway_tdx_mrseam_mrtd", Pass, matched+" policy matched")
+	return factor(TierGateway, "gateway_tee_mrseam_mrtd", Pass, matched+" policy matched")
 }
 
 // evalGatewayTDXHardwareConfig checks gateway RTMR0 against the gateway
 // measurement policy allowlists. Skips when no RTMR0 policy is configured.
 func evalGatewayTDXHardwareConfig(in *ReportInput) []FactorResult {
 	if in.GatewayTDX == nil || in.GatewayTDX.ParseErr != nil {
-		return factor(TierGateway, "gateway_tdx_hardware_config", Skip, "no parseable gateway TDX quote; cannot check RTMR0")
+		return factor(TierGateway, "gateway_tee_hardware_config", Skip, "no parseable gateway TDX quote; cannot check RTMR0")
 	}
 	gp := in.GatewayPolicy
 	if !gp.HasRTMRPolicy(0) {
-		return factor(TierGateway, "gateway_tdx_hardware_config", Skip, "no gateway RTMR0 measurement policy configured")
+		return factor(TierGateway, "gateway_tee_hardware_config", Skip, "no gateway RTMR0 measurement policy configured")
 	}
 	rtmrHex := hex.EncodeToString(in.GatewayTDX.RTMRs[0][:])
 	if _, ok := gp.RTMRAllow[0][rtmrHex]; !ok {
-		return factor(TierGateway, "gateway_tdx_hardware_config", Fail,
+		return factor(TierGateway, "gateway_tee_hardware_config", Fail,
 			fmt.Sprintf("gateway RTMR[0] not in policy allowlist: %s...", prefixHex(rtmrHex)))
 	}
-	return factor(TierGateway, "gateway_tdx_hardware_config", Pass, "gateway RTMR0 policy matched")
+	return factor(TierGateway, "gateway_tee_hardware_config", Pass, "gateway RTMR0 policy matched")
 }
 
 // evalGatewayTDXBootConfig checks gateway RTMR1 and RTMR2 against the
 // gateway measurement policy allowlists. Skips when neither is configured.
 func evalGatewayTDXBootConfig(in *ReportInput) []FactorResult {
 	if in.GatewayTDX == nil || in.GatewayTDX.ParseErr != nil {
-		return factor(TierGateway, "gateway_tdx_boot_config", Skip, "no parseable gateway TDX quote; cannot check RTMR1/RTMR2")
+		return factor(TierGateway, "gateway_tee_boot_config", Skip, "no parseable gateway TDX quote; cannot check RTMR1/RTMR2")
 	}
 	gp := in.GatewayPolicy
 	if !gp.HasRTMRPolicy(1) && !gp.HasRTMRPolicy(2) {
-		return factor(TierGateway, "gateway_tdx_boot_config", Skip, "no gateway RTMR1/RTMR2 measurement policy configured")
+		return factor(TierGateway, "gateway_tee_boot_config", Skip, "no gateway RTMR1/RTMR2 measurement policy configured")
 	}
 	for _, i := range []int{1, 2} {
 		if !gp.HasRTMRPolicy(i) {
@@ -1592,25 +1592,25 @@ func evalGatewayTDXBootConfig(in *ReportInput) []FactorResult {
 		}
 		rtmrHex := hex.EncodeToString(in.GatewayTDX.RTMRs[i][:])
 		if _, ok := gp.RTMRAllow[i][rtmrHex]; !ok {
-			return factor(TierGateway, "gateway_tdx_boot_config", Fail,
+			return factor(TierGateway, "gateway_tee_boot_config", Fail,
 				fmt.Sprintf("gateway RTMR[%d] not in gateway policy allowlist: %s...", i, prefixHex(rtmrHex)))
 		}
 	}
-	return factor(TierGateway, "gateway_tdx_boot_config", Pass, "gateway RTMR1/RTMR2 policy matched")
+	return factor(TierGateway, "gateway_tee_boot_config", Pass, "gateway RTMR1/RTMR2 policy matched")
 }
 func evalGatewayTDXReportDataBinding(in *ReportInput) []FactorResult {
 	switch {
 	case in.GatewayTDX.ParseErr != nil:
-		return factor(TierGateway, "gateway_tdx_reportdata_binding", Fail,
+		return factor(TierGateway, "gateway_tee_reportdata_binding", Fail,
 			"gateway TDX quote parse failed; REPORTDATA binding cannot be verified")
 	case in.GatewayTDX.ReportDataBindingErr != nil:
-		return factor(TierGateway, "gateway_tdx_reportdata_binding", Fail,
+		return factor(TierGateway, "gateway_tee_reportdata_binding", Fail,
 			fmt.Sprintf("gateway REPORTDATA binding failed: %v", in.GatewayTDX.ReportDataBindingErr))
 	case in.GatewayTDX.ReportDataBindingDetail != "":
-		return factor(TierGateway, "gateway_tdx_reportdata_binding", Pass,
+		return factor(TierGateway, "gateway_tee_reportdata_binding", Pass,
 			in.GatewayTDX.ReportDataBindingDetail)
 	default:
-		return factor(TierGateway, "gateway_tdx_reportdata_binding", Fail,
+		return factor(TierGateway, "gateway_tee_reportdata_binding", Fail,
 			"no gateway REPORTDATA verifier ran")
 	}
 }

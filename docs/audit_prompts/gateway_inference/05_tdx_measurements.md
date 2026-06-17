@@ -63,7 +63,7 @@ For complete attestation of a dstack-based CVM — applicable to BOTH the gatewa
 
 The code supports an allowlist-based `MeasurementPolicy` for MRTD, MRSEAM, and RTMR0-3 for both the gateway and the model backend. If gateway inference provider does not publish authenticated measurement baselines in-band, teep provides Go-coded stopgap defaults and operator tooling to partially close this gap:
 
-**MRSEAM — Go-coded defaults from Intel releases.** `DstackBaseMeasurementPolicy()` in `internal/attestation/dstack_defaults.go` ships an allowlist of four Intel-published MRSEAM values corresponding to TDX module versions 1.5.08, 1.5.16, 2.0.08, and 2.0.02. The `tdx_mrseam_mrtd` and `gateway_tdx_mrseam_mrtd` factors are enforced by default for nearcloud (they are NOT in `NearcloudDefaultAllowFail`).
+**MRSEAM — Go-coded defaults from Intel releases.** `DstackBaseMeasurementPolicy()` in `internal/attestation/dstack_defaults.go` ships an allowlist of four Intel-published MRSEAM values corresponding to TDX module versions 1.5.08, 1.5.16, 2.0.08, and 2.0.02. The `tee_mrseam_mrtd` and `gateway_tee_mrseam_mrtd` factors are enforced by default for nearcloud (they are NOT in `NearcloudDefaultAllowFail`).
 
 **MRTD — Go-coded defaults from dstack reproducible builds.** The same base policy ships two MRTD values corresponding to dstack-nvidia image versions 0.5.4.1 and 0.5.5. These apply to both the model backend and gateway CVMs.
 
@@ -71,7 +71,7 @@ The code supports an allowlist-based `MeasurementPolicy` for MRTD, MRSEAM, and R
 - `DefaultMeasurementPolicy()` in `internal/provider/nearcloud/policy.go` provides model backend RTMR values,
 - `DefaultGatewayMeasurementPolicy()` provides gateway CVM RTMR values (which differ from model backend values due to different hardware configurations and compose manifests).
 
-The `tdx_hardware_config` / `gateway_tdx_hardware_config` (RTMR0) and `tdx_boot_config` / `gateway_tdx_boot_config` (RTMR1/RTMR2) factors are in `NearcloudDefaultAllowFail` — meaning they are computed and reported but do not block traffic by default.
+The `tee_hardware_config` / `gateway_tee_hardware_config` (RTMR0) and `tee_boot_config` / `gateway_tee_boot_config` (RTMR1/RTMR2) factors are in `NearcloudDefaultAllowFail` — meaning they are computed and reported but do not block traffic by default.
 
 **Measurement policy merge.** Policies are resolved via a three-tier precedence: per-provider TOML config → global TOML config → Go-coded defaults. Gateway measurement policies use separate TOML fields (`gateway_mrtd_allow`, `gateway_rtmr0_allow`, etc.) to allow independent configuration of gateway and model backend allowlists.
 
@@ -91,18 +91,18 @@ The `tdx_hardware_config` / `gateway_tdx_hardware_config` (RTMR0) and `tdx_boot_
 - MRCONFIGID is expected to be cryptographically checked via compose binding,
 - RTMR fields are expected to be consistency-checked via event log replay when event logs are present,
 - REPORTDATA is expected to be cryptographically verified via the nearai binding scheme (`sha256(signing_address + tls_fingerprint) + nonce`),
-- MRSEAM and MRTD are enforced by default via Go-coded allowlists — the `tdx_mrseam_mrtd` factor is enforced (not in `NearcloudDefaultAllowFail`),
-- RTMR0 is checked via `tdx_hardware_config` against per-provider observed values — allowed to fail by default,
-- RTMR1 and RTMR2 are checked via `tdx_boot_config` against per-provider observed values — allowed to fail by default,
+- MRSEAM and MRTD are enforced by default via Go-coded allowlists — the `tee_mrseam_mrtd` factor is enforced (not in `NearcloudDefaultAllowFail`),
+- RTMR0 is checked via `tee_hardware_config` against per-provider observed values — allowed to fail by default,
+- RTMR1 and RTMR2 are checked via `tee_boot_config` against per-provider observed values — allowed to fail by default,
 - MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros.
 
 **Gateway attestation (Tier 4):**
 - MRCONFIGID is expected to be cryptographically checked via gateway compose binding,
 - RTMR fields are expected to be consistency-checked via gateway event log replay when gateway event logs are present,
 - REPORTDATA is expected to be cryptographically verified via the gateway binding scheme (`sha256(tls_fingerprint) + nonce` — note: no signing_address for the gateway),
-- MRSEAM and MRTD are enforced by default via the same Go-coded allowlists — `gateway_tdx_mrseam_mrtd` is enforced,
-- RTMR0 is checked via `gateway_tdx_hardware_config` — allowed to fail by default,
-- RTMR1 and RTMR2 are checked via `gateway_tdx_boot_config` — allowed to fail by default,
+- MRSEAM and MRTD are enforced by default via the same Go-coded allowlists — `gateway_tee_mrseam_mrtd` is enforced,
+- RTMR0 is checked via `gateway_tee_hardware_config` — allowed to fail by default,
+- RTMR1 and RTMR2 are checked via `gateway_tee_boot_config` — allowed to fail by default,
 - MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros.
 
 > **Known divergence**: Venice does not have gateway TEE attestation — there is no gateway TDX quote, no gateway measurement policy, and no Tier 4 factors. These are server-side limitations that cannot be fixed in teep.
@@ -113,8 +113,8 @@ The `tdx_hardware_config` / `gateway_tdx_hardware_config` (RTMR0) and `tdx_boot_
 > - **MRCONFIGID is not used.** Sek8s does not bind compose hashes. The `compose_binding` factor returns `Skip`.
 > - **RTMR3 is not client-verifiable.** No event log is exposed. `event_log_integrity` returns `Skip`.
 > - **REPORTDATA** = `SHA256(nonce_hex + e2e_pubkey_base64)` — binds nonce and ML-KEM-768 public key (no signing_address or tls_fingerprint).
-> - **MRSEAM** includes TDX module versions 1.5.0d and 2.0.06 (in addition to the dstack fleet versions). Enforced via `tdx_mrseam_mrtd`.
-> - **MRTD** is a single sek8s-specific OVMF value, distinct from dstack. Enforced via `tdx_mrseam_mrtd`.
+> - **MRSEAM** includes TDX module versions 1.5.0d and 2.0.06 (in addition to the dstack fleet versions). Enforced via `tee_mrseam_mrtd`.
+> - **MRTD** is a single sek8s-specific OVMF value, distinct from dstack. Enforced via `tee_mrseam_mrtd`.
 > - **RTMR0** corresponds to the sek8s 8×H200 deployment class (fixed VM parameters for determinism).
 > - **RTMR1** is deterministic per sek8s image build.
 > - **RTMR2** is deterministic per deployment class kernel command line.

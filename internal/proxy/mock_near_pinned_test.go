@@ -73,7 +73,7 @@ func (m *mockNearPinnedHandler) HandlePinned(_ context.Context, req *provider.Pi
 		Model:    req.Model,
 		Factors: []attestation.FactorResult{
 			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
+			{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
 		},
 	}
 
@@ -342,7 +342,7 @@ func newMockNearCloudProxyServer(t *testing.T, e2eeEnabled bool) *httptest.Serve
 		Model:    "test-model",
 		Factors: []attestation.FactorResult{
 			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
+			{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
 		},
 	}
 	srv.PutAttestationCache("nearcloud", "test-model", passingReport)
@@ -393,7 +393,7 @@ func newMockNeardirectE2EEServer(t *testing.T, e2eeEnabled bool) *httptest.Serve
 		Model:    "test-model",
 		Factors: []attestation.FactorResult{
 			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
+			{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
 		},
 	}
 	srv.PutAttestationCache("neardirect", "test-model", passingReport)

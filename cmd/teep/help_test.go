@@ -195,7 +195,7 @@ func TestPrintFactorsHelp(t *testing.T) {
 	out := captureStdout(t, printFactorsHelp)
 	t.Logf("output length: %d", len(out))
 
-	for _, want := range []string{"Verification Factors", "nonce_match", "tdx_quote_present"} {
+	for _, want := range []string{"Verification Factors", "nonce_match", "tee_quote_present"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printFactorsHelp missing %q", want)
 		}

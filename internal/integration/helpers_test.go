@@ -116,11 +116,11 @@ func commonModelAssertions(t *testing.T, r *attestation.VerificationReport) {
 	// Time-sensitive crypto factors — must pass on fresh fixtures.
 	// Previously warn-only (t.Logf); now hard-asserted per AGENTS.md fail-closed policy.
 	assertMustPass(t, r, []string{
-		"tdx_cert_chain",
-		"tdx_quote_signature",
+		"tee_cert_chain",
+		"tee_quote_signature",
 		"intel_pcs_collateral",
-		"tdx_tcb_current",
-		"tdx_tcb_not_revoked",
+		"tee_tcb_current",
+		"tee_tcb_not_revoked",
 		"nvidia_signature",
 		"nvidia_claims",
 		"nvidia_nras_verified",
@@ -132,8 +132,8 @@ func commonModelAssertions(t *testing.T, r *attestation.VerificationReport) {
 	// Allow-fail factors — log for visibility.
 	logFactorStatus(t, r,
 		"cpu_id_registry",
-		"tdx_hardware_config",
-		"tdx_boot_config",
+		"tee_hardware_config",
+		"tee_boot_config",
 	)
 }
 

@@ -195,7 +195,7 @@ func TestUpdateConfigOmitsRTMR3(t *testing.T) {
 func TestUpdateConfigPreservesTopLevelAllowFail(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "teep.toml")
-	existing := `allow_fail = ["tdx_quote_present", "tdx_boot_config"]
+	existing := `allow_fail = ["tee_quote_present", "tee_boot_config"]
 
 [providers.venice]
 base_url = "https://api.venice.ai"
@@ -213,7 +213,7 @@ base_url = "https://api.venice.ai"
 	if len(f.AllowFail) != 2 {
 		t.Fatalf("top-level allow_fail lost: got %v", f.AllowFail)
 	}
-	if f.AllowFail[0] != "tdx_quote_present" || f.AllowFail[1] != "tdx_boot_config" {
+	if f.AllowFail[0] != "tee_quote_present" || f.AllowFail[1] != "tee_boot_config" {
 		t.Errorf("top-level allow_fail changed: got %v", f.AllowFail)
 	}
 }

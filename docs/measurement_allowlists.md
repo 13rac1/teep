@@ -144,7 +144,7 @@ attestation to fail and the request to be blocked.
 
 However, the built-in Go defaults (`DefaultAllowFail`) mark some
 high-variability factors as *advisory* by default (for example,
-`tdx_hardware_config`, `tdx_boot_config`, and their gateway equivalents).
+`tee_hardware_config`, `tee_boot_config`, and their gateway equivalents).
 When a factor is in `allow_fail`, a mismatch is recorded and surfaced as a
 warning, but does not by itself block the request. Factors not listed in
 `allow_fail` are strictly enforced and any mismatch is a hard failure. To

@@ -65,36 +65,36 @@ Verify:
 #### Nearcloud Allowed-to-Fail Factors
 
 The current `NearcloudDefaultAllowFail` factors are:
-- `tdx_hardware_config` — model RTMR0 (varies per deployment hardware),
-- `tdx_boot_config` — model RTMR1/RTMR2,
+- `tee_hardware_config` — model RTMR0 (varies per deployment hardware),
+- `tee_boot_config` — model RTMR1/RTMR2,
 - `cpu_gpu_chain` — not yet implemented,
 - `measured_model_weights` — not yet implemented,
 - `cpu_id_registry` — Proof-of-Cloud hardware registry,
-- `gateway_tdx_hardware_config` — gateway RTMR0,
-- `gateway_tdx_boot_config` — gateway RTMR1/RTMR2,
-- `gateway_tdx_reportdata_binding` — gateway REPORTDATA binding (the audit MUST document whether this is a deliberate design choice or a gap),
+- `gateway_tee_hardware_config` — gateway RTMR0,
+- `gateway_tee_boot_config` — gateway RTMR1/RTMR2,
+- `gateway_tee_reportdata_binding` — gateway REPORTDATA binding (the audit MUST document whether this is a deliberate design choice or a gap),
 - `gateway_cpu_id_registry` — gateway Proof-of-Cloud.
 
 All other factors are enforced by default for nearcloud, including:
 
 **Model backend factors (Tier 1–3):**
-- `nonce_match`, `tdx_quote_present`, `tdx_quote_structure`, `tdx_cert_chain`, `tdx_quote_signature`, `tdx_debug_disabled`,
-- `tdx_mrseam_mrtd` — enforces model MRSEAM and MRTD allowlists,
-- `signing_key_present`, `tdx_reportdata_binding`,
-- `tdx_tcb_not_revoked`, `intel_pcs_collateral`, `tdx_tcb_current`,
+- `nonce_match`, `tee_quote_present`, `tee_quote_structure`, `tee_cert_chain`, `tee_quote_signature`, `tee_debug_disabled`,
+- `tee_mrseam_mrtd` — enforces model MRSEAM and MRTD allowlists,
+- `signing_key_present`, `tee_reportdata_binding`,
+- `tee_tcb_not_revoked`, `intel_pcs_collateral`, `tee_tcb_current`,
 - `nvidia_payload_present`, `nvidia_signature`, `nvidia_claims`, `nvidia_nonce_client_bound`, `nvidia_nras_verified`,
 - `e2ee_capable`, `tls_key_binding`,
 - `compose_binding`, `sigstore_verification`, `build_transparency_log`, `event_log_integrity`.
 
 **Gateway factors (Tier 4):**
-- `gateway_nonce_match`, `gateway_tdx_quote_present`, `gateway_tdx_quote_structure`,
-- `gateway_tdx_cert_chain`, `gateway_tdx_quote_signature`, `gateway_tdx_debug_disabled`,
-- `gateway_tdx_mrseam_mrtd` — enforces gateway MRSEAM and MRTD allowlists,
+- `gateway_nonce_match`, `gateway_tee_quote_present`, `gateway_tee_quote_structure`,
+- `gateway_tee_cert_chain`, `gateway_tee_quote_signature`, `gateway_tee_debug_disabled`,
+- `gateway_tee_mrseam_mrtd` — enforces gateway MRSEAM and MRTD allowlists,
 - `gateway_compose_binding`, `gateway_event_log_integrity`.
 
 The audit MUST evaluate whether additional factors should be enforced and document the rationale for the current enforcement boundary.
 
-> **Known divergence**: Venice currently uses the global `DefaultAllowFail` (less strict than `NearcloudDefaultAllowFail`), has no gateway factors, and does not enforce `tdx_mrseam_mrtd` or `build_transparency_log` by default. Venice may have its own allow_fail list in the future.
+> **Known divergence**: Venice currently uses the global `DefaultAllowFail` (less strict than `NearcloudDefaultAllowFail`), has no gateway factors, and does not enforce `tee_mrseam_mrtd` or `build_transparency_log` by default. Venice may have its own allow_fail list in the future.
 
 #### Complete Factor Inventory
 
@@ -196,9 +196,9 @@ Chutes uses a separate enforcement configuration (`ChutesDefaultAllowFail`) with
 ### Chutes Enforcement Model
 
 **Enforced factors** (NOT in `ChutesDefaultAllowFail`):
-- `nonce_match`, `tdx_quote_present`, `tdx_quote_structure`, `tdx_cert_chain`, `tdx_quote_signature`, `tdx_debug_disabled`
-- `tdx_mrseam_mrtd`, `tdx_reportdata_binding`
-- `intel_pcs_collateral`, `tdx_tcb_not_revoked`, `tdx_tcb_current`
+- `nonce_match`, `tee_quote_present`, `tee_quote_structure`, `tee_cert_chain`, `tee_quote_signature`, `tee_debug_disabled`
+- `tee_mrseam_mrtd`, `tee_reportdata_binding`
+- `intel_pcs_collateral`, `tee_tcb_not_revoked`, `tee_tcb_current`
 - `e2ee_capable`, `signing_key_present`
 
 **Allow-fail factors** (in `ChutesDefaultAllowFail`):

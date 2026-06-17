@@ -53,7 +53,7 @@ Also verify:
 - provider-pluggable verifier model (different providers can use different binding schemes),
 - fail-safe behavior when verifier is missing/unconfigured (no default pass-through).
 
-The `tdx_reportdata_binding` factor is one of the default enforced factors. The audit MUST verify that a REPORTDATA mismatch triggers failure through the enforcement code path.
+The `tee_reportdata_binding` factor is one of the default enforced factors. The audit MUST verify that a REPORTDATA mismatch triggers failure through the enforcement code path.
 
 ### TLS Pinning & TOCTOU Safety
 

@@ -205,14 +205,14 @@ func TestIntegration_Chutes(t *testing.T) {
 		mustPass := []string{
 			// Tier 1: Core TDX.
 			"nonce_match",
-			"tdx_quote_present",
-			"tdx_quote_structure",
-			"tdx_cert_chain",
-			"tdx_quote_signature",
-			"tdx_debug_disabled",
+			"tee_quote_present",
+			"tee_quote_structure",
+			"tee_cert_chain",
+			"tee_quote_signature",
+			"tee_debug_disabled",
 			"signing_key_present",
 			// Tier 2: Binding & Crypto.
-			"tdx_reportdata_binding",
+			"tee_reportdata_binding",
 			"e2ee_capable",
 			// e2ee_usable: after a successful E2EE roundtrip in proxy
 			// mode the cached report is promoted from Skip to Pass.

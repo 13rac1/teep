@@ -465,11 +465,11 @@ func TestHandleE2EEDecryptionFailure_Chutes_NilFetcher(t *testing.T) {
 // pinnedPostDispatchE2EE
 // ---------------------------------------------------------------------------
 
-// bindingPassedReport returns a minimal report where tdx_reportdata_binding passed.
+// bindingPassedReport returns a minimal report where tee_reportdata_binding passed.
 func bindingPassedReport() *attestation.VerificationReport {
 	return &attestation.VerificationReport{
 		Factors: []attestation.FactorResult{
-			{Name: "tdx_reportdata_binding", Status: attestation.Pass, Enforced: true},
+			{Name: "tee_reportdata_binding", Status: attestation.Pass, Enforced: true},
 		},
 	}
 }
@@ -503,7 +503,7 @@ func TestPinnedPostDispatchE2EE_BindingNotPassed(t *testing.T) {
 	s := newMinimalServer()
 	w := httptest.NewRecorder()
 	prov := &provider.Provider{Name: "venice", E2EE: true}
-	// Report with no tdx_reportdata_binding factor → ReportDataBindingPassed() = false.
+	// Report with no tee_reportdata_binding factor → ReportDataBindingPassed() = false.
 	report := &attestation.VerificationReport{}
 	proceed := s.pinnedPostDispatchE2EE(context.Background(), w, prov, "model", report, false)
 	t.Logf("proceed = %v, status = %d", proceed, w.Code)
@@ -724,7 +724,7 @@ func TestResolveModel_EmptySegments(t *testing.T) {
 func blockedReport() *attestation.VerificationReport {
 	return &attestation.VerificationReport{
 		Factors: []attestation.FactorResult{
-			{Tier: "model", Name: "tdx_quote_present", Status: attestation.Fail, Enforced: true, Detail: "no quote"},
+			{Tier: "model", Name: "tee_quote_present", Status: attestation.Fail, Enforced: true, Detail: "no quote"},
 		},
 	}
 }

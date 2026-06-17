@@ -23,11 +23,11 @@ import (
 func buildTestReport(prov, model string) *attestation.VerificationReport {
 	factors := []attestation.FactorResult{
 		{Name: "nonce_match", Status: attestation.Pass, Detail: "ok", Enforced: true, Tier: attestation.TierCore},
-		{Name: "tdx_quote_present", Status: attestation.Pass, Detail: "ok", Tier: attestation.TierCore},
-		{Name: "tdx_quote_structure", Status: attestation.Pass, Detail: "ok", Tier: attestation.TierCore},
-		{Name: "tdx_debug_disabled", Status: attestation.Pass, Detail: "ok", Enforced: true, Tier: attestation.TierCore},
+		{Name: "tee_quote_present", Status: attestation.Pass, Detail: "ok", Tier: attestation.TierCore},
+		{Name: "tee_quote_structure", Status: attestation.Pass, Detail: "ok", Tier: attestation.TierCore},
+		{Name: "tee_debug_disabled", Status: attestation.Pass, Detail: "ok", Enforced: true, Tier: attestation.TierCore},
 		{Name: "signing_key_present", Status: attestation.Pass, Detail: "ok", Enforced: true, Tier: attestation.TierCore},
-		{Name: "tdx_reportdata_binding", Status: attestation.Pass, Detail: "ok", Enforced: true, Tier: attestation.TierBinding},
+		{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "ok", Enforced: true, Tier: attestation.TierBinding},
 		{Name: "e2ee_capable", Status: attestation.Pass, Detail: "ok", Tier: attestation.TierBinding},
 		{Name: "tls_key_binding", Status: attestation.Fail, Detail: "no TLS key", Tier: attestation.TierSupplyChain},
 	}

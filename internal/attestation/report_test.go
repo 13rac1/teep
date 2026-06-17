@@ -313,7 +313,7 @@ func TestWithOfflineAllowFail(t *testing.T) {
 func TestWithOfflineAllowFailNoDuplicates(t *testing.T) {
 	// If the input already contains some OnlineFactors, they should not
 	// be duplicated.
-	input := []string{"intel_pcs_collateral", "tdx_hardware_config"}
+	input := []string{"intel_pcs_collateral", "tee_hardware_config"}
 	result := WithOfflineAllowFail(input)
 	seen := make(map[string]int, len(result))
 	for _, f := range result {
@@ -329,8 +329,8 @@ func TestWithOfflineAllowFailNoDuplicates(t *testing.T) {
 	for _, f := range result {
 		resultSet[f] = true
 	}
-	if !resultSet["tdx_hardware_config"] {
-		t.Error("original entry tdx_hardware_config missing")
+	if !resultSet["tee_hardware_config"] {
+		t.Error("original entry tee_hardware_config missing")
 	}
 	for _, f := range OnlineFactors {
 		if !resultSet[f] {
@@ -340,7 +340,7 @@ func TestWithOfflineAllowFailNoDuplicates(t *testing.T) {
 }
 
 func TestWithOfflineAllowFailDoesNotMutateInput(t *testing.T) {
-	input := []string{"tdx_hardware_config"}
+	input := []string{"tee_hardware_config"}
 	inputCopy := append([]string(nil), input...)
 	_ = WithOfflineAllowFail(input)
 	if len(input) != len(inputCopy) || input[0] != inputCopy[0] {
@@ -349,18 +349,18 @@ func TestWithOfflineAllowFailDoesNotMutateInput(t *testing.T) {
 }
 
 func TestWithAllowFailAddsNewFactor(t *testing.T) {
-	input := []string{"tdx_hardware_config"}
+	input := []string{"tee_hardware_config"}
 	result := WithAllowFail(input, "e2ee_usable")
 	if len(result) != 2 {
 		t.Fatalf("got %d entries, want 2", len(result))
 	}
-	if result[0] != "tdx_hardware_config" || result[1] != "e2ee_usable" {
-		t.Errorf("got %v, want [tdx_hardware_config e2ee_usable]", result)
+	if result[0] != "tee_hardware_config" || result[1] != "e2ee_usable" {
+		t.Errorf("got %v, want [tee_hardware_config e2ee_usable]", result)
 	}
 }
 
 func TestWithAllowFailDeduplicates(t *testing.T) {
-	input := []string{"tdx_hardware_config", "e2ee_usable"}
+	input := []string{"tee_hardware_config", "e2ee_usable"}
 	result := WithAllowFail(input, "e2ee_usable")
 	if len(result) != 2 {
 		t.Fatalf("got %d entries, want 2 (no duplicate)", len(result))
@@ -368,7 +368,7 @@ func TestWithAllowFailDeduplicates(t *testing.T) {
 }
 
 func TestWithAllowFailDoesNotMutateInput(t *testing.T) {
-	input := []string{"tdx_hardware_config"}
+	input := []string{"tee_hardware_config"}
 	inputCopy := append([]string(nil), input...)
 	_ = WithAllowFail(input, "e2ee_usable")
 	if len(input) != len(inputCopy) || input[0] != inputCopy[0] {
@@ -469,7 +469,7 @@ func TestEvalTDXParseDependent(t *testing.T) {
 		if len(results) != 4 {
 			t.Fatalf("got %d results, want 4", len(results))
 		}
-		for _, name := range []string{"tdx_quote_structure", "tdx_cert_chain", "tdx_quote_signature", "tdx_debug_disabled"} {
+		for _, name := range []string{"tee_quote_structure", "tee_cert_chain", "tee_quote_signature", "tee_debug_disabled"} {
 			assertFactor(t, results, name, Fail)
 		}
 	})
@@ -481,7 +481,7 @@ func TestEvalTDXParseDependent(t *testing.T) {
 		if len(results) != 4 {
 			t.Fatalf("got %d results, want 4", len(results))
 		}
-		for _, name := range []string{"tdx_quote_structure", "tdx_cert_chain", "tdx_quote_signature", "tdx_debug_disabled"} {
+		for _, name := range []string{"tee_quote_structure", "tee_cert_chain", "tee_quote_signature", "tee_debug_disabled"} {
 			assertFactor(t, results, name, Pass)
 		}
 	})
@@ -490,7 +490,7 @@ func TestEvalTDXParseDependent(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		tdx := &TDXVerifyResult{DebugEnabled: true, TeeTCBSVN: make([]byte, 16)}
 		results := evalTDXParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
-		f := assertFactor(t, results, "tdx_debug_disabled", Fail)
+		f := assertFactor(t, results, "tee_debug_disabled", Fail)
 		if !strings.Contains(f.Detail, "debug") {
 			t.Errorf("detail should mention debug: %s", f.Detail)
 		}
@@ -500,24 +500,24 @@ func TestEvalTDXParseDependent(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		tdx := &TDXVerifyResult{CertChainErr: errors.New("expired"), TeeTCBSVN: make([]byte, 16)}
 		results := evalTDXParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
-		assertFactor(t, results, "tdx_cert_chain", Fail)
+		assertFactor(t, results, "tee_cert_chain", Fail)
 	})
 
 	t.Run("signature_err", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		tdx := &TDXVerifyResult{SignatureErr: errors.New("bad sig"), TeeTCBSVN: make([]byte, 16)}
 		results := evalTDXParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
-		assertFactor(t, results, "tdx_quote_signature", Fail)
+		assertFactor(t, results, "tee_quote_signature", Fail)
 	})
 
 	t.Run("parse_err_skips_chain_sig_debug", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		tdx := &TDXVerifyResult{ParseErr: errors.New("bad quote")}
 		results := evalTDXParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
-		assertFactor(t, results, "tdx_quote_structure", Fail)
-		assertFactor(t, results, "tdx_cert_chain", Skip)
-		assertFactor(t, results, "tdx_quote_signature", Skip)
-		assertFactor(t, results, "tdx_debug_disabled", Skip)
+		assertFactor(t, results, "tee_quote_structure", Fail)
+		assertFactor(t, results, "tee_cert_chain", Skip)
+		assertFactor(t, results, "tee_quote_signature", Skip)
+		assertFactor(t, results, "tee_debug_disabled", Skip)
 	})
 }
 
@@ -534,7 +534,7 @@ func TestEvalTDXQuoteStructure(t *testing.T) {
 		results := evalTDXParseDependent(&ReportInput{
 			Raw: raw, Nonce: nonce, TDX: tdx,
 		})
-		f := assertFactor(t, results, "tdx_quote_structure", Pass)
+		f := assertFactor(t, results, "tee_quote_structure", Pass)
 		if !strings.Contains(f.Detail, "valid") {
 			t.Errorf("detail should mention valid: %s", f.Detail)
 		}
@@ -552,8 +552,8 @@ func TestEvalTDXQuoteStructure(t *testing.T) {
 				MRTDAllow: map[string]struct{}{strings.Repeat("aa", 48): {}},
 			},
 		})
-		// tdx_quote_structure should pass — measurement checks moved to tdx_mrseam_mrtd
-		assertFactor(t, results, "tdx_quote_structure", Pass)
+		// tee_quote_structure should pass — measurement checks moved to tee_mrseam_mrtd
+		assertFactor(t, results, "tee_quote_structure", Pass)
 	})
 }
 
@@ -1583,7 +1583,7 @@ func TestBuildMetadata_WithPPID(t *testing.T) {
 func TestReportDataBindingPassed(t *testing.T) {
 	t.Run("pass", func(t *testing.T) {
 		r := &VerificationReport{Factors: []FactorResult{
-			{Name: "tdx_reportdata_binding", Status: Pass},
+			{Name: "tee_reportdata_binding", Status: Pass},
 		}}
 		if !r.ReportDataBindingPassed() {
 			t.Error("expected true")
@@ -1591,7 +1591,7 @@ func TestReportDataBindingPassed(t *testing.T) {
 	})
 	t.Run("fail", func(t *testing.T) {
 		r := &VerificationReport{Factors: []FactorResult{
-			{Name: "tdx_reportdata_binding", Status: Fail},
+			{Name: "tee_reportdata_binding", Status: Fail},
 		}}
 		if r.ReportDataBindingPassed() {
 			t.Error("expected false")
@@ -2227,10 +2227,10 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 	})
 
 	// Base 29 + 13 gateway factors = 42
-	// Gateway factors: gateway_nonce_match, gateway_tdx_quote_present,
-	// gateway_tdx_quote_structure, gateway_tdx_cert_chain, gateway_tdx_quote_signature,
-	// gateway_tdx_debug_disabled, gateway_tdx_mrseam_mrtd, gateway_tdx_hardware_config,
-	// gateway_tdx_boot_config, gateway_tdx_reportdata_binding,
+	// Gateway factors: gateway_nonce_match, gateway_tee_quote_present,
+	// gateway_tee_quote_structure, gateway_tee_cert_chain, gateway_tee_quote_signature,
+	// gateway_tee_debug_disabled, gateway_tee_mrseam_mrtd, gateway_tee_hardware_config,
+	// gateway_tee_boot_config, gateway_tee_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
 	if len(report.Factors) != 42 {
 		t.Errorf("factor count with gateway: got %d, want 42", len(report.Factors))
@@ -3536,9 +3536,9 @@ func TestEvalGatewayTDXParseDependent_Errors(t *testing.T) {
 	if len(results) != 4 {
 		t.Fatalf("expected 4 results, got %d", len(results))
 	}
-	// gateway_tdx_quote_structure always passes when ParseErr == nil.
+	// gateway_tee_quote_structure always passes when ParseErr == nil.
 	if results[0].Status != Pass {
-		t.Errorf("gateway_tdx_quote_structure = %v, want Pass", results[0].Status)
+		t.Errorf("gateway_tee_quote_structure = %v, want Pass", results[0].Status)
 	}
 	// cert chain, signature, debug should all fail.
 	for _, r := range results[1:] {

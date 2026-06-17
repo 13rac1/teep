@@ -497,7 +497,7 @@ func TestHandlePinned_AttestationQueryParams(t *testing.T) {
 
 func TestNewPinnedHandler(t *testing.T) {
 	spkiCache := attestation.NewSPKICache()
-	allowFail := []string{"nonce_match", "tdx_debug_disabled"}
+	allowFail := []string{"nonce_match", "tee_debug_disabled"}
 
 	h := NewPinnedHandler(spkiCache, "test-key", true, allowFail, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{}, nil, nil, attestation.DefaultNVIDIAVerifier(), nil)
 
@@ -1053,22 +1053,22 @@ func TestHandlePinned_WithNonEmptyQuotesAndPayload(t *testing.T) {
 	for _, f := range resp.Report.Factors {
 		t.Logf("  factor: %s = %s", f.Name, f.Status)
 		switch f.Name {
-		case "tdx_quote_structure":
+		case "tee_quote_structure":
 			foundTDXStructure = true
 		case "nvidia_payload_present":
 			foundNvidiaPayload = true
-		case "gateway_tdx_quote_present":
+		case "gateway_tee_quote_present":
 			foundGatewayTDX = true
 		}
 	}
 	if !foundTDXStructure {
-		t.Error("expected tdx_quote_structure factor")
+		t.Error("expected tee_quote_structure factor")
 	}
 	if !foundNvidiaPayload {
 		t.Error("expected nvidia_payload_present factor")
 	}
 	if !foundGatewayTDX {
-		t.Error("expected gateway_tdx_quote_present factor")
+		t.Error("expected gateway_tee_quote_present factor")
 	}
 }
 

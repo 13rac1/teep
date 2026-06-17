@@ -77,7 +77,7 @@ Verify and report:
 - debug-bit evaluation and enforcement behavior for BOTH the gateway and model backend quotes (debug enclaves MUST be rejected for production trust),
 - that the TD Attributes field in the quote body is parsed and the DEBUG bit (bit 0) is explicitly checked,
 - that debug-bit check is enforced fail-closed (not merely logged),
-- the enforcement factor names for this check (expected: `tdx_debug_disabled` for model, `gateway_tdx_debug_disabled` for gateway).
+- the enforcement factor names for this check (expected: `tee_debug_disabled` for model, `gateway_tee_debug_disabled` for gateway).
 
 ### Gateway-Specific Verification
 
@@ -129,7 +129,7 @@ Chutes providers produce TDX quotes only from the backend sek8s instances, not f
 - **No gateway TDX quote**: The Chutes gateway is unattested and produces no TDX quote. No `gateway_*` TDX factors exist for chutes.
 - **Two-step fetch**: The TDX quote is fetched via the evidence endpoint (`/chutes/{chute}/evidence?nonce={hex}`) through the Chutes gateway, separate from the instances endpoint that returns E2EE keys. The audit should verify that the evidence response is correctly parsed and that the TDX quote bytes are extracted from the response structure.
 - **Same verification code**: The TDX quote parsing, signature verification, PCK chain validation, and debug-bit checking should use the same `internal/attestation/tdx.go` code path as nearcloud. Verify this is the case.
-- **Sek8s-specific measurements**: The chutes measurement policy defines different MRTD, MRSEAM, and RTMR0-2 golden values than nearcloud. These are checked via the same `tdx_mrseam_mrtd` factor. See Section 05 for measurement details.
+- **Sek8s-specific measurements**: The chutes measurement policy defines different MRTD, MRSEAM, and RTMR0-2 golden values than nearcloud. These are checked via the same `tee_mrseam_mrtd` factor. See Section 05 for measurement details.
 - **Multiple instances**: Chutes may return multiple instances (up to `MaxInstances = 256`), each producing its own TDX quote. Verify that each instance's quote is independently verified and that a single verification failure blocks the request.
 
 Primary reference: `internal/provider/chutes/chutes.go`, `internal/attestation/tdx.go`.
@@ -141,6 +141,6 @@ Provide:
 2. explicit statement of cryptographic-verification boundary vs collateral-dependent checks,
 3. full certificate chain validation assessment,
 4. confirmation that gateway and model TDX verification use the same code path,
-5. enforcement classification for each factor (`tdx_cert_chain`, `tdx_quote_signature`, `tdx_debug_disabled`, and their `gateway_` counterparts),
+5. enforcement classification for each factor (`tee_cert_chain`, `tee_quote_signature`, `tee_debug_disabled`, and their `gateway_` counterparts),
 6. include at least one concrete positive control and one concrete negative/residual-risk observation,
 7. source citations for all claims.

@@ -134,14 +134,14 @@ Is the hardware genuine? These checks verify the TDX quote is present, properly 
 | # | Factor | Description |
 |---|--------|-------------|
 | 1 | `nonce_match` | Attestation response nonce matches submitted nonce |
-| 2 | `tdx_quote_present` | Attestation includes an Intel TDX quote |
-| 3 | `tdx_quote_structure` | TDX quote parses as valid QuoteV4 |
-| 4 | `tdx_cert_chain` | Certificate chain verifies against Intel root CA |
-| 5 | `tdx_quote_signature` | Quote signature valid under attestation key |
-| 6 | `tdx_debug_disabled` | TD_ATTRIBUTES debug bit is 0 (production enclave) |
-| 7 | `tdx_mrseam_mrtd` | MRTD and MRSEAM match configured measurement policy allowlists |
-| 8 | `tdx_hardware_config` | RTMR[0] matches hardware config allowlist |
-| 9 | `tdx_boot_config` | RTMR[1] and RTMR[2] match boot config allowlists |
+| 2 | `tee_quote_present` | Attestation includes an Intel TDX quote |
+| 3 | `tee_quote_structure` | TDX quote parses as valid QuoteV4 |
+| 4 | `tee_cert_chain` | Certificate chain verifies against Intel root CA |
+| 5 | `tee_quote_signature` | Quote signature valid under attestation key |
+| 6 | `tee_debug_disabled` | TD_ATTRIBUTES debug bit is 0 (production enclave) |
+| 7 | `tee_mrseam_mrtd` | MRTD and MRSEAM match configured measurement policy allowlists |
+| 8 | `tee_hardware_config` | RTMR[0] matches hardware config allowlist |
+| 9 | `tee_boot_config` | RTMR[1] and RTMR[2] match boot config allowlists |
 | 10 | `signing_key_present` | Enclave ECDH public key present (API field: `signing_key`) |
 
 </details>
@@ -155,10 +155,10 @@ Is the encryption bound to the hardware? These checks verify the encryption key 
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 11 | `tdx_reportdata_binding` | REPORTDATA cryptographically binds enclave public key to TDX quote (vendor-specific scheme) |
+| 11 | `tee_reportdata_binding` | REPORTDATA cryptographically binds enclave public key to TDX quote (vendor-specific scheme) |
 | 12 | `intel_pcs_collateral` | Intel PCS collateral fetched for TCB status |
-| 13 | `tdx_tcb_current` | TCB SVN meets minimum threshold |
-| 14 | `tdx_tcb_not_revoked` | TCB SVN is not revoked per Intel PCS |
+| 13 | `tee_tcb_current` | TCB SVN meets minimum threshold |
+| 14 | `tee_tcb_not_revoked` | TCB SVN is not revoked per Intel PCS |
 | 15 | `nvidia_payload_present` | NVIDIA GPU attestation payload present |
 | 16 | `nvidia_signature` | NVIDIA EAT SPDM signature valid (ECDSA-P384) |
 | 17 | `nvidia_claims` | NVIDIA EAT claims valid (architecture, GPU count) |
@@ -201,15 +201,15 @@ to the model inference node.
 | # | Factor | Description |
 |---|--------|-------------|
 | 30 | `gateway_nonce_match` | Gateway request nonce matches the client nonce |
-| 31 | `gateway_tdx_quote_present` | Gateway TDX quote is present |
-| 32 | `gateway_tdx_quote_structure` | Gateway TDX quote parses as valid QuoteV4 |
-| 33 | `gateway_tdx_cert_chain` | Gateway cert chain verifies against Intel root CA |
-| 34 | `gateway_tdx_quote_signature` | Gateway quote signature valid |
-| 35 | `gateway_tdx_debug_disabled` | Gateway debug bit is 0 (production enclave) |
-| 36 | `gateway_tdx_mrseam_mrtd` | Gateway MRTD and MRSEAM match measurement policy allowlists |
-| 37 | `gateway_tdx_hardware_config` | Gateway RTMR[0] matches hardware config allowlist |
-| 38 | `gateway_tdx_boot_config` | Gateway RTMR[1] and RTMR[2] match boot config allowlists |
-| 39 | `gateway_tdx_reportdata_binding` | Gateway REPORTDATA binding verified |
+| 31 | `gateway_tee_quote_present` | Gateway TDX quote is present |
+| 32 | `gateway_tee_quote_structure` | Gateway TDX quote parses as valid QuoteV4 |
+| 33 | `gateway_tee_cert_chain` | Gateway cert chain verifies against Intel root CA |
+| 34 | `gateway_tee_quote_signature` | Gateway quote signature valid |
+| 35 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave) |
+| 36 | `gateway_tee_mrseam_mrtd` | Gateway MRTD and MRSEAM match measurement policy allowlists |
+| 37 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches hardware config allowlist |
+| 38 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match boot config allowlists |
+| 39 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified |
 | 40 | `gateway_compose_binding` | Gateway sha256(app_compose) matches TDX MRConfigID |
 | 41 | `gateway_cpu_id_registry` | Gateway CPU PPID verified in Proof of Cloud registry |
 | 42 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match quote |

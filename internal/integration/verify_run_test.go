@@ -44,7 +44,7 @@ func TestVerifyRun_Venice_Fixture(t *testing.T) {
 		report.Passed, report.Passed+report.Failed+report.Skipped,
 		report.Passed, report.Failed, report.Skipped)
 
-	assertMustPass(t, report, []string{"nonce_match", "tdx_quote_present", "signing_key_present"})
+	assertMustPass(t, report, []string{"nonce_match", "tee_quote_present", "signing_key_present"})
 
 	if report.Passed < 5 {
 		t.Errorf("expected at least 5 passing factors, got %d", report.Passed)
@@ -74,7 +74,7 @@ func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
 		report.Passed, report.Passed+report.Failed+report.Skipped,
 		report.Passed, report.Failed, report.Skipped)
 
-	assertMustPass(t, report, []string{"nonce_match", "tdx_quote_present"})
+	assertMustPass(t, report, []string{"nonce_match", "tee_quote_present"})
 
 	if report.Passed < 5 {
 		t.Errorf("expected at least 5 passing factors, got %d", report.Passed)
@@ -107,7 +107,7 @@ func TestVerifyReplay_Venice_Fixture(t *testing.T) {
 	}
 	t.Logf("Score: %d/%d", report.Passed, report.Passed+report.Failed+report.Skipped)
 
-	assertMustPass(t, report, []string{"nonce_match", "tdx_quote_present"})
+	assertMustPass(t, report, []string{"nonce_match", "tee_quote_present"})
 }
 
 func TestVerifyRun_WithCapture_Venice(t *testing.T) {

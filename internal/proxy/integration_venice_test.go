@@ -105,13 +105,13 @@ func assertReportFactors(t *testing.T, report *attestation.VerificationReport) {
 
 	mustPass := []string{
 		"nonce_match",
-		"tdx_quote_present",
-		"tdx_quote_structure",
-		"tdx_cert_chain",
-		"tdx_quote_signature",
-		"tdx_debug_disabled",
+		"tee_quote_present",
+		"tee_quote_structure",
+		"tee_cert_chain",
+		"tee_quote_signature",
+		"tee_debug_disabled",
 		"signing_key_present",
-		"tdx_reportdata_binding",
+		"tee_reportdata_binding",
 		"e2ee_usable",
 	}
 	for _, name := range mustPass {
