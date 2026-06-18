@@ -52,10 +52,10 @@ func TestE2EE_EncryptRequest(t *testing.T) {
 		t.Errorf("encrypted body too short: %d bytes", len(er.Body))
 	}
 
-	// EncapKeyBase64 should be non-empty.
-	encapKey := er.EHBP.EncapKeyBase64()
+	// EncapKeyHex should be non-empty.
+	encapKey := er.EHBP.EncapKeyHex()
 	if encapKey == "" {
-		t.Error("EncapKeyBase64 returned empty string")
+		t.Error("EncapKeyHex returned empty string")
 	}
 	t.Logf("encrypted body length: %d, encap key: %s", len(er.Body), encapKey)
 }

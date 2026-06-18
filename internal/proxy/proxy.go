@@ -2385,7 +2385,7 @@ func (s *Server) doUpstreamRoundtrip(
 		upstreamReq.Header.Set("Content-Type", contentType)
 
 		if ehbp != nil {
-			upstreamReq.Header.Set("Ehbp-Encapsulated-Key", ehbp.EncapKeyBase64())
+			upstreamReq.Header.Set("Ehbp-Encapsulated-Key", ehbp.EncapKeyHex())
 			upstreamReq.ContentLength = -1 // force chunked transfer encoding
 		}
 

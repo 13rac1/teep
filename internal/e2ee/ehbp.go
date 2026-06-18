@@ -7,7 +7,6 @@ import (
 	"crypto/ecdh"
 	"crypto/hpke"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -46,7 +45,7 @@ func NewEHBPSession(serverPubKey []byte) (*EHBPSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ehbp: create HPKE public key: %w", err)
 	}
-	enc, sender, err := hpke.NewSender(hpkePub, hpke.HKDFSHA256(), hpke.AES256GCM(), nil)
+	enc, sender, err := hpke.NewSender(hpkePub, hpke.HKDFSHA256(), hpke.AES256GCM(), []byte("ehbp request"))
 	if err != nil {
 		return nil, fmt.Errorf("ehbp: HPKE SetupBaseS: %w", err)
 	}
@@ -83,10 +82,10 @@ func (s *EHBPSession) EncryptRequest(body io.Reader) (io.Reader, error) {
 	return &buf, nil
 }
 
-// EncapKeyBase64 returns the base64-encoded encapsulated key for the
-// Ehbp-Encapsulated-Key request header.
-func (s *EHBPSession) EncapKeyBase64() string {
-	return base64.StdEncoding.EncodeToString(s.encapKey)
+// EncapKeyHex returns the lowercase hex-encoded encapsulated key for the
+// Ehbp-Encapsulated-Key request header (32 bytes → 64 hex chars).
+func (s *EHBPSession) EncapKeyHex() string {
+	return hex.EncodeToString(s.encapKey)
 }
 
 // DecryptResponse decrypts an EHBP-encrypted response body using the

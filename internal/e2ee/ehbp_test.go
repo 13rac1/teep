@@ -28,7 +28,7 @@ func serverDecryptRequest(t *testing.T, privKey *ecdh.PrivateKey, encapKey []byt
 	if err != nil {
 		t.Fatalf("server NewDHKEMPrivateKey: %v", err)
 	}
-	recipient, err := hpke.NewRecipient(encapKey, hpkePriv, hpke.HKDFSHA256(), hpke.AES256GCM(), nil)
+	recipient, err := hpke.NewRecipient(encapKey, hpkePriv, hpke.HKDFSHA256(), hpke.AES256GCM(), []byte("ehbp request"))
 	if err != nil {
 		t.Fatalf("server NewRecipient: %v", err)
 	}
@@ -61,7 +61,7 @@ func serverEncryptResponse(t *testing.T, privKey *ecdh.PrivateKey, encapKey []by
 	if err != nil {
 		t.Fatalf("server NewDHKEMPrivateKey: %v", err)
 	}
-	recipient, err := hpke.NewRecipient(encapKey, hpkePriv, hpke.HKDFSHA256(), hpke.AES256GCM(), nil)
+	recipient, err := hpke.NewRecipient(encapKey, hpkePriv, hpke.HKDFSHA256(), hpke.AES256GCM(), []byte("ehbp request"))
 	if err != nil {
 		t.Fatalf("server NewRecipient: %v", err)
 	}
@@ -544,9 +544,9 @@ func TestEHBPZeroLengthChunk(t *testing.T) {
 	t.Logf("zero-length chunk correctly rejected: %v", err)
 }
 
-// TestEHBPEncapKeyBase64 verifies EncapKeyBase64 returns valid base64
-// of the 32-byte encapsulated key.
-func TestEHBPEncapKeyBase64(t *testing.T) {
+// TestEHBPEncapKeyHex verifies EncapKeyHex returns valid lowercase hex
+// of the 32-byte encapsulated key (64 hex chars).
+func TestEHBPEncapKeyHex(t *testing.T) {
 	priv := generateX25519KeyPair(t)
 	session, err := NewEHBPSession(priv.PublicKey().Bytes())
 	if err != nil {
@@ -554,11 +554,17 @@ func TestEHBPEncapKeyBase64(t *testing.T) {
 	}
 	defer session.Zero()
 
-	b64 := session.EncapKeyBase64()
-	if b64 == "" {
-		t.Fatal("EncapKeyBase64 returned empty string")
+	h := session.EncapKeyHex()
+	if h == "" {
+		t.Fatal("EncapKeyHex returned empty string")
 	}
-	t.Logf("encap key base64: %s", b64)
+	if len(h) != 64 {
+		t.Errorf("EncapKeyHex length = %d, want 64", len(h))
+	}
+	if _, err := hex.DecodeString(h); err != nil {
+		t.Errorf("EncapKeyHex not valid hex: %v", err)
+	}
+	t.Logf("encap key hex: %s", h)
 }
 
 // TestEHBPNewSessionBadKey verifies NewEHBPSession rejects invalid public keys.
