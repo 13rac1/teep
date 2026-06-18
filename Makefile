@@ -1,4 +1,4 @@
-.PHONY: help build build-debug self-check test test-live test-fuzz integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-tinfoil integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture integration-chutes-fixture vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes report-tinfoil e2e-venice
+.PHONY: help build build-debug self-check test test-live test-fuzz integration integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-tinfoil integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture integration-chutes-fixture integration-tinfoil-fixture vet teeplint lint check clean reports report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes report-tinfoil e2e-venice
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -40,7 +40,7 @@ coverage-full: ## Full coverage without -short (live integration tests still nee
 test-live: ## Run live network tests (dials external hosts, requires internet)
 	TEEP_LIVE_TESTS=1 go test -race -v ./internal/tlsct/ -run TestLive
 
-integration: integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-tinfoil integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture integration-chutes-fixture ## Run all integration tests
+integration: integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-tinfoil integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture integration-chutes-fixture integration-tinfoil-fixture ## Run all integration tests
 
 integration-venice: ## Run Venice integration tests (requires VENICE_API_KEY)
 	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_Venice ./internal/proxy/
@@ -74,6 +74,9 @@ integration-chutes-fixture: ## Run Chutes fixture integration test (no API key n
 
 integration-tinfoil: ## Run Tinfoil integration tests (requires TINFOIL_API_KEY)
 	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_Tinfoil ./internal/proxy/
+
+integration-tinfoil-fixture: ## Run Tinfoil fixture integration test (no API key needed)
+	go test -v -race -timeout 60s -run TestIntegration_Tinfoil_Fixture ./internal/integration/
 
 vet: ## Run go vet
 	go vet ./cmd/... ./internal/...

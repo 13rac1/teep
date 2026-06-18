@@ -39,24 +39,26 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 			attestation.NoncePrefix(raw.Nonce))
 	}
 
-	// Verify GPU evidence hash.
-	if err := verifyGPUEvidenceHash(raw); err != nil {
-		return "", fmt.Errorf("GPU evidence hash verification: %w", err)
-	}
-
-	// Determine NVSwitch expectation and verify if needed.
-	nvswitchExpected, err := isNVSwitchExpected(raw.GPURawJSON)
-	if err != nil {
-		return "", fmt.Errorf("NVSwitch normalization: %w", err)
-	}
-
-	if nvswitchExpected {
-		if err := verifyNVSwitchEvidenceHash(raw); err != nil {
-			return "", fmt.Errorf("NVSwitch evidence hash verification: %w", err)
+	// GPU and NVSwitch verification — only applicable when GPU evidence is present.
+	hasGPU := raw.TinfoilGPUEvidenceHash != "" && len(raw.GPURawJSON) > 0
+	nvswitchExpected := false
+	if hasGPU {
+		if err := verifyGPUEvidenceHash(raw); err != nil {
+			return "", fmt.Errorf("GPU evidence hash verification: %w", err)
+		}
+		var nsErr error
+		nvswitchExpected, nsErr = isNVSwitchExpected(raw.GPURawJSON)
+		if nsErr != nil {
+			return "", fmt.Errorf("NVSwitch normalization: %w", nsErr)
+		}
+		if nvswitchExpected {
+			if err := verifyNVSwitchEvidenceHash(raw); err != nil {
+				return "", fmt.Errorf("NVSwitch evidence hash verification: %w", err)
+			}
 		}
 	}
 
-	// Build the preimage: tls_key_fp || hpke_key || nonce || gpu_evidence_hash [|| nvswitch_evidence_hash]
+	// Build the preimage: tls_key_fp || hpke_key || nonce [|| gpu_evidence_hash [|| nvswitch_evidence_hash]]
 	preimage, err := buildReportDataPreimage(raw)
 	if err != nil {
 		return "", fmt.Errorf("build REPORTDATA preimage: %w", err)
@@ -68,7 +70,10 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 			hex.EncodeToString(reportData[:32]), hex.EncodeToString(expected[:]))
 	}
 
-	detail := "v3: reportdata_hash verified, nonce_bound=true, gpu_bound=true"
+	detail := "v3: reportdata_hash verified, nonce_bound=true"
+	if hasGPU {
+		detail += ", gpu_bound=true"
+	}
 	if nvswitchExpected {
 		detail += ", nvswitch_bound=true"
 	}
@@ -76,6 +81,9 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 }
 
 // buildReportDataPreimage constructs the hash preimage for REPORTDATA[0:32].
+// The preimage is: tls_key_fp || hpke_key || nonce [|| gpu_hash [|| nvswitch_hash]]
+// GPU and NVSwitch hashes are omitted when the enclave has no GPU evidence
+// (e.g., the router enclave is CPU-only).
 func buildReportDataPreimage(raw *attestation.RawAttestation) ([]byte, error) {
 	tlsKeyFP, err := hex.DecodeString(raw.TinfoilTLSKeyFP)
 	if err != nil {
@@ -89,18 +97,20 @@ func buildReportDataPreimage(raw *attestation.RawAttestation) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode nonce: %w", err)
 	}
-	gpuHash, err := hex.DecodeString(raw.TinfoilGPUEvidenceHash)
-	if err != nil {
-		return nil, fmt.Errorf("decode gpu_evidence_hash: %w", err)
-	}
 
 	const fieldSize = 32
-	preimage := make([]byte, 0, 5*fieldSize) // tls_key_fp + hpke_key + nonce + gpu_hash [+ nvswitch_hash]
+	preimage := make([]byte, 0, 5*fieldSize)
 	preimage = append(preimage, tlsKeyFP...)
 	preimage = append(preimage, hpkeKey...)
 	preimage = append(preimage, nonceBytes...)
-	preimage = append(preimage, gpuHash...)
 
+	if raw.TinfoilGPUEvidenceHash != "" {
+		gpuHash, err := hex.DecodeString(raw.TinfoilGPUEvidenceHash)
+		if err != nil {
+			return nil, fmt.Errorf("decode gpu_evidence_hash: %w", err)
+		}
+		preimage = append(preimage, gpuHash...)
+	}
 	if raw.TinfoilNVSwitchEvidenceHash != "" {
 		nvswitchHash, err := hex.DecodeString(raw.TinfoilNVSwitchEvidenceHash)
 		if err != nil {

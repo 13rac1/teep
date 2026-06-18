@@ -1,0 +1,44 @@
+Attestation Report: tinfoil_v3_cloud / meta-llama/Llama-4-Scout-17B-16E-Instruct
+════════════════════════════════════════════════════════════════════════════════
+
+  Hardware:      amd-sev-snp
+  Nonce source:  client
+
+Tier 1: Core Attestation
+  ✓ nonce_match                nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✗ tee_quote_present          intel_quote field is absent from attestation response  [ENFORCED]
+  ✗ tee_quote_structure        no TDX quote available to parse  [ENFORCED]
+  ✗ tee_cert_chain             no TDX quote available; cannot verify cert chain  [ENFORCED]
+  ✗ tee_quote_signature        no TDX quote available; cannot verify signature  [ENFORCED]
+  ✗ tee_debug_disabled         no TDX quote available; cannot check debug flag  [ENFORCED]
+  ✗ tee_mrseam_mrtd            no parseable TDX quote; cannot check MRSEAM/MRTD (enforced)  [ENFORCED]
+  ✗ tee_hardware_config        no parseable TDX quote; cannot check RTMR0 (enforced)  [ENFORCED]
+  ✗ tee_boot_config            no parseable TDX quote; cannot check RTMR1/RTMR2 (enforced)  [ENFORCED]
+  ✓ signing_key_present        enclave pubkey present (1d4e65f73e...)  [ENFORCED]
+
+Tier 2: Binding & Crypto
+  ✗ tee_reportdata_binding     no parseable TDX quote; REPORTDATA binding cannot be verified  [ENFORCED]
+  ✗ intel_pcs_collateral       no parseable TDX quote (enforced)  [ENFORCED]
+  ✗ tee_tcb_current            no parseable TDX quote; TCB SVN not extracted (enforced)  [ENFORCED]
+  ✗ tee_tcb_not_revoked        no parseable TDX quote (enforced)  [ENFORCED]
+  ✗ nvidia_payload_present     nvidia_payload field is absent from attestation response  [ENFORCED]
+  ✗ nvidia_signature           no NVIDIA payload to verify (enforced)  [ENFORCED]
+  ✗ nvidia_claims              no NVIDIA payload to check (enforced)  [ENFORCED]
+  ✗ nvidia_nonce_client_bound  no NVIDIA payload; nonce not checked (enforced)  [ENFORCED]
+  ✗ nvidia_nras_verified       no EAT payload; NRAS not applicable (enforced)  [ENFORCED]
+  ✓ e2ee_capable               X25519 HPKE public key valid (32 bytes); EHBP E2EE key exchange possible  [ENFORCED]
+  ✗ e2ee_usable                E2EE not configured for this provider (enforced)  [ENFORCED]
+
+Tier 3: Supply Chain & Channel Integrity
+  ✓ tls_key_binding            TLS certificate SPKI bound to attestation (add8c424a4a084e7...)  [ENFORCED]
+  ✗ cpu_gpu_chain              CPU-GPU attestation not bound  [ENFORCED]
+  ✗ measured_model_weights     no model weight hashes  [ENFORCED]
+  ✗ build_transparency_log     no build transparency log  [ENFORCED]
+  ✗ cpu_id_registry            no CPU ID registry check  [ALLOWED]
+  ✗ compose_binding            no app_compose in attestation response (enforced)  [ENFORCED]
+  ✗ sigstore_verification      no image digests to verify (enforced)  [ENFORCED]
+  ✗ event_log_integrity        no event log entries in attestation response (enforced)  [ENFORCED]
+
+Score: 4/29 passed, 0 skipped, 25 failed (24 enforced, 1 allowed)
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

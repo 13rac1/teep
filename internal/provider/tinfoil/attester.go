@@ -122,7 +122,9 @@ func verifyEnvelopeSignature(rawBody []byte, resp *v3Response) error {
 
 	// Compute the hash of the JSON with the signature value replaced by empty string.
 	// We do byte-level surgery on the raw JSON to replace the signature value.
-	modifiedBody, err := replaceSignatureValue(rawBody, resp.Signature)
+	// Trim trailing whitespace — HTTP response bodies may include a trailing
+	// newline that was not part of the signed content.
+	modifiedBody, err := replaceSignatureValue(bytes.TrimRight(rawBody, "\n\r\t "), resp.Signature)
 	if err != nil {
 		return err
 	}

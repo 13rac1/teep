@@ -100,10 +100,13 @@ func parseV3Response(body []byte) (*attestation.RawAttestation, *v3Response, err
 	if err := validateHexField("nonce", resp.ReportData.Nonce); err != nil {
 		return nil, nil, err
 	}
-	if err := validateHexField("gpu_evidence_hash", resp.ReportData.GPUEvidenceHash); err != nil {
-		return nil, nil, err
+	// gpu_evidence_hash and nvswitch_evidence_hash are optional — the
+	// router enclave is CPU-only and does not include GPU evidence.
+	if resp.ReportData.GPUEvidenceHash != "" {
+		if err := validateHexField("gpu_evidence_hash", resp.ReportData.GPUEvidenceHash); err != nil {
+			return nil, nil, err
+		}
 	}
-	// nvswitch_evidence_hash is optional.
 	if resp.ReportData.NVSwitchEvidenceHash != "" {
 		if err := validateHexField("nvswitch_evidence_hash", resp.ReportData.NVSwitchEvidenceHash); err != nil {
 			return nil, nil, err

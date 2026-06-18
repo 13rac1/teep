@@ -144,3 +144,35 @@ func TestVerifyRun_WithCapture_Venice(t *testing.T) {
 	}
 	t.Logf("capture dir: %d subdirectory(ies)", len(dirs))
 }
+
+func TestVerifyRun_Tinfoil_Fixture(t *testing.T) {
+	env := loadFixture(t, "tinfoil_v3_cloud")
+	baseURL := extractBaseURL(t, env.entries)
+	t.Logf("base URL: %s", baseURL)
+
+	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, baseURL)
+
+	report, err := verify.Run(context.Background(), &verify.Options{
+		Config:       cfg,
+		Provider:     cp,
+		ProviderName: env.manifest.Provider,
+		ModelName:    env.manifest.Model,
+		Offline:      false,
+		Client:       env.client,
+		Nonce:        env.nonce,
+	})
+	if err != nil {
+		t.Fatalf("verify.Run: %v", err)
+	}
+	t.Logf("Score: %d/%d (passed=%d failed=%d skipped=%d)",
+		report.Passed, report.Passed+report.Failed+report.Skipped,
+		report.Passed, report.Failed, report.Skipped)
+
+	// Tinfoil fixture is SEV-SNP; tee_quote_present fails (TDX-only evaluator).
+	// The minimal factors we can assert are nonce_match and signing_key_present.
+	assertMustPass(t, report, []string{"nonce_match", "signing_key_present"})
+
+	if report.Passed < 3 {
+		t.Errorf("expected at least 3 passing factors, got %d", report.Passed)
+	}
+}
