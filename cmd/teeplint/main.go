@@ -391,9 +391,10 @@ func checkUsesFormatDetect(r *result, p *providerInfo, fd *ast.FuncDecl) {
 	r.failf("%s does not call formatdetect.Detect (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 }
 
-// FetchAttestation calls provider.FetchAttestationJSON for bounded reads,
-// either directly or via a package-level helper function.
+// FetchAttestation calls provider.FetchAttestationJSON (or FetchAttestationWithTLS)
+// for bounded reads, either directly or via a package-level helper function.
 func checkFetchUsesBoundedRead(r *result, p *providerInfo) {
+	allowedFuncs := []string{"FetchAttestationJSON", "FetchAttestationWithTLS"}
 	for _, f := range p.files {
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
@@ -401,13 +402,15 @@ func checkFetchUsesBoundedRead(r *result, p *providerInfo) {
 				continue
 			}
 			if fd.Name.Name == "FetchAttestation" {
-				if containsCallTransitive(fd.Body, "provider", "FetchAttestationJSON", p.files) {
-					pos := p.fset.Position(fd.Name.Pos())
-					r.passf("FetchAttestation uses provider.FetchAttestationJSON (%s:%d)", filepath.Base(pos.Filename), pos.Line)
-					return
+				for _, fn := range allowedFuncs {
+					if containsCallTransitive(fd.Body, "provider", fn, p.files) {
+						pos := p.fset.Position(fd.Name.Pos())
+						r.passf("FetchAttestation uses provider.%s (%s:%d)", fn, filepath.Base(pos.Filename), pos.Line)
+						return
+					}
 				}
 				pos := p.fset.Position(fd.Name.Pos())
-				r.failf("FetchAttestation does not call provider.FetchAttestationJSON (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+				r.failf("FetchAttestation does not call provider.FetchAttestationJSON or FetchAttestationWithTLS (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 				return
 			}
 		}

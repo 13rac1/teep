@@ -57,7 +57,7 @@ func testKeyAndCert(t *testing.T) (pemCert, fpHex string, key *ecdsa.PrivateKey,
 	// Compute SPKI fingerprint from the certificate's RawSubjectPublicKeyInfo.
 	// We parse the DER after CreateCertificate to get the exact SPKI bytes
 	// that will be present in the TLS peer certificate, matching the
-	// production fingerprint computation in extractPeerSPKI and
+	// production fingerprint computation in tlsct.PeerSPKI and
 	// verifyEnvelopeSignature.
 	parsedCert, err := x509.ParseCertificate(certDER)
 	if err != nil {

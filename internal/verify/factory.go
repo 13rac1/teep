@@ -71,8 +71,11 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 		return phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	case "chutes":
 		return chutes.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
-	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
+	case "tinfoil_v3_cloud":
 		return tinfoil.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
+	case "tinfoil_v3_direct":
+		resolver := tinfoil.NewDirectResolver(cp.APIKey, offline)
+		return tinfoil.NewDirectAttester(resolver, cp.APIKey, offline), nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", name)
 	}

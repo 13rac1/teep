@@ -95,8 +95,10 @@ func fetchAndVerifyAttestation(ctx context.Context, client *http.Client, baseURL
 	q.Set("nonce", nonce.Hex())
 	u.RawQuery = q.Encode()
 
-	slog.DebugContext(ctx, "tinfoil: fetching attestation", "url", u.String())
-	body, err := provider.FetchAttestationJSON(ctx, client, u.String(), apiKey, maxBodySize)
+	// Log host+path only; the query string carries the client nonce and must
+	// not be written to logs (matches tlsct.WrapLogging nonce-safety policy).
+	slog.DebugContext(ctx, "tinfoil: fetching attestation", "host", u.Host, "path", u.Path)
+	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, client, u.String(), apiKey, maxBodySize)
 	if err != nil {
 		return nil, fmt.Errorf("tinfoil: fetch attestation: %w", err)
 	}
@@ -119,6 +121,20 @@ func fetchAndVerifyAttestation(ctx context.Context, client *http.Client, baseURL
 	// Envelope signature verification.
 	if err := verifyEnvelopeSignature(body, resp); err != nil {
 		return nil, err
+	}
+
+	// TLS channel binding: verify the live TLS peer certificate matches the
+	// attested tls_key_fp. The attested tls_key_fp MUST be present — an
+	// attestation without TLS binding is malformed and must fail closed.
+	if resp.ReportData.TLSKeyFP == "" {
+		return nil, errors.New("tinfoil: attestation report_data is missing tls_key_fp; cannot verify TLS channel binding")
+	}
+	if peerSPKI == "" {
+		return nil, errors.New("tinfoil: TLS channel binding failed: no TLS peer state (plain HTTP is not allowed for attestation endpoints)")
+	}
+	if subtle.ConstantTimeCompare([]byte(peerSPKI), []byte(resp.ReportData.TLSKeyFP)) != 1 {
+		return nil, fmt.Errorf("tinfoil: TLS channel binding failed: live peer SPKI %s != attested tls_key_fp %s",
+			provider.Truncate(peerSPKI, 16), provider.Truncate(resp.ReportData.TLSKeyFP, 16))
 	}
 
 	return raw, nil

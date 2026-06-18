@@ -564,6 +564,21 @@ func (a *Attester) FetchAttestation() {
 	}
 }
 
+func TestCheckFetchUsesBoundedRead_PassWithTLS(t *testing.T) {
+	f, fset := parseGo(t, `package p
+type Attester struct{}
+func (a *Attester) FetchAttestation() {
+	provider.FetchAttestationWithTLS(nil, "")
+}
+`)
+	p := &providerInfo{name: "test", files: []*ast.File{f}, fset: fset}
+	r := newResult()
+	checkFetchUsesBoundedRead(r, p)
+	if r.failed != 0 {
+		t.Errorf("expected pass for FetchAttestationWithTLS, got %d failures", r.failed)
+	}
+}
+
 func TestCheckFetchUsesBoundedRead_Fail_NoCall(t *testing.T) {
 	f, fset := parseGo(t, `package p
 type Attester struct{}

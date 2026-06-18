@@ -1,7 +1,6 @@
 package e2ee
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
@@ -21,8 +20,9 @@ import (
 // Chunk length prefixes larger than this are rejected before allocation.
 const maxChunkSize = 16 * 1024 * 1024
 
-// maxRequestBodySize is the maximum request body size for EHBP encryption (64 MiB).
-const maxRequestBodySize = 64 * 1024 * 1024
+// ehbpChunkSize is the plaintext chunk size for streaming request encryption
+// (8 KiB), matching the Tinfoil reference implementation.
+const ehbpChunkSize = 8192
 
 // maxChunkIdx is the maximum chunk index (2^31 - 1). The overflow check
 // fires at this value to prevent nonce reuse from counter wrap.
@@ -55,31 +55,70 @@ func NewEHBPSession(serverPubKey []byte) (*EHBPSession, error) {
 	}, nil
 }
 
-// EncryptRequest encrypts the request body into EHBP chunk framing.
-// Each chunk: [4-byte big-endian length][AEAD-encrypted data].
+// EncryptRequest returns a streaming reader that encrypts the request body
+// into EHBP chunk framing. Each chunk: [4-byte big-endian length][AEAD ciphertext].
 // The HPKE context's Seal auto-increments the nonce per chunk.
-func (s *EHBPSession) EncryptRequest(body io.Reader) (io.Reader, error) {
-	plaintext, err := io.ReadAll(io.LimitReader(body, maxRequestBodySize+1))
-	if err != nil {
-		return nil, fmt.Errorf("ehbp: read request body: %w", err)
+// Plaintext is read in ehbpChunkSize (8 KiB) chunks to avoid buffering the
+// entire body in memory.
+func (s *EHBPSession) EncryptRequest(body io.Reader) io.Reader {
+	return &ehbpRequestReader{
+		body:   body,
+		sender: s.senderCtx,
 	}
-	if len(plaintext) > maxRequestBodySize {
-		return nil, fmt.Errorf("ehbp: request body exceeds %d bytes", maxRequestBodySize)
+}
+
+// ehbpRequestReader encrypts plaintext from body into EHBP chunked frames.
+type ehbpRequestReader struct {
+	body    io.Reader
+	sender  *hpke.Sender
+	pending []byte // buffered framed ciphertext not yet returned
+	done    bool
+}
+
+func (r *ehbpRequestReader) Read(p []byte) (int, error) {
+	// Drain any buffered data from a previous chunk.
+	if len(r.pending) > 0 {
+		n := copy(p, r.pending)
+		r.pending = r.pending[n:]
+		return n, nil
+	}
+	if r.done {
+		return 0, io.EOF
 	}
 
-	ciphertext, err := s.senderCtx.Seal(nil, plaintext)
-	if err != nil {
-		return nil, fmt.Errorf("ehbp: seal request chunk: %w", err)
+	// Read up to ehbpChunkSize plaintext bytes.
+	plaintext := make([]byte, ehbpChunkSize)
+	n, err := r.body.Read(plaintext)
+	if n == 0 && err != nil {
+		r.done = true
+		if errors.Is(err, io.EOF) {
+			return 0, io.EOF
+		}
+		return 0, fmt.Errorf("ehbp: read request body: %w", err)
+	}
+
+	ciphertext, sealErr := r.sender.Seal(nil, plaintext[:n])
+	if sealErr != nil {
+		r.done = true
+		return 0, fmt.Errorf("ehbp: seal request chunk: %w", sealErr)
 	}
 
 	// Frame: [4-byte big-endian length][ciphertext]
-	var buf bytes.Buffer
-	buf.Grow(4 + len(ciphertext))
-	if err := binary.Write(&buf, binary.BigEndian, uint32(len(ciphertext))); err != nil { //nolint:gosec // bounded by maxRequestBodySize (64 MiB) + AEAD overhead
-		return nil, fmt.Errorf("ehbp: write chunk length: %w", err)
+	frame := make([]byte, 4+len(ciphertext))
+	binary.BigEndian.PutUint32(frame[:4], uint32(len(ciphertext))) //nolint:gosec // bounded by ehbpChunkSize (8 KiB) + AEAD overhead
+	copy(frame[4:], ciphertext)
+
+	copied := copy(p, frame)
+	if copied < len(frame) {
+		r.pending = frame[copied:]
 	}
-	buf.Write(ciphertext)
-	return &buf, nil
+
+	// If the underlying read hit EOF, we're done after this chunk.
+	if errors.Is(err, io.EOF) {
+		r.done = true
+	}
+
+	return copied, nil
 }
 
 // EncapKeyHex returns the lowercase hex-encoded encapsulated key for the

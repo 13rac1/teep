@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -20,7 +21,7 @@ import (
 // ---- EHBP (HPKE X25519 / AES-256-GCM) tests --------------------------------
 
 // serverDecryptRequest is a test helper simulating the server side:
-// it performs HPKE SetupBaseR to decrypt the EHBP request body.
+// it performs HPKE SetupBaseR to decrypt multi-chunk EHBP request body.
 func serverDecryptRequest(t *testing.T, privKey *ecdh.PrivateKey, encapKey []byte, body io.Reader) []byte {
 	t.Helper()
 
@@ -33,22 +34,28 @@ func serverDecryptRequest(t *testing.T, privKey *ecdh.PrivateKey, encapKey []byt
 		t.Fatalf("server NewRecipient: %v", err)
 	}
 
-	// Read chunk: [4-byte length][ciphertext]
-	var lenBuf [4]byte
-	if _, err := io.ReadFull(body, lenBuf[:]); err != nil {
-		t.Fatalf("server read chunk length: %v", err)
+	var result []byte
+	for {
+		var lenBuf [4]byte
+		_, err := io.ReadFull(body, lenBuf[:])
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
+			t.Fatalf("server read chunk length: %v", err)
+		}
+		chunkLen := binary.BigEndian.Uint32(lenBuf[:])
+		ciphertext := make([]byte, chunkLen)
+		if _, err := io.ReadFull(body, ciphertext); err != nil {
+			t.Fatalf("server read chunk ciphertext: %v", err)
+		}
+		plaintext, err := recipient.Open(nil, ciphertext)
+		if err != nil {
+			t.Fatalf("server Open: %v", err)
+		}
+		result = append(result, plaintext...)
 	}
-	chunkLen := binary.BigEndian.Uint32(lenBuf[:])
-	ciphertext := make([]byte, chunkLen)
-	if _, err := io.ReadFull(body, ciphertext); err != nil {
-		t.Fatalf("server read chunk ciphertext: %v", err)
-	}
-
-	plaintext, err := recipient.Open(nil, ciphertext)
-	if err != nil {
-		t.Fatalf("server Open: %v", err)
-	}
-	return plaintext
+	return result
 }
 
 // serverEncryptResponse is a test helper simulating the server side:
@@ -144,10 +151,7 @@ func TestEHBPRoundTrip(t *testing.T) {
 
 	// Encrypt request.
 	requestBody := []byte(`{"model":"test","messages":[{"role":"user","content":"hello"}]}`)
-	encReader, err := session.EncryptRequest(bytes.NewReader(requestBody))
-	if err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
-	}
+	encReader := session.EncryptRequest(bytes.NewReader(requestBody))
 
 	// Decode the encap key from session.
 	encapKey := session.encapKey
@@ -199,8 +203,9 @@ func TestEHBPSingleChunk(t *testing.T) {
 	defer session.Zero()
 
 	// Must call EncryptRequest first to advance the HPKE context.
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	chunk := []byte(`{"result":"ok"}`)
@@ -230,8 +235,9 @@ func TestEHBPMultipleChunks(t *testing.T) {
 	}
 	defer session.Zero()
 
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	chunks := make([][]byte, 100)
@@ -257,6 +263,27 @@ func TestEHBPMultipleChunks(t *testing.T) {
 	}
 }
 
+// TestEHBPMultiChunkRequest verifies request encryption produces multiple
+// chunks for bodies larger than ehbpChunkSize (8 KiB).
+func TestEHBPMultiChunkRequest(t *testing.T) {
+	priv := generateX25519KeyPair(t)
+	session, err := NewEHBPSession(priv.PublicKey().Bytes())
+	if err != nil {
+		t.Fatalf("NewEHBPSession: %v", err)
+	}
+	defer session.Zero()
+
+	// 3x chunk size to produce at least 3 chunks.
+	requestBody := bytes.Repeat([]byte("A"), ehbpChunkSize*3)
+	encReader := session.EncryptRequest(bytes.NewReader(requestBody))
+
+	decrypted := serverDecryptRequest(t, priv, session.encapKey, encReader)
+	if !bytes.Equal(decrypted, requestBody) {
+		t.Fatalf("multi-chunk request: got %d bytes, want %d bytes", len(decrypted), len(requestBody))
+	}
+	t.Logf("multi-chunk request round-trip OK: %d bytes", len(decrypted))
+}
+
 // TestEHBPEmptyBody verifies encrypting an empty request body.
 func TestEHBPEmptyBody(t *testing.T) {
 	priv := generateX25519KeyPair(t)
@@ -266,11 +293,7 @@ func TestEHBPEmptyBody(t *testing.T) {
 	}
 	defer session.Zero()
 
-	encReader, err := session.EncryptRequest(bytes.NewReader(nil))
-	if err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
-	}
-
+	encReader := session.EncryptRequest(bytes.NewReader(nil))
 	decrypted := serverDecryptRequest(t, priv, session.encapKey, encReader)
 	if len(decrypted) != 0 {
 		t.Fatalf("empty body: got %d bytes, want 0", len(decrypted))
@@ -287,8 +310,9 @@ func TestEHBPOversizedChunkRejected(t *testing.T) {
 	}
 	defer session.Zero()
 
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	// Craft a fake response with an oversized length prefix.
@@ -329,8 +353,9 @@ func TestEHBPMissingResponseNonce(t *testing.T) {
 	}
 	defer session.Zero()
 
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	_, err = session.DecryptResponse(bytes.NewReader(nil), "")
@@ -349,8 +374,9 @@ func TestEHBPInvalidResponseNonceHex(t *testing.T) {
 	}
 	defer session.Zero()
 
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	_, err = session.DecryptResponse(bytes.NewReader(nil), "not-hex-at-all!!")
@@ -369,8 +395,9 @@ func TestEHBPWrongSizeResponseNonce(t *testing.T) {
 	}
 	defer session.Zero()
 
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	// 16 bytes instead of 32.
@@ -394,8 +421,9 @@ func TestEHBPCorruptedCiphertext(t *testing.T) {
 	}
 	defer session.Zero()
 
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	// Build a valid response then corrupt the ciphertext.
@@ -432,8 +460,9 @@ func TestEHBPTruncatedChunk(t *testing.T) {
 	}
 	defer session.Zero()
 
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	responseNonce := make([]byte, 32)
@@ -516,8 +545,9 @@ func TestEHBPZeroLengthChunk(t *testing.T) {
 	}
 	defer session.Zero()
 
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	responseNonce := make([]byte, 32)
@@ -613,8 +643,9 @@ func TestEHBPEmptyResponse(t *testing.T) {
 	}
 	defer session.Zero()
 
-	if _, err := session.EncryptRequest(bytes.NewReader([]byte(`{}`))); err != nil {
-		t.Fatalf("EncryptRequest: %v", err)
+	// EncryptRequest is streaming; drain it to advance the HPKE context.
+	if _, err := io.ReadAll(session.EncryptRequest(bytes.NewReader([]byte(`{}`)))); err != nil {
+		t.Fatalf("EncryptRequest drain: %v", err)
 	}
 
 	responseNonce := make([]byte, 32)

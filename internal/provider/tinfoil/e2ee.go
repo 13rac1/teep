@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
@@ -37,17 +36,6 @@ func (t *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ e2
 		return e2ee.EncryptResult{}, fmt.Errorf("tinfoil E2EE: %w", err)
 	}
 
-	encReader, err := session.EncryptRequest(bytes.NewReader(body))
-	if err != nil {
-		session.Zero()
-		return e2ee.EncryptResult{}, fmt.Errorf("tinfoil E2EE: %w", err)
-	}
-
-	encrypted, err := io.ReadAll(encReader)
-	if err != nil {
-		session.Zero()
-		return e2ee.EncryptResult{}, fmt.Errorf("tinfoil E2EE: read encrypted body: %w", err)
-	}
-
-	return e2ee.EncryptResult{Body: encrypted, EHBP: session}, nil
+	reader := session.EncryptRequest(bytes.NewReader(body))
+	return e2ee.EncryptResult{BodyReader: reader, EHBP: session}, nil
 }

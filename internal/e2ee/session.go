@@ -8,6 +8,8 @@
 // Dependency flow: attestation → e2ee → provider → proxy → cmd
 package e2ee
 
+import "io"
+
 // EndpointType identifies the canonical OpenAI-compatible endpoint for field
 // encryption policy routing. These types are independent of provider-specific
 // upstream paths; actual paths are documented at call sites.
@@ -81,11 +83,13 @@ type Decryptor interface {
 
 // EncryptResult carries the outcome of a single EncryptRequest call.
 // Exactly one of Session, Chutes, or EHBP is non-nil for E2EE requests.
+// For EHBP, BodyReader is set instead of Body (streaming encryption).
 type EncryptResult struct {
-	Body    []byte
-	Session Decryptor    // Venice, NearCloud field-level E2EE
-	Chutes  *ChutesE2EE  // Chutes full-body relay state
-	EHBP    *EHBPSession // Tinfoil EHBP full-body state
+	Body       []byte       // field-level E2EE (Venice, NearCloud)
+	BodyReader io.Reader    // EHBP streaming encrypted body
+	Session    Decryptor    // Venice, NearCloud field-level E2EE
+	Chutes     *ChutesE2EE  // Chutes full-body relay state
+	EHBP       *EHBPSession // Tinfoil EHBP full-body state
 }
 
 // ChutesE2EE carries the per-request state for the Chutes E2EE protocol:

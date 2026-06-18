@@ -336,6 +336,7 @@ func respStatusCode(resp *http.Response) int {
 // for the retry loop's MarkFailed calls.
 type upstreamBody struct {
 	Body       []byte
+	BodyReader io.Reader // EHBP streaming encrypted body (used instead of Body when set)
 	Session    e2ee.Decryptor
 	Meta       *e2ee.ChutesE2EE
 	EHBP       *e2ee.EHBPSession
@@ -2375,7 +2376,13 @@ func (s *Server) doUpstreamRoundtrip(
 		var attemptCtx context.Context
 		attemptCtx, cancel = context.WithTimeout(ctx, upstreamTimeout)
 
-		upstreamReq, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, upstreamURL, bytes.NewReader(ub.Body))
+		var reqBody io.Reader
+		if ub.BodyReader != nil {
+			reqBody = ub.BodyReader
+		} else {
+			reqBody = bytes.NewReader(ub.Body)
+		}
+		upstreamReq, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, upstreamURL, reqBody)
 		if reqErr != nil {
 			cancel()
 			zeroE2EE(session, meta, ehbp)
@@ -2583,6 +2590,7 @@ func (s *Server) buildUpstreamBody(
 	}
 	return &upstreamBody{
 		Body:       result.Body,
+		BodyReader: result.BodyReader,
 		Session:    result.Session,
 		Meta:       result.Chutes,
 		EHBP:       result.EHBP,

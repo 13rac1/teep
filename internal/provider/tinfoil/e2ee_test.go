@@ -4,6 +4,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/hex"
+	"io"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -44,12 +45,24 @@ func TestE2EE_EncryptRequest(t *testing.T) {
 	}
 	defer er.EHBP.Zero()
 
-	if len(er.Body) == 0 {
+	if er.BodyReader == nil {
+		t.Fatal("expected non-nil BodyReader for EHBP streaming")
+	}
+	if er.Body != nil {
+		t.Error("expected nil Body when BodyReader is set")
+	}
+
+	// Drain the streaming reader to verify it produces data.
+	encrypted, err := io.ReadAll(er.BodyReader)
+	if err != nil {
+		t.Fatalf("ReadAll BodyReader: %v", err)
+	}
+	if len(encrypted) == 0 {
 		t.Fatal("encrypted body is empty")
 	}
 	// Encrypted body should be longer than plaintext due to AEAD overhead + chunk framing.
-	if len(er.Body) < 10 {
-		t.Errorf("encrypted body too short: %d bytes", len(er.Body))
+	if len(encrypted) < 10 {
+		t.Errorf("encrypted body too short: %d bytes", len(encrypted))
 	}
 
 	// EncapKeyHex should be non-empty.
@@ -57,7 +70,7 @@ func TestE2EE_EncryptRequest(t *testing.T) {
 	if encapKey == "" {
 		t.Error("EncapKeyHex returned empty string")
 	}
-	t.Logf("encrypted body length: %d, encap key: %s", len(er.Body), encapKey)
+	t.Logf("encrypted body length: %d, encap key: %s", len(encrypted), encapKey)
 }
 
 func TestE2EE_EncryptRequest_MissingSigningKey(t *testing.T) {

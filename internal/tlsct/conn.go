@@ -154,6 +154,28 @@ func newConn(tc *tls.Conn) (*Conn, error) {
 // SubjectPublicKeyInfo, computed at connection creation time.
 func (c *Conn) SPKI() string { return c.spki }
 
+// PeerSPKI returns the hex-encoded SHA-256(SPKI DER) of the leaf peer
+// certificate from a tls.ConnectionState, or empty string if TLS state is
+// unavailable or there are no peer certificates.
+//
+// Uses the certificate's already-parsed RawSubjectPublicKeyInfo (the exact DER
+// bytes from the certificate) rather than re-marshaling via
+// x509.MarshalPKIXPublicKey. This avoids a silent error path: a marshal
+// failure would return an empty string, disabling TLS channel binding for
+// callers like the Tinfoil attester. RawSubjectPublicKeyInfo is populated
+// during certificate parsing and cannot fail at this stage.
+//
+// Exported so that providers using standard http.Client (e.g. tinfoil) can
+// extract the peer SPKI from resp.TLS without importing crypto/tls directly.
+func PeerSPKI(state *tls.ConnectionState) string {
+	if state == nil || len(state.PeerCertificates) == 0 {
+		return ""
+	}
+	spkiDER := state.PeerCertificates[0].RawSubjectPublicKeyInfo
+	h := sha256.Sum256(spkiDER)
+	return hex.EncodeToString(h[:])
+}
+
 // TLSState returns the TLS connection state captured at creation time.
 // Callers use this with Checker.CheckTLSState for CT verification.
 // Returns a shallow copy so callers cannot reassign top-level fields;
