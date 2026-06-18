@@ -749,11 +749,16 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // endpoints. The default MaxIdleConnsPerHost (2) is too low for providers
 // that serve multiple models from the same host. In offline mode, CT checks
 // are disabled to avoid external CT log list downloads.
+//
+// AMD KDS (kdsintf.amd.com) only supports TLS 1.2, so a TLS 1.2 fallback
+// transport routes KDS requests to a separate base while everything else
+// uses TLS 1.3 + CT.
 func NewAttestationClient(offline bool) *http.Client {
 	client := tlsct.NewHTTPClientWithTransport(AttestationTimeout, &http.Transport{
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 	}, !offline)
+	client.Transport = tlsct.NewTLS12FallbackTransport(client.Transport, attestation.AMDKDSHost)
 	client.Transport = tlsct.WrapLogging(client.Transport)
 	client.Transport = &RetryTransport{Base: client.Transport}
 	return client

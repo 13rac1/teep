@@ -143,11 +143,14 @@ func TestIntegration_Tinfoil(t *testing.T) {
 		}
 
 		// Live test against actual SEV-SNP hardware with TEE-agnostic
-		// evaluators. SEV-SNP factors should now pass.
+		// evaluators. SEV-SNP factors should now pass including cert chain
+		// and signature (AMD KDS via TLS 1.2 dispatch transport).
 		mustPass := []string{
 			"nonce_match",
 			"tee_quote_present",
 			"tee_quote_structure",
+			"tee_cert_chain",
+			"tee_quote_signature",
 			"tee_debug_disabled",
 			"tee_reportdata_binding",
 			"tee_hardware_config",

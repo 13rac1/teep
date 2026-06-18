@@ -1,0 +1,29 @@
+{
+  "method": "GET",
+  "url": "https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.2",
+  "tls_cipher": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+  "headers": {
+    "Cache-Control": [
+      "no-cache"
+    ],
+    "Content-Disposition": [
+      "attachment; filename=Genoa.pem"
+    ],
+    "Content-Length": [
+      "4602"
+    ],
+    "Content-Type": [
+      "application/octet-stream"
+    ],
+    "Date": [
+      "Thu, 18 Jun 2026 03:25:05 GMT"
+    ],
+    "Pragma": [
+      "no-cache"
+    ]
+  },
+  "duration_ms": 307
+}

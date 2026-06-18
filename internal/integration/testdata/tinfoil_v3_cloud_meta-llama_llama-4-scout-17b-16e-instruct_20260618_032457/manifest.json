@@ -1,0 +1,7 @@
+{
+  "provider": "tinfoil_v3_cloud",
+  "model": "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+  "nonce_hex": "e3e79c41b8c21758ac8da369c51dc5056c07125c5fa271aa6cd54512e7e12536",
+  "captured_at": "2026-06-18T03:24:57.73608Z",
+  "duration_ms": 589
+}

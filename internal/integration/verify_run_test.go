@@ -168,13 +168,14 @@ func TestVerifyRun_Tinfoil_Fixture(t *testing.T) {
 		report.Passed, report.Passed+report.Failed+report.Skipped,
 		report.Passed, report.Failed, report.Skipped)
 
-	// Tinfoil fixture is SEV-SNP; evaluators are now TEE-agnostic.
-	// verify.Run uses online SEV verifier, but the fixture replay transport
-	// won't have AMD KDS responses, so cert_chain/signature will fail or skip.
+	// Tinfoil fixture is SEV-SNP with AMD KDS responses captured.
+	// verify.Run uses online SEV verifier; replay client serves KDS certs.
 	assertMustPass(t, report, []string{
 		"nonce_match",
 		"tee_quote_present",
 		"tee_quote_structure",
+		"tee_cert_chain",
+		"tee_quote_signature",
 		"tee_debug_disabled",
 		"tee_reportdata_binding",
 		"tee_hardware_config",
@@ -185,7 +186,7 @@ func TestVerifyRun_Tinfoil_Fixture(t *testing.T) {
 		"tls_key_binding",
 	})
 
-	if report.Passed < 11 {
-		t.Errorf("expected at least 11 passing factors, got %d", report.Passed)
+	if report.Passed < 13 {
+		t.Errorf("expected at least 13 passing factors, got %d", report.Passed)
 	}
 }

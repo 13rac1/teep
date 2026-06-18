@@ -1,0 +1,29 @@
+{
+  "method": "GET",
+  "url": "https://kdsintf.amd.com/vcek/v1/Genoa/1af1aa6c1f56037a05849a59b8815cf909583f9ba9ef2f053218c437f33ba183e4e415b039b37f8205250ad15f8b88a0a3add9f4c081c0779a48ed2214378e44?blSPL=10\u0026teeSPL=0\u0026snpSPL=23\u0026ucodeSPL=84",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.2",
+  "tls_cipher": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+  "headers": {
+    "Cache-Control": [
+      "no-cache"
+    ],
+    "Content-Disposition": [
+      "attachment; filename=vcek.crt"
+    ],
+    "Content-Length": [
+      "1347"
+    ],
+    "Content-Type": [
+      "application/octet-stream"
+    ],
+    "Date": [
+      "Thu, 18 Jun 2026 03:25:05 GMT"
+    ],
+    "Pragma": [
+      "no-cache"
+    ]
+  },
+  "duration_ms": 92
+}

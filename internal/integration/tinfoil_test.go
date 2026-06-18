@@ -22,12 +22,12 @@ func TestIntegration_Tinfoil_Fixture(t *testing.T) {
 	t.Logf("tee_hardware=%s intel_quote=%d sev_report=%d signing_key=%d",
 		raw.TEEHardware, len(raw.IntelQuote), len(raw.SEVReportBytes), len(raw.SigningKey))
 
-	// SEV-SNP verification: parse the binary report and check structure.
-	sevResult := attestation.VerifySEVReportOffline(ctx, raw.SEVReportBytes)
+	// SEV-SNP verification: online — AMD KDS certs are served from the replay client.
+	sevResult := attestation.VerifySEVReportOnline(ctx, raw.SEVReportBytes, attestation.NewSEVCertGetter(env.client))
 	if sevResult.ParseErr != nil {
 		t.Fatalf("SEV report parse: %v", sevResult.ParseErr)
 	}
-	t.Logf("SEV: debug=%v measurement=%x", sevResult.DebugEnabled, sevResult.Measurement)
+	t.Logf("SEV: debug=%v online=%v measurement=%x", sevResult.DebugEnabled, sevResult.OnlineVerified, sevResult.Measurement)
 
 	// REPORTDATA binding via Tinfoil's verifier.
 	detail, rdErr := tinfoil.ReportDataVerifier{}.VerifyReportData(sevResult.ReportData, raw, env.nonce)
@@ -60,10 +60,14 @@ func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 	t.Helper()
 
 	// Must Pass: SEV-SNP TEE factors + signing key + e2ee + TLS.
+	// tee_cert_chain and tee_quote_signature pass because AMD KDS
+	// cert_chain and VCEK cert are captured in the fixture.
 	assertMustPass(t, report, []string{
 		"nonce_match",
 		"tee_quote_present",
 		"tee_quote_structure",
+		"tee_cert_chain",
+		"tee_quote_signature",
 		"tee_debug_disabled",
 		"tee_reportdata_binding",
 		"tee_hardware_config",
@@ -84,13 +88,10 @@ func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 		assertFactorStatus(t, report, name, attestation.Skip)
 	}
 
-	// Must Fail (enforced Skip→Fail): offline mode can't verify cert
-	// chain/signature, no measurement policy configured.
+	// Must Fail: no measurement policy configured.
 	assertMustFail(t, report, []string{
-		"tee_cert_chain",
-		"tee_quote_signature",
 		"tee_measurement",
-	}, "enforced offline SEV-SNP skips promoted to fail")
+	}, "no measurement policy")
 
 	// Must Fail: no NVIDIA payload.
 	assertMustFail(t, report, []string{
@@ -110,8 +111,8 @@ func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 		"event_log_integrity",
 	}, "no data in SEV-SNP fixture")
 
-	if report.Passed < 11 {
-		t.Errorf("expected at least 11 passing factors, got %d", report.Passed)
+	if report.Passed < 13 {
+		t.Errorf("expected at least 13 passing factors, got %d", report.Passed)
 	}
 	t.Logf("RESULT: %d/%d factors passed", report.Passed, total(report))
 }

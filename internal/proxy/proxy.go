@@ -408,6 +408,7 @@ func New(cfg *config.Config) (*Server, error) {
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 	}, !cfg.Offline)
+	attestClient.Transport = tlsct.NewTLS12FallbackTransport(attestClient.Transport, attestation.AMDKDSHost)
 
 	s := &Server{
 		cfg:             cfg,

@@ -17,6 +17,11 @@ import (
 	"github.com/google/go-sev-guest/verify/trust"
 )
 
+// AMDKDSHost is the hostname for AMD's Key Distribution Service.
+// Used to route KDS requests through a TLS 1.2 fallback transport,
+// since KDS does not support TLS 1.3.
+const AMDKDSHost = "kdsintf.amd.com"
+
 // sevClientHTTPSGetter adapts an *http.Client to the trust.HTTPSGetter
 // interface used by go-sev-guest (which differs from go-tdx-guest's interface).
 type sevClientHTTPSGetter struct{ client *http.Client }
