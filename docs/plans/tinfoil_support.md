@@ -165,24 +165,20 @@ code, teep must follow these endpoint-specific routing mechanics:
 6. `/v1/models` is a bodyless GET and therefore plaintext at the HTTP-body
    layer; this is acceptable because confidentiality is provided by TLS and the
    payload is non-sensitive model metadata.
-7. For `/v1/responses`, router-owned tool activation is driven by
-   `tools[].type` entries of `web_search` and `code_execution`; unknown
-   tool types must be rejected fail-closed at the teep boundary, and duplicate
-   activations are deduplicated.
-8. Requests with `stream=true` should preserve caller stream intent, and
+7. Requests with `stream=true` should preserve caller stream intent, and
    implementations should be prepared for usage metadata fields/chunks in both
    chat and responses streams.
-9. Unknown or unsupported operational paths must fail closed with explicit
+8. Unknown or unsupported operational paths must fail closed with explicit
     error diagnostics; model-routed `/v1/*` inference paths should be forwarded
     after model resolution and attestation checks, then return upstream errors
     transparently when not supported by the selected enclave.
-10. `POST /v1/convert/file` is in scope and must be implemented:
+9. `POST /v1/convert/file` is in scope and must be implemented:
       - request format: multipart with one or more file parts (`files` form key),
          optional mode query parameter in `{text, vision, images, raw, vlm}`
       - model routing: model `doc-upload` required in request; direct resolves
          `doc-upload` enclave domain when available
       - encryption: request/response body use EHBP (non-empty HTTP body)
-11. WebSocket `/v1/realtime` is in scope and must be implemented over
+10. WebSocket `/v1/realtime` is in scope and must be implemented over
       attested TLS (no EHBP):
       - model routing: model subdomain when present, else `?model=<name>` query
       - auth: `Authorization: Bearer <key>`; for browser compatibility also
@@ -247,34 +243,6 @@ Message compatibility:
 Security properties:
 - Confidentiality/integrity comes from attested TLS + SPKI binding.
 - EHBP AEAD response authentication does not apply to websocket frames.
-
-### Tinfoil-Specific Request Options
-
-The Tinfoil router recognizes optional top-level request fields that are not
-standard OpenAI schema. A compatible proxy must handle these deterministically:
-
-1. `code_execution_options`
-2. `web_search_options`
-3. `pii_check_options`
-
-These options are router-control metadata. They must not weaken attestation,
-E2EE, or verification gates.
-
-Compatibility validation behavior:
-1. `code_execution_options` is strict-validated when present.
-   - Must be an object.
-   - Required non-empty string fields: `accessToken`, `encryptionKey`,
-     `containerAuthToken`.
-   - Optional `uploads` must be an array of objects; each entry requires
-     non-empty string fields `fileAccessToken`, `filename`, `sha256`.
-   - Any malformed shape is a fail-closed request error.
-2. `web_search_options` currently behaves as presence-based metadata; router
-   activation can proceed even when no strict schema validation is applied at
-   the edge.
-3. `pii_check_options` is currently presence-based opt-in metadata.
-4. For `/v1/responses`, tool activation may come from either top-level options
-   or `tools[]` entries; implementations should deduplicate activations and
-   reject unknown `tools[].type` values fail-closed.
 
 ## Architecture Comparison with Existing Providers
 
