@@ -119,8 +119,8 @@ The endpoint coverage differs between providers:
 | TTS (text-to-speech) | `/v1/audio/speech` | Yes (EHBP) | Implement | Implement | OpenAI-compatible speech synthesis |
 | Audio endpoints (generic) | `/v1/audio/*` | Yes (EHBP, non-empty body) | Implement | Implement | Treat as model-routed audio APIs; model required |
 | Models list | `/v1/models` | No (bodyless GET) | Implement (router list) | Implement (direct enclave) | Plaintext over attested TLS; used by direct provider for model-to-domain mapping |
-| Realtime (WebSocket) | `/v1/realtime` | No EHBP (WebSocket over attested TLS) | Implement | Implement | Model from subdomain or `?model=` query; browser fallback auth via websocket subprotocol supported |
-| File conversion | `/v1/convert/file` | Yes (EHBP, multipart body) | Implement | Implement | Document/file preprocessing API; multipart upload with conversion mode |
+| Realtime (WebSocket) | `/v1/realtime` | — | — | — | Deferred to `tinfoil_endpoints.md` |
+| File conversion | `/v1/convert/file` | — | — | — | Deferred to `tinfoil_endpoints.md` |
 | Router operational endpoints | `/health`, `/.well-known/tinfoil-proxy`, etc. | No | Reject fail-closed | N/A | Operational/admin surface; explicitly excluded from inference provider APIs |
 
 **Endpoint availability by provider**: `tinfoil_v3_cloud` uses the router which
@@ -134,8 +134,9 @@ propagate upstream path/model errors without local path rewriting).
 
 For compatibility with the full inference API set, the provider should treat
 non-operational `/v1/*` paths as model-routed inference requests whenever a
-model can be resolved and attested (for example `/v1/embeddings`, `/v1/realtime`,
-`/v1/convert/file`, and future OpenAI-compatible `/v1/*` APIs).
+model can be resolved and attested (for example `/v1/embeddings` and future
+OpenAI-compatible `/v1/*` APIs). `/v1/realtime` and `/v1/convert/file` are
+deferred to `tinfoil_endpoints.md`.
 
 Vision models (qwen3-vl-30b, gemma4-31b, kimi-k2-6) use the chat completions
 endpoint with multimodal content arrays — no separate vision endpoint is needed.
@@ -172,20 +173,7 @@ code, teep must follow these endpoint-specific routing mechanics:
     error diagnostics; model-routed `/v1/*` inference paths should be forwarded
     after model resolution and attestation checks, then return upstream errors
     transparently when not supported by the selected enclave.
-9. `POST /v1/convert/file` is in scope and must be implemented:
-      - request format: multipart with one or more file parts (`files` form key),
-         optional mode query parameter in `{text, vision, images, raw, vlm}`
-      - model routing: model `doc-upload` required in request; direct resolves
-         `doc-upload` enclave domain when available
-      - encryption: request/response body use EHBP (non-empty HTTP body)
-10. WebSocket `/v1/realtime` is in scope and must be implemented over
-      attested TLS (no EHBP):
-      - model routing: model subdomain when present, else `?model=<name>` query
-      - auth: `Authorization: Bearer <key>`; for browser compatibility also
-         accept `Sec-WebSocket-Protocol: openai-insecure-api-key.<key>`
-      - attestation: full attestation + SPKI binding must complete before
-         websocket upgrade is accepted.
-12. Vision-capable models are accessed through `/v1/chat/completions`; no
+9. Vision-capable models are accessed through `/v1/chat/completions`; no
     separate vision endpoint is required.
 13. Generic JSON model-routed `/v1/*` requests (for example future
       OpenAI-compatible APIs) should follow this order:
@@ -197,52 +185,7 @@ code, teep must follow these endpoint-specific routing mechanics:
 
 ### Additional API Protocol Formats
 
-#### `/v1/convert/file` (Document/File Conversion)
-
-Request format:
-- Method: `POST`
-- Content-Type: `multipart/form-data`
-- Multipart fields:
-   - `files`: one or more uploaded file parts
-   - `to_format`: set to `md` for markdown extraction compatibility
-- Query parameter: optional `mode` in `{text, vision, images, raw, vlm}`
-- Model routing:
-   - cloud: model `doc-upload` required in request
-   - direct: resolve `doc-upload` enclave domain when available
-
-Response format (successful):
-- JSON object with `document` payload containing:
-   - `md_content` (string)
-   - `pages` (array of page objects)
-      - `page` (number)
-      - `text` (string)
-      - `image` (string; optional depending on mode)
-      - `is_scanned` (boolean)
-
-Encryption/authentication:
-- Request and response bodies are EHBP-protected (non-empty body exchange).
-- Missing/invalid EHBP response nonce is fail-closed.
-
-#### `/v1/realtime` (WebSocket)
-
-Handshake/routing:
-- Transport: WebSocket over attested TLS (no EHBP framing).
-- Model source:
-   - model subdomain if present, else
-   - required query parameter `?model=<name>`.
-- Authentication:
-   - preferred: `Authorization: Bearer <api-key>`
-   - browser compatibility: websocket subprotocol
-      `openai-insecure-api-key.<api-key>` when Authorization cannot be set.
-
-Message compatibility:
-- Proxy should transparently relay OpenAI-compatible realtime event frames.
-- Do not rewrite event payload schemas except for strict security checks
-   (attestation/TLS binding/auth).
-
-Security properties:
-- Confidentiality/integrity comes from attested TLS + SPKI binding.
-- EHBP AEAD response authentication does not apply to websocket frames.
+`/v1/convert/file` and `/v1/realtime` are deferred to `tinfoil_endpoints.md`.
 
 ## Architecture Comparison with Existing Providers
 
@@ -1720,8 +1663,9 @@ Key discovery/source in teep integration:
 
 Compatibility rule: for Tinfoil, apply EHBP behavior consistently across
 `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,
-`/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/convert/file`, and any additional
-non-empty-body `/v1/audio/*` request.
+`/v1/audio/transcriptions`, `/v1/audio/speech`, and any additional
+non-empty-body `/v1/audio/*` request. `/v1/convert/file` is deferred to
+`tinfoil_endpoints.md`.
 
 **Mode rule (mandatory)**:
 - If request body is non-empty: request MUST be EHBP-encrypted, must include
@@ -1734,8 +1678,8 @@ non-empty-body `/v1/audio/*` request.
    endpoint expects a request body, an empty body MUST be rejected fail-closed.
 - Never downgrade an encrypted exchange to plaintext on missing/invalid EHBP
    headers; fail closed.
-- WebSocket `/v1/realtime` is explicitly outside EHBP scope; use websocket
-  transport over attested TLS with SPKI pinning.
+- WebSocket `/v1/realtime` is outside EHBP scope (deferred to
+  `tinfoil_endpoints.md`).
 
 #### HPKE Parameters
 
@@ -1840,11 +1784,7 @@ Response mode detection:
    parsing, and fail closed on any chunk authentication failure.
 4. For bodyless GET `/v1/models`, do not send EHBP headers and do not expect
    EHBP response headers.
-5. For `POST /v1/convert/file`, preserve multipart framing and part headers
-   exactly across EHBP encryption/decryption; do not normalize or re-order
-   multipart parts.
-6. For websocket `/v1/realtime`, do not attach EHBP headers and do not invoke
-   EHBP decryptors.
+5. `/v1/convert/file` and `/v1/realtime` EHBP rules are in `tinfoil_endpoints.md`.
 
 #### Bodyless Requests (GET /v1/models)
 
@@ -2401,8 +2341,7 @@ wiring as a thin layer on top.
    - `tinfoil_v3_direct`: supports `/v1/responses` and `/v1/chat/completions`
      on all inference enclaves; audio/TTS only on enclaves that expose them
      per their `tinfoil-config.yml` `api_routes` configuration.
-    - Both providers: support `/v1/realtime` (attested TLS websocket) and
-       `/v1/convert/file` (EHBP multipart) when target model/domain is available.
+    - `/v1/realtime` and `/v1/convert/file` are deferred to `tinfoil_endpoints.md`.
     - Model is always required. Missing model is a fail-closed request error.
        The proxy must not silently inject default models — doing so makes a
        trust decision (which TEE to connect to) on behalf of the client.
@@ -2452,19 +2391,10 @@ wiring as a thin layer on top.
 4. **Chat Completions (non-streaming and streaming)**
 5. **Responses API (non-streaming and streaming)**
 6. **Embeddings**, **Audio Transcription**, **TTS**, **Models List**, **Vision**
-7. **Realtime WebSocket (`/v1/realtime`)**:
-   - Verify attestation/SPKI before upgrade.
-   - Verify model routing via subdomain or `?model=` query.
-   - Verify browser subprotocol auth compatibility.
-8. **File Conversion (`/v1/convert/file`)**:
-   - Verify multipart file upload behavior and mode query handling.
-   - Verify EHBP body encryption and response authentication.
+7. **Realtime WebSocket and File Conversion**: deferred to `tinfoil_endpoints.md`.
 
-9. **Negative Tests**:
-   - Missing websocket model parameter fails with explicit error.
-   - Invalid websocket auth/subprotocol fails closed.
-   - Unsupported conversion mode fails closed.
-   - Encrypted conversion request missing `Ehbp-Response-Nonce` fails closed.
+8. **Negative Tests**:
+   - (endpoint-specific negative tests deferred to `tinfoil_endpoints.md`)
 
 **Tests for `tinfoil_v3_direct`** (require `TINFOIL_API_KEY`):
 
@@ -2503,23 +2433,16 @@ wiring as a thin layer on top.
    - Test with a model whose inference enclave is directly accessible.
 
 8. **Embeddings** (model `nomic-embed-text.inference.tinfoil.sh`)
-9. **Realtime WebSocket (`/v1/realtime`)**:
-    - Verify direct websocket connection to realtime-capable model enclave
-       with attested TLS/SPKI binding.
-10. **File Conversion (`/v1/convert/file`)**:
-    - Verify direct routing to `doc-upload` model enclave when available.
-    - Verify multipart conversion mode behavior (`text|vision|images|raw|vlm`).
+9. **Realtime WebSocket and File Conversion**: deferred to `tinfoil_endpoints.md`.
 
-11. **Negative Tests**:
+10. **Negative Tests**:
    - Verify that supplying a model with no known direct enclave domain fails
      closed with explicit error.
    - Verify that a mismatched TLS fingerprint on the inference enclave
      triggers re-attestation and fails closed on continued mismatch.
    - Verify `/v1/audio/speech` fails closed when the target inference enclave
      does not expose that path.
-    - Verify `/v1/realtime` fails closed on model/domain mismatch.
-    - Verify `/v1/convert/file` fails closed when doc-upload enclave is
-       unavailable or attestation fails.
+   - (endpoint-specific negative tests deferred to `tinfoil_endpoints.md`)
 
 **Fixture Tests** (offline, no API key, shared):
 - Capture V3 attestation responses from both router and inference enclave
@@ -2550,8 +2473,7 @@ Existing factors reused as-is:
 - `tls_key_binding` — TLS fingerprint matches REPORTDATA[0:32]
 - `e2ee_capable` — HPKE key extracted from attestation (subsumes key binding)
 - `e2ee_usable` — Request encrypted and response authenticated via EHBP for
-   HTTP body-carrying endpoints; websocket `/v1/realtime` uses attested TLS
-   transport and should emit endpoint-scoped `Skip` for EHBP-specific checks
+   HTTP body-carrying endpoints
 
 Existing factors proposed for TEE-generic rename (`tdx_*` → `tee_*`):
 - `tee_quote_present` (was `tdx_quote_present`) — Hardware quote fetched
@@ -2598,8 +2520,7 @@ Normalization rules for this document:
 - Add `tinfoil_v3_cloud` and `tinfoil_v3_direct` to the endpoint support matrix in `api_support.md`.
 - Add Tinfoil E2EE details (EHBP, HPKE, full-body encryption).
 - Document that both Tinfoil providers have **no field-level encryption gaps**
-   for HTTP body-carrying APIs (full-body EHBP), while websocket `/v1/realtime`
-   uses attested TLS transport (no EHBP framing).
+   for HTTP body-carrying APIs (full-body EHBP).
 - Document the HPKE key ownership distinction: `tinfoil_v3_cloud` EHBP key is the router's; `tinfoil_v3_direct` EHBP key is the inference enclave's.
 - Note provider names `tinfoil_v3_cloud` (router) and `tinfoil_v3_direct` (direct).
 
@@ -2626,7 +2547,7 @@ descriptions reflect this distinction at the detail-string level.
 | `intel_pcs_collateral` | `enforced` (TDX only) | Intel collateral valid; N/A for SEV-SNP |
 | `tls_key_binding` | `enforced` | TLS fingerprint matches `report_data.tls_key_fp` (authenticated via REPORTDATA hash) |
 | `e2ee_capable` | `enforced` | HPKE key from `report_data.hpke_key`, authenticated via REPORTDATA hash |
-| `e2ee_usable` | `enforced` for HTTP body endpoints; `skip` for `/v1/realtime` | EHBP request encrypted + response AEAD-authenticated where EHBP applies |
+| `e2ee_usable` | `enforced` for HTTP body endpoints | EHBP request encrypted + response AEAD-authenticated where EHBP applies |
 | `sigstore_code_verified` | `enforced` | Code measurement verified via Sigstore DSSE |
 | `cpu_id_registry` | `allow_fail` (default) | Proof of Cloud CPU identity registration factor (applies to both TDX and SEV-SNP when available) |
 | `measured_model_weights` | `enforced` (transitive) | Model weights attested via dm-verity + Sigstore chain |
@@ -2788,15 +2709,9 @@ New Go module dependencies:
    downgrade: the attester always requests nonce-based attestation and rejects
    any response without a `report_data` structured field.
 
-10. **WebSocket `/v1/realtime` reduced defense-in-depth**: Unlike all other
-   inference endpoints, WebSocket connections have no EHBP body-layer
-   encryption. Under TEE.fail (where TLS private keys can be fabricated),
-   WebSocket traffic is fully exposed with zero defense-in-depth. The plan
-   correctly emits `e2ee_usable: Skip` for this path, but users should
-   understand that `/v1/realtime` relies solely on attested TLS (SPKI
-   pinning) for confidentiality — there is no second encryption layer.
-
-   Applies to: both providers equally.
+10. **WebSocket `/v1/realtime` reduced defense-in-depth**: Deferred to
+   `tinfoil_endpoints.md`. WebSocket has no EHBP body-layer encryption;
+   relies solely on attested TLS.
 
 11. **Independent V3 verification coverage**: Public client libraries may have
    incomplete V3 verification coverage. Teep must maintain independent V3
