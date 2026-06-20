@@ -7,7 +7,7 @@ import (
 )
 
 func TestMeasurementDefaults_KnownProviders(t *testing.T) {
-	providers := []string{"venice", "neardirect", "nearcloud", "nanogpt", "chutes"}
+	providers := []string{"venice", "neardirect", "nearcloud", "nanogpt", "chutes", "tinfoil_v3_cloud", "tinfoil_v3_direct"}
 
 	for _, name := range providers {
 		t.Run(name, func(t *testing.T) {

@@ -213,8 +213,8 @@ var (
 )
 
 // TDXPolicyResult holds the results of Tinfoil-specific TDX policy checks.
-// Currently checked: TDAttributes, XFAM, MRConfigID, MROwner, MROwnerConfig,
-// RTMR3, TeeTCBSVN. MRSeam is informational only (skip, not fatal).
+// Checked: TDAttributes, XFAM, MRConfigID, MROwner, MROwnerConfig,
+// RTMR3, TeeTCBSVN, MRSeam.
 type TDXPolicyResult struct {
 	TDAttributesErr  error
 	XFAMErr          error
@@ -223,7 +223,7 @@ type TDXPolicyResult struct {
 	MROwnerConfigErr error
 	RTMR3Err         error
 	TeeTCBSVNErr     error
-	MRSeamErr        error // informational — for offline mode whitelist
+	MRSeamErr        error
 }
 
 // Err returns a combined error from all checked policy fields, or nil if all pass.
@@ -236,12 +236,14 @@ func (r *TDXPolicyResult) Err() error {
 		r.MROwnerConfigErr,
 		r.RTMR3Err,
 		r.TeeTCBSVNErr,
+		r.MRSeamErr,
 	)
 }
 
 // CheckTDXPolicy performs Tinfoil-specific TDX policy checks on the quote fields.
+// mrSeamAllow is the set of accepted MR_SEAM hex values (Intel TDX module hashes).
 // These checks are only applicable for the TDX platform.
-func CheckTDXPolicy(tdx *attestation.TDXVerifyResult) *TDXPolicyResult {
+func CheckTDXPolicy(tdx *attestation.TDXVerifyResult, mrSeamAllow map[string]struct{}) *TDXPolicyResult {
 	result := &TDXPolicyResult{}
 
 	// TD_ATTRIBUTES must match expected value.
@@ -290,6 +292,16 @@ func CheckTDXPolicy(tdx *attestation.TDXVerifyResult) *TDXPolicyResult {
 	} else if !tcbSVNGTE(tdx.TeeTCBSVN[:16], minTeeTCBSVN[:]) {
 		result.TeeTCBSVNErr = fmt.Errorf("TEE_TCB_SVN %s < minimum %s",
 			hex.EncodeToString(tdx.TeeTCBSVN[:16]), hex.EncodeToString(minTeeTCBSVN[:]))
+	}
+
+	// MR_SEAM must be in the Intel TDX module allowlist.
+	if len(mrSeamAllow) == 0 {
+		result.MRSeamErr = errors.New("no MR_SEAM allowlist configured")
+	} else {
+		mrSeamHex := hex.EncodeToString(tdx.MRSeam)
+		if _, ok := mrSeamAllow[mrSeamHex]; !ok {
+			result.MRSeamErr = fmt.Errorf("MR_SEAM not in allowlist: %s", mrSeamHex)
+		}
 	}
 
 	return result

@@ -1,6 +1,7 @@
 package tinfoil
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -299,6 +300,14 @@ func buildGPUJSON(count int, arch string) []byte {
 	return fmt.Appendf(nil, `{"evidences":%s}`, evBuilder.String())
 }
 
+// testMRSeam is a 48-byte MR_SEAM value used in policy tests.
+var testMRSeam = bytes.Repeat([]byte{0xAA}, 48)
+
+// testMRSeamAllow is an allowlist containing testMRSeam.
+var testMRSeamAllow = map[string]struct{}{
+	hex.EncodeToString(testMRSeam): {},
+}
+
 // validTDXForPolicy builds a TDXVerifyResult that passes all Tinfoil TDX policy checks.
 func validTDXForPolicy() *attestation.TDXVerifyResult {
 	tdAttrs := make([]byte, 8)
@@ -311,6 +320,7 @@ func validTDXForPolicy() *attestation.TDXVerifyResult {
 		MRConfigID:    make([]byte, 48),
 		MROwner:       make([]byte, 48),
 		MROwnerConfig: make([]byte, 48),
+		MRSeam:        append([]byte(nil), testMRSeam...),
 		RTMRs:         [4][48]byte{},
 		TeeTCBSVN: []byte{0x03, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
@@ -319,7 +329,7 @@ func validTDXForPolicy() *attestation.TDXVerifyResult {
 
 func TestCheckTDXPolicy_Valid(t *testing.T) {
 	tdx := validTDXForPolicy()
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if err := result.Err(); err != nil {
 		t.Errorf("unexpected policy error: %v", err)
 	}
@@ -328,7 +338,7 @@ func TestCheckTDXPolicy_Valid(t *testing.T) {
 func TestCheckTDXPolicy_WrongTDAttributes(t *testing.T) {
 	tdx := validTDXForPolicy()
 	binary.LittleEndian.PutUint64(tdx.TDAttributes, 0xFFFF)
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.TDAttributesErr == nil {
 		t.Error("expected TDAttributesErr for wrong TD_ATTRIBUTES")
 	}
@@ -337,7 +347,7 @@ func TestCheckTDXPolicy_WrongTDAttributes(t *testing.T) {
 func TestCheckTDXPolicy_WrongXFAM(t *testing.T) {
 	tdx := validTDXForPolicy()
 	binary.LittleEndian.PutUint64(tdx.XFAM, 0xFFFF)
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.XFAMErr == nil {
 		t.Error("expected XFAMErr for wrong XFAM")
 	}
@@ -346,7 +356,7 @@ func TestCheckTDXPolicy_WrongXFAM(t *testing.T) {
 func TestCheckTDXPolicy_EmptyTDAttributes(t *testing.T) {
 	tdx := validTDXForPolicy()
 	tdx.TDAttributes = nil
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.TDAttributesErr == nil {
 		t.Error("expected TDAttributesErr for empty TD_ATTRIBUTES")
 	}
@@ -355,7 +365,7 @@ func TestCheckTDXPolicy_EmptyTDAttributes(t *testing.T) {
 func TestCheckTDXPolicy_NonZeroMRConfigID(t *testing.T) {
 	tdx := validTDXForPolicy()
 	tdx.MRConfigID[0] = 0xFF
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.MRConfigIDErr == nil {
 		t.Error("expected MRConfigIDErr for non-zero MR_CONFIG_ID")
 	}
@@ -364,7 +374,7 @@ func TestCheckTDXPolicy_NonZeroMRConfigID(t *testing.T) {
 func TestCheckTDXPolicy_NonZeroMROwner(t *testing.T) {
 	tdx := validTDXForPolicy()
 	tdx.MROwner[0] = 0xFF
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.MROwnerErr == nil {
 		t.Error("expected MROwnerErr for non-zero MR_OWNER")
 	}
@@ -373,7 +383,7 @@ func TestCheckTDXPolicy_NonZeroMROwner(t *testing.T) {
 func TestCheckTDXPolicy_NonZeroMROwnerConfig(t *testing.T) {
 	tdx := validTDXForPolicy()
 	tdx.MROwnerConfig[0] = 0xFF
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.MROwnerConfigErr == nil {
 		t.Error("expected MROwnerConfigErr for non-zero MR_OWNER_CONFIG")
 	}
@@ -382,7 +392,7 @@ func TestCheckTDXPolicy_NonZeroMROwnerConfig(t *testing.T) {
 func TestCheckTDXPolicy_NonZeroRTMR3(t *testing.T) {
 	tdx := validTDXForPolicy()
 	tdx.RTMRs[3][0] = 0xFF
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.RTMR3Err == nil {
 		t.Error("expected RTMR3Err for non-zero RTMR3")
 	}
@@ -392,7 +402,7 @@ func TestCheckTDXPolicy_LowTeeTCBSVN(t *testing.T) {
 	tdx := validTDXForPolicy()
 	tdx.TeeTCBSVN = []byte{0x02, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.TeeTCBSVNErr == nil {
 		t.Error("expected TeeTCBSVNErr for low TEE_TCB_SVN")
 	}
@@ -401,7 +411,7 @@ func TestCheckTDXPolicy_LowTeeTCBSVN(t *testing.T) {
 func TestCheckTDXPolicy_EmptyTeeTCBSVN(t *testing.T) {
 	tdx := validTDXForPolicy()
 	tdx.TeeTCBSVN = nil
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.TeeTCBSVNErr == nil {
 		t.Error("expected TeeTCBSVNErr for empty TEE_TCB_SVN")
 	}
@@ -411,9 +421,26 @@ func TestCheckTDXPolicy_HigherTeeTCBSVN(t *testing.T) {
 	tdx := validTDXForPolicy()
 	tdx.TeeTCBSVN = []byte{0x05, 0x02, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	result := CheckTDXPolicy(tdx)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
 	if result.TeeTCBSVNErr != nil {
 		t.Errorf("unexpected TeeTCBSVNErr: %v", result.TeeTCBSVNErr)
+	}
+}
+
+func TestCheckTDXPolicy_MRSeamMismatch(t *testing.T) {
+	tdx := validTDXForPolicy()
+	tdx.MRSeam = bytes.Repeat([]byte{0xBB}, 48)
+	result := CheckTDXPolicy(tdx, testMRSeamAllow)
+	if result.MRSeamErr == nil {
+		t.Error("expected MRSeamErr for MR_SEAM not in allowlist")
+	}
+}
+
+func TestCheckTDXPolicy_EmptyMRSeamAllow(t *testing.T) {
+	tdx := validTDXForPolicy()
+	result := CheckTDXPolicy(tdx, nil)
+	if result.MRSeamErr == nil {
+		t.Error("expected MRSeamErr for empty allowlist")
 	}
 }
 
@@ -425,6 +452,15 @@ func TestTDXPolicyResult_Err(t *testing.T) {
 	result.MRConfigIDErr = errors.New("test error")
 	if result.Err() == nil {
 		t.Error("expected non-nil Err when a field has an error")
+	}
+}
+
+func TestTDXPolicyResult_ErrIncludesMRSeam(t *testing.T) {
+	result := &TDXPolicyResult{
+		MRSeamErr: errors.New("MR_SEAM not in allowlist"),
+	}
+	if result.Err() == nil {
+		t.Error("expected non-nil Err when MRSeamErr is set")
 	}
 }
 

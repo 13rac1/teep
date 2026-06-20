@@ -1152,10 +1152,10 @@ func (s *Server) verifyTinfoilSupplyChain(
 
 	// TDX policy checks.
 	if tdxResult != nil && tdxResult.ParseErr == nil {
-		pol := tinfoil.CheckTDXPolicy(tdxResult)
+		pol := tinfoil.CheckTDXPolicy(tdxResult, prov.MeasurementPolicy.MRSeamAllow)
 		result.TDXPolicyErr = pol.Err()
 		if result.TDXPolicyErr == nil {
-			result.TDXPolicyDetail = "Tinfoil TDX policy: TD_ATTRIBUTES, XFAM, MR registers, RTMR3, TEE_TCB_SVN all pass"
+			result.TDXPolicyDetail = "Tinfoil TDX policy: TD_ATTRIBUTES, XFAM, MR_SEAM, MR registers, RTMR3, TEE_TCB_SVN all pass"
 		} else {
 			result.TDXPolicyDetail = fmt.Sprintf("Tinfoil TDX policy checks failed: %v", result.TDXPolicyErr)
 		}

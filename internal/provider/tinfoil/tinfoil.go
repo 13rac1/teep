@@ -55,7 +55,11 @@ func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.Chut
 }
 
 // DefaultMeasurementPolicy returns the Go-coded default TDX measurement
-// allowlists for Tinfoil. Currently empty (no known-good values yet).
+// allowlists for Tinfoil. MR_SEAM values are the Intel TDX module
+// measurements shared across all TDX providers.
 func DefaultMeasurementPolicy() attestation.MeasurementPolicy {
-	return attestation.MeasurementPolicy{}
+	base := attestation.DstackBaseMeasurementPolicy()
+	return attestation.MeasurementPolicy{
+		MRSeamAllow: base.MRSeamAllow,
+	}
 }
