@@ -117,7 +117,7 @@ The endpoint coverage differs between providers:
 | Embeddings | `/v1/embeddings` | Yes (EHBP) | Implement | Implement | OpenAI embeddings |
 | Audio transcriptions | `/v1/audio/transcriptions` | Yes (EHBP) | Implement | Implement | Multipart form-data encrypted as full body |
 | TTS (text-to-speech) | `/v1/audio/speech` | Yes (EHBP) | Implement | Implement | OpenAI-compatible speech synthesis |
-| Audio endpoints (generic) | `/v1/audio/*` | Yes (EHBP, non-empty body) | Implement | Implement | Treat as model-routed audio APIs; preserve upstream-compatible defaults where model is omitted |
+| Audio endpoints (generic) | `/v1/audio/*` | Yes (EHBP, non-empty body) | Implement | Implement | Treat as model-routed audio APIs; model required |
 | Models list | `/v1/models` | No (bodyless GET) | Implement (router list) | Implement (direct enclave) | Plaintext over attested TLS; used by direct provider for model-to-domain mapping |
 | Realtime (WebSocket) | `/v1/realtime` | No EHBP (WebSocket over attested TLS) | Implement | Implement | Model from subdomain or `?model=` query; browser fallback auth via websocket subprotocol supported |
 | File conversion | `/v1/convert/file` | Yes (EHBP, multipart body) | Implement | Implement | Document/file preprocessing API; multipart upload with conversion mode |
@@ -154,15 +154,14 @@ code, teep must follow these endpoint-specific routing mechanics:
    APIs and must both be routed through attested + EHBP-protected transports.
 2. `/v1/chat/completions` and `/v1/responses` require `model` in the JSON body.
    Missing or non-string model is a fail-closed request error.
-3. `/v1/audio/speech` uses JSON body model routing. If `model` is missing,
-   empty, or non-string, apply compatibility default model `qwen3-tts`.
+3. `/v1/audio/speech` uses JSON body model routing. Missing or non-string
+   model is a fail-closed request error.
 4. Audio upload-style paths (`/v1/audio/transcriptions`) use multipart or
    binary request bodies and must preserve body bytes exactly across EHBP
    encryption/decryption boundaries. (Note: `/v1/audio/speech` uses JSON
    request bodies and is handled separately as a JSON endpoint.)
 5. For multipart audio requests, extract model from multipart field `model`.
-   If missing or empty, apply compatibility default model
-   `voxtral-small-24b`.
+   Missing or empty model is a fail-closed request error.
 6. `/v1/models` is a bodyless GET and therefore plaintext at the HTTP-body
    layer; this is acceptable because confidentiality is provided by TLS and the
    payload is non-sensitive model metadata.
@@ -180,7 +179,7 @@ code, teep must follow these endpoint-specific routing mechanics:
 10. `POST /v1/convert/file` is in scope and must be implemented:
       - request format: multipart with one or more file parts (`files` form key),
          optional mode query parameter in `{text, vision, images, raw, vlm}`
-      - model routing: cloud defaults to `doc-upload`; direct resolves
+      - model routing: model `doc-upload` required in request; direct resolves
          `doc-upload` enclave domain when available
       - encryption: request/response body use EHBP (non-empty HTTP body)
 11. WebSocket `/v1/realtime` is in scope and must be implemented over
@@ -212,8 +211,8 @@ Request format:
    - `to_format`: set to `md` for markdown extraction compatibility
 - Query parameter: optional `mode` in `{text, vision, images, raw, vlm}`
 - Model routing:
-   - cloud: default model `doc-upload` when omitted
-   - direct: resolve `doc-upload` enclave when available
+   - cloud: model `doc-upload` required in request
+   - direct: resolve `doc-upload` enclave domain when available
 
 Response format (successful):
 - JSON object with `document` payload containing:
@@ -2436,10 +2435,9 @@ wiring as a thin layer on top.
      per their `tinfoil-config.yml` `api_routes` configuration.
     - Both providers: support `/v1/realtime` (attested TLS websocket) and
        `/v1/convert/file` (EHBP multipart) when target model/domain is available.
-    - Compatibility defaults:
-       - `/v1/audio/speech` missing model -> `qwen3-tts`
-       - multipart `/v1/audio/*` missing model -> `voxtral-small-24b`
-       - `/v1/convert/file` missing model -> `doc-upload`
+    - Model is always required. Missing model is a fail-closed request error.
+       The proxy must not silently inject default models — doing so makes a
+       trust decision (which TEE to connect to) on behalf of the client.
 
 **Unit tests**:
 - Test provider construction from config for both `tinfoil_v3_cloud` and
