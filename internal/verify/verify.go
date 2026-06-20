@@ -139,6 +139,8 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 	mergedPolicy := config.MergedMeasurementPolicy(opts.ProviderName, cfg, mDefaults)
 	mergedGWPolicy := config.MergedGatewayMeasurementPolicy(opts.ProviderName, cfg, gwDefaults)
 
+	tinfoilSC := verifyTinfoilSupplyChain(ctx, raw, tdxResult, sevResult, opts.ModelName, mergedPolicy, opts.Offline)
+
 	report = attestation.BuildReport(&attestation.ReportInput{
 		Provider:          opts.ProviderName,
 		Model:             opts.ModelName,
@@ -165,6 +167,7 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 		GatewayNonce:      nonce,
 		GatewayCompose:    gatewayCompose,
 		GatewayEventLog:   raw.GatewayEventLog,
+		TinfoilSC:         tinfoilSC,
 		E2EETest:          e2eeResult,
 		Inapplicable:      inapplicableFactors(opts.ProviderName),
 	})

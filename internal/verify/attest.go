@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
 )
 
 // fetchAttestation fetches raw attestation data from the provider with timing log.
@@ -195,4 +198,132 @@ func checkSigstore(ctx context.Context, digests []string, client *http.Client, o
 		}
 	}
 	return sigstoreResults, rekorResults
+}
+
+// verifyTinfoilSupplyChain performs Tinfoil-specific Sigstore supply chain
+// verification and code/hardware measurement comparison. Returns nil for
+// non-Tinfoil providers.
+func verifyTinfoilSupplyChain(
+	ctx context.Context,
+	raw *attestation.RawAttestation,
+	tdxResult *attestation.TDXVerifyResult,
+	sevResult *attestation.SEVVerifyResult,
+	modelName string,
+	policy attestation.MeasurementPolicy,
+	offline bool,
+) *attestation.TinfoilSupplyChainResult {
+	if raw.BackendFormat != attestation.FormatTinfoil {
+		return nil
+	}
+	sigstoreRepo := tinfoil.RepoForModel(modelName)
+	if sigstoreRepo == "" {
+		return nil
+	}
+	slog.Debug("Tinfoil supply chain verification starting", "repo", sigstoreRepo)
+	start := time.Now()
+	result := &attestation.TinfoilSupplyChainResult{}
+
+	// Check GPU hash bound from REPORTDATA verification detail.
+	bindingDetail := ""
+	if tdxResult != nil {
+		bindingDetail = tdxResult.ReportDataBindingDetail
+	} else if sevResult != nil {
+		bindingDetail = sevResult.ReportDataBindingDetail
+	}
+	result.GPUHashBound = strings.Contains(bindingDetail, "gpu_bound=true")
+	result.NVSwitchHashBound = strings.Contains(bindingDetail, "nvswitch_bound=true")
+
+	// TDX policy checks.
+	if tdxResult != nil && tdxResult.ParseErr == nil {
+		pol := tinfoil.CheckTDXPolicy(tdxResult, policy.MRSeamAllow)
+		result.TDXPolicyErr = pol.Err()
+		if result.TDXPolicyErr == nil {
+			result.TDXPolicyDetail = "Tinfoil TDX policy: TD_ATTRIBUTES, XFAM, MR_SEAM, MR registers, RTMR3, TEE_TCB_SVN all pass"
+		} else {
+			result.TDXPolicyDetail = fmt.Sprintf("Tinfoil TDX policy checks failed: %v", result.TDXPolicyErr)
+		}
+	}
+
+	if offline {
+		slog.Debug("Tinfoil supply chain: skipping Sigstore fetch (offline mode)")
+		return result
+	}
+
+	// Sigstore DSSE bundle verification.
+	sv := tinfoil.NewSigstoreVerifier(config.NewAttestationClient(offline))
+	predicateBytes, predicateType, err := sv.FetchAndVerify(ctx, sigstoreRepo)
+	if err != nil {
+		result.SigstoreErr = err
+		slog.WarnContext(ctx, "Tinfoil Sigstore verification failed",
+			"repo", sigstoreRepo, "err", err)
+		return result
+	}
+	result.SigstoreVerified = true
+	result.SigstoreDetail = fmt.Sprintf("Sigstore DSSE verified for %s (predicate: %s)", sigstoreRepo, predicateType)
+
+	// Parse code measurements from the verified predicate.
+	if predicateType != tinfoil.PredicateMultiPlatform {
+		result.CodeMatchErr = fmt.Errorf("unexpected predicate type %q, want %q", predicateType, tinfoil.PredicateMultiPlatform)
+		return result
+	}
+	codeMeasurements, err := tinfoil.ParseMultiPlatformPredicate(predicateBytes)
+	if err != nil {
+		result.CodeMatchErr = fmt.Errorf("parse multi-platform predicate: %w", err)
+		return result
+	}
+
+	// Build enclave measurements and compare.
+	switch {
+	case tdxResult != nil && tdxResult.ParseErr == nil:
+		enclave := tinfoil.EnclaveMeasurementsFromTDX(tdxResult)
+		if err := tinfoil.CompareMultiPlatformTDX(codeMeasurements, enclave); err != nil {
+			result.CodeMatchErr = err
+		} else {
+			result.CodeMatch = true
+			result.CodeMatchDetail = fmt.Sprintf("TDX code measurements match Sigstore predicate (RTMR1=%s..., RTMR2=%s...)",
+				truncTo(codeMeasurements.RTMR1, 16), truncTo(codeMeasurements.RTMR2, 16))
+		}
+
+		// Hardware measurement match (TDX only).
+		hwPredBytes, hwPredType, hwErr := sv.FetchAndVerify(ctx, "tinfoilsh/hardware-measurements")
+		switch {
+		case hwErr != nil:
+			result.HWMatchErr = fmt.Errorf("fetch hardware measurements: %w", hwErr)
+		case hwPredType != tinfoil.PredicateHardwareMeasurements:
+			result.HWMatchErr = fmt.Errorf("unexpected hardware predicate type %q", hwPredType)
+		default:
+			entries, parseErr := tinfoil.ParseHardwareMeasurements(hwPredBytes)
+			if parseErr != nil {
+				result.HWMatchErr = fmt.Errorf("parse hardware measurements: %w", parseErr)
+			} else if matchID, matchErr := tinfoil.MatchHardwareMeasurements(entries, enclave); matchErr != nil {
+				result.HWMatchErr = matchErr
+			} else {
+				result.HWMatch = matchID
+			}
+		}
+
+	case sevResult != nil && sevResult.ParseErr == nil:
+		enclave := tinfoil.EnclaveMeasurementsFromSEV(sevResult)
+		if err := tinfoil.CompareMultiPlatformSEVSNP(codeMeasurements, enclave); err != nil {
+			result.CodeMatchErr = err
+		} else {
+			result.CodeMatch = true
+			result.CodeMatchDetail = fmt.Sprintf("SEV-SNP code measurement matches Sigstore predicate (%s...)",
+				truncTo(codeMeasurements.SNPMeasurement, 16))
+		}
+
+	default:
+		result.CodeMatchErr = errors.New("no parseable TDX or SEV-SNP result for code measurement comparison")
+	}
+
+	slog.Debug("Tinfoil supply chain verification complete", "elapsed", time.Since(start))
+	return result
+}
+
+// truncTo returns the first n characters of s, or s itself if shorter.
+func truncTo(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
