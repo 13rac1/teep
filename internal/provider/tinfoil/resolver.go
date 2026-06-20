@@ -74,6 +74,15 @@ func NewDirectResolver(apiKey string, offline ...bool) *DirectResolver {
 	}
 }
 
+// SetClient replaces the HTTP client used for model discovery. Safe for
+// concurrent use with Resolve/refresh: the client pointer is read under the
+// same mutex that protects the cached mapping.
+func (r *DirectResolver) SetClient(c *http.Client) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.client = c
+}
+
 // Resolve returns the backend domain for the given model. If the cached
 // mapping is stale (older than 5 minutes), it refreshes from the models
 // API first. Returns an error if the model is not found after refresh.

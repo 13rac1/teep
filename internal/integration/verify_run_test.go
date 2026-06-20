@@ -190,3 +190,49 @@ func TestVerifyRun_Tinfoil_Fixture(t *testing.T) {
 		t.Errorf("expected at least 13 passing factors, got %d", report.Passed)
 	}
 }
+
+func TestVerifyRun_TinfoilDirect_Fixture(t *testing.T) {
+	env := loadFixture(t, "tinfoil_v3_direct")
+
+	// Direct mode uses the models API base URL (inference.tinfoil.sh) for
+	// both resolver discovery and as the default BaseURL in config.
+	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, "https://inference.tinfoil.sh")
+
+	report, err := verify.Run(context.Background(), &verify.Options{
+		Config:       cfg,
+		Provider:     cp,
+		ProviderName: env.manifest.Provider,
+		ModelName:    env.manifest.Model,
+		Offline:      false,
+		Client:       env.client,
+		Nonce:        env.nonce,
+	})
+	if err != nil {
+		t.Fatalf("verify.Run: %v", err)
+	}
+	t.Logf("Score: %d/%d (passed=%d failed=%d skipped=%d)",
+		report.Passed, report.Passed+report.Failed+report.Skipped,
+		report.Passed, report.Failed, report.Skipped)
+
+	// Tinfoil direct fixture is SEV-SNP with AMD KDS responses captured.
+	// verify.Run resolves model via /v1/models, fetches per-enclave attestation.
+	assertMustPass(t, report, []string{
+		"nonce_match",
+		"tee_quote_present",
+		"tee_quote_structure",
+		"tee_cert_chain",
+		"tee_quote_signature",
+		"tee_debug_disabled",
+		"tee_reportdata_binding",
+		"tee_hardware_config",
+		"tee_tcb_current",
+		"tee_tcb_not_revoked",
+		"signing_key_present",
+		"e2ee_capable",
+		"tls_key_binding",
+	})
+
+	if report.Passed < 13 {
+		t.Errorf("expected at least 13 passing factors, got %d", report.Passed)
+	}
+}

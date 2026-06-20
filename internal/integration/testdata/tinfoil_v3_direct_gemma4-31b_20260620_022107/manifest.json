@@ -1,0 +1,7 @@
+{
+  "provider": "tinfoil_v3_direct",
+  "model": "gemma4-31b",
+  "nonce_hex": "5f0540f2750483b5a97035ce50a920f82dc438b9bb094fa1512ec787ccb432ad",
+  "captured_at": "2026-06-20T02:21:07.246031Z",
+  "duration_ms": 700
+}

@@ -57,6 +57,62 @@ func TestIntegration_Tinfoil_Fixture(t *testing.T) {
 	assertTinfoilReport(t, report)
 }
 
+func TestIntegration_TinfoilDirect_Fixture(t *testing.T) {
+	ctx := context.Background()
+	env := loadFixture(t, "tinfoil_v3_direct")
+
+	// Direct mode resolves model → per-model domain via the models API,
+	// then fetches attestation from the resolved enclave. Both the resolver
+	// and attester use the replay client.
+	resolver := tinfoil.NewDirectResolver("", true)
+	resolver.SetClient(env.client)
+	attester := tinfoil.NewDirectAttester(resolver, "", true)
+	attester.SetClient(env.client)
+
+	raw, err := attester.FetchAttestation(ctx, env.manifest.Model, env.nonce)
+	if err != nil {
+		t.Fatalf("fetch attestation: %v", err)
+	}
+	t.Logf("tee_hardware=%s intel_quote=%d sev_report=%d signing_key=%d",
+		raw.TEEHardware, len(raw.IntelQuote), len(raw.SEVReportBytes), len(raw.SigningKey))
+
+	// SEV-SNP verification: online — AMD KDS certs are served from the replay client.
+	sevResult := attestation.VerifySEVReportOnline(ctx, raw.SEVReportBytes, attestation.NewSEVCertGetter(env.client))
+	if sevResult.ParseErr != nil {
+		t.Fatalf("SEV report parse: %v", sevResult.ParseErr)
+	}
+	t.Logf("SEV: debug=%v online=%v measurement=%x", sevResult.DebugEnabled, sevResult.OnlineVerified, sevResult.Measurement)
+
+	// REPORTDATA binding via Tinfoil's verifier.
+	detail, rdErr := tinfoil.ReportDataVerifier{}.VerifyReportData(sevResult.ReportData, raw, env.nonce)
+	t.Logf("REPORTDATA: detail=%q err=%v", detail, rdErr)
+	sevResult.ReportDataBindingErr = rdErr
+	sevResult.ReportDataBindingDetail = detail
+
+	// Build report via the full pipeline.
+	modelPolicy, _ := defaults.MeasurementDefaults("tinfoil_v3_direct")
+	report := attestation.BuildReport(&attestation.ReportInput{
+		Provider:       "tinfoil_v3_direct",
+		Model:          env.manifest.Model,
+		Raw:            raw,
+		Nonce:          env.nonce,
+		SEV:            sevResult,
+		Policy:         modelPolicy,
+		AllowFail:      attestation.TinfoilDefaultAllowFail,
+		E2EEConfigured: true,
+		Inapplicable:   tinfoil.InapplicableFactors(),
+	})
+
+	t.Logf("Score: %d/%d (passed=%d failed=%d skipped=%d)", report.Passed, total(report), report.Passed, report.Failed, report.Skipped)
+	for _, f := range report.Factors {
+		t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
+	}
+
+	// Direct and cloud produce identical factor outcomes — same V3 format,
+	// same REPORTDATA binding, same supply chain applicability.
+	assertTinfoilReport(t, report)
+}
+
 func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 	t.Helper()
 

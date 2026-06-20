@@ -69,8 +69,12 @@ func NewDirectAttester(resolver *DirectResolver, apiKey string, offline ...bool)
 	}
 }
 
-// SetClient replaces the HTTP client used for attestation fetches.
-func (a *DirectAttester) SetClient(c *http.Client) { a.client = c }
+// SetClient replaces the HTTP client used for attestation fetches and
+// propagates it to the resolver for model discovery.
+func (a *DirectAttester) SetClient(c *http.Client) {
+	a.client = c
+	a.resolver.SetClient(c)
+}
 
 // FetchAttestation resolves the model to a per-model domain and fetches
 // attestation from that enclave's well-known endpoint.
