@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	sevabi "github.com/google/go-sev-guest/abi"
@@ -481,4 +483,76 @@ func TestNewSEVVerifierOnline(t *testing.T) {
 		t.Error("expected SignatureErr with noop getter, got nil")
 	}
 	t.Logf("CertChainErr: %v", result.CertChainErr)
+}
+
+// ---------------------------------------------------------------------------
+// sevClientHTTPSGetter
+// ---------------------------------------------------------------------------
+
+func TestSEVClientHTTPSGetter_Success(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("cert-data"))
+	}))
+	defer ts.Close()
+
+	g := &sevClientHTTPSGetter{client: ts.Client()}
+	body, err := g.Get(ts.URL)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(body) != "cert-data" {
+		t.Errorf("body = %q, want cert-data", body)
+	}
+}
+
+func TestSEVClientHTTPSGetter_HTTPError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	g := &sevClientHTTPSGetter{client: ts.Client()}
+	_, err := g.Get(ts.URL)
+	if err == nil {
+		t.Fatal("expected error for 404")
+	}
+}
+
+func TestSEVClientHTTPSGetter_GetContext(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ctx-data"))
+	}))
+	defer ts.Close()
+
+	g := &sevClientHTTPSGetter{client: ts.Client()}
+	body, err := g.GetContext(context.Background(), ts.URL)
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+	if string(body) != "ctx-data" {
+		t.Errorf("body = %q, want ctx-data", body)
+	}
+}
+
+func TestSEVClientHTTPSGetter_CanceledContext(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("data"))
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	g := &sevClientHTTPSGetter{client: ts.Client()}
+	_, err := g.GetContext(ctx, ts.URL)
+	if err == nil {
+		t.Fatal("expected error for canceled context")
+	}
+}
+
+func TestNewSEVCertGetter(t *testing.T) {
+	getter := NewSEVCertGetter(http.DefaultClient)
+	if getter == nil {
+		t.Fatal("expected non-nil getter")
+	}
 }

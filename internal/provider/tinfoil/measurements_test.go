@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/13rac1/teep/internal/attestation"
 )
 
 // makeHex48 returns a 96-char hex string (48 bytes) filled with b.
@@ -271,4 +273,80 @@ func TestKnownRepos(t *testing.T) {
 			t.Errorf("repo %q should start with tinfoilsh/", repo)
 		}
 	}
+}
+
+func TestRepoForModel(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		// Known mapping overrides.
+		{"nomic-ai/nomic-embed-text-v1.5", "tinfoilsh/confidential-nomic-embed-text"},
+		{"fixie-ai/ultravox-v0_4-1B-v20250115", "tinfoilsh/confidential-audio-processing"},
+		{"Qwen/Qwen3-VL-30B", "tinfoilsh/confidential-qwen3-vl-30b"},
+		// Convention fallback: take part after /, lowercase.
+		{"meta-llama/Llama-4-Scout", "tinfoilsh/confidential-llama-4-scout"},
+		{"deepseek-ai/DeepSeek-R1-0528", "tinfoilsh/confidential-deepseek-r1-0528"},
+		// No slash — whole string lowercased.
+		{"gemma4-31b", "tinfoilsh/confidential-gemma4-31b"},
+	}
+	for _, tt := range tests {
+		got := RepoForModel(tt.model)
+		if got != tt.want {
+			t.Errorf("RepoForModel(%q) = %q, want %q", tt.model, got, tt.want)
+		}
+	}
+}
+
+func TestEnclaveMeasurementsFromTDX(t *testing.T) {
+	tdx := &attestation.TDXVerifyResult{
+		MRTD: mustDecodeHex(t, makeHex48(0x01)),
+	}
+	// Set RTMRs.
+	copy(tdx.RTMRs[0][:], mustDecodeHex(t, makeHex48(0x10)))
+	copy(tdx.RTMRs[1][:], mustDecodeHex(t, makeHex48(0x11)))
+	copy(tdx.RTMRs[2][:], mustDecodeHex(t, makeHex48(0x12)))
+	copy(tdx.RTMRs[3][:], mustDecodeHex(t, makeHex48(0x13)))
+
+	em := EnclaveMeasurementsFromTDX(tdx)
+	if em.Platform != "tdx" {
+		t.Errorf("Platform = %q, want tdx", em.Platform)
+	}
+	if em.MRTD != makeHex48(0x01) {
+		t.Errorf("MRTD mismatch")
+	}
+	if em.RTMR0 != makeHex48(0x10) {
+		t.Errorf("RTMR0 mismatch")
+	}
+	if em.RTMR1 != makeHex48(0x11) {
+		t.Errorf("RTMR1 mismatch")
+	}
+	if em.RTMR2 != makeHex48(0x12) {
+		t.Errorf("RTMR2 mismatch")
+	}
+	if em.RTMR3 != makeHex48(0x13) {
+		t.Errorf("RTMR3 mismatch")
+	}
+}
+
+func TestEnclaveMeasurementsFromSEV(t *testing.T) {
+	sev := &attestation.SEVVerifyResult{
+		Measurement: mustDecodeHex(t, makeHex48(0xab)),
+	}
+	em := EnclaveMeasurementsFromSEV(sev)
+	if em.Platform != "sev-snp" {
+		t.Errorf("Platform = %q, want sev-snp", em.Platform)
+	}
+	if em.SEVMeasurement != makeHex48(0xab) {
+		t.Errorf("SEVMeasurement mismatch")
+	}
+}
+
+func mustDecodeHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatalf("hex.DecodeString(%q): %v", s[:16]+"...", err)
+	}
+	return b
 }

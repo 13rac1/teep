@@ -294,3 +294,93 @@ func TestVerifyTDXQuoteOnlineNoRace(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// ---------------------------------------------------------------------------
+// NewTDXVerifier
+// ---------------------------------------------------------------------------
+
+func TestNewTDXVerifier_Offline(t *testing.T) {
+	v := NewTDXVerifier(true, nil)
+	if v == nil {
+		t.Fatal("expected non-nil verifier")
+	}
+	// Offline verifier should parse without network.
+	result := v(context.Background(), realTDXQuoteHex())
+	if result.ParseErr != nil {
+		t.Errorf("offline verifier ParseErr: %v", result.ParseErr)
+	}
+}
+
+func TestNewTDXVerifier_Online(t *testing.T) {
+	getter := &noopGetter{}
+	v := NewTDXVerifier(false, getter)
+	if v == nil {
+		t.Fatal("expected non-nil verifier")
+	}
+	result := v(context.Background(), realTDXQuoteHex())
+	if result.ParseErr != nil {
+		t.Errorf("online verifier ParseErr: %v", result.ParseErr)
+	}
+	// noop getter causes collateral failure
+	if result.CollateralErr == nil {
+		t.Error("expected CollateralErr with noop getter")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extractPCKExtensions
+// ---------------------------------------------------------------------------
+
+func TestExtractPCKExtensions_RealQuote(t *testing.T) {
+	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex())
+	if result.ParseErr != nil {
+		t.Fatalf("parse: %v", result.ParseErr)
+	}
+	ppid, fmspc, err := extractPCKExtensions(result.quote)
+	if err != nil {
+		t.Fatalf("extractPCKExtensions: %v", err)
+	}
+	if ppid == "" {
+		t.Error("PPID is empty")
+	}
+	if fmspc == "" {
+		t.Error("FMSPC is empty")
+	}
+	t.Logf("PPID=%s, FMSPC=%s", ppid, fmspc)
+}
+
+func TestExtractPCKExtensions_UnsupportedType(t *testing.T) {
+	_, _, err := extractPCKExtensions("not a quote")
+	if err == nil {
+		t.Fatal("expected error for unsupported type")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// decodeQuoteBytes
+// ---------------------------------------------------------------------------
+
+func TestDecodeQuoteBytes_InvalidHex(t *testing.T) {
+	result := VerifyTDXQuoteOffline(context.Background(), "not-valid-hex!!!")
+	if result.ParseErr == nil {
+		t.Fatal("expected ParseErr for invalid hex")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GPUVerificationNonce
+// ---------------------------------------------------------------------------
+
+func TestGPUVerificationNonce_GPUNonce(t *testing.T) {
+	raw := &RawAttestation{GPUNonce: "gpu-nonce", Nonce: "top-nonce"}
+	if got := raw.GPUVerificationNonce(); got != "gpu-nonce" {
+		t.Errorf("GPUVerificationNonce = %q, want gpu-nonce", got)
+	}
+}
+
+func TestGPUVerificationNonce_FallbackToNonce(t *testing.T) {
+	raw := &RawAttestation{GPUNonce: "", Nonce: "top-nonce"}
+	if got := raw.GPUVerificationNonce(); got != "top-nonce" {
+		t.Errorf("GPUVerificationNonce = %q, want top-nonce", got)
+	}
+}

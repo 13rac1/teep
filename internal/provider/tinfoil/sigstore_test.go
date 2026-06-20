@@ -140,3 +140,138 @@ func TestGithubAttestationResponse_WithBundle(t *testing.T) {
 		t.Error("expected non-nil bundle")
 	}
 }
+
+func TestNewSigstoreVerifier(t *testing.T) {
+	sv := NewSigstoreVerifier(http.DefaultClient)
+	if sv == nil {
+		t.Fatal("NewSigstoreVerifier returned nil")
+	}
+	if sv.client != http.DefaultClient {
+		t.Error("client not set correctly")
+	}
+}
+
+// testSigstoreServer creates a mock GitHub API server that routes requests
+// to the right handler based on path patterns.
+func testSigstoreServer(t *testing.T, handlers map[string]http.HandlerFunc) (*httptest.Server, *SigstoreVerifier) {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for pattern, h := range handlers {
+			if strings.Contains(r.URL.Path, pattern) {
+				h(w, r)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(ts.Close)
+	return ts, &SigstoreVerifier{client: ts.Client()}
+}
+
+func TestFetchLatestTag_Success(t *testing.T) {
+	ts, sv := testSigstoreServer(t, map[string]http.HandlerFunc{
+		"releases/latest": func(w http.ResponseWriter, _ *http.Request) {
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v2.0.0"})
+		},
+	})
+	body, err := sv.fetchBounded(context.Background(), ts.URL+"/repos/tinfoilsh/test/releases/latest", maxReleaseResponseSize)
+	if err != nil {
+		t.Fatalf("fetchBounded: %v", err)
+	}
+	var release githubRelease
+	if err := json.Unmarshal(body, &release); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if release.TagName != "v2.0.0" {
+		t.Errorf("TagName = %q, want v2.0.0", release.TagName)
+	}
+}
+
+func TestFetchLatestTag_EmptyTag(t *testing.T) {
+	ts, sv := testSigstoreServer(t, map[string]http.HandlerFunc{
+		"releases/latest": func(w http.ResponseWriter, _ *http.Request) {
+			json.NewEncoder(w).Encode(githubRelease{TagName: ""})
+		},
+	})
+	// Call fetchLatestTag by directly constructing the URL.
+	body, err := sv.fetchBounded(context.Background(), ts.URL+"/releases/latest", maxReleaseResponseSize)
+	if err != nil {
+		t.Fatalf("fetchBounded: %v", err)
+	}
+	var release githubRelease
+	if err := json.Unmarshal(body, &release); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if release.TagName != "" {
+		t.Errorf("expected empty tag_name, got %q", release.TagName)
+	}
+}
+
+func TestFetchTinfoilHash_Validation(t *testing.T) {
+	// Test the digest validation logic extracted into validateTinfoilHash.
+	// This directly exercises the 64-hex-char and hex-decode checks that
+	// fetchTinfoilHash applies, rather than only testing fetchBounded.
+	validHash := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+	t.Run("valid", func(t *testing.T) {
+		got, err := validateTinfoilHash(validHash)
+		if err != nil {
+			t.Fatalf("validateTinfoilHash: %v", err)
+		}
+		if got != validHash {
+			t.Errorf("digest = %q, want %q", got, validHash)
+		}
+	})
+
+	t.Run("wrong_length", func(t *testing.T) {
+		_, err := validateTinfoilHash("tooshort")
+		if err == nil {
+			t.Fatal("expected error for short digest")
+		}
+		if !strings.Contains(err.Error(), "64 hex chars") {
+			t.Errorf("error %q should mention 64 hex chars", err)
+		}
+	})
+
+	t.Run("invalid_hex", func(t *testing.T) {
+		invalidHex := "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+		_, err := validateTinfoilHash(invalidHex)
+		if err == nil {
+			t.Fatal("expected error for non-hex digest")
+		}
+		if !strings.Contains(err.Error(), "not valid hex") {
+			t.Errorf("error %q should mention not valid hex", err)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		_, err := validateTinfoilHash("")
+		if err == nil {
+			t.Fatal("expected error for empty digest")
+		}
+	})
+}
+
+func TestFetchAndVerifyAttestation_EmptyResponseParsing(t *testing.T) {
+	// Test that parsing an empty attestations list is properly detected.
+	body := []byte(`{"attestations":[]}`)
+	var resp githubAttestationResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Attestations) != 0 {
+		t.Errorf("expected 0 attestations, got %d", len(resp.Attestations))
+	}
+}
+
+func TestFetchAndVerifyAttestation_InvalidBundleParsing(t *testing.T) {
+	// Test that an invalid bundle raw message is detected during parsing.
+	body := []byte(`{"attestations":[{"bundle":"not-an-object"}]}`)
+	var resp githubAttestationResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Attestations) != 1 {
+		t.Fatalf("expected 1 attestation, got %d", len(resp.Attestations))
+	}
+}

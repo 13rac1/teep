@@ -210,3 +210,160 @@ func TestGPUEvidenceToEAT_Empty(t *testing.T) {
 		t.Errorf("expected empty arch for no evidence, got: %s", out)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// verifySPDMEvidence — error branches
+// ---------------------------------------------------------------------------
+
+func TestVerifySPDMEvidence_TooShort(t *testing.T) {
+	err := verifySPDMEvidence(context.Background(), make([]byte, 10), Nonce{}, nil)
+	if err == nil {
+		t.Fatal("expected error for too-short evidence")
+	}
+	if !strings.Contains(err.Error(), "too short") {
+		t.Errorf("error should mention too short: %v", err)
+	}
+}
+
+func TestVerifySPDMEvidence_WrongRequestVersion(t *testing.T) {
+	evidence := make([]byte, spdmGetMeasurementsLen+100)
+	evidence[0] = 0x99 // wrong version
+	err := verifySPDMEvidence(context.Background(), evidence, Nonce{}, nil)
+	if err == nil {
+		t.Fatal("expected error for wrong request version")
+	}
+	if !strings.Contains(err.Error(), "request SPDM version") {
+		t.Errorf("error should mention request SPDM version: %v", err)
+	}
+}
+
+func TestVerifySPDMEvidence_WrongRequestCode(t *testing.T) {
+	evidence := make([]byte, spdmGetMeasurementsLen+100)
+	evidence[0] = spdmVersion11
+	evidence[1] = 0x99 // wrong request code
+	err := verifySPDMEvidence(context.Background(), evidence, Nonce{}, nil)
+	if err == nil {
+		t.Fatal("expected error for wrong request code")
+	}
+	if !strings.Contains(err.Error(), "request code") {
+		t.Errorf("error should mention request code: %v", err)
+	}
+}
+
+func TestVerifySPDMEvidence_NonceMismatch(t *testing.T) {
+	evidence := make([]byte, spdmGetMeasurementsLen+100)
+	evidence[0] = spdmVersion11
+	evidence[1] = spdmGetMeasurements
+	// Nonce at bytes [4:36] is all zeros — won't match a random nonce.
+	nonce := NewNonce()
+	err := verifySPDMEvidence(context.Background(), evidence, nonce, nil)
+	if err == nil {
+		t.Fatal("expected error for nonce mismatch")
+	}
+	if !strings.Contains(err.Error(), "nonce mismatch") {
+		t.Errorf("error should mention nonce mismatch: %v", err)
+	}
+}
+
+func TestVerifySPDMEvidence_WrongResponseVersion(t *testing.T) {
+	nonce := Nonce{}
+	evidence := make([]byte, spdmGetMeasurementsLen+100)
+	evidence[0] = spdmVersion11
+	evidence[1] = spdmGetMeasurements
+	// Set nonce to match (all zeros).
+	// Response starts at offset 37.
+	evidence[spdmGetMeasurementsLen] = 0x99 // wrong response version
+	err := verifySPDMEvidence(context.Background(), evidence, nonce, nil)
+	if err == nil {
+		t.Fatal("expected error for wrong response version")
+	}
+	if !strings.Contains(err.Error(), "response SPDM version") {
+		t.Errorf("error should mention response SPDM version: %v", err)
+	}
+}
+
+func TestVerifySPDMEvidence_WrongResponseCode(t *testing.T) {
+	nonce := Nonce{}
+	evidence := make([]byte, spdmGetMeasurementsLen+100)
+	evidence[0] = spdmVersion11
+	evidence[1] = spdmGetMeasurements
+	evidence[spdmGetMeasurementsLen] = spdmVersion11
+	evidence[spdmGetMeasurementsLen+1] = 0x99 // wrong response code
+	err := verifySPDMEvidence(context.Background(), evidence, nonce, nil)
+	if err == nil {
+		t.Fatal("expected error for wrong response code")
+	}
+	if !strings.Contains(err.Error(), "response code") {
+		t.Errorf("error should mention response code: %v", err)
+	}
+}
+
+func TestVerifySPDMEvidence_ResponseTooShortForNonce(t *testing.T) {
+	nonce := Nonce{}
+	// Need at least spdmGetMeasurementsLen+10 = 47 total bytes to pass
+	// initial length check. Response header is 8 bytes, then measRecordLen=0
+	// means offset=8, and we need offset+32=40 to be > response length.
+	// Response is evidence[37:], so we need response length < 40.
+	// Total: 37 + 20 = 57 > 47 initial check, but response=20 < 40 for nonce.
+	evidence := make([]byte, spdmGetMeasurementsLen+20)
+	evidence[0] = spdmVersion11
+	evidence[1] = spdmGetMeasurements
+	resp := evidence[spdmGetMeasurementsLen:]
+	resp[0] = spdmVersion11
+	resp[1] = spdmMeasurements
+	// measRecordLen = 0 (3 bytes LE at resp[5:8] are zeros)
+	// offset = 8 + 0 = 8, need offset+32 = 40 > 20 bytes of response
+	err := verifySPDMEvidence(context.Background(), evidence, nonce, nil)
+	if err == nil {
+		t.Fatal("expected error for response too short for nonce")
+	}
+	if !strings.Contains(err.Error(), "responder nonce") {
+		t.Errorf("error should mention responder nonce: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseCertChain — error branches
+// ---------------------------------------------------------------------------
+
+func TestParseCertChain_InvalidBase64(t *testing.T) {
+	_, err := parseCertChain("not-valid-base64!!!")
+	if err == nil {
+		t.Fatal("expected error for invalid base64")
+	}
+}
+
+func TestParseCertChain_NoCertificates(t *testing.T) {
+	// Valid base64 that decodes to non-PEM content.
+	_, err := parseCertChain("bm90LXBlbS1kYXRh") // "not-pem-data"
+	if err == nil {
+		t.Fatal("expected error for no certificates")
+	}
+	if !strings.Contains(err.Error(), "no certificates") {
+		t.Errorf("error should mention no certificates: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// VerifyNVIDIAGPUDirect — error branches
+// ---------------------------------------------------------------------------
+
+func TestVerifyNVIDIAGPUDirect_EmptyEvidence(t *testing.T) {
+	result := VerifyNVIDIAGPUDirect(context.Background(), []GPUEvidence{}, NewNonce())
+	if result.SignatureErr == nil {
+		t.Fatal("expected SignatureErr for empty evidence")
+	}
+	if !strings.Contains(result.SignatureErr.Error(), "empty") {
+		t.Errorf("error should mention empty: %v", result.SignatureErr)
+	}
+}
+
+func TestVerifyNVIDIAGPUDirect_BadCertificate(t *testing.T) {
+	evidence := []GPUEvidence{
+		{Arch: "HOPPER", Certificate: "bm90LXBlbS1kYXRh", Evidence: "dGVzdA=="},
+	}
+	result := VerifyNVIDIAGPUDirect(context.Background(), evidence, NewNonce())
+	if result.SignatureErr == nil {
+		t.Fatal("expected SignatureErr for bad certificate")
+	}
+}

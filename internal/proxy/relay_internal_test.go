@@ -1848,3 +1848,179 @@ func TestRewriteModelInBody_Audio_InvalidBoundaryIsBadRequest(t *testing.T) {
 	}
 	t.Logf("invalid boundary error: %v", err)
 }
+
+// ---------------------------------------------------------------------------
+// requestNormalizationError.Unwrap
+// ---------------------------------------------------------------------------
+
+func TestRequestNormalizationError_Unwrap(t *testing.T) {
+	inner := errors.New("bad input")
+	e := requestNormalizationError{statusCode: http.StatusBadRequest, err: inner}
+	if got := e.Unwrap(); got != inner {
+		t.Errorf("Unwrap() = %v, want %v", got, inner)
+	}
+}
+
+func TestRequestNormalizationError_Error(t *testing.T) {
+	inner := errors.New("bad input")
+	e := requestNormalizationError{statusCode: http.StatusBadRequest, err: inner}
+	if e.Error() != "bad input" {
+		t.Errorf("Error() = %q, want %q", e.Error(), "bad input")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// normalizationStatusCode — non-matching error fallthrough
+// ---------------------------------------------------------------------------
+
+func TestNormalizationStatusCode_NonMatchingError(t *testing.T) {
+	code := normalizationStatusCode(errors.New("random error"))
+	if code != http.StatusInternalServerError {
+		t.Errorf("normalizationStatusCode(random) = %d, want %d", code, http.StatusInternalServerError)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// verifyNVIDIA — GPUEvidence with valid nonce
+// ---------------------------------------------------------------------------
+
+func TestVerifyNVIDIA_GPUEvidence_ValidNonce(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{
+		GPUEvidence: []attestation.GPUEvidence{{Certificate: "test-cert", Evidence: "test-ev", Arch: "HOPPER"}},
+		Nonce:       strings.Repeat("ab", 32), // valid 64 hex chars
+	}
+	result, _ := verifyNVIDIA(ctx, raw, attestation.Nonce{}, "test-provider")
+	if result == nil {
+		t.Fatal("expected non-nil result for GPUEvidence with valid nonce")
+	}
+	t.Logf("verifyNVIDIA(GPUEvidence valid nonce): result=%v", result)
+}
+
+// ---------------------------------------------------------------------------
+// verifySEV — ReportDataVerifier paths
+// ---------------------------------------------------------------------------
+
+func TestVerifySEV_WithReportDataVerifier_ErrNoVerifier(t *testing.T) {
+	s := newMinimalServer()
+	s.sevVerifier = func(_ context.Context, _ []byte) *attestation.SEVVerifyResult {
+		return &attestation.SEVVerifyResult{} // ParseErr == nil
+	}
+	prov := &provider.Provider{
+		Name:               "test",
+		ReportDataVerifier: &mockReportDataVerifier{err: fmt.Errorf("%w %q", multi.ErrNoVerifier, "test-format")},
+	}
+	raw := &attestation.RawAttestation{SEVReportBytes: make([]byte, 100)}
+	result, dur := s.verifySEV(context.Background(), raw, attestation.Nonce{}, prov)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	t.Logf("verifySEV(ErrNoVerifier): result.ReportDataBindingErr=%v dur=%v", result.ReportDataBindingErr, dur)
+	if result.ReportDataBindingErr != nil {
+		t.Errorf("ReportDataBindingErr should be nil for ErrNoVerifier, got: %v", result.ReportDataBindingErr)
+	}
+}
+
+func TestVerifySEV_WithReportDataVerifier_OtherError(t *testing.T) {
+	s := newMinimalServer()
+	s.sevVerifier = func(_ context.Context, _ []byte) *attestation.SEVVerifyResult {
+		return &attestation.SEVVerifyResult{} // ParseErr == nil
+	}
+	bindingErr := errors.New("sev reportdata binding mismatch")
+	prov := &provider.Provider{
+		Name:               "test",
+		ReportDataVerifier: &mockReportDataVerifier{err: bindingErr},
+	}
+	raw := &attestation.RawAttestation{SEVReportBytes: make([]byte, 100)}
+	result, _ := s.verifySEV(context.Background(), raw, attestation.Nonce{}, prov)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !errors.Is(result.ReportDataBindingErr, bindingErr) {
+		t.Errorf("ReportDataBindingErr = %v, want %v", result.ReportDataBindingErr, bindingErr)
+	}
+	if result.ReportDataBindingDetail != "mock-detail" {
+		t.Errorf("ReportDataBindingDetail = %q, want %q", result.ReportDataBindingDetail, "mock-detail")
+	}
+}
+
+func TestVerifySEV_WithReportDataVerifier_Success(t *testing.T) {
+	s := newMinimalServer()
+	s.sevVerifier = func(_ context.Context, _ []byte) *attestation.SEVVerifyResult {
+		return &attestation.SEVVerifyResult{} // ParseErr == nil
+	}
+	prov := &provider.Provider{
+		Name:               "test",
+		ReportDataVerifier: &mockReportDataVerifier{err: nil},
+	}
+	raw := &attestation.RawAttestation{SEVReportBytes: make([]byte, 100)}
+	result, _ := s.verifySEV(context.Background(), raw, attestation.Nonce{}, prov)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.ReportDataBindingErr != nil {
+		t.Errorf("ReportDataBindingErr = %v, want nil", result.ReportDataBindingErr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildUpstreamBody — fresh attestation TDX/SEV REPORTDATA verification paths
+// ---------------------------------------------------------------------------
+
+// mockAttesterWithRaw returns a specific RawAttestation.
+type mockAttesterWithRaw struct {
+	raw *attestation.RawAttestation
+	err error
+}
+
+func (m *mockAttesterWithRaw) FetchAttestation(_ context.Context, _ string, _ attestation.Nonce) (*attestation.RawAttestation, error) {
+	return m.raw, m.err
+}
+
+func TestBuildUpstreamBody_FreshAttestation_NoTEEEvidence(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{
+		Name:      "test",
+		Attester:  &mockAttesterWithRaw{raw: &attestation.RawAttestation{SigningKey: "key"}},
+		Encryptor: &mockRequestEncryptor{},
+	}
+	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
+	if err == nil {
+		t.Fatal("expected error for no TEE evidence")
+	}
+	if !strings.Contains(err.Error(), "no TEE evidence") {
+		t.Errorf("error %q should mention no TEE evidence", err.Error())
+	}
+}
+
+func TestBuildUpstreamBody_FreshAttestation_TDXQuoteParseErr(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{
+		Name:      "test",
+		Attester:  &mockAttesterWithRaw{raw: &attestation.RawAttestation{SigningKey: "key", IntelQuote: "invalid-hex"}},
+		Encryptor: &mockRequestEncryptor{},
+	}
+	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
+	if err == nil {
+		t.Fatal("expected error for TDX quote parse failure")
+	}
+	if !strings.Contains(err.Error(), "fresh TDX quote parse failed") {
+		t.Errorf("error %q should mention fresh TDX quote parse", err.Error())
+	}
+}
+
+func TestBuildUpstreamBody_FreshAttestation_SEVReportParseErr(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{
+		Name:      "test",
+		Attester:  &mockAttesterWithRaw{raw: &attestation.RawAttestation{SigningKey: "key", SEVReportBytes: []byte("too-short")}},
+		Encryptor: &mockRequestEncryptor{},
+	}
+	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
+	if err == nil {
+		t.Fatal("expected error for SEV report parse failure")
+	}
+	if !strings.Contains(err.Error(), "fresh SEV-SNP report parse failed") {
+		t.Errorf("error %q should mention fresh SEV-SNP report parse", err.Error())
+	}
+}

@@ -442,3 +442,22 @@ func TestDecryptStreamChunkChutesTooShort(t *testing.T) {
 	}
 	t.Logf("short chunk correctly returned: %v", err)
 }
+
+func TestChutesSession_IsResponseFieldEncrypted(t *testing.T) {
+	session, err := NewChutesSession()
+	if err != nil {
+		t.Fatalf("NewChutesSession: %v", err)
+	}
+	defer session.Zero()
+
+	// Chutes uses full-body encryption — all fields report as encrypted.
+	fields := []string{"content", "tool_calls", "logprobs", "refusal", "any_field"}
+	endpoints := []EndpointType{EndpointChat, EndpointEmbeddings, EndpointImages}
+	for _, field := range fields {
+		for _, ep := range endpoints {
+			if !session.IsResponseFieldEncrypted(field, ep) {
+				t.Errorf("IsResponseFieldEncrypted(%q, %v) = false, want true", field, ep)
+			}
+		}
+	}
+}

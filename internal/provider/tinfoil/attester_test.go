@@ -304,3 +304,98 @@ func TestReplaceSignatureValue_MissingField(t *testing.T) {
 		t.Fatal("expected error when signature field is missing")
 	}
 }
+
+func TestNewPreparer(t *testing.T) {
+	p := NewPreparer("test-key")
+	if p == nil {
+		t.Fatal("NewPreparer returned nil")
+	}
+}
+
+func TestPreparer_PrepareRequest(t *testing.T) {
+	p := NewPreparer("test-key-123")
+	req, _ := http.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", nil)
+	if err := p.PrepareRequest(req, nil, nil, false, ""); err != nil {
+		t.Fatalf("PrepareRequest: %v", err)
+	}
+	got := req.Header.Get("Authorization")
+	want := "Bearer test-key-123"
+	if got != want {
+		t.Errorf("Authorization = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultMeasurementPolicy(t *testing.T) {
+	pol := DefaultMeasurementPolicy()
+	if len(pol.MRSeamAllow) == 0 {
+		t.Error("DefaultMeasurementPolicy should have MRSeamAllow entries")
+	}
+	// Should not have MRTD — Tinfoil uses Sigstore, not MRTD allowlist.
+	if len(pol.MRTDAllow) != 0 {
+		t.Errorf("DefaultMeasurementPolicy should not set MRTDAllow, got %d", len(pol.MRTDAllow))
+	}
+}
+
+func TestInapplicableFactors(t *testing.T) {
+	inapplicable := InapplicableFactors()
+	if len(inapplicable) == 0 {
+		t.Fatal("InapplicableFactors returned empty map")
+	}
+	expected := []string{
+		"nvidia_nonce_client_bound", "nvidia_nras_verified",
+		"compose_binding", "build_transparency_log",
+		"sigstore_verification", "event_log_integrity",
+	}
+	for _, name := range expected {
+		if _, ok := inapplicable[name]; !ok {
+			t.Errorf("InapplicableFactors missing %q", name)
+		}
+	}
+	// sigstore_code_verified should NOT be inapplicable for Tinfoil.
+	if _, ok := inapplicable["sigstore_code_verified"]; ok {
+		t.Error("sigstore_code_verified should be applicable for Tinfoil")
+	}
+}
+
+func TestNewDirectAttester(t *testing.T) {
+	resolver := newTestResolver(t, `{"data":[{"id":"test-model"}]}`)
+	da := NewDirectAttester(resolver, "key")
+	if da == nil {
+		t.Fatal("NewDirectAttester returned nil")
+	}
+}
+
+func TestDirectAttester_SetClient(t *testing.T) {
+	resolver := newTestResolver(t, `{"data":[{"id":"test-model"}]}`)
+	da := NewDirectAttester(resolver, "key")
+	client := &http.Client{}
+	da.SetClient(client)
+	if da.client != client {
+		t.Error("SetClient did not update client")
+	}
+}
+
+func TestDirectAttester_FetchAttestation_ResolveFails(t *testing.T) {
+	// Empty model list — no model to resolve.
+	resolver := newTestResolver(t, `{"data":[]}`)
+	da := NewDirectAttester(resolver, "key")
+	nonce := attestation.NewNonce()
+	_, err := da.FetchAttestation(context.Background(), "nonexistent-model", nonce)
+	if err == nil {
+		t.Fatal("expected error when model cannot be resolved")
+	}
+}
+
+// newTestResolver creates a DirectResolver backed by a TLS test server.
+func newTestResolver(t *testing.T, modelsResponse string) *DirectResolver {
+	t.Helper()
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(modelsResponse))
+	}))
+	t.Cleanup(ts.Close)
+	r := NewDirectResolver("key", true)
+	r.modelsURL = ts.URL + "/v1/models"
+	r.client = ts.Client()
+	return r
+}

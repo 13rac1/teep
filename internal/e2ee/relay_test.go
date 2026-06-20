@@ -3356,3 +3356,380 @@ func TestDecryptSSEChunk_AudioDataPlaintextRejected_FullFieldSession(t *testing.
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// applyDecryptedJSON
+// ---------------------------------------------------------------------------
+
+func TestApplyDecryptedJSON_ValidJSON(t *testing.T) {
+	result := applyDecryptedJSON([]byte(`{"key":"value"}`))
+	if string(result) != `{"key":"value"}` {
+		t.Errorf("valid JSON should pass through, got %s", result)
+	}
+}
+
+func TestApplyDecryptedJSON_InvalidJSON(t *testing.T) {
+	result := applyDecryptedJSON([]byte("hello world"))
+	if string(result) != `"hello world"` {
+		t.Errorf("invalid JSON should be wrapped as string, got %s", result)
+	}
+}
+
+func TestApplyDecryptedJSON_EmptyBytes(t *testing.T) {
+	result := applyDecryptedJSON([]byte(""))
+	if string(result) != `""` {
+		t.Errorf("empty bytes should be wrapped as empty string, got %s", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rawTypeDescription
+// ---------------------------------------------------------------------------
+
+func TestRawTypeDescription(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", "empty"},
+		{"  ", "empty"},
+		{`{}`, "object"},
+		{`"hello"`, "string"},
+		{`null`, "null"},
+		{`???`, "unknown"},
+		{`[1,2]`, "array"},
+		{`true`, "boolean"},
+		{`false`, "boolean"},
+		{`42`, "number"},
+		{`-1`, "number"},
+	}
+	for _, tt := range tests {
+		got := rawTypeDescription(json.RawMessage(tt.input))
+		if got != tt.want {
+			t.Errorf("rawTypeDescription(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// decryptResponseRerankResults — uncovered branches
+// ---------------------------------------------------------------------------
+
+func TestDecryptResponseRerankResults_MissingDocument(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	raw := json.RawMessage(`[{"index":0}]`)
+	_, err := decryptResponseRerankResults(raw, session, EndpointRerank)
+	if err == nil {
+		t.Fatal("expected error for missing document key")
+	}
+}
+
+func TestDecryptResponseRerankResults_NullDocument(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	raw := json.RawMessage(`[{"document":null,"index":0}]`)
+	out, err := decryptResponseRerankResults(raw, session, EndpointRerank)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != nil {
+		t.Fatalf("expected nil (unchanged) for null document, got %s", out)
+	}
+}
+
+func TestDecryptResponseRerankResults_NonObjectDocumentRejected(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+	raw := json.RawMessage(`[{"document":"plain-text"}]`)
+	_, err := decryptResponseRerankResults(raw, session, EndpointRerank)
+	if err == nil {
+		t.Fatal("expected error for non-object document with full-field session")
+	}
+}
+
+func TestDecryptResponseRerankResults_MissingTextKeyRequired(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+	raw := json.RawMessage(`[{"document":{"other":"val"}}]`)
+	_, err := decryptResponseRerankResults(raw, session, EndpointRerank)
+	if err == nil {
+		t.Fatal("expected error for missing text key with full-field session")
+	}
+}
+
+func TestDecryptResponseRerankResults_MissingTextKeyPassthrough(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	raw := json.RawMessage(`[{"document":{"other":"val"}}]`)
+	out, err := decryptResponseRerankResults(raw, session, EndpointRerank)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != nil {
+		t.Fatalf("expected nil (unchanged), got %s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// decryptFunctionCallField — uncovered branches
+// ---------------------------------------------------------------------------
+
+func TestDecryptFunctionCallField_NullPassthrough(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+	fields := map[string]json.RawMessage{"function_call": json.RawMessage("null")}
+	changed, err := decryptFunctionCallField(fields, session, "test", EndpointChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Fatal("expected no change for null function_call")
+	}
+}
+
+func TestDecryptFunctionCallField_StringPassthrough(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+	fields := map[string]json.RawMessage{"function_call": json.RawMessage(`"auto"`)}
+	changed, err := decryptFunctionCallField(fields, session, "test", EndpointChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Fatal("expected no change for string function_call")
+	}
+}
+
+func TestDecryptFunctionCallField_MalformedObject(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+	fields := map[string]json.RawMessage{"function_call": json.RawMessage(`{bad`)}
+	_, err := decryptFunctionCallField(fields, session, "test", EndpointChat)
+	if err == nil {
+		t.Fatal("expected error for malformed function_call JSON")
+	}
+}
+
+func TestDecryptFunctionCallField_EmptyObjectNoChange(t *testing.T) {
+	session := testFullFieldVeniceSession(t)
+	defer session.Zero()
+	fields := map[string]json.RawMessage{"function_call": json.RawMessage(`{}`)}
+	changed, err := decryptFunctionCallField(fields, session, "test", EndpointChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Fatal("expected no change for empty function_call object")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DecryptSSEChunk — parse errors and passthrough paths
+// ---------------------------------------------------------------------------
+
+func TestDecryptSSEChunk_InvalidJSON(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	_, err := DecryptSSEChunk("not json{", session, EndpointChat)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestDecryptSSEChunk_InvalidChoicesArray(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	_, err := DecryptSSEChunk(`{"choices":"not-array"}`, session, EndpointChat)
+	if err == nil {
+		t.Fatal("expected error for non-array choices")
+	}
+}
+
+func TestDecryptSSEChunk_InvalidDelta(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	_, err := DecryptSSEChunk(`{"choices":[{"delta":"not-object"}]}`, session, EndpointChat)
+	if err == nil {
+		t.Fatal("expected error for non-object delta")
+	}
+}
+
+func TestDecryptSSEChunk_PlaintextContent(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	input := `{"choices":[{"delta":{"role":"assistant"}}]}`
+	result, err := DecryptSSEChunk(input, session, EndpointChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// No encrypted fields, should pass through unchanged
+	if result != input {
+		t.Errorf("expected passthrough, got %s", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DecryptNonStreamResponseForEndpoint — dispatch branches
+// ---------------------------------------------------------------------------
+
+func TestDecryptNonStreamResponse_EmptyEndpoint(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	_, err := DecryptNonStreamResponseForEndpoint([]byte(`{}`), session, "")
+	if err == nil {
+		t.Fatal("expected error for empty endpoint")
+	}
+}
+
+func TestDecryptNonStreamResponse_UnsupportedEndpoint(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	_, err := DecryptNonStreamResponseForEndpoint([]byte(`{}`), session, "unknown_endpoint")
+	if err == nil {
+		t.Fatal("expected error for unsupported endpoint")
+	}
+}
+
+func TestDecryptNonStreamResponse_InvalidJSON(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	_, err := DecryptNonStreamResponseForEndpoint([]byte("not json"), session, EndpointChat)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestDecryptNonStreamResponse_ChatNoChoices(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	body := []byte(`{"id":"test"}`)
+	result, err := DecryptNonStreamResponseForEndpoint(body, session, EndpointChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(result) != `{"id":"test"}` {
+		t.Errorf("expected passthrough, got %s", result)
+	}
+}
+
+func TestDecryptNonStreamResponse_AudioPassthrough(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	body := []byte(`{"text":"hello world"}`)
+	result, err := DecryptNonStreamResponseForEndpoint(body, session, EndpointAudio)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(result) != string(body) {
+		t.Errorf("audio endpoint should passthrough, got %s", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// decryptChoiceLogprobs — parse errors
+// ---------------------------------------------------------------------------
+
+func TestDecryptChoiceLogprobs_NullLogprobs(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	choice := map[string]json.RawMessage{"logprobs": json.RawMessage("null")}
+	changed, err := decryptChoiceLogprobs(choice, session, "test", EndpointChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Fatal("expected no change for null logprobs")
+	}
+}
+
+func TestDecryptChoiceLogprobs_MissingLogprobs(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	choice := map[string]json.RawMessage{"index": json.RawMessage("0")}
+	changed, err := decryptChoiceLogprobs(choice, session, "test", EndpointChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Fatal("expected no change for missing logprobs")
+	}
+}
+
+func TestDecryptChoiceLogprobs_NonObject(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	choice := map[string]json.RawMessage{"logprobs": json.RawMessage(`"string"`)}
+	changed, err := decryptChoiceLogprobs(choice, session, "test", EndpointChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Fatal("expected no change for non-object logprobs")
+	}
+}
+
+func TestDecryptChoiceLogprobs_InvalidJSON(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	choice := map[string]json.RawMessage{"logprobs": json.RawMessage(`{bad`)}
+	_, err := decryptChoiceLogprobs(choice, session, "test", EndpointChat)
+	if err == nil {
+		t.Fatal("expected error for invalid logprobs JSON")
+	}
+}
+
+func TestDecryptChoiceLogprobs_NullContentArray(t *testing.T) {
+	session := testVeniceSession(t)
+	defer session.Zero()
+	choice := map[string]json.RawMessage{
+		"logprobs": json.RawMessage(`{"content":null,"refusal":null}`),
+	}
+	changed, err := decryptChoiceLogprobs(choice, session, "test", EndpointChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Fatal("expected no change for null content/refusal arrays")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// collectOriginalStringFields
+// ---------------------------------------------------------------------------
+
+func TestCollectOriginalStringFields(t *testing.T) {
+	delta := map[string]json.RawMessage{
+		"content": json.RawMessage(`"hello"`),
+		"role":    json.RawMessage(`"assistant"`),
+		"model":   json.RawMessage(`"gpt-4"`),
+	}
+	result := collectOriginalStringFields(delta)
+	// "role" is a non-encrypted metadata field, should be excluded
+	if _, ok := result["role"]; ok {
+		t.Error("role should be excluded as non-encrypted field")
+	}
+	if _, ok := result["content"]; !ok {
+		t.Error("content should be included")
+	}
+}
+
+func TestCollectOriginalStringFields_EmptyString(t *testing.T) {
+	delta := map[string]json.RawMessage{
+		"content": json.RawMessage(`""`),
+	}
+	result := collectOriginalStringFields(delta)
+	if _, ok := result["content"]; ok {
+		t.Error("empty string should be excluded")
+	}
+}
+
+func TestCollectOriginalStringFields_NonString(t *testing.T) {
+	delta := map[string]json.RawMessage{
+		"content": json.RawMessage(`123`),
+	}
+	result := collectOriginalStringFields(delta)
+	if _, ok := result["content"]; ok {
+		t.Error("non-string should be excluded")
+	}
+}

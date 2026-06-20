@@ -16,6 +16,26 @@ import (
 func TestNewAttester(t *testing.T) {
 	cp := &config.Provider{BaseURL: "http://localhost", APIKey: "key"}
 
+	t.Run("tinfoil_v3_cloud", func(t *testing.T) {
+		a, err := newAttester("tinfoil_v3_cloud", cp, false)
+		if err != nil {
+			t.Fatalf("newAttester(tinfoil_v3_cloud): %v", err)
+		}
+		if a == nil {
+			t.Error("newAttester(tinfoil_v3_cloud) returned nil")
+		}
+	})
+
+	t.Run("tinfoil_v3_direct", func(t *testing.T) {
+		a, err := newAttester("tinfoil_v3_direct", cp, true) // offline to avoid network
+		if err != nil {
+			t.Fatalf("newAttester(tinfoil_v3_direct): %v", err)
+		}
+		if a == nil {
+			t.Error("newAttester(tinfoil_v3_direct) returned nil")
+		}
+	})
+
 	t.Run("venice", func(t *testing.T) {
 		a, err := newAttester("venice", cp, false)
 		if err != nil {
@@ -99,6 +119,8 @@ func TestNewReportDataVerifier(t *testing.T) {
 		{"nanogpt", false},
 		{"phalacloud", false},
 		{"chutes", false},
+		{"tinfoil_v3_cloud", false},
+		{"tinfoil_v3_direct", false},
 		{"unknown", true},
 	}
 	for _, tc := range tests {
@@ -128,6 +150,8 @@ func TestSupplyChainPolicy(t *testing.T) {
 		{"nanogpt", false},
 		{"phalacloud", true},
 		{"chutes", true},
+		{"tinfoil_v3_cloud", true},
+		{"tinfoil_v3_direct", true},
 		{"unknown", true},
 	}
 	for _, tc := range tests {
@@ -181,11 +205,43 @@ func TestChatPathForProvider(t *testing.T) {
 		{"neardirect", "/v1/chat/completions"},
 		{"nanogpt", "/v1/chat/completions"},
 		{"chutes", "/v1/chat/completions"},
+		{"tinfoil_v3_cloud", "/v1/chat/completions"},
+		{"tinfoil_v3_direct", "/v1/chat/completions"},
 		{"unknown", ""},
 	}
 	for _, tc := range tests {
 		if got := chatPathForProvider(tc.provider); got != tc.want {
 			t.Errorf("chatPathForProvider(%q) = %q, want %q", tc.provider, got, tc.want)
 		}
+	}
+}
+
+func TestInapplicableFactors(t *testing.T) {
+	tests := []struct {
+		provider string
+		// expectedFactor is a factor that should be inapplicable for this provider.
+		expectedFactor string
+	}{
+		{"tinfoil_v3_cloud", "compose_binding"},
+		{"tinfoil_v3_direct", "event_log_integrity"},
+		{"chutes", "compose_binding"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.provider, func(t *testing.T) {
+			inapplicable := inapplicableFactors(tc.provider)
+			if _, ok := inapplicable[tc.expectedFactor]; !ok {
+				t.Errorf("inapplicableFactors(%q) should include %q", tc.provider, tc.expectedFactor)
+			}
+		})
+	}
+
+	// Default providers should return default inapplicable factors.
+	for _, p := range []string{"venice", "neardirect", "nearcloud"} {
+		t.Run(p+"_default", func(t *testing.T) {
+			inapplicable := inapplicableFactors(p)
+			if inapplicable == nil {
+				t.Errorf("inapplicableFactors(%q) should not be nil", p)
+			}
+		})
 	}
 }

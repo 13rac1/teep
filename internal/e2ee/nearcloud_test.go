@@ -1259,3 +1259,671 @@ func TestContentPlaintext(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// EncryptScoreNearCloud
+// ---------------------------------------------------------------------------
+
+func TestEncryptScoreNearCloud(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","text_1":"hello","text_2":"world"}`)
+	enc, session, err := EncryptScoreNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptScoreNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	// Verify that the encrypted body is valid JSON and the model is preserved.
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal encrypted: %v", err)
+	}
+	if _, ok := obj["text_1"]; !ok {
+		t.Error("encrypted body missing text_1 field")
+	}
+	if _, ok := obj["text_2"]; !ok {
+		t.Error("encrypted body missing text_2 field")
+	}
+}
+
+func TestEncryptScoreNearCloud_NoTextField(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m"}`)
+	enc, session, err := EncryptScoreNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptScoreNearCloud: %v", err)
+	}
+	defer session.Zero()
+	// Body should still be valid JSON.
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal encrypted: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EncryptEmbeddingsNearCloud — single string input
+// ---------------------------------------------------------------------------
+
+func TestEncryptEmbeddingsNearCloud_SingleString(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":"hello world"}`)
+	enc, session, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptEmbeddingsNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal encrypted: %v", err)
+	}
+	if _, ok := obj["input"]; !ok {
+		t.Error("encrypted body missing input field")
+	}
+	// The input should now be an encrypted string, not the original.
+	var input string
+	if err := json.Unmarshal(obj["input"], &input); err != nil {
+		t.Fatalf("input not a string: %v", err)
+	}
+	if input == "hello world" {
+		t.Error("input was not encrypted")
+	}
+}
+
+func TestEncryptEmbeddingsNearCloud_NullInput(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":null}`)
+	enc, session, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptEmbeddingsNearCloud(null input): %v", err)
+	}
+	defer session.Zero()
+	// Null input is passed through unchanged.
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if string(obj["input"]) != "null" {
+		t.Errorf("expected null input passthrough, got %s", obj["input"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// encryptMessageFields — reasoning/refusal/audio/function_call sub-fields
+// ---------------------------------------------------------------------------
+
+func testNearCloudSession(t *testing.T) *NearCloudSession {
+	t.Helper()
+	session, err := NewNearCloudSession()
+	if err != nil {
+		t.Fatalf("NewNearCloudSession: %v", err)
+	}
+	t.Cleanup(session.Zero)
+	pubHex, _ := ed25519KeyPairHex(t)
+	if err := session.SetModelKeyEd25519(pubHex); err != nil {
+		t.Fatalf("SetModelKeyEd25519: %v", err)
+	}
+	return session
+}
+
+func TestEncryptMessageFields_ReasoningContent(t *testing.T) {
+	session := testNearCloudSession(t)
+	msg := map[string]json.RawMessage{
+		"role":              json.RawMessage(`"assistant"`),
+		"reasoning_content": json.RawMessage(`"thinking about it"`),
+	}
+	if err := encryptMessageFields(msg, 0, session); err != nil {
+		t.Fatalf("encryptMessageFields: %v", err)
+	}
+	var rc string
+	if err := json.Unmarshal(msg["reasoning_content"], &rc); err != nil {
+		t.Fatalf("unmarshal reasoning_content: %v", err)
+	}
+	if rc == "thinking about it" {
+		t.Error("reasoning_content was not encrypted")
+	}
+}
+
+func TestEncryptMessageFields_Reasoning(t *testing.T) {
+	session := testNearCloudSession(t)
+	msg := map[string]json.RawMessage{
+		"role":      json.RawMessage(`"assistant"`),
+		"reasoning": json.RawMessage(`"step by step"`),
+	}
+	if err := encryptMessageFields(msg, 0, session); err != nil {
+		t.Fatalf("encryptMessageFields: %v", err)
+	}
+	var r string
+	if err := json.Unmarshal(msg["reasoning"], &r); err != nil {
+		t.Fatalf("unmarshal reasoning: %v", err)
+	}
+	if r == "step by step" {
+		t.Error("reasoning was not encrypted")
+	}
+}
+
+func TestEncryptMessageFields_Refusal(t *testing.T) {
+	session := testNearCloudSession(t)
+	msg := map[string]json.RawMessage{
+		"role":    json.RawMessage(`"assistant"`),
+		"refusal": json.RawMessage(`"I cannot help with that"`),
+	}
+	if err := encryptMessageFields(msg, 0, session); err != nil {
+		t.Fatalf("encryptMessageFields: %v", err)
+	}
+	var ref string
+	if err := json.Unmarshal(msg["refusal"], &ref); err != nil {
+		t.Fatalf("unmarshal refusal: %v", err)
+	}
+	if ref == "I cannot help with that" {
+		t.Error("refusal was not encrypted")
+	}
+}
+
+func TestEncryptMessageFields_AudioData(t *testing.T) {
+	session := testNearCloudSession(t)
+	msg := map[string]json.RawMessage{
+		"role":  json.RawMessage(`"user"`),
+		"audio": json.RawMessage(`{"data":"base64audiodata","format":"wav"}`),
+	}
+	if err := encryptMessageFields(msg, 0, session); err != nil {
+		t.Fatalf("encryptMessageFields: %v", err)
+	}
+	var audio map[string]json.RawMessage
+	if err := json.Unmarshal(msg["audio"], &audio); err != nil {
+		t.Fatalf("unmarshal audio: %v", err)
+	}
+	var data string
+	if err := json.Unmarshal(audio["data"], &data); err != nil {
+		t.Fatalf("unmarshal audio data: %v", err)
+	}
+	if data == "base64audiodata" {
+		t.Error("audio data was not encrypted")
+	}
+}
+
+func TestEncryptMessageFields_FunctionCall(t *testing.T) {
+	session := testNearCloudSession(t)
+	msg := map[string]json.RawMessage{
+		"role":          json.RawMessage(`"assistant"`),
+		"function_call": json.RawMessage(`{"name":"get_weather","arguments":"{\"city\":\"SF\"}"}`),
+	}
+	if err := encryptMessageFields(msg, 0, session); err != nil {
+		t.Fatalf("encryptMessageFields: %v", err)
+	}
+	var fc map[string]json.RawMessage
+	if err := json.Unmarshal(msg["function_call"], &fc); err != nil {
+		t.Fatalf("unmarshal function_call: %v", err)
+	}
+	var name string
+	if err := json.Unmarshal(fc["name"], &name); err != nil {
+		t.Fatalf("unmarshal function_call name: %v", err)
+	}
+	if name == "get_weather" {
+		t.Error("function_call name was not encrypted")
+	}
+}
+
+func TestEncryptMessageFields_FunctionCallString(t *testing.T) {
+	session := testNearCloudSession(t)
+	msg := map[string]json.RawMessage{
+		"role":          json.RawMessage(`"user"`),
+		"content":       json.RawMessage(`"hello"`),
+		"function_call": json.RawMessage(`"auto"`),
+	}
+	if err := encryptMessageFields(msg, 0, session); err != nil {
+		t.Fatalf("encryptMessageFields: %v", err)
+	}
+	// String "auto" should be left unchanged.
+	var fc string
+	if err := json.Unmarshal(msg["function_call"], &fc); err != nil {
+		t.Fatalf("unmarshal function_call: %v", err)
+	}
+	if fc != "auto" {
+		t.Errorf("string function_call changed: got %q, want auto", fc)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// encryptTopLevelFields — tool_choice and function_call
+// ---------------------------------------------------------------------------
+
+func TestEncryptTopLevelFields_ToolChoice(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"tool_choice": json.RawMessage(`{"type":"function","function":{"name":"get_weather"}}`),
+	}
+	if err := encryptTopLevelFields(full, session); err != nil {
+		t.Fatalf("encryptTopLevelFields: %v", err)
+	}
+	var tc map[string]json.RawMessage
+	if err := json.Unmarshal(full["tool_choice"], &tc); err != nil {
+		t.Fatalf("unmarshal tool_choice: %v", err)
+	}
+	var fn map[string]json.RawMessage
+	if err := json.Unmarshal(tc["function"], &fn); err != nil {
+		t.Fatalf("unmarshal tool_choice function: %v", err)
+	}
+	var name string
+	if err := json.Unmarshal(fn["name"], &name); err != nil {
+		t.Fatalf("unmarshal function name: %v", err)
+	}
+	if name == "get_weather" {
+		t.Error("tool_choice function name was not encrypted")
+	}
+}
+
+func TestEncryptTopLevelFields_ToolChoiceString(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"tool_choice": json.RawMessage(`"auto"`),
+	}
+	if err := encryptTopLevelFields(full, session); err != nil {
+		t.Fatalf("encryptTopLevelFields: %v", err)
+	}
+	var tc string
+	if err := json.Unmarshal(full["tool_choice"], &tc); err != nil {
+		t.Fatalf("unmarshal tool_choice: %v", err)
+	}
+	if tc != "auto" {
+		t.Errorf("string tool_choice changed: got %q, want auto", tc)
+	}
+}
+
+func TestEncryptTopLevelFields_FunctionCall(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"function_call": json.RawMessage(`{"name":"my_func"}`),
+	}
+	if err := encryptTopLevelFields(full, session); err != nil {
+		t.Fatalf("encryptTopLevelFields: %v", err)
+	}
+	var fc map[string]json.RawMessage
+	if err := json.Unmarshal(full["function_call"], &fc); err != nil {
+		t.Fatalf("unmarshal function_call: %v", err)
+	}
+	var name string
+	if err := json.Unmarshal(fc["name"], &name); err != nil {
+		t.Fatalf("unmarshal function_call name: %v", err)
+	}
+	if name == "my_func" {
+		t.Error("function_call name was not encrypted")
+	}
+}
+
+func TestEncryptTopLevelFields_FunctionCallString(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"function_call": json.RawMessage(`"none"`),
+	}
+	if err := encryptTopLevelFields(full, session); err != nil {
+		t.Fatalf("encryptTopLevelFields: %v", err)
+	}
+	var fc string
+	if err := json.Unmarshal(full["function_call"], &fc); err != nil {
+		t.Fatalf("unmarshal function_call: %v", err)
+	}
+	if fc != "none" {
+		t.Errorf("string function_call changed: got %q, want none", fc)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EncryptChatMessagesNearCloud — stream forcing and content encryption
+// ---------------------------------------------------------------------------
+
+func TestEncryptChatMessagesNearCloud_StreamForcing(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal encrypted: %v", err)
+	}
+	// stream should be forced to true
+	if string(obj["stream"]) != "true" {
+		t.Errorf("stream not set to true: %s", obj["stream"])
+	}
+	// messages should be present and encrypted
+	var msgs []map[string]json.RawMessage
+	if err := json.Unmarshal(obj["messages"], &msgs); err != nil {
+		t.Fatalf("unmarshal messages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	var content string
+	if err := json.Unmarshal(msgs[0]["content"], &content); err != nil {
+		t.Fatalf("unmarshal content: %v", err)
+	}
+	if content == "hello" {
+		t.Error("content was not encrypted")
+	}
+}
+
+func TestEncryptChatMessagesNearCloud_WithTools(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{
+		"model":"m",
+		"messages":[{"role":"user","content":"hi"}],
+		"tools":[{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object"}}}]
+	}`)
+	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// tools should be present
+	if _, ok := obj["tools"]; !ok {
+		t.Fatal("tools field missing from output")
+	}
+}
+
+func TestEncryptChatMessagesNearCloud_WithToolCalls(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{
+		"model":"m",
+		"messages":[{"role":"assistant","tool_calls":[{"id":"tc1","type":"function","function":{"name":"fn","arguments":"{}"}}]}]
+	}`)
+	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var msgs []map[string]json.RawMessage
+	if err := json.Unmarshal(obj["messages"], &msgs); err != nil {
+		t.Fatalf("unmarshal messages: %v", err)
+	}
+	if _, ok := msgs[0]["tool_calls"]; !ok {
+		t.Fatal("tool_calls field missing")
+	}
+}
+
+func TestEncryptChatMessagesNearCloud_NullContent(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	// Null content is standard for tool-call assistant messages.
+	body := []byte(`{"model":"m","messages":[{"role":"assistant","content":null}]}`)
+	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var msgs []map[string]json.RawMessage
+	if err := json.Unmarshal(obj["messages"], &msgs); err != nil {
+		t.Fatalf("unmarshal messages: %v", err)
+	}
+	if string(msgs[0]["content"]) != "null" {
+		t.Errorf("null content should pass through, got %s", msgs[0]["content"])
+	}
+}
+
+func TestEncryptChatMessagesNearCloud_WithName(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi","name":"alice"}]}`)
+	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var msgs []map[string]json.RawMessage
+	if err := json.Unmarshal(obj["messages"], &msgs); err != nil {
+		t.Fatalf("unmarshal messages: %v", err)
+	}
+	var name string
+	if err := json.Unmarshal(msgs[0]["name"], &name); err != nil {
+		t.Fatalf("unmarshal name: %v", err)
+	}
+	if name == "alice" {
+		t.Error("name field was not encrypted")
+	}
+}
+
+func TestEncryptImagePromptNearCloud_NonStringPrompt(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","prompt":123}`)
+	_, _, err := EncryptImagePromptNearCloud(body, pubHex)
+	if err == nil {
+		t.Fatal("expected error for non-string prompt")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EncryptRerankNearCloud
+// ---------------------------------------------------------------------------
+
+func TestEncryptRerankNearCloud_StringDocuments(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","query":"search","documents":["doc1","doc2"]}`)
+	enc, session, err := EncryptRerankNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptRerankNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Query should be encrypted
+	var query string
+	if err := json.Unmarshal(obj["query"], &query); err != nil {
+		t.Fatalf("unmarshal query: %v", err)
+	}
+	if query == "search" {
+		t.Error("query was not encrypted")
+	}
+}
+
+func TestEncryptRerankNearCloud_UnsupportedDocType(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","query":"q","documents":[123]}`)
+	_, _, err := EncryptRerankNearCloud(body, pubHex)
+	if err == nil {
+		t.Fatal("expected error for unsupported document type")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EncryptEmbeddingsNearCloud — array input
+// ---------------------------------------------------------------------------
+
+func TestEncryptEmbeddingsNearCloud_ArrayInput(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":["hello","world"]}`)
+	enc, session, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err != nil {
+		t.Fatalf("EncryptEmbeddingsNearCloud: %v", err)
+	}
+	defer session.Zero()
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(enc, &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var arr []string
+	if err := json.Unmarshal(obj["input"], &arr); err != nil {
+		t.Fatalf("unmarshal input array: %v", err)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(arr))
+	}
+	if arr[0] == "hello" || arr[1] == "world" {
+		t.Error("array elements were not encrypted")
+	}
+}
+
+func TestEncryptEmbeddingsNearCloud_ArrayNonStringElement(t *testing.T) {
+	pubHex, _ := ed25519KeyPairHex(t)
+	body := []byte(`{"model":"m","input":["hello",123]}`)
+	_, _, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	if err == nil {
+		t.Fatal("expected error for non-string array element")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// encryptToolsDefinitions — nested parsing
+// ---------------------------------------------------------------------------
+
+func TestEncryptToolsDefinitions(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"tools": json.RawMessage(`[
+			{"type":"function","function":{"name":"fn1","description":"desc1","parameters":{"type":"object","properties":{}}}},
+			{"type":"function","function":{"name":"fn2","description":"desc2"}}
+		]`),
+	}
+	if err := encryptToolsDefinitions(full, session); err != nil {
+		t.Fatalf("encryptToolsDefinitions: %v", err)
+	}
+	var tools []map[string]json.RawMessage
+	if err := json.Unmarshal(full["tools"], &tools); err != nil {
+		t.Fatalf("unmarshal tools: %v", err)
+	}
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(tools))
+	}
+	// Check first tool function fields were encrypted
+	var fn map[string]json.RawMessage
+	if err := json.Unmarshal(tools[0]["function"], &fn); err != nil {
+		t.Fatalf("unmarshal function: %v", err)
+	}
+	var name string
+	if err := json.Unmarshal(fn["name"], &name); err != nil {
+		t.Fatalf("unmarshal name: %v", err)
+	}
+	if name == "fn1" {
+		t.Error("tool function name was not encrypted")
+	}
+}
+
+func TestEncryptToolsDefinitions_NullTools(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"tools": json.RawMessage("null"),
+	}
+	if err := encryptToolsDefinitions(full, session); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEncryptToolsDefinitions_InvalidToolsJSON(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"tools": json.RawMessage(`not-json`),
+	}
+	if err := encryptToolsDefinitions(full, session); err == nil {
+		t.Fatal("expected error for invalid tools JSON")
+	}
+}
+
+func TestEncryptToolsDefinitions_InvalidFunctionJSON(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"tools": json.RawMessage(`[{"type":"function","function":"not-an-object"}]`),
+	}
+	if err := encryptToolsDefinitions(full, session); err == nil {
+		t.Fatal("expected error for non-object function")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// encryptToolChoiceFunctionName — parse errors
+// ---------------------------------------------------------------------------
+
+func TestEncryptToolChoiceFunctionName_InvalidJSON(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"tool_choice": json.RawMessage(`{bad`),
+	}
+	if err := encryptToolChoiceFunctionName(full, session); err == nil {
+		t.Fatal("expected error for invalid tool_choice JSON")
+	}
+}
+
+func TestEncryptToolChoiceFunctionName_InvalidFunctionJSON(t *testing.T) {
+	session := testNearCloudSession(t)
+	full := map[string]json.RawMessage{
+		"tool_choice": json.RawMessage(`{"type":"function","function":"bad"}`),
+	}
+	if err := encryptToolChoiceFunctionName(full, session); err == nil {
+		t.Fatal("expected error for non-object function in tool_choice")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// encryptParametersField
+// ---------------------------------------------------------------------------
+
+func TestEncryptParametersField_StringParam(t *testing.T) {
+	session := testNearCloudSession(t)
+	fn := map[string]json.RawMessage{
+		"parameters": json.RawMessage(`"stringified-json"`),
+	}
+	if err := encryptParametersField(fn, session); err != nil {
+		t.Fatalf("encryptParametersField: %v", err)
+	}
+	var param string
+	if err := json.Unmarshal(fn["parameters"], &param); err != nil {
+		t.Fatalf("unmarshal parameters: %v", err)
+	}
+	if param == "stringified-json" {
+		t.Error("string parameters was not encrypted")
+	}
+}
+
+func TestEncryptParametersField_ObjectParam(t *testing.T) {
+	session := testNearCloudSession(t)
+	fn := map[string]json.RawMessage{
+		"parameters": json.RawMessage(`{"type":"object"}`),
+	}
+	if err := encryptParametersField(fn, session); err != nil {
+		t.Fatalf("encryptParametersField: %v", err)
+	}
+	var param string
+	if err := json.Unmarshal(fn["parameters"], &param); err != nil {
+		t.Fatalf("unmarshal parameters: %v", err)
+	}
+	if param == `{"type":"object"}` {
+		t.Error("object parameters was not encrypted")
+	}
+}
+
+func TestEncryptParametersField_Null(t *testing.T) {
+	session := testNearCloudSession(t)
+	fn := map[string]json.RawMessage{
+		"parameters": json.RawMessage("null"),
+	}
+	if err := encryptParametersField(fn, session); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(fn["parameters"]) != "null" {
+		t.Error("null parameters should be unchanged")
+	}
+}

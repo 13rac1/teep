@@ -4231,3 +4231,249 @@ func TestE2EEKeyType(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tinfoil supply chain evaluator tests
+// ---------------------------------------------------------------------------
+
+func buildTinfoilInput(sc *TinfoilSupplyChainResult) *ReportInput {
+	nonce := NewNonce()
+	return &ReportInput{
+		Raw: &RawAttestation{
+			Verified:    true,
+			Nonce:       nonce.Hex(),
+			Model:       "test-model",
+			TEEHardware: "amd-sev-snp",
+			SigningKey:  "1d4e65f73eabcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+		Nonce:     nonce,
+		TinfoilSC: sc,
+	}
+}
+
+func TestEvalSigstoreCodeVerified(t *testing.T) {
+	t.Run("nil_tinfoilSC", func(t *testing.T) {
+		in := buildTinfoilInput(nil)
+		assertSingleFactor(t, evalSigstoreCodeVerified(in), Skip)
+	})
+
+	t.Run("sigstore_error", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			SigstoreErr: errors.New("fetch failed"),
+		})
+		f := assertSingleFactor(t, evalSigstoreCodeVerified(in), Fail)
+		if !strings.Contains(f.Detail, "fetch failed") {
+			t.Errorf("detail %q should mention fetch failed", f.Detail)
+		}
+	})
+
+	t.Run("not_verified", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			SigstoreVerified: false,
+		})
+		assertSingleFactor(t, evalSigstoreCodeVerified(in), Fail)
+	})
+
+	t.Run("code_mismatch", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			SigstoreVerified: true,
+			CodeMatchErr:     errors.New("RTMR1 mismatch"),
+		})
+		f := assertSingleFactor(t, evalSigstoreCodeVerified(in), Fail)
+		if !strings.Contains(f.Detail, "RTMR1 mismatch") {
+			t.Errorf("detail %q should mention RTMR1 mismatch", f.Detail)
+		}
+	})
+
+	t.Run("verified_but_no_match", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			SigstoreVerified: true,
+			CodeMatch:        false,
+		})
+		assertSingleFactor(t, evalSigstoreCodeVerified(in), Fail)
+	})
+
+	t.Run("pass", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			SigstoreVerified: true,
+			CodeMatch:        true,
+			SigstoreDetail:   "Sigstore DSSE verified for tinfoilsh/test",
+		})
+		f := assertSingleFactor(t, evalSigstoreCodeVerified(in), Pass)
+		if !strings.Contains(f.Detail, "Sigstore DSSE verified") {
+			t.Errorf("detail %q should mention verification", f.Detail)
+		}
+	})
+
+	t.Run("pass_no_detail", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			SigstoreVerified: true,
+			CodeMatch:        true,
+		})
+		f := assertSingleFactor(t, evalSigstoreCodeVerified(in), Pass)
+		if !strings.Contains(f.Detail, "code measurements match") {
+			t.Errorf("detail %q should have default text", f.Detail)
+		}
+	})
+}
+
+func TestEvalNVSwitchBinding(t *testing.T) {
+	t.Run("nil_tinfoilSC", func(t *testing.T) {
+		in := buildTinfoilInput(nil)
+		assertSingleFactor(t, evalNVSwitchBinding(in), Skip)
+	})
+
+	t.Run("no_gpu_hash", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			GPUHashBound: false,
+		})
+		f := assertSingleFactor(t, evalNVSwitchBinding(in), Skip)
+		if !strings.Contains(f.Detail, "no GPU evidence") {
+			t.Errorf("detail %q should mention no GPU evidence", f.Detail)
+		}
+	})
+
+	t.Run("nvswitch_bound", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			GPUHashBound:      true,
+			NVSwitchHashBound: true,
+		})
+		assertSingleFactor(t, evalNVSwitchBinding(in), Pass)
+	})
+
+	t.Run("gpu_bound_no_nvswitch", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			GPUHashBound:      true,
+			NVSwitchHashBound: false,
+		})
+		f := assertSingleFactor(t, evalNVSwitchBinding(in), Skip)
+		if !strings.Contains(f.Detail, "not expected") {
+			t.Errorf("detail %q should mention not expected", f.Detail)
+		}
+	})
+}
+
+func TestEvalCPUGPUChain_Tinfoil(t *testing.T) {
+	t.Run("gpu_bound", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{GPUHashBound: true})
+		assertSingleFactor(t, evalCPUGPUChain(in), Pass)
+	})
+
+	t.Run("gpu_not_bound", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{GPUHashBound: false})
+		assertSingleFactor(t, evalCPUGPUChain(in), Fail)
+	})
+
+	t.Run("nil_tinfoilSC", func(t *testing.T) {
+		in := buildTinfoilInput(nil)
+		assertSingleFactor(t, evalCPUGPUChain(in), Fail)
+	})
+}
+
+func TestEvalMeasuredModelWeights_Tinfoil(t *testing.T) {
+	t.Run("pass_sigstore_and_code", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			SigstoreVerified: true,
+			CodeMatch:        true,
+		})
+		f := assertSingleFactor(t, evalMeasuredModelWeights(in), Pass)
+		if !strings.Contains(f.Detail, "dm-verity") {
+			t.Errorf("detail %q should mention dm-verity", f.Detail)
+		}
+	})
+
+	t.Run("fail_no_sigstore", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			SigstoreVerified: false,
+		})
+		assertSingleFactor(t, evalMeasuredModelWeights(in), Fail)
+	})
+
+	t.Run("fail_no_code_match", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			SigstoreVerified: true,
+			CodeMatch:        false,
+		})
+		assertSingleFactor(t, evalMeasuredModelWeights(in), Fail)
+	})
+}
+
+func TestEvalTEEMeasurement_Tinfoil(t *testing.T) {
+	t.Run("code_match_pass", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			CodeMatch:       true,
+			CodeMatchDetail: "TDX code measurements match",
+		})
+		f := assertSingleFactor(t, evalTEEMeasurement(in), Pass)
+		if !strings.Contains(f.Detail, "TDX code measurements match") {
+			t.Errorf("detail %q should mention code match", f.Detail)
+		}
+	})
+
+	t.Run("code_match_error", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			CodeMatchErr: errors.New("RTMR2 mismatch"),
+		})
+		f := assertSingleFactor(t, evalTEEMeasurement(in), Fail)
+		if !strings.Contains(f.Detail, "RTMR2 mismatch") {
+			t.Errorf("detail %q should mention RTMR2 mismatch", f.Detail)
+		}
+	})
+}
+
+func TestEvalTEEHardwareConfig_Tinfoil(t *testing.T) {
+	t.Run("tdx_policy_pass", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			TDXPolicyDetail: "Tinfoil TDX policy: all checks pass",
+		})
+		f := assertSingleFactor(t, evalTEEHardwareConfig(in), Pass)
+		if !strings.Contains(f.Detail, "Tinfoil TDX policy") {
+			t.Errorf("detail %q should mention Tinfoil TDX policy", f.Detail)
+		}
+	})
+
+	t.Run("tdx_policy_fail", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			TDXPolicyDetail: "Tinfoil TDX policy: TD_ATTRIBUTES check failed",
+			TDXPolicyErr:    errors.New("TD_ATTRIBUTES mismatch"),
+		})
+		f := assertSingleFactor(t, evalTEEHardwareConfig(in), Fail)
+		if !strings.Contains(f.Detail, "TD_ATTRIBUTES mismatch") {
+			t.Errorf("detail %q should mention TD_ATTRIBUTES mismatch", f.Detail)
+		}
+	})
+}
+
+func TestEvalTEEBootConfig_Tinfoil(t *testing.T) {
+	t.Run("hw_match", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			HWMatch: "entry-001",
+		})
+		// Need a TDX result for the boot config Tinfoil path.
+		in.TDX = &TDXVerifyResult{}
+		f := assertSingleFactor(t, evalTEEBootConfig(in), Pass)
+		if !strings.Contains(f.Detail, "entry-001") {
+			t.Errorf("detail %q should mention entry-001", f.Detail)
+		}
+	})
+
+	t.Run("hw_match_error", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			HWMatchErr: errors.New("no matching MRTD"),
+		})
+		in.TDX = &TDXVerifyResult{}
+		f := assertSingleFactor(t, evalTEEBootConfig(in), Fail)
+		if !strings.Contains(f.Detail, "no matching MRTD") {
+			t.Errorf("detail %q should mention no matching MRTD", f.Detail)
+		}
+	})
+
+	t.Run("sev_skip", func(t *testing.T) {
+		in := buildTinfoilInput(nil)
+		in.SEV = &SEVVerifyResult{}
+		f := assertSingleFactor(t, evalTEEBootConfig(in), Skip)
+		if !strings.Contains(f.Detail, "SEV-SNP") {
+			t.Errorf("detail %q should mention SEV-SNP", f.Detail)
+		}
+	})
+}

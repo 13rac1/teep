@@ -131,3 +131,23 @@ func TestSek8sMRSEAMAllow(t *testing.T) {
 		t.Errorf("expected 2 chutes-specific MRSEAM entries, got %d", extra)
 	}
 }
+
+func TestInapplicableFactors(t *testing.T) {
+	factors := InapplicableFactors()
+	if factors == nil {
+		t.Fatal("expected non-nil factors")
+	}
+	expected := []string{
+		"compose_binding",
+		"build_transparency_log",
+		"sigstore_verification",
+		"event_log_integrity",
+		"sigstore_code_verified",
+		"nvswitch_binding",
+	}
+	for _, key := range expected {
+		if _, ok := factors[key]; !ok {
+			t.Errorf("missing factor %q", key)
+		}
+	}
+}

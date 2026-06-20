@@ -498,3 +498,194 @@ func TestIsAllZeros(t *testing.T) {
 		t.Error("non-zero byte should not be all zeros")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// buildReportDataPreimage — hex decode error paths
+// ---------------------------------------------------------------------------
+
+func TestBuildReportDataPreimage_InvalidTLSKeyFP(t *testing.T) {
+	raw := &attestation.RawAttestation{TinfoilTLSKeyFP: "ZZZZ"}
+	_, err := buildReportDataPreimage(raw)
+	if err == nil {
+		t.Fatal("expected error for invalid TLS key fp hex")
+	}
+}
+
+func TestBuildReportDataPreimage_InvalidHPKEKey(t *testing.T) {
+	raw := &attestation.RawAttestation{
+		TinfoilTLSKeyFP: makeHex32(0x01),
+		TinfoilHPKEKey:  "ZZZZ",
+	}
+	_, err := buildReportDataPreimage(raw)
+	if err == nil {
+		t.Fatal("expected error for invalid HPKE key hex")
+	}
+}
+
+func TestBuildReportDataPreimage_InvalidNonce(t *testing.T) {
+	raw := &attestation.RawAttestation{
+		TinfoilTLSKeyFP: makeHex32(0x01),
+		TinfoilHPKEKey:  makeHex32(0x02),
+		TinfoilNonce:    "ZZZZ",
+	}
+	_, err := buildReportDataPreimage(raw)
+	if err == nil {
+		t.Fatal("expected error for invalid nonce hex")
+	}
+}
+
+func TestBuildReportDataPreimage_InvalidGPUHash(t *testing.T) {
+	raw := &attestation.RawAttestation{
+		TinfoilTLSKeyFP:        makeHex32(0x01),
+		TinfoilHPKEKey:         makeHex32(0x02),
+		TinfoilNonce:           makeHex32(0x03),
+		TinfoilGPUEvidenceHash: "not-hex",
+	}
+	_, err := buildReportDataPreimage(raw)
+	if err == nil {
+		t.Fatal("expected error for invalid GPU evidence hash hex")
+	}
+}
+
+func TestBuildReportDataPreimage_InvalidNVSwitchHash(t *testing.T) {
+	raw := &attestation.RawAttestation{
+		TinfoilTLSKeyFP:             makeHex32(0x01),
+		TinfoilHPKEKey:              makeHex32(0x02),
+		TinfoilNonce:                makeHex32(0x03),
+		TinfoilNVSwitchEvidenceHash: "not-hex",
+	}
+	_, err := buildReportDataPreimage(raw)
+	if err == nil {
+		t.Fatal("expected error for invalid NVSwitch evidence hash hex")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// verifyNVSwitchEvidenceHash — all error branches
+// ---------------------------------------------------------------------------
+
+func TestVerifyNVSwitchEvidenceHash_EmptyJSON(t *testing.T) {
+	raw := &attestation.RawAttestation{NVSwitchRawJSON: nil}
+	err := verifyNVSwitchEvidenceHash(raw)
+	if err == nil {
+		t.Fatal("expected error for empty NVSwitch JSON")
+	}
+	if !strings.Contains(err.Error(), "nvswitch field is empty") {
+		t.Errorf("error %q should mention nvswitch field is empty", err)
+	}
+}
+
+func TestVerifyNVSwitchEvidenceHash_EmptyHash(t *testing.T) {
+	raw := &attestation.RawAttestation{
+		NVSwitchRawJSON:             []byte(`{"data":"test"}`),
+		TinfoilNVSwitchEvidenceHash: "",
+	}
+	err := verifyNVSwitchEvidenceHash(raw)
+	if err == nil {
+		t.Fatal("expected error for empty NVSwitch evidence hash")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error %q should mention empty", err)
+	}
+}
+
+func TestVerifyNVSwitchEvidenceHash_Mismatch(t *testing.T) {
+	raw := &attestation.RawAttestation{
+		NVSwitchRawJSON:             []byte(`{"data":"test"}`),
+		TinfoilNVSwitchEvidenceHash: makeHex32(0xFF),
+	}
+	err := verifyNVSwitchEvidenceHash(raw)
+	if err == nil {
+		t.Fatal("expected error for NVSwitch hash mismatch")
+	}
+	if !strings.Contains(err.Error(), "mismatch") {
+		t.Errorf("error %q should mention mismatch", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// tcbSVNGTE — mismatched lengths
+// ---------------------------------------------------------------------------
+
+func TestTcbSVNGTE_MismatchedLengths(t *testing.T) {
+	if tcbSVNGTE([]byte{1, 2}, []byte{1}) {
+		t.Error("mismatched lengths should return false")
+	}
+	if tcbSVNGTE([]byte{1}, []byte{1, 2}) {
+		t.Error("mismatched lengths should return false")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// VerifyReportData — GPU evidence hash mismatch
+// ---------------------------------------------------------------------------
+
+func TestVerifyReportData_GPUHashMismatch(t *testing.T) {
+	raw, nonce, reportData := makeRawForReportData(t, false)
+	// Set GPU hash to a wrong value while GPURawJSON is present.
+	raw.TinfoilGPUEvidenceHash = makeHex32(0xFF)
+	_, err := ReportDataVerifier{}.VerifyReportData(reportData, raw, nonce)
+	if err == nil {
+		t.Fatal("expected error for GPU evidence hash mismatch")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// validateHexField — direct unit test
+// ---------------------------------------------------------------------------
+
+func TestValidateHexField_CorrectLenInvalidHex(t *testing.T) {
+	err := validateHexField("test", strings.Repeat("ZZ", 32))
+	if err == nil {
+		t.Fatal("expected error for 64-char invalid hex")
+	}
+}
+
+func TestValidateHexField_Valid(t *testing.T) {
+	err := validateHexField("test", makeHex32(0xAB))
+	if err != nil {
+		t.Fatalf("unexpected error for valid hex: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// replaceSignatureValue — uncovered branches
+// ---------------------------------------------------------------------------
+
+func TestReplaceSignatureValue_NoClosingQuote(t *testing.T) {
+	body := []byte(`{"signature":"ABCD`)
+	_, err := replaceSignatureValue(body, "ABCD")
+	if err == nil {
+		t.Fatal("expected error for missing closing quote")
+	}
+}
+
+func TestReplaceSignatureValue_ValueMismatch(t *testing.T) {
+	body := []byte(`{"signature":"WRONG"}`)
+	_, err := replaceSignatureValue(body, "RIGHT")
+	if err == nil {
+		t.Fatal("expected error for value mismatch")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// verifyEnvelopeSignature — bad PEM, invalid DER
+// ---------------------------------------------------------------------------
+
+func TestVerifyEnvelopeSignature_NoPEM(t *testing.T) {
+	resp := &v3Response{Certificate: "not a PEM block"}
+	err := verifyEnvelopeSignature([]byte(`{}`), resp)
+	if err == nil {
+		t.Fatal("expected error for invalid PEM")
+	}
+}
+
+func TestVerifyEnvelopeSignature_InvalidDER(t *testing.T) {
+	resp := &v3Response{
+		Certificate: "-----BEGIN CERTIFICATE-----\nYmFkZGF0YQ==\n-----END CERTIFICATE-----",
+	}
+	err := verifyEnvelopeSignature([]byte(`{}`), resp)
+	if err == nil {
+		t.Fatal("expected error for invalid DER certificate")
+	}
+}

@@ -393,6 +393,123 @@ func TestVerifyNVIDIA_GPUEvidence_Online_CanceledCtx(t *testing.T) {
 	// We only verify no panic; eat may be nil or non-nil depending on parsing.
 }
 
+// --------------------------------------------------------------------------
+// verifySEV
+// --------------------------------------------------------------------------
+
+func TestVerifySEV_EmptyReport(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{SEVReportBytes: nil}
+	result := verifySEV(ctx, raw, attestation.Nonce{}, "tinfoil_v3_cloud", attestation.VerifySEVReportOffline)
+	if result != nil {
+		t.Errorf("verifySEV with nil report: expected nil, got %v", result)
+	}
+}
+
+func TestVerifySEV_WithReport_ParseError(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{SEVReportBytes: []byte("not-a-real-sev-report")}
+	result := verifySEV(ctx, raw, attestation.Nonce{}, "tinfoil_v3_cloud", attestation.VerifySEVReportOffline)
+	if result == nil {
+		t.Fatal("verifySEV with non-empty report should return non-nil result")
+	}
+	t.Logf("verifySEV parse error: %v", result.ParseErr)
+}
+
+func TestVerifySEV_WithReport_HasRDVerifier(t *testing.T) {
+	ctx := context.Background()
+	// A valid-length (but invalid content) SEV report — 1184 bytes.
+	report := make([]byte, 1184)
+	raw := &attestation.RawAttestation{SEVReportBytes: report}
+	result := verifySEV(ctx, raw, attestation.Nonce{}, "tinfoil_v3_cloud", attestation.VerifySEVReportOffline)
+	if result == nil {
+		t.Fatal("verifySEV with 1184-byte report should return non-nil result")
+	}
+	// The report data is zeroed, so REPORTDATA binding will fail, but verifySEV should still run.
+	t.Logf("verifySEV result: ParseErr=%v, SignatureErr=%v", result.ParseErr, result.SignatureErr)
+}
+
+// --------------------------------------------------------------------------
+// verifyTinfoilSupplyChain
+// --------------------------------------------------------------------------
+
+func TestVerifyTinfoilSupplyChain_NonTinfoilFormat(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatDstack}
+	result := verifyTinfoilSupplyChain(ctx, raw, nil, nil, "model",
+		attestation.MeasurementPolicy{}, true)
+	if result != nil {
+		t.Errorf("verifyTinfoilSupplyChain for non-Tinfoil format: expected nil, got %v", result)
+	}
+}
+
+func TestVerifyTinfoilSupplyChain_TinfoilFormat_Offline(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatTinfoil}
+	result := verifyTinfoilSupplyChain(ctx, raw, nil, nil, "llama3-3-70b",
+		attestation.MeasurementPolicy{}, true)
+	if result == nil {
+		t.Fatal("verifyTinfoilSupplyChain offline: expected non-nil result")
+	}
+	// In offline mode, Sigstore fetch is skipped but GPUHashBound etc. are still set.
+	t.Logf("offline result: GPUHashBound=%v, SigstoreVerified=%v", result.GPUHashBound, result.SigstoreVerified)
+}
+
+func TestVerifyTinfoilSupplyChain_GPUBindingFromSEV(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatTinfoil}
+	sev := &attestation.SEVVerifyResult{
+		ReportDataBindingDetail: "gpu_bound=true, nvswitch_bound=true",
+	}
+	result := verifyTinfoilSupplyChain(ctx, raw, nil, sev, "test-model",
+		attestation.MeasurementPolicy{}, true)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.GPUHashBound {
+		t.Error("expected GPUHashBound=true from SEV binding detail")
+	}
+	if !result.NVSwitchHashBound {
+		t.Error("expected NVSwitchHashBound=true from SEV binding detail")
+	}
+}
+
+func TestVerifyTinfoilSupplyChain_GPUBindingFromTDX(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatTinfoil}
+	tdx := &attestation.TDXVerifyResult{
+		ReportDataBindingDetail: "gpu_bound=true",
+		ParseErr:                errors.New("not a real TDX quote"), // prevent TDX policy checks
+	}
+	result := verifyTinfoilSupplyChain(ctx, raw, tdx, nil, "test-model",
+		attestation.MeasurementPolicy{}, true)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.GPUHashBound {
+		t.Error("expected GPUHashBound=true from TDX binding detail")
+	}
+	if result.NVSwitchHashBound {
+		t.Error("expected NVSwitchHashBound=false (not in TDX binding detail)")
+	}
+}
+
+// --------------------------------------------------------------------------
+// truncTo
+// --------------------------------------------------------------------------
+
+func TestTruncTo(t *testing.T) {
+	if got := truncTo("abcdef", 4); got != "abcd" {
+		t.Errorf("truncTo(abcdef,4) = %q, want abcd", got)
+	}
+	if got := truncTo("ab", 10); got != "ab" {
+		t.Errorf("truncTo(ab,10) = %q, want ab", got)
+	}
+	if got := truncTo("", 5); got != "" {
+		t.Errorf("truncTo('',5) = %q, want ''", got)
+	}
+}
+
 func TestVerifyNearcloudGateway_WithQuote_ParseError(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{GatewayIntelQuote: "not-a-real-tdx-quote"}
@@ -408,4 +525,175 @@ func TestVerifyNearcloudGateway_WithQuote_ParseError(t *testing.T) {
 	if poc != nil {
 		t.Errorf("expected nil poc in offline mode, got %v", poc)
 	}
+}
+
+// --------------------------------------------------------------------------
+// stub TDX/SEV verifiers for coverage of report-data binding paths
+// --------------------------------------------------------------------------
+
+func stubTDXVerifier(result *attestation.TDXVerifyResult) attestation.TDXVerifier {
+	return func(_ context.Context, _ string) *attestation.TDXVerifyResult {
+		return result
+	}
+}
+
+func stubSEVVerifier(result *attestation.SEVVerifyResult) attestation.SEVVerifier {
+	return func(_ context.Context, _ []byte) *attestation.SEVVerifyResult {
+		return result
+	}
+}
+
+// --------------------------------------------------------------------------
+// verifyTDX — report data binding paths with ParseErr == nil
+// --------------------------------------------------------------------------
+
+func TestVerifyTDX_ParseOK_Tinfoil(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{
+		IntelQuote:    "fakequote",
+		BackendFormat: attestation.FormatTinfoil,
+	}
+	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil
+	result := verifyTDX(ctx, raw, attestation.Nonce{}, "tinfoil_v3_cloud", stubTDXVerifier(tdxResult))
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// Tinfoil has a ReportDataVerifier. With a zeroed ReportData + zeroed Nonce,
+	// the binding check will likely fail — that's fine, we're covering the code path.
+	t.Logf("verifyTDX(tinfoil, ParseOK): ReportDataBindingErr=%v Detail=%q",
+		result.ReportDataBindingErr, result.ReportDataBindingDetail)
+}
+
+func TestVerifyTDX_ParseOK_Venice(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{
+		IntelQuote:    "fakequote",
+		BackendFormat: attestation.FormatDstack,
+	}
+	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil
+	result := verifyTDX(ctx, raw, attestation.Nonce{}, "venice", stubTDXVerifier(tdxResult))
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	t.Logf("verifyTDX(venice, ParseOK): ReportDataBindingErr=%v Detail=%q",
+		result.ReportDataBindingErr, result.ReportDataBindingDetail)
+}
+
+func TestVerifyTDX_ParseOK_NoVerifier(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{
+		IntelQuote:    "fakequote",
+		BackendFormat: attestation.FormatDstack,
+	}
+	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil
+	// "unknown_provider" has no ReportDataVerifier (returns nil from newReportDataVerifier).
+	result := verifyTDX(ctx, raw, attestation.Nonce{}, "unknown_provider", stubTDXVerifier(tdxResult))
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.ReportDataBindingErr != nil {
+		t.Errorf("expected nil ReportDataBindingErr for provider without verifier, got %v", result.ReportDataBindingErr)
+	}
+}
+
+// --------------------------------------------------------------------------
+// verifySEV — report data binding paths with ParseErr == nil
+// --------------------------------------------------------------------------
+
+func TestVerifySEV_ParseOK_Tinfoil(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{
+		SEVReportBytes: make([]byte, 100),
+		BackendFormat:  attestation.FormatTinfoil,
+	}
+	sevResult := &attestation.SEVVerifyResult{} // ParseErr == nil
+	result := verifySEV(ctx, raw, attestation.Nonce{}, "tinfoil_v3_cloud", stubSEVVerifier(sevResult))
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	t.Logf("verifySEV(tinfoil, ParseOK): ReportDataBindingErr=%v Detail=%q",
+		result.ReportDataBindingErr, result.ReportDataBindingDetail)
+}
+
+func TestVerifySEV_ParseOK_NoVerifier(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{
+		SEVReportBytes: make([]byte, 100),
+		BackendFormat:  attestation.FormatDstack,
+	}
+	sevResult := &attestation.SEVVerifyResult{} // ParseErr == nil
+	// "unknown_provider" has no ReportDataVerifier (returns nil from newReportDataVerifier).
+	result := verifySEV(ctx, raw, attestation.Nonce{}, "unknown_provider", stubSEVVerifier(sevResult))
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.ReportDataBindingErr != nil {
+		t.Errorf("expected nil ReportDataBindingErr for provider without verifier, got %v", result.ReportDataBindingErr)
+	}
+}
+
+// --------------------------------------------------------------------------
+// verifyNearcloudGateway — ParseErr == nil paths
+// --------------------------------------------------------------------------
+
+func TestVerifyNearcloudGateway_ParseOK_NoCompose(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{GatewayIntelQuote: "fakequote"}
+	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil
+	tdx, compose, _ := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult))
+	if tdx == nil {
+		t.Fatal("expected non-nil TDX result")
+	}
+	t.Logf("gateway ParseOK: ReportDataBindingErr=%v", tdx.ReportDataBindingErr)
+	// No GatewayAppCompose → compose should be nil.
+	if compose != nil {
+		t.Errorf("expected nil compose when GatewayAppCompose is empty, got %v", compose)
+	}
+}
+
+func TestVerifyNearcloudGateway_ParseOK_WithCompose(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{
+		GatewayIntelQuote: "fakequote",
+		GatewayAppCompose: `{"docker_compose_file":"services:\n  app:\n    image: myapp:latest\n"}`,
+	}
+	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil, MRConfigID zero
+	tdx, compose, _ := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult))
+	if tdx == nil {
+		t.Fatal("expected non-nil TDX result")
+	}
+	if compose == nil {
+		t.Fatal("expected non-nil compose when GatewayAppCompose is set")
+	}
+	if !compose.Checked {
+		t.Error("compose.Checked should be true")
+	}
+	// MRConfigID is zero → compose binding will fail.
+	if compose.Err == nil {
+		t.Error("expected compose binding error with zeroed MRConfigID")
+	}
+}
+
+// --------------------------------------------------------------------------
+// verifyTinfoilSupplyChain — TDX policy check path
+// --------------------------------------------------------------------------
+
+func TestVerifyTinfoilSupplyChain_TDXPolicyCheck(t *testing.T) {
+	ctx := context.Background()
+	raw := &attestation.RawAttestation{
+		BackendFormat: attestation.FormatTinfoil,
+	}
+	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil
+	// Use a model name that maps to a known repo. RepoForModel("gemma4-31b")
+	// returns "tinfoilsh/confidential-gemma4-31b".
+	result := verifyTinfoilSupplyChain(ctx, raw, tdxResult, nil, "gemma4-31b", attestation.MeasurementPolicy{}, true)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// The result should have TDXPolicyDetail set (from CheckTDXPolicy).
+	if result.TDXPolicyDetail == "" {
+		t.Error("expected non-empty TDXPolicyDetail")
+	}
+	t.Logf("TDXPolicyDetail: %s", result.TDXPolicyDetail)
+	t.Logf("TDXPolicyErr: %v", result.TDXPolicyErr)
 }
