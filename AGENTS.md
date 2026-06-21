@@ -19,12 +19,16 @@ The proxy receives concurrent API inference requests to multiple models from mul
 
 - `cmd/teep/` — CLI entry point, subcommands (`serve`, `verify`), flag definitions.
 - `internal/proxy/` — HTTP handler that accepts OpenAI-compatible requests and routes to providers.
-- `internal/provider/` — Per-provider attestation and connection logic (subdirs: `nearcloud/`, `neardirect/`, `chutes/`, `venice/`, `nanogpt/`, `phalacloud/`).
+- `internal/provider/` — Per-provider attestation and connection logic (subdirs: `nearcloud/`, `neardirect/`, `chutes/`, `venice/`, `nanogpt/`, `phalacloud/`, `tinfoil/`).
 - `internal/attestation/` — TDX, NVIDIA, sigstore, Rekor, and supply-chain verification.
 - `internal/e2ee/` — End-to-end encryption sessions and relay logic.
 - `internal/config/` — Configuration parsing and strict validation.
+- `internal/jsonstrict/` — Strict JSON decoding used for untrusted config and provider payloads.
+- `internal/tlsct/` — TLS helpers, SPKI fingerprinting, and certificate-transparency-aware HTTP clients.
 - `internal/verify/` — Orchestrates multi-factor verification and report generation.
 - `internal/multi/` — Concurrent multi-provider verification.
+- `internal/integration/` — Live and captured integration coverage, including provider replay testdata.
+- `internal/capture/` — HTTP capture/replay support for deterministic attestation tests.
 
 ## Core Commands
 
@@ -65,6 +69,7 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 - All low-level parsers MUST return unknown field names to callers instead of logging or deduplicating them internally. Callers own the policy decision to fail, warn once per logical operation, or use lower-severity logging in hot paths.
 - If you can't make development progress due to a failing validation, STOP and ask for advice.
 - Fail loudly, not silently: when an expected verification step is skipped because prerequisites are missing, malformed, or unexpectedly unavailable, emit a clear non-secret diagnostic at warn level or stronger.
+- In all cases, prefer errors and panics to fallbacks or workarounds.
 
 ### Always Ensure Attestation Integrity
 
@@ -81,6 +86,8 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 - All cryptographic comparisons MUST be constant-time (`subtle.ConstantTimeCompare`). Never use `==`, `!=`, `bytes.Equal`, or `strings.EqualFold` on secrets, keys, fingerprints, nonces, or hashes.
 - ALWAYS authenticate encryption keys via attestation binding.
 - ALWAYS use authenticated encryption. No plaintext fallback.
+- ALWAYS use httptest.NewTLSServer() in tests that require an HTTP server.
+- ALWAYS exercise cryptographic pathways in test code.
 - Nonce generation MUST use `crypto/rand`. Fail on error; never use a weak source.
 - Zero ephemeral key material after use.
 
@@ -133,6 +140,9 @@ Reference implementations to mirror when adding providers or verification logic:
 ### No Fallbacks or Backwards Compatibility
 
 - NEVER weaken or bypass validation behavior unless it has been explicitly disabled.
+- NEVER add exemptions to teeplint for new code.
+- NO HTTP, empty-key, or cryptographic fallbacks.
+- NO SPECIAL CASES for test harness behavior.
 - NO WORKAROUNDS.
 - NO ERROR FALLBACKS.
 - NO BACKWARDS COMPATIBILITY.
