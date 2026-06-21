@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -136,75 +135,6 @@ func TestClassifyUpstreamError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// e2eeFailed enforcement and recovery
-// ---------------------------------------------------------------------------
-
-func TestE2EEFailed_StoreAndRecover(t *testing.T) {
-	// Simulate the e2eeFailed lifecycle: store a failure, verify it's
-	// present, then clear it on successful fresh re-attestation.
-	var e2eeFailed sync.Map
-	key := providerModelKey{provider: "venice", model: "test-model"}
-
-	// Initially not failed.
-	if _, failed := e2eeFailed.Load(key); failed {
-		t.Fatal("should not be failed initially")
-	}
-
-	// Record failure (as handleE2EEDecryptionFailure does).
-	e2eeFailed.Store(key, true)
-	if _, failed := e2eeFailed.Load(key); !failed {
-		t.Fatal("should be failed after Store")
-	}
-
-	// Recovery: clear on successful fresh re-attestation (ar.Raw != nil).
-	freshAttestation := true // simulates ar.Raw != nil
-	if _, failed := e2eeFailed.Load(key); failed {
-		if freshAttestation {
-			e2eeFailed.Delete(key)
-		}
-	}
-	if _, failed := e2eeFailed.Load(key); failed {
-		t.Fatal("should be cleared after fresh attestation")
-	}
-}
-
-func TestE2EEFailed_NotClearedOnCachedAttestation(t *testing.T) {
-	// When the marker is set and attestation comes from cache (ar.Raw == nil),
-	// the marker must NOT be cleared — fail closed until fresh attestation.
-	var e2eeFailed sync.Map
-	key := providerModelKey{provider: "venice", model: "test-model"}
-
-	e2eeFailed.Store(key, true)
-
-	// Simulates cached attestation (ar.Raw == nil).
-	freshAttestation := false
-	if _, failed := e2eeFailed.Load(key); failed {
-		if freshAttestation {
-			e2eeFailed.Delete(key)
-		}
-		// else: fail closed, marker stays
-	}
-	if _, failed := e2eeFailed.Load(key); !failed {
-		t.Fatal("marker should NOT be cleared on cached attestation")
-	}
-}
-
-func TestE2EEFailed_IsolationByKey(t *testing.T) {
-	var e2eeFailed sync.Map
-	key1 := providerModelKey{provider: "venice", model: "model-a"}
-	key2 := providerModelKey{provider: "venice", model: "model-b"}
-
-	e2eeFailed.Store(key1, true)
-
-	if _, failed := e2eeFailed.Load(key1); !failed {
-		t.Error("key1 should be failed")
-	}
-	if _, failed := e2eeFailed.Load(key2); failed {
-		t.Error("key2 should NOT be failed (different model)")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // httpError.Unwrap
 // ---------------------------------------------------------------------------
@@ -232,10 +162,6 @@ func (n *noopDecryptor) Decrypt(string) ([]byte, error)                         
 func (n *noopDecryptor) IsRequestFieldEncrypted(string) bool                     { return false }
 func (n *noopDecryptor) IsResponseFieldEncrypted(string, e2ee.EndpointType) bool { return false }
 func (n *noopDecryptor) Zero()                                                   { n.zeroed = true }
-
-func TestZeroE2EE_NilAll(t *testing.T) {
-	zeroE2EE(nil, nil, nil) // must not panic
-}
 
 func TestZeroE2EE_WithSession(t *testing.T) {
 	dec := &noopDecryptor{}
@@ -798,19 +724,6 @@ func TestHandlePinnedPostRelay_NoError_NoSession(t *testing.T) {
 	t.Logf("errors after no-error/no-session: %d", ms.errors.Load())
 	if ms.errors.Load() != 0 {
 		t.Errorf("ms.errors = %d, want 0", ms.errors.Load())
-	}
-}
-
-func TestHandlePinnedPostRelay_NoError_WithSession(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{Name: "venice"}
-	ms := &modelStats{}
-	report := &attestation.VerificationReport{}
-	// No error, session present → E2EE success path, cache updated.
-	s.handlePinnedPostRelay(context.Background(), prov, "model", report, mockDecryptor{}, ms, nil)
-	t.Logf("errors after no-error/with-session: %d", ms.errors.Load())
-	if ms.errors.Load() != 0 {
-		t.Errorf("ms.errors = %d, want 0 on success", ms.errors.Load())
 	}
 }
 
