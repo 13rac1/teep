@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -30,16 +31,20 @@ import (
 // RecordedEntry holds metadata for one HTTP request/response pair.
 // Body is saved separately as a .body file (not JSON-encoded).
 type RecordedEntry struct {
-	Method     string        `json:"method"`
-	URL        string        `json:"url"`
-	Status     int           `json:"status"`
-	Proto      string        `json:"proto,omitempty"`
-	TLSVersion string        `json:"tls_version,omitempty"`
-	TLSCipher  string        `json:"tls_cipher,omitempty"`
-	Headers    http.Header   `json:"headers"`
-	ReqBody    []byte        `json:"req_body_base64,omitempty"`
-	Body       []byte        `json:"-"`
-	Duration   time.Duration `json:"-"`
+	Method     string `json:"method"`
+	URL        string `json:"url"`
+	Status     int    `json:"status"`
+	Proto      string `json:"proto,omitempty"`
+	TLSVersion string `json:"tls_version,omitempty"`
+	TLSCipher  string `json:"tls_cipher,omitempty"`
+	// PeerSPKIDER is the raw SubjectPublicKeyInfo DER bytes of the TLS peer
+	// leaf certificate. Captured so the replay transport can reconstruct
+	// resp.TLS for TLS-channel-binding verification (e.g. tinfoil).
+	PeerSPKIDER []byte        `json:"peer_spki_der_base64,omitempty"`
+	Headers     http.Header   `json:"headers"`
+	ReqBody     []byte        `json:"req_body_base64,omitempty"`
+	Body        []byte        `json:"-"`
+	Duration    time.Duration `json:"-"`
 }
 
 // E2EEOutcome records the result of a live E2EE test for capture/replay.
@@ -128,6 +133,9 @@ func (t *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	if resp.TLS != nil {
 		entry.TLSVersion = tlsVersionName(resp.TLS.Version)
 		entry.TLSCipher = tls.CipherSuiteName(resp.TLS.CipherSuite)
+		if len(resp.TLS.PeerCertificates) > 0 {
+			entry.PeerSPKIDER = resp.TLS.PeerCertificates[0].RawSubjectPublicKeyInfo
+		}
 	}
 
 	t.mu.Lock()
@@ -209,14 +217,28 @@ func (t *replayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			"status", e.Status,
 			"body_len", len(e.Body),
 		)
-		return &http.Response{
+		resp := &http.Response{
 			StatusCode:    e.Status,
 			Status:        fmt.Sprintf("%d %s", e.Status, http.StatusText(e.Status)),
 			Proto:         e.Proto,
 			Header:        e.Headers.Clone(),
 			Body:          io.NopCloser(bytes.NewReader(e.Body)),
 			ContentLength: int64(len(e.Body)),
-		}, nil
+		}
+		// Reconstruct resp.TLS so TLS-channel-binding verification (e.g.
+		// tinfoil's peer SPKI check) works under replay. We synthesize a
+		// minimal tls.ConnectionState carrying a certificate whose
+		// RawSubjectPublicKeyInfo matches the captured peer SPKI DER.
+		if len(e.PeerSPKIDER) > 0 {
+			resp.TLS = &tls.ConnectionState{
+				Version:           tls.VersionTLS13,
+				HandshakeComplete: true,
+				PeerCertificates: []*x509.Certificate{
+					{RawSubjectPublicKeyInfo: e.PeerSPKIDER},
+				},
+			}
+		}
+		return resp, nil
 	}
 	return nil, fmt.Errorf("replay: no matching entry for %s %s", req.Method, req.URL)
 }
@@ -254,15 +276,16 @@ func Save(dir string, m *Manifest, reportText string, entries []RecordedEntry) (
 
 		// Metadata JSON (without body).
 		metaJSON, err := json.MarshalIndent(entryMeta{
-			Method:     e.Method,
-			URL:        e.URL,
-			Status:     e.Status,
-			Proto:      e.Proto,
-			TLSVersion: e.TLSVersion,
-			TLSCipher:  e.TLSCipher,
-			Headers:    e.Headers,
-			ReqBody:    base64Encode(e.ReqBody),
-			DurationMS: e.Duration.Milliseconds(),
+			Method:      e.Method,
+			URL:         e.URL,
+			Status:      e.Status,
+			Proto:       e.Proto,
+			TLSVersion:  e.TLSVersion,
+			TLSCipher:   e.TLSCipher,
+			PeerSPKIDER: base64Encode(e.PeerSPKIDER),
+			Headers:     e.Headers,
+			ReqBody:     base64Encode(e.ReqBody),
+			DurationMS:  e.Duration.Milliseconds(),
 		}, "", "  ")
 		if err != nil {
 			return "", fmt.Errorf("marshal entry %d: %w", i, err)
@@ -282,15 +305,16 @@ func Save(dir string, m *Manifest, reportText string, entries []RecordedEntry) (
 
 // entryMeta is the JSON-serialized metadata for one response.
 type entryMeta struct {
-	Method     string      `json:"method"`
-	URL        string      `json:"url"`
-	Status     int         `json:"status"`
-	Proto      string      `json:"proto,omitempty"`
-	TLSVersion string      `json:"tls_version,omitempty"`
-	TLSCipher  string      `json:"tls_cipher,omitempty"`
-	Headers    http.Header `json:"headers"`
-	ReqBody    string      `json:"req_body_base64,omitempty"`
-	DurationMS int64       `json:"duration_ms,omitempty"`
+	Method      string      `json:"method"`
+	URL         string      `json:"url"`
+	Status      int         `json:"status"`
+	Proto       string      `json:"proto,omitempty"`
+	TLSVersion  string      `json:"tls_version,omitempty"`
+	TLSCipher   string      `json:"tls_cipher,omitempty"`
+	PeerSPKIDER string      `json:"peer_spki_der_base64,omitempty"`
+	Headers     http.Header `json:"headers"`
+	ReqBody     string      `json:"req_body_base64,omitempty"`
+	DurationMS  int64       `json:"duration_ms,omitempty"`
 }
 
 func base64Encode(b []byte) string {
@@ -371,17 +395,26 @@ func Load(dir string) (Manifest, []RecordedEntry, error) {
 			}
 		}
 
+		var peerSPKIDER []byte
+		if meta.PeerSPKIDER != "" {
+			peerSPKIDER, err = base64.StdEncoding.DecodeString(meta.PeerSPKIDER)
+			if err != nil {
+				return Manifest{}, nil, fmt.Errorf("decode peer_spki_der in %s: %w", jf, err)
+			}
+		}
+
 		entries = append(entries, RecordedEntry{
-			Method:     meta.Method,
-			URL:        meta.URL,
-			Status:     meta.Status,
-			Proto:      meta.Proto,
-			TLSVersion: meta.TLSVersion,
-			TLSCipher:  meta.TLSCipher,
-			Headers:    meta.Headers,
-			ReqBody:    reqBody,
-			Body:       body,
-			Duration:   time.Duration(meta.DurationMS) * time.Millisecond,
+			Method:      meta.Method,
+			URL:         meta.URL,
+			Status:      meta.Status,
+			Proto:       meta.Proto,
+			TLSVersion:  meta.TLSVersion,
+			TLSCipher:   meta.TLSCipher,
+			PeerSPKIDER: peerSPKIDER,
+			Headers:     meta.Headers,
+			ReqBody:     reqBody,
+			Body:        body,
+			Duration:    time.Duration(meta.DurationMS) * time.Millisecond,
 		})
 	}
 
