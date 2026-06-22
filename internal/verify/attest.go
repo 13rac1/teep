@@ -203,19 +203,23 @@ func checkSigstore(ctx context.Context, digests []string, client *http.Client, o
 // verifyTinfoilSupplyChain performs Tinfoil-specific Sigstore supply chain
 // verification and code/hardware measurement comparison. Returns nil for
 // non-Tinfoil providers.
+//
+// providerName determines which Sigstore repo to verify against:
+// tinfoil_v3_cloud attests the router enclave (confidential-model-router),
+// while tinfoil_v3_direct attests per-model inference enclaves.
 func verifyTinfoilSupplyChain(
 	ctx context.Context,
 	raw *attestation.RawAttestation,
 	tdxResult *attestation.TDXVerifyResult,
 	sevResult *attestation.SEVVerifyResult,
-	modelName string,
+	providerName, modelName string,
 	policy attestation.MeasurementPolicy,
 	offline bool,
 ) *attestation.TinfoilSupplyChainResult {
 	if raw.BackendFormat != attestation.FormatTinfoil {
 		return nil
 	}
-	sigstoreRepo := tinfoil.RepoForModel(modelName)
+	sigstoreRepo := tinfoil.RepoForProvider(providerName, modelName)
 	if sigstoreRepo == "" {
 		return nil
 	}

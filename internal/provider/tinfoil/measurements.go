@@ -16,9 +16,14 @@ const (
 	PredicateHardwareMeasurements = "https://tinfoil.sh/predicate/hardware-measurements/v1"
 )
 
+// RouterRepo is the Sigstore GitHub repo for the Tinfoil confidential model
+// router. The tinfoil_v3_cloud provider always verifies against this repo
+// because it attests the router enclave, not per-model inference enclaves.
+const RouterRepo = "tinfoilsh/confidential-model-router"
+
 // KnownRepos lists the known Tinfoil configuration repo mappings.
 var KnownRepos = []string{
-	"tinfoilsh/confidential-model-router",
+	RouterRepo,
 	"tinfoilsh/confidential-nomic-embed-text",
 	"tinfoilsh/confidential-audio-processing",
 	"tinfoilsh/confidential-voxtral-small-24b",
@@ -194,6 +199,22 @@ func RepoForModel(model string) string {
 		slug = model[i+1:]
 	}
 	return "tinfoilsh/confidential-" + strings.ToLower(slug)
+}
+
+// RepoForProvider returns the Sigstore GitHub repo for supply chain
+// verification based on the provider name and model. For tinfoil_v3_cloud,
+// the router enclave is attested, so the repo is always the router repo.
+// For tinfoil_v3_direct, the per-model inference enclave is attested, so
+// the repo is resolved via RepoForModel.
+func RepoForProvider(providerName, model string) string {
+	switch providerName {
+	case "tinfoil_v3_cloud":
+		return RouterRepo
+	case "tinfoil_v3_direct":
+		return RepoForModel(model)
+	default:
+		return RepoForModel(model)
+	}
 }
 
 // hexEqual compares two hex strings constant-time after normalization.

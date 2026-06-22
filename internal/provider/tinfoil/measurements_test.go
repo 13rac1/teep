@@ -298,6 +298,29 @@ func TestRepoForModel(t *testing.T) {
 	}
 }
 
+func TestRepoForProvider(t *testing.T) {
+	tests := []struct {
+		provider string
+		model    string
+		want     string
+	}{
+		// Cloud provider always uses the router repo, regardless of model.
+		{"tinfoil_v3_cloud", "llama3-3-70b", RouterRepo},
+		{"tinfoil_v3_cloud", "gemma4-31b", RouterRepo},
+		{"tinfoil_v3_cloud", "any-model", RouterRepo},
+		// Direct provider uses per-model repo.
+		{"tinfoil_v3_direct", "gemma4-31b", "tinfoilsh/confidential-gemma4-31b"},
+		{"tinfoil_v3_direct", "llama3-3-70b", "tinfoilsh/confidential-llama3-3-70b"},
+		{"tinfoil_v3_direct", "nomic-ai/nomic-embed-text-v1.5", "tinfoilsh/confidential-nomic-embed-text"},
+	}
+	for _, tt := range tests {
+		got := RepoForProvider(tt.provider, tt.model)
+		if got != tt.want {
+			t.Errorf("RepoForProvider(%q, %q) = %q, want %q", tt.provider, tt.model, got, tt.want)
+		}
+	}
+}
+
 func TestEnclaveMeasurementsFromTDX(t *testing.T) {
 	tdx := &attestation.TDXVerifyResult{
 		MRTD: mustDecodeHex(t, makeHex48(0x01)),
