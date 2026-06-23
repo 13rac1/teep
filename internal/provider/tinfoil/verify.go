@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/13rac1/teep/internal/attestation"
 )
@@ -44,6 +45,7 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	// will be false, causing gpu-related factors to fail closed in BuildReport.
 	hasGPU := raw.TinfoilGPUEvidenceHash != "" && len(raw.GPURawJSON) > 0
 	nvswitchExpected := false
+	nvswitchHashVerified := false
 	if hasGPU {
 		if err := verifyGPUEvidenceHash(raw); err != nil {
 			return "", fmt.Errorf("GPU evidence hash verification: %w", err)
@@ -54,13 +56,25 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 			return "", fmt.Errorf("NVSwitch normalization: %w", nsErr)
 		}
 		if nvswitchExpected {
+			// Check NVSwitch evidence hash against raw JSON bytes. If this
+			// fails (e.g. due to server-side JSON re-encoding), we still
+			// proceed to verify the REPORTDATA hash using the reported
+			// nvswitch_evidence_hash. This authenticates the TLS SPKI,
+			// HPKE key, nonce, and GPU evidence hash via the hardware-signed
+			// REPORTDATA, even when the NVSwitch hash binding is broken.
+			// The nvswitch_binding factor will still fail closed.
 			if err := verifyNVSwitchEvidenceHash(raw); err != nil {
-				return "", fmt.Errorf("NVSwitch evidence hash verification: %w", err)
+				slog.Warn("NVSwitch evidence hash mismatch — proceeding with REPORTDATA verification using reported hash",
+					"err", err)
+			} else {
+				nvswitchHashVerified = true
 			}
 		}
 	}
 
-	// Build the preimage: tls_key_fp || hpke_key || nonce [|| gpu_evidence_hash [|| nvswitch_evidence_hash]]
+	// Build the preimage using the reported hashes from report_data.
+	// These are the values the server bound into REPORTDATA, so the
+	// preimage should match what the hardware signed.
 	preimage, err := buildReportDataPreimage(raw)
 	if err != nil {
 		return "", fmt.Errorf("build REPORTDATA preimage: %w", err)
@@ -76,7 +90,11 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	if hasGPU {
 		detail += ", gpu_bound=true"
 		if nvswitchExpected {
-			detail += ", nvswitch_bound=true"
+			if nvswitchHashVerified {
+				detail += ", nvswitch_bound=true"
+			} else {
+				detail += ", nvswitch_bound=false"
+			}
 		}
 	} else {
 		detail += ", gpu_bound=false"

@@ -880,7 +880,7 @@ func TestEvalTDXReportDataBinding(t *testing.T) {
 				TeeTCBSVN:            make([]byte, 16),
 				ReportDataBindingErr: errors.New("mismatch"),
 			},
-			Fail, "does not bind",
+			Fail, "binding failed",
 		},
 	}
 	for _, tc := range tests {

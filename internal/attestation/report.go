@@ -451,6 +451,13 @@ type TinfoilSupplyChainResult struct {
 	// REPORTDATA. Only set for multi-GPU Hopper configs with NVLink.
 	NVSwitchHashBound bool
 
+	// NVSwitchExpected is true when the GPU topology requires NVSwitch
+	// evidence (8-GPU Hopper). When true and NVSwitchHashBound is false,
+	// the NVSwitch evidence hash did not match the raw JSON bytes
+	// (server-side bug), but the REPORTDATA hash was still verified using
+	// the reported hash value.
+	NVSwitchExpected bool
+
 	// TDXPolicyErr is the combined error from Tinfoil-specific TDX policy checks.
 	// Nil when platform is SEV-SNP or all checks pass.
 	TDXPolicyErr    error
@@ -979,7 +986,7 @@ func evalTDXReportDataBinding(in *ReportInput) []FactorResult {
 		return factor(TierBinding, "tee_reportdata_binding", Fail, "enclave public key absent; REPORTDATA binding cannot be verified")
 	}
 	if in.TDX.ReportDataBindingErr != nil {
-		return factor(TierBinding, "tee_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind enclave public key: %v", in.TDX.ReportDataBindingErr))
+		return factor(TierBinding, "tee_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA binding failed: %v", in.TDX.ReportDataBindingErr))
 	}
 	if in.TDX.ReportDataBindingDetail != "" {
 		return factor(TierBinding, "tee_reportdata_binding", Pass, in.TDX.ReportDataBindingDetail)
@@ -992,7 +999,7 @@ func evalSEVReportDataBinding(in *ReportInput) []FactorResult {
 		return factor(TierBinding, "tee_reportdata_binding", Fail, "enclave public key absent; REPORTDATA binding cannot be verified")
 	}
 	if in.SEV.ReportDataBindingErr != nil {
-		return factor(TierBinding, "tee_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA does not bind enclave public key: %v", in.SEV.ReportDataBindingErr))
+		return factor(TierBinding, "tee_reportdata_binding", Fail, fmt.Sprintf("REPORTDATA binding failed: %v", in.SEV.ReportDataBindingErr))
 	}
 	if in.SEV.ReportDataBindingDetail != "" {
 		return factor(TierBinding, "tee_reportdata_binding", Pass, in.SEV.ReportDataBindingDetail)
@@ -1382,6 +1389,15 @@ func evalNVSwitchBinding(in *ReportInput) []FactorResult {
 	if in.TinfoilSC.NVSwitchHashBound {
 		return factor(TierSupplyChain, "nvswitch_binding", Pass,
 			"NVSwitch evidence hash verified in REPORTDATA")
+	}
+	if in.TinfoilSC.NVSwitchExpected {
+		// NVSwitch was expected (8-GPU Hopper) but the evidence hash did
+		// not match the raw JSON bytes. This is a server-side bug (JSON
+		// re-encoding), but the REPORTDATA hash was still verified using
+		// the reported hash value. Fail closed for the NVSwitch binding
+		// factor since the evidence hash binding is broken.
+		return factor(TierSupplyChain, "nvswitch_binding", Fail,
+			"NVSwitch evidence hash mismatch (server-side JSON re-encoding bug)")
 	}
 	// GPUHashBound but no NVSwitch — topology doesn't require it (< 8 GPUs
 	// or Blackwell-only). This is a successful verification outcome: the

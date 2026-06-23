@@ -243,6 +243,7 @@ func verifyTinfoilSupplyChain(
 	}
 	result.GPUHashBound = strings.Contains(bindingDetail, "gpu_bound=true")
 	result.NVSwitchHashBound = strings.Contains(bindingDetail, "nvswitch_bound=true")
+	result.NVSwitchExpected = strings.Contains(bindingDetail, "nvswitch_bound=")
 
 	// TDX policy checks.
 	if tdxResult != nil && tdxResult.ParseErr == nil {
