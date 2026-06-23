@@ -203,9 +203,19 @@ func isNVSwitchExpected(gpuRawJSON []byte) (bool, error) {
 }
 
 // TDX policy constants for Tinfoil.
+//
+// These values are the little-endian uint64 interpretation of the raw
+// TDX quote bytes, matching the Tinfoil SPEC §4.8 defaults:
+//   - TD_ATTRIBUTES: 0000001000000000 (raw bytes) = SEPT_VE_DISABLE only
+//   - XFAM: e702060000000000 (raw bytes) = FP+SSE+required features
+//
+// The TDX quote stores TD_ATTRIBUTES and XFAM as 8-byte little-endian
+// fields. binary.LittleEndian.Uint64() reads the raw bytes into a uint64,
+// so the constants must be the LE-interpreted values, not the big-endian
+// hex display.
 var (
-	expectedTDAttributes uint64 = 0x0000001000000000
-	expectedXFAM         uint64 = 0xe702060000000000
+	expectedTDAttributes uint64 = 0x0000000010000000
+	expectedXFAM         uint64 = 0x00000000000602e7
 
 	// minTeeTCBSVN is the minimum TEE_TCB_SVN (16 bytes).
 	minTeeTCBSVN = [16]byte{0x03, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,

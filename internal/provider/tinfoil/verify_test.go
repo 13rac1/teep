@@ -309,11 +309,13 @@ var testMRSeamAllow = map[string]struct{}{
 }
 
 // validTDXForPolicy builds a TDXVerifyResult that passes all Tinfoil TDX policy checks.
+// Uses the same LE uint64 constants as the production code to ensure the
+// raw bytes match what binary.LittleEndian.Uint64 reads in CheckTDXPolicy.
 func validTDXForPolicy() *attestation.TDXVerifyResult {
 	tdAttrs := make([]byte, 8)
-	binary.LittleEndian.PutUint64(tdAttrs, 0x0000001000000000)
+	binary.LittleEndian.PutUint64(tdAttrs, expectedTDAttributes)
 	xfam := make([]byte, 8)
-	binary.LittleEndian.PutUint64(xfam, 0xe702060000000000)
+	binary.LittleEndian.PutUint64(xfam, expectedXFAM)
 	return &attestation.TDXVerifyResult{
 		TDAttributes:  tdAttrs,
 		XFAM:          xfam,
