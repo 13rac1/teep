@@ -161,10 +161,8 @@ func TestCompareMultiPlatformSEVSNP_Mismatch(t *testing.T) {
 
 func TestParseHardwareMeasurements(t *testing.T) {
 	pred := HardwareMeasurementsPredicate{
-		Entries: []HardwareMeasurementEntry{
-			{ID: "hw-1", MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
-			{ID: "hw-2", MRTD: makeHex48(0x03), RTMR0: makeHex48(0x04)},
-		},
+		"hw-1": {MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
+		"hw-2": {MRTD: makeHex48(0x03), RTMR0: makeHex48(0x04)},
 	}
 	data, err := json.Marshal(pred)
 	if err != nil {
@@ -178,8 +176,8 @@ func TestParseHardwareMeasurements(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
-	if entries[0].ID != "hw-1" {
-		t.Errorf("entries[0].ID = %q, want hw-1", entries[0].ID)
+	if _, ok := entries["hw-1"]; !ok {
+		t.Errorf("entries should contain key hw-1, got %d entries", len(entries))
 	}
 }
 
@@ -191,9 +189,9 @@ func TestParseHardwareMeasurements_InvalidJSON(t *testing.T) {
 }
 
 func TestMatchHardwareMeasurements_Match(t *testing.T) {
-	entries := []HardwareMeasurementEntry{
-		{ID: "hw-1", MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
-		{ID: "hw-2", MRTD: makeHex48(0x03), RTMR0: makeHex48(0x04)},
+	entries := HardwareMeasurementsPredicate{
+		"hw-1": {MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
+		"hw-2": {MRTD: makeHex48(0x03), RTMR0: makeHex48(0x04)},
 	}
 	enclave := &EnclaveMeasurements{
 		MRTD:  makeHex48(0x03),
@@ -210,8 +208,8 @@ func TestMatchHardwareMeasurements_Match(t *testing.T) {
 }
 
 func TestMatchHardwareMeasurements_NoMatch(t *testing.T) {
-	entries := []HardwareMeasurementEntry{
-		{ID: "hw-1", MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
+	entries := HardwareMeasurementsPredicate{
+		"hw-1": {MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
 	}
 	enclave := &EnclaveMeasurements{
 		MRTD:  makeHex48(0xFF),
@@ -226,8 +224,8 @@ func TestMatchHardwareMeasurements_NoMatch(t *testing.T) {
 
 func TestMatchHardwareMeasurements_PartialMatch(t *testing.T) {
 	// MRTD matches but RTMR0 does not.
-	entries := []HardwareMeasurementEntry{
-		{ID: "hw-1", MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
+	entries := HardwareMeasurementsPredicate{
+		"hw-1": {MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
 	}
 	enclave := &EnclaveMeasurements{
 		MRTD:  makeHex48(0x01),

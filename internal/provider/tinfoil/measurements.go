@@ -43,14 +43,14 @@ type TDXMeasurement struct {
 	RTMR2 string `json:"rtmr2"`
 }
 
-// HardwareMeasurementsPredicate is the in-toto predicate for hardware-measurements/v1.
-type HardwareMeasurementsPredicate struct {
-	Entries []HardwareMeasurementEntry `json:"entries"`
-}
+// HardwareMeasurementsPredicate is the in-toto predicate for
+// hardware-measurements/v1. The predicate is a map of platform ID →
+// measurement entry, not an array under an "entries" key.
+type HardwareMeasurementsPredicate map[string]HardwareMeasurementEntry
 
-// HardwareMeasurementEntry is a single entry in the hardware measurements predicate.
+// HardwareMeasurementEntry is a single entry in the hardware measurements
+// predicate. The platform ID is the map key, not a field in the entry.
 type HardwareMeasurementEntry struct {
-	ID    string `json:"id"`
 	MRTD  string `json:"mrtd"`
 	RTMR0 string `json:"rtmr0"`
 }
@@ -131,21 +131,23 @@ func CompareMultiPlatformSEVSNP(code *CodeMeasurements, enclave *EnclaveMeasurem
 	return nil
 }
 
-// ParseHardwareMeasurements extracts hardware measurement entries from the predicate.
-func ParseHardwareMeasurements(predicateBytes []byte) ([]HardwareMeasurementEntry, error) {
+// ParseHardwareMeasurements extracts hardware measurement entries from the
+// predicate. The predicate is a map of platform ID → {mrtd, rtmr0}.
+func ParseHardwareMeasurements(predicateBytes []byte) (map[string]HardwareMeasurementEntry, error) {
 	var pred HardwareMeasurementsPredicate
 	if err := json.Unmarshal(predicateBytes, &pred); err != nil {
 		return nil, fmt.Errorf("unmarshal hardware measurements predicate: %w", err)
 	}
-	return pred.Entries, nil
+	return pred, nil
 }
 
 // MatchHardwareMeasurements checks whether the enclave MRTD and RTMR0 match
-// any entry in the hardware measurements list. TDX only.
-func MatchHardwareMeasurements(entries []HardwareMeasurementEntry, enclave *EnclaveMeasurements) (string, error) {
-	for _, e := range entries {
+// any entry in the hardware measurements map. TDX only. Returns the matching
+// platform ID.
+func MatchHardwareMeasurements(entries map[string]HardwareMeasurementEntry, enclave *EnclaveMeasurements) (string, error) {
+	for id, e := range entries {
 		if hexEqual(e.MRTD, enclave.MRTD) && hexEqual(e.RTMR0, enclave.RTMR0) {
-			return e.ID, nil
+			return id, nil
 		}
 	}
 	return "", fmt.Errorf("no hardware measurement entry matches enclave MRTD=%s RTMR0=%s",

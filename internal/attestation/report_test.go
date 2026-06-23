@@ -1044,9 +1044,9 @@ func TestEvalSEVHardwareConfig(t *testing.T) {
 
 func TestEvalSEVBootConfig(t *testing.T) {
 	in := buildSEVInput(&SEVVerifyResult{})
-	f := assertSingleFactor(t, evalTEEBootConfig(in), Skip)
-	if !strings.Contains(f.Detail, "no RTMR equivalent") {
-		t.Errorf("detail %q should mention no RTMR equivalent", f.Detail)
+	f := assertSingleFactor(t, evalTEEBootConfig(in), Pass)
+	if !strings.Contains(f.Detail, "launch measurement") {
+		t.Errorf("detail %q should mention launch measurement", f.Detail)
 	}
 }
 
@@ -4503,10 +4503,10 @@ func TestEvalTEEBootConfig_Tinfoil(t *testing.T) {
 		}
 	})
 
-	t.Run("sev_skip", func(t *testing.T) {
+	t.Run("sev_pass", func(t *testing.T) {
 		in := buildTinfoilInput(nil)
 		in.SEV = &SEVVerifyResult{}
-		f := assertSingleFactor(t, evalTEEBootConfig(in), Skip)
+		f := assertSingleFactor(t, evalTEEBootConfig(in), Pass)
 		if !strings.Contains(f.Detail, "SEV-SNP") {
 			t.Errorf("detail %q should mention SEV-SNP", f.Detail)
 		}

@@ -164,6 +164,8 @@ func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 	// Must Pass: SEV-SNP TEE factors + signing key + e2ee + TLS.
 	// tee_cert_chain and tee_quote_signature pass because AMD KDS
 	// cert_chain and VCEK cert are captured in the fixture.
+	// tee_boot_config passes because SEV-SNP boot config is covered by
+	// the launch measurement (tee_measurement).
 	assertMustPass(t, report, []string{
 		"nonce_match",
 		"tee_quote_present",
@@ -173,6 +175,7 @@ func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 		"tee_debug_disabled",
 		"tee_reportdata_binding",
 		"tee_hardware_config",
+		"tee_boot_config",
 		"tee_tcb_current",
 		"tee_tcb_not_revoked",
 		"signing_key_present",
@@ -183,7 +186,6 @@ func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 	// Must Skip: factors not applicable to SEV-SNP (allowed to fail) and
 	// deferred factors.
 	for _, name := range []string{
-		"tee_boot_config",
 		"intel_pcs_collateral",
 		"e2ee_usable",
 	} {
@@ -220,8 +222,8 @@ func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 		assertFactorStatus(t, report, name, attestation.NotApplicable)
 	}
 
-	if report.Passed < 13 {
-		t.Errorf("expected at least 13 passing factors, got %d", report.Passed)
+	if report.Passed < 14 {
+		t.Errorf("expected at least 14 passing factors, got %d", report.Passed)
 	}
 	t.Logf("RESULT: %d/%d factors passed", report.Passed, total(report))
 }

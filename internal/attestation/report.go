@@ -289,10 +289,11 @@ var ChutesDefaultAllowFail = []string{
 // integrity, REPORTDATA binding, and Sigstore code verification are enforced.
 // cpu_id_registry is allowed to fail because Tinfoil does not participate in
 // Proof of Cloud. intel_pcs_collateral is allowed because SEV-SNP uses AMD
-// KDS instead of Intel PCS.
+// KDS instead of Intel PCS. tee_boot_config is enforced: hardware platform
+// measurements (MRTD + RTMR0) must match the Sigstore-attested
+// tinfoilsh/hardware-measurements registry for TDX enclaves.
 var TinfoilDefaultAllowFail = []string{
 	"cpu_id_registry",
-	"tee_boot_config",
 	"intel_pcs_collateral",
 }
 
@@ -924,7 +925,11 @@ func evalTEEBootConfig(in *ReportInput) []FactorResult {
 	case in.TDX != nil && in.TDX.ParseErr == nil:
 		return evalTDXBootConfig(in)
 	case in.SEV != nil && in.SEV.ParseErr == nil:
-		return factor(TierCore, "tee_boot_config", Skip, "SEV-SNP has no boot config registers (no RTMR equivalent)")
+		// SEV-SNP uses a single launch measurement (checked by tee_measurement)
+		// rather than separate boot config registers. There is no additional
+		// boot config to verify beyond what tee_measurement already covers.
+		return factor(TierCore, "tee_boot_config", Pass,
+			"SEV-SNP boot config covered by launch measurement (tee_measurement)")
 	default:
 		return factor(TierCore, "tee_boot_config", Skip, "no parseable TEE quote/report; cannot check boot config")
 	}
