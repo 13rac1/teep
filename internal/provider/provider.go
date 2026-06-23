@@ -214,7 +214,19 @@ type Provider struct {
 
 	// BaseURLForModel resolves the upstream base URL for a specific model.
 	// When set, overrides BaseURL for upstream requests. Nil means use BaseURL.
+	// Implementations should read prompt_cache_key from context (via
+	// tinfoil.PromptCacheKeyFromContext) to support cache-aware backend
+	// selection for providers with multiple enclave domains.
 	BaseURLForModel func(ctx context.Context, model string) (string, error)
+
+	// CacheKeySuffix returns a per-backend suffix for attestation cache keys.
+	// When non-empty, the proxy appends it to the model name in cache
+	// operations (attestation report, signing key, negative cache, e2ee
+	// failure tracker). This allows per-domain caching for providers that
+	// route to different backends based on prompt_cache_key, preventing
+	// cache key collisions between enclaves with different TLS keys.
+	// Nil means cache by model name only (default, single-backend behavior).
+	CacheKeySuffix func(ctx context.Context, model string) string
 
 	// SigstoreRepoForModel returns the GitHub repo for Tinfoil Sigstore
 	// supply chain verification of a specific model. Nil for non-Sigstore

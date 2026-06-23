@@ -360,9 +360,41 @@ func zeroE2EE(session e2ee.Decryptor, meta *e2ee.ChutesE2EE, ehbp *e2ee.EHBPSess
 // chatRequest is a minimal parse of an OpenAI chat completions request.
 // Only fields the proxy needs to inspect or rewrite are decoded here.
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
+	Model          string        `json:"model"`
+	Messages       []chatMessage `json:"messages"`
+	Stream         bool          `json:"stream"`
+	PromptCacheKey string        `json:"prompt_cache_key,omitempty"`
+}
+
+// extractPromptCacheKey extracts the prompt_cache_key field from a JSON body.
+// Returns empty string if the field is absent or the body is not valid JSON.
+func extractPromptCacheKey(body []byte) string {
+	var v struct {
+		PromptCacheKey string `json:"prompt_cache_key"`
+	}
+	_ = json.Unmarshal(body, &v) // best-effort; ignore errors
+	return v.PromptCacheKey
+}
+
+// cacheModelCtxKey is the context key for the per-backend cache model name.
+// When set, cache operations use this value instead of the upstream model
+// name, preventing cache key collisions between enclaves with different
+// TLS keys. See [Provider.CacheKeySuffix].
+type cacheModelCtxKey struct{}
+
+// withCacheModel stores the per-backend cache model name in the context.
+func withCacheModel(ctx context.Context, model string) context.Context {
+	return context.WithValue(ctx, cacheModelCtxKey{}, model)
+}
+
+// cacheModelFor returns the cache model name from the context, or falls back
+// to the given model if not set. Used for attestation report cache, signing
+// key cache, negative cache, and e2ee failure tracker keying.
+func cacheModelFor(ctx context.Context, model string) string {
+	if cm, _ := ctx.Value(cacheModelCtxKey{}).(string); cm != "" {
+		return cm
+	}
+	return model
 }
 
 // chatMessage is one message in the chat history.
@@ -803,7 +835,9 @@ func fromConfig(
 			if err != nil {
 				return "", fmt.Errorf("tinfoil direct: resolve model %q: %w", model, err)
 			}
-			return "https://" + m.Domain, nil
+			promptCacheKey := tinfoil.PromptCacheKeyFromContext(ctx)
+			domain := m.SelectDomain(promptCacheKey)
+			return "https://" + domain, nil
 		}
 		p.ModelLister = provider.NewModelLister(tinfoil.DefaultBaseURL, cp.APIKey, config.NewAttestationClient(offline))
 		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
@@ -813,7 +847,16 @@ func fromConfig(
 					"model", model, "err", err)
 				return "", false
 			}
-			return m.Domain, true
+			promptCacheKey := tinfoil.PromptCacheKeyFromContext(ctx)
+			return m.SelectDomain(promptCacheKey), true
+		}
+		p.CacheKeySuffix = func(ctx context.Context, model string) string {
+			m, err := resolver.ResolveMapping(ctx, model)
+			if err != nil {
+				return ""
+			}
+			promptCacheKey := tinfoil.PromptCacheKeyFromContext(ctx)
+			return m.SelectDomain(promptCacheKey)
 		}
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", cp.Name)
@@ -855,7 +898,7 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, upstreamModel string) (*attestation.VerificationReport, *attestation.RawAttestation) {
 	if prov.Attester == nil {
 		slog.ErrorContext(ctx, "provider has no Attester", "provider", prov.Name, "model", upstreamModel)
-		s.negCache.Record(prov.Name, upstreamModel)
+		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
 		return nil, nil
 	}
 
@@ -867,7 +910,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	raw, err := prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
 	if err != nil {
 		slog.ErrorContext(ctx, "attestation fetch failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-		s.negCache.Record(prov.Name, upstreamModel)
+		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
 		return nil, nil
 	}
 	fetchDur := time.Since(fetchStart)
@@ -1434,6 +1477,22 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 			return
 		}
 
+		// Extract prompt_cache_key for cache-aware backend selection.
+		// When present, the resolver uses hash-based sticky routing to
+		// select a backend enclave domain, maximizing vLLM APC hit rates.
+		promptCacheKey := extractPromptCacheKey(body)
+		ctx = tinfoil.WithPromptCacheKey(ctx, promptCacheKey)
+
+		// Compute per-backend cache model key to prevent attestation cache
+		// collisions between enclaves with different TLS keys. When
+		// CacheKeySuffix returns a domain, all cache operations for this
+		// request use "model@domain" instead of just "model".
+		if prov.CacheKeySuffix != nil {
+			if suffix := prov.CacheKeySuffix(ctx, upstreamModel); suffix != "" {
+				ctx = withCacheModel(ctx, upstreamModel+"@"+suffix)
+			}
+		}
+
 		body, err = rewriteModelInBody(r.Header.Get("Content-Type"), body, ep.contentType, upstreamModel)
 		if err != nil {
 			slog.ErrorContext(ctx, "rewrite model in body", "provider", prov.Name, "model", upstreamModel, "err", err)
@@ -1485,7 +1544,7 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 			s.stats.nonStream.Add(1)
 		}
 
-		if s.negCache.IsBlocked(prov.Name, upstreamModel) {
+		if s.negCache.IsBlocked(prov.Name, cacheModelFor(ctx, upstreamModel)) {
 			status = "neg_cached"
 			s.stats.errors.Add(1)
 			ms.errors.Add(1)
@@ -1537,7 +1596,7 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 		if ar.E2EEActive {
 			cloned := report.Clone()
 			cloned.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
-			s.cache.Put(prov.Name, upstreamModel, cloned)
+			s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), cloned)
 		}
 		s.stats.lastSuccessAt.Store(time.Now().UnixNano())
 		status = "ok"
@@ -1790,7 +1849,7 @@ func (s *Server) handleE2EEDecryptionFailure(
 		// Non-Chutes: mark the provider+model pair as globally failed.
 		// This is a stronger signal — possible MITM or server-side E2EE
 		// breakage. Block all subsequent requests until re-attestation.
-		s.e2eeFailed.Store(providerModelKey{prov.Name, upstreamModel}, true)
+		s.e2eeFailed.Store(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}, true)
 	}
 
 	// Demote e2ee_usable in the cached report so the report endpoint
@@ -1798,15 +1857,15 @@ func (s *Server) handleE2EEDecryptionFailure(
 	// a concurrent reader may still see it briefly. Keep the report detail
 	// sanitized: relayErr may wrap lower-level decrypt errors that include
 	// upstream content, which must never be exposed via the report endpoint.
-	if cachedReport, ok := s.cache.Get(prov.Name, upstreamModel); ok {
+	if cachedReport, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
 		cloned := cachedReport.Clone()
 		cloned.MarkE2EEFailed("E2EE decryption failed (see server logs, req=" + reqid.FromContext(ctx) + ")")
-		s.cache.Put(prov.Name, upstreamModel, cloned)
+		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), cloned)
 	}
 
 	// Invalidate caches to force full re-attestation on the next request.
-	s.cache.Delete(prov.Name, upstreamModel)
-	s.signingKeyCache.Delete(prov.Name, upstreamModel)
+	s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
+	s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
 
 	slog.ErrorContext(ctx, "E2EE decryption failed; caches invalidated",
 		"provider", prov.Name, "model", upstreamModel, "err", relayErr)
@@ -1823,7 +1882,7 @@ func (s *Server) pinnedPreDispatchE2EE(ctx context.Context, w http.ResponseWrite
 	if !prov.E2EE {
 		return true
 	}
-	if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok {
+	if cached, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
 		if !cached.ReportDataBindingPassed() {
 			slog.ErrorContext(ctx, "E2EE required but tee_reportdata_binding not passed; refusing request",
 				"provider", prov.Name, "model", upstreamModel)
@@ -1875,7 +1934,7 @@ func (s *Server) pinnedPostDispatchE2EE(
 	// Without one (e.g. attestation cache expired while SPKI cache is live),
 	// we cannot verify the signing key is bound to the TDX quote.
 	if report == nil {
-		s.negCache.Record(prov.Name, upstreamModel)
+		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
 		slog.ErrorContext(ctx, "E2EE required but no attestation report available",
 			"provider", prov.Name, "model", upstreamModel)
 		http.Error(w, "E2EE required but no attestation report available; refusing request", http.StatusBadGateway)
@@ -1885,7 +1944,7 @@ func (s *Server) pinnedPostDispatchE2EE(
 	// miss). Without it a MITM can substitute the enclave public key and
 	// E2EE degrades to plaintext.
 	if !report.ReportDataBindingPassed() {
-		s.negCache.Record(prov.Name, upstreamModel)
+		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
 		slog.ErrorContext(ctx, "E2EE required but tee_reportdata_binding not passed; refusing request",
 			"provider", prov.Name, "model", upstreamModel)
 		http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
@@ -1894,15 +1953,15 @@ func (s *Server) pinnedPostDispatchE2EE(
 	// Clear stale E2EE failure markers only after a confirmed fresh pinned
 	// attestation (freshReport=true). On an SPKI cache hit the pinned
 	// handler skips attestation: fail closed and force re-attestation.
-	key := providerModelKey{prov.Name, upstreamModel}
+	key := providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}
 	if _, failed := s.e2eeFailed.Load(key); failed {
 		if freshReport {
 			s.e2eeFailed.Delete(key)
 			slog.InfoContext(ctx, "Cleared prior E2EE failure after successful fresh pinned attestation",
 				"provider", prov.Name, "model", upstreamModel)
 		} else {
-			s.cache.Delete(prov.Name, upstreamModel)
-			s.signingKeyCache.Delete(prov.Name, upstreamModel)
+			s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
+			s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
 			slog.ErrorContext(ctx, "E2EE previously failed; cached pinned attestation insufficient for recovery",
 				"provider", prov.Name, "model", upstreamModel)
 			s.stats.errors.Add(1)
@@ -1952,7 +2011,7 @@ func (s *Server) handlePinnedChat(
 	}
 	// Supply the cached signing key for E2EE on SPKI cache hits.
 	if prov.E2EE {
-		if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok {
+		if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
 			pinnedReq.SigningKey = cachedKey
 		}
 	}
@@ -1967,7 +2026,7 @@ func (s *Server) handlePinnedChat(
 
 	pinnedResp, err := prov.PinnedHandler.HandlePinned(ctx, &pinnedReq)
 	if err != nil {
-		s.negCache.Record(prov.Name, upstreamModel)
+		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
 		slog.ErrorContext(ctx, "pinned chat failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		http.Error(w, fmt.Sprintf("pinned connection failed: %v", err), http.StatusBadGateway)
 		return
@@ -1978,19 +2037,19 @@ func (s *Server) handlePinnedChat(
 	// to enforce fail-closed policy before forwarding any upstream response.
 	report := pinnedResp.Report
 	if report != nil {
-		s.cache.Put(prov.Name, upstreamModel, report)
-	} else if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok {
+		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), report)
+	} else if cached, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
 		report = cached
 	}
 	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
-		s.negCache.Record(prov.Name, upstreamModel)
+		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
 		return
 	}
 	if !s.pinnedPostDispatchE2EE(ctx, w, prov, upstreamModel, report, pinnedResp.Report != nil) {
 		return
 	}
 	if pinnedResp.SigningKey != "" {
-		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
+		s.signingKeyCache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), pinnedResp.SigningKey)
 	}
 
 	// Copy response headers, excluding hop-by-hop headers that Go's
@@ -2042,19 +2101,19 @@ func (s *Server) handlePinnedPostRelay(
 	if relayErr != nil && errors.Is(relayErr, e2ee.ErrDecryptionFailed) && session != nil {
 		s.stats.errors.Add(1)
 		ms.errors.Add(1)
-		s.e2eeFailed.Store(providerModelKey{prov.Name, upstreamModel}, true)
+		s.e2eeFailed.Store(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}, true)
 
 		// Demote e2ee_usable in the cached report so the report endpoint
 		// reflects the failure before the cache entry is deleted. Keep detail
 		// sanitized: relayErr may include upstream content.
-		if cachedReport, ok := s.cache.Get(prov.Name, upstreamModel); ok {
+		if cachedReport, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
 			cloned := cachedReport.Clone()
 			cloned.MarkE2EEFailed("pinned E2EE decryption failed (see server logs, req=" + reqid.FromContext(ctx) + ")")
-			s.cache.Put(prov.Name, upstreamModel, cloned)
+			s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), cloned)
 		}
 
-		s.cache.Delete(prov.Name, upstreamModel)
-		s.signingKeyCache.Delete(prov.Name, upstreamModel)
+		s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
+		s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
 		slog.ErrorContext(ctx, "pinned E2EE decryption failed; caches invalidated",
 			"provider", prov.Name, "model", upstreamModel, "err", relayErr)
 		return
@@ -2074,7 +2133,7 @@ func (s *Server) handlePinnedPostRelay(
 	if session != nil && report != nil {
 		cloned := report.Clone()
 		cloned.MarkE2EEUsable("E2EE roundtrip succeeded via pinned connection")
-		s.cache.Put(prov.Name, upstreamModel, cloned)
+		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), cloned)
 	}
 	s.stats.lastSuccessAt.Store(time.Now().UnixNano())
 }
@@ -2100,7 +2159,7 @@ func (s *Server) attestAndCache(
 ) (result *attestResult, failStatus string) {
 	attestStart := time.Now()
 	var raw *attestation.RawAttestation
-	report, cached := s.cache.Get(prov.Name, upstreamModel)
+	report, cached := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel))
 	if cached {
 		s.stats.cacheHits.Add(1)
 	} else {
@@ -2112,7 +2171,7 @@ func (s *Server) attestAndCache(
 			http.Error(w, "attestation fetch failed; see server logs", http.StatusBadGateway)
 			return &attestResult{AttestDur: time.Since(attestStart)}, "attest_failed"
 		}
-		s.cache.Put(prov.Name, upstreamModel, report)
+		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), report)
 	}
 
 	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
@@ -2125,10 +2184,10 @@ func (s *Server) attestAndCache(
 	// the Blocked() check would allow a key from a failed attestation to
 	// be reused for E2EE on a subsequent cache-hit request.
 	if raw != nil && raw.SigningKey != "" {
-		if prev, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok && subtle.ConstantTimeCompare([]byte(prev), []byte(raw.SigningKey)) == 0 {
+		if prev, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok && subtle.ConstantTimeCompare([]byte(prev), []byte(raw.SigningKey)) == 0 {
 			slog.WarnContext(ctx, "signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
 		}
-		s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
+		s.signingKeyCache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), raw.SigningKey)
 	}
 
 	e2eeActive := prov.E2EE && report.ReportDataBindingPassed()
@@ -2368,8 +2427,8 @@ func (s *Server) verifyUpstreamTLSBinding(
 			"live_spki", provider.Truncate(peerSPKI, 16),
 			"attested_spki", provider.Truncate(raw.TinfoilTLSKeyFP, 16))
 		// Invalidate caches to force re-attestation on next request.
-		s.cache.Delete(prov.Name, upstreamModel)
-		s.signingKeyCache.Delete(prov.Name, upstreamModel)
+		s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
+		s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
 		if prov.SPKIDomainForModel != nil {
 			if domain, ok := prov.SPKIDomainForModel(ctx, upstreamModel); ok && domain != "" {
 				s.spkiCache.DeleteDomain(domain)
@@ -2588,7 +2647,7 @@ func (s *Server) buildUpstreamBody(
 		// key must match the attested key via constant-time comparison
 		// to keep ML-KEM bound to a verified TDX quote.
 		if prov.E2EEMaterialFetcher != nil {
-			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); !ok {
+			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); !ok {
 				slog.DebugContext(ctx, "E2EE key exchange: no cached signing key; skipping nonce pool",
 					"provider", prov.Name, "model", upstreamModel,
 				)
@@ -2622,7 +2681,7 @@ func (s *Server) buildUpstreamBody(
 				}
 			}
 		} else if !prov.SkipSigningKeyCache {
-			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok {
+			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
 				slog.DebugContext(ctx, "E2EE key exchange: using cached signing key", "provider", prov.Name, "model", upstreamModel)
 				raw = &attestation.RawAttestation{SigningKey: cachedKey}
 			}
@@ -2665,7 +2724,7 @@ func (s *Server) buildUpstreamBody(
 			default:
 				return nil, errors.New("fresh attestation has no TEE evidence; cannot verify signing key binding")
 			}
-			s.signingKeyCache.Put(prov.Name, upstreamModel, raw.SigningKey)
+			s.signingKeyCache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), raw.SigningKey)
 		}
 	} else {
 		slog.DebugContext(ctx, "E2EE key exchange: reusing attestation from verification (cache miss path)", "provider", prov.Name, "model", upstreamModel)
@@ -2753,7 +2812,7 @@ func (s *Server) handlePinnedNonChat(
 		Endpoint: endpoint,
 	}
 	if prov.E2EE {
-		if cachedKey, ok := s.signingKeyCache.Get(prov.Name, upstreamModel); ok {
+		if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
 			pinnedReq.SigningKey = cachedKey
 		}
 	}
@@ -2763,7 +2822,7 @@ func (s *Server) handlePinnedNonChat(
 
 	pinnedResp, err := prov.PinnedHandler.HandlePinned(reqCtx, &pinnedReq)
 	if err != nil {
-		s.negCache.Record(prov.Name, upstreamModel)
+		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
 		slog.ErrorContext(ctx, "pinned request failed", "provider", prov.Name, "model", upstreamModel, "path", endpointPath, "err", err)
 		http.Error(w, fmt.Sprintf("pinned connection failed: %v", err), http.StatusBadGateway)
 		return
@@ -2772,19 +2831,19 @@ func (s *Server) handlePinnedNonChat(
 
 	report := pinnedResp.Report
 	if report != nil {
-		s.cache.Put(prov.Name, upstreamModel, report)
-	} else if cached, ok := s.cache.Get(prov.Name, upstreamModel); ok {
+		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), report)
+	} else if cached, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
 		report = cached
 	}
 	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
-		s.negCache.Record(prov.Name, upstreamModel)
+		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
 		return
 	}
 	if !s.pinnedPostDispatchE2EE(ctx, w, prov, upstreamModel, report, pinnedResp.Report != nil) {
 		return
 	}
 	if pinnedResp.SigningKey != "" {
-		s.signingKeyCache.Put(prov.Name, upstreamModel, pinnedResp.SigningKey)
+		s.signingKeyCache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), pinnedResp.SigningKey)
 	}
 
 	// Copy response headers, excluding hop-by-hop headers that Go's
@@ -2837,7 +2896,7 @@ func (s *Server) clearE2EEFailureIfFresh(
 	ar *attestResult,
 	ms *modelStats,
 ) bool {
-	key := providerModelKey{prov.Name, upstreamModel}
+	key := providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}
 	_, failed := s.e2eeFailed.Load(key)
 	if !failed {
 		return true
@@ -2848,8 +2907,8 @@ func (s *Server) clearE2EEFailureIfFresh(
 			"provider", prov.Name, "model", upstreamModel)
 		return true
 	}
-	s.cache.Delete(prov.Name, upstreamModel)
-	s.signingKeyCache.Delete(prov.Name, upstreamModel)
+	s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
+	s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
 	slog.ErrorContext(ctx, "E2EE previously failed; cached attestation insufficient for recovery",
 		"provider", prov.Name, "model", upstreamModel)
 	s.stats.errors.Add(1)

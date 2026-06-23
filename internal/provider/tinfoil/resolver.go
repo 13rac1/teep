@@ -2,6 +2,8 @@ package tinfoil
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,6 +37,25 @@ const (
 	refreshTimeout = 30 * time.Second
 )
 
+// promptCacheKeyCtxKey is the context key for the OpenAI prompt_cache_key
+// field. When set, the resolver uses it for cache-aware backend selection
+// to maximize vLLM Automatic Prefix Cache (APC) hit rates.
+type promptCacheKeyCtxKey struct{}
+
+// WithPromptCacheKey returns a new context with the given prompt_cache_key
+// value. The resolver uses this to select a backend enclave domain via
+// hash-based sticky routing.
+func WithPromptCacheKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, promptCacheKeyCtxKey{}, key)
+}
+
+// PromptCacheKeyFromContext extracts the prompt_cache_key from the context,
+// or returns empty string if not set.
+func PromptCacheKeyFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(promptCacheKeyCtxKey{}).(string)
+	return v
+}
+
 // proxyResponse is the JSON response from /.well-known/tinfoil-proxy.
 type proxyResponse struct {
 	Attempted string                `json:"attempted"`
@@ -63,8 +84,9 @@ type proxyEnclave struct {
 // ModelMapping holds the resolved backend enclave domain and Sigstore
 // repo for a model, as returned by the proxy discovery endpoint.
 type ModelMapping struct {
-	Domain string // backend enclave domain (e.g. "gemma4-31b-1.inf10.tinfoil.sh")
-	Repo   string // Sigstore GitHub repo (e.g. "tinfoilsh/confidential-gemma4-31b")
+	Domain  string   // selected backend enclave domain (e.g. "gemma4-31b-1.inf10.tinfoil.sh")
+	Repo    string   // Sigstore GitHub repo (e.g. "tinfoilsh/confidential-gemma4-31b")
+	Domains []string // all available enclave domains, sorted lexicographically
 }
 
 // DirectResolver maps model names to backend inference enclave domains via
@@ -113,12 +135,17 @@ func (r *DirectResolver) SetClient(c *http.Client) {
 // cached mapping is stale (older than 5 minutes), it refreshes from the
 // proxy discovery endpoint first. Returns an error if the model is not
 // found after refresh.
+//
+// When a prompt_cache_key is present in the context (set via
+// WithPromptCacheKey), the resolver uses hash-based sticky routing to
+// select a backend enclave domain, maximizing vLLM APC cache hit rates.
 func (r *DirectResolver) Resolve(ctx context.Context, model string) (string, error) {
 	m, err := r.ResolveMapping(ctx, model)
 	if err != nil {
 		return "", err
 	}
-	return m.Domain, nil
+	promptCacheKey := PromptCacheKeyFromContext(ctx)
+	return m.SelectDomain(promptCacheKey), nil
 }
 
 // ResolveMapping returns the full model mapping (domain + repo) for the
@@ -169,6 +196,39 @@ func (r *DirectResolver) ResolveMapping(ctx context.Context, model string) (Mode
 	return m, nil
 }
 
+// SelectDomain selects the best backend enclave domain from the mapping
+// using the prompt_cache_key for cache-aware routing. When promptCacheKey
+// is non-empty, it hashes the key with each domain and picks the lowest
+// lexicographic hash. This provides sticky routing so that requests with
+// the same prompt_cache_key consistently hit the same backend enclave,
+// maximizing vLLM Automatic Prefix Cache (APC) hit rates.
+//
+// When promptCacheKey is empty, it falls back to the lexicographically
+// smallest domain for deterministic selection (capture/replay consistency).
+func (m ModelMapping) SelectDomain(promptCacheKey string) string {
+	if len(m.Domains) == 0 {
+		return m.Domain
+	}
+	if promptCacheKey == "" {
+		return m.Domains[0]
+	}
+
+	// Hash prompt_cache_key with each domain and pick the lowest hash.
+	// This ensures that the same prompt_cache_key always routes to the
+	// same backend, as long as the set of available domains doesn't change.
+	bestDomain := ""
+	bestHash := ""
+	for _, domain := range m.Domains {
+		h := sha256.Sum256([]byte(promptCacheKey + ":" + domain))
+		hashHex := hex.EncodeToString(h[:])
+		if bestHash == "" || hashHex < bestHash {
+			bestHash = hashHex
+			bestDomain = domain
+		}
+	}
+	return bestDomain
+}
+
 // refresh fetches the model-to-enclave mapping from the proxy discovery
 // endpoint and rebuilds the cached mapping. Holds the write lock only for
 // the swap.
@@ -214,25 +274,40 @@ func (r *DirectResolver) refresh(ctx context.Context) error {
 		if model == "" {
 			continue
 		}
-		// Pick the first available enclave for this model. The proxy
-		// endpoint may list multiple enclaves for load balancing; we
-		// select the first one deterministically. The attestation
-		// verification will confirm the enclave's identity regardless
-		// of which backend is selected.
-		domain := firstEnclaveDomain(pm.Enclaves)
-		if domain == "" {
+		// Collect all valid enclave domains for this model. The proxy
+		// endpoint may list multiple enclaves for load balancing.
+		// Domains are sorted lexicographically for deterministic
+		// selection. The attestation verification will confirm the
+		// enclave's identity regardless of which backend is selected.
+		//
+		// TODO: Add chutes-style instance pool handling with a skip set
+		// for failing/skipped enclaves. The Tinfoil router uses a similar
+		// pattern (NextEnclave with a skip map) to avoid overloaded or
+		// circuit-broken backends. Teep could maintain a per-model skip
+		// set populated by attestation failures or TLS binding mismatches,
+		// and exclude those domains from selection until they recover.
+		domains := sortedEnclaveDomains(pm.Enclaves)
+		if len(domains) == 0 {
 			slog.WarnContext(ctx, "tinfoil: proxy discovery: model has no enclaves",
 				"model", model)
 			continue
 		}
-		if !isValidBackendDomain(domain) {
-			slog.WarnContext(ctx, "tinfoil: proxy discovery: skipping invalid enclave domain",
-				"model", model, "domain", domain)
+		valid := make([]string, 0, len(domains))
+		for _, domain := range domains {
+			if !isValidBackendDomain(domain) {
+				slog.WarnContext(ctx, "tinfoil: proxy discovery: skipping invalid enclave domain",
+					"model", model, "domain", domain)
+				continue
+			}
+			valid = append(valid, domain)
+		}
+		if len(valid) == 0 {
 			continue
 		}
 		mapping[model] = ModelMapping{
-			Domain: domain,
-			Repo:   pm.Repo,
+			Domain:  valid[0],
+			Repo:    pm.Repo,
+			Domains: valid,
 		}
 	}
 
@@ -244,21 +319,22 @@ func (r *DirectResolver) refresh(ctx context.Context) error {
 	return nil
 }
 
-// firstEnclaveDomain returns the lexicographically smallest enclave domain
-// from the map, or empty string if none. Deterministic selection ensures
-// capture/replay consistency: the same proxy response always resolves to
-// the same backend enclave. The attestation verification will confirm the
-// enclave's identity regardless of which backend is selected.
-func firstEnclaveDomain(enclaves map[string]proxyEnclave) string {
+// sortedEnclaveDomains returns all enclave domains from the map, sorted
+// lexicographically. Deterministic ordering ensures capture/replay
+// consistency: the same proxy response always resolves to the same set
+// of backend enclaves in the same order. The attestation verification
+// will confirm the enclave's identity regardless of which backend is
+// selected.
+func sortedEnclaveDomains(enclaves map[string]proxyEnclave) []string {
 	if len(enclaves) == 0 {
-		return ""
+		return nil
 	}
 	domains := make([]string, 0, len(enclaves))
 	for domain := range enclaves {
 		domains = append(domains, domain)
 	}
 	sort.Strings(domains)
-	return domains[0]
+	return domains
 }
 
 // isValidBackendDomain validates that a backend enclave domain is a

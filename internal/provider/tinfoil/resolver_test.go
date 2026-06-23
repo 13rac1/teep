@@ -296,3 +296,133 @@ func TestDirectResolver_SetClient_Concurrent(t *testing.T) {
 
 	wg.Wait()
 }
+
+// proxyResponseMultiEnclaveJSON builds a tinfoil-proxy JSON response with
+// multiple enclaves for a single model, for testing cache-aware selection.
+func proxyResponseMultiEnclaveJSON(model string, domains ...string) string {
+	var sb strings.Builder
+	sb.WriteString(`{"models":{`)
+	fmt.Fprintf(&sb, `%q:{"enclaves":{`, model)
+	for i, d := range domains {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `%q:{"hpke_key":"abc","predicate":"https://tinfoil.sh/predicate/tdx-guest/v2","tls_key_fp":"def"}`, d)
+	}
+	sb.WriteString(`}}}}`)
+	return sb.String()
+}
+
+func TestSelectDomain_NoPromptCacheKey(t *testing.T) {
+	m := ModelMapping{
+		Domain:  "b.tinfoil.sh",
+		Domains: []string{"a.tinfoil.sh", "b.tinfoil.sh", "c.tinfoil.sh"},
+	}
+	// Without prompt_cache_key, should return lexicographically smallest.
+	got := m.SelectDomain("")
+	if got != "a.tinfoil.sh" {
+		t.Errorf("SelectDomain(\"\") = %q, want a.tinfoil.sh", got)
+	}
+}
+
+func TestSelectDomain_WithPromptCacheKey(t *testing.T) {
+	m := ModelMapping{
+		Domain:  "a.tinfoil.sh",
+		Domains: []string{"a.tinfoil.sh", "b.tinfoil.sh", "c.tinfoil.sh"},
+	}
+	// Same prompt_cache_key should always select the same domain.
+	key := "my-cache-key"
+	first := m.SelectDomain(key)
+	if first == "" {
+		t.Fatal("SelectDomain returned empty string")
+	}
+	for range 10 {
+		got := m.SelectDomain(key)
+		if got != first {
+			t.Errorf("SelectDomain not deterministic: got %q, want %q", got, first)
+		}
+	}
+}
+
+func TestSelectDomain_DifferentKeysDifferentDomains(t *testing.T) {
+	m := ModelMapping{
+		Domain:  "a.tinfoil.sh",
+		Domains: []string{"a.tinfoil.sh", "b.tinfoil.sh", "c.tinfoil.sh", "d.tinfoil.sh"},
+	}
+	// Different keys should distribute across domains (at least 2 distinct).
+	seen := make(map[string]bool)
+	for i := range 100 {
+		key := fmt.Sprintf("key-%d", i)
+		seen[m.SelectDomain(key)] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("expected at least 2 distinct domains, got %d", len(seen))
+	}
+}
+
+func TestSelectDomain_EmptyDomains(t *testing.T) {
+	m := ModelMapping{
+		Domain:  "fallback.tinfoil.sh",
+		Domains: nil,
+	}
+	got := m.SelectDomain("some-key")
+	if got != "fallback.tinfoil.sh" {
+		t.Errorf("SelectDomain with nil Domains = %q, want fallback.tinfoil.sh", got)
+	}
+}
+
+func TestResolve_WithPromptCacheKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, proxyResponseMultiEnclaveJSON("gemma4-31b",
+			"gemma4-31b-1.inf10.tinfoil.sh",
+			"gemma4-31b-2.inf10.tinfoil.sh",
+			"gemma4-31b-3.inf10.tinfoil.sh",
+		))
+	}))
+	defer srv.Close()
+
+	resolver := newDirectResolverForTest(srv.URL)
+
+	// Without prompt_cache_key: lexicographically smallest.
+	ctx := context.Background()
+	domain, err := resolver.Resolve(ctx, "gemma4-31b")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if domain != "gemma4-31b-1.inf10.tinfoil.sh" {
+		t.Errorf("domain without key = %q, want gemma4-31b-1.inf10.tinfoil.sh", domain)
+	}
+
+	// With prompt_cache_key: should be deterministic and may differ.
+	ctx = WithPromptCacheKey(context.Background(), "test-cache-key")
+	domainWithKey, err := resolver.Resolve(ctx, "gemma4-31b")
+	if err != nil {
+		t.Fatalf("Resolve with key: %v", err)
+	}
+	if domainWithKey == "" {
+		t.Fatal("domain with key is empty")
+	}
+
+	// Same key should always produce the same domain.
+	domainAgain, err := resolver.Resolve(ctx, "gemma4-31b")
+	if err != nil {
+		t.Fatalf("Resolve with key (2nd): %v", err)
+	}
+	if domainAgain != domainWithKey {
+		t.Errorf("domain not deterministic: %q vs %q", domainWithKey, domainAgain)
+	}
+}
+
+func TestPromptCacheKeyFromContext(t *testing.T) {
+	// Empty context returns empty string.
+	if got := PromptCacheKeyFromContext(context.Background()); got != "" {
+		t.Errorf("empty context: got %q, want empty", got)
+	}
+
+	// Set and get.
+	ctx := WithPromptCacheKey(context.Background(), "my-key")
+	if got := PromptCacheKeyFromContext(ctx); got != "my-key" {
+		t.Errorf("set context: got %q, want my-key", got)
+	}
+}
