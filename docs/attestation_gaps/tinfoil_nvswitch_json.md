@@ -6,58 +6,85 @@ NVSwitch JSON bytes in the HTTP response. The server computes the hash
 over the raw `nvattest` CLI output (serialized by NVIDIA's C++
 `nlohmann/json` library), but Go's `json.Marshal` re-encodes the
 `json.RawMessage` when embedding it in the response, producing different
-bytes. This causes all 8-GPU Hopper inference enclaves that serve
-NVSwitch evidence to fail REPORTDATA binding verification. The gap is
-open on all Tinfoil 8-GPU Hopper deployments until the server-side code
-compacts the `nvattest` output before hashing.
+bytes. Because the NVSwitch evidence hash is part of the REPORTDATA
+preimage, this mismatch prevents the entire REPORTDATA hash from being
+verified — meaning the TLS SPKI, HPKE key, nonce, and GPU evidence hash
+cannot be authenticated via the hardware-signed attestation report.
+Teep implements a workaround that injects the reported hash value into
+the preimage, restoring REPORTDATA authentication for all components
+except NVSwitch evidence binding.
 
 ## The Problem
 
-Tinfoil's confidential VM image serves a V3 attestation document at
-`/.well-known/tinfoil-attestation?nonce=<hex>`. For 8-GPU Hopper
-systems, the document includes NVSwitch attestation evidence in a
-`nvswitch` JSON field and a corresponding `nvswitch_evidence_hash` in
-`report_data`. The hash is bound into the CPU hardware attestation
-report's REPORTDATA field, cryptographically tying the NVSwitch evidence
-to the CPU quote.
+The REPORTDATA field in the Tinfoil V3 attestation document is a 64-byte
+value where the first 32 bytes are:
 
-The problem is that the hash reported in `report_data.nvswitch_evidence_hash`
-does not match `SHA-256(raw_nvswitch_json_bytes)` from the HTTP response.
-The server computes the hash over the raw output of the `nvattest`
-command-line tool, which uses NVIDIA's C++ `nlohmann/json` library for
-serialization. When the server embeds this output as a `json.RawMessage`
-in the `Attestation` struct and serializes the full response with Go's
-`json.Marshal` or `json.NewEncoder`, Go re-encodes the `json.RawMessage`,
-changing the byte sequence (compacting whitespace, potentially reordering
-or re-escaping). The hash was computed over the pre-re-encoding bytes,
-but the response contains the post-re-encoding bytes.
+```
+SHA-256(tls_key_fp || hpke_key || nonce || gpu_evidence_hash || nvswitch_evidence_hash)
+```
 
-This means any external verifier that hashes the NVSwitch JSON bytes from
-the response — which is the only data available to a remote client — will
-compute a different hash than the one bound into the hardware attestation
-report. The REPORTDATA verification fails, which cascades to GPU-CPU
-binding and NVSwitch binding verification failures.
+This hash is signed by the CPU hardware (TDX quote or SEV-SNP report),
+cryptographically binding the TLS certificate fingerprint, HPKE public
+key, client nonce, GPU evidence, and NVSwitch evidence to the enclave
+identity. Without verifying this hash, none of these components are
+authenticated by the hardware signature — they are only verified by
+independent factor checks that do not prove they all belong to the same
+enclave.
+
+The server computes `nvswitch_evidence_hash` as `SHA-256(raw_nvattest_output)`,
+where the raw output comes from NVIDIA's `nvattest` CLI tool (serialized
+by the C++ `nlohmann/json` library). When the server embeds this output
+as a `json.RawMessage` in the `Attestation` struct and serializes the
+full response with Go's `json.Marshal`, Go re-encodes the
+`json.RawMessage` — compacting whitespace and potentially changing
+number formatting or string escaping. The hash was computed over the
+pre-re-encoding bytes, but the response contains the post-re-encoding
+bytes. Any external verifier that hashes the NVSwitch JSON bytes from
+the response will compute a different hash than the one in
+`report_data.nvswitch_evidence_hash`.
+
+Because the NVSwitch evidence hash is part of the REPORTDATA preimage,
+this mismatch is not isolated to NVSwitch verification. If a verifier
+rejects the mismatched hash and fails early, the entire REPORTDATA hash
+is never computed or compared against the hardware-signed value. This
+means the TLS SPKI, HPKE key, nonce, and GPU evidence hash — all of
+which are correctly reported and independently verifiable — lose their
+hardware-signed authentication. An attacker who could relay a valid
+hardware quote from one enclave while serving different TLS/HPKE keys
+from another would not be detected by the REPORTDATA check.
 
 ## Impact
 
-**Security impact:** The NVSwitch evidence hash mismatch prevents
-independent verification of GPU-CPU binding for 8-GPU Hopper systems.
-While the GPU evidence itself (SPDM reports, certificate chains) is
-present and independently verifiable, the cryptographic binding between
-NVSwitch evidence and the CPU hardware quote cannot be confirmed. An
-attacker who could substitute NVSwitch evidence in transit would not be
-detected by the REPORTDATA hash check, because the check fails regardless
-of whether the evidence is authentic or tampered.
+**Security impact:** Without the REPORTDATA workaround, the NVSwitch
+hash mismatch prevents hardware-signed authentication of the TLS SPKI,
+HPKE key, nonce, and GPU evidence hash for all 8-GPU Hopper Tinfoil
+inference enclaves. While each component is independently verified by
+separate factor checks (TLS SPKI by `tls_key_binding`, HPKE key by
+`e2ee_capable`/`e2ee_usable`, nonce by `nonce_match`, GPU evidence by
+`nvidia_*` factors), the REPORTDATA hash provides transitive
+authentication: it proves that the enclave that generated the hardware
+quote is the same enclave that holds the TLS private key, HPKE private
+key, and GPU evidence. Without it, a relay attack that substitutes
+keys or evidence from a different enclave would not be detected by the
+hardware binding check.
 
-However, the GPU evidence hash (for the `gpu` field) is NOT affected by
-this bug — GPU evidence is collected via `json.Marshal` in Go, which
+With the workaround, the TLS SPKI, HPKE key, nonce, and GPU evidence
+hash are authenticated via the hardware-signed REPORTDATA. Only the
+NVSwitch evidence hash binding remains unverified — an attacker who
+could substitute NVSwitch evidence in transit would not be detected by
+the REPORTDATA hash check. However, the NVSwitch evidence itself (SPDM
+reports, certificate chains) is still present and independently
+verifiable, and the `nvswitch_binding` factor fails closed.
+
+The GPU evidence hash (for the `gpu` field) is NOT affected by this
+bug — GPU evidence is collected via `json.Marshal` in Go, which
 produces compact JSON from the start, so the hash matches the response
-bytes. Only NVSwitch evidence, collected via the external `nvattest` CLI,
-is affected.
+bytes. Only NVSwitch evidence, collected via the external `nvattest`
+CLI, is affected.
 
 **Operational impact:** All 8-GPU Hopper Tinfoil inference enclaves
-(e.g. `glm-5-2`) fail attestation verification. Teep correctly fails
-closed, blocking requests to these enclaves. Single-GPU enclaves
+(e.g. `glm-5-2`) have the `nvswitch_binding` factor fail closed,
+blocking requests to these enclaves. Single-GPU enclaves
 (e.g. `gemma4-31b`) are unaffected because they do not serve NVSwitch
 evidence.
 
@@ -224,27 +251,68 @@ collection path.
 
 ### Teep Report Factor Behavior
 
-The NVSwitch hash mismatch causes the following factor cascade in teep:
+Teep implements a workaround that preserves REPORTDATA authentication
+for all components except NVSwitch:
 
-1. `tee_reportdata_binding` → **Fail**: The `verifyNVSwitchEvidenceHash`
-   function in `internal/provider/tinfoil/verify.go` computes
-   `SHA-256(raw.NVSwitchRawJSON)` and compares against
-   `raw.TinfoilNVSwitchEvidenceHash`. The mismatch causes
-   `VerifyReportData` to return an error, which sets
-   `ReportDataBindingErr` on the TDX/SEV result.
+1. `tee_reportdata_binding` → **Pass**: When `verifyNVSwitchEvidenceHash`
+   fails, `VerifyReportData` does not return an error immediately.
+   Instead, it proceeds to verify the REPORTDATA hash using the
+   **reported** `nvswitch_evidence_hash` from `report_data` (which is
+   what the server bound into REPORTDATA). If the REPORTDATA hash
+   matches, the TLS SPKI, HPKE key, nonce, and GPU evidence hash are
+   all authenticated by the hardware signature. The detail string
+   includes `nvswitch_bound=false` to indicate the NVSwitch hash
+   binding is broken.
 
-2. `cpu_gpu_chain` → **Fail**: Because `GPUHashBound` is false (the
-   REPORTDATA binding failed before reaching the GPU hash check),
-   `evalCPUGPUChain` returns Fail.
+2. `cpu_gpu_chain` → **Pass**: Because `GPUHashBound` is true (the GPU
+   evidence hash was verified and the REPORTDATA hash matches),
+   `evalCPUGPUChain` returns Pass.
 
-3. `nvswitch_binding` → **Fail**: Because `GPUHashBound` is false,
-   `evalNVSwitchBinding` takes the "no GPU evidence" Skip path, which
-   is promoted to Fail by the enforced-factor promotion logic.
+3. `nvswitch_binding` → **Fail**: Because `NVSwitchExpected` is true
+   (8-GPU Hopper topology) and `NVSwitchHashBound` is false,
+   `evalNVSwitchBinding` returns Fail with "NVSwitch evidence hash
+   mismatch (server-side JSON re-encoding bug)".
 
-4. `measured_model_weights` → **Fail**: Because
-   `sigstore_code_verified` also fails (the `glm-5-2` repo returns 404
-   from GitHub releases API — a separate issue), the transitive model
-   weight chain cannot be established.
+### Why the Workaround Is Necessary
+
+The REPORTDATA hash authenticates ALL of these components as a group:
+
+```
+REPORTDATA[0:32] = SHA-256(tls_key_fp || hpke_key || nonce || gpu_evidence_hash || nvswitch_evidence_hash)
+```
+
+This hash is signed by the CPU hardware (TDX quote or SEV-SNP report).
+Without verifying it, none of these components are authenticated by the
+hardware signature — they are only verified by independent factor checks
+(TLS SPKI by `tls_key_binding`, HPKE key by `e2ee_capable`/`e2ee_usable`,
+nonce by `nonce_match`, GPU evidence by `nvidia_*` factors).
+
+The independent factor checks are sufficient for individual component
+authentication, but the REPORTDATA hash provides **transitive
+authentication**: it proves that the enclave that generated the hardware
+quote is the same enclave that holds the TLS private key, HPKE private
+key, and GPU evidence. Without REPORTDATA verification, an attacker who
+could relay a valid hardware quote from one enclave while serving
+different TLS/HPKE keys from another would not be detected by the
+REPORTDATA check (though the attestation fetch's peer SPKI verification
+and the upstream TLS binding verification would still catch this).
+
+The workaround uses the **reported** `nvswitch_evidence_hash` (from
+`report_data`) in the preimage instead of the computed hash. This is
+safe because:
+
+1. The reported hash is what the server bound into REPORTDATA
+2. The REPORTDATA hash is signed by the CPU hardware
+3. If the REPORTDATA hash matches, it proves the server used these
+   exact values (tls_key_fp, hpke_key, nonce, gpu_evidence_hash,
+   nvswitch_evidence_hash) when generating the hardware quote
+4. The TLS SPKI, HPKE key, and GPU evidence hash are independently
+   verified against the response data, so they cannot be substituted
+
+The only component that is NOT authenticated is the NVSwitch evidence
+hash binding — we cannot confirm that the NVSwitch evidence in the
+response matches what the server hashed. The `nvswitch_binding` factor
+correctly fails closed for this.
 
 ---
 
@@ -302,18 +370,33 @@ return json.RawMessage(compacted), nil
 This guarantees the hash is computed over Go-native JSON bytes that
 `json.Marshal` will reproduce exactly in the response.
 
-### Client-Side Workaround (Not Recommended)
+### Client-Side Workaround (Implemented)
 
-A client-side workaround would require re-implementing the `nvattest`
-CLI's JSON serialization format (determined by NVIDIA's C++
-`nlohmann/json` library) in Go. This is fragile and would break when
-the `nvattest` CLI or `nlohmann/json` library updates. No client-side
-workaround is recommended.
+Teep implements a workaround that preserves REPORTDATA authentication
+for all components except NVSwitch. When `verifyNVSwitchEvidenceHash`
+fails (the computed hash doesn't match the reported hash), teep does
+NOT fail `VerifyReportData` immediately. Instead, it proceeds to verify
+the REPORTDATA hash using the **reported** `nvswitch_evidence_hash`
+from `report_data`. If the REPORTDATA hash matches, the TLS SPKI, HPKE
+key, nonce, and GPU evidence hash are all authenticated by the hardware
+signature.
+
+The `nvswitch_binding` factor still fails closed, but `tee_reportdata_binding`
+and `cpu_gpu_chain` pass. This is a significant security improvement over
+failing all three factors, which would leave the TLS SPKI, HPKE key, and
+GPU evidence unauthenticated via REPORTDATA.
+
+This workaround does NOT attempt to reproduce the server's hash
+computation (which would require re-implementing the `nvattest` CLI's
+C++ `nlohmann/json` serialization in Go). Instead, it trusts the
+reported hash value for the REPORTDATA preimage, which is safe because
+the REPORTDATA hash itself is hardware-signed and the other components
+are independently verified.
 
 ### Deployment Priority
 
-1. **Server-side fix** (required, blocks all 8-GPU Hopper verification)
-2. **Client-side workaround** (not recommended — fragile, unreliable)
+1. **Server-side fix** (required, blocks NVSwitch binding for all 8-GPU Hopper enclaves)
+2. **Client-side workaround** (implemented — preserves REPORTDATA authentication for all components except NVSwitch)
 
 ---
 
@@ -336,28 +419,27 @@ workaround is recommended.
 
 ## Teep Status
 
-**Affected factors:**
-- `tee_reportdata_binding` — Fail (NVSwitch evidence hash mismatch)
-- `cpu_gpu_chain` — Fail (cascade from REPORTDATA binding failure)
-- `nvswitch_binding` — Fail (cascade from GPUHashBound=false)
-- `measured_model_weights` — Fail (cascade from sigstore_code_verified
-  failure, which is a separate issue for `glm-5-2`)
+**Affected factors (with workaround):**
+- `tee_reportdata_binding` — **Pass** (REPORTDATA hash verified using
+  reported NVSwitch hash; TLS SPKI, HPKE key, nonce, and GPU evidence
+  hash all authenticated by hardware signature)
+- `cpu_gpu_chain` — **Pass** (GPUHashBound=true; GPU evidence hash
+  verified and REPORTDATA hash matches)
+- `nvswitch_binding` — **Fail** (NVSwitchExpected=true but
+  NVSwitchHashBound=false; NVSwitch evidence hash does not match raw
+  JSON bytes due to server-side JSON re-encoding bug)
 
-**Teep behavior:** Teep correctly fails closed on the NVSwitch evidence
-hash mismatch. The `verifyNVSwitchEvidenceHash` function in
-`internal/provider/tinfoil/verify.go` computes
-`SHA-256(raw.NVSwitchRawJSON)` from the exact bytes in the HTTP response
-and constant-time compares against `report_data.nvswitch_evidence_hash`.
-On mismatch, it returns an error that causes `VerifyReportData` to fail,
-which cascades to GPU and NVSwitch binding factors.
-
-**Workaround:** None. Teep cannot reproduce the server's hash
-computation from the response bytes because the `nvattest` CLI's JSON
-serialization format (C++ `nlohmann/json`) differs from Go's
-`encoding/json` in ways that cannot be reliably reverse-engineered.
+**Teep behavior:** When the NVSwitch evidence hash doesn't match the
+raw JSON bytes, teep logs a warning and proceeds to verify the
+REPORTDATA hash using the reported `nvswitch_evidence_hash`. This
+preserves hardware-signed authentication of the TLS SPKI, HPKE key,
+nonce, and GPU evidence hash. The `nvswitch_binding` factor fails
+closed with a clear message indicating the server-side bug.
 
 **Post-fix enforcement:** Once the server-side fix is deployed, teep
-will automatically verify the NVSwitch evidence hash correctly. No teep
-code changes are required — teep already implements the correct
-verification logic. The `tee_reportdata_binding`, `cpu_gpu_chain`, and
-`nvswitch_binding` factors will pass for 8-GPU Hopper enclaves.
+will automatically verify the NVSwitch evidence hash correctly (the
+`verifyNVSwitchEvidenceHash` check will pass, setting
+`nvswitch_bound=true` in the detail string). The `nvswitch_binding`
+factor will pass for 8-GPU Hopper enclaves. No teep code changes are
+required — the workaround automatically detects when the hash matches
+and sets `nvswitch_bound=true`.
