@@ -2317,6 +2317,46 @@ type upstreamResult struct {
 	UpstreamDur time.Duration
 }
 
+// verifyUpstreamTLSBinding checks that the live upstream TLS peer SPKI
+// matches the attested tls_key_fp from the attestation report. This
+// prevents MITM attacks between teep and the enclave after attestation
+// completes. The attestation fetch already verifies the peer SPKI, but
+// the upstream inference connection must also be bound to the same
+// attested identity.
+//
+// On mismatch, invalidates all caches to force re-attestation on the next
+// request. Returns an *httpError on failure, nil on success.
+func (s *Server) verifyUpstreamTLSBinding(
+	ctx context.Context,
+	prov *provider.Provider,
+	upstreamModel string,
+	resp *http.Response,
+	raw *attestation.RawAttestation,
+) *httpError {
+	peerSPKI := tlsct.PeerSPKI(resp.TLS)
+	if peerSPKI == "" {
+		return &httpError{http.StatusBadGateway, "tls_binding_failed",
+			errors.New("upstream TLS binding failed: no TLS peer state on upstream connection")}
+	}
+	if subtle.ConstantTimeCompare([]byte(peerSPKI), []byte(raw.TinfoilTLSKeyFP)) != 1 {
+		slog.ErrorContext(ctx, "upstream TLS SPKI mismatch: live peer does not match attested fingerprint",
+			"provider", prov.Name, "model", upstreamModel,
+			"live_spki", provider.Truncate(peerSPKI, 16),
+			"attested_spki", provider.Truncate(raw.TinfoilTLSKeyFP, 16))
+		// Invalidate caches to force re-attestation on next request.
+		s.cache.Delete(prov.Name, upstreamModel)
+		s.signingKeyCache.Delete(prov.Name, upstreamModel)
+		if prov.SPKIDomainForModel != nil {
+			if domain, ok := prov.SPKIDomainForModel(ctx, upstreamModel); ok && domain != "" {
+				s.spkiCache.DeleteDomain(domain)
+			}
+		}
+		return &httpError{http.StatusBadGateway, "tls_binding_failed",
+			errors.New("upstream TLS SPKI mismatch: live peer fingerprint does not match attested tls_key_fp")}
+	}
+	return nil
+}
+
 // doUpstreamRoundtrip builds the upstream body, sends it, and handles Chutes
 // retry/failover. On error it cleans up all resources (crypto material, response
 // bodies, contexts) and returns the error. On success the caller owns cleanup.
@@ -2425,6 +2465,18 @@ func (s *Server) doUpstreamRoundtrip(
 		upstreamDoStart := time.Now()
 		resp, err = s.upstreamClient.Do(upstreamReq)
 		upstreamDur += time.Since(upstreamDoStart)
+
+		// TLS-fingerprint binding: for providers that use TLS binding
+		// (e.g. Tinfoil), verify the live upstream TLS peer SPKI matches
+		// the attested tls_key_fp from the attestation report.
+		if err == nil && resp != nil && prov.UsesTLSBinding && raw != nil && raw.TinfoilTLSKeyFP != "" {
+			if spkiErr := s.verifyUpstreamTLSBinding(ctx, prov, upstreamModel, resp, raw); spkiErr != nil {
+				cancel()
+				zeroE2EE(session, meta, ehbp)
+				resp.Body.Close()
+				return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur}, spkiErr
+			}
+		}
 
 		retryable := chutesRetryableError(err, resp)
 
