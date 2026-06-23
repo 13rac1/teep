@@ -79,13 +79,18 @@ func (a *DirectAttester) SetClient(c *http.Client) {
 // FetchAttestation resolves the model to a per-model domain and fetches
 // attestation from that enclave's well-known endpoint.
 func (a *DirectAttester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
-	domain, err := a.resolver.Resolve(ctx, model)
+	m, err := a.resolver.ResolveMapping(ctx, model)
 	if err != nil {
 		return nil, fmt.Errorf("tinfoil direct: resolve model %q: %w", model, err)
 	}
-	baseURL := "https://" + domain
-	slog.DebugContext(ctx, "tinfoil direct: resolved model domain", "model", model, "domain", domain)
-	return fetchAndVerifyAttestation(ctx, a.client, baseURL, a.apiKey, nonce)
+	baseURL := "https://" + m.Domain
+	slog.DebugContext(ctx, "tinfoil direct: resolved model domain", "model", model, "domain", m.Domain, "repo", m.Repo)
+	raw, err := fetchAndVerifyAttestation(ctx, a.client, baseURL, a.apiKey, nonce)
+	if err != nil {
+		return nil, err
+	}
+	raw.TinfoilRepo = m.Repo
+	return raw, nil
 }
 
 // fetchAndVerifyAttestation fetches a V3 attestation document from the given

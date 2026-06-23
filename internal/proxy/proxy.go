@@ -791,23 +791,29 @@ func fromConfig(
 		p.Encryptor = tinfoil.NewE2EE()
 		p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
 		p.SupplyChainPolicy = nil // Sigstore-based, not compose-based
-		p.SigstoreRepoForModel = tinfoil.RepoForModel
+		p.SigstoreRepoForModel = func(model string) string {
+			m, err := resolver.ResolveMapping(context.Background(), model)
+			if err != nil || m.Repo == "" {
+				return tinfoil.RepoForModel(model)
+			}
+			return m.Repo
+		}
 		p.BaseURLForModel = func(ctx context.Context, model string) (string, error) {
-			d, err := resolver.Resolve(ctx, model)
+			m, err := resolver.ResolveMapping(ctx, model)
 			if err != nil {
 				return "", fmt.Errorf("tinfoil direct: resolve model %q: %w", model, err)
 			}
-			return "https://" + d, nil
+			return "https://" + m.Domain, nil
 		}
 		p.ModelLister = provider.NewModelLister(tinfoil.DefaultBaseURL, cp.APIKey, config.NewAttestationClient(offline))
 		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
-			d, err := resolver.Resolve(ctx, model)
+			m, err := resolver.ResolveMapping(ctx, model)
 			if err != nil {
 				slog.WarnContext(ctx, "tinfoil direct: SPKI domain resolution failed",
 					"model", model, "err", err)
 				return "", false
 			}
-			return d, true
+			return m.Domain, true
 		}
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", cp.Name)

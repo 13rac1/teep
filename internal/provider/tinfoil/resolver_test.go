@@ -22,7 +22,7 @@ func newDirectResolverForTest(url string) *DirectResolver {
 		proxyURL: url,
 		apiKey:   "test-key",
 		client:   tlsct.NewHTTPClient(1 * time.Second),
-		mapping:  make(map[string]string),
+		mapping:  make(map[string]ModelMapping),
 	}
 }
 

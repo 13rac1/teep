@@ -348,7 +348,7 @@ func runServe(ctx context.Context, offline, force bool) error {
 		return err
 	}
 
-	srv, err := proxy.New(cfg)
+	srv, err := proxy.New(cfg) //nolint:contextcheck // proxy.New doesn't accept context; SigstoreRepoForModel uses context.Background() for cached resolver lookup
 	if err != nil {
 		return fmt.Errorf("proxy init: %w", err)
 	}

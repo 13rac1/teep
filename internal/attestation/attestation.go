@@ -183,6 +183,11 @@ type RawAttestation struct {
 	TinfoilGPUEvidenceHash      string `json:"-"` // report_data.gpu_evidence_hash
 	TinfoilNVSwitchEvidenceHash string `json:"-"` // report_data.nvswitch_evidence_hash (optional)
 
+	// TinfoilRepo is the Sigstore GitHub repo for supply chain verification.
+	// Populated by the DirectAttester from the proxy discovery endpoint.
+	// Empty for the cloud provider (which always uses the router repo).
+	TinfoilRepo string `json:"-"`
+
 	// Gateway fields — populated by providers with TEE-attested API gateways.
 	// Empty for providers without a gateway (e.g. Venice, NEAR AI direct).
 	GatewayIntelQuote     string          `json:"-"`

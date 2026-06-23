@@ -219,7 +219,14 @@ func verifyTinfoilSupplyChain(
 	if raw.BackendFormat != attestation.FormatTinfoil {
 		return nil
 	}
-	sigstoreRepo := tinfoil.RepoForProvider(providerName, modelName)
+	// Use the repo from the proxy discovery endpoint if available (direct
+	// provider), otherwise fall back to RepoForProvider. The proxy endpoint
+	// returns the correct repo name which may differ from the convention
+	// (e.g. "glm-5-2" → "tinfoilsh/confidential-glm5-2" not "confidential-glm-5-2").
+	sigstoreRepo := raw.TinfoilRepo
+	if sigstoreRepo == "" {
+		sigstoreRepo = tinfoil.RepoForProvider(providerName, modelName)
+	}
 	if sigstoreRepo == "" {
 		return nil
 	}

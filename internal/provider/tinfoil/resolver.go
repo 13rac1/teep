@@ -60,6 +60,13 @@ type proxyEnclave struct {
 	TLSKeyFP  string `json:"tls_key_fp"`
 }
 
+// ModelMapping holds the resolved backend enclave domain and Sigstore
+// repo for a model, as returned by the proxy discovery endpoint.
+type ModelMapping struct {
+	Domain string // backend enclave domain (e.g. "gemma4-31b-1.inf10.tinfoil.sh")
+	Repo   string // Sigstore GitHub repo (e.g. "tinfoilsh/confidential-gemma4-31b")
+}
+
 // DirectResolver maps model names to backend inference enclave domains via
 // the Tinfoil router's proxy discovery endpoint
 // (/.well-known/tinfoil-proxy). The proxy endpoint returns the actual
@@ -75,7 +82,7 @@ type DirectResolver struct {
 	client   *http.Client
 
 	mu        sync.RWMutex
-	mapping   map[string]string // model → domain
+	mapping   map[string]ModelMapping // model → mapping
 	fetchedAt time.Time
 
 	sf singleflight.Group
@@ -89,7 +96,7 @@ func NewDirectResolver(apiKey string, offline ...bool) *DirectResolver {
 		proxyURL: defaultProxyURL,
 		apiKey:   apiKey,
 		client:   tlsct.NewHTTPClient(30*time.Second, ctEnabled),
-		mapping:  make(map[string]string),
+		mapping:  make(map[string]ModelMapping),
 	}
 }
 
@@ -107,13 +114,24 @@ func (r *DirectResolver) SetClient(c *http.Client) {
 // proxy discovery endpoint first. Returns an error if the model is not
 // found after refresh.
 func (r *DirectResolver) Resolve(ctx context.Context, model string) (string, error) {
+	m, err := r.ResolveMapping(ctx, model)
+	if err != nil {
+		return "", err
+	}
+	return m.Domain, nil
+}
+
+// ResolveMapping returns the full model mapping (domain + repo) for the
+// given model. If the cached mapping is stale (older than 5 minutes), it
+// refreshes from the proxy discovery endpoint first.
+func (r *DirectResolver) ResolveMapping(ctx context.Context, model string) (ModelMapping, error) {
 	r.mu.RLock()
-	domain, ok := r.mapping[model]
+	m, ok := r.mapping[model]
 	stale := time.Since(r.fetchedAt) > resolverTTL
 	r.mu.RUnlock()
 
 	if ok && !stale {
-		return domain, nil
+		return m, nil
 	}
 
 	// Collapse concurrent refreshes into a single HTTP call.
@@ -126,7 +144,7 @@ func (r *DirectResolver) Resolve(ctx context.Context, model string) (string, err
 	var err error
 	select {
 	case <-ctx.Done():
-		return "", fmt.Errorf("tinfoil model discovery: %w", ctx.Err())
+		return ModelMapping{}, fmt.Errorf("tinfoil model discovery: %w", ctx.Err())
 	case res := <-ch:
 		err = res.Err
 	}
@@ -134,21 +152,21 @@ func (r *DirectResolver) Resolve(ctx context.Context, model string) (string, err
 		if ok {
 			slog.WarnContext(ctx, "tinfoil model discovery refresh failed",
 				"model", model,
-				"stale_domain", domain,
+				"stale_domain", m.Domain,
 				"err", err,
 			)
 		}
-		return "", fmt.Errorf("tinfoil model discovery: %w", err)
+		return ModelMapping{}, fmt.Errorf("tinfoil model discovery: %w", err)
 	}
 
 	r.mu.RLock()
-	domain, ok = r.mapping[model]
+	m, ok = r.mapping[model]
 	r.mu.RUnlock()
 
 	if !ok {
-		return "", fmt.Errorf("unknown model %q (not in tinfoil proxy discovery)", model)
+		return ModelMapping{}, fmt.Errorf("unknown model %q (not in tinfoil proxy discovery)", model)
 	}
-	return domain, nil
+	return m, nil
 }
 
 // refresh fetches the model-to-enclave mapping from the proxy discovery
@@ -191,7 +209,7 @@ func (r *DirectResolver) refresh(ctx context.Context) error {
 		slog.Warn("unexpected JSON fields", "fields", unknown, "context", "tinfoil proxy discovery")
 	}
 
-	mapping := make(map[string]string, len(pr.Models))
+	mapping := make(map[string]ModelMapping, len(pr.Models))
 	for model, pm := range pr.Models {
 		if model == "" {
 			continue
@@ -212,7 +230,10 @@ func (r *DirectResolver) refresh(ctx context.Context) error {
 				"model", model, "domain", domain)
 			continue
 		}
-		mapping[model] = domain
+		mapping[model] = ModelMapping{
+			Domain: domain,
+			Repo:   pm.Repo,
+		}
 	}
 
 	r.mu.Lock()
