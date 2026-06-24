@@ -25,6 +25,8 @@ const (
 	maxAttestationResponseSize = 4 << 20 // 4 MiB
 )
 
+const githubProxyBaseURL = "https://github-proxy.tinfoil.sh"
+
 // sigstoreOIDCIssuer is the expected OIDC issuer for GitHub Actions.
 const sigstoreOIDCIssuer = "https://token.actions.githubusercontent.com"
 
@@ -73,7 +75,7 @@ func (sv *SigstoreVerifier) FetchAndVerify(ctx context.Context, repo string) (pr
 }
 
 func (sv *SigstoreVerifier) fetchLatestTag(ctx context.Context, repo string) (string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	url := githubProxyURL("/repos/%s/releases/latest", repo)
 	body, err := sv.fetchBounded(ctx, url, maxReleaseResponseSize)
 	if err != nil {
 		return "", err
@@ -90,7 +92,7 @@ func (sv *SigstoreVerifier) fetchLatestTag(ctx context.Context, repo string) (st
 }
 
 func (sv *SigstoreVerifier) fetchTinfoilHash(ctx context.Context, repo, tag string) (string, error) {
-	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/tinfoil.hash", repo, tag)
+	url := githubProxyURL("/%s/releases/download/%s/tinfoil.hash", repo, tag)
 	body, err := sv.fetchBounded(ctx, url, maxHashFileSize)
 	if err != nil {
 		return "", err
@@ -113,7 +115,7 @@ func validateTinfoilHash(digest string) (string, error) {
 }
 
 func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo, digest string) (predicateBytes []byte, predicateType string, err error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/attestations/sha256:%s", repo, digest)
+	url := githubProxyURL("/repos/%s/attestations/sha256:%s", repo, digest)
 	body, err := sv.fetchBounded(ctx, url, maxAttestationResponseSize)
 	if err != nil {
 		return nil, "", fmt.Errorf("fetch attestation: %w", err)
@@ -196,6 +198,10 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 	}
 
 	return predicateJSON, statement.GetPredicateType(), nil
+}
+
+func githubProxyURL(pathFormat string, args ...any) string {
+	return githubProxyBaseURL + fmt.Sprintf(pathFormat, args...)
 }
 
 func (sv *SigstoreVerifier) fetchBounded(ctx context.Context, url string, limit int64) ([]byte, error) {

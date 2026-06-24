@@ -151,6 +151,41 @@ func TestNewSigstoreVerifier(t *testing.T) {
 	}
 }
 
+func TestGithubProxyURL(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{
+			name: "latest release",
+			got:  githubProxyURL("/repos/%s/releases/latest", "tinfoilsh/confidential-model-router"),
+			want: "https://github-proxy.tinfoil.sh/repos/tinfoilsh/confidential-model-router/releases/latest",
+		},
+		{
+			name: "release asset",
+			got:  githubProxyURL("/%s/releases/download/%s/tinfoil.hash", "tinfoilsh/confidential-model-router", "v1.2.3"),
+			want: "https://github-proxy.tinfoil.sh/tinfoilsh/confidential-model-router/releases/download/v1.2.3/tinfoil.hash",
+		},
+		{
+			name: "attestation",
+			got:  githubProxyURL("/repos/%s/attestations/sha256:%s", "tinfoilsh/confidential-model-router", strings.Repeat("a", 64)),
+			want: "https://github-proxy.tinfoil.sh/repos/tinfoilsh/confidential-model-router/attestations/sha256:" + strings.Repeat("a", 64),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Fatalf("url = %q, want %q", tt.got, tt.want)
+			}
+			if strings.Contains(tt.got, "api.github.com") || strings.Contains(tt.got, "https://github.com") {
+				t.Fatalf("url must use Tinfoil GitHub proxy, got %q", tt.got)
+			}
+		})
+	}
+}
+
 // testSigstoreServer creates a mock GitHub API server that routes requests
 // to the right handler based on path patterns.
 func testSigstoreServer(t *testing.T, handlers map[string]http.HandlerFunc) (*httptest.Server, *SigstoreVerifier) {
