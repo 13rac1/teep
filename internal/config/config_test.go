@@ -1273,7 +1273,7 @@ func TestMergedAllowFailTinfoilDirectAllowsNVSwitchByDefault(t *testing.T) {
 	}
 }
 
-func TestMergedAllowFailTinfoilCloudEnforcesNVSwitchByDefault(t *testing.T) {
+func TestMergedAllowFailTinfoilCloudAllowsKDSAndGPUFactorsByDefault(t *testing.T) {
 	unsetenv(t, "TEEP_CONFIG")
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "TINFOIL_API_KEY")
@@ -1284,9 +1284,21 @@ func TestMergedAllowFailTinfoilCloudEnforcesNVSwitchByDefault(t *testing.T) {
 	}
 
 	af := MergedAllowFail("tinfoil_v3_cloud", cfg, false)
+	afSet := make(map[string]bool, len(af))
 	for _, name := range af {
-		if name == "nvswitch_binding" {
-			t.Errorf("nvswitch_binding should remain enforced for tinfoil_v3_cloud: got %v", af)
+		afSet[name] = true
+	}
+	for _, name := range []string{
+		"tee_cert_chain",
+		"tee_quote_signature",
+		"nvidia_payload_present",
+		"nvidia_signature",
+		"nvidia_claims",
+		"cpu_gpu_chain",
+		"nvswitch_binding",
+	} {
+		if !afSet[name] {
+			t.Errorf("%s should be in allow_fail for tinfoil_v3_cloud: got %v", name, af)
 		}
 	}
 }

@@ -45,7 +45,7 @@ func TestIntegration_Tinfoil_Fixture(t *testing.T) {
 		Nonce:                  env.nonce,
 		SEV:                    sevResult,
 		Policy:                 modelPolicy,
-		AllowFail:              attestation.TinfoilDefaultAllowFail,
+		AllowFail:              attestation.TinfoilCloudDefaultAllowFail,
 		E2EEConfigured:         true,
 		Inapplicable:           tinfoil.InapplicableFactors(),
 		ProviderUsesTLSBinding: true,
@@ -123,7 +123,7 @@ func TestIntegration_TinfoilDirect_Fixture(t *testing.T) {
 		TDX:                    tdxResult,
 		SEV:                    sevResult,
 		Policy:                 modelPolicy,
-		AllowFail:              attestation.TinfoilDefaultAllowFail,
+		AllowFail:              attestation.TinfoilDirectDefaultAllowFail,
 		E2EEConfigured:         true,
 		Inapplicable:           tinfoil.InapplicableFactors(),
 		ProviderUsesTLSBinding: true,
@@ -183,11 +183,14 @@ func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 		"tls_key_binding",
 	})
 
-	// Must Skip: factors not applicable to SEV-SNP (allowed to fail) and
-	// deferred factors.
+	// Must Skip: factors not applicable to SEV-SNP, factors that depend on
+	// absent GPU evidence, and deferred factors.
 	for _, name := range []string{
 		"intel_pcs_collateral",
+		"nvidia_signature",
+		"nvidia_claims",
 		"e2ee_usable",
+		"nvswitch_binding",
 	} {
 		assertFactorStatus(t, report, name, attestation.Skip)
 	}
@@ -207,7 +210,6 @@ func assertTinfoilReport(t *testing.T, report *attestation.VerificationReport) {
 		"cpu_gpu_chain",
 		"measured_model_weights",
 		"sigstore_code_verified",
-		"nvswitch_binding",
 	}, "not implemented / no supply chain data")
 
 	// Not Applicable: factors handled by Tinfoil's applicability layer.

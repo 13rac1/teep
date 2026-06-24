@@ -283,19 +283,32 @@ var ChutesDefaultAllowFail = []string{
 	"cpu_id_registry",
 }
 
-// TinfoilDefaultAllowFail is the tinfoil-specific default allow_fail list for
-// the router-backed tinfoil_v3_cloud provider.
+// TinfoilCloudDefaultAllowFail is the tinfoil_v3_cloud default allow_fail
+// list.
 // Tinfoil runs its own TEE stack (TDX or SEV-SNP) with Sigstore supply chain
-// verification instead of compose-based binding. Core TDX/SEV-SNP quote
-// integrity, REPORTDATA binding, and Sigstore code verification are enforced.
+// verification instead of compose-based binding.
+//
+// REPORTDATA binding, and Sigstore code verification are enforced.
 // cpu_id_registry is allowed to fail because Tinfoil does not participate in
 // Proof of Cloud. intel_pcs_collateral is allowed because SEV-SNP uses AMD
-// KDS instead of Intel PCS. tee_boot_config is enforced: hardware platform
-// measurements (MRTD + RTMR0) must match the Sigstore-attested
-// tinfoilsh/hardware-measurements registry for TDX enclaves.
-var TinfoilDefaultAllowFail = []string{
+// KDS instead of Intel PCS. SEV-SNP certificate-chain and quote-signature
+// checks require hitting kdsintf.amd.com, which is often down or flaky for
+// tinfoil_v3_cloud. NVIDIA GPU and CPU-GPU/NVSwitch binding factors are
+// reported but currently allowed to fail by default, due to the hashing
+// issue documented in docs/attestation_gaps/tinfoil_nvidia_json.md
+// tee_boot_config is enforced: hardware platform measurements (MRTD + RTMR0)
+// must match the Sigstore-attested tinfoilsh/hardware-measurements registry
+// for TDX enclaves.
+var TinfoilCloudDefaultAllowFail = []string{
 	"cpu_id_registry",
 	"intel_pcs_collateral",
+	"tee_cert_chain",
+	"tee_quote_signature",
+	"nvidia_payload_present",
+	"nvidia_signature",
+	"nvidia_claims",
+	"cpu_gpu_chain",
+	"nvswitch_binding",
 }
 
 // TinfoilDirectDefaultAllowFail is the tinfoil_v3_direct default allow_fail
