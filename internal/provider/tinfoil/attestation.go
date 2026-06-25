@@ -71,14 +71,9 @@ type v3GPUEvidence struct {
 // and extracts report_data fields.
 func parseV3Response(body []byte) (*attestation.RawAttestation, *v3Response, error) {
 	var resp v3Response
-	unknownFields, _, err := jsonstrict.UnmarshalWarn(body, &resp, "tinfoil V3")
+	unknownFields, missingFields, err := jsonstrict.UnmarshalWarn(body, &resp, "tinfoil V3")
 	if err != nil {
 		return nil, nil, fmt.Errorf("tinfoil: unmarshal V3 response: %w", err)
-	}
-
-	// Fail closed on unknown fields per spec.
-	if len(unknownFields) > 0 {
-		return nil, nil, fmt.Errorf("tinfoil: V3 response contains unknown fields: %v", unknownFields)
 	}
 
 	// Reject legacy V2 format (has "body" field).
@@ -139,6 +134,7 @@ func parseV3Response(body []byte) (*attestation.RawAttestation, *v3Response, err
 		SigningAlgo:    "x25519-hpke",
 		TLSFingerprint: resp.ReportData.TLSKeyFP,
 		UnknownFields:  unknownFields,
+		MissingFields:  missingFields,
 		RawBody:        body,
 
 		// Tinfoil-specific fields.

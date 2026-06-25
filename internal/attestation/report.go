@@ -55,10 +55,11 @@ const (
 	TierGateway     = "Tier 4: Gateway Attestation"
 )
 
-// Factor name constants for E2EE verification factors.
+// Factor name constants.
 const (
-	FactorE2EECapable = "e2ee_capable"
-	FactorE2EEUsable  = "e2ee_usable"
+	FactorE2EECapable    = "e2ee_capable"
+	FactorE2EEUsable     = "e2ee_usable"
+	FactorResponseSchema = "response_schema"
 )
 
 // FactorResult records the outcome of one verification factor.
@@ -224,6 +225,7 @@ var DefaultAllowFail = []string{
 	"nvidia_nras_verified",
 	FactorE2EECapable,
 	FactorE2EEUsable,
+	FactorResponseSchema,
 	"tls_key_binding",
 	"cpu_gpu_chain",
 	"measured_model_weights",
@@ -246,6 +248,7 @@ var NearcloudDefaultAllowFail = []string{
 	"cpu_gpu_chain",
 	"measured_model_weights",
 	"cpu_id_registry",
+	FactorResponseSchema,
 	// Gateway factors (nearcloud only).
 	"gateway_tee_hardware_config",
 	"gateway_tee_boot_config",
@@ -262,6 +265,7 @@ var NeardirectDefaultAllowFail = []string{
 	"cpu_gpu_chain",
 	"measured_model_weights",
 	"cpu_id_registry",
+	FactorResponseSchema,
 }
 
 // ChutesDefaultAllowFail is the chutes-specific default allow_fail list.
@@ -281,6 +285,7 @@ var ChutesDefaultAllowFail = []string{
 	"cpu_gpu_chain",
 	"measured_model_weights",
 	"cpu_id_registry",
+	FactorResponseSchema,
 }
 
 // TinfoilCloudDefaultAllowFail is the tinfoil_v3_cloud default allow_fail
@@ -326,7 +331,7 @@ var KnownFactors = []string{
 	"nonce_match", "tee_quote_present", "tee_quote_structure", "tee_cert_chain",
 	"tee_quote_signature", "tee_debug_disabled",
 	"tee_measurement", "tee_hardware_config", "tee_boot_config",
-	"signing_key_present",
+	"signing_key_present", FactorResponseSchema,
 	"tee_reportdata_binding", "intel_pcs_collateral", "tee_tcb_current",
 	"tee_tcb_not_revoked", "nvidia_payload_present", "nvidia_signature", "nvidia_claims",
 	"nvidia_nonce_client_bound", "nvidia_nras_verified", FactorE2EECapable, FactorE2EEUsable, "tls_key_binding", "cpu_gpu_chain", "nvswitch_binding",
@@ -652,6 +657,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalTEEHardwareConfig,
 		evalTEEBootConfig,
 		evalSigningKeyPresent,
+		evalResponseSchema,
 		// Tier 2: Binding & Crypto
 		evalTEEReportDataBinding,
 		evalIntelPCSCollateral,
@@ -986,6 +992,23 @@ func evalSigningKeyPresent(in *ReportInput) []FactorResult {
 		return factor(TierCore, "signing_key_present", Fail, "signing_key field absent from attestation response")
 	}
 	return factor(TierCore, "signing_key_present", Pass, fmt.Sprintf("enclave pubkey present (%s...)", in.Raw.SigningKey[:min(10, len(in.Raw.SigningKey))]))
+}
+
+func evalResponseSchema(in *ReportInput) []FactorResult {
+	unknown := in.Raw.UnknownFields
+	missing := in.Raw.MissingFields
+	if len(unknown) == 0 && len(missing) == 0 {
+		return factor(TierCore, FactorResponseSchema, Pass,
+			"attestation response matches expected schema")
+	}
+	var parts []string
+	if len(unknown) > 0 {
+		parts = append(parts, fmt.Sprintf("unknown fields: %q", unknown))
+	}
+	if len(missing) > 0 {
+		parts = append(parts, fmt.Sprintf("missing fields: %q", missing))
+	}
+	return factor(TierCore, FactorResponseSchema, Fail, strings.Join(parts, "; "))
 }
 
 // ---------------------------------------------------------------------------

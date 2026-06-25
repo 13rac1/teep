@@ -184,7 +184,7 @@ func shouldResolveModelDomain(host string) bool {
 // client path) and PinnedHandler (raw connection path).
 func ParseAttestationResponse(_ context.Context, body []byte, model string) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
-	unknown, _, err := jsonstrict.UnmarshalWarn(body, &ar, "nearai attestation")
+	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, "nearai attestation")
 	if err != nil {
 		return nil, fmt.Errorf("nearai: unmarshal attestation response: %w", err)
 	}
@@ -203,6 +203,7 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 		}
 		raw := rawFromModelAttestation(selected, ar.Verified, body)
 		raw.UnknownFields = unknown
+		raw.MissingFields = missing
 		return raw, nil
 	}
 
@@ -215,6 +216,7 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 		}
 		raw := rawFromModelAttestation(selected, ar.Verified, body)
 		raw.UnknownFields = unknown
+		raw.MissingFields = missing
 		return raw, nil
 	}
 
@@ -239,6 +241,7 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 		EventLog:       ar.EventLog,
 		EventLogCount:  len(ar.EventLog),
 		UnknownFields:  unknown,
+		MissingFields:  missing,
 		RawBody:        body,
 	}
 	if raw.IntelQuote != "" {

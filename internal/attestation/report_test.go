@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -126,8 +127,8 @@ func TestBuildReportFactorCount(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
-	if len(report.Factors) != 31 {
-		t.Errorf("factor count: got %d, want 31", len(report.Factors))
+	if len(report.Factors) != 32 {
+		t.Errorf("factor count: got %d, want 32", len(report.Factors))
 	}
 }
 
@@ -515,6 +516,63 @@ func TestEvalSigningKeyPresent(t *testing.T) {
 			raw := buildMinimalRaw(nonce, tc.key)
 			assertSingleFactor(t, evalSigningKeyPresent(&ReportInput{Raw: raw}), tc.want)
 		})
+	}
+}
+
+func TestEvalResponseSchema(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	tests := []struct {
+		name    string
+		unknown []string
+		missing []string
+		want    Status
+		detail  string // substring expected in Detail
+	}{
+		{"pass", nil, nil, Pass, "matches expected schema"},
+		{"unknown", []string{"bogus_field", "extra"}, nil, Fail, "unknown fields"},
+		{"missing", nil, []string{"nonce", "model"}, Fail, "missing fields"},
+		{"both", []string{"extra"}, []string{"nonce"}, Fail, "unknown fields"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			raw.UnknownFields = tc.unknown
+			raw.MissingFields = tc.missing
+			f := assertSingleFactor(t, evalResponseSchema(&ReportInput{Raw: raw}), tc.want)
+			if !strings.Contains(f.Detail, tc.detail) {
+				t.Errorf("detail %q does not contain %q", f.Detail, tc.detail)
+			}
+		})
+	}
+}
+
+func TestEvalResponseSchema_TinfoilEnforced(t *testing.T) {
+	// FactorResponseSchema must NOT be in tinfoil allow_fail lists so it is
+	// enforced (unknown/missing fields block the attestation).
+	if slices.Contains(TinfoilCloudDefaultAllowFail, FactorResponseSchema) {
+		t.Error("FactorResponseSchema must not be in TinfoilCloudDefaultAllowFail")
+	}
+	if slices.Contains(TinfoilDirectDefaultAllowFail, FactorResponseSchema) {
+		t.Error("FactorResponseSchema must not be in TinfoilDirectDefaultAllowFail")
+	}
+}
+
+func TestEvalResponseSchema_OtherProvidersAllowFail(t *testing.T) {
+	// FactorResponseSchema should be in non-tinfoil allow_fail lists
+	// (warn-and-continue behavior).
+	if !slices.Contains(DefaultAllowFail, FactorResponseSchema) {
+		t.Error("FactorResponseSchema missing from DefaultAllowFail")
+	}
+	if !slices.Contains(NearcloudDefaultAllowFail, FactorResponseSchema) {
+		t.Error("FactorResponseSchema missing from NearcloudDefaultAllowFail")
+	}
+	if !slices.Contains(NeardirectDefaultAllowFail, FactorResponseSchema) {
+		t.Error("FactorResponseSchema missing from NeardirectDefaultAllowFail")
+	}
+	if !slices.Contains(ChutesDefaultAllowFail, FactorResponseSchema) {
+		t.Error("FactorResponseSchema missing from ChutesDefaultAllowFail")
 	}
 }
 
@@ -2535,14 +2593,14 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 		GatewayNonce:    gatewayNonce,
 	})
 
-	// Base 31 + 13 gateway factors = 44
+	// Base 32 + 13 gateway factors = 45
 	// Gateway factors: gateway_nonce_match, gateway_tee_quote_present,
 	// gateway_tee_quote_structure, gateway_tee_cert_chain, gateway_tee_quote_signature,
 	// gateway_tee_debug_disabled, gateway_tee_measurement, gateway_tee_hardware_config,
 	// gateway_tee_boot_config, gateway_tee_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
-	if len(report.Factors) != 44 {
-		t.Errorf("factor count with gateway: got %d, want 44", len(report.Factors))
+	if len(report.Factors) != 45 {
+		t.Errorf("factor count with gateway: got %d, want 45", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}

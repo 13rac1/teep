@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/13rac1/teep/internal/attestation"
 )
 
 // factorInfo describes a single verification factor for the help system.
@@ -123,6 +125,16 @@ var factorRegistry = []factorInfo{
 			"response. Despite the field name, this is an ECDH public key " +
 			"generated inside the TEE for key exchange, not for signing. " +
 			"Without it, E2EE communication with the enclave is not possible.",
+	},
+	{
+		Name:    attestation.FactorResponseSchema,
+		Tier:    1,
+		Summary: "Attestation response matches expected schema",
+		Description: "Checks that the attestation response JSON contains only " +
+			"expected fields and no expected fields are missing. Unknown fields " +
+			"may indicate a changed or untested API version; missing fields may " +
+			"indicate an incomplete attestation. Tinfoil enforces this factor " +
+			"(unknown fields block verification); other providers allow failure.",
 	},
 	// Tier 2: Binding & Crypto
 	{
@@ -491,7 +503,7 @@ var tierRegistry = []tierInfo{
 		Number: 1,
 		Name:   "Core Attestation",
 		Label:  "Tier 1: Core Attestation",
-		Description: "Factors 1-7. Validates that a TDX quote is present, " +
+		Description: "Factors 1-11. Validates that a TDX quote is present, " +
 			"structurally valid, properly signed by Intel hardware, and not " +
 			"from a debug enclave. Also checks the nonce for replay protection " +
 			"and that an enclave public key exists for E2EE. A Tier 1 failure means " +
@@ -501,7 +513,7 @@ var tierRegistry = []tierInfo{
 		Number: 2,
 		Name:   "Binding & Crypto",
 		Label:  "Tier 2: Binding & Crypto",
-		Description: "Factors 8-16. Validates cross-component binding: the enclave " +
+		Description: "Factors 12-22. Validates cross-component binding: the enclave " +
 			"public key is bound to the TDX REPORTDATA (preventing key " +
 			"substitution attacks), NVIDIA GPU attestation is present and " +
 			"locally verified, NVIDIA NRAS RIM measurement comparison " +
@@ -514,7 +526,7 @@ var tierRegistry = []tierInfo{
 		Number: 3,
 		Name:   "Supply Chain & Channel Integrity",
 		Label:  "Tier 3: Supply Chain & Channel Integrity",
-		Description: "Factors 17-24. The gold standard for TEE verification. " +
+		Description: "Factors 23-32. The gold standard for TEE verification. " +
 			"Covers TLS key binding, CPU-GPU attestation chain, measured " +
 			"model weights, build transparency logs, hardware identity " +
 			"registry, compose manifest binding, Sigstore verification, " +
@@ -525,7 +537,7 @@ var tierRegistry = []tierInfo{
 		Number: 4,
 		Name:   "Gateway Attestation",
 		Label:  "Tier 4: Gateway Attestation",
-		Description: "Factors 25-32. Only applies to the nearcloud provider " +
+		Description: "Factors 33-45. Only applies to the nearcloud provider " +
 			"(cloud-api.near.ai). Verifies the API gateway itself runs in " +
 			"an Intel TDX enclave with its own TDX quote, certificate chain, " +
 			"and compose binding. This proves all traffic is routed through " +
