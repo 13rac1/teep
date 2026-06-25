@@ -23,7 +23,7 @@ The proxy receives concurrent API inference requests to multiple models from mul
 - `internal/attestation/` — TDX, NVIDIA, sigstore, Rekor, and supply-chain verification.
 - `internal/e2ee/` — End-to-end encryption sessions and relay logic.
 - `internal/config/` — Configuration parsing and strict validation.
-- `internal/jsonstrict/` — Strict JSON decoding used for untrusted config and provider payloads.
+- `internal/jsonstrict/` — Wrapper around github.com/13rac1/jsonstrict for strict JSON decoding with unknown/missing field detection.
 - `internal/tlsct/` — TLS helpers, SPKI fingerprinting, and certificate-transparency-aware HTTP clients.
 - `internal/verify/` — Orchestrates multi-factor verification and report generation.
 - `internal/multi/` — Concurrent multi-provider verification.

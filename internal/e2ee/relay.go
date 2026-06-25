@@ -1189,10 +1189,8 @@ type toolCallDelta struct {
 // tool calls map, keyed by index. Arguments are concatenated across chunks.
 func mergeToolCallDelta(calls map[int]*reassembledToolCall, raw json.RawMessage) error {
 	var d toolCallDelta
-	if unknown, err := jsonstrict.Unmarshal(raw, &d); err != nil {
+	if _, _, err := jsonstrict.UnmarshalWarn(raw, &d, "e2ee SSE data"); err != nil {
 		return fmt.Errorf("parse tool_call delta: %w", err)
-	} else if len(unknown) > 0 {
-		slog.Debug("unexpected JSON fields", "fields", unknown, "context", "e2ee SSE data")
 	}
 	if d.Index == nil {
 		return errors.New("tool_call delta missing required index field")

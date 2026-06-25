@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -63,10 +62,8 @@ func (l *genericModelLister) ListModels(ctx context.Context) ([]json.RawMessage,
 	}
 
 	var mr modelsResponse
-	if unknown, err := jsonstrict.Unmarshal(body, &mr); err != nil {
+	if _, _, err := jsonstrict.UnmarshalWarn(body, &mr, "models response"); err != nil {
 		return nil, fmt.Errorf("models: unmarshal response: %w", err)
-	} else if len(unknown) > 0 {
-		slog.Warn("unexpected JSON fields", "fields", unknown, "context", "models response")
 	}
 
 	return mr.Data, nil
@@ -130,10 +127,8 @@ func (l *ownedByModelLister) ListModels(ctx context.Context) ([]json.RawMessage,
 	out := make([]json.RawMessage, 0, len(all))
 	for _, raw := range all {
 		var m modelEntry
-		if unknown, err := jsonstrict.Unmarshal(raw, &m); err != nil {
+		if _, _, err := jsonstrict.UnmarshalWarn(raw, &m, "model entry"); err != nil {
 			return nil, fmt.Errorf("models: unmarshal entry to extract owned_by: %w", err)
-		} else if len(unknown) > 0 {
-			slog.Debug("unexpected JSON fields", "fields", unknown, "context", "model entry")
 		}
 		if m.ID == "" {
 			return nil, errors.New("models: model entry missing required id")

@@ -224,7 +224,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 // can parse fixture files without making HTTP calls.
 func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
-	unknown, err := jsonstrict.Unmarshal(body, &ar)
+	unknown, _, err := jsonstrict.UnmarshalWarn(body, &ar, "venice attestation")
 	if err != nil {
 		return nil, fmt.Errorf("venice: unmarshal attestation response: %w", err)
 	}

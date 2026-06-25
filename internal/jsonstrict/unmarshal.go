@@ -1,69 +1,51 @@
-// Package jsonstrict provides JSON unmarshaling that detects unknown fields.
+// Package jsonstrict wraps github.com/13rac1/jsonstrict to provide strict JSON
+// unmarshaling that detects unknown and missing fields.
 //
-// Standard encoding/json silently ignores unknown JSON keys. For security-critical
-// payloads like TEE attestation responses, silent drops mean API format changes
-// go unnoticed. Unmarshal returns the names of unknown fields alongside the
-// decoded value, letting callers decide how to handle format drift.
+// Standard encoding/json silently ignores unknown JSON keys and does not report
+// absent ones. This package returns both alongside the decoded value, letting
+// callers decide how to handle format drift.
+//
+// UnmarshalWarn is the primary entry point for most call sites: it unmarshals,
+// logs warnings for unknown/missing fields, and returns the field names for
+// factor evaluation.
 package jsonstrict
 
 import (
-	"encoding/json"
-	"reflect"
-	"sort"
-	"strings"
+	"log/slog"
+	"maps"
+	"slices"
+
+	strict "github.com/13rac1/jsonstrict"
 )
 
-// Unmarshal unmarshals data into v and returns the names of any JSON keys
-// not represented by a json struct tag on v's type. Unknown fields never cause
-// an error — only the normal json.Unmarshal error (if any) is returned.
+// unmarshal unmarshals data into v and returns the names of any unknown JSON
+// keys and any missing struct fields as sorted slices.
 //
-// v must be a non-nil pointer to a struct. Any other type panics.
-func Unmarshal(data []byte, v any) (unknownFields []string, err error) {
-	var raw map[string]json.RawMessage
-	if jsonErr := json.Unmarshal(data, &raw); jsonErr == nil {
-		known := knownJSONKeys(reflect.TypeOf(v).Elem())
-		for key := range raw {
-			if _, ok := known[key]; !ok {
-				unknownFields = append(unknownFields, key)
-			}
-		}
-		if len(unknownFields) > 0 {
-			sort.Strings(unknownFields)
-		}
+// v must be a non-nil pointer to a struct.
+func unmarshal(data []byte, v any) (unknown, missing []string, err error) {
+	result, err := strict.Unmarshal(data, v)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	return unknownFields, json.Unmarshal(data, v)
+	if len(result.Unknown) > 0 {
+		unknown = slices.Sorted(maps.Keys(result.Unknown))
+	}
+	if len(result.Missing) > 0 {
+		missing = result.Missing
+		slices.Sort(missing)
+	}
+	return unknown, missing, nil
 }
 
-// knownJSONKeys returns the set of JSON field names declared by t's struct tags.
-// It recurses into anonymous (embedded) struct fields. Fields tagged json:"-"
-// are excluded. Tag options (e.g. ",omitempty") are stripped. Untagged fields
-// fall back to the Go field name, matching encoding/json behavior.
-func knownJSONKeys(t reflect.Type) map[string]struct{} {
-	keys := make(map[string]struct{})
-	for field := range t.Fields() {
-		if field.Anonymous {
-			ft := field.Type
-			if ft.Kind() == reflect.Pointer {
-				ft = ft.Elem()
-			}
-			if ft.Kind() == reflect.Struct {
-				for k := range knownJSONKeys(ft) {
-					keys[k] = struct{}{}
-				}
-				continue
-			}
-		}
-
-		tag := field.Tag.Get("json")
-		if tag == "-" {
-			continue
-		}
-		name, _, _ := strings.Cut(tag, ",")
-		if name == "" {
-			name = field.Name
-		}
-		keys[name] = struct{}{}
+// UnmarshalWarn unmarshals data into v and logs warnings for any unknown or
+// missing fields. label identifies the call site in log output.
+func UnmarshalWarn(data []byte, v any, label string) (unknown, missing []string, err error) {
+	unknown, missing, err = unmarshal(data, v)
+	if len(unknown) > 0 {
+		slog.Warn("unexpected JSON fields", "fields", unknown, "label", label)
 	}
-	return keys
+	if len(missing) > 0 {
+		slog.Warn("missing JSON fields", "fields", missing, "label", label)
+	}
+	return unknown, missing, err
 }

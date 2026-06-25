@@ -184,7 +184,7 @@ func shouldResolveModelDomain(host string) bool {
 // client path) and PinnedHandler (raw connection path).
 func ParseAttestationResponse(_ context.Context, body []byte, model string) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
-	unknown, err := jsonstrict.Unmarshal(body, &ar)
+	unknown, _, err := jsonstrict.UnmarshalWarn(body, &ar, "nearai attestation")
 	if err != nil {
 		return nil, fmt.Errorf("nearai: unmarshal attestation response: %w", err)
 	}

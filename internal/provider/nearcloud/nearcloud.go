@@ -83,7 +83,7 @@ type GatewayRaw struct {
 // gateway-specific data and the model RawAttestation.
 func ParseGatewayResponse(ctx context.Context, body []byte, model string) (*GatewayRaw, *attestation.RawAttestation, error) {
 	var gr gatewayResponse
-	unknown, err := jsonstrict.Unmarshal(body, &gr)
+	unknown, _, err := jsonstrict.UnmarshalWarn(body, &gr, "nearcloud gateway")
 	if err != nil {
 		return nil, nil, fmt.Errorf("nearcloud: unmarshal gateway response: %w", err)
 	}

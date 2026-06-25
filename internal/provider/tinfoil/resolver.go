@@ -263,10 +263,8 @@ func (r *DirectResolver) refresh(ctx context.Context) error {
 	}
 
 	var pr proxyResponse
-	if unknown, err := jsonstrict.Unmarshal(body, &pr); err != nil {
+	if _, _, err := jsonstrict.UnmarshalWarn(body, &pr, "tinfoil proxy discovery"); err != nil {
 		return fmt.Errorf("unmarshal: %w", err)
-	} else if len(unknown) > 0 {
-		slog.Warn("unexpected JSON fields", "fields", unknown, "context", "tinfoil proxy discovery")
 	}
 
 	mapping := make(map[string]ModelMapping, len(pr.Models))

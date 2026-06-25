@@ -71,7 +71,7 @@ type v3GPUEvidence struct {
 // and extracts report_data fields.
 func parseV3Response(body []byte) (*attestation.RawAttestation, *v3Response, error) {
 	var resp v3Response
-	unknownFields, err := jsonstrict.Unmarshal(body, &resp)
+	unknownFields, _, err := jsonstrict.UnmarshalWarn(body, &resp, "tinfoil V3")
 	if err != nil {
 		return nil, nil, fmt.Errorf("tinfoil: unmarshal V3 response: %w", err)
 	}

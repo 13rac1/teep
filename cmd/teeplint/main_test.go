@@ -472,7 +472,7 @@ func (T) ParseAttestationResponse() {}
 func TestCheckParseFuncUsesJSONStrict_Pass(t *testing.T) {
 	f, fset := parseGo(t, `package p
 func Parse() {
-	jsonstrict.Unmarshal(nil, nil)
+	jsonstrict.UnmarshalWarn(nil, nil, "test")
 }
 `)
 	fd := findFunc(f, "Parse")
