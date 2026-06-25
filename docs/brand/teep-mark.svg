@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="teep">
+  <!-- teep cradles your prompt and keeps it sealed. Guards (mint) = teep;
+       the chevron (light) = your prompt, the thing that stays yours.
+       Dark-first asset: on light backgrounds, set the prompt stroke to #080B0F. -->
+  <g fill="none" stroke="#4FE3C1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M27 13 L18 13 Q14 13 14 17 L14 47 Q14 51 18 51 L27 51"/>
+    <path d="M37 13 L46 13 Q50 13 50 17 L50 47 Q50 51 46 51 L37 51"/>
+  </g>
+  <path d="M28 24 L37 32 L28 40" fill="none" stroke="#E8EEF4" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

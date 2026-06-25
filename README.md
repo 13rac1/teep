@@ -1,4 +1,7 @@
-# Teep
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/teep-logo.svg">
+  <img alt="teep" src="docs/brand/teep-logo-light.svg" width="200">
+</picture>
 
 [![CI](https://github.com/13rac1/teep/actions/workflows/ci.yml/badge.svg)](https://github.com/13rac1/teep/actions/workflows/ci.yml)
 [![Coverage](https://raw.githubusercontent.com/13rac1/teep/badges/coverage.svg)](https://github.com/13rac1/teep/actions/workflows/ci.yml)
