@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 64" fill="none" role="img" aria-label="teep">
+  <!-- Mark: your prompt, cradled in teep's guards -->
+  <g transform="translate(4 0)">
+    <g fill="none" stroke="#4FE3C1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M27 13 L18 13 Q14 13 14 17 L14 47 Q14 51 18 51 L27 51"/>
+      <path d="M37 13 L46 13 Q50 13 50 17 L50 47 Q50 51 46 51 L37 51"/>
+    </g>
+    <path d="M28 24 L37 32 L28 40" fill="none" stroke="#E8EEF4" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- Wordmark: monospace, the terminal-native voice of the tool -->
+  <text x="74" y="41" fill="#E8EEF4"
+        font-family="'JetBrains Mono','SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace"
+        font-size="34" font-weight="600" letter-spacing="-1.5">teep</text>
+</svg>
