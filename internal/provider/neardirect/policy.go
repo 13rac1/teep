@@ -29,6 +29,7 @@ func SupplyChainPolicy() *attestation.SupplyChainPolicy {
 		{Repo: "datadog/agent", ModelTier: true, Provenance: attestation.SigstorePresent,
 			KeyFingerprint: "25bcab4ec8eede1e3091a14692126798c23986832ae6e5948d6f7eb0a928ab0b"},
 		{Repo: "certbot/dns-cloudflare", ModelTier: true, Provenance: attestation.ComposeBindingOnly},
+		{Repo: "otel/opentelemetry-collector-contrib", ModelTier: true, Provenance: attestation.SigstorePresent},
 		{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: attestation.FulcioSigned,
 			NoDSSE:     true, // Rekor DSSE envelope has no signatures as of 2026-03
 			OIDCIssuer: GithubOIDC,

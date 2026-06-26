@@ -46,9 +46,11 @@ func DefaultGatewayMeasurementPolicy() attestation.MeasurementPolicy {
 // Starts from the neardirect base (model tier) and adds gateway images.
 func SupplyChainPolicy() *attestation.SupplyChainPolicy {
 	p := neardirect.SupplyChainPolicy()
-	// datadog/agent is also a gateway image in nearcloud.
+	// datadog/agent and otel/opentelemetry-collector-contrib are also
+	// gateway images in nearcloud.
 	for i := range p.Images {
-		if p.Images[i].Repo == "datadog/agent" {
+		switch p.Images[i].Repo {
+		case "datadog/agent", "otel/opentelemetry-collector-contrib":
 			p.Images[i].GatewayTier = true
 		}
 	}

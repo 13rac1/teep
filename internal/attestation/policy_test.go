@@ -347,7 +347,7 @@ func TestSupplyChainPolicyNanoGPT(t *testing.T) {
 func TestGatewayRepoNames(t *testing.T) {
 	p := nearcloud.SupplyChainPolicy()
 	names := p.GatewayRepoNames()
-	want := []string{"datadog/agent", "nearaidev/dstack-vpc-client", "nearaidev/dstack-vpc", "alpine", "nearaidev/cloud-api", "nearaidev/cvm-ingress"}
+	want := []string{"datadog/agent", "otel/opentelemetry-collector-contrib", "nearaidev/dstack-vpc-client", "nearaidev/dstack-vpc", "alpine", "nearaidev/cloud-api", "nearaidev/cvm-ingress"}
 	if len(names) != len(want) {
 		t.Fatalf("GatewayRepoNames() = %v (len %d), want len %d", names, len(names), len(want))
 	}
