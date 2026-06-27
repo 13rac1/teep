@@ -525,6 +525,9 @@ func New(cfg *config.Config) (*Server, error) {
 	s.mux.HandleFunc("POST /v1/audio/speech", s.handleEndpoint(&speechEndpoint))
 	s.mux.HandleFunc("GET /v1/models", s.handleModels)
 	s.mux.HandleFunc("GET /v1/tee/report", s.handleReport)
+	s.mux.HandleFunc("GET /test", s.handleTestPage)
+	s.mux.HandleFunc("POST /test/attest", s.handleTestAttest)
+	s.mux.HandleFunc("POST /test/infer", s.handleTestInfer)
 
 	return s, nil
 }

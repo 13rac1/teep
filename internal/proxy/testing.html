@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>teep — testing</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%234FE3C1' stroke-width='3.4'%3E%3Cpath d='M27 13 L18 13 Q14 13 14 17 L14 47 Q14 51 18 51 L27 51'/%3E%3Cpath d='M37 13 L46 13 Q50 13 50 17 L50 47 Q50 51 46 51 L37 51'/%3E%3C/g%3E%3Cpath d='M28 24 L37 32 L28 40' stroke='%23E8EEF4' stroke-width='3.8'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #080B0F; --surface: #0F141A; --surface-2: #141B23;
+    --line: #202A35; --line-soft: #19212A;
+    --ink: #E8EEF4; --dim: #8493A3; --faint: #4A5663;
+    --seal: #4FE3C1; --crypt: #5BB8FF; --warn: #E8B24A; --alert: #FF6B7D;
+    --mono: 'JetBrains Mono','SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: var(--sans); color: var(--ink); line-height: 1.5;
+    background: var(--bg);
+    background-image:
+      radial-gradient(1200px 600px at 50% -8%, rgba(79,227,193,0.06), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(91,184,255,0.04), transparent 55%);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 22px 64px; }
+  a { color: var(--crypt); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ---- top bar ---- */
+  .topbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+  .brand svg { width: 30px; height: 30px; display: block; }
+  .brand .word {
+    font-family: var(--mono); font-weight: 600; font-size: 1.45rem;
+    letter-spacing: -0.04em; color: var(--ink);
+  }
+  .topmeta {
+    margin-left: auto; display: flex; align-items: center; gap: 18px;
+    font-family: var(--mono); font-size: 0.78rem; color: var(--dim); flex-wrap: wrap;
+  }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.68rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.18em; color: var(--dim);
+  }
+
+  /* ---- blocks ---- */
+  .block { margin-top: 36px; }
+  .block-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .filter {
+    margin-left: auto; background: var(--surface); border: 1px solid var(--line);
+    color: var(--ink); font-family: var(--mono); font-size: 0.8rem;
+    padding: 6px 11px; border-radius: 8px; width: 180px; max-width: 45vw;
+  }
+  .filter::placeholder { color: var(--faint); }
+  .filter:focus { outline: none; border-color: var(--seal); }
+
+  /* ---- model cards ---- */
+  .models { display: flex; flex-direction: column; gap: 10px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .card-head {
+    width: 100%; display: flex; align-items: center; gap: 11px; text-align: left;
+    background: none; border: 0; color: inherit; font: inherit; cursor: pointer;
+    padding: 14px 16px;
+  }
+  .card-head:hover { background: var(--surface-2); }
+  .card-name { font-family: var(--mono); font-size: 0.92rem; color: var(--ink); flex: 1; }
+  .card-name .prov { color: var(--dim); }
+  .chev { color: var(--faint); transition: transform 0.18s ease; flex-shrink: 0; }
+  .card-head[aria-expanded="true"] .chev { transform: rotate(90deg); }
+  .card-body { display: none; padding: 0 16px 15px; }
+  .card-head[aria-expanded="true"] + .card-body { display: block; }
+
+  .card-actions { display: flex; gap: 10px; margin-bottom: 14px; }
+  .btn {
+    font-family: var(--mono); font-size: 0.78rem; font-weight: 600;
+    padding: 7px 16px; border-radius: 8px; border: 1px solid; cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-attest { background: transparent; color: var(--seal); border-color: var(--seal); }
+  .btn-attest:hover:not(:disabled) { background: rgba(79,227,193,0.12); }
+  .btn-infer { background: transparent; color: var(--crypt); border-color: var(--crypt); }
+  .btn-infer:hover:not(:disabled) { background: rgba(91,184,255,0.12); }
+
+  .result { margin-top: 12px; }
+  .result[hidden] { display: none; }
+  .result-status {
+    font-family: var(--mono); font-size: 0.82rem; font-weight: 600;
+    padding: 5px 0; display: flex; align-items: center; gap: 8px;
+  }
+  .result-status .dot { font-size: 0.9rem; }
+  .result-body { font-size: 0.84rem; color: var(--dim); margin-top: 6px; }
+
+  /* pill tags */
+  .pill {
+    font-family: var(--mono); font-size: 0.6rem; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 3px 7px; border-radius: 999px;
+    border: 1px solid currentColor;
+  }
+  .pill.e2ee { color: var(--crypt); }
+  .pill.pass { color: var(--seal); }
+  .pill.fail { color: var(--alert); }
+
+  /* factor drill-down */
+  .tiers { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+  .tier { flex: 1; min-width: 130px; }
+  .tier-top { display: flex; justify-content: space-between; font-family: var(--mono);
+    font-size: 0.66rem; color: var(--dim); margin-bottom: 5px; letter-spacing: 0.04em; }
+  .tier-top b { color: var(--ink); font-weight: 600; }
+  .bar { height: 5px; border-radius: 3px; background: var(--line-soft); overflow: hidden; display: flex; }
+  .bar i { display: block; height: 100%; }
+  .bar .ok { background: var(--seal); }
+  .bar .bad { background: var(--alert); }
+
+  .tier-group + .tier-group { margin-top: 12px; }
+  .tier-label { font-family: var(--mono); font-size: 0.64rem; text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--faint); margin-bottom: 6px; }
+  .factor { display: grid; grid-template-columns: 16px 1fr auto; gap: 9px; align-items: baseline;
+    padding: 3px 0; font-size: 0.8rem; }
+  .factor .fn { font-family: var(--mono); color: var(--ink); }
+  .factor .fd { color: var(--faint); font-size: 0.74rem; grid-column: 2 / 4; }
+  .factor .fi { font-weight: 700; text-align: center; }
+  .factor .req { font-family: var(--mono); font-size: 0.58rem; letter-spacing: 0.06em;
+    color: var(--warn); border: 1px solid var(--warn); border-radius: 4px; padding: 0 4px; align-self: center; }
+  .fi.pass { color: var(--seal); }
+  .fi.fail { color: var(--alert); }
+  .fi.skip, .fi.na { color: var(--faint); }
+  .factor.f-fail .fn { color: var(--alert); }
+
+  /* infer result */
+  .infer-result { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; margin-top: 10px; }
+  .infer-meta { font-family: var(--mono); font-size: 0.72rem; color: var(--faint);
+    display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
+  .infer-text { font-size: 0.9rem; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+
+  /* loading spinner */
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--faint);
+    border-top-color: var(--seal); border-radius: 50%; animation: spin 0.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line-soft);
+    color: var(--faint); font-size: 0.78rem; }
+
+  :focus-visible { outline: 2px solid var(--seal); outline-offset: 2px; border-radius: 4px; }
+
+  @media (max-width: 720px) {
+    .topmeta { margin-left: 0; width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chev { transition: none; }
+    .spinner { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 64 64" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <g stroke="#4FE3C1" stroke-width="3">
+          <path d="M27 13 L18 13 Q14 13 14 17 L14 47 Q14 51 18 51 L27 51"/>
+          <path d="M37 13 L46 13 Q50 13 50 17 L50 47 Q50 51 46 51 L37 51"/>
+        </g>
+        <path d="M28 24 L37 32 L28 40" stroke="#E8EEF4" stroke-width="3.4"/>
+      </svg>
+      <span class="word">teep</span>
+    </a>
+    <div class="topmeta">
+      <a href="/">Dashboard</a>
+      <span style="color:var(--ink); font-weight:500;">Testing</span>
+    </div>
+  </header>
+
+  <section class="block">
+    <div class="block-head">
+      <h3 class="eyebrow">Models</h3>
+      <input class="filter" id="filter" type="text" placeholder="filter models..." aria-label="Filter models">
+    </div>
+    <div id="status" class="panel" style="color:var(--dim)">Loading models...</div>
+    <div class="models" id="models"></div>
+  </section>
+
+  <p class="footer">Interactive attestation and inference testing.
+    <a href="/">Back to dashboard</a></p>
+</div>
+
+<script>
+"use strict";
+var TIER_SHORT = { "Tier 1: Core Attestation":"T1 \u00b7 Hardware",
+  "Tier 2: Binding & Crypto":"T2 \u00b7 Crypto",
+  "Tier 3: Supply Chain & Channel Integrity":"T3 \u00b7 Supply chain",
+  "Tier 4: Gateway Attestation":"T4 \u00b7 Gateway" };
+var STATUS_GLYPH = { pass: "\u25cf", fail: "\u2715", skip: "\u25cc", na: "\u2013" };
+
+function esc(s) { var d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
+function el(id) { return document.getElementById(id); }
+
+var allModels = [];
+var filterText = "";
+var expanded = {};
+
+function dashFactorStatus(s) {
+  if (s === "pass" || s === "Pass") return "pass";
+  if (s === "fail" || s === "Fail") return "fail";
+  if (s === "skip" || s === "Skip") return "skip";
+  return "na";
+}
+
+function tierBars(tiers) {
+  if (!tiers || !tiers.length) return "";
+  var h = '<div class="tiers">';
+  for (var i = 0; i < tiers.length; i++) {
+    var t = tiers[i];
+    if (!t.total) continue;
+    var okPct = (t.passed / t.total) * 100;
+    var badPct = (t.failed / t.total) * 100;
+    var label = TIER_SHORT[t.name] || esc(t.name);
+    h += '<div class="tier"><div class="tier-top"><span>' + esc(label) +
+      '</span><span><b>' + t.passed + '</b>/' + t.total + '</span></div>' +
+      '<div class="bar"><i class="ok" style="width:' + okPct + '%"></i>' +
+      '<i class="bad" style="width:' + badPct + '%"></i></div></div>';
+  }
+  return h + '</div>';
+}
+
+function factorList(factors) {
+  if (!factors || !factors.length) return "";
+  var order = [], byTier = {};
+  for (var i = 0; i < factors.length; i++) {
+    var f = factors[i];
+    var tier = f.tier || "Unknown";
+    if (!byTier[tier]) { byTier[tier] = []; order.push(tier); }
+    byTier[tier].push(f);
+  }
+  var h = '<div style="margin-top:14px; border-top:1px solid var(--line); padding-top:12px">';
+  for (var t = 0; t < order.length; t++) {
+    var tn = order[t];
+    h += '<div class="tier-group"><div class="tier-label">' + esc(TIER_SHORT[tn] || tn) + '</div>';
+    var list = byTier[tn];
+    for (var j = 0; j < list.length; j++) {
+      var f = list[j];
+      var st = dashFactorStatus(f.status);
+      var glyph = STATUS_GLYPH[st] || "\u25cc";
+      h += '<div class="factor' + (st === "fail" ? " f-fail" : "") + '">' +
+        '<span class="fi ' + st + '">' + glyph + '</span>' +
+        '<span class="fn">' + esc(f.name) + '</span>' +
+        (f.enforced && st === "fail" ? '<span class="req">enforced</span>' : '<span></span>') +
+        (f.detail ? '<span class="fd">' + esc(f.detail) + '</span>' : '') +
+        '</div>';
+    }
+    h += '</div>';
+  }
+  return h + '</div>';
+}
+
+function renderReport(report) {
+  if (!report) return "";
+  var blocked = report.blocked || false;
+  var statusCls = blocked ? "fail" : "pass";
+  var statusText = blocked ? "Blocked" : "Passed";
+  var h = '<div class="result-status"><span class="dot" style="color:var(--' + (blocked ? 'alert' : 'seal') + ')">\u25cf</span>' +
+    '<span class="pill ' + statusCls + '">' + statusText + '</span>';
+  if (report.passed !== undefined) {
+    h += '<span style="font-size:0.78rem; color:var(--dim)">' +
+      report.passed + ' passed';
+    if (report.enforced_failed) h += ', ' + report.enforced_failed + ' enforced failed';
+    if (report.allowed_failed) h += ', ' + report.allowed_failed + ' allowed failed';
+    h += '</span>';
+  }
+  h += '</div>';
+
+  // Build tiers from factors.
+  var factors = report.factors || [];
+  var tiers = [];
+  var tierIdx = {};
+  for (var i = 0; i < factors.length; i++) {
+    var f = factors[i];
+    var tier = f.tier || "Unknown";
+    var st = dashFactorStatus(f.status);
+    if (tierIdx[tier] === undefined) {
+      tierIdx[tier] = tiers.length;
+      tiers.push({ name: tier, passed: 0, failed: 0, total: 0 });
+    }
+    if (st === "na") continue;
+    tiers[tierIdx[tier]].total++;
+    if (st === "pass") tiers[tierIdx[tier]].passed++;
+    else if (st === "fail") tiers[tierIdx[tier]].failed++;
+  }
+  h += tierBars(tiers);
+  h += factorList(factors);
+  return h;
+}
+
+function modelCard(id) {
+  var parts = id.split(":");
+  var prov = parts[0] || "";
+  var name = parts.slice(1).join(":") || id;
+  var open = !!expanded[id];
+
+  return '<div class="card" data-model="' + esc(id) + '">' +
+    '<button class="card-head" aria-expanded="' + open + '" data-toggle="' + esc(id) + '">' +
+      '<span class="card-name"><span class="prov">' + esc(prov) + ':</span>' + esc(name) + '</span>' +
+      '<span class="chev">\u25b8</span>' +
+    '</button>' +
+    '<div class="card-body">' +
+      '<div class="card-actions">' +
+        '<button class="btn btn-attest" data-attest="' + esc(id) + '">Attest</button>' +
+        '<button class="btn btn-infer" data-infer="' + esc(id) + '">Infer</button>' +
+      '</div>' +
+      '<div class="result" id="attest-' + esc(id) + '" hidden></div>' +
+      '<div class="result" id="infer-' + esc(id) + '" hidden></div>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderModels() {
+  var ft = filterText.toLowerCase();
+  var html = "";
+  var shown = 0;
+  for (var i = 0; i < allModels.length; i++) {
+    var id = allModels[i];
+    if (ft && id.toLowerCase().indexOf(ft) === -1) continue;
+    html += modelCard(id);
+    shown++;
+  }
+  if (allModels.length === 0) {
+    el("status").textContent = "No models available.";
+    el("status").hidden = false;
+    el("models").innerHTML = "";
+    return;
+  }
+  el("status").hidden = true;
+  if (shown === 0) {
+    el("models").innerHTML = '<div class="panel" style="color:var(--dim)">No models match "' + esc(filterText) + '".</div>';
+    return;
+  }
+  el("models").innerHTML = html;
+  wireEvents();
+}
+
+function wireEvents() {
+  var toggles = document.querySelectorAll(".card-head[data-toggle]");
+  for (var i = 0; i < toggles.length; i++) {
+    toggles[i].addEventListener("click", function() {
+      var k = this.getAttribute("data-toggle");
+      expanded[k] = !expanded[k];
+      this.setAttribute("aria-expanded", expanded[k]);
+    });
+  }
+  var attBtns = document.querySelectorAll(".btn-attest[data-attest]");
+  for (var j = 0; j < attBtns.length; j++) {
+    attBtns[j].addEventListener("click", function(e) {
+      e.stopPropagation();
+      doAttest(this.getAttribute("data-attest"));
+    });
+  }
+  var infBtns = document.querySelectorAll(".btn-infer[data-infer]");
+  for (var k = 0; k < infBtns.length; k++) {
+    infBtns[k].addEventListener("click", function(e) {
+      e.stopPropagation();
+      doInfer(this.getAttribute("data-infer"));
+    });
+  }
+}
+
+function setLoading(prefix, model, loading) {
+  var btn = document.querySelector("[data-" + prefix + '="' + CSS.escape(model) + '"]');
+  if (btn) btn.disabled = loading;
+  var res = el(prefix + "-" + model);
+  if (res && loading) {
+    res.hidden = false;
+    res.innerHTML = '<span class="spinner"></span> <span style="color:var(--dim); font-size:0.82rem; margin-left:6px">Running...</span>';
+  }
+}
+
+function doAttest(model) {
+  setLoading("attest", model, true);
+  fetch("/test/attest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: model })
+  }).then(function(r) { return r.json(); }).then(function(report) {
+    var res = el("attest-" + model);
+    if (!res) return;
+    res.hidden = false;
+    res.innerHTML = renderReport(report);
+  }).catch(function(err) {
+    var res = el("attest-" + model);
+    if (!res) return;
+    res.hidden = false;
+    res.innerHTML = '<div class="result-status"><span class="dot" style="color:var(--alert)">\u25cf</span>' +
+      '<span style="color:var(--alert)">Error: ' + esc(err.message) + '</span></div>';
+  }).finally(function() {
+    setLoading("attest", model, false);
+  });
+}
+
+function doInfer(model) {
+  setLoading("infer", model, true);
+  fetch("/test/infer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: model })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    var res = el("infer-" + model);
+    if (!res) return;
+    res.hidden = false;
+    var h = "";
+    if (data.error) {
+      h += '<div class="result-status"><span class="dot" style="color:var(--alert)">\u25cf</span>' +
+        '<span style="color:var(--alert)">' + esc(data.error) + '</span></div>';
+      if (data.report) h += renderReport(data.report);
+    } else {
+      h += '<div class="infer-result">';
+      h += '<div class="infer-text">' + esc(data.response) + '</div>';
+      h += '<div class="infer-meta">';
+      h += '<span>E2EE: ' + (data.e2ee ? '<span style="color:var(--seal)">\u2713 yes</span>' : '<span style="color:var(--faint)">no</span>') + '</span>';
+      h += '<span>Latency: ' + data.latency_ms + 'ms</span>';
+      h += '</div></div>';
+    }
+    res.innerHTML = h;
+  }).catch(function(err) {
+    var res = el("infer-" + model);
+    if (!res) return;
+    res.hidden = false;
+    res.innerHTML = '<div class="result-status"><span class="dot" style="color:var(--alert)">\u25cf</span>' +
+      '<span style="color:var(--alert)">Error: ' + esc(err.message) + '</span></div>';
+  }).finally(function() {
+    setLoading("infer", model, false);
+  });
+}
+
+// Load models on page load.
+fetch("/v1/models").then(function(r) { return r.json(); }).then(function(data) {
+  var models = (data.data || []);
+  allModels = [];
+  for (var i = 0; i < models.length; i++) {
+    var id = models[i].id || models[i].name;
+    if (id) allModels.push(id);
+  }
+  allModels.sort();
+  renderModels();
+}).catch(function(err) {
+  el("status").textContent = "Failed to load models: " + err.message;
+});
+
+el("filter").addEventListener("input", function() {
+  filterText = this.value;
+  renderModels();
+});
+</script>
+</body>
+</html>
