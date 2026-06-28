@@ -19,6 +19,7 @@ const testModelsJSON = `{
 			"created": 1727966436,
 			"owned_by": "venice.ai",
 			"type": "text",
+			"context_length": 131072,
 			"model_spec": {
 				"availableContextTokens": 131072,
 				"capabilities": {"supportsE2EE": true, "supportsTeeAttestation": true},
@@ -32,6 +33,7 @@ const testModelsJSON = `{
 			"created": 1727966436,
 			"owned_by": "venice.ai",
 			"type": "text",
+			"context_length": 65536,
 			"model_spec": {
 				"availableContextTokens": 65536,
 				"capabilities": {"supportsE2EE": false, "supportsTeeAttestation": true},
@@ -45,6 +47,7 @@ const testModelsJSON = `{
 			"created": 1727966436,
 			"owned_by": "venice.ai",
 			"type": "text",
+			"context_length": 4096,
 			"model_spec": {
 				"availableContextTokens": 4096,
 				"capabilities": {"supportsE2EE": false, "supportsTeeAttestation": false},

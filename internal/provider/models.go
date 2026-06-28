@@ -79,9 +79,6 @@ type nearModelEntry struct {
 	OwnedBy                     string          `json:"owned_by"`
 	Name                        string          `json:"name"`
 	Description                 string          `json:"description"`
-	Quantization                string          `json:"quantization"`
-	HuggingFaceID               string          `json:"hugging_face_id"`
-	IsReady                     bool            `json:"is_ready"`
 	ContextLength               int             `json:"context_length"`
 	MaxOutputLength             int             `json:"max_output_length"`
 	InputModalities             []string        `json:"input_modalities"`
@@ -90,9 +87,16 @@ type nearModelEntry struct {
 	SupportedSamplingParameters []string        `json:"supported_sampling_parameters"`
 	Pricing                     json.RawMessage `json:"pricing"`
 	Architecture                json.RawMessage `json:"architecture"`
-	Datacenters                 json.RawMessage `json:"datacenters"`
-	Openrouter                  json.RawMessage `json:"openrouter"`
 	TopProvider                 json.RawMessage `json:"top_provider"`
+
+	// Optional — not present on all NEAR model entries (e.g. image/embedding
+	// models may omit these). Tagged omitempty so jsonstrict does not report
+	// them as missing.
+	Quantization  string          `json:"quantization,omitempty"`
+	HuggingFaceID string          `json:"hugging_face_id,omitempty"`
+	IsReady       bool            `json:"is_ready,omitempty"`
+	Datacenters   json.RawMessage `json:"datacenters,omitempty"`
+	Openrouter    json.RawMessage `json:"openrouter,omitempty"`
 }
 
 // tinfoilModelEntry matches the Tinfoil /v1/models entry schema. Used by

@@ -23,12 +23,13 @@ type modelsResponse struct {
 // veniceModelEntry matches the Venice /api/v1/models entry schema. Used for
 // jsonstrict schema drift detection and TEE/E2EE capability filtering.
 type veniceModelEntry struct {
-	ID        string `json:"id"`
-	Object    string `json:"object"`
-	Created   int64  `json:"created"`
-	OwnedBy   string `json:"owned_by"`
-	Type      string `json:"type"`
-	ModelSpec struct {
+	ID            string `json:"id"`
+	Object        string `json:"object"`
+	Created       int64  `json:"created"`
+	OwnedBy       string `json:"owned_by"`
+	Type          string `json:"type"`
+	ContextLength int    `json:"context_length"`
+	ModelSpec     struct {
 		AvailableContextTokens int    `json:"availableContextTokens"`
 		Description            string `json:"description"`
 		Name                   string `json:"name"`
