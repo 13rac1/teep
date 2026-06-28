@@ -524,7 +524,7 @@ func (h *PinnedHandler) verifyGatewayTDX(
 	gatewayTDX := h.verifyQuote(ctx, gwRaw.IntelQuote)
 	if gatewayTDX.ParseErr == nil {
 		detail, rdErr := GatewayReportDataVerifier{}.Verify(
-			gatewayTDX.ReportData, gwRaw.TLSCertFingerprint, nonce)
+			gatewayTDX.ReportData, gwRaw.SigningAddress, gwRaw.TLSCertFingerprint, nonce)
 		gatewayTDX.ReportDataBindingErr = rdErr
 		gatewayTDX.ReportDataBindingDetail = detail
 	}

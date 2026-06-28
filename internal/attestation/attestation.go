@@ -194,6 +194,7 @@ type RawAttestation struct {
 	GatewayNonceHex       string          `json:"-"`
 	GatewayAppCompose     string          `json:"-"`
 	GatewayEventLog       []EventLogEntry `json:"-"`
+	GatewaySigningAddress string          `json:"-"`
 	GatewayTLSFingerprint string          `json:"-"`
 
 	// UnknownFields lists unexpected JSON keys found in the attestation

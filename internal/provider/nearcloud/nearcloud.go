@@ -61,6 +61,7 @@ func (t *tcbInfo) UnmarshalJSON(data []byte) error {
 // gatewayAttestation holds the gateway's own TDX attestation data.
 type gatewayAttestation struct {
 	RequestNonce       string `json:"request_nonce"`
+	SigningAddress     string `json:"signing_address"`
 	IntelQuote         string `json:"intel_quote"`
 	EventLog           string `json:"event_log"` // JSON string, not array
 	TLSCertFingerprint string `json:"tls_cert_fingerprint"`
@@ -72,6 +73,7 @@ type gatewayAttestation struct {
 // GatewayRaw holds parsed gateway attestation fields ready for verification.
 type GatewayRaw struct {
 	NonceHex           string
+	SigningAddress     string
 	IntelQuote         string
 	AppCompose         string
 	TLSCertFingerprint string
@@ -96,6 +98,7 @@ func ParseGatewayResponse(ctx context.Context, body []byte, model string) (*Gate
 
 	gw := &GatewayRaw{
 		NonceHex:           gr.GatewayAttestation.RequestNonce,
+		SigningAddress:     gr.GatewayAttestation.SigningAddress,
 		IntelQuote:         gr.GatewayAttestation.IntelQuote,
 		AppCompose:         gr.GatewayAttestation.Info.TCBInfo.AppCompose,
 		TLSCertFingerprint: gr.GatewayAttestation.TLSCertFingerprint,
@@ -185,6 +188,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	raw.GatewayNonceHex = gwRaw.NonceHex
 	raw.GatewayAppCompose = gwRaw.AppCompose
 	raw.GatewayEventLog = gwRaw.EventLog
+	raw.GatewaySigningAddress = gwRaw.SigningAddress
 	raw.GatewayTLSFingerprint = gwRaw.TLSCertFingerprint
 	return raw, nil
 }
