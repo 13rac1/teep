@@ -386,12 +386,12 @@ var factorRegistry = []factorInfo{
 	{
 		Name:    attestation.FactorSigstoreVerify,
 		Tier:    3,
-		Summary: "Container images in Sigstore transparency log",
-		Description: "Extracts container image sha256 digests from the docker-compose " +
+		Summary: "Components in Sigstore transparency log",
+		Description: "Extracts component sha256 digests from the docker-compose " +
 			"manifest inside app_compose and checks each against the Sigstore " +
 			"transparency log (search.sigstore.dev). Sigstore entries prove " +
-			"the images were built through a verifiable CI/CD pipeline with " +
-			"signed provenance. Skipped when no image digests are found.",
+			"the components were built through a verifiable CI/CD pipeline with " +
+			"signed provenance. Skipped when no component digests are found.",
 	},
 	{
 		Name:    attestation.FactorSigstoreCode,

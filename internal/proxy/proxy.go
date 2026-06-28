@@ -1899,6 +1899,7 @@ func (s *Server) handleE2EEDecryptionFailure(
 	s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
 	s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
 
+	// This error log is the WARN+ block record for the e2ee_usable failure.
 	slog.ErrorContext(ctx, "E2EE decryption failed; caches invalidated",
 		"provider", prov.Name, "model", upstreamModel,
 		"factor", attestation.FactorE2EEUsable,
@@ -2176,6 +2177,7 @@ func (s *Server) handlePinnedPostRelay(
 		}
 		s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
 		s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
+		// This error log is the WARN+ block record for pinned e2ee_usable failures.
 		slog.ErrorContext(ctx, "pinned E2EE decryption failed; caches invalidated",
 			"provider", prov.Name, "model", upstreamModel,
 			"factor", attestation.FactorE2EEUsable,

@@ -12,7 +12,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Sigstore: allowlisted non-Rekor images (uses real supply chain policies)
+// Sigstore: allowlisted non-Rekor components (uses real supply chain policies)
 // ---------------------------------------------------------------------------
 
 func TestEvalSigstoreVerification_AllowlistedNonRekor(t *testing.T) {

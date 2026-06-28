@@ -1616,7 +1616,7 @@ func buildTransparencyNoRekor(in *ReportInput, scPolicy *SupplyChainPolicy) Fact
 				Detail: "all configured components are compose-binding-only; no transparency log required"}
 		}
 		return FactorResult{Tier: TierSupplyChain, Name: FactorBuildTransparency, Status: Fail,
-			Detail: "no Rekor provenance fetched for attested image digests"}
+			Detail: "no Rekor provenance fetched for attested component digests"}
 	}
 	if in.Raw.ComposeHash != "" {
 		hashPreview := in.Raw.ComposeHash
@@ -1663,7 +1663,7 @@ func classifyRekorEntry(r *RekorProvenance, img *ImageProvenance, imageRepo stri
 			fpGot, errG := hex.DecodeString(r.KeyFingerprint)
 			fpWant, errW := hex.DecodeString(img.KeyFingerprint)
 			if errG != nil || errW != nil || subtle.ConstantTimeCompare(fpGot, fpWant) != 1 {
-				return rekorFailed, fmt.Sprintf("image %q: unexpected signing key fingerprint %s (expected %s)",
+				return rekorFailed, fmt.Sprintf("component %q: unexpected signing key fingerprint %s (expected %s)",
 					imageRepo, truncHex(r.KeyFingerprint), truncHex(img.KeyFingerprint))
 			}
 		}
@@ -1716,11 +1716,11 @@ func rekorProvenanceResult(in *ReportInput, scPolicy *SupplyChainPolicy) FactorR
 		case rekorFulcio:
 			if r.SETErr != nil {
 				return FactorResult{Tier: TierSupplyChain, Name: FactorBuildTransparency, Status: Fail,
-					Detail: fmt.Sprintf("image %q: Rekor SET verification failed: %v", imageRepo, r.SETErr)}
+					Detail: fmt.Sprintf("component %q: Rekor SET verification failed: %v", imageRepo, r.SETErr)}
 			}
 			if r.InclusionErr != nil {
 				return FactorResult{Tier: TierSupplyChain, Name: FactorBuildTransparency, Status: Fail,
-					Detail: fmt.Sprintf("image %q: Rekor inclusion proof verification failed: %v", imageRepo, r.InclusionErr)}
+					Detail: fmt.Sprintf("component %q: Rekor inclusion proof verification failed: %v", imageRepo, r.InclusionErr)}
 			}
 			if r.SETVerified {
 				setVerified++
@@ -1735,19 +1735,19 @@ func rekorProvenanceResult(in *ReportInput, scPolicy *SupplyChainPolicy) FactorR
 		case rekorSigstore:
 			if r.SETErr != nil {
 				return FactorResult{Tier: TierSupplyChain, Name: FactorBuildTransparency, Status: Fail,
-					Detail: fmt.Sprintf("image %q: Rekor SET verification failed for Sigstore entry: %v", imageRepo, r.SETErr)}
+					Detail: fmt.Sprintf("component %q: Rekor SET verification failed for Sigstore entry: %v", imageRepo, r.SETErr)}
 			}
 			if !r.SETVerified {
 				return FactorResult{Tier: TierSupplyChain, Name: FactorBuildTransparency, Status: Fail,
-					Detail: fmt.Sprintf("image %q: Rekor SET verification did not succeed for Sigstore entry", imageRepo)}
+					Detail: fmt.Sprintf("component %q: Rekor SET verification did not succeed for Sigstore entry", imageRepo)}
 			}
 			if r.InclusionErr != nil {
 				return FactorResult{Tier: TierSupplyChain, Name: FactorBuildTransparency, Status: Fail,
-					Detail: fmt.Sprintf("image %q: Rekor inclusion proof verification failed for Sigstore entry: %v", imageRepo, r.InclusionErr)}
+					Detail: fmt.Sprintf("component %q: Rekor inclusion proof verification failed for Sigstore entry: %v", imageRepo, r.InclusionErr)}
 			}
 			if !r.InclusionVerified {
 				return FactorResult{Tier: TierSupplyChain, Name: FactorBuildTransparency, Status: Fail,
-					Detail: fmt.Sprintf("image %q: Rekor inclusion proof verification did not succeed for Sigstore entry", imageRepo)}
+					Detail: fmt.Sprintf("component %q: Rekor inclusion proof verification did not succeed for Sigstore entry", imageRepo)}
 			}
 			setVerified++
 			inclusionVerified++
@@ -1766,34 +1766,34 @@ func rekorProvenanceResult(in *ReportInput, scPolicy *SupplyChainPolicy) FactorR
 // Returns (detail, true) on failure.
 func verifyFulcioEntry(r *RekorProvenance, img *ImageProvenance, imageRepo string) (string, bool) {
 	if r.SignatureErr != nil && !img.NoDSSE {
-		return fmt.Sprintf("image %q: DSSE envelope signature verification failed: %v", imageRepo, r.SignatureErr), true
+		return fmt.Sprintf("component %q: DSSE envelope signature verification failed: %v", imageRepo, r.SignatureErr), true
 	}
 	if !r.HasCert && r.HasNonFulcioCert {
-		return fmt.Sprintf("image %q: expected Fulcio certificate but entry has non-Fulcio X.509 cert (no OIDC issuer OID)", imageRepo), true
+		return fmt.Sprintf("component %q: expected Fulcio certificate but entry has non-Fulcio X.509 cert (no OIDC issuer OID)", imageRepo), true
 	}
 	if !r.HasCert {
-		return fmt.Sprintf("image %q: expected Fulcio certificate but entry has raw key", imageRepo), true
+		return fmt.Sprintf("component %q: expected Fulcio certificate but entry has raw key", imageRepo), true
 	}
 	if subtle.ConstantTimeCompare(
 		[]byte(strings.ToLower(strings.TrimSpace(r.OIDCIssuer))),
 		[]byte(strings.ToLower(strings.TrimSpace(img.OIDCIssuer))),
 	) != 1 {
-		return fmt.Sprintf("image %q: unexpected OIDC issuer %q (expected %q)", imageRepo, r.OIDCIssuer, img.OIDCIssuer), true
+		return fmt.Sprintf("component %q: unexpected OIDC issuer %q (expected %q)", imageRepo, r.OIDCIssuer, img.OIDCIssuer), true
 	}
 	if len(img.OIDCIdentities) > 0 {
 		if !containsFoldCT(strings.TrimSpace(r.SubjectURI), img.OIDCIdentities) {
-			return fmt.Sprintf("image %q: unexpected OIDC identity %q (expected one of %v)", imageRepo, r.SubjectURI, img.OIDCIdentities), true
+			return fmt.Sprintf("component %q: unexpected OIDC identity %q (expected one of %v)", imageRepo, r.SubjectURI, img.OIDCIdentities), true
 		}
 	} else if img.OIDCIdentity != "" && subtle.ConstantTimeCompare(
 		[]byte(strings.ToLower(strings.TrimSpace(r.SubjectURI))),
 		[]byte(strings.ToLower(strings.TrimSpace(img.OIDCIdentity))),
 	) != 1 {
-		return fmt.Sprintf("image %q: unexpected OIDC identity %q (expected %q)", imageRepo, r.SubjectURI, img.OIDCIdentity), true
+		return fmt.Sprintf("component %q: unexpected OIDC identity %q (expected %q)", imageRepo, r.SubjectURI, img.OIDCIdentity), true
 	}
 	repoID := strings.TrimSpace(r.SourceRepo)
 	repoURL := strings.TrimSpace(r.SourceRepoURL)
 	if !containsFold(repoID, img.SourceRepos) && !containsFold(repoURL, img.SourceRepos) {
-		return fmt.Sprintf("image %q: unexpected source repo %q (expected %v)", imageRepo, repoID, img.SourceRepos), true
+		return fmt.Sprintf("component %q: unexpected source repo %q (expected %v)", imageRepo, repoID, img.SourceRepos), true
 	}
 	return "", false
 }
@@ -1821,20 +1821,20 @@ func formatBuildTransparencyResult(scPolicy *SupplyChainPolicy, fulcioVerified, 
 	switch {
 	case scPolicy != nil && fulcioVerified > 0 && sigstorePresent > 0:
 		f.Status = Pass
-		f.Detail = fmt.Sprintf("%d image(s) verified by Fulcio provenance; %d present in Sigstore (%s%s)",
+		f.Detail = fmt.Sprintf("%d component(s) verified by Fulcio provenance; %d present in Sigstore (%s%s)",
 			fulcioVerified, sigstorePresent, detail, logVerify)
 	case scPolicy != nil && fulcioVerified > 0:
 		f.Status = Pass
-		f.Detail = fmt.Sprintf("%d image(s) verified by Fulcio provenance (%s%s)", fulcioVerified, detail, logVerify)
+		f.Detail = fmt.Sprintf("%d component(s) verified by Fulcio provenance (%s%s)", fulcioVerified, detail, logVerify)
 	case scPolicy != nil && sigstorePresent > 0:
 		f.Status = Pass
-		f.Detail = fmt.Sprintf("%d image(s) present in Sigstore (no Fulcio provenance%s)", sigstorePresent, logVerify)
+		f.Detail = fmt.Sprintf("%d component(s) present in Sigstore (no Fulcio provenance%s)", sigstorePresent, logVerify)
 	case fulcioVerified > 0:
 		f.Status = Pass
-		f.Detail = fmt.Sprintf("%d/%d image(s) have Sigstore build provenance (%s%s)", fulcioVerified, rekorCount, detail, logVerify)
+		f.Detail = fmt.Sprintf("%d/%d component(s) have Sigstore build provenance (%s%s)", fulcioVerified, rekorCount, detail, logVerify)
 	default:
 		f.Status = Skip
-		f.Detail = "all images signed with raw keys (no Fulcio build provenance)"
+		f.Detail = "all components signed with raw keys (no Fulcio build provenance)"
 	}
 	return f
 }
@@ -2163,7 +2163,7 @@ func evalComposeBinding(in *ReportInput) []FactorResult {
 }
 func evalSigstoreVerification(in *ReportInput) []FactorResult {
 	if len(in.Sigstore) == 0 {
-		return factor(TierSupplyChain, FactorSigstoreVerify, Skip, "no image digests to verify")
+		return factor(TierSupplyChain, FactorSigstoreVerify, Skip, "no component digests to verify")
 	}
 
 	scPolicy := in.SupplyChainPolicy
@@ -2193,10 +2193,10 @@ func evalSigstoreVerification(in *ReportInput) []FactorResult {
 	inSigstore := len(in.Sigstore) - composeOnly
 	if composeOnly > 0 {
 		return factor(TierSupplyChain, FactorSigstoreVerify, Pass,
-			fmt.Sprintf("%d image digest(s) found in Sigstore transparency log; %d not Sigstore-signed (compose-pinned)", inSigstore, composeOnly))
+			fmt.Sprintf("%d component digest(s) found in Sigstore transparency log; %d not Sigstore-signed (compose-pinned)", inSigstore, composeOnly))
 	}
 	return factor(TierSupplyChain, FactorSigstoreVerify, Pass,
-		fmt.Sprintf("%d image digest(s) found in Sigstore transparency log", len(in.Sigstore)))
+		fmt.Sprintf("%d component digest(s) found in Sigstore transparency log", len(in.Sigstore)))
 }
 func evalSigstoreCodeVerified(in *ReportInput) []FactorResult {
 	if in.TinfoilSC == nil {
@@ -2481,18 +2481,18 @@ func evalGatewayEventLogIntegrity(in *ReportInput) []FactorResult {
 // ---------------------------------------------------------------------------
 
 // ProvenanceType describes the expected level of Sigstore/Rekor evidence for
-// a container image.
+// a supply-chain component.
 type ProvenanceType int
 
 const (
-	// FulcioSigned means the image must have a Fulcio-issued certificate in
+	// FulcioSigned means the component must have a Fulcio-issued certificate in
 	// Rekor with a matching OIDC issuer and source repository.
 	FulcioSigned ProvenanceType = iota
-	// SigstorePresent means the image has an entry in the Sigstore
+	// SigstorePresent means the component has an entry in the Sigstore
 	// transparency log but specific signer identity is not checked (raw-key
 	// signatures or third-party Fulcio certs such as alpine or datadog/agent).
 	SigstorePresent
-	// ComposeBindingOnly means the image is not expected to be in Sigstore.
+	// ComposeBindingOnly means the component is not expected to be in Sigstore.
 	// Security relies on the pinned digest in the attested compose manifest.
 	ComposeBindingOnly
 )

@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// SigstoreResult records the outcome of checking one container image digest
+// SigstoreResult records the outcome of checking one supply-chain component digest
 // against the Sigstore transparency log.
 type SigstoreResult struct {
 	Digest string
