@@ -17,7 +17,7 @@ const modelsPath = "/v1/models"
 
 // modelsResponse is the top-level JSON shape returned by /v1/models endpoints.
 type modelsResponse struct {
-	Object string            `json:"object"`
+	Object string            `json:"object,omitempty"`
 	Data   []json.RawMessage `json:"data"`
 }
 
@@ -80,7 +80,6 @@ type nearModelEntry struct {
 	Name                        string          `json:"name"`
 	Description                 string          `json:"description"`
 	ContextLength               int             `json:"context_length"`
-	MaxOutputLength             int             `json:"max_output_length"`
 	InputModalities             []string        `json:"input_modalities"`
 	OutputModalities            []string        `json:"output_modalities"`
 	SupportedFeatures           []string        `json:"supported_features"`
@@ -92,11 +91,12 @@ type nearModelEntry struct {
 	// Optional — not present on all NEAR model entries (e.g. image/embedding
 	// models may omit these). Tagged omitempty so jsonstrict does not report
 	// them as missing.
-	Quantization  string          `json:"quantization,omitempty"`
-	HuggingFaceID string          `json:"hugging_face_id,omitempty"`
-	IsReady       bool            `json:"is_ready,omitempty"`
-	Datacenters   json.RawMessage `json:"datacenters,omitempty"`
-	Openrouter    json.RawMessage `json:"openrouter,omitempty"`
+	MaxOutputLength int             `json:"max_output_length,omitempty"`
+	Quantization    string          `json:"quantization,omitempty"`
+	HuggingFaceID   string          `json:"hugging_face_id,omitempty"`
+	IsReady         bool            `json:"is_ready,omitempty"`
+	Datacenters     json.RawMessage `json:"datacenters,omitempty"`
+	Openrouter      json.RawMessage `json:"openrouter,omitempty"`
 }
 
 // tinfoilModelEntry matches the Tinfoil /v1/models entry schema. Used by
@@ -107,7 +107,7 @@ type tinfoilModelEntry struct {
 	Created       int64           `json:"created"`
 	OwnedBy       string          `json:"owned_by"`
 	Type          string          `json:"type"`
-	ContextWindow int             `json:"context_window"`
+	ContextWindow int             `json:"context_window,omitempty"`
 	Multimodal    bool            `json:"multimodal"`
 	ToolCalling   bool            `json:"tool_calling"`
 	Reasoning     bool            `json:"reasoning"`
