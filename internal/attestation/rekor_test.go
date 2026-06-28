@@ -276,6 +276,157 @@ func TestFetchRekorProvenanceForImage_PrefersPolicyMatch(t *testing.T) {
 	}
 }
 
+func TestFetchRekorProvenanceForPolicy_UnknownRepoPrefersPolicyMatch(t *testing.T) {
+	const nonMatchingUUID = "24296fb24b8ad77bnonmatching"
+	const matchingUUID = "24296fb24b8ad77bmatching"
+
+	block, _ := pem.Decode([]byte(realPublicKeyPEM))
+	if block == nil {
+		t.Fatal("decode test public key PEM")
+	}
+	h := sha256.Sum256(block.Bytes)
+	keyFingerprint := hex.EncodeToString(h[:])
+
+	entries := map[string][]byte{
+		nonMatchingUUID: buildMockEntryResponse(nonMatchingUUID, buildMockDSSEBody(realFulcioCertPEM)),
+		matchingUUID:    buildMockEntryResponse(matchingUUID, buildMockDSSEBody(realPublicKeyPEM)),
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/index/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			resp, _ := json.Marshal([]string{nonMatchingUUID, matchingUUID})
+			w.Write(resp)
+		case "/api/v1/log/entries/retrieve":
+			var req struct {
+				EntryUUIDs []string `json:"entryUUIDs"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if len(req.EntryUUIDs) != 1 {
+				t.Fatalf("entryUUIDs = %v, want one", req.EntryUUIDs)
+			}
+			entry, ok := entries[req.EntryUUIDs[0]]
+			if !ok {
+				t.Fatalf("unexpected UUID %q", req.EntryUUIDs[0])
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(entry)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
+	policy := &SupplyChainPolicy{Images: []ImageProvenance{{
+		Repo:           "example/original-raw-key",
+		Provenance:     SigstorePresent,
+		KeyFingerprint: keyFingerprint,
+	}}}
+
+	provs := rc.FetchRekorProvenancesForPolicy(
+		context.Background(),
+		[]string{testDigest},
+		map[string]string{testDigest: "example/renamed-raw-key"},
+		policy,
+	)
+	if len(provs) != 1 {
+		t.Fatalf("got %d provenances, want 1", len(provs))
+	}
+	prov := provs[0]
+	if prov.Err != nil {
+		t.Fatalf("unexpected error: %v", prov.Err)
+	}
+	if prov.HasCert {
+		t.Fatal("expected matching raw-key entry, got Fulcio cert")
+	}
+	if prov.KeyFingerprint != keyFingerprint {
+		t.Fatalf("KeyFingerprint = %q, want %q", prov.KeyFingerprint, keyFingerprint)
+	}
+}
+
+func TestFetchRekorProvenanceForPolicy_KnownRepoKeepsProviderSignerFallback(t *testing.T) {
+	const nonMatchingUUID = "24296fb24b8ad77cnonmatching"
+	const providerMatchUUID = "24296fb24b8ad77cprovider"
+
+	block, _ := pem.Decode([]byte(realPublicKeyPEM))
+	if block == nil {
+		t.Fatal("decode test public key PEM")
+	}
+	h := sha256.Sum256(block.Bytes)
+	keyFingerprint := hex.EncodeToString(h[:])
+
+	entries := map[string][]byte{
+		nonMatchingUUID:   buildMockEntryResponse(nonMatchingUUID, buildMockDSSEBody(realFulcioCertPEM)),
+		providerMatchUUID: buildMockEntryResponse(providerMatchUUID, buildMockDSSEBody(realPublicKeyPEM)),
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/index/retrieve":
+			w.Header().Set("Content-Type", "application/json")
+			resp, _ := json.Marshal([]string{nonMatchingUUID, providerMatchUUID})
+			w.Write(resp)
+		case "/api/v1/log/entries/retrieve":
+			var req struct {
+				EntryUUIDs []string `json:"entryUUIDs"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if len(req.EntryUUIDs) != 1 {
+				t.Fatalf("entryUUIDs = %v, want one", req.EntryUUIDs)
+			}
+			entry, ok := entries[req.EntryUUIDs[0]]
+			if !ok {
+				t.Fatalf("unexpected UUID %q", req.EntryUUIDs[0])
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(entry)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	rc := NewRekorClientWithBase(ts.URL, ts.Client())
+	policy := &SupplyChainPolicy{Images: []ImageProvenance{
+		{
+			Repo:         "example/known-component",
+			Provenance:   FulcioSigned,
+			OIDCIssuer:   "https://token.actions.githubusercontent.com",
+			OIDCIdentity: "https://github.com/example/known/.github/workflows/build.yml@refs/heads/main",
+			SourceRepos:  []string{"example/known", "https://github.com/example/known"},
+		},
+		{
+			Repo:           "example/provider-trusted-raw-key",
+			Provenance:     SigstorePresent,
+			KeyFingerprint: keyFingerprint,
+		},
+	}}
+
+	prov := rc.FetchRekorProvenanceForPolicy(
+		context.Background(),
+		testDigest,
+		"example/known-component",
+		policy,
+	)
+	if prov.Err != nil {
+		t.Fatalf("unexpected error: %v", prov.Err)
+	}
+	if prov.HasCert {
+		t.Fatal("expected provider signer raw-key fallback, got Fulcio cert")
+	}
+	if prov.KeyFingerprint != keyFingerprint {
+		t.Fatalf("KeyFingerprint = %q, want %q", prov.KeyFingerprint, keyFingerprint)
+	}
+}
+
 func TestFetchRekorProvenance_NoEntries(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Logf("Rekor mock: %s %s", r.Method, r.URL.Path)

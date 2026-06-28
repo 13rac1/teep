@@ -160,7 +160,22 @@ func (rc *RekorClient) FetchRekorProvenance(ctx context.Context, digest string) 
 // avoids accepting unrelated downstream attestations that merely reference the
 // same digest.
 func (rc *RekorClient) FetchRekorProvenanceForImage(ctx context.Context, digest string, img *ImageProvenance) RekorProvenance {
-	return rc.fetchRekorProvenance(ctx, digest, img)
+	return rc.fetchRekorProvenance(ctx, digest, rekorImageMatcher(img))
+}
+
+// FetchRekorProvenanceForPolicy queries Rekor for a digest and prefers entries
+// matching either the recognized component policy for repo or, when repo is not
+// yet recognized, any provider-wide component signature policy.
+func (rc *RekorClient) FetchRekorProvenanceForPolicy(
+	ctx context.Context,
+	digest string,
+	repo string,
+	policy *SupplyChainPolicy,
+) RekorProvenance {
+	if policy == nil {
+		return rc.FetchRekorProvenance(ctx, digest)
+	}
+	return rc.fetchRekorProvenance(ctx, digest, rekorPolicyMatcherForRepo(policy, repo))
 }
 
 // FetchRekorProvenances fetches provenance for each digest concurrently.
@@ -194,18 +209,24 @@ func (rc *RekorClient) FetchRekorProvenancesForPolicy(
 		wg.Add(1)
 		go func(i int, d string) {
 			defer wg.Done()
-			var img *ImageProvenance
-			if policy != nil {
-				img = policy.Lookup(digestToRepo[d])
-			}
-			results[i] = rc.FetchRekorProvenanceForImage(ctx, d, img)
+			results[i] = rc.FetchRekorProvenanceForPolicy(ctx, d, digestToRepo[d], policy)
 		}(i, d)
 	}
 	wg.Wait()
 	return results
 }
 
-func (rc *RekorClient) fetchRekorProvenance(ctx context.Context, digest string, img *ImageProvenance) RekorProvenance {
+type rekorMatch int
+
+const (
+	rekorNoMatch rekorMatch = iota
+	rekorFallbackMatch
+	rekorPreferredMatch
+)
+
+type rekorMatcher func(*RekorProvenance) rekorMatch
+
+func (rc *RekorClient) fetchRekorProvenance(ctx context.Context, digest string, matcher rekorMatcher) RekorProvenance {
 	uuids, err := rc.fetchRekorUUIDs(ctx, digest)
 	if err != nil {
 		return RekorProvenance{Digest: digest, Err: fmt.Errorf("search Rekor: %w", err)}
@@ -214,12 +235,13 @@ func (rc *RekorClient) fetchRekorProvenance(ctx context.Context, digest string, 
 		return RekorProvenance{Digest: digest, Err: fmt.Errorf("no Rekor entries for sha256:%s", digest)}
 	}
 
-	preferPolicyMatch := hasComponentSignaturePolicy(img)
+	preferPolicyMatch := matcher != nil
 	// Try each UUID; prefer one whose verifier is a Fulcio certificate.
 	// This prevents a front-running attack where an adversary inserts a
 	// raw-key entry first, causing us to skip build-provenance verification.
 	var rawKeyFallback *RekorProvenance
 	var fulcioFallback *RekorProvenance
+	var policyFallback *RekorProvenance
 	var lastErr error
 	for _, uuid := range uuids {
 		entry, err := rc.fetchRekorEntry(ctx, uuid)
@@ -256,7 +278,7 @@ func (rc *RekorClient) fetchRekorProvenance(ctx context.Context, digest string, 
 				KeyFingerprint: hex.EncodeToString(h[:]),
 			}
 			rc.verifyRekorEntry(entry, &p)
-			if preferPolicyMatch && rekorMatchesImagePolicy(&p, img) {
+			if preferPolicyMatch && rekorPolicyMatched(matcher, &p, &policyFallback) {
 				return p
 			}
 			if rawKeyFallback == nil {
@@ -290,7 +312,7 @@ func (rc *RekorClient) fetchRekorProvenance(ctx context.Context, digest string, 
 				KeyFingerprint:   prov.KeyFingerprint,
 			}
 			rc.verifyRekorEntry(entry, &p)
-			if preferPolicyMatch && rekorMatchesImagePolicy(&p, img) {
+			if preferPolicyMatch && rekorPolicyMatched(matcher, &p, &policyFallback) {
 				return p
 			}
 			if rawKeyFallback == nil {
@@ -309,7 +331,7 @@ func (rc *RekorClient) fetchRekorProvenance(ctx context.Context, digest string, 
 		rc.verifyRekorEntry(entry, prov)
 
 		if preferPolicyMatch {
-			if rekorMatchesImagePolicy(prov, img) {
+			if rekorPolicyMatched(matcher, prov, &policyFallback) {
 				return *prov
 			}
 			if fulcioFallback == nil {
@@ -320,6 +342,10 @@ func (rc *RekorClient) fetchRekorProvenance(ctx context.Context, digest string, 
 		}
 
 		return *prov
+	}
+
+	if policyFallback != nil {
+		return *policyFallback
 	}
 
 	if fulcioFallback != nil {
@@ -337,6 +363,20 @@ func (rc *RekorClient) fetchRekorProvenance(ctx context.Context, digest string, 
 	return RekorProvenance{Digest: digest, Err: fmt.Errorf("no usable Rekor entry for sha256:%s", digest)}
 }
 
+func rekorPolicyMatched(matcher rekorMatcher, prov *RekorProvenance, fallback **RekorProvenance) bool {
+	switch matcher(prov) {
+	case rekorPreferredMatch:
+		return true
+	case rekorFallbackMatch:
+		if *fallback == nil {
+			p := *prov
+			*fallback = &p
+		}
+	case rekorNoMatch:
+	}
+	return false
+}
+
 func hasComponentSignaturePolicy(img *ImageProvenance) bool {
 	if img == nil {
 		return false
@@ -348,6 +388,48 @@ func hasComponentSignaturePolicy(img *ImageProvenance) bool {
 		return img.KeyFingerprint != ""
 	default:
 		return false
+	}
+}
+
+func rekorImageMatcher(img *ImageProvenance) rekorMatcher {
+	if !hasComponentSignaturePolicy(img) {
+		return nil
+	}
+	return func(prov *RekorProvenance) rekorMatch {
+		if rekorMatchesImagePolicy(prov, img) {
+			return rekorPreferredMatch
+		}
+		return rekorNoMatch
+	}
+}
+
+func rekorPolicyMatcher(policy *SupplyChainPolicy) rekorMatcher {
+	if policy == nil || !policy.HasSignedComponents() {
+		return nil
+	}
+	return func(prov *RekorProvenance) rekorMatch {
+		if policy.LookupBySignature(prov) != nil {
+			return rekorPreferredMatch
+		}
+		return rekorNoMatch
+	}
+}
+
+func rekorPolicyMatcherForRepo(policy *SupplyChainPolicy, repo string) rekorMatcher {
+	img := policy.Lookup(repo)
+	componentMatcher := rekorImageMatcher(img)
+	providerMatcher := rekorPolicyMatcher(policy)
+	if componentMatcher == nil {
+		return providerMatcher
+	}
+	return func(prov *RekorProvenance) rekorMatch {
+		if componentMatcher(prov) == rekorPreferredMatch {
+			return rekorPreferredMatch
+		}
+		if providerMatcher != nil && providerMatcher(prov) != rekorNoMatch {
+			return rekorFallbackMatch
+		}
+		return rekorNoMatch
 	}
 }
 
