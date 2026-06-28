@@ -19,18 +19,44 @@ const testModelsJSON = `{
 			"object": "model",
 			"created": 1727389200,
 			"owned_by": "near-ai",
-			"pricing": {"prompt": "0.00059", "completion": "0.00079"},
+			"name": "Qwen 2.5 72B Instruct",
+			"description": "A large language model",
+			"quantization": "fp16",
+			"hugging_face_id": "Qwen/Qwen2.5-72B-Instruct",
+			"is_ready": true,
 			"context_length": 32768,
-			"architecture": {"tokenizer": "Qwen/Qwen2.5-72B-Instruct", "instruct_type": "chatml"}
+			"max_output_length": 4096,
+			"input_modalities": ["text"],
+			"output_modalities": ["text"],
+			"supported_features": ["chat"],
+			"supported_sampling_parameters": ["temperature", "top_p"],
+			"pricing": {"prompt": "0.00059", "completion": "0.00079"},
+			"architecture": {"tokenizer": "Qwen/Qwen2.5-72B-Instruct", "instruct_type": "chatml"},
+			"datacenters": [{"name": "us-east"}],
+			"openrouter": null,
+			"top_provider": {"max_completion_tokens": 4096}
 		},
 		{
 			"id": "llama-3.3-70b-instruct",
 			"object": "model",
 			"created": 1733961600,
 			"owned_by": "near-ai",
-			"pricing": {"prompt": "0.00035", "completion": "0.0004"},
+			"name": "Llama 3.3 70B Instruct",
+			"description": "Meta Llama model",
+			"quantization": "fp16",
+			"hugging_face_id": "meta-llama/Llama-3.3-70B-Instruct",
+			"is_ready": true,
 			"context_length": 131072,
-			"architecture": {"tokenizer": "meta-llama/Llama-3.3-70B-Instruct", "instruct_type": "llama3"}
+			"max_output_length": 8192,
+			"input_modalities": ["text"],
+			"output_modalities": ["text"],
+			"supported_features": ["chat"],
+			"supported_sampling_parameters": ["temperature"],
+			"pricing": {"prompt": "0.00035", "completion": "0.0004"},
+			"architecture": {"tokenizer": "meta-llama/Llama-3.3-70B-Instruct", "instruct_type": "llama3"},
+			"datacenters": [{"name": "us-west"}],
+			"openrouter": null,
+			"top_provider": {"max_completion_tokens": 8192}
 		}
 	]
 }`
@@ -178,9 +204,30 @@ func TestOwnedByModelLister_FiltersModels(t *testing.T) {
 	const modelsJSON = `{
 		"object": "list",
 		"data": [
-			{"id": "near-model", "object": "model", "owned_by": "nearai", "context_length": 8192},
-			{"id": "third-party", "object": "model", "owned_by": "openai", "context_length": 4096},
-			{"id": "legacy-near", "object": "model", "owned_by": "near-ai", "context_length": 2048}
+			{
+				"id": "near-model", "object": "model", "created": 1700000000, "owned_by": "nearai",
+				"name": "Near Model", "description": "test", "quantization": "fp16",
+				"hugging_face_id": "org/near-model", "is_ready": true, "context_length": 8192,
+				"max_output_length": 4096, "input_modalities": ["text"], "output_modalities": ["text"],
+				"supported_features": ["chat"], "supported_sampling_parameters": ["temperature"],
+				"pricing": {}, "architecture": {}, "datacenters": [], "openrouter": null, "top_provider": {}
+			},
+			{
+				"id": "third-party", "object": "model", "created": 1700000000, "owned_by": "openai",
+				"name": "Third Party", "description": "test", "quantization": "",
+				"hugging_face_id": "", "is_ready": true, "context_length": 4096,
+				"max_output_length": 2048, "input_modalities": ["text"], "output_modalities": ["text"],
+				"supported_features": [], "supported_sampling_parameters": [],
+				"pricing": {}, "architecture": {}, "datacenters": [], "openrouter": null, "top_provider": {}
+			},
+			{
+				"id": "legacy-near", "object": "model", "created": 1700000000, "owned_by": "near-ai",
+				"name": "Legacy Near", "description": "test", "quantization": "",
+				"hugging_face_id": "", "is_ready": true, "context_length": 2048,
+				"max_output_length": 1024, "input_modalities": ["text"], "output_modalities": ["text"],
+				"supported_features": [], "supported_sampling_parameters": [],
+				"pricing": {}, "architecture": {}, "datacenters": [], "openrouter": null, "top_provider": {}
+			}
 		]
 	}`
 
@@ -226,7 +273,14 @@ func TestOwnedByModelLister_EmptyID(t *testing.T) {
 	const modelsWithEmptyID = `{
 		"object": "list",
 		"data": [
-			{"id": "", "object": "model", "owned_by": "nearai"}
+			{
+				"id": "", "object": "model", "created": 0, "owned_by": "nearai",
+				"name": "", "description": "", "quantization": "",
+				"hugging_face_id": "", "is_ready": false, "context_length": 0,
+				"max_output_length": 0, "input_modalities": [], "output_modalities": [],
+				"supported_features": [], "supported_sampling_parameters": [],
+				"pricing": {}, "architecture": {}, "datacenters": [], "openrouter": null, "top_provider": {}
+			}
 		]
 	}`
 
@@ -247,5 +301,53 @@ func TestOwnedByModelLister_EmptyID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing required id") {
 		t.Errorf("error %q does not mention missing required id", err)
+	}
+}
+
+func TestValidatingModelLister(t *testing.T) {
+	const tinfoilModelsJSON = `{
+		"object": "list",
+		"data": [
+			{
+				"id": "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+				"object": "model",
+				"created": 1749000000,
+				"owned_by": "tinfoil",
+				"type": "chat",
+				"context_window": 131072,
+				"multimodal": true,
+				"tool_calling": true,
+				"reasoning": false,
+				"endpoints": ["/v1/chat/completions"],
+				"pricing": {"prompt": "0.0001", "completion": "0.0003"}
+			}
+		]
+	}`
+
+	validated := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(tinfoilModelsJSON))
+	}))
+	defer srv.Close()
+
+	inner := provider.NewModelLister(srv.URL, "test-key", srv.Client())
+	lister := provider.NewValidatingModelLister(inner, func(_ json.RawMessage) {
+		validated = true
+	})
+
+	models, err := lister.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1", len(models))
+	}
+	if !validated {
+		t.Error("validate function was not called")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -69,32 +70,106 @@ func (l *genericModelLister) ListModels(ctx context.Context) ([]json.RawMessage,
 	return mr.Data, nil
 }
 
-// modelEntry covers commonly used OpenAI-compatible model object fields plus
-// known provider extensions (NEAR AI, Tinfoil). This avoids jsonstrict.Unmarshal
-// false positives for fields this code intentionally accepts; it is not an
-// exhaustive schema for all standard OpenAI model fields.
-//
-// Common OpenAI-compatible fields here: id, object, created, owned_by
-// NEAR AI extensions:                 pricing, context_length, architecture.
-// Tinfoil extensions:                 context_window, endpoints, multimodal,
-//
-//	reasoning, tool_calling, type.
-type modelEntry struct {
+// nearModelEntry matches the NEAR AI /v1/models entry schema. Used by
+// ownedByModelLister for jsonstrict schema drift detection.
+type nearModelEntry struct {
+	ID                          string          `json:"id"`
+	Object                      string          `json:"object"`
+	Created                     int64           `json:"created"`
+	OwnedBy                     string          `json:"owned_by"`
+	Name                        string          `json:"name"`
+	Description                 string          `json:"description"`
+	Quantization                string          `json:"quantization"`
+	HuggingFaceID               string          `json:"hugging_face_id"`
+	IsReady                     bool            `json:"is_ready"`
+	ContextLength               int             `json:"context_length"`
+	MaxOutputLength             int             `json:"max_output_length"`
+	InputModalities             []string        `json:"input_modalities"`
+	OutputModalities            []string        `json:"output_modalities"`
+	SupportedFeatures           []string        `json:"supported_features"`
+	SupportedSamplingParameters []string        `json:"supported_sampling_parameters"`
+	Pricing                     json.RawMessage `json:"pricing"`
+	Architecture                json.RawMessage `json:"architecture"`
+	Datacenters                 json.RawMessage `json:"datacenters"`
+	Openrouter                  json.RawMessage `json:"openrouter"`
+	TopProvider                 json.RawMessage `json:"top_provider"`
+}
+
+// tinfoilModelEntry matches the Tinfoil /v1/models entry schema. Used by
+// validatingModelLister for jsonstrict schema drift detection.
+type tinfoilModelEntry struct {
 	ID            string          `json:"id"`
 	Object        string          `json:"object"`
 	Created       int64           `json:"created"`
 	OwnedBy       string          `json:"owned_by"`
-	Pricing       json.RawMessage `json:"pricing"`
-	ContextLength json.RawMessage `json:"context_length"`
-	Architecture  json.RawMessage `json:"architecture"`
-
-	// Tinfoil extensions.
-	ContextWindow json.RawMessage `json:"context_window"`
-	Endpoints     json.RawMessage `json:"endpoints"`
-	Multimodal    json.RawMessage `json:"multimodal"`
-	Reasoning     json.RawMessage `json:"reasoning"`
-	ToolCalling   json.RawMessage `json:"tool_calling"`
 	Type          string          `json:"type"`
+	ContextWindow int             `json:"context_window"`
+	Multimodal    bool            `json:"multimodal"`
+	ToolCalling   bool            `json:"tool_calling"`
+	Reasoning     bool            `json:"reasoning"`
+	Endpoints     []string        `json:"endpoints"`
+	Pricing       json.RawMessage `json:"pricing"`
+}
+
+// phalaModelEntry matches the Phalacloud /v1/models entry schema. Used by
+// validatingModelLister for jsonstrict schema drift detection.
+type phalaModelEntry struct {
+	ID                  string          `json:"id"`
+	Created             int64           `json:"created"`
+	Name                string          `json:"name"`
+	Description         string          `json:"description"`
+	IsTee               bool            `json:"is_tee"`
+	ContextLength       int             `json:"context_length"`
+	MaxOutputLength     int             `json:"max_output_length"`
+	InputModalities     []string        `json:"input_modalities"`
+	OutputModalities    []string        `json:"output_modalities"`
+	Providers           []string        `json:"providers"`
+	SupportedParameters []string        `json:"supported_parameters"`
+	Pricing             json.RawMessage `json:"pricing"`
+	Metadata            json.RawMessage `json:"metadata"`
+}
+
+// ValidateTinfoilEntry validates a single model entry against the Tinfoil schema.
+func ValidateTinfoilEntry(raw json.RawMessage) {
+	var e tinfoilModelEntry
+	if _, _, err := jsonstrict.UnmarshalWarn(raw, &e, "tinfoil model entry"); err != nil {
+		slog.Warn("tinfoil model entry parse failed", "err", err)
+	}
+}
+
+// ValidatePhalaEntry validates a single model entry against the Phalacloud schema.
+func ValidatePhalaEntry(raw json.RawMessage) {
+	var e phalaModelEntry
+	if _, _, err := jsonstrict.UnmarshalWarn(raw, &e, "phalacloud model entry"); err != nil {
+		slog.Warn("phalacloud model entry parse failed", "err", err)
+	}
+}
+
+// validatingModelLister wraps a ModelLister and runs a validation function on
+// each returned entry. Used to apply jsonstrict schema checks to providers
+// that use genericModelLister (which returns raw JSON without parsing entries).
+type validatingModelLister struct {
+	inner    ModelLister
+	validate func(json.RawMessage)
+}
+
+// NewValidatingModelLister wraps inner and calls validate on each entry
+// returned by ListModels. The validate function should log warnings (e.g.
+// via jsonstrict.UnmarshalWarn) but not fail the listing.
+func NewValidatingModelLister(inner ModelLister, validate func(json.RawMessage)) ModelLister {
+	return &validatingModelLister{inner: inner, validate: validate}
+}
+
+// ListModels fetches models from the inner lister and validates each entry.
+func (l *validatingModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error) {
+	models, err := l.inner.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, raw := range models {
+		l.validate(raw)
+	}
+	return models, nil
 }
 
 // ownedByModelLister wraps a genericModelLister and keeps only models whose
@@ -126,8 +201,8 @@ func (l *ownedByModelLister) ListModels(ctx context.Context) ([]json.RawMessage,
 
 	out := make([]json.RawMessage, 0, len(all))
 	for _, raw := range all {
-		var m modelEntry
-		if _, _, err := jsonstrict.UnmarshalWarn(raw, &m, "model entry"); err != nil {
+		var m nearModelEntry
+		if _, _, err := jsonstrict.UnmarshalWarn(raw, &m, "near model entry"); err != nil {
 			return nil, fmt.Errorf("models: unmarshal entry to extract owned_by: %w", err)
 		}
 		if m.ID == "" {

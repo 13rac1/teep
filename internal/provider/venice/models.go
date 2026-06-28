@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 )
 
@@ -19,10 +20,19 @@ type modelsResponse struct {
 	Data []json.RawMessage `json:"data"`
 }
 
-// modelFilter extracts just enough to decide whether to include a model.
-type modelFilter struct {
+// veniceModelEntry matches the Venice /api/v1/models entry schema. Used for
+// jsonstrict schema drift detection and TEE/E2EE capability filtering.
+type veniceModelEntry struct {
+	ID        string `json:"id"`
+	Object    string `json:"object"`
+	Created   int64  `json:"created"`
+	OwnedBy   string `json:"owned_by"`
+	Type      string `json:"type"`
 	ModelSpec struct {
-		Capabilities struct {
+		AvailableContextTokens int    `json:"availableContextTokens"`
+		Description            string `json:"description"`
+		Name                   string `json:"name"`
+		Capabilities           struct {
 			SupportsTeeAttestation bool `json:"supportsTeeAttestation"`
 			SupportsE2EE           bool `json:"supportsE2EE"`
 		} `json:"capabilities"`
@@ -77,12 +87,12 @@ func (l *ModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error)
 
 	var models []json.RawMessage
 	for _, raw := range mr.Data {
-		var f modelFilter
-		if err := json.Unmarshal(raw, &f); err != nil {
+		var entry veniceModelEntry
+		if _, _, err := jsonstrict.UnmarshalWarn(raw, &entry, "venice model entry"); err != nil {
 			slog.WarnContext(ctx, "venice: skipping model entry", "err", err)
 			continue
 		}
-		if f.ModelSpec.Capabilities.SupportsTeeAttestation || f.ModelSpec.Capabilities.SupportsE2EE {
+		if entry.ModelSpec.Capabilities.SupportsTeeAttestation || entry.ModelSpec.Capabilities.SupportsE2EE {
 			models = append(models, raw)
 		}
 	}

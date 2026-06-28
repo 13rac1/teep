@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 )
 
@@ -18,9 +19,28 @@ type rawModelsResponse struct {
 	Data []json.RawMessage `json:"data"`
 }
 
-// modelFilter extracts just enough from a model entry to decide whether to include it.
-type modelFilter struct {
-	ConfidentialCompute bool `json:"confidential_compute"`
+// chutesModelEntry matches the Chutes /v1/models entry schema. Used for
+// jsonstrict schema drift detection and confidential_compute filtering.
+type chutesModelEntry struct {
+	ID                          string          `json:"id"`
+	Object                      string          `json:"object"`
+	Created                     int64           `json:"created"`
+	OwnedBy                     string          `json:"owned_by"`
+	ChuteID                     string          `json:"chute_id"`
+	ConfidentialCompute         bool            `json:"confidential_compute"`
+	Quantization                string          `json:"quantization"`
+	Root                        string          `json:"root"`
+	ContextLength               int             `json:"context_length"`
+	MaxModelLen                 int             `json:"max_model_len"`
+	MaxOutputLength             int             `json:"max_output_length"`
+	InputModalities             []string        `json:"input_modalities"`
+	OutputModalities            []string        `json:"output_modalities"`
+	SupportedFeatures           []string        `json:"supported_features"`
+	SupportedSamplingParameters []string        `json:"supported_sampling_parameters"`
+	Pricing                     json.RawMessage `json:"pricing"`
+	Price                       json.RawMessage `json:"price"`
+	Parent                      json.RawMessage `json:"parent"`
+	Permission                  json.RawMessage `json:"permission"`
 }
 
 // ModelLister fetches TEE-enabled models from the Chutes /v1/models endpoint.
@@ -77,11 +97,11 @@ func (l *ModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error)
 
 	var models []json.RawMessage
 	for _, raw := range mr.Data {
-		var f modelFilter
-		if err := json.Unmarshal(raw, &f); err != nil {
+		var entry chutesModelEntry
+		if _, _, err := jsonstrict.UnmarshalWarn(raw, &entry, "chutes model entry"); err != nil {
 			return nil, fmt.Errorf("chutes: unmarshal model entry: %w", err)
 		}
-		if f.ConfidentialCompute {
+		if entry.ConfidentialCompute {
 			models = append(models, raw)
 		}
 	}

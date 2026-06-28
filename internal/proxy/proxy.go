@@ -771,7 +771,10 @@ func fromConfig(
 		p.EmbeddingsPath = "/v1/embeddings"
 		p.Attester = phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = phalacloud.NewPreparer(cp.APIKey)
-		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = provider.NewValidatingModelLister(
+			provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline)),
+			provider.ValidatePhalaEntry,
+		)
 		p.ReportDataVerifier = multi.Verifier{
 			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
 				attestation.FormatDstack: venice.ReportDataVerifier{},
@@ -808,7 +811,10 @@ func fromConfig(
 		p.SigstoreRepoForModel = func(_ string) string {
 			return "tinfoilsh/confidential-model-router"
 		}
-		p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = provider.NewValidatingModelLister(
+			provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline)),
+			provider.ValidateTinfoilEntry,
+		)
 		p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
 			return "inference.tinfoil.sh", true
 		}
@@ -842,7 +848,10 @@ func fromConfig(
 			domain := m.SelectDomain(promptCacheKey)
 			return "https://" + domain, nil
 		}
-		p.ModelLister = provider.NewModelLister(tinfoil.DefaultBaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.ModelLister = provider.NewValidatingModelLister(
+			provider.NewModelLister(tinfoil.DefaultBaseURL, cp.APIKey, config.NewAttestationClient(offline)),
+			provider.ValidateTinfoilEntry,
+		)
 		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
 			m, err := resolver.ResolveMapping(ctx, model)
 			if err != nil {

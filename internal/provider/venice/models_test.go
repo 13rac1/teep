@@ -14,39 +14,43 @@ import (
 const testModelsJSON = `{
 	"data": [
 		{
-			"created": 1727966436,
 			"id": "e2ee-qwen3",
+			"object": "model",
+			"created": 1727966436,
+			"owned_by": "venice.ai",
+			"type": "text",
 			"model_spec": {
 				"availableContextTokens": 131072,
 				"capabilities": {"supportsE2EE": true, "supportsTeeAttestation": true},
 				"description": "E2EE model",
 				"name": "Qwen3"
-			},
-			"object": "model",
-			"owned_by": "venice.ai",
-			"type": "text"
+			}
 		},
 		{
-			"created": 1727966436,
 			"id": "tee-llama",
-			"model_spec": {
-				"capabilities": {"supportsE2EE": false, "supportsTeeAttestation": true},
-				"name": "Llama TEE"
-			},
 			"object": "model",
+			"created": 1727966436,
 			"owned_by": "venice.ai",
-			"type": "text"
+			"type": "text",
+			"model_spec": {
+				"availableContextTokens": 65536,
+				"capabilities": {"supportsE2EE": false, "supportsTeeAttestation": true},
+				"description": "Llama TEE",
+				"name": "Llama TEE"
+			}
 		},
 		{
-			"created": 1727966436,
 			"id": "plain-gpt",
-			"model_spec": {
-				"capabilities": {"supportsE2EE": false, "supportsTeeAttestation": false},
-				"name": "Plain GPT"
-			},
 			"object": "model",
+			"created": 1727966436,
 			"owned_by": "venice.ai",
-			"type": "text"
+			"type": "text",
+			"model_spec": {
+				"availableContextTokens": 4096,
+				"capabilities": {"supportsE2EE": false, "supportsTeeAttestation": false},
+				"description": "Plain GPT",
+				"name": "Plain GPT"
+			}
 		}
 	]
 }`
