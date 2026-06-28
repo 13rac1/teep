@@ -1,15 +1,15 @@
-# Plan: Tinfoil Provider Support
+# Tinfoil Provider Support
 
 ## Overview
 
-Add two Tinfoil providers to teep with full attestation verification and E2EE
-support. Tinfoil runs OpenAI-compatible inference in secure enclaves (TDX and
-SEV-SNP). Attestation is fetched from a well-known HTTP endpoint on the enclave,
-verified against hardware roots of trust and Sigstore supply-chain attestations,
-and bound to TLS via the enclave's certificate fingerprint. E2EE uses the EHBP
+Teep supports two Tinfoil providers with attestation verification and E2EE.
+Tinfoil runs OpenAI-compatible inference in secure enclaves (TDX and SEV-SNP).
+Attestation is fetched from a well-known HTTP endpoint on the enclave, verified
+against hardware roots of trust and Sigstore supply-chain attestations, and
+bound to TLS via the enclave's certificate fingerprint. E2EE uses the EHBP
 protocol (HPKE-based full-body encryption).
 
-This plan defines two providers that differ in their trust boundary:
+The providers differ in their trust boundary:
 
 - **`tinfoil_v3_cloud`**: Routes through the Tinfoil confidential model router
   (`inference.tinfoil.sh`). Teep verifies the router enclave only; the router
@@ -34,7 +34,7 @@ Reference providers for implementation patterns:
 `REPORTDATA[0:32]` means bytes at indices 0 through 31 (32 bytes).
 `REPORTDATA[32:64]` means bytes at indices 32 through 63 (32 bytes).
 
-### Provider: `tinfoil_v3_cloud`
+### V3 Attestation Format
 
 Tinfoil's attestation endpoint supports both a legacy format and the current V3
 format. V3 is the fully deployed format as of June 2026, providing client-nonce
@@ -59,7 +59,7 @@ structured field (i.e., any non-V3 response).
 | Connection model | Standard TLS with SPKI pinning to router enclave |
 | Attestation endpoint | `GET /.well-known/tinfoil-attestation?nonce=<64hex>` on the **router** enclave |
 | PinnedHandler | No — uses standard HTTP client with SPKI verification |
-| Supply chain | Sigstore DSSE bundles for `tinfoilsh/confidential-model-router` |
+| Supply chain | Sigstore DSSE bundles fetched through `github-proxy.tinfoil.sh` for `tinfoilsh/confidential-model-router` |
 | Hardware platforms | Intel TDX and AMD SEV-SNP (multi-platform code measurements) |
 | GPU support | Router enclave attestation; inference enclaves attested by router internally |
 | TEE.fail mitigation | None (same as all current providers) |
@@ -83,7 +83,7 @@ structured field (i.e., any non-V3 response).
 | Connection model | Standard TLS with SPKI pinning to per-model inference enclave |
 | Attestation endpoint | `GET /.well-known/tinfoil-attestation?nonce=<64hex>` on the **inference** enclave |
 | PinnedHandler | No — uses standard HTTP client with per-model SPKI verification |
-| Supply chain | Sigstore DSSE bundles for the per-model inference repo |
+| Supply chain | Sigstore DSSE bundles fetched through `github-proxy.tinfoil.sh` for the per-model inference repo |
 | Hardware platforms | Intel TDX and AMD SEV-SNP (multi-platform code measurements) |
 | GPU support | NVIDIA H100/H200 (Hopper), Blackwell; 1-GPU and 8-GPU (HGX) configurations |
 | TEE.fail mitigation | None (same as all current providers) |
@@ -98,15 +98,15 @@ structured field (i.e., any non-V3 response).
 
 ## Supported Endpoints
 
-This plan must account for the full API surface currently exposed by the
-Tinfoil router, while explicitly marking which endpoints teep will implement
-in each phase.
+Teep handles the Tinfoil inference API surface exposed through the router and
+direct model enclaves, while explicitly excluding non-inference operational
+endpoints.
 
-Teep Target terminology in this plan:
-- Implement in teep: endpoint is in-scope for this provider integration.
-- Not in teep (reject fail-closed): endpoint is explicitly excluded from the
-   inference-provider surface (for this plan, this applies to non-inference
-   operational endpoints only).
+Teep target terminology in this document:
+- Implement: endpoint is in-scope for this provider integration.
+- Reject fail-closed: endpoint is explicitly excluded from the
+  inference-provider surface; this applies to non-inference operational
+  endpoints.
 
 The endpoint coverage differs between providers:
 
@@ -243,9 +243,10 @@ Both Tinfoil providers share these differences from all existing teep providers:
    response with separate `cpu`, `gpu`, `nvswitch`, `report_data`,
    `certificate`, and `signature` fields. Not dstack, not chutes, not NEAR.
 2. **Supply chain**: Sigstore verification of GitHub Actions build attestations
-   (DSSE in-toto bundles), checked against code image digests published in
-   GitHub Releases. This is independent of the compose-hash / IMA supply chain
-   used by other providers.
+   (DSSE in-toto bundles), checked against component digests published in
+   GitHub Releases. Teep fetches release and attestation data through
+   `github-proxy.tinfoil.sh`. This is independent of the compose-hash / IMA
+   supply chain used by other providers.
 3. **REPORTDATA binding**: `[0:32]` = SHA-256(tls_fp || hpke || nonce ||
    gpu_hash || nvswitch_hash); `[32:64]` = zeros. Client nonce and GPU binding.
 4. **E2EE protocol**: EHBP (RFC 9180 HPKE + AES-256-GCM), not
@@ -772,10 +773,10 @@ Teep's role is to verify the chain that makes dm-verity trustworthy:
 2. Compare attestation register values against the Sigstore bundle to confirm
    the CVM booted with the attested config (which pins the model dm-verity
    hash). → `sigstore_code_verified`
-3. The `measured_model_weights` factor should be set to `Pass` for Tinfoil
-   when `sigstore_code_verified` passes, because the Sigstore chain
-   transitively authenticates the model weights via config.yml → dm-verity.
-   Detail string should explain the transitive chain.
+3. The `measured_model_weights` factor reports `Pass` for Tinfoil when
+   `sigstore_code_verified` passes, because the Sigstore chain transitively
+   authenticates the model weights via config.yml → dm-verity. The detail
+   string explains the transitive chain.
 
 #### Attestation-Gap Status Rules: Model Weights (Provider Scope)
 
@@ -952,7 +953,7 @@ Status rule:
     - If `gpu` is present, `report_data.gpu_evidence_hash` must be present and
        equal the recomputed hash (constant-time compare via
        `subtle.ConstantTimeCompare`, consistent with the REPORTDATA comparison
-       standard used elsewhere in this plan).
+      standard used elsewhere in this document).
     - Determine `nvswitch_expected` using this deterministic normalization
       algorithm (in order):
       1. Parse `gpu` as JSON object and require `gpu.evidences` array.
@@ -1195,7 +1196,7 @@ to **that enclave's own HPKE key** — not the router's. This is the EHBP equiva
 of `tinfoil_v3_direct` in teep. The main chat flow (no `enclaveURL`) uses the
 router's key, analogous to `tinfoil_v3_cloud`.
 
-**Teep client** (this plan):
+**Teep client**:
 
 Teep does NOT use ATC:
 
@@ -1496,47 +1497,40 @@ For SEV-SNP-format attestation:
    - UcodeSpl >= 0x48
 6. Extract measurement: `report.Measurement` (single 48-byte hex register).
 
-The SEV-SNP verification is new code — teep only verifies TDX quotes via
-`attestation.VerifyTDXQuoteOffline()` / `attestation.VerifyTDXQuoteOnline()`. However,
-go-sev-guest (google/go-sev-guest) provides the verification primitives,
-similar to how go-tdx-guest is used for TDX.
+Teep verifies SEV-SNP reports with `google/go-sev-guest`, analogous to its
+TDX verification path through `go-tdx-guest`.
 
 ### Supply Chain Verification (Sigstore)
 
 Tinfoil's supply chain verification uses GitHub Actions build attestations
-verified through Sigstore.
+verified through Sigstore. Teep fetches release metadata, release hashes, and
+GitHub attestations through `github-proxy.tinfoil.sh` instead of GitHub's
+public endpoints, avoiding direct GitHub 403/rate-limit failures while keeping
+the trust decision in local Sigstore verification.
 
-#### Step 1: Fetch Code Image Digest
+#### Step 1: Fetch Component Digest
 
 For a given configuration repo (e.g. `tinfoilsh/confidential-model-router`):
 
 ```
-GET https://api.github.com/repos/{repo}/releases/latest
+GET https://github-proxy.tinfoil.sh/repos/{repo}/releases/latest
 ```
 
 Parse `tag_name` from the response. Then fetch the digest:
 
 ```
-GET https://github.com/{repo}/releases/download/{tag}/tinfoil.hash
+GET https://github-proxy.tinfoil.sh/{repo}/releases/download/{tag}/tinfoil.hash
 ```
 
 Returns a plain-text SHA-256 hex digest.
 
-**Trust note on `github-proxy.tinfoil.sh`**: The original Tinfoil client SDKs
-use `github-proxy.tinfoil.sh` as a GitHub API proxy. This is a
-Tinfoil-operated service that concentrates supply chain trust — a compromised
-or DNS-hijacked proxy can serve stale Sigstore bundles for old vulnerable CVM
-images, and the Sigstore verification will still pass (Sigstore proves "this
-code was built by this workflow" but not "this is the latest code"). Teep
-should prefer `api.github.com` directly as the primary source. If GitHub rate
-limits are a concern, `github-proxy.tinfoil.sh` can be used as a fallback, but
-this must be documented as a trust tradeoff. Consider pinning a minimum
-acceptable release timestamp to prevent rollback to old vulnerable images.
+The digest must be exactly 64 lowercase or uppercase hexadecimal characters.
+Malformed, empty, oversized, or HTTP-error responses fail closed.
 
 #### Step 2: Fetch Sigstore DSSE Bundle
 
 ```
-GET https://api.github.com/repos/{repo}/attestations/sha256:{digest}
+GET https://github-proxy.tinfoil.sh/repos/{repo}/attestations/sha256:{digest}
 ```
 
 Returns JSON with `attestations[0].bundle` containing a Sigstore DSSE
@@ -1557,6 +1551,10 @@ Verify the DSSE bundle using Sigstore's verification library:
 - **Artifact digest**: Must match the `sha256:{digest}` from Step 1.
 - **Require**: At least 1 signed certificate timestamp, 1 transparency log
   entry, 1 observer timestamp.
+
+The proxy is only the fetch transport. Teep verifies the DSSE bundle with the
+Sigstore trusted root and rejects branch refs, pull-request refs, repository
+mismatches, missing transparency evidence, and digest mismatches.
 
 #### Step 4: Extract Code Measurements
 
@@ -1581,6 +1579,30 @@ Cross-platform comparison logic:
 - Compare code register 0 (snp_measurement) == enclave register 0 (measurement).
 
 All comparisons MUST be constant-time (`subtle.ConstantTimeCompare`).
+
+#### Component Recognition and Signature Factors
+
+Tinfoil supply-chain verification is reported through the generic component
+factors shared with compose-based providers:
+
+- `build_transparency_log`: passes only when the Sigstore DSSE bundle is
+  fetched and verified with the required transparency evidence.
+- `component_recognition`: recognizes the component repo under verification.
+  `tinfoil_v3_cloud` records `tinfoilsh/confidential-model-router`;
+  `tinfoil_v3_direct` records the per-model repo returned by
+  `RepoForProvider`; TDX hardware-measurement validation records
+  `tinfoilsh/hardware-measurements` when that registry is fetched. This factor
+  is in the default `allow_fail` set.
+- `provider_signer_recognition`: requires each signed component to be in the
+  provider-wide trusted Tinfoil namespace (`tinfoilsh/*`) and to have a
+  verified Sigstore bundle. Unknown signer namespaces fail closed.
+- `component_signature_recognition`: requires each signed component to match
+  its component-specific Sigstore policy. Unknown component repos or failed
+  bundle verification fail closed.
+
+The current recognized Tinfoil component set is
+`tinfoilsh/confidential-model-router`, any `tinfoilsh/confidential-*`
+per-model repo, and `tinfoilsh/hardware-measurements`.
 
 ### Hardware Measurement Verification (TDX Only)
 
@@ -1802,24 +1824,15 @@ inference handler.
 
 ---
 
-## Implementation Phases
+## Implementation Notes
 
-### Phase 1: Attestation Document Parsing and Verification
+### Attestation Document Parsing and Verification
 
-**Goal**: Fetch and verify Tinfoil V3 attestation documents (TDX path only;
-SEV-SNP deferred to Phase 3). Create the attester and REPORTDATA verifier.
+Teep fetches and verifies Tinfoil V3 attestation documents for both supported
+CPU platforms and applies REPORTDATA verification before inference traffic is
+allowed.
 
-**Note on phase ordering**: Phase 1 builds the provider plumbing, attester
-interface, REPORTDATA verifier, and TDX policy checks — all of which can be
-unit-tested with TDX fixtures. The deployed Tinfoil router currently runs
-on SEV-SNP, so the provider cannot be validated against the live deployment
-until Phase 3 (SEV-SNP verification) lands. Phase 1 is not independently
-deployable against the live Tinfoil infrastructure. **Recommendation**: stub
-the SEV-SNP path in Phase 1 with an `fmt.Errorf("sev-snp: not yet
-implemented")` return so the `cpu.platform` dispatch and interfaces are correct
-from the start, avoiding structural rework when Phase 3 lands.
-
-**Files to create**:
+**Core files**:
 - `internal/provider/tinfoil/tinfoil.go` — Shared types, constants, Preparer
 - `internal/provider/tinfoil/attestation.go` — Attestation document parsing
   (V3 structured JSON, CPU report dispatch, TDX/SEV-SNP helpers)
@@ -1836,10 +1849,8 @@ rather than raw byte manipulation. The `Nonce` type already encapsulates
 32-byte generation, hex encoding, and parsing.
 
 **Note on resolver reuse**: The `tinfoil_v3_direct` model-to-domain resolver
-(Phase 5) duplicates ~280 lines of concurrent cache logic from
-`neardirect/endpoints.go` (singleflight, TTL, mutex, stale-cache fallback).
-Consider extracting a shared resolver type in `internal/provider/` to avoid
-maintaining two copies of non-trivial concurrent code.
+mirrors the concurrent cache pattern from `neardirect/endpoints.go`
+(singleflight, TTL, mutex, stale-cache behavior).
 
 **Implementation**:
 
@@ -1945,16 +1956,14 @@ maintaining two copies of non-trivial concurrent code.
 - Test `--offline` mode records MR_SEAM / `tee_hardware_config` as `Skip`,
   never `Pass`.
 
-**Commit**: Phase 1 — Tinfoil attestation document parsing and TDX verification.
-
 ---
 
-### Phase 2: Supply Chain Verification (Sigstore)
+### Supply Chain Verification (Sigstore)
 
-**Goal**: Verify Tinfoil code measurements via Sigstore DSSE bundles from
-GitHub Releases.
+Teep verifies Tinfoil code measurements via Sigstore DSSE bundles from GitHub
+Releases fetched through `github-proxy.tinfoil.sh`.
 
-**Files to create**:
+**Core files**:
 - `internal/provider/tinfoil/sigstore.go` — Sigstore bundle fetching and
   verification
 - `internal/provider/tinfoil/measurements.go` — Measurement comparison logic
@@ -1962,8 +1971,7 @@ GitHub Releases.
 **Implementation**:
 
 1. **GitHub Release Fetcher**:
-   - Fetch latest release tag from GitHub API (via `github-proxy.tinfoil.sh`
-     or directly from `api.github.com`).
+   - Fetch latest release tag through `github-proxy.tinfoil.sh`.
    - Fetch `tinfoil.hash` artifact from the release.
    - Fetch Sigstore attestation bundle from
      `repos/{repo}/attestations/sha256:{digest}`.
@@ -2026,15 +2034,13 @@ GitHub Releases.
 - Test hardware measurement matching: found, not found.
 - Test RTMR3 zero validation.
 
-**Commit**: Phase 2 — Tinfoil supply chain verification via Sigstore.
-
 ---
 
-### Phase 3: SEV-SNP Attestation Verification
+### SEV-SNP Attestation Verification
 
-**Goal**: Support Tinfoil enclaves running on AMD SEV-SNP.
+Teep supports Tinfoil enclaves running on AMD SEV-SNP.
 
-**Files to create**:
+**Core files**:
 - `internal/attestation/sev.go` — SEV-SNP report parsing and verification
 - `internal/attestation/sev_test.go` — Unit tests
 - `internal/attestation/certs/genoa_cert_chain.pem` — AMD Genoa ARK+ASK certs
@@ -2069,16 +2075,14 @@ GitHub Releases.
 - Test policy validation: valid, debug=true rejection, low TCB rejection.
 - Test REPORTDATA extraction.
 
-**Commit**: Phase 3 — AMD SEV-SNP attestation verification.
-
 ---
 
-### Phase 4: EHBP E2EE Implementation
+### EHBP E2EE Implementation
 
-**Goal**: Implement the Encrypted HTTP Body Protocol for full-body request
+Teep implements the Encrypted HTTP Body Protocol for full-body request
 encryption and response decryption.
 
-**Files to create**:
+**Core files**:
 - `internal/e2ee/ehbp.go` — EHBP client transport (encrypt request, decrypt
   response)
 - `internal/e2ee/ehbp_test.go` — Unit tests
@@ -2164,18 +2168,16 @@ encryption and response decryption.
 - Test fail-closed: missing Ehbp-Response-Nonce, duplicate EHBP headers,
   unexpected Ehbp-Response-Nonce on bodyless requests, corrupted ciphertext.
 
-**Commit**: Phase 4 — EHBP E2EE implementation.
-
 ---
 
-### Phase 5: Provider Wiring and Configuration
+### Provider Wiring and Configuration
 
-**Goal**: Wire both `tinfoil_v3_cloud` and `tinfoil_v3_direct` providers into
-the proxy, config, and endpoint dispatch.
+Both `tinfoil_v3_cloud` and `tinfoil_v3_direct` are wired into the proxy,
+config, and endpoint dispatch.
 
-**Files to modify**:
+**Core files**:
 - `internal/proxy/proxy.go` — Add `case "tinfoil_v3_cloud"` and `case "tinfoil_v3_direct"` to `fromConfig()`
-- `internal/provider/tinfoil/` — Create new package directory for shared V3 types and both provider variants
+- `internal/provider/tinfoil/` — Shared V3 types and both provider variants
 - `internal/verify/factory.go` — Add both provider cases to `newAttester`,
   `newReportDataVerifier`, `supplyChainPolicy`, `e2eeEnabledByDefault`, and
   `chatPathForProvider`; add `"tinfoil_v3_cloud": "TINFOIL_API_KEY"` and
@@ -2285,22 +2287,13 @@ wiring as a thin layer on top.
 5. **`tinfoil_v3_direct` Supply Chain Repo Mapping**:
 
    For the direct provider, the Sigstore supply chain repo corresponds to the
-   per-model inference enclave repository, not the router. The mapping of
-   model slug to repo must be discoverable without hardcoding all model repos.
-
-   Strategy: during model discovery, check whether a release Sigstore bundle
-   exists at `github-proxy.tinfoil.sh/repos/tinfoilsh/confidential-<slug>/...`.
-   If so, use that repo for supply chain verification. If the Sigstore bundle
-   fetch fails (no repo found), fail closed and mark `sigstore_code_verified`
-   as `Fail` — do not accept inference from unknown repos.
-
-   Known per-model repos (as reference; authoritative source is live discovery):
-   - `gemma4-31b` → `tinfoilsh/confidential-gemma4-31b`
-   - `nomic-embed-text` → `tinfoilsh/confidential-nomic-embed-text`
-   - `kimi-k2-6` → `tinfoilsh/confidential-kimi-k2-6`
-   - `deepseek-v4-pro` → `tinfoilsh/confidential-deepseek-v4-pro`
-
-   For `tinfoil_v3_cloud`, the single repo is always `tinfoilsh/confidential-model-router`.
+   per-model inference enclave repository, not the router. `RepoForProvider`
+   returns `tinfoilsh/confidential-model-router` for `tinfoil_v3_cloud` and
+   delegates to `RepoForModel` for `tinfoil_v3_direct`. `RepoForModel` first
+   checks the explicit model-repo map and then falls back to the convention
+   `tinfoilsh/confidential-<lowercase-model-slug>`. If the resolved repo does
+   not have a valid release, hash, and DSSE attestation through
+   `github-proxy.tinfoil.sh`, supply-chain verification fails closed.
 
 6. **TLS-Fingerprint-Bound Transport** (shared pattern, both providers):
 
@@ -2313,14 +2306,31 @@ wiring as a thin layer on top.
    fingerprint mismatch, return `ErrCertMismatch`-equivalent error and trigger
    re-attestation before retrying.
 
-7. **Allow-Fail Defaults** (both providers share the same set):
+7. **Allow-Fail Defaults**:
 
-   `attestation.TinfoilDefaultAllowFail`:
+   `attestation.TinfoilCloudDefaultAllowFail` and
+   `attestation.TinfoilDirectDefaultAllowFail` both include:
    - `cpu_id_registry` — `allow_fail` (Proof of Cloud identity-registry
      factor; Tinfoil currently has no PoC participation)
+   - `intel_pcs_collateral` — `allow_fail` (SEV-SNP uses AMD KDS instead of
+     Intel PCS; TDX collateral is still verified when applicable)
+   - `component_recognition` — `allow_fail` (component identity drift is
+     surfaced separately from enforced transparency and signature failures)
+   - `nvswitch_binding` — `allow_fail` (reported separately while topology
+     binding compatibility settles)
+   - `response_schema` — `allow_fail` while Tinfoil V3 attestation schema
+     compatibility settles
 
-   > All GPU and nonce factors are `enforced` for both providers.
-   > `sigstore_code_verified` is `enforced` for both providers.
+   `attestation.TinfoilCloudDefaultAllowFail` also includes
+   `tee_cert_chain`, `tee_quote_signature`, `nvidia_payload_present`,
+   `nvidia_signature`, `nvidia_claims`, and `cpu_gpu_chain` because the router
+   path depends on AMD KDS/GPU evidence paths that are still noisy in live
+   deployment.
+
+   > Nonce binding and E2EE factors are `enforced` for both providers.
+   > `build_transparency_log`, `provider_signer_recognition`,
+   > `component_signature_recognition`, and `sigstore_code_verified` are
+   > `enforced` for both providers.
 
 8. **Config examples** (`teep.toml.example`):
    ```toml
@@ -2359,16 +2369,14 @@ wiring as a thin layer on top.
 - Test supply chain repo mapping for both providers.
 - Test that unknown Tinfoil config fields are rejected (strict TOML).
 
-**Commit**: Phase 5 — Tinfoil provider wiring and configuration (both providers).
-
 ---
 
-### Phase 6: Integration Tests
+### Integration Tests
 
-**Goal**: Full API-key-based integration tests for both `tinfoil_v3_cloud` and
-`tinfoil_v3_direct` providers against all Tinfoil endpoints.
+Full API-key-based integration tests cover both `tinfoil_v3_cloud` and
+`tinfoil_v3_direct` providers against Tinfoil endpoints.
 
-**Files to create**:
+**Core files**:
 - `internal/integration/tinfoilcloud_test.go` — `tinfoil_v3_cloud` integration tests
 - `internal/integration/tinfoildirect_test.go` — `tinfoil_v3_direct` integration tests
 - `internal/integration/testdata/tinfoil/` — Captured attestation fixtures (shared)
@@ -2386,7 +2394,7 @@ wiring as a thin layer on top.
    - Verify Sigstore bundle, compare against enclave measurements.
 
 3. **TLS Fingerprint Binding**, **Client Nonce**, **GPU Evidence Verification**,
-   **HPKE Key Authentication**: same as in original Phase 6.
+   **HPKE Key Authentication**.
 
 4. **Chat Completions (non-streaming and streaming)**
 5. **Responses API (non-streaming and streaming)**
@@ -2450,16 +2458,14 @@ wiring as a thin layer on top.
 - Test the full V3 verification pipeline against both fixtures.
 - Refresh fixtures periodically to detect schema/policy drift.
 
-**Commit**: Phase 6 — Tinfoil integration tests (both providers).
-
 ---
 
-### Phase 7: Verification Report and Documentation
+### Verification Report and Documentation
 
-**Goal**: Update verification report generation and documentation for both
+Verification reports include Tinfoil-specific factors for both
 `tinfoil_v3_cloud` and `tinfoil_v3_direct` providers.
 
-**Files to modify**:
+**Core files**:
 - `internal/attestation/report.go` — Add Tinfoil-specific verification
   factors to `KnownFactors` and `BuildReport`
 - `internal/verify/verify.go` — Update `FormatReport` if new factor display
@@ -2475,13 +2481,13 @@ Existing factors reused as-is:
 - `e2ee_usable` — Request encrypted and response authenticated via EHBP for
    HTTP body-carrying endpoints
 
-Existing factors proposed for TEE-generic rename (`tdx_*` → `tee_*`):
-- `tee_quote_present` (was `tdx_quote_present`) — Hardware quote fetched
-- `tee_quote_structure` (was `tdx_quote_structure`) — Quote parses correctly
-- `tee_hardware_config` (was `tdx_hardware_config`) — Platform-specific policy
+TEE-generic factors:
+- `tee_quote_present` — Hardware quote fetched
+- `tee_quote_structure` — Quote parses correctly
+- `tee_hardware_config` — Platform-specific policy
   (TDX: attributes, XFAM, MR_SEAM, RTMR3; SEV-SNP: guest policy, TCB)
-- `tee_boot_config` (was `tdx_boot_config`) — Boot measurements match expected
-- `tee_tcb_current` (was `tdx_tcb_current`) — TCB SVN meets minimum
+- `tee_boot_config` — Boot measurements match expected
+- `tee_tcb_current` — TCB SVN meets minimum
 - `intel_pcs_collateral` — Remains Intel-specific (TDX only); AMD equivalent
   covered by VCEK chain validation within `tee_quote_structure`
 
@@ -2501,9 +2507,9 @@ Existing factors with provider-specific behavior:
 
 ### Factor Status to Teep Policy Mapping
 
-All factor status language in this plan maps directly to teep policy modes:
+All factor status language in this document maps directly to teep policy modes:
 
-| Plan term | Teep config/policy mode | Runtime meaning |
+| Term | Teep config/policy mode | Runtime meaning |
 |---|---|---|
 | `enforced` | factor is NOT in `allow_fail` | Factor failure blocks request (fail-closed) |
 | `allow_fail` | factor is in `allow_fail` | Factor failure is recorded but does not block by itself |
@@ -2524,16 +2530,16 @@ Normalization rules for this document:
 - Document the HPKE key ownership distinction: `tinfoil_v3_cloud` EHBP key is the router's; `tinfoil_v3_direct` EHBP key is the inference enclave's.
 - Note provider names `tinfoil_v3_cloud` (router) and `tinfoil_v3_direct` (direct).
 
-**Commit**: Phase 7 — Verification report factors and documentation.
-
 ---
 
 ## Verification Factors Summary
 
-Both providers use the same factor names and policy modes. The key difference is
-**what enclave is attested**: `tinfoil_v3_cloud` attests the router; `tinfoil_v3_direct`
-attests the inference enclave. The `e2ee_capable` and `tls_key_binding` factor
-descriptions reflect this distinction at the detail-string level.
+Both providers use the same factor names, with a small number of provider-
+specific default `allow_fail` differences. The key distinction is **what
+enclave is attested**: `tinfoil_v3_cloud` attests the router;
+`tinfoil_v3_direct` attests the inference enclave. The `e2ee_capable` and
+`tls_key_binding` factor descriptions reflect this distinction at the
+detail-string level.
 
 ### `tinfoil_v3_cloud` and `tinfoil_v3_direct` Factors (shared)
 
@@ -2544,83 +2550,39 @@ descriptions reflect this distinction at the detail-string level.
 | `tee_hardware_config` | `enforced` | Platform policy (TDX: attrs/XFAM/MR_SEAM/RTMR3; SEV-SNP: guest policy/TCB) |
 | `tee_boot_config` | `enforced` | Boot measurements match expected (MRTD/RTMR0 or measurement) |
 | `tee_tcb_current` | `enforced` | TCB SVN meets minimum threshold |
-| `intel_pcs_collateral` | `enforced` (TDX only) | Intel collateral valid; N/A for SEV-SNP |
+| `intel_pcs_collateral` | `allow_fail` (default; TDX only) | Intel collateral valid when TDX collateral is required; N/A for SEV-SNP |
 | `tls_key_binding` | `enforced` | TLS fingerprint matches `report_data.tls_key_fp` (authenticated via REPORTDATA hash) |
 | `e2ee_capable` | `enforced` | HPKE key from `report_data.hpke_key`, authenticated via REPORTDATA hash |
 | `e2ee_usable` | `enforced` for HTTP body endpoints | EHBP request encrypted + response AEAD-authenticated where EHBP applies |
+| `build_transparency_log` | `enforced` | Tinfoil Sigstore DSSE bundle verified with required transparency evidence |
+| `component_recognition` | `allow_fail` (default) | Tinfoil component repo is recognized: router repo for cloud, per-model repo for direct, and `tinfoilsh/hardware-measurements` when hardware measurements are fetched |
+| `provider_signer_recognition` | `enforced` | Signed components are from the provider-wide trusted Tinfoil signer namespace (`tinfoilsh/*`) and their Sigstore verification succeeds |
+| `component_signature_recognition` | `enforced` | Signed components match the component-specific signature policy for their repo |
 | `sigstore_code_verified` | `enforced` | Code measurement verified via Sigstore DSSE |
 | `cpu_id_registry` | `allow_fail` (default) | Proof of Cloud CPU identity registration factor (applies to both TDX and SEV-SNP when available) |
 | `measured_model_weights` | `enforced` (transitive) | Model weights attested via dm-verity + Sigstore chain |
 | `nonce_in_reportdata` | `enforced` | Client nonce in REPORTDATA hash |
-| `cpu_gpu_chain` | `enforced` | GPU evidence is required and its hash is verified in REPORTDATA; NVSwitch evidence/hash are also required when topology implies NVSwitch (missing required evidence = Fail) |
-| `nvidia_gpu_attestation` | `enforced` | SPDM evidence is required and verified per GPU; NVSwitch evidence is required and verified when topology implies NVSwitch (missing required evidence = Fail) |
+| `cpu_gpu_chain` | `enforced` for direct; `allow_fail` for cloud | GPU evidence hash is verified in REPORTDATA; cloud currently allows this factor to fail while live GPU evidence compatibility settles |
+| `nvswitch_binding` | `allow_fail` (default) | NVSwitch evidence/hash are reported separately when topology implies NVSwitch |
+| `nvidia_payload_present`, `nvidia_signature`, `nvidia_claims` | `enforced` for direct; `allow_fail` for cloud | NVIDIA SPDM evidence is checked when present; cloud currently allows these factors to fail while live GPU evidence compatibility settles |
+| `response_schema` | `allow_fail` (default) | V3 attestation response schema compatibility signal |
 
-#### Factor Rename Migration (`tdx_*` → `tee_*`)
+#### TEE-Generic Factor Names
 
-The `tee_*` factors are proposed renames of the existing `tdx_*` factors,
-generalized to cover both Intel TDX and AMD SEV-SNP. **This rename must be
-performed atomically within a single commit** to avoid silent breakage.
-
-**Critical precondition**: `ReportDataBindingPassed()` in
-`internal/attestation/report.go` hardcodes `"tdx_reportdata_binding"`. The
-proxy gates **all** E2EE activation on this function — at least four call
-sites in `proxy.go` and two in `nearcloud/pinned.go` and
-`neardirect/pinned.go`. If Tinfoil emits `tee_reportdata_binding` but this
-function is not updated, it silently returns `false` and the proxy refuses
-E2EE for all Tinfoil requests. This function **must** be updated as part of
-(or before) the rename commit.
-
-The following references must all be updated together:
-
-1. **`KnownFactors` list** in `internal/attestation/report.go` — rename all
-   `tdx_*` entries (and `gateway_tdx_*` entries) to `tee_*` / `gateway_tee_*`.
-2. **`ReportDataBindingPassed()`** in `internal/attestation/report.go` —
-   currently hardcodes the string `"tdx_reportdata_binding"`. Must be
-   updated to `"tee_reportdata_binding"` (or the new equivalent name).
-3. **`DefaultAllowFail`** in `internal/attestation/report.go` — contains
-   `tdx_*` strings and is distinct from the per-provider lists in
-   `defaults.go`.
-4. **All factor emission sites** across provider packages (`nearcloud`,
-   `neardirect`, `chutes`, `venice`, etc.) that emit `tdx_*` factor names.
-5. **`proxy.go`** — lines that gate E2EE on `ReportDataBindingPassed()`
-   are safe if the function is updated, but verify no other string
-   literals reference old names.
-6. **`internal/verify/factory.go`** — the `newReportDataVerifier`,
-   `newAttester`, `supplyChainPolicy`, `e2eeEnabledByDefault`, and
-   `chatPathForProvider` switch blocks reference provider names. Factor name
-   strings emitted by these functions must also be updated.
-7. **`validateAllowFail()`** in `internal/config/config.go` — validates
-   against `KnownFactors`. After the rename, existing user `teep.toml`
-   files with `allow_fail = ["tdx_hardware_config"]` will fail validation
-   at startup because the factor name is no longer recognized. **This is
-   a breaking user-facing change.** Unrecognized config entries must produce
-   an error (per AGENTS.md: "Unknown or misspelled config values MUST be
-   rejected at startup"). Users must update their config to use the new
-   `tee_*` names.
-8. **Default allow-fail lists** in `internal/defaults/defaults.go` — update
-   all `tdx_*` entries in per-provider defaults.
-9. **`cmd/teep/help.go`** — contains `"tdx_reportdata_binding"` in
-   human-readable factor descriptions (user-visible output).
-10. **`README.md` and `README_ADVANCED.md`** — extensive references to
-   `tdx_*` factor names with descriptions in factor tables.
-11. **Documentation** — update `docs/measurement_allowlists.md`,
-   `docs/api_support.md`, and any other docs referencing `tdx_*` factors.
-12. **Test assertions** — update all test files that assert on `tdx_*` factor
-   name strings. There are at least 9 integration test files with string
-   literal references to `tdx_*` factor names.
-
-This rename should be applied across all providers (not just Tinfoil) as a
-prerequisite or co-requisite commit. Until the rename lands, Tinfoil can
-emit the existing `tdx_*` factor names for TDX attestations and introduce
-`sev_*` equivalents for SEV-SNP.
+The current implementation uses `tee_*` factor names for CPU-TEE checks that
+apply across both Intel TDX and AMD SEV-SNP. Intel-specific collateral remains
+under `intel_pcs_collateral`; AMD VCEK chain validation is part of the
+SEV-SNP quote verification path. Config validation rejects unknown factor
+names at startup, so user `allow_fail` lists must use the current `tee_*`
+names.
 
 ## Dependencies
 
-New Go module dependencies:
-- `github.com/google/go-sev-guest` — AMD SEV-SNP verification (Phase 3)
+Go module dependencies used by the Tinfoil implementation:
+- `github.com/google/go-sev-guest` — AMD SEV-SNP verification
 - `github.com/cloudflare/circl/hpke` or `crypto/hpke` (Go 1.24+) — HPKE
-  operations for EHBP (Phase 4)
-- `github.com/sigstore/sigstore-go` — Sigstore bundle verification (new dependency; Phase 2)
+  operations for EHBP
+- `github.com/sigstore/sigstore-go` — Sigstore bundle verification
 
 ## Public Documentation References
 
@@ -2637,12 +2599,10 @@ New Go module dependencies:
 
 ## Risk Assessment
 
-1. **SEV-SNP is new attestation hardware for teep**: No existing SEV-SNP
-   verification code. Phase 3 adds this. The deployed Tinfoil router and
-   inference enclaves currently run on SEV-SNP, so neither `tinfoil_v3_cloud`
-   nor `tinfoil_v3_direct` can be validated against live deployments until
-   SEV-SNP verification lands. TDX-only support is insufficient for the
-   deployed Tinfoil infrastructure.
+1. **SEV-SNP is new attestation hardware for teep**: Tinfoil uses SEV-SNP for
+   live router and inference deployments, so the provider depends on
+   `go-sev-guest` parsing, VCEK chain verification, guest policy validation,
+   and TCB checks in addition to the existing TDX path.
 
 2. **EHBP is a new E2EE protocol**: Unlike existing field-level or ML-KEM
    protocols, EHBP uses HPKE (RFC 9180). The protocol is well-specified with
