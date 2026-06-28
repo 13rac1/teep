@@ -22,25 +22,28 @@ type rawModelsResponse struct {
 // chutesModelEntry matches the Chutes /v1/models entry schema. Used for
 // jsonstrict schema drift detection and confidential_compute filtering.
 type chutesModelEntry struct {
-	ID                          string          `json:"id"`
-	Object                      string          `json:"object"`
-	Created                     int64           `json:"created"`
-	OwnedBy                     string          `json:"owned_by"`
-	ChuteID                     string          `json:"chute_id"`
-	ConfidentialCompute         bool            `json:"confidential_compute"`
-	Quantization                string          `json:"quantization"`
-	Root                        string          `json:"root"`
-	ContextLength               int             `json:"context_length"`
-	MaxModelLen                 int             `json:"max_model_len"`
-	MaxOutputLength             int             `json:"max_output_length"`
-	InputModalities             []string        `json:"input_modalities"`
-	OutputModalities            []string        `json:"output_modalities"`
-	SupportedFeatures           []string        `json:"supported_features"`
-	SupportedSamplingParameters []string        `json:"supported_sampling_parameters"`
-	Pricing                     json.RawMessage `json:"pricing"`
-	Price                       json.RawMessage `json:"price"`
-	Parent                      json.RawMessage `json:"parent"`
-	Permission                  json.RawMessage `json:"permission"`
+	ID                  string          `json:"id"`
+	Object              string          `json:"object"`
+	Created             int64           `json:"created"`
+	OwnedBy             string          `json:"owned_by"`
+	ChuteID             string          `json:"chute_id"`
+	ConfidentialCompute bool            `json:"confidential_compute"`
+	Root                string          `json:"root"`
+	MaxModelLen         int             `json:"max_model_len"`
+	Pricing             json.RawMessage `json:"pricing"`
+	Price               json.RawMessage `json:"price"`
+	Parent              json.RawMessage `json:"parent"`
+
+	// Optional — not present on all Chutes model entries (e.g. older chutes
+	// omit modalities, quantization, and features).
+	Quantization                string          `json:"quantization,omitempty"`
+	ContextLength               int             `json:"context_length,omitempty"`
+	MaxOutputLength             int             `json:"max_output_length,omitempty"`
+	InputModalities             []string        `json:"input_modalities,omitempty"`
+	OutputModalities            []string        `json:"output_modalities,omitempty"`
+	SupportedFeatures           []string        `json:"supported_features,omitempty"`
+	SupportedSamplingParameters []string        `json:"supported_sampling_parameters,omitempty"`
+	Permission                  json.RawMessage `json:"permission,omitempty"`
 }
 
 // ModelLister fetches TEE-enabled models from the Chutes /v1/models endpoint.
