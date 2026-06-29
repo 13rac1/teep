@@ -104,7 +104,8 @@ func TestIntegration_Chutes_Fixture(t *testing.T) {
 	}
 
 	// PoC
-	poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, env.client)
+	poc := attestation.NewPoCClient(attestation.PoCPeers, attestation.PoCQuorum, env.client).
+		WithVerificationTime(fixtureVerificationTime(&env))
 	pocResult := poc.CheckQuote(ctx, raw.IntelQuote)
 	t.Logf("PoC: registered=%v err=%v", pocResult.Registered, pocResult.Err)
 

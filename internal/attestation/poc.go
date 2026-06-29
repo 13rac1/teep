@@ -46,14 +46,22 @@ type PoCResult struct {
 
 // PoCClient queries Proof of Cloud trust-servers using threshold multisig.
 type PoCClient struct {
-	peers  []string // trust-server base URLs
-	quorum int
-	client *http.Client
+	peers            []string // trust-server base URLs
+	quorum           int
+	client           *http.Client
+	verificationTime time.Time
 }
 
 // NewPoCClient creates a PoCClient with the given trust-server peer URLs.
 func NewPoCClient(peers []string, quorum int, client *http.Client) *PoCClient {
 	return &PoCClient{peers: peers, quorum: quorum, client: client}
+}
+
+// WithVerificationTime returns c configured to validate captured PoC JWT
+// freshness at t. A zero time restores live wall-clock validation.
+func (c *PoCClient) WithVerificationTime(t time.Time) *PoCClient {
+	c.verificationTime = t
+	return c
 }
 
 // pocJWTClaims holds the subset of JWT claims used by PoC trust-server tokens.
@@ -76,6 +84,10 @@ type pocJWTClaims struct {
 // Channel integrity is provided by TLS (with CT checks). This is the sole JWT
 // validation path.
 func verifyPoCJWTClaims(ctx context.Context, jwtStr, hexQuote, expectedMachineID string) (*pocJWTClaims, error) {
+	return verifyPoCJWTClaimsAt(ctx, jwtStr, hexQuote, expectedMachineID, time.Now())
+}
+
+func verifyPoCJWTClaimsAt(ctx context.Context, jwtStr, hexQuote, expectedMachineID string, now time.Time) (*pocJWTClaims, error) {
 	parts := strings.Split(jwtStr, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("malformed JWT: expected 3 dot-separated parts, got %d", len(parts))
@@ -91,8 +103,6 @@ func verifyPoCJWTClaims(ctx context.Context, jwtStr, hexQuote, expectedMachineID
 	if _, _, err := jsonstrict.UnmarshalWarn(payload, &claims, "PoC claims"); err != nil {
 		return nil, fmt.Errorf("parse JWT claims: %w", err)
 	}
-
-	now := time.Now()
 
 	// Verify quote_hash: sha256 of the decoded binary quote (fail closed if absent).
 	if claims.QuoteHash == "" {
@@ -339,7 +349,7 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 
 			// Validate JWT claims: quote_hash binding, timestamp freshness,
 			// expiry, and machine_id consistency with stage-1 peers.
-			claims, err := verifyPoCJWTClaims(ctx, s2.JWT, hexQuote, expectedMachineID)
+			claims, err := verifyPoCJWTClaimsAt(ctx, s2.JWT, hexQuote, expectedMachineID, c.jwtVerificationTime())
 			if err != nil {
 				slog.WarnContext(ctx, "PoC JWT claims validation failed", "peer", n.peerURL, "err", err)
 				return &PoCResult{Err: fmt.Errorf("PoC JWT validation: %w", err)}
@@ -377,6 +387,13 @@ func (c *PoCClient) CheckQuote(ctx context.Context, hexQuote string) *PoCResult 
 	}
 
 	return &PoCResult{Err: errors.New("stage 2 completed without final JWT")}
+}
+
+func (c *PoCClient) jwtVerificationTime() time.Time {
+	if c.verificationTime.IsZero() {
+		return time.Now()
+	}
+	return c.verificationTime
 }
 
 type httpResult struct {

@@ -30,6 +30,10 @@ type Options struct {
 	Nonce          attestation.Nonce           // zero = generate new
 	CapturedE2EE   *attestation.E2EETestResult // nil = run live test
 	NVIDIAVerifier *attestation.NVIDIAVerifier // nil = use default
+	// VerificationTime is the time used for cryptographic validity checks
+	// during replay. Zero means use the verifier's live wall clock. It must
+	// not affect context deadlines, HTTP timeouts, cache TTLs, or timing logs.
+	VerificationTime time.Time
 }
 
 // CfgLoader loads config and provider for the named provider.
@@ -99,8 +103,8 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 	if nv == nil {
 		nv = attestation.DefaultNVIDIAVerifier()
 	}
-	nvidiaResult, nrasResult := verifyNVIDIA(ctx, raw, nonce, client, opts.Offline, nv)
-	pocResult := checkPoC(ctx, raw.IntelQuote, client, opts.Offline)
+	nvidiaResult, nrasResult := verifyNVIDIA(ctx, raw, nonce, client, opts.Offline, nv, nrasJWTParserOptions(opts.VerificationTime)...)
+	pocResult := checkPoC(ctx, raw.IntelQuote, client, opts.Offline, opts.VerificationTime)
 
 	// Model compose evidence (gated on TDX).
 	var composeResult *attestation.ComposeBindingResult
@@ -117,7 +121,7 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 	}
 
 	// Gateway verification (nearcloud-specific fields).
-	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyNearcloudGateway(ctx, raw, nonce, client, opts.Offline, verifier)
+	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyNearcloudGateway(ctx, raw, nonce, client, opts.Offline, verifier, opts.VerificationTime)
 	var gatewayCD attestation.ComposeDigests
 	if gatewayCompose != nil && gatewayCompose.Err == nil {
 		gatewayCD = attestation.ExtractComposeDigests(raw.GatewayAppCompose)
@@ -208,20 +212,31 @@ func Replay(ctx context.Context, captureDir string, cfgLoader CfgLoader) (report
 
 	capturedE2EE := e2eeResultFromOutcome(manifest.E2EE)
 	report, err = Run(ctx, &Options{
-		Config:       cfg,
-		Provider:     cp,
-		ProviderName: manifest.Provider,
-		ModelName:    manifest.Model,
-		Offline:      false,
-		Client:       replayClient,
-		Nonce:        nonce,
-		CapturedE2EE: capturedE2EE,
+		Config:           cfg,
+		Provider:         cp,
+		ProviderName:     manifest.Provider,
+		ModelName:        manifest.Model,
+		Offline:          false,
+		Client:           replayClient,
+		Nonce:            nonce,
+		CapturedE2EE:     capturedE2EE,
+		VerificationTime: verificationTimeForCapture(&manifest),
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("replay verification: %w", err)
 	}
 	reportText = FormatReport(report)
 	return report, reportText, nil
+}
+
+func verificationTimeForCapture(manifest *capture.Manifest) time.Time {
+	if manifest == nil || manifest.CapturedAt.IsZero() {
+		return time.Time{}
+	}
+	if manifest.DurationMS <= 0 {
+		return manifest.CapturedAt
+	}
+	return manifest.CapturedAt.Add(time.Duration(manifest.DurationMS) * time.Millisecond)
 }
 
 // saveCapture writes the capture to disk and returns the error to set as retErr.
@@ -250,11 +265,15 @@ func saveCapture(
 	for i := range recorder.Entries {
 		totalDuration += recorder.Entries[i].Duration
 	}
+	capturedAt := time.Now().UTC()
+	if !opts.VerificationTime.IsZero() {
+		capturedAt = opts.VerificationTime.Add(-totalDuration).UTC()
+	}
 	subdir, saveErr := capture.Save(opts.CaptureDir, &capture.Manifest{
 		Provider:   opts.ProviderName,
 		Model:      opts.ModelName,
 		NonceHex:   nonce.Hex(),
-		CapturedAt: time.Now().UTC(),
+		CapturedAt: capturedAt,
 		DurationMS: totalDuration.Milliseconds(),
 		E2EE:       outcomeFromE2EEResult(e2eeResult),
 		Error:      errMsg,

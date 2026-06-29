@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
@@ -92,7 +93,7 @@ func TestVerifyNVIDIA_EmptyPayload(t *testing.T) {
 
 func TestCheckPoC_Offline(t *testing.T) {
 	ctx := context.Background()
-	result := checkPoC(ctx, "some-quote", nil, true)
+	result := checkPoC(ctx, "some-quote", nil, true, time.Time{})
 	if result != nil {
 		t.Errorf("checkPoC offline: expected nil, got %v", result)
 	}
@@ -100,7 +101,7 @@ func TestCheckPoC_Offline(t *testing.T) {
 
 func TestCheckPoC_EmptyQuote(t *testing.T) {
 	ctx := context.Background()
-	result := checkPoC(ctx, "", nil, false)
+	result := checkPoC(ctx, "", nil, false, time.Time{})
 	if result != nil {
 		t.Errorf("checkPoC empty quote: expected nil, got %v", result)
 	}
@@ -110,7 +111,7 @@ func TestCheckPoC_Online_CanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so PoC network calls fail fast
 	// Exercises the non-nil path (offline=false, quote non-empty) without live network.
-	result := checkPoC(ctx, "fake-quote", &http.Client{}, false)
+	result := checkPoC(ctx, "fake-quote", &http.Client{}, false, time.Time{})
 	t.Logf("checkPoC canceled ctx result: %v", result)
 	// result may be nil or non-nil depending on PoC quorum logic; we just ensure no panic.
 }
@@ -122,7 +123,7 @@ func TestCheckPoC_Online_CanceledContext(t *testing.T) {
 func TestVerifyNearcloudGateway_NoQuote(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{GatewayIntelQuote: ""}
-	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, attestation.VerifyTDXQuoteOffline)
+	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, attestation.VerifyTDXQuoteOffline, time.Time{})
 	if tdx != nil {
 		t.Errorf("expected nil tdx, got %v", tdx)
 	}
@@ -513,7 +514,7 @@ func TestTruncTo(t *testing.T) {
 func TestVerifyNearcloudGateway_WithQuote_ParseError(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{GatewayIntelQuote: "not-a-real-tdx-quote"}
-	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, attestation.VerifyTDXQuoteOffline)
+	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, attestation.VerifyTDXQuoteOffline, time.Time{})
 	if tdx == nil {
 		t.Fatal("expected non-nil TDX result for non-empty GatewayIntelQuote")
 	}
@@ -640,7 +641,7 @@ func TestVerifyNearcloudGateway_ParseOK_NoCompose(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{GatewayIntelQuote: "fakequote"}
 	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil
-	tdx, compose, _ := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult))
+	tdx, compose, _ := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult), time.Time{})
 	if tdx == nil {
 		t.Fatal("expected non-nil TDX result")
 	}
@@ -658,7 +659,7 @@ func TestVerifyNearcloudGateway_ParseOK_WithCompose(t *testing.T) {
 		GatewayAppCompose: `{"docker_compose_file":"services:\n  app:\n    image: myapp:latest\n"}`,
 	}
 	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil, MRConfigID zero
-	tdx, compose, _ := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult))
+	tdx, compose, _ := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult), time.Time{})
 	if tdx == nil {
 		t.Fatal("expected non-nil TDX result")
 	}

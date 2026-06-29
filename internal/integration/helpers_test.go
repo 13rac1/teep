@@ -49,6 +49,19 @@ func loadFixture(t *testing.T, prefix string) fixtureEnv {
 	return fixtureEnv{manifest: manifest, entries: entries, client: client, nonce: nonce}
 }
 
+func fixtureVerificationTime(env *fixtureEnv) time.Time {
+	if env == nil {
+		return time.Time{}
+	}
+	if env.manifest.CapturedAt.IsZero() {
+		return time.Time{}
+	}
+	if env.manifest.DurationMS <= 0 {
+		return env.manifest.CapturedAt
+	}
+	return env.manifest.CapturedAt.Add(time.Duration(env.manifest.DurationMS) * time.Millisecond)
+}
+
 // findFixtureDir returns the newest captured testdata directory matching the
 // given provider prefix (e.g. "venice", "neardirect", "nearcloud").
 func findFixtureDir(t *testing.T, prefix string) string {
