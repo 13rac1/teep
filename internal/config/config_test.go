@@ -129,7 +129,7 @@ e2ee = false
 		t.Errorf("neardirect APIKey: got %q, want %q", neardirect.APIKey, "test-neardirect-key")
 	}
 	if neardirect.E2EE {
-		t.Error("neardirect E2EE: got true, want false")
+		t.Error("neardirect E2EE: got true, want false (TOML fixture explicitly sets e2ee=false)")
 	}
 }
 

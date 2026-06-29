@@ -150,7 +150,7 @@ var knownProviderDefaults = map[string]struct {
 	e2ee      bool
 }{
 	"venice":     {baseURL: "https://api.venice.ai", keyEnvVar: "VENICE_API_KEY", e2ee: true},
-	"neardirect": {baseURL: "https://completions.near.ai", keyEnvVar: "NEARAI_API_KEY"},
+	"neardirect": {baseURL: "https://completions.near.ai", keyEnvVar: "NEARAI_API_KEY", e2ee: true},
 	"nearcloud":  {baseURL: "https://cloud-api.near.ai", keyEnvVar: "NEARAI_API_KEY", e2ee: true},
 	"nanogpt":    {baseURL: "https://nano-gpt.com/api", keyEnvVar: "NANOGPT_API_KEY"},
 }
