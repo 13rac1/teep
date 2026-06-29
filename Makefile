@@ -40,7 +40,7 @@ coverage-full: ## Full coverage without -short (live integration tests still nee
 test-live: ## Run live network tests (dials external hosts, requires internet)
 	TEEP_LIVE_TESTS=1 go test -race -v ./internal/tlsct/ -run TestLive
 
-integration: integration-venice integration-neardirect integration-nearcloud integration-nanogpt integration-phalacloud integration-chutes integration-tinfoil integration-tinfoil-direct integration-neardirect-fixture integration-venice-fixture integration-nearcloud-fixture integration-chutes-fixture integration-tinfoil-fixture integration-tinfoil-direct-fixture ## Run all integration tests
+integration: integration-tinfoil integration-tinfoil-direct integration-neardirect integration-nearcloud integration-venice integration-chutes integration-phalacloud integration-nanogpt integration-tinfoil-fixture integration-tinfoil-direct-fixture integration-neardirect-fixture integration-nearcloud-fixture integration-venice-fixture integration-chutes-fixture ## Run all integration tests
 
 integration-venice: ## Run Venice integration tests (requires VENICE_API_KEY)
 	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_Venice ./internal/proxy/
@@ -108,7 +108,7 @@ test-fuzz: ## Fuzz all attestation parsers (FUZZTIME=30s by default)
 
 check: lint test ## Run lint + test
 
-reports: report-venice report-neardirect report-nearcloud report-nanogpt report-phalacloud report-chutes report-tinfoil report-tinfoil-direct ## Run all attestation reports
+reports: report-tinfoil report-tinfoil-direct report-neardirect report-nearcloud report-venice report-chutes report-phalacloud report-nanogpt ## Run all attestation reports
 
 report-venice: build ## Verify Venice attestation (requires VENICE_API_KEY)
 	./teep verify venice --model e2ee-qwen3-5-122b-a10b --log-level debug --capture /tmp/teep-attestation-venice
