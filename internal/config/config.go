@@ -59,6 +59,7 @@ var providerDefaultAllowFail = map[string][]string{
 	"nanogpt":           attestation.NanoGPTDefaultAllowFail,
 	"nearcloud":         attestation.NearcloudDefaultAllowFail,
 	"neardirect":        attestation.NeardirectDefaultAllowFail,
+	"phalacloud":        attestation.PhalaCloudDefaultAllowFail,
 	"tinfoil_v3_cloud":  attestation.TinfoilCloudDefaultAllowFail,
 	"tinfoil_v3_direct": attestation.TinfoilDirectDefaultAllowFail,
 }

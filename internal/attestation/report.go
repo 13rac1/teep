@@ -341,6 +341,30 @@ var NanoGPTDefaultAllowFail = []string{
 	FactorEventLogIntegrity,
 }
 
+// PhalaCloudDefaultAllowFail is the phalacloud-specific default allow_fail
+// list. PhalaCloud currently routes to backends without consistently
+// replayable nonce, NVIDIA, compose, supply-chain, or event-log integrity
+// evidence, so only these known failing factors are allowed.
+var PhalaCloudDefaultAllowFail = []string{
+	FactorNonceMatch,
+	FactorTEEMeasurement,
+	FactorTEEHardwareConfig,
+	FactorTEEBootConfig,
+	FactorResponseSchema,
+	FactorNvidiaSignature,
+	FactorNvidiaClientNonce,
+	FactorNvidiaNRAS,
+	FactorE2EEUsable,
+	FactorTLSKeyBinding,
+	FactorCPUGPUChain,
+	FactorMeasuredWeights,
+	FactorBuildTransparency,
+	FactorCPUIDRegistry,
+	FactorComposeBinding,
+	FactorSigstoreVerify,
+	FactorEventLogIntegrity,
+}
+
 // ChutesDefaultAllowFail is the chutes-specific default allow_fail list.
 // Chutes runs sek8s inside Intel TDX VMs and supports NVIDIA GPU attestation.
 // Core TDX quote integrity (structure, cert chain, signature, debug mode,
