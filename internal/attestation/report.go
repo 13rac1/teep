@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -704,6 +705,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 
 	inapplicable := in.Inapplicable
 	if inapplicable == nil {
+		slog.Warn("BuildReport called without Inapplicable; applying default")
 		inapplicable = DefaultInapplicableFactors()
 	}
 
