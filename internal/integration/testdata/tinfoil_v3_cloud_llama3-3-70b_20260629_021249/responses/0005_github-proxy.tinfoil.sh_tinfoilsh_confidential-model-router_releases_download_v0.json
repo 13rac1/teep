@@ -1,0 +1,111 @@
+{
+  "method": "GET",
+  "url": "https://github-proxy.tinfoil.sh/tinfoilsh/confidential-model-router/releases/download/v0.0.110/tinfoil.hash",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuoeEKrxvxxsX4e+Fmn3CjyMwAs5t7CPSNNayhnV1YLQzJuzVuLoY0pjDrQd5bTjLwiliGWztr5wCYtM6NtqVLQ==",
+  "headers": {
+    "Accept-Ranges": [
+      "bytes"
+    ],
+    "Access-Control-Allow-Headers": [
+      "*"
+    ],
+    "Access-Control-Allow-Methods": [
+      "GET, OPTIONS"
+    ],
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Age": [
+      "18875"
+    ],
+    "Cache-Control": [
+      "public, max-age=604800"
+    ],
+    "Cf-Cache-Status": [
+      "HIT"
+    ],
+    "Cf-Ray": [
+      "a131688dcd886326-DFW"
+    ],
+    "Connection": [
+      "keep-alive"
+    ],
+    "Content-Disposition": [
+      "attachment; filename=tinfoil.hash"
+    ],
+    "Content-Length": [
+      "65"
+    ],
+    "Content-Type": [
+      "application/octet-stream"
+    ],
+    "Date": [
+      "Mon, 29 Jun 2026 02:12:48 GMT"
+    ],
+    "Etag": [
+      "\"0x8DED17187C3DE8E\""
+    ],
+    "Last-Modified": [
+      "Tue, 23 Jun 2026 21:51:07 GMT"
+    ],
+    "Server": [
+      "cloudflare"
+    ],
+    "Via": [
+      "1.1 varnish, 1.1 varnish"
+    ],
+    "X-Cache": [
+      "HIT, HIT"
+    ],
+    "X-Cache-Hits": [
+      "11, 0"
+    ],
+    "X-Cache-Status": [
+      "HIT"
+    ],
+    "X-Ms-Access-Tier": [
+      "Hot"
+    ],
+    "X-Ms-Access-Tier-Inferred": [
+      "true"
+    ],
+    "X-Ms-Blob-Content-Md5": [
+      "YYPHV0WDuN6JJrkYt4MqPg=="
+    ],
+    "X-Ms-Blob-Type": [
+      "BlockBlob"
+    ],
+    "X-Ms-Creation-Time": [
+      "Tue, 23 Jun 2026 21:51:07 GMT"
+    ],
+    "X-Ms-Lease-State": [
+      "available"
+    ],
+    "X-Ms-Lease-Status": [
+      "unlocked"
+    ],
+    "X-Ms-Request-Id": [
+      "2410da70-401e-0059-135b-0366d6000000"
+    ],
+    "X-Ms-Server-Encrypted": [
+      "true"
+    ],
+    "X-Ms-Version": [
+      "2018-11-09"
+    ],
+    "X-Proxied-To": [
+      "https://github.com/tinfoilsh/confidential-model-router/releases/download/v0.0.110/tinfoil.hash"
+    ],
+    "X-Served-By": [
+      "cache-iad-kiad7000112-IAD, cache-dfw-kdfw8210022-DFW"
+    ],
+    "X-Timer": [
+      "S1782680293.905380,VS0,VE35"
+    ]
+  },
+  "duration_ms": 77
+}

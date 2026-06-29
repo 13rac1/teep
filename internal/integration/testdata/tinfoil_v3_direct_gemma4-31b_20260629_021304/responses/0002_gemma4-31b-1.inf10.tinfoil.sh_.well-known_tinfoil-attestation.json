@@ -1,0 +1,21 @@
+{
+  "method": "GET",
+  "url": "https://gemma4-31b-1.inf10.tinfoil.sh/.well-known/tinfoil-attestation?nonce=1b63be880a57c6cb2ea2191157e35bdc0de416d3b9e4b5b17423b12f8553d633",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEwpaJYjq4axZZrCu8OS1Mrli0bo07AGx/CHKm/v+OBXR98zbflb503LlQuZra+r72IDKpCBpzmJuO3KsjY/VacIP1tOulVPw0c/fKA4TnSdqmdzhGWEQYAkOon2iIYAIL",
+  "headers": {
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Mon, 29 Jun 2026 02:13:11 GMT"
+    ],
+    "Tinfoil-Pt": [
+      "https://tinfoil.sh/predicate/tdx-guest/v2"
+    ]
+  },
+  "duration_ms": 207
+}

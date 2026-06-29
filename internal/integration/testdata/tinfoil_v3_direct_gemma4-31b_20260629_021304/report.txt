@@ -1,0 +1,51 @@
+Attestation Report: tinfoil_v3_direct / gemma4-31b
+══════════════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  PPID:          5eeceeb0e315f66b...
+  Nonce source:  client
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✓ tee_quote_present                 TDX quote present (10012 hex chars)  [ENFORCED]
+  ✓ tee_quote_structure               valid QuoteV4, MRTD: 7357a10d2e2724df...  [ENFORCED]
+  ✓ tee_cert_chain                    certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tee_quote_signature               quote signature verified  [ENFORCED]
+  ✓ tee_debug_disabled                debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ tee_measurement                   TDX code measurements match Sigstore predicate (RTMR1=46658ae5655794d3..., RTMR2=48c6559c034f1a12...)  [ENFORCED]
+  ✓ tee_hardware_config               Tinfoil TDX policy: TD_ATTRIBUTES, XFAM, MR_SEAM, MR registers, RTMR3, TEE_TCB_SVN all pass  [ENFORCED]
+  ✓ tee_boot_config                   hardware measurements matched entry "medium_2d_new"  [ENFORCED]
+  ✓ signing_key_present               enclave pubkey present (0394825e35...)  [ENFORCED]
+  ✗ response_schema                   missing fields: ["body" "nvswitch"]  [ALLOWED]
+
+Tier 2: Binding & Crypto
+  ✓ tee_reportdata_binding            v3: reportdata_hash verified, nonce_bound=true, gpu_bound=true  [ENFORCED]
+  ✓ intel_pcs_collateral              Intel PCS collateral fetched (TCB status: UpToDate)  [ALLOWED]
+  ✓ tee_tcb_current                   TCB is UpToDate per Intel PCS  [ENFORCED]
+  ✓ tee_tcb_not_revoked               TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present            GPU evidence present (1 GPUs, SPDM format)  [ENFORCED]
+  ✓ nvidia_signature                  signature valid  [ENFORCED]
+  ✓ nvidia_claims                     claims valid  [ENFORCED]
+  — nvidia_nonce_client_bound         Tinfoil binds GPU nonce freshness via REPORTDATA hash chain, not direct SPDM nonce
+  — nvidia_nras_verified              NRAS is an EAT-JWT cloud service; Tinfoil uses direct SPDM verification
+  ✓ e2ee_capable                      X25519 HPKE public key valid (32 bytes); EHBP E2EE key exchange possible  [ENFORCED]
+  ✓ e2ee_usable                       EHBP X25519: 4 chunks decrypted  [ENFORCED]
+
+Tier 3: Supply Chain & Channel Integrity
+  ✓ tls_key_binding                   TLS certificate SPKI bound to attestation (dd34cd14f50bc0e4...)  [ENFORCED]
+  ✓ cpu_gpu_chain                     GPU evidence hash verified in REPORTDATA  [ENFORCED]
+  ✓ nvswitch_binding                  NVSwitch not required for this GPU topology (verified absent)  [ALLOWED]
+  ✓ measured_model_weights            model weights transitively authenticated via Sigstore + dm-verity code measurements  [ENFORCED]
+  ✓ build_transparency_log            Sigstore DSSE verified for tinfoilsh/confidential-gemma4-31b (predicate: https://tinfoil.sh/predicate/snp-tdx-multiplatform/v1)  [ENFORCED]
+  ✓ component_recognition             2 Tinfoil component repo(s) recognized (tinfoilsh/confidential-gemma4-31b, tinfoilsh/hardware-measurements)  [ALLOWED]
+  ✓ provider_signer_recognition       Tinfoil signer recognized for tinfoilsh/confidential-gemma4-31b, tinfoilsh/hardware-measurements  [ENFORCED]
+  ✓ component_signature_recognition   Tinfoil component signature policy matched for tinfoilsh/confidential-gemma4-31b, tinfoilsh/hardware-measurements  [ENFORCED]
+  ✗ cpu_id_registry                   hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  — compose_binding                   Tinfoil uses Sigstore DSSE, not compose-based binding
+  — sigstore_verification             Tinfoil uses Sigstore DSSE, not per-image cosign verification
+  ✓ sigstore_code_verified            Sigstore DSSE verified for tinfoilsh/confidential-gemma4-31b (predicate: https://tinfoil.sh/predicate/snp-tdx-multiplatform/v1)  [ENFORCED]
+  — event_log_integrity               Tinfoil does not expose TDX event logs
+
+Score: 28/30 passed, 0 skipped, 2 failed (0 enforced, 2 allowed), 5 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

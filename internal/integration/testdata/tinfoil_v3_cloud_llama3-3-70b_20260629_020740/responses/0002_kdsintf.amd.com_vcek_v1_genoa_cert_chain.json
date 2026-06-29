@@ -1,0 +1,30 @@
+{
+  "method": "GET",
+  "url": "https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.2",
+  "tls_cipher": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArpnwopkg7JaRdTN+u8UzySfw8tDe+q822MM7acGkFHMex5TMLTHgvAgyGomv7ChoEPEpSOX6K9iKLU1Cup8sLlV6rbS52nmS7h5Ry9D67yIxenMQvIAbojJtSrig7XKeQlGO6Q7J36aH+bzRCfXWCDXSfUoPp7MQmCBoWIPCSesGyPJpjwH5lYscba/XkcWwK2JteMtyjT0BdyWt7oTIfMRgdai7D8+c94OUBj75f2cEEI+mY8/uyYU6H341/+bAnuN5GHV+ASpPsByqcpZcqtXM9usfdrqtZCbyDANY19SI/39h4bz5GgBiT2mL87EZ8fVFM15WuImPER86NdC59wIDAQAB",
+  "headers": {
+    "Cache-Control": [
+      "no-cache"
+    ],
+    "Content-Disposition": [
+      "attachment; filename=Genoa.pem"
+    ],
+    "Content-Length": [
+      "4602"
+    ],
+    "Content-Type": [
+      "application/octet-stream"
+    ],
+    "Date": [
+      "Mon, 29 Jun 2026 02:07:49 GMT"
+    ],
+    "Pragma": [
+      "no-cache"
+    ]
+  },
+  "duration_ms": 341
+}

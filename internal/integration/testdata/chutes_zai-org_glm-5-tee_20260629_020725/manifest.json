@@ -1,0 +1,12 @@
+{
+  "provider": "chutes",
+  "model": "zai-org/GLM-5-TEE",
+  "nonce_hex": "c7fe347ecca03db12e156e048bbe809024928ef0707a319796956fe7415148e4",
+  "captured_at": "2026-06-29T02:07:25.881239Z",
+  "duration_ms": 6263,
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE chutes ML-KEM-768: 182 encrypted chunks decrypted; non-standard response headers: Alt-Svc: clear; Via: 1.1 google; X-Chutes-Quota-Remaining: 0; X-Chutes-Quota-Total: 0; X-Chutes-Quota-Used: 0; X-Chutes-Rl-User: 60",
+    "key_type": "ml-kem-768"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "method": "GET",
+  "url": "https://cloud-api.near.ai/v1/attestation/report?include_tls_fingerprint=true\u0026model=Qwen%2FQwen3.5-122B-A10B\u0026nonce=e79c2ec87ccfa76f3aef88deec0687facbd85d1689d82b0cc2de1353f7a62609\u0026signing_algo=ed25519",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyKl7yrkkGDRLaAdag3ptwWf1mGM4tXpyF2o1qNW+sy7KrthOcs5zMoXVa18zCXu4uGmikoCPXdMD2fGxMgxzUg==",
+  "headers": {
+    "Access-Control-Expose-Headers": [
+      "*"
+    ],
+    "Alt-Svc": [
+      "h3=\":8443\"; ma=86400"
+    ],
+    "Cache-Control": [
+      "no-store"
+    ],
+    "Connection": [
+      "keep-alive"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Mon, 29 Jun 2026 02:06:50 GMT"
+    ],
+    "Server": [
+      "nginx/1.29.1"
+    ],
+    "Vary": [
+      "origin",
+      "accept-encoding"
+    ],
+    "X-Request-Id": [
+      "3e48e313-84be-4b85-be06-f2fc78f2ec5b"
+    ]
+  },
+  "duration_ms": 712
+}

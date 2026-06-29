@@ -1,0 +1,12 @@
+{
+  "provider": "tinfoil_v3_cloud",
+  "model": "llama3-3-70b",
+  "nonce_hex": "229471a8453a3521eac3d6ada9f1d52e42c97a527c3a50d565e999401dfd3e9b",
+  "captured_at": "2026-06-29T02:12:49.562247Z",
+  "duration_ms": 1706,
+  "e2ee": {
+    "attempted": true,
+    "detail": "EHBP X25519: 11 chunks decrypted",
+    "key_type": "x25519-hpke"
+  }
+}

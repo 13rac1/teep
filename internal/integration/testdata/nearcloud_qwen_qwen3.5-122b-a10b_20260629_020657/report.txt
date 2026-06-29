@@ -1,0 +1,70 @@
+Attestation Report: nearcloud / Qwen/Qwen3.5-122B-A10B
+══════════════════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  App:           dstack-nvidia-0.5.5
+  Compose hash:  66007399f064f058...
+  OS image:      9b69bb1698bacbb6...
+  Device:        aa781567445c6a3c...
+  PPID:          b02abcf3660e4059...
+  Event log:     30 entries
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars)  [ENFORCED]
+  ✓ tee_quote_present                 TDX quote present (10020 hex chars)  [ENFORCED]
+  ✓ tee_quote_structure               valid QuoteV4, MRTD: b24d3b24e9e3c160...  [ENFORCED]
+  ✓ tee_cert_chain                    certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tee_quote_signature               quote signature verified  [ENFORCED]
+  ✓ tee_debug_disabled                debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ tee_measurement                   MRTD/MRSEAM policy matched  [ENFORCED]
+  ✓ tee_hardware_config               RTMR0 policy matched  [ALLOWED]
+  ✓ tee_boot_config                   RTMR1/RTMR2 policy matched  [ALLOWED]
+  ✓ signing_key_present               enclave pubkey present (d0aa20bcf5...)  [ENFORCED]
+  ✗ response_schema                   unknown fields: ["gateway_attestation" "ohttp_attestation" "ohttp_key_config" "tls_certificate" "model_attestations" "ohttp_attestation" "ohttp_key_config" "tls_certificate"]; missing fields: ["all_attestations" "event_log" "info" "intel_quote" "model_name" "nvidia_payload" "request_nonce" "signing_address" "signing_algo" "signing_public_key" "tls_cert_fingerprint" "verified"]  [ALLOWED]
+
+Tier 2: Binding & Crypto
+  ✓ tee_reportdata_binding            REPORTDATA binds sha256(signing_address + tls_fingerprint) + nonce  [ENFORCED]
+  ✓ intel_pcs_collateral              Intel PCS collateral fetched (TCB status: UpToDate)  [ENFORCED]
+  ✓ tee_tcb_current                   TCB is UpToDate per Intel PCS  [ENFORCED]
+  ✓ tee_tcb_not_revoked               TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present            NVIDIA payload present (98158 chars)  [ENFORCED]
+  ✓ nvidia_signature                  EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)  [ENFORCED]
+  ✓ nvidia_claims                     EAT: arch=HOPPER, 8 GPUs, nonce verified  [ENFORCED]
+  ✓ nvidia_nonce_client_bound         EAT nonce matches client nonce (8 GPUs)  [ENFORCED]
+  ✓ nvidia_nras_verified              NRAS: true (JWT verified)  [ENFORCED]
+  ✓ e2ee_capable                      enclave ed25519 public key valid; E2EE key exchange possible (ed25519)  [ENFORCED]
+  ✓ e2ee_usable                       E2EE nearcloud: 82 encrypted fields decrypted across 85 chunks  [ENFORCED]
+
+Tier 3: Supply Chain & Channel Integrity
+  ✓ tls_key_binding                   TLS certificate SPKI bound to attestation (eb336f52d78ea048...)  [ENFORCED]
+  ✗ cpu_gpu_chain                     CPU-GPU attestation not bound  [ALLOWED]
+  — nvswitch_binding                  NVSwitch fabric verification is Tinfoil-specific
+  ✗ measured_model_weights            no model weight hashes  [ALLOWED]
+  ✓ build_transparency_log            7 component(s) verified by Fulcio provenance; 2 present in Sigstore (nearai/compose-manager@9a035b2, github-hosted; log integrity: SET 9/9, inclusion 9/9)  [ENFORCED]
+  ✓ component_recognition             5 model component(s) recognized; 7 gateway component(s) recognized  [ALLOWED]
+  ✓ provider_signer_recognition       9 component signer(s) recognized provider-wide  [ENFORCED]
+  ✓ component_signature_recognition   9 component signature policy match(es)  [ENFORCED]
+  ✗ cpu_id_registry                   hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  ✓ compose_binding                   sha256(app_compose) matches MRConfigID  [ENFORCED]
+  ✓ sigstore_verification             9 component digest(s) found in Sigstore transparency log; 1 not Sigstore-signed (compose-pinned)  [ENFORCED]
+  — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
+  ✓ event_log_integrity               event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
+
+Tier 4: Gateway Attestation
+  ✓ gateway_nonce_match               gateway nonce matches (64 hex chars)  [ENFORCED]
+  ✓ gateway_tee_quote_present         gateway TDX quote present (10012 hex chars)  [ENFORCED]
+  ✓ gateway_tee_quote_structure       valid QuoteV4, MRTD: f06dfda6dce1cf90...  [ENFORCED]
+  ✓ gateway_tee_cert_chain            gateway certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ gateway_tee_quote_signature       gateway quote signature verified  [ENFORCED]
+  ✓ gateway_tee_debug_disabled        gateway debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ gateway_tee_measurement           gateway MRTD/MRSEAM policy matched  [ENFORCED]
+  ✓ gateway_tee_hardware_config       gateway RTMR0 policy matched  [ALLOWED]
+  ✓ gateway_tee_boot_config           gateway RTMR1/RTMR2 policy matched  [ALLOWED]
+  ✓ gateway_tee_reportdata_binding    gateway REPORTDATA binds sha256(signing_address + tls_fingerprint) + nonce  [ALLOWED]
+  ✓ gateway_compose_binding           gateway sha256(app_compose) matches MRConfigID  [ENFORCED]
+  ✗ gateway_cpu_id_registry           gateway hardware not found in Proof of Cloud registry; paste gateway intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  ✓ gateway_event_log_integrity       gateway event log replayed (29 entries), all 4 RTMRs match quote  [ENFORCED]
+
+Score: 41/46 passed, 0 skipped, 5 failed (0 enforced, 5 allowed), 2 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

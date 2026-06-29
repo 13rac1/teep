@@ -1,0 +1,30 @@
+{
+  "method": "GET",
+  "url": "https://kdsintf.amd.com/vcek/v1/Genoa/1af1aa6c1f56037a05849a59b8815cf909583f9ba9ef2f053218c437f33ba183e4e415b039b37f8205250ad15f8b88a0a3add9f4c081c0779a48ed2214378e44?blSPL=10\u0026teeSPL=0\u0026snpSPL=23\u0026ucodeSPL=84",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.2",
+  "tls_cipher": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArpnwopkg7JaRdTN+u8UzySfw8tDe+q822MM7acGkFHMex5TMLTHgvAgyGomv7ChoEPEpSOX6K9iKLU1Cup8sLlV6rbS52nmS7h5Ry9D67yIxenMQvIAbojJtSrig7XKeQlGO6Q7J36aH+bzRCfXWCDXSfUoPp7MQmCBoWIPCSesGyPJpjwH5lYscba/XkcWwK2JteMtyjT0BdyWt7oTIfMRgdai7D8+c94OUBj75f2cEEI+mY8/uyYU6H341/+bAnuN5GHV+ASpPsByqcpZcqtXM9usfdrqtZCbyDANY19SI/39h4bz5GgBiT2mL87EZ8fVFM15WuImPER86NdC59wIDAQAB",
+  "headers": {
+    "Cache-Control": [
+      "no-cache"
+    ],
+    "Content-Disposition": [
+      "attachment; filename=vcek.crt"
+    ],
+    "Content-Length": [
+      "1347"
+    ],
+    "Content-Type": [
+      "application/octet-stream"
+    ],
+    "Date": [
+      "Mon, 29 Jun 2026 02:12:58 GMT"
+    ],
+    "Pragma": [
+      "no-cache"
+    ]
+  },
+  "duration_ms": 94
+}

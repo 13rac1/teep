@@ -1,0 +1,12 @@
+{
+  "provider": "neardirect",
+  "model": "Qwen/Qwen3.5-122B-A10B",
+  "nonce_hex": "541b6523f9446dcd170e67ac8171eb9226bee5e3f192de4900b74f0ef293500b",
+  "captured_at": "2026-06-29T02:06:37.994367Z",
+  "duration_ms": 5612,
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE neardirect: 86 encrypted fields decrypted across 89 chunks",
+    "key_type": "ed25519"
+  }
+}

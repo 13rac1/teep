@@ -1,0 +1,52 @@
+Attestation Report: chutes / zai-org/GLM-5-TEE
+══════════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  PPID:          ba8cf63a4d1696f1...
+  Nonce source:  client
+  Candidates:    1/2 evaluated
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✓ tee_quote_present                 TDX quote present (10486 hex chars)  [ENFORCED]
+  ✓ tee_quote_structure               valid QuoteV4, MRTD: ddc6efcdd2309e10...  [ENFORCED]
+  ✓ tee_cert_chain                    certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tee_quote_signature               quote signature verified  [ENFORCED]
+  ✓ tee_debug_disabled                debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ tee_measurement                   MRTD/MRSEAM policy matched  [ENFORCED]
+  ✗ tee_hardware_config               RTMR[0] not in policy allowlist: 2864b11878e81290...  [ALLOWED]
+  ✗ tee_boot_config                   RTMR[1] not in policy allowlist: f858ed2aecba4ecd...  [ALLOWED]
+  ✓ signing_key_present               enclave pubkey present (uZiJNGyxxP...)  [ENFORCED]
+  ✓ response_schema                   attestation response matches expected schema  [ALLOWED]
+
+Tier 2: Binding & Crypto
+  ✓ tee_reportdata_binding            REPORTDATA binds SHA256(nonce_hex + e2e_pubkey_base64)  [ENFORCED]
+  ✓ intel_pcs_collateral              Intel PCS collateral fetched (TCB status: UpToDate)  [ENFORCED]
+  ✓ tee_tcb_current                   TCB is UpToDate per Intel PCS  [ENFORCED]
+  ✓ tee_tcb_not_revoked               TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present            GPU evidence present (8 GPUs, SPDM format)  [ENFORCED]
+  ✗ nvidia_signature                  signature invalid: GPU 0 verification failed: SPDM evidence: requester nonce mismatch: got 20c934acdd4b0f08b9f5a3ad6caf5fdf665d3538c90a495c09d1b6894ef1d583, want c7fe347ecca03db12e156e048bbe809024928ef0707a319796956fe7415148e4  [ALLOWED]
+  ✓ nvidia_claims                     claims valid  [ENFORCED]
+  ✓ nvidia_nonce_client_bound         NVIDIA nonce matches client nonce  [ENFORCED]
+  ✗ nvidia_nras_verified              NRAS result: false; all 8 GPUs: NONCE_NOT_MATCHING  [ALLOWED]
+  ✓ e2ee_capable                      ML-KEM-768 public key valid (1184 bytes); post-quantum E2EE key exchange possible  [ENFORCED]
+  ✓ e2ee_usable                       E2EE chutes ML-KEM-768: 182 encrypted chunks decrypted; non-standard response headers: Alt-Svc: clear; Via: 1.1 google; X-Chutes-Quota-Remaining: 0; X-Chutes-Quota-Total: 0; X-Chutes-Quota-Used: 0; X-Chutes-Rl-User: 60  [ENFORCED]
+
+Tier 3: Supply Chain & Channel Integrity
+  - tls_key_binding                   provider uses E2EE key exchange; TLS binding not applicable  [ALLOWED]
+  ✗ cpu_gpu_chain                     CPU-GPU attestation not bound  [ALLOWED]
+  — nvswitch_binding                  NVSwitch fabric verification is Tinfoil-specific
+  ✗ measured_model_weights            no model weight hashes  [ALLOWED]
+  — build_transparency_log            Chutes supply chain verification is validator-side only
+  — component_recognition             Chutes supply chain verification is validator-side only
+  — provider_signer_recognition       Chutes supply chain verification is validator-side only
+  — component_signature_recognition   Chutes supply chain verification is validator-side only
+  ✗ cpu_id_registry                   hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  — compose_binding                   Chutes uses cosign image admission + IMA, not docker-compose
+  — sigstore_verification             Chutes cosign verification is validator-side only
+  — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
+  — event_log_integrity               Chutes RTMR verification is validator-side; event log not exposed
+
+Score: 18/26 passed, 1 skipped, 7 failed (0 enforced, 7 allowed), 9 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

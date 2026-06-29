@@ -1,0 +1,50 @@
+Attestation Report: tinfoil_v3_cloud / llama3-3-70b
+═══════════════════════════════════════════════════
+
+  Hardware:      amd-sev-snp
+  Nonce source:  client
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✓ tee_quote_present                 SEV-SNP report present (1184 bytes)  [ENFORCED]
+  ✓ tee_quote_structure               valid SEV-SNP report, measurement: 7adcb574b1e22ab5...  [ENFORCED]
+  ✓ tee_cert_chain                    certificate chain valid (AMD root CA)  [ALLOWED]
+  ✓ tee_quote_signature               SEV-SNP report signature verified  [ALLOWED]
+  ✓ tee_debug_disabled                debug bit is 0 (production guest)  [ENFORCED]
+  ✓ tee_measurement                   SEV-SNP code measurement matches Sigstore predicate (7adcb574b1e22ab5...)  [ENFORCED]
+  ✓ tee_hardware_config               SEV-SNP guest policy valid (policy=0x0000000000030000)  [ENFORCED]
+  ✓ tee_boot_config                   SEV-SNP boot config covered by launch measurement (tee_measurement)  [ENFORCED]
+  ✓ signing_key_present               enclave pubkey present (dc8e340f82...)  [ENFORCED]
+  ✗ response_schema                   missing fields: ["body" "gpu" "nvswitch"]  [ALLOWED]
+
+Tier 2: Binding & Crypto
+  ✓ tee_reportdata_binding            v3: reportdata_hash verified, nonce_bound=true, gpu_bound=false  [ENFORCED]
+  - intel_pcs_collateral              SEV-SNP uses AMD KDS; Intel PCS not applicable  [ALLOWED]
+  ✓ tee_tcb_current                   SEV-SNP TCB meets minimums (bl=0x0a tee=0x00 snp=0x17 ucode=0x54)  [ENFORCED]
+  ✓ tee_tcb_not_revoked               SEV-SNP TCB validated against minimum thresholds  [ENFORCED]
+  ✗ nvidia_payload_present            nvidia_payload field is absent from attestation response  [ALLOWED]
+  - nvidia_signature                  no NVIDIA payload to verify  [ALLOWED]
+  - nvidia_claims                     no NVIDIA payload to check  [ALLOWED]
+  — nvidia_nonce_client_bound         Tinfoil binds GPU nonce freshness via REPORTDATA hash chain, not direct SPDM nonce
+  — nvidia_nras_verified              NRAS is an EAT-JWT cloud service; Tinfoil uses direct SPDM verification
+  ✓ e2ee_capable                      X25519 HPKE public key valid (32 bytes); EHBP E2EE key exchange possible  [ENFORCED]
+  ✓ e2ee_usable                       EHBP X25519: 11 chunks decrypted  [ENFORCED]
+
+Tier 3: Supply Chain & Channel Integrity
+  ✓ tls_key_binding                   TLS certificate SPKI bound to attestation (0b49e7c770bbeced...)  [ENFORCED]
+  ✗ cpu_gpu_chain                     CPU-GPU attestation not bound  [ALLOWED]
+  - nvswitch_binding                  no GPU evidence; NVSwitch check not applicable  [ALLOWED]
+  ✓ measured_model_weights            model weights transitively authenticated via Sigstore + dm-verity code measurements  [ENFORCED]
+  ✓ build_transparency_log            Sigstore DSSE verified for tinfoilsh/confidential-model-router (predicate: https://tinfoil.sh/predicate/snp-tdx-multiplatform/v1)  [ENFORCED]
+  ✓ component_recognition             1 Tinfoil component repo(s) recognized (tinfoilsh/confidential-model-router)  [ALLOWED]
+  ✓ provider_signer_recognition       Tinfoil signer recognized for tinfoilsh/confidential-model-router  [ENFORCED]
+  ✓ component_signature_recognition   Tinfoil component signature policy matched for tinfoilsh/confidential-model-router  [ENFORCED]
+  ✗ cpu_id_registry                   no CPU ID registry check  [ALLOWED]
+  — compose_binding                   Tinfoil uses Sigstore DSSE, not compose-based binding
+  — sigstore_verification             Tinfoil uses Sigstore DSSE, not per-image cosign verification
+  ✓ sigstore_code_verified            Sigstore DSSE verified for tinfoilsh/confidential-model-router (predicate: https://tinfoil.sh/predicate/snp-tdx-multiplatform/v1)  [ENFORCED]
+  — event_log_integrity               Tinfoil does not expose TDX event logs
+
+Score: 22/30 passed, 4 skipped, 4 failed (0 enforced, 4 allowed), 5 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

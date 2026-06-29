@@ -1,0 +1,117 @@
+{
+  "method": "GET",
+  "url": "https://github-proxy.tinfoil.sh/repos/tinfoilsh/confidential-gemma4-31b/attestations/sha256:c387c254054c0d74662a26ff6ee767649196b07d35694f54edd7601a7729bd85",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuoeEKrxvxxsX4e+Fmn3CjyMwAs5t7CPSNNayhnV1YLQzJuzVuLoY0pjDrQd5bTjLwiliGWztr5wCYtM6NtqVLQ==",
+  "headers": {
+    "Access-Control-Allow-Headers": [
+      "*"
+    ],
+    "Access-Control-Allow-Methods": [
+      "GET, OPTIONS"
+    ],
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Access-Control-Expose-Headers": [
+      "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+    ],
+    "Age": [
+      "419373"
+    ],
+    "Cache-Control": [
+      "public, max-age=604800"
+    ],
+    "Cf-Cache-Status": [
+      "HIT"
+    ],
+    "Cf-Ray": [
+      "a13168e58d7ef819-DFW"
+    ],
+    "Connection": [
+      "keep-alive"
+    ],
+    "Content-Security-Policy": [
+      "default-src 'none'"
+    ],
+    "Content-Type": [
+      "application/json; charset=utf-8"
+    ],
+    "Date": [
+      "Mon, 29 Jun 2026 02:13:02 GMT"
+    ],
+    "Deprecation": [
+      "Tue, 10 Mar 2026 00:00:00 GMT"
+    ],
+    "Etag": [
+      "W/\"bbd969577bde849828100b9d553a24dcd330a687f26a4c0d3568544d90b1d4de\""
+    ],
+    "Github-Authentication-Token-Expiration": [
+      "2027-05-21 20:41:17 UTC"
+    ],
+    "Link": [
+      "\u003chttps://docs.github.com/en/rest/about-the-rest-api/api-versions\u003e; rel=\"deprecation\"; type=\"text/html\""
+    ],
+    "Referrer-Policy": [
+      "origin-when-cross-origin, strict-origin-when-cross-origin"
+    ],
+    "Server": [
+      "cloudflare"
+    ],
+    "Strict-Transport-Security": [
+      "max-age=31536000; includeSubdomains; preload"
+    ],
+    "Sunset": [
+      "Fri, 10 Mar 2028 00:00:00 GMT"
+    ],
+    "Vary": [
+      "accept-encoding"
+    ],
+    "X-Accepted-Github-Permissions": [
+      "attestations=read"
+    ],
+    "X-Cache-Status": [
+      "HIT"
+    ],
+    "X-Content-Type-Options": [
+      "nosniff"
+    ],
+    "X-Frame-Options": [
+      "deny"
+    ],
+    "X-Github-Api-Version-Selected": [
+      "2022-11-28"
+    ],
+    "X-Github-Media-Type": [
+      "github.v3; format=json"
+    ],
+    "X-Github-Request-Id": [
+      "3C6D:301730:2D80385:A6A9BEF:6A3B6E80"
+    ],
+    "X-Proxied-To": [
+      "https://api.github.com/repos/tinfoilsh/confidential-gemma4-31b/attestations/sha256:c387c254054c0d74662a26ff6ee767649196b07d35694f54edd7601a7729bd85"
+    ],
+    "X-Ratelimit-Limit": [
+      "5000"
+    ],
+    "X-Ratelimit-Remaining": [
+      "4902"
+    ],
+    "X-Ratelimit-Reset": [
+      "1782280058"
+    ],
+    "X-Ratelimit-Resource": [
+      "core"
+    ],
+    "X-Ratelimit-Used": [
+      "98"
+    ],
+    "X-Xss-Protection": [
+      "0"
+    ]
+  },
+  "duration_ms": 77
+}
