@@ -34,11 +34,15 @@ The proxy receives concurrent API inference requests to multiple models from mul
 
 ## Fail-Closed Policy (highest priority)
 
-Every validation check MUST block the request on failure, unless the check has been explicitly whitelisted in an `allow_fail` list, by `--force` (debug builds only: bypasses all enforced factors), or by `--offline` (skips network-dependent checks such as Intel PCS, NRAS, sigstore, and Proof of Cloud).
+Every enforced validation factor MUST block the request on failure, unless the
+factor has been explicitly whitelisted in an `allow_fail` list, by `--force`
+(debug builds only: bypasses all enforced factors), or by `--offline` (skips
+network-dependent checks such as Intel PCS, NRAS, sigstore, and Proof of
+Cloud).
 
 Flag any code that:
 
-- Returns a nil error, default value, or falls through on a validation failure.
+- Returns a nil error, default value, or falls through on a factor validation failure.
 - Catches an error and continues instead of aborting (error fallback).
 - Uses a fallback, default, or degraded mode when a security check fails.
 - Introduces a "best-effort", "soft-fail", or "skip-on-error" code path.
@@ -47,12 +51,44 @@ Flag any code that:
 - Allows an unattested or partially-attested request to be forwarded.
 - Serves stale or cached data when re-validation fails, without blocking.
 - Accepts unknown, ambiguous, or semantically invalid configuration that should have been rejected at startup.
-- Uses special cases to handle the tests or test environment.
+- Uses special cases to handle the tests or test environment, including bypassing factor validation.
 - Adds exemptions to teeplint for new code.
 
 If an error path does anything other than return/propagate an error, it is a
 defect. There are NO acceptable workarounds, fallbacks, or error recoveries for
 security validation.
+
+Expected factors or verification steps must fail loudly, not silently. Flag any
+path that skips or fails a factor because prerequisites are missing, malformed,
+or unexpectedly unavailable without returning a blocking error and emitting a
+clear non-secret diagnostic at warn level or stronger.
+
+## Factor Enforcement in Tests
+
+Tests MUST use the same factor enforcement semantics as `teep verify` and
+`teep serve`. Review tests as part of the security boundary: a test helper that
+allows all factors to fail, injects broad `allow_fail`, forces offline behavior,
+or otherwise papers over enforced-factor failures is a fail-open defect unless
+the production path under test is explicitly exercising that exception.
+
+Flag any test code that:
+
+- Allows enforced factors to fail by default instead of expecting the request,
+  verification, or startup path to fail closed.
+- Exercises provider verification through a weaker policy than `teep verify` or
+  `teep serve` would use for the same configuration.
+- Uses `allow_fail`, `--force`, `--offline`, disabled checks, or mock verifier
+  shortcuts without asserting that the exception is explicit and scoped to the
+  behavior under test.
+- Special-cases the harness so `serve` and `verify` diverge in factor
+  enforcement, request blocking, diagnostics, or cache behavior.
+- Replaces a failed factor with a canned success result without exercising the
+  cryptographic, attestation, or supply-chain verification path relevant to the
+  change.
+
+Regression tests for review findings and audit findings must preserve the live
+fail-closed behavior, even when that means the test itself should fail until the
+factor enforcement bug is fixed.
 
 ## Cryptographic Safety
 
