@@ -17,6 +17,7 @@ import (
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
+	"github.com/13rac1/teep/internal/provider/venice"
 )
 
 // fetchAttestation fetches raw attestation data from the provider with timing log.
@@ -378,4 +379,10 @@ func truncTo(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// verifyACIKeyset performs ACI/1 keyset endorsement verification when the
+// attestation uses the ACI/1 format. Returns nil for non-ACI/1 formats.
+func verifyACIKeyset(raw *attestation.RawAttestation) *attestation.ACIKeysetResult {
+	return venice.VerifyACIKeyset(raw)
 }

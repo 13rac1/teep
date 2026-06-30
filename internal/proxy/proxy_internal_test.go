@@ -145,29 +145,33 @@ func TestMonitoredListener_ThrottleLog(t *testing.T) {
 func TestInapplicableForProvider(t *testing.T) {
 	tests := []struct {
 		provider      string
+		format        attestation.BackendFormat
 		expectFactor  string
 		expectPresent bool
 	}{
-		{"venice", "compose_binding", false},
-		{"neardirect", "compose_binding", false},
-		{"nearcloud", "compose_binding", false},
-		{"nanogpt", "compose_binding", false},
-		{"phalacloud", "compose_binding", false},
-		{"tinfoil_v3_cloud", "compose_binding", true},
-		{"tinfoil_v3_direct", "event_log_integrity", true},
-		{"chutes", "compose_binding", true},
-		{"unknown", "compose_binding", false}, // falls through to default
+		{"venice", attestation.FormatDstack, "compose_binding", false},
+		{"venice", attestation.FormatACI1, "compose_binding", true},
+		{"venice", attestation.FormatACI1, "sigstore_verification", true},
+		{"venice", attestation.FormatACI1, "build_transparency_log", true},
+		{"neardirect", attestation.FormatDstack, "compose_binding", false},
+		{"nearcloud", attestation.FormatDstack, "compose_binding", false},
+		{"nanogpt", attestation.FormatDstack, "compose_binding", false},
+		{"phalacloud", attestation.FormatDstack, "compose_binding", false},
+		{"tinfoil_v3_cloud", attestation.FormatTinfoil, "compose_binding", true},
+		{"tinfoil_v3_direct", attestation.FormatTinfoil, "event_log_integrity", true},
+		{"chutes", attestation.FormatChutes, "compose_binding", true},
+		{"unknown", "", "compose_binding", false}, // falls through to default
 	}
 	for _, tc := range tests {
-		t.Run(tc.provider, func(t *testing.T) {
-			result := inapplicableForProvider(tc.provider)
+		t.Run(tc.provider+"_"+string(tc.format), func(t *testing.T) {
+			result := inapplicableForProvider(tc.provider, tc.format)
 			if result == nil {
 				t.Fatal("expected non-nil result")
 			}
 			_, ok := result[tc.expectFactor]
 			if ok != tc.expectPresent {
-				t.Errorf("inapplicableForProvider(%q)[%q] = %v, want %v",
-					tc.provider, tc.expectFactor, ok, tc.expectPresent)
+				t.Errorf("inapplicableForProvider(%q, %q)[%q] = %v, want %v",
+					tc.provider, tc.format, tc.expectFactor, ok, tc.expectPresent)
 			}
 		})
 	}

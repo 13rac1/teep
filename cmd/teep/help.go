@@ -255,6 +255,17 @@ var factorRegistry = []factorInfo{
 			"failure causes this factor to fail. Skipped when offline, when " +
 			"the provider does not support E2EE, or when no API key is set.",
 	},
+	{
+		Name:    attestation.FactorACIKeysetEndorsement,
+		Tier:    2,
+		Summary: "ACI/1 keyset endorsement signature verified",
+		Description: "Venice ACI/1 specific: verifies the keyset endorsement ECDSA " +
+			"secp256k1 signature over JCS-canonicalized endorsement payload using " +
+			"the workload identity key. Cross-checks workload_keyset_digest and " +
+			"workload_id by recomputing SHA-256 of JCS-canonicalized keyset and " +
+			"identity key respectively. The identity key is bound to the TDX quote " +
+			"via the keyset digest chain. Not applicable for non-ACI/1 formats.",
+	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
 		Name:    attestation.FactorTLSKeyBinding,

@@ -935,6 +935,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)
 	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, prov.SupplyChainPolicy)
 	tinfoilSC, tinfoilSCDur := s.verifyTinfoilSupplyChain(ctx, raw, tdxResult, sevResult, prov, upstreamModel)
+	aciKeyset := venice.VerifyACIKeyset(raw)
 
 	totalDur := time.Since(totalStart)
 	slog.InfoContext(ctx, "verification complete",
@@ -973,9 +974,10 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		Compose:                sc.Compose,
 		Sigstore:               sc.Sigstore,
 		Rekor:                  sc.Rekor,
+		ACIKeyset:              aciKeyset,
 		TinfoilSC:              tinfoilSC,
 		E2EEConfigured:         prov.E2EE,
-		Inapplicable:           inapplicableForProvider(prov.Name),
+		Inapplicable:           inapplicableForProvider(prov.Name, raw.BackendFormat),
 		ProviderUsesTLSBinding: prov.UsesTLSBinding,
 	})
 	return report, raw
@@ -1096,9 +1098,14 @@ func (s *Server) verifyNVIDIAOnline(
 	return nil, 0
 }
 
-func inapplicableForProvider(provName string) attestation.InapplicableFactors {
+func inapplicableForProvider(provName string, format attestation.BackendFormat) attestation.InapplicableFactors {
 	switch provName {
-	case "venice", "neardirect", "nearcloud", "nanogpt", "phalacloud":
+	case "venice":
+		if format == attestation.FormatACI1 {
+			return venice.ACIInapplicableFactors()
+		}
+		return attestation.DefaultInapplicableFactors()
+	case "neardirect", "nearcloud", "nanogpt", "phalacloud":
 		return attestation.DefaultInapplicableFactors()
 	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
 		return tinfoil.InapplicableFactors()

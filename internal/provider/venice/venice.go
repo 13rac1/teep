@@ -177,6 +177,143 @@ type attestationResponse struct {
 	DupSigningKey string `json:"signing_key"`
 }
 
+// aciResponse is the JSON shape returned by Venice's ACI/1 attestation format.
+// The api_version field discriminates this from the dstack format. ACI/1
+// includes both the new nested "attestation" block and dstack-compatible
+// top-level fields (nonce, model, verified, etc.).
+type aciResponse struct {
+	// ACI/1-specific fields.
+	APIVersion           string         `json:"api_version"`
+	WorkloadID           string         `json:"workload_id"`
+	WorkloadKeysetDigest string         `json:"workload_keyset_digest"`
+	Attestation          aciAttestation `json:"attestation"`
+	ServiceCapabilities  aciServiceCaps `json:"service_capabilities"`
+
+	// dstack-compatible top-level fields.
+	Verified           bool                `json:"verified"`
+	Nonce              string              `json:"nonce"`
+	Model              string              `json:"model"`
+	TEEProvider        string              `json:"tee_provider"`
+	SigningKey         string              `json:"signing_public_key"`
+	SigningAddress     string              `json:"signing_address"`
+	IntelQuote         string              `json:"intel_quote"`
+	NvidiaPayload      string              `json:"nvidia_payload"`
+	ServerVerification *ServerVerification `json:"server_verification"`
+	UpstreamModel      string              `json:"upstream_model"`
+	SigningAlgo        string              `json:"signing_algo"`
+	TEEHardware        string              `json:"tee_hardware"`
+	NonceSource        string              `json:"nonce_source"`
+	CandidatesAvail    int                 `json:"candidates_available"`
+	CandidatesEval     int                 `json:"candidates_evaluated"`
+}
+
+// aciServiceCaps holds service capability declarations.
+type aciServiceCaps struct {
+	SupportedE2EEVersions []string `json:"supported_e2ee_versions"`
+}
+
+// aciAttestation holds the nested "attestation" object in ACI/1 responses.
+type aciAttestation struct {
+	Vendor            string               `json:"vendor"`
+	TEEType           string               `json:"tee_type"`
+	WorkloadKeyset    aciWorkloadKeyset    `json:"workload_keyset"`
+	ReportData        string               `json:"report_data"`
+	KeysetEndorsement aciKeysetEndorsement `json:"keyset_endorsement"`
+	SourceProvenance  aciSourceProvenance  `json:"source_provenance"`
+	Freshness         aciFreshness         `json:"freshness"`
+	Evidence          aciEvidence          `json:"evidence"`
+}
+
+// aciWorkloadKeyset holds the workload_keyset object in ACI/1 responses.
+type aciWorkloadKeyset struct {
+	WorkloadIdentity   aciWorkloadIdentity `json:"workload_identity"`
+	KeysetEpoch        aciKeysetEpoch      `json:"keyset_epoch"`
+	ReceiptSigningKeys []aciKey            `json:"receipt_signing_keys"`
+	E2EEPublicKeys     []aciKey            `json:"e2ee_public_keys"`
+	TLSPublicKeys      []aciTLSBinding     `json:"tls_public_keys"`
+}
+
+// aciWorkloadIdentity holds the workload_identity object.
+type aciWorkloadIdentity struct {
+	PublicKey aciPublicKey `json:"public_key"`
+	Subject   *string      `json:"subject"` // nullable
+}
+
+// aciPublicKey holds an algorithm + public key pair.
+type aciPublicKey struct {
+	Algo      string `json:"algo"`
+	PublicKey string `json:"public_key"`
+}
+
+// aciKeysetEpoch holds keyset epoch metadata. NotAfter uses json.Number
+// because the wire value may be a float64-rounded representation of u64::MAX
+// (e.g. 18446744073709552000) which exceeds uint64 range. The raw JSON number
+// is preserved as-is for JCS canonicalization.
+type aciKeysetEpoch struct {
+	Version  int         `json:"version"`
+	NotAfter json.Number `json:"not_after"`
+}
+
+// aciKey holds a named cryptographic key entry.
+type aciKey struct {
+	KeyID     string `json:"key_id"`
+	Algo      string `json:"algo"`
+	PublicKey string `json:"public_key"`
+}
+
+// aciKeysetEndorsement holds the keyset endorsement signature.
+type aciKeysetEndorsement struct {
+	Algo  string `json:"algo"`
+	Value string `json:"value"`
+}
+
+// aciFreshness holds attestation freshness timestamps.
+type aciFreshness struct {
+	FetchedAt  int64 `json:"fetched_at"`
+	StaleAfter int64 `json:"stale_after"`
+}
+
+// aciSourceProvenance holds the source_provenance object in ACI/1 responses.
+type aciSourceProvenance struct {
+	RepoURL         string  `json:"repo_url"`
+	RepoCommit      string  `json:"repo_commit"`
+	ImageDigest     *string `json:"image_digest"`     // nullable
+	ImageProvenance *string `json:"image_provenance"` // nullable
+}
+
+// aciKeyCustody holds the key_custody object in ACI/1 responses.
+type aciKeyCustody struct {
+	Provider string          `json:"provider"`
+	Keys     []aciCustodyKey `json:"keys"`
+}
+
+// aciCustodyKey holds one entry in the key_custody.keys array.
+type aciCustodyKey struct {
+	Role           string   `json:"role"`
+	Path           string   `json:"path"`
+	Purpose        string   `json:"purpose"`
+	Algo           string   `json:"algo"`
+	PublicKey      string   `json:"public_key"`
+	SignatureChain []string `json:"signature_chain"`
+}
+
+// aciTLSBinding holds a domain + SPKI hash pair (used in both
+// downstream_tls_binding and workload_keyset.tls_public_keys).
+type aciTLSBinding struct {
+	Domain     string `json:"domain"`
+	SPKISHA256 string `json:"spki_sha256"`
+}
+
+// aciEvidence holds the evidence object in ACI/1 responses.
+type aciEvidence struct {
+	Quote                string           `json:"quote"`
+	QuoteReportData      string           `json:"quote_report_data"`
+	EventLog             eventLogFlexible `json:"event_log"`
+	VMConfig             string           `json:"vm_config"`
+	KeyCustody           aciKeyCustody    `json:"key_custody"`
+	DownstreamTLSBinding aciTLSBinding    `json:"downstream_tls_binding"`
+}
+
 // Attester fetches attestation data from Venice's /api/v1/tee/attestation
 // endpoint. It sends the client-supplied nonce as a query parameter so Venice
 // echoes it back in the response for nonce_match verification.
@@ -220,25 +357,37 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 }
 
 // ParseAttestationResponse unmarshals a Venice attestation JSON response body
-// into a RawAttestation. Extracted from FetchAttestation so integration tests
-// can parse fixture files without making HTTP calls.
+// into a RawAttestation. Detects ACI/1 format via the api_version field;
+// responses without api_version are treated as dstack. Extracted from
+// FetchAttestation so integration tests can parse fixture files without making
+// HTTP calls.
 func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.RawAttestation, error) {
-	var ar attestationResponse
-	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, "venice attestation")
-	if err != nil {
-		return nil, fmt.Errorf("venice: unmarshal attestation response: %w", err)
+	var probe struct {
+		APIVersion string `json:"api_version"`
 	}
+	// Intentionally ignore error — missing api_version means dstack.
+	_ = json.Unmarshal(body, &probe)
 
-	slog.DebugContext(ctx, "venice event log", "entries", len(ar.EventLog))
-	for i, e := range ar.EventLog {
-		digest := e.Digest
-		if len(digest) > 16 {
-			digest = digest[:16] + "..."
+	if probe.APIVersion == "aci/1" {
+		var ar aciResponse
+		unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, "venice aci/1 attestation")
+		if err != nil {
+			return nil, fmt.Errorf("venice aci/1: unmarshal: %w", err)
 		}
-		slog.DebugContext(ctx, "event log entry", "index", i, "imr", e.IMR,
-			"event", e.Event, "type", e.EventType, "digest", digest)
+		return aciToRaw(ctx, &ar, unknown, missing, body), nil
 	}
 
+	var ar attestationResponse
+	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, "venice dstack attestation")
+	if err != nil {
+		return nil, fmt.Errorf("venice dstack: unmarshal: %w", err)
+	}
+	return dstackToRaw(ctx, &ar, unknown, missing, body), nil
+}
+
+// dstackToRaw converts a parsed dstack attestation response to RawAttestation.
+func dstackToRaw(ctx context.Context, ar *attestationResponse, unknown, missing []string, body []byte) *attestation.RawAttestation {
+	logEventLog(ctx, ar.EventLog)
 	return &attestation.RawAttestation{
 		BackendFormat:  attestation.FormatDstack,
 		Verified:       ar.Verified,
@@ -267,7 +416,58 @@ func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.Ra
 		UnknownFields: unknown,
 		MissingFields: missing,
 		RawBody:       body,
-	}, nil
+	}
+}
+
+// aciToRaw converts a parsed ACI/1 attestation response to RawAttestation.
+// ACI/1 includes dstack-compatible top-level fields (nonce, model, verified,
+// etc.) alongside the new nested "attestation" block. Event logs come from the
+// nested evidence object rather than the top level.
+func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, body []byte) *attestation.RawAttestation {
+	logEventLog(ctx, ar.Attestation.Evidence.EventLog)
+	return &attestation.RawAttestation{
+		BackendFormat:   attestation.FormatACI1,
+		Verified:        ar.Verified,
+		Nonce:           ar.Nonce,
+		Model:           ar.Model,
+		TEEProvider:     ar.TEEProvider,
+		SigningKey:      ar.SigningKey,
+		SigningAddress:  ar.SigningAddress,
+		IntelQuote:      ar.IntelQuote,
+		NvidiaPayload:   ar.NvidiaPayload,
+		TEEHardware:     ar.TEEHardware,
+		SigningAlgo:     ar.SigningAlgo,
+		UpstreamModel:   ar.UpstreamModel,
+		NonceSource:     ar.NonceSource,
+		CandidatesAvail: ar.CandidatesAvail,
+		CandidatesEval:  ar.CandidatesEval,
+		EventLog:        ar.Attestation.Evidence.EventLog,
+		EventLogCount:   len(ar.Attestation.Evidence.EventLog),
+
+		ACISourceRepoURL:        ar.Attestation.SourceProvenance.RepoURL,
+		ACIWorkloadID:           ar.WorkloadID,
+		ACIWorkloadKeysetDigest: ar.WorkloadKeysetDigest,
+		ACIKeysetEndorsementSig: ar.Attestation.KeysetEndorsement.Value,
+		ACIIdentityKeyHex:       ar.Attestation.WorkloadKeyset.WorkloadIdentity.PublicKey.PublicKey,
+		ACIWorkloadKeyset:       &ar.Attestation.WorkloadKeyset,
+
+		UnknownFields: unknown,
+		MissingFields: missing,
+		RawBody:       body,
+	}
+}
+
+// logEventLog logs event log entries at debug level.
+func logEventLog(ctx context.Context, entries []attestation.EventLogEntry) {
+	slog.DebugContext(ctx, "venice event log", "entries", len(entries))
+	for i, e := range entries {
+		digest := e.Digest
+		if len(digest) > 16 {
+			digest = digest[:16] + "..."
+		}
+		slog.DebugContext(ctx, "event log entry", "index", i, "imr", e.IMR,
+			"event", e.Event, "type", e.EventType, "digest", digest)
+	}
 }
 
 // Preparer injects Venice E2EE headers into an outgoing chat completions

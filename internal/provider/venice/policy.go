@@ -23,7 +23,12 @@ func DefaultMeasurementPolicy() attestation.MeasurementPolicy {
 }
 
 // SupplyChainPolicy returns the supply chain policy for Venice.
-// Venice uses the same container images as neardirect.
+// Venice uses the same container images as neardirect for dstack, and includes
+// ACI/1 source repo allowlists for the ACI/1 attestation format.
 func SupplyChainPolicy() *attestation.SupplyChainPolicy {
-	return neardirect.SupplyChainPolicy()
+	p := neardirect.SupplyChainPolicy()
+	p.ACISourceRepos = []string{
+		"https://github.com/Dstack-TEE/private-ai-gateway.git",
+	}
+	return p
 }

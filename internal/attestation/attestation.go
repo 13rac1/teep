@@ -74,6 +74,7 @@ const AttestationCacheTTL = 1 * time.Hour
 // BackendFormat constants for known attestation backends.
 const (
 	FormatDstack  BackendFormat = "dstack"
+	FormatACI1    BackendFormat = "aci/1"
 	FormatChutes  BackendFormat = "chutes"
 	FormatTinfoil BackendFormat = "tinfoil"
 	FormatGateway BackendFormat = "gateway"
@@ -182,6 +183,14 @@ type RawAttestation struct {
 	TinfoilNonce                string `json:"-"` // report_data.nonce
 	TinfoilGPUEvidenceHash      string `json:"-"` // report_data.gpu_evidence_hash
 	TinfoilNVSwitchEvidenceHash string `json:"-"` // report_data.nvswitch_evidence_hash (optional)
+
+	// ACI/1-specific fields — populated by Venice ACI/1 parser.
+	ACISourceRepoURL        string `json:"-"` // source_provenance.repo_url
+	ACIWorkloadID           string `json:"-"` // top-level workload_id
+	ACIWorkloadKeysetDigest string `json:"-"` // top-level workload_keyset_digest
+	ACIKeysetEndorsementSig string `json:"-"` // keyset_endorsement.value (hex signature)
+	ACIIdentityKeyHex       string `json:"-"` // workload_identity.public_key.public_key (signs endorsement)
+	ACIWorkloadKeyset       any    `json:"-"` // parsed *venice.aciWorkloadKeyset for canonical value building
 
 	// TinfoilRepo is the Sigstore GitHub repo for supply chain verification.
 	// Populated by the DirectAttester from the proxy discovery endpoint.

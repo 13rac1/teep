@@ -1,9 +1,11 @@
 package verify
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
@@ -174,6 +176,28 @@ func TestSupplyChainPolicy(t *testing.T) {
 	}
 }
 
+func TestVeniceACISourceRepos(t *testing.T) {
+	p := supplyChainPolicy("venice")
+	if p == nil {
+		t.Fatal("venice supply chain policy is nil")
+	}
+	if len(p.ACISourceRepos) == 0 {
+		t.Fatal("venice supply chain policy has no ACI source repos")
+	}
+	if !slices.Contains(p.ACISourceRepos, "https://github.com/Dstack-TEE/private-ai-gateway.git") {
+		t.Error("venice ACI source repos should include private-ai-gateway")
+	}
+}
+
+func TestInapplicableFactors_ACIComponentRecognition(t *testing.T) {
+	// component_recognition should NOT be inapplicable for ACI/1 — it uses
+	// source_provenance.repo_url for recognition.
+	inapplicable := inapplicableFactors("venice", attestation.FormatACI1)
+	if _, ok := inapplicable["component_recognition"]; ok {
+		t.Error("ACI/1 component_recognition should not be inapplicable")
+	}
+}
+
 func TestE2EEEnabledByDefault(t *testing.T) {
 	tests := []struct {
 		provider string
@@ -219,26 +243,38 @@ func TestChatPathForProvider(t *testing.T) {
 func TestInapplicableFactors(t *testing.T) {
 	tests := []struct {
 		provider string
+		format   attestation.BackendFormat
 		// expectedFactor is a factor that should be inapplicable for this provider.
 		expectedFactor string
 	}{
-		{"tinfoil_v3_cloud", "compose_binding"},
-		{"tinfoil_v3_direct", "event_log_integrity"},
-		{"chutes", "compose_binding"},
+		{"tinfoil_v3_cloud", attestation.FormatTinfoil, "compose_binding"},
+		{"tinfoil_v3_direct", attestation.FormatTinfoil, "event_log_integrity"},
+		{"chutes", attestation.FormatChutes, "compose_binding"},
+		{"venice", attestation.FormatACI1, "compose_binding"},
+		{"venice", attestation.FormatACI1, "sigstore_verification"},
+		{"venice", attestation.FormatACI1, "build_transparency_log"},
 	}
 	for _, tc := range tests {
-		t.Run(tc.provider, func(t *testing.T) {
-			inapplicable := inapplicableFactors(tc.provider)
+		t.Run(tc.provider+"_"+string(tc.format), func(t *testing.T) {
+			inapplicable := inapplicableFactors(tc.provider, tc.format)
 			if _, ok := inapplicable[tc.expectedFactor]; !ok {
-				t.Errorf("inapplicableFactors(%q) should include %q", tc.provider, tc.expectedFactor)
+				t.Errorf("inapplicableFactors(%q, %q) should include %q", tc.provider, tc.format, tc.expectedFactor)
 			}
 		})
 	}
 
+	// Venice dstack should NOT have compose_binding as inapplicable.
+	t.Run("venice_dstack", func(t *testing.T) {
+		inapplicable := inapplicableFactors("venice", attestation.FormatDstack)
+		if _, ok := inapplicable["compose_binding"]; ok {
+			t.Error("inapplicableFactors(venice, dstack) should not include compose_binding")
+		}
+	})
+
 	// Default providers should return default inapplicable factors.
-	for _, p := range []string{"venice", "neardirect", "nearcloud"} {
+	for _, p := range []string{"neardirect", "nearcloud"} {
 		t.Run(p+"_default", func(t *testing.T) {
-			inapplicable := inapplicableFactors(p)
+			inapplicable := inapplicableFactors(p, attestation.FormatDstack)
 			if inapplicable == nil {
 				t.Errorf("inapplicableFactors(%q) should not be nil", p)
 			}

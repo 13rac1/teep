@@ -146,6 +146,8 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 
 	tinfoilSC := verifyTinfoilSupplyChain(ctx, raw, tdxResult, sevResult, opts.ProviderName, opts.ModelName, mergedPolicy, opts.Offline, client)
 
+	aciKeyset := verifyACIKeyset(raw)
+
 	report = attestation.BuildReport(&attestation.ReportInput{
 		Provider:               opts.ProviderName,
 		Model:                  opts.ModelName,
@@ -172,9 +174,10 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 		GatewayNonce:           nonce,
 		GatewayCompose:         gatewayCompose,
 		GatewayEventLog:        raw.GatewayEventLog,
+		ACIKeyset:              aciKeyset,
 		TinfoilSC:              tinfoilSC,
 		E2EETest:               e2eeResult,
-		Inapplicable:           inapplicableFactors(opts.ProviderName),
+		Inapplicable:           inapplicableFactors(opts.ProviderName, raw.BackendFormat),
 		ProviderUsesTLSBinding: providerUsesTLSBinding(opts.ProviderName),
 	})
 

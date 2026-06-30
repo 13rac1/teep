@@ -92,6 +92,7 @@ const (
 	FactorComposeBinding       = "compose_binding"
 	FactorSigstoreVerify       = "sigstore_verification"
 	FactorSigstoreCode         = "sigstore_code_verified"
+	FactorACIKeysetEndorsement = "aci_keyset_endorsement"
 	FactorEventLogIntegrity    = "event_log_integrity"
 	FactorGWNonceMatch         = "gateway_nonce_match"
 	FactorGWQuotePresent       = "gateway_tee_quote_present"
@@ -441,10 +442,12 @@ var KnownFactors = []string{
 	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
 	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaSignature, FactorNvidiaClaims,
 	FactorNvidiaClientNonce, FactorNvidiaNRAS, FactorE2EECapable, FactorE2EEUsable,
+	FactorACIKeysetEndorsement,
 	FactorTLSKeyBinding, FactorCPUGPUChain, FactorNVSwitchBinding,
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
-	FactorComposeBinding, FactorSigstoreVerify, FactorSigstoreCode, FactorEventLogIntegrity,
+	FactorComposeBinding, FactorSigstoreVerify, FactorSigstoreCode,
+	FactorEventLogIntegrity,
 	// Gateway factors (nearcloud only).
 	FactorGWNonceMatch, FactorGWQuotePresent, FactorGWQuoteStructure,
 	FactorGWCertChain, FactorGWQuoteSignature, FactorGWDebugDisabled,
@@ -568,6 +571,17 @@ type TinfoilComponentResult struct {
 	SigstoreErr      error
 }
 
+// ACIKeysetResult holds the result of ACI/1 keyset endorsement verification,
+// including workload_keyset_digest and workload_id cross-checks.
+// Nil for non-ACI/1 attestation formats.
+type ACIKeysetResult struct {
+	KeysetDigestMatch bool   // workload_keyset_digest cross-check passed
+	WorkloadIDMatch   bool   // workload_id cross-check passed
+	EndorsementValid  bool   // keyset endorsement ECDSA signature verified
+	Err               error  // non-nil if verification could not complete
+	Detail            string // human-readable summary
+}
+
 // TinfoilSupplyChainResult holds the results of Tinfoil-specific Sigstore
 // supply chain verification and code/hardware measurement comparison.
 // Nil for non-Tinfoil providers.
@@ -654,6 +668,10 @@ type ReportInput struct {
 	GatewayCompose  *ComposeBindingResult
 	GatewayEventLog []EventLogEntry
 	GatewayPolicy   MeasurementPolicy // separate measurement allowlists for gateway CVM (GW-M-04)
+
+	// ACIKeyset holds the result of ACI/1 keyset endorsement verification.
+	// Nil for non-ACI/1 providers.
+	ACIKeyset *ACIKeysetResult
 
 	// TinfoilSC holds Tinfoil-specific Sigstore supply chain results.
 	// Nil for non-Tinfoil providers.
@@ -798,6 +816,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalNvidiaNRASVerified,
 		evalE2EECapable,
 		evalE2EEUsable,
+		evalACIKeysetEndorsement,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -1897,6 +1916,8 @@ func formatBuildTransparencyResult(scPolicy *SupplyChainPolicy, fulcioVerified, 
 
 func evalComponentRecognition(in *ReportInput) []FactorResult {
 	switch {
+	case in.Raw != nil && in.Raw.BackendFormat == FormatACI1 && in.SupplyChainPolicy != nil:
+		return []FactorResult{evalACIComponentRecognition(in)}
 	case in.TinfoilSC != nil:
 		return []FactorResult{evalTinfoilComponentRecognition(in.TinfoilSC)}
 	case in.SupplyChainPolicy != nil:
@@ -1905,6 +1926,20 @@ func evalComponentRecognition(in *ReportInput) []FactorResult {
 		return factor(TierSupplyChain, FactorComponentRecognition, NotApplicable,
 			"provider has no component supply chain policy")
 	}
+}
+
+func evalACIComponentRecognition(in *ReportInput) FactorResult {
+	repoURL := in.Raw.ACISourceRepoURL
+	if repoURL == "" {
+		return FactorResult{Tier: TierSupplyChain, Name: FactorComponentRecognition, Status: Fail,
+			Detail: "ACI/1 source_provenance.repo_url is empty"}
+	}
+	if slices.Contains(in.SupplyChainPolicy.ACISourceRepos, repoURL) {
+		return FactorResult{Tier: TierSupplyChain, Name: FactorComponentRecognition, Status: Pass,
+			Detail: "ACI/1 source repo recognized: " + repoURL}
+	}
+	return FactorResult{Tier: TierSupplyChain, Name: FactorComponentRecognition, Status: Fail,
+		Detail: fmt.Sprintf("ACI/1 source repo %q not in approved list", repoURL)}
 }
 
 func evalComposeComponentRecognition(in *ReportInput) FactorResult {
@@ -2308,6 +2343,35 @@ func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 		fmt.Sprintf("event log replayed (%d entries), all 4 RTMRs match quote", len(in.Raw.EventLog)))
 }
 
+func evalACIKeysetEndorsement(in *ReportInput) []FactorResult {
+	if in.Raw.BackendFormat != FormatACI1 {
+		return factor(TierBinding, FactorACIKeysetEndorsement, NotApplicable,
+			"not ACI/1 format")
+	}
+	if in.ACIKeyset == nil {
+		return factor(TierBinding, FactorACIKeysetEndorsement, Fail,
+			"ACI/1 keyset endorsement verification was not performed")
+	}
+	if in.ACIKeyset.Err != nil {
+		return factor(TierBinding, FactorACIKeysetEndorsement, Fail,
+			fmt.Sprintf("keyset endorsement verification error: %v", in.ACIKeyset.Err))
+	}
+	if !in.ACIKeyset.EndorsementValid {
+		return factor(TierBinding, FactorACIKeysetEndorsement, Fail,
+			in.ACIKeyset.Detail)
+	}
+	if !in.ACIKeyset.KeysetDigestMatch {
+		return factor(TierBinding, FactorACIKeysetEndorsement, Fail,
+			in.ACIKeyset.Detail)
+	}
+	if !in.ACIKeyset.WorkloadIDMatch {
+		return factor(TierBinding, FactorACIKeysetEndorsement, Fail,
+			in.ACIKeyset.Detail)
+	}
+	return factor(TierBinding, FactorACIKeysetEndorsement, Pass,
+		in.ACIKeyset.Detail)
+}
+
 // ---------------------------------------------------------------------------
 // Tier 4: Gateway Attestation evaluators (nearcloud only)
 // ---------------------------------------------------------------------------
@@ -2588,6 +2652,10 @@ type ImageProvenance struct {
 // SupplyChainPolicy defines the allowed container image repos for a provider.
 type SupplyChainPolicy struct {
 	Images []ImageProvenance
+
+	// ACISourceRepos lists approved ACI/1 source_provenance.repo_url values.
+	// Used by component_recognition for ACI/1 format attestations.
+	ACISourceRepos []string
 }
 
 // TrustedProviderSigner reports whether img has a signer policy strong enough

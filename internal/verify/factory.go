@@ -126,9 +126,14 @@ func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
 	}
 }
 
-func inapplicableFactors(providerName string) attestation.InapplicableFactors {
+func inapplicableFactors(providerName string, format attestation.BackendFormat) attestation.InapplicableFactors {
 	switch providerName {
-	case "venice", "neardirect", "nearcloud", "nanogpt", "phalacloud":
+	case "venice":
+		if format == attestation.FormatACI1 {
+			return venice.ACIInapplicableFactors()
+		}
+		return attestation.DefaultInapplicableFactors()
+	case "neardirect", "nearcloud", "nanogpt", "phalacloud":
 		return attestation.DefaultInapplicableFactors()
 	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
 		return tinfoil.InapplicableFactors()
