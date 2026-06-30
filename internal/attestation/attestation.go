@@ -364,6 +364,26 @@ type NegativeCache struct {
 	lastEvictWarn time.Time
 }
 
+// NegativeCacheInfo describes an active negative-cache entry.
+type NegativeCacheInfo struct {
+	Provider   string
+	Model      string
+	RecordedAt time.Time
+	Age        time.Duration
+	TTL        time.Duration
+	Remaining  time.Duration
+}
+
+// NegativeCacheRecord describes an entry at the point it was recorded. It only
+// includes stable fields; ActiveInfo computes age and remaining TTL for active
+// entries when callers need read-side timing metadata.
+type NegativeCacheRecord struct {
+	Provider   string
+	Model      string
+	RecordedAt time.Time
+	TTL        time.Duration
+}
+
 // NewNegativeCache returns a NegativeCache with the specified TTL.
 func NewNegativeCache(ttl time.Duration) *NegativeCache {
 	return &NegativeCache{
@@ -381,18 +401,42 @@ func (c *NegativeCache) IsBlocked(provider, model string) bool {
 	return ok && time.Since(t) < c.ttl
 }
 
-// Record records an attestation failure for the given provider and model.
-func (c *NegativeCache) Record(provider, model string) {
+// ActiveInfo returns metadata for an active negative-cache entry.
+func (c *NegativeCache) ActiveInfo(provider, model string) (NegativeCacheInfo, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	t, ok := c.entries[cacheKey{provider, model}]
+	if !ok {
+		return NegativeCacheInfo{}, false
+	}
+	now := time.Now()
+	age := now.Sub(t)
+	if age >= c.ttl {
+		return NegativeCacheInfo{}, false
+	}
+	return NegativeCacheInfo{
+		Provider:   provider,
+		Model:      model,
+		RecordedAt: t,
+		Age:        age,
+		TTL:        c.ttl,
+		Remaining:  c.ttl - age,
+	}, true
+}
+
+// Record records an attestation failure for the given provider and model and
+// returns stable metadata for the recorded entry.
+func (c *NegativeCache) Record(provider, model string) NegativeCacheRecord {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key := cacheKey{provider, model}
+	recordedAt := time.Now()
 	// Only evict when inserting a new key that would exceed the cap.
 	// Updates to existing keys don't grow the map.
 	if _, exists := c.entries[key]; !exists && len(c.entries) >= maxCacheEntries {
-		now := time.Now()
 		sizeBefore := len(c.entries)
 		for k, t := range c.entries {
-			if now.Sub(t) > c.ttl {
+			if recordedAt.Sub(t) > c.ttl {
 				delete(c.entries, k)
 			}
 		}
@@ -411,16 +455,22 @@ func (c *NegativeCache) Record(provider, model string) {
 				delete(c.entries, oldestKey)
 			}
 		}
-		if len(c.entries) < sizeBefore && now.Sub(c.lastEvictWarn) > evictWarnInterval {
+		if len(c.entries) < sizeBefore && recordedAt.Sub(c.lastEvictWarn) > evictWarnInterval {
 			slog.Warn("attestation cache at capacity, evicting entries",
 				"cache", "negative",
 				"size", len(c.entries),
 				"max", maxCacheEntries,
 			)
-			c.lastEvictWarn = now
+			c.lastEvictWarn = recordedAt
 		}
 	}
-	c.entries[key] = time.Now()
+	c.entries[key] = recordedAt
+	return NegativeCacheRecord{
+		Provider:   provider,
+		Model:      model,
+		RecordedAt: recordedAt,
+		TTL:        c.ttl,
+	}
 }
 
 // Len returns the number of entries in the negative cache (including expired ones).

@@ -453,12 +453,26 @@ func TestFetchAndVerify_NilAttester(t *testing.T) {
 	s.signingKeyCache = attestation.NewSigningKeyCache(0)
 
 	prov := &provider.Provider{Name: "test"}
-	report, raw := s.fetchAndVerify(t.Context(), prov, "model")
+	var report *attestation.VerificationReport
+	var raw *attestation.RawAttestation
+	logs := captureSlog(t, func() {
+		report, raw = s.fetchAndVerify(t.Context(), prov, "model")
+	})
 	if report != nil {
 		t.Errorf("expected nil report, got %v", report)
 	}
 	if raw != nil {
 		t.Errorf("expected nil raw, got %v", raw)
+	}
+	for _, want := range []string{
+		"msg=\"provider has no Attester\"",
+		"provider=test",
+		"model=model",
+		"err=\"provider has no Attester\"",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("log output missing %q:\n%s", want, logs)
+		}
 	}
 }
 

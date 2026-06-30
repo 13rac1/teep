@@ -770,6 +770,110 @@ func TestEnforceReport_BlockedLogsFailingFactor(t *testing.T) {
 	}
 }
 
+func TestRecordNegativeCacheLogsContext(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "neardirect"}
+	report := blockedReport()
+	report.Provider = "neardirect"
+	report.Model = "z-ai/glm-5.2"
+	report.EnforcedFailed = 1
+	ctx := withCacheModel(t.Context(), "z-ai/glm-5.2@glm-5-2.completions.near.ai")
+
+	logs := captureSlog(t, func() {
+		s.recordNegativeCache(ctx, prov, "z-ai/glm-5.2", "blocked_report", report, nil)
+	})
+
+	if _, ok := s.negCache.ActiveInfo("neardirect", "z-ai/glm-5.2@glm-5-2.completions.near.ai"); !ok {
+		t.Fatal("negative cache entry was not active after recordNegativeCache")
+	}
+	for _, want := range []string{
+		"msg=\"negative cache recorded\"",
+		"action=blocked_report",
+		"provider=neardirect",
+		"model=z-ai/glm-5.2",
+		"cache_model=z-ai/glm-5.2@glm-5-2.completions.near.ai",
+		"report_provider=neardirect",
+		"report_model=z-ai/glm-5.2",
+		"blocked_factors=[tee_quote_present]",
+		"enforced_failed=1",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("log output missing %q:\n%s", want, logs)
+		}
+	}
+}
+
+func TestRecordNegativeCacheLogsCacheModelWithZeroTTL(t *testing.T) {
+	s := newMinimalServer()
+	s.negCache = attestation.NewNegativeCache(0)
+	prov := &provider.Provider{Name: "neardirect"}
+	ctx := withCacheModel(t.Context(), "z-ai/glm-5.2@glm-5-2.completions.near.ai")
+
+	logs := captureSlog(t, func() {
+		s.recordNegativeCache(ctx, prov, "z-ai/glm-5.2", "blocked_report", nil, nil)
+	})
+
+	for _, want := range []string{
+		"msg=\"negative cache recorded\"",
+		"provider=neardirect",
+		"model=z-ai/glm-5.2",
+		"cache_model=z-ai/glm-5.2@glm-5-2.completions.near.ai",
+		"ttl=0s",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("log output missing %q:\n%s", want, logs)
+		}
+	}
+}
+
+func TestRecordNegativeCacheNilProviderPanics(t *testing.T) {
+	s := newMinimalServer()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for nil provider")
+		}
+	}()
+	s.recordNegativeCache(t.Context(), nil, "model", "blocked_report", nil, nil)
+}
+
+func TestLogNegativeCacheHitLogsContext(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "neardirect"}
+	report := blockedReport()
+	report.Provider = "neardirect"
+	report.Model = "z-ai/glm-5.2"
+	report.EnforcedFailed = 1
+	s.negCache.Record("neardirect", "z-ai/glm-5.2@glm-5-2.completions.near.ai")
+	info, ok := s.negCache.ActiveInfo("neardirect", "z-ai/glm-5.2@glm-5-2.completions.near.ai")
+	if !ok {
+		t.Fatal("negative cache entry was not active")
+	}
+
+	logs := captureSlog(t, func() {
+		s.logNegativeCacheHit(t.Context(), "chat", prov, "z-ai/glm-5.2", &info, report)
+	})
+
+	for _, want := range []string{
+		"msg=\"negative cache hit\"",
+		"endpoint=chat",
+		"action=negative_cache_block",
+		"status_code=503",
+		"err=\"attestation recently failed\"",
+		"provider=neardirect",
+		"model=z-ai/glm-5.2",
+		"cache_model=z-ai/glm-5.2@glm-5-2.completions.near.ai",
+		"report_provider=neardirect",
+		"report_model=z-ai/glm-5.2",
+		"blocked_factors=[tee_quote_present]",
+		"blocked_factor_results=",
+		"no quote",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("log output missing %q:\n%s", want, logs)
+		}
+	}
+}
+
 func TestHandleE2EEDecryptionFailure_LogsSingleError(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "venice"}
