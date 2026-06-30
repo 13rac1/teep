@@ -909,8 +909,9 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 // binding has already been verified against the raw's signing key.
 func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, upstreamModel string) (*attestation.VerificationReport, *attestation.RawAttestation) {
 	if prov.Attester == nil {
-		slog.ErrorContext(ctx, "provider has no Attester", "provider", prov.Name, "model", upstreamModel)
-		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
+		err := errors.New("provider has no Attester")
+		slog.ErrorContext(ctx, "provider has no Attester", "provider", prov.Name, "model", upstreamModel, "err", err)
+		s.recordNegativeCache(ctx, prov, upstreamModel, "missing_attester", nil, err)
 		return nil, nil
 	}
 
@@ -922,7 +923,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	raw, err := prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
 	if err != nil {
 		slog.ErrorContext(ctx, "attestation fetch failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
+		s.recordNegativeCache(ctx, prov, upstreamModel, "attestation_fetch_failed", nil, err)
 		return nil, nil
 	}
 	fetchDur := time.Since(fetchStart)
@@ -1575,15 +1576,15 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 			s.stats.nonStream.Add(1)
 		}
 
-		if s.negCache.IsBlocked(prov.Name, cacheModelFor(ctx, upstreamModel)) {
+		cacheModel := cacheModelFor(ctx, upstreamModel)
+		if negInfo, blocked := s.negCache.ActiveInfo(prov.Name, cacheModel); blocked {
 			status = "neg_cached"
 			s.stats.errors.Add(1)
 			ms.errors.Add(1)
-			if cached, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
-				s.logReportBlockedFactors(ctx, cached, prov, upstreamModel, "negative_cache_block")
+			if cached, ok := s.cache.Get(prov.Name, cacheModel); ok {
+				s.logNegativeCacheHit(ctx, ep.name, prov, upstreamModel, &negInfo, cached)
 			} else {
-				s.logInferenceBlock(ctx, "negative_cache_block", ep.name, prov.Name, upstreamModel, http.StatusServiceUnavailable,
-					errors.New("attestation recently failed"))
+				s.logNegativeCacheHit(ctx, ep.name, prov, upstreamModel, &negInfo, nil)
 			}
 			http.Error(w,
 				fmt.Sprintf("attestation recently failed for %s/%s; try again later", prov.Name, upstreamModel),
@@ -1994,7 +1995,8 @@ func (s *Server) pinnedPostDispatchE2EE(
 	// Without one (e.g. attestation cache expired while SPKI cache is live),
 	// we cannot verify the signing key is bound to the TDX quote.
 	if report == nil {
-		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
+		s.recordNegativeCache(ctx, prov, upstreamModel, "pinned_missing_report", nil,
+			errors.New("no attestation report available to verify REPORTDATA binding"))
 		// This error log is the WARN+ block record for missing pinned attestation reports.
 		slog.ErrorContext(ctx, "E2EE required but no attestation report available",
 			"provider", prov.Name, "model", upstreamModel,
@@ -2008,7 +2010,8 @@ func (s *Server) pinnedPostDispatchE2EE(
 	// miss). Without it a MITM can substitute the enclave public key and
 	// E2EE degrades to plaintext.
 	if !report.ReportDataBindingPassed() {
-		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
+		s.recordNegativeCache(ctx, prov, upstreamModel, "pinned_reportdata_binding_failed", report,
+			errors.New("REPORTDATA binding not verified"))
 		// This error log is the WARN+ block record for the tee_reportdata_binding failure.
 		slog.ErrorContext(ctx, "E2EE required but tee_reportdata_binding not passed; refusing request",
 			"provider", prov.Name, "model", upstreamModel,
@@ -2098,7 +2101,7 @@ func (s *Server) handlePinnedChat(
 
 	pinnedResp, err := prov.PinnedHandler.HandlePinned(ctx, &pinnedReq)
 	if err != nil {
-		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
+		s.recordNegativeCache(ctx, prov, upstreamModel, "pinned_chat_failed", nil, err)
 		// This error log is the WARN+ block record for pinned chat connection failures.
 		slog.ErrorContext(ctx, "pinned chat failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		http.Error(w, fmt.Sprintf("pinned connection failed: %v", err), http.StatusBadGateway)
@@ -2115,7 +2118,7 @@ func (s *Server) handlePinnedChat(
 		report = cached
 	}
 	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
-		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
+		s.recordNegativeCache(ctx, prov, upstreamModel, "blocked_report", report, nil)
 		return
 	}
 	if !s.pinnedPostDispatchE2EE(ctx, w, prov, upstreamModel, report, pinnedResp.Report != nil) {
@@ -2309,6 +2312,131 @@ func (s *Server) enforceReport(ctx context.Context, w http.ResponseWriter,
 		slog.ErrorContext(ctx, "encode response", "error", err)
 	}
 	return false
+}
+
+func (s *Server) recordNegativeCache(
+	ctx context.Context,
+	prov *provider.Provider,
+	model string,
+	action string,
+	report *attestation.VerificationReport,
+	err error,
+) {
+	if prov == nil {
+		panic("recordNegativeCache called with nil provider")
+	}
+	cacheModel := cacheModelFor(ctx, model)
+	record := s.negCache.Record(prov.Name, cacheModel)
+	attrs := negativeCacheRecordLogAttrs(action, prov, model, &record, report)
+	if err != nil {
+		attrs = append(attrs, "err", err)
+	}
+	slog.WarnContext(ctx, "negative cache recorded", attrs...)
+}
+
+func (s *Server) logNegativeCacheHit(
+	ctx context.Context,
+	endpoint string,
+	prov *provider.Provider,
+	model string,
+	info *attestation.NegativeCacheInfo,
+	report *attestation.VerificationReport,
+) {
+	attrs := negativeCacheLogAttrs("endpoint", endpoint, prov, model, info, report)
+	attrs = append(attrs,
+		"action", "negative_cache_block",
+		"status_code", http.StatusServiceUnavailable,
+		"err", errors.New("attestation recently failed"),
+	)
+	slog.WarnContext(ctx, "negative cache hit", attrs...)
+}
+
+func negativeCacheRecordLogAttrs(
+	action string,
+	prov *provider.Provider,
+	model string,
+	record *attestation.NegativeCacheRecord,
+	report *attestation.VerificationReport,
+) []any {
+	providerName := ""
+	cacheModel := ""
+	var ttl time.Duration
+	if prov != nil {
+		providerName = prov.Name
+	}
+	if record != nil {
+		cacheModel = record.Model
+		ttl = record.TTL
+	}
+	attrs := []any{
+		"action", action,
+		"provider", providerName,
+		"model", model,
+		"cache_model", cacheModel,
+		"ttl", ttl,
+	}
+	return appendNegativeCacheReportAttrs(attrs, report)
+}
+
+func negativeCacheLogAttrs(
+	labelKey string,
+	labelValue string,
+	prov *provider.Provider,
+	model string,
+	info *attestation.NegativeCacheInfo,
+	report *attestation.VerificationReport,
+) []any {
+	providerName := ""
+	if prov != nil {
+		providerName = prov.Name
+	}
+	cacheModel := ""
+	var age time.Duration
+	var ttl time.Duration
+	var remaining time.Duration
+	if info != nil {
+		cacheModel = info.Model
+		age = info.Age
+		ttl = info.TTL
+		remaining = info.Remaining
+	}
+	attrs := []any{
+		labelKey, labelValue,
+		"provider", providerName,
+		"model", model,
+		"cache_model", cacheModel,
+		"age", age,
+		"ttl", ttl,
+		"remaining", remaining,
+	}
+	return appendNegativeCacheReportAttrs(attrs, report)
+}
+
+func appendNegativeCacheReportAttrs(attrs []any, report *attestation.VerificationReport) []any {
+	if report != nil {
+		attrs = append(attrs,
+			"report_provider", report.Provider,
+			"report_model", report.Model,
+			"blocked_factors", blockedFactorNames(report),
+			"blocked_factor_results", report.BlockedFactors(),
+			"enforced_failed", report.EnforcedFailed,
+		)
+	}
+	return attrs
+}
+
+func blockedFactorNames(report *attestation.VerificationReport) []string {
+	if report == nil {
+		return nil
+	}
+	// Keep the primary summary compact and human-scannable. The same log record
+	// also carries blocked_factor_results when callers need tier/detail fields.
+	blocked := report.BlockedFactors()
+	names := make([]string, len(blocked))
+	for i, f := range blocked {
+		names[i] = f.Name
+	}
+	return names
 }
 
 func (s *Server) logReportBlockedFactors(
@@ -2976,7 +3104,7 @@ func (s *Server) handlePinnedNonChat(
 
 	pinnedResp, err := prov.PinnedHandler.HandlePinned(reqCtx, &pinnedReq)
 	if err != nil {
-		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
+		s.recordNegativeCache(ctx, prov, upstreamModel, "pinned_request_failed", nil, err)
 		// This error log is the WARN+ block record for pinned request connection failures.
 		slog.ErrorContext(ctx, "pinned request failed", "provider", prov.Name, "model", upstreamModel, "path", endpointPath, "err", err)
 		http.Error(w, fmt.Sprintf("pinned connection failed: %v", err), http.StatusBadGateway)
@@ -2991,7 +3119,7 @@ func (s *Server) handlePinnedNonChat(
 		report = cached
 	}
 	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
-		s.negCache.Record(prov.Name, cacheModelFor(ctx, upstreamModel))
+		s.recordNegativeCache(ctx, prov, upstreamModel, "blocked_report", report, nil)
 		return
 	}
 	if !s.pinnedPostDispatchE2EE(ctx, w, prov, upstreamModel, report, pinnedResp.Report != nil) {

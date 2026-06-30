@@ -173,6 +173,60 @@ func TestNegativeCacheBasic(t *testing.T) {
 	}
 }
 
+func TestNegativeCacheActiveInfo(t *testing.T) {
+	ttl := time.Minute
+	c := NewNegativeCache(ttl)
+
+	if _, ok := c.ActiveInfo("venice", "test-model"); ok {
+		t.Fatal("ActiveInfo on empty cache returned ok=true")
+	}
+
+	c.Record("venice", "test-model")
+	info, ok := c.ActiveInfo("venice", "test-model")
+	if !ok {
+		t.Fatal("ActiveInfo after Record returned ok=false")
+	}
+	if info.Provider != "venice" {
+		t.Errorf("Provider = %q, want venice", info.Provider)
+	}
+	if info.Model != "test-model" {
+		t.Errorf("Model = %q, want test-model", info.Model)
+	}
+	if info.RecordedAt.IsZero() {
+		t.Error("RecordedAt is zero")
+	}
+	if info.TTL != ttl {
+		t.Errorf("TTL = %s, want %s", info.TTL, ttl)
+	}
+	if info.Age < 0 {
+		t.Errorf("Age = %s, want non-negative", info.Age)
+	}
+	if info.Remaining <= 0 || info.Remaining > ttl {
+		t.Errorf("Remaining = %s, want within (0, %s]", info.Remaining, ttl)
+	}
+}
+
+func TestNegativeCacheRecordWithZeroTTL(t *testing.T) {
+	c := NewNegativeCache(0)
+
+	record := c.Record("neardirect", "z-ai/glm-5.2@glm-5-2.completions.near.ai")
+	if record.Provider != "neardirect" {
+		t.Errorf("Provider = %q, want neardirect", record.Provider)
+	}
+	if record.Model != "z-ai/glm-5.2@glm-5-2.completions.near.ai" {
+		t.Errorf("Model = %q", record.Model)
+	}
+	if record.RecordedAt.IsZero() {
+		t.Error("RecordedAt is zero")
+	}
+	if record.TTL != 0 {
+		t.Errorf("TTL = %s, want 0", record.TTL)
+	}
+	if _, ok := c.ActiveInfo("neardirect", "z-ai/glm-5.2@glm-5-2.completions.near.ai"); ok {
+		t.Error("ActiveInfo with zero TTL returned ok=true")
+	}
+}
+
 // TestNegativeCacheTTLExpiry verifies failure records expire.
 func TestNegativeCacheTTLExpiry(t *testing.T) {
 	c := NewNegativeCache(time.Nanosecond)
@@ -181,6 +235,9 @@ func TestNegativeCacheTTLExpiry(t *testing.T) {
 	// Any measurable time > 1ns passes between Record and IsBlocked.
 	if c.IsBlocked("p", "m") {
 		t.Error("IsBlocked after TTL expiry returned true")
+	}
+	if _, ok := c.ActiveInfo("p", "m"); ok {
+		t.Error("ActiveInfo after TTL expiry returned ok=true")
 	}
 }
 

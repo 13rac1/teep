@@ -411,6 +411,23 @@ func allFactorsExcept(exclude ...string) []string {
 	return out
 }
 
+func assertPinnedFactorNotBlocked(t *testing.T, report *attestation.VerificationReport, name string, status attestation.Status) {
+	t.Helper()
+	for _, f := range report.Factors {
+		if f.Name != name {
+			continue
+		}
+		if f.Status != status {
+			t.Fatalf("%s status = %s, want %s; detail=%s", name, f.Status, status, f.Detail)
+		}
+		if f.Status == attestation.Fail && f.Enforced {
+			t.Fatalf("%s is an enforced failure: detail=%s", name, f.Detail)
+		}
+		return
+	}
+	t.Fatalf("%s factor not found", name)
+}
+
 // TestNewPinnedHandler verifies constructor sets all fields correctly.
 func TestNewPinnedHandler(t *testing.T) {
 	spkiCache := attestation.NewSPKICache()
@@ -649,6 +666,82 @@ func TestHandlePinned_InapplicableNVSwitchDoesNotBlock(t *testing.T) {
 		}
 	}
 	t.Fatal("nvswitch_binding factor not found")
+}
+
+func TestHandlePinned_OfflineOnlineAndInapplicableFactorsDoNotBlock(t *testing.T) {
+	var spkiHash string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/attestation/report") {
+			nonceHex := r.URL.Query().Get("nonce")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(nearaiAttestationJSON(spkiHash, nonceHex)))
+			return
+		}
+		if r.URL.Path == "/v1/chat/completions" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+			return
+		}
+		http.Error(w, "unexpected: "+r.URL.String(), http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	spkiHash = computeTestServerSPKI(t, srv)
+	domain := hostFromURL(t, srv.URL)
+	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
+	}))
+	defer endpointSrv.Close()
+
+	enforcedWithoutOffline := []string{
+		attestation.FactorNVSwitchBinding,
+		attestation.FactorBuildTransparency,
+		attestation.FactorSigstoreCode,
+	}
+	handler := NewPinnedHandler(
+		newEndpointResolverForTest(endpointSrv.URL),
+		attestation.NewSPKICache(),
+		"test-key",
+		true,
+		allFactorsExcept(enforcedWithoutOffline...),
+		attestation.MeasurementPolicy{},
+		ReportDataVerifier{}, nil, attestation.DefaultNVIDIAVerifier(),
+		nil,
+	)
+	handler.setDialer(func(_ context.Context, _ string) (*tlsct.Conn, error) {
+		tc, err := tls.Dial("tcp", hostFromURL(t, srv.URL), testTLSConfig(srv))
+		if err != nil {
+			return nil, err
+		}
+		return tlsct.NewConn(tc)
+	})
+
+	resp, err := handler.HandlePinned(context.Background(), &provider.PinnedRequest{
+		Method:   "POST",
+		Path:     "/v1/chat/completions",
+		Endpoint: e2ee.EndpointChat,
+		Headers:  http.Header{"Content-Type": {"application/json"}},
+		Body:     []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`),
+		Model:    "test-model",
+	})
+	if err != nil {
+		t.Fatalf("HandlePinned: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if resp.Report == nil {
+		t.Fatal("expected report on SPKI miss")
+	}
+	if resp.Report.Blocked() {
+		t.Fatalf("offline/inapplicable factors should not block: %+v", resp.Report.BlockedFactors())
+	}
+	assertPinnedFactorNotBlocked(t, resp.Report, attestation.FactorNVSwitchBinding, attestation.NotApplicable)
+	assertPinnedFactorNotBlocked(t, resp.Report, attestation.FactorBuildTransparency, attestation.Fail)
+	assertPinnedFactorNotBlocked(t, resp.Report, attestation.FactorSigstoreCode, attestation.NotApplicable)
 }
 
 func TestHandlePinned_CacheHitViaSetDialer(t *testing.T) {
