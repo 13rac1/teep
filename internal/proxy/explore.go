@@ -175,6 +175,12 @@ func (s *Server) loopbackInfer(ctx context.Context, model string, body []byte) e
 		return exploreInferResponse{Model: model, Error: fmt.Sprintf("build request: %v", err)}
 	}
 	inner.Header.Set("Content-Type", "application/json")
+	// This is a first-party loopback self-request (the "Infer" button on the
+	// explore page exercises the proxy's own /v1/chat/completions handler),
+	// not an externally-received request. hostGuardMiddleware validates
+	// every request's Host header, including this synthetic one, so it must
+	// carry the proxy's own configured authority to pass.
+	inner.Host = s.cfg.ListenAddr
 
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, inner)

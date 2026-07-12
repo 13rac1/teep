@@ -437,6 +437,9 @@ type Server struct {
 	rekorClient        *attestation.RekorClient
 	nvidiaVerifier     *attestation.NVIDIAVerifier
 	mux                *http.ServeMux
+	handler            http.Handler            // mux wrapped with hostGuardMiddleware; set by New()
+	hostGuard          *hostGuard              // Host-header allowlist; set by New() from cfg.ListenAddr
+	hostGuardLogs      hourlyLogLimiter        // rate-limits rejected-Host WARN logs
 	attestClient       *http.Client            // for attestation fetches
 	collateral         trust.HTTPSGetter       // for Intel PCS collateral fetches
 	verifyQuote        attestation.TDXVerifier // constructed from cfg.Offline + collateral
@@ -530,27 +533,17 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, errors.New("no providers configured")
 	}
 
-	// Monitoring endpoints (/, /events, /metrics) are unauthenticated.
-	// Access control relies on the proxy binding to loopback (127.0.0.1) by default;
-	// config.Load warns when ListenAddr is non-loopback.
-	s.mux.HandleFunc("GET /{$}", s.handleIndex)
-	s.mux.HandleFunc("GET /health", s.handleHealth)
-	s.mux.HandleFunc("GET /events", s.handleEvents)
-	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
-	s.mux.HandleFunc("POST /v1/chat/completions", s.handleEndpoint(&chatEndpoint))
-	s.mux.HandleFunc("POST /v1/embeddings", s.handleEndpoint(&embeddingsEndpoint))
-	s.mux.HandleFunc("POST /v1/audio/transcriptions", s.handleEndpoint(&audioEndpoint))
-	s.mux.HandleFunc("POST /v1/images/generations", s.handleEndpoint(&imagesEndpoint))
-	s.mux.HandleFunc("POST /v1/rerank", s.handleEndpoint(&rerankEndpoint))
-	s.mux.HandleFunc("POST /v1/score", s.handleEndpoint(&scoreEndpoint))
-	s.mux.HandleFunc("POST /v1/responses", s.handleEndpoint(&responsesEndpoint))
-	s.mux.HandleFunc("POST /v1/audio/speech", s.handleEndpoint(&speechEndpoint))
-	s.mux.HandleFunc("GET /v1/{$}", handleV1Help)
-	s.mux.HandleFunc("GET /v1/models", s.handleModels)
-	s.mux.HandleFunc("GET /v1/tee/report", s.handleReport)
-	s.mux.HandleFunc("GET /explore", s.handleExplorePage)
-	s.mux.HandleFunc("POST /explore/attest", s.handleExploreAttest)
-	s.mux.HandleFunc("POST /explore/infer", s.handleExploreInfer)
+	s.registerRoutes()
+
+	guard, err := newHostGuard(cfg.ListenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid listen address %q: %w", cfg.ListenAddr, err)
+	}
+	s.hostGuard = guard
+	// hostGuardMiddleware wraps the *entire* mux exactly once here, so every
+	// route registered above — including /v1/* — is covered by the Host
+	// allowlist and baseline security headers. Do not add per-route wrapping.
+	s.handler = s.hostGuardMiddleware(s.mux)
 
 	return s, nil
 }
@@ -637,13 +630,52 @@ func (c *monitoredConn) Close() error {
 
 // ServeHTTP implements http.Handler so Server can be used with httptest.NewServer.
 // Unmatched routes are logged before returning 404.
+//
+// s.handler is the mux wrapped once with hostGuardMiddleware (set by New).
+// Server values built directly as struct literals (test-only; every
+// production Server comes from New) have a nil handler and fall back to the
+// raw mux with no Host allowlist or security headers, matching prior
+// behavior for those unit tests.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec := &statusRecorder{ResponseWriter: w}
-	s.mux.ServeHTTP(rec, r)
+	handler := s.handler
+	if handler == nil {
+		handler = s.mux
+	}
+	handler.ServeHTTP(rec, r)
 	if rec.status == http.StatusNotFound {
 		ctx := reqid.WithID(r.Context(), reqid.New())
 		slog.WarnContext(ctx, "unmatched route", "method", r.Method, "path", r.URL.Path)
 	}
+}
+
+// registerRoutes wires all HTTP routes onto s.mux. Monitoring/dashboard
+// endpoints (/, /events, /metrics, /explore) and the OpenAI-compatible
+// /v1/* surface are all registered here with no per-route auth: access
+// control is enforced once, for every route, by hostGuardMiddleware (see
+// New and hostguard.go), which rejects requests whose Host header is not in
+// the loopback/configured-address allowlist. This defeats DNS-rebinding
+// attacks that would otherwise let a malicious page reach the proxy over
+// what the browser considers a same-origin connection.
+func (s *Server) registerRoutes() {
+	s.mux.HandleFunc("GET /{$}", s.handleIndex)
+	s.mux.HandleFunc("GET /health", s.handleHealth)
+	s.mux.HandleFunc("GET /events", s.handleEvents)
+	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
+	s.mux.HandleFunc("POST /v1/chat/completions", s.handleEndpoint(&chatEndpoint))
+	s.mux.HandleFunc("POST /v1/embeddings", s.handleEndpoint(&embeddingsEndpoint))
+	s.mux.HandleFunc("POST /v1/audio/transcriptions", s.handleEndpoint(&audioEndpoint))
+	s.mux.HandleFunc("POST /v1/images/generations", s.handleEndpoint(&imagesEndpoint))
+	s.mux.HandleFunc("POST /v1/rerank", s.handleEndpoint(&rerankEndpoint))
+	s.mux.HandleFunc("POST /v1/score", s.handleEndpoint(&scoreEndpoint))
+	s.mux.HandleFunc("POST /v1/responses", s.handleEndpoint(&responsesEndpoint))
+	s.mux.HandleFunc("POST /v1/audio/speech", s.handleEndpoint(&speechEndpoint))
+	s.mux.HandleFunc("GET /v1/{$}", handleV1Help)
+	s.mux.HandleFunc("GET /v1/models", s.handleModels)
+	s.mux.HandleFunc("GET /v1/tee/report", s.handleReport)
+	s.mux.HandleFunc("GET /explore", s.handleExplorePage)
+	s.mux.HandleFunc("POST /explore/attest", s.handleExploreAttest)
+	s.mux.HandleFunc("POST /explore/infer", s.handleExploreInfer)
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.
