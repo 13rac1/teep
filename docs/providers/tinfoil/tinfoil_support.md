@@ -2363,8 +2363,19 @@ wiring as a thin layer on top.
      surfaced separately from enforced transparency and signature failures)
    - `nvswitch_binding` — `allow_fail` (reported separately while topology
      binding compatibility settles)
-   - `response_schema` — `allow_fail` while Tinfoil V3 attestation schema
-     compatibility settles
+
+   `response_schema` is `enforced` (not in the allow_fail list) for
+   `tinfoil_v3_direct`: the V3 parser
+   (`internal/provider/tinfoil/attestation.go`) declares `nvswitch`
+   structurally optional, so its topology-conditional absence — expected
+   only on <8-GPU or non-Hopper topologies — no longer produces a false
+   schema-drift failure; the real requirement is enforced by
+   `nvswitch_binding` instead (GH issue #117). It remains `allow_fail` for
+   `tinfoil_v3_cloud` only, for an unrelated, distinct reason: the
+   client-visible attestation there is the confidential router's own quote,
+   and the router has no GPU of its own, so `gpu` (which stays
+   unconditionally required in the schema) is always absent from cloud
+   responses.
 
    `attestation.TinfoilCloudDefaultAllowFail` also includes
    `tee_cert_chain`, `tee_quote_signature`, `nvidia_payload_present`,
@@ -2612,7 +2623,7 @@ detail-string level.
 | `cpu_gpu_chain` | `enforced` for direct; `allow_fail` for cloud | GPU evidence hash is verified in REPORTDATA; cloud currently allows this factor to fail while live GPU evidence compatibility settles |
 | `nvswitch_binding` | `allow_fail` (default) | NVSwitch evidence/hash are reported separately when topology implies NVSwitch; fails for the known Tinfoil server-side JSON re-encoding mismatch while REPORTDATA/GPU binding can still pass |
 | `nvidia_payload_present`, `nvidia_signature`, `nvidia_claims` | `enforced` for direct; `allow_fail` for cloud | NVIDIA SPDM evidence is checked when present; cloud currently allows these factors to fail while live GPU evidence compatibility settles |
-| `response_schema` | `allow_fail` (default) | V3 attestation response schema compatibility signal |
+| `response_schema` | `enforced` for direct; `allow_fail` for cloud | V3 attestation response schema compatibility signal; `nvswitch` is structurally optional in the parser schema (GH issue #117), so only cloud's router-only `gpu` absence remains a known allow_fail |
 
 #### TEE-Generic Factor Names
 

@@ -1271,8 +1271,13 @@ func TestMergedAllowFailTinfoilDirectAllowsNVSwitchByDefault(t *testing.T) {
 	if !afSet["nvswitch_binding"] {
 		t.Errorf("nvswitch_binding should be in allow_fail for tinfoil_v3_direct: got %v", af)
 	}
-	if !afSet["response_schema"] {
-		t.Errorf("response_schema should be in allow_fail for tinfoil_v3_direct: got %v", af)
+
+	// response_schema must be enforced (absent from allow_fail): the
+	// Tinfoil V3 parser declares nvswitch optional, so its
+	// topology-conditional absence no longer produces schema drift (GH
+	// issue #117), and schema drift should once again block by default.
+	if afSet["response_schema"] {
+		t.Errorf("response_schema should NOT be in allow_fail for tinfoil_v3_direct (must be enforced): got %v", af)
 	}
 }
 
@@ -1297,6 +1302,16 @@ func TestMergedAllowFailTinfoilCloudEnforcesKDSFactorsByDefault(t *testing.T) {
 		"nvidia_claims",
 		"cpu_gpu_chain",
 		"nvswitch_binding",
+		// response_schema stays allowed to fail for tinfoil_v3_cloud: the
+		// client-visible attestation is the confidential router's own quote
+		// (docs/attestation_gaps/tinfoil_cloud_integrity.md), and the router
+		// has no GPU of its own, so cloud responses never carry a "gpu"
+		// field. GPU stays unconditionally required in the parser's schema
+		// (it is not conditional for tinfoil_v3_direct), so this is a
+		// genuine, permanent MissingFields entry for cloud mode — distinct
+		// from, and unaffected by, the nvswitch chicken-egg fix (GH issue
+		// #117), which is what made response_schema safe to enforce for
+		// tinfoil_v3_direct below.
 		"response_schema",
 	} {
 		if !afSet[name] {

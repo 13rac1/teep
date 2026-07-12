@@ -23,18 +23,36 @@ const hexFieldLen = 64
 
 // v3Response is the top-level JSON structure of a V3 attestation response.
 // gpu and nvswitch are kept as json.RawMessage to preserve raw bytes for hashing.
+//
+// GPU is unconditionally required by the V3 spec, so it has no jsonstrict
+// "omitempty" annotation: its absence is a genuine schema violation and must
+// surface via response_schema (in.Raw.MissingFields), in addition to failing
+// closed on every factor that consumes GPU evidence.
+//
+// NVSwitch is a pointer with "omitempty" because its presence is conditional
+// on GPU topology (only expected on >=8-GPU Hopper configurations) — a fact
+// only knowable from the *authenticated* GPU evidence, not the wire schema.
+// jsonstrict.UnmarshalWarn treats "omitempty" fields as optional: their
+// absence is never added to MissingFields (see internal/jsonstrict). The
+// conditional requirement itself is enforced by evalNVSwitchBinding
+// (internal/attestation/report.go), which Fails when the topology demands
+// NVSwitch evidence and none was hash-bound. See GH issue #117.
+//
+// Body is also "omitempty": it is a legacy V2-only field that must NEVER be
+// present in a valid V3 response (see the explicit rejection below), so its
+// permanent absence must not be flagged as a missing field either.
 type v3Response struct {
-	Format     string          `json:"format"`
-	ReportData v3ReportData    `json:"report_data"`
-	CPU        v3CPU           `json:"cpu"`
-	GPU        json.RawMessage `json:"gpu"`
-	NVSwitch   json.RawMessage `json:"nvswitch"`
+	Format     string           `json:"format"`
+	ReportData v3ReportData     `json:"report_data"`
+	CPU        v3CPU            `json:"cpu"`
+	GPU        json.RawMessage  `json:"gpu"`
+	NVSwitch   *json.RawMessage `json:"nvswitch,omitempty"`
 
 	Certificate string `json:"certificate"` // PEM certificate
 	Signature   string `json:"signature"`   // base64 ECDSA DER
 
 	// Body is a legacy V2 field — its presence causes rejection.
-	Body *json.RawMessage `json:"body"`
+	Body *json.RawMessage `json:"body,omitempty"`
 }
 
 // v3ReportData holds the parsed report_data fields.
@@ -126,6 +144,11 @@ func parseV3Response(body []byte) (*attestation.RawAttestation, *v3Response, err
 		return nil, nil, fmt.Errorf("tinfoil: cpu.report decoded size %d exceeds limit %d", len(cpuReportBytes), maxCPUReportSize)
 	}
 
+	var nvswitchRawJSON json.RawMessage
+	if resp.NVSwitch != nil {
+		nvswitchRawJSON = *resp.NVSwitch
+	}
+
 	raw := &attestation.RawAttestation{
 		BackendFormat:  attestation.FormatTinfoil,
 		NonceSource:    "client",
@@ -139,7 +162,7 @@ func parseV3Response(body []byte) (*attestation.RawAttestation, *v3Response, err
 
 		// Tinfoil-specific fields.
 		GPURawJSON:                  resp.GPU,
-		NVSwitchRawJSON:             resp.NVSwitch,
+		NVSwitchRawJSON:             nvswitchRawJSON,
 		TinfoilTLSKeyFP:             resp.ReportData.TLSKeyFP,
 		TinfoilHPKEKey:              resp.ReportData.HPKEKey,
 		TinfoilNonce:                resp.ReportData.Nonce,

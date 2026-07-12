@@ -532,7 +532,7 @@ func TestEvalResponseSchema(t *testing.T) {
 	}{
 		{"pass", nil, nil, Pass, "matches expected schema"},
 		{"unknown", []string{"bogus_field", "extra"}, nil, Fail, "unknown fields"},
-		{"missing", nil, []string{"nonce", "model"}, Fail, "missing fields"},
+		{"missing", nil, []string{"nonce", "model"}, Fail, "required fields absent"},
 		{"both", []string{"extra"}, []string{"nonce"}, Fail, "unknown fields"},
 	}
 	for _, tc := range tests {
@@ -548,14 +548,27 @@ func TestEvalResponseSchema(t *testing.T) {
 	}
 }
 
-func TestEvalResponseSchema_TinfoilAllowFail(t *testing.T) {
-	// FactorResponseSchema is in tinfoil allow_fail lists while V3 attestation
-	// schema compatibility settles.
-	if !slices.Contains(TinfoilCloudDefaultAllowFail, FactorResponseSchema) {
-		t.Error("FactorResponseSchema missing from TinfoilCloudDefaultAllowFail")
+func TestEvalResponseSchema_TinfoilEnforced(t *testing.T) {
+	// FactorResponseSchema must be enforced (absent from allow_fail) for
+	// tinfoil_v3_direct now that the V3 parser
+	// (internal/provider/tinfoil/attestation.go) declares nvswitch
+	// structurally optional: its topology-conditional absence no longer
+	// produces a MissingFields entry, so schema drift is once again a
+	// meaningful, blocking signal. See GH issue #117.
+	if slices.Contains(TinfoilDirectDefaultAllowFail, FactorResponseSchema) {
+		t.Error("FactorResponseSchema should NOT be in TinfoilDirectDefaultAllowFail (must be enforced)")
 	}
-	if !slices.Contains(TinfoilDirectDefaultAllowFail, FactorResponseSchema) {
-		t.Error("FactorResponseSchema missing from TinfoilDirectDefaultAllowFail")
+
+	// tinfoil_v3_cloud still allows response_schema to fail — NOT because
+	// of the nvswitch chicken-egg (fixed above) but because the
+	// client-visible attestation there is the confidential router's own
+	// quote (docs/attestation_gaps/tinfoil_cloud_integrity.md): the router
+	// has no GPU of its own, so cloud responses never carry a "gpu" field,
+	// which is unconditionally required in the parser's schema. This is a
+	// distinct, pre-existing gap already reflected by the other
+	// GPU/NVIDIA-chain factors in TinfoilCloudDefaultAllowFail.
+	if !slices.Contains(TinfoilCloudDefaultAllowFail, FactorResponseSchema) {
+		t.Error("FactorResponseSchema should still be in TinfoilCloudDefaultAllowFail (cloud router has no GPU evidence)")
 	}
 }
 
@@ -4789,6 +4802,24 @@ func TestEvalNVSwitchBinding(t *testing.T) {
 		f := assertSingleFactor(t, evalNVSwitchBinding(in), Pass)
 		if !strings.Contains(f.Detail, "not required") {
 			t.Errorf("detail %q should mention not required", f.Detail)
+		}
+	})
+
+	// Regression test for GH issue #117: an >=8-GPU Hopper topology expects
+	// NVSwitch evidence (NVSwitchExpected=true), but it is absent
+	// (NVSwitchHashBound=false). Making the schema struct's nvswitch field
+	// optional (so response_schema no longer false-fails) must NOT make this
+	// conditional requirement disappear — it must still Fail here, in the
+	// factor designed to enforce it, fail-closed as before.
+	t.Run("nvswitch_expected_but_absent", func(t *testing.T) {
+		in := buildTinfoilInput(&TinfoilSupplyChainResult{
+			GPUHashBound:      true,
+			NVSwitchHashBound: false,
+			NVSwitchExpected:  true,
+		})
+		f := assertSingleFactor(t, evalNVSwitchBinding(in), Fail)
+		if !strings.Contains(f.Detail, "mismatch") {
+			t.Errorf("detail %q should mention the NVSwitch evidence mismatch", f.Detail)
 		}
 	})
 }

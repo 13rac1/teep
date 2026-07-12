@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -343,5 +344,133 @@ func TestParseV3Response_PreservesRawGPUJSON(t *testing.T) {
 	computedHex := hex.EncodeToString(computed[:])
 	if computedHex != raw.TinfoilGPUEvidenceHash {
 		t.Errorf("GPU hash mismatch: computed=%s reported=%s", computedHex, raw.TinfoilGPUEvidenceHash)
+	}
+}
+
+// makeValidV3JSONNoNVSwitch builds a valid V3 attestation JSON document for a
+// small (non-NVSwitch) GPU topology: the "nvswitch" key is entirely absent
+// from the wire document, matching what a real <8-GPU or non-Hopper Tinfoil
+// deployment sends.
+func makeValidV3JSONNoNVSwitch(platform string) []byte {
+	cpuReport := make([]byte, 64)
+	for i := range cpuReport {
+		cpuReport[i] = byte(i)
+	}
+
+	gpu := `{"evidences":[{"arch":"HOPPER","certificate":"Y2VydA==","evidence":"ZXZpZA==","nonce":"` + makeHex32(0xaa) + `"}]}`
+
+	rd := v3ReportData{
+		TLSKeyFP:        makeHex32(0x01),
+		HPKEKey:         makeHex32(0x02),
+		Nonce:           makeHex32(0x03),
+		GPUEvidenceHash: fmt.Sprintf("%x", sha256.Sum256([]byte(gpu))),
+		// NVSwitchEvidenceHash intentionally omitted: no nvswitch evidence.
+	}
+
+	doc := map[string]any{
+		"format":      FormatURI,
+		"report_data": rd,
+		"cpu": map[string]any{
+			"platform": platform,
+			"report":   base64.StdEncoding.EncodeToString(cpuReport),
+		},
+		"gpu": json.RawMessage(gpu),
+		// "nvswitch" key intentionally absent.
+		"certificate": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		"signature":   base64.StdEncoding.EncodeToString([]byte("sig")),
+	}
+
+	data, err := json.Marshal(doc)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+// TestParseV3Response_NVSwitchAbsent_NotSchemaMissing is the core regression
+// test for GH issue #117: a V3 response from a small (non-NVSwitch) GPU
+// topology omits the "nvswitch" key entirely. Because v3Response.NVSwitch is
+// now declared optional (a pointer with the jsonstrict "omitempty" tag), its
+// absence must NOT be reported in MissingFields — the topology-conditional
+// requirement is enforced elsewhere, by nvswitch_binding
+// (internal/attestation/report.go:evalNVSwitchBinding), not by the schema
+// factor. UnknownFields must also be empty: this is a well-formed document,
+// not one with drift.
+func TestParseV3Response_NVSwitchAbsent_NotSchemaMissing(t *testing.T) {
+	body := makeValidV3JSONNoNVSwitch(PlatformTDX)
+	raw, _, err := parseV3Response(body)
+	if err != nil {
+		t.Fatalf("parseV3Response failed: %v", err)
+	}
+	if len(raw.MissingFields) != 0 {
+		t.Errorf("MissingFields = %v, want empty (nvswitch/body must be optional)", raw.MissingFields)
+	}
+	if len(raw.UnknownFields) != 0 {
+		t.Errorf("UnknownFields = %v, want empty", raw.UnknownFields)
+	}
+	if len(raw.NVSwitchRawJSON) != 0 {
+		t.Errorf("NVSwitchRawJSON = %q, want empty when nvswitch is absent", raw.NVSwitchRawJSON)
+	}
+}
+
+// TestParseV3Response_ValidResponse_NoMissingFields is a companion
+// regression test: a fully valid V3 response (nvswitch present, small
+// topology) must also report zero MissingFields. This guards specifically
+// against the "body" sibling field: Body is a legacy-V2-only field that must
+// NEVER appear in a valid V3 response, so — like nvswitch — its permanent
+// absence must not be counted as missing (it is declared optional in the
+// struct alongside nvswitch), or response_schema would fail for every
+// Tinfoil V3 response regardless of the nvswitch fix.
+func TestParseV3Response_ValidResponse_NoMissingFields(t *testing.T) {
+	body := makeValidV3JSON(PlatformTDX)
+	raw, _, err := parseV3Response(body)
+	if err != nil {
+		t.Fatalf("parseV3Response failed: %v", err)
+	}
+	if len(raw.MissingFields) != 0 {
+		t.Errorf("MissingFields = %v, want empty for a fully valid V3 response", raw.MissingFields)
+	}
+	if len(raw.UnknownFields) != 0 {
+		t.Errorf("UnknownFields = %v, want empty", raw.UnknownFields)
+	}
+}
+
+// TestParseV3Response_UnknownField_ReportsDrift verifies the drift/tamper
+// alarm side of the schema factor is intact: a genuinely unmodeled JSON key
+// must still surface via UnknownFields (never silently dropped by the
+// parser — AGENTS.md requires low-level parsers to return unknown fields to
+// callers, leaving the fail/warn policy decision to evalResponseSchema).
+func TestParseV3Response_UnknownField_ReportsDrift(t *testing.T) {
+	cpuReport := make([]byte, 64)
+	gpu := `{"evidences":[]}`
+
+	doc := map[string]any{
+		"format": FormatURI,
+		"report_data": map[string]any{
+			"tls_key_fp":        makeHex32(0x01),
+			"hpke_key":          makeHex32(0x02),
+			"nonce":             makeHex32(0x03),
+			"gpu_evidence_hash": fmt.Sprintf("%x", sha256.Sum256([]byte(gpu))),
+		},
+		"cpu": map[string]any{
+			"platform": PlatformTDX,
+			"report":   base64.StdEncoding.EncodeToString(cpuReport),
+		},
+		"gpu":               json.RawMessage(gpu),
+		"certificate":       "cert",
+		"signature":         base64.StdEncoding.EncodeToString([]byte("sig")),
+		"totally_new_field": "unexpected drift",
+	}
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	raw, _, err := parseV3Response(data)
+	if err != nil {
+		t.Fatalf("parseV3Response failed: %v", err)
+	}
+	if !slices.Contains(raw.UnknownFields, "totally_new_field") {
+		t.Errorf("UnknownFields = %v, want to contain %q", raw.UnknownFields, "totally_new_field")
 	}
 }

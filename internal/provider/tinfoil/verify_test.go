@@ -129,6 +129,61 @@ func TestVerifyReportData_ValidWithNVSwitch(t *testing.T) {
 	t.Logf("detail: %s", detail)
 }
 
+// TestVerifyReportData_8GPUHopperMissingNVSwitch is the regression test for
+// the other half of GH issue #117: an 8-GPU Hopper topology (which
+// requires NVSwitch evidence per isNVSwitchExpected) but no "nvswitch" in
+// the response. Making v3Response.NVSwitch structurally optional must NOT
+// make this conditional requirement disappear — it must still surface, just
+// via nvswitch_binding (report.go:evalNVSwitchBinding) instead of
+// response_schema. REPORTDATA verification itself still succeeds (the
+// preimage omits the NVSwitch hash entirely, matching what the hardware
+// signed), but the returned detail must report nvswitch_bound=false so the
+// caller (internal/verify or internal/proxy) sets NVSwitchExpected=true,
+// NVSwitchHashBound=false, which evalNVSwitchBinding Fails on.
+func TestVerifyReportData_8GPUHopperMissingNVSwitch(t *testing.T) {
+	raw, nonce, reportData := makeRawForReportData(t, false)
+
+	// Build an 8-GPU Hopper topology to trigger nvswitch_expected=true.
+	var gpu8Builder strings.Builder
+	gpu8Builder.WriteString(`{"evidences":[`)
+	for i := range 8 {
+		if i > 0 {
+			gpu8Builder.WriteString(",")
+		}
+		gpu8Builder.WriteString(`{"arch":"HOPPER","certificate":"Y2VydA==","evidence":"ZXZpZA==","nonce":"` + makeHex32(byte(i)) + `"}`)
+	}
+	gpu8Builder.WriteString(`]}`)
+	gpu8 := gpu8Builder.String()
+	gpuHash := sha256.Sum256([]byte(gpu8))
+	raw.GPURawJSON = []byte(gpu8)
+	raw.TinfoilGPUEvidenceHash = hex.EncodeToString(gpuHash[:])
+	// raw.NVSwitchRawJSON stays nil/empty: nvswitch is absent from the response.
+
+	// Recalculate REPORTDATA without an NVSwitch hash contribution (matches
+	// what the server would sign for a response missing nvswitch evidence).
+	tlsBytes, _ := hex.DecodeString(raw.TinfoilTLSKeyFP)
+	hpkeBytes, _ := hex.DecodeString(raw.TinfoilHPKEKey)
+	nonceBytes, _ := hex.DecodeString(raw.TinfoilNonce)
+
+	preimage := make([]byte, 0, 128)
+	preimage = append(preimage, tlsBytes...)
+	preimage = append(preimage, hpkeBytes...)
+	preimage = append(preimage, nonceBytes...)
+	preimage = append(preimage, gpuHash[:]...)
+
+	hash := sha256.Sum256(preimage)
+	copy(reportData[:32], hash[:])
+
+	v := ReportDataVerifier{}
+	detail, err := v.VerifyReportData(reportData, raw, nonce)
+	if err != nil {
+		t.Fatalf("VerifyReportData failed: %v", err)
+	}
+	if !strings.Contains(detail, "nvswitch_bound=false") {
+		t.Errorf("detail = %q, want to contain nvswitch_bound=false (8-GPU Hopper topology expects NVSwitch evidence)", detail)
+	}
+}
+
 func TestVerifyReportData_InvalidHash(t *testing.T) {
 	raw, nonce, reportData := makeRawForReportData(t, false)
 

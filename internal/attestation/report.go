@@ -416,12 +416,23 @@ var ChutesDefaultAllowFail = []string{
 // a definitive cryptographic failure non-exemptible even if an operator
 // re-adds these factors here. NVIDIA GPU and CPU-GPU/NVSwitch binding
 // factors are reported but currently allowed to fail by default, due to the
-// hashing issue documented in docs/attestation_gaps/tinfoil_nvidia_json.md
-// response_schema is allowed to fail while Tinfoil V3 attestation schema
-// compatibility settles.
-// tee_boot_config is enforced: hardware platform measurements (MRTD + RTMR0)
-// must match the Sigstore-attested tinfoilsh/hardware-measurements registry
-// for TDX enclaves.
+// hashing issue documented in docs/attestation_gaps/tinfoil_nvswitch_json.md
+// response_schema is also allowed to fail here — NOT because of the
+// nvswitch chicken-egg (that is fixed: the Tinfoil V3 parser,
+// internal/provider/tinfoil/attestation.go, declares nvswitch structurally
+// optional, so its topology-conditional absence no longer counts as schema
+// drift; see GH issue #117) but because of a distinct, cloud-only gap: the
+// client-visible attestation for tinfoil_v3_cloud is the confidential
+// router's own quote (docs/attestation_gaps/tinfoil_cloud_integrity.md), and
+// the router has no GPU of its own, so real cloud responses never carry a
+// "gpu" field at all. GPU is intentionally kept unconditionally required in
+// the parser's schema (it is not conditional for tinfoil_v3_direct, where the
+// client attests the GPU-bearing inference enclave directly), so its absence
+// here is a genuine, permanent MissingFields entry for cloud mode —
+// consistent with the NVIDIA/CPU-GPU factors above already being tolerated
+// for the same underlying reason. tee_boot_config is enforced: hardware
+// platform measurements (MRTD + RTMR0) must match the Sigstore-attested
+// tinfoilsh/hardware-measurements registry for TDX enclaves.
 var TinfoilCloudDefaultAllowFail = []string{
 	FactorCPUIDRegistry,
 	FactorIntelPCSCollateral,
@@ -437,13 +448,15 @@ var TinfoilCloudDefaultAllowFail = []string{
 // TinfoilDirectDefaultAllowFail is the tinfoil_v3_direct default allow_fail
 // list. Direct inference attests per-model enclaves; NVSwitch binding is
 // reported but currently allowed to fail by default. response_schema is
-// allowed to fail while Tinfoil V3 attestation schema compatibility settles.
+// enforced (not in this list): direct responses always carry gpu, and
+// nvswitch is now structurally optional in the parser's schema, so no
+// topology-conditional field triggers a false schema failure — see GH
+// issue #117.
 var TinfoilDirectDefaultAllowFail = []string{
 	FactorCPUIDRegistry,
 	FactorIntelPCSCollateral,
 	FactorNVSwitchBinding,
 	FactorComponentRecognition,
-	FactorResponseSchema,
 }
 
 // KnownFactors is the complete set of factor names produced by BuildReport.
@@ -1240,6 +1253,26 @@ func evalSigningKeyPresent(in *ReportInput) []FactorResult {
 	return factor(TierCore, FactorSigningKeyPresent, Pass, fmt.Sprintf("enclave pubkey present (%s...)", in.Raw.SigningKey[:min(10, len(in.Raw.SigningKey))]))
 }
 
+// evalResponseSchema checks that the provider's parser reported no
+// unexpected wire-format drift. It conflates two distinct signals from
+// in.Raw, both populated by jsonstrict at the provider's parse step:
+//
+//   - UnknownFields: JSON keys present in the response that the parser's
+//     struct does not model at all. This is a drift/tamper alarm — the
+//     provider sent data outside the documented schema.
+//   - MissingFields: struct fields the parser's schema requires
+//     unconditionally that were absent from the response. Fields whose
+//     presence is conditional on authenticated attestation content (e.g.
+//     Tinfoil's nvswitch, expected only on >=8-GPU Hopper topologies) are
+//     declared optional in the parser's struct precisely so their absence
+//     never lands here; the conditional requirement is instead enforced by
+//     the dedicated factor that consumes the field (e.g. nvswitch_binding).
+//     A MissingFields entry therefore always means a genuinely unconditional
+//     field is absent — which will also fail whatever factor needs it
+//     (signing key, quote, event log, ...), fail-closed where it matters.
+//
+// This factor intentionally does not special-case any provider or field:
+// optionality is declared once, in each provider's parser struct, not here.
 func evalResponseSchema(in *ReportInput) []FactorResult {
 	unknown := in.Raw.UnknownFields
 	missing := in.Raw.MissingFields
@@ -1249,10 +1282,10 @@ func evalResponseSchema(in *ReportInput) []FactorResult {
 	}
 	var parts []string
 	if len(unknown) > 0 {
-		parts = append(parts, fmt.Sprintf("unknown fields: %q", unknown))
+		parts = append(parts, fmt.Sprintf("unknown fields not modeled by parser: %q", unknown))
 	}
 	if len(missing) > 0 {
-		parts = append(parts, fmt.Sprintf("missing fields: %q", missing))
+		parts = append(parts, fmt.Sprintf("required fields absent from response: %q", missing))
 	}
 	return factor(TierCore, FactorResponseSchema, Fail, strings.Join(parts, "; "))
 }
