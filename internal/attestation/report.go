@@ -396,10 +396,17 @@ var ChutesDefaultAllowFail = []string{
 // cpu_id_registry is allowed to fail because Tinfoil does not participate in
 // Proof of Cloud. intel_pcs_collateral is allowed because SEV-SNP uses AMD
 // KDS instead of Intel PCS. SEV-SNP certificate-chain and quote-signature
-// checks require hitting kdsintf.amd.com, which is often down or flaky for
-// tinfoil_v3_cloud. NVIDIA GPU and CPU-GPU/NVSwitch binding factors are
-// reported but currently allowed to fail by default, due to the hashing
-// issue documented in docs/attestation_gaps/tinfoil_nvidia_json.md
+// (tee_cert_chain / tee_quote_signature) are NOT in this list: they
+// cryptographically authenticate the hardware quote that every measurement
+// and key-binding factor derives its trust from, so they are enforced by
+// default. The VCEK is fetched from AMD KDS and cached (24h, keyed by
+// chip+TCB) after the first successful fetch, so the cache — not this list —
+// absorbs routine KDS flakiness; only a cold-cache KDS outage blocks by
+// default, and BuildReport's isCryptoAuthFactor override additionally makes
+// a definitive cryptographic failure non-exemptible even if an operator
+// re-adds these factors here. NVIDIA GPU and CPU-GPU/NVSwitch binding
+// factors are reported but currently allowed to fail by default, due to the
+// hashing issue documented in docs/attestation_gaps/tinfoil_nvidia_json.md
 // response_schema is allowed to fail while Tinfoil V3 attestation schema
 // compatibility settles.
 // tee_boot_config is enforced: hardware platform measurements (MRTD + RTMR0)
@@ -408,8 +415,6 @@ var ChutesDefaultAllowFail = []string{
 var TinfoilCloudDefaultAllowFail = []string{
 	FactorCPUIDRegistry,
 	FactorIntelPCSCollateral,
-	FactorTEECertChain,
-	FactorTEEQuoteSignature,
 	FactorNvidiaPayloadPresent,
 	FactorNvidiaSignature,
 	FactorNvidiaClaims,
@@ -463,6 +468,13 @@ var KnownFactors = []string{
 // without network access, but does not exercise the full E2EE round-trip and
 // is therefore not sufficient to satisfy e2ee_usable in online mode.
 //
+// tee_cert_chain and tee_quote_signature are included because SEV-SNP
+// verification requires fetching the VCEK from AMD KDS: this is the one
+// sanctioned way --offline waives that network dependency. TDX is
+// unaffected in practice — TDX cert/sig verification is offline-only
+// (embedded PCK chain), and BuildReport's isCryptoAuthFactor override
+// re-enforces a genuine TDX crypto failure even under --offline.
+//
 // In --offline mode every factor in this list is automatically added to
 // allow_fail so that the absence of network connectivity cannot block
 // requests.
@@ -479,6 +491,8 @@ var OnlineFactors = []string{
 	FactorSigstoreVerify,
 	FactorSigstoreCode,
 	FactorGWCPUIDRegistry,
+	FactorTEECertChain,
+	FactorTEEQuoteSignature,
 }
 
 // WithOfflineAllowFail returns a new allow_fail list that unions the given
@@ -692,6 +706,22 @@ func factor(tier, name string, status Status, detail string) []FactorResult {
 	return []FactorResult{{Tier: tier, Name: name, Status: status, Detail: detail}}
 }
 
+// isCryptoAuthFactor reports whether name is one of the factors that
+// cryptographically authenticates a hardware quote against its vendor root
+// (Intel PCK for TDX, AMD KDS for SEV-SNP). BuildReport force-enforces a
+// definitive failure of these factors regardless of allow_fail, since every
+// other measurement/key-binding factor derives its trust from the same
+// quote: an exemptible signature/cert-chain check would let a forged quote
+// pass and collapse hardware attestation to bare TLS trust.
+func isCryptoAuthFactor(name string) bool {
+	switch name {
+	case FactorTEECertChain, FactorTEEQuoteSignature, FactorGWCertChain, FactorGWQuoteSignature:
+		return true
+	default:
+		return false
+	}
+}
+
 // BuildReport runs verification factors against the input and returns a
 // complete VerificationReport. The AllowFail field lists factors that are
 // allowed to fail without blocking. Every other factor is enforced.
@@ -714,6 +744,20 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	for _, eval := range evaluators {
 		for _, f := range eval(in) {
 			f.Enforced = !allowFailSet[f.Name]
+			if f.Status == Fail && isCryptoAuthFactor(f.Name) {
+				// Cryptographic authentication of the hardware quote is never
+				// exemptible, even if an operator re-added the factor to
+				// allow_fail. TDX cert/sig verification is offline and free —
+				// always enforce a genuine failure. SEV cert/sig verification
+				// requires AMD KDS, so only a definitive crypto verdict
+				// (SignatureErr/CertChainErr) is force-enforced here; a pure
+				// KDS-availability failure (FetchErr) is NOT covered by this
+				// override, so it follows the allow_fail list and --offline
+				// can still waive it.
+				if in.TDX != nil || (in.SEV != nil && (in.SEV.SignatureErr != nil || in.SEV.CertChainErr != nil)) {
+					f.Enforced = true
+				}
+			}
 			factors = append(factors, f)
 		}
 	}
@@ -921,29 +965,7 @@ func evalSEVParseDependent(in *ReportInput) []FactorResult {
 			Detail: fmt.Sprintf("valid SEV-SNP report, measurement: %s...", prefixHex(measHex))},
 	}
 
-	switch {
-	case in.SEV.CertChainErr != nil:
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Fail,
-			Detail: fmt.Sprintf("VCEK cert chain verification failed: %v", in.SEV.CertChainErr)})
-	case in.SEV.OnlineVerified:
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Pass,
-			Detail: "certificate chain valid (AMD root CA)"})
-	default:
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Skip,
-			Detail: "offline mode; VCEK cert chain not verified (requires AMD KDS)"})
-	}
-
-	switch {
-	case in.SEV.SignatureErr != nil:
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Fail,
-			Detail: fmt.Sprintf("SEV-SNP report signature invalid: %v", in.SEV.SignatureErr)})
-	case in.SEV.OnlineVerified:
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Pass,
-			Detail: "SEV-SNP report signature verified"})
-	default:
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Skip,
-			Detail: "offline mode; SEV-SNP report signature not verified (requires AMD KDS)"})
-	}
+	results = append(results, evalSEVCertChainFactor(in.SEV), evalSEVQuoteSignatureFactor(in.SEV))
 
 	if in.SEV.DebugEnabled {
 		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEDebugDisabled, Status: Fail,
@@ -954,6 +976,58 @@ func evalSEVParseDependent(in *ReportInput) []FactorResult {
 	}
 
 	return results
+}
+
+// evalSEVCertChainFactor renders the tee_cert_chain factor from a SEV
+// verification result, distinguishing a definitive cryptographic failure
+// (CertChainErr — Fail, never exemptible; see isCryptoAuthFactor) from an
+// AMD-KDS availability failure (FetchErr — Fail, but waivable via
+// allow_fail/--offline since it is in OnlineFactors) from an offline run
+// where neither check was attempted (Skip). A SignatureErr with no
+// CertChainErr means the chain itself verified but the report signature
+// didn't; that fault is cross-attributed to tee_quote_signature, so this
+// factor renders Skip rather than a misleading Fail.
+func evalSEVCertChainFactor(sev *SEVVerifyResult) FactorResult {
+	switch {
+	case sev.CertChainErr != nil:
+		return FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Fail,
+			Detail: fmt.Sprintf("VCEK cert chain verification failed: %v", sev.CertChainErr)}
+	case sev.OnlineVerified:
+		return FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Pass,
+			Detail: "certificate chain valid (AMD root CA)"}
+	case sev.SignatureErr != nil:
+		return FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Skip,
+			Detail: "report signature verification failed; cert chain fault not attributable here (see tee_quote_signature)"}
+	case sev.FetchErr != nil:
+		return FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Fail,
+			Detail: fmt.Sprintf("AMD KDS unreachable and no cached VCEK; cannot verify — failing closed (use --offline to bypass network-dependent checks): %v", sev.FetchErr)}
+	default:
+		return FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Skip,
+			Detail: "offline mode; VCEK cert chain not verified (requires AMD KDS)"}
+	}
+}
+
+// evalSEVQuoteSignatureFactor renders the tee_quote_signature factor from a
+// SEV verification result. See evalSEVCertChainFactor for the symmetric
+// cert-chain rendering and the FetchErr-vs-crypto-error distinction.
+func evalSEVQuoteSignatureFactor(sev *SEVVerifyResult) FactorResult {
+	switch {
+	case sev.SignatureErr != nil:
+		return FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Fail,
+			Detail: fmt.Sprintf("SEV-SNP report signature invalid: %v", sev.SignatureErr)}
+	case sev.OnlineVerified:
+		return FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Pass,
+			Detail: "SEV-SNP report signature verified"}
+	case sev.CertChainErr != nil:
+		return FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Skip,
+			Detail: "VCEK cert chain verification failed; signature fault not attributable here (see tee_cert_chain)"}
+	case sev.FetchErr != nil:
+		return FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Fail,
+			Detail: fmt.Sprintf("AMD KDS unreachable and no cached VCEK; cannot verify — failing closed (use --offline to bypass network-dependent checks): %v", sev.FetchErr)}
+	default:
+		return FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Skip,
+			Detail: "offline mode; SEV-SNP report signature not verified (requires AMD KDS)"}
+	}
 }
 
 // tdxQuoteStructure evaluates the tee_quote_structure factor — structural
