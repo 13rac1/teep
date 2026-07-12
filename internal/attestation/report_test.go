@@ -2575,6 +2575,181 @@ func TestBuildReport_EnforcedPromotion(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// H1 regression: SEV-SNP / TDX cert-chain and quote-signature enforcement
+// for tinfoil_v3_cloud (docs/code-review/2026-07-02-h1-fix-plan.md).
+// ---------------------------------------------------------------------------
+
+// TestBuildReport_SEVForgedSignatureBlocksEvenIfAllowFailListed is the
+// regression test for the finding: a cryptographically invalid SEV-SNP
+// report signature must block tinfoil_v3_cloud even though
+// TinfoilCloudDefaultAllowFail no longer lists tee_quote_signature, and
+// even if an operator explicitly re-adds it to their own allow_fail — the
+// isCryptoAuthFactor override in BuildReport must force-enforce a
+// definitive crypto failure regardless.
+func TestBuildReport_SEVForgedSignatureBlocksEvenIfAllowFailListed(t *testing.T) {
+	in := buildSEVInput(&SEVVerifyResult{
+		Measurement:  make([]byte, 48),
+		SignatureErr: errors.New("report signature verification error: x509: ECDSA verification failure"),
+	})
+	in.Provider = "tinfoil_v3_cloud"
+	// Re-add the factor to allow_fail on top of the (already-enforcing)
+	// default list: the override must still block.
+	in.AllowFail = WithAllowFail(TinfoilCloudDefaultAllowFail, FactorTEEQuoteSignature)
+
+	report := BuildReport(in)
+	f := findFactor(t, report, FactorTEEQuoteSignature)
+	if f.Status != Fail {
+		t.Fatalf("tee_quote_signature: got %s, want Fail", f.Status)
+	}
+	if !f.Enforced {
+		t.Error("tee_quote_signature: Enforced should be true even though it is in allow_fail (crypto override)")
+	}
+	if !report.Blocked() {
+		t.Error("Blocked() should be true for a forged SEV-SNP report signature")
+	}
+}
+
+// TestBuildReport_SEVColdCacheFetchErrFailsClosed verifies that a
+// KDS-unreachable, cold-cache result (FetchErr set, no crypto errors) fails
+// closed by default for tinfoil_v3_cloud: both crypto-auth factors render
+// Fail and are enforced (they are no longer in TinfoilCloudDefaultAllowFail)
+// so the report blocks. This is an availability failure, not a forgery
+// signal, so it deliberately blocks via ordinary enforcement (removal from
+// the allow_fail list) rather than the isCryptoAuthFactor override —
+// meaning an operator can still waive it via allow_fail/--offline if they
+// accept the tradeoff (see TestBuildReport_SEVOfflineSkipsViaOnlineFactors).
+func TestBuildReport_SEVColdCacheFetchErrFailsClosed(t *testing.T) {
+	in := buildSEVInput(&SEVVerifyResult{
+		Measurement: make([]byte, 48),
+		FetchErr:    errors.New("VCEK certificate chain unavailable: could not download ASK and ARK certificates: noop getter"),
+	})
+	in.Provider = "tinfoil_v3_cloud"
+	in.AllowFail = TinfoilCloudDefaultAllowFail
+
+	report := BuildReport(in)
+	for _, name := range []string{FactorTEECertChain, FactorTEEQuoteSignature} {
+		f := findFactor(t, report, name)
+		if f.Status != Fail {
+			t.Errorf("%s: got %s, want Fail (fail-closed on cold-cache KDS outage)", name, f.Status)
+		}
+		if !f.Enforced {
+			t.Errorf("%s: Enforced should be true (removed from TinfoilCloudDefaultAllowFail)", name)
+		}
+	}
+	if !report.Blocked() {
+		t.Error("Blocked() should be true when AMD KDS is unreachable and no cached VCEK exists")
+	}
+}
+
+// TestBuildReport_SEVWarmCachePasses verifies that a successful online
+// verification (OnlineVerified — whether from a fresh KDS fetch or a warm
+// cache hit; report.go can't distinguish the two, nor does it need to)
+// renders Pass for both crypto-auth factors and does not block.
+func TestBuildReport_SEVWarmCachePasses(t *testing.T) {
+	in := buildSEVInput(&SEVVerifyResult{
+		Measurement:    make([]byte, 48),
+		OnlineVerified: true,
+	})
+	in.Provider = "tinfoil_v3_cloud"
+	in.AllowFail = TinfoilCloudDefaultAllowFail
+
+	report := BuildReport(in)
+	for _, name := range []string{FactorTEECertChain, FactorTEEQuoteSignature} {
+		f := findFactor(t, report, name)
+		if f.Status != Pass {
+			t.Errorf("%s: got %s, want Pass", name, f.Status)
+		}
+		if !f.Enforced {
+			t.Errorf("%s: Enforced should be true (removed from TinfoilCloudDefaultAllowFail)", name)
+		}
+		// Pass && Enforced can never contribute to Blocked() (defined as
+		// Fail && Enforced), which is the point: a genuine verification
+		// success is enforced and does not block, regardless of the rest
+		// of this minimal synthetic input's unrelated factor statuses.
+	}
+}
+
+// TestBuildReport_SEVOfflineSkipsViaOnlineFactors verifies the sanctioned
+// --offline skip: an offline SEV verification result (no error fields set)
+// renders Skip for both crypto-auth factors, and because they are now in
+// OnlineFactors, WithOfflineAllowFail unions them into the allow_fail list
+// so they are not enforced and do not block.
+func TestBuildReport_SEVOfflineSkipsViaOnlineFactors(t *testing.T) {
+	in := buildSEVInput(&SEVVerifyResult{
+		Measurement: make([]byte, 48),
+		// No FetchErr/SignatureErr/CertChainErr/OnlineVerified: this is what
+		// the offline verifier (VerifySEVReportOffline) produces.
+	})
+	in.Provider = "tinfoil_v3_cloud"
+	in.AllowFail = WithOfflineAllowFail(TinfoilCloudDefaultAllowFail)
+
+	report := BuildReport(in)
+	for _, name := range []string{FactorTEECertChain, FactorTEEQuoteSignature} {
+		f := findFactor(t, report, name)
+		if f.Status != Skip {
+			t.Errorf("%s: got %s, want Skip (offline)", name, f.Status)
+		}
+		if f.Enforced {
+			t.Errorf("%s: Enforced should be false under --offline (unioned via OnlineFactors)", name)
+		}
+		// Skip && !Enforced can never contribute to Blocked() (defined as
+		// Fail && Enforced): the sanctioned --offline skip does not block,
+		// regardless of the rest of this minimal synthetic input's
+		// unrelated factor statuses.
+	}
+}
+
+// TestBuildReport_TDXCryptoOverrideBlocksEvenIfAllowFailListed verifies the
+// symmetric TDX case: TDX cert/sig verification is offline and free, so a
+// genuine TDX quote-signature failure must block even if an operator
+// allow-lists tee_quote_signature (defense in depth for tinfoil_v3_direct
+// and any TDX-backed provider).
+func TestBuildReport_TDXCryptoOverrideBlocksEvenIfAllowFailListed(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	tdx := &TDXVerifyResult{SignatureErr: errors.New("bad signature"), TeeTCBSVN: make([]byte, 16)}
+
+	report := BuildReport(&ReportInput{
+		Provider:  "tinfoil_v3_direct",
+		Model:     "test-model",
+		Raw:       raw,
+		Nonce:     nonce,
+		TDX:       tdx,
+		AllowFail: WithAllowFail(TinfoilDirectDefaultAllowFail, FactorTEEQuoteSignature),
+	})
+
+	f := findFactor(t, report, FactorTEEQuoteSignature)
+	if f.Status != Fail {
+		t.Fatalf("tee_quote_signature: got %s, want Fail", f.Status)
+	}
+	if !f.Enforced {
+		t.Error("tee_quote_signature: Enforced should be true even though it is in allow_fail (TDX crypto override)")
+	}
+	if !report.Blocked() {
+		t.Error("Blocked() should be true for a forged TDX quote signature")
+	}
+}
+
+// TestEvalSEVParseDependent_FetchErr covers the FetchErr rendering branch
+// directly (BuildReport_SEVColdCacheFetchErrFailsClosed exercises it via
+// the full report; this pins the evaluator's own Fail status and detail).
+func TestEvalSEVParseDependent_FetchErr(t *testing.T) {
+	in := buildSEVInput(&SEVVerifyResult{
+		Measurement: make([]byte, 48),
+		FetchErr:    errors.New("could not download ASK and ARK certificates: noop getter"),
+	})
+	results := evalTEEParseDependent(in)
+	certChain := assertFactor(t, results, "tee_cert_chain", Fail)
+	if !strings.Contains(certChain.Detail, "AMD KDS unreachable") {
+		t.Errorf("tee_cert_chain detail %q should mention AMD KDS unreachable", certChain.Detail)
+	}
+	sig := assertFactor(t, results, "tee_quote_signature", Fail)
+	if !strings.Contains(sig.Detail, "AMD KDS unreachable") {
+		t.Errorf("tee_quote_signature detail %q should mention AMD KDS unreachable", sig.Detail)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Gateway factor count test (Features B/F/G)
 // ---------------------------------------------------------------------------
 
