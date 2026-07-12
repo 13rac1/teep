@@ -133,6 +133,16 @@ type VerificationReport struct {
 	AllowedFailed      int               `json:"allowed_failed"`
 	NotApplicableCount int               `json:"not_applicable"`
 	Metadata           map[string]string `json:"metadata,omitempty"`
+
+	// TLSKeyFP is the attested upstream TLS leaf SPKI fingerprint
+	// (RawAttestation.TinfoilTLSKeyFP at the time this report was built).
+	// It is cached alongside the rest of the report so that per-response
+	// upstream TLS binding verification can run on every request — cache
+	// hit or miss, not only the miss that originally fetched attestation.
+	// Empty for providers/backends that do not populate a TLS key
+	// fingerprint. Internal to the proxy; not part of the public report
+	// display or API response.
+	TLSKeyFP string `json:"-"`
 }
 
 // Blocked returns true if any enforced factor has failed. When Blocked is true,
@@ -802,6 +812,11 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		}
 	}
 
+	tlsKeyFP := ""
+	if in.Raw != nil {
+		tlsKeyFP = in.Raw.TinfoilTLSKeyFP
+	}
+
 	return &VerificationReport{
 		Provider:           in.Provider,
 		Model:              in.Model,
@@ -814,6 +829,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		AllowedFailed:      allowedFailed,
 		NotApplicableCount: notApplicable,
 		Metadata:           buildMetadata(in),
+		TLSKeyFP:           tlsKeyFP,
 	}
 }
 

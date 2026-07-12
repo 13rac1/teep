@@ -1730,7 +1730,7 @@ func (s *Server) relayWithRetry(
 			attemptRaw = nil
 		}
 
-		ur, err := s.doUpstreamRoundtrip(ctx, prov, body, upstreamModel, ar.E2EEActive, attemptRaw, stream, endpointPath, contentType, endpoint)
+		ur, err := s.doUpstreamRoundtrip(ctx, prov, body, upstreamModel, ar.E2EEActive, attemptRaw, ar.TLSKeyFP, stream, endpointPath, contentType, endpoint)
 		result.e2eeDur += ur.E2EEDur
 		result.upstreamDur += ur.UpstreamDur
 		if err != nil {
@@ -2271,6 +2271,12 @@ type attestResult struct {
 	Raw        *attestation.RawAttestation
 	E2EEActive bool
 	AttestDur  time.Duration
+	// TLSKeyFP is the attested upstream TLS leaf SPKI fingerprint, set on
+	// both cache hit and cache miss (attestation.VerificationReport.TLSKeyFP
+	// travels with the cached report). Used by doUpstreamRoundtrip to run
+	// upstream TLS binding verification on every response, not only the
+	// response following a fresh attestation fetch.
+	TLSKeyFP string
 }
 
 // attestAndCache checks the attestation cache, fetches and verifies on miss,
@@ -2330,6 +2336,7 @@ func (s *Server) attestAndCache(
 		Raw:        raw,
 		E2EEActive: e2eeActive,
 		AttestDur:  time.Since(attestStart),
+		TLSKeyFP:   report.TLSKeyFP,
 	}, ""
 }
 
@@ -2711,13 +2718,13 @@ type upstreamResult struct {
 
 // setUpstreamConnectionHeaders sets Connection and EHBP headers on the
 // upstream request. For TLS-binding providers, Connection: close is set
-// when a fresh attestation was fetched (cache miss) to prevent TLS
-// connection reuse across attestation boundaries. On cache hits, the
-// connection is reusable — the per-response SPKI verification in
-// verifyUpstreamTLSBinding ensures the connection remains bound to the
-// attested enclave.
-func setUpstreamConnectionHeaders(req *http.Request, prov *provider.Provider, raw *attestation.RawAttestation, ehbp *e2ee.EHBPSession) {
-	if prov.UsesTLSBinding && raw != nil {
+// unconditionally (belt-and-braces): even though verifyUpstreamTLSBinding
+// now runs a real per-response SPKI check on every request — cache hit or
+// miss — forcing a fresh TLS connection per request removes any dependency
+// on that check running correctly to prevent connection reuse across an
+// attestation boundary (AGENTS.md).
+func setUpstreamConnectionHeaders(req *http.Request, prov *provider.Provider, ehbp *e2ee.EHBPSession) {
+	if prov.UsesTLSBinding {
 		req.Header.Set("Connection", "close")
 	}
 	if ehbp != nil {
@@ -2727,11 +2734,13 @@ func setUpstreamConnectionHeaders(req *http.Request, prov *provider.Provider, ra
 }
 
 // verifyUpstreamTLSBinding checks that the live upstream TLS peer SPKI
-// matches the attested tls_key_fp from the attestation report. This
+// matches the attested TLS key fingerprint (attestResult.TLSKeyFP, sourced
+// from VerificationReport.TLSKeyFP on both cache hit and cache miss). This
 // prevents MITM attacks between teep and the enclave after attestation
-// completes. The attestation fetch already verifies the peer SPKI, but
-// the upstream inference connection must also be bound to the same
-// attested identity.
+// completes — including within the attestation cache TTL, when requests are
+// served without re-fetching attestation. The attestation fetch already
+// verifies the peer SPKI, but the upstream inference connection must also be
+// bound to the same attested identity on every response.
 //
 // On mismatch, invalidates all caches to force re-attestation on the next
 // request. Returns an *httpError on failure, nil on success.
@@ -2740,18 +2749,18 @@ func (s *Server) verifyUpstreamTLSBinding(
 	prov *provider.Provider,
 	upstreamModel string,
 	resp *http.Response,
-	raw *attestation.RawAttestation,
+	attestedFP string,
 ) *httpError {
 	peerSPKI := tlsct.PeerSPKI(resp.TLS)
 	if peerSPKI == "" {
 		return &httpError{http.StatusBadGateway, "tls_binding_failed",
 			errors.New("upstream TLS binding failed: no TLS peer state on upstream connection")}
 	}
-	if subtle.ConstantTimeCompare([]byte(peerSPKI), []byte(raw.TinfoilTLSKeyFP)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(peerSPKI), []byte(attestedFP)) != 1 {
 		slog.ErrorContext(ctx, "upstream TLS SPKI mismatch: live peer does not match attested fingerprint",
 			"provider", prov.Name, "model", upstreamModel,
 			"live_spki", provider.Truncate(peerSPKI, 16),
-			"attested_spki", provider.Truncate(raw.TinfoilTLSKeyFP, 16))
+			"attested_spki", provider.Truncate(attestedFP, 16))
 		// Invalidate caches to force re-attestation on next request.
 		s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
 		s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
@@ -2776,6 +2785,7 @@ func (s *Server) doUpstreamRoundtrip(
 	upstreamModel string,
 	e2eeActive bool,
 	raw *attestation.RawAttestation,
+	tlsKeyFP string,
 	stream bool,
 	endpointPath string,
 	contentType string,
@@ -2858,7 +2868,7 @@ func (s *Server) doUpstreamRoundtrip(
 		}
 		upstreamReq.Header.Set("Content-Type", contentType)
 		provider.SetUserAgent(upstreamReq)
-		setUpstreamConnectionHeaders(upstreamReq, prov, raw, ehbp)
+		setUpstreamConnectionHeaders(upstreamReq, prov, ehbp)
 
 		if prepErr := prepareUpstreamHeaders(upstreamReq, prov, session, meta, stream, endpointPath); prepErr != nil {
 			cancel()
@@ -2871,11 +2881,23 @@ func (s *Server) doUpstreamRoundtrip(
 		resp, err = s.upstreamClient.Do(upstreamReq)
 		upstreamDur += time.Since(upstreamDoStart)
 
-		// TLS-fingerprint binding: for providers that use TLS binding
-		// (e.g. Tinfoil), verify the live upstream TLS peer SPKI matches
-		// the attested tls_key_fp from the attestation report.
-		if err == nil && resp != nil && prov.UsesTLSBinding && raw != nil && raw.TinfoilTLSKeyFP != "" {
-			if spkiErr := s.verifyUpstreamTLSBinding(ctx, prov, upstreamModel, resp, raw); spkiErr != nil {
+		// TLS-fingerprint binding: for providers that use TLS binding (e.g.
+		// Tinfoil), verify the live upstream TLS peer SPKI matches the
+		// attested tls_key_fp on EVERY response — cache hit or miss. A
+		// TLS-binding provider with no attested fingerprint (empty
+		// tlsKeyFP: cache entry predating this field, or attestation that
+		// failed to produce one) fails closed rather than skipping the
+		// check.
+		if err == nil && resp != nil && prov.UsesTLSBinding {
+			if tlsKeyFP == "" {
+				cancel()
+				zeroE2EE(session, meta, ehbp)
+				resp.Body.Close()
+				return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
+					&httpError{http.StatusBadGateway, "tls_binding_failed",
+						errors.New("upstream TLS binding required but no attested tls_key_fp available; failing closed")}
+			}
+			if spkiErr := s.verifyUpstreamTLSBinding(ctx, prov, upstreamModel, resp, tlsKeyFP); spkiErr != nil {
 				cancel()
 				zeroE2EE(session, meta, ehbp)
 				resp.Body.Close()
