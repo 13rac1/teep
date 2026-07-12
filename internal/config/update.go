@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -45,13 +46,22 @@ func UpdateConfig(path, providerName string, observed *ObservedMeasurements) err
 			return fmt.Errorf("read config: %w", err)
 		}
 		if len(data) > 0 {
-			if _, err := toml.Decode(string(data), &f); err != nil {
+			// Strict decode: fail closed on unknown keys rather than
+			// silently dropping them from the rewritten file. See
+			// config.go's loadTOML for the same pattern.
+			meta, err := toml.Decode(string(data), &f)
+			if err != nil {
 				return fmt.Errorf("parse config: %w", err)
 			}
-			// Backup original.
+			if undecoded := meta.Undecoded(); len(undecoded) > 0 {
+				return fmt.Errorf("unknown config keys: %v (refusing to rewrite; update teep or remove the key)", undecoded)
+			}
+
+			// Backup original before rewriting.
 			if err := os.WriteFile(path+".bak", data, 0o600); err != nil {
 				return fmt.Errorf("backup config: %w", err)
 			}
+			warnIfCommentsPresent(path, data)
 		}
 	}
 
@@ -75,13 +85,31 @@ func UpdateConfig(path, providerName string, observed *ObservedMeasurements) err
 }
 
 // updateFile mirrors the TOML config structure for update editing.
-// Note: toml.Decode into a struct drops unknown keys and all comments;
-// the .bak backup preserves the original file for manual recovery.
+// Note: strict-decoded (see UpdateConfig) so unknown keys refuse the
+// update rather than being silently dropped; comments are still lost on
+// rewrite (a loud notice is printed and the .bak backup preserves the
+// original file for manual recovery).
+//
+// AllowFail fields use *[]string (not []string+omitempty) so that an
+// absent key (nil pointer, omitted on encode) round-trips distinctly from
+// an explicitly-empty list (`allow_fail = []`, non-nil pointer to an empty
+// slice, emitted verbatim on encode). Collapsing the two via omitempty
+// would silently downgrade an explicit "enforce all factors" back to the
+// weaker Go defaults on the next rewrite.
 type updateFile struct {
 	Providers map[string]updateProvider `toml:"providers,omitempty"`
-	MaxConns  int                       `toml:"max_conns,omitempty"`
-	AllowFail []string                  `toml:"allow_fail,omitempty"`
-	Policy    updatePolicy              `toml:"policy,omitempty"`
+	// MaxConns uses "omitzero" (not "omitempty"): the BurntSushi/toml
+	// encoder's "omitempty" only recognizes zero-length arrays/slices/maps/
+	// strings, structs-of-zero-values, and bool false — it does NOT treat a
+	// zero int as empty (that is what "omitzero" is for). Tagging an int
+	// field "omitempty" is a no-op on encode, so an unset max_conns was
+	// always rewritten back out as the literal `max_conns = 0`, which then
+	// fails strict validation on the next Load() ("max_conns must be a
+	// positive integer, got 0"). max_conns has no valid zero value, so
+	// "omitzero" (omit when 0) is the correct and sufficient fix.
+	MaxConns  int          `toml:"max_conns,omitzero"`
+	AllowFail *[]string    `toml:"allow_fail"`
+	Policy    updatePolicy `toml:"policy,omitempty"`
 }
 
 type updateProvider struct {
@@ -89,18 +117,18 @@ type updateProvider struct {
 	APIKeyEnv string       `toml:"api_key_env,omitempty"`
 	BaseURL   string       `toml:"base_url,omitempty"`
 	E2EE      bool         `toml:"e2ee,omitempty"`
-	AllowFail []string     `toml:"allow_fail,omitempty"`
+	AllowFail *[]string    `toml:"allow_fail"`
 	Policy    updatePolicy `toml:"policy,omitempty"`
 }
 
 type updatePolicy struct {
-	AllowFail   []string `toml:"allow_fail,omitempty"`
-	MRTDAllow   []string `toml:"mrtd_allow,omitempty"`
-	MRSEAMAllow []string `toml:"mrseam_allow,omitempty"`
-	RTMR0Allow  []string `toml:"rtmr0_allow,omitempty"`
-	RTMR1Allow  []string `toml:"rtmr1_allow,omitempty"`
-	RTMR2Allow  []string `toml:"rtmr2_allow,omitempty"`
-	RTMR3Allow  []string `toml:"rtmr3_allow,omitempty"`
+	AllowFail   *[]string `toml:"allow_fail"`
+	MRTDAllow   []string  `toml:"mrtd_allow,omitempty"`
+	MRSEAMAllow []string  `toml:"mrseam_allow,omitempty"`
+	RTMR0Allow  []string  `toml:"rtmr0_allow,omitempty"`
+	RTMR1Allow  []string  `toml:"rtmr1_allow,omitempty"`
+	RTMR2Allow  []string  `toml:"rtmr2_allow,omitempty"`
+	RTMR3Allow  []string  `toml:"rtmr3_allow,omitempty"`
 
 	GatewayMRTDAllow   []string `toml:"gateway_mrtd_allow,omitempty"`
 	GatewayMRSEAMAllow []string `toml:"gateway_mrseam_allow,omitempty"`
@@ -170,4 +198,57 @@ func writeConfig(path string, f *updateFile) error {
 		return fmt.Errorf("create config directory: %w", err)
 	}
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+// warnIfCommentsPresent prints a prominent, unmissable notice to stderr when
+// the original config file contains comments. --update-config round-trips
+// the file through TOML structs, which does not preserve comments; silently
+// dropping them would be a surprising loss for a maintenance command. The
+// original content (comments included) is always available at path+".bak".
+func warnIfCommentsPresent(path string, data []byte) {
+	if !containsComment(data) {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\n"+
+		"*** WARNING: %s contains comments.\n"+
+		"*** --update-config does NOT preserve comments; they will be\n"+
+		"*** dropped from the rewritten file.\n"+
+		"*** The original file (with comments) has been saved to %s.\n\n",
+		path, path+".bak")
+}
+
+// containsComment reports whether data contains a TOML comment: a '#' that
+// is not inside a basic ("...") or literal ('...') string, on any line.
+func containsComment(data []byte) bool {
+	return slices.ContainsFunc(strings.Split(string(data), "\n"), lineHasComment)
+}
+
+// lineHasComment reports whether line contains a TOML comment marker,
+// tracking basic and literal string state so a '#' inside a quoted value
+// (e.g. an API key) is not mistaken for a comment.
+func lineHasComment(line string) bool {
+	var inBasic, inLiteral bool
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case inBasic:
+			switch c {
+			case '\\':
+				i++ // skip escaped character
+			case '"':
+				inBasic = false
+			}
+		case inLiteral:
+			if c == '\'' {
+				inLiteral = false
+			}
+		case c == '"':
+			inBasic = true
+		case c == '\'':
+			inLiteral = true
+		case c == '#':
+			return true
+		}
+	}
+	return false
 }
