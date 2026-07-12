@@ -583,10 +583,10 @@ func TestEvalTDXParseDependent(t *testing.T) {
 	t.Run("nil_tdx_all_fail", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		results := evalTEEParseDependent(&ReportInput{Raw: raw})
-		if len(results) != 4 {
-			t.Fatalf("got %d results, want 4", len(results))
+		if len(results) != 3 {
+			t.Fatalf("got %d results, want 3", len(results))
 		}
-		for _, name := range []string{"tee_quote_structure", "tee_cert_chain", "tee_quote_signature", "tee_debug_disabled"} {
+		for _, name := range []string{"tee_quote_structure", "tee_cert_chain", "tee_quote_signature"} {
 			assertFactor(t, results, name, Fail)
 		}
 	})
@@ -595,21 +595,11 @@ func TestEvalTDXParseDependent(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		tdx := &TDXVerifyResult{TeeTCBSVN: make([]byte, 16)}
 		results := evalTEEParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
-		if len(results) != 4 {
-			t.Fatalf("got %d results, want 4", len(results))
+		if len(results) != 3 {
+			t.Fatalf("got %d results, want 3", len(results))
 		}
-		for _, name := range []string{"tee_quote_structure", "tee_cert_chain", "tee_quote_signature", "tee_debug_disabled"} {
+		for _, name := range []string{"tee_quote_structure", "tee_cert_chain", "tee_quote_signature"} {
 			assertFactor(t, results, name, Pass)
-		}
-	})
-
-	t.Run("debug_enabled", func(t *testing.T) {
-		raw := buildMinimalRaw(nonce, sigKey)
-		tdx := &TDXVerifyResult{DebugEnabled: true, TeeTCBSVN: make([]byte, 16)}
-		results := evalTEEParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
-		f := assertFactor(t, results, "tee_debug_disabled", Fail)
-		if !strings.Contains(f.Detail, "debug") {
-			t.Errorf("detail should mention debug: %s", f.Detail)
 		}
 	})
 
@@ -627,14 +617,158 @@ func TestEvalTDXParseDependent(t *testing.T) {
 		assertFactor(t, results, "tee_quote_signature", Fail)
 	})
 
-	t.Run("parse_err_skips_chain_sig_debug", func(t *testing.T) {
+	t.Run("parse_err_skips_chain_sig", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		tdx := &TDXVerifyResult{ParseErr: errors.New("bad quote")}
 		results := evalTEEParseDependent(&ReportInput{Raw: raw, Nonce: nonce, TDX: tdx})
 		assertFactor(t, results, "tee_quote_structure", Fail)
 		assertFactor(t, results, "tee_cert_chain", Skip)
 		assertFactor(t, results, "tee_quote_signature", Skip)
-		assertFactor(t, results, "tee_debug_disabled", Skip)
+	})
+}
+
+// TestEvalTEEDebugDisabled covers the dedicated tee_debug_disabled evaluator,
+// extracted from the parse-dependent evaluators so an indeterminate debug
+// state Fails directly instead of relying on Skip->Fail promotion.
+func TestEvalTEEDebugDisabled(t *testing.T) {
+	t.Run("nil_tdx_and_sev_fails_indeterminate", func(t *testing.T) {
+		results := evalTEEDebugDisabled(&ReportInput{})
+		f := assertSingleFactor(t, results, Fail)
+		if !strings.Contains(f.Detail, "cannot determine debug state") {
+			t.Errorf("detail should mention indeterminate debug state: %s", f.Detail)
+		}
+	})
+
+	t.Run("tdx_parse_err_fails_not_skip", func(t *testing.T) {
+		tdx := &TDXVerifyResult{ParseErr: errors.New("bad quote")}
+		f := assertSingleFactor(t, evalTEEDebugDisabled(&ReportInput{TDX: tdx}), Fail)
+		if !strings.Contains(f.Detail, "cannot determine debug state") {
+			t.Errorf("detail should mention indeterminate debug state: %s", f.Detail)
+		}
+	})
+
+	t.Run("tdx_debug_enabled_fails_blocked", func(t *testing.T) {
+		tdx := &TDXVerifyResult{DebugEnabled: true, TDAttributes: []byte{0x01, 0, 0, 0, 0, 0, 0, 0}}
+		f := assertSingleFactor(t, evalTEEDebugDisabled(&ReportInput{TDX: tdx}), Fail)
+		if !strings.Contains(f.Detail, "TD_ATTRIBUTES") || !strings.Contains(f.Detail, "bit 0") {
+			t.Errorf("detail should name TDX platform and bit checked: %s", f.Detail)
+		}
+	})
+
+	t.Run("tdx_debug_disabled_passes", func(t *testing.T) {
+		tdx := &TDXVerifyResult{TDAttributes: []byte{0, 0, 0, 0, 0, 0, 0, 0}}
+		f := assertSingleFactor(t, evalTEEDebugDisabled(&ReportInput{TDX: tdx}), Pass)
+		if !strings.Contains(f.Detail, "TD_ATTRIBUTES") {
+			t.Errorf("detail should name the bit checked: %s", f.Detail)
+		}
+	})
+
+	t.Run("sev_parse_err_fails_not_skip", func(t *testing.T) {
+		sev := &SEVVerifyResult{ParseErr: errors.New("bad report")}
+		f := assertSingleFactor(t, evalTEEDebugDisabled(&ReportInput{SEV: sev}), Fail)
+		if !strings.Contains(f.Detail, "cannot determine debug state") {
+			t.Errorf("detail should mention indeterminate debug state: %s", f.Detail)
+		}
+	})
+
+	t.Run("sev_debug_enabled_fails_blocked", func(t *testing.T) {
+		sev := &SEVVerifyResult{DebugEnabled: true, GuestPolicy: 1 << 19}
+		f := assertSingleFactor(t, evalTEEDebugDisabled(&ReportInput{SEV: sev}), Fail)
+		if !strings.Contains(f.Detail, "bit 19") {
+			t.Errorf("detail should name SEV platform and bit checked: %s", f.Detail)
+		}
+	})
+
+	t.Run("sev_debug_disabled_passes", func(t *testing.T) {
+		sev := &SEVVerifyResult{GuestPolicy: 0}
+		f := assertSingleFactor(t, evalTEEDebugDisabled(&ReportInput{SEV: sev}), Pass)
+		if !strings.Contains(f.Detail, "bit 19") {
+			t.Errorf("detail should name the bit checked: %s", f.Detail)
+		}
+	})
+}
+
+// TestTEEDebugDisabledNeverAllowFailed pins the "tee_debug_disabled" and
+// "gateway_tee_debug_disabled" factors as enforced-by-default: they must
+// never appear in any *DefaultAllowFail list, for any provider, now or in
+// the future. This is a regression test for GH issue #119 — the dedicated
+// evaluator extraction must not accidentally make the factor exemptible.
+func TestTEEDebugDisabledNeverAllowFailed(t *testing.T) {
+	lists := map[string][]string{
+		"DefaultAllowFail":              DefaultAllowFail,
+		"NearcloudDefaultAllowFail":     NearcloudDefaultAllowFail,
+		"NeardirectDefaultAllowFail":    NeardirectDefaultAllowFail,
+		"NanoGPTDefaultAllowFail":       NanoGPTDefaultAllowFail,
+		"PhalaCloudDefaultAllowFail":    PhalaCloudDefaultAllowFail,
+		"ChutesDefaultAllowFail":        ChutesDefaultAllowFail,
+		"TinfoilCloudDefaultAllowFail":  TinfoilCloudDefaultAllowFail,
+		"TinfoilDirectDefaultAllowFail": TinfoilDirectDefaultAllowFail,
+	}
+	for listName, list := range lists {
+		if slices.Contains(list, FactorTEEDebugDisabled) {
+			t.Errorf("%s must not contain %q (must be enforced by default)", listName, FactorTEEDebugDisabled)
+		}
+		if slices.Contains(list, FactorGWDebugDisabled) {
+			t.Errorf("%s must not contain %q (must be enforced by default)", listName, FactorGWDebugDisabled)
+		}
+	}
+}
+
+// TestBuildReport_TEEDebugDisabledBlocks is a table test of the full
+// BuildReport path (not just the bare evaluator) for the tee_debug_disabled
+// factor: a set debug bit, on either platform, must Fail and Blocked() must
+// be true; an indeterminate debug state (no parseable quote at all) must
+// also Fail — never Skip — and block.
+func TestBuildReport_TEEDebugDisabledBlocks(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+
+	t.Run("tdx_debug_bit_set", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		tdx := &TDXVerifyResult{DebugEnabled: true, TeeTCBSVN: make([]byte, 16), TDAttributes: []byte{0x01, 0, 0, 0, 0, 0, 0, 0}}
+		report := BuildReport(&ReportInput{
+			Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, TDX: tdx, AllowFail: DefaultAllowFail,
+		})
+		f := findFactor(t, report, FactorTEEDebugDisabled)
+		if f.Status != Fail {
+			t.Errorf("tee_debug_disabled: got %s, want Fail", f.Status)
+		}
+		if !report.Blocked() {
+			t.Error("Blocked() should be true when the TDX debug bit is set")
+		}
+	})
+
+	t.Run("sev_debug_bit_set", func(t *testing.T) {
+		in := buildSEVInput(&SEVVerifyResult{
+			Measurement:  make([]byte, 48),
+			DebugEnabled: true,
+			GuestPolicy:  1 << 19,
+		})
+		in.Provider = "venice"
+		in.AllowFail = DefaultAllowFail
+		report := BuildReport(in)
+		f := findFactor(t, report, FactorTEEDebugDisabled)
+		if f.Status != Fail {
+			t.Errorf("tee_debug_disabled: got %s, want Fail", f.Status)
+		}
+		if !report.Blocked() {
+			t.Error("Blocked() should be true when the SEV-SNP guest policy debug bit is set")
+		}
+	})
+
+	t.Run("indeterminate_nil_tdx_and_sev_fails_not_skip", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.IntelQuote = "" // no quote of any kind
+		report := BuildReport(&ReportInput{
+			Provider: "venice", Model: "m", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail,
+		})
+		f := findFactor(t, report, FactorTEEDebugDisabled)
+		if f.Status != Fail {
+			t.Errorf("tee_debug_disabled: got %s, want Fail (never Skip when indeterminate)", f.Status)
+		}
+		if !report.Blocked() {
+			t.Error("Blocked() should be true when the debug state is indeterminate")
+		}
 	})
 }
 
@@ -1010,7 +1144,6 @@ func TestEvalSEVParseDependent(t *testing.T) {
 		assertFactor(t, results, "tee_quote_structure", Fail)
 		assertFactor(t, results, "tee_cert_chain", Skip)
 		assertFactor(t, results, "tee_quote_signature", Skip)
-		assertFactor(t, results, "tee_debug_disabled", Skip)
 	})
 
 	t.Run("offline_pass", func(t *testing.T) {
@@ -1021,7 +1154,6 @@ func TestEvalSEVParseDependent(t *testing.T) {
 		assertFactor(t, results, "tee_quote_structure", Pass)
 		assertFactor(t, results, "tee_cert_chain", Skip)      // offline
 		assertFactor(t, results, "tee_quote_signature", Skip) // offline
-		assertFactor(t, results, "tee_debug_disabled", Pass)
 	})
 
 	t.Run("online_pass", func(t *testing.T) {
@@ -1050,15 +1182,6 @@ func TestEvalSEVParseDependent(t *testing.T) {
 		})
 		results := evalTEEParseDependent(in)
 		assertFactor(t, results, "tee_quote_signature", Fail)
-	})
-
-	t.Run("debug_enabled", func(t *testing.T) {
-		in := buildSEVInput(&SEVVerifyResult{
-			Measurement:  make([]byte, 48),
-			DebugEnabled: true,
-		})
-		results := evalTEEParseDependent(in)
-		assertFactor(t, results, "tee_debug_disabled", Fail)
 	})
 }
 
@@ -4055,13 +4178,13 @@ func TestEvalGatewayTDXParseDependent_ParseErr(t *testing.T) {
 		GatewayTDX: &TDXVerifyResult{ParseErr: errors.New("bad quote")},
 	}
 	results := evalGatewayTDXParseDependent(in)
-	if len(results) != 4 {
-		t.Fatalf("expected 4 results, got %d", len(results))
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 	if results[0].Status != Fail {
 		t.Errorf("first result status = %v, want Fail", results[0].Status)
 	}
-	for i := 1; i < 4; i++ {
+	for i := 1; i < 3; i++ {
 		if results[i].Status != Skip {
 			t.Errorf("result[%d] status = %v, want Skip", i, results[i].Status)
 		}
@@ -4074,23 +4197,58 @@ func TestEvalGatewayTDXParseDependent_Errors(t *testing.T) {
 		GatewayTDX: &TDXVerifyResult{
 			CertChainErr: errors.New("cert chain failed"),
 			SignatureErr: errors.New("sig failed"),
-			DebugEnabled: true,
 		},
 	}
 	results := evalGatewayTDXParseDependent(in)
-	if len(results) != 4 {
-		t.Fatalf("expected 4 results, got %d", len(results))
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 	// gateway_tee_quote_structure always passes when ParseErr == nil.
 	if results[0].Status != Pass {
 		t.Errorf("gateway_tee_quote_structure = %v, want Pass", results[0].Status)
 	}
-	// cert chain, signature, debug should all fail.
+	// cert chain, signature should both fail.
 	for _, r := range results[1:] {
 		if r.Status != Fail {
 			t.Errorf("result %q = %v, want Fail", r.Name, r.Status)
 		}
 	}
+}
+
+// --------------------------------------------------------------------------
+// evalGatewayTEEDebugDisabled
+// --------------------------------------------------------------------------
+
+func TestEvalGatewayTEEDebugDisabled(t *testing.T) {
+	t.Run("parse_err_fails_not_skip", func(t *testing.T) {
+		in := &ReportInput{
+			Raw:        &RawAttestation{},
+			GatewayTDX: &TDXVerifyResult{ParseErr: errors.New("bad quote")},
+		}
+		f := assertSingleFactor(t, evalGatewayTEEDebugDisabled(in), Fail)
+		if !strings.Contains(f.Detail, "cannot determine debug state") {
+			t.Errorf("detail should mention indeterminate debug state: %s", f.Detail)
+		}
+	})
+
+	t.Run("debug_enabled_fails_blocked", func(t *testing.T) {
+		in := &ReportInput{
+			Raw:        &RawAttestation{},
+			GatewayTDX: &TDXVerifyResult{DebugEnabled: true, TDAttributes: []byte{0x01, 0, 0, 0, 0, 0, 0, 0}},
+		}
+		f := assertSingleFactor(t, evalGatewayTEEDebugDisabled(in), Fail)
+		if !strings.Contains(f.Detail, "TD_ATTRIBUTES") {
+			t.Errorf("detail should name TDX platform and bit checked: %s", f.Detail)
+		}
+	})
+
+	t.Run("debug_disabled_passes", func(t *testing.T) {
+		in := &ReportInput{
+			Raw:        &RawAttestation{},
+			GatewayTDX: &TDXVerifyResult{TDAttributes: []byte{0, 0, 0, 0, 0, 0, 0, 0}},
+		}
+		assertSingleFactor(t, evalGatewayTEEDebugDisabled(in), Pass)
+	})
 }
 
 // --------------------------------------------------------------------------

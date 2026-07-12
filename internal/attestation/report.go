@@ -825,6 +825,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalNonceMatch,
 		evalTEEQuotePresent,
 		evalTEEParseDependent,
+		evalTEEDebugDisabled,
 		evalTEEMeasurement,
 		evalTEEHardwareConfig,
 		evalTEEBootConfig,
@@ -862,6 +863,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 			evalGatewayNonceMatch,
 			evalGatewayTDXQuotePresent,
 			evalGatewayTDXParseDependent,
+			evalGatewayTEEDebugDisabled,
 			evalGatewayTDXMeasurement,
 			evalGatewayTDXHardwareConfig,
 			evalGatewayTDXBootConfig,
@@ -911,7 +913,6 @@ func evalTEEParseDependent(in *ReportInput) []FactorResult {
 			{Tier: TierCore, Name: FactorTEEQuoteStructure, Status: Fail, Detail: "no TEE quote/report available to parse"},
 			{Tier: TierCore, Name: FactorTEECertChain, Status: Fail, Detail: "no TEE quote/report available; cannot verify cert chain"},
 			{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Fail, Detail: "no TEE quote/report available; cannot verify signature"},
-			{Tier: TierCore, Name: FactorTEEDebugDisabled, Status: Fail, Detail: "no TEE quote/report available; cannot check debug flag"},
 		}
 	}
 }
@@ -922,7 +923,6 @@ func evalTDXParseDependent(in *ReportInput) []FactorResult {
 			{Tier: TierCore, Name: FactorTEEQuoteStructure, Status: Fail, Detail: fmt.Sprintf("TDX quote parse failed: %v", in.TDX.ParseErr)},
 			{Tier: TierCore, Name: FactorTEECertChain, Status: Skip, Detail: "quote parse failed; cert chain not extracted"},
 			{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Skip, Detail: "quote parse failed; signature not verified"},
-			{Tier: TierCore, Name: FactorTEEDebugDisabled, Status: Skip, Detail: "quote parse failed; debug flag not checked"},
 		}
 	}
 
@@ -940,12 +940,6 @@ func evalTDXParseDependent(in *ReportInput) []FactorResult {
 		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Pass, Detail: "quote signature verified"})
 	}
 
-	if in.TDX.DebugEnabled {
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEDebugDisabled, Status: Fail, Detail: "TD_ATTRIBUTES debug bit is set — this is a debug enclave; do not trust for production"})
-	} else {
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEDebugDisabled, Status: Pass, Detail: "debug bit is 0 (production enclave)"})
-	}
-
 	return results
 }
 
@@ -955,27 +949,58 @@ func evalSEVParseDependent(in *ReportInput) []FactorResult {
 			{Tier: TierCore, Name: FactorTEEQuoteStructure, Status: Fail, Detail: fmt.Sprintf("SEV-SNP report parse failed: %v", in.SEV.ParseErr)},
 			{Tier: TierCore, Name: FactorTEECertChain, Status: Skip, Detail: "SEV-SNP report parse failed; cert chain not verified"},
 			{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Skip, Detail: "SEV-SNP report parse failed; signature not verified"},
-			{Tier: TierCore, Name: FactorTEEDebugDisabled, Status: Skip, Detail: "SEV-SNP report parse failed; debug flag not checked"},
 		}
 	}
 
 	measHex := hex.EncodeToString(in.SEV.Measurement)
-	results := []FactorResult{
-		{Tier: TierCore, Name: FactorTEEQuoteStructure, Status: Pass,
+	results := make([]FactorResult, 0, 3)
+	results = append(results,
+		FactorResult{Tier: TierCore, Name: FactorTEEQuoteStructure, Status: Pass,
 			Detail: fmt.Sprintf("valid SEV-SNP report, measurement: %s...", prefixHex(measHex))},
-	}
-
-	results = append(results, evalSEVCertChainFactor(in.SEV), evalSEVQuoteSignatureFactor(in.SEV))
-
-	if in.SEV.DebugEnabled {
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEDebugDisabled, Status: Fail,
-			Detail: "SEV-SNP guest policy debug bit is set; do not trust for production"})
-	} else {
-		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEDebugDisabled, Status: Pass,
-			Detail: "debug bit is 0 (production guest)"})
-	}
+		evalSEVCertChainFactor(in.SEV), evalSEVQuoteSignatureFactor(in.SEV))
 
 	return results
+}
+
+// evalTEEDebugDisabled renders the dedicated tee_debug_disabled factor,
+// independent of quote/report parsing outcome. An indeterminate debug state
+// (no quote, or a parse failure) is rendered as a direct Fail — never Skip —
+// since this is an enforced-by-default factor and an unreadable debug bit
+// must block rather than rely on Skip→Fail promotion.
+func evalTEEDebugDisabled(in *ReportInput) []FactorResult {
+	switch {
+	case in.TDX != nil:
+		return tdxDebugDisabledFactor(TierCore, FactorTEEDebugDisabled, in.TDX)
+	case in.SEV != nil:
+		return sevDebugDisabledFactor(TierCore, FactorTEEDebugDisabled, in.SEV)
+	default:
+		return factor(TierCore, FactorTEEDebugDisabled, Fail, "no TEE quote/report available; cannot determine debug state")
+	}
+}
+
+// tdxDebugDisabledFactor evaluates TD_ATTRIBUTES bit 0 (TUD.DEBUG) from a
+// parsed TDX quote. Shared by the core and gateway tiers (parity: both are
+// TDX quotes) — tier and factor name are supplied by the caller.
+func tdxDebugDisabledFactor(tier, name string, tdx *TDXVerifyResult) []FactorResult {
+	if tdx.ParseErr != nil {
+		return factor(tier, name, Fail, fmt.Sprintf("TDX quote parse failed; cannot determine debug state: %v", tdx.ParseErr))
+	}
+	if tdx.DebugEnabled {
+		return factor(tier, name, Fail, fmt.Sprintf("TD_ATTRIBUTES bit 0 (TUD.DEBUG) is set (raw: %x) — this is a debug enclave; do not trust for production", tdx.TDAttributes))
+	}
+	return factor(tier, name, Pass, fmt.Sprintf("TD_ATTRIBUTES bit 0 (TUD.DEBUG) is 0 — production enclave (raw: %x)", tdx.TDAttributes))
+}
+
+// sevDebugDisabledFactor evaluates SEV-SNP guest policy bit 19 (DEBUG) from
+// a parsed SEV-SNP report.
+func sevDebugDisabledFactor(tier, name string, sev *SEVVerifyResult) []FactorResult {
+	if sev.ParseErr != nil {
+		return factor(tier, name, Fail, fmt.Sprintf("SEV-SNP report parse failed; cannot determine debug state: %v", sev.ParseErr))
+	}
+	if sev.DebugEnabled {
+		return factor(tier, name, Fail, fmt.Sprintf("guest policy bit 19 (DEBUG) is set (policy: 0x%x) — do not trust for production", sev.GuestPolicy))
+	}
+	return factor(tier, name, Pass, fmt.Sprintf("guest policy bit 19 (DEBUG) is 0 — production guest (policy: 0x%x)", sev.GuestPolicy))
 }
 
 // evalSEVCertChainFactor renders the tee_cert_chain factor from a SEV
@@ -2411,11 +2436,10 @@ func evalGatewayTDXParseDependent(in *ReportInput) []FactorResult {
 			{Tier: TierGateway, Name: FactorGWQuoteStructure, Status: Fail, Detail: fmt.Sprintf("gateway TDX quote parse failed: %v", in.GatewayTDX.ParseErr)},
 			{Tier: TierGateway, Name: FactorGWCertChain, Status: Skip, Detail: "gateway quote parse failed; cert chain not extracted"},
 			{Tier: TierGateway, Name: FactorGWQuoteSignature, Status: Skip, Detail: "gateway quote parse failed; signature not verified"},
-			{Tier: TierGateway, Name: FactorGWDebugDisabled, Status: Skip, Detail: "gateway quote parse failed; debug flag not checked"},
 		}
 	}
 
-	results := make([]FactorResult, 0, 4)
+	results := make([]FactorResult, 0, 3)
 	results = append(results, gatewayTDXQuoteStructure(in))
 
 	// gateway_tee_cert_chain
@@ -2432,14 +2456,14 @@ func evalGatewayTDXParseDependent(in *ReportInput) []FactorResult {
 		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWQuoteSignature, Status: Pass, Detail: "gateway quote signature verified"})
 	}
 
-	// gateway_tee_debug_disabled
-	if in.GatewayTDX.DebugEnabled {
-		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWDebugDisabled, Status: Fail, Detail: "gateway TD_ATTRIBUTES debug bit is set — debug enclave"})
-	} else {
-		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWDebugDisabled, Status: Pass, Detail: "gateway debug bit is 0 (production enclave)"})
-	}
-
 	return results
+}
+
+// evalGatewayTEEDebugDisabled renders the dedicated gateway_tee_debug_disabled
+// factor. Precondition: in.GatewayTDX != nil (guaranteed by buildEvaluators,
+// mirrors evalGatewayTDXParseDependent).
+func evalGatewayTEEDebugDisabled(in *ReportInput) []FactorResult {
+	return tdxDebugDisabledFactor(TierGateway, FactorGWDebugDisabled, in.GatewayTDX)
 }
 
 // gatewayTDXQuoteStructure evaluates the gateway_tee_quote_structure factor —
