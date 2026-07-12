@@ -495,7 +495,9 @@ func New(cfg *config.Config) (*Server, error) {
 	s.nvidiaVerifier = attestation.DefaultNVIDIAVerifier()
 	s.collateral = attestation.NewCollateralGetter(s.attestClient)
 	s.verifyQuote = attestation.NewTDXVerifier(cfg.Offline, s.collateral)
-	s.sevVerifier = attestation.NewSEVVerifier(cfg.Offline, attestation.NewSEVCertGetter(s.attestClient))
+	// Zero time.Time means "use the real wall clock" (see NewSEVVerifier);
+	// the live proxy has no fixed verification time like replay fixtures do.
+	s.sevVerifier = attestation.NewSEVVerifier(cfg.Offline, attestation.NewSEVCertGetter(s.attestClient), time.Time{})
 
 	for name, cp := range cfg.Providers {
 		if cp == nil {
