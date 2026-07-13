@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -318,6 +319,133 @@ func TestExtractObserved_EmptyMetadata(t *testing.T) {
 	obs := extractObserved(report)
 	if obs.MRSeam != "" || obs.MRTD != "" || obs.RTMR0 != "" {
 		t.Error("all fields should be empty for empty metadata")
+	}
+}
+
+// --------------------------------------------------------------------------
+// pinConfig / warnUnauthenticQuotePin
+// --------------------------------------------------------------------------
+
+// captureSlog redirects the default slog logger to a buffer for the
+// duration of the test and restores the original logger afterward.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// reportWithFactor builds a minimal report containing one named factor at
+// the given status/enforced state, alongside a passing baseline factor.
+func reportWithFactor(name string, status attestation.Status, enforced bool) *attestation.VerificationReport {
+	return &attestation.VerificationReport{
+		Provider: "testprov",
+		Factors: []attestation.FactorResult{
+			{Name: "nonce_match", Status: attestation.Pass, Enforced: true, Tier: attestation.TierCore},
+			{Name: name, Status: status, Enforced: enforced, Tier: attestation.TierCore},
+		},
+	}
+}
+
+func TestPinConfig_FailingQuoteSignature_WarnsAndPins(t *testing.T) {
+	buf := captureSlog(t)
+	report := reportWithFactor(attestation.FactorTEEQuoteSignature, attestation.Fail, false)
+	path := filepath.Join(t.TempDir(), "config.toml")
+
+	if err := pinConfig(report, "testprov", false, path); err != nil {
+		t.Fatalf("pinConfig() error = %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "WARN") {
+		t.Errorf("expected a WARN-level log line, got: %s", out)
+	}
+	if !strings.Contains(out, attestation.FactorTEEQuoteSignature) {
+		t.Errorf("expected warning to name %q, got: %s", attestation.FactorTEEQuoteSignature, out)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("expected config to still be pinned despite the warning: %v", err)
+	}
+}
+
+func TestPinConfig_FailingCertChain_WarnsAndPins(t *testing.T) {
+	buf := captureSlog(t)
+	report := reportWithFactor(attestation.FactorTEECertChain, attestation.Fail, false)
+	path := filepath.Join(t.TempDir(), "config.toml")
+
+	if err := pinConfig(report, "testprov", false, path); err != nil {
+		t.Fatalf("pinConfig() error = %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "WARN") || !strings.Contains(out, attestation.FactorTEECertChain) {
+		t.Errorf("expected WARN naming %q, got: %s", attestation.FactorTEECertChain, out)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("expected config to still be pinned despite the warning: %v", err)
+	}
+}
+
+// TestPinConfig_EnforcedFailingFactor_StillWarns confirms the warning fires
+// regardless of the factor's Enforced bit — a genuine crypto failure that
+// happens to be enforced for some tier is just as much a reason to warn as
+// a waived one; H1 already blocks the enforced case via Blocked(), this
+// warning is the belt-and-suspenders signal for whichever tier reaches here.
+func TestPinConfig_EnforcedFailingFactor_StillWarns(t *testing.T) {
+	buf := captureSlog(t)
+	report := reportWithFactor(attestation.FactorTEEQuoteSignature, attestation.Fail, true)
+	path := filepath.Join(t.TempDir(), "config.toml")
+
+	if err := pinConfig(report, "testprov", false, path); err != nil {
+		t.Fatalf("pinConfig() error = %v", err)
+	}
+	if !strings.Contains(buf.String(), attestation.FactorTEEQuoteSignature) {
+		t.Errorf("expected warning even for an enforced failing factor, got: %s", buf.String())
+	}
+}
+
+func TestPinConfig_CleanReport_NoWarning(t *testing.T) {
+	buf := captureSlog(t)
+	report := reportWithFactor(attestation.FactorTEEQuoteSignature, attestation.Pass, false)
+	path := filepath.Join(t.TempDir(), "config.toml")
+
+	if err := pinConfig(report, "testprov", false, path); err != nil {
+		t.Fatalf("pinConfig() error = %v", err)
+	}
+	if strings.Contains(buf.String(), "WARN") {
+		t.Errorf("expected no warning for a clean report, got: %s", buf.String())
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("expected config to be pinned: %v", err)
+	}
+}
+
+// TestPinConfig_UnrelatedFailure_NoWarning confirms the warning is scoped to
+// quote-authenticity factors only — an unrelated waived factor failing
+// (e.g. tee_measurement) must not trigger it.
+func TestPinConfig_UnrelatedFailure_NoWarning(t *testing.T) {
+	buf := captureSlog(t)
+	report := reportWithFactor(attestation.FactorTEEMeasurement, attestation.Fail, false)
+	path := filepath.Join(t.TempDir(), "config.toml")
+
+	if err := pinConfig(report, "testprov", false, path); err != nil {
+		t.Fatalf("pinConfig() error = %v", err)
+	}
+	if strings.Contains(buf.String(), "WARN") {
+		t.Errorf("expected no warning for an unrelated failing factor, got: %s", buf.String())
+	}
+}
+
+func TestPinConfig_Blocked_Refuses(t *testing.T) {
+	report := reportWithFactor(attestation.FactorTEEQuoteSignature, attestation.Fail, true)
+	err := pinConfig(report, "testprov", true, filepath.Join(t.TempDir(), "config.toml"))
+	if err == nil {
+		t.Fatal("expected refusal when report is blocked")
+	}
+	if !strings.Contains(err.Error(), "refusing --update-config") {
+		t.Errorf("error %q should mention refusing --update-config", err)
 	}
 }
 

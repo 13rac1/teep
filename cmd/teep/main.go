@@ -427,26 +427,38 @@ func runVerify(ctx context.Context, provider, model, captureDir string, offline,
 	blocked := report.Blocked()
 
 	if updateConfig || configOut != "" {
-		if blocked {
-			return errors.New("refusing --update-config: attestation blocked (measurements may be untrustworthy)")
+		if err := pinConfig(report, provider, blocked, configOut); err != nil {
+			return err
 		}
-		outPath := configOut
-		if outPath == "" {
-			outPath = os.Getenv("TEEP_CONFIG")
-		}
-		if outPath == "" {
-			return errors.New("--update-config requires $TEEP_CONFIG or --config-out")
-		}
-		observed := extractObserved(report)
-		if err := config.UpdateConfig(outPath, provider, &observed); err != nil {
-			return fmt.Errorf("update config: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Config updated: %s (provider %s)\n", outPath, provider)
 	}
 
 	if blocked {
 		return errSilentExit
 	}
+	return nil
+}
+
+// pinConfig implements the --update-config / --config-out path: it refuses
+// to pin a blocked report, otherwise resolves the output path, warns (but
+// does not refuse) if the report's quote-authenticity factors failed, then
+// writes the observed measurements as the new trust baseline.
+func pinConfig(report *attestation.VerificationReport, provider string, blocked bool, configOut string) error {
+	if blocked {
+		return errors.New("refusing --update-config: attestation blocked (measurements may be untrustworthy)")
+	}
+	outPath := configOut
+	if outPath == "" {
+		outPath = os.Getenv("TEEP_CONFIG")
+	}
+	if outPath == "" {
+		return errors.New("--update-config requires $TEEP_CONFIG or --config-out")
+	}
+	warnUnauthenticQuotePin(report)
+	observed := extractObserved(report)
+	if err := config.UpdateConfig(outPath, provider, &observed); err != nil {
+		return fmt.Errorf("update config: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Config updated: %s (provider %s)\n", outPath, provider)
 	return nil
 }
 
@@ -484,6 +496,50 @@ func runVerification(ctx context.Context, opts *verify.Options) (*attestation.Ve
 	opts.Config = cfg
 	opts.Provider = cp
 	return verify.Run(ctx, opts)
+}
+
+// quoteAuthenticityFactors are the factors that establish the TEE quote
+// itself is genuine hardware output — a valid Intel/AMD signature over a
+// valid certificate chain. Everything else in a report (measurements,
+// report-data binding, freshness, ...) is only meaningful if these hold: a
+// forged or replayed-from-a-foreign-machine quote can carry arbitrary
+// "valid-looking" measurements.
+var quoteAuthenticityFactors = []string{
+	attestation.FactorTEEQuoteSignature,
+	attestation.FactorTEECertChain,
+}
+
+// warnUnauthenticQuotePin logs a loud, non-blocking warning when a report
+// being pinned via --update-config has a failing quote-authenticity factor
+// (tee_quote_signature and/or tee_cert_chain), regardless of whether that
+// factor is enforced or waived for the provider's tier.
+//
+// This does not refuse the pin: some providers/tiers (nanogpt, phalacloud,
+// venice, nearcloud) intentionally waive these factors and must keep
+// serving in a degraded state rather than being blocked outright. But
+// --update-config pins the report's measurements as the user's trust
+// baseline (TOFU), and doing that from a quote whose hardware
+// signature/cert chain did not verify anchors that baseline to a
+// potentially forged or foreign quote. The operator needs to see this even
+// though the CLI proceeds.
+func warnUnauthenticQuotePin(report *attestation.VerificationReport) {
+	var failing []string
+	for _, name := range quoteAuthenticityFactors {
+		for _, f := range report.Factors {
+			if f.Name == name && f.Status == attestation.Fail {
+				failing = append(failing, name)
+			}
+		}
+	}
+	if len(failing) == 0 {
+		return
+	}
+	slog.Warn("pinning measurements from a report with failing quote-authenticity factors: "+
+		"the TEE hardware signature and/or certificate chain did not verify, so this quote "+
+		"may be forged or replayed from a foreign machine — the pinned measurements inherit "+
+		"that risk as the trust baseline",
+		"failing_factors", strings.Join(failing, ", "),
+		"provider", report.Provider)
 }
 
 // extractObserved builds an ObservedMeasurements from the verification report
