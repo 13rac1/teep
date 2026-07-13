@@ -715,6 +715,17 @@ Example TOML:
 Flags:
   --offline           Skip external verification (Intel PCS, Proof of Cloud,
                       Certificate Transparency).
+  --strict            Enforce every attestation factor, dropping the
+                      Go-default allow_fail waivers that let low-assurance
+                      providers (nanogpt, phalacloud, venice, nearcloud) serve
+                      in a degraded-but-visible state. Under --strict, any
+                      provider that cannot fully attest every factor is
+                      blocked — with the current factor set, that may mean no
+                      provider serves. An explicit TOML allow_fail entry still
+                      waives that specific factor even under --strict.
+                      Overrides config enforcement = "default"; a config
+                      enforcement = "strict" is unaffected by omitting this
+                      flag.
   --log-level LEVEL   Set log verbosity: debug, info, warn, error (default: info).
 `)
 }
@@ -747,6 +758,9 @@ Optional flags:
   --offline         Skip external verification (Intel PCS collateral,
                     Proof of Cloud registry, Certificate Transparency).
                     PPID is still extracted locally.
+  --strict          Enforce every attestation factor, dropping the Go-default
+                    allow_fail waivers for this provider. Overrides config
+                    enforcement = "default".
   --update-config   Write observed TDX measurements to the config file at
                     $TEEP_CONFIG. Adds values to [providers.X.policy] with
                     deduplication. Creates a .bak backup of the original file.

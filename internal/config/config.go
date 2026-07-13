@@ -47,6 +47,19 @@ const (
 	// 45 seconds accommodates Chutes' multi-GPU evidence endpoint which
 	// consistently takes ~30 seconds for large TEE deployments.
 	AttestationTimeout = 45 * time.Second
+
+	// EnforcementDefault is the default enforcement profile: per-provider and
+	// global Go-default allow_fail waivers apply (see MergedAllowFail), so
+	// low-assurance providers with known-failing factors keep serving in a
+	// degraded-but-visible state.
+	EnforcementDefault = "default"
+
+	// EnforcementStrict is the opt-in enforcement profile: MergedAllowFail
+	// drops the Go-default waiver layer entirely, so every factor not
+	// explicitly waived via TOML allow_fail is enforced. With the current
+	// factor set this means every low-assurance provider is blocked — that
+	// is the intended, honest result of choosing maximum strictness.
+	EnforcementStrict = "strict"
 )
 
 // DefaultAllowFail lists the factor names that are allowed to fail without
@@ -141,6 +154,7 @@ type tomlFile struct {
 	MaxConns             int                       `toml:"max_conns"`
 	Policy               PolicyConfig              `toml:"policy"`
 	RepairPromptSandwich bool                      `toml:"repair_prompt_sandwich"`
+	Enforcement          string                    `toml:"enforcement"`
 }
 
 // ModelAlias records the resolved target of a client-facing model alias:
@@ -235,6 +249,17 @@ type Config struct {
 	// field (distinguishing "not set, inherit global" from "explicitly
 	// false"), mirroring the ProviderAllowFail pattern.
 	ProviderRepairPromptSandwich map[string]bool
+
+	// Enforcement selects the global enforcement profile: EnforcementDefault
+	// (the zero-value-safe default; low-assurance providers keep serving via
+	// Go-default allow_fail waivers) or EnforcementStrict (opt-in maximum
+	// strictness; MergedAllowFail drops the Go-default waiver layer so every
+	// factor not explicitly waived via TOML allow_fail is enforced). Set from
+	// the TOML `enforcement` key, defaulting to EnforcementDefault, and may
+	// be forced to EnforcementStrict by the --strict CLI flag via
+	// ApplyStrictFlag. Read-only after Load()/ApplyStrictFlag return — safe
+	// for concurrent reads from the proxy's hot request path.
+	Enforcement string
 }
 
 // warnIfRlimitLow logs a warning when the soft RLIMIT_NOFILE is below 1000,
@@ -315,6 +340,7 @@ func Load() (*Config, error) {
 		ProviderGatewayPolicies:      make(map[string]attestation.MeasurementPolicy),
 		ModelAliases:                 make(map[string]ModelAlias),
 		ProviderRepairPromptSandwich: make(map[string]bool),
+		Enforcement:                  EnforcementDefault,
 	}
 
 	configPath := os.Getenv("TEEP_CONFIG")
@@ -415,6 +441,13 @@ func loadTOML(cfg *Config, path string) error {
 		cfg.RepairPromptSandwich = f.RepairPromptSandwich
 	}
 
+	if meta.IsDefined("enforcement") {
+		if err := validateEnforcement(f.Enforcement); err != nil {
+			return fmt.Errorf("enforcement: %w", err)
+		}
+		cfg.Enforcement = f.Enforcement
+	}
+
 	aliases, err := buildModelAliases(f.Providers)
 	if err != nil {
 		return fmt.Errorf("model_aliases: %w", err)
@@ -512,6 +545,77 @@ func validateAllowFail(names []string) error {
 		}
 	}
 	return nil
+}
+
+// validateEnforcement checks that v is a known enforcement profile name,
+// rejecting unknown or misspelled values fail-closed at config load time
+// (AGENTS.md: "unknown, misspelled, ambiguous, or semantically invalid
+// config values MUST be rejected at startup").
+func validateEnforcement(v string) error {
+	switch v {
+	case EnforcementDefault, EnforcementStrict:
+		return nil
+	default:
+		return fmt.Errorf("unknown enforcement %q: must be %q or %q", v, EnforcementDefault, EnforcementStrict)
+	}
+}
+
+// ApplyStrictFlag reconciles the --strict CLI flag with cfg.Enforcement
+// (already set from the TOML `enforcement` key, defaulting to
+// EnforcementDefault).
+//
+// Interaction rule: --strict, when passed, always forces cfg.Enforcement to
+// EnforcementStrict — it never forces the default profile. This is safe
+// without needing to reject a mismatch as an error: moving to the stricter
+// profile can never fail open, so there is no ambiguous or dangerous case to
+// guard against. If the TOML config already requested strict, this is a
+// no-op agreement. If the TOML config requested the default profile, the
+// flag wins and a WARN is logged so operators notice the discrepancy rather
+// than being silently surprised. There is no flag to force the default
+// profile back on over a stricter TOML setting; an operator who wants that
+// simply edits the TOML `enforcement` key.
+func ApplyStrictFlag(cfg *Config, strict bool) {
+	if !strict {
+		return
+	}
+	if cfg.Enforcement != EnforcementStrict {
+		slog.Warn("--strict overrides config enforcement setting",
+			"config_enforcement", cfg.Enforcement, "effective_enforcement", EnforcementStrict)
+	}
+	cfg.Enforcement = EnforcementStrict
+}
+
+// WarnIfStrict emits a loud, non-blocking startup warning when cfg.Enforcement
+// is EnforcementStrict. Under strict, MergedAllowFail drops the Go-default
+// allow_fail waiver layer entirely (see MergedAllowFail), so any configured
+// provider that depends on those waivers to serve in a degraded-but-visible
+// state will instead be blocked for any factor it cannot fully satisfy. With
+// the current factor set this means every low-assurance provider (nanogpt,
+// phalacloud, venice, nearcloud) will be blocked outright. That is the
+// intended, honest result of opting into maximum strictness — not a bug —
+// but operators must see it coming, not discover it as a silent outage.
+//
+// Enumerates the configured provider names when available; falls back to a
+// general warning when no providers are configured yet (e.g. this is called
+// before pruning inactive providers).
+func WarnIfStrict(cfg *Config) {
+	if cfg.Enforcement != EnforcementStrict {
+		return
+	}
+	names := make([]string, 0, len(cfg.Providers))
+	for name := range cfg.Providers {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	const msg = "strict enforcement active: ALL attestation factors are enforced except those " +
+		"explicitly waived via TOML allow_fail; any provider that cannot fully attest every " +
+		"factor will be BLOCKED"
+	if len(names) > 0 {
+		slog.Warn(msg, "providers", strings.Join(names, ", "))
+		return
+	}
+	slog.Warn(msg)
 }
 
 // modelAliasPattern mirrors the character set internal/proxy.modelIDPattern

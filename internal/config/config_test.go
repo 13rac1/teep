@@ -1826,6 +1826,175 @@ func TestLoad_AllowFailWarnLogging_NoTOML(t *testing.T) {
 	}
 }
 
+// --- Enforcement profile (strict enforcement opt-in) ---
+
+func TestLoadDefaults_EnforcementIsDefault(t *testing.T) {
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Enforcement != EnforcementDefault {
+		t.Errorf("Enforcement: got %q, want %q", cfg.Enforcement, EnforcementDefault)
+	}
+}
+
+func TestLoadTOML_EnforcementStrict(t *testing.T) {
+	toml := `enforcement = "strict"`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Enforcement != EnforcementStrict {
+		t.Errorf("Enforcement: got %q, want %q", cfg.Enforcement, EnforcementStrict)
+	}
+}
+
+func TestLoadTOML_EnforcementDefaultExplicit(t *testing.T) {
+	toml := `enforcement = "default"`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Enforcement != EnforcementDefault {
+		t.Errorf("Enforcement: got %q, want %q", cfg.Enforcement, EnforcementDefault)
+	}
+}
+
+func TestLoadTOML_EnforcementUnknownValueRejected(t *testing.T) {
+	toml := `enforcement = "paranoid"`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for unknown enforcement value, got nil")
+	}
+	if !strings.Contains(err.Error(), "paranoid") {
+		t.Errorf("error should name the bad value %q: %v", "paranoid", err)
+	}
+	if !strings.Contains(err.Error(), "enforcement") {
+		t.Errorf("error should mention the enforcement key: %v", err)
+	}
+}
+
+func TestLoadTOML_EnforcementMisspelledRejected(t *testing.T) {
+	// A common typo (trailing 't', or wrong case) must be rejected exactly
+	// like any other unknown value — no fuzzy/case-insensitive matching.
+	for _, bad := range []string{"strictt", "Strict", "STRICT", "defaultt", ""} {
+		t.Run(bad, func(t *testing.T) {
+			toml := fmt.Sprintf("enforcement = %q\n", bad)
+			path := writeConfigFile(t, toml, 0o600)
+			setenv(t, "TEEP_CONFIG", path)
+			unsetenv(t, "TEEP_LISTEN_ADDR")
+			clearProviderEnv(t)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected error for enforcement = %q, got nil", bad)
+			}
+		})
+	}
+}
+
+func TestApplyStrictFlag_NotSet_NoChange(t *testing.T) {
+	cfg := &Config{Enforcement: EnforcementDefault}
+	ApplyStrictFlag(cfg, false)
+	if cfg.Enforcement != EnforcementDefault {
+		t.Errorf("Enforcement: got %q, want unchanged %q", cfg.Enforcement, EnforcementDefault)
+	}
+}
+
+func TestApplyStrictFlag_Set_ForcesStrict(t *testing.T) {
+	// --strict forces strict regardless of the config value: this is the
+	// documented interaction rule (flag wins, and only ever tightens
+	// enforcement, so no config/flag combination needs to be rejected).
+	for _, initial := range []string{EnforcementDefault, EnforcementStrict, ""} {
+		t.Run(initial, func(t *testing.T) {
+			cfg := &Config{Enforcement: initial}
+			ApplyStrictFlag(cfg, true)
+			if cfg.Enforcement != EnforcementStrict {
+				t.Errorf("Enforcement: got %q, want %q (flag must win)", cfg.Enforcement, EnforcementStrict)
+			}
+		})
+	}
+}
+
+func TestApplyStrictFlag_LogsWhenOverridingConfig(t *testing.T) {
+	getLogs := captureSlogWarn(t)
+
+	cfg := &Config{Enforcement: EnforcementDefault}
+	ApplyStrictFlag(cfg, true)
+
+	logs := getLogs()
+	if !strings.Contains(logs, "strict") {
+		t.Errorf("expected a WARN log noting the --strict override; output:\n%s", logs)
+	}
+}
+
+func TestWarnIfStrict_DefaultProfile_NoWarning(t *testing.T) {
+	getLogs := captureSlogWarn(t)
+
+	cfg := &Config{Enforcement: EnforcementDefault, Providers: map[string]*Provider{"venice": {Name: "venice"}}}
+	WarnIfStrict(cfg)
+
+	logs := getLogs()
+	if strings.Contains(logs, "strict enforcement active") {
+		t.Errorf("expected no strict-enforcement WARN under the default profile; output:\n%s", logs)
+	}
+}
+
+func TestWarnIfStrict_StrictProfile_EnumeratesProviders(t *testing.T) {
+	getLogs := captureSlogWarn(t)
+
+	cfg := &Config{
+		Enforcement: EnforcementStrict,
+		Providers: map[string]*Provider{
+			"venice":    {Name: "venice"},
+			"nearcloud": {Name: "nearcloud"},
+		},
+	}
+	WarnIfStrict(cfg)
+
+	logs := getLogs()
+	if !strings.Contains(logs, "strict enforcement active") {
+		t.Errorf("expected a strict-enforcement WARN; output:\n%s", logs)
+	}
+	if !strings.Contains(logs, "BLOCKED") {
+		t.Errorf("expected the WARN to state that non-attesting providers will be BLOCKED; output:\n%s", logs)
+	}
+	if !strings.Contains(logs, "venice") || !strings.Contains(logs, "nearcloud") {
+		t.Errorf("expected the WARN to enumerate configured providers; output:\n%s", logs)
+	}
+}
+
+func TestWarnIfStrict_StrictProfile_NoProvidersStillWarns(t *testing.T) {
+	getLogs := captureSlogWarn(t)
+
+	cfg := &Config{Enforcement: EnforcementStrict}
+	WarnIfStrict(cfg)
+
+	logs := getLogs()
+	if !strings.Contains(logs, "strict enforcement active") {
+		t.Errorf("expected a general strict-enforcement WARN even with no providers configured; output:\n%s", logs)
+	}
+}
+
 func TestUsableFDHeadroom(t *testing.T) {
 	tests := []struct {
 		name string

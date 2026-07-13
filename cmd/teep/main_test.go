@@ -457,7 +457,7 @@ func TestPinConfig_Blocked_Refuses(t *testing.T) {
 // --offline are rejected together. Now an in-process test since runVerify
 // returns error instead of calling os.Exit.
 func TestRunVerify_CaptureOfflineMutuallyExclusive(t *testing.T) {
-	err := runVerify(context.Background(), "someprovider", "m", os.TempDir(), true, false, "")
+	err := runVerify(context.Background(), "someprovider", "m", os.TempDir(), true, false, false, "")
 	t.Logf("runVerify(capture+offline) error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for --capture + --offline")
@@ -469,13 +469,75 @@ func TestRunVerify_CaptureOfflineMutuallyExclusive(t *testing.T) {
 
 // TestRunVerify_ModelRequired verifies that an empty --model is rejected.
 func TestRunVerify_ModelRequired(t *testing.T) {
-	err := runVerify(context.Background(), "someprovider", "", "", false, false, "")
+	err := runVerify(context.Background(), "someprovider", "", "", false, false, false, "")
 	t.Logf("runVerify(no model) error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for missing --model")
 	}
 	if !strings.Contains(err.Error(), "--model is required") {
 		t.Errorf("expected '--model is required' in error, got: %v", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// --strict flag wiring
+// --------------------------------------------------------------------------
+
+// strictTestConfig writes a minimal TOML config pointing "venice" at an
+// unreachable loopback address (nothing listens on port 1) so the
+// attestation fetch fails fast with a connection error rather than making a
+// live network call, while still exercising the full runVerify ->
+// runVerification -> config.ApplyStrictFlag/config.WarnIfStrict path.
+func strictTestConfig(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "teep.toml")
+	content := `[providers.venice]
+base_url = "http://127.0.0.1:1"
+api_key = "test-key"
+`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("TEEP_CONFIG", cfgFile)
+}
+
+// TestRunVerify_StrictFlag_Warns proves --strict is actually threaded through
+// runVerify -> runVerification -> config.ApplyStrictFlag/WarnIfStrict: the
+// loud strict-enforcement startup warning must appear even though the
+// verification itself subsequently fails (unreachable base_url).
+func TestRunVerify_StrictFlag_Warns(t *testing.T) {
+	strictTestConfig(t)
+	buf := captureSlog(t)
+
+	err := runVerify(context.Background(), "venice", "test-model", "", true, true, false, "")
+	t.Logf("runVerify(strict) error: %v", err)
+	if err == nil {
+		t.Fatal("expected an error: base_url is unreachable")
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "strict enforcement active") {
+		t.Errorf("expected a strict-enforcement WARN log with --strict; output:\n%s", out)
+	}
+}
+
+// TestRunVerify_NoStrictFlag_NoWarning is the control for
+// TestRunVerify_StrictFlag_Warns: without --strict, no strict-enforcement
+// warning should be logged.
+func TestRunVerify_NoStrictFlag_NoWarning(t *testing.T) {
+	strictTestConfig(t)
+	buf := captureSlog(t)
+
+	err := runVerify(context.Background(), "venice", "test-model", "", true, false, false, "")
+	t.Logf("runVerify(no strict) error: %v", err)
+	if err == nil {
+		t.Fatal("expected an error: base_url is unreachable")
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "strict enforcement active") {
+		t.Errorf("expected no strict-enforcement WARN without --strict; output:\n%s", out)
 	}
 }
 
@@ -840,7 +902,7 @@ func TestRunReverify_MissingReport(t *testing.T) {
 
 func TestRunVerify_LoadConfigFails(t *testing.T) {
 	ctx := context.Background()
-	err := runVerify(ctx, "nonexistent-provider-xyz", "test-model", "", false, false, "")
+	err := runVerify(ctx, "nonexistent-provider-xyz", "test-model", "", false, false, false, "")
 	t.Logf("runVerify(nonexistent provider): err=%v", err)
 	if err == nil {
 		t.Fatal("expected error when provider config not found")

@@ -49,6 +49,9 @@ func main() {
 	serveOffline := serveFlags.BoolLong("offline",
 		"skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
 	serveForce := registerForceFlag(serveFlags)
+	serveStrict := serveFlags.BoolLong("strict",
+		"enforce every attestation factor (drops Go-default allow_fail waivers); "+
+			"providers that cannot fully attest will be blocked; overrides config enforcement=default")
 
 	// Verify flags.
 	verifyFlags := ff.NewFlagSet("verify").SetParent(rootFlags)
@@ -60,6 +63,9 @@ func main() {
 		"re-verify from a captured attestation directory")
 	verifyOffline := verifyFlags.BoolLong("offline",
 		"skip external verification (Intel PCS, Proof of Cloud, Certificate Transparency)")
+	verifyStrict := verifyFlags.BoolLong("strict",
+		"enforce every attestation factor (drops Go-default allow_fail waivers); "+
+			"overrides config enforcement=default")
 	updateConfig := verifyFlags.BoolLong("update-config",
 		"write observed measurements to the config file ($TEEP_CONFIG)")
 	configOut := verifyFlags.StringLong("config-out", "",
@@ -93,7 +99,7 @@ func main() {
 						printServeHelp()
 						return errSilentExit
 					}
-					return runServe(ctx, *serveOffline, forceValue(serveForce))
+					return runServe(ctx, *serveOffline, forceValue(serveForce), *serveStrict)
 				},
 			},
 			{
@@ -136,7 +142,7 @@ func main() {
 						return errSilentExit
 					}
 					return runVerify(ctx, args[0], *model, *captureDir,
-						*verifyOffline, *updateConfig, *configOut)
+						*verifyOffline, *verifyStrict, *updateConfig, *configOut)
 				},
 			},
 			{
@@ -332,7 +338,7 @@ func normalizeArgs(args []string, rootFS *ff.FlagSet, subcmdFS map[string]*ff.Fl
 }
 
 // runServe loads config, activates all providers with resolved API keys, and starts listening.
-func runServe(ctx context.Context, offline, force bool) error {
+func runServe(ctx context.Context, offline, force, strict bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -343,6 +349,9 @@ func runServe(ctx context.Context, offline, force bool) error {
 		cfg.Force = true
 		slog.Warn("--force enabled: requests will be forwarded even when enforced attestation factors fail")
 	}
+
+	config.ApplyStrictFlag(cfg, strict)
+	config.WarnIfStrict(cfg)
 
 	if err := pruneInactiveProviders(cfg.Providers); err != nil {
 		return err
@@ -403,7 +412,7 @@ func providerNotFoundError(name string, cfg *config.Config) error {
 // runVerify fetches attestation from the named provider, builds the
 // verification report, prints it to stdout, and returns an error if any
 // enforced factor failed.
-func runVerify(ctx context.Context, provider, model, captureDir string, offline, updateConfig bool, configOut string) error {
+func runVerify(ctx context.Context, provider, model, captureDir string, offline, strict, updateConfig bool, configOut string) error {
 	if model == "" {
 		return errors.New("--model is required")
 	}
@@ -416,7 +425,7 @@ func runVerify(ctx context.Context, provider, model, captureDir string, offline,
 		ModelName:    model,
 		CaptureDir:   captureDir,
 		Offline:      offline,
-	})
+	}, strict)
 	if report != nil {
 		fmt.Print(verify.FormatReport(report))
 	}
@@ -485,14 +494,19 @@ func runReverify(ctx context.Context, captureDir string) error {
 	return nil
 }
 
-// runVerification loads config then delegates to verify.Run.
+// runVerification loads config then delegates to verify.Run. strict applies
+// the --strict CLI flag on top of the loaded config's enforcement setting
+// (see config.ApplyStrictFlag) and emits the loud startup warning when
+// strict is active (see config.WarnIfStrict).
 // Callers set override fields (Client, Nonce, CapturedE2EE) directly on opts
 // when needed for testing or replay; leave them zero for normal operation.
-func runVerification(ctx context.Context, opts *verify.Options) (*attestation.VerificationReport, error) {
+func runVerification(ctx context.Context, opts *verify.Options, strict bool) (*attestation.VerificationReport, error) {
 	cfg, cp, err := loadConfig(opts.ProviderName)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
+	config.ApplyStrictFlag(cfg, strict)
+	config.WarnIfStrict(cfg)
 	opts.Config = cfg
 	opts.Provider = cp
 	return verify.Run(ctx, opts)
