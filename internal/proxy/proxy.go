@@ -1098,6 +1098,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)
 	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, prov.SupplyChainPolicy)
 	tinfoilSC, tinfoilSCDur := s.verifyTinfoilSupplyChain(ctx, raw, tdxResult, sevResult, prov, upstreamModel)
+	aciKeyset := venice.VerifyACIKeyset(raw) // nil for non-ACI/1 formats
 
 	totalDur := time.Since(totalStart)
 	slog.InfoContext(ctx, "verification complete",
@@ -1136,6 +1137,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 		Compose:                sc.Compose,
 		Sigstore:               sc.Sigstore,
 		Rekor:                  sc.Rekor,
+		ACIKeyset:              aciKeyset,
 		TinfoilSC:              tinfoilSC,
 		E2EEConfigured:         prov.E2EE,
 		Inapplicable:           inapplicableForProvider(prov.Name),

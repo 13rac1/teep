@@ -324,11 +324,28 @@ func TestVerificationReportMetadata(t *testing.T) {
 	}
 }
 
+// TestDefaultAllowFailExcludesSupplyChainFactors asserts the supply-chain
+// factors that have NO structural "ACI/1 has no compose surface at all"
+// exemption are still enforced, i.e. NOT in DefaultAllowFail.
+//
+// compose_binding, sigstore_verification, build_transparency_log,
+// provider_signer_recognition, and component_signature_recognition were
+// removed from this list (GH #113): Venice ACI/1 has no docker-compose
+// manifest, so those five correctly evaluate to Fail rather than
+// NotApplicable, and are waived here so venice's ACI/1 models keep serving
+// degraded instead of blocking (see the DefaultAllowFail comment and
+// TestACISupplyChainFactorsNonBlocking). The GH #118 Part 2 "policy
+// accidentally nil despite real compose data present" fail-closed check is
+// preserved separately via isMissingPolicySupplyChainFactor's force-enforce
+// override in BuildReport (see TestBuildReport_MissingPolicyBlocksRequest),
+// which does not depend on allow_fail at all.
+//
+// aci_keyset_endorsement is independently verifiable from data already in
+// the ACI/1 response (unlike the five above, which depend on data ACI/1
+// structurally does not provide), so it remains in mustEnforce.
 func TestDefaultAllowFailExcludesSupplyChainFactors(t *testing.T) {
-	// Supply-chain factors must be enforced, i.e. NOT in DefaultAllowFail.
 	mustEnforce := []string{
-		"sigstore_verification",
-		"build_transparency_log",
+		"aci_keyset_endorsement",
 	}
 	allowFailSet := make(map[string]bool, len(DefaultAllowFail))
 	for _, f := range DefaultAllowFail {
@@ -5229,4 +5246,142 @@ func TestEvalACIKeysetEndorsement(t *testing.T) {
 		}
 		assertSingleFactor(t, evalACIKeysetEndorsement(in), Pass)
 	})
+}
+
+// TestACISupplyChainFactorsNonBlocking is a regression test for the
+// degraded-visible policy (GH #113): Venice ACI/1 has no docker-compose
+// manifest, so compose_binding, sigstore_verification, build_transparency_log,
+// provider_signer_recognition, and component_signature_recognition correctly
+// evaluate to Fail (not NotApplicable — that would hide the gap) whenever
+// ACI/1 provenance is unverifiable. Venice must keep serving degraded, so
+// these five factors are waived via the global DefaultAllowFail (venice has
+// no ProviderDefaultAllowFail entry — MergedAllowFail selects the global list
+// for it). Mirrors the TestE2EEResponseOriginNonBlocking pattern: evaluate the
+// real factor functions, compute Enforced the same way BuildReport does, and
+// build a minimal report to isolate Blocked()/WaivedFactors() from unrelated
+// factor plumbing (constructing a full passing TDX/NVIDIA/etc. report is not
+// needed to test this mechanic).
+func TestACISupplyChainFactorsNonBlocking(t *testing.T) {
+	allowFailSet := make(map[string]bool, len(DefaultAllowFail))
+	for _, name := range DefaultAllowFail {
+		allowFailSet[name] = true
+	}
+	for _, name := range []string{
+		FactorComposeBinding, FactorSigstoreVerify, FactorBuildTransparency,
+		FactorProviderSigner, FactorComponentSignature,
+	} {
+		if !allowFailSet[name] {
+			t.Fatalf("%s must be in the global DefaultAllowFail list to stay non-blocking for venice ACI/1", name)
+		}
+	}
+	// aci_keyset_endorsement IS independently verifiable and must stay
+	// enforced — never added to allow_fail.
+	if allowFailSet[FactorACIKeysetEndorsement] {
+		t.Fatal("aci_keyset_endorsement must NOT be in DefaultAllowFail — it is independently verifiable and always enforced")
+	}
+
+	// ACI/1 RawAttestation with no compose data (as the real parser
+	// produces), plus a SupplyChainPolicy with a signed component so
+	// build_transparency_log/provider_signer_recognition/
+	// component_signature_recognition take the "no Rekor provenance" Fail
+	// path rather than the "no signed components expected" NotApplicable path.
+	in := &ReportInput{
+		Provider: "venice",
+		Raw:      &RawAttestation{BackendFormat: FormatACI1},
+		SupplyChainPolicy: &SupplyChainPolicy{
+			Images: []ImageProvenance{
+				{Repo: "example/component", Provenance: SigstorePresent, KeyFingerprint: "deadbeef"},
+			},
+		},
+	}
+
+	evalFns := map[string]evaluatorFunc{
+		FactorComposeBinding:     evalComposeBinding,
+		FactorSigstoreVerify:     evalSigstoreVerification,
+		FactorBuildTransparency:  evalBuildTransparencyLog,
+		FactorProviderSigner:     evalProviderSignerRecognition,
+		FactorComponentSignature: evalComponentSignatureRecognition,
+	}
+
+	factors := make([]FactorResult, 0, 2+len(evalFns))
+	factors = append(factors,
+		FactorResult{Name: "nonce_match", Status: Pass, Enforced: true},
+		FactorResult{Name: "tee_reportdata_binding", Status: Pass, Enforced: true},
+	)
+	for name, fn := range evalFns {
+		results := fn(in)
+		if len(results) != 1 {
+			t.Fatalf("%s: got %d results, want 1", name, len(results))
+		}
+		f := results[0]
+		if f.Status != Skip && f.Status != Fail {
+			t.Fatalf("%s: got %s, want Skip or Fail (no compose/provenance data for ACI/1)", name, f.Status)
+		}
+		f.Enforced = !allowFailSet[f.Name] // same computation as BuildReport
+		if f.Status == Skip && f.Enforced {
+			// Same Skip→Fail promotion BuildReport applies to enforced factors.
+			f.Status = Fail
+		}
+		if f.Status != Fail {
+			t.Errorf("factor %s: got %s, want Fail after promotion", name, f.Status)
+		}
+		if f.Enforced {
+			t.Errorf("factor %s: Enforced=true, want false (must be waived via global DefaultAllowFail)", name)
+		}
+		factors = append(factors, f)
+	}
+
+	report := &VerificationReport{Factors: factors}
+	if report.Blocked() {
+		t.Errorf("Blocked() should be false: venice ACI/1 must keep serving degraded; blocked factors: %+v", report.BlockedFactors())
+	}
+
+	waived := report.WaivedFactors()
+	waivedNames := make(map[string]bool, len(waived))
+	for _, f := range waived {
+		waivedNames[f.Name] = true
+	}
+	for name := range evalFns {
+		if !waivedNames[name] {
+			t.Errorf("factor %s should appear in WaivedFactors() so the dashboard degraded badge surfaces it", name)
+		}
+	}
+}
+
+// TestACIKeysetEndorsementStaysEnforced is the companion regression test:
+// unlike the five supply-chain factors above, aci_keyset_endorsement IS
+// independently verifiable from data already in the ACI/1 response, so it
+// must remain enforced and block on a genuine verification failure.
+func TestACIKeysetEndorsementStaysEnforced(t *testing.T) {
+	allowFailSet := make(map[string]bool, len(DefaultAllowFail))
+	for _, name := range DefaultAllowFail {
+		allowFailSet[name] = true
+	}
+	if allowFailSet[FactorACIKeysetEndorsement] {
+		t.Fatal("aci_keyset_endorsement must not be waived by DefaultAllowFail")
+	}
+
+	in := &ReportInput{
+		Provider: "venice",
+		Raw:      &RawAttestation{BackendFormat: FormatACI1},
+		ACIKeyset: &ACIKeysetResult{
+			EndorsementValid: false,
+			Detail:           "endorsement signature INVALID",
+		},
+	}
+	f := assertSingleFactor(t, evalACIKeysetEndorsement(in), Fail)
+	f.Enforced = !allowFailSet[f.Name] // same computation as BuildReport
+	if !f.Enforced {
+		t.Fatal("aci_keyset_endorsement should be Enforced=true under DefaultAllowFail")
+	}
+
+	report := &VerificationReport{
+		Factors: []FactorResult{
+			{Name: "nonce_match", Status: Pass, Enforced: true},
+			f,
+		},
+	}
+	if !report.Blocked() {
+		t.Error("Blocked() should be true: an invalid keyset endorsement must block, unlike the waived ACI/1 supply-chain factors")
+	}
 }

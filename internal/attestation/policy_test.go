@@ -644,8 +644,13 @@ func TestSupplyChainPolicy_Validate(t *testing.T) {
 // for the commit 766cb3f failure mode at the BuildReport level: a compose
 // report with real component data (ImageRepos, Rekor) but no SupplyChainPolicy
 // configured must render the affected factors Fail and, because
-// provider_signer_recognition / component_signature_recognition are enforced
-// by default (not in DefaultAllowFail), the overall report must be Blocked.
+// provider_signer_recognition / component_signature_recognition are force-
+// enforced whenever SupplyChainPolicy is nil despite real compose/component
+// data being present (BuildReport's isMissingPolicySupplyChainFactor
+// override — see GH #113), the overall report must be Blocked even though
+// GH #113 also added these two factor names to the global DefaultAllowFail
+// (to let Venice ACI/1, which always has a non-nil SupplyChainPolicy, serve
+// degraded instead of blocking on its structurally-absent compose surface).
 func TestBuildReport_MissingPolicyBlocksRequest(t *testing.T) {
 	nonce := attestation.NewNonce()
 	sigKey := attestation.ValidSigningKeyForTest(t)

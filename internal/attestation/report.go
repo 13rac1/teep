@@ -319,6 +319,28 @@ var DefaultAllowFail = []string{
 	// visible-but-non-blocking degraded factor (WaivedFactors) instead of
 	// silently blocking Venice/NearCloud traffic.
 	FactorE2EEResponseOrigin,
+	// Venice ACI/1 has no docker-compose manifest: no app_compose to bind
+	// (compose_binding), no image digests to check against Sigstore
+	// (sigstore_verification) or Rekor (build_transparency_log,
+	// provider_signer_recognition, component_signature_recognition).
+	// Provenance is expressed instead as a git source_provenance
+	// (repo_url/repo_commit) plus a cryptographically endorsed workload
+	// keyset — see aci_keyset_endorsement, which IS independently verifiable
+	// and stays enforced (never listed here). Until Venice publishes
+	// verifiable image digests for ACI/1 workloads, these five factors
+	// correctly evaluate to Fail (never NotApplicable — that would hide the
+	// gap); waiving them here keeps venice's ACI/1 models serving degraded
+	// instead of blocking, and surfaces the gap via WaivedFactors() for the
+	// dashboard degraded badge. venice has no ProviderDefaultAllowFail entry
+	// (MergedAllowFail selects the global list for it), so this is the only
+	// place these need to be listed for venice; dstack venice attestations
+	// are unaffected because these factors already Pass for them (compose
+	// data and Rekor provenance are present).
+	FactorComposeBinding,
+	FactorSigstoreVerify,
+	FactorBuildTransparency,
+	FactorProviderSigner,
+	FactorComponentSignature,
 	// Gateway factors (nearcloud only).
 	FactorGWQuotePresent,
 	FactorGWQuoteStructure,
@@ -802,6 +824,21 @@ func isCryptoAuthFactor(name string) bool {
 	}
 }
 
+// isMissingPolicySupplyChainFactor reports whether name is one of the three
+// supply-chain factors that have their own "policy accidentally nil despite
+// real compose/component data present" fail-closed check (GH #118 Part 2 /
+// commit 766cb3f): build_transparency_log, provider_signer_recognition, and
+// component_signature_recognition. BuildReport force-enforces a Fail from
+// this specific check regardless of allow_fail — see the call site below.
+func isMissingPolicySupplyChainFactor(name string) bool {
+	switch name {
+	case FactorBuildTransparency, FactorProviderSigner, FactorComponentSignature:
+		return true
+	default:
+		return false
+	}
+}
+
 // BuildReport runs verification factors against the input and returns a
 // complete VerificationReport. The AllowFail field lists factors that are
 // allowed to fail without blocking. Every other factor is enforced.
@@ -837,6 +874,18 @@ func BuildReport(in *ReportInput) *VerificationReport {
 				if in.TDX != nil || (in.SEV != nil && (in.SEV.SignatureErr != nil || in.SEV.CertChainErr != nil)) {
 					f.Enforced = true
 				}
+			}
+			if f.Status == Fail && isMissingPolicySupplyChainFactor(f.Name) &&
+				in.SupplyChainPolicy == nil && hasComposeSupplyChainData(in) {
+				// GH #118 Part 2: an accidentally-nil SupplyChainPolicy despite
+				// real compose/component data being present must always block,
+				// regardless of allow_fail — this is the commit 766cb3f
+				// silent-bypass failure mode. venice ACI/1's waiver of these same
+				// factor names (DefaultAllowFail) only covers the case where a
+				// real policy IS configured but ACI/1 structurally has no compose
+				// surface to check (in.SupplyChainPolicy != nil there, so this
+				// override never fires for it).
+				f.Enforced = true
 			}
 			factors = append(factors, f)
 		}
@@ -2531,6 +2580,14 @@ func evalCPUIDRegistry(in *ReportInput) []FactorResult {
 }
 func evalComposeBinding(in *ReportInput) []FactorResult {
 	switch {
+	case in.Raw != nil && in.Raw.BackendFormat == FormatACI1:
+		// ACI/1 has no docker-compose manifest at all — this is a definite,
+		// permanent absence (not a prerequisite that merely failed/wasn't
+		// attempted), so it must render as Fail rather than Skip: Skip on a
+		// factor that is also waived via allow_fail never gets promoted and
+		// would silently vanish instead of surfacing via WaivedFactors().
+		return factor(TierSupplyChain, FactorComposeBinding, Fail,
+			"ACI/1 has no docker-compose manifest to bind (see source_provenance/aci_keyset_endorsement instead)")
 	case in.Compose == nil || !in.Compose.Checked:
 		return factor(TierSupplyChain, FactorComposeBinding, Skip, "no app_compose in attestation response")
 	case in.Compose.Err != nil:
@@ -2540,6 +2597,14 @@ func evalComposeBinding(in *ReportInput) []FactorResult {
 	}
 }
 func evalSigstoreVerification(in *ReportInput) []FactorResult {
+	if in.Raw != nil && in.Raw.BackendFormat == FormatACI1 && len(in.Sigstore) == 0 {
+		// See evalComposeBinding: ACI/1 has no compose-derived image digests
+		// to check against Sigstore at all, so this must be a definite Fail
+		// (surfaced via WaivedFactors), not a Skip that silently disappears
+		// once the factor is also waived via allow_fail.
+		return factor(TierSupplyChain, FactorSigstoreVerify, Fail,
+			"ACI/1 has no compose-derived image digests to verify against Sigstore")
+	}
 	if len(in.Sigstore) == 0 {
 		return factor(TierSupplyChain, FactorSigstoreVerify, Skip, "no component digests to verify")
 	}
