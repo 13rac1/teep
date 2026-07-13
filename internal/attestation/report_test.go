@@ -4877,6 +4877,35 @@ func TestEvalBuildTransparencyLog_TinfoilSetupError(t *testing.T) {
 	}
 }
 
+// TestTinfoilComponentsFailClosedOnEmptyComponents is a regression test for
+// GH issue #120: with the scalar ComponentRepos fallback removed, an empty
+// Components slice must fail closed rather than evaluating as verified.
+// tinfoilComponentsVerified must not return vacuous-true for a zero-element
+// loop, and tinfoilComponentVerificationErr must return a non-nil error so a
+// constructed-but-unpopulated TinfoilSupplyChainResult (e.g. the scalar-only
+// SigstoreVerified=true case that used to satisfy the fallback) renders Fail,
+// not Pass, in every Tinfoil evaluator.
+func TestTinfoilComponentsFailClosedOnEmptyComponents(t *testing.T) {
+	sc := &TinfoilSupplyChainResult{
+		// Scalars alone must never satisfy verification now that the
+		// fallback is gone.
+		SigstoreVerified: true,
+		SigstoreDetail:   "Sigstore DSSE verified for tinfoilsh/confidential-model-router",
+	}
+
+	if tinfoilComponentsVerified(sc) {
+		t.Fatal("tinfoilComponentsVerified(empty Components) = true, want false (fail closed)")
+	}
+	if repo, err := tinfoilComponentVerificationErr(sc); err == nil {
+		t.Fatalf("tinfoilComponentVerificationErr(empty Components) = (%q, nil), want non-nil error", repo)
+	}
+
+	in := buildTinfoilInput(sc)
+	assertSingleFactor(t, evalComponentRecognition(in), Fail)
+	assertSingleFactor(t, evalProviderSignerRecognition(in), Fail)
+	assertSingleFactor(t, evalComponentSignatureRecognition(in), Fail)
+}
+
 func TestEvalSigstoreCodeVerified(t *testing.T) {
 	t.Run("nil_tinfoilSC", func(t *testing.T) {
 		in := buildTinfoilInput(nil)

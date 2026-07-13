@@ -263,7 +263,7 @@ func verifyTinfoilSupplyChain(
 	}
 	slog.Debug("Tinfoil supply chain verification starting", "repo", sigstoreRepo)
 	start := time.Now()
-	result := &attestation.TinfoilSupplyChainResult{ComponentRepos: []string{sigstoreRepo}}
+	result := &attestation.TinfoilSupplyChainResult{}
 
 	// Check GPU hash bound from REPORTDATA verification detail.
 	bindingDetail := ""
@@ -333,7 +333,6 @@ func verifyTinfoilSupplyChain(
 		}
 
 		// Hardware measurement match (TDX only).
-		result.ComponentRepos = append(result.ComponentRepos, "tinfoilsh/hardware-measurements")
 		hwPredBytes, hwPredType, hwErr := sv.FetchAndVerify(ctx, "tinfoilsh/hardware-measurements")
 		switch {
 		case hwErr != nil:

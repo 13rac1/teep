@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -647,10 +648,10 @@ type TinfoilComponentResult struct {
 // supply chain verification and code/hardware measurement comparison.
 // Nil for non-Tinfoil providers.
 type TinfoilSupplyChainResult struct {
-	// ComponentRepos are the Tinfoil GitHub repositories whose Sigstore
-	// release bundles were verified or attempted for this attestation.
-	ComponentRepos []string
-	Components     []TinfoilComponentResult
+	// Components are the per-repository Sigstore verification results for
+	// the Tinfoil GitHub repositories whose release bundles were verified
+	// or attempted for this attestation.
+	Components []TinfoilComponentResult
 
 	// SigstoreVerified is true when the Sigstore DSSE bundle was fetched
 	// and cryptographically verified for the provider's repo.
@@ -2371,9 +2372,6 @@ func isTinfoilProviderTrustedSignerRepo(repo string) bool {
 }
 
 func tinfoilComponentRepos(sc *TinfoilSupplyChainResult) []string {
-	if len(sc.Components) == 0 {
-		return sc.ComponentRepos
-	}
 	repos := make([]string, 0, len(sc.Components))
 	for _, component := range sc.Components {
 		repos = append(repos, component.Repo)
@@ -2381,9 +2379,12 @@ func tinfoilComponentRepos(sc *TinfoilSupplyChainResult) []string {
 	return repos
 }
 
+// tinfoilComponentsVerified reports whether every recorded component passed
+// Sigstore verification. Fails closed: an empty Components slice is treated
+// as unverified rather than vacuously true.
 func tinfoilComponentsVerified(sc *TinfoilSupplyChainResult) bool {
 	if len(sc.Components) == 0 {
-		return sc.SigstoreVerified
+		return false
 	}
 	for _, component := range sc.Components {
 		if !component.SigstoreVerified {
@@ -2393,9 +2394,13 @@ func tinfoilComponentsVerified(sc *TinfoilSupplyChainResult) bool {
 	return true
 }
 
+// tinfoilComponentVerificationErr returns the first component verification
+// error, if any. Fails closed: an empty Components slice returns a non-nil
+// error rather than ("", nil), so a constructed-but-unpopulated result is
+// treated as unverified rather than implicitly passing.
 func tinfoilComponentVerificationErr(sc *TinfoilSupplyChainResult) (string, error) {
 	if len(sc.Components) == 0 {
-		return "", sc.SigstoreErr
+		return "", errors.New("no supply chain components verified")
 	}
 	for _, component := range sc.Components {
 		if component.SigstoreErr != nil {

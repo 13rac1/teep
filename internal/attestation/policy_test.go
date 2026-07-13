@@ -462,7 +462,6 @@ func TestSupplyChainComponentRecognitionNanoGPTComposeOnly(t *testing.T) {
 
 func TestSupplyChainComponentRecognitionTinfoil(t *testing.T) {
 	sc := &attestation.TinfoilSupplyChainResult{
-		ComponentRepos:   []string{"tinfoilsh/confidential-model-router", "tinfoilsh/hardware-measurements"},
 		SigstoreVerified: true,
 		SigstoreDetail:   "Sigstore DSSE verified for tinfoilsh/confidential-model-router",
 		Components: []attestation.TinfoilComponentResult{
@@ -481,7 +480,6 @@ func TestSupplyChainComponentRecognitionTinfoil(t *testing.T) {
 func TestSupplyChainComponentRecognitionTinfoilFailures(t *testing.T) {
 	t.Run("unknown_repo", func(t *testing.T) {
 		in := &attestation.ReportInput{TinfoilSC: &attestation.TinfoilSupplyChainResult{
-			ComponentRepos:   []string{"attacker/confidential-model-router"},
 			SigstoreVerified: true,
 			Components: []attestation.TinfoilComponentResult{
 				{Repo: "attacker/confidential-model-router", SigstoreVerified: true},
@@ -494,7 +492,6 @@ func TestSupplyChainComponentRecognitionTinfoilFailures(t *testing.T) {
 
 	t.Run("support_component_signature_error", func(t *testing.T) {
 		in := &attestation.ReportInput{TinfoilSC: &attestation.TinfoilSupplyChainResult{
-			ComponentRepos: []string{"tinfoilsh/confidential-model-router", "tinfoilsh/hardware-measurements"},
 			Components: []attestation.TinfoilComponentResult{
 				{Repo: "tinfoilsh/confidential-model-router", SigstoreVerified: true},
 				{Repo: "tinfoilsh/hardware-measurements", SigstoreErr: errors.New("fetch failed")},
