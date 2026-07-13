@@ -39,6 +39,16 @@ type exploreProviderInfo struct {
 	Name   string `json:"name"`
 	Pinned bool   `json:"pinned"`
 	E2EE   bool   `json:"e2ee"`
+
+	// Degraded, AllowedFailed, WaivedFactors, and MissingE2EE mirror
+	// dashboardProvider's fields (see summarizeProviderAttestations in
+	// dashboard.go): they surface the provider's waived-integrity state so
+	// the degraded badge shows on /explore as soon as any attestation is
+	// cached, not only after this page's own on-demand Attest click.
+	Degraded      bool     `json:"degraded"`
+	AllowedFailed int      `json:"allowed_failed"`
+	WaivedFactors []string `json:"waived_factors,omitempty"`
+	MissingE2EE   bool     `json:"missing_e2ee"`
 }
 
 // exploreTemplateData is the template data for the explore page.
@@ -48,13 +58,26 @@ type exploreTemplateData struct {
 
 // handleExplorePage serves the interactive explore page at GET /explore.
 func (s *Server) handleExplorePage(w http.ResponseWriter, r *http.Request) {
+	// Walk the shared attestation cache (same helper buildDashboardData
+	// uses) so the degraded badge is visible proactively from any
+	// already-cached attestation, not only after this page's own
+	// on-demand Attest click.
+	summaries := summarizeProviderAttestations(s.cache)
+
 	infos := make([]exploreProviderInfo, 0, len(s.providers))
 	for _, p := range s.providers {
-		infos = append(infos, exploreProviderInfo{
+		info := exploreProviderInfo{
 			Name:   p.Name,
 			Pinned: p.PinnedHandler != nil,
 			E2EE:   p.E2EE,
-		})
+		}
+		if sum, ok := summaries[p.Name]; ok {
+			info.Degraded = sum.Degraded
+			info.AllowedFailed = sum.AllowedFailed
+			info.WaivedFactors = sum.WaivedFactors
+			info.MissingE2EE = sum.MissingE2EE
+		}
+		infos = append(infos, info)
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
 

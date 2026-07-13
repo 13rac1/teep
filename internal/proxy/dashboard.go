@@ -99,6 +99,95 @@ type dashboardProvider struct {
 	E2EE     string `json:"e2ee"`
 	Requests int64  `json:"requests"`
 	Errors   int64  `json:"errors"`
+
+	// Degraded, AllowedFailed, WaivedFactors, and MissingE2EE surface the
+	// provider's active waived-integrity state so it is visible on the
+	// dashboard proactively, not only after an on-demand Attest click. They
+	// are derived from providerAttestationSummary (see
+	// summarizeProviderAttestations), which walks the live attestation
+	// cache — never a hardcoded provider list — so this stays correct as
+	// the allow_fail enforcement profile changes.
+	Degraded      bool     `json:"degraded"`
+	AllowedFailed int      `json:"allowed_failed"`
+	WaivedFactors []string `json:"waived_factors,omitempty"`
+	MissingE2EE   bool     `json:"missing_e2ee"`
+}
+
+// providerAttestationSummary aggregates the degraded/waived-factor state of
+// one provider across all of its currently cached model attestations.
+type providerAttestationSummary struct {
+	// Degraded is true if any cached model report for this provider has a
+	// waived-and-failing factor (attestation.FactorResult.WaivedFactors) or
+	// is missing the E2EE report-data-binding guarantee.
+	Degraded bool
+	// AllowedFailed sums VerificationReport.AllowedFailed across every
+	// cached model for this provider.
+	AllowedFailed int
+	// WaivedFactors is the deduplicated, sorted union of waived-and-failing
+	// factor names across every cached model for this provider.
+	WaivedFactors []string
+	// MissingE2EE is true if any cached model report for this provider does
+	// not pass ReportDataBindingPassed() — i.e. E2EE, even where "capable",
+	// lacks the cryptographic guarantee that the enclave's public key
+	// wasn't substituted by a MITM.
+	MissingE2EE bool
+}
+
+// summarizeProviderAttestations walks every attestation currently held in
+// the shared cache and aggregates a per-provider degraded-state summary.
+// This is the single place that derives "degraded" from the active
+// per-factor allow_fail policy already reflected in the cached reports
+// (attestation.VerificationReport.WaivedFactors / ReportDataBindingPassed) —
+// used by both buildDashboardData (dashboard.go) and handleExplorePage
+// (explore.go) so the cache-walk and aggregation logic exists in one place
+// and the degraded badge shows on both pages without waiting for an
+// on-demand Attest click.
+func summarizeProviderAttestations(cache *attestation.Cache) map[string]providerAttestationSummary {
+	out := make(map[string]providerAttestationSummary)
+	for _, info := range cache.Models() {
+		report, ok := cache.Get(info.Provider, info.Model)
+		if !ok {
+			continue
+		}
+		sum := out[info.Provider]
+
+		sum.AllowedFailed += report.AllowedFailed
+		for _, f := range report.WaivedFactors() {
+			sum.Degraded = true
+			if !slices.Contains(sum.WaivedFactors, f.Name) {
+				sum.WaivedFactors = append(sum.WaivedFactors, f.Name)
+			}
+		}
+		if !report.ReportDataBindingPassed() {
+			sum.MissingE2EE = true
+			sum.Degraded = true
+		}
+
+		out[info.Provider] = sum
+	}
+	for name, sum := range out {
+		slices.Sort(sum.WaivedFactors)
+		out[name] = sum
+	}
+	return out
+}
+
+// applyProviderAttestationSummaries merges the shared degraded/waived-factor
+// summary into the providers map. Extracted into its own helper (rather than
+// inlined in buildDashboardData) to keep buildDashboardData's cyclomatic
+// complexity within the AGENTS.md limit.
+func applyProviderAttestationSummaries(providers map[string]dashboardProvider, summaries map[string]providerAttestationSummary) {
+	for name, sum := range summaries {
+		p, ok := providers[name]
+		if !ok {
+			continue
+		}
+		p.Degraded = sum.Degraded
+		p.AllowedFailed = sum.AllowedFailed
+		p.WaivedFactors = sum.WaivedFactors
+		p.MissingE2EE = sum.MissingE2EE
+		providers[name] = p
+	}
 }
 
 type dashboardRequests struct {
@@ -274,6 +363,10 @@ func (s *Server) buildDashboardData() dashboardData {
 			providers[name] = p
 		}
 	}
+
+	// Merge the shared degraded/waived-factor summary (also used by
+	// handleExplorePage) into the providers map.
+	applyProviderAttestationSummaries(providers, summarizeProviderAttestations(s.cache))
 
 	cacheInfos := s.cache.Models()
 	slices.SortFunc(cacheInfos, func(a, b attestation.CacheInfo) int {

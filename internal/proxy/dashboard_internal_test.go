@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -814,4 +815,250 @@ func TestStoreModelsCache_SkipsEmpty(t *testing.T) {
 	if cached := s.cachedModels(); cached == nil {
 		t.Error("empty store overwrote existing cache")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// summarizeProviderAttestations / dashboardProvider degraded surfacing
+// ---------------------------------------------------------------------------
+
+// TestSummarizeProviderAttestations_Degraded verifies a provider with a
+// waived-and-failing factor is reported Degraded, with the waived factor's
+// name surfaced and AllowedFailed carried through from the report.
+func TestSummarizeProviderAttestations_Degraded(t *testing.T) {
+	cache := attestation.NewCache(10 * time.Minute)
+	cache.Put("nanogpt", "m1", &attestation.VerificationReport{
+		Provider:      "nanogpt",
+		Model:         "m1",
+		AllowedFailed: 1,
+		Factors: []attestation.FactorResult{
+			{Name: attestation.FactorNonceMatch, Status: attestation.Pass, Enforced: true},
+			{Name: attestation.FactorTEEReportData, Status: attestation.Pass, Enforced: true},
+			{Name: attestation.FactorTEEHardwareConfig, Status: attestation.Fail, Enforced: false}, // waived
+		},
+	})
+
+	summaries := summarizeProviderAttestations(cache)
+	sum, ok := summaries["nanogpt"]
+	if !ok {
+		t.Fatal("nanogpt missing from summary")
+	}
+	if !sum.Degraded {
+		t.Error("Degraded = false, want true (has a waived-and-failing factor)")
+	}
+	if sum.AllowedFailed != 1 {
+		t.Errorf("AllowedFailed = %d, want 1", sum.AllowedFailed)
+	}
+	if len(sum.WaivedFactors) != 1 || sum.WaivedFactors[0] != attestation.FactorTEEHardwareConfig {
+		t.Errorf("WaivedFactors = %v, want [%s]", sum.WaivedFactors, attestation.FactorTEEHardwareConfig)
+	}
+	if sum.MissingE2EE {
+		t.Error("MissingE2EE = true, want false (tee_reportdata_binding passed)")
+	}
+}
+
+// TestSummarizeProviderAttestations_FullyPassing verifies a provider whose
+// only cached model passed every factor (including the E2EE report-data
+// binding gate) is NOT marked degraded.
+func TestSummarizeProviderAttestations_FullyPassing(t *testing.T) {
+	cache := attestation.NewCache(10 * time.Minute)
+	cache.Put("nearcloud", "m1", &attestation.VerificationReport{
+		Provider: "nearcloud",
+		Model:    "m1",
+		Factors: []attestation.FactorResult{
+			{Name: attestation.FactorNonceMatch, Status: attestation.Pass, Enforced: true},
+			{Name: attestation.FactorTEEQuotePresent, Status: attestation.Pass, Enforced: true},
+			{Name: attestation.FactorTEEReportData, Status: attestation.Pass, Enforced: true},
+		},
+	})
+
+	summaries := summarizeProviderAttestations(cache)
+	sum, ok := summaries["nearcloud"]
+	if !ok {
+		t.Fatal("nearcloud missing from summary")
+	}
+	if sum.Degraded {
+		t.Errorf("Degraded = true, want false for a fully-passing report: %+v", sum)
+	}
+	if len(sum.WaivedFactors) != 0 {
+		t.Errorf("WaivedFactors = %v, want empty", sum.WaivedFactors)
+	}
+	if sum.MissingE2EE {
+		t.Error("MissingE2EE = true, want false")
+	}
+	if sum.AllowedFailed != 0 {
+		t.Errorf("AllowedFailed = %d, want 0", sum.AllowedFailed)
+	}
+}
+
+// TestSummarizeProviderAttestations_MissingE2EEGuarantee verifies a report
+// that never evaluated the tee_reportdata_binding factor at all (as opposed
+// to evaluating it and failing) is still surfaced as degraded via
+// MissingE2EE, per ReportDataBindingPassed's fail-closed absent case.
+func TestSummarizeProviderAttestations_MissingE2EEGuarantee(t *testing.T) {
+	cache := attestation.NewCache(10 * time.Minute)
+	cache.Put("phalacloud", "m1", &attestation.VerificationReport{
+		Provider: "phalacloud",
+		Model:    "m1",
+		Factors: []attestation.FactorResult{
+			{Name: attestation.FactorNonceMatch, Status: attestation.Pass, Enforced: true},
+			// No tee_reportdata_binding factor present at all.
+		},
+	})
+
+	summaries := summarizeProviderAttestations(cache)
+	sum, ok := summaries["phalacloud"]
+	if !ok {
+		t.Fatal("phalacloud missing from summary")
+	}
+	if !sum.MissingE2EE {
+		t.Error("MissingE2EE = false, want true when tee_reportdata_binding is absent")
+	}
+	if !sum.Degraded {
+		t.Error("Degraded = false, want true when the E2EE guarantee is missing")
+	}
+	if len(sum.WaivedFactors) != 0 {
+		t.Errorf("WaivedFactors = %v, want empty (no waived-and-failing factor)", sum.WaivedFactors)
+	}
+}
+
+// TestSummarizeProviderAttestations_DedupesAcrossModels verifies that when
+// two models of the same provider both waive the same factor, the name
+// appears once in WaivedFactors and AllowedFailed sums across models.
+func TestSummarizeProviderAttestations_DedupesAcrossModels(t *testing.T) {
+	cache := attestation.NewCache(10 * time.Minute)
+	report := func() *attestation.VerificationReport {
+		return &attestation.VerificationReport{
+			AllowedFailed: 1,
+			Factors: []attestation.FactorResult{
+				{Name: attestation.FactorTEEHardwareConfig, Status: attestation.Fail, Enforced: false},
+			},
+		}
+	}
+	cache.Put("nanogpt", "m1", report())
+	cache.Put("nanogpt", "m2", report())
+
+	summaries := summarizeProviderAttestations(cache)
+	sum := summaries["nanogpt"]
+	if len(sum.WaivedFactors) != 1 {
+		t.Errorf("WaivedFactors = %v, want exactly 1 deduplicated entry", sum.WaivedFactors)
+	}
+	if sum.AllowedFailed != 2 {
+		t.Errorf("AllowedFailed = %d, want 2 (summed across both models)", sum.AllowedFailed)
+	}
+}
+
+// TestBuildDashboardData_DegradedProvider verifies buildDashboardData
+// surfaces the degraded/waived state on dashboardProvider: a provider with a
+// waived-and-failing factor is marked Degraded with the right factor names,
+// while a fully-passing provider is not.
+func TestBuildDashboardData_DegradedProvider(t *testing.T) {
+	s := &Server{
+		cfg:             &config.Config{ListenAddr: "127.0.0.1:8337"},
+		cache:           attestation.NewCache(10 * time.Minute),
+		negCache:        attestation.NewNegativeCache(0),
+		signingKeyCache: attestation.NewSigningKeyCache(0),
+		spkiCache:       attestation.NewSPKICache(),
+		stats:           stats{models: make(map[string]*modelStats)},
+		providers: map[string]*provider.Provider{
+			"nanogpt": {Name: "nanogpt", BaseURL: "https://nanogpt.example"},
+			"venice":  {Name: "venice", BaseURL: "https://api.venice.ai"},
+		},
+	}
+	s.cache.Put("nanogpt", "m1", &attestation.VerificationReport{
+		Provider:      "nanogpt",
+		Model:         "m1",
+		AllowedFailed: 1,
+		Factors: []attestation.FactorResult{
+			{Name: attestation.FactorTEEReportData, Status: attestation.Pass, Enforced: true},
+			{Name: attestation.FactorTEEHardwareConfig, Status: attestation.Fail, Enforced: false},
+		},
+	})
+	s.cache.Put("venice", "m1", &attestation.VerificationReport{
+		Provider: "venice",
+		Model:    "m1",
+		Factors: []attestation.FactorResult{
+			{Name: attestation.FactorTEEReportData, Status: attestation.Pass, Enforced: true},
+			{Name: attestation.FactorNonceMatch, Status: attestation.Pass, Enforced: true},
+		},
+	})
+
+	data := s.buildDashboardData()
+
+	nano, ok := data.Providers["nanogpt"]
+	if !ok {
+		t.Fatal("nanogpt missing from Providers")
+	}
+	if !nano.Degraded {
+		t.Error("nanogpt.Degraded = false, want true")
+	}
+	if len(nano.WaivedFactors) != 1 || nano.WaivedFactors[0] != attestation.FactorTEEHardwareConfig {
+		t.Errorf("nanogpt.WaivedFactors = %v, want [%s]", nano.WaivedFactors, attestation.FactorTEEHardwareConfig)
+	}
+	if nano.AllowedFailed != 1 {
+		t.Errorf("nanogpt.AllowedFailed = %d, want 1", nano.AllowedFailed)
+	}
+
+	venice, ok := data.Providers["venice"]
+	if !ok {
+		t.Fatal("venice missing from Providers")
+	}
+	if venice.Degraded {
+		t.Errorf("venice.Degraded = true, want false (fully passing report): %+v", venice)
+	}
+}
+
+// TestBuildDashboardData_ConcurrentRace exercises buildDashboardData
+// concurrently with cache writes to catch shared-cache races under -race.
+// The dashboard reads the shared attestation cache from arbitrary request
+// goroutines (SSE ticks, initial page loads, /explore) while attestation
+// results are written concurrently from live verification, so this path
+// must be safe for concurrent use per AGENTS.md.
+func TestBuildDashboardData_ConcurrentRace(t *testing.T) {
+	s := &Server{
+		cfg:             &config.Config{ListenAddr: "127.0.0.1:8337"},
+		cache:           attestation.NewCache(10 * time.Minute),
+		negCache:        attestation.NewNegativeCache(0),
+		signingKeyCache: attestation.NewSigningKeyCache(0),
+		spkiCache:       attestation.NewSPKICache(),
+		stats:           stats{models: make(map[string]*modelStats)},
+		providers: map[string]*provider.Provider{
+			"nanogpt": {Name: "nanogpt", BaseURL: "https://nanogpt.example"},
+			"venice":  {Name: "venice", BaseURL: "https://api.venice.ai"},
+		},
+	}
+
+	const writers = 8
+	const readers = 8
+	var wg sync.WaitGroup
+	wg.Add(writers + readers)
+
+	for w := range writers {
+		go func(w int) {
+			defer wg.Done()
+			for i := range 50 {
+				prov := "nanogpt"
+				if (w+i)%2 == 0 {
+					prov = "venice"
+				}
+				s.cache.Put(prov, "m1", &attestation.VerificationReport{
+					Provider:      prov,
+					Model:         "m1",
+					AllowedFailed: 1,
+					Factors: []attestation.FactorResult{
+						{Name: attestation.FactorTEEReportData, Status: attestation.Pass, Enforced: true},
+						{Name: attestation.FactorTEEHardwareConfig, Status: attestation.Fail, Enforced: false},
+					},
+				})
+			}
+		}(w)
+	}
+	for range readers {
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				_ = s.buildDashboardData()
+			}
+		}()
+	}
+	wg.Wait()
 }

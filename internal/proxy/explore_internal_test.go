@@ -440,3 +440,59 @@ func TestHandleExplorePage_WithProviders(t *testing.T) {
 		t.Fatalf("HTML parse error: %v", err)
 	}
 }
+
+// TestHandleExplorePage_DegradedSurfacedFromCache verifies handleExplorePage
+// walks the shared attestation cache (via summarizeProviderAttestations, the
+// same helper buildDashboardData uses) so a waived-and-failing factor is
+// visible in the embedded provider JSON as soon as any model is cached —
+// proactively, without requiring an on-demand Attest click first.
+func TestHandleExplorePage_DegradedSurfacedFromCache(t *testing.T) {
+	s := newExploreTestServer(t, nil)
+	s.cache.Put("testprov", "m1", &attestation.VerificationReport{
+		Provider:      "testprov",
+		Model:         "m1",
+		AllowedFailed: 1,
+		Factors: []attestation.FactorResult{
+			{Name: attestation.FactorTEEReportData, Status: attestation.Pass, Enforced: true},
+			{Name: attestation.FactorTEEHardwareConfig, Status: attestation.Fail, Enforced: false},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/explore", http.NoBody)
+	rec := httptest.NewRecorder()
+	s.handleExplorePage(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	body := rec.Body.String()
+	start := strings.Index(body, "var PROVIDERS = ")
+	if start == -1 {
+		t.Fatal("PROVIDERS assignment not found in explore page")
+	}
+	start += len("var PROVIDERS = ")
+	end := strings.Index(body[start:], ";\n")
+	if end == -1 {
+		t.Fatal("could not find end of PROVIDERS JSON")
+	}
+	var infos []exploreProviderInfo
+	if err := json.Unmarshal([]byte(body[start:start+end]), &infos); err != nil {
+		t.Fatalf("unmarshal PROVIDERS JSON: %v\nraw: %s", err, body[start:start+end])
+	}
+	if len(infos) != 1 {
+		t.Fatalf("infos len = %d, want 1", len(infos))
+	}
+	if !infos[0].Degraded {
+		t.Error("infos[0].Degraded = false, want true")
+	}
+	if len(infos[0].WaivedFactors) != 1 || infos[0].WaivedFactors[0] != attestation.FactorTEEHardwareConfig {
+		t.Errorf("infos[0].WaivedFactors = %v, want [%s]", infos[0].WaivedFactors, attestation.FactorTEEHardwareConfig)
+	}
+	if infos[0].AllowedFailed != 1 {
+		t.Errorf("infos[0].AllowedFailed = %d, want 1", infos[0].AllowedFailed)
+	}
+	if infos[0].MissingE2EE {
+		t.Error("infos[0].MissingE2EE = true, want false")
+	}
+}
