@@ -172,7 +172,20 @@ func verifyNearcloudGateway(
 	return tdx, compose, poc
 }
 
-// checkSigstore checks sigstore digests and fetches Rekor provenance for matches.
+// checkSigstore checks sigstore digests and fetches Rekor provenance for
+// matches.
+//
+// The single production call site (Run) resolves scPolicy via
+// supplyChainPolicy, which returns either a real policy or the explicit
+// attestation.NoSupplyChainPolicy() sentinel for every known provider and an
+// error for unknown ones, so scPolicy is always non-nil in practice. This
+// helper itself tolerates a nil scPolicy (delegated to
+// FetchRekorProvenancesForPolicy, which falls back to an unpreferenced Rekor
+// fetch) because it only affects which Rekor entry is preferred among
+// candidates for a digest — it is not the validation decision point. The
+// actual policy-vs-data validation happens in the report dispatchers
+// (internal/attestation/report.go), which fail closed on a nil policy when
+// compose/component data is present (GH #118 / commit 766cb3f).
 func checkSigstore(
 	ctx context.Context,
 	digests []string,

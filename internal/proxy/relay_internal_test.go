@@ -1303,13 +1303,36 @@ func TestVerifyNVIDIAOnline_GPUEvidence(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// verifySupplyChain — nil policy entry-point guard (GH #118 / commit 766cb3f
+// regression: a nil SupplyChainPolicy must never silently bypass compose
+// validation).
+// ---------------------------------------------------------------------------
+
+func TestVerifySupplyChain_NilPolicyPanics(t *testing.T) {
+	s := newMinimalServer()
+	raw := &attestation.RawAttestation{AppCompose: "version: '3'\nservices:\n  app:\n    image: ubuntu:latest\n"}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for nil SupplyChainPolicy, got none")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.Contains(msg, "nil SupplyChainPolicy") {
+			t.Errorf("panic value = %v, want message mentioning nil SupplyChainPolicy", r)
+		}
+	}()
+	s.verifySupplyChain(context.Background(), raw, nil, nil)
+}
+
+// ---------------------------------------------------------------------------
 // verifySupplyChain — skip paths
 // ---------------------------------------------------------------------------
 
 func TestVerifySupplyChain_EmptyAppCompose(t *testing.T) {
 	s := newMinimalServer()
 	raw := &attestation.RawAttestation{} // AppCompose == ""
-	sc, dur := s.verifySupplyChain(context.Background(), raw, nil, nil)
+	sc, dur := s.verifySupplyChain(context.Background(), raw, nil, attestation.NoSupplyChainPolicy())
 	t.Logf("verifySupplyChain(empty AppCompose): compose=%v dur=%v", sc.Compose, dur)
 	if sc.Compose != nil {
 		t.Error("expected empty supplyChainResult for empty AppCompose")
@@ -1323,7 +1346,7 @@ func TestVerifySupplyChain_TDXParseErr(t *testing.T) {
 	s := newMinimalServer()
 	raw := &attestation.RawAttestation{AppCompose: "version: '3'\nservices:\n  app:\n    image: ubuntu:latest\n"}
 	tdxResult := &attestation.TDXVerifyResult{ParseErr: errors.New("parse failed")}
-	sc, _ := s.verifySupplyChain(context.Background(), raw, tdxResult, nil)
+	sc, _ := s.verifySupplyChain(context.Background(), raw, tdxResult, attestation.NoSupplyChainPolicy())
 	t.Logf("verifySupplyChain(TDX ParseErr): compose=%v", sc.Compose)
 	if sc.Compose != nil {
 		t.Error("expected empty result when TDX ParseErr is set")
@@ -1335,7 +1358,7 @@ func TestVerifySupplyChain_WithAppCompose(t *testing.T) {
 	raw := &attestation.RawAttestation{AppCompose: `{"docker_compose_file":"version: '3'\n"}`}
 	// TDXVerifyResult with no ParseErr but empty MRConfigID — VerifyComposeBinding returns error.
 	tdxResult := &attestation.TDXVerifyResult{}
-	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, nil)
+	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, attestation.NoSupplyChainPolicy())
 	t.Logf("verifySupplyChain(AppCompose): compose=%v dur=%v", sc.Compose, dur)
 	if sc.Compose == nil {
 		t.Error("expected non-nil Compose result when AppCompose is set")
@@ -1662,7 +1685,7 @@ func TestVerifySupplyChain_SuccessPath(t *testing.T) {
 	raw := &attestation.RawAttestation{AppCompose: appCompose}
 	tdxResult := &attestation.TDXVerifyResult{MRConfigID: mrConfigID}
 
-	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, nil)
+	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, attestation.NoSupplyChainPolicy())
 	t.Logf("verifySupplyChain(success): compose=%+v dur=%v", sc.Compose, dur)
 	if sc.Compose == nil {
 		t.Fatal("expected non-nil Compose result")

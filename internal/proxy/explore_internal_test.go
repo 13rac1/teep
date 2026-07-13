@@ -124,9 +124,10 @@ func newExploreTestServer(t *testing.T, chatHandler http.HandlerFunc) *Server {
 		stats:    stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 		providers: map[string]*provider.Provider{
 			"testprov": {
-				Name:    "testprov",
-				BaseURL: "https://test.example.com",
-				E2EE:    true,
+				Name:              "testprov",
+				BaseURL:           "https://test.example.com",
+				E2EE:              true,
+				SupplyChainPolicy: attestation.NoSupplyChainPolicy(),
 			},
 		},
 	}

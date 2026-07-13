@@ -504,6 +504,195 @@ func TestSupplyChainComponentRecognitionTinfoilFailures(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// GH #118 part 2: mandatory supply chain policy — nil-policy hole closure
+// ---------------------------------------------------------------------------
+
+// TestSupplyChainPolicy_NilPolicyWithDataFailsClosed is a regression test for
+// the commit 766cb3f failure mode (GH #118): raw attestation produced real
+// compose/component supply chain data (ImageRepos, Rekor provenance) but no
+// SupplyChainPolicy was configured to validate it. The compose/component
+// dispatchers must render Fail ("supply chain data present but no policy
+// configured"), not silently pass as NotApplicable.
+func TestSupplyChainPolicy_NilPolicyWithDataFailsClosed(t *testing.T) {
+	nonce := attestation.NewNonce()
+	sigKey := attestation.ValidSigningKeyForTest(t)
+	raw := attestation.BuildMinimalRawForTest(nonce, sigKey)
+	digest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+	in := &attestation.ReportInput{
+		Provider:          "testprovider",
+		Raw:               raw,
+		SupplyChainPolicy: nil, // accidentally omitted, as in commit 766cb3f
+		ImageRepos:        []string{"myrepo/model"},
+		DigestToRepo:      map[string]string{digest: "myrepo/model"},
+		Rekor: []attestation.RekorProvenance{{
+			Digest:  digest,
+			HasCert: true,
+		}},
+	}
+
+	for name, factors := range map[string][]attestation.FactorResult{
+		"component_recognition":  attestation.EvalComponentRecognitionForTest(in),
+		"provider_signer":        attestation.EvalProviderSignerRecognitionForTest(in),
+		"component_signature":    attestation.EvalComponentSignatureRecognitionForTest(in),
+		"build_transparency_log": attestation.EvalBuildTransparencyLogForTest(in),
+	} {
+		f := attestation.AssertSingleFactorForTest(t, factors, attestation.Fail)
+		if !strings.Contains(f.Detail, "no policy configured") {
+			t.Errorf("%s detail = %q, want mention of missing policy", name, f.Detail)
+		}
+	}
+}
+
+// TestSupplyChainPolicy_NilPolicyNoDataStaysNotApplicable confirms that a nil
+// SupplyChainPolicy with no compose/component data extracted (a provider that
+// genuinely produced no supply chain evidence in this attestation) still
+// reports NotApplicable rather than Fail — only data-present-but-unvalidated
+// must fail closed.
+func TestSupplyChainPolicy_NilPolicyNoDataStaysNotApplicable(t *testing.T) {
+	nonce := attestation.NewNonce()
+	sigKey := attestation.ValidSigningKeyForTest(t)
+	raw := attestation.BuildMinimalRawForTest(nonce, sigKey)
+	in := &attestation.ReportInput{
+		Provider:          "testprovider",
+		Raw:               raw,
+		SupplyChainPolicy: nil,
+	}
+
+	attestation.AssertSingleFactorForTest(t, attestation.EvalComponentRecognitionForTest(in), attestation.NotApplicable)
+	attestation.AssertSingleFactorForTest(t, attestation.EvalProviderSignerRecognitionForTest(in), attestation.NotApplicable)
+	attestation.AssertSingleFactorForTest(t, attestation.EvalComponentSignatureRecognitionForTest(in), attestation.NotApplicable)
+	attestation.AssertSingleFactorForTest(t, attestation.EvalBuildTransparencyLogForTest(in), attestation.Fail) // no build transparency log at all
+}
+
+// TestSupplyChainPolicy_SentinelIsNotApplicable confirms that the explicit
+// attestation.NoSupplyChainPolicy() sentinel reports NotApplicable — even
+// when compose data happens to be present — because "no supply chain
+// policy" is a reviewed decision for this provider, distinct from an
+// accidental nil.
+func TestSupplyChainPolicy_SentinelIsNotApplicable(t *testing.T) {
+	nonce := attestation.NewNonce()
+	sigKey := attestation.ValidSigningKeyForTest(t)
+	raw := attestation.BuildMinimalRawForTest(nonce, sigKey)
+	in := &attestation.ReportInput{
+		Provider:          "chutes",
+		Raw:               raw,
+		SupplyChainPolicy: attestation.NoSupplyChainPolicy(),
+		ImageRepos:        []string{"myrepo/model"}, // even with data present
+	}
+
+	for name, factors := range map[string][]attestation.FactorResult{
+		"component_recognition": attestation.EvalComponentRecognitionForTest(in),
+		"provider_signer":       attestation.EvalProviderSignerRecognitionForTest(in),
+		"component_signature":   attestation.EvalComponentSignatureRecognitionForTest(in),
+	} {
+		f := attestation.AssertSingleFactorForTest(t, factors, attestation.NotApplicable)
+		if !strings.Contains(f.Detail, "reviewed decision") {
+			t.Errorf("%s detail = %q, want mention of reviewed decision", name, f.Detail)
+		}
+	}
+	attestation.AssertSingleFactorForTest(t, attestation.EvalBuildTransparencyLogForTest(in), attestation.NotApplicable)
+}
+
+// TestNoSupplyChainPolicy_IsNoSupplyChainSurface checks the sentinel
+// constructor and its nil-safe predicate.
+func TestNoSupplyChainPolicy_IsNoSupplyChainSurface(t *testing.T) {
+	sentinel := attestation.NoSupplyChainPolicy()
+	if !sentinel.IsNoSupplyChainSurface() {
+		t.Error("NoSupplyChainPolicy().IsNoSupplyChainSurface() = false, want true")
+	}
+
+	var nilPolicy *attestation.SupplyChainPolicy
+	if nilPolicy.IsNoSupplyChainSurface() {
+		t.Error("nil.IsNoSupplyChainSurface() = true, want false")
+	}
+
+	realPolicy := neardirect.SupplyChainPolicy()
+	if realPolicy.IsNoSupplyChainSurface() {
+		t.Error("real policy IsNoSupplyChainSurface() = true, want false")
+	}
+}
+
+// TestSupplyChainPolicy_Validate exercises the startup-validation entry
+// point: nil is always rejected, the sentinel is always accepted, and a
+// non-sentinel policy with zero images is rejected.
+func TestSupplyChainPolicy_Validate(t *testing.T) {
+	t.Run("nil", func(t *testing.T) {
+		var p *attestation.SupplyChainPolicy
+		if err := p.Validate(); err == nil {
+			t.Error("Validate() on nil = nil, want error")
+		}
+	})
+	t.Run("sentinel", func(t *testing.T) {
+		if err := attestation.NoSupplyChainPolicy().Validate(); err != nil {
+			t.Errorf("Validate() on sentinel = %v, want nil", err)
+		}
+	})
+	t.Run("empty_non_sentinel", func(t *testing.T) {
+		p := &attestation.SupplyChainPolicy{}
+		if err := p.Validate(); err == nil {
+			t.Error("Validate() on empty non-sentinel policy = nil, want error")
+		}
+	})
+	t.Run("real_policy", func(t *testing.T) {
+		if err := neardirect.SupplyChainPolicy().Validate(); err != nil {
+			t.Errorf("Validate() on real policy = %v, want nil", err)
+		}
+	})
+}
+
+// TestBuildReport_MissingPolicyBlocksRequest is an end-to-end regression test
+// for the commit 766cb3f failure mode at the BuildReport level: a compose
+// report with real component data (ImageRepos, Rekor) but no SupplyChainPolicy
+// configured must render the affected factors Fail and, because
+// provider_signer_recognition / component_signature_recognition are enforced
+// by default (not in DefaultAllowFail), the overall report must be Blocked.
+func TestBuildReport_MissingPolicyBlocksRequest(t *testing.T) {
+	nonce := attestation.NewNonce()
+	sigKey := attestation.ValidSigningKeyForTest(t)
+	raw := attestation.BuildMinimalRawForTest(nonce, sigKey)
+	digest := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+
+	report := attestation.BuildReport(&attestation.ReportInput{
+		Provider:          "testprovider",
+		Model:             "m",
+		Raw:               raw,
+		Nonce:             nonce,
+		AllowFail:         attestation.DefaultAllowFail,
+		SupplyChainPolicy: nil, // accidentally omitted, as in commit 766cb3f
+		ImageRepos:        []string{"myrepo/model"},
+		DigestToRepo:      map[string]string{digest: "myrepo/model"},
+		Rekor: []attestation.RekorProvenance{{
+			Digest:  digest,
+			HasCert: true,
+		}},
+	})
+
+	if !report.Blocked() {
+		t.Fatal("expected report.Blocked() = true when compose data is present but no supply chain policy is configured")
+	}
+	for _, name := range []string{"provider_signer_recognition", "component_signature_recognition"} {
+		f := findFactorForTest(t, report, name)
+		if f.Status != attestation.Fail {
+			t.Errorf("factor %q: got %s, want Fail", name, f.Status)
+		}
+		if !f.Enforced {
+			t.Errorf("factor %q: got Enforced=false, want true (not in DefaultAllowFail)", name)
+		}
+	}
+}
+
+func findFactorForTest(t *testing.T, report *attestation.VerificationReport, name string) attestation.FactorResult {
+	t.Helper()
+	for _, f := range report.Factors {
+		if f.Name == name {
+			return f
+		}
+	}
+	t.Fatalf("factor %q not found in report", name)
+	return attestation.FactorResult{}
+}
+
+// ---------------------------------------------------------------------------
 // Supply chain policy tests (use real provider policies)
 // ---------------------------------------------------------------------------
 

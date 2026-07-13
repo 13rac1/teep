@@ -863,7 +863,13 @@ func fromConfig(
 				attestation.FormatDstack: venice.ReportDataVerifier{},
 			},
 		}
-		p.SupplyChainPolicy = nil // no supply chain policy yet
+		// No real supply chain policy authored yet for phalacloud (it can
+		// route to a dstack backend that does expose compose data). The
+		// explicit sentinel keeps phalacloud serving under the now-mandatory
+		// non-nil SupplyChainPolicy invariant (GH #118 part 2) instead of an
+		// accidental nil; component/signer recognition report NotApplicable
+		// until a real policy is authored as a reviewed follow-up.
+		p.SupplyChainPolicy = attestation.NoSupplyChainPolicy()
 	case "chutes":
 		p.BaseURL = chutesProvider.DefaultLLMBaseURL
 		p.ChatPath = "/v1/chat/completions"
@@ -874,7 +880,10 @@ func fromConfig(
 		p.Encryptor = chutesProvider.NewE2EE()
 		p.Preparer = chutesProvider.NewPreparer(cp.APIKey, cp.BaseURL)
 		p.ReportDataVerifier = chutesProvider.ReportDataVerifier{}
-		p.SupplyChainPolicy = nil // cosign+IMA model, no docker-compose
+		// Chutes runs sek8s with cosign image admission + IMA, not
+		// docker-compose; it has no compose/component supply chain surface
+		// at all. Explicit sentinel per GH #118 part 2.
+		p.SupplyChainPolicy = attestation.NoSupplyChainPolicy()
 		p.ModelLister = chutesProvider.NewModelLister(chutesProvider.DefaultModelsBaseURL, cp.APIKey, config.NewAttestationClient(offline))
 		p.E2EEMaterialFetcher = chutesProvider.NewNoncePool(
 			cp.BaseURL, cp.APIKey, attester.Resolver(), config.NewAttestationClient(offline),
@@ -890,7 +899,16 @@ func fromConfig(
 		p.Preparer = tinfoil.NewPreparer(cp.APIKey)
 		p.Encryptor = tinfoil.NewE2EE()
 		p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
-		p.SupplyChainPolicy = nil // Sigstore-based, not compose-based
+		// Tinfoil verifies its own Sigstore-based supply chain via
+		// verifyTinfoilSupplyChain / isTinfoilRecognizedComponent, not the
+		// generic compose dispatcher (in.TinfoilSC != nil short-circuits
+		// those evaluators before SupplyChainPolicy is ever consulted). The
+		// sentinel here only satisfies the mandatory non-nil invariant on
+		// the generic path (GH #118 part 2); it does not change Tinfoil's
+		// own verification. Real Tinfoil policy content (component/signer
+		// allowlists keyed on the Sigstore-verified identity) is deferred to
+		// GH #118 Part 1.
+		p.SupplyChainPolicy = attestation.NoSupplyChainPolicy()
 		p.SigstoreRepoForModel = func(_ string) string {
 			return "tinfoilsh/confidential-model-router"
 		}
@@ -914,7 +932,16 @@ func fromConfig(
 		p.Preparer = tinfoil.NewPreparer(cp.APIKey)
 		p.Encryptor = tinfoil.NewE2EE()
 		p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
-		p.SupplyChainPolicy = nil // Sigstore-based, not compose-based
+		// Tinfoil verifies its own Sigstore-based supply chain via
+		// verifyTinfoilSupplyChain / isTinfoilRecognizedComponent, not the
+		// generic compose dispatcher (in.TinfoilSC != nil short-circuits
+		// those evaluators before SupplyChainPolicy is ever consulted). The
+		// sentinel here only satisfies the mandatory non-nil invariant on
+		// the generic path (GH #118 part 2); it does not change Tinfoil's
+		// own verification. Real Tinfoil policy content (component/signer
+		// allowlists keyed on the Sigstore-verified identity) is deferred to
+		// GH #118 Part 1.
+		p.SupplyChainPolicy = attestation.NoSupplyChainPolicy()
 		p.SigstoreRepoForModel = func(model string) string {
 			m, err := resolver.ResolveMapping(context.Background(), model)
 			if err != nil || m.Repo == "" {
@@ -962,6 +989,16 @@ func fromConfig(
 	// This check prevents future providers from silently omitting the resolver.
 	if p.PinnedHandler != nil && p.SPKIDomainForModel == nil {
 		return nil, fmt.Errorf("provider %q has PinnedHandler but no SPKIDomainForModel; SPKI eviction would fail", cp.Name)
+	}
+
+	// Invariant (GH #118 part 2): every provider must be wired with either a
+	// real, non-empty SupplyChainPolicy or the explicit
+	// attestation.NoSupplyChainPolicy() sentinel — never a bare nil. Catching
+	// this at config load turns a missing/malformed policy into a startup
+	// error instead of a silently-skipped validation factor at request time
+	// (commit 766cb3f).
+	if err := p.SupplyChainPolicy.Validate(); err != nil {
+		return nil, fmt.Errorf("provider %q: %w", cp.Name, err)
 	}
 
 	return p, nil
@@ -1265,12 +1302,25 @@ type supplyChainResult struct {
 }
 
 // verifySupplyChain runs compose binding, sigstore digest, and rekor provenance checks.
+//
+// scPolicy MUST be non-nil: every provider is wired at config load with
+// either a real *attestation.SupplyChainPolicy or the explicit
+// attestation.NoSupplyChainPolicy() sentinel (see provider selection above).
+// A nil scPolicy reaching this function is a provider-wiring bug, not a
+// legitimate "no policy" state — silently treating it as "no policy" here is
+// exactly the commit 766cb3f failure mode (GH #118): a real compose policy
+// was accidentally omitted and validation was bypassed instead of failing.
+// Panicking (per-request, recovered by net/http's server loop) fails loudly
+// and closed rather than serving unvalidated compose data.
 func (s *Server) verifySupplyChain(
 	ctx context.Context,
 	raw *attestation.RawAttestation,
 	tdxResult *attestation.TDXVerifyResult,
 	scPolicy *attestation.SupplyChainPolicy,
 ) (supplyChainResult, time.Duration) {
+	if scPolicy == nil {
+		panic("verifySupplyChain: nil SupplyChainPolicy; provider must supply a real policy or attestation.NoSupplyChainPolicy()")
+	}
 	if raw.AppCompose == "" || tdxResult == nil || tdxResult.ParseErr != nil {
 		if tdxResult != nil && tdxResult.ParseErr != nil {
 			slog.WarnContext(ctx, "supply chain verification skipped: TDX quote parse failed",

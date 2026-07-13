@@ -128,7 +128,10 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 	}
 
 	allDigests, digestToRepo := attestation.MergeComposeDigests(modelCD, gatewayCD)
-	scPolicy := supplyChainPolicy(opts.ProviderName)
+	scPolicy, err := supplyChainPolicy(opts.ProviderName)
+	if err != nil {
+		return nil, fmt.Errorf("supply chain policy: %w", err)
+	}
 	sigstoreResults, rekorResults := checkSigstore(ctx, allDigests, digestToRepo, scPolicy, client, opts.Offline)
 
 	if opts.CapturedE2EE != nil {

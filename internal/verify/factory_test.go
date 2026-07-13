@@ -141,30 +141,49 @@ func TestNewReportDataVerifier(t *testing.T) {
 
 func TestSupplyChainPolicy(t *testing.T) {
 	tests := []struct {
-		provider string
-		wantNil  bool
+		provider     string
+		wantSentinel bool
+		wantErr      bool
 	}{
-		{"venice", false},
-		{"neardirect", false},
-		{"nearcloud", false},
-		{"nanogpt", false},
-		{"phalacloud", true},
-		{"chutes", true},
-		{"tinfoil_v3_cloud", true},
-		{"tinfoil_v3_direct", true},
-		{"unknown", true},
+		{provider: "venice"},
+		{provider: "neardirect"},
+		{provider: "nearcloud"},
+		{provider: "nanogpt"},
+		{provider: "phalacloud", wantSentinel: true},
+		{provider: "chutes", wantSentinel: true},
+		{provider: "tinfoil_v3_cloud", wantSentinel: true},
+		{provider: "tinfoil_v3_direct", wantSentinel: true},
+		{provider: "unknown", wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.provider, func(t *testing.T) {
-			p := supplyChainPolicy(tc.provider)
-			if tc.wantNil {
+			p, err := supplyChainPolicy(tc.provider)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("supplyChainPolicy(%q) error = nil, want error", tc.provider)
+				}
 				if p != nil {
-					t.Errorf("supplyChainPolicy(%q) = %v, want nil", tc.provider, p)
+					t.Errorf("supplyChainPolicy(%q) = %v, want nil on error", tc.provider, p)
 				}
 				return
 			}
+			if err != nil {
+				t.Fatalf("supplyChainPolicy(%q) unexpected error: %v", tc.provider, err)
+			}
+			// Every known provider must return a non-nil policy: either a
+			// real policy or the explicit NoSupplyChainPolicy() sentinel.
+			// Nil is never a valid return for a known provider (GH #118).
 			if p == nil {
-				t.Fatalf("supplyChainPolicy(%q) = nil, want non-nil", tc.provider)
+				t.Fatalf("supplyChainPolicy(%q) = nil, want non-nil (real policy or sentinel)", tc.provider)
+			}
+			if tc.wantSentinel {
+				if !p.IsNoSupplyChainSurface() {
+					t.Errorf("supplyChainPolicy(%q) = %v, want NoSupplyChainPolicy() sentinel", tc.provider, p)
+				}
+				return
+			}
+			if p.IsNoSupplyChainSurface() {
+				t.Errorf("supplyChainPolicy(%q) returned the no-supply-chain sentinel, want a real policy", tc.provider)
 			}
 			if len(p.Images) == 0 {
 				t.Errorf("supplyChainPolicy(%q) returned policy with 0 images", tc.provider)

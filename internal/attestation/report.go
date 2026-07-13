@@ -1821,10 +1821,21 @@ func evalMeasuredModelWeights(in *ReportInput) []FactorResult {
 	return factor(TierSupplyChain, FactorMeasuredWeights, Fail, "no model weight hashes")
 }
 func evalBuildTransparencyLog(in *ReportInput) []FactorResult {
-	scPolicy := in.SupplyChainPolicy
-
 	if in.TinfoilSC != nil {
 		return []FactorResult{tinfoilBuildTransparencyResult(in.TinfoilSC)}
+	}
+
+	scPolicy := in.SupplyChainPolicy
+	if scPolicy.IsNoSupplyChainSurface() {
+		return []FactorResult{{Tier: TierSupplyChain, Name: FactorBuildTransparency, Status: NotApplicable,
+			Detail: "provider has no supply chain policy surface (reviewed decision)"}}
+	}
+	if scPolicy == nil && hasComposeSupplyChainData(in) {
+		// GH #118 / commit 766cb3f failure mode: raw attestation produced
+		// compose/component supply chain data but no policy was configured to
+		// validate it. Fail closed instead of silently treating this as N/A.
+		return []FactorResult{{Tier: TierSupplyChain, Name: FactorBuildTransparency, Status: Fail,
+			Detail: "supply chain data present but no policy configured"}}
 	}
 
 	if len(in.Rekor) == 0 {
@@ -1832,6 +1843,21 @@ func evalBuildTransparencyLog(in *ReportInput) []FactorResult {
 	}
 
 	return []FactorResult{rekorProvenanceResult(in, scPolicy)}
+}
+
+// hasComposeSupplyChainData reports whether raw attestation processing
+// extracted docker-compose supply chain evidence (component repos, Rekor
+// provenance, or a compose hash), independent of whether a policy is
+// configured to validate it. Used to distinguish a provider that genuinely
+// has no supply chain surface presented in this attestation (nil policy, no
+// data — stays NotApplicable) from the GH #118 / commit 766cb3f failure mode:
+// real supply chain data was extracted but no policy was configured to
+// validate it (nil policy, data present — must fail closed).
+func hasComposeSupplyChainData(in *ReportInput) bool {
+	if len(in.ImageRepos) > 0 || len(in.GatewayImageRepos) > 0 || len(in.Rekor) > 0 {
+		return true
+	}
+	return in.Raw != nil && in.Raw.ComposeHash != ""
 }
 
 func tinfoilBuildTransparencyResult(sc *TinfoilSupplyChainResult) FactorResult {
@@ -2127,8 +2153,14 @@ func evalComponentRecognition(in *ReportInput) []FactorResult {
 	switch {
 	case in.TinfoilSC != nil:
 		return []FactorResult{evalTinfoilComponentRecognition(in.TinfoilSC)}
+	case in.SupplyChainPolicy.IsNoSupplyChainSurface():
+		return factor(TierSupplyChain, FactorComponentRecognition, NotApplicable,
+			"provider has no supply chain policy surface (reviewed decision)")
 	case in.SupplyChainPolicy != nil:
 		return []FactorResult{evalComposeComponentRecognition(in)}
+	case hasComposeSupplyChainData(in):
+		return factor(TierSupplyChain, FactorComponentRecognition, Fail,
+			"supply chain data present but no policy configured")
 	default:
 		return factor(TierSupplyChain, FactorComponentRecognition, NotApplicable,
 			"provider has no component supply chain policy")
@@ -2168,8 +2200,14 @@ func evalProviderSignerRecognition(in *ReportInput) []FactorResult {
 	switch {
 	case in.TinfoilSC != nil:
 		return []FactorResult{evalTinfoilProviderSignerRecognition(in.TinfoilSC)}
+	case in.SupplyChainPolicy.IsNoSupplyChainSurface():
+		return factor(TierSupplyChain, FactorProviderSigner, NotApplicable,
+			"provider has no supply chain policy surface (reviewed decision)")
 	case in.SupplyChainPolicy != nil:
 		return []FactorResult{evalComposeProviderSignerRecognition(in)}
+	case hasComposeSupplyChainData(in):
+		return factor(TierSupplyChain, FactorProviderSigner, Fail,
+			"supply chain data present but no policy configured")
 	default:
 		return factor(TierSupplyChain, FactorProviderSigner, NotApplicable,
 			"provider has no signer supply chain policy")
@@ -2249,8 +2287,14 @@ func evalComponentSignatureRecognition(in *ReportInput) []FactorResult {
 	switch {
 	case in.TinfoilSC != nil:
 		return []FactorResult{evalTinfoilComponentSignatureRecognition(in.TinfoilSC)}
+	case in.SupplyChainPolicy.IsNoSupplyChainSurface():
+		return factor(TierSupplyChain, FactorComponentSignature, NotApplicable,
+			"provider has no supply chain policy surface (reviewed decision)")
 	case in.SupplyChainPolicy != nil:
 		return []FactorResult{evalComposeComponentSignatureRecognition(in)}
+	case hasComposeSupplyChainData(in):
+		return factor(TierSupplyChain, FactorComponentSignature, Fail,
+			"supply chain data present but no policy configured")
 	default:
 		return factor(TierSupplyChain, FactorComponentSignature, NotApplicable,
 			"provider has no component signature policy")
@@ -2814,11 +2858,87 @@ type ImageProvenance struct {
 	// FulcioSigned entries with source repo policy and SigstorePresent entries
 	// with a key fingerprint are trusted provider-wide by default.
 	ProviderSignerTrusted bool
+	// WorkflowPattern is the Fulcio SAN identity regex (GitHub Actions
+	// workflow URI pattern) expected for this component, e.g.
+	// `^https://github.com/{repo}/\.github/workflows/[^@]+@refs/tags/[^/]+$`.
+	// It is empty for docker-compose-based providers (ComposeBindingOnly /
+	// digest-pinned images), where the compose manifest binding plus
+	// Rekor/Sigstore digest lookup is the trust anchor instead of a
+	// GitHub-repo + Fulcio-workflow identity. Non-empty only for providers
+	// whose supply chain is GitHub-repo + Fulcio-workflow based (Tinfoil);
+	// wiring this into Tinfoil's own evaluators is deferred to GH #118 Part 1.
+	WorkflowPattern string
 }
+
+// SupplyChainPolicyMode selects how a SupplyChainPolicy's absence of
+// enforceable images should be interpreted.
+type SupplyChainPolicyMode int
+
+const (
+	// ComposeSupplyChain is the default (zero-value) mode: Images defines the
+	// recognized docker-compose component repos, provider-signer trust, and
+	// per-component signature policy for a provider whose attestation
+	// includes compose data.
+	ComposeSupplyChain SupplyChainPolicyMode = iota
+	// NoSupplyChainSurface marks a provider that has been reviewed and
+	// deliberately has no compose/component supply chain policy to enforce —
+	// either because its attestation format has no docker-compose surface at
+	// all (e.g. chutes' cosign+IMA admission control), or because the
+	// provider verifies its supply chain via an entirely separate path
+	// (Tinfoil's Sigstore-based verifyTinfoilSupplyChain), or because a real
+	// policy has not been authored yet and the gap is a reviewed, tracked
+	// deferral (e.g. phalacloud). Construct via NoSupplyChainPolicy() instead
+	// of leaving the policy nil, so "no policy" is always an explicit,
+	// reviewed decision and never an accidental omission (GH #118 part 2;
+	// commit 766cb3f showed the silent-bypass failure mode of an accidental
+	// nil).
+	NoSupplyChainSurface
+)
 
 // SupplyChainPolicy defines the allowed container image repos for a provider.
 type SupplyChainPolicy struct {
 	Images []ImageProvenance
+	// Mode selects how this policy is interpreted. The zero value,
+	// ComposeSupplyChain, means Images governs compose validation. Use
+	// NoSupplyChainPolicy() to construct the explicit NoSupplyChainSurface
+	// sentinel.
+	Mode SupplyChainPolicyMode
+}
+
+// NoSupplyChainPolicy returns the explicit sentinel policy for a provider
+// that has been reviewed and has no docker-compose/component supply chain
+// policy to enforce on the generic compose validation path. Passing this
+// instead of a nil policy makes "no supply chain policy" a reviewed,
+// auditable decision rather than an accidental omission that silently
+// bypasses validation.
+func NoSupplyChainPolicy() *SupplyChainPolicy {
+	return &SupplyChainPolicy{Mode: NoSupplyChainSurface}
+}
+
+// IsNoSupplyChainSurface reports whether p is the explicit sentinel
+// constructed by NoSupplyChainPolicy. Safe to call on a nil receiver (returns
+// false), matching Go's nil-safe method idiom used elsewhere on this type.
+func (p *SupplyChainPolicy) IsNoSupplyChainSurface() bool {
+	return p != nil && p.Mode == NoSupplyChainSurface
+}
+
+// Validate rejects a nil policy and an empty non-sentinel policy: every real
+// SupplyChainPolicy must declare at least one image, and "no policy" must be
+// the explicit NoSupplyChainPolicy() sentinel rather than an empty policy
+// value or a nil pointer. Intended for use at provider config/startup time so
+// a missing or malformed policy is caught loudly before any request is
+// served, not discovered later as a silently-skipped factor.
+func (p *SupplyChainPolicy) Validate() error {
+	if p == nil {
+		return errors.New("supply chain policy is nil; use NoSupplyChainPolicy() for a provider with no supply chain surface")
+	}
+	if p.Mode == NoSupplyChainSurface {
+		return nil
+	}
+	if len(p.Images) == 0 {
+		return errors.New("supply chain policy has no images configured")
+	}
+	return nil
 }
 
 // TrustedProviderSigner reports whether img has a signer policy strong enough

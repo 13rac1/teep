@@ -105,24 +105,42 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 	}
 }
 
-func supplyChainPolicy(name string) *attestation.SupplyChainPolicy {
+// supplyChainPolicy returns the supply chain policy for a known provider
+// name, or an error for an unrecognized one. Every known provider returns a
+// non-nil policy: providers with a real docker-compose policy return it
+// directly; providers with no compose/component supply chain surface to
+// validate on the generic path return the explicit
+// attestation.NoSupplyChainPolicy() sentinel instead of nil, so "no policy"
+// is always a reviewed decision (GH #118 part 2), never an accidental
+// omission that silently bypasses validation (the commit 766cb3f failure
+// mode).
+func supplyChainPolicy(name string) (*attestation.SupplyChainPolicy, error) {
 	switch name {
 	case "venice":
-		return venice.SupplyChainPolicy()
+		return venice.SupplyChainPolicy(), nil
 	case "neardirect":
-		return neardirect.SupplyChainPolicy()
+		return neardirect.SupplyChainPolicy(), nil
 	case "nearcloud":
-		return nearcloud.SupplyChainPolicy()
+		return nearcloud.SupplyChainPolicy(), nil
 	case "nanogpt":
-		return nanogpt.SupplyChainPolicy()
+		return nanogpt.SupplyChainPolicy(), nil
 	case "phalacloud":
-		return nil // no supply chain policy yet
+		// No real supply chain policy authored yet (phalacloud can route to
+		// a dstack backend that does expose compose data). Sentinel keeps
+		// `teep verify` reporting NotApplicable (as before) instead of
+		// erroring, until a real policy is authored as a reviewed follow-up.
+		return attestation.NoSupplyChainPolicy(), nil
 	case "chutes":
-		return nil // cosign+IMA model, no docker-compose
+		return attestation.NoSupplyChainPolicy(), nil // cosign+IMA model, no docker-compose surface
 	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
-		return nil // Sigstore-based, not compose-based
+		// Tinfoil verifies its own Sigstore-based supply chain separately
+		// (verifyTinfoilSupplyChain); the sentinel only satisfies the
+		// mandatory non-nil invariant on this generic selector and does not
+		// affect Tinfoil's own verification. Real Tinfoil policy content is
+		// deferred to GH #118 Part 1.
+		return attestation.NoSupplyChainPolicy(), nil
 	default:
-		return nil
+		return nil, fmt.Errorf("unknown provider %q: no supply chain policy mapping", name)
 	}
 }
 
