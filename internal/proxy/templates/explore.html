@@ -142,19 +142,37 @@ function fmtCtx(n) {
   return n + " ctx";
 }
 
-function modelMeta(m) {
+// appendModelMeta appends a "<ctx> \u00b7 <type> \u00b7 <quantization> \u00b7 <owned_by>"
+// meta line to container, built entirely from text nodes (no markup, so no
+// escaping is needed regardless of what the provider sent).
+function appendModelMeta(container, m) {
   var parts = [];
   var ctx = m.context_length || m.context_window ||
     (m.model_spec && m.model_spec.availableContextTokens) || 0;
   if (ctx > 0) parts.push(fmtCtx(ctx));
-  if (m.type) parts.push(esc(m.type));
-  if (m.quantization) parts.push(esc(m.quantization));
-  if (m.owned_by) parts.push(esc(m.owned_by));
-  if (!parts.length) return "";
-  return '<div class="card-meta">' + parts.join('<span class="sep">\u00b7</span>') + '</div>';
+  if (m.type) parts.push(m.type);
+  if (m.quantization) parts.push(m.quantization);
+  if (m.owned_by) parts.push(m.owned_by);
+  if (!parts.length) return;
+  var meta = document.createElement("div");
+  meta.className = "card-meta";
+  for (var i = 0; i < parts.length; i++) {
+    if (i > 0) {
+      var sep = document.createElement("span");
+      sep.className = "sep";
+      sep.textContent = "\u00b7";
+      meta.appendChild(sep);
+    }
+    meta.appendChild(document.createTextNode(parts[i]));
+  }
+  container.appendChild(meta);
 }
 
-function modelPills(m) {
+// appendModelPills appends the multimodal/tools/reasoning/feature/modality
+// pills to container as individual <span> elements with textContent (not
+// markup), so a pill value containing e.g. a quote or angle bracket is
+// rendered as inert text rather than parsed.
+function appendModelPills(container, m) {
   var pills = [];
   if (m.multimodal) pills.push("multimodal");
   if (m.tool_calling) pills.push("tools");
@@ -173,43 +191,101 @@ function modelPills(m) {
     var olabel = outMod[k] + " out";
     if (pills.indexOf(olabel) === -1) pills.push(olabel);
   }
-  if (!pills.length) return "";
-  var h = '<div class="meta-pills">';
+  if (!pills.length) return;
+  var wrap = document.createElement("div");
+  wrap.className = "meta-pills";
   for (var p = 0; p < pills.length; p++) {
-    h += '<span class="meta-pill">' + esc(pills[p]) + '</span>';
+    var pill = document.createElement("span");
+    pill.className = "meta-pill";
+    pill.textContent = pills[p];
+    wrap.appendChild(pill);
   }
-  return h + '</div>';
+  container.appendChild(wrap);
 }
 
-function modelDesc(m) {
+// appendModelDesc appends the model description as a text node.
+function appendModelDesc(container, m) {
   var desc = m.description || (m.model_spec && m.model_spec.description) || "";
-  if (!desc) return "";
-  return '<div class="card-desc">' + esc(desc) + '</div>';
+  if (!desc) return;
+  var d = document.createElement("div");
+  d.className = "card-desc";
+  d.textContent = desc;
+  container.appendChild(d);
 }
 
+// modelCard builds the card element for one model entirely via DOM APIs:
+// createElement + setAttribute + textContent. Model ids and other
+// provider-controlled fields flow into attribute values (data-model,
+// data-attest, data-infer, id) only through setAttribute/the .id property,
+// and into text only through textContent \u2014 both are injection-proof
+// regardless of what characters the value contains, unlike the previous
+// innerHTML-string-concatenation approach.
 function modelCard(m) {
   var id = m._id;
   var parts = id.split(":");
   var prov = parts[0] || "";
   var name = parts.slice(1).join(":") || id;
 
-  return '<div class="card" data-model="' + esc(id) + '">' +
-    '<div class="card-head">' +
-      '<div style="flex:1; min-width:0">' +
-        '<div class="card-name"><span class="prov">' + esc(prov) + ':</span>' + esc(name) + '</div>' +
-        modelMeta(m) + modelDesc(m) +
-      '</div>' +
-    '</div>' +
-    '<div class="card-body">' +
-      modelPills(m) +
-      '<div class="card-actions" style="margin-top:10px">' +
-        '<button class="btn btn-attest" data-attest="' + esc(id) + '">Attest</button>' +
-        '<button class="btn btn-infer" data-infer="' + esc(id) + '">Infer</button>' +
-      '</div>' +
-      '<div class="result" id="attest-' + esc(id) + '" hidden></div>' +
-      '<div class="result" id="infer-' + esc(id) + '" hidden></div>' +
-    '</div>' +
-  '</div>';
+  var card = document.createElement("div");
+  card.className = "card";
+  card.setAttribute("data-model", id);
+
+  var head = document.createElement("div");
+  head.className = "card-head";
+  var headInfo = document.createElement("div");
+  headInfo.style.flex = "1";
+  headInfo.style.minWidth = "0";
+
+  var nameDiv = document.createElement("div");
+  nameDiv.className = "card-name";
+  var provSpan = document.createElement("span");
+  provSpan.className = "prov";
+  provSpan.textContent = prov + ":";
+  nameDiv.appendChild(provSpan);
+  nameDiv.appendChild(document.createTextNode(name));
+  headInfo.appendChild(nameDiv);
+
+  appendModelMeta(headInfo, m);
+  appendModelDesc(headInfo, m);
+  head.appendChild(headInfo);
+  card.appendChild(head);
+
+  var body = document.createElement("div");
+  body.className = "card-body";
+  appendModelPills(body, m);
+
+  var actions = document.createElement("div");
+  actions.className = "card-actions";
+  actions.style.marginTop = "10px";
+
+  var attestBtn = document.createElement("button");
+  attestBtn.className = "btn btn-attest";
+  attestBtn.setAttribute("data-attest", id);
+  attestBtn.textContent = "Attest";
+  actions.appendChild(attestBtn);
+
+  var inferBtn = document.createElement("button");
+  inferBtn.className = "btn btn-infer";
+  inferBtn.setAttribute("data-infer", id);
+  inferBtn.textContent = "Infer";
+  actions.appendChild(inferBtn);
+
+  body.appendChild(actions);
+
+  var attestResult = document.createElement("div");
+  attestResult.className = "result";
+  attestResult.id = "attest-" + id;
+  attestResult.hidden = true;
+  body.appendChild(attestResult);
+
+  var inferResult = document.createElement("div");
+  inferResult.className = "result";
+  inferResult.id = "infer-" + id;
+  inferResult.hidden = true;
+  body.appendChild(inferResult);
+
+  card.appendChild(body);
+  return card;
 }
 
 function groupByProvider(models, ft) {
@@ -224,44 +300,87 @@ function groupByProvider(models, ft) {
   return { order: order, groups: groups };
 }
 
+// buildProviderGroupHead builds the collapsible provider-group header
+// button via DOM APIs, so the provider name (attacker-influenced in the
+// same way a model id is \u2014 both come from provider responses) can only
+// ever land in a text node or an attribute value, never parsed as markup.
+function buildProviderGroupHead(prov, models, info, open) {
+  var head = document.createElement("button");
+  head.className = "prov-head";
+  head.setAttribute("aria-expanded", String(open));
+  head.setAttribute("data-prov-toggle", prov);
+
+  var nameSpan = document.createElement("span");
+  nameSpan.className = "prov-name";
+  nameSpan.textContent = prov;
+  head.appendChild(nameSpan);
+
+  if (info.pinned) {
+    var pinnedPill = document.createElement("span");
+    pinnedPill.className = "meta-pill";
+    pinnedPill.style.color = "var(--seal)";
+    pinnedPill.style.borderColor = "var(--seal)";
+    pinnedPill.textContent = "pinned TLS";
+    head.appendChild(pinnedPill);
+  }
+  if (info.e2ee) {
+    var e2eePill = document.createElement("span");
+    e2eePill.className = "meta-pill";
+    e2eePill.style.color = "var(--crypt)";
+    e2eePill.style.borderColor = "var(--crypt)";
+    e2eePill.textContent = "E2EE";
+    head.appendChild(e2eePill);
+  }
+
+  var countSpan = document.createElement("span");
+  countSpan.className = "prov-count";
+  countSpan.textContent = models.length + (models.length === 1 ? " model" : " models");
+  head.appendChild(countSpan);
+
+  var chev = document.createElement("span");
+  chev.className = "chev";
+  chev.textContent = "\u25b8";
+  head.appendChild(chev);
+
+  return head;
+}
+
 function renderModels() {
+  var modelsEl = el("models");
   if (allModels.length === 0) {
     el("status").textContent = "No models available.";
     el("status").hidden = false;
-    el("models").innerHTML = "";
+    clearChildren(modelsEl);
     return;
   }
   var ft = filterText.toLowerCase();
   var g = groupByProvider(allModels, ft);
+  clearChildren(modelsEl);
   if (g.order.length === 0) {
     el("status").hidden = true;
-    el("models").innerHTML = '<div class="panel" style="color:var(--dim)">No models match "' + esc(filterText) + '".</div>';
+    modelsEl.appendChild(makePanel('No models match "' + filterText + '".'));
     return;
   }
   el("status").hidden = true;
-  var html = "";
   for (var i = 0; i < g.order.length; i++) {
     var prov = g.order[i];
     var models = g.groups[prov];
     var open = !!provExpanded[prov];
     var info = provInfo[prov] || {};
-    var provPills = '';
-    if (info.pinned) provPills += '<span class="meta-pill" style="color:var(--seal);border-color:var(--seal)">pinned TLS</span>';
-    if (info.e2ee) provPills += '<span class="meta-pill" style="color:var(--crypt);border-color:var(--crypt)">E2EE</span>';
-    html += '<div class="prov-group">' +
-      '<button class="prov-head" aria-expanded="' + open + '" data-prov-toggle="' + esc(prov) + '">' +
-        '<span class="prov-name">' + esc(prov) + '</span>' +
-        provPills +
-        '<span class="prov-count">' + models.length + (models.length === 1 ? ' model' : ' models') + '</span>' +
-        '<span class="chev">\u25b8</span>' +
-      '</button>' +
-      '<div class="prov-body">';
+
+    var group = document.createElement("div");
+    group.className = "prov-group";
+    group.appendChild(buildProviderGroupHead(prov, models, info, open));
+
+    var body = document.createElement("div");
+    body.className = "prov-body";
     for (var j = 0; j < models.length; j++) {
-      html += modelCard(models[j]);
+      body.appendChild(modelCard(models[j]));
     }
-    html += '</div></div>';
+    group.appendChild(body);
+
+    modelsEl.appendChild(group);
   }
-  el("models").innerHTML = html;
   wireEvents();
 }
 

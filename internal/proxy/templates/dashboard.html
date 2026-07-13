@@ -340,6 +340,100 @@ function renderHero(p) {
   el("hero-stats").innerHTML = h;
 }
 
+// buildEnclaveCard builds one enclave card via DOM APIs:
+// createElement + setAttribute + textContent. opts.key/provider/model come
+// from attestation/model data that ultimately traces back to
+// provider-controlled input in the same way a model id does; routing them
+// through setAttribute (attribute values) and textContent (text nodes)
+// instead of string-concatenated markup means they can't break out of
+// either context regardless of what characters they contain.
+function buildEnclaveCard(opts) {
+  var card = document.createElement("div");
+  card.className = "card" + (opts.blocked ? " blocked" : "");
+  card.setAttribute("data-key", opts.key);
+
+  var head = document.createElement("button");
+  head.className = "card-head";
+  head.setAttribute("aria-expanded", String(!!opts.open));
+  if (opts.disabled) {
+    head.disabled = true;
+    head.style.cursor = "default";
+  } else {
+    head.setAttribute("data-toggle", opts.key);
+  }
+
+  var dot = document.createElement("span");
+  dot.className = "dot";
+  dot.style.color = opts.dotColor;
+  dot.textContent = opts.dotGlyph;
+  head.appendChild(dot);
+
+  var nameSpan = document.createElement("span");
+  nameSpan.className = "card-name";
+  if (opts.provider) {
+    var provSpan = document.createElement("span");
+    provSpan.className = "prov";
+    provSpan.textContent = opts.provider + "/";
+    nameSpan.appendChild(provSpan);
+    nameSpan.appendChild(document.createTextNode(opts.model));
+  } else {
+    nameSpan.textContent = opts.model;
+  }
+  head.appendChild(nameSpan);
+
+  if (opts.pillsHTML) {
+    var tags = document.createElement("span");
+    tags.className = "card-tags";
+    // pillsHTML is always one of a small set of hardcoded badge strings
+    // built in renderEnclaves (never provider-controlled text), so this
+    // innerHTML assignment carries no untrusted data.
+    tags.innerHTML = opts.pillsHTML;
+    head.appendChild(tags);
+  }
+
+  var timeSpan = document.createElement("span");
+  timeSpan.className = "card-time";
+  timeSpan.textContent = opts.timeText;
+  head.appendChild(timeSpan);
+
+  if (!opts.disabled) {
+    var chev = document.createElement("span");
+    chev.className = "chev";
+    chev.textContent = "▸";
+    head.appendChild(chev);
+  }
+  card.appendChild(head);
+
+  var body = document.createElement("div");
+  body.className = "card-body";
+
+  var subDiv = document.createElement("div");
+  subDiv.className = "card-sub";
+  subDiv.appendChild(document.createTextNode(opts.sub || ""));
+  if (opts.subExtra) subDiv.appendChild(document.createTextNode(opts.subExtra));
+  if (opts.copyKey) {
+    var copyBtn = document.createElement("button");
+    copyBtn.className = "copyid";
+    copyBtn.title = "Copy model id";
+    copyBtn.setAttribute("data-copy", opts.copyKey);
+    copyBtn.textContent = "copy id";
+    subDiv.appendChild(copyBtn);
+  }
+  body.appendChild(subDiv);
+
+  if (opts.bodyExtraHTML) {
+    // tierBars/factorList (_base_js.html) esc() all provider-controlled
+    // text within; there is no attribute sink in their output, so parsing
+    // that markup here is safe.
+    var extra = document.createElement("div");
+    extra.innerHTML = opts.bodyExtraHTML;
+    while (extra.firstChild) body.appendChild(extra.firstChild);
+  }
+
+  card.appendChild(body);
+  return card;
+}
+
 function renderEnclaves(d) {
   var atts = d.attestations || [];
   var models = d.models || {};
@@ -352,18 +446,18 @@ function renderEnclaves(d) {
     var k = key(a.provider, a.model);
     seen[k] = true;
     var ms = models[k] || {};
-    var dotColor, pills = "";
+    var dotColor, pillsHTML = "";
     if (a.blocked) {
       dotColor = "var(--alert)";
-      pills = '<span class="pill blocked">blocked</span>';
+      pillsHTML = '<span class="pill blocked">blocked</span>';
     } else {
       dotColor = "var(--seal)";
-      pills = '<span class="pill enclave">enclave</span>';
-      if (a.e2ee === "usable") pills += '<span class="pill e2ee">e2ee</span>';
+      pillsHTML = '<span class="pill enclave">enclave</span>';
+      if (a.e2ee === "usable") pillsHTML += '<span class="pill e2ee">e2ee</span>';
     }
     var sub;
     if (a.blocked) {
-      sub = "Blocked — " + esc((a.blocked_factors || []).join(", ") || "enforced factor failed");
+      sub = "Blocked — " + ((a.blocked_factors || []).join(", ") || "enforced factor failed");
     } else if (a.e2ee === "usable") {
       sub = "Secure enclave · end-to-end encrypted";
     } else if (a.e2ee === "capable") {
@@ -377,52 +471,52 @@ function renderEnclaves(d) {
     if (ms.requests) meta.push(ms.requests + " req");
     if (ms.tok_per_sec && ms.tok_per_sec !== "—") meta.push(ms.tok_per_sec + " tok/s");
     if (ms.verify_ms && ms.verify_ms !== "—") meta.push("verify " + ms.verify_ms);
-    var subExtra = meta.length ? ' · ' + esc(meta.join(" · ")) : "";
+    var subExtra = meta.length ? " · " + meta.join(" · ") : "";
 
     var open = !!expanded[k];
-    var html = '<div class="card' + (a.blocked ? ' blocked' : '') + '" data-key="' + esc(k) + '">' +
-      '<button class="card-head" aria-expanded="' + open + '" data-toggle="' + esc(k) + '">' +
-        '<span class="dot" style="color:' + dotColor + '">●</span>' +
-        '<span class="card-name"><span class="prov">' + esc(a.provider) + '/</span>' + esc(a.model) + '</span>' +
-        '<span class="card-tags">' + pills + '</span>' +
-        '<span class="card-time">verified ' + esc(a.verified) + '</span>' +
-        '<span class="chev">▸</span>' +
-      '</button>' +
-      '<div class="card-body">' +
-        '<div class="card-sub">' + sub + subExtra +
-          '<button class="copyid" data-copy="' + esc(k) + '" title="Copy model id">copy id</button>' +
-        '</div>' +
-        tierBars(a.tiers || []) +
-        factorList(a.factors || [], open) +
-      '</div>' +
-    '</div>';
-    cards.push({ k: k, blocked: a.blocked, html: html });
+    var node = buildEnclaveCard({
+      key: k, blocked: a.blocked, open: open,
+      dotColor: dotColor, dotGlyph: "●",
+      provider: a.provider, model: a.model,
+      pillsHTML: pillsHTML,
+      timeText: "verified " + a.verified,
+      sub: sub, subExtra: subExtra,
+      copyKey: k,
+      bodyExtraHTML: tierBars(a.tiers || []) + factorList(a.factors || [], open)
+    });
+    cards.push({ k: k, blocked: a.blocked, node: node });
   }
 
   // models with traffic but no cached attestation yet
   for (var mk in models) {
     if (seen[mk] || !models[mk].requests) continue;
-    cards.push({ k: mk, blocked: false, html:
-      '<div class="card" data-key="' + esc(mk) + '"><button class="card-head" aria-expanded="false" disabled style="cursor:default">' +
-      '<span class="dot" style="color:var(--faint)">◌</span>' +
-      '<span class="card-name">' + esc(mk) + '</span>' +
-      '<span class="card-time">awaiting verification</span></button>' +
-      '<div class="card-body"><div class="card-sub">' + models[mk].requests + ' request' +
-      (models[mk].requests > 1 ? "s" : "") + ' · attestation pending</div></div></div>' });
+    var pendingSub = models[mk].requests + " request" +
+      (models[mk].requests > 1 ? "s" : "") + " · attestation pending";
+    var pendingNode = buildEnclaveCard({
+      key: mk, blocked: false, open: false, disabled: true,
+      dotColor: "var(--faint)", dotGlyph: "◌",
+      model: mk,
+      timeText: "awaiting verification",
+      sub: pendingSub
+    });
+    cards.push({ k: mk, blocked: false, node: pendingNode });
   }
 
   var ft = filterText.toLowerCase();
-  var shown = 0, out = "";
-  for (var c = 0; c < cards.length; c++) {
-    if (ft && cards[c].k.toLowerCase().indexOf(ft) === -1) continue;
-    out += cards[c].html; shown++;
-  }
+  clearChildren(host);
   if (cards.length === 0) {
-    out = '<div class="panel" style="color:var(--dim)">No enclaves yet. Point a client at the proxy and send a request.</div>';
-  } else if (shown === 0) {
-    out = '<div class="panel" style="color:var(--dim)">No enclaves match "' + esc(filterText) + '".</div>';
+    host.appendChild(makePanel("No enclaves yet. Point a client at the proxy and send a request."));
+  } else {
+    var shown = 0;
+    for (var c = 0; c < cards.length; c++) {
+      if (ft && cards[c].k.toLowerCase().indexOf(ft) === -1) continue;
+      host.appendChild(cards[c].node);
+      shown++;
+    }
+    if (shown === 0) {
+      host.appendChild(makePanel('No enclaves match "' + filterText + '".'));
+    }
   }
-  host.innerHTML = out;
 
   // wire interactions (re-bound each render; handlers are idempotent)
   var heads = host.querySelectorAll(".card-head[data-toggle]");

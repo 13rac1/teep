@@ -1582,6 +1582,106 @@ func TestHandleModels_MultipleProviders(t *testing.T) {
 	}
 }
 
+// TestHandleModels_HostileModelID_RejectsWholeProviderList is a regression
+// test for M5 (dashboard attribute-injection XSS): a provider that returns
+// a model id containing characters an attacker could use to break out of
+// an HTML attribute (e.g. a double quote) must have its entire model list
+// rejected — the hostile id must never reach /v1/models, and therefore
+// never reach the browser-rendered dashboard/explore pages. Other,
+// well-behaved providers are unaffected (partial success across
+// providers).
+func TestHandleModels_HostileModelID_RejectsWholeProviderList(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+			},
+			"nearcloud": {
+				Name:    "nearcloud",
+				BaseURL: "https://cloud-api.near.ai",
+				APIKey:  "key",
+			},
+		},
+		AllowFail: attestation.KnownFactors,
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+
+	// The hostile provider returns a well-behaved model AND a hostile one;
+	// per AGENTS.md ("never silently drop malformed elements") the whole
+	// list must be rejected, not just the hostile entry.
+	hostile := srv.ProviderByName("neardirect")
+	hostile.PinnedHandler = stubPinnedHandler{}
+	hostile.ModelLister = stubModelLister{
+		models: []json.RawMessage{
+			json.RawMessage(`{"id":"model-a","object":"model","owned_by":"near-ai"}`),
+			json.RawMessage(`{"id":"x\" autofocus onfocus=\"fetch('/explore/infer')","object":"model","owned_by":"near-ai"}`),
+		},
+	}
+
+	wellBehaved := srv.ProviderByName("nearcloud")
+	wellBehaved.PinnedHandler = stubPinnedHandler{}
+	wellBehaved.ModelLister = stubModelLister{
+		models: []json.RawMessage{json.RawMessage(`{"id":"model-b","object":"model","owned_by":"near-ai"}`)},
+	}
+
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	resp, err := http.Get(proxySrv.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if strings.Contains(string(body), "autofocus") || strings.Contains(string(body), "onfocus") {
+		t.Fatalf("hostile model id leaked into /v1/models response: %s", body)
+	}
+
+	var result struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	ids := map[string]bool{}
+	for _, raw := range result.Data {
+		var m struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		t.Logf("  model: %s", m.ID)
+		ids[m.ID] = true
+	}
+
+	if ids["neardirect:model-a"] {
+		t.Error("neardirect:model-a present: the whole neardirect list should have been rejected, not just the hostile entry")
+	}
+	if len(ids) != 1 {
+		t.Errorf("data = %v, want exactly nearcloud's model (neardirect's whole list rejected)", ids)
+	}
+	if !ids["nearcloud:model-b"] {
+		t.Error("nearcloud:model-b missing from response: an unrelated provider's list should be unaffected")
+	}
+}
+
 func TestHandleModels_SlowProvider(t *testing.T) {
 	cfg := &config.Config{
 		ListenAddr: "127.0.0.1:0",

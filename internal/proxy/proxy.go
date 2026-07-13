@@ -32,6 +32,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -3380,14 +3381,22 @@ func (s *Server) fetchModels() []json.RawMessage {
 				slog.WarnContext(ctx, "model listing failed", "provider", prov.Name, "err", err)
 				return
 			}
+			prefixed := make([]json.RawMessage, 0, len(models))
 			for _, raw := range models {
-				prefixed, err := prefixModelID(name, raw)
+				p, err := prefixModelID(name, raw)
 				if err != nil {
-					slog.WarnContext(ctx, "model ID prefix failed", "provider", name, "err", err)
-					continue
+					// Fail this provider's entire list rather than silently
+					// dropping the one malformed/hostile entry (AGENTS.md:
+					// reject malformed input entirely). Other providers'
+					// listings are unaffected (partial success across
+					// providers, as documented on fetchModels/handleModels).
+					slog.WarnContext(ctx, "provider model list rejected: invalid model id",
+						"provider", name, "err", err)
+					return
 				}
-				results[i] = append(results[i], prefixed)
+				prefixed = append(prefixed, p)
 			}
+			results[i] = prefixed
 		}(i, name, prov)
 	}
 	wg.Wait()
@@ -3427,9 +3436,31 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	writeModelsResponse(ctx, w, models)
 }
 
+// modelIDPattern is the character set teep accepts in a provider-supplied
+// model id. The dashboard and explore templates render model ids into HTML
+// (historically into attribute contexts too — see M5's DOM-API rewrite in
+// internal/proxy/templates/). Restricting the accepted characters here
+// turns "the dashboard can't be attribute-injected by a model id" into a
+// data invariant enforced at the proxy boundary, rather than something that
+// depends solely on every current and future rendering call site getting
+// escaping right.
+var modelIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
+
+// validModelID reports whether id contains only characters teep allows in a
+// model id (see modelIDPattern). An empty id is never valid.
+func validModelID(id string) bool {
+	return id != "" && modelIDPattern.MatchString(id)
+}
+
 // prefixModelID rewrites the "id" field of a JSON model object to
-// "providerName:originalID", preserving all other fields. Returns an error if
-// the object cannot be parsed or the "id" field is missing or not a string.
+// "providerName:originalID", preserving all other fields. Returns an error
+// if the object cannot be parsed, the "id" field is missing or not a
+// string, or the id contains characters outside modelIDPattern — a
+// malformed or hostile id (e.g. containing '"', '<', '`') must reject the
+// model entry loudly rather than let it reach dashboard rendering; see
+// fetchModels, which fails the whole provider's list rather than silently
+// dropping just this one malformed entry (AGENTS.md: never silently drop
+// malformed elements).
 func prefixModelID(providerName string, raw json.RawMessage) (json.RawMessage, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
@@ -3442,6 +3473,9 @@ func prefixModelID(providerName string, raw json.RawMessage) (json.RawMessage, e
 	var id string
 	if err := json.Unmarshal(idRaw, &id); err != nil {
 		return nil, fmt.Errorf("model 'id' is not a string: %w", err)
+	}
+	if !validModelID(id) {
+		return nil, fmt.Errorf("model 'id' %q contains characters outside [A-Za-z0-9._:/-]", id)
 	}
 	prefixed, err := json.Marshal(providerName + ":" + id)
 	if err != nil {

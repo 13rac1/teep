@@ -327,6 +327,61 @@ func TestPrefixModelID_InvalidJSON(t *testing.T) {
 	}
 }
 
+// TestPrefixModelID_RejectsHostileCharacters is a regression test for M5
+// (dashboard attribute-injection XSS): a model id from a malicious or
+// compromised provider must be rejected loudly here, at the proxy
+// boundary, rather than trusted through to dashboard/explore rendering.
+func TestPrefixModelID_RejectsHostileCharacters(t *testing.T) {
+	hostile := []string{
+		`x" autofocus onfocus="fetch('/explore/infer')`,
+		`model<script>alert(1)</script>`,
+		"model`onload`",
+		"model'onmouseover='x",
+		"model with spaces",
+		"",
+	}
+	for _, id := range hostile {
+		raw, err := json.Marshal(map[string]string{"id": id})
+		if err != nil {
+			t.Fatalf("marshal fixture: %v", err)
+		}
+		if _, err := prefixModelID("venice", raw); err == nil {
+			t.Errorf("prefixModelID(%q): expected rejection, got nil error", id)
+		}
+	}
+}
+
+// TestPrefixModelID_AllowsValidCharacters confirms the character-set check
+// doesn't reject legitimate ids seen from real providers (letters, digits,
+// dots, underscores, colons, slashes, hyphens).
+func TestPrefixModelID_AllowsValidCharacters(t *testing.T) {
+	valid := []string{
+		"qwen3-32b",
+		"llama3.3-70b_instruct",
+		"org/model-name",
+		"model:v2",
+		"UPPER-lower-123",
+	}
+	for _, id := range valid {
+		raw, err := json.Marshal(map[string]string{"id": id})
+		if err != nil {
+			t.Fatalf("marshal fixture: %v", err)
+		}
+		result, err := prefixModelID("venice", raw)
+		if err != nil {
+			t.Errorf("prefixModelID(%q): unexpected error: %v", id, err)
+			continue
+		}
+		var obj map[string]string
+		if err := json.Unmarshal(result, &obj); err != nil {
+			t.Fatalf("unmarshal result: %v", err)
+		}
+		if want := "venice:" + id; obj["id"] != want {
+			t.Errorf("prefixModelID(%q) id = %q, want %q", id, obj["id"], want)
+		}
+	}
+}
+
 // --------------------------------------------------------------------------
 // extractMultipartField — new branches not covered by relay_internal_test.go
 // --------------------------------------------------------------------------

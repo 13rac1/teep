@@ -7,8 +7,40 @@ var TIER_SHORT = { "Tier 1: Core Attestation":"T1 \u00b7 Hardware",
   "Tier 4: Gateway Attestation":"T4 \u00b7 Gateway" };
 var STATUS_GLYPH = { pass: "\u25cf", fail: "\u2715", skip: "\u25cc", na: "\u2013" };
 
-function esc(s) { var d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
+// esc HTML-escapes a value for use in string-concatenated markup (both text
+// and attribute contexts). The character set covers everything that can
+// break out of a double- or single-quoted attribute or a text node:
+// & < > " ' and backtick. This is defense-in-depth: the row/button
+// construction in explore.html and dashboard.html builds DOM nodes via
+// createElement/setAttribute/textContent (injection-proof regardless of
+// escaping), but esc() is kept name-and-location-stable for any remaining
+// or future string-concatenated markup (e.g. renderReport/tierBars/
+// factorList below).
+var ESC_REPLACEMENTS = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;", "`": "&#96;" };
+function esc(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"'`]/g, function (c) { return ESC_REPLACEMENTS[c]; });
+}
 function el(id) { return document.getElementById(id); }
+
+// clearChildren removes all child nodes of an element without touching its
+// attributes or listeners. Used before rebuilding a list container via DOM
+// APIs (see modelCard/renderModels in explore.html and buildEnclaveCard/
+// renderEnclaves in dashboard.html) instead of resetting via innerHTML.
+function clearChildren(container) {
+  while (container.firstChild) container.removeChild(container.firstChild);
+}
+
+// makePanel returns a dismissible status panel <div> with plain text
+// content. Using textContent means the message is always rendered as inert
+// text regardless of what it contains (e.g. a user-typed filter string).
+function makePanel(text) {
+  var p = document.createElement("div");
+  p.className = "panel";
+  p.style.color = "var(--dim)";
+  p.textContent = text;
+  return p;
+}
 
 // factorStatus normalizes factor status from both raw reports (uint8: 0-3)
 // and pre-normalized dashboard data (lowercase strings).
