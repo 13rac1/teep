@@ -17,6 +17,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -90,6 +92,19 @@ type ProviderConfig struct {
 	E2EE      bool         `toml:"e2ee"`
 	AllowFail []string     `toml:"allow_fail"`
 	Policy    PolicyConfig `toml:"policy"`
+
+	// ModelAliases maps a client-facing alias (advertised verbatim, with no
+	// "provider:" prefix, in /v1/models and accepted verbatim as the "model"
+	// field on inference requests) to an upstream model name for this
+	// provider. This lets an operator expose a model under exactly the name
+	// an agent framework's provider/model-family heuristics expect (see GH
+	// issue #124), instead of only the disambiguated "provider:model" form.
+	//
+	// Aliases are strictly validated at config load (see buildModelAliases):
+	// duplicate aliases across providers, aliases containing ':', and
+	// aliases colliding with a configured provider name are all rejected
+	// fail-closed at startup.
+	ModelAliases map[string]string `toml:"model_aliases"`
 }
 
 // PolicyConfig holds the optional [policy] section from the TOML file.
@@ -117,6 +132,13 @@ type tomlFile struct {
 	AllowFail []string                  `toml:"allow_fail"`
 	MaxConns  int                       `toml:"max_conns"`
 	Policy    PolicyConfig              `toml:"policy"`
+}
+
+// ModelAlias records the resolved target of a client-facing model alias:
+// which provider it routes to and which upstream model name it maps to.
+type ModelAlias struct {
+	Provider      string
+	UpstreamModel string
 }
 
 // Provider is a fully resolved provider configuration, ready for use by the
@@ -185,6 +207,12 @@ type Config struct {
 	// Force forwards requests even when enforced attestation factors fail.
 	// Set via --force flag. WARNING: this reduces security guarantees.
 	Force bool
+
+	// ModelAliases is the flattened, validated alias table: client-facing
+	// alias -> (provider, upstream model). Built once at config load by
+	// buildModelAliases and never mutated afterward — safe for concurrent
+	// read-only access from the proxy's hot request path (resolveModel).
+	ModelAliases map[string]ModelAlias
 }
 
 // warnIfRlimitLow logs a warning when the soft RLIMIT_NOFILE is below 1000,
@@ -263,6 +291,7 @@ func Load() (*Config, error) {
 		ProviderAllowFail:       make(map[string][]string),
 		ProviderPolicies:        make(map[string]attestation.MeasurementPolicy),
 		ProviderGatewayPolicies: make(map[string]attestation.MeasurementPolicy),
+		ModelAliases:            make(map[string]ModelAlias),
 	}
 
 	configPath := os.Getenv("TEEP_CONFIG")
@@ -350,6 +379,12 @@ func loadTOML(cfg *Config, path string) error {
 			cfg.ProviderGatewayPolicies[name] = gpp
 		}
 	}
+
+	aliases, err := buildModelAliases(f.Providers)
+	if err != nil {
+		return fmt.Errorf("model_aliases: %w", err)
+	}
+	cfg.ModelAliases = aliases
 
 	// Top-level allow_fail (from toml file root or [policy] section).
 	// Provider-level takes precedence; this is the global fallback.
@@ -440,6 +475,83 @@ func validateAllowFail(names []string) error {
 		if !known[n] {
 			return fmt.Errorf("unknown allow_fail factor %q", n)
 		}
+	}
+	return nil
+}
+
+// modelAliasPattern mirrors the character set internal/proxy.modelIDPattern
+// accepts for model ids (minus ':', which is rejected separately below with
+// a clearer error message). Aliases are advertised verbatim as bare model
+// ids in /v1/models and must not contain characters that could be used to
+// attack dashboard rendering; keeping this pattern in sync with
+// internal/proxy/proxy.go's validModelID doc comment is a defense-in-depth,
+// fail-closed-at-config-load check (internal/config cannot import
+// internal/proxy, so the character set is duplicated intentionally rather
+// than shared).
+var modelAliasPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+// buildModelAliases flattens each provider's model_aliases into a single
+// alias -> (provider, upstream model) table, validating fail-closed per
+// AGENTS.md ("config validation fails closed at startup on any ambiguity"):
+//
+//   - an alias must not be empty
+//   - an alias must not contain ':' (it is advertised with no "provider:"
+//     prefix, and a colon would make it ambiguous with that form)
+//   - an alias must only contain characters modelIDPattern accepts elsewhere
+//   - an alias must not collide with any configured provider name (which
+//     would be ambiguous with that provider's own "provider:" prefix)
+//   - an alias must not be defined by more than one provider (duplicate
+//     aliases across providers are rejected outright, not merged or
+//     first-wins, to keep routing deterministic per AGENTS.md)
+//   - the upstream model an alias maps to must not be empty
+//
+// Iteration order is deterministic (providers and aliases are visited in
+// sorted order) so error messages are stable across runs.
+func buildModelAliases(providers map[string]ProviderConfig) (map[string]ModelAlias, error) {
+	provNames := make([]string, 0, len(providers))
+	for name := range providers {
+		provNames = append(provNames, name)
+	}
+	slices.Sort(provNames)
+
+	aliases := make(map[string]ModelAlias)
+	for _, provName := range provNames {
+		pc := providers[provName]
+		aliasNames := make([]string, 0, len(pc.ModelAliases))
+		for alias := range pc.ModelAliases {
+			aliasNames = append(aliasNames, alias)
+		}
+		slices.Sort(aliasNames)
+
+		for _, alias := range aliasNames {
+			upstreamModel := pc.ModelAliases[alias]
+			if err := validateModelAlias(alias, upstreamModel, provName, providers, aliases); err != nil {
+				return nil, err
+			}
+			aliases[alias] = ModelAlias{Provider: provName, UpstreamModel: upstreamModel}
+		}
+	}
+	return aliases, nil
+}
+
+func validateModelAlias(alias, upstreamModel, provName string, providers map[string]ProviderConfig, existing map[string]ModelAlias) error {
+	if alias == "" {
+		return fmt.Errorf("providers.%s.model_aliases: alias must not be empty", provName)
+	}
+	if strings.Contains(alias, ":") {
+		return fmt.Errorf("providers.%s.model_aliases: alias %q must not contain ':'", provName, alias)
+	}
+	if !modelAliasPattern.MatchString(alias) {
+		return fmt.Errorf("providers.%s.model_aliases: alias %q contains characters outside [A-Za-z0-9._/-]", provName, alias)
+	}
+	if upstreamModel == "" {
+		return fmt.Errorf("providers.%s.model_aliases: alias %q maps to an empty model name", provName, alias)
+	}
+	if _, isProviderName := providers[alias]; isProviderName {
+		return fmt.Errorf("providers.%s.model_aliases: alias %q collides with a configured provider name; ambiguous with the %q: prefix", provName, alias, alias)
+	}
+	if prev, ok := existing[alias]; ok {
+		return fmt.Errorf("providers.%s.model_aliases: alias %q is already defined by provider %q", provName, alias, prev.Provider)
 	}
 	return nil
 }

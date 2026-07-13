@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -379,6 +380,75 @@ func TestPrefixModelID_AllowsValidCharacters(t *testing.T) {
 		if want := "venice:" + id; obj["id"] != want {
 			t.Errorf("prefixModelID(%q) id = %q, want %q", id, obj["id"], want)
 		}
+	}
+}
+
+// --------------------------------------------------------------------------
+// modelObjectID / renameModelID / buildAliasesByProviderModel (GH issue #124
+// Phase 3: model aliases advertised verbatim in /v1/models)
+// --------------------------------------------------------------------------
+
+func TestModelObjectID(t *testing.T) {
+	if id, ok := modelObjectID(json.RawMessage(`{"id":"model-a","object":"model"}`)); !ok || id != "model-a" {
+		t.Errorf("modelObjectID = (%q, %v), want (model-a, true)", id, ok)
+	}
+	if _, ok := modelObjectID(json.RawMessage(`{"object":"model"}`)); ok {
+		t.Error("modelObjectID: expected ok=false for missing id")
+	}
+	if _, ok := modelObjectID(json.RawMessage(`{"id":""}`)); ok {
+		t.Error("modelObjectID: expected ok=false for empty id")
+	}
+	if _, ok := modelObjectID(json.RawMessage(`not json`)); ok {
+		t.Error("modelObjectID: expected ok=false for invalid JSON")
+	}
+}
+
+func TestRenameModelID(t *testing.T) {
+	result, err := renameModelID(json.RawMessage(`{"id":"model-a","object":"model","owned_by":"x"}`), "my-alias")
+	if err != nil {
+		t.Fatalf("renameModelID: %v", err)
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(result, &obj); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	var id, ownedBy string
+	if err := json.Unmarshal(obj["id"], &id); err != nil {
+		t.Fatalf("unmarshal id: %v", err)
+	}
+	if err := json.Unmarshal(obj["owned_by"], &ownedBy); err != nil {
+		t.Fatalf("unmarshal owned_by: %v", err)
+	}
+	if id != "my-alias" {
+		t.Errorf("renamed id = %q, want my-alias (no provider prefix)", id)
+	}
+	if ownedBy != "x" {
+		t.Errorf("owned_by = %q, want x (other fields preserved)", ownedBy)
+	}
+}
+
+func TestRenameModelID_InvalidJSON(t *testing.T) {
+	if _, err := renameModelID(json.RawMessage(`not json`), "alias"); err == nil {
+		t.Error("renameModelID: expected error for invalid JSON")
+	}
+}
+
+func TestBuildAliasesByProviderModel(t *testing.T) {
+	aliases := map[string]config.ModelAlias{
+		"alias-b": {Provider: "p", UpstreamModel: "m"},
+		"alias-a": {Provider: "p", UpstreamModel: "m"},
+		"other":   {Provider: "q", UpstreamModel: "n"},
+	}
+	got := buildAliasesByProviderModel(aliases)
+	want := []string{"alias-a", "alias-b"}
+	if !slices.Equal(got["p:m"], want) {
+		t.Errorf("aliasesByProviderModel[p:m] = %v, want %v (sorted, both aliases for same model)", got["p:m"], want)
+	}
+	if !slices.Equal(got["q:n"], []string{"other"}) {
+		t.Errorf("aliasesByProviderModel[q:n] = %v, want [other]", got["q:n"])
+	}
+	if len(got) != 2 {
+		t.Errorf("aliasesByProviderModel has %d keys, want 2", len(got))
 	}
 }
 

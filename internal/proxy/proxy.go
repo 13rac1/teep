@@ -451,10 +451,20 @@ type Server struct {
 	reasoningStripLogs          hourlyLogLimiter
 	reasoningResponsesStripLogs hourlyLogLimiter // rate-limits /v1/responses reasoning diagnostics (GH issue #124 Phase 1)
 	stats                       stats
-	modelsMu                    sync.RWMutex      // protects modelsCache and modelsCachedAt
-	modelsCache                 []json.RawMessage // cached /v1/models response
-	modelsCachedAt              time.Time         // when modelsCache was populated
-	modelsFlight                singleflight.Group
+
+	// modelAliases and aliasesByProviderModel are built once in New() from
+	// cfg.ModelAliases (already validated fail-closed at config load; see
+	// config.buildModelAliases) and never mutated afterward. They are safe
+	// for concurrent reads from the hot request path without locking, the
+	// same read-only-after-init contract as the providers map above
+	// (GH issue #124 Phase 3).
+	modelAliases           map[string]config.ModelAlias // alias -> (provider, upstream model)
+	aliasesByProviderModel map[string][]string          // "provider:upstreamModel" -> sorted aliases to also advertise
+
+	modelsMu       sync.RWMutex      // protects modelsCache and modelsCachedAt
+	modelsCache    []json.RawMessage // cached /v1/models response
+	modelsCachedAt time.Time         // when modelsCache was populated
+	modelsFlight   singleflight.Group
 }
 
 // New builds a Server from cfg. Providers are wired with their Attester and
@@ -534,6 +544,20 @@ func New(cfg *config.Config) (*Server, error) {
 	if len(s.providers) == 0 {
 		return nil, errors.New("no providers configured")
 	}
+
+	// cfg.ModelAliases is already validated fail-closed at config load (see
+	// config.buildModelAliases: no duplicate aliases, no ':' in aliases, no
+	// collision with a provider name). The one thing config load cannot
+	// check is whether the provider an alias targets actually resolved
+	// successfully here — verify that fail-closed too, rather than silently
+	// advertising or resolving to a dangling alias.
+	for alias, ma := range cfg.ModelAliases {
+		if _, ok := s.providers[ma.Provider]; !ok {
+			return nil, fmt.Errorf("model alias %q: provider %q is not configured", alias, ma.Provider)
+		}
+	}
+	s.modelAliases = cfg.ModelAliases
+	s.aliasesByProviderModel = buildAliasesByProviderModel(cfg.ModelAliases)
 
 	s.registerRoutes()
 
@@ -941,11 +965,31 @@ func fromConfig(
 	return p, nil
 }
 
-// resolveModel parses a client model string of the form "provider:model" and
-// returns the matching provider and upstream model name. Both the provider
-// prefix and the model segment must be non-empty. Unknown provider names and
-// missing separators are rejected (returns false).
+// resolveModel resolves a client-supplied model string to a provider and
+// upstream model name. Two forms are accepted:
+//
+//  1. A configured alias (s.modelAliases), matched verbatim before any
+//     other parsing — this lets an operator expose a model under exactly
+//     the name an agent framework's provider/model-family heuristics expect
+//     (GH issue #124 Phase 3). The alias table is built once at startup
+//     (config.buildModelAliases, validated fail-closed) and never mutated,
+//     so this lookup is safe for concurrent use without locking.
+//  2. The "provider:model" form: both the provider prefix and the model
+//     segment must be non-empty. Unknown provider names and missing
+//     separators are rejected (returns false).
+//
+// Checking the alias table first (rather than falling back to it) keeps
+// resolution deterministic: an alias can never be reinterpreted as a
+// provider-prefixed id, and a provider-prefixed id is never shadowed by an
+// alias (aliases are validated to never contain ':' at config load).
 func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, bool) {
+	if alias, ok := s.modelAliases[clientModel]; ok {
+		p, found := s.providers[alias.Provider]
+		if !found {
+			return nil, "", false
+		}
+		return p, alias.UpstreamModel, true
+	}
 	provName, upstreamModel, ok := strings.Cut(clientModel, ":")
 	if !ok || provName == "" || upstreamModel == "" {
 		return nil, "", false
@@ -955,6 +999,28 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 		return nil, "", false
 	}
 	return p, upstreamModel, true
+}
+
+// buildAliasesByProviderModel inverts the alias -> (provider, upstream
+// model) table into "provider:upstreamModel" -> sorted aliases, so
+// fetchModels can look up (by provider name + upstream model id) which
+// aliases, if any, should also be advertised for a given upstream model
+// listing. Aliases are visited in sorted order so the result is
+// deterministic even if more than one alias targets the same model.
+func buildAliasesByProviderModel(aliases map[string]config.ModelAlias) map[string][]string {
+	aliasNames := make([]string, 0, len(aliases))
+	for alias := range aliases {
+		aliasNames = append(aliasNames, alias)
+	}
+	slices.Sort(aliasNames)
+
+	out := make(map[string][]string, len(aliases))
+	for _, alias := range aliasNames {
+		ma := aliases[alias]
+		key := ma.Provider + ":" + ma.UpstreamModel
+		out[key] = append(out[key], alias)
+	}
+	return out
 }
 
 // fetchAndVerify fetches attestation from the provider and runs all
@@ -3399,6 +3465,28 @@ func (s *Server) fetchModels() []json.RawMessage {
 					return
 				}
 				prefixed = append(prefixed, p)
+
+				// If an operator configured a model_aliases entry for this
+				// exact provider+upstream-model pair, also advertise it
+				// verbatim (no "provider:" prefix) alongside the normal
+				// entry, so agent frameworks whose heuristics match on exact
+				// model name/id can recognize it (GH issue #124 Phase 3).
+				upstreamID, idOK := modelObjectID(raw)
+				if !idOK {
+					continue
+				}
+				for _, alias := range s.aliasesByProviderModel[name+":"+upstreamID] {
+					aliased, err := renameModelID(raw, alias)
+					if err != nil {
+						// raw already parsed successfully above (prefixModelID
+						// succeeded), so this should not happen; fail closed
+						// on just the alias entry rather than the whole list.
+						slog.WarnContext(ctx, "provider model alias rejected: invalid model id",
+							"provider", name, "alias", alias, "err", err)
+						continue
+					}
+					prefixed = append(prefixed, aliased)
+				}
 			}
 			results[i] = prefixed
 		}(i, name, prov)
@@ -3486,6 +3574,43 @@ func prefixModelID(providerName string, raw json.RawMessage) (json.RawMessage, e
 		return nil, err
 	}
 	obj["id"] = prefixed
+	return json.Marshal(obj)
+}
+
+// modelObjectID extracts the original (un-prefixed) "id" field from a raw
+// upstream model listing entry, for looking up whether an alias is
+// configured for it. Returns ok=false for anything that isn't a JSON object
+// with a non-empty string "id" — callers treat that as "no alias lookup
+// possible" rather than an error, since prefixModelID (called just before
+// this on the same raw value) is what enforces the id is well-formed.
+func modelObjectID(raw json.RawMessage) (id string, ok bool) {
+	var obj struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil || obj.ID == "" {
+		return "", false
+	}
+	return obj.ID, true
+}
+
+// renameModelID rewrites the "id" field of a JSON model object to alias
+// verbatim (no provider prefix), preserving all other fields. Used to
+// additionally advertise an alias-configured model under the exact
+// client-facing name operators configure (config.ModelAliases), so agent
+// frameworks whose heuristics match on exact model name/id can recognize it
+// (GH issue #124 Phase 3). alias is validated at config load
+// (config.buildModelAliases) against the same character set prefixModelID
+// enforces, so this only fails if raw itself is not a JSON object.
+func renameModelID(raw json.RawMessage, alias string) (json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	aliasID, err := json.Marshal(alias)
+	if err != nil {
+		return nil, err
+	}
+	obj["id"] = aliasID
 	return json.Marshal(obj)
 }
 

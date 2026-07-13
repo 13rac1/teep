@@ -1582,6 +1582,86 @@ func TestHandleModels_MultipleProviders(t *testing.T) {
 	}
 }
 
+// TestHandleModels_AliasAdvertisedAlongsidePrefixedID covers GH issue #124
+// Phase 3: an operator-configured model_aliases entry must be advertised
+// verbatim (no "provider:" prefix) in /v1/models alongside the normal
+// "provider:model" entry, so agent frameworks whose heuristics match on
+// exact model id can recognize the alias while "provider:model" routing
+// keeps working unchanged.
+func TestHandleModels_AliasAdvertisedAlongsidePrefixedID(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "key",
+			},
+		},
+		AllowFail: attestation.KnownFactors,
+		ModelAliases: map[string]config.ModelAlias{
+			"deepseek-ai/DeepSeek-V3.2-Exp": {Provider: "neardirect", UpstreamModel: "model-a"},
+		},
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+
+	direct := srv.ProviderByName("neardirect")
+	direct.PinnedHandler = stubPinnedHandler{}
+	direct.ModelLister = stubModelLister{
+		models: []json.RawMessage{
+			json.RawMessage(`{"id":"model-a","object":"model","owned_by":"near-ai"}`),
+			json.RawMessage(`{"id":"model-b","object":"model","owned_by":"near-ai"}`),
+		},
+	}
+
+	proxySrv := httptest.NewServer(srv)
+	defer proxySrv.Close()
+
+	resp, err := http.Get(proxySrv.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// model-a gets both its normal prefixed entry and its alias entry;
+	// model-b (no alias configured) only gets its normal prefixed entry.
+	if len(result.Data) != 3 {
+		t.Fatalf("data len = %d, want 3 (model-a prefixed + model-a alias + model-b prefixed)", len(result.Data))
+	}
+
+	ids := map[string]bool{}
+	for _, raw := range result.Data {
+		var m struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		t.Logf("  model: %s", m.ID)
+		ids[m.ID] = true
+	}
+	if !ids["neardirect:model-a"] {
+		t.Error("neardirect:model-a (normal prefixed id) missing from response")
+	}
+	if !ids["deepseek-ai/DeepSeek-V3.2-Exp"] {
+		t.Error("deepseek-ai/DeepSeek-V3.2-Exp (alias, no prefix) missing from response")
+	}
+	if !ids["neardirect:model-b"] {
+		t.Error("neardirect:model-b missing from response")
+	}
+}
+
 // TestHandleModels_HostileModelID_RejectsWholeProviderList is a regression
 // test for M5 (dashboard attribute-injection XSS): a provider that returns
 // a model id containing characters an attacker could use to break out of
@@ -5020,6 +5100,34 @@ func TestNew_ProviderKeyNameMismatch(t *testing.T) {
 	t.Logf("proxy.New with mismatched provider key/name: %v", err)
 	if err == nil {
 		t.Error("expected error for mismatched provider map key and name, got nil")
+	}
+}
+
+// TestNew_ModelAliasUnknownProviderFailsClosed covers a defense-in-depth
+// check in New(): config.buildModelAliases already rejects (at TOML load)
+// aliases whose provider name collides with another configured provider,
+// but it cannot know whether an alias's *target* provider actually resolved
+// successfully in New() (relevant for programmatically-constructed Configs
+// that bypass config.Load(), e.g. in tests or embedders). New() must still
+// fail closed rather than silently serve a dangling alias.
+func TestNew_ModelAliasUnknownProviderFailsClosed(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"venice": {
+				Name:    "venice",
+				BaseURL: "https://example.com",
+				APIKey:  "test-key",
+			},
+		},
+		ModelAliases: map[string]config.ModelAlias{
+			"dangling-alias": {Provider: "not-configured", UpstreamModel: "m"},
+		},
+	}
+	_, err := proxy.New(cfg)
+	t.Logf("proxy.New with dangling model alias: %v", err)
+	if err == nil {
+		t.Error("expected error for model alias targeting an unconfigured provider, got nil")
 	}
 }
 

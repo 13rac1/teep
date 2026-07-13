@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -673,6 +674,125 @@ func TestResolveModel_EmptySegments(t *testing.T) {
 			t.Errorf("resolveModel(%q): expected ok=false for empty segment", c)
 		}
 	}
+}
+
+func TestResolveModel_AliasResolvesToProviderAndUpstreamModel(t *testing.T) {
+	s := newMinimalServer()
+	s.providers = map[string]*provider.Provider{
+		"tinfoil_v3_direct": {Name: "tinfoil_v3_direct"},
+	}
+	s.modelAliases = map[string]config.ModelAlias{
+		"deepseek-ai/DeepSeek-V3.2-Exp": {Provider: "tinfoil_v3_direct", UpstreamModel: "deepseek-v3.2-exp"},
+	}
+	prov, model, ok := s.resolveModel("deepseek-ai/DeepSeek-V3.2-Exp")
+	if !ok {
+		t.Fatal("resolveModel(alias): expected ok=true")
+	}
+	if prov == nil || prov.Name != "tinfoil_v3_direct" {
+		t.Fatalf("resolveModel(alias): prov = %v, want tinfoil_v3_direct", prov)
+	}
+	if model != "deepseek-v3.2-exp" {
+		t.Fatalf("resolveModel(alias): model = %q, want deepseek-v3.2-exp", model)
+	}
+}
+
+func TestResolveModel_AliasTakesPrecedenceOverProviderSplit(t *testing.T) {
+	// The alias table is checked before "provider:model" parsing. Aliases
+	// are validated at config load to never contain ':', so this mainly
+	// guards against a future regression reordering the checks.
+	s := newMinimalServer()
+	s.providers = map[string]*provider.Provider{
+		"venice": {Name: "venice"},
+	}
+	s.modelAliases = map[string]config.ModelAlias{
+		"my-alias": {Provider: "venice", UpstreamModel: "actual-model"},
+	}
+	prov, model, ok := s.resolveModel("my-alias")
+	if !ok || prov == nil || prov.Name != "venice" || model != "actual-model" {
+		t.Fatalf("resolveModel(alias) = (%v, %q, %v), want (venice, actual-model, true)", prov, model, ok)
+	}
+	// Non-aliased provider:model routing keeps working unaffected.
+	prov, model, ok = s.resolveModel("venice:some-other-model")
+	if !ok || prov == nil || prov.Name != "venice" || model != "some-other-model" {
+		t.Fatalf("resolveModel(provider:model) = (%v, %q, %v), want (venice, some-other-model, true)", prov, model, ok)
+	}
+}
+
+func TestResolveModel_AliasForUnconfiguredProviderFailsClosed(t *testing.T) {
+	// This should not occur at runtime (New() validates every alias's
+	// target provider resolved successfully before serving traffic), but
+	// resolveModel must still fail closed rather than panic or route to a
+	// nil provider if the invariant is ever violated.
+	s := newMinimalServer()
+	s.providers = map[string]*provider.Provider{}
+	s.modelAliases = map[string]config.ModelAlias{
+		"dangling-alias": {Provider: "missing-provider", UpstreamModel: "m"},
+	}
+	prov, _, ok := s.resolveModel("dangling-alias")
+	if ok || prov != nil {
+		t.Fatalf("resolveModel(dangling alias) = (%v, ok=%v), want (nil, false)", prov, ok)
+	}
+}
+
+// TestResolveModelConcurrency_AliasesAndPrefixedNames exercises the concern
+// GH issue #124 Phase 3 calls out explicitly: the alias table is built once
+// and must never be written again, so many goroutines resolving both
+// aliases and ordinary "provider:model" names concurrently must be safe
+// under -race with no locking on this hot path.
+func TestResolveModelConcurrency_AliasesAndPrefixedNames(t *testing.T) {
+	s := newMinimalServer()
+	s.providers = map[string]*provider.Provider{
+		"venice":     {Name: "venice"},
+		"neardirect": {Name: "neardirect"},
+	}
+	s.modelAliases = map[string]config.ModelAlias{
+		"alias-one": {Provider: "venice", UpstreamModel: "model-one"},
+		"alias-two": {Provider: "neardirect", UpstreamModel: "model-two"},
+	}
+	s.aliasesByProviderModel = buildAliasesByProviderModel(s.modelAliases)
+
+	inputs := []string{
+		"alias-one", "alias-two",
+		"venice:some-model", "neardirect:other-model",
+		"unknown-alias", "noColonHere", "venice:",
+	}
+
+	var wg sync.WaitGroup
+	const goroutines = 16
+	const iterations = 500
+	for g := range goroutines {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := range iterations {
+				input := inputs[(g+i)%len(inputs)]
+				prov, model, ok := s.resolveModel(input)
+				switch input {
+				case "alias-one":
+					if !ok || prov == nil || prov.Name != "venice" || model != "model-one" {
+						t.Errorf("resolveModel(%q) = (%v, %q, %v), want (venice, model-one, true)", input, prov, model, ok)
+					}
+				case "alias-two":
+					if !ok || prov == nil || prov.Name != "neardirect" || model != "model-two" {
+						t.Errorf("resolveModel(%q) = (%v, %q, %v), want (neardirect, model-two, true)", input, prov, model, ok)
+					}
+				case "venice:some-model":
+					if !ok || prov == nil || prov.Name != "venice" || model != "some-model" {
+						t.Errorf("resolveModel(%q) = (%v, %q, %v), want (venice, some-model, true)", input, prov, model, ok)
+					}
+				case "neardirect:other-model":
+					if !ok || prov == nil || prov.Name != "neardirect" || model != "other-model" {
+						t.Errorf("resolveModel(%q) = (%v, %q, %v), want (neardirect, other-model, true)", input, prov, model, ok)
+					}
+				case "unknown-alias", "noColonHere", "venice:":
+					if ok {
+						t.Errorf("resolveModel(%q) = ok=true, want false", input)
+					}
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
 }
 
 // ---------------------------------------------------------------------------
