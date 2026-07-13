@@ -186,6 +186,25 @@ func (r *VerificationReport) BlockedFactors() []FactorResult {
 	return out
 }
 
+// WaivedFactors returns every factor that failed but was NOT enforced — i.e.
+// the active allow_fail policy knowingly lets this factor fail without
+// blocking the request. This is the definitive "degraded" set: each entry
+// means teep is running with reduced integrity assurance on that axis for
+// this provider/model. Centralizing the definition here (rather than
+// re-deriving Status==Fail && !Enforced at each call site) keeps every
+// caller — dashboard, explore page, future callers — consistent, and keeps
+// the degraded surface correct automatically as the allow_fail policy
+// changes, without hardcoding any factor or provider name.
+func (r *VerificationReport) WaivedFactors() []FactorResult {
+	var out []FactorResult
+	for _, f := range r.Factors {
+		if f.Status == Fail && !f.Enforced {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // ReportDataBindingPassed returns true if the tee_reportdata_binding factor
 // passed. Without this, a MITM can substitute the enclave public key and
 // E2EE becomes security theater. E2EE must never be activated unless this

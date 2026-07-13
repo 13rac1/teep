@@ -2108,6 +2108,46 @@ func TestReportDataBindingPassed(t *testing.T) {
 	})
 }
 
+// TestWaivedFactors verifies WaivedFactors returns exactly the
+// Status==Fail && !Enforced factors — a mix of enforced-fail, waived-fail,
+// pass, and skip must yield only the waived-fail entries, in report order.
+func TestWaivedFactors(t *testing.T) {
+	r := &VerificationReport{Factors: []FactorResult{
+		{Name: "tee_quote_present", Status: Pass, Enforced: true},
+		{Name: "tee_hardware_config", Status: Fail, Enforced: false}, // waived
+		{Name: "nonce_match", Status: Fail, Enforced: true},          // enforced (blocking), not waived
+		{Name: "nvidia_nras", Status: Skip, Enforced: false},
+		{Name: "tee_boot_config", Status: Fail, Enforced: false}, // waived
+		{Name: "tee_measurement", Status: NotApplicable, Enforced: true},
+	}}
+
+	waived := r.WaivedFactors()
+	if len(waived) != 2 {
+		t.Fatalf("WaivedFactors() returned %d factors, want 2: %+v", len(waived), waived)
+	}
+	if waived[0].Name != "tee_hardware_config" || waived[1].Name != "tee_boot_config" {
+		t.Errorf("WaivedFactors() = %v, want [tee_hardware_config, tee_boot_config] in report order", waived)
+	}
+	for _, f := range waived {
+		if f.Status != Fail || f.Enforced {
+			t.Errorf("WaivedFactors() returned non-waived factor %+v", f)
+		}
+	}
+}
+
+// TestWaivedFactorsNilWhenNoneWaived verifies WaivedFactors is nil when every
+// factor either passed, was skipped, or failed while enforced.
+func TestWaivedFactorsNilWhenNoneWaived(t *testing.T) {
+	r := &VerificationReport{Factors: []FactorResult{
+		{Name: "tee_quote_present", Status: Pass, Enforced: true},
+		{Name: "nonce_match", Status: Fail, Enforced: true},
+		{Name: "nvidia_nras", Status: Skip, Enforced: false},
+	}}
+	if waived := r.WaivedFactors(); waived != nil {
+		t.Errorf("WaivedFactors() = %v, want nil", waived)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Feature C: Ed25519 support in evalE2EECapable
 // ---------------------------------------------------------------------------
