@@ -901,17 +901,15 @@ func fromConfig(
 		p.Encryptor = tinfoil.NewE2EE()
 		p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
 		// Tinfoil verifies its own Sigstore-based supply chain via
-		// verifyTinfoilSupplyChain / isTinfoilRecognizedComponent, not the
-		// generic compose dispatcher (in.TinfoilSC != nil short-circuits
-		// those evaluators before SupplyChainPolicy is ever consulted). The
-		// sentinel here only satisfies the mandatory non-nil invariant on
-		// the generic path (GH #118 part 2); it does not change Tinfoil's
-		// own verification. Real Tinfoil policy content (component/signer
-		// allowlists keyed on the Sigstore-verified identity) is deferred to
-		// GH #118 Part 1.
-		p.SupplyChainPolicy = attestation.NoSupplyChainPolicy()
+		// verifyTinfoilSupplyChain, not the generic compose dispatcher
+		// (in.TinfoilSC != nil short-circuits the generic compose
+		// evaluators). This policy IS consulted, though: the Tinfoil-
+		// specific evaluators in report.go compare the attested Fulcio
+		// signer identity (OIDC issuer + workflow SAN) against this policy's
+		// entries instead of a repo-name-prefix heuristic (GH #118 part 1).
+		p.SupplyChainPolicy = tinfoil.CloudSupplyChainPolicy()
 		p.SigstoreRepoForModel = func(_ string) string {
-			return "tinfoilsh/confidential-model-router"
+			return tinfoil.RouterRepo
 		}
 		p.ModelLister = provider.NewValidatingModelLister(
 			provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline)),
@@ -934,15 +932,17 @@ func fromConfig(
 		p.Encryptor = tinfoil.NewE2EE()
 		p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
 		// Tinfoil verifies its own Sigstore-based supply chain via
-		// verifyTinfoilSupplyChain / isTinfoilRecognizedComponent, not the
-		// generic compose dispatcher (in.TinfoilSC != nil short-circuits
-		// those evaluators before SupplyChainPolicy is ever consulted). The
-		// sentinel here only satisfies the mandatory non-nil invariant on
-		// the generic path (GH #118 part 2); it does not change Tinfoil's
-		// own verification. Real Tinfoil policy content (component/signer
-		// allowlists keyed on the Sigstore-verified identity) is deferred to
-		// GH #118 Part 1.
-		p.SupplyChainPolicy = attestation.NoSupplyChainPolicy()
+		// verifyTinfoilSupplyChain, not the generic compose dispatcher
+		// (in.TinfoilSC != nil short-circuits the generic compose
+		// evaluators). This policy IS consulted, though: the Tinfoil-
+		// specific evaluators in report.go compare the attested Fulcio
+		// signer identity (OIDC issuer + workflow SAN) against this policy's
+		// explicit per-model-repo allowlist instead of a
+		// "tinfoilsh/confidential-*" prefix heuristic (GH #118 part 1). An
+		// unknown model repo (one not yet added to
+		// tinfoil.DirectSupplyChainPolicy) fails closed on the supply chain
+		// factors rather than being silently accepted.
+		p.SupplyChainPolicy = tinfoil.DirectSupplyChainPolicy()
 		p.SigstoreRepoForModel = func(model string) string {
 			m, err := resolver.ResolveMapping(context.Background(), model)
 			if err != nil || m.Repo == "" {
@@ -1410,7 +1410,7 @@ func (s *Server) verifyTinfoilSupplyChain(
 
 	// Sigstore DSSE bundle verification.
 	sv := tinfoil.NewSigstoreVerifier(config.NewAttestationClient(s.cfg.Offline))
-	predicateBytes, predicateType, err := sv.FetchAndVerify(ctx, sigstoreRepo)
+	predicateBytes, predicateType, signer, err := sv.FetchAndVerify(ctx, sigstoreRepo)
 	if err != nil {
 		result.SigstoreErr = err
 		result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: sigstoreRepo, SigstoreErr: err})
@@ -1419,7 +1419,10 @@ func (s *Server) verifyTinfoilSupplyChain(
 		return result, time.Since(start)
 	}
 	result.SigstoreVerified = true
-	result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: sigstoreRepo, SigstoreVerified: true})
+	result.Components = append(result.Components, attestation.TinfoilComponentResult{
+		Repo: sigstoreRepo, SigstoreVerified: true,
+		OIDCIssuer: signer.OIDCIssuer, SAN: signer.SAN,
+	})
 	result.SigstoreDetail = fmt.Sprintf("Sigstore DSSE verified for %s (predicate: %s)", sigstoreRepo, predicateType)
 
 	// Parse code measurements from the verified predicate.
@@ -1446,16 +1449,19 @@ func (s *Server) verifyTinfoilSupplyChain(
 		}
 
 		// Hardware measurement match (TDX only).
-		hwPredBytes, hwPredType, hwErr := sv.FetchAndVerify(ctx, "tinfoilsh/hardware-measurements")
+		hwPredBytes, hwPredType, hwSigner, hwErr := sv.FetchAndVerify(ctx, tinfoil.HardwareMeasurementsRepo)
 		switch {
 		case hwErr != nil:
-			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: "tinfoilsh/hardware-measurements", SigstoreErr: hwErr})
+			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: tinfoil.HardwareMeasurementsRepo, SigstoreErr: hwErr})
 			result.HWMatchErr = fmt.Errorf("fetch hardware measurements: %w", hwErr)
 		case hwPredType != tinfoil.PredicateHardwareMeasurements:
-			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: "tinfoilsh/hardware-measurements", SigstoreErr: fmt.Errorf("unexpected hardware predicate type %q", hwPredType)})
+			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: tinfoil.HardwareMeasurementsRepo, SigstoreErr: fmt.Errorf("unexpected hardware predicate type %q", hwPredType)})
 			result.HWMatchErr = fmt.Errorf("unexpected hardware predicate type %q", hwPredType)
 		default:
-			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: "tinfoilsh/hardware-measurements", SigstoreVerified: true})
+			result.Components = append(result.Components, attestation.TinfoilComponentResult{
+				Repo: tinfoil.HardwareMeasurementsRepo, SigstoreVerified: true,
+				OIDCIssuer: hwSigner.OIDCIssuer, SAN: hwSigner.SAN,
+			})
 			entries, parseErr := tinfoil.ParseHardwareMeasurements(hwPredBytes)
 			if parseErr != nil {
 				result.HWMatchErr = fmt.Errorf("parse hardware measurements: %w", parseErr)

@@ -21,6 +21,11 @@ const (
 // because it attests the router enclave, not per-model inference enclaves.
 const RouterRepo = "tinfoilsh/confidential-model-router"
 
+// HardwareMeasurementsRepo is the Sigstore GitHub repo for Tinfoil's
+// hardware measurement allowlist, verified alongside the router (cloud) or
+// the per-model enclave (direct) for TDX platforms.
+const HardwareMeasurementsRepo = "tinfoilsh/hardware-measurements"
+
 // KnownRepos lists the known Tinfoil configuration repo mappings.
 var KnownRepos = []string{
 	RouterRepo,

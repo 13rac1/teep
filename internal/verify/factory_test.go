@@ -151,8 +151,8 @@ func TestSupplyChainPolicy(t *testing.T) {
 		{provider: "nanogpt"},
 		{provider: "phalacloud", wantSentinel: true},
 		{provider: "chutes", wantSentinel: true},
-		{provider: "tinfoil_v3_cloud", wantSentinel: true},
-		{provider: "tinfoil_v3_direct", wantSentinel: true},
+		{provider: "tinfoil_v3_cloud"},
+		{provider: "tinfoil_v3_direct"},
 		{provider: "unknown", wantErr: true},
 	}
 	for _, tc := range tests {

@@ -132,13 +132,16 @@ func supplyChainPolicy(name string) (*attestation.SupplyChainPolicy, error) {
 		return attestation.NoSupplyChainPolicy(), nil
 	case "chutes":
 		return attestation.NoSupplyChainPolicy(), nil // cosign+IMA model, no docker-compose surface
-	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
+	case "tinfoil_v3_cloud":
 		// Tinfoil verifies its own Sigstore-based supply chain separately
-		// (verifyTinfoilSupplyChain); the sentinel only satisfies the
-		// mandatory non-nil invariant on this generic selector and does not
-		// affect Tinfoil's own verification. Real Tinfoil policy content is
-		// deferred to GH #118 Part 1.
-		return attestation.NoSupplyChainPolicy(), nil
+		// (verifyTinfoilSupplyChain), but the same policy is consulted by
+		// the Tinfoil-specific evaluators in report.go (GH #118 part 1) to
+		// compare the attested Fulcio signer identity against the router +
+		// hardware-measurements component allowlist, replacing the old
+		// repo-name-prefix heuristic.
+		return tinfoil.CloudSupplyChainPolicy(), nil
+	case "tinfoil_v3_direct":
+		return tinfoil.DirectSupplyChainPolicy(), nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q: no supply chain policy mapping", name)
 	}

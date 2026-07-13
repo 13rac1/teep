@@ -31,6 +31,31 @@ const githubProxyBaseURL = "https://github-proxy.tinfoil.sh"
 // sigstoreOIDCIssuer is the expected OIDC issuer for GitHub Actions.
 const sigstoreOIDCIssuer = "https://token.actions.githubusercontent.com"
 
+// SignerIdentity holds the verified Fulcio signer's OIDC issuer and Subject
+// Alternative Name (GitHub Actions workflow identity), extracted from a
+// successfully verified Sigstore DSSE bundle. Both fields are non-secret,
+// public attestation values (see the debug log in fetchAndVerifyAttestation).
+// Callers thread this onto attestation.TinfoilComponentResult so the
+// report-layer evaluators (internal/attestation/report.go) can compare the
+// attested signer identity against the supply chain policy, rather than
+// trusting a repo-name prefix.
+type SignerIdentity struct {
+	OIDCIssuer string
+	SAN        string
+}
+
+// WorkflowPattern returns the tag-agnostic Fulcio SAN identity regex for a
+// Tinfoil GitHub Actions release of repo: any workflow file under
+// .github/workflows, signed against any git tag. Tinfoil cuts a new release
+// (and thus a new tag) on every deploy, so the trust anchor is the repo +
+// OIDC issuer, not a specific tag. Shared between FetchAndVerify (which
+// performs the actual Fulcio certificate-identity check via Sigstore) and
+// the supply chain policy (policy.go), which independently re-checks the
+// verified identity against policy.
+func WorkflowPattern(repo string) string {
+	return fmt.Sprintf(`^https://github.com/%s/\.github/workflows/[^@]+@refs/tags/[^/]+$`, regexp.QuoteMeta(repo))
+}
+
 // githubRelease is the minimal JSON structure from the GitHub releases API.
 type githubRelease struct {
 	TagName string `json:"tag_name"`
@@ -57,18 +82,20 @@ func NewSigstoreVerifier(client *http.Client) *SigstoreVerifier {
 
 // FetchAndVerify fetches the latest release of the given repo, retrieves the
 // tinfoil.hash digest, fetches the Sigstore attestation for that digest, and
-// verifies the DSSE bundle. Returns the verified in-toto predicate bytes.
-func (sv *SigstoreVerifier) FetchAndVerify(ctx context.Context, repo string) (predicateBytes []byte, predicateType string, err error) {
+// verifies the DSSE bundle. Returns the verified in-toto predicate bytes and
+// the verified Fulcio signer identity (OIDC issuer + SAN), so callers can
+// compare the attested signer against their own supply chain policy.
+func (sv *SigstoreVerifier) FetchAndVerify(ctx context.Context, repo string) (predicateBytes []byte, predicateType string, signer SignerIdentity, err error) {
 	// Step 1: Fetch latest release tag.
 	tag, err := sv.fetchLatestTag(ctx, repo)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch latest release tag: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("fetch latest release tag: %w", err)
 	}
 
 	// Step 2: Fetch tinfoil.hash from the release.
 	digest, err := sv.fetchTinfoilHash(ctx, repo, tag)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch tinfoil.hash: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("fetch tinfoil.hash: %w", err)
 	}
 
 	// Step 3: Fetch and verify Sigstore attestation.
@@ -115,51 +142,48 @@ func validateTinfoilHash(digest string) (string, error) {
 	return digest, nil
 }
 
-func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo, digest string) (predicateBytes []byte, predicateType string, err error) {
+func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo, digest string) (predicateBytes []byte, predicateType string, signer SignerIdentity, err error) {
 	url := githubProxyURL("/repos/%s/attestations/sha256:%s", repo, digest)
 	body, err := sv.fetchBounded(ctx, url, maxAttestationResponseSize)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch attestation: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("fetch attestation: %w", err)
 	}
 
 	var resp githubAttestationResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, "", fmt.Errorf("unmarshal attestation response: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("unmarshal attestation response: %w", err)
 	}
 	if len(resp.Attestations) == 0 {
-		return nil, "", fmt.Errorf("no attestations found for sha256:%s", digest)
+		return nil, "", SignerIdentity{}, fmt.Errorf("no attestations found for sha256:%s", digest)
 	}
 
 	// Parse the DSSE bundle from raw JSON bytes.
 	var b bundle.Bundle
 	if err := b.UnmarshalJSON(resp.Attestations[0].Bundle); err != nil {
-		return nil, "", fmt.Errorf("parse DSSE bundle: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("parse DSSE bundle: %w", err)
 	}
 
 	// Get trusted root from Sigstore TUF.
 	trustedRoot, err := root.FetchTrustedRoot()
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch Sigstore trusted root: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("fetch Sigstore trusted root: %w", err)
 	}
 
 	// Build verification policy.
-	workflowPattern := fmt.Sprintf("^https://github.com/%s/\\.github/workflows/[^@]+@refs/tags/[^/]+$",
-		regexp.QuoteMeta(repo))
-
 	certID, err := verify.NewShortCertificateIdentity(
 		sigstoreOIDCIssuer,
 		"", // issuerRegex
 		"", // sanValue
-		workflowPattern,
+		WorkflowPattern(repo),
 	)
 	if err != nil {
-		return nil, "", fmt.Errorf("build cert identity: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("build cert identity: %w", err)
 	}
 
 	// Decode hex digest to bytes for WithArtifactDigest.
 	digestBytes, err := hex.DecodeString(digest)
 	if err != nil {
-		return nil, "", fmt.Errorf("decode digest hex: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("decode digest hex: %w", err)
 	}
 
 	// Configure verifier with SCT, transparency log, and observer timestamps.
@@ -170,7 +194,7 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 		verify.WithObserverTimestamps(1),
 	)
 	if err != nil {
-		return nil, "", fmt.Errorf("create signed entity verifier: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("create signed entity verifier: %w", err)
 	}
 
 	// Verify the bundle.
@@ -179,39 +203,46 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 		verify.WithCertificateIdentity(certID),
 	))
 	if err != nil {
-		return nil, "", fmt.Errorf("DSSE bundle verification failed: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("DSSE bundle verification failed: %w", err)
 	}
 
-	// Log the verified Fulcio signer identity: OIDC issuer and full SAN URI
-	// (e.g. https://github.com/tinfoilsh/<repo>/.github/workflows/<wf>@refs/tags/<tag>).
-	// Non-secret, public attestation fields; the tag is load-bearing for a
-	// future version-floor check, so log the whole SAN rather than parsing
-	// out just the tag.
-	if result.Signature != nil && result.Signature.Certificate != nil {
-		slog.DebugContext(ctx, "Fulcio signer identity verified",
-			"oidc_issuer", result.Signature.Certificate.Issuer,
-			"san", result.Signature.Certificate.SubjectAlternativeName,
-			"repo", repo,
-		)
+	// Extract the verified Fulcio signer identity: OIDC issuer and full SAN
+	// URI (e.g. https://github.com/tinfoilsh/<repo>/.github/workflows/<wf>@refs/tags/<tag>).
+	// Both fields are non-secret, public attestation fields. Fail closed if
+	// the successfully-verified result is somehow missing a certificate:
+	// verify.WithCertificateIdentity requires a Fulcio cert to succeed, so a
+	// nil certificate here indicates a library invariant violation, not a
+	// legitimate raw-key signature.
+	if result.Signature == nil || result.Signature.Certificate == nil {
+		return nil, "", SignerIdentity{}, errors.New("verified bundle has no certificate identity")
 	}
+	signer = SignerIdentity{
+		OIDCIssuer: result.Signature.Certificate.Issuer,
+		SAN:        result.Signature.Certificate.SubjectAlternativeName,
+	}
+	slog.DebugContext(ctx, "Fulcio signer identity verified",
+		"oidc_issuer", signer.OIDCIssuer,
+		"san", signer.SAN,
+		"repo", repo,
+	)
 
 	// Extract the verified statement.
 	statement := result.Statement
 	if statement == nil {
-		return nil, "", errors.New("verified bundle has no in-toto statement")
+		return nil, "", SignerIdentity{}, errors.New("verified bundle has no in-toto statement")
 	}
 
 	if statement.GetPredicate() == nil {
-		return nil, "", errors.New("verified statement has nil predicate")
+		return nil, "", SignerIdentity{}, errors.New("verified statement has nil predicate")
 	}
 
 	// Marshal the protobuf Struct predicate to JSON bytes.
 	predicateJSON, err := protojson.Marshal(statement.GetPredicate())
 	if err != nil {
-		return nil, "", fmt.Errorf("marshal predicate to JSON: %w", err)
+		return nil, "", SignerIdentity{}, fmt.Errorf("marshal predicate to JSON: %w", err)
 	}
 
-	return predicateJSON, statement.GetPredicateType(), nil
+	return predicateJSON, statement.GetPredicateType(), signer, nil
 }
 
 func githubProxyURL(pathFormat string, args ...any) string {

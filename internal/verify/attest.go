@@ -310,7 +310,7 @@ func verifyTinfoilSupplyChain(
 		client = config.NewAttestationClient(offline)
 	}
 	sv := tinfoil.NewSigstoreVerifier(client)
-	predicateBytes, predicateType, err := sv.FetchAndVerify(ctx, sigstoreRepo)
+	predicateBytes, predicateType, signer, err := sv.FetchAndVerify(ctx, sigstoreRepo)
 	if err != nil {
 		result.SigstoreErr = err
 		result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: sigstoreRepo, SigstoreErr: err})
@@ -319,7 +319,10 @@ func verifyTinfoilSupplyChain(
 		return result
 	}
 	result.SigstoreVerified = true
-	result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: sigstoreRepo, SigstoreVerified: true})
+	result.Components = append(result.Components, attestation.TinfoilComponentResult{
+		Repo: sigstoreRepo, SigstoreVerified: true,
+		OIDCIssuer: signer.OIDCIssuer, SAN: signer.SAN,
+	})
 	result.SigstoreDetail = fmt.Sprintf("Sigstore DSSE verified for %s (predicate: %s)", sigstoreRepo, predicateType)
 
 	// Parse code measurements from the verified predicate.
@@ -346,16 +349,19 @@ func verifyTinfoilSupplyChain(
 		}
 
 		// Hardware measurement match (TDX only).
-		hwPredBytes, hwPredType, hwErr := sv.FetchAndVerify(ctx, "tinfoilsh/hardware-measurements")
+		hwPredBytes, hwPredType, hwSigner, hwErr := sv.FetchAndVerify(ctx, tinfoil.HardwareMeasurementsRepo)
 		switch {
 		case hwErr != nil:
-			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: "tinfoilsh/hardware-measurements", SigstoreErr: hwErr})
+			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: tinfoil.HardwareMeasurementsRepo, SigstoreErr: hwErr})
 			result.HWMatchErr = fmt.Errorf("fetch hardware measurements: %w", hwErr)
 		case hwPredType != tinfoil.PredicateHardwareMeasurements:
-			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: "tinfoilsh/hardware-measurements", SigstoreErr: fmt.Errorf("unexpected hardware predicate type %q", hwPredType)})
+			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: tinfoil.HardwareMeasurementsRepo, SigstoreErr: fmt.Errorf("unexpected hardware predicate type %q", hwPredType)})
 			result.HWMatchErr = fmt.Errorf("unexpected hardware predicate type %q", hwPredType)
 		default:
-			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: "tinfoilsh/hardware-measurements", SigstoreVerified: true})
+			result.Components = append(result.Components, attestation.TinfoilComponentResult{
+				Repo: tinfoil.HardwareMeasurementsRepo, SigstoreVerified: true,
+				OIDCIssuer: hwSigner.OIDCIssuer, SAN: hwSigner.SAN,
+			})
 			entries, parseErr := tinfoil.ParseHardwareMeasurements(hwPredBytes)
 			if parseErr != nil {
 				result.HWMatchErr = fmt.Errorf("parse hardware measurements: %w", parseErr)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -678,6 +679,17 @@ type TinfoilComponentResult struct {
 	Repo             string
 	SigstoreVerified bool
 	SigstoreErr      error
+
+	// OIDCIssuer and SAN are the verified Fulcio signer identity extracted
+	// from the successfully-verified Sigstore DSSE bundle (see
+	// tinfoil.SignerIdentity). Both are non-secret, public attestation
+	// fields. Populated only when SigstoreVerified is true. The Tinfoil
+	// evaluators (evalTinfoilComponentRecognition and friends, below)
+	// compare these against the component's SupplyChainPolicy entry
+	// (ImageProvenance.OIDCIssuer / WorkflowPattern) instead of trusting a
+	// repo-name prefix (GH #118 part 1).
+	OIDCIssuer string
+	SAN        string
 }
 
 // TinfoilSupplyChainResult holds the results of Tinfoil-specific Sigstore
@@ -2247,7 +2259,7 @@ func formatBuildTransparencyResult(scPolicy *SupplyChainPolicy, fulcioVerified, 
 func evalComponentRecognition(in *ReportInput) []FactorResult {
 	switch {
 	case in.TinfoilSC != nil:
-		return []FactorResult{evalTinfoilComponentRecognition(in.TinfoilSC)}
+		return []FactorResult{evalTinfoilComponentRecognition(in.TinfoilSC, in.SupplyChainPolicy)}
 	case in.SupplyChainPolicy.IsNoSupplyChainSurface():
 		return factor(TierSupplyChain, FactorComponentRecognition, NotApplicable,
 			"provider has no supply chain policy surface (reviewed decision)")
@@ -2274,16 +2286,28 @@ func evalComposeComponentRecognition(in *ReportInput) FactorResult {
 	return f
 }
 
-func evalTinfoilComponentRecognition(sc *TinfoilSupplyChainResult) FactorResult {
+// evalTinfoilComponentRecognition checks that every Tinfoil supply chain
+// component repo has an entry in policy — i.e. is a component Teep has been
+// configured (by a reviewed policy edit) to expect from this Tinfoil
+// deployment (router, hardware-measurements, or a known per-model enclave
+// repo). This replaced the isTinfoilRecognizedComponent prefix heuristic
+// (any "tinfoilsh/confidential-*" repo) in GH #118 part 1: recognition is
+// now driven by tinfoil.CloudSupplyChainPolicy /
+// tinfoil.DirectSupplyChainPolicy, not a repo-name shape check.
+func evalTinfoilComponentRecognition(sc *TinfoilSupplyChainResult, policy *SupplyChainPolicy) FactorResult {
 	repos := tinfoilComponentRepos(sc)
 	if len(repos) == 0 {
 		return FactorResult{Tier: TierSupplyChain, Name: FactorComponentRecognition, Status: Fail,
 			Detail: "no Tinfoil supply chain component repos recorded"}
 	}
+	if policy == nil || policy.IsNoSupplyChainSurface() {
+		return FactorResult{Tier: TierSupplyChain, Name: FactorComponentRecognition, Status: Fail,
+			Detail: "Tinfoil supply chain policy not configured"}
+	}
 	for _, repo := range repos {
-		if !isTinfoilRecognizedComponent(repo) {
+		if policy.Lookup(repo) == nil {
 			return FactorResult{Tier: TierSupplyChain, Name: FactorComponentRecognition, Status: Fail,
-				Detail: fmt.Sprintf("Tinfoil component repo %q not recognized", repo)}
+				Detail: fmt.Sprintf("Tinfoil component repo %q not recognized by supply chain policy", repo)}
 		}
 	}
 	return FactorResult{Tier: TierSupplyChain, Name: FactorComponentRecognition, Status: Pass,
@@ -2294,7 +2318,7 @@ func evalTinfoilComponentRecognition(sc *TinfoilSupplyChainResult) FactorResult 
 func evalProviderSignerRecognition(in *ReportInput) []FactorResult {
 	switch {
 	case in.TinfoilSC != nil:
-		return []FactorResult{evalTinfoilProviderSignerRecognition(in.TinfoilSC)}
+		return []FactorResult{evalTinfoilProviderSignerRecognition(in.TinfoilSC, in.SupplyChainPolicy)}
 	case in.SupplyChainPolicy.IsNoSupplyChainSurface():
 		return factor(TierSupplyChain, FactorProviderSigner, NotApplicable,
 			"provider has no supply chain policy surface (reviewed decision)")
@@ -2309,16 +2333,31 @@ func evalProviderSignerRecognition(in *ReportInput) []FactorResult {
 	}
 }
 
-func evalTinfoilProviderSignerRecognition(sc *TinfoilSupplyChainResult) FactorResult {
+// evalTinfoilProviderSignerRecognition checks that every Tinfoil component's
+// policy entry is marked provider-wide trusted, that the component's
+// Sigstore verification succeeded, and that the attested Fulcio signer
+// identity (OIDC issuer + workflow SAN) matches the policy entry. This
+// replaced the isTinfoilProviderTrustedSignerRepo prefix heuristic (bare
+// "tinfoilsh/" prefix, no identity check at all) in GH #118 part 1.
+func evalTinfoilProviderSignerRecognition(sc *TinfoilSupplyChainResult, policy *SupplyChainPolicy) FactorResult {
 	repos := tinfoilComponentRepos(sc)
 	if len(repos) == 0 {
 		return FactorResult{Tier: TierSupplyChain, Name: FactorProviderSigner, Status: Fail,
 			Detail: "no Tinfoil signer component repos recorded"}
 	}
+	if policy == nil || policy.IsNoSupplyChainSurface() {
+		return FactorResult{Tier: TierSupplyChain, Name: FactorProviderSigner, Status: Fail,
+			Detail: "Tinfoil supply chain policy not configured"}
+	}
 	for _, repo := range repos {
-		if !isTinfoilProviderTrustedSignerRepo(repo) {
+		img := policy.Lookup(repo)
+		if img == nil {
 			return FactorResult{Tier: TierSupplyChain, Name: FactorProviderSigner, Status: Fail,
-				Detail: fmt.Sprintf("Tinfoil repo %q is not in provider-wide trusted signer namespace", repo)}
+				Detail: fmt.Sprintf("Tinfoil repo %q not recognized by supply chain policy", repo)}
+		}
+		if !img.ProviderSignerTrusted {
+			return FactorResult{Tier: TierSupplyChain, Name: FactorProviderSigner, Status: Fail,
+				Detail: fmt.Sprintf("Tinfoil repo %q is not marked provider-wide trusted in policy", repo)}
 		}
 	}
 	if repo, err := tinfoilComponentVerificationErr(sc); err != nil {
@@ -2328,6 +2367,10 @@ func evalTinfoilProviderSignerRecognition(sc *TinfoilSupplyChainResult) FactorRe
 	if !tinfoilComponentsVerified(sc) {
 		return FactorResult{Tier: TierSupplyChain, Name: FactorProviderSigner, Status: Fail,
 			Detail: "Tinfoil signer not verified"}
+	}
+	if repo, err := tinfoilSignerIdentityErr(sc, policy); err != nil {
+		return FactorResult{Tier: TierSupplyChain, Name: FactorProviderSigner, Status: Fail,
+			Detail: fmt.Sprintf("Tinfoil signer for %q rejected by policy: %v", repo, err)}
 	}
 	return FactorResult{Tier: TierSupplyChain, Name: FactorProviderSigner, Status: Pass,
 		Detail: "Tinfoil signer recognized for " + strings.Join(repos, ", ")}
@@ -2381,7 +2424,7 @@ func evalComposeProviderSignerRecognition(in *ReportInput) FactorResult {
 func evalComponentSignatureRecognition(in *ReportInput) []FactorResult {
 	switch {
 	case in.TinfoilSC != nil:
-		return []FactorResult{evalTinfoilComponentSignatureRecognition(in.TinfoilSC)}
+		return []FactorResult{evalTinfoilComponentSignatureRecognition(in.TinfoilSC, in.SupplyChainPolicy)}
 	case in.SupplyChainPolicy.IsNoSupplyChainSurface():
 		return factor(TierSupplyChain, FactorComponentSignature, NotApplicable,
 			"provider has no supply chain policy surface (reviewed decision)")
@@ -2396,14 +2439,23 @@ func evalComponentSignatureRecognition(in *ReportInput) []FactorResult {
 	}
 }
 
-func evalTinfoilComponentSignatureRecognition(sc *TinfoilSupplyChainResult) FactorResult {
+// evalTinfoilComponentSignatureRecognition checks that every Tinfoil
+// component repo has a policy entry, that its Sigstore verification
+// succeeded, and that the attested signer identity matches the policy
+// entry's OIDC issuer and workflow pattern. This replaced the
+// isTinfoilRecognizedComponent prefix heuristic in GH #118 part 1.
+func evalTinfoilComponentSignatureRecognition(sc *TinfoilSupplyChainResult, policy *SupplyChainPolicy) FactorResult {
 	repos := tinfoilComponentRepos(sc)
 	if len(repos) == 0 {
 		return FactorResult{Tier: TierSupplyChain, Name: FactorComponentSignature, Status: Fail,
 			Detail: "no Tinfoil component signature policy target recorded"}
 	}
+	if policy == nil || policy.IsNoSupplyChainSurface() {
+		return FactorResult{Tier: TierSupplyChain, Name: FactorComponentSignature, Status: Fail,
+			Detail: "Tinfoil supply chain policy not configured"}
+	}
 	for _, repo := range repos {
-		if !isTinfoilRecognizedComponent(repo) {
+		if policy.Lookup(repo) == nil {
 			return FactorResult{Tier: TierSupplyChain, Name: FactorComponentSignature, Status: Fail,
 				Detail: fmt.Sprintf("Tinfoil component %q has no recognized signature policy", repo)}
 		}
@@ -2415,6 +2467,10 @@ func evalTinfoilComponentSignatureRecognition(sc *TinfoilSupplyChainResult) Fact
 	if !tinfoilComponentsVerified(sc) {
 		return FactorResult{Tier: TierSupplyChain, Name: FactorComponentSignature, Status: Fail,
 			Detail: "Tinfoil component signature not verified"}
+	}
+	if repo, err := tinfoilSignerIdentityErr(sc, policy); err != nil {
+		return FactorResult{Tier: TierSupplyChain, Name: FactorComponentSignature, Status: Fail,
+			Detail: fmt.Sprintf("Tinfoil component %q signature rejected by policy: %v", repo, err)}
 	}
 	return FactorResult{Tier: TierSupplyChain, Name: FactorComponentSignature, Status: Pass,
 		Detail: "Tinfoil component signature policy matched for " + strings.Join(repos, ", ")}
@@ -2499,15 +2555,65 @@ func verifyComponentSignature(r *RekorProvenance, img *ImageProvenance, repo str
 	}
 }
 
-func isTinfoilRecognizedComponent(repo string) bool {
-	repo = strings.ToLower(strings.TrimSpace(repo))
-	return repo == "tinfoilsh/hardware-measurements" ||
-		repo == "tinfoilsh/confidential-model-router" ||
-		strings.HasPrefix(repo, "tinfoilsh/confidential-")
+// tinfoilSignerIdentityErr checks the attested Fulcio signer identity (OIDC
+// issuer + SAN) recorded on each component in sc against its supply chain
+// policy entry. Returns the first repo whose attested identity does not
+// match policy and a descriptive error, or ("", nil) once every component
+// matches. Callers must already have verified every component's Sigstore
+// bundle was fetched and cryptographically verified (SigstoreVerified/
+// SigstoreErr, checked by tinfoilComponentsVerified /
+// tinfoilComponentVerificationErr) — this function only compares the
+// resulting identity against policy, it does not re-verify the signature.
+func tinfoilSignerIdentityErr(sc *TinfoilSupplyChainResult, policy *SupplyChainPolicy) (string, error) {
+	for _, c := range sc.Components {
+		img := policy.Lookup(c.Repo)
+		if img == nil {
+			return c.Repo, errors.New("no supply chain policy entry for component")
+		}
+		if err := tinfoilVerifySignerIdentity(c, img); err != nil {
+			return c.Repo, err
+		}
+	}
+	return "", nil
 }
 
-func isTinfoilProviderTrustedSignerRepo(repo string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(repo)), "tinfoilsh/")
+// tinfoilVerifySignerIdentity compares a Tinfoil component's attested Fulcio
+// signer identity (c.OIDCIssuer, c.SAN — extracted from the verified
+// Sigstore bundle by tinfoil.SigstoreVerifier.FetchAndVerify) against its
+// policy entry's expected OIDC issuer and workflow identity pattern. The
+// workflow pattern is tag-agnostic by design (img.WorkflowPattern, e.g.
+// tinfoil.WorkflowPattern(repo)): Tinfoil cuts a new release tag on every
+// deploy, so a known component re-signed by the same trusted signer under a
+// new tag must still be recognized (GH #116 semantics), while a signer
+// change, a different repo, or an unexpected workflow file must not.
+//
+// Per GH #118 part 1: OIDC issuer and SAN are non-secret, public attestation
+// identity fields, not secrets/keys/fingerprints/nonces/hashes — but this
+// file's convention (see verifyFulcioEntry, above) is to compare OIDC issuer
+// strings via subtle.ConstantTimeCompare rather than strings.EqualFold, and
+// teeplint enforces no strings.EqualFold anywhere in this package. Mirror
+// that convention here for consistency.
+func tinfoilVerifySignerIdentity(c TinfoilComponentResult, img *ImageProvenance) error {
+	if img.OIDCIssuer == "" || img.WorkflowPattern == "" {
+		return fmt.Errorf("policy entry for %q is missing an OIDC issuer or workflow pattern", img.Repo)
+	}
+	if c.OIDCIssuer == "" || c.SAN == "" {
+		return errors.New("no verified Fulcio signer identity recorded for component")
+	}
+	if subtle.ConstantTimeCompare(
+		[]byte(strings.ToLower(strings.TrimSpace(c.OIDCIssuer))),
+		[]byte(strings.ToLower(strings.TrimSpace(img.OIDCIssuer))),
+	) != 1 {
+		return fmt.Errorf("unexpected OIDC issuer %q (expected %q)", c.OIDCIssuer, img.OIDCIssuer)
+	}
+	re, err := regexp.Compile(img.WorkflowPattern)
+	if err != nil {
+		return fmt.Errorf("policy workflow pattern %q does not compile: %w", img.WorkflowPattern, err)
+	}
+	if !re.MatchString(c.SAN) {
+		return fmt.Errorf("signer identity %q does not match expected workflow pattern %q", c.SAN, img.WorkflowPattern)
+	}
+	return nil
 }
 
 func tinfoilComponentRepos(sc *TinfoilSupplyChainResult) []string {
