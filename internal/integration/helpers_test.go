@@ -76,6 +76,15 @@ func findFixtureDir(t *testing.T, prefix string) string {
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix+"_") {
 			continue
 		}
+		// The generic "venice" prefix must not also match the more specific
+		// "venice_aci_*" series (Venice ACI/1, GH #113): both begin with
+		// "venice_", so a plain HasPrefix scan would let a freshly captured
+		// ACI fixture silently hijack the dstack venice tests (it's a
+		// different attestation format entirely) just by being newer.
+		// ACI fixtures are selected explicitly via prefix "venice_aci".
+		if prefix == "venice" && strings.HasPrefix(e.Name(), "venice_aci_") {
+			continue
+		}
 		dir := filepath.Join("testdata", e.Name())
 		manifest, _, err := capture.Load(dir)
 		if err != nil {

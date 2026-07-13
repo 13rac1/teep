@@ -1,0 +1,56 @@
+Attestation Report: venice / e2ee-glm-5-2-p
+═══════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  Upstream:      z-ai/glm-5.2
+  PPID:          6d29fd8d39de97bd...
+  Nonce source:  client
+  Candidates:    1/1 evaluated
+  Event log:     30 entries
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✓ tee_quote_present                 TDX quote present (10012 hex chars)  [ALLOWED]
+  ✓ tee_quote_structure               valid QuoteV4, MRTD: f06dfda6dce1cf90...  [ALLOWED]
+  ✓ tee_cert_chain                    certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tee_quote_signature               quote signature verified  [ENFORCED]
+  ✓ tee_debug_disabled                TD_ATTRIBUTES bit 0 (TUD.DEBUG) is 0 — production enclave (raw: 0000001000000000)  [ENFORCED]
+  ✓ tee_measurement                   MRTD/MRSEAM policy matched  [ENFORCED]
+  ✗ tee_hardware_config               RTMR[0] not in policy allowlist: d6118f0eeb30e9d9...  [ALLOWED]
+  ✗ tee_boot_config                   RTMR[1] not in policy allowlist: 07e6f51aa763abfe...  [ALLOWED]
+  ✓ signing_key_present               enclave pubkey present (04943cea0b...)  [ENFORCED]
+  ✓ response_schema                   attestation response matches expected schema  [ALLOWED]
+
+Tier 2: Binding & Crypto
+  ✓ tee_reportdata_binding            REPORTDATA binds enclave key (0x79a5061efe5a46b0d1f33b11cf1c5adbedae6b79) and nonce  [ENFORCED]
+  ✓ intel_pcs_collateral              Intel PCS collateral fetched (TCB status: UpToDate)  [ALLOWED]
+  ✓ tee_tcb_current                   TCB is UpToDate per Intel PCS  [ALLOWED]
+  ✓ tee_tcb_not_revoked               TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present            NVIDIA payload present (98158 chars)  [ALLOWED]
+  ✓ nvidia_signature                  EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)  [ENFORCED]
+  ✓ nvidia_claims                     EAT: arch=HOPPER, 8 GPUs, nonce verified  [ALLOWED]
+  ✓ nvidia_nonce_client_bound         EAT nonce matches client nonce (8 GPUs)  [ENFORCED]
+  ✓ nvidia_nras_verified              NRAS: true (JWT verified)  [ALLOWED]
+  ✓ e2ee_capable                      enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible (ecdsa)  [ALLOWED]
+  ✓ e2ee_usable                       E2EE venice: 51 encrypted fields decrypted across 54 chunks  [ALLOWED]
+  ✗ e2ee_response_origin              response AEAD key is derived from a per-response wire ephemeral key that is never compared against the attested model key; response confidentiality holds but response origin is not cryptographically authenticated  [ALLOWED]
+  ✓ aci_keyset_endorsement            endorsement signature valid; keyset digest matches; workload_id matches  [ENFORCED]
+
+Tier 3: Supply Chain & Channel Integrity
+  - tls_key_binding                   provider uses E2EE key exchange; TLS binding not applicable  [ALLOWED]
+  ✗ cpu_gpu_chain                     CPU-GPU attestation not bound  [ALLOWED]
+  — nvswitch_binding                  NVSwitch fabric verification is Tinfoil-specific
+  ✗ measured_model_weights            no model weight hashes  [ALLOWED]
+  ✗ build_transparency_log            no Rekor provenance fetched for attested component digests  [ALLOWED]
+  ✗ component_recognition             no attested model component repositories extracted from compose  [ALLOWED]
+  ✗ provider_signer_recognition       no Rekor provenance available for provider signer recognition  [ALLOWED]
+  ✗ component_signature_recognition   no Rekor provenance available for component signature recognition  [ALLOWED]
+  ✓ cpu_id_registry                   Proof of Cloud: registered (unlabeled)  [ALLOWED]
+  ✗ compose_binding                   ACI/1 has no docker-compose manifest to bind (see source_provenance/aci_keyset_endorsement instead)  [ALLOWED]
+  ✗ sigstore_verification             ACI/1 has no compose-derived image digests to verify against Sigstore  [ALLOWED]
+  — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
+  ✓ event_log_integrity               event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
+
+Score: 23/35 passed, 1 skipped, 11 failed (0 enforced, 11 allowed), 2 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.
