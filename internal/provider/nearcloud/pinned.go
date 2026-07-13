@@ -76,7 +76,7 @@ func NewPinnedHandler(
 		rdVerifier:     rdVerifier,
 		rekorClient:    rekorClient,
 		nvidiaVerifier: nvidiaVerifier,
-		verifyQuote:    attestation.NewTDXVerifier(offline, getter),
+		verifyQuote:    attestation.NewTDXVerifier(offline, getter, time.Time{}),
 		ctChecker:      checker,
 	}
 }

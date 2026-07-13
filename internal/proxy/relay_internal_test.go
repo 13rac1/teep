@@ -1180,7 +1180,7 @@ func TestVerifyTDX_EmptyIntelQuote(t *testing.T) {
 func TestVerifyTDX_WithFakeQuote(t *testing.T) {
 	s := newMinimalServer()
 	// Use offline TDX verifier — parses the quote without network calls.
-	s.verifyQuote = attestation.NewTDXVerifier(true, nil)
+	s.verifyQuote = attestation.NewTDXVerifier(true, nil, time.Time{})
 	// Non-empty but invalid hex quote: verifyQuote parses and returns ParseErr.
 	raw := &attestation.RawAttestation{IntelQuote: "deadbeef"}
 	// nil ReportDataVerifier: skip the binding check.

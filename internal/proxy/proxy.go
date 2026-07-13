@@ -510,9 +510,10 @@ func New(cfg *config.Config) (*Server, error) {
 	s.rekorClient = attestation.NewRekorClient(attestClient)
 	s.nvidiaVerifier = attestation.DefaultNVIDIAVerifier()
 	s.collateral = attestation.NewCollateralGetter(s.attestClient)
-	s.verifyQuote = attestation.NewTDXVerifier(cfg.Offline, s.collateral)
-	// Zero time.Time means "use the real wall clock" (see NewSEVVerifier);
-	// the live proxy has no fixed verification time like replay fixtures do.
+	// Zero time.Time means "use the real wall clock" (both NewTDXVerifier and
+	// NewSEVVerifier fall back to time.Now() internally); the live proxy has
+	// no fixed verification time like replay fixtures do.
+	s.verifyQuote = attestation.NewTDXVerifier(cfg.Offline, s.collateral, time.Time{})
 	s.sevVerifier = attestation.NewSEVVerifier(cfg.Offline, attestation.NewSEVCertGetter(s.attestClient), time.Time{})
 
 	for name, cp := range cfg.Providers {
@@ -3212,7 +3213,8 @@ func (s *Server) buildUpstreamBody(
 			// did online verification for the cached report.
 			switch {
 			case raw.IntelQuote != "":
-				tdxResult := attestation.VerifyTDXQuoteOffline(ctx, raw.IntelQuote)
+				// Live serving: zero time.Time means "use the real wall clock".
+				tdxResult := attestation.VerifyTDXQuoteOffline(ctx, raw.IntelQuote, time.Time{})
 				if tdxResult.ParseErr != nil {
 					return nil, fmt.Errorf("fresh TDX quote parse failed: %w", tdxResult.ParseErr)
 				}

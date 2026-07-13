@@ -27,6 +27,13 @@ import (
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
+// offlineTDXVerifier adapts attestation.VerifyTDXQuoteOffline to the
+// attestation.TDXVerifier signature (func(ctx, hexQuote) *TDXVerifyResult)
+// for tests that don't need a pinned replay time.
+func offlineTDXVerifier(ctx context.Context, hexQuote string) *attestation.TDXVerifyResult {
+	return attestation.VerifyTDXQuoteOffline(ctx, hexQuote, time.Time{})
+}
+
 func TestWriteHTTPRequest_GET(t *testing.T) {
 	var buf bytes.Buffer
 	bw := bufio.NewWriter(&buf)
@@ -1419,7 +1426,7 @@ func TestVerifyTDX(t *testing.T) {
 	})
 
 	t.Run("InvalidQuote", func(t *testing.T) {
-		h := &PinnedHandler{offline: true, verifyQuote: attestation.VerifyTDXQuoteOffline}
+		h := &PinnedHandler{offline: true, verifyQuote: offlineTDXVerifier}
 		raw := &attestation.RawAttestation{IntelQuote: "aabbccdd"}
 		nonce := attestation.NewNonce()
 
@@ -1439,7 +1446,7 @@ func TestVerifyTDX(t *testing.T) {
 		h := &PinnedHandler{
 			offline:     true,
 			rdVerifier:  ReportDataVerifier{},
-			verifyQuote: attestation.VerifyTDXQuoteOffline,
+			verifyQuote: offlineTDXVerifier,
 		}
 		raw := &attestation.RawAttestation{
 			IntelQuote:     quoteHex,

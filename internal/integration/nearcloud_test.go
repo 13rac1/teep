@@ -32,7 +32,7 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 		len(raw.GatewayEventLog))
 
 	// --- Model TDX ---
-	tdxResult := attestation.VerifyTDXQuoteOnline(ctx, raw.IntelQuote, attestation.NewCollateralGetter(env.client))
+	tdxResult := attestation.VerifyTDXQuoteOnline(ctx, raw.IntelQuote, attestation.NewCollateralGetter(env.client), fixtureVerificationTime(&env))
 	if tdxResult.ParseErr != nil {
 		t.Fatalf("TDX parse: %v", tdxResult.ParseErr)
 	}
@@ -82,7 +82,7 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 	var gatewayCompose *attestation.ComposeBindingResult
 	var gatewayCD attestation.ComposeDigests
 	if raw.GatewayIntelQuote != "" {
-		gatewayTDX = attestation.VerifyTDXQuoteOnline(ctx, raw.GatewayIntelQuote, attestation.NewCollateralGetter(env.client))
+		gatewayTDX = attestation.VerifyTDXQuoteOnline(ctx, raw.GatewayIntelQuote, attestation.NewCollateralGetter(env.client), fixtureVerificationTime(&env))
 		t.Logf("gateway TDX: parse=%v cert=%v sig=%v collateral=%v",
 			gatewayTDX.ParseErr, gatewayTDX.CertChainErr, gatewayTDX.SignatureErr, gatewayTDX.CollateralErr)
 

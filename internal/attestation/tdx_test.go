@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
 // realTDXQuoteRaw is the raw bytes of a real TDX production quote from Intel
@@ -26,7 +27,7 @@ func realTDXQuoteHex() string {
 // TestVerifyTDXQuoteParseRealQuote verifies that the real TDX fixture quote
 // parses successfully as a QuoteV4.
 func TestVerifyTDXQuoteParseRealQuote(t *testing.T) {
-	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex())
+	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex(), time.Time{})
 
 	if result.ParseErr != nil {
 		t.Fatalf("VerifyTDXQuoteOffline: unexpected parse error: %v", result.ParseErr)
@@ -45,7 +46,7 @@ func TestVerifyTDXQuoteParseRealQuote(t *testing.T) {
 // TestVerifyTDXQuoteMeasurements verifies that MRTD, RTMRs, and other
 // measurement registers are extracted from the real production quote.
 func TestVerifyTDXQuoteMeasurements(t *testing.T) {
-	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex())
+	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex(), time.Time{})
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed: %v", result.ParseErr)
@@ -98,7 +99,7 @@ func TestVerifyTDXQuoteMeasurements(t *testing.T) {
 // TestVerifyTDXQuoteDebugFlagRealQuote verifies the real production quote has
 // debug disabled (it's a production quote, not a debug quote).
 func TestVerifyTDXQuoteDebugFlagRealQuote(t *testing.T) {
-	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex())
+	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex(), time.Time{})
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed: %v", result.ParseErr)
@@ -111,7 +112,7 @@ func TestVerifyTDXQuoteDebugFlagRealQuote(t *testing.T) {
 
 // TestVerifyTDXQuoteInvalidHex verifies parse error on garbage input.
 func TestVerifyTDXQuoteInvalidHex(t *testing.T) {
-	result := VerifyTDXQuoteOffline(context.Background(), "not-hex!@#$%")
+	result := VerifyTDXQuoteOffline(context.Background(), "not-hex!@#$%", time.Time{})
 
 	if result.ParseErr == nil {
 		t.Error("expected ParseErr for invalid hex input, got nil")
@@ -121,7 +122,7 @@ func TestVerifyTDXQuoteInvalidHex(t *testing.T) {
 // TestVerifyTDXQuoteTooShort verifies parse error when bytes are too short to be a quote.
 func TestVerifyTDXQuoteTooShort(t *testing.T) {
 	short := hex.EncodeToString([]byte("too short"))
-	result := VerifyTDXQuoteOffline(context.Background(), short)
+	result := VerifyTDXQuoteOffline(context.Background(), short, time.Time{})
 
 	if result.ParseErr == nil {
 		t.Error("expected ParseErr for too-short quote bytes, got nil")
@@ -130,7 +131,7 @@ func TestVerifyTDXQuoteTooShort(t *testing.T) {
 
 // TestVerifyTDXQuoteEmptyString verifies parse error on empty input.
 func TestVerifyTDXQuoteEmptyString(t *testing.T) {
-	result := VerifyTDXQuoteOffline(context.Background(), "")
+	result := VerifyTDXQuoteOffline(context.Background(), "", time.Time{})
 
 	if result.ParseErr == nil {
 		t.Error("expected ParseErr for empty quote string, got nil")
@@ -140,7 +141,7 @@ func TestVerifyTDXQuoteEmptyString(t *testing.T) {
 // TestPPIDExtraction verifies PPID and FMSPC are extracted from the real
 // production quote's PCK certificate chain.
 func TestPPIDExtraction(t *testing.T) {
-	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex())
+	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex(), time.Time{})
 
 	if result.ParseErr != nil {
 		t.Fatalf("parse failed: %v", result.ParseErr)
@@ -243,7 +244,7 @@ func TestVerifyTDXQuoteOfflineNoRace(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Go(func() {
-			result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex())
+			result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex(), time.Time{})
 			t.Logf("result.ParseErr: %v", result.ParseErr)
 		})
 	}
@@ -258,7 +259,7 @@ func TestVerifyTDXQuoteOnlineNoRace(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Go(func() {
-			result := VerifyTDXQuoteOnline(context.Background(), realTDXQuoteHex(), getter)
+			result := VerifyTDXQuoteOnline(context.Background(), realTDXQuoteHex(), getter, time.Time{})
 			t.Logf("result.CollateralErr: %v", result.CollateralErr)
 			if result.ParseErr != nil {
 				t.Errorf("unexpected ParseErr: %v", result.ParseErr)
@@ -276,7 +277,7 @@ func TestVerifyTDXQuoteOnlineNoRace(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewTDXVerifier_Offline(t *testing.T) {
-	v := NewTDXVerifier(true, nil)
+	v := NewTDXVerifier(true, nil, time.Time{})
 	if v == nil {
 		t.Fatal("expected non-nil verifier")
 	}
@@ -289,7 +290,7 @@ func TestNewTDXVerifier_Offline(t *testing.T) {
 
 func TestNewTDXVerifier_Online(t *testing.T) {
 	getter := &noopGetter{}
-	v := NewTDXVerifier(false, getter)
+	v := NewTDXVerifier(false, getter, time.Time{})
 	if v == nil {
 		t.Fatal("expected non-nil verifier")
 	}
@@ -308,7 +309,7 @@ func TestNewTDXVerifier_Online(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExtractPCKExtensions_RealQuote(t *testing.T) {
-	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex())
+	result := VerifyTDXQuoteOffline(context.Background(), realTDXQuoteHex(), time.Time{})
 	if result.ParseErr != nil {
 		t.Fatalf("parse: %v", result.ParseErr)
 	}

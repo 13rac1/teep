@@ -177,6 +177,27 @@ type TDXVerifyResult struct {
 // debug mode and its memory can be inspected by the host.
 const tdxDebugBit = 0x01
 
+// tdxTimeSet builds a *tdxverify.TimeSet pinning every collateral currency
+// check (PCK cert chain x509 validity, tcbInfo, QE identity, PCK CRL, root CA
+// CRL) to t. This mirrors the SEV/NRAS/PoC replay-time mechanism (see
+// NewSEVVerifier, nrasJWTParserOptions, checkPoC): live serving passes the
+// zero time here, which returns nil so the go-tdx-guest library falls back to
+// its own defaultTimeSet() (time.Now() for every field). Only replay/fixture
+// verification passes a non-zero capture time, pinning collateral currency to
+// the moment the fixture was captured instead of the wall clock.
+func tdxTimeSet(t time.Time) *tdxverify.TimeSet {
+	if t.IsZero() {
+		return nil
+	}
+	return &tdxverify.TimeSet{
+		PckCertChain: t,
+		TcbInfo:      t,
+		QeIdentity:   t,
+		PckCrl:       t,
+		RootCaCrl:    t,
+	}
+}
+
 // VerifyTDXQuoteOffline decodes the hex-encoded intel_quote, parses it as a
 // TDX quote (QuoteV4 or QuoteV5), checks the certificate chain and signature, and checks the debug
 // flag. Intel PCS collateral is not fetched; TcbStatus and AdvisoryIDs remain
@@ -185,8 +206,12 @@ const tdxDebugBit = 0x01
 // REPORTDATA binding is NOT checked here — it is provider-specific and must be
 // performed by the provider's ReportDataVerifier after this function returns.
 //
+// verifyTime pins the PCK certificate chain's x509 validity check to that
+// instant (see tdxTimeSet); the zero value means "use the live wall clock",
+// which is required for live serving.
+//
 // This function never panics. All errors are captured in the returned result.
-func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string) *TDXVerifyResult {
+func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string, verifyTime time.Time) *TDXVerifyResult {
 	result := &TDXVerifyResult{}
 
 	raw, err := decodeQuoteBytes(hexQuote)
@@ -301,6 +326,7 @@ func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string) *TDXVerifyResul
 		GetCollateral:    false,
 		CheckRevocations: false,
 		TrustedRoots:     intelSGXRootPool,
+		Now:              tdxTimeSet(verifyTime),
 	}
 	if verifyErr := tdxverify.TdxQuote(quoteAny, opts); verifyErr != nil {
 		// The verify library does cert chain + signature in one call.
@@ -326,9 +352,14 @@ func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string) *TDXVerifyResul
 // then fetches Intel PCS collateral to populate TcbStatus and AdvisoryIDs.
 // See VerifyTDXQuoteOffline for the base verification contract.
 //
+// verifyTime pins Intel PCS collateral currency checks (tcbInfo, QE identity,
+// PCK CRL, root CA CRL) and the PCK cert chain's x509 validity to that
+// instant (see tdxTimeSet); the zero value means "use the live wall clock",
+// which is required for live serving.
+//
 // This function never panics. All errors are captured in the returned result.
-func VerifyTDXQuoteOnline(ctx context.Context, hexQuote string, getter trust.HTTPSGetter) *TDXVerifyResult {
-	result := VerifyTDXQuoteOffline(ctx, hexQuote)
+func VerifyTDXQuoteOnline(ctx context.Context, hexQuote string, getter trust.HTTPSGetter, verifyTime time.Time) *TDXVerifyResult {
+	result := VerifyTDXQuoteOffline(ctx, hexQuote, verifyTime)
 	if result.ParseErr != nil {
 		return result
 	}
@@ -341,6 +372,7 @@ func VerifyTDXQuoteOnline(ctx context.Context, hexQuote string, getter trust.HTT
 		CheckRevocations: true,
 		Getter:           getter,
 		TrustedRoots:     intelSGXRootPool,
+		Now:              tdxTimeSet(verifyTime),
 	}
 	if err := tdxverify.TdxQuoteContext(ctx, result.quote, collateralOpts); err != nil {
 		result.CollateralErr = fmt.Errorf("intel PCS collateral: %w", err)
@@ -364,12 +396,18 @@ type TDXVerifier func(ctx context.Context, hexQuote string) *TDXVerifyResult
 
 // NewTDXVerifier returns a TDXVerifier for the given mode. If offline is true,
 // Intel PCS collateral is not fetched and TcbStatus/AdvisoryIDs remain empty.
-func NewTDXVerifier(offline bool, getter trust.HTTPSGetter) TDXVerifier {
+//
+// verifyTime pins collateral/cert-chain currency checks to that instant (see
+// tdxTimeSet); pass the zero value for live serving so the live wall clock is
+// used, and a fixture's capture time for replay.
+func NewTDXVerifier(offline bool, getter trust.HTTPSGetter, verifyTime time.Time) TDXVerifier {
 	if offline {
-		return VerifyTDXQuoteOffline
+		return func(ctx context.Context, hexQuote string) *TDXVerifyResult {
+			return VerifyTDXQuoteOffline(ctx, hexQuote, verifyTime)
+		}
 	}
 	return func(ctx context.Context, hexQuote string) *TDXVerifyResult {
-		return VerifyTDXQuoteOnline(ctx, hexQuote, getter)
+		return VerifyTDXQuoteOnline(ctx, hexQuote, getter, verifyTime)
 	}
 }
 
