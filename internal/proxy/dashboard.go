@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/config"
 )
 
 // dashboardData is the JSON-serializable snapshot of all dashboard stats.
@@ -21,6 +22,7 @@ import (
 type dashboardData struct {
 	ListenAddr   string                       `json:"listen_addr"`
 	Uptime       string                       `json:"uptime"`
+	Enforcement  string                       `json:"enforcement"`
 	Providers    map[string]dashboardProvider `json:"providers"`
 	Attestations []dashAttestation            `json:"attestations"`
 	Requests     dashboardRequests            `json:"requests"`
@@ -232,6 +234,19 @@ type dashModel struct {
 	VerifyMs    string `json:"verify_ms"`
 	TokPerSec   string `json:"tok_per_sec"`
 	LastRequest string `json:"last_request"`
+}
+
+// enforcementLabel returns the active enforcement profile for display:
+// config.EnforcementStrict when strict enforcement is active, otherwise
+// config.EnforcementDefault. This normalizes the zero-value cfg.Enforcement
+// == "" (programmatic *config.Config values built directly, e.g. in tests,
+// that never called config.Load()) to the same "default" label MergedAllowFail
+// treats it as, so the dashboard never shows a blank enforcement value.
+func enforcementLabel(cfg *config.Config) string {
+	if cfg.Enforcement == config.EnforcementStrict {
+		return config.EnforcementStrict
+	}
+	return config.EnforcementDefault
 }
 
 func hitRateString(hits, misses int64) string {
@@ -488,6 +503,7 @@ func (s *Server) buildDashboardData() dashboardData {
 	return dashboardData{
 		ListenAddr:   s.cfg.ListenAddr,
 		Uptime:       time.Since(s.stats.startTime).Truncate(time.Second).String(),
+		Enforcement:  enforcementLabel(s.cfg),
 		Providers:    providers,
 		Attestations: attestations,
 		Requests: dashboardRequests{

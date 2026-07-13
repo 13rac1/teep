@@ -320,13 +320,15 @@ function postureFor(atts, anyReq) {
   return { cls: cls, head: head, sub: sub, frac: frac, verified: verified, blocked: blocked, e2ee: e2ee, pass: pass, scored: scored };
 }
 
-function renderHero(p, degradedCount) {
+function renderHero(p, degradedCount, enforcement) {
   var seal = el("seal");
   seal.className = "seal " + p.cls;
   el("seal-prog").style.strokeDashoffset = SEAL_C * (1 - p.frac);
   el("verdict").textContent = p.head;
   el("verdict-sub").textContent = p.sub;
+  var strict = enforcement === "strict";
   var stats = [
+    { n: strict ? "Strict" : "Default", l: "Enforcement", accent: strict },
     { n: p.verified, l: "Enclaves", accent: false },
     { n: p.e2ee, l: "Encrypted", accent: true },
     { n: p.scored ? (p.pass + "/" + p.scored) : "—", l: "Factors passed", accent: false }
@@ -695,7 +697,7 @@ function render(d) {
   for (var pk in provs) {
     if (Object.prototype.hasOwnProperty.call(provs, pk) && provs[pk].degraded) degradedCount++;
   }
-  renderHero(p, degradedCount);
+  renderHero(p, degradedCount, d.enforcement);
   renderEnclaves(d);
   renderTraffic(d);
   pushSpark((d.requests && d.requests.total) || 0);

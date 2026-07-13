@@ -214,6 +214,32 @@ func TestBuildDashboardData_NonZeroModelStats(t *testing.T) {
 	}
 }
 
+// TestBuildDashboardData_Enforcement_Default verifies that the dashboard
+// reports "default" enforcement for a zero-value cfg.Enforcement (the same
+// normalization MergedAllowFail relies on for programmatic *config.Config
+// values that never called config.Load()).
+func TestBuildDashboardData_Enforcement_Default(t *testing.T) {
+	s := newTestServer(t)
+
+	data := s.buildDashboardData()
+	if data.Enforcement != config.EnforcementDefault {
+		t.Errorf("Enforcement: got %q, want %q", data.Enforcement, config.EnforcementDefault)
+	}
+}
+
+// TestBuildDashboardData_Enforcement_Strict verifies that the dashboard
+// surfaces the active strict enforcement profile so operators can see which
+// mode is running (PR S3).
+func TestBuildDashboardData_Enforcement_Strict(t *testing.T) {
+	s := newTestServer(t)
+	s.cfg.Enforcement = config.EnforcementStrict
+
+	data := s.buildDashboardData()
+	if data.Enforcement != config.EnforcementStrict {
+		t.Errorf("Enforcement: got %q, want %q", data.Enforcement, config.EnforcementStrict)
+	}
+}
+
 func TestBuildHTTPStats(t *testing.T) {
 	s := &Server{
 		cfg:      &config.Config{ListenAddr: "127.0.0.1:8337"},
@@ -469,6 +495,9 @@ func TestHandleIndex_InitialJSONValid(t *testing.T) {
 	}
 	if data.ListenAddr != "127.0.0.1:8337" {
 		t.Errorf("ListenAddr = %q, want 127.0.0.1:8337", data.ListenAddr)
+	}
+	if data.Enforcement != config.EnforcementDefault {
+		t.Errorf("Enforcement = %q, want %q", data.Enforcement, config.EnforcementDefault)
 	}
 	if len(data.Providers) != 2 {
 		t.Errorf("Providers len = %d, want 2", len(data.Providers))
