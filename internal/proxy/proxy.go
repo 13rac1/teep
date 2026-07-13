@@ -429,31 +429,32 @@ type providerModelKey struct {
 
 // Server is the teep proxy HTTP server.
 type Server struct {
-	cfg                *config.Config
-	providers          map[string]*provider.Provider // provider name → Provider
-	cache              *attestation.Cache
-	negCache           *attestation.NegativeCache
-	signingKeyCache    *attestation.SigningKeyCache
-	spkiCache          *attestation.SPKICache
-	rekorClient        *attestation.RekorClient
-	nvidiaVerifier     *attestation.NVIDIAVerifier
-	mux                *http.ServeMux
-	handler            http.Handler            // mux wrapped with hostGuardMiddleware; set by New()
-	hostGuard          *hostGuard              // Host-header allowlist; set by New() from cfg.ListenAddr
-	hostGuardLogs      hourlyLogLimiter        // rate-limits rejected-Host WARN logs
-	attestClient       *http.Client            // for attestation fetches
-	collateral         trust.HTTPSGetter       // for Intel PCS collateral fetches
-	verifyQuote        attestation.TDXVerifier // constructed from cfg.Offline + collateral
-	sevVerifier        attestation.SEVVerifier // constructed from cfg.Offline + AMD KDS getter
-	upstreamClient     *http.Client            // for chat completions forwards
-	sseConns           atomic.Int64            // active SSE /events connections
-	e2eeFailed         sync.Map                // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
-	reasoningStripLogs hourlyLogLimiter
-	stats              stats
-	modelsMu           sync.RWMutex      // protects modelsCache and modelsCachedAt
-	modelsCache        []json.RawMessage // cached /v1/models response
-	modelsCachedAt     time.Time         // when modelsCache was populated
-	modelsFlight       singleflight.Group
+	cfg                         *config.Config
+	providers                   map[string]*provider.Provider // provider name → Provider
+	cache                       *attestation.Cache
+	negCache                    *attestation.NegativeCache
+	signingKeyCache             *attestation.SigningKeyCache
+	spkiCache                   *attestation.SPKICache
+	rekorClient                 *attestation.RekorClient
+	nvidiaVerifier              *attestation.NVIDIAVerifier
+	mux                         *http.ServeMux
+	handler                     http.Handler            // mux wrapped with hostGuardMiddleware; set by New()
+	hostGuard                   *hostGuard              // Host-header allowlist; set by New() from cfg.ListenAddr
+	hostGuardLogs               hourlyLogLimiter        // rate-limits rejected-Host WARN logs
+	attestClient                *http.Client            // for attestation fetches
+	collateral                  trust.HTTPSGetter       // for Intel PCS collateral fetches
+	verifyQuote                 attestation.TDXVerifier // constructed from cfg.Offline + collateral
+	sevVerifier                 attestation.SEVVerifier // constructed from cfg.Offline + AMD KDS getter
+	upstreamClient              *http.Client            // for chat completions forwards
+	sseConns                    atomic.Int64            // active SSE /events connections
+	e2eeFailed                  sync.Map                // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
+	reasoningStripLogs          hourlyLogLimiter
+	reasoningResponsesStripLogs hourlyLogLimiter // rate-limits /v1/responses reasoning diagnostics (GH issue #124 Phase 1)
+	stats                       stats
+	modelsMu                    sync.RWMutex      // protects modelsCache and modelsCachedAt
+	modelsCache                 []json.RawMessage // cached /v1/models response
+	modelsCachedAt              time.Time         // when modelsCache was populated
+	modelsFlight                singleflight.Group
 }
 
 // New builds a Server from cfg. Providers are wired with their Attester and
@@ -1608,6 +1609,9 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 		}
 		if ep.endpointType == e2ee.EndpointChat {
 			logChatRequestStats(ctx, &s.reasoningStripLogs, model, prov.Name, upstreamModel, r.URL.Path, body, reasoningStats, reasoningRepair)
+		}
+		if ep.endpointType == e2ee.EndpointResponses {
+			logResponsesRequestStats(ctx, &s.reasoningResponsesStripLogs, model, prov.Name, upstreamModel, r.URL.Path, body)
 		}
 
 		if ep.preRouteGuard != nil {
