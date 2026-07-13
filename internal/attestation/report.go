@@ -80,6 +80,7 @@ const (
 	FactorNvidiaNRAS           = "nvidia_nras_verified"
 	FactorE2EECapable          = "e2ee_capable"
 	FactorE2EEUsable           = "e2ee_usable"
+	FactorE2EEResponseOrigin   = "e2ee_response_origin"
 	FactorTLSKeyBinding        = "tls_key_binding"
 	FactorCPUGPUChain          = "cpu_gpu_chain"
 	FactorNVSwitchBinding      = "nvswitch_binding"
@@ -306,6 +307,16 @@ var DefaultAllowFail = []string{
 	FactorMeasuredWeights,
 	FactorComponentRecognition,
 	FactorCPUIDRegistry,
+	// e2ee_response_origin is waived globally (not per-provider) because the
+	// gap it reports is a property of the wire protocol, not something an
+	// operator can remediate via config: Venice and NearCloud fail this
+	// factor (response AEAD key derived from an attacker-choosable wire
+	// ephemeral, never bound to the attested model key — see
+	// docs/plans/2026-07-06-fable-review-m2.md), Chutes passes it, and other
+	// providers report NotApplicable. Waiving it here surfaces the gap as a
+	// visible-but-non-blocking degraded factor (WaivedFactors) instead of
+	// silently blocking Venice/NearCloud traffic.
+	FactorE2EEResponseOrigin,
 	// Gateway factors (nearcloud only).
 	FactorGWQuotePresent,
 	FactorGWQuoteStructure,
@@ -326,6 +337,13 @@ var NearcloudDefaultAllowFail = []string{
 	FactorComponentRecognition,
 	FactorCPUIDRegistry,
 	FactorResponseSchema,
+	// Response-origin authentication is not provided over the nearcloud
+	// gateway path (the response wire key is not bound to the attested model
+	// key). Waived so nearcloud keeps serving; the gap is surfaced as a
+	// visible degraded factor rather than blocking. MergedAllowFail selects a
+	// provider's own list instead of unioning the global DefaultAllowFail, so
+	// this entry must be listed here explicitly.
+	FactorE2EEResponseOrigin,
 	// Gateway factors (nearcloud only).
 	FactorGWHardwareConfig,
 	FactorGWBootConfig,
@@ -488,6 +506,7 @@ var KnownFactors = []string{
 	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
 	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaSignature, FactorNvidiaClaims,
 	FactorNvidiaClientNonce, FactorNvidiaNRAS, FactorE2EECapable, FactorE2EEUsable,
+	FactorE2EEResponseOrigin,
 	FactorTLSKeyBinding, FactorCPUGPUChain, FactorNVSwitchBinding,
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
@@ -891,6 +910,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalNvidiaNRASVerified,
 		evalE2EECapable,
 		evalE2EEUsable,
+		evalE2EEResponseOrigin,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -1653,6 +1673,46 @@ func evalE2EEUsable(in *ReportInput) []FactorResult {
 		detail = "E2EE test not attempted"
 	}
 	return factor(TierBinding, FactorE2EEUsable, Skip, detail)
+}
+
+// evalE2EEResponseOrigin reports whether the E2EE response is cryptographically
+// bound to the attested model key, i.e. whether decrypting a response proves
+// the *attested enclave* produced it (response-origin authentication), not
+// merely that the plaintext was kept confidential in transit.
+//
+// This is distinct from e2ee_capable/e2ee_usable, which only establish that a
+// key exchange and encrypted round-trip work — neither implies the response
+// key is bound to the attested key.
+//
+// Chutes: the client's response key travels encrypted *inside* the attested
+// request, so only the attested enclave can ever learn it — response origin
+// is authenticated.
+//
+// Venice and NearCloud: response decryption (DecryptVenice, DecryptXChaCha20)
+// derives the response AEAD key via ECDH against a wire ephemeral public key
+// that arrives unauthenticated on each response and is never compared against
+// the session's attested model key. Any party that learns the client's
+// session public key (e.g. Venice's non-attested API gateway, which reads it
+// from a request header) can therefore forge a plausible "model response"
+// without the attested key ever being involved. Confidentiality holds;
+// origin authentication does not. See
+// docs/plans/2026-07-06-fable-review-m2.md for the full analysis and the
+// live wire-key-equality-pin follow-up this factor intentionally defers.
+//
+// All other providers do not perform this wire-ephemeral response decryption
+// pattern at all, so the factor does not apply to them.
+func evalE2EEResponseOrigin(in *ReportInput) []FactorResult {
+	switch in.Provider {
+	case "chutes":
+		return factor(TierBinding, FactorE2EEResponseOrigin, Pass,
+			"response key is delivered encrypted inside the attested request; only the attested enclave can decrypt it, so response origin is authenticated")
+	case "venice", "nearcloud":
+		return factor(TierBinding, FactorE2EEResponseOrigin, Fail,
+			"response AEAD key is derived from a per-response wire ephemeral key that is never compared against the attested model key; response confidentiality holds but response origin is not cryptographically authenticated")
+	default:
+		return factor(TierBinding, FactorE2EEResponseOrigin, NotApplicable,
+			"provider does not perform wire-ephemeral E2EE response decryption")
+	}
 }
 
 // validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519

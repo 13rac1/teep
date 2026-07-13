@@ -121,14 +121,14 @@ func allExcept(exclude ...string) []string {
 // BuildReport-level tests (cross-cutting concerns)
 // ---------------------------------------------------------------------------
 
-// TestBuildReportFactorCount ensures exactly 35 factors are produced.
+// TestBuildReportFactorCount ensures exactly 36 factors are produced.
 func TestBuildReportFactorCount(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
-	if len(report.Factors) != 35 {
-		t.Errorf("factor count: got %d, want 35", len(report.Factors))
+	if len(report.Factors) != 36 {
+		t.Errorf("factor count: got %d, want 36", len(report.Factors))
 	}
 }
 
@@ -2407,6 +2407,139 @@ func TestEvalE2EEUsable_E2EEConfigured(t *testing.T) {
 	})
 }
 
+// ---------------------------------------------------------------------------
+// e2ee_response_origin (Fable review M2, Phase 2b: visible, non-blocking factor)
+// ---------------------------------------------------------------------------
+
+func TestEvalE2EEResponseOrigin(t *testing.T) {
+	t.Run("chutes_pass", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEResponseOrigin(&ReportInput{
+			Provider: "chutes",
+			Raw:      &RawAttestation{},
+		}), Pass)
+		if !strings.Contains(f.Detail, "encrypted inside the attested request") {
+			t.Errorf("detail should explain client key travels inside the request: %s", f.Detail)
+		}
+	})
+
+	t.Run("venice_fail", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEResponseOrigin(&ReportInput{
+			Provider: "venice",
+			Raw:      &RawAttestation{},
+		}), Fail)
+		if !strings.Contains(f.Detail, "not cryptographically authenticated") {
+			t.Errorf("detail should explain response origin is not authenticated: %s", f.Detail)
+		}
+	})
+
+	t.Run("nearcloud_fail", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEResponseOrigin(&ReportInput{
+			Provider: "nearcloud",
+			Raw:      &RawAttestation{},
+		}), Fail)
+		if !strings.Contains(f.Detail, "not cryptographically authenticated") {
+			t.Errorf("detail should explain response origin is not authenticated: %s", f.Detail)
+		}
+	})
+
+	t.Run("non_e2ee_provider_not_applicable", func(t *testing.T) {
+		f := assertSingleFactor(t, evalE2EEResponseOrigin(&ReportInput{
+			Provider: "tinfoil_v3_cloud",
+			Raw:      &RawAttestation{},
+		}), NotApplicable)
+		if !strings.Contains(f.Detail, "not applicable") && !strings.Contains(f.Detail, "does not perform") {
+			t.Errorf("detail should explain why it's not applicable: %s", f.Detail)
+		}
+	})
+}
+
+// TestE2EEResponseOriginNonBlocking is a regression test for the "fail
+// loudly, not blocking" requirement (Fable review M2, Phase 2b): Venice and
+// NearCloud must keep serving even though e2ee_response_origin correctly
+// fails for them, because the gap is a wire-protocol property (not something
+// an operator can remediate) and is waived globally via DefaultAllowFail.
+//
+// First confirms the factor is actually in DefaultAllowFail (the real
+// production policy, not a hand-picked allow list), then evaluates the
+// factor for Venice the same way BuildReport does (Enforced =
+// !allowFailSet[name]) and builds a report where it is the ONLY failing
+// factor — mirroring the TestWaivedFactors/TestBlockedReturnsFalse pattern
+// used elsewhere in this file to isolate Blocked()/WaivedFactors() behavior
+// from unrelated factor plumbing.
+func TestE2EEResponseOriginNonBlocking(t *testing.T) {
+	allowFailSet := make(map[string]bool, len(DefaultAllowFail))
+	for _, name := range DefaultAllowFail {
+		allowFailSet[name] = true
+	}
+	if !allowFailSet[FactorE2EEResponseOrigin] {
+		t.Fatal("e2ee_response_origin must be in the global DefaultAllowFail list to stay non-blocking")
+	}
+
+	results := evalE2EEResponseOrigin(&ReportInput{Provider: "venice", Raw: &RawAttestation{}})
+	f := assertSingleFactor(t, results, Fail)
+	f.Enforced = !allowFailSet[f.Name] // same computation as BuildReport
+
+	report := &VerificationReport{
+		Factors: []FactorResult{
+			{Name: "nonce_match", Status: Pass, Enforced: true},
+			{Name: "tee_reportdata_binding", Status: Pass, Enforced: true},
+			f, // the e2ee_response_origin factor built above: Fail, not enforced
+		},
+	}
+
+	if f.Enforced {
+		t.Fatal("e2ee_response_origin should not be enforced for Venice (waived by DefaultAllowFail)")
+	}
+	if report.Blocked() {
+		t.Error("Blocked() should be false: e2ee_response_origin is the only failing factor and it is non-blocking")
+	}
+
+	waived := report.WaivedFactors()
+	found := false
+	for _, wf := range waived {
+		if wf.Name == FactorE2EEResponseOrigin {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("e2ee_response_origin should appear in WaivedFactors() so the dashboard degraded badge surfaces it")
+	}
+}
+
+// TestE2EEResponseOriginNonBlockingNearcloud guards the merge-semantics trap:
+// MergedAllowFail SELECTS a provider's own default list rather than unioning
+// the global DefaultAllowFail, so nearcloud (which has NearcloudDefaultAllowFail)
+// does NOT inherit the global waiver. e2ee_response_origin must therefore be
+// listed in NearcloudDefaultAllowFail explicitly, or nearcloud — which the
+// factor fails for — would block despite the "keep serving" policy.
+func TestE2EEResponseOriginNonBlockingNearcloud(t *testing.T) {
+	allowFailSet := make(map[string]bool, len(NearcloudDefaultAllowFail))
+	for _, name := range NearcloudDefaultAllowFail {
+		allowFailSet[name] = true
+	}
+	if !allowFailSet[FactorE2EEResponseOrigin] {
+		t.Fatal("e2ee_response_origin must be in NearcloudDefaultAllowFail: MergedAllowFail selects the provider list, not the global one, so nearcloud would block without this entry")
+	}
+
+	results := evalE2EEResponseOrigin(&ReportInput{Provider: "nearcloud", Raw: &RawAttestation{}})
+	f := assertSingleFactor(t, results, Fail)
+	f.Enforced = !allowFailSet[f.Name] // same computation as BuildReport
+
+	report := &VerificationReport{
+		Factors: []FactorResult{
+			{Name: "nonce_match", Status: Pass, Enforced: true},
+			f, // e2ee_response_origin: Fail, not enforced for nearcloud
+		},
+	}
+	if f.Enforced {
+		t.Fatal("e2ee_response_origin should not be enforced for nearcloud (waived by NearcloudDefaultAllowFail)")
+	}
+	if report.Blocked() {
+		t.Error("Blocked() should be false for nearcloud: e2ee_response_origin is the only failing factor and it is non-blocking")
+	}
+}
+
 func TestMarkE2EEUsable(t *testing.T) {
 	t.Run("promotes_skip_to_pass", func(t *testing.T) {
 		report := &VerificationReport{
@@ -2944,14 +3077,14 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 		GatewayNonce:    gatewayNonce,
 	})
 
-	// Base 35 + 13 gateway factors = 48
+	// Base 36 + 13 gateway factors = 49
 	// Gateway factors: gateway_nonce_match, gateway_tee_quote_present,
 	// gateway_tee_quote_structure, gateway_tee_cert_chain, gateway_tee_quote_signature,
 	// gateway_tee_debug_disabled, gateway_tee_measurement, gateway_tee_hardware_config,
 	// gateway_tee_boot_config, gateway_tee_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
-	if len(report.Factors) != 48 {
-		t.Errorf("factor count with gateway: got %d, want 48", len(report.Factors))
+	if len(report.Factors) != 49 {
+		t.Errorf("factor count with gateway: got %d, want 49", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}

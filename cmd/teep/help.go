@@ -255,6 +255,25 @@ var factorRegistry = []factorInfo{
 			"failure causes this factor to fail. Skipped when offline, when " +
 			"the provider does not support E2EE, or when no API key is set.",
 	},
+	{
+		Name:    attestation.FactorE2EEResponseOrigin,
+		Tier:    2,
+		Summary: "E2EE response bound to attested model key",
+		Description: "Checks whether decrypting an E2EE response cryptographically " +
+			"proves the attested enclave produced it, distinct from e2ee_capable/" +
+			"e2ee_usable which only prove a working encrypted round-trip. Chutes " +
+			"passes: the client's response key travels encrypted inside the " +
+			"attested request, so only the attested enclave ever learns it. " +
+			"Venice and NearCloud fail: their response decryption derives the " +
+			"AEAD key from a per-response wire ephemeral key that is never " +
+			"compared against the attested model key, so response " +
+			"confidentiality holds but response origin is not authenticated — " +
+			"a party that learns the client's session public key could forge a " +
+			"response. Not applicable to providers that do not perform this " +
+			"wire-ephemeral response decryption pattern. Allowed to fail by " +
+			"default so this gap is visible in reports without blocking " +
+			"service.",
+	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
 		Name:    attestation.FactorTLSKeyBinding,
