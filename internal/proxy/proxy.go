@@ -450,6 +450,7 @@ type Server struct {
 	e2eeFailed                  sync.Map                // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
 	reasoningStripLogs          hourlyLogLimiter
 	reasoningResponsesStripLogs hourlyLogLimiter // rate-limits /v1/responses reasoning diagnostics (GH issue #124 Phase 1)
+	promptSandwichRepairLogs    hourlyLogLimiter // rate-limits the opt-in prompt-sandwich merge repair WARNs (GH issue #124 Phase 4)
 	stats                       stats
 
 	// modelAliases and aliasesByProviderModel are built once in New() from
@@ -537,6 +538,7 @@ func New(cfg *config.Config) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
+		p.RepairPromptSandwich = config.RepairPromptSandwichEnabled(name, cfg)
 		s.providers[name] = p
 		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE)
 	}
@@ -1657,6 +1659,14 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 				slog.ErrorContext(ctx, "repair chat reasoning preservation", "provider", prov.Name, "model", upstreamModel, "err", err)
 				http.Error(w, "failed to normalize request body", normalizationStatusCode(err))
 				return
+			}
+			if prov.RepairPromptSandwich {
+				body, reasoningStats, err = repairPromptSandwichMerge(ctx, &s.promptSandwichRepairLogs, model, prov.Name, upstreamModel, r.URL.Path, prov.E2EE, body, reasoningStats)
+				if err != nil {
+					slog.ErrorContext(ctx, "repair prompt sandwich merge", "provider", prov.Name, "model", upstreamModel, "err", err)
+					http.Error(w, "failed to normalize request body", normalizationStatusCode(err))
+					return
+				}
 			}
 		}
 

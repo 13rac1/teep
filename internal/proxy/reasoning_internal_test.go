@@ -1661,3 +1661,251 @@ func TestChatRequestStatsLoggingEnabledRespectsRateLimiter(t *testing.T) {
 		t.Fatal("chatRequestStatsLoggingEnabled = true with all warn diagnostic keys rate-limited, want false")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4 (GH issue #124): opt-in prompt-sandwich merge repair.
+// ---------------------------------------------------------------------------
+
+func promptSandwichBody(trailingExtra string) []byte {
+	return []byte(`{
+		"messages": [
+			{"role": "user", "content": "please run the tool"},
+			{"role": "assistant", "reasoning": "thinking...", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}]},
+			{"role": "tool", "content": "tool result"},
+			{"role": "user", "content": "continue please"` + trailingExtra + `}
+		]
+	}`)
+}
+
+func messageContents(t *testing.T, body []byte) []string {
+	t.Helper()
+	var req struct {
+		Messages []struct {
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal repaired body: %v", err)
+	}
+	out := make([]string, len(req.Messages))
+	for i, m := range req.Messages {
+		out[i] = m.Content
+	}
+	return out
+}
+
+func messageCount(t *testing.T, body []byte) int {
+	t.Helper()
+	var req struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal repaired body: %v", err)
+	}
+	return len(req.Messages)
+}
+
+func TestRepairPromptSandwichMerge_MergesLosslessly(t *testing.T) {
+	body := promptSandwichBody("")
+	repaired, stats, err := repairPromptSandwichMerge(t.Context(), &hourlyLogLimiter{}, "provider:some-unknown-family", "provider", "some-unknown-family", "/v1/chat/completions", false, body, nil)
+	if err != nil {
+		t.Fatalf("repairPromptSandwichMerge: %v", err)
+	}
+	if messageCount(t, repaired) != 3 {
+		t.Fatalf("message count = %d, want 3 (trailing message merged away)", messageCount(t, repaired))
+	}
+	contents := messageContents(t, repaired)
+	want := "please run the tool\n\ncontinue please"
+	if contents[0] != want {
+		t.Fatalf("merged prior user content = %q, want %q", contents[0], want)
+	}
+	if stats == nil {
+		t.Fatal("stats = nil, want refreshed stats after merge")
+	}
+	if stats.TrailingUserAddendumIndex >= 0 {
+		t.Fatalf("stats.TrailingUserAddendumIndex = %d after merge, want -1 (no more trailing addendum)", stats.TrailingUserAddendumIndex)
+	}
+}
+
+func TestRepairPromptSandwichMerge_ParsesStatsWhenNil(t *testing.T) {
+	// repairChatReasoningPreservationWithStats returns nil stats for
+	// unknown families (it short-circuits before parsing); the merge repair
+	// must still work by parsing the body itself in that case.
+	body := promptSandwichBody("")
+	repaired, _, err := repairPromptSandwichMerge(t.Context(), &hourlyLogLimiter{}, "provider:unknown-family", "provider", "unknown-family", "/v1/chat/completions", false, body, nil)
+	if err != nil {
+		t.Fatalf("repairPromptSandwichMerge: %v", err)
+	}
+	if messageCount(t, repaired) != 3 {
+		t.Fatalf("message count = %d, want 3", messageCount(t, repaired))
+	}
+}
+
+func TestRepairPromptSandwichMerge_NoTrailingAddendumIsNoop(t *testing.T) {
+	body := []byte(`{"messages": [{"role": "user", "content": "hi"}]}`)
+	repaired, _, err := repairPromptSandwichMerge(t.Context(), &hourlyLogLimiter{}, "provider:model", "provider", "model", "/v1/chat/completions", false, body, nil)
+	if err != nil {
+		t.Fatalf("repairPromptSandwichMerge: %v", err)
+	}
+	if !bytes.Equal(repaired, body) {
+		t.Fatalf("repaired body = %s, want unchanged %s", repaired, body)
+	}
+}
+
+func TestRepairPromptSandwichMerge_SkipsKnownFamily(t *testing.T) {
+	// Families with a known chat-template flag are handled by
+	// repairChatReasoningPreservationWithStats; the merge repair must not
+	// also mutate the request for those.
+	body := promptSandwichBody("")
+	repaired, _, err := repairPromptSandwichMerge(t.Context(), &hourlyLogLimiter{}, "provider:glm-5-2", "provider", "glm-5-2", "/v1/chat/completions", false, body, nil)
+	if err != nil {
+		t.Fatalf("repairPromptSandwichMerge: %v", err)
+	}
+	if messageCount(t, repaired) != 4 {
+		t.Fatalf("message count = %d, want 4 (unchanged for known family)", messageCount(t, repaired))
+	}
+}
+
+func TestRepairPromptSandwichMerge_SkipsE2EEProviderWithWarn(t *testing.T) {
+	body := promptSandwichBody("")
+	limiter := &hourlyLogLimiter{}
+	var repaired []byte
+	var err error
+	logs := captureSlog(t, func() {
+		repaired, _, err = repairPromptSandwichMerge(t.Context(), limiter, "provider:unknown-family", "provider", "unknown-family", "/v1/chat/completions", true, body, nil)
+	})
+	if err != nil {
+		t.Fatalf("repairPromptSandwichMerge: %v", err)
+	}
+	if messageCount(t, repaired) != 4 {
+		t.Fatalf("message count = %d, want 4 (unchanged for E2EE provider)", messageCount(t, repaired))
+	}
+	if !strings.Contains(logs, "prompt-sandwich merge repair skipped: provider uses field-level E2EE") {
+		t.Fatalf("log output missing E2EE-skip WARN:\n%s", logs)
+	}
+	assertReasoningDiagnosticContext(t, logs)
+}
+
+func TestRepairPromptSandwichMerge_SkipsLossyNonStringContentWithWarn(t *testing.T) {
+	body := []byte(`{
+		"messages": [
+			{"role": "user", "content": [{"type": "text", "text": "please run the tool"}]},
+			{"role": "assistant", "reasoning": "thinking...", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}]},
+			{"role": "tool", "content": "tool result"},
+			{"role": "user", "content": "continue please"}
+		]
+	}`)
+	limiter := &hourlyLogLimiter{}
+	var repaired []byte
+	var err error
+	logs := captureSlog(t, func() {
+		repaired, _, err = repairPromptSandwichMerge(t.Context(), limiter, "provider:unknown-family", "provider", "unknown-family", "/v1/chat/completions", false, body, nil)
+	})
+	if err != nil {
+		t.Fatalf("repairPromptSandwichMerge: %v", err)
+	}
+	if messageCount(t, repaired) != 4 {
+		t.Fatalf("message count = %d, want 4 (unchanged: non-string content parts cannot merge losslessly)", messageCount(t, repaired))
+	}
+	if !strings.Contains(logs, "prompt-sandwich merge repair skipped: trailing user message could not be merged losslessly") {
+		t.Fatalf("log output missing lossy-skip WARN:\n%s", logs)
+	}
+}
+
+func TestRepairPromptSandwichMerge_SkipsLossyExtraFieldOnTrailingMessage(t *testing.T) {
+	body := promptSandwichBody(`, "name": "reminder-bot"`)
+	repaired, _, err := repairPromptSandwichMerge(t.Context(), &hourlyLogLimiter{}, "provider:unknown-family", "provider", "unknown-family", "/v1/chat/completions", false, body, nil)
+	if err != nil {
+		t.Fatalf("repairPromptSandwichMerge: %v", err)
+	}
+	if messageCount(t, repaired) != 4 {
+		t.Fatalf("message count = %d, want 4 (unchanged: extra field on trailing message would be silently dropped)", messageCount(t, repaired))
+	}
+}
+
+func TestRepairPromptSandwichMerge_AppliedWarnIsRateLimited(t *testing.T) {
+	body := promptSandwichBody("")
+	limiter := &hourlyLogLimiter{}
+	logs := captureSlog(t, func() {
+		if _, _, err := repairPromptSandwichMerge(t.Context(), limiter, "provider:unknown-family", "provider", "unknown-family", "/v1/chat/completions", false, body, nil); err != nil {
+			t.Fatalf("repairPromptSandwichMerge: %v", err)
+		}
+		if _, _, err := repairPromptSandwichMerge(t.Context(), limiter, "provider:unknown-family", "provider", "unknown-family", "/v1/chat/completions", false, body, nil); err != nil {
+			t.Fatalf("repairPromptSandwichMerge: %v", err)
+		}
+	})
+	count := strings.Count(logs, "prompt-sandwich merge repair applied")
+	if count != 1 {
+		t.Fatalf("applied WARN logged %d times, want 1 (rate-limited):\n%s", count, logs)
+	}
+}
+
+func TestRepairPromptSandwichMerge_NeverLogsMessageContent(t *testing.T) {
+	const secretMarker = "TOP_SECRET_USER_MESSAGE_CONTENT_MUST_NOT_APPEAR_IN_LOGS"
+	body := []byte(`{
+		"messages": [
+			{"role": "user", "content": "` + secretMarker + `"},
+			{"role": "assistant", "reasoning": "thinking...", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}]},
+			{"role": "tool", "content": "tool result"},
+			{"role": "user", "content": "` + secretMarker + `"}
+		]
+	}`)
+	logs := captureSlog(t, func() {
+		if _, _, err := repairPromptSandwichMerge(t.Context(), &hourlyLogLimiter{}, "provider:unknown-family", "provider", "unknown-family", "/v1/chat/completions", false, body, nil); err != nil {
+			t.Fatalf("repairPromptSandwichMerge: %v", err)
+		}
+	})
+	if strings.Contains(logs, secretMarker) {
+		t.Fatalf("log output leaked message content:\n%s", logs)
+	}
+}
+
+func TestMergeTrailingUserIntoPriorUser_MissingMessagesFieldIsLossy(t *testing.T) {
+	req := map[string]json.RawMessage{}
+	_, _, _, lossy, err := mergeTrailingUserIntoPriorUser(req, 0, 1)
+	if err != nil {
+		t.Fatalf("mergeTrailingUserIntoPriorUser: %v", err)
+	}
+	if !lossy {
+		t.Fatal("lossy = false, want true when messages field is missing")
+	}
+}
+
+func TestMergeTrailingUserIntoPriorUser_OutOfRangeIndexesAreLossy(t *testing.T) {
+	req := map[string]json.RawMessage{
+		"messages": json.RawMessage(`[{"role":"user","content":"a"}]`),
+	}
+	_, _, _, lossy, err := mergeTrailingUserIntoPriorUser(req, 0, 5)
+	if err != nil {
+		t.Fatalf("mergeTrailingUserIntoPriorUser: %v", err)
+	}
+	if !lossy {
+		t.Fatal("lossy = false, want true for out-of-range addendum index")
+	}
+}
+
+func TestIsExactlyRoleAndContentKeys(t *testing.T) {
+	yes, _ := unmarshalJSONObject(json.RawMessage(`{"role":"user","content":"hi"}`))
+	if !isExactlyRoleAndContentKeys(yes) {
+		t.Error("isExactlyRoleAndContentKeys(role+content) = false, want true")
+	}
+	no, _ := unmarshalJSONObject(json.RawMessage(`{"role":"user","content":"hi","name":"x"}`))
+	if isExactlyRoleAndContentKeys(no) {
+		t.Error("isExactlyRoleAndContentKeys(role+content+name) = true, want false")
+	}
+}
+
+func TestPlainStringContent(t *testing.T) {
+	if s, ok := plainStringContent(json.RawMessage(`"hello"`)); !ok || s != "hello" {
+		t.Errorf("plainStringContent(string) = (%q, %v), want (hello, true)", s, ok)
+	}
+	if _, ok := plainStringContent(json.RawMessage(`["a","b"]`)); ok {
+		t.Error("plainStringContent(array) = ok, want not ok")
+	}
+	if _, ok := plainStringContent(json.RawMessage(`null`)); ok {
+		t.Error("plainStringContent(null) = ok, want not ok")
+	}
+	if _, ok := plainStringContent(json.RawMessage(``)); ok {
+		t.Error("plainStringContent(empty) = ok, want not ok")
+	}
+}

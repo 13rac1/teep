@@ -173,6 +173,17 @@ type Provider struct {
 	// E2EE indicates whether this provider supports end-to-end encryption.
 	E2EE bool
 
+	// RepairPromptSandwich opts this provider in to the Phase 4 (GH issue
+	// #124) prompt-sandwich merge repair: when a trailing user "reminder"
+	// message appended after tool output would otherwise strip the model's
+	// current-turn reasoning (and the model family has no known
+	// chat-template preservation flag), merge that message into the prior
+	// user message instead of sending it as a new turn. Default is false
+	// (opt-in only, per config.RepairPromptSandwichEnabled); the repair is
+	// never applied when E2EE is true, since message content is subject to
+	// this provider's field-level E2EE encryption downstream.
+	RepairPromptSandwich bool
+
 	// Encryptor encrypts outgoing chat request bodies for the provider's
 	// E2EE protocol. Non-nil when E2EE is true.
 	Encryptor RequestEncryptor

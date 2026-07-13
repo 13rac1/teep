@@ -1163,3 +1163,220 @@ func activeMissingReasoningWarns(stats *chatRequestLogStats) bool {
 	return len(stats.ActiveMissingReasoningToolCallIndexes) >= activeMissingReasoningWarnThreshold ||
 		len(stats.ActiveMissingReasoningUserMessageIndexes) >= activeMissingReasoningWarnThreshold
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4 (GH issue #124): opt-in prompt-sandwich merge repair.
+//
+// For model families with no known chat-template preservation flag
+// (modelReasoningPreservationCheck returns ok=false — those families are
+// handled by repairChatReasoningPreservationWithStats/injectChatTemplateBool
+// instead), the only server-side mitigation for the Case 2 "prompt
+// sandwich" (a trailing user reminder message appended after tool output,
+// which some chat templates treat as starting a new turn and therefore
+// strip the just-produced reasoning) is to merge that trailing message into
+// the prior user message so the template never sees a new user turn.
+//
+// This is strictly opt-in (config.RepairPromptSandwichEnabled, default
+// off), since it mutates client request semantics. It is never applied to
+// E2EE providers, and it is all-or-nothing: if the merge cannot be
+// performed losslessly, the request is left unmodified and a WARN explains
+// why (AGENTS.md: no partial rewrites).
+// ---------------------------------------------------------------------------
+
+const (
+	chatPromptSandwichRepairAppliedLogKey      = "chat_prompt_sandwich_repair_applied"
+	chatPromptSandwichRepairSkippedE2EELogKey  = "chat_prompt_sandwich_repair_skipped_e2ee"
+	chatPromptSandwichRepairSkippedLossyLogKey = "chat_prompt_sandwich_repair_skipped_lossy"
+)
+
+// repairPromptSandwichMerge implements the Phase 4 opt-in merge repair. It
+// is only meaningful when annotateTrailingUserReasoningLoss already fired
+// (stats.TrailingUserAddendumIndex >= 0) for a model family with no known
+// chat-template preservation flag; stats may be nil (e.g. because the
+// caller's family was unknown to repairChatReasoningPreservationWithStats,
+// which short-circuits before parsing stats for unknown families), in which
+// case this function parses the body itself.
+//
+// isE2EEField must be true for any provider whose message content is
+// subject to field-level E2EE encryption (config: provider e2ee = true) —
+// the merge is unconditionally skipped (with a WARN) for those providers.
+func repairPromptSandwichMerge(ctx context.Context, limiter *hourlyLogLimiter, model, providerName, upstreamModel, path string, isE2EEField bool, body []byte, stats *chatRequestLogStats) ([]byte, *chatRequestLogStats, error) {
+	if stats == nil {
+		parsed, ok := bestEffortChatRequestReasoningState(body)
+		if !ok {
+			return body, nil, nil
+		}
+		stats = &parsed.stats
+	}
+	if stats.TrailingUserAddendumIndex < 0 {
+		return body, stats, nil
+	}
+	if modelReasoningPreservationFamilyKnown(model, upstreamModel) {
+		// Families with a known chat-template flag are already repaired by
+		// repairChatReasoningPreservationWithStats; merging on top would be
+		// a second, unnecessary mutation for a case Phase 3 already covers.
+		return body, stats, nil
+	}
+
+	baseAttrs := []any{
+		"model", model,
+		"provider", providerName,
+		"upstream_model", upstreamModel,
+		"path", path,
+		"trailing_user_addendum_index", stats.TrailingUserAddendumIndex,
+		"trailing_user_prev_user_index", stats.TrailingUserPrevUserIndex,
+	}
+
+	if isE2EEField {
+		if allowHourlyLogAtLevel(ctx, limiter, slog.LevelWarn, chatPromptSandwichRepairSkippedE2EELogKey) {
+			slog.WarnContext(ctx, "prompt-sandwich merge repair skipped: provider uses field-level E2EE, so message content must not be rewritten by this repair path",
+				reasoningDiagnosticAttrs(baseAttrs)...)
+		}
+		return body, stats, nil
+	}
+
+	state, ok := bestEffortChatRequestReasoningState(body)
+	if !ok {
+		return body, stats, nil
+	}
+
+	merged, mergedInto, removedIdx, lossy, err := mergeTrailingUserIntoPriorUser(state.raw, stats.TrailingUserPrevUserIndex, stats.TrailingUserAddendumIndex)
+	if err != nil {
+		return body, stats, err
+	}
+	if lossy {
+		if allowHourlyLogAtLevel(ctx, limiter, slog.LevelWarn, chatPromptSandwichRepairSkippedLossyLogKey) {
+			slog.WarnContext(ctx, "prompt-sandwich merge repair skipped: trailing user message could not be merged losslessly (non-string content, attachments, or extra fields)",
+				reasoningDiagnosticAttrs(baseAttrs)...)
+		}
+		return body, stats, nil
+	}
+
+	if allowHourlyLogAtLevel(ctx, limiter, slog.LevelWarn, chatPromptSandwichRepairAppliedLogKey) {
+		slog.WarnContext(ctx, "prompt-sandwich merge repair applied: merged trailing user message into the prior user message so the model chat template does not treat it as a new turn",
+			reasoningDiagnosticAttrs(append(baseAttrs,
+				"merged_into_index", mergedInto,
+				"removed_index", removedIdx))...)
+	}
+
+	newStats, statsErr := chatRequestStats(merged)
+	if statsErr != nil {
+		// The repair itself succeeded; a best-effort stats refresh failing
+		// is not a reason to fail the request or discard the repair.
+		return merged, stats, nil //nolint:nilerr // intentional: stats refresh is best-effort, not the operation's result
+	}
+	return merged, &newStats, nil
+}
+
+// mergeTrailingUserIntoPriorUser merges messages[addendumIdx] (the trailing
+// user "reminder" message) into messages[prevUserIdx] (the prior real user
+// message) by concatenating their "content" strings with a "\n\n" join, then
+// removes the trailing message from the array. All other fields of the
+// prior message are preserved untouched.
+//
+// The merge is only performed when it can be done losslessly:
+//   - both messages' "content" fields must be plain JSON strings (not
+//     arrays of content parts, not objects, i.e. no multi-part/attachment
+//     content), and
+//   - the trailing message must have exactly the "role" and "content" keys
+//     (any additional field on it, e.g. a "name", would otherwise be
+//     silently dropped when the message is removed).
+//
+// Returns lossy=true (with no error) when the merge cannot be performed
+// losslessly; callers must leave body unmodified in that case rather than
+// attempt a partial rewrite.
+func mergeTrailingUserIntoPriorUser(req map[string]json.RawMessage, prevUserIdx, addendumIdx int) (merged []byte, mergedInto, removedIdx int, lossy bool, err error) {
+	rawMessages, ok := req["messages"]
+	if !ok {
+		return nil, 0, 0, true, nil
+	}
+	var messages []json.RawMessage
+	if jsonErr := json.Unmarshal(rawMessages, &messages); jsonErr != nil {
+		return nil, 0, 0, true, nil //nolint:nilerr // intentional: an unparseable "messages" field is reported via lossy=true, not err
+	}
+	if prevUserIdx < 0 || addendumIdx < 0 || prevUserIdx >= len(messages) || addendumIdx >= len(messages) || addendumIdx <= prevUserIdx {
+		return nil, 0, 0, true, nil
+	}
+
+	priorObj, ok := unmarshalJSONObject(messages[prevUserIdx])
+	if !ok {
+		return nil, 0, 0, true, nil
+	}
+	trailingObj, ok := unmarshalJSONObject(messages[addendumIdx])
+	if !ok {
+		return nil, 0, 0, true, nil
+	}
+	if !isExactlyRoleAndContentKeys(trailingObj) {
+		return nil, 0, 0, true, nil
+	}
+	priorContent, ok := plainStringContent(priorObj["content"])
+	if !ok {
+		return nil, 0, 0, true, nil
+	}
+	trailingContent, ok := plainStringContent(trailingObj["content"])
+	if !ok {
+		return nil, 0, 0, true, nil
+	}
+
+	mergedContent, err := json.Marshal(priorContent + "\n\n" + trailingContent)
+	if err != nil {
+		return nil, 0, 0, false, fmt.Errorf("marshal merged content: %w", err)
+	}
+	priorObj["content"] = mergedContent
+	mergedPriorRaw, err := json.Marshal(priorObj)
+	if err != nil {
+		return nil, 0, 0, false, fmt.Errorf("marshal merged message: %w", err)
+	}
+
+	newMessages := make([]json.RawMessage, 0, len(messages)-1)
+	for idx, m := range messages {
+		switch idx {
+		case addendumIdx:
+			continue
+		case prevUserIdx:
+			newMessages = append(newMessages, mergedPriorRaw)
+		default:
+			newMessages = append(newMessages, m)
+		}
+	}
+	encodedMessages, err := json.Marshal(newMessages)
+	if err != nil {
+		return nil, 0, 0, false, fmt.Errorf("marshal merged messages array: %w", err)
+	}
+	req["messages"] = encodedMessages
+
+	repaired, err := json.Marshal(req)
+	if err != nil {
+		return nil, 0, 0, false, fmt.Errorf("marshal merged request: %w", err)
+	}
+	return repaired, prevUserIdx, addendumIdx, false, nil
+}
+
+// isExactlyRoleAndContentKeys reports whether obj has precisely the two
+// keys "role" and "content" and no others — the shape a trailing user
+// "reminder" message must have for mergeTrailingUserIntoPriorUser to remove
+// it without silently dropping any other field it might carry.
+func isExactlyRoleAndContentKeys(obj map[string]json.RawMessage) bool {
+	if len(obj) != 2 {
+		return false
+	}
+	_, hasRole := obj["role"]
+	_, hasContent := obj["content"]
+	return hasRole && hasContent
+}
+
+// plainStringContent returns a message's "content" field as a string, and
+// ok=true only when the field is present, non-null, and a plain JSON
+// string — never an array of content parts or an object (multi-part
+// content/attachments), which cannot be merged losslessly by string
+// concatenation.
+func plainStringContent(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 || isJSONNull(raw) {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", false
+	}
+	return s, true
+}

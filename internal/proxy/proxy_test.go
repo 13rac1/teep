@@ -4995,6 +4995,42 @@ func TestNew_WithProviderAllowFailConfig(t *testing.T) {
 	}
 }
 
+// TestNew_RepairPromptSandwichWiredFromConfig covers GH issue #124 Phase 4:
+// New() must resolve config.RepairPromptSandwichEnabled per provider (global
+// default plus per-provider override) onto provider.Provider.RepairPromptSandwich,
+// since that's what handleEndpoint reads to gate the opt-in merge repair.
+func TestNew_RepairPromptSandwichWiredFromConfig(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr:           "127.0.0.1:0",
+		RepairPromptSandwich: true,
+		Providers: map[string]*config.Provider{
+			"venice": {
+				Name:    "venice",
+				BaseURL: "https://api.venice.ai",
+				APIKey:  "test-key",
+			},
+			"neardirect": {
+				Name:    "neardirect",
+				BaseURL: "https://completions.near.ai",
+				APIKey:  "test-key",
+			},
+		},
+		ProviderRepairPromptSandwich: map[string]bool{
+			"neardirect": false,
+		},
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+	if !srv.ProviderByName("venice").RepairPromptSandwich {
+		t.Error("venice.RepairPromptSandwich = false, want true (inherits global on)")
+	}
+	if srv.ProviderByName("neardirect").RepairPromptSandwich {
+		t.Error("neardirect.RepairPromptSandwich = true, want false (explicit per-provider override)")
+	}
+}
+
 func TestDashboardIndex(t *testing.T) {
 	attestSrv := makeAttestationServer(t, false)
 	defer attestSrv.Close()

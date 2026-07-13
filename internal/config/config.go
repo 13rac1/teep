@@ -105,6 +105,14 @@ type ProviderConfig struct {
 	// aliases colliding with a configured provider name are all rejected
 	// fail-closed at startup.
 	ModelAliases map[string]string `toml:"model_aliases"`
+
+	// RepairPromptSandwich opts this provider in to the Phase 4 (GH issue
+	// #124) prompt-sandwich merge repair. When unset, the global
+	// repair_prompt_sandwich setting applies; when set, it overrides the
+	// global setting for this provider (including turning it explicitly
+	// off when the global default is on). Default is off (opt-in only),
+	// because the repair mutates client request semantics.
+	RepairPromptSandwich bool `toml:"repair_prompt_sandwich"`
 }
 
 // PolicyConfig holds the optional [policy] section from the TOML file.
@@ -128,10 +136,11 @@ type PolicyConfig struct {
 
 // tomlFile mirrors the top-level structure of the optional TOML config file.
 type tomlFile struct {
-	Providers map[string]ProviderConfig `toml:"providers"`
-	AllowFail []string                  `toml:"allow_fail"`
-	MaxConns  int                       `toml:"max_conns"`
-	Policy    PolicyConfig              `toml:"policy"`
+	Providers            map[string]ProviderConfig `toml:"providers"`
+	AllowFail            []string                  `toml:"allow_fail"`
+	MaxConns             int                       `toml:"max_conns"`
+	Policy               PolicyConfig              `toml:"policy"`
+	RepairPromptSandwich bool                      `toml:"repair_prompt_sandwich"`
 }
 
 // ModelAlias records the resolved target of a client-facing model alias:
@@ -213,6 +222,19 @@ type Config struct {
 	// buildModelAliases and never mutated afterward — safe for concurrent
 	// read-only access from the proxy's hot request path (resolveModel).
 	ModelAliases map[string]ModelAlias
+
+	// RepairPromptSandwich is the global opt-in default for the Phase 4 (GH
+	// issue #124) prompt-sandwich merge repair. Per-provider
+	// [providers.X] repair_prompt_sandwich overrides this; see
+	// RepairPromptSandwichEnabled. Default is off.
+	RepairPromptSandwich bool
+
+	// ProviderRepairPromptSandwich holds explicit per-provider
+	// repair_prompt_sandwich overrides parsed from [providers.X] TOML
+	// sections. Keys are present only when the provider explicitly set the
+	// field (distinguishing "not set, inherit global" from "explicitly
+	// false"), mirroring the ProviderAllowFail pattern.
+	ProviderRepairPromptSandwich map[string]bool
 }
 
 // warnIfRlimitLow logs a warning when the soft RLIMIT_NOFILE is below 1000,
@@ -285,13 +307,14 @@ func logDefaultMaxConnsDiagnostics() {
 // permissions, but does not return an error for either condition.
 func Load() (*Config, error) {
 	cfg := &Config{
-		ListenAddr:              DefaultListenAddr,
-		MaxConns:                defaultMaxConns(),
-		Providers:               make(map[string]*Provider),
-		ProviderAllowFail:       make(map[string][]string),
-		ProviderPolicies:        make(map[string]attestation.MeasurementPolicy),
-		ProviderGatewayPolicies: make(map[string]attestation.MeasurementPolicy),
-		ModelAliases:            make(map[string]ModelAlias),
+		ListenAddr:                   DefaultListenAddr,
+		MaxConns:                     defaultMaxConns(),
+		Providers:                    make(map[string]*Provider),
+		ProviderAllowFail:            make(map[string][]string),
+		ProviderPolicies:             make(map[string]attestation.MeasurementPolicy),
+		ProviderGatewayPolicies:      make(map[string]attestation.MeasurementPolicy),
+		ModelAliases:                 make(map[string]ModelAlias),
+		ProviderRepairPromptSandwich: make(map[string]bool),
 	}
 
 	configPath := os.Getenv("TEEP_CONFIG")
@@ -378,6 +401,18 @@ func loadTOML(cfg *Config, path string) error {
 		if hasMeasurementPolicy(gpp) {
 			cfg.ProviderGatewayPolicies[name] = gpp
 		}
+
+		// Parse per-provider repair_prompt_sandwich override. Use
+		// meta.IsDefined to distinguish "not set, inherit global" from
+		// "explicitly set" (including explicitly false, which turns the
+		// repair off for this provider even if the global default is on).
+		if meta.IsDefined("providers", name, "repair_prompt_sandwich") {
+			cfg.ProviderRepairPromptSandwich[name] = pc.RepairPromptSandwich
+		}
+	}
+
+	if meta.IsDefined("repair_prompt_sandwich") {
+		cfg.RepairPromptSandwich = f.RepairPromptSandwich
 	}
 
 	aliases, err := buildModelAliases(f.Providers)
@@ -554,6 +589,18 @@ func validateModelAlias(alias, upstreamModel, provName string, providers map[str
 		return fmt.Errorf("providers.%s.model_aliases: alias %q is already defined by provider %q", provName, alias, prev.Provider)
 	}
 	return nil
+}
+
+// RepairPromptSandwichEnabled reports whether the opt-in Phase 4 (GH issue
+// #124) prompt-sandwich merge repair is enabled for providerName: an
+// explicit per-provider [providers.X] repair_prompt_sandwich setting takes
+// precedence; otherwise the global repair_prompt_sandwich setting applies
+// (default: off).
+func RepairPromptSandwichEnabled(providerName string, cfg *Config) bool {
+	if v, ok := cfg.ProviderRepairPromptSandwich[providerName]; ok {
+		return v
+	}
+	return cfg.RepairPromptSandwich
 }
 
 // MergedAllowFail returns the allow_fail list for a provider, applying a
