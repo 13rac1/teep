@@ -714,8 +714,21 @@ func RepairPromptSandwichEnabled(providerName string, cfg *Config) bool {
 //  3. Per-provider Go defaults    (ProviderDefaultAllowFail)
 //  4. Global Go defaults          (DefaultAllowFail)
 //
+// Layers 1 and 2 are explicit operator intent (TOML) and always apply
+// regardless of enforcement profile: an operator can deliberately waive a
+// specific factor via TOML even under strict enforcement. Layers 3 and 4 are
+// Go-level defaults baked into the binary, not operator intent — under
+// cfg.Enforcement == EnforcementStrict, this waiver layer is dropped
+// entirely (an empty list is used instead), so every factor not explicitly
+// waived via TOML is enforced. With the current factor set this means
+// currently-degraded providers (nanogpt, phalacloud, venice, nearcloud) end
+// up Blocked()==true — the intended, honest result of opting into maximum
+// strictness, not a bug.
+//
 // When offline is true, factors that require network access (OnlineFactors)
-// are automatically added to the result so they cannot block requests.
+// are automatically added to the result so they cannot block requests; this
+// sanctioned network skip applies identically under both enforcement
+// profiles and is orthogonal to strictness.
 func MergedAllowFail(providerName string, cfg *Config, offline bool) []string {
 	var af []string
 	switch {
@@ -727,6 +740,10 @@ func MergedAllowFail(providerName string, cfg *Config, offline bool) []string {
 		// covers programmatic configs (tests, proxy setup) that set
 		// AllowFail directly without calling Load().
 		af = cfg.AllowFail
+	case cfg.Enforcement == EnforcementStrict:
+		// Strict enforcement drops the Go-default waiver layer (below):
+		// nothing is waived except what TOML explicitly configured above.
+		af = nil
 	default:
 		if paf, ok := ProviderDefaultAllowFail()[providerName]; ok {
 			af = paf

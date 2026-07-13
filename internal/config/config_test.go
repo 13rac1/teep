@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1993,6 +1994,203 @@ func TestWarnIfStrict_StrictProfile_NoProvidersStillWarns(t *testing.T) {
 	if !strings.Contains(logs, "strict enforcement active") {
 		t.Errorf("expected a general strict-enforcement WARN even with no providers configured; output:\n%s", logs)
 	}
+}
+
+// --- MergedAllowFail: strict enforcement drops Go-default waivers ---
+
+func TestMergedAllowFail_Strict_DropsProviderGoDefaults(t *testing.T) {
+	// Under default enforcement, nearcloud gets its (non-empty) Go-default
+	// waiver list. Under strict, the same provider with no TOML allow_fail
+	// gets an empty list: no Go-default waiver layer applies.
+	cfg := &Config{Enforcement: EnforcementDefault}
+	defaultAF := MergedAllowFail("nearcloud", cfg, false)
+	if len(defaultAF) == 0 {
+		t.Fatal("expected nearcloud to have a non-empty Go-default allow_fail list under default enforcement")
+	}
+
+	strictCfg := &Config{Enforcement: EnforcementStrict}
+	strictAF := MergedAllowFail("nearcloud", strictCfg, false)
+	if len(strictAF) != 0 {
+		t.Errorf("MergedAllowFail(\"nearcloud\", strict): got %v, want empty (no Go-default waivers)", strictAF)
+	}
+}
+
+func TestMergedAllowFail_Strict_GlobalGoDefaultAlsoDropped(t *testing.T) {
+	// A provider with no per-provider Go defaults (falls back to the global
+	// DefaultAllowFail under the default profile) must also get an empty
+	// list under strict.
+	cfg := &Config{Enforcement: EnforcementDefault}
+	defaultAF := MergedAllowFail("venice", cfg, false)
+	if len(defaultAF) == 0 {
+		t.Fatal("expected venice to have a non-empty global Go-default allow_fail list under default enforcement")
+	}
+
+	strictCfg := &Config{Enforcement: EnforcementStrict}
+	strictAF := MergedAllowFail("venice", strictCfg, false)
+	if len(strictAF) != 0 {
+		t.Errorf("MergedAllowFail(\"venice\", strict): got %v, want empty", strictAF)
+	}
+}
+
+func TestMergedAllowFail_Strict_ExplicitTOMLAllowFailSurvives(t *testing.T) {
+	// An operator can still deliberately waive a specific factor via TOML
+	// allow_fail even under strict enforcement (layers 1/2 always apply).
+	toml := `
+enforcement = "strict"
+
+[providers.nearcloud]
+api_key = "k"
+base_url = "https://cloud-api.near.ai"
+allow_fail = ["cpu_gpu_chain"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "NEARAI_API_KEY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Enforcement != EnforcementStrict {
+		t.Fatalf("Enforcement: got %q, want %q", cfg.Enforcement, EnforcementStrict)
+	}
+
+	af := MergedAllowFail("nearcloud", cfg, false)
+	if len(af) != 1 || af[0] != "cpu_gpu_chain" {
+		t.Errorf("MergedAllowFail(\"nearcloud\"): got %v, want [cpu_gpu_chain]", af)
+	}
+}
+
+func TestMergedAllowFail_Strict_GlobalTOMLAllowFailSurvives(t *testing.T) {
+	toml := `
+enforcement = "strict"
+allow_fail = ["cpu_gpu_chain"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	clearProviderEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	af := MergedAllowFail("nearcloud", cfg, false)
+	if len(af) != 1 || af[0] != "cpu_gpu_chain" {
+		t.Errorf("MergedAllowFail(\"nearcloud\"): got %v, want [cpu_gpu_chain]", af)
+	}
+}
+
+func TestMergedAllowFail_StrictOffline_StillUnionsOnlineFactors(t *testing.T) {
+	// --offline's sanctioned network skip is orthogonal to strictness: it
+	// must still apply under strict enforcement.
+	cfg := &Config{Enforcement: EnforcementStrict}
+	af := MergedAllowFail("nearcloud", cfg, true)
+
+	afSet := make(map[string]bool, len(af))
+	for _, f := range af {
+		afSet[f] = true
+	}
+	for _, f := range attestation.OnlineFactors {
+		if !afSet[f] {
+			t.Errorf("strict + offline: expected online factor %q to be unioned in via WithOfflineAllowFail", f)
+		}
+	}
+	// And nothing beyond OnlineFactors should be present (no Go-default
+	// waivers leak in under strict).
+	if len(af) != len(attestation.OnlineFactors) {
+		t.Errorf("strict + offline: got %d entries, want exactly %d (OnlineFactors only)", len(af), len(attestation.OnlineFactors))
+	}
+}
+
+func TestMergedAllowFail_Strict_UnknownProviderAlsoEmpty(t *testing.T) {
+	// A provider with no Go defaults at all (falls back to global
+	// DefaultAllowFail under the default profile) must not silently pick up
+	// any waiver under strict.
+	cfg := &Config{Enforcement: EnforcementStrict}
+	af := MergedAllowFail("some-unconfigured-provider", cfg, false)
+	if len(af) != 0 {
+		t.Errorf("MergedAllowFail(unknown provider, strict): got %v, want empty", af)
+	}
+}
+
+// --- Report-level regression: strict enforcement actually blocks ---
+
+// TestReportBlocked_StrictEnforcesNearcloudGoDefaultWaiver is a regression
+// test proving the opt-in strict profile actually enforces: nearcloud fails
+// e2ee_response_origin unconditionally (the response AEAD key is never bound
+// to the attested model key — see NearcloudDefaultAllowFail's doc comment),
+// and that failure is waived by NearcloudDefaultAllowFail under the default
+// profile so nearcloud keeps serving in a degraded-but-visible state. Under
+// strict, MergedAllowFail drops that Go-default waiver layer, so the exact
+// same failing factor must block.
+//
+// Every other known factor is marked NotApplicable via ReportInput.Inapplicable
+// so e2ee_response_origin is the sole factor determining Blocked() — isolating
+// the profile-dependent behavior from unrelated evaluator plumbing, the same
+// technique used elsewhere in this codebase for this kind of regression test
+// (see TestE2EEResponseOriginNonBlockingNearcloud in the attestation package).
+// Both the default and strict allow_fail lists come from the real
+// MergedAllowFail, and Blocked() is the real, unmodified production method.
+func TestReportBlocked_StrictEnforcesNearcloudGoDefaultWaiver(t *testing.T) {
+	inapplicable := make(attestation.InapplicableFactors, len(attestation.KnownFactors))
+	for _, name := range attestation.KnownFactors {
+		if name == attestation.FactorE2EEResponseOrigin {
+			continue
+		}
+		inapplicable[name] = "excluded for regression isolation"
+	}
+
+	raw := &attestation.RawAttestation{Model: "test-model"}
+	nonce := attestation.NewNonce()
+
+	build := func(cfg *Config) *attestation.VerificationReport {
+		return attestation.BuildReport(&attestation.ReportInput{
+			Provider:     "nearcloud",
+			Model:        "test-model",
+			Raw:          raw,
+			Nonce:        nonce,
+			AllowFail:    MergedAllowFail("nearcloud", cfg, false),
+			Inapplicable: inapplicable,
+		})
+	}
+
+	defaultReport := build(&Config{Enforcement: EnforcementDefault})
+	if defaultReport.Blocked() {
+		t.Fatalf("default enforcement: report should not be blocked (e2ee_response_origin is waived by NearcloudDefaultAllowFail); factors=%+v", defaultReport.Factors)
+	}
+
+	strictReport := build(&Config{Enforcement: EnforcementStrict})
+	if !strictReport.Blocked() {
+		t.Fatalf("strict enforcement: report should be blocked (Go-default waiver dropped; e2ee_response_origin now enforced); factors=%+v", strictReport.Factors)
+	}
+}
+
+// TestConfig_Enforcement_ReadOnlyAfterLoad_Concurrent is a concurrency
+// regression test: cfg.Enforcement must be safe for concurrent reads after
+// Load()/ApplyStrictFlag return, mirroring AGENTS.md's "config read-only
+// after load" requirement. It does not mutate cfg concurrently — there is no
+// legitimate concurrent-write path for this field — it only proves that many
+// goroutines can call MergedAllowFail (which reads cfg.Enforcement) at once
+// without the race detector objecting.
+func TestConfig_Enforcement_ReadOnlyAfterLoad_Concurrent(t *testing.T) {
+	cfg := &Config{Enforcement: EnforcementStrict}
+
+	var wg sync.WaitGroup
+	providers := []string{"venice", "nearcloud", "nanogpt", "phalacloud", "chutes"}
+	for i := range 50 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			name := providers[i%len(providers)]
+			for range 10 {
+				_ = MergedAllowFail(name, cfg, i%2 == 0)
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 func TestUsableFDHeadroom(t *testing.T) {
