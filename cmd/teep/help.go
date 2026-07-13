@@ -85,6 +85,19 @@ var factorRegistry = []factorInfo{
 			"workloads must never run in debug mode.",
 	},
 	{
+		Name:    attestation.FactorTEEPolicyBits,
+		Tier:    1,
+		Summary: "Hazardous TEE hardware-config bits are absent",
+		Description: "Checks TEE hardware-configuration bits beyond the debug bit " +
+			"(see tee_debug_disabled) for known hazards. For SEV-SNP: fails if the " +
+			"guest-policy MIGRATE_MA bit (migration agent access) is set, or if any " +
+			"guest-policy bit outside a defined known-good mask is set. For TDX: " +
+			"TD_ATTRIBUTES and XFAM vary more across platforms and are not yet " +
+			"pinned per-provider, so this factor passes with the raw values in the " +
+			"detail for drift visibility; fine-grained TDX attribute/XFAM pinning " +
+			"is a documented follow-up.",
+	},
+	{
 		Name:    attestation.FactorTEEMeasurement,
 		Tier:    1,
 		Summary: "TEE measurement matches policy",

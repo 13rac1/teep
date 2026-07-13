@@ -121,14 +121,14 @@ func allExcept(exclude ...string) []string {
 // BuildReport-level tests (cross-cutting concerns)
 // ---------------------------------------------------------------------------
 
-// TestBuildReportFactorCount ensures exactly 37 factors are produced.
+// TestBuildReportFactorCount ensures exactly 38 factors are produced.
 func TestBuildReportFactorCount(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
-	if len(report.Factors) != 37 {
-		t.Errorf("factor count: got %d, want 37", len(report.Factors))
+	if len(report.Factors) != 38 {
+		t.Errorf("factor count: got %d, want 38", len(report.Factors))
 	}
 }
 
@@ -716,6 +716,99 @@ func TestEvalTEEDebugDisabled(t *testing.T) {
 			t.Errorf("detail should name the bit checked: %s", f.Detail)
 		}
 	})
+}
+
+// TestEvalTEEPolicyBits covers the dedicated tee_policy_bits evaluator (GH
+// #119 deferred part): hazardous TEE hardware-config bits beyond the debug
+// bit (tee_debug_disabled). SEV-SNP guest-policy bits are a small, defined
+// ABI surface so novel/unexpected bits fail closed; TDX TD_ATTRIBUTES/XFAM
+// are not yet pinned per-provider so the TDX branch Passes with the raw
+// values in the detail (see docs/attestation_gaps and the #119 plan doc).
+func TestEvalTEEPolicyBits(t *testing.T) {
+	t.Run("nil_tdx_and_sev_fails_indeterminate", func(t *testing.T) {
+		results := evalTEEPolicyBits(&ReportInput{})
+		f := assertSingleFactor(t, results, Fail)
+		if !strings.Contains(f.Detail, "cannot determine policy bits") {
+			t.Errorf("detail should mention indeterminate policy state: %s", f.Detail)
+		}
+	})
+
+	t.Run("tdx_parse_err_fails_not_skip", func(t *testing.T) {
+		tdx := &TDXVerifyResult{ParseErr: errors.New("bad quote")}
+		f := assertSingleFactor(t, evalTEEPolicyBits(&ReportInput{TDX: tdx}), Fail)
+		if !strings.Contains(f.Detail, "cannot determine policy bits") {
+			t.Errorf("detail should mention indeterminate policy state: %s", f.Detail)
+		}
+	})
+
+	t.Run("tdx_sept_ve_disable_passes", func(t *testing.T) {
+		// Real observed Tinfoil TDX value: only bit 28 (SEPT_VE_DISABLE) set.
+		// This MUST pass — it is legitimate and observed on live providers.
+		tdx := &TDXVerifyResult{TDAttributes: []byte{0, 0, 0, 0x10, 0, 0, 0, 0}, XFAM: []byte{0xe7, 0x02, 0x06, 0, 0, 0, 0, 0}}
+		f := assertSingleFactor(t, evalTEEPolicyBits(&ReportInput{TDX: tdx}), Pass)
+		if !strings.Contains(f.Detail, "TD_ATTRIBUTES") {
+			t.Errorf("detail should include the raw TD_ATTRIBUTES: %s", f.Detail)
+		}
+	})
+
+	t.Run("sev_parse_err_fails_not_skip", func(t *testing.T) {
+		sev := &SEVVerifyResult{ParseErr: errors.New("bad report")}
+		f := assertSingleFactor(t, evalTEEPolicyBits(&ReportInput{SEV: sev}), Fail)
+		if !strings.Contains(f.Detail, "cannot determine policy bits") {
+			t.Errorf("detail should mention indeterminate policy state: %s", f.Detail)
+		}
+	})
+
+	t.Run("sev_migrate_ma_fails_blocked", func(t *testing.T) {
+		sev := &SEVVerifyResult{GuestPolicy: 1 << 18}
+		f := assertSingleFactor(t, evalTEEPolicyBits(&ReportInput{SEV: sev}), Fail)
+		if !strings.Contains(f.Detail, "MIGRATE_MA") {
+			t.Errorf("detail should name MIGRATE_MA: %s", f.Detail)
+		}
+	})
+
+	t.Run("sev_observed_tinfoil_policy_passes", func(t *testing.T) {
+		// Real observed Tinfoil SEV value: bits 16 (SMT) and 17
+		// (reserved-must-be-1) set. This MUST pass.
+		sev := &SEVVerifyResult{GuestPolicy: 0x30000}
+		f := assertSingleFactor(t, evalTEEPolicyBits(&ReportInput{SEV: sev}), Pass)
+		if !strings.Contains(f.Detail, "0x30000") {
+			t.Errorf("detail should include the raw policy: %s", f.Detail)
+		}
+	})
+
+	t.Run("sev_unknown_high_bit_fails", func(t *testing.T) {
+		// Bit 25 is above the defined ABI range (0-24) used by the known-good
+		// mask, so it must fail closed on novelty.
+		sev := &SEVVerifyResult{GuestPolicy: 1 << 25}
+		f := assertSingleFactor(t, evalTEEPolicyBits(&ReportInput{SEV: sev}), Fail)
+		if !strings.Contains(f.Detail, "outside the known-good mask") {
+			t.Errorf("detail should mention the known-good mask: %s", f.Detail)
+		}
+	})
+}
+
+// TestTEEPolicyBitsNeverAllowFailed pins the "tee_policy_bits" factor as
+// enforced-by-default: it must never appear in any *DefaultAllowFail list,
+// for any provider, now or in the future. Mirrors
+// TestTEEDebugDisabledNeverAllowFailed for GH issue #119's deferred
+// tee_policy_bits factor.
+func TestTEEPolicyBitsNeverAllowFailed(t *testing.T) {
+	lists := map[string][]string{
+		"DefaultAllowFail":              DefaultAllowFail,
+		"NearcloudDefaultAllowFail":     NearcloudDefaultAllowFail,
+		"NeardirectDefaultAllowFail":    NeardirectDefaultAllowFail,
+		"NanoGPTDefaultAllowFail":       NanoGPTDefaultAllowFail,
+		"PhalaCloudDefaultAllowFail":    PhalaCloudDefaultAllowFail,
+		"ChutesDefaultAllowFail":        ChutesDefaultAllowFail,
+		"TinfoilCloudDefaultAllowFail":  TinfoilCloudDefaultAllowFail,
+		"TinfoilDirectDefaultAllowFail": TinfoilDirectDefaultAllowFail,
+	}
+	for listName, list := range lists {
+		if slices.Contains(list, FactorTEEPolicyBits) {
+			t.Errorf("%s must not contain %q (must be enforced by default)", listName, FactorTEEPolicyBits)
+		}
+	}
 }
 
 // TestTEEDebugDisabledNeverAllowFailed pins the "tee_debug_disabled" and
@@ -3094,14 +3187,15 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 		GatewayNonce:    gatewayNonce,
 	})
 
-	// Base 37 + 13 gateway factors = 50
+	// Base 38 (core, including tee_policy_bits) + 13 gateway factors = 51
 	// Gateway factors: gateway_nonce_match, gateway_tee_quote_present,
 	// gateway_tee_quote_structure, gateway_tee_cert_chain, gateway_tee_quote_signature,
 	// gateway_tee_debug_disabled, gateway_tee_measurement, gateway_tee_hardware_config,
 	// gateway_tee_boot_config, gateway_tee_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
-	if len(report.Factors) != 50 {
-		t.Errorf("factor count with gateway: got %d, want 50", len(report.Factors))
+	// (there is no gateway_tee_policy_bits twin — tee_policy_bits is core-only per GH #119)
+	if len(report.Factors) != 51 {
+		t.Errorf("factor count with gateway: got %d, want 51", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}

@@ -3,6 +3,7 @@ package attestation
 import (
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -66,6 +67,7 @@ const (
 	FactorTEECertChain         = "tee_cert_chain"
 	FactorTEEQuoteSignature    = "tee_quote_signature"
 	FactorTEEDebugDisabled     = "tee_debug_disabled"
+	FactorTEEPolicyBits        = "tee_policy_bits"
 	FactorTEEMeasurement       = "tee_measurement"
 	FactorTEEHardwareConfig    = "tee_hardware_config"
 	FactorTEEBootConfig        = "tee_boot_config"
@@ -525,7 +527,7 @@ var TinfoilDirectDefaultAllowFail = []string{
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{
 	FactorNonceMatch, FactorTEEQuotePresent, FactorTEEQuoteStructure, FactorTEECertChain,
-	FactorTEEQuoteSignature, FactorTEEDebugDisabled,
+	FactorTEEQuoteSignature, FactorTEEDebugDisabled, FactorTEEPolicyBits,
 	FactorTEEMeasurement, FactorTEEHardwareConfig, FactorTEEBootConfig,
 	FactorSigningKeyPresent, FactorResponseSchema,
 	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
@@ -973,6 +975,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalTEEQuotePresent,
 		evalTEEParseDependent,
 		evalTEEDebugDisabled,
+		evalTEEPolicyBits,
 		evalTEEMeasurement,
 		evalTEEHardwareConfig,
 		evalTEEBootConfig,
@@ -1150,6 +1153,111 @@ func sevDebugDisabledFactor(tier, name string, sev *SEVVerifyResult) []FactorRes
 		return factor(tier, name, Fail, fmt.Sprintf("guest policy bit 19 (DEBUG) is set (policy: 0x%x) — do not trust for production", sev.GuestPolicy))
 	}
 	return factor(tier, name, Pass, fmt.Sprintf("guest policy bit 19 (DEBUG) is 0 — production guest (policy: 0x%x)", sev.GuestPolicy))
+}
+
+// sevPolicyKnownGoodMask is the set of SEV-SNP guest-policy bits (AMD
+// SEV-SNP ABI) that are safe to observe set in a legitimate production
+// deployment: the low ABI-version bits (0-15), SMT (16), the
+// reserved-must-be-1 bit (17), SINGLE_SOCKET (20), CXL_ALLOW (21),
+// MEM_AES_256_XTS (22), RAPL_DIS (23), and CIPHERTEXT_HIDING (24).
+// MIGRATE_MA (18) and DEBUG (19) are deliberately excluded — both are
+// hazardous — as is any bit above 24, which the current ABI does not define
+// and which is therefore reserved/unknown-and-forbidden (fail closed on
+// novelty). DEBUG duplication with tee_debug_disabled is intentional and
+// harmless: that factor already fails independently on bit 19; this mask
+// simply doesn't special-case it out.
+const sevPolicyKnownGoodMask uint64 = 0x0000FFFF | // ABI version bits 0-15
+	1<<16 | // SMT
+	1<<17 | // reserved, must be 1
+	1<<20 | // SINGLE_SOCKET
+	1<<21 | // CXL_ALLOW
+	1<<22 | // MEM_AES_256_XTS
+	1<<23 | // RAPL_DIS
+	1<<24 // CIPHERTEXT_HIDING
+
+// sevMigrateMABit is guest-policy bit 18 (MIGRATE_MA): permits an
+// AMD-signed migration agent to access guest memory/keys as part of a live
+// migration. Named out explicitly (in addition to the known-good mask
+// check) because it is the single most security-relevant bit in this range.
+const sevMigrateMABit uint64 = 1 << 18
+
+// tdxSeptVeDisableBitPolicy mirrors tdxSeptVeDisableBit (tdx.go); duplicated
+// here as a uint64 constant since evalTEEPolicyBits works on the decoded
+// uint64 view of TD_ATTRIBUTES rather than the raw byte slice.
+const tdxSeptVeDisableBitPolicy uint64 = 1 << 28
+
+// evalTEEPolicyBits renders the dedicated tee_policy_bits factor (GH #119):
+// hazardous TEE hardware-config bits beyond TUD.DEBUG/SNP DEBUG, which are
+// already covered by tee_debug_disabled and are not re-litigated here.
+//
+// This is a NEW enforced factor (not in any *DefaultAllowFail list — see
+// TestTEEPolicyBitsNeverAllowFailed) and is offline-computable, so an
+// indeterminate policy state (no parseable quote/report) fails directly
+// rather than relying on Skip promotion, mirroring evalTEEDebugDisabled.
+//
+// SEV-SNP guest-policy bits are a small, well-defined ABI surface, so this
+// factor fails closed on any bit outside sevPolicyKnownGoodMask (see MASK
+// constant docs) — in particular MIGRATE_MA (18).
+//
+// TDX TD_ATTRIBUTES/XFAM vary more across platforms and are not yet pinned
+// per-provider (that is a follow-up — see docs/attestation_gaps/ and the
+// #119 plan). Every attribute bit observed across every current provider's
+// live captures is 0 except SEPT_VE_DISABLE (bit 28, always set) and
+// TUD.DEBUG (bit 0, handled elsewhere) — but a single-shape sample across
+// today's providers is not sufficient basis to fail-closed on other bits
+// without risking blocking a legitimate provider using them. So the TDX
+// branch Passes with the raw attributes/XFAM in the detail for
+// greppability/drift-visibility (also already slog-logged, see tdx.go),
+// documenting fine-grained TDX-attribute pinning as the follow-up.
+func evalTEEPolicyBits(in *ReportInput) []FactorResult {
+	switch {
+	case in.TDX != nil:
+		return tdxPolicyBitsFactor(in.TDX)
+	case in.SEV != nil:
+		return sevPolicyBitsFactor(in.SEV)
+	default:
+		return factor(TierCore, FactorTEEPolicyBits, Fail, "no TEE quote/report available; cannot determine policy bits")
+	}
+}
+
+// tdxPolicyBitsFactor renders tee_policy_bits for a parsed TDX quote. See
+// evalTEEPolicyBits for why this Passes-with-detail rather than
+// fail-closing on novel TD_ATTRIBUTES/XFAM bits.
+func tdxPolicyBitsFactor(tdx *TDXVerifyResult) []FactorResult {
+	if tdx.ParseErr != nil {
+		return factor(TierCore, FactorTEEPolicyBits, Fail,
+			fmt.Sprintf("TDX quote parse failed; cannot determine policy bits: %v", tdx.ParseErr))
+	}
+	var attrs uint64
+	if len(tdx.TDAttributes) == 8 {
+		attrs = binary.LittleEndian.Uint64(tdx.TDAttributes)
+	}
+	septVE := attrs&tdxSeptVeDisableBitPolicy != 0
+	return factor(TierCore, FactorTEEPolicyBits, Pass,
+		fmt.Sprintf("TD_ATTRIBUTES=%x XFAM=%x (sept_ve_disable=%t); fine-grained TDX attribute/XFAM pinning is a documented follow-up (see docs/attestation_gaps/)",
+			tdx.TDAttributes, tdx.XFAM, septVE))
+}
+
+// sevPolicyBitsFactor renders tee_policy_bits for a parsed SEV-SNP report:
+// fails if MIGRATE_MA (bit 18) is set, or if any guest-policy bit outside
+// sevPolicyKnownGoodMask is set (which also catches DEBUG at bit 19 and any
+// undefined bit above 24).
+func sevPolicyBitsFactor(sev *SEVVerifyResult) []FactorResult {
+	if sev.ParseErr != nil {
+		return factor(TierCore, FactorTEEPolicyBits, Fail,
+			fmt.Sprintf("SEV-SNP report parse failed; cannot determine policy bits: %v", sev.ParseErr))
+	}
+	policy := sev.GuestPolicy
+	if policy&sevMigrateMABit != 0 {
+		return factor(TierCore, FactorTEEPolicyBits, Fail,
+			fmt.Sprintf("guest policy bit 18 (MIGRATE_MA) is set (policy: 0x%x) — migration agent access is a hazard; do not trust for production", policy))
+	}
+	if bad := policy &^ sevPolicyKnownGoodMask; bad != 0 {
+		return factor(TierCore, FactorTEEPolicyBits, Fail,
+			fmt.Sprintf("guest policy has bit(s) outside the known-good mask set (policy: 0x%x, unexpected bits: 0x%x)", policy, bad))
+	}
+	return factor(TierCore, FactorTEEPolicyBits, Pass,
+		fmt.Sprintf("guest policy bits are within the known-good mask (policy: 0x%x)", policy))
 }
 
 // evalSEVCertChainFactor renders the tee_cert_chain factor from a SEV
