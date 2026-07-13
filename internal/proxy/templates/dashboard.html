@@ -233,7 +233,7 @@
     <h3 class="eyebrow" style="margin-bottom:14px">Providers</h3>
     <div class="panel">
       <table class="tbl">
-        <thead><tr><th>Provider</th><th>Upstream</th><th>E2EE</th><th>Requests</th><th>Errors</th></tr></thead>
+        <thead><tr><th>Provider</th><th>Upstream</th><th>E2EE</th><th>Requests</th><th>Errors</th><th>Degraded</th></tr></thead>
         <tbody id="prov-rows"></tbody>
       </table>
     </div>
@@ -320,7 +320,7 @@ function postureFor(atts, anyReq) {
   return { cls: cls, head: head, sub: sub, frac: frac, verified: verified, blocked: blocked, e2ee: e2ee, pass: pass, scored: scored };
 }
 
-function renderHero(p) {
+function renderHero(p, degradedCount) {
   var seal = el("seal");
   seal.className = "seal " + p.cls;
   el("seal-prog").style.strokeDashoffset = SEAL_C * (1 - p.frac);
@@ -332,6 +332,7 @@ function renderHero(p) {
     { n: p.scored ? (p.pass + "/" + p.scored) : "—", l: "Factors passed", accent: false }
   ];
   if (p.blocked > 0) stats.push({ n: p.blocked, l: "Blocked", accent: false });
+  if (degradedCount > 0) stats.push({ n: degradedCount, l: "Providers degraded", accent: false });
   var h = "";
   for (var i = 0; i < stats.length; i++) {
     h += '<div class="hstat"><div class="n' + (stats[i].accent ? ' accent' : '') + '">' +
@@ -623,19 +624,62 @@ function renderWarnings(d) {
   el("warnings-list").innerHTML = h;
 }
 
+// buildProviderDegradedCell builds the "Degraded" table cell for one
+// provider row. Uses degradedBadge (DOM-API built, see _base_js.html) so the
+// waived factor names — and the E2EE-guarantee flag folded in alongside
+// them — can only ever land in a text node or title attribute.
+function buildProviderDegradedCell(p) {
+  var td = document.createElement("td");
+  if (!p.degraded) {
+    td.textContent = "–";
+    td.style.color = "var(--faint)";
+    return td;
+  }
+  var names = (p.waived_factors || []).slice();
+  if (p.missing_e2ee) names.push("missing E2EE guarantee (report-data binding not passed)");
+  var badge = degradedBadge(names.length, names);
+  if (badge) td.appendChild(badge);
+  return td;
+}
+
 function renderProviders(d) {
   var provs = d.providers || {};
   var names = Object.keys(provs).sort();
-  var h = "";
+  var tbody = el("prov-rows");
+  clearChildren(tbody);
   for (var i = 0; i < names.length; i++) {
     var p = provs[names[i]];
-    var cls = p.e2ee === "enabled" ? "ok" : "off";
-    var errCls = (p.errors || 0) > 0 ? ' class="bad"' : '';
-    h += '<tr><td class="mono">' + esc(names[i]) + '</td><td class="mono" style="color:var(--dim)">' +
-      esc(p.upstream) + '</td><td class="' + cls + '">' + esc(p.e2ee) +
-      '</td><td>' + esc(p.requests || 0) + '</td><td' + errCls + '>' + esc(p.errors || 0) + '</td></tr>';
+    var tr = document.createElement("tr");
+
+    var tdName = document.createElement("td");
+    tdName.className = "mono";
+    tdName.textContent = names[i];
+    tr.appendChild(tdName);
+
+    var tdUp = document.createElement("td");
+    tdUp.className = "mono";
+    tdUp.style.color = "var(--dim)";
+    tdUp.textContent = p.upstream || "";
+    tr.appendChild(tdUp);
+
+    var tdE2ee = document.createElement("td");
+    tdE2ee.className = p.e2ee === "enabled" ? "ok" : "off";
+    tdE2ee.textContent = p.e2ee || "";
+    tr.appendChild(tdE2ee);
+
+    var tdReq = document.createElement("td");
+    tdReq.textContent = String(p.requests || 0);
+    tr.appendChild(tdReq);
+
+    var tdErr = document.createElement("td");
+    if ((p.errors || 0) > 0) tdErr.className = "bad";
+    tdErr.textContent = String(p.errors || 0);
+    tr.appendChild(tdErr);
+
+    tr.appendChild(buildProviderDegradedCell(p));
+
+    tbody.appendChild(tr);
   }
-  el("prov-rows").innerHTML = h;
 }
 
 function render(d) {
@@ -646,7 +690,12 @@ function render(d) {
 
   var anyReq = (d.requests && d.requests.total > 0);
   var p = postureFor(d.attestations || [], anyReq);
-  renderHero(p);
+  var provs = d.providers || {};
+  var degradedCount = 0;
+  for (var pk in provs) {
+    if (Object.prototype.hasOwnProperty.call(provs, pk) && provs[pk].degraded) degradedCount++;
+  }
+  renderHero(p, degradedCount);
   renderEnclaves(d);
   renderTraffic(d);
   pushSpark((d.requests && d.requests.total) || 0);

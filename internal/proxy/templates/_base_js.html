@@ -23,6 +23,28 @@ function esc(s) {
 }
 function el(id) { return document.getElementById(id); }
 
+// degradedBadge builds a ".pill.degraded" badge summarizing a provider's
+// currently waived-and-failing integrity factors (attestation is
+// intentionally allowed to run with these axes unenforced — the "degraded"
+// state teep surfaces rather than hides). count is the number of names;
+// names is the full list, joined into a title/tooltip so the badge is
+// informative (which factors are waived), not just a bare count. Returns
+// null when there is nothing to show. Built entirely via DOM APIs
+// (createElement/className/title/textContent) so no factor name can ever
+// be parsed as markup, matching the DOM-API rendering used elsewhere for
+// provider- and attestation-derived data (buildEnclaveCard,
+// buildProviderGroupHead).
+function degradedBadge(count, names) {
+  if (!count) return null;
+  var b = document.createElement("span");
+  b.className = "pill degraded";
+  b.textContent = "degraded (" + count + ")";
+  if (names && names.length) {
+    b.title = "Waived & failing: " + names.join(", ");
+  }
+  return b;
+}
+
 // clearChildren removes all child nodes of an element without touching its
 // attributes or listeners. Used before rebuilding a list container via DOM
 // APIs (see modelCard/renderModels in explore.html and buildEnclaveCard/

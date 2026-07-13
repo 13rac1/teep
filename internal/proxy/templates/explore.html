@@ -331,6 +331,15 @@ function buildProviderGroupHead(prov, models, info, open) {
     e2eePill.textContent = "E2EE";
     head.appendChild(e2eePill);
   }
+  if (info.degraded) {
+    // Fold the E2EE-guarantee gate into the same badge's tooltip alongside
+    // any generically waived factors, so the one "degraded" indicator is
+    // fully informative rather than requiring two separate badges.
+    var waivedNames = (info.waived_factors || []).slice();
+    if (info.missing_e2ee) waivedNames.push("missing E2EE guarantee (report-data binding not passed)");
+    var badge = degradedBadge(waivedNames.length, waivedNames);
+    if (badge) head.appendChild(badge);
+  }
 
   var countSpan = document.createElement("span");
   countSpan.className = "prov-count";
