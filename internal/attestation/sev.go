@@ -213,6 +213,26 @@ func VerifySEVReportOffline(ctx context.Context, report []byte) *SEVVerifyResult
 
 	result.DebugEnabled = policy.Debug
 
+	// Log the raw guest policy and platform_info bitmasks plus their
+	// hazard/identity bits, decoded by name, so drift is greppable on every
+	// attestation without decoding raw report bytes by hand. platform_info is
+	// a separate 8-byte little-endian field at report offset 0x40; go-sev-guest
+	// parses it directly off the report proto.
+	platformInfo := parsed.GetPlatformInfo()
+	platInfo, platErr := sevabi.ParseSnpPlatformInfo(platformInfo)
+	if platErr != nil {
+		slog.DebugContext(ctx, "SEV-SNP platform_info parse failed (non-fatal)", "err", platErr, "platform_info", fmt.Sprintf("0x%016x", platformInfo))
+	}
+	slog.DebugContext(ctx, "SEV-SNP guest policy and platform info extracted",
+		"guest_policy", fmt.Sprintf("0x%016x", result.GuestPolicy),
+		"snp_debug", policy.Debug,
+		"migrate_ma", policy.MigrateMA,
+		"smt_allowed", policy.SMT,
+		"platform_info", fmt.Sprintf("0x%016x", platformInfo),
+		"smt_en", platInfo.SMTEnabled,
+		"tsme_en", platInfo.TSMEEnabled,
+	)
+
 	// Validate guest policy.
 	result.PolicyErr = validateSEVPolicy(policy, parsed)
 

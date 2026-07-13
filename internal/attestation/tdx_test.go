@@ -85,6 +85,16 @@ func TestVerifyTDXQuoteMeasurements(t *testing.T) {
 		t.Errorf("MRSeam length: got %d, want 48", len(result.MRSeam))
 	}
 
+	// TD_ATTRIBUTES and XFAM should each be the 8-byte fields defined by the
+	// TDX Module ABI, and are now also surfaced in the "TDX measurements
+	// extracted" debug log for greppability.
+	if len(result.TDAttributes) != 8 {
+		t.Errorf("TDAttributes length: got %d, want 8", len(result.TDAttributes))
+	}
+	if len(result.XFAM) != 8 {
+		t.Errorf("XFAM length: got %d, want 8", len(result.XFAM))
+	}
+
 	t.Logf("MRTD:           %s", hex.EncodeToString(result.MRTD))
 	for i, r := range result.RTMRs {
 		t.Logf("RTMR%d:          %s", i, hex.EncodeToString(r[:]))
@@ -94,6 +104,8 @@ func TestVerifyTDXQuoteMeasurements(t *testing.T) {
 	t.Logf("MRConfigID:     %s", hex.EncodeToString(result.MRConfigID))
 	t.Logf("MROwner:        %s", hex.EncodeToString(result.MROwner))
 	t.Logf("MROwnerConfig:  %s", hex.EncodeToString(result.MROwnerConfig))
+	t.Logf("TDAttributes:   %s", hex.EncodeToString(result.TDAttributes))
+	t.Logf("XFAM:           %s", hex.EncodeToString(result.XFAM))
 }
 
 // TestVerifyTDXQuoteDebugFlagRealQuote verifies the real production quote has

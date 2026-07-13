@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -179,6 +180,19 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 	))
 	if err != nil {
 		return nil, "", fmt.Errorf("DSSE bundle verification failed: %w", err)
+	}
+
+	// Log the verified Fulcio signer identity: OIDC issuer and full SAN URI
+	// (e.g. https://github.com/tinfoilsh/<repo>/.github/workflows/<wf>@refs/tags/<tag>).
+	// Non-secret, public attestation fields; the tag is load-bearing for a
+	// future version-floor check, so log the whole SAN rather than parsing
+	// out just the tag.
+	if result.Signature != nil && result.Signature.Certificate != nil {
+		slog.DebugContext(ctx, "Fulcio signer identity verified",
+			"oidc_issuer", result.Signature.Certificate.Issuer,
+			"san", result.Signature.Certificate.SubjectAlternativeName,
+			"repo", repo,
+		)
 	}
 
 	// Extract the verified statement.

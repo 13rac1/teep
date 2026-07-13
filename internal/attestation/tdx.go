@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	_ "embed"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -177,6 +178,12 @@ type TDXVerifyResult struct {
 // debug mode and its memory can be inspected by the host.
 const tdxDebugBit = 0x01
 
+// tdxSeptVeDisableBit is bit 28 of the little-endian uint64 view of
+// TD_ATTRIBUTES (Intel TDX Module ABI spec). When set, EPT-violation
+// conversion to #VE is disabled for guest TD accesses to PENDING pages.
+// Mirrors tdxAttributesSeptVeDisSupport in go-tdx-guest's validate package.
+const tdxSeptVeDisableBit = 1 << 28
+
 // tdxTimeSet builds a *tdxverify.TimeSet pinning every collateral currency
 // check (PCK cert chain x509 validity, tcbInfo, QE identity, PCK CRL, root CA
 // CRL) to t. This mirrors the SEV/NRAS/PoC replay-time mechanism (see
@@ -303,6 +310,15 @@ func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string, verifyTime time
 		copy(result.RTMRs[i][:], r)
 	}
 
+	// TD_ATTRIBUTES is an 8-byte little-endian bitmask (Intel TDX Module ABI
+	// spec). Decode it as a uint64 so hazard bits beyond byte 0 (e.g.
+	// SEPT_VE_DISABLE at bit 28) can be checked, in addition to the raw hex
+	// dump logged below for drift detection.
+	var tdAttrsVal uint64
+	if len(tdAttrs) == 8 {
+		tdAttrsVal = binary.LittleEndian.Uint64(tdAttrs)
+	}
+
 	slog.DebugContext(ctx, "TDX measurements extracted",
 		"mrtd", hex.EncodeToString(mrTD),
 		"rtmr0", hex.EncodeToString(safeSlice(rtmrs, 0)),
@@ -314,6 +330,10 @@ func VerifyTDXQuoteOffline(ctx context.Context, hexQuote string, verifyTime time
 		"mr_config_id", hex.EncodeToString(mrConfigID),
 		"mr_owner", hex.EncodeToString(mrOwner),
 		"mr_owner_config", hex.EncodeToString(mrOwnerConfig),
+		"td_attributes", hex.EncodeToString(tdAttrs),
+		"xfam", hex.EncodeToString(xfam),
+		"tud_debug", tdAttrsVal&tdxDebugBit != 0,
+		"sept_ve_disable", tdAttrsVal&tdxSeptVeDisableBit != 0,
 	)
 
 	// Factor 6: debug flag. TD_ATTRIBUTES is 8 bytes; bit 0 of byte 0 is debug.
