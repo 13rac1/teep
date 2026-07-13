@@ -121,14 +121,14 @@ func allExcept(exclude ...string) []string {
 // BuildReport-level tests (cross-cutting concerns)
 // ---------------------------------------------------------------------------
 
-// TestBuildReportFactorCount ensures exactly 36 factors are produced.
+// TestBuildReportFactorCount ensures exactly 37 factors are produced.
 func TestBuildReportFactorCount(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
-	if len(report.Factors) != 36 {
-		t.Errorf("factor count: got %d, want 36", len(report.Factors))
+	if len(report.Factors) != 37 {
+		t.Errorf("factor count: got %d, want 37", len(report.Factors))
 	}
 }
 
@@ -202,8 +202,8 @@ func TestBuildReportInapplicableOverride(t *testing.T) {
 
 	// NotApplicable factors must not appear in the score denominator.
 	scoreDenom := report.Passed + report.Failed + report.Skipped
-	if report.NotApplicableCount != 8 {
-		t.Errorf("NotApplicableCount: got %d, want 8", report.NotApplicableCount)
+	if report.NotApplicableCount != 9 {
+		t.Errorf("NotApplicableCount: got %d, want 9", report.NotApplicableCount)
 	}
 	if scoreDenom+report.NotApplicableCount != len(report.Factors) {
 		t.Errorf("score denominator (%d) + N/A (%d) != total factors (%d)",
@@ -3077,14 +3077,14 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 		GatewayNonce:    gatewayNonce,
 	})
 
-	// Base 36 + 13 gateway factors = 49
+	// Base 37 + 13 gateway factors = 50
 	// Gateway factors: gateway_nonce_match, gateway_tee_quote_present,
 	// gateway_tee_quote_structure, gateway_tee_cert_chain, gateway_tee_quote_signature,
 	// gateway_tee_debug_disabled, gateway_tee_measurement, gateway_tee_hardware_config,
 	// gateway_tee_boot_config, gateway_tee_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
-	if len(report.Factors) != 49 {
-		t.Errorf("factor count with gateway: got %d, want 49", len(report.Factors))
+	if len(report.Factors) != 50 {
+		t.Errorf("factor count with gateway: got %d, want 50", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}
@@ -5148,5 +5148,85 @@ func TestEvalTEEBootConfig_Tinfoil(t *testing.T) {
 		if !strings.Contains(f.Detail, "SEV-SNP") {
 			t.Errorf("detail %q should mention SEV-SNP", f.Detail)
 		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// evalACIKeysetEndorsement tests (Venice ACI/1)
+// ---------------------------------------------------------------------------
+
+func TestEvalACIKeysetEndorsement(t *testing.T) {
+	t.Run("not_applicable_dstack", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatDstack},
+		}
+		assertSingleFactor(t, evalACIKeysetEndorsement(in), NotApplicable)
+	})
+
+	t.Run("fail_nil_result", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+		}
+		assertSingleFactor(t, evalACIKeysetEndorsement(in), Fail)
+	})
+
+	t.Run("fail_error", func(t *testing.T) {
+		in := &ReportInput{
+			Raw:       &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{Err: errors.New("test error")},
+		}
+		assertSingleFactor(t, evalACIKeysetEndorsement(in), Fail)
+	})
+
+	t.Run("fail_bad_signature", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				EndorsementValid:  false,
+				KeysetDigestMatch: true,
+				WorkloadIDMatch:   true,
+				Detail:            "endorsement signature INVALID",
+			},
+		}
+		assertSingleFactor(t, evalACIKeysetEndorsement(in), Fail)
+	})
+
+	t.Run("fail_digest_mismatch", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				EndorsementValid:  true,
+				KeysetDigestMatch: false,
+				WorkloadIDMatch:   true,
+				Detail:            "keyset digest mismatch",
+			},
+		}
+		assertSingleFactor(t, evalACIKeysetEndorsement(in), Fail)
+	})
+
+	t.Run("fail_workload_id_mismatch", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				EndorsementValid:  true,
+				KeysetDigestMatch: true,
+				WorkloadIDMatch:   false,
+				Detail:            "workload_id mismatch",
+			},
+		}
+		assertSingleFactor(t, evalACIKeysetEndorsement(in), Fail)
+	})
+
+	t.Run("pass", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				EndorsementValid:  true,
+				KeysetDigestMatch: true,
+				WorkloadIDMatch:   true,
+				Detail:            "all checks passed",
+			},
+		}
+		assertSingleFactor(t, evalACIKeysetEndorsement(in), Pass)
 	})
 }

@@ -82,6 +82,7 @@ const (
 	FactorE2EECapable          = "e2ee_capable"
 	FactorE2EEUsable           = "e2ee_usable"
 	FactorE2EEResponseOrigin   = "e2ee_response_origin"
+	FactorACIKeysetEndorsement = "aci_keyset_endorsement"
 	FactorTLSKeyBinding        = "tls_key_binding"
 	FactorCPUGPUChain          = "cpu_gpu_chain"
 	FactorNVSwitchBinding      = "nvswitch_binding"
@@ -508,6 +509,7 @@ var KnownFactors = []string{
 	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaSignature, FactorNvidiaClaims,
 	FactorNvidiaClientNonce, FactorNvidiaNRAS, FactorE2EECapable, FactorE2EEUsable,
 	FactorE2EEResponseOrigin,
+	FactorACIKeysetEndorsement,
 	FactorTLSKeyBinding, FactorCPUGPUChain, FactorNVSwitchBinding,
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
@@ -637,6 +639,18 @@ func (r *RawAttestation) E2EEKeyType() string {
 	return "ecdsa"
 }
 
+// ACIKeysetResult holds the result of Venice ACI/1 keyset endorsement
+// verification: JCS-canonicalized workload keyset digest and workload_id
+// cross-checks, plus the ECDSA secp256k1 endorsement signature verification.
+// Nil for non-ACI/1 attestation formats.
+type ACIKeysetResult struct {
+	KeysetDigestMatch bool   // recomputed sha256(canonical keyset) == declared workload_keyset_digest
+	WorkloadIDMatch   bool   // recomputed sha256(canonical identity key) == declared workload_id
+	EndorsementValid  bool   // keyset_endorsement ECDSA secp256k1 signature verified over the endorsement payload
+	Err               error  // non-nil if verification could not complete (malformed input, bad hex, etc.)
+	Detail            string // human-readable summary of the above
+}
+
 // TinfoilComponentResult holds per-component Tinfoil Sigstore verification.
 type TinfoilComponentResult struct {
 	Repo             string
@@ -730,6 +744,10 @@ type ReportInput struct {
 	GatewayCompose  *ComposeBindingResult
 	GatewayEventLog []EventLogEntry
 	GatewayPolicy   MeasurementPolicy // separate measurement allowlists for gateway CVM (GW-M-04)
+
+	// ACIKeyset holds the result of Venice ACI/1 keyset endorsement
+	// verification. Nil for non-ACI/1 providers/formats.
+	ACIKeyset *ACIKeysetResult
 
 	// TinfoilSC holds Tinfoil-specific Sigstore supply chain results.
 	// Nil for non-Tinfoil providers.
@@ -912,6 +930,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalE2EECapable,
 		evalE2EEUsable,
 		evalE2EEResponseOrigin,
+		evalACIKeysetEndorsement,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -1714,6 +1733,33 @@ func evalE2EEResponseOrigin(in *ReportInput) []FactorResult {
 		return factor(TierBinding, FactorE2EEResponseOrigin, NotApplicable,
 			"provider does not perform wire-ephemeral E2EE response decryption")
 	}
+}
+
+// evalACIKeysetEndorsement evaluates Venice ACI/1's keyset endorsement
+// factor: the workload keyset (E2EE/receipt/TLS public keys) is bound to the
+// TDX-attested identity key via a JCS-canonicalized digest cross-check
+// (workload_keyset_digest, workload_id) and an ECDSA secp256k1 signature
+// (keyset_endorsement) over that digest. NotApplicable for every format
+// other than ACI/1 — this is not a hidden/waived factor, it is a real
+// verification step that is enforced (never added to any allow_fail list)
+// whenever ACI/1 is in use.
+func evalACIKeysetEndorsement(in *ReportInput) []FactorResult {
+	if in.Raw.BackendFormat != FormatACI1 {
+		return factor(TierBinding, FactorACIKeysetEndorsement, NotApplicable,
+			"not ACI/1 format")
+	}
+	if in.ACIKeyset == nil {
+		return factor(TierBinding, FactorACIKeysetEndorsement, Fail,
+			"ACI/1 keyset endorsement verification was not performed")
+	}
+	if in.ACIKeyset.Err != nil {
+		return factor(TierBinding, FactorACIKeysetEndorsement, Fail,
+			fmt.Sprintf("keyset endorsement verification error: %v", in.ACIKeyset.Err))
+	}
+	if !in.ACIKeyset.EndorsementValid || !in.ACIKeyset.KeysetDigestMatch || !in.ACIKeyset.WorkloadIDMatch {
+		return factor(TierBinding, FactorACIKeysetEndorsement, Fail, in.ACIKeyset.Detail)
+	}
+	return factor(TierBinding, FactorACIKeysetEndorsement, Pass, in.ACIKeyset.Detail)
 }
 
 // validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519

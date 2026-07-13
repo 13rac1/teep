@@ -274,6 +274,21 @@ var factorRegistry = []factorInfo{
 			"default so this gap is visible in reports without blocking " +
 			"service.",
 	},
+	{
+		Name:    attestation.FactorACIKeysetEndorsement,
+		Tier:    2,
+		Summary: "ACI/1 keyset endorsement signature verified",
+		Description: "Venice ACI/1 specific: verifies the keyset endorsement ECDSA " +
+			"secp256k1 signature over the JCS-canonicalized endorsement payload " +
+			"using the workload identity key, and cross-checks " +
+			"workload_keyset_digest and workload_id by recomputing SHA-256 of " +
+			"the JCS-canonicalized keyset and identity key respectively. The " +
+			"identity key itself is bound to the TDX quote via REPORTDATA (see " +
+			"tee_reportdata_binding). Not applicable for non-ACI/1 formats. " +
+			"Always enforced (never added to allow_fail) because, unlike the " +
+			"ACI/1 supply-chain factors, this is independently verifiable from " +
+			"data already present in the attestation response.",
+	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
 		Name:    attestation.FactorTLSKeyBinding,

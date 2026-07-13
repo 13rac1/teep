@@ -74,6 +74,7 @@ const AttestationCacheTTL = 1 * time.Hour
 // BackendFormat constants for known attestation backends.
 const (
 	FormatDstack  BackendFormat = "dstack"
+	FormatACI1    BackendFormat = "aci/1"
 	FormatChutes  BackendFormat = "chutes"
 	FormatTinfoil BackendFormat = "tinfoil"
 	FormatGateway BackendFormat = "gateway"
@@ -187,6 +188,20 @@ type RawAttestation struct {
 	// Populated by the DirectAttester from the proxy discovery endpoint.
 	// Empty for the cloud provider (which always uses the router repo).
 	TinfoilRepo string `json:"-"`
+
+	// ACI/1-specific fields — populated by the Venice ACI/1 parser
+	// (internal/provider/venice/aci.go). ACI/1 has no docker-compose
+	// manifest; provenance is expressed as a source repo + commit plus a
+	// cryptographically endorsed workload keyset instead.
+	ACISourceRepoURL        string `json:"-"` // attestation.source_provenance.repo_url
+	ACIWorkloadID           string `json:"-"` // top-level workload_id (sha256 digest of identity key)
+	ACIWorkloadKeysetDigest string `json:"-"` // top-level workload_keyset_digest
+	ACIKeysetEndorsementSig string `json:"-"` // attestation.keyset_endorsement.value (hex ECDSA signature)
+	ACIIdentityKeyHex       string `json:"-"` // attestation.workload_keyset.workload_identity.public_key.public_key
+	// ACIWorkloadKeyset holds the parsed *venice ACI workload keyset struct
+	// (opaque `any` here to avoid an attestation → venice import cycle; the
+	// venice package type-asserts it back). Nil for non-ACI/1 formats.
+	ACIWorkloadKeyset any `json:"-"`
 
 	// Gateway fields — populated by providers with TEE-attested API gateways.
 	// Empty for providers without a gateway (e.g. Venice, NEAR AI direct).

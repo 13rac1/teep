@@ -323,6 +323,193 @@ func TestAttester_FetchAttestation_InvalidBaseURL(t *testing.T) {
 	}
 }
 
+// --- ACI/1 format tests ---
+//
+// validACI1JSON is synthetic — it matches the documented/observed ACI/1
+// shape but is not a captured live response. A real endorsement-signed
+// capture and end-to-end integration fixture are deferred; see
+// docs/plans/2026-07-06-gh-issue-113.md.
+
+const validACI1JSON = `{
+	"api_version": "aci/1",
+	"workload_id": "sha256:3def476b0000000000000000000000000000000000000000000000000000abcd",
+	"workload_keyset_digest": "sha256:abcdef0123456789",
+	"attestation": {
+		"vendor": "private-ai-gateway-dev",
+		"tee_type": "tdx",
+		"workload_keyset": {
+			"workload_identity": {
+				"public_key": {"algo": "ecdsa-secp256k1", "public_key": "04aabb"},
+				"subject": null
+			},
+			"keyset_epoch": {"version": 1, "not_after": 18446744073709552000},
+			"receipt_signing_keys": [{"key_id": "receipt-v1", "algo": "ecdsa-secp256k1", "public_key": "04ccdd"}],
+			"e2ee_public_keys": [{"key_id": "e2ee-v1", "algo": "secp256k1-aes-256-gcm", "public_key": "04eeff"}],
+			"tls_public_keys": [{"domain": "test.example.com", "spki_sha256": "aabbccdd"}]
+		},
+		"report_data": "0000000000000000000000000000000000000000000000000000000000000000",
+		"keyset_endorsement": {"algo": "ecdsa-secp256k1", "value": "aabbccdd"},
+		"source_provenance": {
+			"repo_url": "https://github.com/Dstack-TEE/private-ai-gateway.git",
+			"repo_commit": "1b43f76e43c2459856faebe9cd97d8e01cb0df0c",
+			"image_digest": null,
+			"image_provenance": null
+		},
+		"freshness": {"fetched_at": 1782772332, "stale_after": 1782775932},
+		"evidence": {
+			"quote": "dGVzdHF1b3Rl",
+			"quote_report_data": "79a5061e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aa",
+			"event_log": [
+				{"digest": "d6d8d853b6454f838d98c5573d6a098c", "event": "", "event_payload": "095464785461626c65", "event_type": 2147483659, "imr": 0},
+				{"digest": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "event": "", "event_payload": "0a1b2c3d4e5f", "event_type": 2147483649, "imr": 1}
+			],
+			"vm_config": "tdx-vm-aci",
+			"key_custody": {"provider": "dstack-kms", "keys": [{"role": "identity", "path": "aci/identity/v1", "purpose": "aci.identity.v1", "algo": "ecdsa-secp256k1", "public_key": "04aabb", "signature_chain": ["aabb", "ccdd"]}]},
+			"downstream_tls_binding": {"domain": "test.example.com", "spki_sha256": "aabbccdd"}
+		}
+	},
+	"service_capabilities": {"supported_e2ee_versions": ["2"]},
+	"intel_quote": "dGVzdHF1b3Rl",
+	"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test.payload",
+	"signing_public_key": "04943cea0baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	"signing_algo": "ecdsa",
+	"signing_address": "0x79a5061ebbbbbbbb",
+	"verified": true,
+	"nonce": "aabbccddeeff00112233445566778899",
+	"model": "e2ee-glm-5-2-p",
+	"tee_provider": "phala",
+	"tee_hardware": "intel-tdx",
+	"nonce_source": "client",
+	"upstream_model": "z-ai/glm-5.2",
+	"server_verification": {"tdx": {"valid": true, "signatureValid": true, "certificateChainValid": true, "rootCaPinned": true, "attestationKeyMatch": true, "reportData": "", "measurements": {"mrtd": "", "mrconfigid": "", "mrowner": "", "mrownerconfig": "", "rtmr0": "", "rtmr1": "", "rtmr2": "", "rtmr3": "", "tdAttributes": "", "xfam": ""}, "crlCheck": {"checked": true, "revoked": false}}, "nvidia": {"valid": true, "signatureVerified": true, "certificateChainStatus": {"valid": true, "intermediatePinned": true, "leafCertExpiry": ""}}, "signingAddressBinding": {"bound": true, "reportDataAddress": ""}, "nonceBinding": {"bound": true, "method": "raw"}, "nvidiaNonceBinding": {"bound": true, "method": "nvidia_payload"}, "verifiedAt": "2026-06-29T01:00:00.000Z", "verificationDurationMs": 300},
+	"candidates_evaluated": 1,
+	"candidates_available": 3
+}`
+
+func TestParseACI1_Success(t *testing.T) {
+	raw, err := venice.ParseAttestationResponse(context.Background(), []byte(validACI1JSON))
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse(ACI/1): %v", err)
+	}
+
+	checks := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"BackendFormat", string(raw.BackendFormat), string(attestation.FormatACI1)},
+		{"TEEProvider", raw.TEEProvider, "phala"},
+		{"SigningKey", raw.SigningKey, "04943cea0baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"SigningAddress", raw.SigningAddress, "0x79a5061ebbbbbbbb"},
+		{"IntelQuote", raw.IntelQuote, "dGVzdHF1b3Rl"},
+		{"SigningAlgo", raw.SigningAlgo, "ecdsa"},
+		{"Nonce", raw.Nonce, "aabbccddeeff00112233445566778899"},
+		{"Model", raw.Model, "e2ee-glm-5-2-p"},
+		{"TEEHardware", raw.TEEHardware, "intel-tdx"},
+		{"NonceSource", raw.NonceSource, "client"},
+		{"UpstreamModel", raw.UpstreamModel, "z-ai/glm-5.2"},
+	}
+	for _, tc := range checks {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+	if !raw.Verified {
+		t.Error("Verified = false, want true")
+	}
+	if raw.NvidiaPayload == "" {
+		t.Error("NvidiaPayload is empty, want non-empty")
+	}
+	if raw.CandidatesAvail != 3 {
+		t.Errorf("CandidatesAvail = %d, want 3", raw.CandidatesAvail)
+	}
+	if raw.CandidatesEval != 1 {
+		t.Errorf("CandidatesEval = %d, want 1", raw.CandidatesEval)
+	}
+	if raw.ACISourceRepoURL != "https://github.com/Dstack-TEE/private-ai-gateway.git" {
+		t.Errorf("ACISourceRepoURL = %q, want the private-ai-gateway repo", raw.ACISourceRepoURL)
+	}
+	if raw.ACIWorkloadKeyset == nil {
+		t.Error("ACIWorkloadKeyset is nil, want populated for keyset endorsement verification")
+	}
+}
+
+func TestParseACI1_EventLog(t *testing.T) {
+	raw, err := venice.ParseAttestationResponse(context.Background(), []byte(validACI1JSON))
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse(ACI/1): %v", err)
+	}
+
+	if raw.EventLogCount != 2 {
+		t.Errorf("EventLogCount = %d, want 2", raw.EventLogCount)
+	}
+	if len(raw.EventLog) != 2 {
+		t.Fatalf("len(EventLog) = %d, want 2", len(raw.EventLog))
+	}
+	if raw.EventLog[0].IMR != 0 {
+		t.Errorf("EventLog[0].IMR = %d, want 0", raw.EventLog[0].IMR)
+	}
+	if raw.EventLog[1].IMR != 1 {
+		t.Errorf("EventLog[1].IMR = %d, want 1", raw.EventLog[1].IMR)
+	}
+}
+
+func TestParseACI1_NoComposeFields(t *testing.T) {
+	raw, err := venice.ParseAttestationResponse(context.Background(), []byte(validACI1JSON))
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse(ACI/1): %v", err)
+	}
+
+	// ACI/1 has no compose manifest — compose-related fields should be
+	// empty, so the compose-based supply chain factors evaluate to Fail
+	// (not NotApplicable) rather than being silently skipped.
+	if raw.AppCompose != "" {
+		t.Errorf("AppCompose = %q, want empty for ACI/1", raw.AppCompose)
+	}
+	if raw.ComposeHash != "" {
+		t.Errorf("ComposeHash = %q, want empty for ACI/1", raw.ComposeHash)
+	}
+	if raw.AppName != "" {
+		t.Errorf("AppName = %q, want empty for ACI/1", raw.AppName)
+	}
+}
+
+func TestParseACI1_InvalidJSON(t *testing.T) {
+	body := `{"api_version": "aci/1", "attestation": {invalid}`
+	_, err := venice.ParseAttestationResponse(context.Background(), []byte(body))
+	if err == nil {
+		t.Fatal("expected error for invalid ACI/1 JSON, got nil")
+	}
+}
+
+func TestParseACI1_UnknownAPIVersion(t *testing.T) {
+	// A recognized-looking but unsupported api_version must fail loudly, not
+	// silently fall back to dstack parsing (the body also has intel_quote).
+	body := `{"api_version": "aci/2", "intel_quote": "dGVzdHF1b3Rl"}`
+	_, err := venice.ParseAttestationResponse(context.Background(), []byte(body))
+	if err == nil {
+		t.Fatal("expected error for unrecognized api_version, got nil")
+	}
+}
+
+func TestParseDstack_StillWorks(t *testing.T) {
+	// Regression: dstack format must still parse correctly after adding ACI/1 detection.
+	raw, err := venice.ParseAttestationResponse(context.Background(), []byte(validAttestationJSON))
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse(dstack): %v", err)
+	}
+
+	if raw.BackendFormat != attestation.FormatDstack {
+		t.Errorf("BackendFormat = %q, want %q", raw.BackendFormat, attestation.FormatDstack)
+	}
+	if !raw.Verified {
+		t.Error("Verified = false, want true")
+	}
+	if raw.Model != "e2ee-qwen3-5-122b-a10b" {
+		t.Errorf("Model = %q, want %q", raw.Model, "e2ee-qwen3-5-122b-a10b")
+	}
+}
+
 // --- Preparer tests ---
 
 func TestPreparer_PrepareRequest_SetsHeaders(t *testing.T) {

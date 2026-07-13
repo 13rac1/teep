@@ -17,6 +17,7 @@ package venice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -26,6 +27,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 )
@@ -219,25 +221,39 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	return ParseAttestationResponse(ctx, body)
 }
 
-// ParseAttestationResponse unmarshals a Venice attestation JSON response body
-// into a RawAttestation. Extracted from FetchAttestation so integration tests
-// can parse fixture files without making HTTP calls.
+// ParseAttestationResponse detects the attestation format from the JSON body
+// and delegates to the appropriate parser. Venice serves two formats today:
+// the original dstack shape (top-level intel_quote, no api_version) and the
+// newer ACI/1 shape (api_version == "aci/1"). Detection is delegated to
+// formatdetect.Detect, which checks api_version before intel_quote — ACI/1
+// bodies also carry a top-level intel_quote, so checking intel_quote first
+// would misclassify them as dstack. Any other/unknown api_version value (or
+// no recognized format at all) is a parse error, never a silent dstack
+// fallback.
 func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.RawAttestation, error) {
+	format := formatdetect.Detect(body)
+	slog.DebugContext(ctx, "venice format detected", "format", format)
+
+	switch format {
+	case attestation.FormatDstack:
+		return parseDstack(ctx, body)
+	case attestation.FormatACI1:
+		return parseACI(ctx, body)
+	default:
+		return nil, errors.New("venice: unrecognized attestation format (no known format keys found)")
+	}
+}
+
+// parseDstack unmarshals a Venice dstack-format attestation JSON response
+// body into a RawAttestation.
+func parseDstack(ctx context.Context, body []byte) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
-	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, "venice attestation")
+	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, "venice dstack attestation")
 	if err != nil {
-		return nil, fmt.Errorf("venice: unmarshal attestation response: %w", err)
+		return nil, fmt.Errorf("venice dstack: unmarshal attestation response: %w", err)
 	}
 
-	slog.DebugContext(ctx, "venice event log", "entries", len(ar.EventLog))
-	for i, e := range ar.EventLog {
-		digest := e.Digest
-		if len(digest) > 16 {
-			digest = digest[:16] + "..."
-		}
-		slog.DebugContext(ctx, "event log entry", "index", i, "imr", e.IMR,
-			"event", e.Event, "type", e.EventType, "digest", digest)
-	}
+	logEventLog(ctx, ar.EventLog)
 
 	return &attestation.RawAttestation{
 		BackendFormat:  attestation.FormatDstack,
@@ -268,6 +284,21 @@ func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.Ra
 		MissingFields: missing,
 		RawBody:       body,
 	}, nil
+}
+
+// logEventLog logs event log entries at debug level. Shared by the dstack and
+// ACI/1 parsers, which both carry a TDX RTMR event log (at different JSON
+// locations).
+func logEventLog(ctx context.Context, entries []attestation.EventLogEntry) {
+	slog.DebugContext(ctx, "venice event log", "entries", len(entries))
+	for i, e := range entries {
+		digest := e.Digest
+		if len(digest) > 16 {
+			digest = digest[:16] + "..."
+		}
+		slog.DebugContext(ctx, "event log entry", "index", i, "imr", e.IMR,
+			"event", e.Event, "type", e.EventType, "digest", digest)
+	}
 }
 
 // Preparer injects Venice E2EE headers into an outgoing chat completions
