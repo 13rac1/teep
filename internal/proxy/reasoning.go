@@ -834,6 +834,7 @@ func excludeIntSlice(values, excluded []int) []int {
 }
 
 type reasoningPreservationCheck struct {
+	provider  string
 	family    string
 	flag      string
 	field     string
@@ -859,16 +860,42 @@ func modelNameForFamilyMatch(name string) string {
 	return name
 }
 
+// modelReasoningPreservationFamilyKnown reports whether model/upstreamModel
+// belongs to a model family with a known chat-template preservation flag
+// (glm, kimi, deepseek). This is intentionally provider-agnostic: it gates
+// whether reasoning-loss *detection* runs at all (parsing chat request
+// stats), and detection must run for every provider regardless of whether
+// that provider's upstream API will actually accept an injected
+// chat_template_kwargs field. The provider-scoped injection decision is made
+// separately, downstream, by modelReasoningPreservationCheck (see below) and
+// the AcceptsChatTemplateKwargs gate in repairChatReasoningPreservationWithStats.
 func modelReasoningPreservationFamilyKnown(model, upstreamModel string) bool {
 	return modelFamilyMatches("glm", model, upstreamModel) ||
 		modelFamilyMatches("kimi", model, upstreamModel) ||
 		modelFamilyMatches("deepseek", model, upstreamModel)
 }
 
-func modelReasoningPreservationCheck(model, upstreamModel string, stats *chatRequestLogStats) (reasoningPreservationCheck, bool) {
+// modelReasoningPreservationCheck resolves the chat-template preservation
+// flag (if any) for a request, scoped by the resolved provider:model
+// identity the proxy already computes at the request-routing call site
+// (providerName is prov.Name; see proxy.go). providerName is carried on the
+// returned reasoningPreservationCheck for attribution/diagnostics; the flag
+// family/field/value themselves are a property of the model, not the
+// provider, but the caller-supplied providerName keys this lookup so that
+// the same family served by two different providers is never conflated:
+// per GH #124, Tinfoil forwards an injected chat_template_kwargs field to
+// vLLM, while Venice's strict request schema rejects it with HTTP 400 for
+// the identical GLM/DeepSeek family — the *injection* decision for that
+// distinction is made by the provider's AcceptsChatTemplateKwargs capability
+// in repairChatReasoningPreservationWithStats, not here; effective/present
+// here reflect only what's actually in the request body so that detection
+// (WARN diagnostics) is correct for every provider even when injection is
+// skipped.
+func modelReasoningPreservationCheck(providerName, model, upstreamModel string, stats *chatRequestLogStats) (reasoningPreservationCheck, bool) {
 	switch {
 	case modelFamilyMatches("glm", model, upstreamModel):
 		return reasoningPreservationCheck{
+			provider:  providerName,
 			family:    "glm",
 			flag:      "chat_template_kwargs.clear_thinking=false",
 			field:     "clear_thinking",
@@ -878,6 +905,7 @@ func modelReasoningPreservationCheck(model, upstreamModel string, stats *chatReq
 		}, true
 	case modelFamilyMatches("kimi", model, upstreamModel):
 		return reasoningPreservationCheck{
+			provider:  providerName,
 			family:    "kimi",
 			flag:      "chat_template_kwargs.preserve_thinking=true",
 			field:     "preserve_thinking",
@@ -887,11 +915,12 @@ func modelReasoningPreservationCheck(model, upstreamModel string, stats *chatReq
 		}, true
 	case modelFamilyMatches("deepseek", model, upstreamModel):
 		return reasoningPreservationCheck{
-			family:  "deepseek",
-			flag:    "chat_template_kwargs.drop_thinking=false",
-			field:   "drop_thinking",
-			value:   false,
-			present: stats.ChatTemplateDropThinkingPresent,
+			provider: providerName,
+			family:   "deepseek",
+			flag:     "chat_template_kwargs.drop_thinking=false",
+			field:    "drop_thinking",
+			value:    false,
+			present:  stats.ChatTemplateDropThinkingPresent,
 			effective: stats.chatTemplateDropThinkingFalse() ||
 				(!stats.ChatTemplateDropThinkingPresent && stats.deepSeekToolLoopPreservesReasoning()),
 		}, true
@@ -912,12 +941,23 @@ type reasoningPreservationRepair struct {
 	reasons []string
 }
 
-func repairChatReasoningPreservation(model, upstreamModel string, body []byte) ([]byte, *reasoningPreservationRepair, error) {
-	repaired, _, repair, err := repairChatReasoningPreservationWithStats(model, upstreamModel, body)
+func repairChatReasoningPreservation(providerName, model, upstreamModel string, acceptsChatTemplateKwargs bool, body []byte) ([]byte, *reasoningPreservationRepair, error) {
+	repaired, _, repair, err := repairChatReasoningPreservationWithStats(providerName, model, upstreamModel, acceptsChatTemplateKwargs, body)
 	return repaired, repair, err
 }
 
-func repairChatReasoningPreservationWithStats(model, upstreamModel string, body []byte) ([]byte, *chatRequestLogStats, *reasoningPreservationRepair, error) {
+// repairChatReasoningPreservationWithStats runs Phase 3 (GH issue #124)
+// reasoning-preservation repair: for a model family with a known chat-
+// template preservation flag, inject that flag into chat_template_kwargs
+// when the agent framework's history shows reasoning would otherwise be
+// lost. acceptsChatTemplateKwargs is the resolved provider's capability
+// (provider.Provider.AcceptsChatTemplateKwargs) confirming that its upstream
+// API tolerates an unrecognized chat_template_kwargs field; when false
+// (e.g. Venice, which 400s on unrecognized top-level keys), the *injection*
+// step is skipped so the request is never broken by this repair — but
+// stats are still parsed and returned so the caller's detection
+// diagnostics (WARN logs) keep firing regardless of provider.
+func repairChatReasoningPreservationWithStats(providerName, model, upstreamModel string, acceptsChatTemplateKwargs bool, body []byte) ([]byte, *chatRequestLogStats, *reasoningPreservationRepair, error) {
 	if !modelReasoningPreservationFamilyKnown(model, upstreamModel) {
 		return body, nil, nil, nil
 	}
@@ -929,12 +969,18 @@ func repairChatReasoningPreservationWithStats(model, upstreamModel string, body 
 		return body, nil, nil, nil
 	}
 	stats := &state.stats
-	preservation, ok := modelReasoningPreservationCheck(model, upstreamModel, stats)
+	preservation, ok := modelReasoningPreservationCheck(providerName, model, upstreamModel, stats)
 	if !ok || preservation.present {
 		return body, stats, nil, nil
 	}
 	reasons := reasoningPreservationRepairReasons(stats)
 	if len(reasons) == 0 {
+		return body, stats, nil, nil
+	}
+	if !acceptsChatTemplateKwargs {
+		// Detection-only: this provider is not confirmed to accept an
+		// injected chat_template_kwargs field, so leave the request body
+		// untouched rather than risk an upstream 400 (GH #124).
 		return body, stats, nil, nil
 	}
 	repaired, injected, err := injectChatTemplateBool(state.raw, preservation.field, preservation.value)
@@ -1097,7 +1143,7 @@ func logChatRequestStats(ctx context.Context, limiter *hourlyLogLimiter, model, 
 			reasoningDiagnosticAttrs(warnAttrs,
 				"assistant_missing_reasoning_prior_turn_indexes", priorTurnMissingIndexes)...)
 	}
-	if preservation, ok := modelReasoningPreservationCheck(model, upstreamModel, stats); ok &&
+	if preservation, ok := modelReasoningPreservationCheck(providerName, model, upstreamModel, stats); ok &&
 		len(stats.PriorTurnPreservedReasoningIndexes) > 0 &&
 		(!preservation.effective || repairHasReason(repair, reasoningRepairReasonPriorTurn)) &&
 		allowHourlyLogAtLevel(ctx, limiter, slog.LevelWarn, chatPriorTurnReasoningNotPreservedLogKey) {
@@ -1121,7 +1167,7 @@ func logChatRequestStats(ctx context.Context, limiter *hourlyLogLimiter, model, 
 				"assistant_user_message_missing_reasoning_active_indexes", stats.ActiveMissingReasoningUserMessageIndexes)...)
 	}
 	trailingUserLostReasoningWarns := len(stats.TrailingUserLostReasoningIndexes) > 0 &&
-		(!modelReasoningPreservationEffective(model, upstreamModel, stats) || repairHasReason(repair, reasoningRepairReasonTrailingUser))
+		(!modelReasoningPreservationEffective(providerName, model, upstreamModel, stats) || repairHasReason(repair, reasoningRepairReasonTrailingUser))
 	trailingUserMissingReasoningWarns := len(stats.TrailingUserMissingReasoningIndexes) > 0
 	if (trailingUserLostReasoningWarns || trailingUserMissingReasoningWarns) &&
 		allowHourlyLogAtLevel(ctx, limiter, slog.LevelWarn, chatTrailingUserReasoningLostLogKey) {
@@ -1154,8 +1200,8 @@ func appendRepairAttrs(attrs []any, repair *reasoningPreservationRepair) []any {
 	return append(attrs, "reasoning_preservation_repair_reasons", repair.reasons)
 }
 
-func modelReasoningPreservationEffective(model, upstreamModel string, stats *chatRequestLogStats) bool {
-	preservation, ok := modelReasoningPreservationCheck(model, upstreamModel, stats)
+func modelReasoningPreservationEffective(providerName, model, upstreamModel string, stats *chatRequestLogStats) bool {
+	preservation, ok := modelReasoningPreservationCheck(providerName, model, upstreamModel, stats)
 	return ok && preservation.effective
 }
 

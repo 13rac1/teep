@@ -755,6 +755,11 @@ func fromConfig(
 	}
 	switch cp.Name {
 	case "venice":
+		// AcceptsChatTemplateKwargs stays false (default): Venice runs a
+		// strict request schema that rejects unrecognized top-level keys
+		// with HTTP 400 (confirmed via live API test against
+		// "chat_template_kwargs"), so the reasoning-preservation repair must
+		// not inject it here (GH #124).
 		p.ChatPath = "/api/v1/chat/completions"
 		p.Attester = venice.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = venice.NewPreparer(cp.APIKey)
@@ -872,6 +877,11 @@ func fromConfig(
 		// until a real policy is authored as a reviewed follow-up.
 		p.SupplyChainPolicy = attestation.NoSupplyChainPolicy()
 	case "chutes":
+		// AcceptsChatTemplateKwargs stays false (default): Chutes serves
+		// GLM reasoning models (e.g. zai-org/GLM-5-TEE) but its handling of
+		// an unrecognized "chat_template_kwargs" field has not been
+		// confirmed, so the reasoning-preservation repair must not inject
+		// it here (GH #124); only detection diagnostics run.
 		p.BaseURL = chutesProvider.DefaultLLMBaseURL
 		p.ChatPath = "/v1/chat/completions"
 		p.EmbeddingsPath = "/v1/embeddings"
@@ -890,6 +900,11 @@ func fromConfig(
 			cp.BaseURL, cp.APIKey, attester.Resolver(), config.NewAttestationClient(offline),
 		)
 	case "tinfoil_v3_cloud":
+		// AcceptsChatTemplateKwargs=true: Tinfoil's router forwards an
+		// unrecognized "chat_template_kwargs" request field verbatim to
+		// vLLM (confirmed), so the reasoning-preservation repair (GH #124)
+		// may inject model-specific chat-template flags for this provider.
+		p.AcceptsChatTemplateKwargs = true
 		p.ChatPath = "/v1/chat/completions"
 		p.EmbeddingsPath = "/v1/embeddings"
 		p.AudioPath = "/v1/audio/transcriptions"
@@ -919,6 +934,9 @@ func fromConfig(
 			return "inference.tinfoil.sh", true
 		}
 	case "tinfoil_v3_direct":
+		// AcceptsChatTemplateKwargs=true: same confirmed vLLM forwarding
+		// behavior as tinfoil_v3_cloud (GH #124).
+		p.AcceptsChatTemplateKwargs = true
 		resolver := tinfoil.NewDirectResolver(cp.APIKey, offline)
 		p.BaseURL = tinfoil.DefaultBaseURL // fallback for model discovery
 		p.ChatPath = "/v1/chat/completions"
@@ -1712,7 +1730,7 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 		var reasoningRepair *reasoningPreservationRepair
 		var reasoningStats *chatRequestLogStats
 		if ep.endpointType == e2ee.EndpointChat {
-			body, reasoningStats, reasoningRepair, err = repairChatReasoningPreservationWithStats(model, upstreamModel, body)
+			body, reasoningStats, reasoningRepair, err = repairChatReasoningPreservationWithStats(prov.Name, model, upstreamModel, prov.AcceptsChatTemplateKwargs, body)
 			if err != nil {
 				slog.ErrorContext(ctx, "repair chat reasoning preservation", "provider", prov.Name, "model", upstreamModel, "err", err)
 				http.Error(w, "failed to normalize request body", normalizationStatusCode(err))

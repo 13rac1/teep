@@ -173,6 +173,21 @@ type Provider struct {
 	// E2EE indicates whether this provider supports end-to-end encryption.
 	E2EE bool
 
+	// AcceptsChatTemplateKwargs declares whether this provider's upstream API
+	// tolerates an unrecognized top-level "chat_template_kwargs" request field
+	// (used by the GH issue #124 reasoning-preservation repair to inject
+	// model-specific chat-template flags like clear_thinking=false). Providers
+	// differ: Tinfoil forwards it verbatim to vLLM (confirmed working), while
+	// Venice runs a strict request schema that rejects unrecognized top-level
+	// keys with HTTP 400 (confirmed via live API test — the "repair" would
+	// otherwise break the entire request). Default is false (no injection):
+	// every provider not explicitly confirmed to accept the field must not
+	// have it injected, since injecting a field a provider rejects breaks
+	// serving. This only gates the injection step of the repair; reasoning-
+	// loss detection (WARN diagnostics) still runs for all providers
+	// regardless of this flag.
+	AcceptsChatTemplateKwargs bool
+
 	// RepairPromptSandwich opts this provider in to the Phase 4 (GH issue
 	// #124) prompt-sandwich merge repair: when a trailing user "reminder"
 	// message appended after tool output would otherwise strip the model's

@@ -4995,6 +4995,58 @@ func TestNew_WithProviderAllowFailConfig(t *testing.T) {
 	}
 }
 
+// TestNew_AcceptsChatTemplateKwargsWiredFromConfig covers GH issue #124: the
+// reasoning-preservation repair must only inject chat_template_kwargs for
+// providers confirmed to tolerate the unrecognized field. Tinfoil forwards
+// it to vLLM (confirmed), so both Tinfoil provider names must wire
+// AcceptsChatTemplateKwargs=true; Venice's strict request schema rejects
+// unrecognized top-level keys with HTTP 400 (confirmed via live API test),
+// so it must default to false — the bug this issue fixes was Venice getting
+// the same injection as Tinfoil and 400ing the whole request.
+func TestNew_AcceptsChatTemplateKwargsWiredFromConfig(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr: "127.0.0.1:0",
+		Providers: map[string]*config.Provider{
+			"venice": {
+				Name:    "venice",
+				BaseURL: "https://api.venice.ai",
+				APIKey:  "test-key",
+			},
+			"tinfoil_v3_cloud": {
+				Name:    "tinfoil_v3_cloud",
+				BaseURL: "https://inference.tinfoil.sh",
+				APIKey:  "test-key",
+			},
+			"tinfoil_v3_direct": {
+				Name:    "tinfoil_v3_direct",
+				BaseURL: "https://inference.tinfoil.sh",
+				APIKey:  "test-key",
+			},
+			"chutes": {
+				Name:    "chutes",
+				BaseURL: "https://llm.chutes.ai",
+				APIKey:  "test-key",
+			},
+		},
+	}
+	srv, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatalf("proxy.New: %v", err)
+	}
+	if srv.ProviderByName("venice").AcceptsChatTemplateKwargs {
+		t.Error("venice.AcceptsChatTemplateKwargs = true, want false (Venice 400s on unrecognized top-level keys)")
+	}
+	if !srv.ProviderByName("tinfoil_v3_cloud").AcceptsChatTemplateKwargs {
+		t.Error("tinfoil_v3_cloud.AcceptsChatTemplateKwargs = false, want true (confirmed forwarded to vLLM)")
+	}
+	if !srv.ProviderByName("tinfoil_v3_direct").AcceptsChatTemplateKwargs {
+		t.Error("tinfoil_v3_direct.AcceptsChatTemplateKwargs = false, want true (confirmed forwarded to vLLM)")
+	}
+	if srv.ProviderByName("chutes").AcceptsChatTemplateKwargs {
+		t.Error("chutes.AcceptsChatTemplateKwargs = true, want false (kwargs handling unconfirmed; Chutes serves GLM-5-TEE)")
+	}
+}
+
 // TestNew_RepairPromptSandwichWiredFromConfig covers GH issue #124 Phase 4:
 // New() must resolve config.RepairPromptSandwichEnabled per provider (global
 // default plus per-provider override) onto provider.Provider.RepairPromptSandwich,

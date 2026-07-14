@@ -39,7 +39,7 @@ func TestRepairChatReasoningPreservation_PriorTurnGLMInjects(t *testing.T) {
 			{"role": "user", "content": "next"}
 		]
 	}`)
-	repaired, repair, err := repairChatReasoningPreservation("provider:GLM-Future", "glm-future", body)
+	repaired, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "provider:GLM-Future", "glm-future", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestRepairChatReasoningPreservation_TrailingUserKimiInjects(t *testing.T) {
 			{"role": "user", "content": "continue"}
 		]
 	}`)
-	repaired, repair, err := repairChatReasoningPreservation("vendor:KIMI-next", "other", body)
+	repaired, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "vendor:KIMI-next", "other", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestRepairChatReasoningPreservation_PriorTurnDeepSeekInjectsDespiteTools(t 
 			{"role": "user", "content": "next"}
 		]
 	}`)
-	repaired, repair, err := repairChatReasoningPreservation("provider:deepseek-vFuture", "upstream", body)
+	repaired, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "provider:deepseek-vFuture", "upstream", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestRepairChatReasoningPreservation_DoesNotOverrideExplicitFlag(t *testing.
 			{"role": "user", "content": "next"}
 		]
 	}`)
-	repaired, repair, err := repairChatReasoningPreservation("provider:glm", "glm", body)
+	repaired, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "provider:glm", "glm", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestRepairChatReasoningPreservation_OverridesNullFlag(t *testing.T) {
 			{"role": "user", "content": "next"}
 		]
 	}`)
-	repaired, repair, err := repairChatReasoningPreservation("provider:glm", "glm", body)
+	repaired, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "provider:glm", "glm", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestRepairChatReasoningPreservation_OverridesInvalidTypedFlag(t *testing.T)
 			{"role": "user", "content": "next"}
 		]
 	}`)
-	repaired, repair, err := repairChatReasoningPreservation("provider:glm", "glm", body)
+	repaired, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "provider:glm", "glm", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestRepairChatReasoningPreservationWithStats_ReturnsRepairedStats(t *testin
 			{"role": "user", "content": "next"}
 		]
 	}`)
-	repaired, stats, repair, err := repairChatReasoningPreservationWithStats("provider:glm", "glm", body)
+	repaired, stats, repair, err := repairChatReasoningPreservationWithStats("tinfoil_v3_direct", "provider:glm", "glm", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservationWithStats: %v", err)
 	}
@@ -220,6 +220,96 @@ func TestRepairChatReasoningPreservationWithStats_ReturnsRepairedStats(t *testin
 	value, present := chatTemplateBool(t, repaired, "clear_thinking")
 	if !present || value {
 		t.Fatalf("clear_thinking body = %v present=%v, want false present=true", value, present)
+	}
+}
+
+// TestRepairChatReasoningPreservationWithStats_ProviderGatesInjection covers
+// the GH issue #124 fix: teep's Case-3 reasoning repair must only inject
+// chat_template_kwargs for providers confirmed to tolerate the field.
+// Tinfoil forwards it to vLLM (AcceptsChatTemplateKwargs=true), so injection
+// must still happen there. Venice runs a strict request schema that rejects
+// unrecognized top-level keys with HTTP 400 (confirmed via live API test),
+// so for the identical GLM request body and model family, Venice
+// (AcceptsChatTemplateKwargs=false) must get a byte-for-byte unmodified body
+// (no chat_template_kwargs key at all) while still returning parsed stats so
+// the caller's detection diagnostics (WARN logs) keep firing. This is the
+// "same family, different providers, different answers" requirement: the
+// lookup is scoped by the resolved provider, not just the bare model name.
+func TestRepairChatReasoningPreservationWithStats_ProviderGatesInjection(t *testing.T) {
+	body := []byte(`{
+		"messages": [
+			{"role": "user"},
+			{"role": "assistant", "reasoning_content": "abc"},
+			{"role": "user", "content": "next"}
+		]
+	}`)
+
+	t.Run("venice does not accept kwargs: no injection, detection still runs", func(t *testing.T) {
+		repaired, stats, repair, err := repairChatReasoningPreservationWithStats("venice", "venice:e2ee-glm-5-2-p", "e2ee-glm-5-2-p", false, body)
+		if err != nil {
+			t.Fatalf("repairChatReasoningPreservationWithStats: %v", err)
+		}
+		if repair != nil {
+			t.Fatalf("repair = %#v, want nil (no injection for a provider that rejects chat_template_kwargs)", repair)
+		}
+		if !slices.Equal(repaired, body) {
+			t.Fatalf("body was modified: got %s, want unchanged %s", repaired, body)
+		}
+		if bytes.Contains(repaired, []byte("chat_template_kwargs")) {
+			t.Fatalf("repaired body contains chat_template_kwargs, want it absent: %s", repaired)
+		}
+		if stats == nil {
+			t.Fatal("stats = nil, want detection stats even though injection was skipped")
+		}
+		if stats.ChatTemplateClearThinkingPresent {
+			t.Fatal("ChatTemplateClearThinkingPresent = true, want false: nothing was injected")
+		}
+		// Detection must still see the prior-turn-preserved-reasoning signal
+		// that would otherwise drive the WARN diagnostic in logChatRequestStats.
+		if !slices.Equal(stats.PriorTurnPreservedReasoningIndexes, []int{1}) {
+			t.Fatalf("PriorTurnPreservedReasoningIndexes = %v, want [1] (detection must run regardless of injectability)", stats.PriorTurnPreservedReasoningIndexes)
+		}
+	})
+
+	t.Run("tinfoil accepts kwargs: injection still happens", func(t *testing.T) {
+		repaired, stats, repair, err := repairChatReasoningPreservationWithStats("tinfoil_v3_direct", "tinfoil_v3_direct:glm-5-2", "glm-5-2", true, body)
+		if err != nil {
+			t.Fatalf("repairChatReasoningPreservationWithStats: %v", err)
+		}
+		if repair == nil {
+			t.Fatal("repair = nil, want repair (Tinfoil accepts chat_template_kwargs)")
+		}
+		if repair.field != "clear_thinking" || repair.value {
+			t.Fatalf("repair = %#v, want field=clear_thinking value=false", repair)
+		}
+		if stats == nil || !stats.ChatTemplateClearThinkingPresent || stats.ChatTemplateClearThinking {
+			t.Fatalf("stats clear_thinking = %#v, want present=true value=false", stats)
+		}
+		value, present := chatTemplateBool(t, repaired, "clear_thinking")
+		if !present || value {
+			t.Fatalf("clear_thinking body = %v present=%v, want false present=true", value, present)
+		}
+	})
+}
+
+// TestModelReasoningPreservationCheck_ScopedByProvider verifies the
+// modelReasoningPreservationCheck lookup carries the caller-supplied
+// provider identity through to its result (the "provider:model" key the
+// rest of teep already uses), rather than resolving purely from a bare
+// model-name substring irrespective of provider.
+func TestModelReasoningPreservationCheck_ScopedByProvider(t *testing.T) {
+	stats := &chatRequestLogStats{}
+	for _, providerName := range []string{"venice", "tinfoil_v3_direct", "chutes"} {
+		check, ok := modelReasoningPreservationCheck(providerName, "glm-5-2", "glm-5-2", stats)
+		if !ok {
+			t.Fatalf("modelReasoningPreservationCheck(%q, glm-5-2): ok = false, want true", providerName)
+		}
+		if check.provider != providerName {
+			t.Fatalf("modelReasoningPreservationCheck(%q, glm-5-2).provider = %q, want %q", providerName, check.provider, providerName)
+		}
+		if check.family != "glm" {
+			t.Fatalf("modelReasoningPreservationCheck(%q, glm-5-2).family = %q, want glm", providerName, check.family)
+		}
 	}
 }
 
@@ -243,7 +333,7 @@ func TestRepairChatReasoningPreservation_UnknownModelSkipsStatsParse(t *testing.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repaired, repair, err := repairChatReasoningPreservation(tt.model, tt.upstreamModel, body)
+			repaired, repair, err := repairChatReasoningPreservation("some_other_provider", tt.model, tt.upstreamModel, false, body)
 			if err != nil {
 				t.Fatalf("repairChatReasoningPreservation: %v", err)
 			}
@@ -259,7 +349,7 @@ func TestRepairChatReasoningPreservation_UnknownModelSkipsStatsParse(t *testing.
 
 func TestRepairChatReasoningPreservation_KnownModelSkipsMalformedStats(t *testing.T) {
 	body := []byte(`{"messages": [1]}`)
-	repaired, repair, err := repairChatReasoningPreservation("provider:glm", "glm", body)
+	repaired, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "provider:glm", "glm", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
@@ -280,7 +370,7 @@ func TestRepairChatReasoningPreservation_NonObjectChatTemplateKwargsDoesNotRejec
 			{"role": "user", "content": "next"}
 		]
 	}`)
-	repaired, repair, err := repairChatReasoningPreservation("provider:glm", "glm", body)
+	repaired, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "provider:glm", "glm", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
@@ -1270,7 +1360,7 @@ func TestLogChatRequestStats_ReasoningPreservationRepairWarns(t *testing.T) {
 			{"role": "user", "content": "continue"}
 		]
 	}`)
-	repairedBody, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct:glm-5-2", "glm-5-2", body)
+	repairedBody, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "tinfoil_v3_direct:glm-5-2", "glm-5-2", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
@@ -1324,7 +1414,7 @@ func TestLogChatRequestStats_TrailingUserRepairWarnsAtWarnLevel(t *testing.T) {
 			{"role": "user", "content": "continue"}
 		]
 	}`)
-	repairedBody, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct:glm-5-2", "glm-5-2", body)
+	repairedBody, repair, err := repairChatReasoningPreservation("tinfoil_v3_direct", "tinfoil_v3_direct:glm-5-2", "glm-5-2", true, body)
 	if err != nil {
 		t.Fatalf("repairChatReasoningPreservation: %v", err)
 	}
