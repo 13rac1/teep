@@ -16,12 +16,13 @@ import (
 // itself.
 const missingPortInAddress = "missing port in address"
 
-// contentSecurityPolicy is served on dashboard/HTML routes. script-src
-// 'unsafe-inline' is required because the templates embed inline <script>
-// blocks; tightening that belongs to a follow-up that moves those scripts
-// to static/hashed assets. M5's DOM-API rendering + hardened esc() reduce
-// what an injected script could do in the meantime.
-const contentSecurityPolicy = "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+// contentSecurityPolicy is served on dashboard/HTML routes. script-src and
+// style-src 'unsafe-inline' are both required because the templates embed
+// inline <script> blocks, inline <style> blocks, and style="" attributes;
+// tightening that belongs to a follow-up that moves those to static/hashed
+// assets. M5's DOM-API rendering + hardened esc() reduce what an injected
+// script could do in the meantime.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
 
 // hostGuard is a precomputed Host-header allowlist. It defends the
 // loopback-bound proxy against DNS-rebinding: a browser page on a rebound

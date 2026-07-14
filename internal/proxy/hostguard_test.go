@@ -135,7 +135,7 @@ func TestSecurityHeaders_HTMLRoutes(t *testing.T) {
 		_, _ = io.Copy(io.Discard, resp.Body) // drain fully to avoid a server-side connection-reset log
 		resp.Body.Close()
 
-		wantCSP := "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+		wantCSP := "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
 		if got := resp.Header.Get("Content-Security-Policy"); got != wantCSP {
 			t.Errorf("%s: CSP = %q, want %q", path, got, wantCSP)
 		}
