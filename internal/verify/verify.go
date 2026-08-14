@@ -82,7 +82,7 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 
 	// Build per-call verifiers so concurrent Run calls don't race on a global.
 	verifier := attestation.NewTDXVerifier(opts.Offline, attestation.NewCollateralGetter(client), opts.VerificationTime)
-	sevVerifier := attestation.NewSEVVerifier(opts.Offline, attestation.NewSEVCertGetter(client))
+	sevVerifier := attestation.NewSEVVerifier(opts.Offline, attestation.NewSEVCertGetter(client), opts.VerificationTime)
 
 	// Inject shared client into attester for capture/replay.
 	type clientSetter interface{ SetClient(*http.Client) }

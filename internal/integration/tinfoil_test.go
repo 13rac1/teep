@@ -29,7 +29,11 @@ func TestIntegration_Tinfoil_Fixture(t *testing.T) {
 
 	logReportFactors(t, report)
 	assertNoEnforcedFailures(t, report)
-	assertMustPass(t, report, []string{"nonce_match", "tee_quote_present", "tee_reportdata_binding", "signing_key_present", "e2ee_capable", "e2ee_usable", "tls_key_binding"})
+	// tee_cert_chain/tee_quote_signature are now enforced-by-default (H1):
+	// asserting they PASS here proves the split fetch/crypto SEV-SNP
+	// verifier genuinely succeeds against this fixture's replayed AMD KDS
+	// responses, not merely that they're no longer exempted.
+	assertMustPass(t, report, []string{"nonce_match", "tee_quote_present", "tee_cert_chain", "tee_quote_signature", "tee_reportdata_binding", "signing_key_present", "e2ee_capable", "e2ee_usable", "tls_key_binding"})
 	logReportResult(t, report)
 }
 

@@ -1276,7 +1276,7 @@ func TestMergedAllowFailTinfoilDirectAllowsNVSwitchByDefault(t *testing.T) {
 	}
 }
 
-func TestMergedAllowFailTinfoilCloudAllowsKDSAndGPUFactorsByDefault(t *testing.T) {
+func TestMergedAllowFailTinfoilCloudEnforcesKDSFactorsByDefault(t *testing.T) {
 	unsetenv(t, "TEEP_CONFIG")
 	unsetenv(t, "TEEP_LISTEN_ADDR")
 	unsetenv(t, "TINFOIL_API_KEY")
@@ -1292,8 +1292,6 @@ func TestMergedAllowFailTinfoilCloudAllowsKDSAndGPUFactorsByDefault(t *testing.T
 		afSet[name] = true
 	}
 	for _, name := range []string{
-		"tee_cert_chain",
-		"tee_quote_signature",
 		"nvidia_payload_present",
 		"nvidia_signature",
 		"nvidia_claims",
@@ -1303,6 +1301,15 @@ func TestMergedAllowFailTinfoilCloudAllowsKDSAndGPUFactorsByDefault(t *testing.T
 	} {
 		if !afSet[name] {
 			t.Errorf("%s should be in allow_fail for tinfoil_v3_cloud: got %v", name, af)
+		}
+	}
+
+	// tee_cert_chain/tee_quote_signature cryptographically authenticate the
+	// SEV-SNP quote via AMD KDS; they must be enforced online by default
+	// (absent from allow_fail), not exempted (H1).
+	for _, name := range []string{"tee_cert_chain", "tee_quote_signature"} {
+		if afSet[name] {
+			t.Errorf("%s should NOT be in allow_fail for tinfoil_v3_cloud online (must be enforced): got %v", name, af)
 		}
 	}
 }

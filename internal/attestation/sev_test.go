@@ -7,10 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	sevabi "github.com/google/go-sev-guest/abi"
 	"github.com/google/go-sev-guest/kds"
 	pb "github.com/google/go-sev-guest/proto/sevsnp"
+	sevtesting "github.com/google/go-sev-guest/testing"
+	"github.com/google/go-sev-guest/verify/testdata"
+	"github.com/google/go-sev-guest/verify/trust"
 )
 
 // makeSEVReport builds a synthetic SEV-SNP attestation report with the given
@@ -438,7 +442,7 @@ func TestVerifySEVReportGuestPolicyExtracted(t *testing.T) {
 // TestNewSEVVerifierOffline verifies that NewSEVVerifier in offline mode
 // returns a working verifier that does not require a getter.
 func TestNewSEVVerifierOffline(t *testing.T) {
-	verifier := NewSEVVerifier(true, nil)
+	verifier := NewSEVVerifier(true, nil, time.Time{})
 	raw := makeSEVReport(t, nil)
 
 	result := verifier(context.Background(), raw)
@@ -466,23 +470,150 @@ func (*sevNoopGetter) GetContext(_ context.Context, _ string) ([]byte, error) {
 }
 
 // TestNewSEVVerifierOnline verifies that NewSEVVerifier in online mode
-// calls the getter and reports cert/sig errors when the getter fails.
+// calls the getter and reports a FetchErr (availability failure, not a
+// cryptographic forgery signal) when the getter fails and no cached chain
+// is available.
 func TestNewSEVVerifierOnline(t *testing.T) {
-	verifier := NewSEVVerifier(false, &sevNoopGetter{})
+	verifier := NewSEVVerifier(false, &sevNoopGetter{}, time.Time{})
 	raw := makeSEVReport(t, nil)
 
 	result := verifier(context.Background(), raw)
 	if result.ParseErr != nil {
 		t.Fatalf("unexpected ParseErr: %v", result.ParseErr)
 	}
-	// With a noop getter, cert fetching should fail.
-	if result.CertChainErr == nil {
-		t.Error("expected CertChainErr with noop getter, got nil")
+	// With a noop getter and a cold cache, the VCEK fetch fails closed as
+	// an availability error, not a crypto error.
+	if result.FetchErr == nil {
+		t.Error("expected FetchErr with noop getter and cold cache, got nil")
+	}
+	if result.CertChainErr != nil {
+		t.Errorf("expected nil CertChainErr with noop getter, got: %v", result.CertChainErr)
+	}
+	if result.SignatureErr != nil {
+		t.Errorf("expected nil SignatureErr with noop getter, got: %v", result.SignatureErr)
+	}
+	if result.OnlineVerified {
+		t.Error("expected OnlineVerified=false with noop getter")
+	}
+	t.Logf("FetchErr: %v", result.FetchErr)
+}
+
+// ---------------------------------------------------------------------------
+// Genuine end-to-end crypto verification (real AMD-signed committed test
+// data from go-sev-guest, no network) — proves the split fetch/crypto
+// implementation genuinely verifies a real report and correctly attributes
+// a corrupted signature, rather than merely toggling booleans.
+// ---------------------------------------------------------------------------
+
+// genuineVerifyNow is a fixed time within the validity window of the
+// embedded real AMD VCEK certificate (testdata.VcekBytes, valid
+// 2022-09-24 through 2029-09-24), so these tests do not depend on the real
+// wall clock and do not silently start failing once that cert expires.
+var genuineVerifyNow = time.Date(2023, 6, 1, 0, 0, 0, 0, time.UTC)
+
+// genuineKDSGetter returns a trust.HTTPSGetter serving the exact real,
+// AMD-signed committed attestation fixture bundled with go-sev-guest
+// (verify/testdata.AttestationBytes / VcekBytes), keyed by the same URLs
+// go-sev-guest's own TestRealAttestationVerification uses. No real network
+// access occurs.
+func genuineKDSGetter() trust.HTTPSGetter {
+	return sevtesting.SimpleGetter(map[string][]byte{
+		"https://kdsintf.amd.com/vcek/v1/Milan/cert_chain": trust.AskArkMilanVcekBytes,
+		"https://kdsintf.amd.com/vcek/v1/Milan/3ac3fe21e13fb0990eb28a802e3fb6a29483a6b0753590c951bdd3b8e53786184ca39e359669a2b76a1936776b564ea464cdce40c05f63c9b610c5068b006b5d?blSPL=2&teeSPL=0&snpSPL=5&ucodeSPL=68": testdata.VcekBytes,
+	})
+}
+
+// TestVerifySEVReportOnline_GenuineReportPassesAndCaches verifies that a
+// real AMD-signed report cryptographically verifies (OnlineVerified) when
+// fetched fresh from KDS, that the fetched chain is cached, and that a
+// subsequent verification against a getter that always errors still
+// succeeds from the warm cache (proving the cache absorbs a KDS outage
+// after first contact, per the fail-closed design: a cache hit only
+// supplies certificate bytes, and the crypto phase re-runs every time).
+func TestVerifySEVReportOnline_GenuineReportPassesAndCaches(t *testing.T) {
+	cache := NewSEVCertCache()
+	report := testdata.AttestationBytes
+
+	result := VerifySEVReportOnline(context.Background(), report, cache, genuineKDSGetter(), genuineVerifyNow)
+	if result.ParseErr != nil {
+		t.Fatalf("unexpected ParseErr: %v", result.ParseErr)
+	}
+	if result.FetchErr != nil {
+		t.Fatalf("unexpected FetchErr: %v", result.FetchErr)
+	}
+	if result.SignatureErr != nil {
+		t.Errorf("unexpected SignatureErr: %v", result.SignatureErr)
+	}
+	if result.CertChainErr != nil {
+		t.Errorf("unexpected CertChainErr: %v", result.CertChainErr)
+	}
+	if !result.OnlineVerified {
+		t.Fatal("expected OnlineVerified=true for a genuine AMD-signed report")
+	}
+
+	reportProto, err := sevabi.ReportToProto(report)
+	if err != nil {
+		t.Fatalf("ReportToProto: %v", err)
+	}
+	key := sevCacheKey(reportProto.GetChipId(), reportProto.GetReportedTcb())
+	if _, ok := cache.Get(key); !ok {
+		t.Fatal("expected the verified chain to be cached under the report's chip/TCB key")
+	}
+
+	// Warm-cache path: KDS is now unreachable, but the chain came from cache.
+	warmResult := VerifySEVReportOnline(context.Background(), report, cache, &sevNoopGetter{}, genuineVerifyNow)
+	if warmResult.FetchErr != nil {
+		t.Errorf("warm cache: unexpected FetchErr: %v", warmResult.FetchErr)
+	}
+	if !warmResult.OnlineVerified {
+		t.Error("warm cache: expected OnlineVerified=true even with a failing getter")
+	}
+}
+
+// TestVerifySEVReportOnline_CorruptedSignatureAttributed verifies that
+// corrupting only the report's signature (leaving a genuinely-issued,
+// chain-valid VCEK/ASK/ARK untouched) is attributed to SignatureErr, not
+// CertChainErr — the regression test for H1: a forged/corrupted quote must
+// be distinguishable from, and never silently absorbed by, an
+// availability failure.
+func TestVerifySEVReportOnline_CorruptedSignatureAttributed(t *testing.T) {
+	reportProto, err := sevabi.ReportToProto(testdata.AttestationBytes)
+	if err != nil {
+		t.Fatalf("ReportToProto: %v", err)
+	}
+	corrupted := append([]byte(nil), reportProto.GetSignature()...)
+	corrupted[0] ^= 0xff
+	reportProto.Signature = corrupted
+
+	raw, err := sevabi.ReportToAbiBytes(reportProto)
+	if err != nil {
+		t.Fatalf("ReportToAbiBytes: %v", err)
+	}
+
+	cache := NewSEVCertCache()
+	result := VerifySEVReportOnline(context.Background(), raw, cache, genuineKDSGetter(), genuineVerifyNow)
+	if result.ParseErr != nil {
+		t.Fatalf("unexpected ParseErr: %v", result.ParseErr)
+	}
+	if result.FetchErr != nil {
+		t.Fatalf("unexpected FetchErr: %v", result.FetchErr)
+	}
+	if result.CertChainErr != nil {
+		t.Errorf("expected nil CertChainErr (chain is genuinely valid); got: %v", result.CertChainErr)
 	}
 	if result.SignatureErr == nil {
-		t.Error("expected SignatureErr with noop getter, got nil")
+		t.Fatal("expected SignatureErr for a corrupted report signature")
 	}
-	t.Logf("CertChainErr: %v", result.CertChainErr)
+	if result.OnlineVerified {
+		t.Error("expected OnlineVerified=false for a corrupted signature")
+	}
+	t.Logf("SignatureErr: %v", result.SignatureErr)
+
+	// A corrupted signature must never be cached as verified.
+	key := sevCacheKey(reportProto.GetChipId(), reportProto.GetReportedTcb())
+	if _, ok := cache.Get(key); ok {
+		t.Error("a failed verification must not populate the cache")
+	}
 }
 
 // ---------------------------------------------------------------------------
