@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -175,13 +176,28 @@ func parseACI(ctx context.Context, body []byte) (*attestation.RawAttestation, er
 
 // aciToRaw converts a parsed ACI/1 attestation response to RawAttestation.
 // ACI/1 includes dstack-compatible top-level fields (nonce, model, verified,
-// etc.) alongside the new nested "attestation" block. The event log comes
-// from the nested evidence object rather than the top level; the TDX quote
-// binding (REPORTDATA) is the same keccak256(signing key)+nonce scheme dstack
-// uses, so venice.ReportDataVerifier is reused unchanged for ACI/1 — see the
-// comment on ReportDataVerifier in reportdata.go.
+// etc.) alongside the new nested "attestation" block.
+//
+// The attested CVM is the private-ai-gateway, not the machine serving
+// inference: its vm_config reports zero GPUs, it pins a downstream TLS hop,
+// and its KMS key paths carry no model component. The TDX quote and event
+// log therefore populate the Gateway* fields and are verified in the
+// gateway tier (Tier 4); the core fields stay empty and the core tee_*
+// factors fail, stating that teep has no CPU attestation of the inference
+// host. TEEHardware is cleared for the same reason — the report must not
+// present the gateway's platform as the model endpoint's.
+//
+// The quote's REPORTDATA binding is the same keccak256(signing key)+nonce
+// scheme dstack uses, so venice.ReportDataVerifier is reused unchanged for
+// the gateway quote — see the comment on ReportDataVerifier in reportdata.go.
 func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, body []byte) *attestation.RawAttestation {
 	logEventLog(ctx, ar.Attestation.Evidence.EventLog)
+	if ar.IntelQuote != ar.Attestation.Evidence.Quote {
+		// The top-level intel_quote is documented as an echo of
+		// attestation.evidence.quote. A divergence means the response is not
+		// what the format promises; the nested field is the attested source.
+		slog.WarnContext(ctx, "venice aci/1: top-level intel_quote differs from attestation.evidence.quote; using the nested field")
+	}
 	return &attestation.RawAttestation{
 		BackendFormat:   attestation.FormatACI1,
 		Verified:        ar.Verified,
@@ -190,16 +206,19 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 		TEEProvider:     ar.TEEProvider,
 		SigningKey:      ar.SigningKey,
 		SigningAddress:  ar.SigningAddress,
-		IntelQuote:      ar.IntelQuote,
 		NvidiaPayload:   ar.NvidiaPayload,
-		TEEHardware:     ar.TEEHardware,
 		SigningAlgo:     ar.SigningAlgo,
 		UpstreamModel:   ar.UpstreamModel,
 		NonceSource:     ar.NonceSource,
 		CandidatesAvail: ar.CandidatesAvail,
 		CandidatesEval:  ar.CandidatesEval,
-		EventLog:        ar.Attestation.Evidence.EventLog,
-		EventLogCount:   len(ar.Attestation.Evidence.EventLog),
+
+		// Gateway evidence: the quote and event log describe the
+		// private-ai-gateway CVM. GatewayNonceHex carries the echoed client
+		// nonce that the gateway quote's REPORTDATA binds.
+		GatewayIntelQuote: ar.Attestation.Evidence.Quote,
+		GatewayEventLog:   ar.Attestation.Evidence.EventLog,
+		GatewayNonceHex:   ar.Nonce,
 
 		// ACI/1 has no app_compose/compose_hash — AppCompose, ComposeHash,
 		// and AppName stay empty so the compose-based supply-chain factors
@@ -212,6 +231,8 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 		ACIKeysetEndorsementSig: ar.Attestation.KeysetEndorsement.Value,
 		ACIIdentityKeyHex:       ar.Attestation.WorkloadKeyset.WorkloadIdentity.PublicKey.PublicKey,
 		ACIWorkloadKeyset:       &ar.Attestation.WorkloadKeyset,
+		ACIDownstreamTLSDomain:  ar.Attestation.Evidence.DownstreamTLSBinding.Domain,
+		ACIDownstreamTLSSPKI:    ar.Attestation.Evidence.DownstreamTLSBinding.SPKISHA256,
 
 		UnknownFields: unknown,
 		MissingFields: missing,

@@ -400,11 +400,9 @@ func TestParseACI1_Success(t *testing.T) {
 		{"TEEProvider", raw.TEEProvider, "phala"},
 		{"SigningKey", raw.SigningKey, "04943cea0baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		{"SigningAddress", raw.SigningAddress, "0x79a5061ebbbbbbbb"},
-		{"IntelQuote", raw.IntelQuote, "dGVzdHF1b3Rl"},
 		{"SigningAlgo", raw.SigningAlgo, "ecdsa"},
 		{"Nonce", raw.Nonce, "aabbccddeeff00112233445566778899"},
 		{"Model", raw.Model, "e2ee-glm-5-2-p"},
-		{"TEEHardware", raw.TEEHardware, "intel-tdx"},
 		{"NonceSource", raw.NonceSource, "client"},
 		{"UpstreamModel", raw.UpstreamModel, "z-ai/glm-5.2"},
 	}
@@ -433,23 +431,52 @@ func TestParseACI1_Success(t *testing.T) {
 	}
 }
 
+// TestParseACI1_GatewayEvidence: the ACI/1 quote and event log describe the
+// private-ai-gateway CVM, not the inference host, so they populate the
+// Gateway* fields; the core fields stay empty and TEEHardware is cleared so
+// the report does not present the gateway's platform as the endpoint's.
+func TestParseACI1_GatewayEvidence(t *testing.T) {
+	raw, err := venice.ParseAttestationResponse(context.Background(), []byte(validACI1JSON))
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse(ACI/1): %v", err)
+	}
+
+	if raw.GatewayIntelQuote != "dGVzdHF1b3Rl" {
+		t.Errorf("GatewayIntelQuote = %q, want the evidence quote", raw.GatewayIntelQuote)
+	}
+	if raw.IntelQuote != "" {
+		t.Errorf("IntelQuote = %q, want empty — the quote describes the gateway", raw.IntelQuote)
+	}
+	if raw.TEEHardware != "" {
+		t.Errorf("TEEHardware = %q, want cleared for a gateway-only attestation", raw.TEEHardware)
+	}
+	if raw.GatewayNonceHex != raw.Nonce {
+		t.Errorf("GatewayNonceHex = %q, want the echoed client nonce %q", raw.GatewayNonceHex, raw.Nonce)
+	}
+	if raw.ACIDownstreamTLSDomain != "test.example.com" || raw.ACIDownstreamTLSSPKI != "aabbccdd" {
+		t.Errorf("downstream TLS binding = %q/%q, want test.example.com/aabbccdd",
+			raw.ACIDownstreamTLSDomain, raw.ACIDownstreamTLSSPKI)
+	}
+}
+
 func TestParseACI1_EventLog(t *testing.T) {
 	raw, err := venice.ParseAttestationResponse(context.Background(), []byte(validACI1JSON))
 	if err != nil {
 		t.Fatalf("ParseAttestationResponse(ACI/1): %v", err)
 	}
 
-	if raw.EventLogCount != 2 {
-		t.Errorf("EventLogCount = %d, want 2", raw.EventLogCount)
+	if len(raw.GatewayEventLog) != 2 {
+		t.Fatalf("len(GatewayEventLog) = %d, want 2", len(raw.GatewayEventLog))
 	}
-	if len(raw.EventLog) != 2 {
-		t.Fatalf("len(EventLog) = %d, want 2", len(raw.EventLog))
+	if raw.GatewayEventLog[0].IMR != 0 {
+		t.Errorf("GatewayEventLog[0].IMR = %d, want 0", raw.GatewayEventLog[0].IMR)
 	}
-	if raw.EventLog[0].IMR != 0 {
-		t.Errorf("EventLog[0].IMR = %d, want 0", raw.EventLog[0].IMR)
+	if raw.GatewayEventLog[1].IMR != 1 {
+		t.Errorf("GatewayEventLog[1].IMR = %d, want 1", raw.GatewayEventLog[1].IMR)
 	}
-	if raw.EventLog[1].IMR != 1 {
-		t.Errorf("EventLog[1].IMR = %d, want 1", raw.EventLog[1].IMR)
+	if len(raw.EventLog) != 0 || raw.EventLogCount != 0 {
+		t.Errorf("core EventLog has %d entries (count %d), want 0 — the log describes the gateway",
+			len(raw.EventLog), raw.EventLogCount)
 	}
 }
 

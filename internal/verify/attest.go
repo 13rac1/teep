@@ -15,7 +15,6 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
-	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 )
 
@@ -169,20 +168,25 @@ func checkPoC(ctx context.Context, quote string, client *http.Client, offline bo
 	return result
 }
 
-// verifyNearcloudGateway verifies gateway TDX, compose binding, and PoC for
-// providers that populate GatewayIntelQuote (nearcloud).
-func verifyNearcloudGateway(
+// verifyGatewayTDX verifies gateway TDX, compose binding, and PoC for
+// providers that populate GatewayIntelQuote (nearcloud, venice ACI/1). The
+// REPORTDATA binding scheme is per-provider (rdVerifier, selected by
+// newGatewayReportDataVerifier); with a nil verifier the binding detail
+// stays empty and evalGatewayReportDataBinding fails closed.
+//
+// SYNC: proxy.verifyGatewayTDX does the same for teep serve.
+func verifyGatewayTDX(
 	ctx context.Context, raw *attestation.RawAttestation, nonce attestation.Nonce,
-	client *http.Client, offline bool, verifier attestation.TDXVerifier, verificationTime time.Time,
+	client *http.Client, offline bool, verifier attestation.TDXVerifier,
+	rdVerifier provider.ReportDataVerifier, verificationTime time.Time,
 ) (tdx *attestation.TDXVerifyResult, compose *attestation.ComposeBindingResult, poc *attestation.PoCResult) {
 	if raw.GatewayIntelQuote == "" {
 		return nil, nil, nil
 	}
 	slog.Debug("gateway TDX verification starting", "quote_len", len(raw.GatewayIntelQuote))
 	tdx = verifier(ctx, raw.GatewayIntelQuote)
-	if tdx.ParseErr == nil {
-		detail, rdErr := nearcloud.GatewayReportDataVerifier{}.VerifyReportData(
-			tdx.ReportData, raw, nonce)
+	if tdx.ParseErr == nil && rdVerifier != nil {
+		detail, rdErr := rdVerifier.VerifyReportData(tdx.ReportData, raw, nonce)
 		tdx.ReportDataBindingErr = rdErr
 		tdx.ReportDataBindingDetail = detail
 	}

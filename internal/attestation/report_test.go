@@ -4979,3 +4979,94 @@ func TestEvalACIKeysetEndorsement(t *testing.T) {
 		assertSingleFactor(t, evalACIKeysetEndorsement(in), Pass)
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Venice ACI/1 gateway report tests
+// ---------------------------------------------------------------------------
+
+// aciGatewayRaw builds a minimal ACI/1 RawAttestation with gateway evidence,
+// as venice.aciToRaw produces it: quote and event log in the Gateway fields,
+// core quote fields empty, TEEHardware cleared.
+func aciGatewayRaw(nonce Nonce, signingKey string) *RawAttestation {
+	return &RawAttestation{
+		BackendFormat:     FormatACI1,
+		Verified:          true,
+		Nonce:             nonce.Hex(),
+		Model:             "test-model",
+		TEEProvider:       "phala",
+		SigningKey:        signingKey,
+		GatewayIntelQuote: "dGVzdA==", // base64("test") — not a real quote
+		GatewayNonceHex:   nonce.Hex(),
+	}
+}
+
+// TestBuildReport_ACIGatewayEvidence: an ACI/1 report retargets E2EE
+// authorization to the gateway REPORTDATA factor, renders the compose and
+// Sigstore supply-chain gaps as Fail (never Skip or NotApplicable), and
+// includes the gateway tier.
+func TestBuildReport_ACIGatewayEvidence(t *testing.T) {
+	nonce := NewNonce()
+	raw := aciGatewayRaw(nonce, validSigningKey(t))
+	report := BuildReport(&ReportInput{
+		Provider:              "venice",
+		Model:                 "test-model",
+		Raw:                   raw,
+		Nonce:                 nonce,
+		AllowFail:             DefaultAllowFail,
+		GatewayTDX:            &TDXVerifyResult{TeeTCBSVN: make([]byte, 16)},
+		GatewayNonceHex:       nonce.Hex(),
+		GatewayNonce:          nonce,
+		E2EEKeyBoundByGateway: true,
+	})
+
+	if report.E2EEBindingFactor != FactorGWReportData {
+		t.Errorf("E2EEBindingFactor = %q, want %q", report.E2EEBindingFactor, FactorGWReportData)
+	}
+	byName := map[string]FactorResult{}
+	for _, f := range report.Factors {
+		byName[f.Name] = f
+	}
+	for factorName, wantDetail := range map[string]string{
+		FactorComposeBinding: "ACI/1 publishes no compose manifest",
+		FactorSigstoreVerify: "ACI/1 publishes no image digests",
+	} {
+		f, ok := byName[factorName]
+		if !ok {
+			t.Fatalf("factor %s missing from report", factorName)
+		}
+		if f.Status != Fail {
+			t.Errorf("%s status = %s, want Fail — the gap must stay visible", factorName, f.Status)
+		}
+		if !strings.Contains(f.Detail, wantDetail) {
+			t.Errorf("%s detail = %q, want it to contain %q", factorName, f.Detail, wantDetail)
+		}
+	}
+	if _, ok := byName[FactorGWReportData]; !ok {
+		t.Error("gateway tier missing: no gateway_tee_reportdata_binding factor")
+	}
+}
+
+// TestBuildReport_ACIGatewayUnverifiedFailsClosed: gateway evidence supplied
+// without a GatewayTDX result must trip the non-suppressible
+// evidence_verified failure.
+func TestBuildReport_ACIGatewayUnverifiedFailsClosed(t *testing.T) {
+	nonce := NewNonce()
+	raw := aciGatewayRaw(nonce, validSigningKey(t))
+	report := BuildReport(&ReportInput{
+		Provider:  "venice",
+		Model:     "test-model",
+		Raw:       raw,
+		Nonce:     nonce,
+		AllowFail: KnownFactors, // waive everything waivable; evidence_verified must still block
+	})
+
+	for _, f := range report.Factors {
+		if f.Name == FactorEvidenceVerified {
+			if f.Status != Fail || !f.Enforced {
+				t.Errorf("evidence_verified: status=%s enforced=%v, want enforced Fail", f.Status, f.Enforced)
+			}
+			return
+		}
+	}
+	t.Error("evidence_verified factor missing: unverified gateway evidence did not fail closed")
+}

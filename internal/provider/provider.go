@@ -77,6 +77,18 @@ type ReportDataVerifier interface {
 	VerifyReportData(reportData [64]byte, raw *attestation.RawAttestation, nonce attestation.Nonce) (detail string, err error)
 }
 
+// GatewayBindsE2EEKey reports whether the gateway attestation, not the model
+// endpoint's, binds the key clients encrypt to. E2EE authorization then
+// requires gateway_tee_reportdata_binding instead of the core factor
+// (SEE: attestation.ReportInput.E2EEKeyBoundByGateway). True for the Tinfoil
+// router (its REPORTDATA binds the HPKE key, SEE: tinfoil.asGatewayEvidence)
+// and for every Venice ACI/1 response (ACI/1 defines signing_public_key as
+// the gateway's endorsed E2EE key, SEE: venice.aciToRaw). Shared by
+// proxy and verify so the two report paths cannot diverge.
+func GatewayBindsE2EEKey(name string, format attestation.BackendFormat) bool {
+	return name == "tinfoil_v3_cloud" || (name == "venice" && format == attestation.FormatACI1)
+}
+
 // Provider is a fully constructed TEE-capable AI backend. It combines the data from
 // config.Provider with the behavioral interfaces Attester and Preparer.
 //
@@ -158,17 +170,19 @@ type Provider struct {
 	// May be nil if the provider does not support REPORTDATA verification.
 	ReportDataVerifier ReportDataVerifier
 
+	// GatewayReportDataVerifier validates REPORTDATA binding for this
+	// provider's gateway quote (GatewayIntelQuote). Nil for providers
+	// without a TDX gateway; evalGatewayReportDataBinding fails closed when
+	// gateway evidence is present and no verifier ran.
+	// SYNC: verify.newGatewayReportDataVerifier selects the same verifier
+	// per provider for teep verify.
+	GatewayReportDataVerifier ReportDataVerifier
+
 	// UsesTLSBinding requires atomic authorization and a transport authenticated
 	// against the attested SPKI before request transmission. Pools are scoped
 	// to the provider, authority, and attested key. The derived live-peer
 	// identity must be present in the verification report.
 	UsesTLSBinding bool
-
-	// E2EEKeyBoundByGateway declares that the gateway attestation, not the
-	// model endpoint's, binds the key clients encrypt to. The proxy gates
-	// E2EE on that factor instead of the core one.
-	// SEE: attestation.ReportInput.E2EEKeyBoundByGateway.
-	E2EEKeyBoundByGateway bool
 
 	// SupplyChainPolicy defines the allowed container image repos for this
 	// provider. Never nil on a constructed Provider: set a real policy, or

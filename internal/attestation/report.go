@@ -2592,6 +2592,13 @@ func evalCPUIDRegistry(in *ReportInput) []FactorResult {
 }
 func evalComposeBinding(in *ReportInput) []FactorResult {
 	switch {
+	case in.Raw != nil && in.Raw.BackendFormat == FormatACI1:
+		// ACI/1 publishes no compose manifest at all — a permanent
+		// structural absence, not evidence that failed to arrive. Fail
+		// rather than Skip so the gap stays visible when the factor is
+		// waived (a waived Skip never surfaces in the score).
+		return factor(TierSupplyChain, FactorComposeBinding, Fail,
+			"ACI/1 publishes no compose manifest; workload composition is not verifiable")
 	case in.Compose == nil || !in.Compose.Checked:
 		return factor(TierSupplyChain, FactorComposeBinding, Skip, "no app_compose in attestation response")
 	case in.Compose.Err != nil:
@@ -2601,6 +2608,13 @@ func evalComposeBinding(in *ReportInput) []FactorResult {
 	}
 }
 func evalSigstoreVerification(in *ReportInput) []FactorResult {
+	if in.Raw != nil && in.Raw.BackendFormat == FormatACI1 {
+		// ACI/1 publishes no image digests (source_provenance.image_digest
+		// is null) — a permanent structural absence. Fail rather than Skip
+		// so the gap stays visible when the factor is waived.
+		return factor(TierSupplyChain, FactorSigstoreVerify, Fail,
+			"ACI/1 publishes no image digests; Sigstore verification is not possible")
+	}
 	if len(in.Sigstore) == 0 {
 		return factor(TierSupplyChain, FactorSigstoreVerify, Skip, "no component digests to verify")
 	}
@@ -3439,6 +3453,14 @@ func buildMetadata(in *ReportInput) map[string]string {
 				m[fmt.Sprintf("gateway_rtmr%d", i)] = v
 			}
 		}
+	}
+
+	// ACI/1 gateways attest the TLS pin of their own downstream hop. teep
+	// never dials that domain, so the pin is reported as metadata rather
+	// than verified; its integrity is covered by aci_keyset_endorsement.
+	if in.Raw != nil && in.Raw.ACIDownstreamTLSDomain != "" {
+		m["gateway_downstream_tls"] = fmt.Sprintf("%s spki %s",
+			in.Raw.ACIDownstreamTLSDomain, in.Raw.ACIDownstreamTLSSPKI)
 	}
 
 	if len(m) == 0 {

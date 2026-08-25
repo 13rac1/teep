@@ -204,6 +204,8 @@ type RawAttestation struct {
 	ACIWorkloadKeysetDigest string `json:"-"` // top-level workload_keyset_digest
 	ACIKeysetEndorsementSig string `json:"-"` // attestation.keyset_endorsement.value (hex ECDSA signature)
 	ACIIdentityKeyHex       string `json:"-"` // attestation.workload_keyset.workload_identity.public_key.public_key
+	ACIDownstreamTLSDomain  string `json:"-"` // attestation.evidence.downstream_tls_binding.domain
+	ACIDownstreamTLSSPKI    string `json:"-"` // attestation.evidence.downstream_tls_binding.spki_sha256
 	// ACIWorkloadKeyset holds the parsed venice ACI workload keyset struct
 	// (opaque `any` here because a concrete type would create an
 	// attestation → venice import cycle; the venice package type-asserts it

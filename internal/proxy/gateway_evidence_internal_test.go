@@ -136,12 +136,11 @@ func TestFetchAndVerify_GatewayProviderActivatesE2EE(t *testing.T) {
 		GatewayNonceHex:       nonce.Hex(),
 	}
 	prov := &provider.Provider{
-		Name:                  "tinfoil_v3_cloud",
-		E2EE:                  true,
-		E2EEKeyBoundByGateway: true,
-		Attester:              &mockAttesterWithRaw{raw: raw},
-		SupplyChainPolicy:     attestation.NoSupplyChainPolicy(),
-		StaticRoute:           gatewaySupplyChainRoute(t),
+		Name:              "tinfoil_v3_cloud",
+		E2EE:              true,
+		Attester:          &mockAttesterWithRaw{raw: raw},
+		SupplyChainPolicy: attestation.NoSupplyChainPolicy(),
+		StaticRoute:       gatewaySupplyChainRoute(t),
 	}
 
 	report, _ := s.fetchAndVerify(context.Background(), prov, "test-model")
@@ -154,15 +153,31 @@ func TestFetchAndVerify_GatewayProviderActivatesE2EE(t *testing.T) {
 	}
 }
 
-// fromConfig owns the declaration, so the wiring is asserted where it is set.
-func TestFromConfig_TinfoilCloudBindsE2EEToGateway(t *testing.T) {
-	cp := &config.Provider{Name: "tinfoil_v3_cloud", BaseURL: "https://inference.tinfoil.sh", APIKey: "test-key"}
-	p, err := fromConfig(cp, true, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
-	if err != nil {
-		t.Fatalf("fromConfig: %v", err)
+// provider.GatewayBindsE2EEKey owns the declaration for both report paths,
+// so the truth table is asserted against the helper.
+func TestGatewayBindsE2EEKey(t *testing.T) {
+	tests := []struct {
+		name   string
+		prov   string
+		format attestation.BackendFormat
+		want   bool
+	}{
+		{"tinfoil cloud", "tinfoil_v3_cloud", attestation.FormatTinfoil, true},
+		{"venice aci/1", "venice", attestation.FormatACI1, true},
+		{"venice dstack", "venice", attestation.FormatDstack, false},
+		{"tinfoil direct", "tinfoil_v3_direct", attestation.FormatTinfoil, false},
+		{"nearcloud", "nearcloud", attestation.FormatGateway, false},
+		// The format alone must not decide this: only Venice serves ACI/1, and a
+		// misdetected or future ACI/1 body from another provider must keep the
+		// core reportdata factor rather than accept the gateway factor.
+		{"other provider aci/1", "nanogpt", attestation.FormatACI1, false},
 	}
-	if !p.E2EEKeyBoundByGateway {
-		t.Error("tinfoil_v3_cloud does not bind E2EE to the gateway; the core factor never passes and E2EE stays off")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := provider.GatewayBindsE2EEKey(tt.prov, tt.format); got != tt.want {
+				t.Errorf("GatewayBindsE2EEKey(%q, %q) = %v, want %v", tt.prov, tt.format, got, tt.want)
+			}
+		})
 	}
 }
 
