@@ -92,8 +92,8 @@ func findFixtureDir(t *testing.T, prefix string) string {
 	return filepath.Join("testdata", latest)
 }
 
-func serveAllowFail(providerName string) []string {
-	return config.MergedAllowFail(providerName, &config.Config{}, false)
+func serveAllowFail(providerName string, format attestation.BackendFormat) []string {
+	return config.MergedAllowFail(providerName, format, &config.Config{}, false)
 }
 
 func fixtureE2EEResult(o *capture.E2EEOutcome) *attestation.E2EETestResult {

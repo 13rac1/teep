@@ -65,6 +65,20 @@ var providerDefaultAllowFail = map[string][]string{
 	"tinfoil_v3_direct": attestation.TinfoilDirectDefaultAllowFail,
 }
 
+// providerFormatDefaultAllowFail maps (provider, attestation format) pairs to
+// format-specific Go-level default allow_fail lists, for providers that
+// serve more than one attestation format under one name. Selected ahead of
+// providerDefaultAllowFail so a format-specific list cannot be diluted by a
+// provider-wide one; a (provider, format) pair not in this map falls through
+// to the provider layer. Venice's dstack models keep the global defaults —
+// waiving the ACI/1 core-tier gaps provider-wide would weaken enforcement
+// for the models that do attest the inference host.
+var providerFormatDefaultAllowFail = map[string]map[attestation.BackendFormat][]string{
+	"venice": {
+		attestation.FormatACI1: attestation.VeniceACIDefaultAllowFail,
+	},
+}
+
 // ProviderDefaultAllowFail returns a defensive copy of the provider-specific
 // default allow_fail lists. Callers must not rely on mutating the returned
 // map or its slices to change enforcement behavior at runtime.
@@ -446,15 +460,21 @@ func validateAllowFail(names []string) error {
 }
 
 // MergedAllowFail returns the allow_fail list for a provider, applying a
-// four-layer merge (first defined wins):
-//  1. Per-provider TOML override  ([providers.X] allow_fail)
-//  2. Global TOML override        (top-level allow_fail)
-//  3. Per-provider Go defaults    (ProviderDefaultAllowFail)
-//  4. Global Go defaults          (DefaultAllowFail)
+// five-layer merge (first defined wins):
+//  1. Per-provider TOML override      ([providers.X] allow_fail)
+//  2. Global TOML override            (top-level allow_fail)
+//  3. Per-(provider, format) Go defaults (providerFormatDefaultAllowFail)
+//  4. Per-provider Go defaults        (ProviderDefaultAllowFail)
+//  5. Global Go defaults              (DefaultAllowFail)
+//
+// format is the attestation format of the response under evaluation, known
+// only at report time for providers that serve more than one format. Callers
+// without a response in hand (provider construction) pass ""; a TOML
+// override replaces the defaults for every format the provider serves.
 //
 // When offline is true, factors that require network access (OnlineFactors)
 // are automatically added to the result so they cannot block requests.
-func MergedAllowFail(providerName string, cfg *Config, offline bool) []string {
+func MergedAllowFail(providerName string, format attestation.BackendFormat, cfg *Config, offline bool) []string {
 	var af []string
 	switch {
 	case cfg.ProviderAllowFail[providerName] != nil:
@@ -466,7 +486,9 @@ func MergedAllowFail(providerName string, cfg *Config, offline bool) []string {
 		// AllowFail directly without calling Load().
 		af = cfg.AllowFail
 	default:
-		if paf, ok := ProviderDefaultAllowFail()[providerName]; ok {
+		if faf, ok := providerFormatDefaultAllowFail[providerName][format]; ok && format != "" {
+			af = faf
+		} else if paf, ok := ProviderDefaultAllowFail()[providerName]; ok {
 			af = paf
 		} else {
 			af = DefaultAllowFail

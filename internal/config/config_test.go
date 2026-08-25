@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -303,7 +305,7 @@ allow_fail = []
 		t.Errorf("global AllowFail: got %v, want nil (TOML didn't set global allow_fail)", cfg.AllowFail)
 	}
 	// Per-provider allow_fail should be empty (enforce all).
-	af := MergedAllowFail("venice", cfg, false)
+	af := MergedAllowFail("venice", "", cfg, false)
 	if len(af) != 0 {
 		t.Errorf("MergedAllowFail(\"venice\"): got %d entries, want 0 (enforce all)", len(af))
 	}
@@ -394,7 +396,7 @@ base_url = "https://api.venice.ai"
 	if cfg.AllowFail != nil {
 		t.Errorf("AllowFail after TOML with no [policy]: got %v, want nil", cfg.AllowFail)
 	}
-	af := MergedAllowFail("venice", cfg, false)
+	af := MergedAllowFail("venice", "", cfg, false)
 	if len(af) != len(DefaultAllowFail) {
 		t.Errorf("MergedAllowFail(venice): got %d entries, want %d", len(af), len(DefaultAllowFail))
 	}
@@ -1092,7 +1094,7 @@ func TestDefaultAllowFailImmutable(t *testing.T) {
 	}
 
 	// MergedAllowFail for a provider without Go defaults uses DefaultAllowFail.
-	af := MergedAllowFail("venice", cfg, false)
+	af := MergedAllowFail("venice", "", cfg, false)
 	if len(af) == 0 {
 		t.Fatal("expected non-empty allow_fail for venice defaults")
 	}
@@ -1118,7 +1120,7 @@ func TestMergedAllowFailNearcloudGoDefaults(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	af := MergedAllowFail("nearcloud", cfg, false)
+	af := MergedAllowFail("nearcloud", "", cfg, false)
 	want := attestation.NearcloudDefaultAllowFail
 	if len(af) != len(want) {
 		t.Fatalf("MergedAllowFail(\"nearcloud\"): got %d entries, want %d", len(af), len(want))
@@ -1160,7 +1162,7 @@ func TestMergedAllowFailNonNearcloudUsesGlobalDefaults(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	af := MergedAllowFail("venice", cfg, false)
+	af := MergedAllowFail("venice", "", cfg, false)
 	if len(af) != len(DefaultAllowFail) {
 		t.Errorf("MergedAllowFail(\"venice\"): got %d entries, want %d", len(af), len(DefaultAllowFail))
 	}
@@ -1179,7 +1181,7 @@ func TestMergedAllowFailGlobalTOMLOverridesNearcloudDefaults(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	af := MergedAllowFail("nearcloud", cfg, false)
+	af := MergedAllowFail("nearcloud", "", cfg, false)
 	if len(af) != 1 || af[0] != "cpu_gpu_chain" {
 		t.Errorf("MergedAllowFail(\"nearcloud\"): got %v, want [cpu_gpu_chain]", af)
 	}
@@ -1206,7 +1208,7 @@ allow_fail = ["tee_hardware_config"]
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	af := MergedAllowFail("nearcloud", cfg, false)
+	af := MergedAllowFail("nearcloud", "", cfg, false)
 	if len(af) != 1 || af[0] != "tee_hardware_config" {
 		t.Errorf("MergedAllowFail(\"nearcloud\"): got %v, want [tee_hardware_config]", af)
 	}
@@ -1224,7 +1226,7 @@ func TestMergedAllowFailNeardirectGoDefaults(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	af := MergedAllowFail("neardirect", cfg, false)
+	af := MergedAllowFail("neardirect", "", cfg, false)
 	want := attestation.NeardirectDefaultAllowFail
 	if len(af) != len(want) {
 		t.Fatalf("MergedAllowFail(\"neardirect\"): got %d entries, want %d", len(af), len(want))
@@ -1263,7 +1265,7 @@ func TestMergedAllowFailTinfoilDirectAllowsNVSwitchByDefault(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	af := MergedAllowFail("tinfoil_v3_direct", cfg, false)
+	af := MergedAllowFail("tinfoil_v3_direct", "", cfg, false)
 	afSet := make(map[string]bool, len(af))
 	for _, name := range af {
 		afSet[name] = true
@@ -1286,7 +1288,7 @@ func TestMergedAllowFailTinfoilCloudAllowsKDSAndGPUFactorsByDefault(t *testing.T
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	af := MergedAllowFail("tinfoil_v3_cloud", cfg, false)
+	af := MergedAllowFail("tinfoil_v3_cloud", "", cfg, false)
 	afSet := make(map[string]bool, len(af))
 	for _, name := range af {
 		afSet[name] = true
@@ -1322,7 +1324,7 @@ func TestMergedAllowFailOfflineAddsOnlineFactors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	af := MergedAllowFail("nearcloud", cfg, true)
+	af := MergedAllowFail("nearcloud", "", cfg, true)
 	afSet := make(map[string]bool, len(af))
 	for _, name := range af {
 		afSet[name] = true
@@ -1347,7 +1349,7 @@ func TestMergedAllowFailOnlineDoesNotAddOnlineFactors(t *testing.T) {
 	}
 	// Offline is false by default.
 
-	af := MergedAllowFail("nearcloud", cfg, false)
+	af := MergedAllowFail("nearcloud", "", cfg, false)
 	afSet := make(map[string]bool, len(af))
 	for _, name := range af {
 		afSet[name] = true
@@ -1377,7 +1379,7 @@ allow_fail = []
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	af := MergedAllowFail("venice", cfg, true)
+	af := MergedAllowFail("venice", "", cfg, true)
 	if len(af) != len(attestation.OnlineFactors) {
 		t.Errorf("offline + empty TOML: got %d entries, want %d (OnlineFactors only)",
 			len(af), len(attestation.OnlineFactors))
@@ -1399,7 +1401,7 @@ func TestMergedAllowFailProgrammaticAllowFail(t *testing.T) {
 	cfg := &Config{
 		AllowFail: attestation.KnownFactors,
 	}
-	af := MergedAllowFail("nearcloud", cfg, false)
+	af := MergedAllowFail("nearcloud", "", cfg, false)
 	if len(af) != len(attestation.KnownFactors) {
 		t.Errorf("programmatic AllowFail: got %d entries, want %d (KnownFactors)",
 			len(af), len(attestation.KnownFactors))
@@ -1409,7 +1411,7 @@ func TestMergedAllowFailProgrammaticAllowFail(t *testing.T) {
 	cfg2 := &Config{
 		AllowFail: []string{},
 	}
-	af2 := MergedAllowFail("nearcloud", cfg2, false)
+	af2 := MergedAllowFail("nearcloud", "", cfg2, false)
 	if len(af2) != 0 {
 		t.Errorf("programmatic empty AllowFail: got %d entries, want 0", len(af2))
 	}
@@ -1433,8 +1435,8 @@ base_url = "https://api.near.ai"
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	a := MergedAllowFail("nearcloud", cfg, false)
-	b := MergedAllowFail("nearcloud", cfg, false)
+	a := MergedAllowFail("nearcloud", "", cfg, false)
+	b := MergedAllowFail("nearcloud", "", cfg, false)
 	if len(a) == 0 {
 		t.Fatal("expected non-empty allow_fail for nearcloud defaults")
 	}
@@ -1824,5 +1826,77 @@ func TestUsableFDHeadroom(t *testing.T) {
 				t.Fatalf("usableFDHeadroom(%d) = %d, want %d", tc.soft, got, tc.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Format-aware allow_fail (Venice ACI/1)
+// ---------------------------------------------------------------------------
+
+// TestMergedAllowFail_VeniceFormatLayer: venice serves dstack and ACI/1 under
+// one provider name, and only ACI/1 responses select the ACI list. A waiver
+// list keyed on the provider alone would weaken enforcement for the dstack
+// models that do attest the inference host.
+func TestMergedAllowFail_VeniceFormatLayer(t *testing.T) {
+	cfg := &Config{}
+
+	aci := MergedAllowFail("venice", attestation.FormatACI1, cfg, false)
+	if !reflect.DeepEqual(aci, attestation.VeniceACIDefaultAllowFail) {
+		t.Errorf("venice/aci1: got %v, want VeniceACIDefaultAllowFail", aci)
+	}
+
+	dstack := MergedAllowFail("venice", attestation.FormatDstack, cfg, false)
+	if !reflect.DeepEqual(dstack, attestation.DefaultAllowFail) {
+		t.Errorf("venice/dstack: got %v, want the global DefaultAllowFail (unchanged)", dstack)
+	}
+
+	noFormat := MergedAllowFail("venice", "", cfg, false)
+	if !reflect.DeepEqual(noFormat, attestation.DefaultAllowFail) {
+		t.Errorf("venice/<none>: got %v, want the global DefaultAllowFail", noFormat)
+	}
+
+	// An unknown future format must not inherit the ACI/1 waivers.
+	unknown := MergedAllowFail("venice", attestation.BackendFormat("aci/2"), cfg, false)
+	if !reflect.DeepEqual(unknown, attestation.DefaultAllowFail) {
+		t.Errorf("venice/aci2: got %v, want the global DefaultAllowFail", unknown)
+	}
+}
+
+// TestMergedAllowFail_TOMLOverridesFormatLayer: operator TOML replaces the
+// Go defaults for every format the provider serves.
+func TestMergedAllowFail_TOMLOverridesFormatLayer(t *testing.T) {
+	cfg := &Config{ProviderAllowFail: map[string][]string{
+		"venice": {attestation.FactorCPUGPUChain},
+	}}
+	got := MergedAllowFail("venice", attestation.FormatACI1, cfg, false)
+	if !reflect.DeepEqual(got, []string{attestation.FactorCPUGPUChain}) {
+		t.Errorf("per-provider TOML must override the format layer: got %v", got)
+	}
+
+	global := &Config{AllowFail: []string{attestation.FactorTEEBootConfig}}
+	got = MergedAllowFail("venice", attestation.FormatACI1, global, false)
+	if !reflect.DeepEqual(got, []string{attestation.FactorTEEBootConfig}) {
+		t.Errorf("global TOML must override the format layer: got %v", got)
+	}
+}
+
+// TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced: the two factors that
+// prove the E2EE key is the gateway's endorsed, hardware-bound key must never
+// be waived by default — together they are the whole of what authorizes E2EE
+// for ACI/1.
+func TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced(t *testing.T) {
+	for _, name := range []string{
+		attestation.FactorACIKeysetEndorsement,
+		"gateway_tee_reportdata_binding",
+		"gateway_tee_quote_signature",
+		"gateway_tee_measurement",
+		"gateway_event_log_integrity",
+		"nonce_match",
+		"nvidia_signature",
+		"nvidia_nonce_client_bound",
+	} {
+		if slices.Contains(attestation.VeniceACIDefaultAllowFail, name) {
+			t.Errorf("VeniceACIDefaultAllowFail contains %s; it must stay enforced", name)
+		}
 	}
 }

@@ -934,7 +934,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		Model:                  upstreamModel,
 		Raw:                    raw,
 		Nonce:                  nonce,
-		AllowFail:              config.MergedAllowFail(prov.Name, s.cfg, s.cfg.Offline),
+		AllowFail:              config.MergedAllowFail(prov.Name, raw.BackendFormat, s.cfg, s.cfg.Offline),
 		Policy:                 prov.MeasurementPolicy,
 		GatewayPolicy:          prov.GatewayMeasurementPolicy,
 		SupplyChainPolicy:      prov.SupplyChainPolicy,

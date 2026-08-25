@@ -20,7 +20,8 @@ type providerDefaults struct {
 
 var registry = map[string]providerDefaults{
 	"venice": {
-		model: venice.DefaultMeasurementPolicy(),
+		model:   venice.DefaultMeasurementPolicy(),
+		gateway: venice.DefaultGatewayMeasurementPolicy(),
 	},
 	"neardirect": {
 		model: neardirect.DefaultMeasurementPolicy(),

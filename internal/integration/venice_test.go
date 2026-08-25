@@ -107,7 +107,7 @@ func TestIntegration_Venice_Fixture(t *testing.T) {
 		Rekor:             rekorResults,
 		Policy:            modelPolicy,
 		SupplyChainPolicy: venice.SupplyChainPolicy(),
-		AllowFail:         serveAllowFail("venice"),
+		AllowFail:         serveAllowFail("venice", attestation.FormatDstack),
 		Inapplicable:      attestation.DefaultInapplicableFactors(),
 	})
 

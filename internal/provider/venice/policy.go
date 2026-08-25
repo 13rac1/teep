@@ -22,6 +22,19 @@ func DefaultMeasurementPolicy() attestation.MeasurementPolicy {
 	return p
 }
 
+// DefaultGatewayMeasurementPolicy returns the default TDX measurement
+// allowlists for the Venice ACI/1 private-ai-gateway CVM. The gateway runs a
+// dstack image, so MRTD/MRSEAM come from the shared dstack base list; the
+// enforced gateway_tee_measurement factor checks those. RTMR allowlists are
+// filled from captured gateway values as they are observed —
+// gateway_tee_hardware_config and gateway_tee_boot_config are waived by
+// default (SEE: attestation.VeniceACIDefaultAllowFail) because the
+// private-ai-gateway-dev channel redeploys often and its RTMRs churn with
+// each image.
+func DefaultGatewayMeasurementPolicy() attestation.MeasurementPolicy {
+	return attestation.DstackBaseMeasurementPolicy()
+}
+
 // SupplyChainPolicy returns the supply chain policy for Venice.
 // Venice uses the same container images as neardirect.
 func SupplyChainPolicy() *attestation.SupplyChainPolicy {

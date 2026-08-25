@@ -510,6 +510,80 @@ var TinfoilDirectDefaultAllowFail = []string{
 	FactorComponentRecognition,
 }
 
+// VeniceACIDefaultAllowFail is the default allow_fail list for Venice models
+// that return the ACI/1 attestation format. Selected per response format,
+// not per provider: Venice's dstack models keep the global DefaultAllowFail.
+// SEE: config.MergedAllowFail.
+//
+// DANGER: this list accepts a provider that proves nothing about the machine
+// that runs the model. The ACI/1 quote describes the private-ai-gateway CVM
+// (zero GPUs, downstream TLS hop, model-agnostic KMS keys), verified in
+// Tier 4; every core factor that describes the inference host fails and is
+// listed here so the provider stays usable. Removing an entry blocks every
+// ACI/1 model; that is the honest default and it is held back only because
+// the alternative is no service.
+//
+// Enforced and deliberately absent from this list: aci_keyset_endorsement
+// and gateway_tee_reportdata_binding — together they prove the E2EE key teep
+// encrypts to is the gateway's endorsed, hardware-bound key, and E2EE
+// authorization reads the gateway factor for ACI/1
+// (SEE: provider.GatewayBindsE2EEKey). Also enforced: the gateway quote
+// chain (gateway_nonce_match, quote present/structure/cert_chain/signature,
+// debug_disabled, measurement, event_log_integrity) and the NVIDIA payload
+// signature and nonce factors — the relayed GPU evidence is real and
+// client-nonce-fresh even though cpu_gpu_chain cannot bind it to the
+// attested CPU.
+var VeniceACIDefaultAllowFail = []string{
+	// No inference-host evidence. The gateway is the only attested
+	// principal, so every core factor that describes the machine running
+	// the model fails.
+	FactorTEEQuotePresent,
+	FactorTEEQuoteStructure,
+	FactorTEECertChain,
+	FactorTEEQuoteSignature,
+	FactorTEEDebugDisabled,
+	FactorTEEMeasurement,
+	FactorTEEHardwareConfig,
+	FactorTEEBootConfig,
+	FactorTEEReportData,
+	FactorIntelPCSCollateral,
+	FactorTEETCBCurrent,
+	FactorTEETCBNotRevoked,
+	FactorMeasuredWeights,
+	FactorEventLogIntegrity,
+	FactorCPUGPUChain,
+	FactorCPUIDRegistry,
+
+	// ACI/1 publishes no compose manifest and no image digests, so the
+	// compose supply-chain factors fail structurally.
+	// SEE: docs/attestation_gaps/venice_aci_gateway.md.
+	FactorComposeBinding,
+	FactorSigstoreVerify,
+	FactorBuildTransparency,
+	FactorProviderSigner,
+	FactorComponentSignature,
+	FactorComponentRecognition,
+
+	// Waivers venice already carries via the global DefaultAllowFail.
+	FactorNvidiaPayloadPresent,
+	FactorNvidiaClaims,
+	FactorNvidiaNRAS,
+	FactorE2EECapable,
+	FactorE2EEUsable,
+	FactorResponseSchema,
+	FactorTLSKeyBinding,
+
+	// Gateway waivers. hardware_config and boot_config cover RTMR churn on
+	// the private-ai-gateway-dev channel (the same treatment venice's dstack
+	// model tier gets); compose_binding because ACI/1 publishes no gateway
+	// compose manifest either; cpu_id_registry mirrors nearcloud — a Proof
+	// of Cloud outage must not block.
+	FactorGWHardwareConfig,
+	FactorGWBootConfig,
+	FactorGWComposeBinding,
+	FactorGWCPUIDRegistry,
+}
+
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{

@@ -218,8 +218,8 @@ func TestIntegrationConfigsUseServeAllowFailPolicy(t *testing.T) {
 				t.Fatalf("missing provider %q", tt.providerName)
 			}
 
-			got := config.MergedAllowFail(tt.providerName, cfg, cfg.Offline)
-			want := config.MergedAllowFail(tt.providerName, &config.Config{Offline: cfg.Offline}, cfg.Offline)
+			got := config.MergedAllowFail(tt.providerName, "", cfg, cfg.Offline)
+			want := config.MergedAllowFail(tt.providerName, "", &config.Config{Offline: cfg.Offline}, cfg.Offline)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("effective allow_fail mismatch:\ngot  %v\nwant %v", got, want)
 			}
