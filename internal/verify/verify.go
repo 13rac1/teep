@@ -19,6 +19,7 @@ import (
 	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
+	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -228,6 +229,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		GatewayCompose:         gatewayCompose,
 		GatewayEventLog:        raw.GatewayEventLog,
 		TinfoilSC:              tinfoilSC,
+		ACIKeyset:              venice.VerifyACIKeyset(raw),
 		E2EETest:               e2eeResult,
 		E2EEConfigured:         providerUsesTLSBinding(opts.ProviderName) && opts.Provider.E2EE,
 		Inapplicable:           inapplicableFactors(opts.ProviderName),

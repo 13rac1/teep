@@ -955,6 +955,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		Sigstore:               sc.Sigstore,
 		Rekor:                  sc.Rekor,
 		TinfoilSC:              tinfoilSC,
+		ACIKeyset:              venice.VerifyACIKeyset(raw),
 		E2EEConfigured:         prov.E2EE,
 		Inapplicable:           inapplicableForProvider(prov.Name),
 		ProviderUsesTLSBinding: prov.UsesTLSBinding,

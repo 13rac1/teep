@@ -58,6 +58,36 @@ func TestDetect(t *testing.T) {
 			body: `{"gateway_attestation":null,"intel_quote":"abc"}`,
 			want: attestation.FormatDstack,
 		},
+		{
+			name: "present but empty intel_quote is still dstack (key presence, not value)",
+			body: `{"model":"test-model","intel_quote":"","signing_key":""}`,
+			want: attestation.FormatDstack,
+		},
+		{
+			name: "absent intel_quote key is not dstack",
+			body: `{"model":"test-model","signing_key":""}`,
+			want: "",
+		},
+		{
+			name: "aci/1 api_version",
+			body: `{"api_version":"aci/1","intel_quote":"deadbeef"}`,
+			want: attestation.FormatACI1,
+		},
+		{
+			name: "aci/1 takes priority over intel_quote (ACI/1 bodies also carry intel_quote)",
+			body: `{"api_version":"aci/1","intel_quote":"deadbeef","attestation":{}}`,
+			want: attestation.FormatACI1,
+		},
+		{
+			name: "unknown api_version fails closed, not a silent dstack fallback",
+			body: `{"api_version":"aci/2","intel_quote":"deadbeef"}`,
+			want: "",
+		},
+		{
+			name: "tinfoil takes priority over aci/1",
+			body: `{"format":"tinfoil","api_version":"aci/1","intel_quote":"deadbeef"}`,
+			want: attestation.FormatTinfoil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -65,6 +95,27 @@ func TestDetect(t *testing.T) {
 			got := formatdetect.Detect([]byte(tt.body))
 			if got != tt.want {
 				t.Errorf("Detect() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAPIVersion(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"aci/1", `{"api_version":"aci/1"}`, "aci/1"},
+		{"unsupported version", `{"api_version":"aci/2"}`, "aci/2"},
+		{"absent", `{"intel_quote":"aa"}`, ""},
+		{"invalid json", `{`, ""},
+		{"wrong type", `{"api_version":3}`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatdetect.APIVersion([]byte(tt.body)); got != tt.want {
+				t.Errorf("APIVersion(%s) = %q, want %q", tt.body, got, tt.want)
 			}
 		})
 	}
