@@ -15,23 +15,60 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
+	"golang.org/x/crypto/sha3"
 )
+
+// This file verifies the two mechanisms that connect the ACI/1 workload
+// keyset to the gateway's TDX quote:
+//
+//  1. Keyset digest: workload_keyset_digest = "sha256:" + hex(sha256(JCS
+//     (workload_keyset))), recomputed from the parsed keyset. The digest is
+//     self-asserted, so this check alone proves internal consistency, not
+//     hardware binding.
+//  2. dstack-KMS key custody: each workload key carries a two-signature
+//     chain — the app key signs "{purpose}:{compressed kms_public_key}",
+//     and the KMS root signs "dstack-kms-issued:" || app_id || compressed
+//     app key. Both are 65-byte recoverable secp256k1 signatures over
+//     keccak256 of the message; the recovered root must be an accepted
+//     dstack-KMS root, and app_id comes from the quote-bound RTMR3 "app-id"
+//     event.
+//
+// The hardware chain is: TDX quote → REPORTDATA binds signing_public_key
+// (SEE: ReportDataVerifier) → membership in workload_keyset.e2ee_public_keys
+// → custody chain from the accepted KMS root over the same key, with app_id
+// measured into the quote's RTMR3 (integrity of that log is the enforced
+// gateway_event_log_integrity factor).
+//
+// SEE: verify_dstack_kms_receipt_custody in
+// https://github.com/Dstack-TEE/private-ai-gateway src/aci/verifier/dstack.rs
+// — the reference verifier this implementation matches.
+
+// e2eeCustodyPurpose is the KMS derivation purpose for the secp256k1 E2EE
+// key — the key teep encrypts requests to. The custody check accepts a chain
+// only for this derivation path, not for any key the app happens to hold.
+const e2eeCustodyPurpose = "aci.e2ee.v1"
+
+// defaultACIKMSRootAllow lists accepted dstack-KMS root public keys
+// (compressed secp256k1, hex) for the Venice ACI/1 gateway.
+//
+// The value was recovered from the custody signature chains of live
+// attestations of two different models on 2026-08-25 and is trust-on-first-
+// use. DANGER: an attacker who controls this list controls which KMS —
+// and therefore which key-releasing authority — teep accepts for every
+// Venice ACI/1 model. Corroborate against the dstack KmsAuth registry
+// (Phala publishes the KMS root on-chain) before extending it.
+// SEE: docs/attestation_gaps/venice_aci_gateway.md.
+var defaultACIKMSRootAllow = []string{
+	"0334c76e0c3f52ec64cbf9bbf5c910c272330166fd656c0a86bb330963e46910e1",
+}
 
 // ---------------------------------------------------------------------------
 // Canonical value builders
 // ---------------------------------------------------------------------------
 //
 // These build any-typed trees that the canonical serializer below converts
-// to deterministic bytes, matching Venice's Rust ACI/1 implementation
-// byte-for-byte (JCS/RFC 8785), including correct integer representation
-// (no float64 precision loss).
-
-func (k *aciPublicKey) toCanonicalValue() map[string]any {
-	return map[string]any{
-		"algo":       k.Algo,
-		"public_key": k.PublicKey,
-	}
-}
+// to deterministic bytes, matching the ACI/1 JCS (RFC 8785) digest rules,
+// including correct integer representation (no float64 precision loss).
 
 func (k *aciKey) toCanonicalValue() map[string]any {
 	return map[string]any{
@@ -49,50 +86,34 @@ func (t *aciTLSBinding) toCanonicalValue() map[string]any {
 	return m
 }
 
-func (id *aciWorkloadIdentity) toCanonicalValue() map[string]any {
-	// Convert *string to untyped nil or string value so the canonical
-	// serializer emits JSON null (not a typed nil interface).
-	var subject any
-	if id.Subject != nil {
-		subject = *id.Subject
-	}
-	return map[string]any{
-		"public_key": id.PublicKey.toCanonicalValue(),
-		"subject":    subject,
-	}
-}
-
-func (e *aciKeysetEpoch) toCanonicalValue() (map[string]any, error) {
-	// NotAfter is u64 in the ACI/1 protocol. json.Number preserves the exact
-	// serialized string; parse as uint64 to match the Rust reference
+// notAfterCanonical parses the not_after JSON number as uint64.
+func notAfterCanonical(n string) (uint64, error) {
+	// not_after is u64 in the ACI/1 protocol. json.Number preserves the
+	// exact serialized string; parse as uint64 to match the Rust reference
 	// implementation.
-	na, err := strconv.ParseUint(e.NotAfter.String(), 10, 64)
+	na, err := strconv.ParseUint(n, 10, 64)
 	if err != nil {
-		// The JSON value may be a float64-rounded representation of a uint64.
-		// This happens when an intermediary (e.g. a JavaScript gateway)
-		// re-serializes u64::MAX (18446744073709551615) through float64,
-		// producing "18446744073709552000". Recover the original uint64.
-		// Only this one exact value is recovered; the keyset digest
+		// The JSON value may be a float64-rounded representation of a
+		// uint64. This happens when an intermediary (e.g. a JavaScript
+		// gateway) re-serializes u64::MAX (18446744073709551615) through
+		// float64, producing "18446744073709552000". Recover the original
+		// uint64. Only this one exact value is recovered; the keyset digest
 		// cross-check still decides whether the canonical bytes match the
-		// endorsed digest.
-		f, ferr := strconv.ParseFloat(e.NotAfter.String(), 64)
+		// declared digest.
+		f, ferr := strconv.ParseFloat(n, 64)
 		if ferr != nil {
-			return nil, fmt.Errorf("parse keyset_epoch.not_after %q: %w", e.NotAfter.String(), err)
+			return 0, fmt.Errorf("parse not_after %q: %w", n, err)
 		}
 		if f == float64(math.MaxUint64) {
-			na = math.MaxUint64
-		} else {
-			return nil, fmt.Errorf("keyset_epoch.not_after %q exceeds uint64 range", e.NotAfter.String())
+			return math.MaxUint64, nil
 		}
+		return 0, fmt.Errorf("not_after %q exceeds uint64 range", n)
 	}
-	return map[string]any{
-		"version":   e.Version,
-		"not_after": na,
-	}, nil
+	return na, nil
 }
 
 func (ks *aciWorkloadKeyset) toCanonicalValue() (map[string]any, error) {
-	epoch, err := ks.KeysetEpoch.toCanonicalValue()
+	na, err := notAfterCanonical(ks.NotAfter.String())
 	if err != nil {
 		return nil, err
 	}
@@ -110,9 +131,14 @@ func (ks *aciWorkloadKeyset) toCanonicalValue() (map[string]any, error) {
 		tlsKeys[i] = ks.TLSPublicKeys[i].toCanonicalValue()
 	}
 
+	// Subject is nullable: an untyped nil serializes as JSON null.
+	var subject any
+	if ks.Subject != nil {
+		subject = *ks.Subject
+	}
 	return map[string]any{
-		"workload_identity":    ks.WorkloadIdentity.toCanonicalValue(),
-		"keyset_epoch":         epoch,
+		"subject":              subject,
+		"not_after":            na,
 		"receipt_signing_keys": receiptKeys,
 		"e2ee_public_keys":     e2eeKeys,
 		"tls_public_keys":      tlsKeys,
@@ -124,7 +150,7 @@ func (ks *aciWorkloadKeyset) toCanonicalValue() (map[string]any, error) {
 // ---------------------------------------------------------------------------
 //
 // SYNC: canonicalize, writeCanonicalString, and utf16Compare must produce
-// byte-identical output to the JCS serializer in Venice's private-ai-gateway
+// byte-identical output to the JCS serializer in the private-ai-gateway
 // Rust implementation (https://github.com/Dstack-TEE/private-ai-gateway);
 // the keyset digest cross-check fails on any divergence.
 //
@@ -247,7 +273,7 @@ func utf16Compare(a, b string) int {
 }
 
 // ---------------------------------------------------------------------------
-// Keyset endorsement verification
+// Keyset verification
 // ---------------------------------------------------------------------------
 
 // jcsSHA256Hex returns "sha256:<hex>" for the canonical serialization of v.
@@ -260,12 +286,12 @@ func jcsSHA256Hex(v any) (string, error) {
 	return "sha256:" + hex.EncodeToString(h[:]), nil
 }
 
-// VerifyACIKeyset performs ACI/1 keyset endorsement verification using fields
-// from a RawAttestation. Returns nil for non-ACI/1 formats. The endorsement
-// signature is verified using the identity key (workload_identity.public_key),
-// not the top-level signing_public_key; the signing key is instead checked
-// for membership in the endorsed e2ee_public_keys, which is what connects
-// the endorsed keyset to the TDX quote (REPORTDATA binds the signing key).
+// VerifyACIKeyset performs ACI/1 workload keyset verification using fields
+// from a RawAttestation: the keyset digest recompute, the signing-key
+// membership check, and the dstack-KMS custody chain for the E2EE key.
+// Returns nil for non-ACI/1 formats. app_id is read from the RTMR3 "app-id"
+// event in raw.GatewayEventLog; the enforced gateway_event_log_integrity
+// factor is what proves that log matches the quote.
 func VerifyACIKeyset(raw *attestation.RawAttestation) *attestation.ACIKeysetResult {
 	if raw.BackendFormat != attestation.FormatACI1 {
 		return nil
@@ -276,54 +302,63 @@ func VerifyACIKeyset(raw *attestation.RawAttestation) *attestation.ACIKeysetResu
 			Err: errors.New("ACI/1 workload keyset not available"),
 		}
 	}
-	return verifyKeysetEndorsement(
+	custody, ok := raw.ACIKeyCustody.(*aciKeyCustody)
+	if !ok || custody == nil {
+		return &attestation.ACIKeysetResult{
+			Err: errors.New("ACI/1 key custody not available"),
+		}
+	}
+	return verifyKeyset(
 		keyset,
+		custody,
 		raw.ACIWorkloadKeysetDigest,
-		raw.ACIWorkloadID,
-		raw.ACIKeysetEndorsementSig,
-		raw.ACIIdentityKeyHex,
 		raw.SigningKey,
+		appIDFromEventLog(raw.GatewayEventLog),
+		defaultACIKMSRootAllow,
 	)
 }
 
-// verifyKeysetEndorsement performs ACI/1 keyset endorsement verification:
-//
-//  1. Build canonical value from parsed workload_keyset struct → canonicalize
-//     → SHA256 → "sha256:<hex>" → cross-check against declared
-//     workload_keyset_digest.
-//  2. Build endorsement payload:
-//     {"purpose":"aci.keyset.endorsement.v1","workload_keyset_digest":"<computed>"}
-//     → canonicalize → payload_bytes.
-//  3. ECDSA secp256k1: verify signature over SHA256(payload_bytes)
-//     using the identity key.
-//  4. Build canonical value from identity public key → canonicalize → SHA256
-//     → "sha256:<hex>" → cross-check against declared workload_id.
-//  5. Check that signingKeyHex (the top-level signing_public_key, which the
-//     TDX quote's REPORTDATA binds and which teep encrypts E2EE traffic to)
-//     is a member of the endorsed e2ee_public_keys.
-//
-// Step 5 is what connects the endorsement to hardware: the identity key
-// itself appears only inside the JSON response, so without the membership
-// check steps 1-4 prove only that the response is self-consistent. With it,
-// the chain is: TDX quote → REPORTDATA → signing_public_key → member of
-// endorsed e2ee_public_keys → keyset digest endorsed by identity key →
-// workload_id = sha256(canonical identity key).
-func verifyKeysetEndorsement(
-	keyset *aciWorkloadKeyset,
-	declaredKeysetDigest string,
-	declaredWorkloadID string,
-	endorsementSigHex string,
-	identityKeyHex string,
-	signingKeyHex string,
-) *attestation.ACIKeysetResult {
-	if endorsementSigHex == "" {
-		return &attestation.ACIKeysetResult{Err: errors.New("keyset_endorsement signature is empty")}
+// appIDFromEventLog returns the payload of the RTMR3 "app-id" event, or nil
+// when absent.
+func appIDFromEventLog(entries []attestation.EventLogEntry) []byte {
+	for i := range entries {
+		if entries[i].IMR == 3 && entries[i].Event == "app-id" {
+			b, err := hex.DecodeString(entries[i].EventPayload)
+			if err != nil {
+				return nil
+			}
+			return b
+		}
 	}
-	if identityKeyHex == "" {
-		return &attestation.ACIKeysetResult{Err: errors.New("identity public key is empty")}
-	}
+	return nil
+}
 
-	// Step 1: Build canonical keyset value, compute digest, cross-check.
+// verifyKeyset performs the three ACI/1 keyset checks:
+//
+//  1. Recompute sha256(JCS(workload_keyset)) and cross-check against the
+//     declared workload_keyset_digest.
+//  2. Check that signingKeyHex (the top-level signing_public_key, which the
+//     gateway quote's REPORTDATA binds and which teep encrypts E2EE traffic
+//     to) is a member of workload_keyset.e2ee_public_keys.
+//  3. Verify the dstack-KMS custody chain for the e2eeCustodyPurpose entry:
+//     the entry's public_key must equal the signing key, the app key
+//     recovered from signature_chain[0] over
+//     "{purpose}:{compressed kms_public_key}" must be endorsed by
+//     signature_chain[1] over "dstack-kms-issued:" || appID || compressed
+//     app key, and the recovered root must be in kmsRootAllow.
+//
+// Check 3 is what connects the keys to an authority outside the response;
+// checks 1 and 2 alone prove only that the response is self-consistent
+// around the REPORTDATA-bound signing key.
+func verifyKeyset(
+	keyset *aciWorkloadKeyset,
+	custody *aciKeyCustody,
+	declaredKeysetDigest string,
+	signingKeyHex string,
+	appID []byte,
+	kmsRootAllow []string,
+) *attestation.ACIKeysetResult {
+	// Check 1: keyset digest recompute.
 	keysetValue, err := keyset.toCanonicalValue()
 	if err != nil {
 		return &attestation.ACIKeysetResult{Err: fmt.Errorf("build keyset canonical value: %w", err)}
@@ -334,80 +369,42 @@ func verifyKeysetEndorsement(
 	}
 	keysetDigestMatch := computedDigest == declaredKeysetDigest
 
-	// Step 2: Build endorsement payload and canonicalize.
-	payload := map[string]any{
-		"purpose":                "aci.keyset.endorsement.v1",
-		"workload_keyset_digest": computedDigest,
-	}
-	payloadCanonical, err := canonicalize(payload)
-	if err != nil {
-		return &attestation.ACIKeysetResult{Err: fmt.Errorf("canonicalize endorsement payload: %w", err)}
-	}
-
-	// Step 3: Verify ECDSA secp256k1 signature.
-	sigBytes, err := hex.DecodeString(endorsementSigHex)
-	if err != nil {
-		return &attestation.ACIKeysetResult{Err: fmt.Errorf("decode endorsement signature hex: %w", err)}
-	}
-	endorsementValid, err := verifySecp256k1(payloadCanonical, sigBytes, identityKeyHex)
-	if err != nil {
-		return &attestation.ACIKeysetResult{
-			KeysetDigestMatch: keysetDigestMatch,
-			Err:               fmt.Errorf("secp256k1 verify: %w", err),
-		}
-	}
-
-	// Step 4: Compute workload_id from identity key and cross-check.
-	identityValue := keyset.WorkloadIdentity.PublicKey.toCanonicalValue()
-	computedID, err := jcsSHA256Hex(identityValue)
-	if err != nil {
-		return &attestation.ACIKeysetResult{
-			KeysetDigestMatch: keysetDigestMatch,
-			EndorsementValid:  endorsementValid,
-			Err:               fmt.Errorf("compute workload_id: %w", err),
-		}
-	}
-	workloadIDMatch := computedID == declaredWorkloadID
-
-	// Step 5: Check the REPORTDATA-bound signing key is an endorsed E2EE key.
+	// Check 2: the REPORTDATA-bound signing key is a keyset E2EE key.
 	signingKeyInKeyset := keysetContainsE2EEKey(keyset, signingKeyHex)
+
+	// Check 3: dstack-KMS custody chain for the E2EE key.
+	custodyDetail, custodyErr := verifyKeyCustody(custody, signingKeyHex, appID, kmsRootAllow)
 
 	result := &attestation.ACIKeysetResult{
 		KeysetDigestMatch:  keysetDigestMatch,
-		WorkloadIDMatch:    workloadIDMatch,
-		EndorsementValid:   endorsementValid,
 		SigningKeyInKeyset: signingKeyInKeyset,
+		CustodyChainValid:  custodyErr == nil,
 	}
 
 	var parts []string
-	if endorsementValid {
-		parts = append(parts, "endorsement signature valid")
-	} else {
-		parts = append(parts, "endorsement signature did not verify")
-	}
 	if keysetDigestMatch {
 		parts = append(parts, "keyset digest matches")
 	} else {
 		parts = append(parts, fmt.Sprintf("keyset digest mismatch: computed %s, declared %s", computedDigest, declaredKeysetDigest))
 	}
-	if workloadIDMatch {
-		parts = append(parts, "workload_id matches")
-	} else {
-		parts = append(parts, fmt.Sprintf("workload_id mismatch: computed %s, declared %s", computedID, declaredWorkloadID))
-	}
 	if signingKeyInKeyset {
-		parts = append(parts, "signing key is an endorsed e2ee key")
+		parts = append(parts, "signing key is a keyset e2ee key")
 	} else {
-		parts = append(parts, "signing key is not in the endorsed e2ee_public_keys")
+		parts = append(parts, "signing key is not in the keyset e2ee_public_keys")
+	}
+	if custodyErr == nil {
+		parts = append(parts, custodyDetail)
+	} else {
+		parts = append(parts, fmt.Sprintf("key custody: %v", custodyErr))
 	}
 	result.Detail = strings.Join(parts, "; ")
 	return result
 }
 
 // keysetContainsE2EEKey reports whether signingKeyHex decodes to the same
-// bytes as one of the endorsed e2ee_public_keys. An entry that does not
-// decode as hex cannot match; an empty or undecodable signing key matches
-// nothing, so the caller's factor fails closed.
+// bytes as one of the keyset e2ee_public_keys. An entry that does not decode
+// as hex cannot match; an empty or undecodable signing key matches nothing,
+// so the caller's factor fails closed.
 func keysetContainsE2EEKey(keyset *aciWorkloadKeyset, signingKeyHex string) bool {
 	signingKey, err := hex.DecodeString(signingKeyHex)
 	if err != nil || len(signingKey) == 0 {
@@ -425,28 +422,152 @@ func keysetContainsE2EEKey(keyset *aciWorkloadKeyset, signingKeyHex string) bool
 	return false
 }
 
-// verifySecp256k1 verifies a 64-byte r||s ECDSA secp256k1 signature over
-// SHA256(message) using the given uncompressed public key (hex).
-func verifySecp256k1(message, sig []byte, pubKeyHex string) (bool, error) {
-	if len(sig) != 64 {
-		return false, fmt.Errorf("signature must be 64 bytes (r||s), got %d", len(sig))
+// verifyKeyCustody verifies the dstack-KMS custody chain for the E2EE key
+// entry (purpose e2eeCustodyPurpose) and returns a detail string on success.
+// SEE: the file comment for the chain definition and the reference
+// implementation.
+func verifyKeyCustody(custody *aciKeyCustody, signingKeyHex string, appID []byte, kmsRootAllow []string) (string, error) {
+	if custody.Provider != "dstack-kms" {
+		return "", fmt.Errorf("unsupported key custody provider %q", custody.Provider)
 	}
-	pubBytes, err := hex.DecodeString(pubKeyHex)
+	if len(appID) == 0 {
+		return "", errors.New("no app-id event in the gateway event log")
+	}
+	entry, err := custodyEntryForPurpose(custody, e2eeCustodyPurpose)
 	if err != nil {
-		return false, fmt.Errorf("decode public key hex: %w", err)
+		return "", err
 	}
-	pubKey, err := secp256k1.ParsePubKey(pubBytes)
+	if err := custodyKeyMatchesSigningKey(entry, signingKeyHex); err != nil {
+		return "", err
+	}
+	if len(entry.SignatureChain) != 2 {
+		return "", fmt.Errorf("signature_chain must contain 2 signatures, got %d", len(entry.SignatureChain))
+	}
+
+	kmsPubCompressed, err := compressedK256Hex(entry.KMSPublicKey)
 	if err != nil {
-		return false, fmt.Errorf("parse secp256k1 public key: %w", err)
+		return "", fmt.Errorf("kms_public_key: %w", err)
 	}
-	var r, s secp256k1.ModNScalar
-	if overflow := r.SetByteSlice(sig[:32]); overflow {
-		return false, errors.New("signature r component overflows scalar field")
+	purposeSig, err := hex.DecodeString(entry.SignatureChain[0])
+	if err != nil {
+		return "", fmt.Errorf("decode signature_chain[0]: %w", err)
 	}
-	if overflow := s.SetByteSlice(sig[32:]); overflow {
-		return false, errors.New("signature s component overflows scalar field")
+	appKey, err := recoverK256([]byte(entry.Purpose+":"+kmsPubCompressed), purposeSig)
+	if err != nil {
+		return "", fmt.Errorf("recover app key from purpose signature: %w", err)
 	}
-	ecdsaSig := ecdsa.NewSignature(&r, &s)
-	hash := sha256.Sum256(message)
-	return ecdsaSig.Verify(hash[:], pubKey), nil
+
+	rootSig, err := hex.DecodeString(entry.SignatureChain[1])
+	if err != nil {
+		return "", fmt.Errorf("decode signature_chain[1]: %w", err)
+	}
+	rootMessage := append([]byte("dstack-kms-issued:"), appID...)
+	rootMessage = append(rootMessage, appKey.SerializeCompressed()...)
+	rootKey, err := recoverK256(rootMessage, rootSig)
+	if err != nil {
+		return "", fmt.Errorf("recover KMS root from app signature: %w", err)
+	}
+
+	rootHex := hex.EncodeToString(rootKey.SerializeCompressed())
+	if !kmsRootAccepted(rootHex, kmsRootAllow) {
+		return "", fmt.Errorf("recovered KMS root %s is not an accepted dstack-KMS root", rootHex)
+	}
+	return fmt.Sprintf("e2ee key custody chain verified to accepted KMS root (%s...)", rootHex[:16]), nil
+}
+
+// custodyEntryForPurpose returns the custody entry whose purpose matches, or
+// an error when absent or duplicated.
+func custodyEntryForPurpose(custody *aciKeyCustody, purpose string) (*aciCustodyKey, error) {
+	var found *aciCustodyKey
+	for i := range custody.Keys {
+		if custody.Keys[i].Purpose == purpose {
+			if found != nil {
+				return nil, fmt.Errorf("multiple key custody entries with purpose %q", purpose)
+			}
+			found = &custody.Keys[i]
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("no key custody entry with purpose %q", purpose)
+	}
+	return found, nil
+}
+
+// custodyKeyMatchesSigningKey checks that the custody entry describes the
+// REPORTDATA-bound signing key: its public_key equals the signing key, and
+// its kms_public_key is the compressed form of the same point.
+func custodyKeyMatchesSigningKey(entry *aciCustodyKey, signingKeyHex string) error {
+	entryKey, err := hex.DecodeString(entry.PublicKey)
+	if err != nil {
+		return fmt.Errorf("decode custody public_key: %w", err)
+	}
+	signingKey, err := hex.DecodeString(signingKeyHex)
+	if err != nil || len(signingKey) == 0 {
+		return errors.New("signing key is empty or not valid hex")
+	}
+	if len(entryKey) != len(signingKey) || subtle.ConstantTimeCompare(entryKey, signingKey) != 1 {
+		return errors.New("custody e2ee public_key does not match the signing key")
+	}
+	entryCompressed, err := compressedK256Hex(entry.KMSPublicKey)
+	if err != nil {
+		return fmt.Errorf("kms_public_key: %w", err)
+	}
+	signingCompressed, err := compressedK256Hex(signingKeyHex)
+	if err != nil {
+		return fmt.Errorf("signing key: %w", err)
+	}
+	if subtle.ConstantTimeCompare([]byte(entryCompressed), []byte(signingCompressed)) != 1 {
+		return errors.New("custody kms_public_key does not match the signing key")
+	}
+	return nil
+}
+
+// kmsRootAccepted reports whether rootHex is in the allowlist, comparing in
+// constant time.
+func kmsRootAccepted(rootHex string, allow []string) bool {
+	accepted := false
+	for _, a := range allow {
+		if len(a) == len(rootHex) && subtle.ConstantTimeCompare([]byte(a), []byte(rootHex)) == 1 {
+			accepted = true
+		}
+	}
+	return accepted
+}
+
+// recoverK256 recovers the secp256k1 public key from a 65-byte r||s||v
+// recoverable signature over keccak256(message). The v byte accepts both
+// the 0..3 and 27..30 encodings.
+func recoverK256(message, sig []byte) (*secp256k1.PublicKey, error) {
+	if len(sig) != 65 {
+		return nil, fmt.Errorf("recoverable signature must be 65 bytes, got %d", len(sig))
+	}
+	v := sig[64]
+	if v < 27 {
+		v += 27
+	}
+	// ecdsa.RecoverCompact expects the recovery byte first.
+	compact := make([]byte, 0, 65)
+	compact = append(compact, v)
+	compact = append(compact, sig[:64]...)
+	h := sha3.NewLegacyKeccak256()
+	h.Write(message)
+	pub, _, err := ecdsa.RecoverCompact(compact, h.Sum(nil))
+	if err != nil {
+		return nil, err
+	}
+	return pub, nil
+}
+
+// compressedK256Hex normalizes a hex secp256k1 public key (compressed or
+// uncompressed) to its compressed hex form.
+func compressedK256Hex(pubHex string) (string, error) {
+	b, err := hex.DecodeString(pubHex)
+	if err != nil {
+		return "", fmt.Errorf("not valid hex: %w", err)
+	}
+	pub, err := secp256k1.ParsePubKey(b)
+	if err != nil {
+		return "", fmt.Errorf("not a valid secp256k1 public key: %w", err)
+	}
+	return hex.EncodeToString(pub.SerializeCompressed()), nil
 }

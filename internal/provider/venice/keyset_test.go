@@ -1,15 +1,19 @@
 package venice
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"math"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
+	"golang.org/x/crypto/sha3"
 )
 
 // ---------------------------------------------------------------------------
@@ -171,73 +175,39 @@ func TestJcsSHA256Hex_Uint64Max(t *testing.T) {
 // Canonical value builder tests
 // ---------------------------------------------------------------------------
 
-func TestKeysetEpoch_ToCanonicalValue(t *testing.T) {
-	epoch := aciKeysetEpoch{
-		Version:  1,
-		NotAfter: json.Number("18446744073709551615"),
+func TestNotAfterCanonical(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    uint64
+		wantErr bool
+	}{
+		{"timestamp", "1790265204", 1790265204, false},
+		{"uint64 max", "18446744073709551615", 18446744073709551615, false},
+		{"float64-rounded uint64 max", "18446744073709552000", 18446744073709551615, false},
+		// Any string that rounds to float64(2^64) recovers u64::MAX; the
+		// keyset digest cross-check decides whether that was correct.
+		{"rounds to uint64 max", "18446744073709552001", 18446744073709551615, false},
+		{"out of range", "28446744073709552000", 0, true},
+		{"not a number", "not-a-number", 0, true},
 	}
-	cv, err := epoch.toCanonicalValue()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := canonicalize(cv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Keys sorted: not_after before version.
-	want := `{"not_after":18446744073709551615,"version":1}`
-	if string(got) != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestKeysetEpoch_Float64Rounded(t *testing.T) {
-	// Wire JSON from JavaScript gateways has "18446744073709552000" instead
-	// of "18446744073709551615" (u64::MAX) due to float64 precision loss.
-	// The canonical value builder must recover the original u64::MAX.
-	epoch := aciKeysetEpoch{
-		Version:  1,
-		NotAfter: json.Number("18446744073709552000"),
-	}
-	cv, err := epoch.toCanonicalValue()
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := canonicalize(cv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `{"not_after":18446744073709551615,"version":1}`
-	if string(got) != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestKeysetEpoch_InvalidNotAfter(t *testing.T) {
-	epoch := aciKeysetEpoch{
-		Version:  1,
-		NotAfter: json.Number("not-a-number"),
-	}
-	_, err := epoch.toCanonicalValue()
-	if err == nil {
-		t.Error("expected error for invalid not_after")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := notAfterCanonical(tc.in)
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err == nil && got != tc.want {
+				t.Errorf("got %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 
 func TestWorkloadKeyset_ToCanonicalValue(t *testing.T) {
 	ks := &aciWorkloadKeyset{
-		WorkloadIdentity: aciWorkloadIdentity{
-			PublicKey: aciPublicKey{
-				Algo:      "ecdsa-secp256k1",
-				PublicKey: "deadbeef",
-			},
-			Subject: nil,
-		},
-		KeysetEpoch: aciKeysetEpoch{
-			Version:  1,
-			NotAfter: json.Number("18446744073709551615"),
-		},
+		Subject:            nil,
+		NotAfter:           json.Number("18446744073709551615"),
 		ReceiptSigningKeys: []aciKey{},
 		E2EEPublicKeys:     []aciKey{},
 		TLSPublicKeys:      []aciTLSBinding{},
@@ -247,313 +217,309 @@ func TestWorkloadKeyset_ToCanonicalValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Verify the canonical value serializes without error.
 	got, err := canonicalize(cv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("canonical keyset: %s", got)
 
-	// Verify the digest is stable.
+	// Canonical key ordering:
+	//   e2ee_public_keys < not_after < receipt_signing_keys < subject < tls_public_keys
+	want := `{"e2ee_public_keys":[],"not_after":18446744073709551615,"receipt_signing_keys":[],"subject":null,"tls_public_keys":[]}`
+	if string(got) != want {
+		t.Errorf("canonical keyset:\n  got:  %s\n  want: %s", got, want)
+	}
+
 	d, err := jcsSHA256Hex(cv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("keyset digest: %s", d)
-
-	// Compute expected digest from known canonical form.
-	// Canonical key ordering:
-	//   e2ee_public_keys < keyset_epoch < receipt_signing_keys < tls_public_keys < workload_identity
-	// Inner objects also sorted by key.
-	canonical := `{"e2ee_public_keys":[],"keyset_epoch":{"not_after":18446744073709551615,"version":1},"receipt_signing_keys":[],"tls_public_keys":[],"workload_identity":{"public_key":{"algo":"ecdsa-secp256k1","public_key":"deadbeef"},"subject":null}}`
-	h := sha256.Sum256([]byte(canonical))
+	h := sha256.Sum256([]byte(want))
 	expected := "sha256:" + hex.EncodeToString(h[:])
 	if d != expected {
-		t.Errorf("keyset digest mismatch:\n  got:  %s\n  want: %s\n  canonical: %s", d, expected, got)
+		t.Errorf("keyset digest: got %s, want %s", d, expected)
 	}
 }
 
-func TestPublicKey_WorkloadID(t *testing.T) {
-	pk := aciPublicKey{
-		Algo:      "ecdsa-secp256k1",
-		PublicKey: "deadbeef",
+// ---------------------------------------------------------------------------
+// verifyKeyset / VerifyACIKeyset tests
+// ---------------------------------------------------------------------------
+
+// signRecoverable signs keccak256(message) with priv and returns the
+// 65-byte r||s||v signature hex that the custody chain carries.
+func signRecoverable(t *testing.T, priv *secp256k1.PrivateKey, message []byte) string {
+	t.Helper()
+	h := sha3.NewLegacyKeccak256()
+	h.Write(message)
+	// ecdsa.SignCompact returns the recovery byte first; the ACI chain
+	// carries it last.
+	sig := ecdsa.SignCompact(priv, h.Sum(nil), true)
+	return hex.EncodeToString(append(sig[1:], sig[0]))
+}
+
+// custodyChain builds a valid two-signature dstack-KMS custody chain for
+// e2eeKey: the app key signs the purpose message, the root signs
+// "dstack-kms-issued:" || appID || compressed app key. Returns the chain
+// and the compressed root hex for the allowlist.
+func custodyChain(t *testing.T, root, app *secp256k1.PrivateKey, e2eeKey *secp256k1.PublicKey, appID []byte) (chain []string, rootHex string) {
+	t.Helper()
+	kmsPubCompressed := hex.EncodeToString(e2eeKey.SerializeCompressed())
+	purposeSig := signRecoverable(t, app, []byte(e2eeCustodyPurpose+":"+kmsPubCompressed))
+	rootMsg := append([]byte("dstack-kms-issued:"), appID...)
+	rootMsg = append(rootMsg, app.PubKey().SerializeCompressed()...)
+	rootSig := signRecoverable(t, root, rootMsg)
+	return []string{purposeSig, rootSig}, hex.EncodeToString(root.PubKey().SerializeCompressed())
+}
+
+// aciTestFixture bundles a self-consistent keyset + custody chain built by
+// keysetFixture.
+type aciTestFixture struct {
+	keyset     *aciWorkloadKeyset
+	custody    *aciKeyCustody
+	digest     string
+	signingKey string
+	appID      []byte
+	rootHex    string
+}
+
+// keysetFixture builds a self-consistent keyset + custody + digest around a
+// freshly generated E2EE key, signed by fresh app and root keys.
+func keysetFixture(t *testing.T) aciTestFixture {
+	t.Helper()
+	rootPriv, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
 	}
-	d, err := jcsSHA256Hex(pk.toCanonicalValue())
+	appPriv, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2eePriv, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingKeyHex := hex.EncodeToString(e2eePriv.PubKey().SerializeUncompressed())
+	appID := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44}
+
+	keyset := &aciWorkloadKeyset{
+		NotAfter:           json.Number("1790265204"),
+		ReceiptSigningKeys: []aciKey{},
+		E2EEPublicKeys:     []aciKey{{KeyID: "dstack-kms-e2ee-v1", Algo: "secp256k1-aes-256-gcm-hkdf-sha256", PublicKey: signingKeyHex}},
+		TLSPublicKeys:      []aciTLSBinding{{Domain: "test.example.com", SPKISHA256: "aabbccdd"}},
+	}
+	cv, err := keyset.toCanonicalValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := jcsSHA256Hex(cv)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Canonical: {"algo":"ecdsa-secp256k1","public_key":"deadbeef"}
-	h := sha256.Sum256([]byte(`{"algo":"ecdsa-secp256k1","public_key":"deadbeef"}`))
-	expected := "sha256:" + hex.EncodeToString(h[:])
-	if d != expected {
-		t.Errorf("workload_id mismatch: got %s, want %s", d, expected)
+	chain, root := custodyChain(t, rootPriv, appPriv, e2eePriv.PubKey(), appID)
+	custody := &aciKeyCustody{
+		Provider: "dstack-kms",
+		Keys: []aciCustodyKey{{
+			Role:           "e2ee-secp256k1",
+			Path:           "aci/e2ee/v1",
+			Purpose:        e2eeCustodyPurpose,
+			Algo:           "secp256k1-aes-256-gcm-hkdf-sha256",
+			PublicKey:      signingKeyHex,
+			KMSPublicKey:   hex.EncodeToString(e2eePriv.PubKey().SerializeCompressed()),
+			SignatureChain: chain,
+		}},
 	}
+	return aciTestFixture{keyset: keyset, custody: custody, digest: digest,
+		signingKey: signingKeyHex, appID: appID, rootHex: root}
 }
 
-// ---------------------------------------------------------------------------
-// VerifyACIKeyset / verifyKeysetEndorsement tests
-// ---------------------------------------------------------------------------
-
-// signEndorsement builds the ACI/1 endorsement payload for keysetDigest and
-// signs it with priv, returning the 64-byte r||s hex signature that
-// verifyKeysetEndorsement expects.
-func signEndorsement(t *testing.T, priv *secp256k1.PrivateKey, keysetDigest string) string {
-	t.Helper()
-	payload := map[string]any{
-		"purpose":                "aci.keyset.endorsement.v1",
-		"workload_keyset_digest": keysetDigest,
-	}
-	payloadCanonical, err := canonicalize(payload)
-	if err != nil {
-		t.Fatalf("canonicalize endorsement payload: %v", err)
-	}
-	hash := sha256.Sum256(payloadCanonical)
-	sig := ecdsa.Sign(priv, hash[:])
-	r, s := sig.R(), sig.S()
-	rBytes, sBytes := r.Bytes(), s.Bytes()
-	return hex.EncodeToString(append(rBytes[:], sBytes[:]...))
-}
-
-// TestVerifyKeysetEndorsement_HappyPath: generate a real secp256k1 keypair,
-// build a workload keyset whose identity key is that keypair's public key and
-// whose e2ee_public_keys contain the signing key, sign the JCS-canonicalized
-// endorsement payload with the private key, and confirm
-// verifyKeysetEndorsement (via verifySecp256k1) reports EndorsementValid,
-// KeysetDigestMatch, WorkloadIDMatch, and SigningKeyInKeyset all true. Every
-// other keyset_test.go case up to this point only exercises error paths or
-// pure-canonicalization helpers — none produces and verifies a valid
-// signature end-to-end.
-func TestVerifyKeysetEndorsement_HappyPath(t *testing.T) {
-	priv, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatalf("GeneratePrivateKey: %v", err)
-	}
-	identityKeyHex := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
-	const signingKeyHex = "04eeff"
-
-	keyset := &aciWorkloadKeyset{
-		WorkloadIdentity: aciWorkloadIdentity{
-			PublicKey: aciPublicKey{Algo: "ecdsa-secp256k1", PublicKey: identityKeyHex},
-		},
-		KeysetEpoch:        aciKeysetEpoch{Version: 1, NotAfter: json.Number("18446744073709551615")},
-		ReceiptSigningKeys: []aciKey{{KeyID: "receipt-v1", Algo: "ecdsa-secp256k1", PublicKey: "04ccdd"}},
-		E2EEPublicKeys:     []aciKey{{KeyID: "e2ee-v1", Algo: "secp256k1-aes-256-gcm", PublicKey: signingKeyHex}},
-		TLSPublicKeys:      []aciTLSBinding{{Domain: "test.example.com", SPKISHA256: "aabbccdd"}},
-	}
-
-	keysetValue, err := keyset.toCanonicalValue()
-	if err != nil {
-		t.Fatalf("toCanonicalValue: %v", err)
-	}
-	keysetDigest, err := jcsSHA256Hex(keysetValue)
-	if err != nil {
-		t.Fatalf("jcsSHA256Hex(keyset): %v", err)
-	}
-	workloadID, err := jcsSHA256Hex(keyset.WorkloadIdentity.PublicKey.toCanonicalValue())
-	if err != nil {
-		t.Fatalf("jcsSHA256Hex(identity): %v", err)
-	}
-	sigHex := signEndorsement(t, priv, keysetDigest)
-
-	result := verifyKeysetEndorsement(keyset, keysetDigest, workloadID, sigHex, identityKeyHex, signingKeyHex)
+func TestVerifyKeyset_HappyPath(t *testing.T) {
+	fx := keysetFixture(t)
+	result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
 	if result.Err != nil {
-		t.Fatalf("verifyKeysetEndorsement: unexpected error: %v (detail: %s)", result.Err, result.Detail)
+		t.Fatalf("verifyKeyset: unexpected error: %v (detail: %s)", result.Err, result.Detail)
 	}
-	if !result.EndorsementValid {
-		t.Errorf("EndorsementValid = false, want true: %s", result.Detail)
-	}
-	if !result.KeysetDigestMatch {
-		t.Errorf("KeysetDigestMatch = false, want true: %s", result.Detail)
-	}
-	if !result.WorkloadIDMatch {
-		t.Errorf("WorkloadIDMatch = false, want true: %s", result.Detail)
-	}
-	if !result.SigningKeyInKeyset {
-		t.Errorf("SigningKeyInKeyset = false, want true: %s", result.Detail)
-	}
-}
-
-// TestVerifyKeysetEndorsement_SigningKeyNotInKeyset: a valid endorsement over
-// a keyset that does not contain the REPORTDATA-bound signing key must report
-// SigningKeyInKeyset false — the endorsement is self-consistent but unbound
-// to the hardware quote, and the factor fails.
-func TestVerifyKeysetEndorsement_SigningKeyNotInKeyset(t *testing.T) {
-	priv, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatalf("GeneratePrivateKey: %v", err)
-	}
-	identityKeyHex := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
-
-	keyset := &aciWorkloadKeyset{
-		WorkloadIdentity: aciWorkloadIdentity{
-			PublicKey: aciPublicKey{Algo: "ecdsa-secp256k1", PublicKey: identityKeyHex},
-		},
-		KeysetEpoch:    aciKeysetEpoch{Version: 1, NotAfter: json.Number("100")},
-		E2EEPublicKeys: []aciKey{{KeyID: "e2ee-v1", Algo: "secp256k1-aes-256-gcm", PublicKey: "04eeff"}},
-	}
-	keysetValue, err := keyset.toCanonicalValue()
-	if err != nil {
-		t.Fatalf("toCanonicalValue: %v", err)
-	}
-	keysetDigest, err := jcsSHA256Hex(keysetValue)
-	if err != nil {
-		t.Fatalf("jcsSHA256Hex(keyset): %v", err)
-	}
-	workloadID, err := jcsSHA256Hex(keyset.WorkloadIdentity.PublicKey.toCanonicalValue())
-	if err != nil {
-		t.Fatalf("jcsSHA256Hex(identity): %v", err)
-	}
-	sigHex := signEndorsement(t, priv, keysetDigest)
-
-	result := verifyKeysetEndorsement(keyset, keysetDigest, workloadID, sigHex, identityKeyHex, "04aabb")
-	if result.Err != nil {
-		t.Fatalf("verifyKeysetEndorsement: unexpected error: %v", result.Err)
-	}
-	if !result.EndorsementValid || !result.KeysetDigestMatch || !result.WorkloadIDMatch {
-		t.Fatalf("endorsement checks should pass in this scenario: %+v", result)
-	}
-	if result.SigningKeyInKeyset {
-		t.Error("SigningKeyInKeyset = true for a signing key absent from e2ee_public_keys, want false")
-	}
-}
-
-func TestKeysetContainsE2EEKey(t *testing.T) {
-	keyset := &aciWorkloadKeyset{
-		E2EEPublicKeys: []aciKey{
-			{KeyID: "e2ee-v1", Algo: "secp256k1-aes-256-gcm", PublicKey: "04eeff"},
-			{KeyID: "bad-hex", Algo: "secp256k1-aes-256-gcm", PublicKey: "not-hex"},
-		},
-	}
-	tests := []struct {
-		name       string
-		signingKey string
-		want       bool
-	}{
-		{"member", "04eeff", true},
-		{"member uppercase hex", "04EEFF", true},
-		{"not a member", "04aabb", false},
-		{"empty signing key", "", false},
-		{"undecodable signing key", "zz", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := keysetContainsE2EEKey(keyset, tt.signingKey); got != tt.want {
-				t.Errorf("keysetContainsE2EEKey(%q) = %v, want %v", tt.signingKey, got, tt.want)
-			}
-		})
-	}
-}
-
-// TestVerifyACIKeyset_HappyPath exercises the same scenario through the
-// public VerifyACIKeyset entry point (RawAttestation → ACIKeysetResult), as
-// used by the proxy/verify orchestration.
-func TestVerifyACIKeyset_HappyPath(t *testing.T) {
-	priv, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatalf("GeneratePrivateKey: %v", err)
-	}
-	identityKeyHex := hex.EncodeToString(priv.PubKey().SerializeUncompressed())
-
-	const signingKeyHex = "04eeff"
-	keyset := &aciWorkloadKeyset{
-		WorkloadIdentity: aciWorkloadIdentity{
-			PublicKey: aciPublicKey{Algo: "ecdsa-secp256k1", PublicKey: identityKeyHex},
-		},
-		KeysetEpoch:        aciKeysetEpoch{Version: 1, NotAfter: json.Number("100")},
-		ReceiptSigningKeys: []aciKey{},
-		E2EEPublicKeys:     []aciKey{{KeyID: "e2ee-v1", Algo: "secp256k1-aes-256-gcm", PublicKey: signingKeyHex}},
-		TLSPublicKeys:      []aciTLSBinding{},
-	}
-	keysetValue, err := keyset.toCanonicalValue()
-	if err != nil {
-		t.Fatalf("toCanonicalValue: %v", err)
-	}
-	keysetDigest, err := jcsSHA256Hex(keysetValue)
-	if err != nil {
-		t.Fatalf("jcsSHA256Hex(keyset): %v", err)
-	}
-	workloadID, err := jcsSHA256Hex(keyset.WorkloadIdentity.PublicKey.toCanonicalValue())
-	if err != nil {
-		t.Fatalf("jcsSHA256Hex(identity): %v", err)
-	}
-	sigHex := signEndorsement(t, priv, keysetDigest)
-
-	raw := &attestation.RawAttestation{
-		BackendFormat:           attestation.FormatACI1,
-		SigningKey:              signingKeyHex,
-		ACIWorkloadKeyset:       keyset,
-		ACIWorkloadKeysetDigest: keysetDigest,
-		ACIWorkloadID:           workloadID,
-		ACIKeysetEndorsementSig: sigHex,
-		ACIIdentityKeyHex:       identityKeyHex,
-	}
-
-	result := VerifyACIKeyset(raw)
-	if result == nil {
-		t.Fatal("VerifyACIKeyset returned nil for ACI/1 attestation")
-	}
-	if result.Err != nil {
-		t.Fatalf("keyset endorsement error: %v", result.Err)
-	}
-	if !result.EndorsementValid || !result.KeysetDigestMatch || !result.WorkloadIDMatch || !result.SigningKeyInKeyset {
+	if !result.KeysetDigestMatch || !result.SigningKeyInKeyset || !result.CustodyChainValid {
 		t.Errorf("expected all checks to pass: %+v", result)
 	}
 }
 
+func TestVerifyKeyset_Failures(t *testing.T) {
+	t.Run("digest mismatch", func(t *testing.T) {
+		fx := keysetFixture(t)
+		result := verifyKeyset(fx.keyset, fx.custody, "sha256:0000", fx.signingKey, fx.appID, []string{fx.rootHex})
+		if result.KeysetDigestMatch {
+			t.Error("KeysetDigestMatch = true for a wrong declared digest")
+		}
+	})
+
+	t.Run("signing key not in keyset", func(t *testing.T) {
+		fx := keysetFixture(t)
+		fx.keyset.E2EEPublicKeys = []aciKey{{KeyID: "other", Algo: "x", PublicKey: "04aabb"}}
+		cv, err := fx.keyset.toCanonicalValue()
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest, err := jcsSHA256Hex(cv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := verifyKeyset(fx.keyset, fx.custody, digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		if result.SigningKeyInKeyset {
+			t.Error("SigningKeyInKeyset = true for a signing key absent from e2ee_public_keys")
+		}
+	})
+
+	t.Run("root not accepted", func(t *testing.T) {
+		fx := keysetFixture(t)
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{"03" + strings.Repeat("00", 32)})
+		if result.CustodyChainValid {
+			t.Error("CustodyChainValid = true for a root outside the allowlist")
+		}
+	})
+
+	t.Run("wrong app id", func(t *testing.T) {
+		fx := keysetFixture(t)
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, []byte("wrong-app-id-bytes--"), []string{fx.rootHex})
+		if result.CustodyChainValid {
+			t.Error("CustodyChainValid = true when the quote-bound app id differs from the endorsed one")
+		}
+	})
+
+	t.Run("missing app id", func(t *testing.T) {
+		fx := keysetFixture(t)
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, nil, []string{fx.rootHex})
+		if result.CustodyChainValid {
+			t.Error("CustodyChainValid = true with no app-id event")
+		}
+	})
+
+	t.Run("custody key differs from signing key", func(t *testing.T) {
+		fx := keysetFixture(t)
+		other, err := secp256k1.GeneratePrivateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fx.custody.Keys[0].PublicKey = hex.EncodeToString(other.PubKey().SerializeUncompressed())
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		if result.CustodyChainValid {
+			t.Error("CustodyChainValid = true when the custody entry describes a different key")
+		}
+	})
+
+	t.Run("tampered purpose signature", func(t *testing.T) {
+		fx := keysetFixture(t)
+		sig, err := hex.DecodeString(fx.custody.Keys[0].SignatureChain[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig[10] ^= 0xff
+		fx.custody.Keys[0].SignatureChain[0] = hex.EncodeToString(sig)
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		if result.CustodyChainValid {
+			t.Error("CustodyChainValid = true for a tampered purpose signature")
+		}
+	})
+
+	t.Run("wrong custody provider", func(t *testing.T) {
+		fx := keysetFixture(t)
+		fx.custody.Provider = "other-kms"
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		if result.CustodyChainValid {
+			t.Error("CustodyChainValid = true for an unsupported custody provider")
+		}
+	})
+
+	t.Run("no e2ee custody entry", func(t *testing.T) {
+		fx := keysetFixture(t)
+		fx.custody.Keys[0].Purpose = "aci.receipt.v1"
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		if result.CustodyChainValid {
+			t.Error("CustodyChainValid = true with no entry for the e2ee purpose")
+		}
+	})
+}
+
 func TestVerifyACIKeyset_NonACI(t *testing.T) {
 	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatDstack}
-	result := VerifyACIKeyset(raw)
-	if result != nil {
+	if result := VerifyACIKeyset(raw); result != nil {
 		t.Error("expected nil for non-ACI/1 format")
 	}
 }
 
-func TestVerifyACIKeyset_NilKeyset(t *testing.T) {
+func TestVerifyACIKeyset_MissingStructs(t *testing.T) {
 	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatACI1}
 	result := VerifyACIKeyset(raw)
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-	if result.Err == nil {
-		t.Error("expected error for nil keyset")
+	if result == nil || result.Err == nil {
+		t.Fatalf("expected an error result for a missing keyset, got %+v", result)
 	}
 }
 
-func TestVerifyKeysetEndorsement_ErrorPaths(t *testing.T) {
-	ks := &aciWorkloadKeyset{
-		WorkloadIdentity: aciWorkloadIdentity{
-			PublicKey: aciPublicKey{Algo: "ecdsa-secp256k1", PublicKey: "deadbeef"},
+func TestVerifyACIKeyset_HappyPath(t *testing.T) {
+	fx := keysetFixture(t)
+	raw := &attestation.RawAttestation{
+		BackendFormat:           attestation.FormatACI1,
+		SigningKey:              fx.signingKey,
+		ACIWorkloadKeyset:       fx.keyset,
+		ACIKeyCustody:           fx.custody,
+		ACIWorkloadKeysetDigest: fx.digest,
+		GatewayEventLog: []attestation.EventLogEntry{
+			{IMR: 3, Event: "app-id", EventPayload: hex.EncodeToString(fx.appID)},
 		},
-		KeysetEpoch: aciKeysetEpoch{Version: 1, NotAfter: json.Number("100")},
 	}
 
-	t.Run("empty signature", func(t *testing.T) {
-		result := verifyKeysetEndorsement(ks, "x", "x", "", "aabb", "04eeff")
-		if result.Err == nil {
-			t.Error("expected error for empty signature")
-		}
-	})
+	// The default allowlist does not contain the test root, so the custody
+	// chain must be rejected...
+	result := VerifyACIKeyset(raw)
+	if result == nil || result.Err != nil {
+		t.Fatalf("VerifyACIKeyset: %+v", result)
+	}
+	if result.CustodyChainValid {
+		t.Error("CustodyChainValid = true for a root outside the default allowlist")
+	}
+	if !result.KeysetDigestMatch || !result.SigningKeyInKeyset {
+		t.Errorf("digest/membership should pass: %+v", result)
+	}
 
-	t.Run("empty identity key", func(t *testing.T) {
-		result := verifyKeysetEndorsement(ks, "x", "x", "aabb", "", "04eeff")
-		if result.Err == nil {
-			t.Error("expected error for empty identity key")
-		}
-	})
+	// ...and the full chain must verify against the matching allowlist.
+	direct := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+	if !direct.CustodyChainValid {
+		t.Errorf("CustodyChainValid = false with the correct root allowed: %s", direct.Detail)
+	}
+}
 
-	t.Run("invalid signature hex", func(t *testing.T) {
-		result := verifyKeysetEndorsement(ks, "x", "x", "not-hex", "aabb", "04eeff")
-		if result.Err == nil {
-			t.Error("expected error for invalid signature hex")
-		}
-	})
+// TestVerifyACIKeyset_LiveSample replays the workload keyset, custody chain,
+// and app id captured from a live Venice ACI/1 attestation (2026-08-25,
+// model e2ee-glm-5-2-p) through the full verification, pinning the digest
+// scheme, the custody chain construction, and the default KMS root
+// allowlist against real provider data.
+func TestVerifyACIKeyset_LiveSample(t *testing.T) {
+	data, err := os.ReadFile("testdata/aci_keyset_live.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx struct {
+		WorkloadKeysetDigest string            `json:"workload_keyset_digest"`
+		SigningPublicKey     string            `json:"signing_public_key"`
+		AppID                string            `json:"app_id"`
+		WorkloadKeyset       aciWorkloadKeyset `json:"workload_keyset"`
+		KeyCustody           aciKeyCustody     `json:"key_custody"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&fx); err != nil {
+		t.Fatal(err)
+	}
+	appID, err := hex.DecodeString(fx.AppID)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	t.Run("wrong signature length", func(t *testing.T) {
-		result := verifyKeysetEndorsement(ks, "x", "x", "aabb", "aabb", "04eeff")
-		if result.Err == nil {
-			t.Error("expected error for wrong signature length")
-		}
-	})
+	result := verifyKeyset(&fx.WorkloadKeyset, &fx.KeyCustody, fx.WorkloadKeysetDigest,
+		fx.SigningPublicKey, appID, defaultACIKMSRootAllow)
+	if result.Err != nil {
+		t.Fatalf("verifyKeyset(live sample): %v", result.Err)
+	}
+	if !result.KeysetDigestMatch || !result.SigningKeyInKeyset || !result.CustodyChainValid {
+		t.Errorf("live sample must verify fully: %s", result.Detail)
+	}
 }

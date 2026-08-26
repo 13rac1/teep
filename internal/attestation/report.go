@@ -88,7 +88,7 @@ const (
 	FactorNvidiaNRAS           = "nvidia_nras_verified"
 	FactorE2EECapable          = "e2ee_capable"
 	FactorE2EEUsable           = "e2ee_usable"
-	FactorACIKeysetEndorsement = "aci_keyset_endorsement"
+	FactorACIKeyCustody        = "aci_key_custody"
 	FactorTLSKeyBinding        = "tls_key_binding"
 	FactorCPUGPUChain          = "cpu_gpu_chain"
 	FactorNVSwitchBinding      = "nvswitch_binding"
@@ -523,9 +523,9 @@ var TinfoilDirectDefaultAllowFail = []string{
 // ACI/1 model; that is the honest default and it is held back only because
 // the alternative is no service.
 //
-// Enforced and deliberately absent from this list: aci_keyset_endorsement
+// Enforced and deliberately absent from this list: aci_key_custody
 // and gateway_tee_reportdata_binding — together they prove the E2EE key teep
-// encrypts to is the gateway's endorsed, hardware-bound key, and E2EE
+// encrypts to is the gateway's KMS-issued, hardware-bound key, and E2EE
 // authorization reads the gateway factor for ACI/1
 // (SEE: provider.GatewayBindsE2EEKey). Also enforced: the gateway quote
 // chain (gateway_nonce_match, quote present/structure/cert_chain/signature,
@@ -594,7 +594,7 @@ var KnownFactors = []string{
 	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
 	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaSignature, FactorNvidiaClaims,
 	FactorNvidiaClientNonce, FactorNvidiaNRAS, FactorE2EECapable, FactorE2EEUsable,
-	FactorACIKeysetEndorsement,
+	FactorACIKeyCustody,
 	FactorTLSKeyBinding, FactorCPUGPUChain, FactorNVSwitchBinding,
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
@@ -725,16 +725,15 @@ func (r *RawAttestation) E2EEKeyType() string {
 	return "ecdsa"
 }
 
-// ACIKeysetResult holds the result of Venice ACI/1 keyset endorsement
-// verification: JCS-canonicalized workload keyset digest and workload_id
-// cross-checks, the ECDSA secp256k1 endorsement signature verification, and
-// the check that the E2EE signing key teep encrypts to is a member of the
-// endorsed keyset. Nil for non-ACI/1 attestation formats.
+// ACIKeysetResult holds the result of Venice ACI/1 workload keyset
+// verification: the JCS keyset digest recompute, the check that the E2EE
+// signing key teep encrypts to is a member of the keyset, and the dstack-KMS
+// custody chain from an accepted KMS root to that key. Nil for non-ACI/1
+// attestation formats. SEE: venice.VerifyACIKeyset.
 type ACIKeysetResult struct {
-	KeysetDigestMatch  bool   // recomputed sha256(canonical keyset) == declared workload_keyset_digest
-	WorkloadIDMatch    bool   // recomputed sha256(canonical identity key) == declared workload_id
-	EndorsementValid   bool   // keyset_endorsement ECDSA secp256k1 signature verified over the endorsement payload
-	SigningKeyInKeyset bool   // top-level signing_public_key is a member of the endorsed e2ee_public_keys
+	KeysetDigestMatch  bool   // recomputed sha256(JCS(workload_keyset)) == declared workload_keyset_digest
+	SigningKeyInKeyset bool   // top-level signing_public_key is a member of the keyset e2ee_public_keys
+	CustodyChainValid  bool   // dstack-KMS signature chain verified to an accepted KMS root
 	Err                error  // non-nil if verification could not complete (malformed input, bad hex, etc.)
 	Detail             string // summary of the above
 }
@@ -1068,7 +1067,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalNvidiaNRASVerified,
 		evalE2EECapable,
 		evalE2EEUsable,
-		evalACIKeysetEndorsement,
+		evalACIKeyCustody,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -1769,34 +1768,36 @@ func evalE2EEUsable(in *ReportInput) []FactorResult {
 	return factor(TierBinding, FactorE2EEUsable, Skip, detail)
 }
 
-// evalACIKeysetEndorsement evaluates Venice ACI/1's keyset endorsement
-// factor. The verification chain is: the TDX quote's REPORTDATA binds the
-// top-level signing_public_key (see tee_reportdata_binding); that key must be
-// a member of the endorsed e2ee_public_keys; the keyset digest is endorsed by
-// the identity key; and workload_id is the digest of the identity key. The
-// membership check is what connects the endorsed keyset to the hardware
-// quote — without it the endorsement is only self-consistent. NotApplicable
-// for every format other than ACI/1. Enforced whenever ACI/1 is in use;
-// never added to any allow_fail list because it is verifiable from data
-// already present in the attestation response.
-func evalACIKeysetEndorsement(in *ReportInput) []FactorResult {
+// evalACIKeyCustody evaluates Venice ACI/1's key custody factor. The
+// verification chain is: the gateway TDX quote's REPORTDATA binds the
+// top-level signing_public_key (SEE: gateway_tee_reportdata_binding); that
+// key must be a member of the keyset e2ee_public_keys; the keyset digest
+// must recompute; and the dstack-KMS custody chain must connect the same key
+// to an accepted KMS root, with the app id read from the quote-bound RTMR3
+// event log (SEE: gateway_event_log_integrity). The custody chain is what
+// connects the keys to an authority outside the response — the digest and
+// membership checks alone prove only self-consistency. NotApplicable for
+// every format other than ACI/1. Enforced whenever ACI/1 is in use; never
+// added to any allow_fail list because it is verifiable from data already
+// present in the attestation response.
+func evalACIKeyCustody(in *ReportInput) []FactorResult {
 	if in.Raw.BackendFormat != FormatACI1 {
-		return factor(TierBinding, FactorACIKeysetEndorsement, NotApplicable,
+		return factor(TierBinding, FactorACIKeyCustody, NotApplicable,
 			"not ACI/1 format")
 	}
 	if in.ACIKeyset == nil {
-		return factor(TierBinding, FactorACIKeysetEndorsement, Fail,
-			"ACI/1 keyset endorsement verification was not performed")
+		return factor(TierBinding, FactorACIKeyCustody, Fail,
+			"ACI/1 keyset verification was not performed")
 	}
 	if in.ACIKeyset.Err != nil {
-		return factor(TierBinding, FactorACIKeysetEndorsement, Fail,
-			fmt.Sprintf("keyset endorsement verification error: %v", in.ACIKeyset.Err))
+		return factor(TierBinding, FactorACIKeyCustody, Fail,
+			fmt.Sprintf("keyset verification error: %v", in.ACIKeyset.Err))
 	}
-	if !in.ACIKeyset.EndorsementValid || !in.ACIKeyset.KeysetDigestMatch ||
-		!in.ACIKeyset.WorkloadIDMatch || !in.ACIKeyset.SigningKeyInKeyset {
-		return factor(TierBinding, FactorACIKeysetEndorsement, Fail, in.ACIKeyset.Detail)
+	if !in.ACIKeyset.KeysetDigestMatch || !in.ACIKeyset.SigningKeyInKeyset ||
+		!in.ACIKeyset.CustodyChainValid {
+		return factor(TierBinding, FactorACIKeyCustody, Fail, in.ACIKeyset.Detail)
 	}
-	return factor(TierBinding, FactorACIKeysetEndorsement, Pass, in.ACIKeyset.Detail)
+	return factor(TierBinding, FactorACIKeyCustody, Pass, in.ACIKeyset.Detail)
 }
 
 // validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519

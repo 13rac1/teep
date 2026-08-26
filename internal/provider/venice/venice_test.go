@@ -327,47 +327,42 @@ func TestAttester_FetchAttestation_InvalidBaseURL(t *testing.T) {
 //
 // validACI1JSON is synthetic — it matches the observed ACI/1 structure but
 // is not a captured live response. Captured fixtures and end-to-end ACI/1
-// replay coverage live in internal/integration.
+// replay coverage live in internal/integration; a live keyset/custody
+// sample is pinned in keyset_test.go (testdata/aci_keyset_live.json).
 
 const validACI1JSON = `{
 	"api_version": "aci/1",
-	"workload_id": "sha256:3def476b0000000000000000000000000000000000000000000000000000abcd",
 	"workload_keyset_digest": "sha256:abcdef0123456789",
 	"attestation": {
-		"vendor": "private-ai-gateway-dev",
 		"tee_type": "tdx",
 		"workload_keyset": {
-			"workload_identity": {
-				"public_key": {"algo": "ecdsa-secp256k1", "public_key": "04aabb"},
-				"subject": null
-			},
-			"keyset_epoch": {"version": 1, "not_after": 18446744073709552000},
-			"receipt_signing_keys": [{"key_id": "receipt-v1", "algo": "ecdsa-secp256k1", "public_key": "04ccdd"}],
-			"e2ee_public_keys": [{"key_id": "e2ee-v1", "algo": "secp256k1-aes-256-gcm", "public_key": "04eeff"}],
-			"tls_public_keys": [{"domain": "test.example.com", "spki_sha256": "aabbccdd"}]
+			"subject": null,
+			"not_after": 1790265204,
+			"receipt_signing_keys": [{"key_id": "dstack-kms-receipt-ed25519-v1", "algo": "ed25519", "public_key": "110f3824"}],
+			"e2ee_public_keys": [{"key_id": "dstack-kms-e2ee-v1", "algo": "secp256k1-aes-256-gcm-hkdf-sha256", "public_key": "04943cea0baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+			"tls_public_keys": [{"spki_sha256": "aabbccdd", "domain": "test.example.com"}]
 		},
-		"report_data": "0000000000000000000000000000000000000000000000000000000000000000",
-		"keyset_endorsement": {"algo": "ecdsa-secp256k1", "value": "aabbccdd"},
+		"report_data": "79a5061e00000000000000000000000000000000000000000000000000000000",
 		"source_provenance": {
 			"repo_url": "https://github.com/Dstack-TEE/private-ai-gateway.git",
-			"repo_commit": "1b43f76e43c2459856faebe9cd97d8e01cb0df0c",
+			"repo_commit": "ac7dd5fc0a95f21f86f75dacf812614656e9ae6a",
 			"image_digest": null,
 			"image_provenance": null
 		},
-		"freshness": {"fetched_at": 1782772332, "stale_after": 1782775932},
 		"evidence": {
 			"quote": "dGVzdHF1b3Rl",
-			"quote_report_data": "79a5061e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aa",
-			"event_log": [
-				{"digest": "d6d8d853b6454f838d98c5573d6a098c", "event": "", "event_payload": "095464785461626c65", "event_type": 2147483659, "imr": 0},
-				{"digest": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "event": "", "event_payload": "0a1b2c3d4e5f", "event_type": 2147483649, "imr": 1}
-			],
-			"vm_config": "tdx-vm-aci",
-			"key_custody": {"provider": "dstack-kms", "keys": [{"role": "identity", "path": "aci/identity/v1", "purpose": "aci.identity.v1", "algo": "ecdsa-secp256k1", "public_key": "04aabb", "signature_chain": ["aabb", "ccdd"]}]},
+			"quote_report_data": "79a5061e00000000000000000000000000000000000000000000000000000000",
+			"event_log": "[{\"imr\":0,\"event_type\":2147483659,\"digest\":\"d6d8d853b6454f838d98c5573d6a098c\",\"event\":\"\",\"event_payload\":\"095464785461626c65\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4\",\"event\":\"app-id\",\"event_payload\":\"fdb7a14e5a6675f752e2cb69c9067a98ca402918\"}]",
+			"vm_config": "{\"os_image_hash\":\"bd369a8c\",\"cpu_count\":16,\"memory_size\":34359738368,\"qemu_version\":\"8.2.2\",\"num_gpus\":0,\"num_nvswitches\":0,\"image\":\"dstack-dev-0.5.11\",\"spec_version\":1}",
+			"app_compose": "{\"manifest_version\":2,\"name\":\"private-ai-gateway\",\"docker_compose_file\":\"services: {}\"}",
+			"key_custody": {
+				"provider": "dstack-kms",
+				"keys": [{"role": "e2ee-secp256k1", "path": "aci/e2ee/v1", "purpose": "aci.e2ee.v1", "algo": "secp256k1-aes-256-gcm-hkdf-sha256", "public_key": "04943cea0baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "kms_public_key": "03943cea0baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "signature_chain": ["aabb", "ccdd"]}]
+			},
 			"downstream_tls_binding": {"domain": "test.example.com", "spki_sha256": "aabbccdd"}
 		}
 	},
-	"service_capabilities": {"supported_e2ee_versions": ["2"]},
+	"service_capabilities": {"supported_e2ee_versions": ["2"], "serving": "aggregator"},
 	"intel_quote": "dGVzdHF1b3Rl",
 	"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test.payload",
 	"signing_public_key": "04943cea0baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -405,6 +400,7 @@ func TestParseACI1_Success(t *testing.T) {
 		{"Model", raw.Model, "e2ee-glm-5-2-p"},
 		{"NonceSource", raw.NonceSource, "client"},
 		{"UpstreamModel", raw.UpstreamModel, "z-ai/glm-5.2"},
+		{"ACIWorkloadKeysetDigest", raw.ACIWorkloadKeysetDigest, "sha256:abcdef0123456789"},
 	}
 	for _, tc := range checks {
 		if tc.got != tc.want {
@@ -427,14 +423,18 @@ func TestParseACI1_Success(t *testing.T) {
 		t.Errorf("ACISourceRepoURL = %q, want the private-ai-gateway repo", raw.ACISourceRepoURL)
 	}
 	if raw.ACIWorkloadKeyset == nil {
-		t.Error("ACIWorkloadKeyset is nil, want populated for keyset endorsement verification")
+		t.Error("ACIWorkloadKeyset is nil, want populated for keyset verification")
+	}
+	if raw.ACIKeyCustody == nil {
+		t.Error("ACIKeyCustody is nil, want populated for custody chain verification")
 	}
 }
 
-// TestParseACI1_GatewayEvidence: the ACI/1 quote and event log describe the
-// private-ai-gateway CVM, not the inference host, so they populate the
-// Gateway* fields; the core fields stay empty and TEEHardware is cleared so
-// the report does not present the gateway's platform as the endpoint's.
+// TestParseACI1_GatewayEvidence: the ACI/1 quote, event log, and compose
+// manifest describe the private-ai-gateway CVM, not the inference host, so
+// they populate the Gateway* fields; the core fields stay empty and
+// TEEHardware is cleared so the report does not present the gateway's
+// platform as the endpoint's.
 func TestParseACI1_GatewayEvidence(t *testing.T) {
 	raw, err := venice.ParseAttestationResponse(context.Background(), []byte(validACI1JSON))
 	if err != nil {
@@ -452,6 +452,9 @@ func TestParseACI1_GatewayEvidence(t *testing.T) {
 	}
 	if raw.GatewayNonceHex != raw.Nonce {
 		t.Errorf("GatewayNonceHex = %q, want the echoed client nonce %q", raw.GatewayNonceHex, raw.Nonce)
+	}
+	if raw.GatewayAppCompose == "" {
+		t.Error("GatewayAppCompose is empty, want the gateway compose manifest")
 	}
 	if raw.ACIDownstreamTLSDomain != "test.example.com" || raw.ACIDownstreamTLSSPKI != "aabbccdd" {
 		t.Errorf("downstream TLS binding = %q/%q, want test.example.com/aabbccdd",
@@ -471,8 +474,8 @@ func TestParseACI1_EventLog(t *testing.T) {
 	if raw.GatewayEventLog[0].IMR != 0 {
 		t.Errorf("GatewayEventLog[0].IMR = %d, want 0", raw.GatewayEventLog[0].IMR)
 	}
-	if raw.GatewayEventLog[1].IMR != 1 {
-		t.Errorf("GatewayEventLog[1].IMR = %d, want 1", raw.GatewayEventLog[1].IMR)
+	if raw.GatewayEventLog[1].Event != "app-id" {
+		t.Errorf("GatewayEventLog[1].Event = %q, want app-id", raw.GatewayEventLog[1].Event)
 	}
 	if len(raw.EventLog) != 0 || raw.EventLogCount != 0 {
 		t.Errorf("core EventLog has %d entries (count %d), want 0 — the log describes the gateway",
@@ -480,15 +483,16 @@ func TestParseACI1_EventLog(t *testing.T) {
 	}
 }
 
-func TestParseACI1_NoComposeFields(t *testing.T) {
+func TestParseACI1_NoModelComposeFields(t *testing.T) {
 	raw, err := venice.ParseAttestationResponse(context.Background(), []byte(validACI1JSON))
 	if err != nil {
 		t.Fatalf("ParseAttestationResponse(ACI/1): %v", err)
 	}
 
-	// ACI/1 has no compose manifest — compose-related fields should be
-	// empty, so the compose-based supply chain factors evaluate to Fail
-	// (not NotApplicable) rather than being silently skipped.
+	// ACI/1 publishes no manifest for the machine serving inference — the
+	// model-tier compose fields stay empty, so the model-tier supply chain
+	// factors evaluate to Fail (never NotApplicable). The gateway's own
+	// manifest is in GatewayAppCompose.
 	if raw.AppCompose != "" {
 		t.Errorf("AppCompose = %q, want empty for ACI/1", raw.AppCompose)
 	}
@@ -505,6 +509,15 @@ func TestParseACI1_InvalidJSON(t *testing.T) {
 	_, err := venice.ParseAttestationResponse(context.Background(), []byte(body))
 	if err == nil {
 		t.Fatal("expected error for invalid ACI/1 JSON, got nil")
+	}
+}
+
+func TestParseACI1_InvalidEventLog(t *testing.T) {
+	body := strings.Replace(validACI1JSON,
+		`"event_log": "[{`, `"event_log": "not-json[{`, 1)
+	_, err := venice.ParseAttestationResponse(context.Background(), []byte(body))
+	if err == nil {
+		t.Fatal("expected error for an undecodable evidence.event_log, got nil")
 	}
 }
 

@@ -256,18 +256,19 @@ var factorRegistry = []factorInfo{
 			"the provider does not support E2EE, or when no API key is set.",
 	},
 	{
-		Name:    attestation.FactorACIKeysetEndorsement,
+		Name:    attestation.FactorACIKeyCustody,
 		Tier:    2,
-		Summary: "ACI/1 keyset endorsement verified and bound to the quote",
-		Description: "Venice ACI/1 specific: verifies the keyset endorsement " +
-			"ECDSA secp256k1 signature over the JCS-canonicalized endorsement " +
-			"payload using the workload identity key, cross-checks " +
-			"workload_keyset_digest and workload_id by recomputing SHA-256 of " +
-			"the JCS-canonicalized keyset and identity key, and checks that " +
-			"the top-level signing_public_key is a member of the endorsed " +
-			"e2ee_public_keys. The TDX quote's REPORTDATA binds the signing " +
-			"key (see tee_reportdata_binding), so the membership check is " +
-			"what connects the endorsed keyset to the hardware quote. Not " +
+		Summary: "ACI/1 key custody chain verified to an accepted KMS root",
+		Description: "Venice ACI/1 specific: recomputes the workload keyset " +
+			"digest (SHA-256 over the JCS-canonicalized keyset), checks that " +
+			"the top-level signing_public_key is a member of the keyset " +
+			"e2ee_public_keys, and verifies the dstack-KMS custody chain — " +
+			"the app key signs the E2EE key's derivation purpose, the KMS " +
+			"root signs the app key together with the app id measured into " +
+			"the quote's RTMR3, and the recovered root must be an accepted " +
+			"dstack-KMS root. The gateway quote's REPORTDATA binds the same " +
+			"signing key (see gateway_tee_reportdata_binding), completing " +
+			"the chain from hardware to the key teep encrypts to. Not " +
 			"applicable for non-ACI/1 formats. Always enforced (never added " +
 			"to allow_fail) because it is verifiable from data already " +
 			"present in the attestation response.",

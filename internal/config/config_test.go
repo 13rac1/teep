@@ -1880,13 +1880,13 @@ func TestMergedAllowFail_TOMLOverridesFormatLayer(t *testing.T) {
 	}
 }
 
-// TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced: the two factors that
-// prove the E2EE key is the gateway's endorsed, hardware-bound key must never
-// be waived by default — together they are the whole of what authorizes E2EE
-// for ACI/1.
+// TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced: the factors that
+// prove the E2EE key is the gateway's KMS-issued, hardware-bound key must
+// never be waived by default — together they are the whole of what
+// authorizes E2EE for ACI/1.
 func TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced(t *testing.T) {
 	for _, name := range []string{
-		attestation.FactorACIKeysetEndorsement,
+		attestation.FactorACIKeyCustody,
 		"gateway_tee_reportdata_binding",
 		"gateway_tee_quote_signature",
 		"gateway_tee_measurement",

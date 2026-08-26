@@ -11,19 +11,16 @@ import (
 )
 
 // aciResponse is the JSON structure returned by Venice's ACI/1 attestation
-// format (api_version == "aci/1", vendor "private-ai-gateway-dev"). ACI/1
-// includes both a new nested "attestation" block (workload keyset,
-// keyset endorsement, source provenance, evidence) and dstack-compatible
-// top-level fields (nonce, model, verified, intel_quote, etc.).
+// format (api_version == "aci/1"). ACI/1 includes both a nested
+// "attestation" block (workload keyset, source provenance, evidence) and
+// dstack-compatible top-level fields (nonce, model, verified, intel_quote,
+// etc.).
 //
-// ACI/1 has no docker-compose manifest — there is no app_compose/compose_hash
-// analog. Supply-chain provenance is expressed instead as a git
-// source_provenance (repo_url/repo_commit) plus a cryptographically
-// endorsed workload_keyset; see keyset.go for the endorsement verification.
+// SEE: spec/aci.md in https://github.com/Dstack-TEE/private-ai-gateway —
+// the attested workload named by attestation.source_provenance.repo_url.
 type aciResponse struct {
 	// ACI/1-specific fields.
 	APIVersion           string         `json:"api_version"`
-	WorkloadID           string         `json:"workload_id"`
 	WorkloadKeysetDigest string         `json:"workload_keyset_digest"`
 	Attestation          aciAttestation `json:"attestation"`
 	ServiceCapabilities  aciServiceCaps `json:"service_capabilities"`
@@ -46,54 +43,33 @@ type aciResponse struct {
 	CandidatesEval     int                 `json:"candidates_evaluated"`
 }
 
-// aciServiceCaps holds service capability declarations.
+// aciServiceCaps holds service capability declarations. Serving is
+// "aggregator" when the service forwards to upstream inference hosts and
+// "direct" when inference runs inside the attested workload.
 type aciServiceCaps struct {
 	SupportedE2EEVersions []string `json:"supported_e2ee_versions"`
+	Serving               string   `json:"serving"`
 }
 
 // aciAttestation holds the nested "attestation" object in ACI/1 responses.
 type aciAttestation struct {
-	Vendor            string               `json:"vendor"`
-	TEEType           string               `json:"tee_type"`
-	WorkloadKeyset    aciWorkloadKeyset    `json:"workload_keyset"`
-	ReportData        string               `json:"report_data"`
-	KeysetEndorsement aciKeysetEndorsement `json:"keyset_endorsement"`
-	SourceProvenance  aciSourceProvenance  `json:"source_provenance"`
-	Freshness         aciFreshness         `json:"freshness"`
-	Evidence          aciEvidence          `json:"evidence"`
+	TEEType          string              `json:"tee_type"`
+	WorkloadKeyset   aciWorkloadKeyset   `json:"workload_keyset"`
+	ReportData       string              `json:"report_data"`
+	SourceProvenance aciSourceProvenance `json:"source_provenance"`
+	Evidence         aciEvidence         `json:"evidence"`
 }
 
 // aciWorkloadKeyset holds the workload_keyset object in ACI/1 responses: the
-// workload identity key plus the receipt-signing, E2EE, and TLS public keys
-// it endorses. See keyset.go for JCS canonicalization and endorsement
-// signature verification.
+// receipt-signing, E2EE, and TLS public keys the workload serves under. The
+// declared workload_keyset_digest is sha256 over the JCS canonicalization of
+// this object; see keyset.go.
 type aciWorkloadKeyset struct {
-	WorkloadIdentity   aciWorkloadIdentity `json:"workload_identity"`
-	KeysetEpoch        aciKeysetEpoch      `json:"keyset_epoch"`
-	ReceiptSigningKeys []aciKey            `json:"receipt_signing_keys"`
-	E2EEPublicKeys     []aciKey            `json:"e2ee_public_keys"`
-	TLSPublicKeys      []aciTLSBinding     `json:"tls_public_keys"`
-}
-
-// aciWorkloadIdentity holds the workload_identity object.
-type aciWorkloadIdentity struct {
-	PublicKey aciPublicKey `json:"public_key"`
-	Subject   *string      `json:"subject"` // nullable
-}
-
-// aciPublicKey holds an algorithm + public key pair.
-type aciPublicKey struct {
-	Algo      string `json:"algo"`
-	PublicKey string `json:"public_key"`
-}
-
-// aciKeysetEpoch holds keyset epoch metadata. NotAfter uses json.Number
-// because the wire value may be a float64-rounded representation of u64::MAX
-// (e.g. 18446744073709552000) which exceeds uint64 range. The raw JSON number
-// is preserved as-is for JCS canonicalization; see keyset.go.
-type aciKeysetEpoch struct {
-	Version  int         `json:"version"`
-	NotAfter json.Number `json:"not_after"`
+	Subject            *string         `json:"subject"` // nullable
+	NotAfter           json.Number     `json:"not_after"`
+	ReceiptSigningKeys []aciKey        `json:"receipt_signing_keys"`
+	E2EEPublicKeys     []aciKey        `json:"e2ee_public_keys"`
+	TLSPublicKeys      []aciTLSBinding `json:"tls_public_keys"`
 }
 
 // aciKey holds a named cryptographic key entry.
@@ -103,23 +79,12 @@ type aciKey struct {
 	PublicKey string `json:"public_key"`
 }
 
-// aciKeysetEndorsement holds the keyset endorsement signature.
-type aciKeysetEndorsement struct {
-	Algo  string `json:"algo"`
-	Value string `json:"value"`
-}
-
-// aciFreshness holds attestation freshness timestamps.
-type aciFreshness struct {
-	FetchedAt  int64 `json:"fetched_at"`
-	StaleAfter int64 `json:"stale_after"`
-}
-
 // aciSourceProvenance holds the source_provenance object in ACI/1 responses.
-// ACI/1's supply-chain provenance is expressed as a git repo + commit rather
-// than a docker-compose manifest; image_digest/image_provenance are declared
-// nullable because Venice does not currently publish verifiable image
-// digests for ACI/1 workloads.
+// ACI/1's supply-chain provenance is a git repo + commit; image_digest and
+// image_provenance are declared nullable because Venice does not currently
+// publish them. These fields are not bound into the quote; the quote-bound
+// provenance is the gateway app_compose (evidence.app_compose), whose hash
+// the quote's MRConfigID and RTMR3 compose-hash event measure.
 type aciSourceProvenance struct {
 	RepoURL         string  `json:"repo_url"`
 	RepoCommit      string  `json:"repo_commit"`
@@ -127,19 +92,27 @@ type aciSourceProvenance struct {
 	ImageProvenance *string `json:"image_provenance"` // nullable
 }
 
-// aciKeyCustody holds the key_custody object in ACI/1 responses.
+// aciKeyCustody holds the key_custody object in ACI/1 responses: the
+// dstack-KMS derivation record for each workload key. See keyset.go for the
+// signature-chain verification that connects these keys to an accepted KMS
+// root.
 type aciKeyCustody struct {
 	Provider string          `json:"provider"`
 	Keys     []aciCustodyKey `json:"keys"`
 }
 
 // aciCustodyKey holds one entry in the key_custody.keys array.
+// SignatureChain carries two 65-byte recoverable secp256k1 signatures:
+// [0] by the app key over "{purpose}:{compressed kms_public_key}", and
+// [1] by the KMS root over "dstack-kms-issued:" || app_id || compressed app
+// key. SEE: verifyKeyCustody in keyset.go.
 type aciCustodyKey struct {
 	Role           string   `json:"role"`
 	Path           string   `json:"path"`
 	Purpose        string   `json:"purpose"`
 	Algo           string   `json:"algo"`
 	PublicKey      string   `json:"public_key"`
+	KMSPublicKey   string   `json:"kms_public_key"`
 	SignatureChain []string `json:"signature_chain"`
 }
 
@@ -147,20 +120,24 @@ type aciCustodyKey struct {
 // downstream_tls_binding and workload_keyset.tls_public_keys). teep never
 // connects to the domains these entries name (the gateway does), so no live
 // SPKI comparison is possible; their integrity is covered by the keyset
-// endorsement check in keyset.go.
+// digest check in keyset.go.
 type aciTLSBinding struct {
 	Domain     string `json:"domain"`
 	SPKISHA256 string `json:"spki_sha256"`
 }
 
-// aciEvidence holds the evidence object in ACI/1 responses.
+// aciEvidence holds the evidence object in ACI/1 responses. EventLog,
+// VMConfig, and AppCompose arrive as JSON-encoded strings; the event log is
+// decoded here, the compose manifest is passed through for the existing
+// dstack compose-binding verification.
 type aciEvidence struct {
-	Quote                string           `json:"quote"`
-	QuoteReportData      string           `json:"quote_report_data"`
-	EventLog             eventLogFlexible `json:"event_log"`
-	VMConfig             string           `json:"vm_config"`
-	KeyCustody           aciKeyCustody    `json:"key_custody"`
-	DownstreamTLSBinding aciTLSBinding    `json:"downstream_tls_binding"`
+	Quote                string        `json:"quote"`
+	QuoteReportData      string        `json:"quote_report_data"`
+	EventLog             string        `json:"event_log"`
+	VMConfig             string        `json:"vm_config"`
+	AppCompose           string        `json:"app_compose"`
+	KeyCustody           aciKeyCustody `json:"key_custody"`
+	DownstreamTLSBinding aciTLSBinding `json:"downstream_tls_binding"`
 }
 
 // parseACI unmarshals a Venice ACI/1-format attestation JSON response body
@@ -171,27 +148,34 @@ func parseACI(ctx context.Context, body []byte) (*attestation.RawAttestation, er
 	if err != nil {
 		return nil, fmt.Errorf("venice aci/1: unmarshal attestation response: %w", err)
 	}
-	return aciToRaw(ctx, &ar, unknown, missing, body), nil
+	return aciToRaw(ctx, &ar, unknown, missing, body)
 }
 
 // aciToRaw converts a parsed ACI/1 attestation response to RawAttestation.
 // ACI/1 includes dstack-compatible top-level fields (nonce, model, verified,
-// etc.) alongside the new nested "attestation" block.
+// etc.) alongside the nested "attestation" block.
 //
 // The attested CVM is the private-ai-gateway, not the machine serving
 // inference: its vm_config reports zero GPUs, it pins a downstream TLS hop,
-// and its KMS key paths carry no model component. The TDX quote and event
-// log therefore populate the Gateway* fields and are verified in the
-// gateway tier (Tier 4); the core fields stay empty and the core tee_*
-// factors fail, stating that teep has no CPU attestation of the inference
-// host. TEEHardware is cleared for the same reason — the report must not
-// present the gateway's platform as the model endpoint's.
+// service_capabilities.serving is "aggregator", and its KMS key paths carry
+// no model component. The TDX quote, event log, and app_compose therefore
+// populate the Gateway* fields and are verified in the gateway tier
+// (Tier 4); the core fields stay empty and the core tee_* factors fail,
+// stating that teep has no CPU attestation of the inference host.
+// TEEHardware is cleared for the same reason — the report must not present
+// the gateway's platform as the model endpoint's.
 //
 // The quote's REPORTDATA binding is the same keccak256(signing key)+nonce
 // scheme dstack uses, so venice.ReportDataVerifier is reused unchanged for
 // the gateway quote — see the comment on ReportDataVerifier in reportdata.go.
-func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, body []byte) *attestation.RawAttestation {
-	logEventLog(ctx, ar.Attestation.Evidence.EventLog)
+func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, body []byte) (*attestation.RawAttestation, error) {
+	var eventLog []attestation.EventLogEntry
+	if ar.Attestation.Evidence.EventLog != "" {
+		if err := json.Unmarshal([]byte(ar.Attestation.Evidence.EventLog), &eventLog); err != nil {
+			return nil, fmt.Errorf("venice aci/1: decode evidence.event_log: %w", err)
+		}
+	}
+	logEventLog(ctx, eventLog)
 	if ar.IntelQuote != ar.Attestation.Evidence.Quote {
 		// The top-level intel_quote is documented as an echo of
 		// attestation.evidence.quote. A divergence means the response is not
@@ -213,29 +197,29 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 		CandidatesAvail: ar.CandidatesAvail,
 		CandidatesEval:  ar.CandidatesEval,
 
-		// Gateway evidence: the quote and event log describe the
-		// private-ai-gateway CVM. GatewayNonceHex carries the echoed client
-		// nonce that the gateway quote's REPORTDATA binds.
+		// Gateway evidence: the quote, event log, and compose manifest
+		// describe the private-ai-gateway CVM. GatewayNonceHex carries the
+		// echoed client nonce that the gateway quote's REPORTDATA binds.
+		// GatewayAppCompose feeds the existing dstack compose binding:
+		// sha256(app_compose) must match the quote's MRConfigID.
 		GatewayIntelQuote: ar.Attestation.Evidence.Quote,
-		GatewayEventLog:   ar.Attestation.Evidence.EventLog,
+		GatewayEventLog:   eventLog,
 		GatewayNonceHex:   ar.Nonce,
+		GatewayAppCompose: ar.Attestation.Evidence.AppCompose,
 
-		// ACI/1 has no app_compose/compose_hash — AppCompose, ComposeHash,
-		// and AppName stay empty so the compose-based supply-chain factors
-		// (compose_binding, sigstore_verification, build_transparency_log,
-		// provider_signer_recognition, component_signature_recognition)
-		// evaluate to Fail rather than being hidden as NotApplicable.
+		// The model-tier compose fields stay empty: ACI/1 publishes no
+		// manifest for the machine serving inference, so the model-tier
+		// supply-chain factors evaluate to Fail rather than being hidden as
+		// NotApplicable.
 		ACISourceRepoURL:        ar.Attestation.SourceProvenance.RepoURL,
-		ACIWorkloadID:           ar.WorkloadID,
 		ACIWorkloadKeysetDigest: ar.WorkloadKeysetDigest,
-		ACIKeysetEndorsementSig: ar.Attestation.KeysetEndorsement.Value,
-		ACIIdentityKeyHex:       ar.Attestation.WorkloadKeyset.WorkloadIdentity.PublicKey.PublicKey,
 		ACIWorkloadKeyset:       &ar.Attestation.WorkloadKeyset,
+		ACIKeyCustody:           &ar.Attestation.Evidence.KeyCustody,
 		ACIDownstreamTLSDomain:  ar.Attestation.Evidence.DownstreamTLSBinding.Domain,
 		ACIDownstreamTLSSPKI:    ar.Attestation.Evidence.DownstreamTLSBinding.SPKISHA256,
 
 		UnknownFields: unknown,
 		MissingFields: missing,
 		RawBody:       body,
-	}
+	}, nil
 }
