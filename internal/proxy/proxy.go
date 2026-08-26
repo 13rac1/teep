@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -908,6 +909,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	nrasResult, nrasDur := s.verifyNVIDIAOnline(ctx, raw, prov.Name)
 	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)
 	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, prov.SupplyChainPolicy)
+	s.addGatewaySupplyChain(ctx, &sc, raw, gatewayComposeResult, prov.SupplyChainPolicy)
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
 	tinfoilSC, tinfoilSCDur := s.verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, prov, upstreamModel)
 
@@ -939,6 +941,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		GatewayPolicy:          prov.GatewayMeasurementPolicy,
 		SupplyChainPolicy:      prov.SupplyChainPolicy,
 		ImageRepos:             sc.ImageRepos,
+		GatewayImageRepos:      sc.GatewayImageRepos,
 		DigestToRepo:           sc.DigestToRepo,
 		TDX:                    tdxResult,
 		SEV:                    sevResult,
@@ -1188,11 +1191,49 @@ func (s *Server) verifyPoC(
 // supplyChainResult holds the outputs of compose binding, sigstore, and rekor
 // verification. Zero value is safe to use (nil slices/maps/pointers).
 type supplyChainResult struct {
-	Compose      *attestation.ComposeBindingResult
-	Sigstore     []attestation.SigstoreResult
-	ImageRepos   []string
-	DigestToRepo map[string]string
-	Rekor        []attestation.RekorProvenance
+	Compose           *attestation.ComposeBindingResult
+	Sigstore          []attestation.SigstoreResult
+	ImageRepos        []string
+	GatewayImageRepos []string
+	DigestToRepo      map[string]string
+	Rekor             []attestation.RekorProvenance
+}
+
+// addGatewaySupplyChain extracts the image digests from a verified gateway
+// compose manifest and runs the sigstore and Rekor checks over them,
+// merging the results into sc. Digests only count once the gateway compose
+// binding verified — an unbound manifest proves nothing.
+// SYNC: verify.Run merges gateway digests the same way (MergeComposeDigests).
+func (s *Server) addGatewaySupplyChain(
+	ctx context.Context,
+	sc *supplyChainResult,
+	raw *attestation.RawAttestation,
+	gatewayCompose *attestation.ComposeBindingResult,
+	scPolicy *attestation.SupplyChainPolicy,
+) {
+	if gatewayCompose == nil || gatewayCompose.Err != nil || raw.GatewayAppCompose == "" {
+		return
+	}
+	cd := attestation.ExtractComposeDigests(raw.GatewayAppCompose)
+	sc.GatewayImageRepos = cd.Repos
+	if sc.DigestToRepo == nil {
+		sc.DigestToRepo = make(map[string]string, len(cd.DigestToRepo))
+	}
+	maps.Copy(sc.DigestToRepo, cd.DigestToRepo)
+	if len(cd.Digests) == 0 || s.cfg.Offline {
+		return
+	}
+	gwSigstore := s.rekorClient.CheckSigstoreDigests(ctx, cd.Digests)
+	sc.Sigstore = append(sc.Sigstore, gwSigstore...)
+	var okDigests []string
+	for _, sr := range gwSigstore {
+		if sr.OK {
+			okDigests = append(okDigests, sr.Digest)
+		}
+	}
+	if len(okDigests) > 0 {
+		sc.Rekor = append(sc.Rekor, s.rekorClient.FetchRekorProvenancesForPolicy(ctx, okDigests, sc.DigestToRepo, scPolicy)...)
+	}
 }
 
 // verifySupplyChain runs compose binding, sigstore digest, and rekor provenance checks.

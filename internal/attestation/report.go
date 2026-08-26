@@ -574,13 +574,13 @@ var VeniceACIDefaultAllowFail = []string{
 	FactorTLSKeyBinding,
 
 	// Gateway waivers. hardware_config and boot_config cover RTMR churn on
-	// the private-ai-gateway-dev channel (the same treatment venice's dstack
-	// model tier gets); compose_binding because ACI/1 publishes no gateway
-	// compose manifest either; cpu_id_registry mirrors nearcloud — a Proof
-	// of Cloud outage must not block.
+	// the dev-channel gateway image (the same treatment venice's dstack
+	// model tier gets); cpu_id_registry mirrors nearcloud — a Proof of
+	// Cloud outage must not block. gateway_compose_binding is enforced: the
+	// gateway publishes its app_compose and the quote's MRConfigID measures
+	// it.
 	FactorGWHardwareConfig,
 	FactorGWBootConfig,
-	FactorGWComposeBinding,
 	FactorGWCPUIDRegistry,
 }
 
@@ -2668,12 +2668,13 @@ func evalCPUIDRegistry(in *ReportInput) []FactorResult {
 func evalComposeBinding(in *ReportInput) []FactorResult {
 	switch {
 	case in.Raw != nil && in.Raw.BackendFormat == FormatACI1:
-		// ACI/1 publishes no compose manifest at all — a permanent
-		// structural absence, not evidence that failed to arrive. Fail
-		// rather than Skip so the gap stays visible when the factor is
-		// waived (a waived Skip never surfaces in the score).
+		// ACI/1 publishes no compose manifest for the inference host — a
+		// permanent structural absence, not evidence that failed to arrive.
+		// Fail rather than Skip so the gap stays visible when the factor is
+		// waived (a waived Skip never surfaces in the score). The gateway's
+		// own manifest is verified by gateway_compose_binding.
 		return factor(TierSupplyChain, FactorComposeBinding, Fail,
-			"ACI/1 publishes no compose manifest; workload composition is not verifiable")
+			"ACI/1 publishes no compose manifest for the inference host; workload composition is not verifiable")
 	case in.Compose == nil || !in.Compose.Checked:
 		return factor(TierSupplyChain, FactorComposeBinding, Skip, "no app_compose in attestation response")
 	case in.Compose.Err != nil:
@@ -2683,12 +2684,14 @@ func evalComposeBinding(in *ReportInput) []FactorResult {
 	}
 }
 func evalSigstoreVerification(in *ReportInput) []FactorResult {
-	if in.Raw != nil && in.Raw.BackendFormat == FormatACI1 {
-		// ACI/1 publishes no image digests (source_provenance.image_digest
-		// is null) — a permanent structural absence. Fail rather than Skip
-		// so the gap stays visible when the factor is waived.
+	if in.Raw != nil && in.Raw.BackendFormat == FormatACI1 && len(in.Sigstore) == 0 {
+		// ACI/1 publishes no image digests for the inference host — a
+		// permanent structural absence. Fail rather than Skip so the gap
+		// stays visible when the factor is waived. When the gateway compose
+		// binding verified, its digest-pinned images populate in.Sigstore
+		// and evaluate below.
 		return factor(TierSupplyChain, FactorSigstoreVerify, Fail,
-			"ACI/1 publishes no image digests; Sigstore verification is not possible")
+			"ACI/1 publishes no image digests for the inference host; Sigstore verification is not possible")
 	}
 	if len(in.Sigstore) == 0 {
 		return factor(TierSupplyChain, FactorSigstoreVerify, Skip, "no component digests to verify")
