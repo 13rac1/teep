@@ -230,7 +230,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		GatewayCompose:         gatewayCompose,
 		GatewayEventLog:        raw.GatewayEventLog,
 		TinfoilSC:              tinfoilSC,
-		ACIKeyset:              venice.VerifyACIKeyset(raw),
+		ACIKeyset:              venice.VerifyACIKeyset(raw, opts.VerificationTime),
 		E2EETest:               e2eeResult,
 		E2EEConfigured:         providerUsesTLSBinding(opts.ProviderName) && opts.Provider.E2EE,
 		Inapplicable:           inapplicableFactors(opts.ProviderName),

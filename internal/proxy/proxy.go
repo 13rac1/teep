@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -908,8 +907,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	nvidiaResult, nvidiaDur := verifyNVIDIA(ctx, raw, nonce, prov.Name)
 	nrasResult, nrasDur := s.verifyNVIDIAOnline(ctx, raw, prov.Name)
 	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)
-	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, prov.SupplyChainPolicy)
-	s.addGatewaySupplyChain(ctx, &sc, raw, gatewayComposeResult, prov.SupplyChainPolicy)
+	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, gatewayComposeResult, prov.SupplyChainPolicy)
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
 	tinfoilSC, tinfoilSCDur := s.verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, prov, upstreamModel)
 
@@ -959,7 +957,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		Sigstore:               sc.Sigstore,
 		Rekor:                  sc.Rekor,
 		TinfoilSC:              tinfoilSC,
-		ACIKeyset:              venice.VerifyACIKeyset(raw),
+		ACIKeyset:              venice.VerifyACIKeyset(raw, time.Time{}),
 		E2EEConfigured:         prov.E2EE,
 		Inapplicable:           inapplicableForProvider(prov.Name),
 		ProviderUsesTLSBinding: prov.UsesTLSBinding,
@@ -1199,43 +1197,6 @@ type supplyChainResult struct {
 	Rekor             []attestation.RekorProvenance
 }
 
-// addGatewaySupplyChain extracts the image digests from a verified gateway
-// compose manifest and runs the sigstore and Rekor checks over them,
-// merging the results into sc. Digests only count once the gateway compose
-// binding verified — an unbound manifest proves nothing.
-// SYNC: verify.Run merges gateway digests the same way (MergeComposeDigests).
-func (s *Server) addGatewaySupplyChain(
-	ctx context.Context,
-	sc *supplyChainResult,
-	raw *attestation.RawAttestation,
-	gatewayCompose *attestation.ComposeBindingResult,
-	scPolicy *attestation.SupplyChainPolicy,
-) {
-	if gatewayCompose == nil || gatewayCompose.Err != nil || raw.GatewayAppCompose == "" {
-		return
-	}
-	cd := attestation.ExtractComposeDigests(raw.GatewayAppCompose)
-	sc.GatewayImageRepos = cd.Repos
-	if sc.DigestToRepo == nil {
-		sc.DigestToRepo = make(map[string]string, len(cd.DigestToRepo))
-	}
-	maps.Copy(sc.DigestToRepo, cd.DigestToRepo)
-	if len(cd.Digests) == 0 || s.cfg.Offline {
-		return
-	}
-	gwSigstore := s.rekorClient.CheckSigstoreDigests(ctx, cd.Digests)
-	sc.Sigstore = append(sc.Sigstore, gwSigstore...)
-	var okDigests []string
-	for _, sr := range gwSigstore {
-		if sr.OK {
-			okDigests = append(okDigests, sr.Digest)
-		}
-	}
-	if len(okDigests) > 0 {
-		sc.Rekor = append(sc.Rekor, s.rekorClient.FetchRekorProvenancesForPolicy(ctx, okDigests, sc.DigestToRepo, scPolicy)...)
-	}
-}
-
 // verifySupplyChain runs compose binding, sigstore digest, and rekor provenance checks.
 //
 // scPolicy must be non-nil (set at config load, SEE: fromConfig). A nil
@@ -1246,35 +1207,53 @@ func (s *Server) verifySupplyChain(
 	ctx context.Context,
 	raw *attestation.RawAttestation,
 	tdxResult *attestation.TDXVerifyResult,
+	gatewayCompose *attestation.ComposeBindingResult,
 	scPolicy *attestation.SupplyChainPolicy,
 ) (supplyChainResult, time.Duration) {
 	if scPolicy == nil {
 		panic("verifySupplyChain: nil SupplyChainPolicy; provider must supply a real policy or attestation.NoSupplyChainPolicy()")
 	}
-	if raw.AppCompose == "" || tdxResult == nil || tdxResult.ParseErr != nil {
-		if tdxResult != nil && tdxResult.ParseErr != nil {
-			slog.WarnContext(ctx, "supply chain verification skipped: TDX quote parse failed",
-				"parse_err", tdxResult.ParseErr)
-		} else {
-			slog.DebugContext(ctx, "supply chain verification skipped",
-				"has_compose", raw.AppCompose != "",
-				"has_tdx", tdxResult != nil)
-		}
-		return supplyChainResult{}, 0
-	}
 	start := time.Now()
-	sc := supplyChainResult{
-		Compose: &attestation.ComposeBindingResult{Checked: true},
-	}
-	sc.Compose.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+	var sc supplyChainResult
 
-	if sc.Compose.Err == nil {
-		cd := attestation.ExtractComposeDigests(raw.AppCompose)
-		sc.ImageRepos = cd.Repos
-		sc.DigestToRepo = cd.DigestToRepo
-		if len(cd.Digests) > 0 && !s.cfg.Offline {
-			sc.Sigstore = s.rekorClient.CheckSigstoreDigests(ctx, cd.Digests)
+	// Model-tier compose binding and digest extraction.
+	var modelCD attestation.ComposeDigests
+	switch {
+	case raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil:
+		sc.Compose = &attestation.ComposeBindingResult{Checked: true}
+		sc.Compose.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+		if sc.Compose.Err == nil {
+			modelCD = attestation.ExtractComposeDigests(raw.AppCompose)
+			sc.ImageRepos = modelCD.Repos
 		}
+	case tdxResult != nil && tdxResult.ParseErr != nil:
+		slog.WarnContext(ctx, "supply chain verification skipped: TDX quote parse failed",
+			"parse_err", tdxResult.ParseErr)
+	default:
+		slog.DebugContext(ctx, "model supply chain verification skipped",
+			"has_compose", raw.AppCompose != "",
+			"has_tdx", tdxResult != nil)
+	}
+
+	// Gateway-tier digest extraction. Digests count only after the gateway
+	// compose binding verified — an unbound manifest proves nothing.
+	var gatewayCD attestation.ComposeDigests
+	if gatewayCompose != nil && gatewayCompose.Err == nil && raw.GatewayAppCompose != "" {
+		gatewayCD = attestation.ExtractComposeDigests(raw.GatewayAppCompose)
+		sc.GatewayImageRepos = gatewayCD.Repos
+	}
+
+	if len(modelCD.Digests) == 0 && len(gatewayCD.Digests) == 0 {
+		return sc, time.Since(start)
+	}
+
+	// One deduplicated Sigstore/Rekor pass over the merged digest set.
+	// SYNC: verify.Run merges the same way (attestation.MergeComposeDigests:
+	// model digests first, first-writer-wins with conflict logging).
+	allDigests, digestToRepo := attestation.MergeComposeDigests(modelCD, gatewayCD)
+	sc.DigestToRepo = digestToRepo
+	if !s.cfg.Offline {
+		sc.Sigstore = s.rekorClient.CheckSigstoreDigests(ctx, allDigests)
 	}
 
 	if len(sc.Sigstore) > 0 && !s.cfg.Offline {

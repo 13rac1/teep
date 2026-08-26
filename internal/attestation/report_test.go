@@ -4962,10 +4962,42 @@ func TestEvalACIKeyCustody(t *testing.T) {
 		in := &ReportInput{
 			Raw: &RawAttestation{BackendFormat: FormatACI1},
 			ACIKeyset: &ACIKeysetResult{
-				KeysetDigestMatch:  true,
-				SigningKeyInKeyset: true,
-				CustodyChainValid:  false,
-				Detail:             "key custody: recovered KMS root is not accepted",
+				KeysetDigestMatch:    true,
+				SigningKeyInKeyset:   true,
+				CustodyChainValid:    false,
+				GatewayIdentityValid: false,
+				KeysetNotExpired:     true,
+				Detail:               "key custody: recovered KMS root is not accepted",
+			},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
+	})
+
+	t.Run("fail_gateway_identity_invalid", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				KeysetDigestMatch:    true,
+				SigningKeyInKeyset:   true,
+				CustodyChainValid:    true,
+				GatewayIdentityValid: false,
+				KeysetNotExpired:     true,
+				Detail:               "keyset subject does not name the accepted app id",
+			},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
+	})
+
+	t.Run("fail_expired", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				KeysetDigestMatch:    true,
+				SigningKeyInKeyset:   true,
+				CustodyChainValid:    true,
+				GatewayIdentityValid: true,
+				KeysetNotExpired:     false,
+				Detail:               "keyset expired",
 			},
 		}
 		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
@@ -4975,10 +5007,12 @@ func TestEvalACIKeyCustody(t *testing.T) {
 		in := &ReportInput{
 			Raw: &RawAttestation{BackendFormat: FormatACI1},
 			ACIKeyset: &ACIKeysetResult{
-				KeysetDigestMatch:  true,
-				SigningKeyInKeyset: true,
-				CustodyChainValid:  true,
-				Detail:             "all checks passed",
+				KeysetDigestMatch:    true,
+				SigningKeyInKeyset:   true,
+				CustodyChainValid:    true,
+				GatewayIdentityValid: true,
+				KeysetNotExpired:     true,
+				Detail:               "all checks passed",
 			},
 		}
 		assertSingleFactor(t, evalACIKeyCustody(in), Pass)
@@ -5049,6 +5083,38 @@ func TestBuildReport_ACIGatewayEvidence(t *testing.T) {
 	if _, ok := byName[FactorGWReportData]; !ok {
 		t.Error("gateway tier missing: no gateway_tee_reportdata_binding factor")
 	}
+}
+
+// TestBuildReport_ACIEmptyQuoteFailsClosed: an ACI/1 report with no gateway
+// TDX result (as an empty evidence.quote would produce if the parser did not
+// already reject it) must trip the non-suppressible evidence_verified
+// failure — the waived core factors must never stand alone.
+func TestBuildReport_ACIEmptyQuoteFailsClosed(t *testing.T) {
+	nonce := NewNonce()
+	raw := &RawAttestation{
+		BackendFormat: FormatACI1,
+		Verified:      true,
+		Nonce:         nonce.Hex(),
+		Model:         "test-model",
+		SigningKey:    validSigningKey(t),
+		// No GatewayIntelQuote: the empty-quote case.
+	}
+	report := BuildReport(&ReportInput{
+		Provider:  "venice",
+		Model:     "test-model",
+		Raw:       raw,
+		Nonce:     nonce,
+		AllowFail: KnownFactors, // waive everything waivable
+	})
+	for _, f := range report.Factors {
+		if f.Name == FactorEvidenceVerified {
+			if f.Status != Fail || !f.Enforced {
+				t.Errorf("evidence_verified: status=%s enforced=%v, want enforced Fail", f.Status, f.Enforced)
+			}
+			return
+		}
+	}
+	t.Error("evidence_verified factor missing: an ACI/1 report without a gateway quote did not fail closed")
 }
 
 // TestBuildReport_ACIGatewayUnverifiedFailsClosed: gateway evidence supplied

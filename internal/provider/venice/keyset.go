@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -60,6 +61,24 @@ const e2eeCustodyPurpose = "aci.e2ee.v1"
 // SEE: docs/attestation_gaps/venice_aci_gateway.md.
 var defaultACIKMSRootAllow = []string{
 	"0334c76e0c3f52ec64cbf9bbf5c910c272330166fd656c0a86bb330963e46910e1",
+}
+
+// defaultACIGatewayAppIDAllow lists accepted dstack app ids (hex, the RTMR3
+// "app-id" event payload) for the Venice ACI/1 gateway. The app id is the
+// dstack-KMS application identity; pinning it is what says "this key belongs
+// to the private-ai-gateway", not merely to some tenant of the same KMS. The
+// value is authenticated: the RTMR3 event log replay recomputes the app-id
+// event digest, and gateway_event_log_integrity checks the replay against the
+// quote.
+//
+// The value was observed on two models of the live gateway on 2026-08-25 and
+// is trust-on-first-use. DANGER: an attacker who adds an app id here makes
+// teep accept that dstack app as the Venice gateway. The gateway runs a
+// dev-channel image, so the app id can change on redeploy — a mismatch fails
+// aci_key_custody closed, which is correct; refresh the pin from a new
+// capture. SEE: docs/attestation_gaps/venice_aci_gateway.md.
+var defaultACIGatewayAppIDAllow = []string{
+	"fdb7a14e5a6675f752e2cb69c9067a98ca402918",
 }
 
 // ---------------------------------------------------------------------------
@@ -288,11 +307,13 @@ func jcsSHA256Hex(v any) (string, error) {
 
 // VerifyACIKeyset performs ACI/1 workload keyset verification using fields
 // from a RawAttestation: the keyset digest recompute, the signing-key
-// membership check, and the dstack-KMS custody chain for the E2EE key.
-// Returns nil for non-ACI/1 formats. app_id is read from the RTMR3 "app-id"
-// event in raw.GatewayEventLog; the enforced gateway_event_log_integrity
-// factor is what proves that log matches the quote.
-func VerifyACIKeyset(raw *attestation.RawAttestation) *attestation.ACIKeysetResult {
+// membership check, the dstack-KMS custody chain for the E2EE key, the
+// gateway identity pin, and the keyset expiry. Returns nil for non-ACI/1
+// formats. app_id is read from the RTMR3 "app-id" event in
+// raw.GatewayEventLog; the enforced gateway_event_log_integrity factor is
+// what proves that log matches the quote. now is the verification time (the
+// capture time on replay); a zero value resolves to the wall clock.
+func VerifyACIKeyset(raw *attestation.RawAttestation, now time.Time) *attestation.ACIKeysetResult {
 	if raw.BackendFormat != attestation.FormatACI1 {
 		return nil
 	}
@@ -308,29 +329,40 @@ func VerifyACIKeyset(raw *attestation.RawAttestation) *attestation.ACIKeysetResu
 			Err: errors.New("ACI/1 key custody not available"),
 		}
 	}
-	return verifyKeyset(
-		keyset,
-		custody,
-		raw.ACIWorkloadKeysetDigest,
-		raw.SigningKey,
-		appIDFromEventLog(raw.GatewayEventLog),
-		defaultACIKMSRootAllow,
-	)
+	appID, err := appIDFromEventLog(raw.GatewayEventLog)
+	if err != nil {
+		return &attestation.ACIKeysetResult{Err: err}
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return verifyKeyset(keyset, custody, raw.ACIWorkloadKeysetDigest, raw.SigningKey,
+		appID, now, defaultACIKMSRootAllow, defaultACIGatewayAppIDAllow)
 }
 
-// appIDFromEventLog returns the payload of the RTMR3 "app-id" event, or nil
-// when absent.
-func appIDFromEventLog(entries []attestation.EventLogEntry) []byte {
+// appIDFromEventLog returns the payload of the single RTMR3 dstack-runtime
+// "app-id" event. It requires the runtime event type so the value is one the
+// RTMR replay authenticated (an "app-id" event of any other type carries an
+// unchecked digest), and returns an error on a duplicate so an attacker
+// cannot append a second entry that this reader would prefer. Returns nil,
+// nil when no such event exists — the caller fails closed on a nil app id.
+func appIDFromEventLog(entries []attestation.EventLogEntry) ([]byte, error) {
+	var found []byte
 	for i := range entries {
-		if entries[i].IMR == 3 && entries[i].Event == "app-id" {
-			b, err := hex.DecodeString(entries[i].EventPayload)
-			if err != nil {
-				return nil
-			}
-			return b
+		e := entries[i]
+		if e.IMR != 3 || e.Event != "app-id" || e.EventType != attestation.DstackRuntimeEventType {
+			continue
 		}
+		if found != nil {
+			return nil, errors.New("multiple app-id events in the gateway event log")
+		}
+		b, err := hex.DecodeString(e.EventPayload)
+		if err != nil {
+			return nil, fmt.Errorf("decode app-id event payload: %w", err)
+		}
+		found = b
 	}
-	return nil
+	return found, nil
 }
 
 // verifyKeyset performs the three ACI/1 keyset checks:
@@ -345,18 +377,24 @@ func appIDFromEventLog(entries []attestation.EventLogEntry) []byte {
 //     recovered from signature_chain[0] over
 //     "{purpose}:{compressed kms_public_key}" must be endorsed by
 //     signature_chain[1] over "dstack-kms-issued:" || appID || compressed
-//     app key, and the recovered root must be in kmsRootAllow.
+//     app key, the recovered root must be in kmsRootAllow, and appID must be
+//     in appIDAllow.
+//  4. Check that a non-null keyset subject restates the accepted app id as
+//     "app-id:0x<hex>".
 //
-// Check 3 is what connects the keys to an authority outside the response;
-// checks 1 and 2 alone prove only that the response is self-consistent
-// around the REPORTDATA-bound signing key.
+// Check 3 is what connects the keys to an authority outside the response, and
+// the appID pin is what says the chain belongs to the accepted gateway rather
+// than to any tenant of the same KMS; checks 1 and 2 alone prove only that
+// the response is self-consistent around the REPORTDATA-bound signing key.
 func verifyKeyset(
 	keyset *aciWorkloadKeyset,
 	custody *aciKeyCustody,
 	declaredKeysetDigest string,
 	signingKeyHex string,
 	appID []byte,
+	now time.Time,
 	kmsRootAllow []string,
+	appIDAllow []string,
 ) *attestation.ACIKeysetResult {
 	// Check 1: keyset digest recompute.
 	keysetValue, err := keyset.toCanonicalValue()
@@ -372,13 +410,21 @@ func verifyKeyset(
 	// Check 2: the REPORTDATA-bound signing key is a keyset E2EE key.
 	signingKeyInKeyset := keysetContainsE2EEKey(keyset, signingKeyHex)
 
-	// Check 3: dstack-KMS custody chain for the E2EE key.
-	custodyDetail, custodyErr := verifyKeyCustody(custody, signingKeyHex, appID, kmsRootAllow)
+	// Check 3: dstack-KMS custody chain to an accepted root for an accepted app.
+	custodyDetail, custodyErr := verifyKeyCustody(custody, signingKeyHex, appID, kmsRootAllow, appIDAllow)
+
+	// Check 4: a non-null subject must restate the accepted app id.
+	subjectErr := verifyKeysetSubject(keyset.Subject, appID)
+
+	// Check 5: the keyset must not have expired.
+	notExpired, expiryDetail := keysetNotExpired(keyset.NotAfter.String(), now)
 
 	result := &attestation.ACIKeysetResult{
-		KeysetDigestMatch:  keysetDigestMatch,
-		SigningKeyInKeyset: signingKeyInKeyset,
-		CustodyChainValid:  custodyErr == nil,
+		KeysetDigestMatch:    keysetDigestMatch,
+		SigningKeyInKeyset:   signingKeyInKeyset,
+		CustodyChainValid:    custodyErr == nil,
+		GatewayIdentityValid: custodyErr == nil && subjectErr == nil,
+		KeysetNotExpired:     notExpired,
 	}
 
 	var parts []string
@@ -397,8 +443,53 @@ func verifyKeyset(
 	} else {
 		parts = append(parts, fmt.Sprintf("key custody: %v", custodyErr))
 	}
+	if subjectErr != nil {
+		parts = append(parts, fmt.Sprintf("keyset subject: %v", subjectErr))
+	}
+	if !notExpired {
+		parts = append(parts, expiryDetail)
+	}
 	result.Detail = strings.Join(parts, "; ")
 	return result
+}
+
+// keysetNotExpired reports whether the keyset not_after (a unix-seconds
+// timestamp) is in the future at now. An unparseable value is treated as
+// expired (fail closed) with a describing detail.
+//
+// NOTE: not_after is self-asserted. Venice's gateway REPORTDATA binds only
+// the E2EE signing key and nonce (SEE: ReportDataVerifier), not the keyset
+// digest, so this is a rotation bound that holds against an honest gateway,
+// not a hardware-enforced expiry.
+// SEE: docs/attestation_gaps/venice_aci_gateway.md residual exposure 7.
+func keysetNotExpired(notAfter string, now time.Time) (ok bool, detail string) {
+	na, err := notAfterCanonical(notAfter)
+	if err != nil {
+		return false, fmt.Sprintf("keyset not_after is unparseable: %v", err)
+	}
+	if na > math.MaxInt64 {
+		// not_after == u64::MAX means the keyset never expires.
+		return true, ""
+	}
+	if now.Unix() >= int64(na) {
+		return false, fmt.Sprintf("keyset expired: not_after %d is not after %d", na, now.Unix())
+	}
+	return true, ""
+}
+
+// verifyKeysetSubject checks that a non-null keyset subject restates the
+// accepted app id as "app-id:0x<hex>". A null subject is accepted (the
+// custody chain's app-id pin is the binding); a present subject that names a
+// different app is rejected.
+func verifyKeysetSubject(subject *string, appID []byte) error {
+	if subject == nil {
+		return nil
+	}
+	want := "app-id:0x" + hex.EncodeToString(appID)
+	if subtle.ConstantTimeCompare([]byte(*subject), []byte(want)) != 1 {
+		return fmt.Errorf("subject %q does not name the accepted app id", *subject)
+	}
+	return nil
 }
 
 // keysetContainsE2EEKey reports whether signingKeyHex decodes to the same
@@ -426,12 +517,16 @@ func keysetContainsE2EEKey(keyset *aciWorkloadKeyset, signingKeyHex string) bool
 // entry (purpose e2eeCustodyPurpose) and returns a detail string on success.
 // SEE: the file comment for the chain definition and the reference
 // implementation.
-func verifyKeyCustody(custody *aciKeyCustody, signingKeyHex string, appID []byte, kmsRootAllow []string) (string, error) {
+func verifyKeyCustody(custody *aciKeyCustody, signingKeyHex string, appID []byte, kmsRootAllow, appIDAllow []string) (string, error) {
 	if custody.Provider != "dstack-kms" {
 		return "", fmt.Errorf("unsupported key custody provider %q", custody.Provider)
 	}
 	if len(appID) == 0 {
 		return "", errors.New("no app-id event in the gateway event log")
+	}
+	appIDHex := hex.EncodeToString(appID)
+	if !hexInAllowlist(appIDHex, appIDAllow) {
+		return "", fmt.Errorf("gateway app id %s is not an accepted private-ai-gateway app id", appIDHex)
 	}
 	entry, err := custodyEntryForPurpose(custody, e2eeCustodyPurpose)
 	if err != nil {
@@ -469,10 +564,10 @@ func verifyKeyCustody(custody *aciKeyCustody, signingKeyHex string, appID []byte
 	}
 
 	rootHex := hex.EncodeToString(rootKey.SerializeCompressed())
-	if !kmsRootAccepted(rootHex, kmsRootAllow) {
+	if !hexInAllowlist(rootHex, kmsRootAllow) {
 		return "", fmt.Errorf("recovered KMS root %s is not an accepted dstack-KMS root", rootHex)
 	}
-	return fmt.Sprintf("e2ee key custody chain verified to accepted KMS root (%s...)", rootHex[:16]), nil
+	return fmt.Sprintf("e2ee key custody chain verified to accepted KMS root (%s...) for app %s...", rootHex[:16], appIDHex[:16]), nil
 }
 
 // custodyEntryForPurpose returns the custody entry whose purpose matches, or
@@ -522,12 +617,12 @@ func custodyKeyMatchesSigningKey(entry *aciCustodyKey, signingKeyHex string) err
 	return nil
 }
 
-// kmsRootAccepted reports whether rootHex is in the allowlist, comparing in
-// constant time.
-func kmsRootAccepted(rootHex string, allow []string) bool {
+// hexInAllowlist reports whether target (a hex string) is in allow, comparing
+// in constant time and without short-circuiting on the first match.
+func hexInAllowlist(target string, allow []string) bool {
 	accepted := false
 	for _, a := range allow {
-		if len(a) == len(rootHex) && subtle.ConstantTimeCompare([]byte(a), []byte(rootHex)) == 1 {
+		if len(a) == len(target) && subtle.ConstantTimeCompare([]byte(a), []byte(target)) == 1 {
 			accepted = true
 		}
 	}

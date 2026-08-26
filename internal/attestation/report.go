@@ -731,11 +731,13 @@ func (r *RawAttestation) E2EEKeyType() string {
 // custody chain from an accepted KMS root to that key. Nil for non-ACI/1
 // attestation formats. SEE: venice.VerifyACIKeyset.
 type ACIKeysetResult struct {
-	KeysetDigestMatch  bool   // recomputed sha256(JCS(workload_keyset)) == declared workload_keyset_digest
-	SigningKeyInKeyset bool   // top-level signing_public_key is a member of the keyset e2ee_public_keys
-	CustodyChainValid  bool   // dstack-KMS signature chain verified to an accepted KMS root
-	Err                error  // non-nil if verification could not complete (malformed input, bad hex, etc.)
-	Detail             string // summary of the above
+	KeysetDigestMatch    bool   // recomputed sha256(JCS(workload_keyset)) == declared workload_keyset_digest
+	SigningKeyInKeyset   bool   // top-level signing_public_key is a member of the keyset e2ee_public_keys
+	CustodyChainValid    bool   // dstack-KMS signature chain verified to an accepted KMS root for an accepted app id
+	GatewayIdentityValid bool   // custody chain valid AND a non-null keyset subject names the accepted app id
+	KeysetNotExpired     bool   // the keyset not_after is in the future at verification time
+	Err                  error  // non-nil if verification could not complete (malformed input, bad hex, etc.)
+	Detail               string // summary of the above
 }
 
 // TinfoilComponentResult holds per-component Tinfoil Sigstore verification.
@@ -1025,6 +1027,14 @@ func unverifiedEvidence(in *ReportInput) []string {
 	}
 	if len(in.Raw.GatewaySEVReportBytes) > 0 && in.GatewaySEV == nil {
 		missing = append(missing, "gateway_sev_report")
+	}
+	// ACI/1 waives the core tee_* factors on the premise that the gateway
+	// tier carries the CPU evidence. A response that omits the gateway quote
+	// would build no gateway tier and leave nothing enforced that needs a
+	// quote, so require a verified gateway TDX result whenever the format is
+	// ACI/1 — independent of the parser's own empty-quote rejection.
+	if in.Raw.BackendFormat == FormatACI1 && in.GatewayTDX == nil {
+		missing = append(missing, "aci_gateway_quote")
 	}
 	return missing
 }
@@ -1794,7 +1804,8 @@ func evalACIKeyCustody(in *ReportInput) []FactorResult {
 			fmt.Sprintf("keyset verification error: %v", in.ACIKeyset.Err))
 	}
 	if !in.ACIKeyset.KeysetDigestMatch || !in.ACIKeyset.SigningKeyInKeyset ||
-		!in.ACIKeyset.CustodyChainValid {
+		!in.ACIKeyset.CustodyChainValid || !in.ACIKeyset.GatewayIdentityValid ||
+		!in.ACIKeyset.KeysetNotExpired {
 		return factor(TierBinding, FactorACIKeyCustody, Fail, in.ACIKeyset.Detail)
 	}
 	return factor(TierBinding, FactorACIKeyCustody, Pass, in.ACIKeyset.Detail)

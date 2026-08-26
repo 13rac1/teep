@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -278,7 +279,18 @@ type aciTestFixture struct {
 	digest     string
 	signingKey string
 	appID      []byte
+	appIDHex   string
 	rootHex    string
+}
+
+// fixtureNow is a fixed verification time before the fixtures' not_after, so
+// the expiry check passes deterministically.
+var fixtureNow = time.Unix(1_700_000_000, 0)
+
+// run verifies the fixture with its own root and app-id allowlists.
+func (fx *aciTestFixture) run() *attestation.ACIKeysetResult {
+	return verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID,
+		fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
 }
 
 // keysetFixture builds a self-consistent keyset + custody + digest around a
@@ -329,16 +341,17 @@ func keysetFixture(t *testing.T) aciTestFixture {
 		}},
 	}
 	return aciTestFixture{keyset: keyset, custody: custody, digest: digest,
-		signingKey: signingKeyHex, appID: appID, rootHex: root}
+		signingKey: signingKeyHex, appID: appID, appIDHex: hex.EncodeToString(appID), rootHex: root}
 }
 
 func TestVerifyKeyset_HappyPath(t *testing.T) {
 	fx := keysetFixture(t)
-	result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+	result := fx.run()
 	if result.Err != nil {
 		t.Fatalf("verifyKeyset: unexpected error: %v (detail: %s)", result.Err, result.Detail)
 	}
-	if !result.KeysetDigestMatch || !result.SigningKeyInKeyset || !result.CustodyChainValid {
+	if !result.KeysetDigestMatch || !result.SigningKeyInKeyset || !result.CustodyChainValid ||
+		!result.GatewayIdentityValid || !result.KeysetNotExpired {
 		t.Errorf("expected all checks to pass: %+v", result)
 	}
 }
@@ -346,7 +359,7 @@ func TestVerifyKeyset_HappyPath(t *testing.T) {
 func TestVerifyKeyset_Failures(t *testing.T) {
 	t.Run("digest mismatch", func(t *testing.T) {
 		fx := keysetFixture(t)
-		result := verifyKeyset(fx.keyset, fx.custody, "sha256:0000", fx.signingKey, fx.appID, []string{fx.rootHex})
+		result := verifyKeyset(fx.keyset, fx.custody, "sha256:0000", fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
 		if result.KeysetDigestMatch {
 			t.Error("KeysetDigestMatch = true for a wrong declared digest")
 		}
@@ -363,7 +376,7 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result := verifyKeyset(fx.keyset, fx.custody, digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		result := verifyKeyset(fx.keyset, fx.custody, digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
 		if result.SigningKeyInKeyset {
 			t.Error("SigningKeyInKeyset = true for a signing key absent from e2ee_public_keys")
 		}
@@ -371,7 +384,7 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 
 	t.Run("root not accepted", func(t *testing.T) {
 		fx := keysetFixture(t)
-		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{"03" + strings.Repeat("00", 32)})
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, fixtureNow, []string{"03" + strings.Repeat("00", 32)}, []string{fx.appIDHex})
 		if result.CustodyChainValid {
 			t.Error("CustodyChainValid = true for a root outside the allowlist")
 		}
@@ -379,7 +392,8 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 
 	t.Run("wrong app id", func(t *testing.T) {
 		fx := keysetFixture(t)
-		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, []byte("wrong-app-id-bytes--"), []string{fx.rootHex})
+		wrong := []byte("wrong-app-id-bytes--")
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, wrong, fixtureNow, []string{fx.rootHex}, []string{hex.EncodeToString(wrong)})
 		if result.CustodyChainValid {
 			t.Error("CustodyChainValid = true when the quote-bound app id differs from the endorsed one")
 		}
@@ -387,9 +401,52 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 
 	t.Run("missing app id", func(t *testing.T) {
 		fx := keysetFixture(t)
-		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, nil, []string{fx.rootHex})
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, nil, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
 		if result.CustodyChainValid {
 			t.Error("CustodyChainValid = true with no app-id event")
+		}
+	})
+
+	t.Run("app id not accepted", func(t *testing.T) {
+		fx := keysetFixture(t)
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, nil)
+		if result.CustodyChainValid {
+			t.Error("CustodyChainValid = true for an app id outside the accepted list — any KMS tenant would be accepted")
+		}
+	})
+
+	t.Run("subject names a different app", func(t *testing.T) {
+		fx := keysetFixture(t)
+		other := "app-id:0xdeadbeef"
+		fx.keyset.Subject = &other
+		cv, err := fx.keyset.toCanonicalValue()
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest, err := jcsSHA256Hex(cv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := verifyKeyset(fx.keyset, fx.custody, digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
+		if result.GatewayIdentityValid {
+			t.Error("GatewayIdentityValid = true when the keyset subject names a different app")
+		}
+	})
+
+	t.Run("expired keyset", func(t *testing.T) {
+		fx := keysetFixture(t)
+		fx.keyset.NotAfter = json.Number("1000")
+		cv, err := fx.keyset.toCanonicalValue()
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest, err := jcsSHA256Hex(cv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := verifyKeyset(fx.keyset, fx.custody, digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
+		if result.KeysetNotExpired {
+			t.Error("KeysetNotExpired = true for a keyset whose not_after is in the past")
 		}
 	})
 
@@ -400,7 +457,7 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 			t.Fatal(err)
 		}
 		fx.custody.Keys[0].PublicKey = hex.EncodeToString(other.PubKey().SerializeUncompressed())
-		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
 		if result.CustodyChainValid {
 			t.Error("CustodyChainValid = true when the custody entry describes a different key")
 		}
@@ -414,7 +471,7 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 		}
 		sig[10] ^= 0xff
 		fx.custody.Keys[0].SignatureChain[0] = hex.EncodeToString(sig)
-		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
 		if result.CustodyChainValid {
 			t.Error("CustodyChainValid = true for a tampered purpose signature")
 		}
@@ -423,7 +480,7 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 	t.Run("wrong custody provider", func(t *testing.T) {
 		fx := keysetFixture(t)
 		fx.custody.Provider = "other-kms"
-		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
 		if result.CustodyChainValid {
 			t.Error("CustodyChainValid = true for an unsupported custody provider")
 		}
@@ -432,7 +489,7 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 	t.Run("no e2ee custody entry", func(t *testing.T) {
 		fx := keysetFixture(t)
 		fx.custody.Keys[0].Purpose = "aci.receipt.v1"
-		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+		result := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
 		if result.CustodyChainValid {
 			t.Error("CustodyChainValid = true with no entry for the e2ee purpose")
 		}
@@ -441,14 +498,14 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 
 func TestVerifyACIKeyset_NonACI(t *testing.T) {
 	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatDstack}
-	if result := VerifyACIKeyset(raw); result != nil {
+	if result := VerifyACIKeyset(raw, fixtureNow); result != nil {
 		t.Error("expected nil for non-ACI/1 format")
 	}
 }
 
 func TestVerifyACIKeyset_MissingStructs(t *testing.T) {
 	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatACI1}
-	result := VerifyACIKeyset(raw)
+	result := VerifyACIKeyset(raw, fixtureNow)
 	if result == nil || result.Err == nil {
 		t.Fatalf("expected an error result for a missing keyset, got %+v", result)
 	}
@@ -469,7 +526,7 @@ func TestVerifyACIKeyset_HappyPath(t *testing.T) {
 
 	// The default allowlist does not contain the test root, so the custody
 	// chain must be rejected...
-	result := VerifyACIKeyset(raw)
+	result := VerifyACIKeyset(raw, fixtureNow)
 	if result == nil || result.Err != nil {
 		t.Fatalf("VerifyACIKeyset: %+v", result)
 	}
@@ -481,7 +538,7 @@ func TestVerifyACIKeyset_HappyPath(t *testing.T) {
 	}
 
 	// ...and the full chain must verify against the matching allowlist.
-	direct := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, []string{fx.rootHex})
+	direct := verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
 	if !direct.CustodyChainValid {
 		t.Errorf("CustodyChainValid = false with the correct root allowed: %s", direct.Detail)
 	}
@@ -515,11 +572,47 @@ func TestVerifyACIKeyset_LiveSample(t *testing.T) {
 	}
 
 	result := verifyKeyset(&fx.WorkloadKeyset, &fx.KeyCustody, fx.WorkloadKeysetDigest,
-		fx.SigningPublicKey, appID, defaultACIKMSRootAllow)
+		fx.SigningPublicKey, appID, fixtureNow, defaultACIKMSRootAllow, defaultACIGatewayAppIDAllow)
 	if result.Err != nil {
 		t.Fatalf("verifyKeyset(live sample): %v", result.Err)
 	}
-	if !result.KeysetDigestMatch || !result.SigningKeyInKeyset || !result.CustodyChainValid {
+	if !result.KeysetDigestMatch || !result.SigningKeyInKeyset || !result.CustodyChainValid ||
+		!result.GatewayIdentityValid || !result.KeysetNotExpired {
 		t.Errorf("live sample must verify fully: %s", result.Detail)
 	}
+}
+
+func TestAppIDFromEventLog(t *testing.T) {
+	runtime := func(event, payload string) attestation.EventLogEntry {
+		return attestation.EventLogEntry{IMR: 3, EventType: attestation.DstackRuntimeEventType, Event: event, EventPayload: payload}
+	}
+	t.Run("single runtime app-id", func(t *testing.T) {
+		got, err := appIDFromEventLog([]attestation.EventLogEntry{runtime("app-id", "1122")})
+		if err != nil || hex.EncodeToString(got) != "1122" {
+			t.Errorf("got %x err %v, want 1122", got, err)
+		}
+	})
+	t.Run("wrong event type is ignored", func(t *testing.T) {
+		// An "app-id" event of a non-runtime type carries an unchecked digest.
+		got, err := appIDFromEventLog([]attestation.EventLogEntry{
+			{IMR: 3, EventType: 0x1, Event: "app-id", EventPayload: "dead"},
+		})
+		if err != nil || got != nil {
+			t.Errorf("got %x err %v, want nil (non-runtime app-id ignored)", got, err)
+		}
+	})
+	t.Run("duplicate is rejected", func(t *testing.T) {
+		_, err := appIDFromEventLog([]attestation.EventLogEntry{
+			runtime("app-id", "1122"), runtime("app-id", "3344"),
+		})
+		if err == nil {
+			t.Error("expected an error for duplicate app-id events")
+		}
+	})
+	t.Run("absent returns nil", func(t *testing.T) {
+		got, err := appIDFromEventLog([]attestation.EventLogEntry{runtime("system-ready", "")})
+		if err != nil || got != nil {
+			t.Errorf("got %x err %v, want nil,nil", got, err)
+		}
+	})
 }

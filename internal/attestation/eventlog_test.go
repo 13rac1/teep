@@ -145,7 +145,7 @@ func TestReplayEventLog_ShortDigestPadded(t *testing.T) {
 func TestReplayEventLog_DstackRuntimeEvent(t *testing.T) {
 	entries := []EventLogEntry{{
 		IMR:          3,
-		EventType:    dstackRuntimeEventType,
+		EventType:    DstackRuntimeEventType,
 		Event:        "app-id",
 		EventPayload: "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b",
 	}}
@@ -163,7 +163,7 @@ func TestReplayEventLog_DstackRuntimeEvent(t *testing.T) {
 func TestReplayEventLog_DstackRuntimeEventStoredDigest(t *testing.T) {
 	entry := EventLogEntry{
 		IMR:          3,
-		EventType:    dstackRuntimeEventType,
+		EventType:    DstackRuntimeEventType,
 		Event:        "app-id",
 		EventPayload: "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b",
 		Digest:       "5c149c8719975dc6285de58d94db7e6a75c46e796c319b751db8ee14e6748b6c2638d13cf12f54396e08299944766537",
@@ -181,11 +181,48 @@ func TestReplayEventLog_DstackRuntimeEventStoredDigest(t *testing.T) {
 func TestReplayEventLog_DstackRuntimeEventInvalidPayload(t *testing.T) {
 	entries := []EventLogEntry{{
 		IMR:          3,
-		EventType:    dstackRuntimeEventType,
+		EventType:    DstackRuntimeEventType,
 		Event:        "app-id",
 		EventPayload: "not-hex",
 	}}
 	if _, err := ReplayEventLog(entries); err == nil {
 		t.Fatal("ReplayEventLog accepted an invalid runtime event payload")
+	}
+}
+
+// TestReplayEventLog_RuntimeEventDigestRecomputed: a dstack runtime event's
+// declared digest is not trusted — the replay recomputes it from
+// (event_type, event, event_payload), so tampering with those fields fails
+// the replay even though the declared digest is unchanged. This is what
+// authenticates the app-id an ACI/1 custody chain reads from the log.
+func TestReplayEventLog_RuntimeEventDigestRecomputed(t *testing.T) {
+	// A genuine runtime event: digest = SHA384(u32le(type) ":" event ":" payload).
+	typeBytes := []byte{0x01, 0x00, 0x00, 0x08} // 0x08000001 little-endian
+	h := sha512.New384()
+	h.Write(typeBytes)
+	h.Write([]byte(":app-id:"))
+	h.Write([]byte{0x11, 0x22, 0x33})
+	good := EventLogEntry{
+		IMR:          3,
+		EventType:    0x08000001,
+		Event:        "app-id",
+		EventPayload: "112233",
+		Digest:       hex.EncodeToString(h.Sum(nil)),
+	}
+	if _, err := ReplayEventLog([]EventLogEntry{good}); err != nil {
+		t.Fatalf("genuine runtime event should replay: %v", err)
+	}
+
+	// Same declared digest, attacker-changed payload → mismatch, replay fails.
+	tampered := good
+	tampered.EventPayload = "445566"
+	if _, err := ReplayEventLog([]EventLogEntry{tampered}); err == nil {
+		t.Error("tampered runtime event_payload with an unchanged digest replayed without error")
+	}
+
+	// A non-runtime event keeps trusting its declared digest.
+	nonRuntime := EventLogEntry{IMR: 0, EventType: 0x00000001, Digest: "aabb"}
+	if _, err := ReplayEventLog([]EventLogEntry{nonRuntime}); err != nil {
+		t.Errorf("non-runtime event should use its declared digest: %v", err)
 	}
 }

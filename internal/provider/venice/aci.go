@@ -3,6 +3,7 @@ package venice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -169,6 +170,14 @@ func parseACI(ctx context.Context, body []byte) (*attestation.RawAttestation, er
 // scheme dstack uses, so venice.ReportDataVerifier is reused unchanged for
 // the gateway quote — see the comment on ReportDataVerifier in reportdata.go.
 func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, body []byte) (*attestation.RawAttestation, error) {
+	// The gateway TDX quote is the whole of the CPU evidence for ACI/1 — the
+	// core tee_* factors are waived on the premise that Tier 4 carries it. An
+	// empty quote would build no gateway tier and produce a report with no
+	// enforced factor that needs a quote, so reject it here (defense in
+	// depth: unverifiedEvidence also fails a nil GatewayTDX for ACI/1).
+	if ar.Attestation.Evidence.Quote == "" {
+		return nil, errors.New("venice aci/1: attestation.evidence.quote is empty")
+	}
 	var eventLog []attestation.EventLogEntry
 	if ar.Attestation.Evidence.EventLog != "" {
 		if err := json.Unmarshal([]byte(ar.Attestation.Evidence.EventLog), &eventLog); err != nil {
