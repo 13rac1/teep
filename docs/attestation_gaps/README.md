@@ -16,3 +16,4 @@ New reports should follow [TEMPLATE.md](TEMPLATE.md).
 - [Model Weight Authentication](model_weights.md)
 - [Proof of Cloud Registry: JWT Validation Failure](poc_jwt_validation.md)
 - [Chutes/sek8s Integrity Chain](sek8s_integrity.md)
+- [Venice ACI/1: Attested Gateway, Unattested Inference Host](venice_aci_gateway.md)

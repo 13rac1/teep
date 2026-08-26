@@ -13,7 +13,7 @@ import (
 )
 
 // TestVerifyRun_VeniceACI_Fixture replays a captured Venice ACI/1
-// attestation through the full verify.Run production wiring (GH #113).
+// attestation through the full verify.Run production code path (GH #113).
 // ACI/1 attests the private-ai-gateway CVM, not the machine serving
 // inference, so the report puts the quote in the gateway tier: the gateway
 // chain, the key custody factor, and the gateway compose binding are

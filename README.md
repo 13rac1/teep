@@ -164,7 +164,7 @@ Is the hardware genuine? These checks verify the TDX quote (or SEV-SNP report) i
 Is the encryption bound to the hardware? These checks verify the encryption key can't be swapped out, GPU attestation is valid, and E2EE key exchange is possible.
 
 <details>
-<summary>11 factors</summary>
+<summary>12 factors</summary>
 
 | # | Factor | Description |
 |---|--------|-------------|
@@ -179,6 +179,7 @@ Is the encryption bound to the hardware? These checks verify the encryption key 
 | 20 | `nvidia_nras_verified` | NVIDIA NRAS RIM measurement comparison passed |
 | 21 | `e2ee_capable` | Provider returned enough info for E2EE key exchange |
 | 22 | `e2ee_usable` | E2EE round-trip succeeded with the verified enclave key |
+| 23 | `aci_key_custody` | Venice ACI/1: workload keyset digest recomputed, signing key is a keyset E2EE key, and the dstack-KMS custody chain verifies to an accepted KMS root |
 
 </details>
 
@@ -191,43 +192,48 @@ Is the software what it claims to be? These checks verify container provenance, 
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 23 | `tls_key_binding` | TLS certificate key matches attestation document |
-| 24 | `cpu_gpu_chain` | CPU attestation cryptographically binds GPU attestation |
-| 25 | `nvswitch_binding` | NVSwitch fabric evidence hash verified in REPORTDATA (multi-GPU NVLink nodes) |
-| 26 | `measured_model_weights` | Attestation proves specific model weights by hash |
-| 27 | `build_transparency_log` | Runtime measurements match an immutable transparency log |
-| 28 | `cpu_id_registry` | CPU ID verified against a known-good hardware registry |
-| 29 | `compose_binding` | `sha256(app_compose)` matches TDX MRConfigID, binding docker-compose manifest to hardware attestation |
-| 30 | `sigstore_verification` | Container image digests found in Sigstore transparency log, proving verifiable CI/CD provenance |
-| 31 | `sigstore_code_verified` | Sigstore DSSE bundle code measurements match live enclave (Tinfoil-specific) |
-| 32 | `event_log_integrity` | Event log replayed against TDX RTMRs — proves log is authentic and complete |
+| 24 | `tls_key_binding` | TLS certificate key matches attestation document |
+| 25 | `cpu_gpu_chain` | CPU attestation cryptographically binds GPU attestation |
+| 26 | `nvswitch_binding` | NVSwitch fabric evidence hash verified in REPORTDATA (multi-GPU NVLink nodes) |
+| 27 | `measured_model_weights` | Attestation proves specific model weights by hash |
+| 28 | `build_transparency_log` | Runtime measurements match an immutable transparency log |
+| 29 | `cpu_id_registry` | CPU ID verified against a known-good hardware registry |
+| 30 | `compose_binding` | `sha256(app_compose)` matches TDX MRConfigID, binding docker-compose manifest to hardware attestation |
+| 31 | `sigstore_verification` | Container image digests found in Sigstore transparency log, proving verifiable CI/CD provenance |
+| 32 | `sigstore_code_verified` | Sigstore DSSE bundle code measurements match live enclave (Tinfoil-specific) |
+| 33 | `event_log_integrity` | Event log replayed against TDX RTMRs — proves log is authentic and complete |
 
 </details>
 
 ### Tier 4: Gateway Attestation
 
-Available only for providers that route traffic through an independently-attested TEE
-gateway (currently `nearcloud`). These factors verify the gateway itself, in addition
-to the model inference node.
+Available only for providers that route traffic through an independently-attested
+TEE gateway: `nearcloud` (Intel TDX), `tinfoil_v3_cloud` (AMD SEV-SNP), and
+Venice ACI/1 models (Intel TDX). These factors verify the gateway itself. For
+tinfoil_v3_cloud and Venice ACI/1 this tier carries the only CPU attestation
+there is — the machine serving inference exposes none, and the core tee_*
+factors state that.
 
 <details>
-<summary>13 factors</summary>
+<summary>15 factors</summary>
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 33 | `gateway_nonce_match` | Gateway request nonce matches the client nonce |
-| 34 | `gateway_tee_quote_present` | Gateway TDX quote is present |
-| 35 | `gateway_tee_quote_structure` | Gateway TDX quote parses as valid QuoteV4 |
-| 36 | `gateway_tee_cert_chain` | Gateway cert chain verifies against Intel root CA |
-| 37 | `gateway_tee_quote_signature` | Gateway quote signature valid |
-| 38 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave) |
-| 39 | `gateway_tee_measurement` | Gateway MRTD and MRSEAM match measurement policy allowlists |
-| 40 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches hardware config allowlist |
-| 41 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match boot config allowlists |
-| 42 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified |
-| 43 | `gateway_compose_binding` | Gateway sha256(app_compose) matches TDX MRConfigID |
-| 44 | `gateway_cpu_id_registry` | Gateway CPU PPID verified in Proof of Cloud registry |
-| 45 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match quote |
+| 34 | `gateway_nonce_match` | Gateway request nonce matches the client nonce |
+| 35 | `gateway_tee_quote_present` | Gateway quote or report is present |
+| 36 | `gateway_tee_quote_structure` | Gateway quote parses as valid QuoteV4 or SEV-SNP report |
+| 37 | `gateway_tee_cert_chain` | Gateway cert chain verifies against Intel or AMD root CA |
+| 38 | `gateway_tee_quote_signature` | Gateway quote signature valid |
+| 39 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave) |
+| 40 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists |
+| 41 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches hardware config allowlist |
+| 42 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match boot config allowlists |
+| 43 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified |
+| 44 | `gateway_compose_binding` | Gateway sha256(app_compose) matches TDX MRConfigID |
+| 45 | `gateway_cpu_id_registry` | Gateway CPU PPID verified in Proof of Cloud registry |
+| 46 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match quote |
+| 47 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP) |
+| 48 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP) |
 
 </details>
 

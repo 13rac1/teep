@@ -842,7 +842,7 @@ type ReportInput struct {
 	GatewayEventLog []EventLogEntry
 	GatewayPolicy   MeasurementPolicy // separate measurement allowlists for gateway CVM (GW-M-04)
 
-	// ACIKeyset holds the result of Venice ACI/1 keyset endorsement
+	// ACIKeyset holds the result of Venice ACI/1 workload keyset
 	// verification. Nil for non-ACI/1 providers/formats.
 	ACIKeyset *ACIKeysetResult
 
@@ -3541,7 +3541,7 @@ func buildMetadata(in *ReportInput) map[string]string {
 
 	// ACI/1 gateways attest the TLS pin of their own downstream hop. teep
 	// never dials that domain, so the pin is reported as metadata rather
-	// than verified; its integrity is covered by aci_keyset_endorsement.
+	// than verified; its integrity is covered by aci_key_custody.
 	if in.Raw != nil && in.Raw.ACIDownstreamTLSDomain != "" {
 		m["gateway_downstream_tls"] = fmt.Sprintf("%s spki %s",
 			in.Raw.ACIDownstreamTLSDomain, in.Raw.ACIDownstreamTLSSPKI)

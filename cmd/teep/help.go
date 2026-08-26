@@ -614,12 +614,13 @@ var tierRegistry = []tierInfo{
 		Name:   "Gateway Attestation",
 		Label:  "Tier 4: Gateway Attestation",
 		Description: "Applies to providers that route requests through an " +
-			"attested gateway: nearcloud (cloud-api.near.ai, Intel TDX) and " +
-			"tinfoil_v3_cloud (inference.tinfoil.sh, AMD SEV-SNP). Verifies the " +
+			"attested gateway: nearcloud (cloud-api.near.ai, Intel TDX), " +
+			"tinfoil_v3_cloud (inference.tinfoil.sh, AMD SEV-SNP), and Venice " +
+			"ACI/1 models (private-ai-gateway, Intel TDX). Verifies the " +
 			"gateway itself with its own quote, certificate chain, measurement " +
-			"and REPORTDATA binding. For tinfoil_v3_cloud this tier carries all " +
-			"the evidence there is: the router is attested, the model backend " +
-			"behind it exposes none.",
+			"and REPORTDATA binding. For tinfoil_v3_cloud and Venice ACI/1 " +
+			"this tier carries all the CPU evidence there is: the gateway is " +
+			"attested, the machine serving inference behind it exposes none.",
 	},
 }
 
