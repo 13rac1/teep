@@ -1,0 +1,70 @@
+Attestation Report: venice / e2ee-glm-5-2-p
+═══════════════════════════════════════════
+
+  Upstream:      z-ai/glm-5.2
+  Nonce source:  client
+  Candidates:    1/1 evaluated
+  Gateway downstream TLS: api.redpill.ai spki c68585e7dc00a55d3082a9c860cb916e1788c5daec51505e413d27ab94f7d4c7
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✗ tee_quote_present                 no TEE attestation evidence (no intel_quote or sev_report)  [ALLOWED]
+  ✗ tee_quote_structure               no TEE quote/report available to parse  [ALLOWED]
+  ✗ tee_cert_chain                    no TEE quote/report available; cannot verify cert chain  [ALLOWED]
+  ✗ tee_quote_signature               no TEE quote/report available; cannot verify signature  [ALLOWED]
+  ✗ tee_debug_disabled                no TEE quote/report available; cannot check debug flag  [ALLOWED]
+  - tee_measurement                   no parseable TEE quote/report; cannot check measurements  [ALLOWED]
+  - tee_hardware_config               no parseable TEE quote/report; cannot check hardware config  [ALLOWED]
+  - tee_boot_config                   no parseable TEE quote/report; cannot check boot config  [ALLOWED]
+  ✓ signing_key_present               enclave pubkey present (04943cea0b...)  [ENFORCED]
+  ✓ response_schema                   attestation response matches expected schema  [ALLOWED]
+
+Tier 2: Binding & Crypto
+  ✗ tee_reportdata_binding            no parseable TEE quote/report; REPORTDATA binding cannot be verified  [ALLOWED]
+  - intel_pcs_collateral              no parseable TEE quote/report  [ALLOWED]
+  - tee_tcb_current                   no parseable TEE quote/report; TCB not extracted  [ALLOWED]
+  - tee_tcb_not_revoked               no parseable TEE quote/report  [ALLOWED]
+  ✓ nvidia_payload_present            NVIDIA payload present (98158 chars)  [ALLOWED]
+  ✓ nvidia_signature                  EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)  [ENFORCED]
+  ✓ nvidia_claims                     EAT: arch=HOPPER, 8 GPUs, nonce verified  [ALLOWED]
+  ✓ nvidia_nonce_client_bound         EAT nonce matches client nonce (8 GPUs)  [ENFORCED]
+  ✓ nvidia_nras_verified              NRAS: true (JWT verified)  [ALLOWED]
+  ✓ e2ee_capable                      enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible (ecdsa)  [ALLOWED]
+  ✗ e2ee_usable                       HTTP 500: {"error":"Inference processing failed"}  [ALLOWED]
+  ✓ aci_key_custody                   keyset digest matches; signing key is a keyset e2ee key; e2ee key custody chain verified to accepted KMS root (0334c76e0c3f52ec...)  [ENFORCED]
+
+Tier 3: Supply Chain & Channel Integrity
+  - tls_key_binding                   provider uses E2EE key exchange; TLS binding not applicable  [ALLOWED]
+  ✗ cpu_gpu_chain                     CPU-GPU attestation not bound  [ALLOWED]
+  — nvswitch_binding                  NVSwitch fabric verification is Tinfoil-specific
+  ✗ measured_model_weights            no model weight hashes  [ALLOWED]
+  — build_transparency_log            3 compose-binding-only component(s); no transparency log required
+  ✗ component_recognition             no attested model component repositories extracted from compose  [ALLOWED]
+  — provider_signer_recognition       no signed components present in attested compose
+  — component_signature_recognition   no signed components present in attested compose
+  ✗ cpu_id_registry                   no CPU ID registry check  [ALLOWED]
+  ✗ compose_binding                   ACI/1 publishes no compose manifest for the inference host; workload composition is not verifiable  [ALLOWED]
+  ✓ sigstore_verification             3 component digest(s) found in Sigstore transparency log; 1 not Sigstore-signed (compose-pinned)  [ALLOWED]
+  — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
+  - event_log_integrity               no event log entries in attestation response  [ALLOWED]
+
+Tier 4: Gateway Attestation
+  ✓ gateway_nonce_match               gateway nonce matches (64 hex chars)  [ENFORCED]
+  ✓ gateway_tee_quote_present         gateway TDX quote present (10012 hex chars)  [ENFORCED]
+  ✓ gateway_tee_quote_structure       valid QuoteV4, MRTD: f06dfda6dce1cf90...  [ENFORCED]
+  ✓ gateway_tee_cert_chain            gateway certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ gateway_tee_quote_signature       gateway quote signature verified  [ENFORCED]
+  ✓ gateway_tee_debug_disabled        gateway debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ gateway_tee_measurement           gateway MRTD/MRSEAM policy matched  [ENFORCED]
+  - gateway_tee_hardware_config       no gateway RTMR0 measurement policy configured  [ALLOWED]
+  - gateway_tee_boot_config           no gateway RTMR1/RTMR2 measurement policy configured  [ALLOWED]
+  ✓ gateway_tee_reportdata_binding    REPORTDATA binds enclave key (0x79a5061efe5a46b0d1f33b11cf1c5adbedae6b79) and nonce  [ENFORCED]
+  ✓ gateway_compose_binding           gateway sha256(app_compose) matches MRConfigID  [ENFORCED]
+  ✓ gateway_cpu_id_registry           gateway Proof of Cloud: registered (unlabeled)  [ALLOWED]
+  ✓ gateway_event_log_integrity       gateway event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
+  — gateway_tee_tcb_current           TCB minimums for a TDX gateway are checked by the Intel PCS collateral
+  — gateway_tee_tcb_not_revoked       TDX revocation is checked by the Intel PCS collateral
+
+Score: 22/44 passed, 10 skipped, 12 failed (0 enforced, 12 allowed), 7 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

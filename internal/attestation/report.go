@@ -1994,7 +1994,13 @@ func checkComponentRepoPolicy(in *ReportInput, scPolicy *SupplyChainPolicy) (Fac
 			return fail, true
 		}
 	}
-	if scPolicy.HasGatewayImages() {
+	// Gateway repos are required only when this report carries gateway
+	// evidence: a provider can serve gateway and non-gateway formats under
+	// one name (venice dstack vs ACI/1), and a policy that lists gateway
+	// images must not fail the formats that have no gateway. A gateway
+	// quote supplied without verification is blocked by unverifiedEvidence
+	// before this factor matters.
+	if scPolicy.HasGatewayImages() && (in.GatewayTDX != nil || in.GatewaySEV != nil) {
 		if len(in.GatewayImageRepos) == 0 {
 			fail.Detail = "no attested gateway component repositories extracted from compose"
 			return fail, true

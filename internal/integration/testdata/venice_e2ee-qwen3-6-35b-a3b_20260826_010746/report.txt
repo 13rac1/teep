@@ -1,0 +1,59 @@
+Attestation Report: venice / e2ee-qwen3-6-35b-a3b
+═════════════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  Upstream:      Qwen/Qwen3.6-35B-A3B-FP8
+  App:           dstack-nvidia-0.5.5
+  Compose hash:  9385918de0a73b86...
+  OS image:      9b69bb1698bacbb6...
+  Device:        1a5c4f8e26db9c76...
+  PPID:          9345831e85d60e2d...
+  Nonce source:  client
+  Candidates:    1/1 evaluated
+  Event log:     30 entries
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✓ tee_quote_present                 TDX quote present (10012 hex chars)  [ALLOWED]
+  ✓ tee_quote_structure               valid QuoteV4, MRTD: b24d3b24e9e3c160...  [ALLOWED]
+  ✓ tee_cert_chain                    certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tee_quote_signature               quote signature verified  [ENFORCED]
+  ✓ tee_debug_disabled                debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ tee_measurement                   MRTD/MRSEAM policy matched  [ENFORCED]
+  ✗ tee_hardware_config               RTMR[0] not in policy allowlist: bc122d143ab76856...  [ALLOWED]
+  ✓ tee_boot_config                   RTMR1/RTMR2 policy matched  [ALLOWED]
+  ✓ signing_key_present               enclave pubkey present (0489f03d8e...)  [ENFORCED]
+  ✗ response_schema                   unknown fields: ["compose_manager_attestation" "ohttp_attestation" "ohttp_key_config"]; missing fields: ["quote" "vm_config"]  [ALLOWED]
+
+Tier 2: Binding & Crypto
+  ✓ tee_reportdata_binding            REPORTDATA binds enclave key (0xe5d0fec43b001f181a3410b96715ec54171f36da) and nonce  [ENFORCED]
+  ✓ intel_pcs_collateral              Intel PCS collateral fetched (TCB status: UpToDate)  [ALLOWED]
+  ✓ tee_tcb_current                   TCB is UpToDate per Intel PCS  [ALLOWED]
+  ✓ tee_tcb_not_revoked               TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present            NVIDIA payload present (98158 chars)  [ALLOWED]
+  ✓ nvidia_signature                  EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)  [ENFORCED]
+  ✓ nvidia_claims                     EAT: arch=HOPPER, 8 GPUs, nonce verified  [ALLOWED]
+  ✓ nvidia_nonce_client_bound         EAT nonce matches client nonce (8 GPUs)  [ENFORCED]
+  ✓ nvidia_nras_verified              NRAS: true (JWT verified)  [ALLOWED]
+  ✓ e2ee_capable                      enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible (ecdsa)  [ALLOWED]
+  ✓ e2ee_usable                       E2EE venice: 52 encrypted fields decrypted across 55 chunks  [ALLOWED]
+  — aci_key_custody                   not ACI/1 format
+
+Tier 3: Supply Chain & Channel Integrity
+  - tls_key_binding                   provider uses E2EE key exchange; TLS binding not applicable  [ALLOWED]
+  ✗ cpu_gpu_chain                     CPU-GPU attestation not bound  [ALLOWED]
+  — nvswitch_binding                  NVSwitch fabric verification is Tinfoil-specific
+  ✗ measured_model_weights            no model weight hashes  [ALLOWED]
+  ✓ build_transparency_log            2 component(s) verified by Fulcio provenance; 1 present in Sigstore (nearai/compose-manager@8e07c35, github-hosted; log integrity: SET 3/3, inclusion 3/3)  [ENFORCED]
+  ✗ component_recognition             no attested gateway component repositories extracted from compose  [ALLOWED]
+  ✓ provider_signer_recognition       3 component signer(s) recognized provider-wide  [ENFORCED]
+  ✓ component_signature_recognition   3 component signature policy match(es)  [ENFORCED]
+  ✗ cpu_id_registry                   hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  ✓ compose_binding                   sha256(app_compose) matches MRConfigID  [ENFORCED]
+  ✓ sigstore_verification             3 component digest(s) found in Sigstore transparency log; 1 not Sigstore-signed (compose-pinned)  [ENFORCED]
+  — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
+  ✓ event_log_integrity               event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
+
+Score: 26/33 passed, 1 skipped, 6 failed (0 enforced, 6 allowed), 3 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

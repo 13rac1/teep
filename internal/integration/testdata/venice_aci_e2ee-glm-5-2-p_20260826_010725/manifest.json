@@ -1,0 +1,13 @@
+{
+  "provider": "venice",
+  "model": "e2ee-glm-5-2-p",
+  "nonce_hex": "f8fa63c20487e44b74445a0b30e243fc8067c81ea29df019bb46808285c4f9f9",
+  "captured_at": "2026-08-26T01:07:25.108502142Z",
+  "duration_ms": 25242,
+  "e2ee": {
+    "attempted": true,
+    "failed": true,
+    "error": "HTTP 500: {\"error\":\"Inference processing failed\"}",
+    "key_type": "ecdsa"
+  }
+}
