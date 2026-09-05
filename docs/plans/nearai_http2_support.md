@@ -242,7 +242,10 @@ The implementation is complete only if all of these invariants hold.
 13. **Body ownership.** Every response path reads the body to EOF when safe and
     closes the original HTTP response body exactly once. A decryption reader
     has separate cleanup ownership; closing it must not replace closing the
-    HTTP body. A rejection parser that closes the original body must replace
+    HTTP body. An SSE `[DONE]` marker does not replace reading the remaining
+    EHBP frames to EOF. Accept only bounded trailing empty lines or comments;
+    propagate framing, authentication, and read errors before forwarding the
+    completion marker or promoting E2EE success. A rejection parser that closes the original body must replace
     it before returning, including on errors. Error paths close bodies and zero
     ephemeral key material. A bounded error-body read may cause `net/http` to discard a
     connection; it must never justify an unbounded read.

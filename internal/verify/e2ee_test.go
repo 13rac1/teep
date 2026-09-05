@@ -738,7 +738,11 @@ func TestStandaloneNearHTTPError(t *testing.T) {
 			t.Fatal(err)
 		}
 		fp := sha256.Sum256(ts.Certificate().RawSubjectPublicKeyInfo)
-		client, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(0, tlsct.NewPooledTransport(), hex.EncodeToString(fp[:]), true)
+		identity, err := tlsct.NewTransportIdentity(route.Authority(), hex.EncodeToString(fp[:]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(0, tlsct.NewPooledTransport(), identity, true)
 		if err != nil {
 			t.Fatal(err)
 		}

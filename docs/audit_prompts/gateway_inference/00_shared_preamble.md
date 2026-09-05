@@ -16,7 +16,7 @@ Client → teep proxy → cloud-api.near.ai (gateway CVM) → model backend CVM
                           ↑ gateway attestation       ↑ model attestation
 ```
 
-The gateway host is fixed (not resolved via a model routing API). The proxy opens a single TLS connection to the gateway, performs attestation on that connection (receiving both gateway and model attestation in a single response), and then sends the chat request on the same connection.
+The gateway host is fixed (not resolved via a model routing API). The proxy authenticates the gateway attestation fetch against its live TLS peer, verifies both gateway and model evidence, and publishes one complete authorization. Inference uses a pooled transport bound to that gateway authority and attested SPKI. Every new handshake verifies WebPKI, TLS 1.3, CT, and the attested pin before sending request bytes. The model backend fingerprint remains separately authenticated evidence.
 
 The two layers of attestation to verify are:
 - **Tier 1–3 (model):** the model inference backend's TDX quote, NVIDIA attestation, compose binding, event log, REPORTDATA binding, and supply chain verification,

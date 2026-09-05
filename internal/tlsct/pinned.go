@@ -25,24 +25,20 @@ var ErrSPKIMismatch = errors.New("TLS peer SPKI does not match attested fingerpr
 //
 // Certificate-transparency enforcement is composed into the same handshake
 // through NewHTTPClientWithTransport. The caller must dedicate base to this
-// pin; a transport pool must never contain connections authenticated under
+// authority and pin. Proxy selection occurs once for that origin. A transport
+// pool must never contain connections authenticated under
 // different expected fingerprints. TLS session resumption remains disabled.
 func NewSPKIPinnedHTTPClientWithTransport(
 	timeout time.Duration,
 	base *http.Transport,
-	expectedSPKI string,
+	identity TransportIdentity,
 	ctEnabled ...bool,
 ) (*http.Client, error) {
-	expected, err := decodeSPKI(expectedSPKI)
-	if err != nil {
-		return nil, fmt.Errorf("invalid expected SPKI fingerprint: %w", err)
+	if identity.Authority() == "" {
+		return nil, errors.New("SPKI-pinned client requires a transport identity")
 	}
 	if base == nil {
-		dt, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			return nil, errors.New("http.DefaultTransport is not *http.Transport")
-		}
-		base = dt.Clone()
+		base = NewPooledTransport()
 	}
 	if err := validateSystemWebPKITransport(base); err != nil {
 		return nil, err
@@ -56,14 +52,18 @@ func NewSPKIPinnedHTTPClientWithTransport(
 			return errors.New("TLS peer did not provide a certificate")
 		}
 		actual := sha256.Sum256(state.PeerCertificates[0].RawSubjectPublicKeyInfo)
-		if subtle.ConstantTimeCompare(actual[:], expected) != 1 {
+		if subtle.ConstantTimeCompare(actual[:], identity.fingerprint[:]) != 1 {
 			return ErrSPKIMismatch
 		}
 		return nil
 	}
 	base.TLSClientConfig = tlsConfig
 
-	return NewHTTPClientWithTransport(timeout, base, ctEnabled...), nil
+	client := NewHTTPClientWithTransport(timeout, base, ctEnabled...)
+	if err := configurePinnedProxy(base, identity.Authority(), ctEnabledFromOpt(ctEnabled...)); err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 func validateSystemWebPKITransport(base *http.Transport) error {

@@ -58,7 +58,7 @@ func (s *Server) pinnedClientForIdentity(providerName string, identity tlsct.Tra
 	}
 
 	base := newUpstreamTransport()
-	client, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(0, base, identity.Fingerprint(), !s.cfg.Offline)
+	client, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(0, base, identity, !s.cfg.Offline)
 	if err != nil {
 		s.pinnedUpstreams.mu.Unlock()
 		return nil, err

@@ -16,7 +16,7 @@ import (
 
 func TestAuthorizedSSEFailureClassification(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		for _, kind := range []string{"json", "choices", "delta", "authentication", "plaintext"} {
+		for _, kind := range []string{"json", "choices", "delta", "authentication", "plaintext", "authentication_no_space", "plaintext_no_space"} {
 			t.Run(fmt.Sprintf("stream_%v_%s", stream, kind), func(t *testing.T) {
 				server := newTLSBindingTestServerHandle()
 				server.authorizations = newAuthorizationStore(10, 2, time.Second)
@@ -34,9 +34,9 @@ func TestAuthorizedSSEFailureClassification(t *testing.T) {
 					data = `{"choices":42}`
 				case "delta":
 					data = `{"choices":[{"delta":42}]}`
-				case "plaintext":
+				case "plaintext", "plaintext_no_space":
 					data = `{"choices":[{"delta":{"content":"plaintext"}}]}`
-				case "authentication":
+				case "authentication", "authentication_no_space":
 					public, err := hex.DecodeString(session.ClientEd25519PubHex())
 					if err != nil {
 						t.Fatal(err)
@@ -59,12 +59,16 @@ func TestAuthorizedSSEFailureClassification(t *testing.T) {
 					data = fmt.Sprintf(`{"choices":[{"delta":{"content":%q}}]}`, ciphertext)
 				}
 				input := &authorizedRequest{provider: &provider.Provider{Name: "neardirect", E2EE: true}, key: key, endpoint: e2ee.EndpointChat, stream: stream}
-				response := authorizedResponse{authorization: value, upstream: &upstreamResult{Session: session, Resp: &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("data: " + data + "\n\n"))}}}
+				prefix := "data: "
+				if strings.HasSuffix(kind, "_no_space") {
+					prefix = "data:"
+				}
+				response := authorizedResponse{authorization: value, upstream: &upstreamResult{Session: session, Resp: &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(prefix + data + "\n\ndata:[DONE]\n\n"))}}}
 				err = server.relayAuthorized(t.Context(), newInferenceRecorder(), input, response)
 				if err == nil {
 					t.Fatal("invalid response succeeded")
 				}
-				cryptoFailure := kind == "authentication" || kind == "plaintext"
+				cryptoFailure := strings.HasPrefix(kind, "authentication") || strings.HasPrefix(kind, "plaintext")
 				if errors.Is(err, e2ee.ErrDecryptionFailed) != cryptoFailure {
 					t.Fatalf("incorrect error classification: %v", err)
 				}

@@ -52,7 +52,7 @@ func TestHTTP2ConcurrentStreamConnectionBound(t *testing.T) {
 		fp := sha256.Sum256(server.Certificate().RawSubjectPublicKeyInfo)
 		transport := NewPooledTransport()
 		transport.MaxConnsPerHost = 2
-		client, err := NewSPKIPinnedHTTPClientWithTransport(0, transport, hex.EncodeToString(fp[:]), true)
+		client, err := NewSPKIPinnedHTTPClientWithTransport(0, transport, pinnedTestIdentity(t, server.URL, hex.EncodeToString(fp[:])), true)
 		if err != nil {
 			t.Fatal(err)
 		}

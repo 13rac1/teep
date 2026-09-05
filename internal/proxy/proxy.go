@@ -440,8 +440,7 @@ type Server struct {
 // New builds a Server from cfg. Providers are given their Attester and
 // Preparer implementations based on provider name.
 func New(cfg *config.Config) (*Server, error) {
-	attestClient := tlsct.NewHTTPClientWithTransport(config.AttestationTimeout, tlsct.NewPooledTransport(), !cfg.Offline)
-	attestClient.Transport = tlsct.NewTLS12FallbackTransport(attestClient.Transport, attestation.AMDKDSHost)
+	attestClient := config.NewAttestationClient(cfg.Offline)
 
 	s := &Server{
 		cfg:             cfg,
@@ -459,7 +458,7 @@ func New(cfg *config.Config) (*Server, error) {
 	onErr := func() { s.stats.httpErrors.Add(1) }
 
 	attestClient.Transport = tlsct.WrapCounting(
-		tlsct.WrapLogging(attestClient.Transport),
+		attestClient.Transport,
 		onReq, onErr)
 
 	upstreamTransport := newUpstreamTransport()

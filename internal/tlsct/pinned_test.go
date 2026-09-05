@@ -29,7 +29,7 @@ func TestSPKIPinnedClientRejectsBeforeSendingRequest(t *testing.T) {
 		}))
 
 		wrong := sha256.Sum256([]byte("wrong SPKI"))
-		client, err := NewSPKIPinnedHTTPClientWithTransport(0, &http.Transport{Proxy: nil}, hexFingerprint(wrong), false)
+		client, err := NewSPKIPinnedHTTPClientWithTransport(0, &http.Transport{Proxy: nil}, pinnedTestIdentity(t, ts.URL, hexFingerprint(wrong)), false)
 		if err != nil {
 			t.Fatalf("NewSPKIPinnedHTTPClientWithTransport: %v", err)
 		}
@@ -71,7 +71,7 @@ func TestSPKIPinnedClientInstallsHandshakeCTAndReusesConnection(t *testing.T) {
 		}))
 
 		fingerprint := certificateSPKI(t, ts)
-		client, err := NewSPKIPinnedHTTPClientWithTransport(0, &http.Transport{Proxy: nil, ForceAttemptHTTP2: true}, fingerprint, true)
+		client, err := NewSPKIPinnedHTTPClientWithTransport(0, &http.Transport{Proxy: nil, ForceAttemptHTTP2: true}, pinnedTestIdentity(t, ts.URL, fingerprint), true)
 		if err != nil {
 			t.Fatalf("NewSPKIPinnedHTTPClientWithTransport: %v", err)
 		}
@@ -171,7 +171,7 @@ func TestSPKIPinnedClientRejectsModifiedTrust(t *testing.T) {
 	fingerprint := hexFingerprint(sha256.Sum256([]byte("fingerprint")))
 	for name, transport := range tests {
 		t.Run(name, func(t *testing.T) {
-			client, err := NewSPKIPinnedHTTPClientWithTransport(0, transport, fingerprint, false)
+			client, err := NewSPKIPinnedHTTPClientWithTransport(0, transport, pinnedTestIdentity(t, "https://example.com", fingerprint), false)
 			if err == nil || client != nil {
 				t.Fatalf("client, error = %v, %v; want nil, non-nil", client, err)
 			}
@@ -220,4 +220,17 @@ func certificateSPKI(t *testing.T, ts *httptest.Server) string {
 	}
 	sum := sha256.Sum256(ts.Certificate().RawSubjectPublicKeyInfo)
 	return hexFingerprint(sum)
+}
+
+func pinnedTestIdentity(t *testing.T, origin, fingerprint string) TransportIdentity {
+	t.Helper()
+	authority, err := HTTPSOriginAuthority(origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := NewTransportIdentity(authority, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity
 }

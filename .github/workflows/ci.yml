@@ -12,6 +12,23 @@ permissions:
   actions: write
 
 jobs:
+  transport-compatibility:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        go-version: ["1.26.0", "1.27.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Check attested transport and authorization behavior
+        run: go test -short -race -count=1 ./internal/tlsct ./internal/proxy ./internal/provider ./internal/verify -run 'TestAuthorized|TestAuthorization|TestHTTP2|TestPinnedHTTP1|TestPinnedHTTPSProxy|TestGenericInference|TestPooledTransport|TestAttestedPools|TestPrepareInference|TestStandalone|TestNearHTTP2|TestWrappedClient|TestNearKeyRejection'
+      - name: Check authenticated Intel collateral validity
+        working-directory: third_party/go-tdx-guest
+        run: go test -race ./verify
   check:
     runs-on: ubuntu-latest
     steps:

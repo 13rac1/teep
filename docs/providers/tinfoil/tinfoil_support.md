@@ -60,7 +60,7 @@ structured field (i.e., any non-V3 response).
 | E2EE | Yes (EHBP: HPKE + AES-256-GCM full-body encryption to router enclave) |
 | Connection model | Standard TLS with SPKI pinning to router enclave |
 | Attestation endpoint | `GET /.well-known/tinfoil-attestation?nonce=<64hex>` on the **router** enclave |
-| PinnedHandler | No — uses standard HTTP client with SPKI verification |
+| Transport | Pooled HTTP client with attested SPKI handshake verification |
 | Supply chain | Sigstore DSSE bundles fetched through `github-proxy.tinfoil.sh` for `tinfoilsh/confidential-model-router` |
 | Hardware platforms | Intel TDX and AMD SEV-SNP (multi-platform code measurements) |
 | GPU support | Router enclave attestation; inference enclaves attested by router internally |
@@ -84,7 +84,7 @@ structured field (i.e., any non-V3 response).
 | E2EE | Yes (EHBP: HPKE + AES-256-GCM full-body encryption directly to inference enclave) |
 | Connection model | Standard TLS with SPKI pinning to per-model inference enclave |
 | Attestation endpoint | `GET /.well-known/tinfoil-attestation?nonce=<64hex>` on the **inference** enclave |
-| PinnedHandler | No — uses standard HTTP client with per-model SPKI verification |
+| Transport | Pooled HTTP client with per-route attested SPKI handshake verification |
 | Supply chain | Sigstore DSSE bundles fetched through `github-proxy.tinfoil.sh` for the per-model inference repo |
 | Hardware platforms | Intel TDX and AMD SEV-SNP (multi-platform code measurements) |
 | GPU support | NVIDIA H100/H200 (Hopper), Blackwell; 1-GPU and 8-GPU (HGX) configurations |
@@ -190,7 +190,7 @@ gateway verifies model enclaves internally.
 
 - Full-body encryption (EHBP replaces NEAR's Ed25519/XChaCha20-Poly1305)
 - Standard TLS with SPKI pinning to gateway (not connection-pinned like neardirect)
-- No PinnedHandler needed — the standard proxy path verifies the attestation
+- The standard proxy path verifies the attestation
   fetch peer SPKI and the upstream response peer SPKI against `report_data`
 - Supply chain verification via Sigstore (replaces nearcloud's compose-hash/IMA)
 - Router re-attests inference enclaves and uses a `TLSBoundRoundTripper`
@@ -561,7 +561,7 @@ Link 1: Key Generation Inside Enclave
 │   │           Attestation fetch records the live TLS peer SPKI
 │   │           Upstream response TLS peer SPKI is checked against REPORTDATA
 │   │           Mismatch fails closed and evicts relevant caches
-│   │           Connection: close for TLS-binding providers
+│   │           Attested HTTP/2 pools; no Connection header
 │   │
 │   └── Link 4: HPKE Key Binding
 │       │   HPKE public key from response report_data.hpke_key
@@ -1702,20 +1702,36 @@ This binding ensures the TLS connection terminates inside the attested enclave.
 
 ### TLS-Fingerprint Binding in Teep
 
-Tinfoil does not use a PinnedHandler. Teep enforces TLS binding in two places:
+Teep binds attestation and inference to the same cryptographic TLS identity:
 
 1. During attestation fetch, `FetchAttestationWithTLS` records the live HTTPS
-   peer SPKI and `fetchAndVerifyAttestation` constant-time compares it against
+   peer SPKI. The attester compares it in constant time against the attested
    `report_data.tls_key_fp`.
-2. During the inference request, `verifyUpstreamTLSBinding` reads the live
-   upstream response TLS peer SPKI and constant-time compares it against the
-   same attested `tls_key_fp`.
+2. Before sending inference bytes on each new TLS connection, the pinned
+   transport requires TLS 1.3, WebPKI, Certificate Transparency, and a matching
+   attested SPKI. TLS session resumption is disabled for these pools.
 
-On upstream mismatch, teep fails the request, evicts the relevant attestation
-and signing-key cache entries, and evicts the selected direct-provider domain
-from the SPKI cache when available. `Connection: close` is set for
-TLS-binding providers when sending upstream requests, so fresh attestations do
-not depend on a reused connection across attestation boundaries.
+The proxy resolves a direct-provider route once, including its supply-chain
+repository. It publishes the report, route authority, transport identity, and
+EHBP key as one authorization generation. The authorization expires only when
+authenticated evidence supplies a validity bound; discovery metadata refreshes
+and local cache timers do not extend or shorten that cryptographic lifetime.
+
+Pools are scoped to provider, authority, and attested SPKI. Equal identities
+reuse HTTP/2 connections and multiplex requests. A changed key replaces the
+selectable pool and closes its idle connections. A trust or demonstrated key
+failure invalidates only the authorization generation used by that request.
+Every request and permitted retry creates a fresh EHBP session. At most one
+retry is allowed, only for a typed pre-connection failure or the exact documented
+key-rejection response. Redirects, ambiguous failures, and response decryption
+failures are not retried. Buffered inference requests have no `GetBody` callback.
+
+No `Connection: close` or `Connection: keep-alive` header is set. The transport
+limits physical connections to 16 per authority, with separate five-minute TCP
+dial and TLS handshake budgets. Request and authenticated-evidence deadlines
+can end work sooner.
+A socket permit remains held until the socket closes, including when HTTP/2
+stream-capacity handling changes Go's internal connection accounting.
 
 ### E2EE: Encrypted HTTP Body Protocol (EHBP)
 
@@ -2223,7 +2239,7 @@ config, and endpoint dispatch.
 
 **Core files**:
 - `internal/proxy/proxy.go` — Provider construction, endpoint paths,
-  TLS-binding hooks, direct-provider per-model URL/cache-key resolution
+  TLS-binding dispatch; immutable direct-provider route selection
 - `internal/provider/tinfoil/` — Shared V3 types and both provider variants
 - `internal/verify/factory.go` — Attester/report-data verifier factory cases,
   default E2EE status, chat path, and `TINFOIL_API_KEY` env var mapping
@@ -2330,26 +2346,26 @@ wiring as a thin layer on top.
    - When `prompt_cache_key` is present, select the backend domain by hashing
      the key with each domain and choosing the lowest hash; otherwise choose
      the lexicographically first domain for deterministic behavior.
-   - Cache keys for reports/signing keys include `model@domain` so multiple
-     backends for the same model cannot collide.
+   - Authorization keys include provider, model, and canonical authority so
+     multiple backends for the same model cannot collide.
 
 5. **`tinfoil_v3_direct` Supply Chain Repo Mapping**:
 
    For the direct provider, the Sigstore supply chain repo corresponds to the
    per-model inference enclave repository, not the router. The direct attester
    records the repo returned by `/.well-known/tinfoil-proxy` on
-   `RawAttestation.TinfoilRepo`; proxy report helpers use the same resolver
-   and fall back to `RepoForModel` only if discovery is unavailable. If the
+   `RawAttestation.TinfoilRepo`; proxy report helpers receive the immutable
+   route repository selected before attestation. They do not resolve again. If the
    resolved repo does not have a valid release, hash, and DSSE attestation
    through `github-proxy.tinfoil.sh`, supply-chain verification fails closed.
 
 6. **TLS fingerprint binding** (shared pattern, both providers):
 
    The current proxy does not create a dedicated Tinfoil transport type.
-   Attestation fetches and inference responses both compare the live TLS peer
-   SPKI against the attested `report_data.tls_key_fp`; inference mismatches
-   fail closed and evict cached report/signing-key/SPKI state for the relevant
-   model or selected direct backend domain.
+   Attestation fetches compare the live TLS peer SPKI against the attested
+   `report_data.tls_key_fp`. Every inference handshake checks that pin before
+   sending request bytes. Trust failures invalidate only the authorization
+   generation used by the failed attempt.
 
 7. **Allow-Fail Defaults**:
 

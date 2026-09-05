@@ -80,7 +80,7 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 			if client != nil {
 				client.CloseIdleConnections()
 			}
-			client, err = tlsct.NewSPKIPinnedHTTPClientWithTransport(0, tlsct.NewPooledTransport(), selected.Fingerprint(), !opts.Offline)
+			client, err = tlsct.NewSPKIPinnedHTTPClientWithTransport(0, tlsct.NewPooledTransport(), selected, !opts.Offline)
 			if err != nil {
 				return current, false, err
 			}

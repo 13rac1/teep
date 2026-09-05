@@ -142,7 +142,7 @@ func (h *Handler) attestOnConn(...) (*Report, error) {
 
 Reference implementations to mirror when adding providers or verification logic:
 
-- **Attestation verification:** `internal/provider/nearcloud/pinned.go:attestOnConn` and `internal/provider/neardirect/pinned.go:attestOnConn`
+- **Attestation verification:** `internal/proxy/proxy.go:fetchVerified` and `internal/verify/verify.go:runEvidence`
 - **Proxy handler:** `internal/proxy/proxy.go:handleChat`
 
 ### Follow Go Conventions

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,7 +44,11 @@ func TestOutboundClientsRejectRedirects(t *testing.T) {
 			w.WriteHeader(status)
 		}))
 		fp := sha256.Sum256(source.Certificate().RawSubjectPublicKeyInfo)
-		pinned, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(time.Second, tlsct.NewPooledTransport(), hex.EncodeToString(fp[:]), true)
+		identity, err := tlsct.NewTransportIdentity(strings.TrimPrefix(source.URL, "https://"), hex.EncodeToString(fp[:]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pinned, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(time.Second, tlsct.NewPooledTransport(), identity, true)
 		if err != nil {
 			t.Fatal(err)
 		}

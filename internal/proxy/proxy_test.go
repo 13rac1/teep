@@ -359,16 +359,17 @@ func allowFailExcept(exclude ...string) []string {
 	return out
 }
 
-// newProxy creates a proxy.Server using the given config, wires it to the
-// given upstream chat completions server URL via the provider's BaseURL, and
-// returns both an httptest.Server wrapping the proxy and the proxy itself.
+// newProxyServer serves the proxy and closes its owned clients after the test.
 func newProxyServer(t *testing.T, cfg *config.Config) *httptest.Server {
 	t.Helper()
 	srv, err := proxy.New(cfg)
 	if err != nil {
 		t.Fatalf("proxy.New: %v", err)
 	}
-	return httptest.NewServer(srv)
+	t.Cleanup(srv.Close)
+	server := httptest.NewServer(srv)
+	t.Cleanup(server.Close)
+	return server
 }
 
 // postChat sends a POST /v1/chat/completions to the given proxy URL.

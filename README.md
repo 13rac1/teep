@@ -124,8 +124,8 @@ Yes. Teep is open source under AGPL-3.0. Dual licensing is available for commerc
 | Provider | What teep does |
 |----------|---------------|
 | [Venice AI](https://venice.ai) | End-to-end encryption (ECDH + AES-256-GCM) |
-| [NEAR AI Direct](https://near.ai) | TLS connection pinning to model-specific TEE nodes |
-| [NEAR AI Cloud](https://near.ai) | TLS connection pinning through TEE-attested gateway |
+| [NEAR AI Direct](https://near.ai) | Attested HTTP/2 pools to model-specific TEE nodes |
+| [NEAR AI Cloud](https://near.ai) | Attested HTTP/2 pools through a TEE-attested gateway |
 | [NanoGPT](https://nano-gpt.com) | TEE attestation with Intel TDX + NVIDIA GPU |
 | [Chutes](https://chutes.ai) | End-to-end encryption (ML-KEM-768 + ChaCha20-Poly1305) with multi-instance failover |
 | [Phala Cloud](https://phala.network) | Format-agnostic gateway supporting Chutes and dStack attestation backends |

@@ -33,7 +33,7 @@ Both sections are parsed from a single HTTP response body. The gateway-specific 
 
 Verify and report:
 - attestation response body size bounds (recommended: ≤2 MiB for gateway responses, which are expected to be larger than direct inference responses due to the presence of two attestation payloads — verify `io.LimitReader` or equivalent is applied),
-- that the attestation API is queried and the response is fully validated **before** any inference request is forwarded on the same TLS connection (no TOCTOU gap),
+- that the attestation API is queried and the response is fully validated **before** any inference request is forwarded through an attestation-bound transport,
 - HTTP client timeout configuration for the attestation fetch (connect, read, overall),
 - HTTP response status code validation before body parsing,
 - that the Host header and request path are constructed from trusted values (not user-supplied).
@@ -130,7 +130,7 @@ The audit for chutes MUST verify:
 ## Security Audit Points
 
 - **Trust boundary**: Everything from the attestation API response is untrusted until cryptographically verified via the TDX quote chain. The JSON structure, field values, and attestation blobs could all be attacker-controlled (including a compromised gateway). Verify that the code treats the entire response as adversarial.
-- **TOCTOU between fetch and use**: The attestation fetch and the inference request MUST occur on the same TLS connection to prevent an attacker from swapping the backend server between attestation and inference. Verify that no connection pooling or reuse breaks this binding.
+- **TOCTOU between fetch and use**: The fetched evidence MUST bind the live attestation TLS peer. Every inference handshake must enforce the same attested SPKI and authority before sending request bytes. Reused connections must remain in the selected authorization scope.
 - **Defense in depth for parsing**: Verify that strict JSON unmarshalling is the default path, not an opt-in annotation. A single parsing path that bypasses strict mode would allow field injection.
 - **Fail-closed on ambiguity**: If the response format is ambiguous (e.g., partially valid JSON, unexpected array nesting, or missing required fields), the parser MUST reject the entire response rather than attempting best-effort extraction.
 - **Resource exhaustion**: Verify that deeply nested JSON structures, extremely long string fields, or large array sizes in the combined gateway+model response cannot cause stack overflow, excessive memory allocation, or CPU-bound parsing delays.

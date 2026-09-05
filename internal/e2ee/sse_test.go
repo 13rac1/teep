@@ -2,13 +2,15 @@ package e2ee
 
 import (
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func TestNewSSEScanner(t *testing.T) {
 	input := "data: {\"chunk\":1}\n\ndata: {\"chunk\":2}\n\ndata: [DONE]\n\n"
-	scanner, cleanup := newSSEScanner(strings.NewReader(input))
+	scanner, cleanup := NewSSEScanner(strings.NewReader(input))
 	defer cleanup()
 
 	var lines []string
@@ -45,11 +47,11 @@ func TestNewSSEScanner(t *testing.T) {
 
 func TestNewSSEScanner_PoolReuse(t *testing.T) {
 	// Create and release a scanner, then create another to verify pool reuse.
-	s1, c1 := newSSEScanner(strings.NewReader("line1\n"))
+	s1, c1 := NewSSEScanner(strings.NewReader("line1\n"))
 	_ = s1.Scan()
 	c1()
 
-	s2, c2 := newSSEScanner(strings.NewReader("line2\n"))
+	s2, c2 := NewSSEScanner(strings.NewReader("line2\n"))
 	defer c2()
 	if !s2.Scan() {
 		t.Fatal("second scanner failed to scan")
@@ -99,5 +101,42 @@ func TestSafePrefix(t *testing.T) {
 			}
 			t.Logf("SafePrefix(%q, %d) = %q", tt.s, tt.n, got)
 		})
+	}
+}
+
+// A network read can stop between CR and LF or within the initial UTF-8 mark.
+func TestSSEScannerFramingAcrossReads(t *testing.T) {
+	for _, wire := range []string{
+		"\uFEFFdata:{}\r\ndata:[DONE]\r\n",
+		"\uFEFFdata:{}\rdata:[DONE]\r",
+		"data:{}\ndata:[DONE]",
+	} {
+		scanner, cleanup := NewSSEScanner(iotest.OneByteReader(strings.NewReader(wire)))
+		var lines []string
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		err := scanner.Err()
+		cleanup()
+		if err != nil || !slices.Equal(lines, []string{"data:{}", "data:[DONE]"}) {
+			t.Fatalf("incorrect SSE framing: lines=%q error=%v", lines, err)
+		}
+	}
+}
+
+func TestSSEDataField(t *testing.T) {
+	for _, tc := range []struct {
+		line, value string
+		data        bool
+	}{
+		{"data:{}", "{}", true}, {"data: {}", "{}", true},
+		{"data:  {}", " {}", true}, {"data", "", true},
+		{"data:", "", true}, {":data:{}", "data:{}", false},
+		{"event:error", "error", false},
+	} {
+		value, data := SSEData(tc.line)
+		if data != tc.data || value != tc.value {
+			t.Fatalf("incorrect data field for %q", tc.line)
+		}
 	}
 }

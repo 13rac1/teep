@@ -24,8 +24,7 @@ import (
 // ---------------------------------------------------------------------------
 // Regression coverage for attested upstream TLS binding. Every new connection
 // must match the attested SPKI during its TLS handshake, before request data is
-// transmitted. The response SPKI is checked again on cache hits and misses as
-// defense in depth.
+// transmitted. Reused connections remain within the attested pool scope.
 // ---------------------------------------------------------------------------
 
 // newTLSBindingTestServer starts a locally CA-signed server whose CA is a

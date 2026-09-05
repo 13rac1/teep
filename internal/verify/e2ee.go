@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -191,8 +190,8 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 		}
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+	scanner, cleanup := e2ee.NewSSEScanner(resp.Body)
+	defer cleanup()
 
 	var streamKey []byte
 	decryptedChunks := 0
@@ -200,10 +199,10 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		data, isData := e2ee.SSEData(line)
+		if !isData {
 			continue
 		}
-		data := line[len("data: "):]
 		if data == "[DONE]" {
 			break
 		}
@@ -309,18 +308,26 @@ func verifyE2EEStreamResponse(resp *http.Response, session e2ee.Decryptor, versi
 		}
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+	scanner, cleanup := e2ee.NewSSEScanner(resp.Body)
+	defer cleanup()
 	encryptedCount := 0
 	chunkCount := 0
+	seenDone := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if err := e2ee.CheckSSEEvent(line); err != nil {
+			return &attestation.E2EETestResult{Attempted: true, Err: err}
+		}
+		data, isData := e2ee.SSEData(line)
+		if !isData {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			if err := e2ee.FinishSSE(scanner); err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("SSE completion: %w", err)}
+			}
+			seenDone = true
 			break
 		}
 		chunkCount++
@@ -336,13 +343,17 @@ func verifyE2EEStreamResponse(resp *http.Response, session e2ee.Decryptor, versi
 				Delta        any `json:"delta,omitempty"`
 				FinishReason any `json:"finish_reason,omitempty"`
 			} `json:"choices,omitempty"`
-			Usage any `json:"usage,omitempty"`
+			Error json.RawMessage `json:"error,omitempty"`
+			Usage any             `json:"usage,omitempty"`
 		}
 		if _, _, err := jsonstrict.UnmarshalWarn([]byte(data), &chunk, "e2ee SSE chunk"); err != nil {
 			return &attestation.E2EETestResult{
 				Attempted: true,
 				Err:       fmt.Errorf("parse SSE chunk %d: %w", chunkCount, err),
 			}
+		}
+		if len(chunk.Error) != 0 {
+			return &attestation.E2EETestResult{Attempted: true, Err: errors.New("upstream SSE error event")}
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -370,6 +381,10 @@ func verifyE2EEStreamResponse(resp *http.Response, session e2ee.Decryptor, versi
 	}
 	if err := scanner.Err(); err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("read SSE stream: %w", err)}
+	}
+
+	if err := e2ee.CheckSSEEndMarker(session, chatCompletionsEndpoint, seenDone); err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: err}
 	}
 
 	if encryptedCount == 0 {
@@ -472,17 +487,20 @@ func verifyEHBPStreamResponse(resp *http.Response, session *e2ee.EHBPSession) *a
 	}
 	defer decrypted.Close()
 
-	scanner := bufio.NewScanner(decrypted)
-	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+	scanner, cleanup := e2ee.NewSSEScanner(decrypted)
+	defer cleanup()
 	chunkCount := 0
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		data, isData := e2ee.SSEData(line)
+		if !isData {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			if err := e2ee.FinishSSE(scanner); err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("EHBP stream completion: %w", err)}
+			}
 			break
 		}
 		chunkCount++
