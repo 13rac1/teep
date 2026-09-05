@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -17,8 +18,8 @@ func KeyRejection(resp *http.Response, name, path string) (bool, error) {
 		return false, nil
 	}
 	isTinfoil := name == "tinfoil_v3_cloud" || name == "tinfoil_v3_direct"
-	isNear := name == "neardirect" || name == "nearcloud"
-	candidate := isTinfoil && resp.StatusCode == http.StatusUnprocessableEntity || isNear && resp.StatusCode == http.StatusBadRequest && path == "/v1/chat/completions"
+	nearType, isNear := nearRejectionType(name, path)
+	candidate := isTinfoil && resp.StatusCode == http.StatusUnprocessableEntity || isNear && resp.StatusCode == http.StatusBadRequest
 	if !candidate || len(resp.Header.Values("Ehbp-Response-Nonce")) != 0 {
 		return false, nil
 	}
@@ -47,7 +48,7 @@ func KeyRejection(resp *http.Response, name, path string) (bool, error) {
 	if isTinfoil {
 		return ehbpKeyRejection(body)
 	}
-	return nearKeyRejection(body, name)
+	return nearKeyRejection(body, nearType)
 }
 
 func ehbpKeyRejection(body []byte) (bool, error) {
@@ -65,22 +66,43 @@ func ehbpKeyRejection(body []byte) (bool, error) {
 	return problem.Type == "urn:ietf:params:ehbp:error:key-config", nil
 }
 
-func nearKeyRejection(body []byte, name string) (bool, error) {
+func nearKeyRejection(body []byte, expected string) (bool, error) {
 	var envelope struct {
-		Error struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-			Code    any    `json:"code,omitempty"`
-			Param   any    `json:"param,omitempty"`
-		} `json:"error"`
+		Error json.RawMessage `json:"error"`
 	}
 	unknown, missing, err := jsonstrict.Unmarshal(body, &envelope)
 	if err != nil || len(unknown) > 0 || len(missing) > 0 {
 		return false, errors.New("malformed NEAR error response")
 	}
-	expected := "bad_request"
-	if name == "nearcloud" {
-		expected = "invalid_request_error"
+	// jsonstrict reports fields at one object level. Validate the nested
+	// protocol object separately before treating the response as retryable.
+	var detail struct {
+		Type    *string `json:"type"`
+		Message *string `json:"message"`
+		Code    any     `json:"code,omitempty"`
+		Param   any     `json:"param,omitempty"`
 	}
-	return envelope.Error.Type == expected && envelope.Error.Message == "Decryption failed", nil
+	unknown, missing, err = jsonstrict.Unmarshal(envelope.Error, &detail)
+	if err != nil || len(unknown) > 0 || len(missing) > 0 || detail.Type == nil || detail.Message == nil {
+		return false, errors.New("malformed NEAR error detail")
+	}
+	return *detail.Type == expected && *detail.Message == "Decryption failed", nil
+}
+
+func nearRejectionType(name, path string) (string, bool) {
+	if name == "neardirect" {
+		switch path {
+		case "/v1/chat/completions", "/v1/embeddings", "/v1/images/generations", "/v1/rerank", "/v1/score":
+			return "bad_request", true
+		}
+	}
+	if name == "nearcloud" {
+		switch path {
+		case "/v1/chat/completions":
+			return "invalid_request_error", true
+		case "/v1/embeddings":
+			return "provider_error", true
+		}
+	}
+	return "", false
 }

@@ -1,9 +1,7 @@
 package verify
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,13 +12,11 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/nearcloud"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct"
 )
-
-func isTinfoilProvider(name string) bool {
-	return name == "tinfoil_v3_cloud" || name == "tinfoil_v3_direct"
-}
 
 func standaloneAttesterForRoute(ctx context.Context, opts *Options, attester provider.Attester, route *provider.ResolvedRoute) (provider.Attester, error) {
 	if route.Authority() == "" {
@@ -30,7 +26,11 @@ func standaloneAttesterForRoute(ctx context.Context, opts *Options, attester pro
 		}); ok {
 			*route, err = resolver.ResolveRoute(ctx, opts.ModelName)
 		} else {
-			*route, err = provider.NewResolvedRoute(opts.Provider.BaseURL, tinfoil.RouterRepo)
+			origin, repo := opts.Provider.BaseURL, tinfoil.RouterRepo
+			if opts.ProviderName == "nearcloud" {
+				origin, repo = "https://"+nearcloud.GatewayHost(), ""
+			}
+			*route, err = provider.NewResolvedRoute(origin, repo)
 		}
 		if err != nil {
 			return nil, err
@@ -39,7 +39,7 @@ func standaloneAttesterForRoute(ctx context.Context, opts *Options, attester pro
 	if scoped, ok := attester.(provider.RouteAttester); ok {
 		return provider.AttesterForRoute(scoped, *route)
 	}
-	if opts.ProviderName != "tinfoil_v3_cloud" {
+	if opts.ProviderName != "tinfoil_v3_cloud" && opts.ProviderName != "nearcloud" {
 		return nil, errors.New("dynamic provider has no route attester")
 	}
 	return attester, nil
@@ -86,17 +86,11 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 			}
 			identity = selected
 		}
-		bounded, boundCancel := context.WithCancel(attemptCtx)
-		if expires, present := report.Validity.Expiry(); present {
-			boundCancel()
-			if !time.Now().Before(expires) {
-				return current, false, errors.New("authenticated evidence expired before inference")
-			}
-			bounded, boundCancel = context.WithDeadline(attemptCtx, expires)
-		}
+		expires, present := report.Validity.Expiry()
+		bounded, boundCancel := tlsct.InferenceContext(attemptCtx, expires, present)
 		defer boundCancel()
 		var retry bool
-		current.e2ee, retry, err = testStandaloneTinfoil(bounded, opts, *route, current.raw, client)
+		current.e2ee, retry, err = testStandaloneInference(bounded, opts, *route, current.raw, client)
 		if contextErr := bounded.Err(); contextErr != nil {
 			err = contextErr
 			if current.e2ee != nil {
@@ -141,36 +135,33 @@ func completeTLSInference(result *verificationOutcome, err error) {
 	}
 }
 
-func testStandaloneTinfoil(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, client *http.Client) (*attestation.E2EETestResult, bool, error) {
-	key, err := hex.DecodeString(raw.SigningKey)
-	if err != nil {
-		return nil, false, errors.New("invalid attested EHBP key")
+// testStandaloneInference uses the same encryption, headers, framing, and
+// rejection recognition as the proxy, while retaining standalone report output.
+func testStandaloneInference(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, client *http.Client) (*attestation.E2EETestResult, bool, error) {
+	prov := &provider.Provider{Name: opts.ProviderName, E2EE: true}
+	switch opts.ProviderName {
+	case "nearcloud", "neardirect":
+		prov.Encryptor, prov.Preparer = neardirect.NewE2EE(), neardirect.NewPreparer(opts.Provider.APIKey)
+	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
+		prov.Encryptor, prov.Preparer = tinfoil.NewE2EE(), tinfoil.NewPreparer(opts.Provider.APIKey)
+	default:
+		return nil, false, errors.New("unsupported TLS-binding inference provider")
 	}
-	session, err := e2ee.NewEHBPSession(key)
-	if err != nil {
-		return nil, false, err
-	}
-	defer session.Zero()
 	body, err := json.Marshal(map[string]any{"model": opts.ModelName, "messages": []map[string]string{{"role": "user", "content": "Say hello"}}, "stream": true})
 	if err != nil {
 		return nil, false, err
 	}
 	phase := &tlsct.InferenceAttempt{}
-	req, err := http.NewRequestWithContext(phase.Context(ctx), http.MethodPost, route.BaseURL()+"/v1/chat/completions", session.EncryptRequest(bytes.NewReader(body)))
+	req, encrypted, err := provider.PrepareInference(phase.Context(ctx), prov, route, &provider.InferenceInput{Body: body, SigningKey: raw.SigningKey, Path: "/v1/chat/completions", ContentType: "application/json", Stream: true, Endpoint: e2ee.EndpointChat})
 	if err != nil {
 		return nil, false, err
 	}
-	req.GetBody = nil
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+opts.Provider.APIKey)
-	req.Header.Set("Ehbp-Encapsulated-Key", session.EncapKeyHex())
-	req.ContentLength = -1
-	tlsct.SetUserAgent(req)
+	defer e2ee.ZeroSessions(encrypted.Session, encrypted.Chutes, encrypted.EHBP)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, phase.RetryConnectionFailure(ctx, err), err
 	}
-	defer resp.Body.Close()
+	defer func() { resp.Body.Close() }()
 	rejected, err := provider.KeyRejection(resp, opts.ProviderName, "/v1/chat/completions")
 	if err != nil {
 		return nil, false, err
@@ -179,10 +170,28 @@ func testStandaloneTinfoil(ctx context.Context, opts *Options, route provider.Re
 		return nil, true, &standaloneKeyRejectionError{}
 	}
 	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		return nil, false, fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
+		return nil, false, standaloneInferenceError(resp, encrypted.EHBP)
 	}
-	return verifyEHBPStreamResponse(resp, session), false, nil
+	if encrypted.EHBP != nil {
+		return verifyEHBPStreamResponse(resp, encrypted.EHBP), false, nil
+	}
+	return verifyE2EEStreamResponse(resp, encrypted.Session, opts.ProviderName), false, nil
+}
+
+func standaloneInferenceError(resp *http.Response, session *e2ee.EHBPSession) error {
+	var body io.Reader = resp.Body
+	if nonce := resp.Header.Get("Ehbp-Response-Nonce"); session != nil && len(resp.Header.Values("Ehbp-Response-Nonce")) != 0 {
+		plain, err := session.DecryptResponse(body, nonce)
+		if err != nil {
+			return err
+		}
+		defer plain.Close()
+		body = plain
+	}
+	if _, err := io.Copy(io.Discard, io.LimitReader(body, 64<<10)); err != nil {
+		return err
+	}
+	return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
 }
 
 type standaloneKeyRejectionError struct{}

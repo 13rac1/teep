@@ -191,7 +191,13 @@ NearDirect and NearCloud both use the NearAI field-encryption protocol: Ed25519/
 
 ### NearDirect
 
-**Upstream:** Model TEE inference-proxy instances at `*.completions.near.ai`, resolved per-model via the `/endpoints` discovery API.
+**Upstream:** Model TEE inference-proxy instances at `*.completions.near.ai`.
+With `base_url = "https://completions.near.ai"` (the default), or
+`https://api.near.ai`, both `serve` and `verify` resolve the model through
+`/endpoints`. Set `[providers.neardirect].base_url` to an explicit HTTPS backend
+origin to disable endpoint discovery in both commands. That origin is used for
+attestation and inference for every requested model; all attestation, TLS, and
+E2EE checks still apply. The `/v1/models` catalog remains gateway-provided.
 
 **E2EE protocol:** Ed25519/X25519 ECDH + XChaCha20-Poly1305 (field-level encryption).
 

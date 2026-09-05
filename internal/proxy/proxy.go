@@ -319,7 +319,7 @@ func rewriteMultipartModel(contentType string, body []byte, upstreamModel string
 // amplifies the rate limit and consumes nonces for nothing.
 func chutesRetryableError(err error, resp *http.Response) bool {
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, tlsct.ErrConnectionCapacity) {
 			return false // client disconnected; retrying is pointless
 		}
 		return true // connection error, timeout, etc.
@@ -356,19 +356,6 @@ type upstreamBody struct {
 	EHBP       *e2ee.EHBPSession
 	ChuteID    string // For MarkFailed (from raw attestation, not meta)
 	InstanceID string // For MarkFailed (from raw attestation, not meta)
-}
-
-// zeroE2EE zeroes crypto material from all E2EE session types.
-func zeroE2EE(session e2ee.Decryptor, meta *e2ee.ChutesE2EE, ehbp *e2ee.EHBPSession) {
-	if session != nil {
-		session.Zero()
-	}
-	if meta != nil && meta.Session != nil {
-		meta.Session.Zero()
-	}
-	if ehbp != nil {
-		ehbp.Zero()
-	}
 }
 
 // chatRequest is a minimal parse of an OpenAI chat completions request.
@@ -517,7 +504,7 @@ func New(cfg *config.Config) (*Server, error) {
 		mDefaults, gwDefaults := defaults.MeasurementDefaults(name)
 		mergedPolicy := config.MergedMeasurementPolicy(name, cfg, mDefaults)
 		mergedGWPolicy := config.MergedGatewayMeasurementPolicy(name, cfg, gwDefaults)
-		p, err := fromConfig(cp, spkiCache, cfg.Offline, config.MergedAllowFail(name, cfg, cfg.Offline), mergedPolicy, mergedGWPolicy, s.rekorClient, s.nvidiaVerifier, s.collateral)
+		p, err := fromConfig(cp, cfg.Offline, mergedPolicy, mergedGWPolicy)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
@@ -678,14 +665,9 @@ func (r *statusRecorder) Flush() {
 // the correct Attester, Preparer, and PinnedHandler for the known provider names.
 func fromConfig(
 	cp *config.Provider,
-	spkiCache *attestation.SPKICache,
 	offline bool,
-	allowFail []string,
 	policy attestation.MeasurementPolicy,
 	gatewayPolicy attestation.MeasurementPolicy,
-	rekorClient *attestation.RekorClient,
-	nvidiaVerifier *attestation.NVIDIAVerifier,
-	getter trust.HTTPSGetter,
 ) (*provider.Provider, error) {
 	p := &provider.Provider{
 		Name:                     cp.Name,
@@ -712,30 +694,14 @@ func fromConfig(
 		p.RerankPath = "/v1/rerank"
 		p.ScorePath = "/v1/score"
 		rdVerifier := neardirect.ReportDataVerifier{}
-		p.Attester = neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		attester := neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		p.Attester = attester
+		p.ResolveRoute = attester.ResolveRoute
+		p.UsesTLSBinding = true
+		p.Encryptor = neardirect.NewE2EE()
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
 		p.SupplyChainPolicy = neardirect.SupplyChainPolicy()
-		resolver := neardirect.NewEndpointResolver(offline)
-		p.PinnedHandler = neardirect.NewPinnedHandler(
-			resolver,
-			spkiCache,
-			cp.APIKey,
-			offline,
-			allowFail,
-			policy,
-			rdVerifier,
-			rekorClient,
-			nvidiaVerifier,
-			getter,
-		)
-		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
-			d, err := resolver.Resolve(ctx, model)
-			if err != nil {
-				return "", false
-			}
-			return d, true
-		}
 		p.ModelLister = provider.NewOwnedByModelLister(
 			"https://"+nearcloud.GatewayHost(), cp.APIKey,
 			config.NewAttestationClient(offline), "nearai",
@@ -752,21 +718,13 @@ func fromConfig(
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
 		p.SupplyChainPolicy = nearcloud.SupplyChainPolicy()
-		p.PinnedHandler = nearcloud.NewPinnedHandler(
-			spkiCache,
-			cp.APIKey,
-			offline,
-			allowFail,
-			policy,
-			gatewayPolicy,
-			rdVerifier,
-			rekorClient,
-			nvidiaVerifier,
-			getter,
-		)
-		p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
-			return nearcloud.GatewayHost(), true
+		p.UsesTLSBinding = true
+		p.BaseURL = "https://" + nearcloud.GatewayHost()
+		route, err := provider.NewResolvedRoute(p.BaseURL, "")
+		if err != nil {
+			return nil, err
 		}
+		p.StaticRoute = route
 		p.ModelLister = provider.NewOwnedByModelLister(
 			"https://"+nearcloud.GatewayHost(), cp.APIKey,
 			config.NewAttestationClient(offline), "nearai",
@@ -925,17 +883,18 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 // it for E2EE key exchange without a second round-trip. The REPORTDATA
 // binding has already been verified against the raw's signing key.
 func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, upstreamModel string) (*attestation.VerificationReport, *attestation.RawAttestation) {
-	return s.fetchVerified(ctx, prov, upstreamModel, func(action string, err error) {
+	report, raw, _ := s.fetchVerified(ctx, prov, upstreamModel, func(action string, err error) {
 		s.recordNegativeCache(ctx, prov, upstreamModel, action, nil, err)
 	})
+	return report, raw
 }
 
-func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, upstreamModel string, failure func(string, error)) (*attestation.VerificationReport, *attestation.RawAttestation) {
+func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, upstreamModel string, failure func(string, error)) (*attestation.VerificationReport, *attestation.RawAttestation, error) {
 	if prov.Attester == nil {
 		err := errors.New("provider has no Attester")
 		slog.ErrorContext(ctx, "provider has no Attester", "provider", prov.Name, "model", upstreamModel, "err", err)
 		failure("missing_attester", err)
-		return nil, nil
+		return nil, nil, err
 	}
 
 	totalStart := time.Now()
@@ -947,7 +906,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	if err != nil {
 		slog.ErrorContext(ctx, "attestation fetch failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		failure("attestation_fetch_failed", err)
-		return nil, nil
+		return nil, nil, err
 	}
 	fetchDur := time.Since(fetchStart)
 	slog.DebugContext(ctx, "attestation fetch complete", "provider", prov.Name, "elapsed", fetchDur)
@@ -981,7 +940,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	ms := s.stats.getModelStats(prov.Name, cacheModelFor(ctx, upstreamModel))
 	ms.lastVerifyMs.Store(totalDur.Milliseconds())
 
-	report := attestation.BuildReport(&attestation.ReportInput{
+	input := &attestation.ReportInput{
 		Provider:               prov.Name,
 		Model:                  upstreamModel,
 		Raw:                    raw,
@@ -1000,6 +959,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		GatewayPoC:             gatewayPoCResult,
 		GatewayNonceHex:        raw.GatewayNonceHex,
 		GatewayNonce:           nonce,
+		GatewayEventLog:        raw.GatewayEventLog,
 		Nvidia:                 nvidiaResult,
 		NvidiaNRAS:             nrasResult,
 		PoC:                    pocResult,
@@ -1011,8 +971,13 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		Inapplicable:           inapplicableForProvider(prov.Name),
 		ProviderUsesTLSBinding: prov.UsesTLSBinding,
 		E2EEKeyBoundByGateway:  prov.E2EEKeyBoundByGateway,
-	})
-	return report, raw
+	}
+	report := attestation.BuildReport(input)
+	if report.Blocked() && !s.cfg.Force && errors.Is(input.VerificationErrors(), tlsct.ErrConnectionCapacity) {
+		failure("attestation_capacity", tlsct.ErrConnectionCapacity)
+		return nil, nil, tlsct.ErrConnectionCapacity
+	}
+	return report, raw, nil
 }
 
 // verifyTDX runs TDX quote verification and REPORTDATA binding.
@@ -1867,7 +1832,7 @@ func (s *Server) relayWithRetry(
 			// inside doUpstreamRoundtrip. If we get here, all transport
 			// retries are exhausted. Continue to the next relay attempt
 			// only if we haven't written headers yet.
-			if relayAttempt < maxRelayAttempts-1 && !ri.headerSent {
+			if relayAttempt < maxRelayAttempts-1 && !ri.headerSent && !errors.Is(err, tlsct.ErrConnectionCapacity) {
 				slog.WarnContext(ctx, "chutes: upstream failed, trying relay attempt with new instance",
 					"provider", prov.Name, "model", upstreamModel, "relay_attempt", relayAttempt+1, "err", err)
 				continue
@@ -1876,6 +1841,9 @@ func (s *Server) relayWithRetry(
 			ms.errors.Add(1)
 			s.logUpstreamRoundtripFailure(ctx, prov.Name, upstreamModel, endpointPath, code, err)
 			if !ri.headerSent {
+				if errors.Is(err, tlsct.ErrConnectionCapacity) {
+					w.Header().Set("Retry-After", "1")
+				}
 				http.Error(w, msg, code)
 				return result
 			}
@@ -1894,7 +1862,7 @@ func (s *Server) relayWithRetry(
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 			resp.Body.Close()
 			ur.Cancel()
-			zeroE2EE(session, meta, ehbp)
+			e2ee.ZeroSessions(session, meta, ehbp)
 		}
 
 		if resp.StatusCode != http.StatusOK {
@@ -1923,7 +1891,7 @@ func (s *Server) relayWithRetry(
 		// ciphertext as plaintext would leak data.
 		if meta != nil && meta.Session == nil {
 			cleanupAttempt()
-			if relayAttempt < maxRelayAttempts-1 && !ri.headerSent {
+			if relayAttempt < maxRelayAttempts-1 && !ri.headerSent && !errors.Is(err, tlsct.ErrConnectionCapacity) {
 				slog.WarnContext(ctx, "chutes: e2ee session missing, trying new instance",
 					"provider", prov.Name, "model", upstreamModel, "relay_attempt", relayAttempt+1)
 				continue
@@ -1972,7 +1940,7 @@ func (s *Server) relayWithRetry(
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
 		ur.Cancel()
-		zeroE2EE(session, meta, ehbp)
+		e2ee.ZeroSessions(session, meta, ehbp)
 
 		if relayErr == nil {
 			// Relay succeeded.
@@ -2750,8 +2718,10 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
 		return e2ee.RelayNonStreamChutes(ctx, w, body, meta.Session)
 	case session != nil && stream:
 		return e2ee.RelayStream(ctx, w, body, session, endpoint)
-	case session != nil:
+	case session != nil && endpoint == e2ee.EndpointChat:
 		return e2ee.RelayReassembledNonStream(ctx, w, body, session, endpoint)
+	case session != nil:
+		return e2ee.RelayNonStreamForEndpoint(ctx, w, body, session, endpoint)
 	case stream:
 		return e2ee.RelayStream(ctx, w, body, nil, endpoint)
 	default:
@@ -2898,6 +2868,9 @@ func classifyUpstreamError(err error) (status string, code int, msg string) {
 			msg = "failed to prepare encrypted request"
 		}
 	}
+	if errors.Is(err, tlsct.ErrConnectionCapacity) {
+		status, code, msg = "upstream_overloaded", http.StatusServiceUnavailable, "outbound connection capacity exhausted"
+	}
 	return
 }
 
@@ -2922,52 +2895,6 @@ type upstreamResult struct {
 	Cancel      context.CancelFunc
 	E2EEDur     time.Duration
 	UpstreamDur time.Duration
-}
-
-// setUpstreamConnectionHeaders sets EHBP headers on the upstream request.
-// Connection lifetime is intentionally left to the SPKI-pinned transport,
-// which may safely pool connections authenticated during their TLS handshake.
-func setUpstreamConnectionHeaders(req *http.Request, ehbp *e2ee.EHBPSession) {
-	if ehbp != nil {
-		req.Header.Set("Ehbp-Encapsulated-Key", ehbp.EncapKeyHex())
-		req.ContentLength = -1 // force chunked transfer encoding
-	}
-}
-
-// verifyUpstreamTLSBinding checks that the live upstream TLS peer SPKI
-// matches the attested TLS key fingerprint (attestResult.TLSKeyFP, sourced
-// from VerificationReport.TLSKeyFP on both cache hit and cache miss). This
-// prevents MITM attacks between teep and the enclave after attestation
-// completes — including within the attestation cache TTL, when requests are
-// served without re-fetching attestation. The attestation fetch already
-// verifies the peer SPKI, but the upstream inference connection must also be
-// bound to the same attested identity on every response.
-//
-// On mismatch, invalidates all caches to force re-attestation on the next
-// request. Returns an *httpError on failure, nil on success.
-func (s *Server) verifyUpstreamTLSBinding(
-	ctx context.Context,
-	prov *provider.Provider,
-	upstreamModel string,
-	baseURL string,
-	resp *http.Response,
-	attestedFP string,
-) *httpError {
-	peerSPKI := tlsct.PeerSPKI(resp.TLS)
-	if peerSPKI == "" {
-		return &httpError{http.StatusBadGateway, "tls_binding_failed",
-			errors.New("upstream TLS binding failed: no TLS peer state on upstream connection")}
-	}
-	if !tlsct.SPKIFingerprintsEqual(peerSPKI, attestedFP) {
-		slog.ErrorContext(ctx, "upstream TLS SPKI mismatch: live peer does not match attested fingerprint",
-			"provider", prov.Name, "model", upstreamModel,
-			"live_spki", provider.Truncate(peerSPKI, 16),
-			"attested_spki", provider.Truncate(attestedFP, 16))
-		s.invalidateTLSBinding(ctx, prov, upstreamModel, baseURL)
-		return &httpError{http.StatusBadGateway, "tls_binding_failed",
-			errors.New("upstream TLS SPKI mismatch: live peer fingerprint does not match attested tls_key_fp")}
-	}
-	return nil
 }
 
 // invalidateTLSBinding retires every cache that could otherwise authorize or
@@ -3091,7 +3018,7 @@ func (s *Server) doUpstreamRoundtrip(
 
 		if buildErr != nil {
 			err = buildErr
-			if attempt < maxAttempts-1 && !errors.Is(err, context.Canceled) {
+			if attempt < maxAttempts-1 && chutesRetryableError(err, nil) {
 				slog.WarnContext(ctx, "chutes: E2EE body build failed, retrying",
 					"provider", prov.Name, "model", upstreamModel, "attempt", attempt+1, "err", err)
 				continue
@@ -3116,17 +3043,17 @@ func (s *Server) doUpstreamRoundtrip(
 		upstreamReq, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, upstreamURL, reqBody)
 		if reqErr != nil {
 			cancel()
-			zeroE2EE(session, meta, ehbp)
+			e2ee.ZeroSessions(session, meta, ehbp)
 			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
 				&httpError{http.StatusInternalServerError, "e2ee_failed", fmt.Errorf("build upstream request: %w", reqErr)}
 		}
 		upstreamReq.Header.Set("Content-Type", contentType)
 		provider.SetUserAgent(upstreamReq)
-		setUpstreamConnectionHeaders(upstreamReq, ehbp)
+		provider.SetEHBPHeaders(upstreamReq, ehbp)
 
-		if prepErr := prepareUpstreamHeaders(upstreamReq, prov, session, meta, stream, endpointPath); prepErr != nil {
+		if prepErr := provider.PrepareInferenceHeaders(upstreamReq, prov, session, meta, stream, endpointPath); prepErr != nil {
 			cancel()
-			zeroE2EE(session, meta, ehbp)
+			e2ee.ZeroSessions(session, meta, ehbp)
 			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
 				&httpError{http.StatusInternalServerError, "e2ee_failed", fmt.Errorf("prepare upstream headers: %w", prepErr)}
 		}
@@ -3136,23 +3063,10 @@ func (s *Server) doUpstreamRoundtrip(
 		upstreamDur += time.Since(upstreamDoStart)
 		if tlsErr != nil {
 			cancel()
-			zeroE2EE(session, meta, ehbp)
+			e2ee.ZeroSessions(session, meta, ehbp)
 			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur}, tlsErr
 		}
 		resp, err = sent.resp, sent.err
-
-		// TLS-fingerprint binding: for providers that use TLS binding (e.g.
-		// Tinfoil), verify the live upstream TLS peer SPKI matches the
-		// attested tls_key_fp on EVERY response — cache hit or miss. The
-		// empty-tlsKeyFP case is rejected before the loop starts.
-		if err == nil && resp != nil && prov.UsesTLSBinding {
-			if spkiErr := s.verifyUpstreamTLSBinding(ctx, prov, upstreamModel, baseURL, resp, tlsKeyFP); spkiErr != nil {
-				cancel()
-				zeroE2EE(session, meta, ehbp)
-				resp.Body.Close()
-				return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur}, spkiErr
-			}
-		}
 
 		retryable := chutesRetryableError(err, resp)
 
@@ -3170,7 +3084,7 @@ func (s *Server) doUpstreamRoundtrip(
 					"instance_id", ub.InstanceID, "attempt", attempt+1,
 					"err", err, "status", respStatusCode(resp))
 			}
-			zeroE2EE(session, meta, ehbp)
+			e2ee.ZeroSessions(session, meta, ehbp)
 			if resp != nil {
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 				resp.Body.Close()
@@ -3185,7 +3099,7 @@ func (s *Server) doUpstreamRoundtrip(
 		if cancel != nil {
 			cancel()
 		}
-		zeroE2EE(session, meta, ehbp)
+		e2ee.ZeroSessions(session, meta, ehbp)
 		if resp != nil {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 			resp.Body.Close()
@@ -3345,35 +3259,6 @@ func (s *Server) buildUpstreamBody(
 		ChuteID:    raw.ChuteID,
 		InstanceID: raw.InstanceID,
 	}, nil
-}
-
-// prepareUpstreamHeaders injects auth and E2EE headers into the upstream request.
-// It builds protocol-specific headers from the Decryptor via type switch, then
-// delegates to the provider's Preparer. When no Preparer is configured, it sets
-// only the Authorization header.
-func prepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session e2ee.Decryptor, meta *e2ee.ChutesE2EE, stream bool, endpointPath string) error {
-	if prov.Preparer == nil {
-		if prov.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+prov.APIKey)
-		}
-		return nil
-	}
-
-	// nil session: plaintext or Chutes (Chutes headers are in meta, not session).
-	var e2eeHeaders http.Header
-	switch s := session.(type) {
-	case *e2ee.VeniceSession:
-		e2eeHeaders = make(http.Header)
-		e2eeHeaders.Set("X-Venice-Tee-Client-Pub-Key", s.ClientPubKeyHex())
-		e2eeHeaders.Set("X-Venice-Tee-Model-Pub-Key", s.ModelKeyHex())
-		e2eeHeaders.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
-	case *e2ee.NearCloudSession:
-		e2eeHeaders = make(http.Header)
-		e2eeHeaders.Set("X-Signing-Algo", "ed25519")
-		e2eeHeaders.Set("X-Client-Pub-Key", s.ClientEd25519PubHex())
-		e2eeHeaders.Set("X-Encryption-Version", "2")
-	}
-	return prov.Preparer.PrepareRequest(req, e2eeHeaders, meta, stream, endpointPath)
 }
 
 // handlePinnedNonChat handles non-chat requests for connection-pinned providers.

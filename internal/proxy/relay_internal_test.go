@@ -173,7 +173,7 @@ func (n *noopDecryptor) Zero()                                                  
 
 func TestZeroE2EE_WithSession(t *testing.T) {
 	dec := &noopDecryptor{}
-	zeroE2EE(dec, nil, nil)
+	e2ee.ZeroSessions(dec, nil, nil)
 	if !dec.zeroed {
 		t.Error("Zero() not called on non-nil session")
 	}
@@ -185,7 +185,7 @@ func TestZeroE2EE_WithMeta(t *testing.T) {
 		t.Fatalf("NewChutesSession: %v", err)
 	}
 	meta := &e2ee.ChutesE2EE{Session: sess}
-	zeroE2EE(nil, meta, nil)
+	e2ee.ZeroSessions(nil, meta, nil)
 	t.Log("zeroE2EE with meta.Session completed without panic")
 }
 
@@ -1260,9 +1260,7 @@ func TestVerifySupplyChain_WithAppCompose(t *testing.T) {
 
 func TestFromConfig_UnknownProvider(t *testing.T) {
 	cp := &config.Provider{Name: "unknown-xyz-provider"}
-	_, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
-		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
-		nil, nil, nil)
+	_, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
 	t.Logf("fromConfig(unknown): err=%v", err)
 	if err == nil {
 		t.Error("expected error for unknown provider")
@@ -1274,9 +1272,7 @@ func TestFromConfig_UnknownProvider(t *testing.T) {
 
 func TestFromConfig_Nanogpt(t *testing.T) {
 	cp := &config.Provider{Name: "nanogpt", BaseURL: "https://nano-gpt.com", APIKey: "test-key"}
-	p, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
-		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
-		nil, nil, nil)
+	p, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
 	t.Logf("fromConfig(nanogpt): err=%v ChatPath=%s", err, p.ChatPath)
 	if err != nil {
 		t.Fatalf("unexpected error for nanogpt: %v", err)
@@ -1288,9 +1284,7 @@ func TestFromConfig_Nanogpt(t *testing.T) {
 
 func TestFromConfig_Phalacloud(t *testing.T) {
 	cp := &config.Provider{Name: "phalacloud", BaseURL: "https://api.redpill.ai", APIKey: "test-key"}
-	p, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
-		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
-		nil, nil, nil)
+	p, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
 	t.Logf("fromConfig(phalacloud): err=%v ChatPath=%s", err, p.ChatPath)
 	if err != nil {
 		t.Fatalf("unexpected error for phalacloud: %v", err)
@@ -1308,9 +1302,7 @@ func TestFromConfig_Phalacloud_PathSuffix(t *testing.T) {
 		"https://api.redpill.ai/api/",
 	} {
 		cp := &config.Provider{Name: "phalacloud", BaseURL: badURL, APIKey: "test-key"}
-		_, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
-			attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
-			nil, nil, nil)
+		_, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
 		t.Logf("fromConfig(phalacloud, base_url=%q): err=%v", badURL, err)
 		if err == nil {
 			t.Errorf("expected error when phalacloud base_url includes /v1 path suffix: %q", badURL)
@@ -1320,9 +1312,7 @@ func TestFromConfig_Phalacloud_PathSuffix(t *testing.T) {
 
 func TestFromConfig_Phalacloud_RootPathAllowed(t *testing.T) {
 	cp := &config.Provider{Name: "phalacloud", BaseURL: "https://api.redpill.ai/", APIKey: "test-key"}
-	p, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
-		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
-		nil, nil, nil)
+	p, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
 	t.Logf("fromConfig(phalacloud, root slash): err=%v ChatPath=%s", err, p.ChatPath)
 	if err != nil {
 		t.Fatalf("unexpected error for phalacloud with root slash: %v", err)
@@ -1334,9 +1324,7 @@ func TestFromConfig_Phalacloud_RootPathAllowed(t *testing.T) {
 
 func TestFromConfig_Venice(t *testing.T) {
 	cp := &config.Provider{Name: "venice", BaseURL: "https://api.venice.ai", APIKey: "test-key"}
-	p, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
-		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
-		nil, nil, nil)
+	p, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
 	t.Logf("fromConfig(venice): err=%v ChatPath=%s", err, p.ChatPath)
 	if err != nil {
 		t.Fatalf("unexpected error for venice: %v", err)
@@ -1348,9 +1336,7 @@ func TestFromConfig_Venice(t *testing.T) {
 
 func TestFromConfig_Nearcloud(t *testing.T) {
 	cp := &config.Provider{Name: "nearcloud", APIKey: "test-key"}
-	p, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
-		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
-		nil, attestation.NewNVIDIAVerifier("http://nras.example.com", "http://jwks.example.com"), nil)
+	p, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
 	t.Logf("fromConfig(nearcloud): err=%v ChatPath=%s", err, p.ChatPath)
 	if err != nil {
 		t.Fatalf("unexpected error for nearcloud: %v", err)
@@ -1371,9 +1357,7 @@ func TestFromConfig_Nearcloud(t *testing.T) {
 
 func TestFromConfig_Chutes(t *testing.T) {
 	cp := &config.Provider{Name: "chutes", APIKey: "test-key"}
-	p, err := fromConfig(cp, attestation.NewSPKICache(), false, nil,
-		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{},
-		nil, nil, nil)
+	p, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
 	t.Logf("fromConfig(chutes): err=%v ChatPath=%s", err, p.ChatPath)
 	if err != nil {
 		t.Fatalf("unexpected error for chutes: %v", err)

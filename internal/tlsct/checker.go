@@ -93,11 +93,7 @@ func (c *Checker) SetEnabled(enabled bool) {
 // TLS handshakes, before sending HTTP requests. All outgoing requests are
 // logged at DEBUG level via WrapLogging.
 func NewHTTPClient(timeout time.Duration, ctEnabled ...bool) *http.Client {
-	dt, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		panic("http.DefaultTransport is not *http.Transport")
-	}
-	client := NewHTTPClientWithTransport(timeout, dt.Clone(), ctEnabled...)
+	client := NewHTTPClientWithTransport(timeout, NewPooledTransport(), ctEnabled...)
 	client.Transport = WrapLogging(client.Transport)
 	return client
 }
@@ -107,12 +103,9 @@ func NewHTTPClient(timeout time.Duration, ctEnabled ...bool) *http.Client {
 // while using the provided base transport settings.
 func NewHTTPClientWithTransport(timeout time.Duration, base *http.Transport, ctEnabled ...bool) *http.Client {
 	if base == nil {
-		dt, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			panic("http.DefaultTransport is not *http.Transport")
-		}
-		base = dt.Clone()
+		base = NewPooledTransport()
 	}
+
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13}
 	if base.TLSClientConfig != nil {
 		tlsConfig = base.TLSClientConfig.Clone()

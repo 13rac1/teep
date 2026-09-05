@@ -9,12 +9,12 @@ import (
 	"testing"
 )
 
-// TestExtractChunkMeta_DecryptsToolCallsForNearCloud regression test for:
+// TestReassemblyChunkDecryptsToolCallsForNearCloud regression test for:
 // https://github.com/13rac1/teep/pull/103#discussion_r3263139818
-// extractChunkMeta must check "tool_calls[].function.name" (leaf path) not
+// decryptSSEChunkContent must check "tool_calls[].function.name" (leaf path) not
 // "tool_calls" (container path), so that tool_calls function fields are
 // decrypted for NearCloud/NearDirect full-field E2EE.
-func TestExtractChunkMeta_DecryptsToolCallsForNearCloud(t *testing.T) {
+func TestReassemblyChunkDecryptsToolCallsForNearCloud(t *testing.T) {
 	// Test that the NearCloud policy correctly identifies encrypted leaf paths.
 	session := testNearCloudSessionForRegression(t)
 
@@ -50,7 +50,7 @@ func TestExtractChunkMeta_DecryptsToolCallsForNearCloud(t *testing.T) {
 		t.Fatalf("encrypt tool call arguments: %v", err)
 	}
 
-	// If extractChunkMeta checked the container path ("tool_calls") instead of
+	// If decryptSSEChunkContent checked the container path ("tool_calls") instead of
 	// the leaf path ("tool_calls[].function.name"), the NearCloud policy would
 	// return false and decryption would be skipped — the assertions below would
 	// then fail because the ciphertext blob would survive intact in the output.
@@ -72,9 +72,9 @@ func TestExtractChunkMeta_DecryptsToolCallsForNearCloud(t *testing.T) {
 		t.Fatalf("marshal chunk: %v", err)
 	}
 
-	meta, err := extractChunkMeta(string(chunkJSON), session, EndpointChat)
+	_, meta, err := decryptSSEChunkContent(string(chunkJSON), session, EndpointChat)
 	if err != nil {
-		t.Fatalf("extractChunkMeta: %v", err)
+		t.Fatalf("decryptSSEChunkContent: %v", err)
 	}
 	if len(meta.ToolCalls) != 1 {
 		t.Fatalf("tool_calls len = %d, want 1", len(meta.ToolCalls))

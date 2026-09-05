@@ -24,8 +24,8 @@ import (
 var ErrDecryptionFailed = errors.New("e2ee decryption failed")
 
 // ErrRelayFailed is a sentinel error returned by relay functions for
-// non-decryption failures (e.g. streaming not supported, empty upstream,
-// read errors). Callers should treat any non-nil relay error as terminal
+// response processing failures. It can also wrap ErrDecryptionFailed.
+// Callers should treat any non-nil relay error as terminal
 // but use errors.Is to distinguish decryption failures from other relay
 // failures.
 var ErrRelayFailed = errors.New("relay failed")
@@ -132,7 +132,7 @@ func decryptContentField(fields map[string]json.RawMessage, session Decryptor, c
 
 	if !jsonRawStartsWithToken(raw, '[') {
 		if requiresEncrypted {
-			return false, fmt.Errorf("%s.content: expected encrypted string or content-part array, got %s", ctx, rawTypeDescription(raw))
+			return false, fmt.Errorf("%w: %s.content: expected encrypted string or content-part array, got %s", ErrDecryptionFailed, ctx, rawTypeDescription(raw))
 		}
 		return false, nil
 	}
@@ -140,7 +140,7 @@ func decryptContentField(fields map[string]json.RawMessage, session Decryptor, c
 	// Multimodal content array encryption: /v1/chat/completions
 	if !session.IsResponseFieldEncrypted(EncFieldContentText, endpoint) {
 		if requiresEncrypted {
-			return false, fmt.Errorf("%s.content: expected encrypted string but got array", ctx)
+			return false, fmt.Errorf("%w: %s.content: expected encrypted string but got array", ErrDecryptionFailed, ctx)
 		}
 		return false, nil
 	}
@@ -521,7 +521,7 @@ func DecryptFieldOrSkip(raw json.RawMessage, session Decryptor, requiresEncrypte
 		if !requiresEncrypted {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%s: expected encrypted string, got %s", ctx, rawTypeDescription(raw))
+		return nil, fmt.Errorf("%w: %s: expected encrypted string, got %s", ErrDecryptionFailed, ctx, rawTypeDescription(raw))
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
@@ -534,11 +534,11 @@ func DecryptFieldOrSkip(raw json.RawMessage, session Decryptor, requiresEncrypte
 		if !requiresEncrypted {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%s: expected encrypted string but not recognised (len=%d prefix=%q)", ctx, len(s), SafePrefix(s, 8))
+		return nil, fmt.Errorf("%w: %s: expected encrypted string but not recognised", ErrDecryptionFailed, ctx)
 	}
 	plaintext, err := session.Decrypt(s)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt %s: %w", ctx, err)
+		return nil, fmt.Errorf("%w: decrypt %s: %w", ErrDecryptionFailed, ctx, err)
 	}
 	return plaintext, nil
 }
@@ -665,41 +665,54 @@ func collectOriginalStringFields(delta map[string]json.RawMessage) map[string]st
 
 // decryptSSEChunkContent decrypts all encrypted fields from the first choice's
 // delta in one SSE JSON chunk and returns them as a map of field name to
-// plaintext string.
+// plaintext string, together with metadata from that same decrypted delta.
 // The endpoint parameter identifies the proxy route kind (currently only EndpointChat is supported).
-func decryptSSEChunkContent(data string, session Decryptor, endpoint EndpointType) (map[string]string, error) {
+func decryptSSEChunkContent(data string, session Decryptor, endpoint EndpointType) (map[string]string, chunkMeta, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(data), &full); err != nil {
-		return nil, fmt.Errorf("parse SSE chunk JSON: %w", err)
+		return nil, chunkMeta{}, fmt.Errorf("parse SSE chunk JSON: %w", err)
 	}
 
 	choicesRaw, ok := full["choices"]
 	if !ok {
-		return map[string]string{}, nil
+		return map[string]string{}, chunkMeta{}, nil
 	}
 
 	var choices []map[string]json.RawMessage
 	if err := json.Unmarshal(choicesRaw, &choices); err != nil {
-		return nil, fmt.Errorf("parse choices array: %w", err)
+		return nil, chunkMeta{}, fmt.Errorf("parse choices array: %w", err)
 	}
 	if len(choices) == 0 {
-		return map[string]string{}, nil
+		return map[string]string{}, chunkMeta{}, nil
+	}
+
+	var meta chunkMeta
+	if raw, ok := choices[0]["finish_reason"]; ok {
+		if err := json.Unmarshal(raw, &meta.FinishReason); err != nil {
+			return nil, meta, fmt.Errorf("parse finish reason: %w", err)
+		}
 	}
 
 	deltaRaw, ok := choices[0]["delta"]
 	if !ok {
-		return map[string]string{}, nil
+		return map[string]string{}, meta, nil
 	}
 
 	var delta map[string]json.RawMessage
 	if err := json.Unmarshal(deltaRaw, &delta); err != nil {
-		return nil, fmt.Errorf("parse delta object: %w", err)
+		return nil, chunkMeta{}, fmt.Errorf("parse delta object: %w", err)
 	}
 
 	originalStringFields := collectOriginalStringFields(delta)
 
 	if _, err := decryptChatObject(delta, session, "delta", endpoint); err != nil {
-		return nil, err
+		return nil, chunkMeta{}, err
+	}
+
+	if raw, ok := delta["tool_calls"]; ok {
+		if err := json.Unmarshal(raw, &meta.ToolCalls); err != nil {
+			return nil, meta, fmt.Errorf("parse decrypted tool calls: %w", err)
+		}
 	}
 
 	result := make(map[string]string)
@@ -714,21 +727,18 @@ func decryptSSEChunkContent(data string, session Decryptor, endpoint EndpointTyp
 		}
 		if !session.IsEncryptedChunk(original) {
 			if !IsNonEncryptedField(key) && session.IsResponseFieldEncrypted(key, endpoint) {
-				return nil, fmt.Errorf("delta.%s: expected encrypted string before decryption", key)
+				return nil, chunkMeta{}, fmt.Errorf("%w: delta.%s: expected encrypted string before decryption", ErrDecryptionFailed, key)
 			}
 			result[key] = s
 			continue
 		}
 		if subtle.ConstantTimeCompare([]byte(original), []byte(s)) == 1 {
-			return nil, fmt.Errorf("delta.%s: expected decrypted plaintext, got unchanged ciphertext", key)
+			return nil, chunkMeta{}, fmt.Errorf("%w: delta.%s: expected decrypted plaintext, got unchanged ciphertext", ErrDecryptionFailed, key)
 		}
 		result[key] = s
 	}
 
-	if len(result) == 0 {
-		return map[string]string{}, nil
-	}
-	return result, nil
+	return result, meta, nil
 }
 
 // DecryptNonStreamResponseForEndpoint decrypts all encrypted string fields in
@@ -1059,7 +1069,7 @@ func ReassembleNonStream(body io.Reader, session Decryptor, endpoint EndpointTyp
 
 		stats.recordChunk(data, &firstChunk)
 
-		decrypted, err := decryptSSEChunkContent(data, session, endpoint)
+		decrypted, meta, err := decryptSSEChunkContent(data, session, endpoint)
 		if err != nil {
 			return nil, stats, fmt.Errorf("reassemble: %w", err)
 		}
@@ -1072,10 +1082,6 @@ func ReassembleNonStream(body io.Reader, session Decryptor, endpoint EndpointTyp
 			b.WriteString(v)
 		}
 
-		meta, err := extractChunkMeta(data, session, endpoint)
-		if err != nil {
-			return nil, stats, fmt.Errorf("reassemble: %w", err)
-		}
 		for _, tc := range meta.ToolCalls {
 			if err := mergeToolCallDelta(toolCalls, tc); err != nil {
 				return nil, stats, fmt.Errorf("reassemble: %w", err)
@@ -1147,47 +1153,10 @@ type reassembledToolCallFunc struct {
 	Arguments string `json:"arguments"`
 }
 
-// chunkMeta holds non-encrypted metadata extracted from an SSE chunk.
+// chunkMeta holds tool calls and finish metadata from a decrypted SSE chunk.
 type chunkMeta struct {
 	ToolCalls    []json.RawMessage
 	FinishReason string
-}
-
-// extractChunkMeta extracts tool_calls and finish_reason from the first
-// choice's delta in an SSE chunk.
-func extractChunkMeta(data string, session Decryptor, endpoint EndpointType) (chunkMeta, error) {
-	var parsed struct {
-		Choices []struct {
-			Delta struct {
-				ToolCalls []json.RawMessage `json:"tool_calls"`
-			} `json:"delta"`
-			FinishReason *string `json:"finish_reason"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal([]byte(data), &parsed); err != nil {
-		return chunkMeta{}, fmt.Errorf("extractChunkMeta: %w", err)
-	}
-	var m chunkMeta
-	if len(parsed.Choices) > 0 {
-		m.ToolCalls = parsed.Choices[0].Delta.ToolCalls
-		if session != nil && len(m.ToolCalls) > 0 {
-			delta := map[string]json.RawMessage{}
-			toolCallsJSON, _ := json.Marshal(m.ToolCalls) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
-			delta["tool_calls"] = toolCallsJSON
-			if _, err := decryptChatObject(delta, session, "delta", endpoint); err != nil {
-				return chunkMeta{}, err
-			}
-			if raw, ok := delta["tool_calls"]; ok {
-				if err := json.Unmarshal(raw, &m.ToolCalls); err != nil {
-					return chunkMeta{}, fmt.Errorf("extractChunkMeta: parse decrypted tool_calls: %w", err)
-				}
-			}
-		}
-		if parsed.Choices[0].FinishReason != nil {
-			m.FinishReason = *parsed.Choices[0].FinishReason
-		}
-	}
-	return m, nil
 }
 
 // toolCallDelta is the streaming delta format for a single tool call entry.
@@ -1309,13 +1278,10 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 	return stats, decryptErr
 }
 
-// relaySSELine processes a single SSE line, writing it to w. Returns
-// (done, error) where done=true means the stream should end. error is non-nil
-// only on decryption failure (wraps ErrDecryptionFailed).
-// The endpoint parameter identifies the proxy route kind (currently only EndpointChat is supported).
-// relaySSELine writes a single SSE line to the client, decrypting if needed.
-// Returns (done, written, err) where written is the number of payload bytes
-// delivered to the client (plaintext), enabling accurate throughput tracking.
+// relaySSELine writes one SSE line, decrypting its payload when required.
+// done ends the stream; written counts plaintext payload bytes. Any processing
+// error is terminal, and cryptographic failures also wrap ErrDecryptionFailed.
+// The endpoint identifies the proxy route kind; only EndpointChat is supported.
 func relaySSELine(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, line string, session Decryptor, endpoint EndpointType) (done bool, written int, err error) {
 	if !strings.HasPrefix(line, "data: ") {
 		fmt.Fprintf(w, "%s\n", line)
@@ -1341,7 +1307,7 @@ func relaySSELine(ctx context.Context, w http.ResponseWriter, flusher http.Flush
 		slog.ErrorContext(ctx, "stream decryption failed", "err", err)
 		fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":\"stream decryption failed\",\"type\":\"decryption_error\"}}\n\n")
 		flusher.Flush()
-		return true, 0, fmt.Errorf("%w: %w", ErrDecryptionFailed, err)
+		return true, 0, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 
 	fmt.Fprintf(w, "data: %s\n\n", decrypted)
@@ -1358,8 +1324,8 @@ func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body 
 	result, stats, err := ReassembleNonStream(body, session, endpoint)
 	if err != nil {
 		slog.ErrorContext(ctx, "E2EE non-stream reassembly failed", "err", err)
-		http.Error(w, "response decryption failed", http.StatusBadGateway)
-		return stats, fmt.Errorf("%w: %w", ErrDecryptionFailed, err)
+		http.Error(w, "response reassembly failed", http.StatusBadGateway)
+		return stats, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1398,7 +1364,7 @@ func RelayNonStreamForEndpoint(ctx context.Context, w http.ResponseWriter, body 
 	if err != nil {
 		slog.ErrorContext(ctx, "non-stream decryption failed", "err", err)
 		http.Error(w, "response decryption failed", http.StatusBadGateway)
-		return StreamStats{}, fmt.Errorf("%w: %w", ErrDecryptionFailed, err)
+		return StreamStats{}, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

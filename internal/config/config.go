@@ -12,6 +12,7 @@ package config
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -733,6 +734,9 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		resp, err := t.Base.RoundTrip(req)
 		if err != nil {
+			if errors.Is(err, tlsct.ErrConnectionCapacity) {
+				return nil, err
+			}
 			lastErr = err
 			continue
 		}

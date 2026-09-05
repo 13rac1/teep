@@ -87,13 +87,6 @@ func validateAuthorizationKey(name, key string) error {
 	}
 }
 
-func (a *authorization) attemptContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if a.hasExpiry {
-		return context.WithDeadline(ctx, a.expiresAt)
-	}
-	return context.WithCancel(ctx)
-}
-
 type authorizationRecord struct {
 	value    *authorization
 	lastUsed time.Time

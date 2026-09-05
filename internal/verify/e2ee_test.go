@@ -2,6 +2,7 @@ package verify
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/mlkem"
 	"crypto/rand"
@@ -20,6 +21,9 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/tlsct"
+	"github.com/13rac1/teep/internal/tlsct/testtls"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 )
@@ -650,37 +654,28 @@ func TestTestE2EEVenice_InvalidSigningKey(t *testing.T) {
 
 // TestTestE2EENeardirect_ResolveError tests the error path in testE2EENeardirect
 // when the endpoint resolver fails (canceled context → immediate failure).
-func TestTestE2EENeardirect_ResolveError(t *testing.T) {
+func TestStandaloneNearRouteResolveError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately so resolver.Resolve fails
-
-	raw := &attestation.RawAttestation{SigningKey: "04aabbcc"}
-	cp := &config.Provider{APIKey: "key"}
-	got := testE2EE(ctx, raw, "neardirect", cp, "nonexistent-model", false)
-	if got == nil {
-		t.Fatal("expected non-nil result")
+	cancel()
+	opts := &Options{ProviderName: "neardirect", Provider: &config.Provider{APIKey: "key", BaseURL: "https://completions.near.ai"}, ModelName: "nonexistent-model"}
+	attester, err := newAttester(opts.ProviderName, opts.Provider, false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !got.Attempted {
-		t.Error("Attempted should be true")
+	route := provider.ResolvedRoute{}
+	if _, err := standaloneAttesterForRoute(ctx, opts, attester, &route); err == nil {
+		t.Fatal("canceled discovery succeeded")
 	}
-	if got.Err == nil {
-		t.Error("expected error from failed resolve")
-	}
-	t.Logf("testE2EENeardirect resolve error: %v", got.Err)
 }
 
-func TestTestE2EENearCloud_InvalidSigningKey(t *testing.T) {
-	raw := &attestation.RawAttestation{SigningKey: "not-a-valid-ed25519-key"}
-	cp := &config.Provider{APIKey: "key"}
-	got := testE2EE(context.Background(), raw, "nearcloud", cp, "test-model", false)
-	if got == nil {
-		t.Fatal("expected non-nil result")
+func TestStandaloneNearInvalidSigningKey(t *testing.T) {
+	route, err := provider.NewResolvedRoute("https://cloud-api.near.ai", "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !got.Attempted {
-		t.Error("Attempted should be true")
-	}
-	if got.Err == nil {
-		t.Error("expected error for invalid signing key")
+	_, retry, err := testStandaloneInference(context.Background(), &Options{ProviderName: "nearcloud", Provider: &config.Provider{APIKey: "key"}, ModelName: "model"}, route, &attestation.RawAttestation{SigningKey: "invalid"}, nil)
+	if err == nil || retry {
+		t.Fatalf("invalid key: retry=%v err=%v", retry, err)
 	}
 }
 
@@ -721,31 +716,38 @@ func TestTestE2EEVenice_HTTPError(t *testing.T) {
 // testE2EENearAI — HTTP error path with valid Ed25519 key
 // --------------------------------------------------------------------------
 
-func TestTestE2EENearAI_HTTPError(t *testing.T) {
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	pubHex := hex.EncodeToString(pub)
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-	}))
-	defer ts.Close()
-
-	raw := &attestation.RawAttestation{SigningKey: pubHex}
-	cp := &config.Provider{APIKey: "key"}
-	got := testE2EENearAI(context.Background(), raw, cp, "test-model", ts.URL, "nearcloud")
-	if got == nil {
-		t.Fatal("expected non-nil result")
-	}
-	if !got.Attempted {
-		t.Error("Attempted should be true")
-	}
-	if got.Err == nil {
-		t.Error("expected error from HTTP 401")
-	}
-	t.Logf("testE2EENearAI HTTP error: %v", got.Err)
+func TestStandaloneNearHTTPError(t *testing.T) {
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ts := authority.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.ProtoMajor != 2 {
+				t.Error("standalone inference did not negotiate HTTP/2")
+			}
+			if r.Header.Get("X-Encrypt-All-Fields") != "true" || r.Header.Get("Connection") != "" {
+				t.Error("incorrect inference headers")
+			}
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		}))
+		defer ts.Close()
+		route, err := provider.NewResolvedRoute(ts.URL, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fp := sha256.Sum256(ts.Certificate().RawSubjectPublicKeyInfo)
+		client, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(0, tlsct.NewPooledTransport(), hex.EncodeToString(fp[:]), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.CloseIdleConnections()
+		_, retry, err := testStandaloneInference(context.Background(), &Options{ProviderName: "nearcloud", Provider: &config.Provider{APIKey: "key"}, ModelName: "model"}, route, &attestation.RawAttestation{SigningKey: hex.EncodeToString(pub)}, client)
+		if err == nil || retry {
+			t.Fatalf("ordinary HTTP error: retry=%v err=%v", retry, err)
+		}
+	})
 }
 
 // --------------------------------------------------------------------------
@@ -1347,5 +1349,29 @@ func TestDoE2EEChutesStreamTest_DecryptChunkFail(t *testing.T) {
 	}
 	if !strings.Contains(result.Err.Error(), "decrypt e2e chunk") {
 		t.Errorf("error should mention decrypt failure, got: %v", result.Err)
+	}
+}
+
+func TestStandaloneEncryptedErrorAuthentication(t *testing.T) {
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := e2ee.NewEHBPSession(private.PublicKey().Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Zero()
+	// Request ciphertext has valid framing but cannot authenticate as a response.
+	resp := &http.Response{StatusCode: http.StatusUnprocessableEntity, Header: http.Header{
+		"Content-Type": {"application/problem+json"}, "Ehbp-Response-Nonce": {strings.Repeat("00", 32)},
+	}, Body: io.NopCloser(session.EncryptRequest(strings.NewReader(`{"type":"urn:ietf:params:ehbp:error:key-config"}`)))}
+	defer resp.Body.Close()
+	rejected, err := provider.KeyRejection(resp, "tinfoil_v3_cloud", "/v1/chat/completions")
+	if rejected || err != nil {
+		t.Fatalf("encrypted error classified as plaintext rejection: %v", err)
+	}
+	if err := standaloneInferenceError(resp, session); !errors.Is(err, e2ee.ErrDecryptionFailed) {
+		t.Fatalf("authentication failure=%v", err)
 	}
 }

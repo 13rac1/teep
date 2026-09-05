@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http/httptrace"
 	"sync/atomic"
+	"time"
 )
 
 // InferenceAttempt records whether any connection was assigned to an attempt.
@@ -21,7 +22,7 @@ func (a *InferenceAttempt) Context(ctx context.Context) context.Context {
 // RetryConnectionFailure accepts only typed establishment failures before
 // GotConn. TLS verification errors and ambiguous EOF/reset errors do not match.
 func (a *InferenceAttempt) RetryConnectionFailure(ctx context.Context, err error) bool {
-	if err == nil || ctx.Err() != nil || a.assigned.Load() || IsTrustFailure(err) {
+	if err == nil || errors.Is(err, ErrConnectionCapacity) || ctx.Err() != nil || a.assigned.Load() || IsTrustFailure(err) {
 		return false
 	}
 	if dns, ok := errors.AsType[*net.DNSError](err); ok {
@@ -68,3 +69,12 @@ func (e *ctVerificationError) Error() string {
 	return "certificate transparency check failed: " + e.err.Error()
 }
 func (e *ctVerificationError) Unwrap() error { return e.err }
+
+// InferenceContext bounds an attempt by authenticated evidence without extending
+// its caller's deadline. An expired bound produces an already-canceled context.
+func InferenceContext(ctx context.Context, expires time.Time, present bool) (context.Context, context.CancelFunc) {
+	if present {
+		return context.WithDeadline(ctx, expires)
+	}
+	return context.WithCancel(ctx)
+}

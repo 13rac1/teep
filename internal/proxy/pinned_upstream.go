@@ -2,10 +2,7 @@ package proxy
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -25,10 +22,10 @@ type pinnedUpstreamKey struct {
 }
 
 type pinnedUpstreamEntry struct {
-	fingerprint string
-	client      *http.Client
-	transport   *http.Transport
-	lastUsed    time.Time
+	identity  tlsct.TransportIdentity
+	client    *http.Client
+	transport *http.Transport
+	lastUsed  time.Time
 }
 
 type pinnedUpstreamPools struct {
@@ -46,21 +43,29 @@ func newPinnedUpstreamPools() *pinnedUpstreamPools {
 // provider authority; in-flight users of the old pool may finish, but no later
 // request can obtain it from this registry.
 func (s *Server) pinnedUpstreamClient(prov *provider.Provider, baseURL, expectedSPKI string) (*http.Client, error) {
-	if s.pinnedUpstreams == nil {
-		return nil, errors.New("TLS-pinned upstream pool is not initialized")
-	}
-	if s.cfg == nil {
-		return nil, errors.New("server config is not initialized")
-	}
-	authority, err := pinnedUpstreamAuthority(baseURL)
+	authority, err := tlsct.HTTPSOriginAuthority(baseURL)
 	if err != nil {
 		return nil, err
 	}
-	key := pinnedUpstreamKey{provider: prov.Name, authority: authority}
+	identity, err := tlsct.NewTransportIdentity(authority, expectedSPKI)
+	if err != nil {
+		return nil, err
+	}
+	return s.pinnedClientForIdentity(prov.Name, identity)
+}
+
+func (s *Server) pinnedClientForIdentity(providerName string, identity tlsct.TransportIdentity) (*http.Client, error) {
+	if s.pinnedUpstreams == nil || s.cfg == nil {
+		return nil, errors.New("pinned upstream pools are not initialized")
+	}
+	if identity.Authority() == "" {
+		return nil, errors.New("missing attested transport identity")
+	}
+	key := pinnedUpstreamKey{provider: providerName, authority: identity.Authority()}
 
 	s.pinnedUpstreams.mu.Lock()
 	if entry := s.pinnedUpstreams.entries[key]; entry != nil &&
-		tlsct.SPKIFingerprintsEqual(entry.fingerprint, expectedSPKI) {
+		entry.identity.Equal(identity) {
 		entry.lastUsed = time.Now()
 		client := entry.client
 		s.pinnedUpstreams.mu.Unlock()
@@ -68,7 +73,7 @@ func (s *Server) pinnedUpstreamClient(prov *provider.Provider, baseURL, expected
 	}
 
 	base := newUpstreamTransport()
-	client, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(0, base, expectedSPKI, !s.cfg.Offline)
+	client, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(0, base, identity.Fingerprint(), !s.cfg.Offline)
 	if err != nil {
 		s.pinnedUpstreams.mu.Unlock()
 		return nil, err
@@ -81,10 +86,10 @@ func (s *Server) pinnedUpstreamClient(prov *provider.Provider, baseURL, expected
 
 	old := s.pinnedUpstreams.entries[key]
 	s.pinnedUpstreams.entries[key] = &pinnedUpstreamEntry{
-		fingerprint: expectedSPKI,
-		client:      client,
-		transport:   base,
-		lastUsed:    time.Now(),
+		identity:  identity,
+		client:    client,
+		transport: base,
+		lastUsed:  time.Now(),
 	}
 	evicted := s.pinnedUpstreams.evictOldestLocked(key)
 	s.pinnedUpstreams.mu.Unlock()
@@ -138,12 +143,5 @@ func (s *Server) retirePinnedUpstream(prov *provider.Provider, baseURL string) {
 }
 
 func pinnedUpstreamAuthority(baseURL string) (string, error) {
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		return "", fmt.Errorf("parse TLS-pinned upstream URL: %w", err)
-	}
-	if u.Scheme != "https" || u.Host == "" || u.User != nil {
-		return "", fmt.Errorf("TLS-pinned upstream URL %q must be an absolute HTTPS URL without userinfo", baseURL)
-	}
-	return strings.ToLower(u.Host), nil
+	return tlsct.HTTPSOriginAuthority(baseURL)
 }

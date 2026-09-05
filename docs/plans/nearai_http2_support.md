@@ -988,8 +988,14 @@ normally uses one connection per authority and multiplexes streams up to the
 peer's advertised limit. Do not set `MaxConnsPerHost` to one: that can reduce
 availability when the peer reaches its concurrent-stream limit or sends
 GOAWAY. The finite limit lets the Go transport open additional fully verified
-connections when needed while applying backpressure under a request burst.
-The request context deadline must bound time spent waiting for a connection.
+connections when needed. When a new dial cannot acquire a physical socket
+permit, reject it with an explicit capacity error; do not wait for socket
+closure when an existing HTTP/2 stream can finish without closing its socket.
+Inference returns HTTP 503 without replay or authorization invalidation.
+HTTP/1.1 connection waits remain bounded by the request context deadline.
+Do not enable `StrictMaxConcurrentRequests`: Go 1.26.8 and 1.27.1 can deadlock
+because stream admission counts reservations queued behind the holder of
+`reqHeaderMu`. See the maintained [transport reference](../transport/README.md).
 
 On a TLS handshake SPKI mismatch, keep fail-closed behavior: conditionally
 delete only the authorization generation used by the request and require fresh
@@ -1524,8 +1530,8 @@ Extend the current tinfoil TLS-binding tests with NEAR cases:
 - A persistent HTTP/1.1 peer supports sequential reuse and the same TLS pin,
   WebPKI, and CT checks. Production constructors reject invalid WebPKI and CT;
   offline tests do not substitute for positive online enforcement coverage.
-- A request waiting at the active-connection limit stops when its context
-  deadline expires.
+- An HTTP/1.1 request waiting at the active-connection limit stops when its
+  context deadline expires. HTTP/2 socket exhaustion returns a capacity error.
 - The attestation transport has a finite `MaxConnsPerHost`, and a request
   waiting at that limit stops when its fixed verification context expires.
 - The separate AMD KDS client still works with its TLS 1.2 exception and does
@@ -1550,8 +1556,8 @@ strings. Hold the handlers open until every request has arrived. Assert:
 Use a separate server with an advertised concurrent-stream limit of two.
 Assert that additional connections never exceed `MaxConnsPerHost`, every
 additional connection passes the handshake pin before its first request, and
-excess work waits or reaches its context deadline without an unbounded dial
-burst.
+excess work receives a capacity error without an unbounded dial burst. After
+active streams finish, subsequent requests reuse the existing connections.
 
 ### Cache and rotation tests
 

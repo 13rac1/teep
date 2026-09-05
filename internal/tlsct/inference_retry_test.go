@@ -18,7 +18,7 @@ func TestInferenceRetryClassification(t *testing.T) {
 	if !a.RetryConnectionFailure(ctx, dial) {
 		t.Fatal("typed dial failure not retryable")
 	}
-	for _, err := range []error{io.EOF, ErrSPKIMismatch, &net.OpError{Op: "read", Err: syscall.ECONNRESET}, errors.New("PROTOCOL_ERROR")} {
+	for _, err := range []error{ErrConnectionCapacity, &net.OpError{Op: "dial", Err: ErrConnectionCapacity}, io.EOF, ErrSPKIMismatch, &net.OpError{Op: "read", Err: syscall.ECONNRESET}, errors.New("PROTOCOL_ERROR")} {
 		if a.RetryConnectionFailure(ctx, err) {
 			t.Fatalf("ambiguous/trust failure retryable: %v", err)
 		}

@@ -72,7 +72,7 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 		}()
 	}
 	route := provider.ResolvedRoute{}
-	if isTinfoilProvider(local.ProviderName) {
+	if providerUsesTLSBinding(local.ProviderName) {
 		result, retErr = runTLSVerification(ctx, &local, &route)
 	} else {
 		result, retErr = runEvidence(ctx, &local, &route)
@@ -118,7 +118,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		cs.SetClient(client)
 	}
 
-	if isTinfoilProvider(opts.ProviderName) {
+	if providerUsesTLSBinding(opts.ProviderName) {
 		attester, err = standaloneAttesterForRoute(ctx, opts, attester, route)
 		if err != nil {
 			return verificationOutcome{}, err
@@ -181,7 +181,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 
 	if opts.CapturedE2EE != nil {
 		e2eeResult = opts.CapturedE2EE
-	} else if !isTinfoilProvider(opts.ProviderName) || opts.Offline || opts.Provider.APIKey == "" {
+	} else if !providerUsesTLSBinding(opts.ProviderName) || opts.Offline || opts.Provider.APIKey == "" {
 		e2eeResult = testE2EE(ctx, raw, opts.ProviderName, opts.Provider, opts.ModelName, opts.Offline)
 	}
 	if e2eeResult != nil && e2eeResult.KeyType == "" {
@@ -224,7 +224,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		GatewayEventLog:        raw.GatewayEventLog,
 		TinfoilSC:              tinfoilSC,
 		E2EETest:               e2eeResult,
-		E2EEConfigured:         isTinfoilProvider(opts.ProviderName) && opts.Provider.E2EE,
+		E2EEConfigured:         providerUsesTLSBinding(opts.ProviderName) && opts.Provider.E2EE,
 		Inapplicable:           inapplicableFactors(opts.ProviderName),
 		ProviderUsesTLSBinding: providerUsesTLSBinding(opts.ProviderName),
 		E2EEKeyBoundByGateway:  providerE2EEKeyBoundByGateway(opts.ProviderName),

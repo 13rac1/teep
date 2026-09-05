@@ -2577,7 +2577,7 @@ func TestDecryptSSEChunkContent_InvalidJSON(t *testing.T) {
 	defer session.Zero()
 
 	t.Logf("calling decryptSSEChunkContent with invalid JSON")
-	_, err := decryptSSEChunkContent("not-valid-json", session, EndpointChat)
+	_, _, err := decryptSSEChunkContent("not-valid-json", session, EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON input")
 	}
@@ -2592,7 +2592,7 @@ func TestDecryptSSEChunkContent_NoChoicesKey(t *testing.T) {
 	defer session.Zero()
 
 	t.Logf("calling decryptSSEChunkContent with empty object (no choices key)")
-	result, err := decryptSSEChunkContent("{}", session, EndpointChat)
+	result, _, err := decryptSSEChunkContent("{}", session, EndpointChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2608,7 +2608,7 @@ func TestDecryptSSEChunkContent_ChoicesNotArray(t *testing.T) {
 
 	input := `{"choices": 42}`
 	t.Logf("calling decryptSSEChunkContent with choices=42 (not an array)")
-	_, err := decryptSSEChunkContent(input, session, EndpointChat)
+	_, _, err := decryptSSEChunkContent(input, session, EndpointChat)
 	if err == nil {
 		t.Fatal("expected error when choices is not an array")
 	}
@@ -2624,7 +2624,7 @@ func TestDecryptSSEChunkContent_EmptyChoices(t *testing.T) {
 
 	input := `{"choices":[]}`
 	t.Logf("calling decryptSSEChunkContent with empty choices array")
-	result, err := decryptSSEChunkContent(input, session, EndpointChat)
+	result, _, err := decryptSSEChunkContent(input, session, EndpointChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2640,7 +2640,7 @@ func TestDecryptSSEChunkContent_NoDeltaKey(t *testing.T) {
 
 	input := `{"choices":[{}]}`
 	t.Logf("calling decryptSSEChunkContent with choices[0] missing delta key")
-	result, err := decryptSSEChunkContent(input, session, EndpointChat)
+	result, _, err := decryptSSEChunkContent(input, session, EndpointChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2656,7 +2656,7 @@ func TestDecryptSSEChunkContent_DeltaNotObject(t *testing.T) {
 
 	input := `{"choices":[{"delta":"not-an-object"}]}`
 	t.Logf("calling decryptSSEChunkContent with delta as a string (not an object)")
-	_, err := decryptSSEChunkContent(input, session, EndpointChat)
+	_, _, err := decryptSSEChunkContent(input, session, EndpointChat)
 	if err == nil {
 		t.Fatal("expected error when delta is not an object")
 	}
@@ -2824,7 +2824,7 @@ func TestDecryptSSEChunkContent_DecryptError(t *testing.T) {
 	}
 	// chunk with a "content" field in delta that the mock claims is encrypted
 	data := `{"choices":[{"delta":{"content":"some_encrypted_value"}}]}`
-	_, err := decryptSSEChunkContent(data, mock, EndpointChat)
+	_, _, err := decryptSSEChunkContent(data, mock, EndpointChat)
 	t.Logf("decryptSSEChunkContent(decrypt error): err=%v", err)
 	if err == nil {
 		t.Fatal("expected error from decrypt failure")
@@ -2836,7 +2836,7 @@ func TestDecryptSSEChunkContent_VeniceAllowsPlaintextNameAndRefusal(t *testing.T
 	defer session.Zero()
 
 	input := `{"choices":[{"delta":{"role":"assistant","name":"bot","refusal":"none"}}]}`
-	result, err := decryptSSEChunkContent(input, session, EndpointChat)
+	result, _, err := decryptSSEChunkContent(input, session, EndpointChat)
 	if err != nil {
 		t.Fatalf("unexpected error for Venice plaintext optional fields: %v", err)
 	}
@@ -3189,7 +3189,7 @@ func TestDecryptSSEChunkContent_UnchangedCiphertextRejected(t *testing.T) {
 	}
 	data := `{"choices":[{"delta":{"content":"enc:still-ciphertext"}}]}`
 
-	_, err := decryptSSEChunkContent(data, mock, EndpointChat)
+	_, _, err := decryptSSEChunkContent(data, mock, EndpointChat)
 	if err == nil {
 		t.Fatal("expected error for unchanged ciphertext")
 	}

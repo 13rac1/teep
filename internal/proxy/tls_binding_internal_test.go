@@ -3,8 +3,6 @@ package proxy
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -64,6 +62,29 @@ func newTLSBindingTestServerHandle() *Server {
 	}
 }
 
+// TLS authorization tests explicitly disable body encryption to isolate the
+// production attested TLS handshake, cache acquisition, and pool boundaries.
+func tlsAuthorizationInput(t *testing.T, server *Server, name, model, origin, fingerprint string) *authorizedRequest {
+	t.Helper()
+	route, err := provider.NewResolvedRoute(origin, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := route.AuthorizationKey(name, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov := &provider.Provider{Name: name, BaseURL: origin, StaticRoute: route, UsesTLSBinding: true,
+		Attester: &mockAttester{err: errors.New("test attestation unavailable after invalidation")}}
+	report := &attestation.VerificationReport{Provider: name, Model: model, TLSAuthority: route.Authority(), TLSKeyFP: fingerprint}
+	candidate, err := newAuthorization(key, report, "", false, false, time.Time{}, false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadTestAuthorization(t, server.authorizations, key, candidate)
+	return &authorizedRequest{provider: prov, route: route, key: key, body: []byte(`{}`), path: "/inference", endpoint: e2ee.EndpointChat, contentType: "application/json"}
+}
+
 // tlsBindingTestProvider returns a TLS-binding provider (mirrors
 // tinfoil_v3_cloud/direct) pointed at baseURL.
 func tlsBindingTestProvider(baseURL string) *provider.Provider {
@@ -72,7 +93,7 @@ func tlsBindingTestProvider(baseURL string) *provider.Provider {
 
 func TestSetUpstreamConnectionHeaders_DoesNotSetConnectionHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "https://example.com", http.NoBody)
-	setUpstreamConnectionHeaders(req, nil)
+	provider.SetEHBPHeaders(req, nil)
 	if got := req.Header.Get("Connection"); got != "" {
 		t.Fatalf("Connection = %q, want empty", got)
 	}
@@ -205,53 +226,6 @@ func TestDoUpstreamRoundtrip_TLSBinding_CacheHitDetectsCertSwap(t *testing.T) {
 		}
 		if _, ok := s.signingKeyCache.Get(prov.Name, "model"); ok {
 			t.Error("expected signing key cache entry to be deleted after SPKI mismatch")
-		}
-	})
-}
-
-func TestVerifyUpstreamTLSBinding_ResponseCheckRemainsFailClosed(t *testing.T) {
-	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
-		t.Helper()
-		ts, liveFP := newTLSBindingTestServer(t, authority)
-		s := newTLSBindingTestServerHandle()
-		prov := tlsBindingTestProvider(ts.URL)
-		attested := sha256.Sum256([]byte("different attested SPKI"))
-		attestedFP := hex.EncodeToString(attested[:])
-		if tlsct.SPKIFingerprintsEqual(liveFP, attestedFP) {
-			t.Fatal("test fingerprints unexpectedly match")
-		}
-
-		s.cache.Put(prov.Name, "model", &attestation.VerificationReport{TLSKeyFP: attestedFP})
-		s.signingKeyCache.Put(prov.Name, "model", "some-signing-key")
-		resp := &http.Response{TLS: &tls.ConnectionState{
-			PeerCertificates: []*x509.Certificate{ts.Certificate()},
-		}}
-
-		he := s.verifyUpstreamTLSBinding(context.Background(), prov, "model", ts.URL, resp, attestedFP)
-		if he == nil || he.status != "tls_binding_failed" {
-			t.Fatalf("verifyUpstreamTLSBinding error = %+v, want tls_binding_failed", he)
-		}
-		if _, ok := s.cache.Get(prov.Name, "model"); ok {
-			t.Error("attestation cache retained after response SPKI mismatch")
-		}
-		if _, ok := s.signingKeyCache.Get(prov.Name, "model"); ok {
-			t.Error("signing key cache retained after response SPKI mismatch")
-		}
-	})
-}
-
-func TestVerifyUpstreamTLSBinding_AcceptsUppercaseFingerprint(t *testing.T) {
-	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
-		t.Helper()
-		ts, liveFP := newTLSBindingTestServer(t, authority)
-		s := newTLSBindingTestServerHandle()
-		prov := tlsBindingTestProvider(ts.URL)
-		resp := &http.Response{TLS: &tls.ConnectionState{
-			PeerCertificates: []*x509.Certificate{ts.Certificate()},
-		}}
-
-		if he := s.verifyUpstreamTLSBinding(context.Background(), prov, "model", ts.URL, resp, strings.ToUpper(liveFP)); he != nil {
-			t.Fatalf("uppercase attested fingerprint was rejected: %v", he.err)
 		}
 	})
 }
@@ -463,4 +437,48 @@ func TestDoUpstreamRoundtrip_TLSBinding_Concurrent(t *testing.T) {
 		}
 		wg.Wait()
 	})
+}
+
+func TestAttestedPoolsRespectProviderAuthorityAndKey(t *testing.T) {
+	server := newTLSBindingTestServerHandle()
+	defer server.Close()
+	a, err := tlsct.NewTransportIdentity("a.near.ai", strings.Repeat("ab", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := tlsct.NewTransportIdentity("a.near.ai", strings.Repeat("cd", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := tlsct.NewTransportIdentity("b.near.ai", strings.Repeat("ab", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previous *http.Client
+	for _, name := range []string{"tinfoil_v3_cloud", "nearcloud", "neardirect"} {
+		first, err := server.pinnedClientForIdentity(name, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		same, err := server.pinnedClientForIdentity(name, a)
+		if err != nil || same != first {
+			t.Fatal("unchanged identity replaced its pool")
+		}
+		if previous == first {
+			t.Fatal("providers shared a pool")
+		}
+		previous = first
+		rotated, err := server.pinnedClientForIdentity(name, b)
+		if err != nil || rotated == first {
+			t.Fatal("changed key reused a pool")
+		}
+		restored, err := server.pinnedClientForIdentity(name, a)
+		if err != nil || restored == rotated {
+			t.Fatal("valid earlier key could not select a pool")
+		}
+		isolated, err := server.pinnedClientForIdentity(name, other)
+		if err != nil || isolated == restored {
+			t.Fatal("authorities shared a pool")
+		}
+	}
 }

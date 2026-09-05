@@ -153,7 +153,7 @@ func inapplicableFactors(providerName string) attestation.InapplicableFactors {
 // peer SPKI; other providers use E2EE signing-key binding or pinned TLS.
 func providerUsesTLSBinding(providerName string) bool {
 	switch providerName {
-	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
+	case "tinfoil_v3_cloud", "tinfoil_v3_direct", "nearcloud", "neardirect":
 		return true
 	default:
 		return false

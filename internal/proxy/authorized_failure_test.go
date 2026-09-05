@@ -72,13 +72,14 @@ func TestAuthorizedEncryptedErrors(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
 		for _, tc := range []struct {
-			name               string
-			status             int
-			corrupt, truncated bool
+			name                           string
+			status                         int
+			corrupt, truncated, emptyNonce bool
 		}{
-			{"valid_422", 422, false, false}, {"corrupt_422", 422, true, false},
-			{"valid_500", 500, false, false}, {"corrupt_500", 500, true, false},
-			{"truncated_200", 200, false, true}, {"valid_200", 200, false, false},
+			{name: "valid_422", status: 422}, {name: "corrupt_422", status: 422, corrupt: true},
+			{name: "empty_nonce_422", status: 422, emptyNonce: true},
+			{name: "valid_500", status: 500}, {name: "corrupt_500", status: 500, corrupt: true},
+			{name: "truncated_200", status: 200, truncated: true}, {name: "valid_200", status: 200},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				private := authorizedTestKey(t)
@@ -98,6 +99,9 @@ func TestAuthorizedEncryptedErrors(t *testing.T) {
 					if tc.truncated {
 						body = body[:len(body)-1]
 					}
+					if tc.emptyNonce {
+						nonce = ""
+					}
 					w.Header().Set("Ehbp-Response-Nonce", nonce)
 					w.Header().Set("Content-Type", "application/problem+json")
 					w.WriteHeader(tc.status)
@@ -105,7 +109,7 @@ func TestAuthorizedEncryptedErrors(t *testing.T) {
 				}))
 				defer upstream.Close()
 				server, input, value := authorizedFailureFixture(t, upstream, private)
-				client, err := server.pinnedUpstreamClient(input.provider, input.route.BaseURL(), value.identity.Fingerprint())
+				client, err := server.pinnedClientForIdentity(input.provider.Name, value.identity)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -116,10 +120,10 @@ func TestAuthorizedEncryptedErrors(t *testing.T) {
 					t.Fatalf("requests=%d body closes=%d", requests.Load(), closes.Load())
 				}
 				_, retained := server.authorizations.acquire(input.key)
-				if retained == tc.corrupt {
+				if retained == (tc.corrupt || tc.emptyNonce) {
 					t.Fatalf("authorization retained=%v, corrupt=%v", retained, tc.corrupt)
 				}
-				if !tc.corrupt && !tc.truncated && (recorder.Code != tc.status || !strings.Contains(recorder.Body.String(), "key-config")) {
+				if !tc.corrupt && !tc.emptyNonce && !tc.truncated && (recorder.Code != tc.status || !strings.Contains(recorder.Body.String(), "key-config")) {
 					t.Fatal("authenticated response was not relayed")
 				}
 				if outcome.attestDur <= 0 || outcome.e2eeDur <= 0 || outcome.upstreamDur <= 0 {

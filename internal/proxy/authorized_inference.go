@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -73,7 +72,7 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 		return result, false, err
 	}
 	result.outcome.status = "upstream_failed"
-	attemptCtx, cancel := value.attemptContext(ctx)
+	attemptCtx, cancel := tlsct.InferenceContext(ctx, value.expiresAt, value.hasExpiry)
 	trace := &tlsct.InferenceAttempt{}
 	started = time.Now()
 	ur, err := s.prepareAuthorizedRequest(trace.Context(attemptCtx), input, value)
@@ -86,7 +85,7 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	defer func() { result.outcome.upstreamDur = time.Since(started) }()
 	ur.Cancel = cancel
 	result.upstream = ur
-	client, err := s.pinnedUpstreamClient(input.provider, input.route.BaseURL(), value.identity.Fingerprint())
+	client, err := s.pinnedClientForIdentity(input.provider.Name, value.identity)
 	if err == nil {
 		ur.Resp, err = client.Do(ur.Request) //nolint:bodyclose // cleanupAuthorized closes rejected attempts; inferAuthorized owns successful responses.
 	}
@@ -120,37 +119,20 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 }
 
 func (s *Server) prepareAuthorizedRequest(ctx context.Context, input *authorizedRequest, value *authorization) (*upstreamResult, error) {
-	started := time.Now()
-	ub, err := s.buildUpstreamBody(ctx, input.body, input.key.Model(), input.provider.E2EE, input.provider, &attestation.RawAttestation{SigningKey: value.signingKey}, input.endpoint)
+	req, encrypted, err := provider.PrepareInference(ctx, input.provider, input.route, &provider.InferenceInput{
+		Body: input.body, SigningKey: value.signingKey, Path: input.path, ContentType: input.contentType, Stream: input.stream, Endpoint: input.endpoint,
+	})
 	if err != nil {
 		return nil, err
 	}
-	ur := &upstreamResult{Session: ub.Session, Meta: ub.Meta, EHBP: ub.EHBP, E2EEDur: time.Since(started)}
-	var body io.Reader = bytes.NewReader(ub.Body)
-	if ub.BodyReader != nil {
-		body = ub.BodyReader
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, input.route.BaseURL()+input.path, body)
-	if err == nil {
-		req.GetBody = nil
-		req.Header.Set("Content-Type", input.contentType)
-		provider.SetUserAgent(req)
-		setUpstreamConnectionHeaders(req, ub.EHBP)
-		err = prepareUpstreamHeaders(req, input.provider, ub.Session, ub.Meta, input.stream, input.path)
-	}
-	if err != nil {
-		zeroE2EE(ub.Session, ub.Meta, ub.EHBP)
-		return nil, err
-	}
-	ur.Request = req
-	return ur, nil
+	return &upstreamResult{Request: req, Session: encrypted.Session, Meta: encrypted.Chutes, EHBP: encrypted.EHBP}, nil
 }
 
 func cleanupAuthorized(ur *upstreamResult) {
 	if ur.Resp != nil {
 		ur.Resp.Body.Close()
 	}
-	zeroE2EE(ur.Session, ur.Meta, ur.EHBP)
+	e2ee.ZeroSessions(ur.Session, ur.Meta, ur.EHBP)
 	if ur.Cancel != nil {
 		ur.Cancel()
 	}
@@ -209,7 +191,7 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	if ur.EHBP != nil {
 		nonce := resp.Header.Get("Ehbp-Response-Nonce")
 		// A plaintext non-success response does not demonstrate key expiry.
-		if nonce != "" || resp.StatusCode == http.StatusOK {
+		if len(resp.Header.Values("Ehbp-Response-Nonce")) != 0 || resp.StatusCode == http.StatusOK {
 			plain, err := ur.EHBP.DecryptResponse(resp.Body, nonce)
 			if err != nil {
 				invalidate()
@@ -250,8 +232,11 @@ func (s *Server) handleAuthorizedEndpoint(ctx context.Context, w http.ResponseWr
 		}
 		if !ri.headerSent {
 			code := http.StatusBadGateway
-			if _, ok := errors.AsType[*verificationOverloadError](err); ok {
+			if _, ok := errors.AsType[*verificationOverloadError](err); ok || errors.Is(err, tlsct.ErrConnectionCapacity) {
 				code = http.StatusServiceUnavailable
+			}
+			if errors.Is(err, tlsct.ErrConnectionCapacity) {
+				writer.Header().Set("Retry-After", "1")
 			}
 			if httpErr, ok := errors.AsType[*httpError](err); ok {
 				code = httpErr.code

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/proxy"
+	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
 
 const testsLoadDotEnvEnv = "TEEP_TESTS_LOAD_DOTENV"
@@ -244,141 +246,6 @@ func TestLoadEnvLoadsRepoRootAndSupportsNonExport(t *testing.T) {
 	if got, _ := os.LookupEnv("TEEP_TEST_EXPORT"); got != "quoted value" {
 		t.Fatalf("TEEP_TEST_EXPORT=%q want %q", got, "quoted value")
 	}
-}
-
-type stubPinnedHandler struct{}
-
-func (stubPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	body := io.NopCloser(strings.NewReader(nonStreamResponse("ok")))
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       body,
-	}, nil
-}
-
-type blockedPinnedHandler struct{}
-
-func (blockedPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	body := io.NopCloser(strings.NewReader(""))
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusBadGateway,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       body,
-		Report: &attestation.VerificationReport{
-			Provider: "neardirect",
-			Model:    "test-model",
-			Factors: []attestation.FactorResult{
-				{Name: "nonce_match", Status: attestation.Fail, Enforced: true, Detail: "mismatch"},
-			},
-		},
-	}, nil
-}
-
-// signingKeyPinnedHandler returns a signing key on first call (cache miss)
-// and no report on subsequent calls (simulating SPKI cache hits). It records
-// the SigningKey from PinnedRequest to verify the proxy passes cached keys.
-type signingKeyPinnedHandler struct {
-	key          string
-	calls        int
-	lastReqSKKey string
-}
-
-func (h *signingKeyPinnedHandler) HandlePinned(_ context.Context, req *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	h.calls++
-	h.lastReqSKKey = req.SigningKey
-	body := io.NopCloser(strings.NewReader(nonStreamResponse("ok")))
-	if h.calls == 1 {
-		// First call: SPKI cache miss → return report + signing key.
-		return &provider.PinnedResponse{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       body,
-			SigningKey: h.key,
-			Report: &attestation.VerificationReport{
-				Provider: "neardirect",
-				Model:    "test-model",
-				Factors: []attestation.FactorResult{
-					{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-					{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
-				},
-			},
-		}, nil
-	}
-	// Subsequent calls: SPKI cache hit → no report, no signing key from handler.
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       body,
-	}, nil
-}
-
-// blockedThenOKPinnedHandler returns blocked on first call, then OK on subsequent calls.
-type blockedThenOKPinnedHandler struct {
-	calls int
-}
-
-func (h *blockedThenOKPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	h.calls++
-	if h.calls == 1 {
-		return &provider.PinnedResponse{
-			StatusCode: http.StatusBadGateway,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader("")),
-			Report: &attestation.VerificationReport{
-				Provider: "neardirect",
-				Model:    "test-model",
-				Factors: []attestation.FactorResult{
-					{Name: "nonce_match", Status: attestation.Fail, Enforced: true, Detail: "mismatch"},
-				},
-			},
-		}, nil
-	}
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(nonStreamResponse("recovered"))),
-		Report: &attestation.VerificationReport{
-			Provider: "neardirect",
-			Model:    "test-model",
-			Factors: []attestation.FactorResult{
-				{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			},
-		},
-	}, nil
-}
-
-// reportDataFailPinnedHandler returns a passing report where
-// tee_reportdata_binding fails. Used for E2EE cache checks.
-type reportDataFailPinnedHandler struct {
-	calls int
-}
-
-func (h *reportDataFailPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	h.calls++
-	body := io.NopCloser(strings.NewReader(nonStreamResponse("ok")))
-	if h.calls == 1 {
-		// First call: return report (cache miss), reportdata binding fails.
-		return &provider.PinnedResponse{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       body,
-			Report: &attestation.VerificationReport{
-				Provider: "neardirect",
-				Model:    "test-model",
-				Factors: []attestation.FactorResult{
-					{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-					{Name: "tee_reportdata_binding", Status: attestation.Fail, Detail: "binding mismatch"},
-				},
-			},
-		}, nil
-	}
-	// Second call: SPKI hit → no report (proxy uses cached).
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       body,
-	}, nil
 }
 
 // --------------------------------------------------------------------------
@@ -666,141 +533,117 @@ type pathCapturingPinnedHandler struct {
 	path string
 }
 
-func (h *pathCapturingPinnedHandler) HandlePinned(_ context.Context, req *provider.PinnedRequest) (*provider.PinnedResponse, error) {
+func (h *pathCapturingPinnedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
-	h.path = req.Path
+	h.path = r.URL.Path
 	h.mu.Unlock()
-	body := io.NopCloser(strings.NewReader(`{"object":"list","data":[{"object":"embedding","embedding":[0.1],"index":0}],"model":"test-model","usage":{"prompt_tokens":5,"total_tokens":5}}`))
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       body,
-		Report: &attestation.VerificationReport{
-			Provider: "neardirect",
-			Model:    "test-model",
-			Factors: []attestation.FactorResult{
-				{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			},
-		},
-	}, nil
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"object":"list","data":[{"object":"embedding","embedding":[0.1],"index":0}],"model":"test-model","usage":{"prompt_tokens":5,"total_tokens":5}}`)
 }
 
 // newNeardirectProxyServer creates a neardirect-backed proxy server with all
 // endpoint paths configured and a stub PinnedHandler attached.
-func newNeardirectProxyServer(t *testing.T, handler provider.PinnedHandler) *httptest.Server {
+func newNeardirectProxyServer(t *testing.T, authority *testtls.Authority, handler http.Handler) *httptest.Server {
 	t.Helper()
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"neardirect": {
-				Name:    "neardirect",
-				BaseURL: "https://completions.near.ai",
-				APIKey:  "key",
-			},
-		},
-		AllowFail: attestation.KnownFactors,
-	}
-	srv, err := proxy.New(cfg)
+	return newNeardirectProxyFixture(t, authority, handler, true)
+}
+
+func newNeardirectProxyFixture(t *testing.T, authority *testtls.Authority, handler http.Handler, authorize bool) *httptest.Server {
+	t.Helper()
+	upstream := authority.NewTLSServer(t, handler)
+	t.Cleanup(upstream.Close)
+	srv, err := proxy.New(&config.Config{Providers: map[string]*config.Provider{"neardirect": {Name: "neardirect", BaseURL: upstream.URL}}})
 	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	route, err := provider.NewResolvedRoute(upstream.URL, "")
+	if err != nil {
+		t.Fatal(err)
 	}
 	prov := srv.ProviderByName("neardirect")
-	prov.PinnedHandler = handler
-	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
-		return "test.near.example", true
+	prov.StaticRoute, prov.ResolveRoute, prov.BaseURL, prov.Attester = route, nil, route.BaseURL(), nil
+	fp := sha256.Sum256(upstream.Certificate().RawSubjectPublicKeyInfo)
+	report := &attestation.VerificationReport{Provider: prov.Name, Model: "test-model", TLSAuthority: route.Authority(), TLSKeyFP: hex.EncodeToString(fp[:])}
+	if authorize {
+		if err := srv.PutAuthorizationForTest(t.Context(), prov.Name, "test-model", route, report, ""); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return httptest.NewServer(srv)
 }
 
-// sessionPinnedHandler returns a non-nil Session in PinnedResponse, simulating
-// an upstream that returned E2EE-encrypted data on a non-chat endpoint.
-type sessionPinnedHandler struct{}
+type plainTestUpstream struct{}
 
-// fakeDecryptor satisfies e2ee.Decryptor for testing.
-type fakeDecryptor struct{}
-
-func (fakeDecryptor) IsEncryptedChunk(string) bool                            { return false }
-func (fakeDecryptor) Decrypt(string) ([]byte, error)                          { return nil, errors.New("fake") }
-func (fakeDecryptor) IsRequestFieldEncrypted(string) bool                     { return false }
-func (fakeDecryptor) IsResponseFieldEncrypted(string, e2ee.EndpointType) bool { return false }
-func (fakeDecryptor) Zero()                                                   {}
-
-func (sessionPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	body := io.NopCloser(strings.NewReader(`{"created":1234567890,"data":[{"b64_json":"encrypted","revised_prompt":"prompt"}]}`))
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       body,
-		Session:    fakeDecryptor{},
-		Report: &attestation.VerificationReport{
-			Provider: "neardirect",
-			Model:    "test-model",
-			Factors: []attestation.FactorResult{
-				{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			},
-		},
-	}, nil
+func (plainTestUpstream) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, nonStreamResponse("ok"))
 }
 
-// --------------------------------------------------------------------------
-// Embeddings endpoint tests
-// --------------------------------------------------------------------------
-
 func TestEmbeddings_MissingModel400(t *testing.T) {
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
-		strings.NewReader(`{"input":"hello"}`))
-	if err != nil {
-		t.Fatalf("POST embeddings: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
+			strings.NewReader(`{"input":"hello"}`))
+		if err != nil {
+			t.Fatalf("POST embeddings: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestEmbeddings_InvalidJSON400(t *testing.T) {
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
-		strings.NewReader(`not json`))
-	if err != nil {
-		t.Fatalf("POST embeddings: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
+			strings.NewReader(`not json`))
+		if err != nil {
+			t.Fatalf("POST embeddings: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestEmbeddings_PinnedOK(t *testing.T) {
-	handler := &pathCapturingPinnedHandler{}
-	proxySrv := newNeardirectProxyServer(t, handler)
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		handler := &pathCapturingPinnedHandler{}
+		proxySrv := newNeardirectProxyServer(t, authority, handler)
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
-		strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
-	if err != nil {
-		t.Fatalf("POST embeddings: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
+			strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
+		if err != nil {
+			t.Fatalf("POST embeddings: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
-	}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
 
-	handler.mu.Lock()
-	gotPath := handler.path
-	handler.mu.Unlock()
-	if gotPath != "/v1/embeddings" {
-		t.Errorf("PinnedRequest.Path = %q, want /v1/embeddings", gotPath)
-	}
+		handler.mu.Lock()
+		gotPath := handler.path
+		handler.mu.Unlock()
+		if gotPath != "/v1/embeddings" {
+			t.Errorf("PinnedRequest.Path = %q, want /v1/embeddings", gotPath)
+		}
+	})
 }
 
 func TestEmbeddings_ProviderDoesNotSupport400(t *testing.T) {
@@ -829,80 +672,92 @@ func TestEmbeddings_ProviderDoesNotSupport400(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestImages_MissingModel400(t *testing.T) {
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
-		strings.NewReader(`{"prompt":"a cat"}`))
-	if err != nil {
-		t.Fatalf("POST images: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
+			strings.NewReader(`{"prompt":"a cat"}`))
+		if err != nil {
+			t.Fatalf("POST images: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestImages_InvalidJSON400(t *testing.T) {
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
-		strings.NewReader(`not json`))
-	if err != nil {
-		t.Fatalf("POST images: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
+			strings.NewReader(`not json`))
+		if err != nil {
+			t.Fatalf("POST images: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestImages_PinnedOK(t *testing.T) {
-	handler := &pathCapturingPinnedHandler{}
-	proxySrv := newNeardirectProxyServer(t, handler)
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		handler := &pathCapturingPinnedHandler{}
+		proxySrv := newNeardirectProxyServer(t, authority, handler)
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
-		strings.NewReader(`{"model":"neardirect:test-model","prompt":"a cat","n":1}`))
-	if err != nil {
-		t.Fatalf("POST images: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
+			strings.NewReader(`{"model":"neardirect:test-model","prompt":"a cat","n":1}`))
+		if err != nil {
+			t.Fatalf("POST images: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
-	}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
 
-	handler.mu.Lock()
-	gotPath := handler.path
-	handler.mu.Unlock()
-	if gotPath != "/v1/images/generations" {
-		t.Errorf("PinnedRequest.Path = %q, want /v1/images/generations", gotPath)
-	}
+		handler.mu.Lock()
+		gotPath := handler.path
+		handler.mu.Unlock()
+		if gotPath != "/v1/images/generations" {
+			t.Errorf("PinnedRequest.Path = %q, want /v1/images/generations", gotPath)
+		}
+	})
 }
 
 func TestImages_PinnedE2EESessionRelayed(t *testing.T) {
-	// When a pinned non-chat endpoint returns an E2EE session, the proxy
-	// decrypts the response via RelayNonStream and forwards to the client.
-	// fakeDecryptor.IsEncryptedChunk returns false, so the body passes through.
-	proxySrv := newNeardirectProxyServer(t, sessionPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		// When a pinned non-chat endpoint returns an E2EE session, the proxy
+		// decrypts the response via RelayNonStream and forwards to the client.
+		// fakeDecryptor.IsEncryptedChunk returns false, so the body passes through.
+		proxySrv := newMockNeardirectE2EEServer(t, authority, true)
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
-		strings.NewReader(`{"model":"neardirect:test-model","prompt":"a cat","n":1}`))
-	if err != nil {
-		t.Fatalf("POST images: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/images/generations", "application/json",
+			strings.NewReader(`{"model":"neardirect:test-model","prompt":"a cat","n":1}`))
+		if err != nil {
+			t.Fatalf("POST images: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Errorf("status = %d, want 200; body=%s", resp.StatusCode, body)
-	}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Errorf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
+	})
 }
 
 func TestImages_ProviderDoesNotSupport400(t *testing.T) {
@@ -932,66 +787,57 @@ type headerPinnedHandler struct {
 	extraHeaders http.Header
 }
 
-func (h headerPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	hdr := http.Header{"Content-Type": []string{"application/json"}}
-	maps.Copy(hdr, h.extraHeaders)
-	body := io.NopCloser(strings.NewReader(`{"data":"ok"}`))
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header:     hdr,
-		Body:       body,
-		Report: &attestation.VerificationReport{
-			Provider: "neardirect",
-			Model:    "test-model",
-			Factors: []attestation.FactorResult{
-				{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			},
-		},
-	}, nil
+func (h headerPinnedHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	maps.Copy(w.Header(), h.extraHeaders)
+	_, _ = io.WriteString(w, `{"data":"ok"}`)
 }
 
 func TestNonChat_PinnedOK_ForwardsUpstreamHeaders(t *testing.T) {
-	// Regression: handlePinnedNonChat must forward upstream response headers
-	// (rate-limit, request IDs, etc.) to the client, matching handlePinnedChat.
-	handler := headerPinnedHandler{
-		extraHeaders: http.Header{
-			"X-Request-Id":          []string{"req-abc-123"},
-			"X-Ratelimit-Remaining": []string{"42"},
-		},
-	}
-	proxySrv := newNeardirectProxyServer(t, handler)
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		// Regression: handlePinnedNonChat must forward upstream response headers
+		// (rate-limit, request IDs, etc.) to the client, matching handlePinnedChat.
+		handler := headerPinnedHandler{
+			extraHeaders: http.Header{
+				"X-Request-Id":          []string{"req-abc-123"},
+				"X-Ratelimit-Remaining": []string{"42"},
+			},
+		}
+		proxySrv := newNeardirectProxyServer(t, authority, handler)
+		defer proxySrv.Close()
 
-	endpoints := []struct {
-		path string
-		body string
-	}{
-		{"/v1/embeddings", `{"model":"neardirect:test-model","input":"hello"}`},
-		{"/v1/images/generations", `{"model":"neardirect:test-model","prompt":"a cat","n":1}`},
-		{"/v1/score", `{"model":"neardirect:test-model","text_1":"hello","text_2":"world"}`},
-	}
-	for _, ep := range endpoints {
-		t.Run(ep.path, func(t *testing.T) {
-			resp, err := http.Post(proxySrv.URL+ep.path, "application/json",
-				strings.NewReader(ep.body))
-			if err != nil {
-				t.Fatalf("POST %s: %v", ep.path, err)
-			}
-			defer resp.Body.Close()
+		endpoints := []struct {
+			path string
+			body string
+		}{
+			{"/v1/embeddings", `{"model":"neardirect:test-model","input":"hello"}`},
+			{"/v1/images/generations", `{"model":"neardirect:test-model","prompt":"a cat","n":1}`},
+			{"/v1/score", `{"model":"neardirect:test-model","text_1":"hello","text_2":"world"}`},
+		}
+		for _, ep := range endpoints {
+			t.Run(ep.path, func(t *testing.T) {
+				resp, err := http.Post(proxySrv.URL+ep.path, "application/json",
+					strings.NewReader(ep.body))
+				if err != nil {
+					t.Fatalf("POST %s: %v", ep.path, err)
+				}
+				defer resp.Body.Close()
 
-			if resp.StatusCode != http.StatusOK {
-				body, _ := io.ReadAll(resp.Body)
-				t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
-			}
+				if resp.StatusCode != http.StatusOK {
+					body, _ := io.ReadAll(resp.Body)
+					t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+				}
 
-			if got := resp.Header.Get("X-Request-ID"); got != "req-abc-123" {
-				t.Errorf("X-Request-Id = %q, want %q", got, "req-abc-123")
-			}
-			if got := resp.Header.Get("X-Ratelimit-Remaining"); got != "42" {
-				t.Errorf("X-Ratelimit-Remaining = %q, want %q", got, "42")
-			}
-		})
-	}
+				if got := resp.Header.Get("X-Request-ID"); got != "req-abc-123" {
+					t.Errorf("X-Request-Id = %q, want %q", got, "req-abc-123")
+				}
+				if got := resp.Header.Get("X-Ratelimit-Remaining"); got != "42" {
+					t.Errorf("X-Ratelimit-Remaining = %q, want %q", got, "42")
+				}
+			})
+		}
+	})
 }
 
 // --------------------------------------------------------------------------
@@ -999,78 +845,87 @@ func TestNonChat_PinnedOK_ForwardsUpstreamHeaders(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestAudio_MissingModel400(t *testing.T) {
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	// Multipart form without model field.
-	var buf bytes.Buffer
-	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
-	resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
-		"multipart/form-data; boundary=boundary", &buf)
-	if err != nil {
-		t.Fatalf("POST audio: %v", err)
-	}
-	defer resp.Body.Close()
+		// Multipart form without model field.
+		var buf bytes.Buffer
+		buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
+		resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
+			"multipart/form-data; boundary=boundary", &buf)
+		if err != nil {
+			t.Fatalf("POST audio: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestAudio_PinnedOK(t *testing.T) {
-	handler := &pathCapturingPinnedHandler{}
-	proxySrv := newNeardirectProxyServer(t, handler)
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		handler := &pathCapturingPinnedHandler{}
+		proxySrv := newNeardirectProxyServer(t, authority, handler)
+		defer proxySrv.Close()
 
-	// Multipart form with model field.
-	var buf bytes.Buffer
-	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nneardirect:test-model\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
-	resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
-		"multipart/form-data; boundary=boundary", &buf)
-	if err != nil {
-		t.Fatalf("POST audio: %v", err)
-	}
-	defer resp.Body.Close()
+		// Multipart form with model field.
+		var buf bytes.Buffer
+		buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nneardirect:test-model\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
+		resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
+			"multipart/form-data; boundary=boundary", &buf)
+		if err != nil {
+			t.Fatalf("POST audio: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
-	}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
 
-	handler.mu.Lock()
-	gotPath := handler.path
-	handler.mu.Unlock()
-	if gotPath != "/v1/audio/transcriptions" {
-		t.Errorf("PinnedRequest.Path = %q, want /v1/audio/transcriptions", gotPath)
-	}
+		handler.mu.Lock()
+		gotPath := handler.path
+		handler.mu.Unlock()
+		if gotPath != "/v1/audio/transcriptions" {
+			t.Errorf("PinnedRequest.Path = %q, want /v1/audio/transcriptions", gotPath)
+		}
+	})
 }
 
 func TestAudio_PinnedOK_FileBeforeModel(t *testing.T) {
-	handler := &pathCapturingPinnedHandler{}
-	proxySrv := newNeardirectProxyServer(t, handler)
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		handler := &pathCapturingPinnedHandler{}
+		proxySrv := newNeardirectProxyServer(t, authority, handler)
+		defer proxySrv.Close()
 
-	// Multipart form with file field before model field (reversed order).
-	var buf bytes.Buffer
-	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nneardirect:test-model\r\n--boundary--\r\n")
-	resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
-		"multipart/form-data; boundary=boundary", &buf)
-	if err != nil {
-		t.Fatalf("POST audio: %v", err)
-	}
-	defer resp.Body.Close()
+		// Multipart form with file field before model field (reversed order).
+		var buf bytes.Buffer
+		buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nneardirect:test-model\r\n--boundary--\r\n")
+		resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
+			"multipart/form-data; boundary=boundary", &buf)
+		if err != nil {
+			t.Fatalf("POST audio: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
-	}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
 
-	handler.mu.Lock()
-	gotPath := handler.path
-	handler.mu.Unlock()
-	if gotPath != "/v1/audio/transcriptions" {
-		t.Errorf("PinnedRequest.Path = %q, want /v1/audio/transcriptions", gotPath)
-	}
+		handler.mu.Lock()
+		gotPath := handler.path
+		handler.mu.Unlock()
+		if gotPath != "/v1/audio/transcriptions" {
+			t.Errorf("PinnedRequest.Path = %q, want /v1/audio/transcriptions", gotPath)
+		}
+	})
 }
 
 func TestAudio_ProviderDoesNotSupport400(t *testing.T) {
@@ -1138,27 +993,30 @@ func TestAudio_NonPinnedE2EEFails400(t *testing.T) {
 }
 
 func TestAudio_OversizedModelField400(t *testing.T) {
-	// Regression: extractMultipartField must reject fields exceeding the size
-	// limit instead of silently truncating them.
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		// Regression: extractMultipartField must reject fields exceeding the size
+		// limit instead of silently truncating them.
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	oversized := strings.Repeat("a", 1025)
-	var buf bytes.Buffer
-	buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n")
-	buf.WriteString(oversized)
-	buf.WriteString("\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
-	resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
-		"multipart/form-data; boundary=boundary", &buf)
-	if err != nil {
-		t.Fatalf("POST audio: %v", err)
-	}
-	defer resp.Body.Close()
+		oversized := strings.Repeat("a", 1025)
+		var buf bytes.Buffer
+		buf.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n")
+		buf.WriteString(oversized)
+		buf.WriteString("\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\naudiodata\r\n--boundary--\r\n")
+		resp, err := http.Post(proxySrv.URL+"/v1/audio/transcriptions",
+			"multipart/form-data; boundary=boundary", &buf)
+		if err != nil {
+			t.Fatalf("POST audio: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		body, _ := io.ReadAll(resp.Body)
-		t.Errorf("status = %d, want 400; body=%s", resp.StatusCode, body)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			body, _ := io.ReadAll(resp.Body)
+			t.Errorf("status = %d, want 400; body=%s", resp.StatusCode, body)
+		}
+	})
 }
 
 // --------------------------------------------------------------------------
@@ -1166,60 +1024,69 @@ func TestAudio_OversizedModelField400(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestRerank_MissingModel400(t *testing.T) {
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
-		strings.NewReader(`{"query":"hello","documents":["a","b"]}`))
-	if err != nil {
-		t.Fatalf("POST rerank: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
+			strings.NewReader(`{"query":"hello","documents":["a","b"]}`))
+		if err != nil {
+			t.Fatalf("POST rerank: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestRerank_InvalidJSON400(t *testing.T) {
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
-		strings.NewReader(`not json`))
-	if err != nil {
-		t.Fatalf("POST rerank: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
+			strings.NewReader(`not json`))
+		if err != nil {
+			t.Fatalf("POST rerank: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestRerank_PinnedOK(t *testing.T) {
-	handler := &pathCapturingPinnedHandler{}
-	proxySrv := newNeardirectProxyServer(t, handler)
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		handler := &pathCapturingPinnedHandler{}
+		proxySrv := newNeardirectProxyServer(t, authority, handler)
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
-		strings.NewReader(`{"model":"neardirect:test-model","query":"hello","documents":["a","b"]}`))
-	if err != nil {
-		t.Fatalf("POST rerank: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/rerank", "application/json",
+			strings.NewReader(`{"model":"neardirect:test-model","query":"hello","documents":["a","b"]}`))
+		if err != nil {
+			t.Fatalf("POST rerank: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
-	}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
 
-	handler.mu.Lock()
-	gotPath := handler.path
-	handler.mu.Unlock()
-	if gotPath != "/v1/rerank" {
-		t.Errorf("PinnedRequest.Path = %q, want /v1/rerank", gotPath)
-	}
+		handler.mu.Lock()
+		gotPath := handler.path
+		handler.mu.Unlock()
+		if gotPath != "/v1/rerank" {
+			t.Errorf("PinnedRequest.Path = %q, want /v1/rerank", gotPath)
+		}
+	})
 }
 
 func TestRerank_ProviderDoesNotSupport400(t *testing.T) {
@@ -1248,60 +1115,69 @@ func TestRerank_ProviderDoesNotSupport400(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestScore_MissingModel400(t *testing.T) {
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
-		strings.NewReader(`{"text_1":"hello","text_2":"world"}`))
-	if err != nil {
-		t.Fatalf("POST score: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
+			strings.NewReader(`{"text_1":"hello","text_2":"world"}`))
+		if err != nil {
+			t.Fatalf("POST score: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestScore_InvalidJSON400(t *testing.T) {
-	proxySrv := newNeardirectProxyServer(t, stubPinnedHandler{})
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyServer(t, authority, plainTestUpstream{})
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
-		strings.NewReader(`not json`))
-	if err != nil {
-		t.Fatalf("POST score: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
+			strings.NewReader(`not json`))
+		if err != nil {
+			t.Fatalf("POST score: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestScore_PinnedOK(t *testing.T) {
-	handler := &pathCapturingPinnedHandler{}
-	proxySrv := newNeardirectProxyServer(t, handler)
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		handler := &pathCapturingPinnedHandler{}
+		proxySrv := newNeardirectProxyServer(t, authority, handler)
+		defer proxySrv.Close()
 
-	resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
-		strings.NewReader(`{"model":"neardirect:test-model","text_1":"hello","text_2":"world"}`))
-	if err != nil {
-		t.Fatalf("POST score: %v", err)
-	}
-	defer resp.Body.Close()
+		resp, err := http.Post(proxySrv.URL+"/v1/score", "application/json",
+			strings.NewReader(`{"model":"neardirect:test-model","text_1":"hello","text_2":"world"}`))
+		if err != nil {
+			t.Fatalf("POST score: %v", err)
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
-	}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+		}
 
-	handler.mu.Lock()
-	gotPath := handler.path
-	handler.mu.Unlock()
-	if gotPath != "/v1/score" {
-		t.Errorf("PinnedRequest.Path = %q, want /v1/score", gotPath)
-	}
+		handler.mu.Lock()
+		gotPath := handler.path
+		handler.mu.Unlock()
+		if gotPath != "/v1/score" {
+			t.Errorf("PinnedRequest.Path = %q, want /v1/score", gotPath)
+		}
+	})
 }
 
 func TestScore_ProviderDoesNotSupport400(t *testing.T) {
@@ -1330,31 +1206,33 @@ func TestScore_ProviderDoesNotSupport400(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestEmbeddings_NegativeCache503(t *testing.T) {
-	handler := blockedPinnedHandler{}
-	proxySrv := newNeardirectProxyServer(t, handler)
-	defer proxySrv.Close()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		proxySrv := newNeardirectProxyFixture(t, authority, plainTestUpstream{}, false)
+		defer proxySrv.Close()
 
-	// First request: blocked attestation in pinned handler → 502.
-	resp1, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
-		strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
-	if err != nil {
-		t.Fatalf("first request: %v", err)
-	}
-	defer resp1.Body.Close()
-	if resp1.StatusCode != http.StatusBadGateway {
-		t.Errorf("first request status = %d, want 502", resp1.StatusCode)
-	}
+		// First request: blocked attestation in pinned handler → 502.
+		resp1, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
+			strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
+		if err != nil {
+			t.Fatalf("first request: %v", err)
+		}
+		defer resp1.Body.Close()
+		if resp1.StatusCode != http.StatusBadGateway {
+			t.Errorf("first request status = %d, want 502", resp1.StatusCode)
+		}
 
-	// Second request: negative cache → 503.
-	resp2, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
-		strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
-	if err != nil {
-		t.Fatalf("second request: %v", err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("second request status = %d, want 503", resp2.StatusCode)
-	}
+		// Second request: negative cache → 503.
+		resp2, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
+			strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
+		if err != nil {
+			t.Fatalf("second request: %v", err)
+		}
+		defer resp2.Body.Close()
+		if resp2.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("second request status = %d, want 503", resp2.StatusCode)
+		}
+	})
 }
 
 // --------------------------------------------------------------------------
@@ -1471,7 +1349,6 @@ func TestHandleModels_ProviderError(t *testing.T) {
 	}
 	prov := srv.ProviderByName("neardirect")
 	prov.ModelLister = errorModelLister{}
-	prov.PinnedHandler = stubPinnedHandler{}
 
 	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
@@ -1526,13 +1403,13 @@ func TestHandleModels_MultipleProviders(t *testing.T) {
 
 	// Stub both providers with different models.
 	direct := srv.ProviderByName("neardirect")
-	direct.PinnedHandler = stubPinnedHandler{}
+
 	direct.ModelLister = stubModelLister{
 		models: []json.RawMessage{json.RawMessage(`{"id":"model-a","object":"model","owned_by":"near-ai"}`)},
 	}
 
 	cloud := srv.ProviderByName("nearcloud")
-	cloud.PinnedHandler = stubPinnedHandler{}
+
 	cloud.ModelLister = stubModelLister{
 		models: []json.RawMessage{json.RawMessage(`{"id":"model-b","object":"model","owned_by":"near-ai"}`)},
 	}
@@ -1600,7 +1477,6 @@ func TestHandleModels_SlowProvider(t *testing.T) {
 	}
 	prov := srv.ProviderByName("neardirect")
 	prov.ModelLister = slowModelLister{}
-	prov.PinnedHandler = stubPinnedHandler{}
 
 	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
@@ -1691,7 +1567,6 @@ func TestHandleModels_CacheHit(t *testing.T) {
 	}
 	prov := srv.ProviderByName("neardirect")
 	prov.ModelLister = lister
-	prov.PinnedHandler = stubPinnedHandler{}
 
 	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
@@ -1743,7 +1618,6 @@ func TestHandleModels_Singleflight(t *testing.T) {
 	}
 	prov := srv.ProviderByName("neardirect")
 	prov.ModelLister = lister
-	prov.PinnedHandler = stubPinnedHandler{}
 
 	proxySrv := httptest.NewServer(srv)
 	defer proxySrv.Close()
@@ -2331,102 +2205,6 @@ func TestUpstreamNon200Forwarded(t *testing.T) {
 // --------------------------------------------------------------------------
 // Model resolution across providers
 // --------------------------------------------------------------------------
-
-func TestSinglePinnedProvider_AllowsDynamicModelName(t *testing.T) {
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"neardirect": {
-				Name:    "neardirect",
-				BaseURL: "https://completions.near.ai",
-				APIKey:  "key",
-				E2EE:    false,
-			},
-		},
-		AllowFail: attestation.KnownFactors,
-	}
-
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-
-	prov := srv.ProviderByName("neardirect")
-	if prov == nil {
-		t.Fatal("neardirect provider missing")
-	}
-
-	// Avoid network dependency: stub pinned chat handler.
-	prov.PinnedHandler = stubPinnedHandler{}
-	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
-		return "test.near.example", true
-	}
-
-	proxySrv := httptest.NewServer(srv)
-	defer proxySrv.Close()
-
-	resp, err := postChat(t, proxySrv.URL, "neardirect:zai-org/GLM-5-FP8", false)
-	if err != nil {
-		t.Fatalf("POST chat: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
-	}
-}
-
-func TestPinnedProvider_BlockedReportReturns502(t *testing.T) {
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"neardirect": {
-				Name:    "neardirect",
-				BaseURL: "https://completions.near.ai",
-				APIKey:  "key",
-				E2EE:    false,
-			},
-		},
-		AllowFail: attestation.KnownFactors,
-	}
-
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-
-	prov := srv.ProviderByName("neardirect")
-	if prov == nil {
-		t.Fatal("neardirect provider missing")
-	}
-	prov.PinnedHandler = blockedPinnedHandler{}
-	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
-		return "test.near.example", true
-	}
-
-	proxySrv := httptest.NewServer(srv)
-	defer proxySrv.Close()
-
-	resp, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
-	if err != nil {
-		t.Fatalf("POST chat: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadGateway {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 502; body=%s", resp.StatusCode, body)
-	}
-
-	var report attestation.VerificationReport
-	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
-		t.Fatalf("decode report: %v", err)
-	}
-	if !report.Blocked() {
-		t.Fatal("report.Blocked() = false, want true")
-	}
-}
 
 // --------------------------------------------------------------------------
 // SSE parsing edge cases
@@ -3830,280 +3608,11 @@ func TestHandleIndex_AfterRequest(t *testing.T) {
 // Phase 4: Cache coherence and signing key tests
 // --------------------------------------------------------------------------
 
-func TestSigningKeyCacheReuse(t *testing.T) {
-	// Two sequential requests to a pinned E2EE provider. First triggers
-	// attestation + signing key cache population. Second uses the cached
-	// signing key (verify signing key is passed to PinnedRequest).
-	handler := &signingKeyPinnedHandler{key: "test-signing-key-hex"}
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"neardirect": {
-				Name:    "neardirect",
-				BaseURL: "https://completions.near.ai",
-				APIKey:  "key",
-				E2EE:    true,
-			},
-		},
-		AllowFail: attestation.KnownFactors,
-	}
-
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-	prov := srv.ProviderByName("neardirect")
-	if prov == nil {
-		t.Fatal("neardirect provider missing")
-	}
-	prov.PinnedHandler = handler
-	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) { return "completions.near.ai", true }
-
-	proxySrv := httptest.NewServer(srv)
-	defer proxySrv.Close()
-
-	// First request: attestation + signing key cached.
-	resp1, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
-	if err != nil {
-		t.Fatalf("first request: %v", err)
-	}
-	resp1.Body.Close()
-	if resp1.StatusCode != http.StatusOK {
-		t.Fatalf("first status = %d, want 200", resp1.StatusCode)
-	}
-	if handler.calls != 1 {
-		t.Fatalf("handler calls = %d, want 1", handler.calls)
-	}
-	// First request should NOT have a signing key from cache.
-	if handler.lastReqSKKey != "" {
-		t.Errorf("first request SigningKey should be empty, got %q", handler.lastReqSKKey)
-	}
-
-	// Second request: SPKI hit, signing key should come from cache.
-	resp2, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
-	if err != nil {
-		t.Fatalf("second request: %v", err)
-	}
-	resp2.Body.Close()
-	if resp2.StatusCode != http.StatusOK {
-		t.Fatalf("second status = %d, want 200", resp2.StatusCode)
-	}
-	if handler.calls != 2 {
-		t.Fatalf("handler calls = %d, want 2", handler.calls)
-	}
-	// Second request should receive the cached signing key.
-	if handler.lastReqSKKey != "test-signing-key-hex" {
-		t.Errorf("second request SigningKey = %q, want %q", handler.lastReqSKKey, "test-signing-key-hex")
-	}
-}
-
-func TestBlockedReport_NegCacheAndAttestCacheInteraction(t *testing.T) {
-	// Blocked attestation → negative cache record. Verify second request
-	// gets 503 (neg cache) not 502 (re-attest). Third request after
-	// negative cache expiry should succeed (recovery).
-	handler := &blockedThenOKPinnedHandler{}
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"neardirect": {
-				Name:    "neardirect",
-				BaseURL: "https://completions.near.ai",
-				APIKey:  "key",
-				E2EE:    false,
-			},
-		},
-		AllowFail: attestation.KnownFactors,
-	}
-
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-	// Use a very short negative cache TTL so the test can expire it quickly.
-	srv.SetNegativeCache(attestation.NewNegativeCache(50 * time.Millisecond))
-	prov := srv.ProviderByName("neardirect")
-	if prov == nil {
-		t.Fatal("neardirect provider missing")
-	}
-	prov.PinnedHandler = handler
-	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
-		return "test.near.example", true
-	}
-
-	proxySrv := httptest.NewServer(srv)
-	defer proxySrv.Close()
-
-	// Request 1: blocked → 502 + negative cache populated.
-	resp1, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
-	if err != nil {
-		t.Fatalf("request 1: %v", err)
-	}
-	resp1.Body.Close()
-	if resp1.StatusCode != http.StatusBadGateway {
-		t.Fatalf("request 1 status = %d, want 502", resp1.StatusCode)
-	}
-	if handler.calls != 1 {
-		t.Fatalf("handler calls = %d, want 1", handler.calls)
-	}
-
-	// Request 2: negative cache → 503. Handler should NOT be called again.
-	resp2, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
-	if err != nil {
-		t.Fatalf("request 2: %v", err)
-	}
-	resp2.Body.Close()
-	if resp2.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("request 2 status = %d, want 503 (neg cache)", resp2.StatusCode)
-	}
-	if handler.calls != 1 {
-		t.Errorf("handler calls = %d, want still 1 (neg cache should intercept)", handler.calls)
-	}
-
-	// Wait for negative cache to expire by polling with a deadline instead of a fixed sleep.
-	deadline := time.Now().Add(2 * time.Second)
-	var lastStatus int
-	var lastErr error
-	for {
-		if time.Now().After(deadline) {
-			t.Fatalf("request 3 did not succeed before deadline; last status = %d, last error = %v", lastStatus, lastErr)
-		}
-
-		// Request 3 attempt: expect negative cache to have expired → re-attest → handler returns OK.
-		resp3, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
-		lastErr = err
-		if err != nil {
-			// Retry until deadline to avoid flakiness due to timing.
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-
-		lastStatus = resp3.StatusCode
-		resp3.Body.Close()
-		if resp3.StatusCode == http.StatusOK {
-			break
-		}
-
-		// Still seeing negative-cache behavior; wait briefly and retry until deadline.
-		time.Sleep(10 * time.Millisecond)
-	}
-	if handler.calls != 2 {
-		t.Errorf("handler calls = %d, want 2 (re-attest after neg cache expiry)", handler.calls)
-	}
-}
-
-func TestPinnedPath_E2EE_ReportDataBindingCacheCheck(t *testing.T) {
-	// E2EE provider: first request caches report where
-	// tee_reportdata_binding fails. Second request (SPKI cache hit)
-	// should be rejected with 502 because cached report has no binding.
-	handler := &reportDataFailPinnedHandler{}
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"neardirect": {
-				Name:    "neardirect",
-				BaseURL: "https://completions.near.ai",
-				APIKey:  "key",
-				E2EE:    true,
-			},
-		},
-		AllowFail: attestation.KnownFactors,
-	}
-
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-	prov := srv.ProviderByName("neardirect")
-	if prov == nil {
-		t.Fatal("neardirect provider missing")
-	}
-	prov.PinnedHandler = handler
-	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) { return "completions.near.ai", true }
-
-	proxySrv := httptest.NewServer(srv)
-	defer proxySrv.Close()
-
-	// Request 1: attestation returns report where reportdata binding fails.
-	// For an E2EE provider, the proxy must refuse the request even on first
-	// request (SPKI miss) to prevent plaintext downgrade.
-	resp1, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
-	if err != nil {
-		t.Fatalf("request 1: %v", err)
-	}
-	resp1.Body.Close()
-	if resp1.StatusCode != http.StatusBadGateway {
-		t.Fatalf("request 1 status = %d, want 502 (reportdata binding failed; E2EE must refuse)", resp1.StatusCode)
-	}
-	if handler.calls != 1 {
-		t.Fatalf("handler calls after request 1 = %d, want 1 (handler called for attestation)", handler.calls)
-	}
-
-	// Request 2: provider/model is now negative-cached after the first
-	// REPORTDATA binding failure → request is blocked immediately with 503.
-	resp2, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
-	if err != nil {
-		t.Fatalf("request 2: %v", err)
-	}
-	resp2.Body.Close()
-	if resp2.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("request 2 status = %d, want 503 (negative-cached after binding failure)", resp2.StatusCode)
-	}
-}
-
 // TestPinnedPath_E2EE_NilReportBlocked verifies that an E2EE provider on the
 // pinned path blocks the request when the pinned handler returns a nil report
 // (SPKI cache hit) and the attestation cache is empty. Previously this was a
 // fail-open: enforceReport returned true for nil reports, and the E2EE binding
 // check short-circuited on report==nil.
-func TestPinnedPath_E2EE_NilReportBlocked(t *testing.T) {
-	// Handler always returns nil report (simulates SPKI cache hit with no
-	// attestation). Also returns 200 + body so we can distinguish "blocked
-	// by proxy" (502) from "handler error."
-	handler := &stubPinnedHandler{}
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"neardirect": {
-				Name:    "neardirect",
-				BaseURL: "https://completions.near.ai",
-				APIKey:  "key",
-				E2EE:    true,
-			},
-		},
-		AllowFail: attestation.KnownFactors,
-	}
-
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-	prov := srv.ProviderByName("neardirect")
-	if prov == nil {
-		t.Fatal("neardirect provider missing")
-	}
-	prov.PinnedHandler = handler
-	prov.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) { return "completions.near.ai", true }
-
-	// Do NOT populate the attestation cache — simulate cache expiry.
-	proxySrv := httptest.NewServer(srv)
-	defer proxySrv.Close()
-
-	resp, err := postChat(t, proxySrv.URL, "neardirect:test-model", false)
-	if err != nil {
-		t.Fatalf("POST chat: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	t.Logf("status=%d body=%s", resp.StatusCode, string(body))
-
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 (E2EE with nil report must be blocked)", resp.StatusCode)
-	}
-	if !strings.Contains(string(body), "no attestation report available") {
-		t.Errorf("expected 'no attestation report available' in body, got: %s", string(body))
-	}
-}
 
 // --- Nonce pool unit tests ---
 
@@ -4186,7 +3695,6 @@ func passingReport(provName, model string) *attestation.VerificationReport { //n
 // The returned server's upstream points at upstreamURL for chat completions.
 func newNoncePoolTestServer(t *testing.T, upstreamURL string) (srv *proxy.Server, ts *httptest.Server) {
 	t.Helper()
-
 	cfg := &config.Config{
 		ListenAddr: "127.0.0.1:0",
 		Providers: map[string]*config.Provider{

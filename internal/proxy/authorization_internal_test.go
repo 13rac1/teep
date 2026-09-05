@@ -11,6 +11,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 func testAuthorizationCandidate(t *testing.T, model string, expires time.Time, hasExpiry bool) (provider.AuthorizationKey, *authorization) {
@@ -144,7 +145,7 @@ func TestAuthorizationLifetimeAndAcquisition(t *testing.T) {
 	if _, ok := store.acquire(key); !ok {
 		t.Fatal("invented local authorization TTL")
 	}
-	ctx, cancel := a.attemptContext(context.Background())
+	ctx, cancel := tlsct.InferenceContext(context.Background(), a.expiresAt, a.hasExpiry)
 	defer cancel()
 	store.deleteGeneration(key, a.generation)
 	if _, ok := store.acquire(key); ok {
@@ -157,7 +158,7 @@ func TestAuthorizationLifetimeAndAcquisition(t *testing.T) {
 	expiry := time.Now().Add(time.Hour)
 	key, candidate = testAuthorizationCandidate(t, "model", expiry, true)
 	a = loadTestAuthorization(t, store, key, candidate)
-	ctx2, cancel2 := a.attemptContext(context.Background())
+	ctx2, cancel2 := tlsct.InferenceContext(context.Background(), a.expiresAt, a.hasExpiry)
 	defer cancel2()
 	deadline, ok := ctx2.Deadline()
 	if !ok || !deadline.Equal(expiry) {
@@ -296,6 +297,32 @@ func TestAuthorizationNegativeRecheck(t *testing.T) {
 	})
 	if !errors.Is(err, failure) {
 		t.Fatalf("negative recheck: %v", err)
+	}
+}
+
+func TestAuthorizationConstructorRejectsIncompleteMaterial(t *testing.T) {
+	key, candidate := testAuthorizationCandidate(t, "model", time.Time{}, false)
+	for _, tc := range []struct {
+		name       string
+		change     func(*attestation.VerificationReport)
+		signingKey string
+		encrypt    bool
+	}{
+		{"wrong model", func(r *attestation.VerificationReport) { r.Model = "other" }, "", false},
+		{"missing TLS identity", func(r *attestation.VerificationReport) { r.TLSKeyFP = "" }, "", false},
+		{"wrong authority", func(r *attestation.VerificationReport) { r.TLSAuthority = "b.near.ai" }, "", false},
+		{"unbound key", func(*attestation.VerificationReport) {}, strings.Repeat("ab", 32), true},
+		{"empty bound key", func(r *attestation.VerificationReport) {
+			r.Factors = []attestation.FactorResult{{Name: attestation.FactorTEEReportData, Status: attestation.Pass}}
+		}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := candidate.report.Clone()
+			tc.change(report)
+			if _, err := newAuthorization(key, report, tc.signingKey, tc.encrypt, false, time.Time{}, false, time.Now()); err == nil {
+				t.Fatal("incomplete authorization accepted")
+			}
+		})
 	}
 }
 

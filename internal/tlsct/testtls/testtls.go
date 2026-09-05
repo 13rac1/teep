@@ -58,7 +58,13 @@ func RunWithFallbackRoot(t *testing.T, fn func(t *testing.T, authority *Authorit
 // authority. The caller must invoke it inside RunWithFallbackRoot.
 func (a *Authority) NewTLSServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
-	return a.newTLSServer(t, handler, "localhost", []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback})
+	return a.newTLSServer(t, handler, "localhost", []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}, nil)
+}
+
+// NewTLSServerWithConfig applies server configuration before starting TLS.
+func (a *Authority) NewTLSServerWithConfig(t *testing.T, handler http.Handler, configure func(*httptest.Server)) *httptest.Server {
+	t.Helper()
+	return a.newTLSServer(t, handler, "localhost", []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}, configure)
 }
 
 // NewTLSServerForHost starts a TLS server whose certificate is valid for
@@ -69,10 +75,10 @@ func (a *Authority) NewTLSServerForHost(t *testing.T, handler http.Handler, host
 	if host == "" {
 		t.Fatal("test TLS hostname is empty")
 	}
-	return a.newTLSServer(t, handler, host, nil)
+	return a.newTLSServer(t, handler, host, nil, nil)
 }
 
-func (a *Authority) newTLSServer(t *testing.T, handler http.Handler, host string, addresses []net.IP) *httptest.Server {
+func (a *Authority) newTLSServer(t *testing.T, handler http.Handler, host string, addresses []net.IP, configure func(*httptest.Server)) *httptest.Server {
 	t.Helper()
 	if a == nil || a.cert == nil || a.key == nil {
 		t.Fatal("test TLS authority is not initialized")
@@ -107,6 +113,9 @@ func (a *Authority) newTLSServer(t *testing.T, handler http.Handler, host string
 	server.TLS = &tls.Config{
 		Certificates: []tls.Certificate{certificate},
 		MinVersion:   tls.VersionTLS13,
+	}
+	if configure != nil {
+		configure(server)
 	}
 	server.StartTLS()
 	t.Cleanup(server.Close)

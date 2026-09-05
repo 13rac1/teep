@@ -56,14 +56,10 @@ func (g *clientHTTPSGetter) GetContext(ctx context.Context, url string) (header 
 	return resp.Header, body, nil
 }
 
-// NewCollateralGetter wraps an *http.Client as a trust.HTTPSGetter with retry
-// logic for Intel PCS collateral fetches.
+// NewCollateralGetter adapts the shared attestation client to certificate retrieval.
+// The client owns retry policy, including immediate capacity-error rejection.
 func NewCollateralGetter(client *http.Client) trust.HTTPSGetter {
-	return &trust.RetryHTTPSGetter{
-		Timeout:       30 * time.Second,
-		MaxRetryDelay: 5 * time.Second,
-		Getter:        &clientHTTPSGetter{client: client},
-	}
+	return &clientHTTPSGetter{client: client}
 }
 
 //go:embed certs/intel_sgx_root_ca.pem
@@ -388,15 +384,20 @@ func VerifyTDXQuoteOnline(ctx context.Context, hexQuote string, getter trust.HTT
 	// Fetch Intel PCS collateral for TCB currency checks. This is a separate
 	// pass so a collateral network error doesn't mask the cert chain / signature
 	// result from the offline pass.
+	if getter == nil {
+		result.CollateralErr = errors.New("collateral getter is required for Intel verification")
+		return result
+	}
+	observed := &tdxEvidenceGetter{base: getter}
 	collateralOpts := &tdxverify.Options{
 		GetCollateral:    true,
 		CheckRevocations: true,
-		Getter:           getter,
+		Getter:           observed,
 		TrustedRoots:     intelSGXRootPool,
 		Now:              tdxTimeSet(verifyTime),
 	}
 	if err := tdxverify.TdxQuoteContext(ctx, result.quote, collateralOpts); err != nil {
-		result.CollateralErr = fmt.Errorf("intel PCS collateral: %w", err)
+		result.CollateralErr = fmt.Errorf("intel PCS collateral: %w", errors.Join(err, observed.failure()))
 		slog.DebugContext(ctx, "TDX collateral verification failed", "err", err)
 		return result
 	}
