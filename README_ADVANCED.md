@@ -2,6 +2,12 @@
 
 Detailed cryptographic and attestation documentation for security engineers. For an overview, see [README.md](README.md).
 
+For provider implementation and transport changes, see the
+[HTTP and TLS transport reference](docs/transport/README.md), including
+[retry contracts](docs/transport/retries.md),
+[redirect policy](docs/transport/redirects.md), and
+[required transport tests](docs/transport/testing.md).
+
 ## Attestation Architecture
 
 Most providers use Intel TDX for CPU attestation and NVIDIA confidential computing for GPU attestation. Tinfoil uses AMD SEV-SNP. Providers differ in how the secure channel between client and TEE is established.
@@ -28,9 +34,9 @@ NEAR AI Direct connects to model-specific inference nodes and binds the TLS cert
 4. Extracts `tls_cert_fingerprint` from the attestation response.
 5. Verifies the server's TLS certificate SPKI matches the attested fingerprint.
 6. Confirms the fingerprint is bound to the TDX REPORTDATA via `sha256(signing_address ‖ tls_cert_fingerprint)` in the first 32 bytes, with the nonce in bytes 32–64.
-7. Sends the chat request on the same verified connection.
+7. Sends the request through a pool scoped to the provider, authority, and attested SPKI. Every new connection authenticates that SPKI before request bytes are sent.
 
-Verified SPKI hashes are cached per-domain to avoid repeated attestation for subsequent requests.
+The report, transport identity, and required authenticated E2EE key form one cached authorization. Evidence expiration alone does not trigger renewal. HTTP/2 streams and reconnects reuse authorization within its attested scope. See the [transport contract](docs/transport/README.md#routes-and-authorizations) for admission checks, key failure classification, and approval withdrawal.
 
 ### NEAR AI Cloud (Gateway TLS Pinning)
 
@@ -40,7 +46,7 @@ NEAR AI Cloud routes all traffic through a single TEE-attested API gateway (`clo
 2. Fetches attestation on the same TLS connection — the response includes both model attestation and gateway attestation.
 3. Verifies the gateway's TLS certificate SPKI matches the attested fingerprint (same binding scheme as Direct).
 4. Verifies the gateway's own TDX quote, event log, and compose binding (Tier 4 factors).
-5. Sends the chat request on the same verified connection.
+5. Sends the request through the gateway SPKI pool, with the required model E2EE key from its cached authorization. New model backend scopes require full verification.
 
 The gateway adds 13 additional verification factors (Tier 4) covering gateway nonce, TDX quote, cert chain, debug mode, measurement allowlists, REPORTDATA binding, compose binding, CPU registry, and event log integrity.
 

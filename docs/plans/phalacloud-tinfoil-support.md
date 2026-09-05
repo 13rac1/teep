@@ -67,8 +67,8 @@ This must become backend-format-aware, like the ReportDataVerifier already is.
 
 ### 5. Supply chain verification (`proxy.go` ~line 745)
 
-Currently `nil` for Phala. Tinfoil backends need `SigstoreRepoForModel` to
-resolve the Sigstore repository for code measurement verification. The repo
+Tinfoil backends need an effective Sigstore repository from the immutable
+route snapshot for code measurement verification. The repo
 depends on whether the Tinfoil backend is cloud-routed
 (`tinfoilsh/confidential-model-router`) or direct (per-model repo via
 `tinfoil.RepoForModel`).

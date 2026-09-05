@@ -105,7 +105,7 @@ Exits with code 1 if any enforced factor fails. For the full factor list, see [V
 ## FAQ
 
 **Does this slow down my app?**
-The first request to a provider takes an extra 200–500ms while teep fetches and verifies the attestation. After that, results are cached for 10 minutes — subsequent requests add under 1ms.
+The first request for an uncached authorization fetches and fully verifies attestation. NEAR and Tinfoil TLS-binding providers reuse that authorization while its attested identity and required encryption keys remain usable, until explicit invalidation, eviction, or process exit. Evidence expiration alone does not trigger renewal. Other providers retain their existing cache policies. See [authorization reuse and approval withdrawal](docs/transport/README.md#routes-and-authorizations).
 
 **What does this actually protect against?**
 Teep protects your prompts from the AI company's employees, a compromised data center, and a network attacker who can see your traffic. It does not protect against a malicious model or hardware backdoors. See [Verification Factors](#verification-factors) for exactly what each provider currently proves.
