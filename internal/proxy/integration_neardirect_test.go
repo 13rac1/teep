@@ -78,12 +78,12 @@ func integrationNearDirectConfig(t *testing.T) *config.Config {
 }
 
 // integrationNearDirectE2EEConfig returns a config pointing at the live
-// completions.near.ai endpoints with E2EE enabled and Offline true.
+// completions.near.ai endpoints with E2EE and the online serve policy enabled.
 func integrationNearDirectE2EEConfig(t *testing.T) *config.Config {
 	t.Helper()
 	return &config.Config{
 		ListenAddr: "127.0.0.1:0",
-		Offline:    true,
+		Offline:    false,
 		Providers: map[string]*config.Provider{
 			"neardirect": {
 				Name:    "neardirect",
@@ -109,37 +109,34 @@ func postNearDirectContentChat(t *testing.T, proxyURL, model string, stream bool
 func TestIntegration_NearDirect(t *testing.T) {
 	skipNearDirectIntegration(t)
 
-	t.Run("NonStream", runNearDirectNonStream)
-	t.Run("Streaming", runNearDirectStreaming)
-	t.Run("Models", runNearDirectModels)
-	t.Run("E2EEStreaming", runNearDirectE2EEStreaming)
-	t.Run("E2EENonStream", runNearDirectE2EENonStream)
-	t.Run("AttestationReport", runNearDirectAttestationReport)
-	t.Run("E2EEStreamingWithTools", runNearDirectE2EEStreamingWithTools)
-	t.Run("E2EENonStreamWithTools", runNearDirectE2EENonStreamWithTools)
-	t.Run("GLMReasoning", runNearDirectGLMReasoning)
-	t.Run("E2EEStreamingMultimodalContentArray", runNearDirectE2EEStreamingMultimodalContentArray)
-	t.Run("E2EENonStreamMultimodalContentArray", runNearDirectE2EENonStreamMultimodalContentArray)
+	plain := newProxyServer(t, integrationNearDirectConfig(t))
+	encrypted := newProxyServer(t, integrationNearDirectE2EEConfig(t))
+
+	t.Run("NonStream", func(t *testing.T) { runNearDirectNonStream(t, plain.URL) })
+	t.Run("Streaming", func(t *testing.T) { runNearDirectStreaming(t, plain.URL) })
+	t.Run("Models", func(t *testing.T) { runNearDirectModels(t, plain.URL) })
+	t.Run("E2EEStreaming", func(t *testing.T) { runNearDirectE2EEStreaming(t, encrypted.URL) })
+	t.Run("E2EENonStream", func(t *testing.T) { runNearDirectE2EENonStream(t, encrypted.URL) })
+	t.Run("AttestationReport", func(t *testing.T) { runNearDirectAttestationReport(t, encrypted.URL) })
+	t.Run("E2EEStreamingWithTools", func(t *testing.T) { runNearDirectE2EEStreamingWithTools(t, encrypted.URL) })
+	t.Run("E2EENonStreamWithTools", func(t *testing.T) { runNearDirectE2EENonStreamWithTools(t, encrypted.URL) })
+	t.Run("GLMReasoning", func(t *testing.T) { runNearDirectGLMReasoning(t, plain.URL, encrypted.URL) })
+	t.Run("E2EEStreamingMultimodalContentArray", func(t *testing.T) { runNearDirectE2EEStreamingMultimodalContentArray(t, encrypted.URL) })
+	t.Run("E2EENonStreamMultimodalContentArray", func(t *testing.T) { runNearDirectE2EENonStreamMultimodalContentArray(t, encrypted.URL) })
 }
 
-func runNearDirectGLMReasoning(t *testing.T) {
-	plainSrv := newProxyServer(t, integrationNearDirectConfig(t))
-	defer plainSrv.Close()
-	e2eeSrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
-	defer e2eeSrv.Close()
-
+func runNearDirectGLMReasoning(t *testing.T, plainURL, e2eeURL string) {
+	t.Helper()
 	const model = "neardirect:z-ai/glm-5.3-flash"
-	runReasoningResponseTests(t, plainSrv.URL, e2eeSrv.URL, model)
+	runReasoningResponseTests(t, plainURL, e2eeURL, model)
 	t.Run("Repairs", func(t *testing.T) {
-		runGLMReasoningRepairTests(t, e2eeSrv.URL, model)
+		runGLMReasoningRepairTests(t, e2eeURL, model)
 	})
 }
 
-func runNearDirectNonStream(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearDirectConfig(t))
-	defer proxySrv.Close()
-
-	resp := postNearDirectContentChat(t, proxySrv.URL, nearDirectIntegrationModel(), false)
+func runNearDirectNonStream(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postNearDirectContentChat(t, proxyURL, nearDirectIntegrationModel(), false)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -158,11 +155,9 @@ func runNearDirectNonStream(t *testing.T) {
 	t.Logf("response: %q", content)
 }
 
-func runNearDirectStreaming(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearDirectConfig(t))
-	defer proxySrv.Close()
-
-	resp := postNearDirectContentChat(t, proxySrv.URL, nearDirectIntegrationModel(), true)
+func runNearDirectStreaming(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postNearDirectContentChat(t, proxyURL, nearDirectIntegrationModel(), true)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -186,11 +181,9 @@ func runNearDirectStreaming(t *testing.T) {
 	t.Logf("response (%d chunks): %q", len(chunks), content)
 }
 
-func runNearDirectModels(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearDirectConfig(t))
-	defer proxySrv.Close()
-
-	resp, err := integrationClient.Get(proxySrv.URL + "/v1/models")
+func runNearDirectModels(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp, err := integrationClient.Get(proxyURL + "/v1/models")
 	if err != nil {
 		t.Fatalf("GET /v1/models: %v", err)
 	}
@@ -229,40 +222,32 @@ func runNearDirectModels(t *testing.T) {
 	}
 }
 
-func runNearDirectE2EEStreaming(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
-	defer proxySrv.Close()
-
-	resp := postNearDirectContentChat(t, proxySrv.URL, nearDirectIntegrationModel(), true)
+func runNearDirectE2EEStreaming(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postNearDirectContentChat(t, proxyURL, nearDirectIntegrationModel(), true)
 	defer resp.Body.Close()
 	assertStreamResponse(t, resp)
 }
 
-func runNearDirectE2EENonStream(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
-	defer proxySrv.Close()
-
-	resp := postNearDirectContentChat(t, proxySrv.URL, nearDirectIntegrationModel(), false)
+func runNearDirectE2EENonStream(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postNearDirectContentChat(t, proxyURL, nearDirectIntegrationModel(), false)
 	defer resp.Body.Close()
 	assertNonStreamResponse(t, resp)
 }
 
-func runNearDirectAttestationReport(t *testing.T) {
-	// Online mode so the report includes Intel PCS, NRAS, and PoC results.
-	cfg := integrationNearDirectE2EEConfig(t)
-	cfg.Offline = false
-	proxySrv := newProxyServer(t, cfg)
-	defer proxySrv.Close()
-
+func runNearDirectAttestationReport(t *testing.T, proxyURL string) {
+	t.Helper()
+	// Use the suite's online E2EE proxy and its current authorization.
 	model := nearDirectIntegrationModel()
 	_, upstreamModel, _ := strings.Cut(model, ":")
 
 	// A successful encrypted request publishes and promotes one route authorization.
-	chatResp := postNearDirectContentChat(t, proxySrv.URL, model, true)
-	io.Copy(io.Discard, chatResp.Body) // drain so the proxy's relayStream finishes cleanly
-	chatResp.Body.Close()
+	chatResp := postNearDirectContentChat(t, proxyURL, model, false)
+	defer chatResp.Body.Close()
+	assertNonStreamResponse(t, chatResp)
 
-	reportURL := fmt.Sprintf("%s/v1/tee/report?provider=neardirect&model=%s", proxySrv.URL, upstreamModel)
+	reportURL := fmt.Sprintf("%s/v1/tee/report?provider=neardirect&model=%s", proxyURL, upstreamModel)
 	reportResp, err := integrationClient.Get(reportURL)
 	if err != nil {
 		t.Fatalf("GET report: %v", err)
@@ -327,32 +312,27 @@ func runNearDirectAttestationReport(t *testing.T) {
 	logReportScore(t, &report)
 }
 
-func runNearDirectE2EEStreamingWithTools(t *testing.T) {
+func runNearDirectE2EEStreamingWithTools(t *testing.T, proxyURL string) {
+	t.Helper()
 	// Validate that tool-call function leaves are surfaced as plaintext after E2EE relay decryption.
-	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
-	defer proxySrv.Close()
-	resp := postChatWithTools(t, proxySrv.URL, nearDirectIntegrationModel(), true)
+	resp := postChatWithTools(t, proxyURL, nearDirectIntegrationModel(), true)
 	defer resp.Body.Close()
 	if !assertStreamToolCallLeaves(t, resp, "neardirect") {
 		t.Fatal("neardirect: expected at least one tool call in streaming tools integration test")
 	}
 }
 
-func runNearDirectE2EENonStreamWithTools(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
-	defer proxySrv.Close()
-
-	resp := postChatWithTools(t, proxySrv.URL, nearDirectIntegrationModel(), false)
+func runNearDirectE2EENonStreamWithTools(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postChatWithTools(t, proxyURL, nearDirectIntegrationModel(), false)
 	defer resp.Body.Close()
 	if !assertNonStreamToolCallLeaves(t, resp, "neardirect") {
 		t.Fatal("neardirect: expected at least one tool call in non-stream tools integration test")
 	}
 }
 
-func runNearDirectE2EEStreamingMultimodalContentArray(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
-	defer proxySrv.Close()
-
+func runNearDirectE2EEStreamingMultimodalContentArray(t *testing.T, proxyURL string) {
+	t.Helper()
 	model := nearDirectVLModel()
 	body := fmt.Sprintf(`{
 		"model": %q,
@@ -368,7 +348,7 @@ func runNearDirectE2EEStreamingMultimodalContentArray(t *testing.T) {
 		"reasoning_effort": "none"
 	}`, model, testPNG())
 
-	resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/chat/completions", body)
+	resp, err := integrationPostJSON(t, proxyURL+"/v1/chat/completions", body)
 	if err != nil {
 		t.Fatalf("POST chat (multimodal stream E2EE): %v", err)
 	}
@@ -377,10 +357,8 @@ func runNearDirectE2EEStreamingMultimodalContentArray(t *testing.T) {
 	assertStreamMultimodalResponse(t, resp, "neardirect")
 }
 
-func runNearDirectE2EENonStreamMultimodalContentArray(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearDirectE2EEConfig(t))
-	defer proxySrv.Close()
-
+func runNearDirectE2EENonStreamMultimodalContentArray(t *testing.T, proxyURL string) {
+	t.Helper()
 	model := nearDirectVLModel()
 	body := fmt.Sprintf(`{
 		"model": %q,
@@ -396,7 +374,7 @@ func runNearDirectE2EENonStreamMultimodalContentArray(t *testing.T) {
 		"reasoning_effort": "none"
 	}`, model, testPNG())
 
-	resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/chat/completions", body)
+	resp, err := integrationPostJSON(t, proxyURL+"/v1/chat/completions", body)
 	if err != nil {
 		t.Fatalf("POST chat (multimodal non-stream E2EE): %v", err)
 	}

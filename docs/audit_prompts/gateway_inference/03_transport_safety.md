@@ -4,7 +4,7 @@
 
 Audit transport-layer request construction safety, bounded-resource handling, sensitive-data hygiene, and connection lifecycle management in gateway inference proxy paths.
 
-For gateway providers that construct raw HTTP requests on the underlying TLS connection (bypassing Go's `http.Client` connection pooling), these checks are particularly important as the proxy takes responsibility for correct HTTP framing. The gateway provider has a unique connection lifecycle: the attestation request uses `Connection: keep-alive` (to allow the chat request on the same connection) while the chat request uses `Connection: close`.
+The gateway provider uses a standard HTTP transport with attestation-bound pools. Go owns HTTP framing and multiplexing. Request code must not set `Connection: close` or `Connection: keep-alive`.
 
 ## Primary Files
 
@@ -14,7 +14,7 @@ For gateway providers that construct raw HTTP requests on the underlying TLS con
 
 ## Secondary Context Files
 
-- [`internal/provider/nearcloud/pinned.go`](../../../internal/provider/nearcloud/pinned.go)
+- [`internal/proxy/authorized_inference.go`](../../../internal/proxy/authorized_inference.go)
 
 ## Required Checks
 
@@ -28,7 +28,7 @@ Verify and report:
 - request path construction from trusted constants plus URL-encoded parameters,
 - that the HTTP method used is restricted to expected values (e.g., POST for inference endpoints),
 - that any query parameters appended to the request URL are properly URL-encoded,
-- that the attestation request uses `Connection: keep-alive` while the chat request uses `Connection: close`,
+- that neither attestation nor inference sets a `Connection` header,
 - that the Authorization header is set correctly for both the attestation and chat requests.
 
 ### Response Handling Safety
@@ -54,28 +54,28 @@ Unbounded reads from untrusted sources represent a denial-of-service vector and 
 
 ### Connection Lifetime Safety
 
-TLS connections to the gateway MUST be closed after each request-response cycle to ensure each new request triggers a fresh attestation or SPKI cache check. The gateway connection has a unique lifecycle:
-1. TLS handshake → attestation request (keep-alive) → attestation response validated → chat request (close) → response streamed → connection closed.
+TLS connections may be reused only within a provider, authority, and attested SPKI scope.
 
 Verify and report:
-- that the response body wrapper closes the underlying TCP connection when the body is consumed or closed (e.g., via a custom `io.ReadCloser` that calls `conn.Close()`),
-- that `Connection: close` is set on the chat (inference) request,
-- that `Connection: keep-alive` is set on the attestation request (to allow the chat request on the same TLS connection),
-- that connection read/write timeouts are set and reasonable (noting that gateway connections may need longer timeouts due to two attestation payloads),
-- that a half-closed or errored connection cannot be mistakenly reused for a subsequent request,
-- that Go's default `http.Transport` connection pooling is disabled or bypassed for attested connections (since connection reuse would skip re-attestation),
-- that `net.Conn.SetDeadline()`, `SetReadDeadline()`, or `SetWriteDeadline()` are used on the raw TLS connection where appropriate.
+- each request acquires a complete, currently valid authorization,
+- cache misses initiate or join full verification of gateway and model evidence,
+- changed keys replace the selectable pool and close its idle connections,
+- every new connection verifies the attested pin before sending request bytes,
+- HTTP/2 response cancellation does not cancel another stream,
+- physical connections and verification work have finite limits,
+- connection setup, request, and authenticated-evidence deadlines bound waits,
+- buffered POST requests have no replay callback or idempotency headers,
+- a consumed POST followed by a protocol reset is not replayed,
+- redirects and ambiguous failures cannot enable application retries.
 
 ### TLS Configuration Safety
 
-For gateway providers that bypass standard Go `http.Client` TLS handling:
-
 Verify and report:
-- whether `InsecureSkipVerify` is used on the `tls.Config`, and if so, that it is justified and cryptographically compensated by attestation-based SPKI pinning,
-- that `ServerName` is still set on the `tls.Config` for correct SNI even when CA verification is bypassed,
-- that the TLS minimum version is set appropriately (TLS 1.2 minimum, TLS 1.3 preferred),
-- that cipher suite selection is not weakened (no custom cipher suite list that enables weak ciphers),
-- that TLS handshake errors are handled as hard failures (not silently retried with weaker parameters).
+- inference TLS requires TLS 1.3 and system WebPKI,
+- CT remains enforced online and SPKI comparison runs before transmission,
+- `InsecureSkipVerify` and custom production roots are absent,
+- TLS session resumption is disabled on SPKI-bound pools,
+- handshake trust failures stop the request and invalidate only its authorization generation.
 
 ### Sensitive Data Handling
 
@@ -97,7 +97,7 @@ Verify and report:
 - **Error wrapping**: Verify that transport errors are wrapped with `fmt.Errorf("context: %w", err)` to preserve the error chain for debugging while not exposing internals to clients.
 - **`http.MaxBytesReader`**: For any proxy paths that accept client request bodies, verify that `http.MaxBytesReader` is used to bound incoming request sizes.
 - **`bufio.Scanner` buffer limits**: Verify that any `bufio.Scanner` used for SSE streaming has an explicit maximum buffer size set via `Scanner.Buffer()`, as the default 64 KiB may be insufficient or too large depending on context.
-- **Context cancellation**: Verify that HTTP requests to upstream servers use `context.Context` with timeouts, and that context cancellation properly tears down the underlying connection.
+- **Context cancellation**: Verify that HTTP requests to upstream servers use `context.Context` with timeouts, and that context cancellation ends the affected request without canceling unrelated HTTP/2 streams.
 - **No `panic` in request paths**: Verify that transport error handling uses returned errors, not panics, which would crash the proxy process.
 
 ### Cryptography Best Practices
@@ -117,7 +117,7 @@ Verify and report:
 
 ## Known Divergence: Chutes/Sek8s
 
-Chutes providers do **not** use attestation-bound TLS pinning or the nearcloud keep-alive/close connection lifecycle. The Chutes gateway (`api.chutes.ai`/`llm.chutes.ai`) is unattested and routes requests to sek8s TEE instances. Key differences:
+Chutes providers do **not** use attestation-bound TLS pinning or the nearcloud attested transport scope. The Chutes gateway (`api.chutes.ai`/`llm.chutes.ai`) is unattested and routes requests to sek8s TEE instances. Key differences:
 
 - **No raw HTTP construction**: Chutes uses standard Go `http.Client` for all requests to the Chutes gateway (instances endpoint, evidence endpoint, inference endpoint). There is no raw TLS connection management.
 - **No `Connection: keep-alive` / `Connection: close` lifecycle**: Each chutes HTTP request to the gateway is independent. The attestation fetch (instances + evidence) and inference request are separate HTTP calls, not pipelined on a single TLS connection.
@@ -129,7 +129,7 @@ However, the following transport safety checks still apply to chutes:
 - Response body size limits (`io.LimitReader`) on attestation and inference responses.
 - SSE streaming buffer bounds for encrypted streaming (`e2e_init`, `e2e` event types).
 - Sensitive data handling (API key redaction, no inference data logging).
-- `Connection: close` header on inference requests to prevent TLS session reuse across attestation boundaries.
+- No request-level `Connection` header; each encrypted request uses a currently attested backend key.
 
 The audit should verify that chutes transport paths apply the same bounded-read discipline as nearcloud even though the connection lifecycle is simpler.
 
@@ -140,7 +140,7 @@ Primary reference: `internal/provider/chutes/chutes.go`, `internal/e2ee/relay_ch
 Provide:
 1. findings-first list ordered by severity,
 2. transport safety control inventory with enforcement classification,
-3. connection lifecycle safety assessment (keep-alive for attestation, close-after-inference, timeout, reuse prevention),
+3. connection lifecycle safety assessment (attested scope, multiplexing, deadlines, and invalidation),
 4. bounded-resource coverage summary and DoS residual-risk notes,
 5. TLS configuration assessment (version, cipher suites, SNI, InsecureSkipVerify justification),
 6. include at least one concrete positive control and one concrete negative/residual-risk observation,
