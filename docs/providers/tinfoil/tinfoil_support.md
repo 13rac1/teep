@@ -117,7 +117,7 @@ The endpoint coverage differs between providers:
 | Chat completions | `/v1/chat/completions` | Yes (EHBP) | Supported | Supported | OpenAI-compatible chat; multimodal content arrays |
 | Responses API | `/v1/responses` | Yes (EHBP) | Supported | Supported | OpenAI Responses API shape; tool-calling flows |
 | Embeddings | `/v1/embeddings` | Yes (EHBP) | Supported | Supported | OpenAI embeddings |
-| Audio transcriptions | `/v1/audio/transcriptions` | Plaintext only when provider E2EE is disabled; fail-closed when E2EE is enabled | Guarded | Guarded | Current proxy guard rejects multipart requests for non-pinned E2EE providers, including both Tinfoil providers |
+| Audio transcriptions | `/v1/audio/transcriptions` | Attested TLS only when provider E2EE is disabled; fail-closed when E2EE is enabled | Guarded | Guarded | Both Tinfoil providers use SPKI-pinned TLS; multipart encryption through EHBP is not implemented |
 | TTS (text-to-speech) | `/v1/audio/speech` | Yes (EHBP) | Supported | Supported | OpenAI-compatible speech synthesis |
 | Audio endpoints (generic) | `/v1/audio/*` | Depends on registered route | Only registered `/v1/audio/transcriptions` and `/v1/audio/speech` | Only registered `/v1/audio/transcriptions` and `/v1/audio/speech` | Teep currently registers transcription and speech only |
 | Models list | `/v1/models` | No (bodyless GET) | Supported (proxy-aggregated router list) | Supported (proxy-aggregated router list) | Teep's proxy aggregates provider model lists and prefixes IDs; direct routing does not use `/v1/models` for backend domain selection |
@@ -158,8 +158,8 @@ code, teep must follow these endpoint-specific routing mechanics:
 4. Audio upload-style paths (`/v1/audio/transcriptions`) use multipart request
    bodies. Current teep behavior forwards them only when provider E2EE is
    disabled; when E2EE is enabled for Tinfoil, the proxy fails closed before
-   routing because Tinfoil is a non-pinned full-body E2EE provider and the
-   multipart route is not implemented through EHBP.
+   routing because multipart encryption through EHBP is not implemented.
+   Attested, SPKI-pinned TLS remains required when E2EE is disabled.
 5. For multipart audio requests, extract model from multipart field `model`.
    Missing or empty model is a fail-closed request error.
 6. `/v1/models` is a bodyless proxy-aggregated GET. It is not EHBP-encrypted
@@ -184,14 +184,15 @@ code, teep must follow these endpoint-specific routing mechanics:
 
 ### `tinfoil_v3_cloud` — Similarities to `nearcloud`
 
-Both route through a single TEE-attested gateway/router that performs its own
-second-hop attestation. The structural pattern is: teep verifies gateway →
-gateway verifies model enclaves internally.
+Both route through a single TEE-attested gateway or router. Teep independently
+verifies the NEAR gateway and model evidence. For Tinfoil cloud, teep verifies
+the router evidence, and the router verifies its model enclaves internally.
 
 - Full-body encryption (EHBP replaces NEAR's Ed25519/XChaCha20-Poly1305)
-- Standard TLS with SPKI pinning to gateway (not connection-pinned like neardirect)
-- The standard proxy path verifies the attestation
-  fetch peer SPKI and the upstream response peer SPKI against `report_data`
+- Pooled TLS with attested SPKI verification during each new handshake,
+  as described in the [transport reference](../../transport/README.md)
+- The attestation fetch checks the peer SPKI against the evidence; inference
+  handshakes check the authenticated SPKI before sending request bytes
 - Supply chain verification via Sigstore (replaces nearcloud's compose-hash/IMA)
 - Router re-attests inference enclaves and uses a `TLSBoundRoundTripper`
    pattern pinned to each inference enclave's attested TLS fingerprint for
@@ -207,17 +208,20 @@ router enclave before re-encryption to the inference host.
 ### `tinfoil_v3_direct` — Similarities to `neardirect`
 
 Both connect directly to per-model backend enclaves with per-model attestation
-and SPKI pinning. The structural pattern: teep resolves model → attestation
-domain, verifies inference enclave directly, EHBP-encrypts to inference enclave.
+and SPKI pinning. Teep resolves the model's authority, verifies the selected
+enclave, and encrypts inference to its attested key. Tinfoil uses EHBP; NEAR
+uses its Ed25519/XChaCha20-Poly1305 protocol.
 
 Parallel with `neardirect` provider behavior:
 - Dynamic model-to-domain resolution, sourced from Tinfoil's proxy discovery
    endpoint rather than NEAR's endpoint discovery API
-- Attestation and TLS-binding cache entries are scoped to the selected
-  inference enclave domain
-- On attestation cache miss, signing-key cache miss, selected backend-domain
-  change, or TLS-binding mismatch: full attestation + Sigstore + hardware
-  measurements per inference enclave before any inference request is accepted
+- One [atomic authorization](../../transport/README.md#routes-and-authorizations)
+  contains the report, encryption key, transport identity, and authenticated
+  expiry for the provider, model, and selected inference enclave authority
+- An authorization miss starts or joins full verification. A TLS-binding
+  mismatch fails the request and conditionally removes its authorization;
+  subsequent requests require valid authorization under the
+  [retry contract](../../transport/retries.md)
 - EHBP encrypts to the **inference enclave's** HPKE key (not a gateway key)
 - Same live TLS SPKI-to-attested-fingerprint enforcement used by other
    direct-attestation providers
@@ -559,7 +563,7 @@ Link 1: Key Generation Inside Enclave
 │   │   │
 │   │   └── Link 3a: TLS-Binding Enforcement (teep implementation)
 │   │           Attestation fetch records the live TLS peer SPKI
-│   │           Upstream response TLS peer SPKI is checked against REPORTDATA
+│   │           Inference handshakes check the attested SPKI before transmission
 │   │           Mismatch fails closed and evicts relevant caches
 │   │           Attested HTTP/2 pools; no Connection header
 │   │
@@ -1076,11 +1080,12 @@ Both Tinfoil providers use client-supplied nonces:
 - Verify `report_data.nonce` equals the client nonce (constant-time compare).
 - Verify the nonce is in the REPORTDATA hash (see REPORTDATA Verification above).
 - The `nonce_in_reportdata` factor is `enforced`.
-- On attestation cache miss, signing-key cache miss, selected direct
-  backend-domain change, or TLS-binding mismatch, require fresh attestation
-  with a fresh nonce before the next accepted request. Teep computes the live
-  TLS peer SPKI during attestation fetch and upstream response handling and
-  compares it against `report_data.tls_key_fp`.
+- An authorization miss requires fresh attestation with a fresh nonce.
+  Teep checks the attestation fetch peer against `report_data.tls_key_fp` and
+  enforces the authenticated SPKI during each new inference TLS handshake.
+  Authorization replacement and TLS failures follow the shared
+  [transport](../../transport/README.md) and [retry](../../transport/retries.md)
+  contracts.
 
 ### Alternate Authentication Chain: ATC Attestation Bundle (Legacy V2 Bootstrap)
 
@@ -1717,6 +1722,16 @@ EHBP key as one authorization generation. The authorization expires only when
 authenticated evidence supplies a validity bound; discovery metadata refreshes
 and local cache timers do not extend or shorten that cryptographic lifetime.
 
+Cloud models on the same router authority share one verified authorization and
+key generation. Full router attestation is performed once on a cache miss,
+including concurrent misses across models. Reports retain the requested model
+and its own E2EE roundtrip outcome. A key rejection invalidates only the shared
+router generation used by that request. Direct mode retains model-and-authority
+scopes because it verifies the backend evidence and repository for that route.
+
+See [authorization validity and cached report selection](../../transport/README.md#routes-and-authorizations)
+for the authenticated certificate bounds and exact-authority report lookup.
+
 Pools are scoped to provider, authority, and attested SPKI. Equal identities
 reuse HTTP/2 connections and multiplex requests. A changed key replaces the
 selectable pool and closes its idle connections. A trust or demonstrated key
@@ -1726,12 +1741,12 @@ retry is allowed, only for a typed pre-connection failure or the exact documente
 key-rejection response. Redirects, ambiguous failures, and response decryption
 failures are not retried. Buffered inference requests have no `GetBody` callback.
 
-No `Connection: close` or `Connection: keep-alive` header is set. The transport
-limits physical connections to 16 per authority, with separate five-minute TCP
-dial and TLS handshake budgets. Request and authenticated-evidence deadlines
-can end work sooner.
-A socket permit remains held until the socket closes, including when HTTP/2
-stream-capacity handling changes Go's internal connection accounting.
+No `Connection: close` or `Connection: keep-alive` header is set. Socket limits
+apply per transport pool and dial address, not across all pools for an
+authority. Separate provider pools and overlapping pools during SPKI rotation
+can exceed one pool's limit. See the shared
+[connection limits and setup budgets](../../transport/README.md#connection-reuse-and-resource-limits)
+for the current settings and their interaction with HTTP/2 accounting.
 
 ### E2EE: Encrypted HTTP Body Protocol (EHBP)
 
@@ -1750,8 +1765,8 @@ Compatibility rule: for Tinfoil, apply EHBP behavior consistently across
 `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, and
 `/v1/audio/speech` when provider E2EE is enabled. The current proxy rejects
 `/v1/audio/transcriptions` when E2EE is enabled because multipart uploads are
-not implemented through the non-pinned EHBP path; the same route can be forwarded
-with provider E2EE disabled after attestation. `/v1/convert/file` is deferred
+not implemented through EHBP; with provider E2EE disabled, the same route can
+be forwarded over attested, SPKI-pinned TLS. `/v1/convert/file` is deferred
 to `tinfoil_endpoints.md`.
 
 **Mode rule (mandatory)**:
@@ -1868,8 +1883,7 @@ Response mode detection:
 1. `/v1/responses` follows the same EHBP behavior as `/v1/chat/completions`:
    full request-body encryption and full response-body authentication.
 2. Multipart audio uploads (`/v1/audio/transcriptions`) are currently not
-   supported in Tinfoil E2EE mode. The proxy fails closed for non-pinned E2EE
-   providers on this route instead of silently sending plaintext.
+   supported in Tinfoil E2EE mode. The proxy rejects this route when Tinfoil E2EE is enabled.
 3. For streaming endpoints (chat or responses), decrypt chunk stream before SSE
    parsing, and fail closed on any chunk authentication failure.
 4. For bodyless GET `/v1/models`, do not send EHBP headers and do not expect
@@ -1890,10 +1904,11 @@ treated as non-sensitive model metadata.
 For `/v1/audio/transcriptions`, the request body is `multipart/form-data`.
 Current teep behavior is:
 - When provider E2EE is disabled, teep rewrites only the multipart `model`
-  field to the upstream model ID and forwards the body after attestation.
+  field to the upstream model ID and forwards the body over attested,
+  SPKI-pinned TLS.
 - When provider E2EE is enabled for either Tinfoil provider, teep rejects the
   request with a fail-closed diagnostic because multipart uploads are not
-  implemented through the non-pinned EHBP path.
+  implemented through EHBP.
 
 ---
 
@@ -2232,7 +2247,7 @@ encryption and response decryption.
 
 ---
 
-### Provider Wiring and Configuration
+### Provider Construction and Configuration
 
 Both `tinfoil_v3_cloud` and `tinfoil_v3_direct` are connected to the proxy,
 config, and endpoint dispatch.
@@ -2252,7 +2267,7 @@ config, and endpoint dispatch.
 The attestation parsing, REPORTDATA verifier, policy checks, and EHBP
 encryptor are shared between both providers. The package structure mirrors
 `internal/provider/neardirect/` for the direct provider and adds router-specific
-wiring as a thin layer on top.
+attestation handling for cloud routes.
 
 1. **Config** (`config.go`):
    - Both providers use env var `TINFOIL_API_KEY`.
@@ -2261,74 +2276,22 @@ wiring as a thin layer on top.
      and model listing, then resolves a per-model backend URL per request.
    - E2EE default: `true` for both.
 
-2. **`tinfoil_v3_cloud` Provider Construction** (`proxy.go:fromConfig`):
+2. **`tinfoil_v3_cloud` Provider Construction**:
 
-   `fromConfig()` takes `cp`, `spkiCache`, `offline`, `allowFail`, `policy`,
-   `gatewayPolicy`, `rekorClient`, `nvidiaVerifier`, and `getter`
-   (Intel PCS collateral getter).
+   [Provider construction](../../../internal/proxy/proxy.go) installs the
+   Tinfoil attester, request preparer, EHBP encryptor, REPORTDATA verifier,
+   cloud supply-chain policy, and validating model lister. `StaticRoute`
+   contains the configured router origin and `tinfoil.RouterRepo`.
+   Every model obtains its own authorization for that route.
 
-   ```go
-   case "tinfoil_v3_cloud":
-       p.ChatPath = "/v1/chat/completions"
-       p.ResponsesPath = "/v1/responses"
-       p.EmbeddingsPath = "/v1/embeddings"
-       p.AudioPath = "/v1/audio/transcriptions"
-       p.SpeechPath = "/v1/audio/speech"
-       p.UsesTLSBinding = true
-       p.Attester = tinfoil.NewAttester(cp.BaseURL, cp.APIKey, offline)
-       p.Preparer = tinfoil.NewPreparer(cp.APIKey)
-       p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
-       p.Encryptor = tinfoil.NewE2EE()
-       p.SupplyChainPolicy = nil // Sigstore-based, not compose-based
-       p.ModelLister = provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
-   ```
+3. **`tinfoil_v3_direct` Provider Construction**:
 
-   SPKI caching for cloud provider — single router domain for all models:
-   ```go
-   p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
-       return "inference.tinfoil.sh", true
-   }
-   ```
-
-3. **`tinfoil_v3_direct` Provider Construction** (`proxy.go:fromConfig`):
-
-   Direct provider requires a model-to-domain resolver analogous to
-   `neardirect/endpoints.go:EndpointResolver`. The resolver queries
-   `GET https://inference.tinfoil.sh/.well-known/tinfoil-proxy` to discover
-   actual backend enclave domains and the per-model Sigstore repo. Results are
-   cached for 5 minutes and refreshed lazily, using `singleflight` to collapse
-   concurrent refreshes.
-
-   ```go
-   case "tinfoil_v3_direct":
-       resolver := tinfoil.NewDirectResolver(cp.APIKey, offline)
-       p.BaseURL = tinfoil.DefaultBaseURL
-       p.ChatPath = "/v1/chat/completions"
-       p.ResponsesPath = "/v1/responses"
-       p.EmbeddingsPath = "/v1/embeddings"
-       p.AudioPath = "/v1/audio/transcriptions"
-       p.SpeechPath = "/v1/audio/speech"
-       p.UsesTLSBinding = true
-       p.Attester = tinfoil.NewDirectAttester(resolver, cp.APIKey, offline)
-       p.Preparer = tinfoil.NewPreparer(cp.APIKey)
-       p.ReportDataVerifier = tinfoil.ReportDataVerifier{}
-       p.Encryptor = tinfoil.NewE2EE()
-       p.SupplyChainPolicy = nil // Sigstore-based, per-model repo
-       p.ModelLister = provider.NewModelLister(
-           "https://inference.tinfoil.sh", cp.APIKey,
-           config.NewAttestationClient(offline))
-   ```
-
-   SPKI caching for direct provider — per-model domain:
-   ```go
-   p.BaseURLForModel = func(ctx context.Context, model string) (string, error) {
-       m, err := resolver.ResolveMapping(ctx, model)
-       if err != nil {
-           return "", err
-       }
-       return "https://" + m.SelectDomain(tinfoil.PromptCacheKeyFromContext(ctx)), nil
-   }
-   ```
+   Provider construction installs `DirectResolver.ResolveRoute` and a
+   route-aware attester, together with the direct supply-chain policy.
+   One immutable route contains the selected backend authority and effective
+   repository. Attestation, authorization lookup, and inference use that
+   snapshot. The [transport reference](../../transport/README.md) defines
+   authorization and pool ownership.
 
 4. **`tinfoil_v3_direct` Model-to-Domain Resolver**
    (`internal/provider/tinfoil/resolver.go`):

@@ -10,8 +10,9 @@ Teep is designed to BLOCK REQUEST ACTIVITY when enforced validation factors fail
 
 ## Data Flow
 
-The Teep proxy receives an OpenAI-compatible chat request → resolves model to provider →
-fetches and validates TEE attestation per policy → forwards (or blocks) the request.
+The Teep proxy receives an OpenAI-compatible chat request → resolves its provider and route →
+acquires valid cached authorization or fetches and validates attestation per policy →
+forwards (or blocks) the request.
 
 The proxy receives concurrent API inference requests to multiple models from multiple client API consumers simultaneously, and should support expansion to handle multiple concurrent providers. All code paths from the HTTP handler inward must be safe for concurrent use. All attestation caches, key pinning, connection pinning, supply chain validation, and supply chain caches must also be safe for concurrent use via multiple clients performing simultaneous access of multiple providers and models.
 
@@ -78,21 +79,27 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 - Nonces MUST originate from the client, not the server response.
 - Never trust provider-asserted "verified" fields without independent cryptographic verification.
 - Provider and model routing MUST ensure uniqueness and determinism.
+- Resolve an immutable route before verification or encryption. Do not change a shared provider's endpoint for an individual request.
 - Every inference TLS handshake must use TLS-1.3, pass WebPKI, and CT validation must remain enforced, before sending the request.
+- Authenticate each new connection during its TLS handshake. Every request MUST acquire valid authorization for the connection's identity. Reusing an authenticated connection does not require another handshake for each request.
 - Connection reuse MUST remain within the currently valid attestation scope:
   - Key any TLS connection pools by provider, authority, and applicable attestation scope.
+  - Apply both TLS-SPKI and E2EE requirements when a provider uses both mechanisms.
   - **TLS-SPKI providers:**
     - TLS reuse attestation scope is the SPKI pin.
     - Perform the currently attested SPKI fingerprint check *before* any request bytes are sent.
     - Disable TLS session resumption for TLS-SPKI pools. Elsewhere, resumption MUST NOT bypass attestation-bound identity checks.
   - **E2EE/router providers:**
     - Attestation scope is the attested backend model endpoint and E2EE key.
-    - Relay TLS connections may be reused independently, but every request must use a currently attested model/route E2EE key.
+    - Relay TLS reuse may be independent of the backend key epoch. It MUST still satisfy any attested gateway or relay SPKI requirement. Every request must use a currently attested model or route E2EE key.
     - Invalidate and re-attest on key expiry, rejection, or change.
-  - Attestation or key cache eviction MUST prevent later use of stale attestation, pin, or key material. Rotate only connection pools whose trust depends on that epoch.
+  - Attestation or key cache eviction MUST prevent subsequent acquisition of the evicted authorization. Attempts that already acquired authorization may continue within their caller deadlines and authenticated expiry. Eviction does not extend validity or require cancellation of other HTTP/2 streams. Rotate only connection pools whose trust depends on the affected epoch.
   - We prefer HTTP/2 usage and associated request multiplexing where possible, within these constraints.
   - `Connection: close` is a last-resort HTTP/1.1 boundary mechanism, never a per-request default; HTTP/2 forbids it.
 - An attestation cache miss MUST initiate or join full re-attestation; never pass through unverified.
+- Publish the report, authenticated encryption key, transport identity, and evidence-derived expiry as one authorization. Do not maintain an independent pin cache with a different lifetime.
+- Derive authorization expiry from verified evidence. Apply any authenticated expiry to connection waiting and response streaming as well as request transmission. Do not replace it with an arbitrary local TTL.
+- Re-attestation does not itself authorize replay. Follow the [retry contracts](docs/transport/retries.md) for retry eligibility and authorization invalidation.
 
 ### Always Ensure Cryptographic Safety
 
@@ -113,6 +120,8 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 - Exported package-level `var` declarations holding security policy or runtime state are forbidden unless they are truly immutable and callers cannot mutate the underlying value. Do not expose maps, slices, or pointers that callers can modify.
 - Prefer dependency injection (constructor parameters, struct fields, function arguments) over globals for anything that could differ between callers.
 - Use `sync.Mutex`/`sync.RWMutex` for protecting shared data structures (caches, maps). Prefer channels for coordination between goroutines. Use `sync.Once` for safe lazy initialization.
+- Shared verification MUST use a bounded context owned by the server. One client's cancellation must not cancel verification needed by another client or invalidate shared authorization.
+- Request outcomes may update or remove only the authorization generation that the request used. They MUST NOT change a replacement generation. Recheck expiry and invalidation before publishing shared verification results.
 - Add concurrent test cases (`sync.WaitGroup` + parallel goroutines) when manipulating shared state. Ensure integration-level coverage of these cases.
 - Always run `make check` and `make integration` to ensure new and existing concurrency tests pass (all tests use `go test -race`).
 
@@ -130,18 +139,22 @@ Each function should do one thing at one level of abstraction. When a function h
 
 ```go
 // Good: orchestrator calls named helpers
-func (h *Handler) attestOnConn(...) (*Report, error) {
-    raw, err := h.sendAttestationRequest(...)
-    tdxResult := h.verifyTDX(ctx, raw, nonce)
-    nvidiaResult, nrasResult := h.verifyNVIDIA(ctx, raw, nonce)
-    // ... TLS fingerprint check (inline — fatal trust root) ...
-    compose, repos, digests, sig, rekor := h.verifySupplyChain(ctx, raw, tdxResult)
+func (v *Verifier) verifyEvidence(...) (*Report, error) {
+    raw, err := v.fetchAttestation(...)
+    if err != nil {
+        return nil, err
+    }
+    tdxResult := v.verifyTDX(ctx, raw, nonce)
+    nvidiaResult, nrasResult := v.verifyNVIDIA(ctx, raw, nonce)
+    bindingResult := v.verifyTransportBinding(raw, tdxResult)
+    compose, repos, digests, sig, rekor := v.verifySupplyChain(ctx, raw, tdxResult)
     return buildReport(...)
 }
 ```
 
 Reference implementations to mirror when adding providers or verification logic:
 
+- **HTTP and TLS transport:** Follow [the transport reference](docs/transport/README.md), including retry contracts, redirect policy, and provider migration tests.
 - **Attestation verification:** `internal/proxy/proxy.go:fetchVerified` and `internal/verify/verify.go:runEvidence`
 - **Proxy handler:** `internal/proxy/proxy.go:handleChat`
 

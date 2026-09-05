@@ -7,6 +7,15 @@ support. The pre-implementation survey below is historical. Phase file lists
 and test inventories describe the migration, not a requirement to retain old
 helpers or duplicate tests.
 
+The completed implementation refines the cache scope below for
+`tinfoil_v3_cloud`: model-independent router evidence is shared by provider and
+router authority, while reports and E2EE outcomes retain the requested model.
+References below to provider/model/authority keys describe request identity;
+the authorization store collapses those cloud keys to their router evidence
+scope. Other providers retain model-specific authorization. The maintained
+transport reference documents the bounds on model report views, NEAR response
+reassembly, and attestation overload handling.
+
 ## Objective
 
 Move `nearcloud` and `neardirect` from their manual HTTP/1.1
@@ -330,6 +339,7 @@ successful result, then take the minimum once during authorization construction.
 | TDX or SEV-SNP quote/report and REPORTDATA key binding | No separate expiration field in the quote/report itself | Preserve quote, nonce, measurement, and key-binding verification; do not manufacture an age limit from fetch time. |
 | Intel online collateral used to pass enforced checks | Authenticated `nextUpdate`/valid-until bounds and the current-time certificate validity required by that verification | Extend the verified result to expose the earliest bound actually used by successful verification; do not copy an unchecked parsed field. Include gateway and model evidence when both apply. |
 | NVIDIA NRAS overall JWT | Verified `exp`, when present | Require successful signature and claims validation. `NvidiaVerifyResult.ExpiresAt` is also populated on partial failure today, so its presence alone is insufficient. Per-GPU diagnostic JWTs are not independently verified by the current extraction path and supply no bound. |
+| Online SEV-SNP certificate verification | Verified VCEK/VLEK and embedded AMD issuer certificate expirations | Include the earliest authenticated certificate bound for applicable backend and gateway verification. Supplied ASK/ARK dates do not establish trust. |
 | Local NVIDIA SPDM/EAT certificate verification | Verified certificate validity bounds required at verification time | Return the applicable bound from the successful verifier; do not infer a boot-key expiration from unrelated metadata. |
 | Proof of Cloud JWT | No independently signature-verified expiration is exposed by the current implementation | `verifyPoCJWTClaimsAt` validates decoded claims without checking the JWT signature, and `PoCResult` has no validated expiration. Do not label its parsed `exp` an independently authenticated JWT bound or add signature verification in this transport change. Document this limitation. A future signature-verification change must return its validated bound explicitly. |
 | Sigstore/Fulcio signing certificates and timestamped release evidence | No current authorization expiration solely from historical signer-certificate `NotAfter` | Preserve verification at the authenticated signing time. A historical signing certificate expiring now does not expire a correctly verified release. |

@@ -43,7 +43,7 @@ These are teep runtime/observability endpoints, not OpenAI-compatible inference 
 | `/health` | GET | Health API | JSON process health snapshot |
 | `/events` | GET | Dashboard status API | Server-Sent Events stream for live dashboard updates |
 | `/metrics` | GET | Prometheus API | Prometheus text-format counters |
-| `/v1/tee/report` | GET | Teep status API | Cached attestation report for a provider/model (`provider` and `model` query params required) |
+| `/v1/tee/report` | GET | Teep status API | Cached attestation report (`provider` and `model` required; optional `authority` selects an exact cached TLS scope; see [report selection](transport/README.md#cached-report-selection)) |
 
 Operational endpoints are intended for local monitoring and process supervision. In the current server implementation, these endpoints are unauthenticated and access control relies on binding to loopback by default.
 
@@ -334,7 +334,7 @@ When a Chutes-format backend is detected, the attestation is parsed using the Ch
 | Chat completions | `/v1/chat/completions` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Responses | `/v1/responses` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Embeddings | `/v1/embeddings` | Yes | Full-body EHBP encryption |
-| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but current proxy guard rejects non-pinned E2EE multipart requests before routing. Plaintext mode can forward after attestation |
+| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but the proxy rejects Tinfoil multipart requests when E2EE is enabled. With E2EE disabled, it forwards over attested, SPKI-pinned TLS |
 | Text-to-speech | `/v1/audio/speech` | Yes | Full-body EHBP encryption |
 
 **E2EE field coverage:** EHBP encrypts the entire HTTP request and response body. There are **no field-level encryption gaps** — all request fields (messages, tools, parameters) and all response fields (content, tool_calls, usage) are encrypted by construction. Adding new OpenAI API fields requires zero changes to the encryption layer.
@@ -360,7 +360,7 @@ When a Chutes-format backend is detected, the attestation is parsed using the Ch
 | Chat completions | `/v1/chat/completions` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Responses | `/v1/responses` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Embeddings | `/v1/embeddings` | Yes | Full-body EHBP encryption |
-| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but current proxy guard rejects non-pinned E2EE multipart requests before routing. Plaintext mode can forward after attestation |
+| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but the proxy rejects Tinfoil multipart requests when E2EE is enabled. With E2EE disabled, it forwards over attested, SPKI-pinned TLS |
 | Text-to-speech | `/v1/audio/speech` | Yes | Full-body EHBP encryption |
 
 **E2EE field coverage:** Identical to Tinfoil Cloud — full-body EHBP, no field-level gaps.

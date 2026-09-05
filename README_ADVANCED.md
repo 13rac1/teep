@@ -2,6 +2,12 @@
 
 Detailed cryptographic and attestation documentation for security engineers. For an overview, see [README.md](README.md).
 
+For provider implementation and transport changes, see the
+[HTTP and TLS transport reference](docs/transport/README.md), including
+[retry contracts](docs/transport/retries.md),
+[redirect policy](docs/transport/redirects.md), and
+[required transport tests](docs/transport/testing.md).
+
 ## Attestation Architecture
 
 Most providers use Intel TDX for CPU attestation and NVIDIA confidential computing for GPU attestation. Tinfoil uses AMD SEV-SNP. Providers differ in how the secure channel between client and TEE is established.
