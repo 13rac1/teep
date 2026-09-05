@@ -283,14 +283,8 @@ func VerifySEVReportOnline(ctx context.Context, report []byte, getter trust.HTTP
 		return result
 	}
 
-	// Use RawSnpReportContext which handles VCEK cert fetching, chain
-	// verification, and signature verification in one call.
-	opts := &sevverify.Options{
-		Getter: getter,
-	}
-	if err := sevverify.RawSnpReportContext(ctx, report, opts); err != nil {
-		// Record both cert chain and signature as failed; they share the
-		// same root cause from the unified verify call.
+	err := verifySEVEvidence(ctx, report, getter)
+	if err != nil {
 		result.CertChainErr = err
 		result.SignatureErr = err
 		slog.DebugContext(ctx, "SEV-SNP online verification failed", "err", err)
@@ -314,4 +308,18 @@ func NewSEVVerifier(offline bool, getter trust.HTTPSGetter) SEVVerifier {
 	return func(ctx context.Context, report []byte) *SEVVerifyResult {
 		return VerifySEVReportOnline(ctx, report, getter)
 	}
+}
+
+// verifySEVEvidence verifies the certificate chain and report signature.
+func verifySEVEvidence(ctx context.Context, raw []byte, getter trust.HTTPSGetter) error {
+	report, err := sevabi.ReportToProto(raw)
+	if err != nil {
+		return err
+	}
+	opts := &sevverify.Options{Getter: getter}
+	evidence, err := sevverify.GetAttestationFromReportContext(ctx, report, opts)
+	if err != nil {
+		return err
+	}
+	return sevverify.SnpAttestationContext(ctx, evidence, opts)
 }

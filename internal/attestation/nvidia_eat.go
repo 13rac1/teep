@@ -97,7 +97,8 @@ func verifyNVIDIAEAT(ctx context.Context, payload string, expectedNonce Nonce) *
 
 	// Verify each GPU's evidence.
 	for i, ev := range eat.EvidenceList {
-		if err := verifyGPUEvidence(ctx, ev, expectedNonce, rootCA); err != nil {
+		err := verifyGPUEvidence(ctx, ev, expectedNonce, rootCA)
+		if err != nil {
 			result.SignatureErr = fmt.Errorf("GPU %d verification failed: %w", i, err)
 			return result
 		}
@@ -144,7 +145,8 @@ func verifyGPUEvidence(ctx context.Context, ev nvidiaGPUEvidence, expectedNonce 
 	}
 
 	// 2. Verify the chain terminates at the pinned root.
-	if err := verifyCertChain(certs, rootCA); err != nil {
+	err = verifyCertChain(certs, rootCA)
+	if err != nil {
 		return fmt.Errorf("cert chain verification: %w", err)
 	}
 
@@ -211,7 +213,7 @@ func verifyCertChain(certs []*x509.Certificate, pinnedRoot *x509.Certificate) er
 	chainRoot := certs[len(certs)-1]
 	chainRootFP := sha256.Sum256(chainRoot.Raw)
 	pinnedRootFP := sha256.Sum256(pinnedRoot.Raw)
-	if chainRootFP != pinnedRootFP {
+	if subtle.ConstantTimeCompare(chainRootFP[:], pinnedRootFP[:]) != 1 {
 		return fmt.Errorf("chain root CA fingerprint %s does not match pinned root %s",
 			hex.EncodeToString(chainRootFP[:]), hex.EncodeToString(pinnedRootFP[:]))
 	}
@@ -234,7 +236,8 @@ func verifyCertChain(certs []*x509.Certificate, pinnedRoot *x509.Certificate) er
 		Intermediates: intermediatePool,
 	}
 
-	if _, err := certs[0].Verify(opts); err != nil {
+	_, err := certs[0].Verify(opts)
+	if err != nil {
 		return fmt.Errorf("x509 chain verify: %w", err)
 	}
 
@@ -381,7 +384,8 @@ func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, serverNo
 			Certificate: ev.Certificate,
 			Evidence:    ev.Evidence,
 		}
-		if err := verifyGPUEvidence(ctx, internal, serverNonce, rootCA); err != nil {
+		err := verifyGPUEvidence(ctx, internal, serverNonce, rootCA)
+		if err != nil {
 			result.SignatureErr = fmt.Errorf("GPU %d verification failed: %w", i, err)
 			return result
 		}
