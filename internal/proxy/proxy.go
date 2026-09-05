@@ -2267,6 +2267,14 @@ func (s *Server) handlePinnedChat(
 		return
 	}
 	defer pinnedResp.Body.Close()
+	if tlsct.IsRedirectStatus(pinnedResp.StatusCode) {
+		if pinnedResp.Session != nil {
+			pinnedResp.Session.Zero()
+		}
+		slog.WarnContext(ctx, "upstream returned an unexpected redirect", "provider", prov.Name)
+		http.Error(w, "upstream returned an unexpected redirect", http.StatusBadGateway)
+		return
+	}
 
 	// Use the report from this request (SPKI miss) or cached report (SPKI hit)
 	// to enforce fail-closed policy before forwarding any upstream response.
@@ -2976,7 +2984,12 @@ func (s *Server) sendUpstreamRequest(
 		}
 	}
 
-	resp, err := client.Do(req) //nolint:bodyclose // ownership is returned to doUpstreamRoundtrip
+	resp, err := client.Do(req)
+	if err == nil && resp != nil && tlsct.IsRedirectStatus(resp.StatusCode) {
+		resp.Body.Close()
+		return upstreamSendResult{}, &httpError{http.StatusBadGateway, "upstream_redirect",
+			errors.New("upstream returned an unexpected redirect")}
+	}
 	if errors.Is(err, tlsct.ErrSPKIMismatch) {
 		s.invalidateTLSBinding(ctx, prov, upstreamModel, baseURL)
 		return upstreamSendResult{}, &httpError{http.StatusBadGateway, "tls_binding_failed",
@@ -3391,6 +3404,14 @@ func (s *Server) handlePinnedNonChat(
 		return
 	}
 	defer pinnedResp.Body.Close()
+	if tlsct.IsRedirectStatus(pinnedResp.StatusCode) {
+		if pinnedResp.Session != nil {
+			pinnedResp.Session.Zero()
+		}
+		slog.WarnContext(ctx, "upstream returned an unexpected redirect", "provider", prov.Name)
+		http.Error(w, "upstream returned an unexpected redirect", http.StatusBadGateway)
+		return
+	}
 
 	report := pinnedResp.Report
 	if report != nil {

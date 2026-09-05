@@ -16,6 +16,7 @@ import (
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/defaults"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 // Options holds all parameters for Run.
@@ -218,8 +219,9 @@ func Replay(ctx context.Context, captureDir string, cfgLoader CfgLoader) (report
 	}
 
 	replayClient := &http.Client{
-		Transport: capture.NewReplayTransport(entries),
-		Timeout:   config.AttestationTimeout,
+		CheckRedirect: tlsct.RejectRedirect,
+		Transport:     capture.NewReplayTransport(entries),
+		Timeout:       config.AttestationTimeout,
 	}
 
 	capturedE2EE := e2eeResultFromOutcome(manifest.E2EE)

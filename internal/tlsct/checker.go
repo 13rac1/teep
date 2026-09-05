@@ -69,8 +69,9 @@ func NewChecker() *Checker {
 	c := &Checker{
 		entries: make(map[string]certCacheEntry),
 		logListHTTP: &http.Client{
-			Timeout:   20 * time.Second,
-			Transport: WrapLogging(base),
+			CheckRedirect: RejectRedirect,
+			Timeout:       20 * time.Second,
+			Transport:     WrapLogging(base),
 		},
 	}
 	c.enabled.Store(ctEnabledDefault)
@@ -125,8 +126,9 @@ func NewHTTPClientWithTransport(timeout time.Duration, base *http.Transport, ctE
 	}
 	base.TLSClientConfig = tlsConfig
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: base,
+		CheckRedirect: RejectRedirect,
+		Timeout:       timeout,
+		Transport:     base,
 	}
 }
 
