@@ -16,13 +16,7 @@ import (
 const maxPinnedUpstreamPools = 1000
 
 func newUpstreamTransport() *http.Transport {
-	return &http.Transport{
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-		// Installing TLSClientConfig disables Go's automatic HTTP/2 setup
-		// unless ForceAttemptHTTP2 is set explicitly.
-		ForceAttemptHTTP2: true,
-	}
+	return tlsct.NewPooledTransport()
 }
 
 type pinnedUpstreamKey struct {

@@ -6,10 +6,36 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/13rac1/teep/internal/tlsct"
 )
+
+type closeCountingRT struct {
+	mockRT
+	closes atomic.Int32
+}
+
+func (t *closeCountingRT) CloseIdleConnections() { t.closes.Add(1) }
+
+func TestWrappedClientClosesIdleConnections(t *testing.T) {
+	base, fallback := &closeCountingRT{}, &closeCountingRT{}
+	transport := tlsct.NewTLS12FallbackTransportWithFallback(base, fallback, []string{"fallback.example"})
+	client := &http.Client{Transport: tlsct.WrapCounting(tlsct.WrapLogging(transport), nil, nil)}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(client.CloseIdleConnections)
+	}
+	wg.Wait()
+	if base.closes.Load() != 8 || fallback.closes.Load() != 8 {
+		t.Fatalf("cleanup calls: default=%d fallback=%d", base.closes.Load(), fallback.closes.Load())
+	}
+	// RoundTrippers without pooled connections need no cleanup method.
+	client.Transport = tlsct.WrapLogging(&mockRT{})
+	client.CloseIdleConnections()
+}
 
 // mockRT is a controllable RoundTripper for testing.
 type mockRT struct {

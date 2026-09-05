@@ -149,6 +149,7 @@ func TestCTRejectsBeforeSendingRequest(t *testing.T) {
 func TestSPKIPinnedClientRejectsModifiedTrust(t *testing.T) {
 	customRoots := x509.NewCertPool()
 	tests := map[string]*http.Transport{
+		"empty TLS config":   {TLSClientConfig: &tls.Config{}},
 		"InsecureSkipVerify": {TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
 		"custom roots":       {TLSClientConfig: &tls.Config{RootCAs: customRoots}},
 		"VerifyPeerCertificate": {TLSClientConfig: &tls.Config{

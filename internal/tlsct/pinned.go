@@ -70,40 +70,16 @@ func validateSystemWebPKITransport(base *http.Transport) error {
 	if base.DialTLSContext != nil || base.DialTLS != nil { //nolint:staticcheck // deprecated hook must also be rejected
 		return errors.New("SPKI-pinned transport must not set a custom TLS dialer")
 	}
-	cfg := base.TLSClientConfig
-	if cfg == nil {
-		return nil
+	if base.TLSClientConfig != nil {
+		return errors.New("SPKI-pinned transport must not provide a custom TLSClientConfig")
 	}
-	if cfg.InsecureSkipVerify {
-		return errors.New("SPKI-pinned transport must not disable certificate verification")
-	}
-	if cfg.RootCAs != nil {
-		return errors.New("SPKI-pinned transport must use system root CAs")
-	}
-	if cfg.VerifyPeerCertificate != nil {
-		return errors.New("SPKI-pinned transport must not set VerifyPeerCertificate")
-	}
-	if cfg.VerifyConnection != nil {
-		return errors.New("SPKI-pinned transport must not set VerifyConnection")
-	}
-	if cfg.ServerName != "" {
-		return errors.New("SPKI-pinned transport must derive the server name from the request URL")
-	}
-	return errors.New("SPKI-pinned transport must not provide a custom TLSClientConfig")
+	return nil
 }
 
 // SPKIFingerprintsEqual compares two hex-encoded SHA-256 SPKI fingerprints in
 // constant time. Malformed fingerprints never match.
 func SPKIFingerprintsEqual(left, right string) bool {
-	l, err := decodeSPKI(left)
-	if err != nil {
-		return false
-	}
-	r, err := decodeSPKI(right)
-	if err != nil {
-		return false
-	}
-	return subtle.ConstantTimeCompare(l, r) == 1
+	return CompareSPKIFingerprints(left, right) == nil
 }
 
 func decodeSPKI(value string) ([]byte, error) {

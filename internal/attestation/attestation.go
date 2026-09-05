@@ -174,6 +174,13 @@ type RawAttestation struct {
 	SEVReportBytes []byte `json:"-"` // raw binary SEV-SNP report (tinfoil sev-snp platform)
 
 	// Tinfoil v3 crypto material (each 64 hex chars = 32 bytes).
+	// TransportTLSFingerprint is the live-peer-matched attested SPKI. NEAR
+	// cloud uses the gateway key; direct providers use the model endpoint key.
+	TransportTLSFingerprint string `json:"-"`
+	// TransportTLSAuthority is the canonical HTTPS authority checked by WebPKI
+	// on the attestation connection. Set together with TransportTLSFingerprint.
+	TransportTLSAuthority string `json:"-"`
+
 	TinfoilTLSKeyFP string `json:"-"` // crypto_material item "tls"
 	TinfoilHPKEKey  string `json:"-"` // crypto_material item "hpke"
 	TinfoilNonce    string `json:"-"` // challenge.nonce

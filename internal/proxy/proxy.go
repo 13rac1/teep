@@ -457,10 +457,7 @@ type Server struct {
 func New(cfg *config.Config) (*Server, error) {
 	spkiCache := attestation.NewSPKICache()
 
-	attestClient := tlsct.NewHTTPClientWithTransport(config.AttestationTimeout, &http.Transport{
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-	}, !cfg.Offline)
+	attestClient := tlsct.NewHTTPClientWithTransport(config.AttestationTimeout, tlsct.NewPooledTransport(), !cfg.Offline)
 	attestClient.Transport = tlsct.NewTLS12FallbackTransport(attestClient.Transport, attestation.AMDKDSHost)
 
 	s := &Server{

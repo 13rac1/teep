@@ -13,6 +13,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const attestationPath = "/.well-known/tinfoil-attestation"
@@ -172,10 +173,15 @@ func fetchAndVerifyAttestation(ctx context.Context, client *http.Client, baseURL
 	if peerSPKI == "" {
 		return nil, errors.New("tinfoil: TLS channel binding failed: no TLS peer state (plain HTTP is not allowed for attestation endpoints)")
 	}
-	if subtle.ConstantTimeCompare([]byte(peerSPKI), []byte(raw.TinfoilTLSKeyFP)) != 1 {
-		return nil, fmt.Errorf("tinfoil: TLS channel binding failed: live peer SPKI %s != endorsed tls key %s",
-			provider.Truncate(peerSPKI, 16), provider.Truncate(raw.TinfoilTLSKeyFP, 16))
+	if err := tlsct.CompareSPKIFingerprints(peerSPKI, raw.TinfoilTLSKeyFP); err != nil {
+		return nil, fmt.Errorf("tinfoil: TLS channel binding failed: %w", err)
 	}
+	authority, err := tlsct.HTTPSOriginAuthority(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("tinfoil: attestation authority: %w", err)
+	}
+	raw.TransportTLSFingerprint = raw.TinfoilTLSKeyFP
+	raw.TransportTLSAuthority = authority
 
 	return raw, nil
 }
