@@ -52,7 +52,7 @@ func (s *Server) handleExplorePage(w http.ResponseWriter, r *http.Request) {
 	for _, p := range s.providers {
 		infos = append(infos, exploreProviderInfo{
 			Name:   p.Name,
-			Pinned: p.PinnedHandler != nil,
+			Pinned: p.UsesTLSBinding,
 			E2EE:   p.E2EE,
 		})
 	}
@@ -116,13 +116,6 @@ func (s *Server) handleExploreAttest(w http.ResponseWriter, r *http.Request) {
 			slog.ErrorContext(ctx, "encode attest response", "err", err)
 		}
 		return
-	}
-
-	// Apply CacheKeySuffix so the cache key matches the main proxy path.
-	if prov.CacheKeySuffix != nil {
-		if suffix := prov.CacheKeySuffix(ctx, upstreamModel); suffix != "" {
-			ctx = withCacheModel(ctx, upstreamModel+"@"+suffix)
-		}
 	}
 
 	report, _ := s.fetchAndVerify(ctx, prov, upstreamModel)
@@ -254,17 +247,10 @@ func (s *Server) loopbackInfer(ctx context.Context, model string, body []byte) e
 		responseText = chatResp.Choices[0].Message.Content
 	}
 
-	// Check cached report for E2EE status. Apply CacheKeySuffix so the
-	// cache key matches the main proxy path (e.g. "model@domain").
+	// Non-TLS-binding providers retain the model-scoped report cache.
 	var encrypted bool
 	if prov, upModel, ok := s.resolveModel(model); ok && !prov.UsesTLSBinding {
-		lookupCtx := ctx
-		if prov.CacheKeySuffix != nil {
-			if suffix := prov.CacheKeySuffix(lookupCtx, upModel); suffix != "" {
-				lookupCtx = withCacheModel(lookupCtx, upModel+"@"+suffix)
-			}
-		}
-		cacheKey := cacheModelFor(lookupCtx, upModel)
+		cacheKey := cacheModelFor(ctx, upModel)
 		if report, cacheOK := s.cache.Get(prov.Name, cacheKey); cacheOK {
 			encrypted = prov.E2EE && report.ReportDataBindingPassed()
 		}

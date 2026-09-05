@@ -226,9 +226,9 @@ func TestNearCloudE2EE_ImageGeneration(t *testing.T) {
 	})
 }
 
-// TestNearCloudE2EE_PlaintextFallback verifies that non-E2EE requests
-// still work through the pinned handler.
-func TestNearCloudE2EE_PlaintextFallback(t *testing.T) {
+// TestNearCloudE2EE_ExplicitlyDisabled verifies that non-E2EE requests
+// work when the test explicitly disables E2EE.
+func TestNearCloudE2EE_ExplicitlyDisabled(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
 		ts := newMockNearCloudProxyServer(t, authority, false)

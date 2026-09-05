@@ -1,4 +1,4 @@
-// Package nearcloud implements the Attester and PinnedHandler for the NEAR AI
+// Package nearcloud implements attestation fetching for the NEAR AI
 // cloud gateway (cloud-api.near.ai). Unlike the neardirect package which connects
 // to model-specific subdomains, nearcloud routes all traffic through a single
 // TEE-attested API gateway that itself runs in an Intel TDX enclave.
@@ -37,8 +37,7 @@ const (
 	maxModelAttestations      = 256
 )
 
-// GatewayHost returns the fixed host used for SPKI cache keying and pinned
-// TLS connections to the NEAR AI cloud gateway.
+// GatewayHost returns the authority used for gateway attestation and inference.
 func GatewayHost() string { return gatewayHost }
 
 // gatewayResponse is the top-level JSON shape returned by the gateway

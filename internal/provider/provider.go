@@ -8,7 +8,6 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -62,52 +61,6 @@ type RequestPreparer interface {
 //   - Tinfoil/EHBP: EHBP (full-body state, decrypted before relay)
 type RequestEncryptor interface {
 	EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error)
-}
-
-// PinnedHandler handles chat requests on a connection-pinned TLS connection
-// where attestation and inference share the same TCP connection. Used by
-// providers like NEAR AI where the TLS cert is verified via attestation
-// rather than a traditional CA chain.
-type PinnedHandler interface {
-	HandlePinned(ctx context.Context, req *PinnedRequest) (*PinnedResponse, error)
-}
-
-// PinnedRequest is the input to a pinned chat handler.
-type PinnedRequest struct {
-	Method  string
-	Path    string      // e.g. "/v1/chat/completions"
-	Headers http.Header // forwarded headers (Authorization, Content-Type, etc.)
-	Body    []byte      // raw request body
-	Model   string      // upstream model name (for endpoint resolution)
-	E2EE    bool        // encrypt message contents for the model backend
-
-	// Endpoint is the canonical proxy route kind (e.g. EndpointChat, EndpointEmbeddings).
-	// Used by E2EE handlers for field-level encryption routing.
-	Endpoint e2ee.EndpointType
-
-	// SigningKey is the model's attested public key, provided by the caller
-	// from its signing key cache. Used on SPKI cache hits when E2EE is
-	// active and no fresh attestation provides a signing key.
-	SigningKey string
-}
-
-// PinnedResponse is a raw HTTP response from a pinned connection.
-type PinnedResponse struct {
-	StatusCode int
-	Header     http.Header
-	Body       io.ReadCloser
-
-	// Report is the verification report from attestation, if attestation was
-	// performed on this connection. Nil on SPKI cache hits.
-	Report *attestation.VerificationReport
-
-	// SigningKey is the attested model key returned on cache misses. It allows
-	// callers to refresh signing-key caches without a second attestation fetch.
-	SigningKey string
-
-	// Session is the E2EE session established during the pinned request.
-	// Non-nil when E2EE was active; callers use it for response decryption.
-	Session e2ee.Decryptor
 }
 
 // ModelLister fetches the list of available models from a provider.
@@ -205,49 +158,10 @@ type Provider struct {
 	// May be nil if the provider does not support REPORTDATA verification.
 	ReportDataVerifier ReportDataVerifier
 
-	// PinnedHandler handles chat requests on a connection-pinned TLS
-	// connection. Set for providers that require same-connection attestation
-	// (e.g. NEAR AI). When non-nil, the proxy uses this instead of the
-	// standard http.Client path.
-	PinnedHandler PinnedHandler
-
-	// SPKIDomainForModel returns the domain string used as the SPKI cache
-	// key for a given model. Required for E2EE providers with a PinnedHandler
-	// so the proxy can evict the correct SPKI entries when the attestation
-	// report cache expires. Returns ("", false) if the domain cannot be
-	// determined (the proxy must fail closed in that case).
-	SPKIDomainForModel func(ctx context.Context, model string) (string, bool)
-
-	// BaseURLForModel resolves the upstream base URL for a specific model.
-	// When set, overrides BaseURL for upstream requests. Nil means use BaseURL.
-	// Implementations should read prompt_cache_key from context (via
-	// tinfoil.PromptCacheKeyFromContext) to support cache-aware backend
-	// selection for providers with multiple enclave domains.
-	BaseURLForModel func(ctx context.Context, model string) (string, error)
-
-	// CacheKeySuffix returns a per-backend suffix for attestation cache keys.
-	// When non-empty, the proxy appends it to the model name in cache
-	// operations (attestation report, signing key, negative cache, e2ee
-	// failure tracker). This allows per-domain caching for providers that
-	// route to different backends based on prompt_cache_key, preventing
-	// cache key collisions between enclaves with different TLS keys.
-	// Nil means cache by model name only (default, single-backend behavior).
-	CacheKeySuffix func(ctx context.Context, model string) string
-
-	// SigstoreRepoForModel returns the GitHub repo for Tinfoil Sigstore
-	// supply chain verification of a specific model. Nil for non-Sigstore
-	// providers. For cloud (router) providers, returns a static repo.
-	// For direct providers, returns a per-model repo.
-	SigstoreRepoForModel func(model string) string
-
-	// UsesTLSBinding declares that this provider performs live TLS channel
-	// binding. The proxy authenticates each new upstream TLS connection against
-	// the attested SPKI before transmitting request data, then checks the peer
-	// SPKI again on every response as defense in depth. Authenticated connections
-	// may be pooled and reused for subsequent requests to the same authority.
-	// When true, evalTLSKeyBinding fails closed if the attestation's
-	// TLSFingerprint is empty, preventing a future provider from silently
-	// skipping TLS binding. Tinfoil sets this; E2EE-only providers do not.
+	// UsesTLSBinding requires atomic authorization and a transport authenticated
+	// against the attested SPKI before request transmission. Pools are scoped
+	// to the provider, authority, and attested key. The derived live-peer
+	// identity must be present in the verification report.
 	UsesTLSBinding bool
 
 	// E2EEKeyBoundByGateway declares that the gateway attestation, not the

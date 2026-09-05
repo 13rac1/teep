@@ -54,11 +54,11 @@ func generateMockKeys(t *testing.T) *mockNearKeys {
 	}
 }
 
-// mockNearPinnedHandler implements provider.PinnedHandler with real NearCloud
+// mockNearUpstream serves TLS requests with real NearCloud
 // E2EE crypto. It receives plaintext bodies from the proxy, performs
 // client-side encryption + server-side decryption, generates a mock response,
 // encrypts it, and returns the session for proxy-side decryption.
-type mockNearPinnedHandler struct {
+type mockNearUpstream struct {
 	keys         *mockNearKeys
 	providerName string // "nearcloud" or "neardirect"
 	// responseFunc optionally overrides the default response generation.
@@ -67,7 +67,7 @@ type mockNearPinnedHandler struct {
 	responseFunc func(body []byte, path string) string
 }
 
-func (m *mockNearPinnedHandler) serve(w http.ResponseWriter, r *http.Request, encrypted bool) {
+func (m *mockNearUpstream) serve(w http.ResponseWriter, r *http.Request, encrypted bool) {
 	if r.ProtoMajor != 2 {
 		http.Error(w, "HTTP/2 required", http.StatusBadRequest)
 		return
@@ -112,7 +112,7 @@ func (m *mockNearPinnedHandler) serve(w http.ResponseWriter, r *http.Request, en
 	_, _ = io.WriteString(w, response)
 }
 
-func (m *mockNearPinnedHandler) decryptChatBody(encBody []byte) ([]map[string]json.RawMessage, error) {
+func (m *mockNearUpstream) decryptChatBody(encBody []byte) ([]map[string]json.RawMessage, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(encBody, &full); err != nil {
 		return nil, fmt.Errorf("parse encrypted body: %w", err)
@@ -147,7 +147,7 @@ func (m *mockNearPinnedHandler) decryptChatBody(encBody []byte) ([]map[string]js
 }
 
 // decryptImageBody decrypts the prompt field from an encrypted image body.
-func (m *mockNearPinnedHandler) decryptImageBody(encBody []byte) (string, error) {
+func (m *mockNearUpstream) decryptImageBody(encBody []byte) (string, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(encBody, &full); err != nil {
 		return "", fmt.Errorf("parse encrypted body: %w", err)
@@ -164,7 +164,7 @@ func (m *mockNearPinnedHandler) decryptImageBody(encBody []byte) (string, error)
 }
 
 // chatResponse generates a mock chat response from decrypted messages.
-func (m *mockNearPinnedHandler) chatResponse(messages []map[string]json.RawMessage) string {
+func (m *mockNearUpstream) chatResponse(messages []map[string]json.RawMessage) string {
 	// Extract the last user message content for the echo response.
 	content := "echo"
 	for i := range slices.Backward(messages) {
@@ -190,7 +190,7 @@ func (m *mockNearPinnedHandler) chatResponse(messages []map[string]json.RawMessa
 }
 
 // encryptSSEResponse builds an SSE stream with one encrypted content chunk.
-func (m *mockNearPinnedHandler) encryptSSEResponse(content, clientEdPubHex string) (string, error) {
+func (m *mockNearUpstream) encryptSSEResponse(content, clientEdPubHex string) (string, error) {
 	clientX25519, err := clientEdToX25519(clientEdPubHex)
 	if err != nil {
 		return "", err
@@ -205,7 +205,7 @@ func (m *mockNearPinnedHandler) encryptSSEResponse(content, clientEdPubHex strin
 }
 
 // encryptImageResponse builds a non-streaming image response with encrypted b64_json.
-func (m *mockNearPinnedHandler) encryptImageResponse(decryptedPrompt, clientEdPubHex string) (string, error) {
+func (m *mockNearUpstream) encryptImageResponse(decryptedPrompt, clientEdPubHex string) (string, error) {
 	clientX25519, err := clientEdToX25519(clientEdPubHex)
 	if err != nil {
 		return "", err
@@ -228,7 +228,7 @@ func (m *mockNearPinnedHandler) encryptImageResponse(decryptedPrompt, clientEdPu
 }
 
 // buildPlaintextResponse generates a simple JSON response for non-E2EE requests.
-func (m *mockNearPinnedHandler) buildPlaintextResponse(body []byte, path string) string {
+func (m *mockNearUpstream) buildPlaintextResponse(body []byte, path string) string {
 	if m.responseFunc != nil {
 		return m.responseFunc(body, path)
 	}
@@ -262,7 +262,7 @@ func newMockNeardirectE2EEServer(t *testing.T, authority *testtls.Authority, enc
 func newMockNearHTTPServer(t *testing.T, authority *testtls.Authority, name string, encrypted bool) *httptest.Server {
 	t.Helper()
 	keys := generateMockKeys(t)
-	handler := &mockNearPinnedHandler{keys: keys, providerName: name}
+	handler := &mockNearUpstream{keys: keys, providerName: name}
 	upstream := authority.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.serve(w, r, encrypted) }))
 	t.Cleanup(upstream.Close)
 	srv, err := proxy.New(&config.Config{Providers: map[string]*config.Provider{name: {Name: name, BaseURL: upstream.URL, APIKey: "test-key", E2EE: encrypted}}})
@@ -282,5 +282,5 @@ func newMockNearHTTPServer(t *testing.T, authority *testtls.Authority, name stri
 	if err := srv.PutAuthorizationForTest(t.Context(), name, "test-model", route, report, keys.edPubHex); err != nil {
 		t.Fatal(err)
 	}
-	return httptest.NewServer(srv)
+	return authority.NewTLSServer(t, srv)
 }

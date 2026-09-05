@@ -326,7 +326,7 @@ func (r *DirectResolver) refresh(ctx context.Context) error {
 		if len(valid) == 0 {
 			continue
 		}
-		// An empty repo asserts nothing, and SigstoreRepoForModel falls back
+		// An empty repo asserts nothing, and ResolveRoute selects
 		// to the RepoForModel naming convention. A non-empty but malformed
 		// repo is malformed, whether by error or by attack: drop the model with a
 		// warning, as for an invalid enclave domain above.

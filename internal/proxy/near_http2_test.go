@@ -114,7 +114,7 @@ func serveNearMultiplexRequest(t *testing.T, w http.ResponseWriter, r *http.Requ
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	mock := &mockNearPinnedHandler{keys: key, providerName: name}
+	mock := &mockNearUpstream{keys: key, providerName: name}
 	mock.serve(w, r, true)
 }
 

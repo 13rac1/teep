@@ -10,7 +10,7 @@
 // TDX and NVIDIA attestation payloads for one inference node, plus
 // signing_address, tls_cert_fingerprint, and the echoed nonce.
 //
-// When E2EE is enabled, the PinnedHandler encrypts the request body using the
+// When E2EE is enabled, the request encryptor encrypts the request body using the
 // Ed25519/X25519/XChaCha20-Poly1305 protocol (same as nearcloud).
 package neardirect
 
@@ -241,7 +241,7 @@ func shouldResolveModelDomain(host string) bool {
 
 // ParseAttestationResponse unmarshals a NEAR AI attestation JSON response body
 // and selects the entry matching model. Used by both FetchAttestation (HTTP
-// client path) and PinnedHandler (raw connection path).
+// client path).
 func ParseAttestationResponse(_ context.Context, body []byte, model string) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
 	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, "nearai attestation")
@@ -406,4 +406,9 @@ func (a *Attester) ResolveRoute(ctx context.Context, model string) (provider.Res
 		return provider.NewResolvedRoute("https://"+domain, "")
 	}
 	return provider.NewResolvedRoute(a.baseURL, "")
+}
+
+// DomainResolver maps a model name to a backend authority.
+type DomainResolver interface {
+	Resolve(context.Context, string) (string, error)
 }

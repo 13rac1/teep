@@ -142,8 +142,6 @@ func TestClassifyUpstreamError(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // httpError.Unwrap
 // ---------------------------------------------------------------------------
 
@@ -216,7 +214,6 @@ func newMinimalServer() *Server {
 		cache:           attestation.NewCache(time.Minute),
 		negCache:        attestation.NewNegativeCache(time.Minute),
 		signingKeyCache: attestation.NewSigningKeyCache(time.Minute),
-		spkiCache:       attestation.NewSPKICache(),
 		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 	}
 }
@@ -398,208 +395,9 @@ func TestHandleE2EEDecryptionFailure_Chutes_NilFetcher(t *testing.T) {
 // pinnedPostDispatchE2EE
 // ---------------------------------------------------------------------------
 
-// bindingPassedReport returns a minimal report where tee_reportdata_binding passed.
-func bindingPassedReport() *attestation.VerificationReport {
-	return &attestation.VerificationReport{
-		Factors: []attestation.FactorResult{
-			{Name: "tee_reportdata_binding", Status: attestation.Pass, Enforced: true},
-		},
-	}
-}
-
-func TestPinnedPostDispatchE2EE_NonE2EEProvider(t *testing.T) {
-	s := newMinimalServer()
-	w := httptest.NewRecorder()
-	prov := &provider.Provider{Name: "venice", E2EE: false}
-	proceed := s.pinnedPostDispatchE2EE(context.Background(), w, prov, "model", nil, false)
-	t.Logf("proceed = %v", proceed)
-	if !proceed {
-		t.Error("expected proceed=true for non-E2EE provider")
-	}
-}
-
-func TestPinnedPostDispatchE2EE_NilReport(t *testing.T) {
-	s := newMinimalServer()
-	w := httptest.NewRecorder()
-	prov := &provider.Provider{Name: "venice", E2EE: true}
-	proceed := s.pinnedPostDispatchE2EE(context.Background(), w, prov, "model", nil, false)
-	t.Logf("proceed = %v, status = %d", proceed, w.Code)
-	if proceed {
-		t.Error("expected proceed=false when report is nil for E2EE provider")
-	}
-	if w.Code != http.StatusBadGateway {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadGateway)
-	}
-}
-
-func TestPinnedPostDispatchE2EE_BindingNotPassed(t *testing.T) {
-	s := newMinimalServer()
-	w := httptest.NewRecorder()
-	prov := &provider.Provider{Name: "venice", E2EE: true}
-	// Report with no tee_reportdata_binding factor → ReportDataBindingPassed() = false.
-	report := &attestation.VerificationReport{}
-	proceed := s.pinnedPostDispatchE2EE(context.Background(), w, prov, "model", report, false)
-	t.Logf("proceed = %v, status = %d", proceed, w.Code)
-	if proceed {
-		t.Error("expected proceed=false when binding not passed")
-	}
-	if w.Code != http.StatusBadGateway {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadGateway)
-	}
-}
-
-func TestPinnedPostDispatchE2EE_BindingPassed_NoFailureMark(t *testing.T) {
-	s := newMinimalServer()
-	w := httptest.NewRecorder()
-	prov := &provider.Provider{Name: "venice", E2EE: true}
-	proceed := s.pinnedPostDispatchE2EE(context.Background(), w, prov, "model", bindingPassedReport(), false)
-	t.Logf("proceed = %v", proceed)
-	if !proceed {
-		t.Error("expected proceed=true when binding passed and no failure mark")
-	}
-}
-
-func TestPinnedPostDispatchE2EE_E2EEFailedMark_FreshReport(t *testing.T) {
-	s := newMinimalServer()
-	// Set failure mark.
-	s.e2eeFailed.Store(providerModelKey{"venice", "model"}, true)
-	w := httptest.NewRecorder()
-	prov := &provider.Provider{Name: "venice", E2EE: true}
-	// freshReport=true → should clear the mark.
-	proceed := s.pinnedPostDispatchE2EE(context.Background(), w, prov, "model", bindingPassedReport(), true)
-	t.Logf("proceed = %v", proceed)
-	if !proceed {
-		t.Error("expected proceed=true after clearing failure mark on fresh report")
-	}
-	if _, failed := s.e2eeFailed.Load(providerModelKey{"venice", "model"}); failed {
-		t.Error("failure mark should have been cleared")
-	}
-}
-
-func TestPinnedPostDispatchE2EE_E2EEFailedMark_CachedReport(t *testing.T) {
-	s := newMinimalServer()
-	// Set failure mark.
-	s.e2eeFailed.Store(providerModelKey{"venice", "model"}, true)
-	w := httptest.NewRecorder()
-	prov := &provider.Provider{Name: "venice", E2EE: true}
-	// freshReport=false → should fail closed with 503.
-	proceed := s.pinnedPostDispatchE2EE(context.Background(), w, prov, "model", bindingPassedReport(), false)
-	t.Logf("proceed = %v, status = %d", proceed, w.Code)
-	if proceed {
-		t.Error("expected proceed=false when failure mark set and cached report only")
-	}
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // pinnedPreDispatchE2EE
 // ---------------------------------------------------------------------------
-
-func TestPinnedPreDispatchE2EE_NonE2EEProvider(t *testing.T) {
-	s := newMinimalServer()
-	w := httptest.NewRecorder()
-	prov := &provider.Provider{Name: "venice", E2EE: false}
-	proceed := s.pinnedPreDispatchE2EE(context.Background(), w, prov, "model")
-	t.Logf("proceed = %v", proceed)
-	if !proceed {
-		t.Error("expected proceed=true for non-E2EE provider")
-	}
-}
-
-func TestPinnedPreDispatchE2EE_NilSPKIDomainForModel(t *testing.T) {
-	s := newMinimalServer()
-	w := httptest.NewRecorder()
-	// E2EE provider, cache miss, non-nil PinnedHandler, nil SPKIDomainForModel.
-	prov := &provider.Provider{
-		Name:               "neardirect",
-		E2EE:               true,
-		PinnedHandler:      &noopPinnedHandler{},
-		SPKIDomainForModel: nil,
-	}
-	proceed := s.pinnedPreDispatchE2EE(context.Background(), w, prov, "model")
-	t.Logf("proceed = %v, status = %d", proceed, w.Code)
-	if proceed {
-		t.Error("expected proceed=false when SPKIDomainForModel is nil")
-	}
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
-	}
-}
-
-func TestPinnedPreDispatchE2EE_DomainResolutionFails(t *testing.T) {
-	s := newMinimalServer()
-	w := httptest.NewRecorder()
-	prov := &provider.Provider{
-		Name:          "neardirect",
-		E2EE:          true,
-		PinnedHandler: &noopPinnedHandler{},
-		SPKIDomainForModel: func(_ context.Context, _ string) (string, bool) {
-			return "", false // resolution failed
-		},
-	}
-	proceed := s.pinnedPreDispatchE2EE(context.Background(), w, prov, "model")
-	t.Logf("proceed = %v, status = %d", proceed, w.Code)
-	if proceed {
-		t.Error("expected proceed=false when domain resolution fails")
-	}
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
-	}
-}
-
-func TestPinnedPreDispatchE2EE_CacheMissEvictsSPKI(t *testing.T) {
-	s := newMinimalServer()
-	w := httptest.NewRecorder()
-	s.spkiCache.Add("api.near.ai", "abcd")
-	prov := &provider.Provider{
-		Name:          "neardirect",
-		E2EE:          true,
-		PinnedHandler: &noopPinnedHandler{},
-		SPKIDomainForModel: func(_ context.Context, _ string) (string, bool) {
-			return "api.near.ai", true
-		},
-	}
-	// Cache miss (nothing in s.cache), SPKIDomainForModel returns valid domain.
-	proceed := s.pinnedPreDispatchE2EE(context.Background(), w, prov, "model")
-	t.Logf("proceed = %v, status = %d", proceed, w.Code)
-	if !proceed {
-		t.Error("expected proceed=true after SPKI eviction")
-	}
-	if s.spkiCache.Contains("api.near.ai", "abcd") {
-		t.Error("expected SPKI domain to be evicted on pinned report cache miss")
-	}
-}
-
-func TestPinnedPreDispatchPlaintext_CacheMissEvictsSPKI(t *testing.T) {
-	s := newMinimalServer()
-	w := httptest.NewRecorder()
-	s.spkiCache.Add("api.near.ai", "abcd")
-	prov := &provider.Provider{
-		Name:          "neardirect",
-		E2EE:          false,
-		PinnedHandler: &noopPinnedHandler{},
-		SPKIDomainForModel: func(_ context.Context, _ string) (string, bool) {
-			return "api.near.ai", true
-		},
-	}
-	proceed := s.pinnedPreDispatchE2EE(context.Background(), w, prov, "model")
-	t.Logf("proceed = %v, status = %d", proceed, w.Code)
-	if !proceed {
-		t.Error("expected proceed=true after SPKI eviction")
-	}
-	if s.spkiCache.Contains("api.near.ai", "abcd") {
-		t.Error("expected SPKI domain to be evicted for plaintext pinned report cache miss")
-	}
-}
-
-// noopPinnedHandler satisfies provider.PinnedHandler for tests.
-type noopPinnedHandler struct{}
-
-func (*noopPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	return nil, errors.New("noop")
-}
 
 // ---------------------------------------------------------------------------
 // resolveModel
@@ -931,57 +729,6 @@ func TestLogUpstreamStatusWarnsExceptRateLimit(t *testing.T) {
 		if !strings.Contains(rateLimitLogs, want) {
 			t.Fatalf("429 log output missing %q:\n%s", want, rateLimitLogs)
 		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// handlePinnedPostRelay
-// ---------------------------------------------------------------------------
-
-// mockDecryptor satisfies e2ee.Decryptor for tests that need a non-nil session.
-type mockDecryptor struct{}
-
-func (mockDecryptor) IsEncryptedChunk(_ string) bool                          { return false }
-func (mockDecryptor) Decrypt(_ string) ([]byte, error)                        { return nil, errors.New("mock decrypt") }
-func (mockDecryptor) IsRequestFieldEncrypted(string) bool                     { return false }
-func (mockDecryptor) IsResponseFieldEncrypted(string, e2ee.EndpointType) bool { return false }
-func (mockDecryptor) Zero()                                                   {}
-
-func TestHandlePinnedPostRelay_NoError_NoSession(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{Name: "venice"}
-	ms := &modelStats{}
-	// No error, no session → success path, no cache update.
-	s.handlePinnedPostRelay(context.Background(), prov, "model", nil, nil, ms, nil)
-	t.Logf("errors after no-error/no-session: %d", ms.errors.Load())
-	if ms.errors.Load() != 0 {
-		t.Errorf("ms.errors = %d, want 0", ms.errors.Load())
-	}
-}
-
-func TestHandlePinnedPostRelay_NonDecryptionError(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{Name: "venice"}
-	ms := &modelStats{}
-	relayErr := errors.New("upstream timeout")
-	// Non-decryption error → error counters incremented.
-	s.handlePinnedPostRelay(context.Background(), prov, "model", nil, nil, ms, relayErr)
-	t.Logf("ms.errors = %d", ms.errors.Load())
-	if ms.errors.Load() != 1 {
-		t.Errorf("ms.errors = %d, want 1", ms.errors.Load())
-	}
-}
-
-func TestHandlePinnedPostRelay_E2EEDecryptionFailure(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{Name: "venice"}
-	ms := &modelStats{}
-	relayErr := fmt.Errorf("relay: %w", e2ee.ErrDecryptionFailed)
-	// E2EE decryption failure with session → cache invalidated, error counters incremented.
-	s.handlePinnedPostRelay(context.Background(), prov, "model", nil, mockDecryptor{}, ms, relayErr)
-	t.Logf("ms.errors = %d", ms.errors.Load())
-	if ms.errors.Load() != 1 {
-		t.Errorf("ms.errors = %d, want 1", ms.errors.Load())
 	}
 }
 

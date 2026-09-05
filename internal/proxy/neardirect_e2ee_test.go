@@ -175,9 +175,9 @@ func TestNeardirectE2EE_ImageGeneration(t *testing.T) {
 	})
 }
 
-// TestNeardirectE2EE_PlaintextFallback verifies that non-E2EE requests
-// still work through the neardirect pinned handler.
-func TestNeardirectE2EE_PlaintextFallback(t *testing.T) {
+// TestNeardirectE2EE_ExplicitlyDisabled verifies that non-E2EE requests
+// work when the test explicitly disables E2EE.
+func TestNeardirectE2EE_ExplicitlyDisabled(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
 		ts := newMockNeardirectE2EEServer(t, authority, false)
