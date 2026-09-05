@@ -90,3 +90,6 @@ require (
 	google.golang.org/grpc v1.81.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 )
+
+// Expose authenticated collateral validity from the pinned verifier.
+replace github.com/google/go-tdx-guest => ./third_party/go-tdx-guest

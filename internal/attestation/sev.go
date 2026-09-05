@@ -81,6 +81,9 @@ type SEVTCBVersion struct {
 // verification. Fields are populated even on partial failure so the report
 // builder can produce precise per-factor results.
 type SEVVerifyResult struct {
+	// Validity bounds reuse by the successfully verified AMD certificate chain.
+	Validity EvidenceValidity
+
 	// ParseErr is non-nil if the binary report parse step failed.
 	ParseErr error
 
@@ -283,19 +286,14 @@ func VerifySEVReportOnline(ctx context.Context, report []byte, getter trust.HTTP
 		return result
 	}
 
-	// Use RawSnpReportContext which handles VCEK cert fetching, chain
-	// verification, and signature verification in one call.
-	opts := &sevverify.Options{
-		Getter: getter,
-	}
-	if err := sevverify.RawSnpReportContext(ctx, report, opts); err != nil {
-		// Record both cert chain and signature as failed; they share the
-		// same root cause from the unified verify call.
+	validity, err := verifySEVEvidence(ctx, report, getter)
+	if err != nil {
 		result.CertChainErr = err
 		result.SignatureErr = err
 		slog.DebugContext(ctx, "SEV-SNP online verification failed", "err", err)
 	} else {
 		result.OnlineVerified = true
+		result.Validity = validity
 	}
 
 	return result
@@ -314,4 +312,62 @@ func NewSEVVerifier(offline bool, getter trust.HTTPSGetter) SEVVerifier {
 	return func(ctx context.Context, report []byte) *SEVVerifyResult {
 		return VerifySEVReportOnline(ctx, report, getter)
 	}
+}
+
+// verifySEVEvidence retains the certificates used by successful verification.
+func verifySEVEvidence(ctx context.Context, raw []byte, getter trust.HTTPSGetter) (EvidenceValidity, error) {
+	report, err := sevabi.ReportToProto(raw)
+	if err != nil {
+		return EvidenceValidity{}, err
+	}
+	opts := &sevverify.Options{Getter: getter}
+	evidence, err := sevverify.GetAttestationFromReportContext(ctx, report, opts)
+	if err != nil {
+		return EvidenceValidity{}, err
+	}
+	if err := sevverify.SnpAttestationContext(ctx, evidence, opts); err != nil {
+		return EvidenceValidity{}, err
+	}
+	return verifiedSEVCertificateValidity(evidence)
+}
+
+// verifiedSEVCertificateValidity is called only after SnpAttestationContext
+// succeeds with the default embedded AMD roots. Supplied ASK/ARK certificates
+// are not trust anchors and must not determine the authorization lifetime.
+func verifiedSEVCertificateValidity(evidence *pb.Attestation) (EvidenceValidity, error) {
+	info, err := sevabi.ParseSignerInfo(evidence.GetReport().GetSignerInfo())
+	if err != nil {
+		return EvidenceValidity{}, err
+	}
+	productLine := kds.ProductLine(evidence.GetProduct())
+	if fms := evidence.GetReport().GetCpuid1EaxFms(); fms != 0 {
+		productLine = kds.ProductLineFromFms(fms)
+	}
+	root, err := trust.GetDefaultRootCerts(productLine)
+	if err != nil {
+		return EvidenceValidity{}, err
+	}
+	der, intermediate := evidence.GetCertificateChain().GetVcekCert(), root.ProductCerts.Ask
+	if info.SigningKey == sevabi.VlekReportSigner {
+		der, intermediate = evidence.GetCertificateChain().GetVlekCert(), root.ProductCerts.Asvk
+	}
+	leaf, err := trust.ParseCert(der)
+	if err != nil {
+		return EvidenceValidity{}, err
+	}
+	if intermediate == nil || root.ProductCerts.Ark == nil {
+		return EvidenceValidity{}, errors.New("verified SEV chain is missing its trusted issuer")
+	}
+	bound, err := verifiedEvidenceValidity(leaf.NotAfter)
+	if err != nil {
+		return EvidenceValidity{}, err
+	}
+	for _, expiry := range []time.Time{intermediate.NotAfter, root.ProductCerts.Ark.NotAfter} {
+		issuerBound, err := verifiedEvidenceValidity(expiry)
+		if err != nil {
+			return EvidenceValidity{}, err
+		}
+		bound = minimumEvidenceValidity(bound, issuerBound)
+	}
+	return bound, nil
 }

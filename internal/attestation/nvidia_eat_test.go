@@ -81,7 +81,7 @@ func TestVerifyGPUEvidence_CertChain(t *testing.T) {
 		t.Errorf("cert chain length: got %d, want 5", len(certs))
 	}
 
-	if err := verifyCertChain(certs, rootCA); err != nil {
+	if _, err := verifyCertChain(certs, rootCA); err != nil {
 		t.Fatalf("verifyCertChain: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestVerifyGPUEvidence_Signature(t *testing.T) {
 	}
 
 	// Verify first GPU's evidence (includes signature check).
-	if err := verifyGPUEvidence(context.Background(), eat.EvidenceList[0], nonce, rootCA); err != nil {
+	if _, err := verifyGPUEvidence(context.Background(), eat.EvidenceList[0], nonce, rootCA); err != nil {
 		t.Fatalf("verifyGPUEvidence: %v", err)
 	}
 }
@@ -129,7 +129,7 @@ func TestVerifyGPUEvidence_NonceMatch(t *testing.T) {
 
 	// All 8 GPUs should have the same nonce.
 	for i, ev := range eat.EvidenceList {
-		if err := verifyGPUEvidence(context.Background(), ev, nonce, rootCA); err != nil {
+		if _, err := verifyGPUEvidence(context.Background(), ev, nonce, rootCA); err != nil {
 			t.Errorf("GPU %d: %v", i, err)
 		}
 	}

@@ -97,10 +97,12 @@ func verifyNVIDIAEAT(ctx context.Context, payload string, expectedNonce Nonce) *
 
 	// Verify each GPU's evidence.
 	for i, ev := range eat.EvidenceList {
-		if err := verifyGPUEvidence(ctx, ev, expectedNonce, rootCA); err != nil {
+		bound, err := verifyGPUEvidence(ctx, ev, expectedNonce, rootCA)
+		if err != nil {
 			result.SignatureErr = fmt.Errorf("GPU %d verification failed: %w", i, err)
 			return result
 		}
+		result.Validity = minimumEvidenceValidity(result.Validity, bound)
 	}
 
 	slog.DebugContext(ctx, "NVIDIA EAT verification complete", "gpu_count", len(eat.EvidenceList), "arch", eat.Arch)
@@ -133,42 +135,43 @@ func loadPinnedNVIDIARootCA() (*x509.Certificate, error) {
 
 // verifyGPUEvidence verifies a single GPU's certificate chain and SPDM
 // measurement signature.
-func verifyGPUEvidence(ctx context.Context, ev nvidiaGPUEvidence, expectedNonce Nonce, rootCA *x509.Certificate) error {
+func verifyGPUEvidence(ctx context.Context, ev nvidiaGPUEvidence, expectedNonce Nonce, rootCA *x509.Certificate) (EvidenceValidity, error) {
 	// 1. Parse certificate chain.
 	certs, err := parseCertChain(ev.Certificate)
 	if err != nil {
-		return fmt.Errorf("parse cert chain: %w", err)
+		return EvidenceValidity{}, fmt.Errorf("parse cert chain: %w", err)
 	}
 	if len(certs) < 2 {
-		return fmt.Errorf("cert chain too short: %d certs, need at least 2", len(certs))
+		return EvidenceValidity{}, fmt.Errorf("cert chain too short: %d certs, need at least 2", len(certs))
 	}
 
 	// 2. Verify the chain terminates at the pinned root.
-	if err := verifyCertChain(certs, rootCA); err != nil {
-		return fmt.Errorf("cert chain verification: %w", err)
+	validity, err := verifyCertChain(certs, rootCA)
+	if err != nil {
+		return EvidenceValidity{}, fmt.Errorf("cert chain verification: %w", err)
 	}
 
 	// 3. Extract leaf cert's ECDSA P-384 public key.
 	leaf := certs[0]
 	ecdsaKey, ok := leaf.PublicKey.(*ecdsa.PublicKey)
 	if !ok {
-		return fmt.Errorf("leaf cert public key is %T, expected *ecdsa.PublicKey", leaf.PublicKey)
+		return EvidenceValidity{}, fmt.Errorf("leaf cert public key is %T, expected *ecdsa.PublicKey", leaf.PublicKey)
 	}
 	if ecdsaKey.Curve != elliptic.P384() {
-		return fmt.Errorf("leaf cert key curve is %s, expected P-384", ecdsaKey.Curve.Params().Name)
+		return EvidenceValidity{}, fmt.Errorf("leaf cert key curve is %s, expected P-384", ecdsaKey.Curve.Params().Name)
 	}
 
 	// 4. Decode and parse SPDM evidence.
 	evidenceBytes, err := base64.StdEncoding.DecodeString(ev.Evidence)
 	if err != nil {
-		return fmt.Errorf("base64 decode evidence: %w", err)
+		return EvidenceValidity{}, fmt.Errorf("base64 decode evidence: %w", err)
 	}
 
 	if err := verifySPDMEvidence(ctx, evidenceBytes, expectedNonce, ecdsaKey); err != nil {
-		return fmt.Errorf("SPDM evidence: %w", err)
+		return EvidenceValidity{}, fmt.Errorf("SPDM evidence: %w", err)
 	}
 
-	return nil
+	return validity, nil
 }
 
 // parseCertChain decodes a base64-encoded PEM bundle into a slice of x509
@@ -206,13 +209,13 @@ func parseCertChain(b64PEM string) ([]*x509.Certificate, error) {
 // verifyCertChain verifies that certs[0] (leaf) chains to pinnedRoot via the
 // intermediate certs[1:n-1]. The chain's root (certs[n-1]) must match
 // pinnedRoot by fingerprint.
-func verifyCertChain(certs []*x509.Certificate, pinnedRoot *x509.Certificate) error {
+func verifyCertChain(certs []*x509.Certificate, pinnedRoot *x509.Certificate) (EvidenceValidity, error) {
 	// The last cert in the chain should be the root. Verify it matches our pin.
 	chainRoot := certs[len(certs)-1]
 	chainRootFP := sha256.Sum256(chainRoot.Raw)
 	pinnedRootFP := sha256.Sum256(pinnedRoot.Raw)
-	if chainRootFP != pinnedRootFP {
-		return fmt.Errorf("chain root CA fingerprint %s does not match pinned root %s",
+	if subtle.ConstantTimeCompare(chainRootFP[:], pinnedRootFP[:]) != 1 {
+		return EvidenceValidity{}, fmt.Errorf("chain root CA fingerprint %s does not match pinned root %s",
 			hex.EncodeToString(chainRootFP[:]), hex.EncodeToString(pinnedRootFP[:]))
 	}
 
@@ -234,11 +237,20 @@ func verifyCertChain(certs []*x509.Certificate, pinnedRoot *x509.Certificate) er
 		Intermediates: intermediatePool,
 	}
 
-	if _, err := certs[0].Verify(opts); err != nil {
-		return fmt.Errorf("x509 chain verify: %w", err)
+	chains, err := certs[0].Verify(opts)
+	if err != nil {
+		return EvidenceValidity{}, fmt.Errorf("x509 chain verify: %w", err)
 	}
 
-	return nil
+	var validity EvidenceValidity
+	for _, cert := range chains[0] {
+		bound, err := verifiedEvidenceValidity(cert.NotAfter)
+		if err != nil {
+			return EvidenceValidity{}, err
+		}
+		validity = minimumEvidenceValidity(validity, bound)
+	}
+	return validity, nil
 }
 
 // verifySPDMEvidence validates the SPDM 1.1 GET_MEASUREMENTS request/response
@@ -381,10 +393,12 @@ func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, serverNo
 			Certificate: ev.Certificate,
 			Evidence:    ev.Evidence,
 		}
-		if err := verifyGPUEvidence(ctx, internal, serverNonce, rootCA); err != nil {
+		bound, err := verifyGPUEvidence(ctx, internal, serverNonce, rootCA)
+		if err != nil {
 			result.SignatureErr = fmt.Errorf("GPU %d verification failed: %w", i, err)
 			return result
 		}
+		result.Validity = minimumEvidenceValidity(result.Validity, bound)
 	}
 
 	slog.DebugContext(ctx, "NVIDIA GPU direct verification complete",

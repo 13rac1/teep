@@ -92,6 +92,8 @@ func mustParseCertPool(pemBytes []byte) *x509.CertPool {
 // verification. Fields are populated even on partial failure so the report
 // builder can produce precise per-factor results.
 type TDXVerifyResult struct {
+	// Validity comes only from successful online collateral verification.
+	Validity EvidenceValidity
 	// ParseErr is non-nil if the hex decode or quote parse step failed.
 	// When ParseErr is set, all downstream fields are zero/nil.
 	ParseErr error
@@ -402,6 +404,16 @@ func VerifyTDXQuoteOnline(ctx context.Context, hexQuote string, getter trust.HTT
 	if err != nil {
 		result.CollateralErr = fmt.Errorf("TCB level extraction: %w", err)
 		slog.DebugContext(ctx, "TDX TCB level extraction failed", "err", err)
+		return result
+	}
+	bound, ok := collateralOpts.VerifiedValidityBound()
+	if !ok {
+		result.CollateralErr = errors.New("verified Intel collateral validity is unavailable")
+		return result
+	}
+	result.Validity, err = verifiedEvidenceValidity(bound)
+	if err != nil {
+		result.CollateralErr = err
 		return result
 	}
 	result.TcbStatus = tcbLevel.TcbStatus

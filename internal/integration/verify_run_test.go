@@ -196,6 +196,10 @@ func TestVerifyRun_Tinfoil_Fixture(t *testing.T) {
 		"tls_key_binding",
 	})
 
+	if expiry, ok := report.Validity.Expiry(); !ok || expiry.IsZero() {
+		t.Fatal("verified gateway SEV certificate expiry missing from authorization")
+	}
+
 	if report.Passed < 13 {
 		t.Errorf("expected at least 13 passing factors, got %d", report.Passed)
 	}

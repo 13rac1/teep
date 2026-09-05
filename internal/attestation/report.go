@@ -131,6 +131,8 @@ type FactorResult struct {
 // VerificationReport holds the factor-by-factor results of an attestation
 // verification run. Produced by BuildReport.
 type VerificationReport struct {
+	// Validity is the earliest applicable authenticated evidence bound.
+	Validity           EvidenceValidity  `json:"-"`
 	Title              string            `json:"title,omitempty"` // header label; defaults to "Attestation Report"
 	Provider           string            `json:"provider"`
 	Model              string            `json:"model"`
@@ -882,6 +884,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	}
 
 	return &VerificationReport{
+		Validity:           reportEvidenceValidity(in, factors),
 		Provider:           in.Provider,
 		Model:              in.Model,
 		Timestamp:          time.Now(),
