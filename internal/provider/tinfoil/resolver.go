@@ -245,6 +245,14 @@ func (r *DirectResolver) ResolveRoute(ctx context.Context, model string) (provid
 	return provider.NewResolvedRoute("https://"+mapping.SelectDomain(PromptCacheKeyFromContext(ctx)), repo)
 }
 
+// CloseIdleConnections releases idle discovery connections.
+func (r *DirectResolver) CloseIdleConnections() {
+	r.mu.RLock()
+	client := r.client
+	r.mu.RUnlock()
+	client.CloseIdleConnections()
+}
+
 // refresh fetches the model-to-enclave mapping from the proxy discovery
 // endpoint and rebuilds the cached mapping. Holds the write lock only for
 // the swap.

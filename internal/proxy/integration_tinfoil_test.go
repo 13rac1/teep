@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -215,7 +216,7 @@ func TestIntegration_Tinfoil(t *testing.T) {
 	})
 	t.Run("GLMReasoningRepairs", func(t *testing.T) {
 		model := requireTinfoilModelEndpoint(t, catalog,
-			tinfoilPrefixModel("tinfoil_v3_cloud", "glm-5-2"), "/v1/chat/completions")
+			tinfoilPrefixModel("tinfoil_v3_cloud", tinfoilReasoningModel()), "/v1/chat/completions")
 		runGLMReasoningRepairTests(t, e2eeSrv.URL, model)
 	})
 }
@@ -240,7 +241,7 @@ func TestIntegration_TinfoilDirect(t *testing.T) {
 	})
 	t.Run("GLMReasoningRepairs", func(t *testing.T) {
 		model := requireTinfoilModelEndpoint(t, catalog,
-			tinfoilPrefixModel("tinfoil_v3_direct", "glm-5-2"), "/v1/chat/completions")
+			tinfoilPrefixModel("tinfoil_v3_direct", tinfoilReasoningModel()), "/v1/chat/completions")
 		runGLMReasoningRepairTests(t, e2eeSrv.URL, model)
 	})
 }
@@ -250,7 +251,7 @@ func runTinfoilAPISurface(t *testing.T, providerName string, catalog tinfoilCata
 
 	chatModel := requireTinfoilModelEndpoint(t, catalog, tinfoilChatModel(providerName), "/v1/chat/completions")
 	reasoningModel := requireTinfoilModelEndpoint(t, catalog,
-		tinfoilPrefixModel(providerName, "glm-5-2"), "/v1/chat/completions")
+		tinfoilPrefixModel(providerName, tinfoilReasoningModel()), "/v1/chat/completions")
 	visionModel := requireTinfoilMultimodalModel(t, catalog, tinfoilVisionModel(providerName), "/v1/chat/completions")
 	responsesModel := requireTinfoilModelEndpoint(t, catalog, tinfoilChatModel(providerName), "/v1/responses")
 	embeddingsModel := requireTinfoilModelEndpoint(t, catalog, tinfoilEmbeddingsModel(providerName), "/v1/embeddings")
@@ -744,6 +745,11 @@ func assertSpeechResponse(t *testing.T, resp *http.Response) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
 	}
+	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || !strings.HasPrefix(media, "audio/") {
+		t.Fatalf("speech response requires an audio media type, got %q", resp.Header.Get("Content-Type"))
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read speech body: %v", err)
@@ -1007,4 +1013,11 @@ func isTinfoilIntegrationBackendDomain(domain string) bool {
 		}
 	}
 	return true
+}
+
+func tinfoilReasoningModel() string {
+	if model := os.Getenv("TINFOIL_REASONING_MODEL"); model != "" {
+		return model
+	}
+	return "glm-5-3"
 }

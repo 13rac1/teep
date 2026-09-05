@@ -431,6 +431,7 @@ type Server struct {
 	providers          map[string]*provider.Provider // provider name → Provider
 	cache              *attestation.Cache
 	negCache           *attestation.NegativeCache
+	authorizations     *authorizationStore
 	signingKeyCache    *attestation.SigningKeyCache
 	spkiCache          *attestation.SPKICache
 	rekorClient        *attestation.RekorClient
@@ -466,6 +467,7 @@ func New(cfg *config.Config) (*Server, error) {
 		cache:           attestation.NewCache(attestationCacheTTL),
 		negCache:        attestation.NewNegativeCache(negativeCacheTTL),
 		signingKeyCache: attestation.NewSigningKeyCache(signingKeyCacheTTL),
+		authorizations:  newAuthorizationStore(maxAuthorizations, maxAuthorizationVerifications, authorizationVerificationTimeout),
 		spkiCache:       spkiCache,
 		mux:             http.NewServeMux(),
 		attestClient:    attestClient,
@@ -557,6 +559,7 @@ func New(cfg *config.Config) (*Server, error) {
 // initiates a graceful shutdown with a 5-second deadline to drain in-flight
 // requests (which zeros any active E2EE sessions via their defers).
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	defer s.Close()
 	if s.cfg.MaxConns <= 0 {
 		return fmt.Errorf("max_conns must be positive, got %d", s.cfg.MaxConns)
 	}
@@ -587,6 +590,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		slog.Info("shutting down")
+		s.authorizations.close()
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
@@ -649,6 +653,8 @@ type statusRecorder struct {
 	http.ResponseWriter
 	status int
 }
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (r *statusRecorder) Write(b []byte) (int, error) {
 	if r.status == 0 {
@@ -840,16 +846,16 @@ func fromConfig(
 		// TinfoilSC skips that path. SEE:
 		// evalTinfoilProviderSignerRecognition.
 		p.SupplyChainPolicy = tinfoil.CloudSupplyChainPolicy()
-		p.SigstoreRepoForModel = func(_ string) string {
-			return tinfoil.RouterRepo
+		route, err := provider.NewResolvedRoute(cp.BaseURL, tinfoil.RouterRepo)
+		p.StaticRoute = route
+		if err != nil {
+			return nil, err
 		}
 		p.ModelLister = provider.NewValidatingModelLister(
 			provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline)),
 			provider.ValidateTinfoilEntry,
 		)
-		p.SPKIDomainForModel = func(_ context.Context, _ string) (string, bool) {
-			return "inference.tinfoil.sh", true
-		}
+
 	case "tinfoil_v3_direct":
 		resolver := tinfoil.NewDirectResolver(cp.APIKey, offline)
 		p.BaseURL = tinfoil.DefaultBaseURL // fallback for model discovery
@@ -868,44 +874,12 @@ func fromConfig(
 		// model repo signed by the Tinfoil org WARNs; a foreign signer
 		// fails. SEE: attestation.OrgSignerPolicy.
 		p.SupplyChainPolicy = tinfoil.DirectSupplyChainPolicy()
-		p.SigstoreRepoForModel = func(model string) string {
-			m, err := resolver.ResolveMapping(context.Background(), model)
-			if err != nil || m.Repo == "" {
-				return tinfoil.RepoForModel(model)
-			}
-			return m.Repo
-		}
-		p.BaseURLForModel = func(ctx context.Context, model string) (string, error) {
-			m, err := resolver.ResolveMapping(ctx, model)
-			if err != nil {
-				return "", fmt.Errorf("tinfoil direct: resolve model %q: %w", model, err)
-			}
-			promptCacheKey := tinfoil.PromptCacheKeyFromContext(ctx)
-			domain := m.SelectDomain(promptCacheKey)
-			return "https://" + domain, nil
-		}
+		p.ResolveRoute = resolver.ResolveRoute
 		p.ModelLister = provider.NewValidatingModelLister(
 			provider.NewModelLister(tinfoil.DefaultBaseURL, cp.APIKey, config.NewAttestationClient(offline)),
 			provider.ValidateTinfoilEntry,
 		)
-		p.SPKIDomainForModel = func(ctx context.Context, model string) (string, bool) {
-			m, err := resolver.ResolveMapping(ctx, model)
-			if err != nil {
-				slog.WarnContext(ctx, "tinfoil direct: SPKI domain resolution failed",
-					"model", model, "err", err)
-				return "", false
-			}
-			promptCacheKey := tinfoil.PromptCacheKeyFromContext(ctx)
-			return m.SelectDomain(promptCacheKey), true
-		}
-		p.CacheKeySuffix = func(ctx context.Context, model string) string {
-			m, err := resolver.ResolveMapping(ctx, model)
-			if err != nil {
-				return ""
-			}
-			promptCacheKey := tinfoil.PromptCacheKeyFromContext(ctx)
-			return m.SelectDomain(promptCacheKey)
-		}
+
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", cp.Name)
 	}
@@ -951,10 +925,16 @@ func (s *Server) resolveModel(clientModel string) (*provider.Provider, string, b
 // it for E2EE key exchange without a second round-trip. The REPORTDATA
 // binding has already been verified against the raw's signing key.
 func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, upstreamModel string) (*attestation.VerificationReport, *attestation.RawAttestation) {
+	return s.fetchVerified(ctx, prov, upstreamModel, func(action string, err error) {
+		s.recordNegativeCache(ctx, prov, upstreamModel, action, nil, err)
+	})
+}
+
+func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, upstreamModel string, failure func(string, error)) (*attestation.VerificationReport, *attestation.RawAttestation) {
 	if prov.Attester == nil {
 		err := errors.New("provider has no Attester")
 		slog.ErrorContext(ctx, "provider has no Attester", "provider", prov.Name, "model", upstreamModel, "err", err)
-		s.recordNegativeCache(ctx, prov, upstreamModel, "missing_attester", nil, err)
+		failure("missing_attester", err)
 		return nil, nil
 	}
 
@@ -966,7 +946,7 @@ func (s *Server) fetchAndVerify(ctx context.Context, prov *provider.Provider, up
 	raw, err := prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
 	if err != nil {
 		slog.ErrorContext(ctx, "attestation fetch failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-		s.recordNegativeCache(ctx, prov, upstreamModel, "attestation_fetch_failed", nil, err)
+		failure("attestation_fetch_failed", err)
 		return nil, nil
 	}
 	fetchDur := time.Since(fetchStart)
@@ -1322,10 +1302,13 @@ func (s *Server) verifyTinfoilSupplyChain(
 	prov *provider.Provider,
 	upstreamModel string,
 ) (*attestation.TinfoilSupplyChainResult, time.Duration) {
-	if raw.BackendFormat != attestation.FormatTinfoil || prov.SigstoreRepoForModel == nil {
+	if raw.BackendFormat != attestation.FormatTinfoil {
 		return nil, 0
 	}
-	sigstoreRepo := prov.SigstoreRepoForModel(upstreamModel)
+	sigstoreRepo := prov.StaticRoute.SupplyChainRepo()
+	if prov.SigstoreRepoForModel != nil {
+		sigstoreRepo = prov.SigstoreRepoForModel(upstreamModel)
+	}
 	if sigstoreRepo == "" {
 		return &attestation.TinfoilSupplyChainResult{
 			SigstoreErr: fmt.Errorf("no Tinfoil Sigstore repo for model %q", upstreamModel),
@@ -1357,7 +1340,9 @@ func (s *Server) verifyTinfoilSupplyChain(
 	}
 
 	// Sigstore DSSE bundle verification.
-	sv := tinfoil.NewSigstoreVerifier(config.NewAttestationClient(s.cfg.Offline))
+	client := config.NewAttestationClient(s.cfg.Offline)
+	defer client.CloseIdleConnections()
+	sv := tinfoil.NewSigstoreVerifier(client)
 	predicateBytes, predicateType, signer, err := sv.FetchAndVerify(ctx, sigstoreRepo)
 	if err != nil {
 		result.SigstoreErr = err
@@ -1601,6 +1586,13 @@ var (
 // given endpoint configuration. The returned handler performs:
 // body reading → model parsing → provider resolution → attestation → E2EE → relay.
 func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
+	return s.endpointHandler(ep, nil)
+}
+
+// endpointHandler shares request normalization, routing, accounting, and
+// inference with Explore. The optional observer belongs to that one request
+// and receives its actual authorization report, including after retry.
+func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.VerificationReport, bool)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := reqid.WithID(r.Context(), reqid.New())
 		requestStart := time.Now()
@@ -1711,6 +1703,20 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 
 		s.stats.requests.Add(1)
 		s.stats.lastRequestAt.Store(requestStart.UnixNano())
+		var route provider.ResolvedRoute
+		var key provider.AuthorizationKey
+		if prov.UsesTLSBinding {
+			var routeErr error
+			route, key, routeErr = resolveRequestRoute(ctx, prov, upstreamModel)
+			if routeErr != nil {
+				status = "route_failed"
+				s.stats.errors.Add(1)
+				s.logInferenceBlock(ctx, "resolve_route", ep.name, prov.Name, upstreamModel, http.StatusBadGateway, routeErr)
+				http.Error(w, "resolve upstream route failed", http.StatusBadGateway)
+				return
+			}
+			ctx = withCacheModel(ctx, key.Model()+"@"+key.Authority())
+		}
 		ms := s.stats.getModelStats(prov.Name, cacheModelFor(ctx, upstreamModel))
 		ms.requests.Add(1)
 		ms.lastRequestAt.Store(requestStart.Unix())
@@ -1726,6 +1732,19 @@ func (s *Server) handleEndpoint(ep *endpointConfig) http.HandlerFunc {
 			s.stats.nonStream.Add(1)
 			s.stats.activeNonStream.Add(1)
 			defer s.stats.activeNonStream.Add(-1)
+		}
+
+		if prov.UsesTLSBinding {
+			contentType := ep.contentType
+			if contentType == "" {
+				contentType = r.Header.Get("Content-Type")
+			}
+			outcome := s.handleAuthorizedEndpoint(ctx, w, &authorizedRequest{provider: prov, route: route, key: key, body: body, stream: stream, path: endpointPath, endpoint: ep.endpointType, contentType: contentType})
+			if observe != nil {
+				observe(outcome.report, prov.E2EE)
+			}
+			status, attestDur, e2eeDur, upstreamDur = outcome.status, outcome.attestDur, outcome.e2eeDur, outcome.upstreamDur
+			return
 		}
 
 		cacheModel := cacheModelFor(ctx, upstreamModel)
@@ -2826,6 +2845,9 @@ type responseInterceptor struct {
 	headerSent bool
 }
 
+// Unwrap lets ResponseController reach the server's deadline support.
+func (ri *responseInterceptor) Unwrap() http.ResponseWriter { return ri.ResponseWriter }
+
 func (ri *responseInterceptor) WriteHeader(code int) {
 	ri.headerSent = true
 	ri.ResponseWriter.WriteHeader(code)
@@ -2892,6 +2914,7 @@ func (e *httpError) Unwrap() error { return e.err }
 // upstreamResult holds the outcome of doUpstreamRoundtrip. Always returned
 // (even on error) so callers can extract partial timing for metrics.
 type upstreamResult struct {
+	Request     *http.Request
 	Resp        *http.Response
 	Session     e2ee.Decryptor
 	Meta        *e2ee.ChutesE2EE
@@ -3654,18 +3677,45 @@ func prefixModelID(providerName string, raw json.RawMessage) (json.RawMessage, e
 	return json.Marshal(obj)
 }
 
-// handleReport returns the cached VerificationReport for the given provider
-// and model as JSON. Query parameters: provider, model.
+// handleReport returns a cached report. An explicit authority selects the exact
+// TLS authorization scope without discovery or verification.
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
-	provName := r.URL.Query().Get("provider")
-	model := r.URL.Query().Get("model")
-
-	if provName == "" || model == "" {
-		http.Error(w, `query parameters "provider" and "model" are required`, http.StatusBadRequest)
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(query["provider"]) != 1 || len(query["model"]) != 1 || len(query["authority"]) > 1 || query.Get("provider") == "" || query.Get("model") == "" {
+		http.Error(w, "expected one provider, one model, and at most one authority", http.StatusBadRequest)
 		return
 	}
+	provName, model := query.Get("provider"), query.Get("model")
+	var selected provider.ResolvedRoute
+	if authorities, specified := query["authority"]; specified {
+		selected, err = provider.NewResolvedRoute("https://"+authorities[0], "")
+		prov := s.providers[provName]
+		if err != nil || prov == nil || !prov.UsesTLSBinding {
+			http.Error(w, "authority requires a valid HTTPS authority and a TLS-bound provider", http.StatusBadRequest)
+			return
+		}
+	}
 
-	report, ok := s.cache.Get(provName, model)
+	var report *attestation.VerificationReport
+	var ok bool
+	if prov := s.providers[provName]; prov != nil && prov.UsesTLSBinding {
+		var key provider.AuthorizationKey
+		if selected.Authority() != "" {
+			key, err = selected.AuthorizationKey(provName, model)
+		} else {
+			_, key, err = resolveRequestRoute(r.Context(), prov, model)
+		}
+		if err != nil {
+			slog.WarnContext(r.Context(), "resolve report route failed", "provider", provName, "model", model, "err", err)
+			http.Error(w, "resolve report route failed", http.StatusBadGateway)
+			return
+		}
+		if value, found := s.authorizations.acquire(key); found {
+			report, ok = value.report, true
+		}
+	} else {
+		report, ok = s.cache.Get(provName, model)
+	}
 	if !ok {
 		http.Error(w, fmt.Sprintf("no cached report for provider=%q model=%q", provName, model), http.StatusNotFound)
 		return

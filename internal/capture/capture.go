@@ -466,3 +466,10 @@ func hostSlug(rawURL string) string {
 	}
 	return slug
 }
+
+// CloseIdleConnections forwards transport cleanup through this wrapper.
+func (t *RecordingTransport) CloseIdleConnections() {
+	if closer, ok := t.Base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}

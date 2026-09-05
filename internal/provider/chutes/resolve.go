@@ -102,6 +102,9 @@ func (r *ModelResolver) Resolve(ctx context.Context, model string) (string, erro
 	return "", fmt.Errorf("chutes: model %q not found in /v1/models listing; use a chute UUID or check available models", model)
 }
 
+// CloseIdleConnections releases idle connections owned by this component.
+func (r *ModelResolver) CloseIdleConnections() { r.client.CloseIdleConnections() }
+
 // maybeRefresh fetches /v1/models if the cache has expired.
 func (r *ModelResolver) maybeRefresh(ctx context.Context) error {
 	r.mu.Lock()

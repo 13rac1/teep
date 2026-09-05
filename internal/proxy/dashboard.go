@@ -189,13 +189,14 @@ func (s *Server) buildCacheStats(hits, misses int64) dashboardCache {
 	}
 	s.modelsMu.RUnlock()
 
+	authorizations, signingKeys := s.authorizations.counts()
 	return dashboardCache{
-		Entries:         s.cache.Len(),
+		Entries:         s.cache.Len() + authorizations,
 		Negative:        s.negCache.Len(),
 		HitRate:         hitRateString(hits, misses),
 		Hits:            hits,
 		Misses:          misses,
-		SigningKeys:     s.signingKeyCache.Len(),
+		SigningKeys:     s.signingKeyCache.Len() + signingKeys,
 		SPKICerts:       s.spkiCache.Len(),
 		SPKIDomains:     s.spkiCache.DomainCount(),
 		ModelsCount:     modelsCount,
@@ -275,17 +276,11 @@ func (s *Server) buildDashboardData() dashboardData {
 		}
 	}
 
-	cacheInfos := s.cache.Models()
-	slices.SortFunc(cacheInfos, func(a, b attestation.CacheInfo) int {
-		return b.FetchedAt.Compare(a.FetchedAt) // descending: most recent first
-	})
-
-	var attestations []dashAttestation
-	for _, info := range cacheInfos {
-		report, ok := s.cache.Get(info.Provider, info.Model)
-		if !ok {
-			continue
-		}
+	reports := s.cachedReportSnapshots()
+	slices.SortFunc(reports, func(a, b cachedReportSnapshot) int { return b.info.FetchedAt.Compare(a.info.FetchedAt) })
+	attestations := make([]dashAttestation, 0, len(reports))
+	for _, snapshot := range reports {
+		info, report := snapshot.info, snapshot.report
 		e2ee := ""
 		for _, f := range report.Factors {
 			if f.Name == attestation.FactorE2EEUsable && f.Status == attestation.Pass {

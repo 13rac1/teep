@@ -258,7 +258,7 @@ func (r *ehbpResponseReader) Read(p []byte) (int, error) {
 	plaintext, err := r.gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		r.done = true
-		return 0, fmt.Errorf("ehbp: AEAD authentication failed at chunk %d: %w", r.chunkIdx-1, err)
+		return 0, fmt.Errorf("%w: ehbp AEAD authentication failed at chunk %d: %w", ErrDecryptionFailed, r.chunkIdx-1, err)
 	}
 
 	n := copy(p, plaintext)

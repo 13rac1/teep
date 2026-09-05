@@ -124,6 +124,9 @@ func (p *NoncePool) FetchE2EEMaterial(ctx context.Context, model string) (*provi
 	return p.Take(ctx, model)
 }
 
+// CloseIdleConnections releases idle connections owned by this component.
+func (p *NoncePool) CloseIdleConnections() { p.client.CloseIdleConnections() }
+
 // take attempts to consume one nonce from the pool. Returns nil if no nonces
 // are available or the pool is expired. Prefers instances with fewer failures.
 func (p *NoncePool) take(ctx context.Context, chuteID string) *provider.E2EEMaterial {

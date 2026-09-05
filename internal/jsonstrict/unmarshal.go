@@ -49,3 +49,9 @@ func UnmarshalWarn(data []byte, v any, label string) (unknown, missing []string,
 	}
 	return unknown, missing, err
 }
+
+// Unmarshal returns field diagnostics without logging untrusted field names.
+// Low-level protocol parsers return these diagnostics to their callers.
+func Unmarshal(data []byte, v any) (unknown, missing []string, err error) {
+	return unmarshal(data, v)
+}

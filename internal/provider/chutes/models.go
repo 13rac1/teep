@@ -110,3 +110,6 @@ func (l *ModelLister) ListModels(ctx context.Context) ([]json.RawMessage, error)
 	}
 	return models, nil
 }
+
+// CloseIdleConnections releases idle connections owned by this component.
+func (l *ModelLister) CloseIdleConnections() { l.client.CloseIdleConnections() }

@@ -164,7 +164,7 @@ func addCTVerifyConnection(config *tls.Config, checker *Checker) {
 		}
 		host := ctConnectionHost(&state, configuredServerName)
 		if err := checker.checkTLSState(host, &state, checker.loadLogListForHandshake); err != nil {
-			return fmt.Errorf("certificate transparency check failed: %w", err)
+			return &ctVerificationError{err: err}
 		}
 		return nil
 	}

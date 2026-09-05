@@ -762,3 +762,10 @@ func NewAttestationClient(offline bool) *http.Client {
 	client.Transport = &RetryTransport{Base: client.Transport}
 	return client
 }
+
+// CloseIdleConnections forwards transport cleanup through this wrapper.
+func (t *RetryTransport) CloseIdleConnections() {
+	if closer, ok := t.Base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}

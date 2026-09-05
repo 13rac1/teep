@@ -97,6 +97,7 @@ func (a *authorization) attemptContext(ctx context.Context) (context.Context, co
 type authorizationRecord struct {
 	value    *authorization
 	lastUsed time.Time
+	models   map[provider.AuthorizationKey]string // Bounded model-specific E2EE outcomes for a shared router.
 }
 
 type authorizationOperation struct {
@@ -137,35 +138,74 @@ func newAuthorizationStore(capacity, verifications int, timeout time.Duration) *
 // acquire is the attempt boundary: deletion prevents subsequent acquisitions,
 // while callers that already acquired immutable material may finish naturally.
 func (s *authorizationStore) acquire(key provider.AuthorizationKey) (*authorization, bool) {
-	value, ok := s.lookup(key)
+	s.mu.Lock()
+	record, ok := s.lookupLocked(key)
 	if !ok {
+		s.mu.Unlock()
 		return nil, false
 	}
-	snapshot := *value
-	snapshot.report = value.report.Clone()
-	return &snapshot, true
+	detail := ""
+	if key.EvidenceScope() != key {
+		record.observeModel(key, s.capacity)
+		detail = record.models[key]
+		s.entries[key.EvidenceScope()] = record
+	}
+	s.mu.Unlock()
+	return authorizationForModel(record.value, key, detail), true
 }
 
-// lookup returns immutable published material. Callers must clone the report
-// before exposing it for mutation. Copying stays outside the store lock.
+func authorizationForModel(value *authorization, key provider.AuthorizationKey, detail string) *authorization {
+	snapshot := *value
+	snapshot.key = key
+	snapshot.report = value.report.Clone()
+	snapshot.report.Model = key.Model()
+	if detail != "" {
+		snapshot.report.MarkE2EEUsable(detail)
+	}
+	return &snapshot
+}
+
+func (r *authorizationRecord) observeModel(key provider.AuthorizationKey, limit int) {
+	if r.models == nil {
+		r.models = make(map[provider.AuthorizationKey]string)
+	}
+	if _, exists := r.models[key]; exists {
+		return
+	}
+	if len(r.models) >= limit {
+		for previous := range r.models {
+			delete(r.models, previous)
+			break
+		}
+	}
+	r.models[key] = ""
+}
+
+// lookup returns immutable published material. Callers must clone its report.
 func (s *authorizationStore) lookup(key provider.AuthorizationKey) (*authorization, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	record, ok := s.lookupLocked(key)
+	return record.value, ok
+}
+
+func (s *authorizationStore) lookupLocked(key provider.AuthorizationKey) (authorizationRecord, bool) {
+	key = key.EvidenceScope()
 	if s.closed {
-		return nil, false
+		return authorizationRecord{}, false
 	}
 	record, ok := s.entries[key]
 	if !ok {
-		return nil, false
+		return authorizationRecord{}, false
 	}
 	now := s.now()
 	if record.value.hasExpiry && !now.Before(record.value.expiresAt) {
 		delete(s.entries, key)
-		return nil, false
+		return authorizationRecord{}, false
 	}
 	record.lastUsed = now
 	s.entries[key] = record
-	return record.value, true
+	return record, true
 }
 
 // authorizationVerification returns a validated candidate or a blocked report.
@@ -179,12 +219,17 @@ type authorizationVerifyFunc func(context.Context) (authorizationVerification, e
 
 // load collapses verification while allowing each caller to cancel its wait.
 // Negative cache checks and writes belong to the shared callback, once per run.
-func (s *authorizationStore) load(ctx context.Context, key provider.AuthorizationKey, negative func() error, verify authorizationVerifyFunc) (*authorization, *attestation.VerificationReport, error) {
+func (s *authorizationStore) load(ctx context.Context, key provider.AuthorizationKey, negative func() error, observe func(bool), verify authorizationVerifyFunc) (*authorization, *attestation.VerificationReport, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		if value, ok := s.acquire(key); ok {
+		value, hit := s.acquire(key)
+		if observe != nil {
+			observe(hit)
+			observe = nil // Count only the initial lookup, not acquisition after verification.
+		}
+		if hit {
 			return value, nil, nil
 		}
 		if negative != nil {
@@ -192,7 +237,7 @@ func (s *authorizationStore) load(ctx context.Context, key provider.Authorizatio
 				return nil, nil, err
 			}
 		}
-		result := s.flight.DoChan(key.SingleflightKey(), func() (any, error) {
+		result := s.flight.DoChan(key.EvidenceScope().SingleflightKey(), func() (any, error) {
 			return s.verifyShared(key, negative, verify)
 		})
 		select {
@@ -246,6 +291,7 @@ func (s *authorizationStore) verifyShared(key provider.AuthorizationKey, negativ
 }
 
 func (s *authorizationStore) begin(key provider.AuthorizationKey) (*authorizationOperation, error) {
+	key = key.EvidenceScope()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -263,6 +309,7 @@ func (s *authorizationStore) begin(key provider.AuthorizationKey) (*authorizatio
 }
 
 func (s *authorizationStore) finish(key provider.AuthorizationKey, op *authorizationOperation) {
+	key = key.EvidenceScope()
 	op.cancel()
 	s.mu.Lock()
 	if s.active[key] == op {
@@ -273,12 +320,13 @@ func (s *authorizationStore) finish(key provider.AuthorizationKey, op *authoriza
 }
 
 func (s *authorizationStore) publish(key provider.AuthorizationKey, op *authorizationOperation, candidate *authorization) error {
+	key = key.EvidenceScope()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.active[key] != op || op.ctx.Err() != nil {
 		return errors.New("authorization verification was invalidated")
 	}
-	if candidate.key != key {
+	if candidate.key.EvidenceScope() != key {
 		return errors.New("authorization candidate does not match publication key")
 	}
 	if candidate.hasExpiry && !s.now().Before(candidate.expiresAt) {
@@ -318,6 +366,7 @@ func (s *authorizationStore) evictLocked(keep provider.AuthorizationKey) {
 }
 
 func (s *authorizationStore) deleteGeneration(key provider.AuthorizationKey, generation authorizationGeneration) bool {
+	key = key.EvidenceScope()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.entries[key]
@@ -331,9 +380,15 @@ func (s *authorizationStore) deleteGeneration(key provider.AuthorizationKey, gen
 func (s *authorizationStore) promote(key provider.AuthorizationKey, generation authorizationGeneration, detail string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, ok := s.entries[key]
+	record, ok := s.entries[key.EvidenceScope()]
 	if !ok || record.value.generation != generation {
 		return false
+	}
+	if key.EvidenceScope() != key {
+		record.observeModel(key, s.capacity)
+		record.models[key] = detail
+		s.entries[key.EvidenceScope()] = record
+		return true
 	}
 	for _, factor := range record.value.report.Factors {
 		if factor.Name != attestation.FactorE2EEUsable {
@@ -353,6 +408,7 @@ func (s *authorizationStore) promote(key provider.AuthorizationKey, generation a
 }
 
 func (s *authorizationStore) invalidate(key provider.AuthorizationKey) {
+	key = key.EvidenceScope()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.entries, key)
@@ -367,4 +423,28 @@ func (s *authorizationStore) close() {
 	s.closed = true
 	s.cancel()
 	clear(s.entries)
+}
+
+// counts returns live authorizations and retained encryption keys without
+// copying reports or changing cache recency.
+func (s *authorizationStore) counts() (entries, signingKeys int) {
+	if s == nil {
+		return 0, 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, 0
+	}
+	now := s.now()
+	for _, record := range s.entries {
+		if record.value.hasExpiry && !now.Before(record.value.expiresAt) {
+			continue
+		}
+		entries++
+		if record.value.signingKey != "" {
+			signingKeys++
+		}
+	}
+	return entries, signingKeys
 }
