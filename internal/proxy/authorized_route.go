@@ -8,6 +8,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 // Close cancels shared verification and closes idle inference, attestation,
@@ -86,7 +87,9 @@ func (s *Server) loadAuthorization(ctx context.Context, prov *provider.Provider,
 			if verifyCtx.Err() != nil {
 				return
 			}
-			s.negCache.Record(key.ProviderName(), key.EvidenceScope().SingleflightKey())
+			if !errors.Is(err, tlsct.ErrConnectionCapacity) {
+				s.negCache.Record(key.ProviderName(), key.EvidenceScope().SingleflightKey())
+			}
 			slog.WarnContext(verifyCtx, "route attestation failed", "provider", key.ProviderName(), "model", key.Model(), "action", action, "err", err)
 		}
 		report, raw, admission, err := s.fetchVerified(withCacheModel(verifyCtx, key.Model()+"@"+key.Authority()), scoped, key.Model(), recordFailure)

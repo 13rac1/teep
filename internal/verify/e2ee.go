@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -18,7 +17,6 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
-	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -48,10 +46,6 @@ func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName
 	switch providerName {
 	case "venice":
 		return testE2EEVenice(ctx, raw, cp, model)
-	case "nearcloud":
-		return testE2EENearCloud(ctx, raw, cp, model)
-	case "neardirect":
-		return testE2EENeardirect(ctx, raw, cp, model)
 	case "chutes":
 		return testE2EEChutes(ctx, raw, cp, model)
 	default:
@@ -103,60 +97,6 @@ func testE2EEVenice(ctx context.Context, raw *attestation.RawAttestation, cp *co
 
 // testE2EENearCloud tests NearCloud E2EE (Ed25519/XChaCha20-Poly1305) via
 // direct HTTPS request with E2EE headers.
-func testE2EENearCloud(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
-	baseURL := cp.BaseURL
-	if baseURL == "" {
-		baseURL = "https://cloud-api.near.ai"
-	}
-	return testE2EENearAI(ctx, raw, cp, model, baseURL, "nearcloud")
-}
-
-// testE2EENeardirect tests neardirect E2EE (same Ed25519/XChaCha20-Poly1305
-// protocol as NearCloud) via direct HTTPS request to the resolved model domain.
-func testE2EENeardirect(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
-	resolver := neardirect.NewEndpointResolver()
-	domain, err := resolver.Resolve(ctx, model)
-	if err != nil {
-		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("resolve model domain: %w", err)}
-	}
-	return testE2EENearAI(ctx, raw, cp, model, "https://"+domain, "neardirect")
-}
-
-// testE2EENearAI runs a NEAR AI E2EE test inference (Ed25519/XChaCha20-Poly1305).
-// Shared by nearcloud and neardirect.
-func testE2EENearAI(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model, baseURL, label string) *attestation.E2EETestResult {
-	body, err := json.Marshal(map[string]any{
-		"model":    model,
-		"messages": []map[string]string{{"role": "user", "content": "Say hello"}},
-		"stream":   true,
-	})
-	if err != nil {
-		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("marshal body: %w", err)}
-	}
-
-	encBody, session, err := e2ee.EncryptChatMessagesNearCloud(body, raw.SigningKey)
-	if err != nil {
-		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("encrypt v2: %w", err)}
-	}
-	defer session.Zero()
-
-	chatURL := baseURL + "/v1/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatURL, bytes.NewReader(encBody))
-	if err != nil {
-		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Signing-Algo", "ed25519")
-	req.Header.Set("X-Client-Pub-Key", session.ClientEd25519PubHex())
-	req.Header.Set("X-Encryption-Version", "2")
-	req.Header.Set("X-Encrypt-All-Fields", "true")
-	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
-	req.Header.Set("Connection", "close")
-	tlsct.SetUserAgent(req)
-
-	return doE2EEStreamTest(req, session, label)
-}
-
 // testE2EEChutes tests Chutes E2EE (ML-KEM-768 + ChaCha20-Poly1305) via
 // direct HTTPS request to the /e2e/invoke endpoint.
 func testE2EEChutes(ctx context.Context, raw *attestation.RawAttestation, cp *config.Provider, model string) *attestation.E2EETestResult {
@@ -227,10 +167,9 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return &attestation.E2EETestResult{
 			Attempted: true,
-			Err:       fmt.Errorf("HTTP %d: %s", resp.StatusCode, body),
+			Err:       fmt.Errorf("HTTP %d", resp.StatusCode),
 		}
 	}
 
@@ -251,8 +190,8 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 		}
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+	scanner, cleanup := e2ee.NewSSEScanner(resp.Body)
+	defer cleanup()
 
 	var streamKey []byte
 	decryptedChunks := 0
@@ -260,10 +199,10 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		data, isData := e2ee.SSEData(line)
+		if !isData {
 			continue
 		}
-		data := line[len("data: "):]
 		if data == "[DONE]" {
 			break
 		}
@@ -358,26 +297,37 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 		resp.Body.Close()
 	}()
 
+	return verifyE2EEStreamResponse(resp, session, version)
+}
+
+func verifyE2EEStreamResponse(resp *http.Response, session e2ee.Decryptor, version string) *attestation.E2EETestResult {
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return &attestation.E2EETestResult{
 			Attempted: true,
-			Err:       fmt.Errorf("HTTP %d: %s", resp.StatusCode, body),
+			Err:       fmt.Errorf("HTTP %d", resp.StatusCode),
 		}
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+	scanner, cleanup := e2ee.NewSSEScanner(resp.Body)
+	defer cleanup()
 	encryptedCount := 0
 	chunkCount := 0
+	seenDone := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if err := e2ee.CheckSSEEvent(line); err != nil {
+			return &attestation.E2EETestResult{Attempted: true, Err: err}
+		}
+		data, isData := e2ee.SSEData(line)
+		if !isData {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			if err := e2ee.FinishSSE(scanner); err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("SSE completion: %w", err)}
+			}
+			seenDone = true
 			break
 		}
 		chunkCount++
@@ -393,13 +343,17 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 				Delta        any `json:"delta,omitempty"`
 				FinishReason any `json:"finish_reason,omitempty"`
 			} `json:"choices,omitempty"`
-			Usage any `json:"usage,omitempty"`
+			Error json.RawMessage `json:"error,omitempty"`
+			Usage any             `json:"usage,omitempty"`
 		}
 		if _, _, err := jsonstrict.UnmarshalWarn([]byte(data), &chunk, "e2ee SSE chunk"); err != nil {
 			return &attestation.E2EETestResult{
 				Attempted: true,
 				Err:       fmt.Errorf("parse SSE chunk %d: %w", chunkCount, err),
 			}
+		}
+		if len(chunk.Error) != 0 {
+			return &attestation.E2EETestResult{Attempted: true, Err: errors.New("upstream SSE error event")}
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -427,6 +381,10 @@ func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string)
 	}
 	if err := scanner.Err(); err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("read SSE stream: %w", err)}
+	}
+
+	if err := e2ee.CheckSSEEndMarker(session, chatCompletionsEndpoint, seenDone); err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: err}
 	}
 
 	if encryptedCount == 0 {
@@ -515,8 +473,7 @@ func safePrefix(s string, n int) string {
 	return s[:n]
 }
 
-// testE2EETinfoil tests Tinfoil EHBP (HPKE X25519 + AES-256-GCM full-body
-// encryption) via direct HTTPS request.
+// verifyEHBPStreamResponse authenticates EHBP frames and checks SSE completion.
 func verifyEHBPStreamResponse(resp *http.Response, session *e2ee.EHBPSession) *attestation.E2EETestResult {
 	nonceHex := resp.Header.Get("Ehbp-Response-Nonce")
 	if len(nonceHex) != 64 {
@@ -529,22 +486,36 @@ func verifyEHBPStreamResponse(resp *http.Response, session *e2ee.EHBPSession) *a
 	}
 	defer decrypted.Close()
 
-	scanner := bufio.NewScanner(decrypted)
-	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+	scanner, cleanup := e2ee.NewSSEScanner(decrypted)
+	defer cleanup()
 	chunkCount := 0
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if err := e2ee.CheckSSEEvent(line); err != nil {
+			return &attestation.E2EETestResult{Attempted: true, Err: err}
+		}
+		data, isData := e2ee.SSEData(line)
+		if !isData {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			if err := e2ee.FinishSSE(scanner); err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("EHBP stream completion: %w", err)}
+			}
 			break
 		}
 		chunkCount++
-		if !json.Valid([]byte(data)) {
-			return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("decrypted SSE chunk %d is not valid JSON", chunkCount)}
+		var chunk struct {
+			Error json.RawMessage `json:"error,omitempty"`
+		}
+		// Other completion metadata does not affect EHBP authentication. Only
+		// the error member determines whether the provider rejected inference.
+		if _, _, err := jsonstrict.Unmarshal([]byte(data), &chunk); err != nil {
+			return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("decrypted SSE chunk %d is not a JSON object", chunkCount)}
+		}
+		if len(chunk.Error) != 0 {
+			return &attestation.E2EETestResult{Attempted: true, Err: errors.New("upstream SSE error event")}
 		}
 	}
 	if err := scanner.Err(); err != nil {

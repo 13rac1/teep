@@ -173,8 +173,14 @@ func (a *Attester) CloseIdleConnections() {
 	}
 }
 
-// SetClient replaces the HTTP client used for attestation fetches.
-func (a *Attester) SetClient(c *http.Client) { a.client = c }
+// SetClient shares the caller's client with attestation and endpoint discovery.
+// Call it only before concurrent use or cleanup.
+func (a *Attester) SetClient(c *http.Client) {
+	a.client = c
+	if setter, ok := a.resolver.(interface{ SetClient(*http.Client) }); ok {
+		setter.SetClient(c)
+	}
+}
 
 // FetchAttestation fetches TEE attestation from NEAR AI. The nonce is sent as
 // a query parameter; NEAR AI echoes it back in the response. Query parameters
@@ -183,25 +189,9 @@ func (a *Attester) SetClient(c *http.Client) { a.client = c }
 // for E2EE key exchange. The model parameter selects which attestation to use
 // when the response contains multiple entries.
 func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
-	baseURL := a.baseURL
-
-	base, err := url.Parse(a.baseURL)
+	route, err := a.ResolveRoute(ctx, model)
 	if err != nil {
-		return nil, fmt.Errorf("nearai: parse base URL %q: %w", a.baseURL, err)
-	}
-
-	if shouldResolveModelDomain(base.Hostname()) && a.resolver != nil {
-		domain, err := a.resolver.Resolve(ctx, model)
-		if err != nil {
-			return nil, fmt.Errorf("nearai: resolve model %q: %w", model, err)
-		}
-		baseURL = "https://" + domain
-		slog.DebugContext(ctx, "nearai model resolved", "model", model, "domain", domain)
-	}
-
-	route, err := provider.NewResolvedRoute(baseURL, "")
-	if err != nil {
-		return nil, fmt.Errorf("nearai: resolve route: %w", err)
+		return nil, err
 	}
 	return fetchAttestationForRoute(ctx, a, route, model, nonce)
 }
@@ -378,7 +368,42 @@ func NewPreparer(apiKey string) *Preparer {
 }
 
 // PrepareRequest injects the NEAR AI Authorization header into req.
-func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string) error {
+func (p *Preparer) PrepareRequest(req *http.Request, headers http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if len(headers) == 0 {
+		return nil
+	}
+	names := []string{"X-Signing-Algo", "X-Client-Pub-Key", "X-Encryption-Version", "X-Encrypt-All-Fields"}
+	for _, name := range names {
+		if len(headers.Values(name)) != 1 || headers.Get(name) == "" {
+			return fmt.Errorf("incomplete NEAR E2EE headers: %s", name)
+		}
+	}
+	if headers.Get("X-Signing-Algo") != "ed25519" || headers.Get("X-Encryption-Version") != "2" || headers.Get("X-Encrypt-All-Fields") != "true" {
+		return errors.New("invalid NEAR E2EE protocol headers")
+	}
+	for _, name := range names {
+		req.Header.Set(name, headers.Get(name))
+	}
 	return nil
+}
+
+// ResolveRoute selects the same origin that a standalone attestation will use.
+func (a *Attester) ResolveRoute(ctx context.Context, model string) (provider.ResolvedRoute, error) {
+	base, err := url.Parse(a.baseURL)
+	if err != nil {
+		return provider.ResolvedRoute{}, fmt.Errorf("nearai: parse base URL %q: %w", a.baseURL, err)
+	}
+	if shouldResolveModelDomain(base.Hostname()) {
+		if a.resolver == nil {
+			return provider.ResolvedRoute{}, errors.New("missing NEAR route resolver")
+		}
+		domain, err := a.resolver.Resolve(ctx, model)
+		if err != nil {
+			return provider.ResolvedRoute{}, fmt.Errorf("nearai: resolve model %q: %w", model, err)
+		}
+		slog.DebugContext(ctx, "nearai model resolved", "model", model, "domain", domain)
+		return provider.NewResolvedRoute("https://"+domain, "")
+	}
+	return provider.NewResolvedRoute(a.baseURL, "")
 }

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -597,11 +598,13 @@ func TestParseAttestationResponse_TooManyComposeManagerActions(t *testing.T) {
 
 // mockResolver implements neardirect.DomainResolver for testing.
 type mockResolver struct {
+	calls  atomic.Int32
 	domain string
 	err    error
 }
 
 func (m *mockResolver) Resolve(_ context.Context, _ string) (string, error) {
+	m.calls.Add(1)
 	return m.domain, m.err
 }
 
@@ -625,14 +628,18 @@ func TestAttester_FetchAttestation_ResolverSuccess(t *testing.T) {
 	defer srv.Close()
 
 	host := strings.TrimPrefix(srv.URL, "https://")
+	resolver := &mockResolver{domain: host}
 	attester := neardirect.NewAttesterWithResolver(
 		"https://api.near.ai", "test-key",
-		&mockResolver{domain: host},
+		resolver,
 	)
 	attester.SetClient(srv.Client())
 	_, err := attester.FetchAttestation(context.Background(), "some-model", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("resolved attestation: %v", err)
+	}
+	if resolver.calls.Load() != 1 {
+		t.Fatalf("resolved %d times for one attestation", resolver.calls.Load())
 	}
 }
 
@@ -674,5 +681,41 @@ func setServedFingerprint(value any, fp string) {
 		for _, child := range v {
 			setServedFingerprint(child, fp)
 		}
+	}
+}
+
+func TestPreparerPreservesCompleteE2EEHeaders(t *testing.T) {
+	headers := http.Header{"X-Signing-Algo": {"ed25519"}, "X-Client-Pub-Key": {strings.Repeat("ab", 32)}, "X-Encryption-Version": {"2"}, "X-Encrypt-All-Fields": {"true"}, "X-Unrelated": {"ignored"}}
+	preparer := neardirect.NewPreparer("test-key")
+	request := httptest.NewRequest(http.MethodPost, "https://test.near.ai/v1/chat/completions", http.NoBody)
+	if err := preparer.PrepareRequest(request, headers, nil, true, "/v1/chat/completions"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"X-Signing-Algo", "X-Client-Pub-Key", "X-Encryption-Version", "X-Encrypt-All-Fields"} {
+		if request.Header.Get(name) != headers.Get(name) {
+			t.Errorf("missing %s", name)
+		}
+		incomplete := headers.Clone()
+		incomplete.Del(name)
+		if err := preparer.PrepareRequest(request, incomplete, nil, true, "/v1/chat/completions"); err == nil {
+			t.Errorf("accepted missing %s", name)
+		}
+	}
+	if request.Header.Get("X-Unrelated") != "" {
+		t.Fatal("copied unrelated header")
+	}
+}
+
+func TestAttester_FetchAttestation_MissingResolver(t *testing.T) {
+	for _, origin := range []string{"https://api.near.ai", "https://completions.near.ai"} {
+		t.Run(origin, func(t *testing.T) {
+			attester := neardirect.NewAttesterWithResolver(origin, "test-key", nil)
+			defer attester.CloseIdleConnections()
+			_, routeErr := attester.ResolveRoute(t.Context(), "model")
+			_, fetchErr := attester.FetchAttestation(t.Context(), "model", attestation.NewNonce())
+			if routeErr == nil || fetchErr == nil || fetchErr.Error() != routeErr.Error() {
+				t.Fatalf("standalone fetch and route resolution must reject a missing resolver: route=%v fetch=%v", routeErr, fetchErr)
+			}
+		})
 	}
 }

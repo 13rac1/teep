@@ -1,10 +1,10 @@
 package proxy_test
 
 import (
-	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -22,6 +21,7 @@ import (
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/proxy"
+	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
 
 // mockNearKeys holds the model's key material for the mock.
@@ -67,107 +67,51 @@ type mockNearPinnedHandler struct {
 	responseFunc func(body []byte, path string) string
 }
 
-func (m *mockNearPinnedHandler) HandlePinned(_ context.Context, req *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	report := &attestation.VerificationReport{
-		Provider: m.providerName,
-		Model:    req.Model,
-		Factors: []attestation.FactorResult{
-			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
-		},
+func (m *mockNearPinnedHandler) serve(w http.ResponseWriter, r *http.Request, encrypted bool) {
+	if r.ProtoMajor != 2 {
+		http.Error(w, "HTTP/2 required", http.StatusBadRequest)
+		return
 	}
-
-	if !req.E2EE {
-		// Plaintext path: echo back a simple response.
-		respBody := m.buildPlaintextResponse(req.Body, req.Path)
-		return &provider.PinnedResponse{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(respBody)),
-			Report:     report,
-			SigningKey: m.keys.edPubHex,
-		}, nil
+	body, err := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
+	if err != nil || len(body) > 1<<20 {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
 	}
-
-	// E2EE path: encrypt the body (client side), decrypt it (server side),
-	// generate response, encrypt it (server side), return with session.
-	switch req.Path {
+	w.Header().Set("Content-Type", "application/json")
+	if !encrypted {
+		_, _ = io.WriteString(w, m.buildPlaintextResponse(body, r.URL.Path))
+		return
+	}
+	if r.Header.Get("X-Encrypt-All-Fields") != "true" || r.Header.Get("Connection") != "" {
+		http.Error(w, "invalid encryption headers", http.StatusBadRequest)
+		return
+	}
+	var response string
+	switch r.URL.Path {
 	case "/v1/chat/completions":
-		return m.handleChatE2EE(req, report)
+		var messages []map[string]json.RawMessage
+		messages, err = m.decryptChatBody(body)
+		if err == nil {
+			response, err = m.encryptSSEResponse(m.chatResponse(messages), r.Header.Get("X-Client-Pub-Key"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
 	case "/v1/images/generations":
-		return m.handleImageE2EE(req, report)
+		var prompt string
+		prompt, err = m.decryptImageBody(body)
+		if err == nil {
+			response, err = m.encryptImageResponse(prompt, r.Header.Get("X-Client-Pub-Key"))
+		}
 	default:
-		return nil, fmt.Errorf("mock %s: unsupported E2EE endpoint %q", m.providerName, req.Path)
+		http.Error(w, "unsupported encrypted test endpoint", http.StatusBadRequest)
+		return
 	}
+	if err != nil {
+		http.Error(w, "test encryption failed", http.StatusInternalServerError)
+		return
+	}
+	_, _ = io.WriteString(w, response)
 }
 
-func (m *mockNearPinnedHandler) handleChatE2EE(req *provider.PinnedRequest, report *attestation.VerificationReport) (*provider.PinnedResponse, error) {
-	// Client-side: encrypt the body and create a session.
-	encBody, session, err := e2ee.EncryptChatMessagesNearCloud(req.Body, m.keys.edPubHex)
-	if err != nil {
-		return nil, fmt.Errorf("mock encrypt chat: %w", err)
-	}
-
-	// Server-side: decrypt messages to verify round-trip.
-	decrypted, err := m.decryptChatBody(encBody)
-	if err != nil {
-		session.Zero()
-		return nil, fmt.Errorf("mock server-side decrypt: %w", err)
-	}
-
-	// Generate response and encrypt it for the client.
-	responsePlain := m.chatResponse(decrypted)
-	responseSSE, err := m.encryptSSEResponse(responsePlain, session.ClientEd25519PubHex())
-	if err != nil {
-		session.Zero()
-		return nil, fmt.Errorf("mock encrypt response: %w", err)
-	}
-
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header: http.Header{
-			"Content-Type":     []string{"text/event-stream"},
-			"X-Client-Pub-Key": []string{session.ClientEd25519PubHex()},
-		},
-		Body:       io.NopCloser(strings.NewReader(responseSSE)),
-		Report:     report,
-		SigningKey: m.keys.edPubHex,
-		Session:    session,
-	}, nil
-}
-
-func (m *mockNearPinnedHandler) handleImageE2EE(req *provider.PinnedRequest, report *attestation.VerificationReport) (*provider.PinnedResponse, error) {
-	// Client-side: encrypt the prompt and create a session.
-	encBody, session, err := e2ee.EncryptImagePromptNearCloud(req.Body, m.keys.edPubHex)
-	if err != nil {
-		return nil, fmt.Errorf("mock encrypt image: %w", err)
-	}
-
-	// Server-side: decrypt prompt to verify round-trip.
-	decryptedPrompt, err := m.decryptImageBody(encBody)
-	if err != nil {
-		session.Zero()
-		return nil, fmt.Errorf("mock server-side decrypt image: %w", err)
-	}
-
-	// Generate encrypted image response.
-	responseJSON, err := m.encryptImageResponse(decryptedPrompt, session.ClientEd25519PubHex())
-	if err != nil {
-		session.Zero()
-		return nil, fmt.Errorf("mock encrypt image response: %w", err)
-	}
-
-	return &provider.PinnedResponse{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(responseJSON)),
-		Report:     report,
-		SigningKey: m.keys.edPubHex,
-		Session:    session,
-	}, nil
-}
-
-// decryptChatBody decrypts all message content fields from an encrypted chat body.
 func (m *mockNearPinnedHandler) decryptChatBody(encBody []byte) ([]map[string]json.RawMessage, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(encBody, &full); err != nil {
@@ -305,99 +249,38 @@ func clientEdToX25519(edPubHex string) (*ecdh.PublicKey, error) {
 	return e2ee.Ed25519PubToX25519(edPubBytes)
 }
 
-// newMockNearCloudProxyServer creates a proxy with a mock NearCloud
-// PinnedHandler that uses real XChaCha20 E2EE crypto. Caches are primed
-// with a passing attestation report and the model's signing key.
-func newMockNearCloudProxyServer(t *testing.T, e2eeEnabled bool) *httptest.Server {
+func newMockNearCloudProxyServer(t *testing.T, authority *testtls.Authority, encrypted bool) *httptest.Server {
 	t.Helper()
-
-	keys := generateMockKeys(t)
-	handler := &mockNearPinnedHandler{keys: keys, providerName: "nearcloud"}
-
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"nearcloud": {
-				Name:    "nearcloud",
-				BaseURL: "https://api.near.ai",
-				APIKey:  "test-key",
-				E2EE:    e2eeEnabled,
-			},
-		},
-	}
-
-	srv, err := proxy.New(cfg)
-	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
-	}
-
-	prov := srv.ProviderByName("nearcloud")
-	prov.PinnedHandler = handler
-	prov.E2EE = e2eeEnabled
-
-	// Prime caches so the proxy doesn't try real attestation.
-	passingReport := &attestation.VerificationReport{
-		Provider: "nearcloud",
-		Model:    "test-model",
-		Factors: []attestation.FactorResult{
-			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
-		},
-	}
-	srv.PutAttestationCache("nearcloud", "test-model", passingReport)
-	if e2eeEnabled {
-		srv.PutSigningKeyCache("nearcloud", "test-model", keys.edPubHex)
-	}
-
-	return httptest.NewServer(srv)
+	return newMockNearHTTPServer(t, authority, "nearcloud", encrypted)
 }
 
-// newMockNeardirectE2EEServer creates a proxy with a mock neardirect
-// PinnedHandler that uses real XChaCha20 E2EE crypto. The neardirect
-// provider is configured with all 5 endpoint paths and E2EE enabled.
-func newMockNeardirectE2EEServer(t *testing.T, e2eeEnabled bool) *httptest.Server {
+func newMockNeardirectE2EEServer(t *testing.T, authority *testtls.Authority, encrypted bool) *httptest.Server {
 	t.Helper()
+	return newMockNearHTTPServer(t, authority, "neardirect", encrypted)
+}
 
+func newMockNearHTTPServer(t *testing.T, authority *testtls.Authority, name string, encrypted bool) *httptest.Server {
+	t.Helper()
 	keys := generateMockKeys(t)
-	handler := &mockNearPinnedHandler{keys: keys, providerName: "neardirect"}
-
-	cfg := &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Providers: map[string]*config.Provider{
-			"neardirect": {
-				Name:    "neardirect",
-				BaseURL: "https://completions.near.ai",
-				APIKey:  "test-key",
-				E2EE:    e2eeEnabled,
-			},
-		},
-	}
-
-	srv, err := proxy.New(cfg)
+	handler := &mockNearPinnedHandler{keys: keys, providerName: name}
+	upstream := authority.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.serve(w, r, encrypted) }))
+	t.Cleanup(upstream.Close)
+	srv, err := proxy.New(&config.Config{Providers: map[string]*config.Provider{name: {Name: name, BaseURL: upstream.URL, APIKey: "test-key", E2EE: encrypted}}})
 	if err != nil {
-		t.Fatalf("proxy.New: %v", err)
+		t.Fatal(err)
 	}
-
-	prov := srv.ProviderByName("neardirect")
-	prov.PinnedHandler = handler
-	prov.E2EE = e2eeEnabled
-	if e2eeEnabled {
-		prov.Encryptor = neardirect.NewE2EE()
+	t.Cleanup(srv.Close)
+	prov := srv.ProviderByName(name)
+	route, err := provider.NewResolvedRoute(upstream.URL, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Prime caches so the proxy doesn't try real attestation.
-	passingReport := &attestation.VerificationReport{
-		Provider: "neardirect",
-		Model:    "test-model",
-		Factors: []attestation.FactorResult{
-			{Name: "nonce_match", Status: attestation.Pass, Detail: "match"},
-			{Name: "tee_reportdata_binding", Status: attestation.Pass, Detail: "binding ok"},
-		},
+	prov.StaticRoute, prov.ResolveRoute, prov.BaseURL, prov.Attester = route, nil, route.BaseURL(), nil
+	prov.Encryptor = neardirect.NewE2EE()
+	fp := sha256.Sum256(upstream.Certificate().RawSubjectPublicKeyInfo)
+	report := &attestation.VerificationReport{Provider: name, Model: "test-model", TLSAuthority: route.Authority(), TLSKeyFP: hex.EncodeToString(fp[:]), Factors: []attestation.FactorResult{{Name: attestation.FactorTEEReportData, Status: attestation.Pass}, {Name: attestation.FactorE2EEUsable, Status: attestation.Skip}}}
+	if err := srv.PutAuthorizationForTest(t.Context(), name, "test-model", route, report, keys.edPubHex); err != nil {
+		t.Fatal(err)
 	}
-	srv.PutAttestationCache("neardirect", "test-model", passingReport)
-	if e2eeEnabled {
-		srv.PutSigningKeyCache("neardirect", "test-model", keys.edPubHex)
-	}
-
 	return httptest.NewServer(srv)
 }

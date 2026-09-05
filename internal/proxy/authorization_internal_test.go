@@ -285,6 +285,32 @@ func TestAuthorizationNegativeRecheck(t *testing.T) {
 	}
 }
 
+func TestAuthorizationConstructorRejectsIncompleteMaterial(t *testing.T) {
+	key, candidate := testAuthorizationCandidate(t, "model")
+	for _, tc := range []struct {
+		name       string
+		change     func(*attestation.VerificationReport)
+		signingKey string
+		encrypt    bool
+	}{
+		{"wrong model", func(r *attestation.VerificationReport) { r.Model = "other" }, "", false},
+		{"missing TLS identity", func(r *attestation.VerificationReport) { r.TLSKeyFP = "" }, "", false},
+		{"wrong authority", func(r *attestation.VerificationReport) { r.TLSAuthority = "b.near.ai" }, "", false},
+		{"unbound key", func(*attestation.VerificationReport) {}, strings.Repeat("ab", 32), true},
+		{"empty bound key", func(r *attestation.VerificationReport) {
+			r.Factors = []attestation.FactorResult{{Name: attestation.FactorTEEReportData, Status: attestation.Pass}}
+		}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := candidate.report.Clone()
+			tc.change(report)
+			if _, err := newAuthorization(key, report, tc.signingKey, tc.encrypt, false); err == nil {
+				t.Fatal("incomplete authorization accepted")
+			}
+		})
+	}
+}
+
 func TestAuthorizationLookupObservation(t *testing.T) {
 	store := newAuthorizationStore(2, 1, time.Second)
 	defer store.close()

@@ -249,7 +249,7 @@ func runNearDirectE2EENonStream(t *testing.T) {
 
 func runNearDirectAttestationReport(t *testing.T) {
 	// Online mode so the report includes Intel PCS, NRAS, and PoC results.
-	cfg := integrationNearDirectConfig(t)
+	cfg := integrationNearDirectE2EEConfig(t)
 	cfg.Offline = false
 	proxySrv := newProxyServer(t, cfg)
 	defer proxySrv.Close()
@@ -257,19 +257,8 @@ func runNearDirectAttestationReport(t *testing.T) {
 	model := nearDirectIntegrationModel()
 	_, upstreamModel, _ := strings.Cut(model, ":")
 
-	// A chat request populates the report cache. For NEAR AI (a pinned
-	// provider), PinnedHandler.HandlePinned returns a non-nil Report only
-	// on SPKI cache miss — i.e., when the first request to a new domain
-	// triggers attestation. The proxy caches that report at proxy.go:431-432:
-	//
-	//   if pinnedResp.Report != nil {
-	//       s.cache.Put(prov.Name, upstreamModel, pinnedResp.Report)
-	//   }
-	//
-	// A fresh proxy instance starts with an empty SPKI cache, so the first
-	// chat request always misses, triggers attestation, and populates the
-	// report cache.
-	chatResp := postChatIntegration(t, proxySrv.URL, model, true)
+	// A successful encrypted request publishes and promotes one route authorization.
+	chatResp := postNearDirectContentChat(t, proxySrv.URL, model, true)
 	io.Copy(io.Discard, chatResp.Body) // drain so the proxy's relayStream finishes cleanly
 	chatResp.Body.Close()
 

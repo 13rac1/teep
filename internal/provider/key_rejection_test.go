@@ -15,6 +15,8 @@ func TestKeyRejection(t *testing.T) {
 		want        bool
 		bad         bool
 	}{
+		{"unknown", 200, "application/json", `{}`, false, true},
+		{"unknown", 400, "application/json", `{}`, false, true},
 		{"tinfoil_v3_cloud", 422, "application/problem+json", `{"type":"urn:ietf:params:ehbp:error:key-config"}`, true, false},
 		{"tinfoil_v3_direct", 422, "application/problem+json", `{"type":"other","title":"key-config"}`, false, false},
 		{"tinfoil_v3_cloud", 422, "application/json", `{"type":"urn:ietf:params:ehbp:error:key-config"}`, false, false},
@@ -37,6 +39,41 @@ func TestKeyRejection(t *testing.T) {
 				if err != nil || string(body) != tc.body {
 					t.Fatal("response body was consumed")
 				}
+			}
+		})
+	}
+}
+
+func TestNearKeyRejectionEndpoints(t *testing.T) {
+	for _, name := range []string{"neardirect", "nearcloud"} {
+		for _, path := range []string{"/v1/chat/completions", "/v1/embeddings", "/v1/images/generations", "/v1/rerank", "/v1/score", "/v1/audio/transcriptions"} {
+			expected, known := nearRejectionType(name, path)
+			body := `{"error":{"type":"` + expected + `","message":"Decryption failed"}}`
+			resp := &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
+			rejected, err := KeyRejection(resp, name, path)
+			resp.Body.Close()
+			if err != nil || rejected != known {
+				t.Fatalf("%s %s: rejected=%v err=%v", name, path, rejected, err)
+			}
+		}
+	}
+}
+
+func TestNearKeyRejectionRejectsMalformedDetail(t *testing.T) {
+	for _, detail := range []string{
+		`{"type":"bad_request","message":"Decryption failed","unexpected":true}`,
+		`{"type":"bad_request"}`,
+		`{"message":"Decryption failed"}`,
+		`{"type":null,"message":"Decryption failed"}`,
+		`{"type":42,"message":"Decryption failed"}`,
+		`null`, `[]`, `"error"`, `{}`,
+	} {
+		t.Run(detail, func(t *testing.T) {
+			resp := &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":` + detail + `}`))}
+			retry, err := KeyRejection(resp, "neardirect", "/v1/chat/completions")
+			defer resp.Body.Close()
+			if retry || err == nil {
+				t.Fatalf("malformed detail: retry=%v err=%v", retry, err)
 			}
 		})
 	}

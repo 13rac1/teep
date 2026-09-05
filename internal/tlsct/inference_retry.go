@@ -21,7 +21,10 @@ func (a *InferenceAttempt) Context(ctx context.Context) context.Context {
 // RetryConnectionFailure accepts only typed establishment failures before
 // GotConn. TLS verification errors and ambiguous EOF/reset errors do not match.
 func (a *InferenceAttempt) RetryConnectionFailure(ctx context.Context, err error) bool {
-	if err == nil || ctx.Err() != nil || a.assigned.Load() || IsTrustFailure(err) {
+	if err == nil || errors.Is(err, ErrConnectionCapacity) || ctx.Err() != nil || a.assigned.Load() || IsTrustFailure(err) {
+		return false
+	}
+	if _, ok := errors.AsType[*proxyHandshakeError](err); ok {
 		return false
 	}
 	if dns, ok := errors.AsType[*net.DNSError](err); ok {
@@ -60,6 +63,15 @@ func IsTrustFailure(err error) bool {
 	}
 	_, ok := errors.AsType[*ctVerificationError](err)
 	return ok
+}
+
+// IsOriginTrustFailure excludes forward-proxy failures: a failed outer TLS
+// handshake does not challenge the origin's attested identity or keys.
+func IsOriginTrustFailure(err error) bool {
+	if _, ok := errors.AsType[*proxyHandshakeError](err); ok {
+		return false
+	}
+	return IsTrustFailure(err)
 }
 
 type ctVerificationError struct{ err error }

@@ -102,3 +102,16 @@ type ChutesE2EE struct {
 	E2ENonce   string         // X-E2E-Nonce header value (single-use token)
 	Session    *ChutesSession // ML-KEM session for relay decryption
 }
+
+// ZeroSessions zeroes crypto material from all E2EE session types.
+func ZeroSessions(session Decryptor, meta *ChutesE2EE, ehbp *EHBPSession) {
+	if session != nil {
+		session.Zero()
+	}
+	if meta != nil && meta.Session != nil {
+		meta.Session.Zero()
+	}
+	if ehbp != nil {
+		ehbp.Zero()
+	}
+}

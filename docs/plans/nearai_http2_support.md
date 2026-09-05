@@ -287,7 +287,9 @@ The implementation is complete only if all of these invariants hold.
     has separate cleanup ownership; closing it must not replace closing the
     HTTP body. An SSE `[DONE]` marker does not replace reading the remaining
     EHBP frames to EOF. Accept only bounded trailing empty lines or comments;
-    propagate framing, authentication, and read errors before forwarding the
+    use a 64 KiB budget that counts each line plus two bytes for its possible
+    CRLF terminator, including shorter or absent terminators.
+    Propagate framing, authentication, and read errors before forwarding the
     completion marker or promoting E2EE success. A rejection parser that closes the original body must replace
     it before returning, including on errors. Error paths close bodies and zero
     ephemeral key material. A bounded error-body read may cause `net/http` to discard a
@@ -356,19 +358,33 @@ does not force another attestation of model-independent router evidence.
 
 ### Classification of key and trust failures
 
+EHBP non-2xx responses without a nonce retain their status and bounded body
+as TLS-authenticated diagnostics, without E2EE success, retry, or invalidation.
+All 2xx responses and responses with a nonce require EHBP authentication.
+Malformed nonce headers and response authentication failures remove authorization
+with the response-failure cooldown. Unknown provider names in key-rejection parsing return an error.
+
 "Keys stop working" means a classified cryptographic or protocol trust failure,
 not every unsuccessful request. Apply these rules to the authorization
 generation actually acquired by the request:
 
-- TLS SPKI, WebPKI, CT, or authority-consistency failure blocks the request and
-  conditionally invalidates that generation. Do not retry the logical inference
-  request or accept a replacement fingerprint from the failed connection.
+- Origin TLS SPKI, WebPKI, CT, or authority-consistency failure blocks the
+  request and conditionally invalidates that generation. Do not retry the
+  logical inference request or accept a replacement fingerprint from the
+  failed connection.
+- An HTTPS forward-proxy handshake failure blocks the request without retry.
+  Retain origin authorization: the failed outer handshake did not authenticate
+  or challenge the origin.
 - An exact, supported pre-inference E2EE key-rejection envelope conditionally
   invalidates that generation. Full re-attestation and one fresh-session retry
   are permitted only by the endpoint-specific retry contract below.
 - Response authentication, decryption, or required encryption-policy failure
   conditionally invalidates that generation and ends the logical request. The
-  next request must acquire fresh authorization; do not replay the failed one.
+  next request must acquire fresh authorization after the configured negative-cache
+  cooldown; do not replay the failed one. Record the cooldown atomically with
+  removal, only for the failed generation. Late failures must not extend the
+  cooldown or affect a replacement generation. A zero negative-cache TTL
+  disables this throttle.
 - Cancellation, request deadlines, DNS/dial failures, connection closure, EOF,
   resets, GOAWAY, overload, generic HTTP errors, redirects, malformed rejection
   envelopes, invalid JSON/SSE structure, and response-size violations do not by
@@ -686,7 +702,8 @@ after the manual pinned path is removed.
 The capture/replay transport already reconstructs `http.Response.TLS` from
 `peer_spki_der_base64`. Keep fixture tests on the same binding path. A fixture
 that lacks TLS peer data must fail closed and be recaptured; do not add a replay
-exception to production attesters.
+exception to production attesters. Replay tests verify recorded evidence and
+binding consistency; reconstructed TLS metadata does not prove a live handshake.
 
 Install one shared client policy that returns `http.ErrUseLastResponse` for
 every redirect in the common teep HTTP-client constructors. Do not accept a
@@ -930,7 +947,7 @@ Use generation-conditional operations:
 
 - report-only promotion clones the current report and replaces it
   under the cache lock only if the authorization generation still matches;
-- a TLS/SPKI, authority-consistency, or E2EE trust failure deletes
+- an origin TLS/SPKI, authority-consistency, or E2EE trust failure deletes
   authorization only if the immutable generation matches; a discovery refresh
   failure or repository-only change does not delete it;
 - no operation from an old generation can update or delete a replacement; and
@@ -1150,8 +1167,9 @@ Do not nest provider-specific retry loops or alter non-TLS-binding retry behavio
 | Typed temporary or timed-out DNS error, or a dial error, before any connection was assigned to the attempt | Teep may retry once if the caller is active and the deadline permits | Retain authorization and pool; reacquire a valid snapshot for the retry. |
 | Stale connection or HTTP/2 stream error after connection assignment, including `REFUSED_STREAM` and GOAWAY | No application retry; encrypted requests have no `GetBody` replay source | Retain authorization. Do not infer non-processing from a reset or EOF. |
 | Recognized pre-inference E2EE key rejection described below | Conditionally invalidate, initiate or join full attestation, then retry once with a new session | Use the replacement/current verified authorization, never a key from an error response. |
-| SPKI, authority, WebPKI, CT, attestation, or required factor failure | No retry of the logical inference request | Preserve fail-closed handling; conditionally invalidate the applicable generation for a trust failure. |
+| Origin SPKI, authority, WebPKI, CT, attestation, or required factor failure | No retry of the logical inference request | Preserve fail-closed handling; conditionally invalidate the applicable generation for a trust failure. |
 | Ambiguous write/read failure, peer `PROTOCOL_ERROR`, generic 4xx/5xx, redirect, malformed error, or response-decryption failure | No retry | Only a demonstrated trust/key failure invalidates; ordinary input, auth, rate-limit, and service errors retain valid keys. |
+| HTTPS forward-proxy handshake failure | No retry | Retain origin authorization, including replacement generations. |
 | Caller cancellation or logical deadline | No retry | Retain authorization; another client may continue using it. Evidence expiration is not a request deadline or invalidation event. |
 
 Use a typed decryption failure for response authentication failures, including
@@ -1524,8 +1542,10 @@ Work:
     regression tests with these changes.
 15. Bind pinned-client proxy selection to the resolved transport authority.
     Authenticate a CONNECT proxy separately from the attested origin, preserve
-    origin SPKI checks, and test proxy errors and TLS trust failures. Update
-    constructor callers to pass the complete transport identity.
+    origin SPKI checks, and retain origin authorization on outer handshake
+    failures without retry. Test concurrent proxy failures and replacement
+    generations. Update constructor callers to pass the complete transport
+    identity.
 16. Test connection-loss reuse in normal and offline operation, missing model
     keys, caller deadlines, duplicate rejection envelopes, stream completion,
     and ordinary read failures through the activated authorization path. Add

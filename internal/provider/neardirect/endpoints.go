@@ -76,6 +76,10 @@ func NewEndpointResolver(offline ...bool) *EndpointResolver {
 	}
 }
 
+// SetClient replaces the discovery client. Call it only before concurrent use
+// or cleanup. The caller retains ownership of the client.
+func (r *EndpointResolver) SetClient(client *http.Client) { r.client = client }
+
 // newEndpointResolverForTest returns a resolver pointing at a custom URL.
 func newEndpointResolverForTest(url string) *EndpointResolver {
 	return &EndpointResolver{
