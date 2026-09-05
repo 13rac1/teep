@@ -631,7 +631,7 @@ func nrasJWTExpired(t *testing.T, fixtureDir string) bool {
 }
 
 func TestRunReverify_NearCloud_Fixture(t *testing.T) {
-	fdir := "../../internal/integration/testdata/nearcloud_qwen_qwen3.5-122b-a10b_20260424_020614"
+	fdir := "../../internal/integration/testdata/nearcloud_qwen_qwen3.5-122b-a10b_20260629_020657"
 
 	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
 	cfgContent := "[providers.nearcloud]\napi_key = \"test-key\"\n"
@@ -653,7 +653,7 @@ func TestRunReverify_NearCloud_Fixture(t *testing.T) {
 }
 
 func TestRunReverify_NearDirect_Fixture(t *testing.T) {
-	fdir := "../../internal/integration/testdata/neardirect_qwen_qwen3.5-122b-a10b_20260424_021037"
+	fdir := "../../internal/integration/testdata/neardirect_qwen_qwen3.5-122b-a10b_20260629_020637"
 
 	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
 	cfgContent := "[providers.neardirect]\nbase_url = \"https://qwen35-122b.completions.near.ai\"\napi_key = \"test-key\"\n"

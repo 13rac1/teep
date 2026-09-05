@@ -2,6 +2,9 @@ package neardirect_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,7 +14,9 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 // makeAttestationEntry builds one JSON attestation entry with the given model name.
@@ -36,11 +41,13 @@ const validFlatResponseJSON = `{
 
 func makeServer(t *testing.T, status int, body string) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
+		_, _ = w.Write(servedAttestationJSON(t, body, serverFingerprint(srv)))
 	}))
+	return srv
 }
 
 func TestAttester_FetchAttestation_ArrayResponse_ExactMatch(t *testing.T) {
@@ -66,6 +73,7 @@ func TestAttester_FetchAttestation_ArrayResponse_ExactMatch(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	nonce := attestation.NewNonce()
 
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-405b", nonce)
@@ -137,6 +145,7 @@ func TestAttester_FetchAttestation_ArrayResponse_NoMatch(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	_, err := a.FetchAttestation(context.Background(), "unknown-model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for model not in attestation list")
@@ -149,6 +158,7 @@ func TestAttester_FetchAttestation_FlatResponse(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -169,17 +179,19 @@ func TestAttester_FetchAttestation_SetsAuthHeaderAndQueryParams(t *testing.T) {
 	var capturedAuth string
 	var capturedQuery string
 	var capturedPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedAuth = r.Header.Get("Authorization")
 		capturedQuery = r.URL.RawQuery
 		capturedPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(validFlatResponseJSON))
+		_, _ = w.Write(servedAttestationJSON(t, validFlatResponseJSON, serverFingerprint(srv)))
 	}))
 	defer srv.Close()
 
 	nonce := attestation.NewNonce()
 	a := neardirect.NewAttester(srv.URL, "nearai-secret")
+	a.SetClient(srv.Client())
 	_, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", nonce)
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -213,6 +225,7 @@ func TestAttester_FetchAttestation_HTTP500(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	_, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for HTTP 500, got nil")
@@ -224,6 +237,7 @@ func TestAttester_FetchAttestation_InvalidJSON(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	_, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
@@ -231,12 +245,13 @@ func TestAttester_FetchAttestation_InvalidJSON(t *testing.T) {
 }
 
 func TestAttester_FetchAttestation_ContextCancelled(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -263,6 +278,7 @@ func TestAttester_FetchAttestation_TEEProviderIsSet(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	raw, err := a.FetchAttestation(context.Background(), "m", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -292,6 +308,7 @@ func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -303,7 +320,7 @@ func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
 	if raw.SigningAlgo != "ed25519" {
 		t.Errorf("SigningAlgo = %q, want %q", raw.SigningAlgo, "ed25519")
 	}
-	if raw.TLSFingerprint != "aabbccdd" {
+	if !tlsct.SPKIFingerprintsEqual(raw.TLSFingerprint, serverFingerprint(srv)) {
 		t.Errorf("TLSFingerprint = %q, want %q", raw.TLSFingerprint, "aabbccdd")
 	}
 	if raw.Nonce != "abc123" {
@@ -327,6 +344,7 @@ func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -335,7 +353,7 @@ func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
 	if raw.SigningAddress != "0x1234" {
 		t.Errorf("SigningAddress = %q, want %q", raw.SigningAddress, "0x1234")
 	}
-	if raw.TLSFingerprint != "deadbeef" {
+	if !tlsct.SPKIFingerprintsEqual(raw.TLSFingerprint, serverFingerprint(srv)) {
 		t.Errorf("TLSFingerprint = %q, want %q", raw.TLSFingerprint, "deadbeef")
 	}
 	if raw.Nonce != "test-nonce" {
@@ -362,6 +380,7 @@ func TestAttester_FetchAttestation_AllAttestations_UsesNewFieldNames(t *testing.
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	raw, err := a.FetchAttestation(context.Background(), "openai/gpt-oss-120b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -394,6 +413,7 @@ func TestAttester_FetchAttestation_TooManyAttestations(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	_, err := a.FetchAttestation(context.Background(), "m-0", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for too many attestation entries")
@@ -414,6 +434,7 @@ func TestAttester_FetchAttestation_MalformedEventLogEntry(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	_, err := a.FetchAttestation(context.Background(), "test-model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for malformed event_log entry")
@@ -438,6 +459,7 @@ func TestAttester_FetchAttestation_Ed25519KeyPassedThrough(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
 	raw, err := a.FetchAttestation(context.Background(), "test-model", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -602,17 +624,55 @@ func TestAttester_FetchAttestation_ResolverSuccess(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, makeAttestationEntry("some-model"))
 	defer srv.Close()
 
-	host := strings.TrimPrefix(srv.URL, "http://")
+	host := strings.TrimPrefix(srv.URL, "https://")
 	attester := neardirect.NewAttesterWithResolver(
 		"https://api.near.ai", "test-key",
 		&mockResolver{domain: host},
 	)
 	attester.SetClient(srv.Client())
 	_, err := attester.FetchAttestation(context.Background(), "some-model", attestation.NewNonce())
-	t.Logf("ResolverSuccess: %v", err)
-	// The request goes to http:// but we set https:// scheme after resolve,
-	// so a TLS error or parse result is expected — not a resolver error.
-	if err != nil && strings.Contains(err.Error(), "resolve model") {
-		t.Errorf("should not be a resolver error: %v", err)
+	if err != nil {
+		t.Fatalf("resolved attestation: %v", err)
+	}
+}
+
+func serverFingerprint(srv *httptest.Server) string {
+	fp := sha256.Sum256(srv.Certificate().RawSubjectPublicKeyInfo)
+	return hex.EncodeToString(fp[:])
+}
+
+// servedAttestationJSON binds the test server's evidence to its actual TLS key.
+func servedAttestationJSON(t *testing.T, body, fp string) []byte {
+	t.Helper()
+	if !json.Valid([]byte(body)) {
+		return []byte(body)
+	}
+	var wrapper struct {
+		Value any `json:"value"`
+	}
+	if _, _, err := jsonstrict.UnmarshalWarn([]byte(`{"value":`+body+`}`), &wrapper, "test evidence"); err != nil {
+		t.Fatal(err)
+	}
+	setServedFingerprint(wrapper.Value, fp)
+	encoded, err := json.Marshal(wrapper.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func setServedFingerprint(value any, fp string) {
+	switch v := value.(type) {
+	case map[string]any:
+		if _, ok := v["intel_quote"]; ok {
+			v["tls_cert_fingerprint"] = fp
+		}
+		for _, child := range v {
+			setServedFingerprint(child, fp)
+		}
+	case []any:
+		for _, child := range v {
+			setServedFingerprint(child, fp)
+		}
 	}
 }

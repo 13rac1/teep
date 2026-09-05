@@ -28,6 +28,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
@@ -198,12 +199,25 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("signing_algo", "ed25519")
 	endpoint.RawQuery = q.Encode()
 
-	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
+	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("nearai: %w", err)
 	}
 
-	return ParseAttestationResponse(ctx, body, model)
+	raw, err := ParseAttestationResponse(ctx, body, model)
+	if err != nil {
+		return nil, err
+	}
+	if err := tlsct.CompareSPKIFingerprints(peerSPKI, raw.TLSFingerprint); err != nil {
+		return nil, fmt.Errorf("nearai: attestation TLS binding: %w", err)
+	}
+	authority, err := tlsct.HTTPSOriginAuthority(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("nearai: attestation authority: %w", err)
+	}
+	raw.TransportTLSFingerprint = raw.TLSFingerprint
+	raw.TransportTLSAuthority = authority
+	return raw, nil
 }
 
 func shouldResolveModelDomain(host string) bool {

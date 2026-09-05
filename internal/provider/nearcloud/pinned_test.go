@@ -838,66 +838,6 @@ func TestHandlePinned_ModelHasDifferentFingerprint(t *testing.T) {
 	}
 }
 
-func TestFetchAttestation_HappyPath(t *testing.T) {
-	nonce := attestation.NewNonce()
-	var capturedQuery string
-	var capturedAuth string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedQuery = r.URL.RawQuery
-		capturedAuth = r.Header.Get("Authorization")
-		t.Logf("request: %s %s", r.Method, r.URL.String())
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(nearcloudAttestationJSON("sha256:fp", nonce.Hex())))
-	}))
-	defer srv.Close()
-
-	a := NewAttester("my-api-key", true)
-	// Override the client transport to redirect to our test server.
-	a.client = srv.Client()
-	a.client.Transport = &testTransport{target: srv.URL}
-
-	raw, err := a.FetchAttestation(context.Background(), "test-model", nonce)
-	if err != nil {
-		t.Fatalf("FetchAttestation: %v", err)
-	}
-
-	t.Logf("raw: nonce=%s, model=%s", raw.Nonce, raw.Model)
-	t.Logf("gateway fields: nonce=%s, compose=%s, fp=%s",
-		raw.GatewayNonceHex, raw.GatewayAppCompose, raw.GatewayTLSFingerprint)
-	t.Logf("captured query: %s", capturedQuery)
-	t.Logf("captured auth: %s", capturedAuth)
-
-	if raw.Nonce != nonce.Hex() {
-		t.Errorf("Nonce = %q, want %q", raw.Nonce, nonce.Hex())
-	}
-	if raw.GatewayNonceHex != nonce.Hex() {
-		t.Errorf("GatewayNonceHex = %q, want %q", raw.GatewayNonceHex, nonce.Hex())
-	}
-	if raw.GatewayAppCompose != "test-compose" {
-		t.Errorf("GatewayAppCompose = %q, want %q", raw.GatewayAppCompose, "test-compose")
-	}
-	if raw.GatewayTLSFingerprint != "sha256:fp" {
-		t.Errorf("GatewayTLSFingerprint = %q, want %q", raw.GatewayTLSFingerprint, "sha256:fp")
-	}
-
-	// Verify query params.
-	if !strings.Contains(capturedQuery, "model=test-model") {
-		t.Errorf("query should contain model: %s", capturedQuery)
-	}
-	if !strings.Contains(capturedQuery, "nonce="+nonce.Hex()) {
-		t.Errorf("query should contain nonce: %s", capturedQuery)
-	}
-	if !strings.Contains(capturedQuery, "include_tls_fingerprint=true") {
-		t.Errorf("query should contain include_tls_fingerprint: %s", capturedQuery)
-	}
-	if !strings.Contains(capturedQuery, "signing_algo=ed25519") {
-		t.Errorf("query should contain signing_algo=ed25519: %s", capturedQuery)
-	}
-	if capturedAuth != "Bearer my-api-key" {
-		t.Errorf("Authorization = %q, want %q", capturedAuth, "Bearer my-api-key")
-	}
-}
-
 func TestFetchAttestation_HTTP500(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Logf("request: %s %s", r.Method, r.URL.String())

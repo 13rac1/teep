@@ -21,6 +21,7 @@ import (
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
@@ -187,7 +188,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("signing_algo", "ed25519")
 	endpoint.RawQuery = q.Encode()
 
-	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
+	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
 	if err != nil {
 		return nil, fmt.Errorf("nearcloud: %w", err)
 	}
@@ -196,6 +197,11 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	if err != nil {
 		return nil, err
 	}
+	if err := tlsct.CompareSPKIFingerprints(peerSPKI, gwRaw.TLSCertFingerprint); err != nil {
+		return nil, fmt.Errorf("nearcloud: gateway attestation TLS binding: %w", err)
+	}
+	raw.TransportTLSFingerprint = gwRaw.TLSCertFingerprint
+	raw.TransportTLSAuthority = gatewayHost
 	raw.GatewayIntelQuote = gwRaw.IntelQuote
 	raw.GatewayNonceHex = gwRaw.NonceHex
 	raw.GatewayAppCompose = gwRaw.AppCompose
