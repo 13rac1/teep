@@ -164,6 +164,15 @@ func NewAttesterWithResolver(baseURL, apiKey string, resolver DomainResolver, of
 	}
 }
 
+// CloseIdleConnections releases idle attestation and discovery connections.
+// Call SetClient only before concurrent use or cleanup.
+func (a *Attester) CloseIdleConnections() {
+	a.client.CloseIdleConnections()
+	if closer, ok := a.resolver.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
 // SetClient replaces the HTTP client used for attestation fetches.
 func (a *Attester) SetClient(c *http.Client) { a.client = c }
 

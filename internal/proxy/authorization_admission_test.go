@@ -67,7 +67,7 @@ func TestAuthorizationNRASAdmissionAndReuse(t *testing.T) {
 			at := now
 			store.now = func() time.Time { return at }
 			key, candidate := testAuthorizationCandidate(t, "model")
-			value, _, err := store.load(t.Context(), key, nil, func(context.Context) (authorizationVerification, error) {
+			value, _, err := store.load(t.Context(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
 				if delayed {
 					at = now.Add(time.Hour + 10*time.Second)
 				}
@@ -92,7 +92,7 @@ func TestAuthorizationNRASAdmissionAndReuse(t *testing.T) {
 			var wg sync.WaitGroup
 			for range 16 {
 				wg.Go(func() {
-					current, _, err := store.load(t.Context(), key, nil, func(context.Context) (authorizationVerification, error) {
+					current, _, err := store.load(t.Context(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
 						calls.Add(1)
 						return authorizationVerification{candidate: candidate}, nil
 					})
@@ -112,7 +112,7 @@ func TestAuthorizationNRASAdmissionAndReuse(t *testing.T) {
 			if calls.Load() != 0 {
 				t.Fatal("cache hit reattested after evidence expiration")
 			}
-			if len(store.entries) != 1 {
+			if len(store.snapshots()) != 1 {
 				t.Fatal("age hid cached report")
 			}
 		})

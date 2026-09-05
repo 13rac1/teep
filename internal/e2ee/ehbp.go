@@ -225,9 +225,15 @@ func (r *ehbpResponseReader) Read(p []byte) (int, error) {
 	var lenBuf [4]byte
 	_, err := io.ReadFull(r.body, lenBuf[:])
 	if err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		if errors.Is(err, io.EOF) && r.chunkIdx > 0 {
 			r.done = true
 			return 0, io.EOF
+		}
+		// EOF before the first authenticated frame is not a valid response.
+		// A partial length prefix is a truncated frame at any position.
+		r.done = true
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
 		}
 		return 0, fmt.Errorf("ehbp: read chunk length: %w", err)
 	}
@@ -258,7 +264,7 @@ func (r *ehbpResponseReader) Read(p []byte) (int, error) {
 	plaintext, err := r.gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		r.done = true
-		return 0, fmt.Errorf("ehbp: AEAD authentication failed at chunk %d: %w", r.chunkIdx-1, err)
+		return 0, fmt.Errorf("%w: ehbp AEAD authentication failed at chunk %d: %w", ErrDecryptionFailed, r.chunkIdx-1, err)
 	}
 
 	n := copy(p, plaintext)

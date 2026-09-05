@@ -33,7 +33,7 @@ func TestAuthorizationEvictionUsesRecency(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 16 {
 		wg.Go(func() {
-			value, _, err := store.load(t.Context(), key, nil, func(context.Context) (authorizationVerification, error) {
+			value, _, err := store.load(t.Context(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
 				verifications.Add(1)
 				return authorizationVerification{}, errors.New("valid authorization should have been retained")
 			})

@@ -634,7 +634,7 @@ func TestEHBPZero(t *testing.T) {
 	}
 }
 
-// TestEHBPEmptyResponse verifies that an empty response body returns EOF.
+// TestEHBPEmptyResponse rejects EOF before any authenticated response frame.
 func TestEHBPEmptyResponse(t *testing.T) {
 	priv := generateX25519KeyPair(t)
 	session, err := NewEHBPSession(priv.PublicKey().Bytes())
@@ -660,8 +660,8 @@ func TestEHBPEmptyResponse(t *testing.T) {
 	defer rc.Close()
 
 	got, err := io.ReadAll(rc)
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("expected truncated response error, got %v", err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected empty response, got %d bytes", len(got))

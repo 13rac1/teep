@@ -33,13 +33,43 @@ func testAuthorizationCandidate(t *testing.T, model string) (provider.Authorizat
 
 func loadTestAuthorization(t *testing.T, store *authorizationStore, key provider.AuthorizationKey, candidate *authorization) *authorization {
 	t.Helper()
-	value, blocked, err := store.load(context.Background(), key, nil, func(context.Context) (authorizationVerification, error) {
+	value, blocked, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
 		return authorizationVerification{candidate: candidate}, nil
 	})
 	if err != nil || blocked != nil || value == nil {
 		t.Fatalf("load authorization: %v", err)
 	}
 	return value
+}
+
+func TestAuthorizationCounts(t *testing.T) {
+	store := newAuthorizationStore(10, 2, time.Second)
+	defer store.close()
+	now := time.Now()
+	key, candidate := testAuthorizationCandidate(t, "encrypted")
+	candidate.signingKey = "retained public key"
+	value := loadTestAuthorization(t, store, key, candidate)
+	plainKey, plain := testAuthorizationCandidate(t, "tls-only")
+	loadTestAuthorization(t, store, plainKey, plain)
+	thirdKey, third := testAuthorizationCandidate(t, "third")
+	loadTestAuthorization(t, store, thirdKey, third)
+	store.now = func() time.Time { return now.Add(time.Hour) }
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 20 {
+				if entries, keys := store.counts(); entries != 3 || keys != 1 {
+					t.Errorf("entries=%d keys=%d, want 3 and 1", entries, keys)
+				}
+				store.promote(key, value.generation, "verified response")
+			}
+		})
+	}
+	wg.Wait()
+	store.close()
+	if entries, keys := store.counts(); entries != 0 || keys != 0 {
+		t.Fatal("closed store reported authorizations")
+	}
 }
 
 func TestAuthorizationSameKeySingleflight(t *testing.T) {
@@ -51,7 +81,7 @@ func TestAuthorizationSameKeySingleflight(t *testing.T) {
 	results := make(chan *authorization, 32)
 	for range 32 {
 		wg.Go(func() {
-			value, _, err := store.load(context.Background(), key, nil, func(context.Context) (authorizationVerification, error) {
+			value, _, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
 				calls.Add(1)
 				return authorizationVerification{candidate: candidate}, nil
 			})
@@ -133,7 +163,7 @@ func TestAuthorizationInvalidationPreventsLatePublication(t *testing.T) {
 		release := make(chan struct{})
 		done := make(chan error, 1)
 		go func() {
-			_, _, err := store.load(context.Background(), key, nil, func(context.Context) (authorizationVerification, error) {
+			_, _, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
 				close(started)
 				<-release // Simulate verification that completes after cancellation.
 				return authorizationVerification{candidate: candidate}, nil
@@ -173,9 +203,9 @@ func TestAuthorizationVerificationAdmissionAndCancellation(t *testing.T) {
 		<-release
 		return authorizationVerification{candidate: candidate}, verifyCtx.Err()
 	}
-	go func() { _, _, err := store.load(ctx, key, nil, verify); done <- err }()
+	go func() { _, _, err := store.load(ctx, key, nil, nil, verify); done <- err }()
 	<-started
-	_, _, err := store.load(context.Background(), other, nil, verify)
+	_, _, err := store.load(context.Background(), other, nil, nil, verify)
 	if _, ok := errors.AsType[*verificationOverloadError](err); !ok {
 		t.Fatalf("distinct key did not fail fast: %v", err)
 	}
@@ -184,7 +214,7 @@ func TestAuthorizationVerificationAdmissionAndCancellation(t *testing.T) {
 		t.Fatalf("caller cancellation: %v", err)
 	}
 	joined := make(chan error, 1)
-	go func() { _, _, err := store.load(context.Background(), key, nil, verify); joined <- err }()
+	go func() { _, _, err := store.load(context.Background(), key, nil, nil, verify); joined <- err }()
 	close(release)
 	if err := <-joined; err != nil {
 		t.Fatal(err)
@@ -199,7 +229,7 @@ func TestAuthorizationAgeAndEviction(t *testing.T) {
 	defer store.close()
 	later := time.Now().Add(time.Hour)
 	key, candidate := testAuthorizationCandidate(t, "model")
-	_, _, err := store.load(context.Background(), key, nil, func(context.Context) (authorizationVerification, error) {
+	_, _, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
 		store.now = func() time.Time { return later }
 		return authorizationVerification{candidate: candidate}, nil
 	})
@@ -223,7 +253,7 @@ func TestAuthorizationBlockedReportNotCached(t *testing.T) {
 	defer store.close()
 	key, _ := testAuthorizationCandidate(t, "model")
 	blocked := &attestation.VerificationReport{Factors: []attestation.FactorResult{{Status: attestation.Fail, Enforced: true}}}
-	value, report, err := store.load(context.Background(), key, nil, func(context.Context) (authorizationVerification, error) {
+	value, report, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
 		return authorizationVerification{blocked: blocked}, nil
 	})
 	if err != nil || value != nil || report == nil || !report.Blocked() {
@@ -246,11 +276,30 @@ func TestAuthorizationNegativeRecheck(t *testing.T) {
 		}
 		return nil
 	}
-	_, _, err := store.load(context.Background(), key, negative, func(context.Context) (authorizationVerification, error) {
+	_, _, err := store.load(context.Background(), key, negative, nil, func(context.Context) (authorizationVerification, error) {
 		t.Error("verification started despite negative cache")
 		return authorizationVerification{}, errors.New("unexpected verification")
 	})
 	if !errors.Is(err, failure) {
 		t.Fatalf("negative recheck: %v", err)
+	}
+}
+
+func TestAuthorizationLookupObservation(t *testing.T) {
+	store := newAuthorizationStore(2, 1, time.Second)
+	defer store.close()
+	key, candidate := testAuthorizationCandidate(t, "model")
+	var observations []bool
+	observe := func(hit bool) { observations = append(observations, hit) }
+	verify := func(context.Context) (authorizationVerification, error) {
+		return authorizationVerification{candidate: candidate}, nil
+	}
+	for range 2 {
+		if _, _, err := store.load(t.Context(), key, nil, observe, verify); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(observations) != 2 || observations[0] || !observations[1] {
+		t.Fatalf("initial lookups=%v, want [false true]", observations)
 	}
 }

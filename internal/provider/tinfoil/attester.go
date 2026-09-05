@@ -189,3 +189,18 @@ func fetchAndVerifyAttestation(ctx context.Context, client *http.Client, baseURL
 
 	return raw, nil
 }
+
+// ResolveRoute obtains one discovery snapshot for standalone verification.
+func (a *DirectAttester) ResolveRoute(ctx context.Context, model string) (provider.ResolvedRoute, error) {
+	return a.resolver.ResolveRoute(ctx, model)
+}
+
+// CloseIdleConnections releases idle connections owned by this component.
+func (a *Attester) CloseIdleConnections() { a.client.CloseIdleConnections() }
+
+// CloseIdleConnections releases idle attestation and discovery connections.
+// Call SetClient only before concurrent use or cleanup.
+func (a *DirectAttester) CloseIdleConnections() {
+	a.client.CloseIdleConnections()
+	a.resolver.CloseIdleConnections()
+}

@@ -288,3 +288,6 @@ func (p *Preparer) PrepareRequest(req *http.Request, e2eeHeaders http.Header, _ 
 	maps.Copy(req.Header, e2eeHeaders)
 	return nil
 }
+
+// CloseIdleConnections releases idle connections owned by this component.
+func (a *Attester) CloseIdleConnections() { a.client.CloseIdleConnections() }

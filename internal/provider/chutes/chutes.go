@@ -351,3 +351,10 @@ func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, meta *e2ee.C
 	}
 	return nil
 }
+
+// CloseIdleConnections releases idle attestation and discovery connections.
+// Call SetClient only before concurrent use or cleanup.
+func (a *Attester) CloseIdleConnections() {
+	a.client.CloseIdleConnections()
+	a.resolver.CloseIdleConnections()
+}

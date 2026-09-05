@@ -1374,14 +1374,21 @@ func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body 
 // (chat, embeddings, images, etc.); actual provider paths are documented
 // in DecryptNonStreamResponseForEndpoint.
 func RelayNonStreamForEndpoint(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor, endpoint EndpointType) (StreamStats, error) {
-	responseBody, err := io.ReadAll(io.LimitReader(body, 10<<20))
+	responseBody, err := io.ReadAll(io.LimitReader(body, (10<<20)+1))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return StreamStats{}, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 
+	if len(responseBody) > 10<<20 {
+		http.Error(w, "upstream response exceeds size limit", http.StatusBadGateway)
+		return StreamStats{}, fmt.Errorf("%w: upstream response exceeds 10 MiB", ErrRelayFailed)
+	}
+
 	if session == nil {
-		w.Header().Set("Content-Type", "application/json")
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "application/json")
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(responseBody)
 		return StreamStats{}, nil

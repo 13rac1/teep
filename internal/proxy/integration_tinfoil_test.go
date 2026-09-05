@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -215,7 +216,7 @@ func TestIntegration_Tinfoil(t *testing.T) {
 	})
 	t.Run("GLMReasoningRepairs", func(t *testing.T) {
 		model := requireTinfoilModelEndpoint(t, catalog,
-			tinfoilPrefixModel("tinfoil_v3_cloud", "glm-5-2"), "/v1/chat/completions")
+			tinfoilPrefixModel("tinfoil_v3_cloud", tinfoilReasoningModel()), "/v1/chat/completions")
 		runGLMReasoningRepairTests(t, e2eeSrv.URL, model)
 	})
 }
@@ -240,7 +241,7 @@ func TestIntegration_TinfoilDirect(t *testing.T) {
 	})
 	t.Run("GLMReasoningRepairs", func(t *testing.T) {
 		model := requireTinfoilModelEndpoint(t, catalog,
-			tinfoilPrefixModel("tinfoil_v3_direct", "glm-5-2"), "/v1/chat/completions")
+			tinfoilPrefixModel("tinfoil_v3_direct", tinfoilReasoningModel()), "/v1/chat/completions")
 		runGLMReasoningRepairTests(t, e2eeSrv.URL, model)
 	})
 }
@@ -250,7 +251,7 @@ func runTinfoilAPISurface(t *testing.T, providerName string, catalog tinfoilCata
 
 	chatModel := requireTinfoilModelEndpoint(t, catalog, tinfoilChatModel(providerName), "/v1/chat/completions")
 	reasoningModel := requireTinfoilModelEndpoint(t, catalog,
-		tinfoilPrefixModel(providerName, "glm-5-2"), "/v1/chat/completions")
+		tinfoilPrefixModel(providerName, tinfoilReasoningModel()), "/v1/chat/completions")
 	visionModel := requireTinfoilMultimodalModel(t, catalog, tinfoilVisionModel(providerName), "/v1/chat/completions")
 	responsesModel := requireTinfoilModelEndpoint(t, catalog, tinfoilChatModel(providerName), "/v1/responses")
 	embeddingsModel := requireTinfoilModelEndpoint(t, catalog, tinfoilEmbeddingsModel(providerName), "/v1/embeddings")
@@ -744,6 +745,11 @@ func assertSpeechResponse(t *testing.T, resp *http.Response) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
 	}
+	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || !strings.HasPrefix(media, "audio/") {
+		t.Fatalf("speech response requires an audio media type, got %q", resp.Header.Get("Content-Type"))
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read speech body: %v", err)
@@ -800,7 +806,7 @@ func assertTinfoilPromptCacheKeyRequest(t *testing.T, proxyURL, model, upstreamM
 	defer resp.Body.Close()
 	assertChatShapeResponse(t, resp, false)
 
-	assertTinfoilReportCached(t, proxyURL, "tinfoil_v3_direct", upstreamModel+"@"+domain)
+	assertTinfoilReportCached(t, proxyURL, "tinfoil_v3_direct", upstreamModel, domain)
 }
 
 func tinfoilDistinctPromptCacheRoutes(t *testing.T, domains []string) (firstRoute, secondRoute tinfoilPromptCacheRoute) {
@@ -824,11 +830,10 @@ func tinfoilDistinctPromptCacheRoutes(t *testing.T, domains []string) (firstRout
 	return tinfoilPromptCacheRoute{}, tinfoilPromptCacheRoute{}
 }
 
-func assertTinfoilReportCached(t *testing.T, proxyURL, providerName, reportModel string) {
+func assertTinfoilReportCached(t *testing.T, proxyURL, providerName, reportModel, authority string) {
 	t.Helper()
 
-	reportURL := fmt.Sprintf("%s/v1/tee/report?provider=%s&model=%s",
-		proxyURL, url.QueryEscape(providerName), url.QueryEscape(reportModel))
+	reportURL := tinfoilReportURL(proxyURL, providerName, reportModel, authority)
 	reportResp, err := integrationClient.Get(reportURL)
 	if err != nil {
 		t.Fatalf("GET cached report: %v", err)
@@ -893,15 +898,13 @@ func assertTinfoilAttestationReport(t *testing.T, cfg *config.Config, model, pro
 	defer proxySrv.Close()
 
 	_, upstreamModel, _ := strings.Cut(model, ":")
-	reportModel := tinfoilReportCacheModel(t, providerName, upstreamModel)
 
 	// First chat request triggers attestation and populates the report cache.
 	chatResp := postChatIntegration(t, proxySrv.URL, model, true)
 	io.Copy(io.Discard, chatResp.Body)
 	chatResp.Body.Close()
 
-	reportURL := fmt.Sprintf("%s/v1/tee/report?provider=%s&model=%s",
-		proxySrv.URL, url.QueryEscape(providerName), url.QueryEscape(reportModel))
+	reportURL := tinfoilReportURL(proxySrv.URL, providerName, upstreamModel, "")
 	reportResp, err := integrationClient.Get(reportURL)
 	if err != nil {
 		t.Fatalf("GET report: %v", err)
@@ -930,17 +933,12 @@ func assertTinfoilAttestationReport(t *testing.T, cfg *config.Config, model, pro
 	}
 }
 
-func tinfoilReportCacheModel(t *testing.T, providerName, upstreamModel string) string {
-	t.Helper()
-	if providerName != "tinfoil_v3_direct" {
-		return upstreamModel
+func tinfoilReportURL(origin, providerName, model, authority string) string {
+	query := url.Values{"provider": {providerName}, "model": {model}}
+	if authority != "" {
+		query.Set("authority", authority)
 	}
-	return upstreamModel + "@" + fetchTinfoilDirectReportDomain(t, upstreamModel)
-}
-
-func fetchTinfoilDirectReportDomain(t *testing.T, upstreamModel string) string {
-	t.Helper()
-	return fetchTinfoilDirectReportDomains(t, upstreamModel)[0]
+	return origin + "/v1/tee/report?" + query.Encode()
 }
 
 func fetchTinfoilDirectReportDomains(t *testing.T, upstreamModel string) []string {
@@ -1007,4 +1005,11 @@ func isTinfoilIntegrationBackendDomain(domain string) bool {
 		}
 	}
 	return true
+}
+
+func tinfoilReasoningModel() string {
+	if model := os.Getenv("TINFOIL_REASONING_MODEL"); model != "" {
+		return model
+	}
+	return "glm-5-3"
 }

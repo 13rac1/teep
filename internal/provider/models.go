@@ -219,3 +219,16 @@ func (l *ownedByModelLister) ListModels(ctx context.Context) ([]json.RawMessage,
 	}
 	return out, nil
 }
+
+// CloseIdleConnections releases idle model discovery connections.
+func (l *genericModelLister) CloseIdleConnections() { l.client.CloseIdleConnections() }
+
+// CloseIdleConnections forwards cleanup to the wrapped lister.
+func (l *validatingModelLister) CloseIdleConnections() {
+	if closer, ok := l.inner.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
+// CloseIdleConnections forwards cleanup to the wrapped lister.
+func (l *ownedByModelLister) CloseIdleConnections() { l.inner.CloseIdleConnections() }

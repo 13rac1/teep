@@ -210,3 +210,6 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	raw.GatewayTLSFingerprint = gwRaw.TLSCertFingerprint
 	return raw, nil
 }
+
+// CloseIdleConnections releases idle connections owned by this component.
+func (a *Attester) CloseIdleConnections() { a.client.CloseIdleConnections() }

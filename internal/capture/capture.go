@@ -77,7 +77,7 @@ type Manifest struct {
 type RecordingTransport struct {
 	Base    http.RoundTripper
 	mu      sync.Mutex
-	Entries []RecordedEntry
+	entries []RecordedEntry
 }
 
 // WrapRecording wraps base with a RecordingTransport. It must be the outermost
@@ -86,6 +86,23 @@ type RecordingTransport struct {
 // base must be non-nil.
 func WrapRecording(base http.RoundTripper) *RecordingTransport {
 	return &RecordingTransport{Base: base}
+}
+
+// Snapshot returns an independent copy of completed exchanges. Recording may
+// continue after caller cancellation when discovery owns a detached context.
+func (t *RecordingTransport) Snapshot() []RecordedEntry {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	entries := make([]RecordedEntry, len(t.entries))
+	for i := range t.entries {
+		entry := t.entries[i]
+		entry.Headers = entry.Headers.Clone()
+		entry.PeerSPKIDER = bytes.Clone(entry.PeerSPKIDER)
+		entry.ReqBody = bytes.Clone(entry.ReqBody)
+		entry.Body = bytes.Clone(entry.Body)
+		entries[i] = entry
+	}
+	return entries
 }
 
 const maxRecordBody = 10 << 20 // 10 MiB
@@ -139,7 +156,7 @@ func (t *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}
 
 	t.mu.Lock()
-	t.Entries = append(t.Entries, entry)
+	t.entries = append(t.entries, entry)
 	t.mu.Unlock()
 
 	return resp, nil
@@ -465,4 +482,11 @@ func hostSlug(rawURL string) string {
 		slug = slug[:80]
 	}
 	return slug
+}
+
+// CloseIdleConnections forwards transport cleanup through this wrapper.
+func (t *RecordingTransport) CloseIdleConnections() {
+	if closer, ok := t.Base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
 }

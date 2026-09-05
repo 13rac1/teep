@@ -90,3 +90,13 @@ type resolvedAttester struct {
 func (a resolvedAttester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	return a.attester.FetchAttestationForRoute(ctx, a.route, model, nonce)
 }
+
+// EvidenceScope identifies the independently verified boot. Tinfoil cloud
+// authenticates one model-independent router; its backend models are not attested.
+// Other providers retain model-specific evidence scopes.
+func (k AuthorizationKey) EvidenceScope() AuthorizationKey {
+	if k.provider == "tinfoil_v3_cloud" {
+		k.model = ""
+	}
+	return k
+}

@@ -147,6 +147,14 @@ func (r *EndpointResolver) ResolveRoute(ctx context.Context, model string) (prov
 	return provider.NewResolvedRoute("https://"+domain, "")
 }
 
+// CloseIdleConnections releases idle discovery connections.
+func (r *EndpointResolver) CloseIdleConnections() {
+	r.mu.RLock()
+	client := r.client
+	r.mu.RUnlock()
+	client.CloseIdleConnections()
+}
+
 // refresh fetches the endpoint mapping from the discovery URL and replaces
 // the cached mapping. Holds the write lock only for the swap.
 func (r *EndpointResolver) refresh(ctx context.Context) error {
@@ -211,7 +219,7 @@ func canonicalDiscoveryAuthority(domain string, restrictToNearAI bool) (string, 
 
 func parseEndpointMapping(body []byte, restrictToNearAI bool) (map[string]string, error) {
 	var response endpointsResponse
-	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &response, "nearai endpoint discovery")
+	unknown, missing, err := jsonstrict.Unmarshal(body, &response)
 	if err != nil {
 		return nil, fmt.Errorf("decode endpoint discovery: %w", err)
 	}
