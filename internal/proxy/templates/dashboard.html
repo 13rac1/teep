@@ -212,7 +212,6 @@
         <div class="row"><span>Negative</span><span id="c-neg">—</span></div>
         <div class="row"><span>Hit rate</span><span id="c-hit">—</span></div>
         <div class="row"><span>Signing keys</span><span id="c-skeys">—</span></div>
-        <div class="row"><span>SPKI pins</span><span id="c-spki">—</span></div>
         <div class="row"><span>Models</span><span id="c-models">—</span></div>
       </div>
       <div class="panel">
@@ -570,7 +569,6 @@ function render(d) {
   el("c-neg").textContent = c.negative != null ? c.negative : "—";
   el("c-hit").textContent = (c.hit_rate || "—") + " (" + (c.hits || 0) + " hit / " + (c.misses || 0) + " miss)";
   el("c-skeys").textContent = c.signing_keys != null ? c.signing_keys : "—";
-  el("c-spki").textContent = (c.spki_certs || 0) + " certs / " + (c.spki_domains || 0) + " domains";
   el("c-models").textContent = c.models_count
     ? c.models_count + " cached" + (c.models_cached_ago ? " (" + c.models_cached_ago + ")" : "")
     : "—";

@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -37,23 +36,9 @@ func newPinnedUpstreamPools() *pinnedUpstreamPools {
 	return &pinnedUpstreamPools{entries: make(map[pinnedUpstreamKey]*pinnedUpstreamEntry)}
 }
 
-// pinnedUpstreamClient returns a connection pool whose TLS handshakes are
-// authenticated against expectedSPKI before request transmission. A change in
-// the attested fingerprint atomically replaces the selectable pool for the
-// provider authority; in-flight users of the old pool may finish, but no later
-// request can obtain it from this registry.
-func (s *Server) pinnedUpstreamClient(prov *provider.Provider, baseURL, expectedSPKI string) (*http.Client, error) {
-	authority, err := tlsct.HTTPSOriginAuthority(baseURL)
-	if err != nil {
-		return nil, err
-	}
-	identity, err := tlsct.NewTransportIdentity(authority, expectedSPKI)
-	if err != nil {
-		return nil, err
-	}
-	return s.pinnedClientForIdentity(prov.Name, identity)
-}
-
+// pinnedClientForIdentity selects a pool scoped to the provider and attested
+// identity. Replacing a pool closes its idle connections; acquired attempts
+// may finish on the previous pool within their authenticated deadlines.
 func (s *Server) pinnedClientForIdentity(providerName string, identity tlsct.TransportIdentity) (*http.Client, error) {
 	if s.pinnedUpstreams == nil || s.cfg == nil {
 		return nil, errors.New("pinned upstream pools are not initialized")
@@ -122,26 +107,4 @@ func (p *pinnedUpstreamPools) evictOldestLocked(exclude pinnedUpstreamKey) *pinn
 		delete(p.entries, oldestKey)
 	}
 	return oldest
-}
-
-func (s *Server) retirePinnedUpstream(prov *provider.Provider, baseURL string) {
-	if s.pinnedUpstreams == nil {
-		return
-	}
-	authority, err := pinnedUpstreamAuthority(baseURL)
-	if err != nil {
-		return
-	}
-	key := pinnedUpstreamKey{provider: prov.Name, authority: authority}
-	s.pinnedUpstreams.mu.Lock()
-	entry := s.pinnedUpstreams.entries[key]
-	delete(s.pinnedUpstreams.entries, key)
-	s.pinnedUpstreams.mu.Unlock()
-	if entry != nil {
-		entry.transport.CloseIdleConnections()
-	}
-}
-
-func pinnedUpstreamAuthority(baseURL string) (string, error) {
-	return tlsct.HTTPSOriginAuthority(baseURL)
 }

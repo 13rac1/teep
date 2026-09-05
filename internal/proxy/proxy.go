@@ -350,10 +350,8 @@ func respStatusCode(resp *http.Response) int {
 // for the retry loop's MarkFailed calls.
 type upstreamBody struct {
 	Body       []byte
-	BodyReader io.Reader // EHBP streaming encrypted body (used instead of Body when set)
 	Session    e2ee.Decryptor
 	Meta       *e2ee.ChutesE2EE
-	EHBP       *e2ee.EHBPSession
 	ChuteID    string // For MarkFailed (from raw attestation, not meta)
 	InstanceID string // For MarkFailed (from raw attestation, not meta)
 }
@@ -380,7 +378,7 @@ func extractPromptCacheKey(body []byte) string {
 // cacheModelCtxKey is the context key for the per-backend cache model name.
 // When set, cache operations use this value instead of the upstream model
 // name, preventing cache key collisions between enclaves with different
-// TLS keys. See [Provider.CacheKeySuffix].
+// TLS keys. TLS-binding routes supply the model and resolved authority.
 type cacheModelCtxKey struct{}
 
 // withCacheModel stores the per-backend cache model name in the context.
@@ -420,7 +418,6 @@ type Server struct {
 	negCache           *attestation.NegativeCache
 	authorizations     *authorizationStore
 	signingKeyCache    *attestation.SigningKeyCache
-	spkiCache          *attestation.SPKICache
 	rekorClient        *attestation.RekorClient
 	nvidiaVerifier     *attestation.NVIDIAVerifier
 	mux                *http.ServeMux
@@ -443,8 +440,6 @@ type Server struct {
 // New builds a Server from cfg. Providers are given their Attester and
 // Preparer implementations based on provider name.
 func New(cfg *config.Config) (*Server, error) {
-	spkiCache := attestation.NewSPKICache()
-
 	attestClient := tlsct.NewHTTPClientWithTransport(config.AttestationTimeout, tlsct.NewPooledTransport(), !cfg.Offline)
 	attestClient.Transport = tlsct.NewTLS12FallbackTransport(attestClient.Transport, attestation.AMDKDSHost)
 
@@ -455,7 +450,6 @@ func New(cfg *config.Config) (*Server, error) {
 		negCache:        attestation.NewNegativeCache(negativeCacheTTL),
 		signingKeyCache: attestation.NewSigningKeyCache(signingKeyCacheTTL),
 		authorizations:  newAuthorizationStore(maxAuthorizations, maxAuthorizationVerifications, authorizationVerificationTimeout),
-		spkiCache:       spkiCache,
 		mux:             http.NewServeMux(),
 		attestClient:    attestClient,
 		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
@@ -662,7 +656,7 @@ func (r *statusRecorder) Flush() {
 }
 
 // fromConfig constructs a provider.Provider from a config.Provider, attaching
-// the correct Attester, Preparer, and PinnedHandler for the known provider names.
+// the correct Attester, Preparer, and Encryptor for the known provider names.
 func fromConfig(
 	cp *config.Provider,
 	offline bool,
@@ -840,13 +834,6 @@ func fromConfig(
 
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", cp.Name)
-	}
-
-	// Invariant: any provider with a PinnedHandler must have SPKIDomainForModel
-	// so the proxy can evict SPKI entries when the attestation cache expires.
-	// This check prevents future providers from silently omitting the resolver.
-	if p.PinnedHandler != nil && p.SPKIDomainForModel == nil {
-		return nil, fmt.Errorf("provider %q has PinnedHandler but no SPKIDomainForModel; SPKI eviction would fail", cp.Name)
 	}
 
 	// Every provider sets a real SupplyChainPolicy or the
@@ -1271,9 +1258,6 @@ func (s *Server) verifyTinfoilSupplyChain(
 		return nil, 0
 	}
 	sigstoreRepo := prov.StaticRoute.SupplyChainRepo()
-	if prov.SigstoreRepoForModel != nil {
-		sigstoreRepo = prov.SigstoreRepoForModel(upstreamModel)
-	}
 	if sigstoreRepo == "" {
 		return &attestation.TinfoilSupplyChainResult{
 			SigstoreErr: fmt.Errorf("no Tinfoil Sigstore repo for model %q", upstreamModel),
@@ -1430,11 +1414,6 @@ type endpointConfig struct {
 	// routing. Returns an error message and true to block the request.
 	// Nil means no guard.
 	preRouteGuard func(prov *provider.Provider) (errMsg string, block bool)
-
-	// canStream indicates whether this endpoint type supports SSE streaming.
-	// When true, the pinned path uses handlePinnedChat (which supports
-	// streaming + E2EE session decryption); otherwise handlePinnedNonChat.
-	canStream bool
 }
 
 // parseChatRequest extracts model and stream flag from a chat completions JSON body.
@@ -1478,7 +1457,6 @@ var (
 		endpointPath: func(p *provider.Provider) string { return p.ChatPath },
 		parseRequest: parseChatRequest,
 		contentType:  "application/json",
-		canStream:    true,
 	}
 	embeddingsEndpoint = endpointConfig{
 		name:         "embeddings",
@@ -1522,7 +1500,7 @@ var (
 			// Non-pinned E2EE providers (Chutes, nearcloud) require body encryption,
 			// which doesn't support multipart. Fail closed to prevent silently
 			// sending plaintext.
-			if prov.E2EE && prov.PinnedHandler == nil {
+			if prov.E2EE {
 				return "audio transcription requires TLS-level E2EE (pinned provider)", true
 			}
 			return "", false
@@ -1535,7 +1513,6 @@ var (
 		unsupported:  "responses",
 		parseRequest: parseChatRequest,
 		contentType:  "application/json",
-		canStream:    true,
 	}
 	speechEndpoint = endpointConfig{
 		name:         "speech",
@@ -1596,16 +1573,6 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 		// select a backend enclave domain, maximizing vLLM APC hit rates.
 		promptCacheKey := extractPromptCacheKey(body)
 		ctx = tinfoil.WithPromptCacheKey(ctx, promptCacheKey)
-
-		// Compute per-backend cache model key to prevent attestation cache
-		// collisions between enclaves with different TLS keys. When
-		// CacheKeySuffix returns a domain, all cache operations for this
-		// request use "model@domain" instead of just "model".
-		if prov.CacheKeySuffix != nil {
-			if suffix := prov.CacheKeySuffix(ctx, upstreamModel); suffix != "" {
-				ctx = withCacheModel(ctx, upstreamModel+"@"+suffix)
-			}
-		}
 
 		body, err = rewriteModelInBody(r.Header.Get("Content-Type"), body, ep.contentType, upstreamModel)
 		if err != nil {
@@ -1728,18 +1695,6 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 			return
 		}
 
-		// Connection-pinned providers (NEAR AI) handle attestation on a
-		// single TLS connection. No separate attestation cache or E2EE needed.
-		if prov.PinnedHandler != nil {
-			status = "pinned"
-			if ep.canStream {
-				s.handlePinnedChat(ctx, w, r, prov, upstreamModel, body, stream, endpointPath, ep.endpointType, ep.contentType)
-			} else {
-				s.handlePinnedNonChat(ctx, w, r, prov, upstreamModel, body, endpointPath, ep.endpointType)
-			}
-			return
-		}
-
 		ar, failStatus := s.attestAndCache(ctx, w, prov, upstreamModel, ms)
 		attestDur = ar.AttestDur
 		if failStatus != "" {
@@ -1822,7 +1777,7 @@ func (s *Server) relayWithRetry(
 			attemptRaw = nil
 		}
 
-		ur, err := s.doUpstreamRoundtrip(ctx, prov, body, upstreamModel, ar.E2EEActive, attemptRaw, ar.TLSKeyFP, stream, endpointPath, contentType, endpoint)
+		ur, err := s.doUpstreamRoundtrip(ctx, prov, body, upstreamModel, ar.E2EEActive, attemptRaw, stream, endpointPath, contentType, endpoint)
 		result.e2eeDur += ur.E2EEDur
 		result.upstreamDur += ur.UpstreamDur
 		if err != nil {
@@ -1852,7 +1807,6 @@ func (s *Server) relayWithRetry(
 		resp := ur.Resp
 		session := ur.Session
 		meta := ur.Meta
-		ehbp := ur.EHBP
 		if meta != nil && meta.ChuteID != "" {
 			lastChuteID = meta.ChuteID
 		}
@@ -1862,7 +1816,7 @@ func (s *Server) relayWithRetry(
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 			resp.Body.Close()
 			ur.Cancel()
-			e2ee.ZeroSessions(session, meta, ehbp)
+			e2ee.ZeroSessions(session, meta, nil)
 		}
 
 		if resp.StatusCode != http.StatusOK {
@@ -1873,14 +1827,7 @@ func (s *Server) relayWithRetry(
 			if !ri.headerSent {
 				result.status = fmt.Sprintf("upstream_%d", resp.StatusCode)
 				w.WriteHeader(resp.StatusCode)
-				if body, ok := ehbpErrorBody(resp, ehbp); ok {
-					_, _ = io.Copy(w, io.LimitReader(body, 10<<20))
-				} else {
-					slog.WarnContext(ctx, "upstream error body could not be decrypted",
-						"provider", prov.Name, "model", upstreamModel, "status", resp.StatusCode)
-					fmt.Fprintf(w, "upstream returned HTTP %d; its error body was E2EE-encrypted and could not be decrypted\n",
-						resp.StatusCode)
-				}
+				_, _ = io.Copy(w, io.LimitReader(resp.Body, 10<<20))
 			}
 			cleanupAttempt()
 			return result
@@ -1915,22 +1862,6 @@ func (s *Server) relayWithRetry(
 			return result
 		}
 
-		// EHBP response unwrapping: decrypt the full response body before
-		// relay so standard relay functions see plaintext SSE/JSON.
-		if ehbp != nil {
-			status, ok := s.unwrapEHBPResponse(ctx, resp, ehbp, prov.Name, upstreamModel, ri, riWriter)
-			if !ok {
-				cleanupAttempt()
-				ehbpErr := fmt.Errorf("EHBP: %s", status)
-				result.status = s.handleE2EEDecryptionFailure(ctx, prov, upstreamModel, ms, false, "", ehbpErr)
-				return result
-			}
-			ehbp.Zero()
-			ehbp = nil
-			session = nil
-			meta = nil
-		}
-
 		upstreamRelayStart := time.Now()
 		ss, relayErr = relayResponse(ctx, riWriter, resp.Body, session, meta, stream, endpoint)
 		result.upstreamDur += time.Since(upstreamRelayStart)
@@ -1940,7 +1871,7 @@ func (s *Server) relayWithRetry(
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
 		ur.Cancel()
-		e2ee.ZeroSessions(session, meta, ehbp)
+		e2ee.ZeroSessions(session, meta, nil)
 
 		if relayErr == nil {
 			// Relay succeeded.
@@ -2069,324 +2000,12 @@ func (s *Server) handleE2EEDecryptionFailure(
 	return "e2ee_decrypt_failed"
 }
 
-// pinnedPreDispatchE2EE checks cached pinned attestation state before making a
-// pinned request. Returns false if the request must be aborted.
-//
-// When the attestation report cache is empty but the SPKI cache may still hold
-// a live entry, the SPKI domain is evicted so the pinned handler performs full
-// re-attestation on this connection instead of returning a nil report.
-func (s *Server) pinnedPreDispatchE2EE(ctx context.Context, w http.ResponseWriter, prov *provider.Provider, upstreamModel string) bool {
-	if cached, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
-		if prov.E2EE && !cached.ReportDataBindingPassed() {
-			// This error log is the WARN+ block record for the tee_reportdata_binding failure.
-			slog.ErrorContext(ctx, "E2EE required but tee_reportdata_binding not passed; refusing request",
-				"provider", prov.Name, "model", upstreamModel,
-				"factor", attestation.FactorTEEReportData,
-				"tier", attestation.TierBinding,
-				"detail", "E2EE required but REPORTDATA binding not verified")
-			http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
-			return false
-		}
-	} else if prov.PinnedHandler != nil {
-		// Attestation report cache miss (expired, never populated, or
-		// populated only for a different provider sharing this SPKI domain).
-		// Evict the SPKI domain so the pinned handler treats this as an SPKI
-		// miss, forcing fresh attestation for this provider/model.
-		//
-		// Use SPKIDomainForModel to resolve the correct SPKI cache key.
-		// If unavailable, fail closed — an unresolvable domain means we
-		// cannot guarantee the stale SPKI entry will be evicted, risking
-		// a nil report on the next pinned request.
-		if prov.SPKIDomainForModel == nil {
-			// This error log is the WARN+ block record for pinned SPKI config failures.
-			slog.ErrorContext(ctx, "pinned provider has no SPKIDomainForModel; cannot evict SPKI cache; refusing request",
-				"provider", prov.Name, "model", upstreamModel,
-				"factor", attestation.FactorTEEReportData,
-				"tier", attestation.TierBinding,
-				"detail", "pinned attestation recovery cannot resolve SPKI cache domain")
-			http.Error(w, "pinned provider configuration error", http.StatusInternalServerError)
-			return false
-		}
-		domain, ok := prov.SPKIDomainForModel(ctx, upstreamModel)
-		if !ok || domain == "" {
-			// This error log is the WARN+ block record for pinned SPKI resolution failures.
-			slog.ErrorContext(ctx, "pinned provider could not resolve SPKI domain; refusing request",
-				"provider", prov.Name, "model", upstreamModel,
-				"factor", attestation.FactorTEEReportData,
-				"tier", attestation.TierBinding,
-				"detail", "pinned attestation recovery could not resolve SPKI cache domain")
-			http.Error(w, "pinned SPKI domain resolution failed", http.StatusInternalServerError)
-			return false
-		}
-		s.spkiCache.DeleteDomain(domain)
-		slog.InfoContext(ctx, "evicted SPKI cache to force re-attestation (attestation report expired)",
-			"provider", prov.Name, "model", upstreamModel, "domain", domain)
-	}
-	return true
-}
-
-// pinnedPostDispatchE2EE enforces E2EE requirements after receiving a pinned
-// response: nil-report check, REPORTDATA binding check, and e2eeFailed map
-// recovery. Returns false if the request must be aborted.
-func (s *Server) pinnedPostDispatchE2EE(
-	ctx context.Context, w http.ResponseWriter,
-	prov *provider.Provider, upstreamModel string,
-	report *attestation.VerificationReport,
-	freshReport bool,
-) bool {
-	if !prov.E2EE {
-		return true
-	}
-	// E2EE providers must always have a report to verify REPORTDATA binding.
-	// Without one (e.g. attestation cache expired while SPKI cache is live),
-	// we cannot verify the signing key is bound to the TDX quote.
-	if report == nil {
-		s.recordNegativeCache(ctx, prov, upstreamModel, "pinned_missing_report", nil,
-			errors.New("no attestation report available to verify REPORTDATA binding"))
-		// This error log is the WARN+ block record for missing pinned attestation reports.
-		slog.ErrorContext(ctx, "E2EE required but no attestation report available",
-			"provider", prov.Name, "model", upstreamModel,
-			"factor", attestation.FactorTEEReportData,
-			"tier", attestation.TierBinding,
-			"detail", "no attestation report available to verify REPORTDATA binding")
-		http.Error(w, "E2EE required but no attestation report available; refusing request", http.StatusBadGateway)
-		return false
-	}
-	// E2EE providers require REPORTDATA binding even on first request (SPKI
-	// miss). Without it a MITM can substitute the enclave public key and
-	// E2EE degrades to plaintext.
-	if !report.ReportDataBindingPassed() {
-		s.recordNegativeCache(ctx, prov, upstreamModel, "pinned_reportdata_binding_failed", report,
-			errors.New("REPORTDATA binding not verified"))
-		// This error log is the WARN+ block record for the tee_reportdata_binding failure.
-		slog.ErrorContext(ctx, "E2EE required but tee_reportdata_binding not passed; refusing request",
-			"provider", prov.Name, "model", upstreamModel,
-			"factor", attestation.FactorTEEReportData,
-			"tier", attestation.TierBinding,
-			"detail", "E2EE required but REPORTDATA binding not verified")
-		http.Error(w, "E2EE required but REPORTDATA binding not verified; refusing plaintext", http.StatusBadGateway)
-		return false
-	}
-	// Clear stale E2EE failure markers only after a confirmed fresh pinned
-	// attestation (freshReport=true). On an SPKI cache hit the pinned
-	// handler skips attestation: fail closed and force re-attestation.
-	key := providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}
-	if _, failed := s.e2eeFailed.Load(key); failed {
-		if freshReport {
-			s.e2eeFailed.Delete(key)
-			slog.InfoContext(ctx, "Cleared prior E2EE failure after successful fresh pinned attestation",
-				"provider", prov.Name, "model", upstreamModel)
-		} else {
-			s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
-			s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
-			// This error log is the WARN+ block record for stale pinned e2ee_usable failures.
-			slog.ErrorContext(ctx, "E2EE previously failed; cached pinned attestation insufficient for recovery",
-				"provider", prov.Name, "model", upstreamModel,
-				"factor", attestation.FactorE2EEUsable,
-				"tier", attestation.TierBinding,
-				"detail", "previous E2EE decryption failure requires fresh re-attestation")
-			s.stats.errors.Add(1)
-			http.Error(w, "E2EE previously failed; re-attestation required", http.StatusServiceUnavailable)
-			return false
-		}
-	}
-	return true
-}
-
-// handlePinnedChat handles streaming-capable requests for connection-pinned
-// providers. Attestation and chat happen on the same TLS connection via
-// PinnedHandler. Also used for non-chat streaming endpoints if added later.
-func (s *Server) handlePinnedChat(
-	ctx context.Context,
-	w http.ResponseWriter, r *http.Request,
-	prov *provider.Provider, upstreamModel string,
-	body []byte, stream bool, endpointPath string, endpoint e2ee.EndpointType, contentType string,
-) {
-	// Build forwarded headers.
-	headers := make(http.Header)
-	ct := contentType
-	if ct == "" {
-		ct = r.Header.Get("Content-Type")
-	}
-	if ct == "" {
-		ct = "application/json"
-	}
-	headers.Set("Content-Type", ct)
-	// Forward Authorization from client if present.
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		headers.Set("Authorization", auth)
-	}
-
-	if !s.pinnedPreDispatchE2EE(ctx, w, prov, upstreamModel) {
-		return
-	}
-
-	pinnedReq := provider.PinnedRequest{
-		Method:   http.MethodPost,
-		Path:     endpointPath,
-		Headers:  headers,
-		Body:     body,
-		Model:    upstreamModel,
-		E2EE:     prov.E2EE,
-		Endpoint: endpoint,
-	}
-	// Supply the cached signing key for E2EE on SPKI cache hits.
-	if prov.E2EE {
-		if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
-			pinnedReq.SigningKey = cachedKey
-		}
-	}
-
-	var cancel context.CancelFunc
-	if stream {
-		ctx, cancel = context.WithTimeout(ctx, 30*time.Minute)
-	} else {
-		ctx, cancel = context.WithTimeout(ctx, 120*time.Second)
-	}
-	defer cancel()
-
-	pinnedResp, err := prov.PinnedHandler.HandlePinned(ctx, &pinnedReq)
-	if err != nil {
-		s.recordNegativeCache(ctx, prov, upstreamModel, "pinned_chat_failed", nil, err)
-		// This error log is the WARN+ block record for pinned chat connection failures.
-		slog.ErrorContext(ctx, "pinned chat failed", "provider", prov.Name, "model", upstreamModel, "err", err)
-		http.Error(w, fmt.Sprintf("pinned connection failed: %v", err), http.StatusBadGateway)
-		return
-	}
-	defer pinnedResp.Body.Close()
-	if tlsct.IsRedirectStatus(pinnedResp.StatusCode) {
-		if pinnedResp.Session != nil {
-			pinnedResp.Session.Zero()
-		}
-		slog.WarnContext(ctx, "upstream returned an unexpected redirect", "provider", prov.Name)
-		http.Error(w, "upstream returned an unexpected redirect", http.StatusBadGateway)
-		return
-	}
-
-	// Use the report from this request (SPKI miss) or cached report (SPKI hit)
-	// to enforce fail-closed policy before forwarding any upstream response.
-	report := pinnedResp.Report
-	if report != nil {
-		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), report)
-	} else if cached, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
-		report = cached
-	}
-	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
-		s.recordNegativeCache(ctx, prov, upstreamModel, "blocked_report", report, nil)
-		return
-	}
-	if !s.pinnedPostDispatchE2EE(ctx, w, prov, upstreamModel, report, pinnedResp.Report != nil) {
-		return
-	}
-	if pinnedResp.SigningKey != "" {
-		s.signingKeyCache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), pinnedResp.SigningKey)
-	}
-
-	// Copy response headers, excluding hop-by-hop headers that Go's
-	// HTTP stack manages (matching proxy.py's filtering).
-	// net/http canonicalizes keys, so compare against canonical forms.
-	for key, vals := range pinnedResp.Header {
-		switch key {
-		case "Transfer-Encoding", "Content-Encoding", "Content-Length", "Connection":
-			continue
-		}
-		for _, v := range vals {
-			w.Header().Add(key, v)
-		}
-	}
-
-	// Relay the response.
-	if pinnedResp.StatusCode != http.StatusOK {
-		s.logUpstreamStatus(ctx, prov.Name, upstreamModel, endpointPath, pinnedResp.StatusCode)
-		w.WriteHeader(pinnedResp.StatusCode)
-		_, _ = io.Copy(w, io.LimitReader(pinnedResp.Body, 10<<20))
-		return
-	}
-
-	ms := s.stats.getModelStats(prov.Name, cacheModelFor(ctx, upstreamModel))
-	session := pinnedResp.Session
-	if session != nil {
-		s.stats.e2ee.Add(1)
-		defer session.Zero()
-	} else {
-		s.stats.plaintext.Add(1)
-	}
-	ss, relayErr := relayResponse(ctx, w, pinnedResp.Body, session, nil, stream, endpoint)
-	recordTokPerSec(ms, ss)
-
-	s.handlePinnedPostRelay(ctx, prov, upstreamModel, report, session, ms, relayErr)
-}
-
-// handlePinnedPostRelay handles E2EE enforcement and cache updates after a
-// pinned relay completes. Extracted from handlePinnedChat for complexity.
-func (s *Server) handlePinnedPostRelay(
-	ctx context.Context,
-	prov *provider.Provider,
-	upstreamModel string,
-	report *attestation.VerificationReport,
-	session e2ee.Decryptor,
-	ms *modelStats,
-	relayErr error,
-) {
-	// Post-relay enforcement for pinned E2EE paths.
-	if relayErr != nil && errors.Is(relayErr, e2ee.ErrDecryptionFailed) && session != nil {
-		s.stats.errors.Add(1)
-		ms.errors.Add(1)
-		s.e2eeFailed.Store(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}, true)
-		detail := "pinned E2EE decryption failed (see server logs, req=" + reqid.FromContext(ctx) + ")"
-
-		// Demote e2ee_usable in the cached report so the report endpoint
-		// reflects the failure before the cache entry is deleted. Keep detail
-		// sanitized: relayErr may include upstream content.
-		if cachedReport, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
-			cloned := cachedReport.Clone()
-			cloned.MarkE2EEFailed(detail)
-			s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), cloned)
-		}
-		s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
-		s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
-		// This error log is the WARN+ block record for pinned e2ee_usable failures.
-		slog.ErrorContext(ctx, "pinned E2EE decryption failed; caches invalidated",
-			"provider", prov.Name, "model", upstreamModel,
-			"factor", attestation.FactorE2EEUsable,
-			"tier", attestation.TierBinding,
-			"detail", detail,
-			"err", relayErr)
-		return
-	}
-
-	// Non-decryption relay errors: response already written to client.
-	if relayErr != nil {
-		s.stats.errors.Add(1)
-		ms.errors.Add(1)
-		// This error log is the WARN+ block record for pinned relay failures.
-		slog.ErrorContext(ctx, "pinned relay failed", "provider", prov.Name, "model", upstreamModel, "err", relayErr)
-		return
-	}
-
-	// After a successful E2EE roundtrip on the pinned path,
-	// promote e2ee_usable from Skip to Pass in the cached report.
-	// Clone before mutating to avoid racing with concurrent readers.
-	if session != nil && report != nil {
-		cloned := report.Clone()
-		cloned.MarkE2EEUsable("E2EE roundtrip succeeded via pinned connection")
-		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), cloned)
-	}
-	s.stats.lastSuccessAt.Store(time.Now().UnixNano())
-}
-
 // attestResult holds the outcome of attestAndCache on success.
 type attestResult struct {
 	Report     *attestation.VerificationReport
 	Raw        *attestation.RawAttestation
 	E2EEActive bool
 	AttestDur  time.Duration
-	// TLSKeyFP is the attested upstream TLS leaf SPKI fingerprint, set on
-	// both cache hit and cache miss (attestation.VerificationReport.TLSKeyFP
-	// travels with the cached report). Used by doUpstreamRoundtrip to run
-	// upstream TLS binding verification on every response, not only the
-	// response following a fresh attestation fetch.
-	TLSKeyFP string
 }
 
 // attestAndCache checks the attestation cache, fetches and verifies on miss,
@@ -2447,7 +2066,6 @@ func (s *Server) attestAndCache(
 		Raw:        raw,
 		E2EEActive: e2eeActive,
 		AttestDur:  time.Since(attestStart),
-		TLSKeyFP:   report.TLSKeyFP,
 	}, ""
 }
 
@@ -2729,80 +2347,6 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
 	}
 }
 
-// ehbpNonceHexLen is the hex length of an EHBP response nonce (32 bytes).
-const ehbpNonceHexLen = 64
-
-// ehbpErrorBody returns the upstream body as plaintext, and reports whether it
-// is safe to relay. Without an EHBP session the body was never encrypted and
-// passes through.
-//
-// EHBP encrypts the whole response stream, error responses included, and the
-// success path is the only one that decrypts. Field-level Decryptor providers
-// need none of this: their error bodies are ordinary JSON.
-//
-// DANGER: relaying the body when this returns false sends the client
-// ciphertext instead of the upstream error text, and nothing fails loudly —
-// the response just arrives unreadable. SEE: TestEHBPErrorBody.
-func ehbpErrorBody(resp *http.Response, ehbp *e2ee.EHBPSession) (io.Reader, bool) {
-	if ehbp == nil {
-		return resp.Body, true
-	}
-	nonceHex := resp.Header.Get("Ehbp-Response-Nonce")
-	if len(nonceHex) != ehbpNonceHexLen {
-		return nil, false
-	}
-	plain, err := ehbp.DecryptResponse(resp.Body, nonceHex)
-	if err != nil {
-		return nil, false
-	}
-	return plain, true
-}
-
-// unwrapEHBPResponse decrypts an EHBP-encrypted response body in place,
-// replacing resp.Body with a plaintext reader. Returns a status string and
-// false on failure; the caller must clean up and return. On success returns
-// ("", true) and resp.Body is ready for standard relay.
-func (s *Server) unwrapEHBPResponse(
-	ctx context.Context,
-	resp *http.Response,
-	ehbp *e2ee.EHBPSession,
-	provName, upstreamModel string,
-	ri *responseInterceptor,
-	riWriter http.ResponseWriter,
-) (string, bool) {
-	nonceHex := resp.Header.Get("Ehbp-Response-Nonce")
-	if nonceHex == "" {
-		slog.ErrorContext(ctx, "EHBP response missing Ehbp-Response-Nonce header",
-			"provider", provName, "model", upstreamModel)
-		if !ri.headerSent {
-			ri.WriteHeader(http.StatusBadGateway)
-			_, _ = riWriter.Write([]byte("EHBP response missing Ehbp-Response-Nonce header\n"))
-		}
-		return "ehbp_missing_nonce", false
-	}
-	if len(nonceHex) != ehbpNonceHexLen {
-		slog.ErrorContext(ctx, "EHBP response nonce wrong length",
-			"provider", provName, "model", upstreamModel, "len", len(nonceHex))
-		if !ri.headerSent {
-			ri.WriteHeader(http.StatusBadGateway)
-			_, _ = riWriter.Write([]byte("EHBP response nonce invalid\n"))
-		}
-		return "ehbp_invalid_nonce", false
-	}
-	decryptedBody, err := ehbp.DecryptResponse(resp.Body, nonceHex)
-	if err != nil {
-		slog.ErrorContext(ctx, "EHBP response decryption failed",
-			"provider", provName, "model", upstreamModel, "err", err)
-		if !ri.headerSent {
-			ri.WriteHeader(http.StatusBadGateway)
-			_, _ = riWriter.Write([]byte("EHBP response decryption failed\n"))
-		}
-		return "ehbp_decrypt_failed", false
-	}
-	resp.Body = decryptedBody
-	return "", true
-}
-
 // responseInterceptor wraps an http.ResponseWriter to detect whether headers
 // have been flushed to the client. Used by the Chutes E2EE retry loop to
 // determine if a failed streaming relay can be retried.
@@ -2897,53 +2441,19 @@ type upstreamResult struct {
 	UpstreamDur time.Duration
 }
 
-// invalidateTLSBinding retires every cache that could otherwise authorize or
-// reuse the mismatched upstream identity. The next request must fully
-// re-attest and establish a newly pinned transport.
-func (s *Server) invalidateTLSBinding(ctx context.Context, prov *provider.Provider, upstreamModel, baseURL string) {
-	s.retirePinnedUpstream(prov, baseURL)
-	s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
-	s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
-	if prov.SPKIDomainForModel != nil {
-		if domain, ok := prov.SPKIDomainForModel(ctx, upstreamModel); ok && domain != "" {
-			s.spkiCache.DeleteDomain(domain)
-		}
-	}
-}
-
 type upstreamSendResult struct {
 	resp *http.Response
 	err  error
 }
 
-// sendUpstreamRequest selects the ordinary or handshake-pinned transport and
-// converts pin setup and handshake failures into fail-closed proxy errors.
-func (s *Server) sendUpstreamRequest(
-	ctx context.Context,
-	prov *provider.Provider,
-	upstreamModel, baseURL, tlsKeyFP string,
-	req *http.Request,
-) (upstreamSendResult, *httpError) {
-	client := s.upstreamClient
-	if prov.UsesTLSBinding {
-		var err error
-		client, err = s.pinnedUpstreamClient(prov, baseURL, tlsKeyFP)
-		if err != nil {
-			return upstreamSendResult{}, &httpError{http.StatusBadGateway, "tls_binding_failed",
-				fmt.Errorf("prepare pinned upstream transport: %w", err)}
-		}
-	}
-
-	resp, err := client.Do(req)
+// sendUpstreamRequest sends non-TLS-binding traffic through the shared client
+// and rejects upstream redirects before returning a response for relay.
+func (s *Server) sendUpstreamRequest(req *http.Request) (upstreamSendResult, *httpError) {
+	resp, err := s.upstreamClient.Do(req)
 	if err == nil && resp != nil && tlsct.IsRedirectStatus(resp.StatusCode) {
 		resp.Body.Close()
 		return upstreamSendResult{}, &httpError{http.StatusBadGateway, "upstream_redirect",
 			errors.New("upstream returned an unexpected redirect")}
-	}
-	if errors.Is(err, tlsct.ErrSPKIMismatch) {
-		s.invalidateTLSBinding(ctx, prov, upstreamModel, baseURL)
-		return upstreamSendResult{}, &httpError{http.StatusBadGateway, "tls_binding_failed",
-			errors.New("upstream TLS handshake SPKI does not match attested fingerprint")}
 	}
 	return upstreamSendResult{resp: resp, err: err}, nil
 }
@@ -2958,22 +2468,12 @@ func (s *Server) doUpstreamRoundtrip(
 	upstreamModel string,
 	e2eeActive bool,
 	raw *attestation.RawAttestation,
-	tlsKeyFP string,
 	stream bool,
 	endpointPath string,
 	contentType string,
 	endpoint e2ee.EndpointType,
 ) (*upstreamResult, error) {
-	baseURL := prov.BaseURL
-	if prov.BaseURLForModel != nil {
-		resolved, err := prov.BaseURLForModel(ctx, upstreamModel)
-		if err != nil {
-			return &upstreamResult{}, &httpError{http.StatusBadGateway, "model_resolution_failed",
-				fmt.Errorf("resolve upstream URL for model %q: %w", upstreamModel, err)}
-		}
-		baseURL = resolved
-	}
-	upstreamURL := baseURL + endpointPath
+	upstreamURL := prov.BaseURL + endpointPath
 	upstreamTimeout := upstreamStreamTimeout
 	if !stream {
 		upstreamTimeout = upstreamNonStreamTimeout
@@ -2985,18 +2485,9 @@ func (s *Server) doUpstreamRoundtrip(
 		maxAttempts = chutesMaxAttempts
 	}
 
-	// Fail closed before any upstream I/O: a TLS-binding provider with no
-	// attested fingerprint must not send request data to an unbound peer.
-	if prov.UsesTLSBinding && tlsKeyFP == "" {
-		return &upstreamResult{},
-			&httpError{http.StatusBadGateway, "tls_binding_failed",
-				errors.New("upstream TLS binding required but no attested tls_key_fp available; failing closed")}
-	}
-
 	var (
 		session     e2ee.Decryptor
 		meta        *e2ee.ChutesE2EE
-		ehbp        *e2ee.EHBPSession
 		resp        *http.Response
 		cancel      context.CancelFunc
 		err         error
@@ -3029,42 +2520,34 @@ func (s *Server) doUpstreamRoundtrip(
 
 		session = ub.Session
 		meta = ub.Meta
-		ehbp = ub.EHBP
 
 		var attemptCtx context.Context
 		attemptCtx, cancel = context.WithTimeout(ctx, upstreamTimeout)
 
-		var reqBody io.Reader
-		if ub.BodyReader != nil {
-			reqBody = ub.BodyReader
-		} else {
-			reqBody = bytes.NewReader(ub.Body)
-		}
-		upstreamReq, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, upstreamURL, reqBody)
+		upstreamReq, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, upstreamURL, bytes.NewReader(ub.Body))
 		if reqErr != nil {
 			cancel()
-			e2ee.ZeroSessions(session, meta, ehbp)
+			e2ee.ZeroSessions(session, meta, nil)
 			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
 				&httpError{http.StatusInternalServerError, "e2ee_failed", fmt.Errorf("build upstream request: %w", reqErr)}
 		}
 		upstreamReq.Header.Set("Content-Type", contentType)
 		provider.SetUserAgent(upstreamReq)
-		provider.SetEHBPHeaders(upstreamReq, ehbp)
 
 		if prepErr := provider.PrepareInferenceHeaders(upstreamReq, prov, session, meta, stream, endpointPath); prepErr != nil {
 			cancel()
-			e2ee.ZeroSessions(session, meta, ehbp)
+			e2ee.ZeroSessions(session, meta, nil)
 			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
 				&httpError{http.StatusInternalServerError, "e2ee_failed", fmt.Errorf("prepare upstream headers: %w", prepErr)}
 		}
 
 		upstreamDoStart := time.Now()
-		sent, tlsErr := s.sendUpstreamRequest(ctx, prov, upstreamModel, baseURL, tlsKeyFP, upstreamReq)
+		sent, sendErr := s.sendUpstreamRequest(upstreamReq)
 		upstreamDur += time.Since(upstreamDoStart)
-		if tlsErr != nil {
+		if sendErr != nil {
 			cancel()
-			e2ee.ZeroSessions(session, meta, ehbp)
-			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur}, tlsErr
+			e2ee.ZeroSessions(session, meta, nil)
+			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur}, sendErr
 		}
 		resp, err = sent.resp, sent.err
 
@@ -3084,7 +2567,7 @@ func (s *Server) doUpstreamRoundtrip(
 					"instance_id", ub.InstanceID, "attempt", attempt+1,
 					"err", err, "status", respStatusCode(resp))
 			}
-			e2ee.ZeroSessions(session, meta, ehbp)
+			e2ee.ZeroSessions(session, meta, nil)
 			if resp != nil {
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 				resp.Body.Close()
@@ -3099,7 +2582,7 @@ func (s *Server) doUpstreamRoundtrip(
 		if cancel != nil {
 			cancel()
 		}
-		e2ee.ZeroSessions(session, meta, ehbp)
+		e2ee.ZeroSessions(session, meta, nil)
 		if resp != nil {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 10<<20))
 			resp.Body.Close()
@@ -3112,7 +2595,6 @@ func (s *Server) doUpstreamRoundtrip(
 		Resp:        resp,
 		Session:     session,
 		Meta:        meta,
-		EHBP:        ehbp,
 		Cancel:      cancel,
 		E2EEDur:     e2eeDur,
 		UpstreamDur: upstreamDur,
@@ -3250,131 +2732,17 @@ func (s *Server) buildUpstreamBody(
 	if err != nil {
 		return nil, err
 	}
+	if result.EHBP != nil || result.BodyReader != nil {
+		e2ee.ZeroSessions(result.Session, result.Chutes, result.EHBP)
+		return nil, errors.New("streaming request encryption requires authorized inference")
+	}
 	return &upstreamBody{
 		Body:       result.Body,
-		BodyReader: result.BodyReader,
 		Session:    result.Session,
 		Meta:       result.Chutes,
-		EHBP:       result.EHBP,
 		ChuteID:    raw.ChuteID,
 		InstanceID: raw.InstanceID,
 	}, nil
-}
-
-// handlePinnedNonChat handles non-chat requests for connection-pinned providers.
-// It mirrors handlePinnedChat but uses the given endpointPath and is always
-// non-streaming. When the upstream returns an E2EE session (e.g. images with
-// encrypted b64_json), the response is decrypted via RelayNonStream.
-func (s *Server) handlePinnedNonChat(
-	ctx context.Context,
-	w http.ResponseWriter, r *http.Request,
-	prov *provider.Provider, upstreamModel string,
-	body []byte, endpointPath string, endpoint e2ee.EndpointType,
-) {
-	headers := make(http.Header)
-	if ct := r.Header.Get("Content-Type"); ct != "" {
-		headers.Set("Content-Type", ct)
-	} else {
-		headers.Set("Content-Type", "application/json")
-	}
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		headers.Set("Authorization", auth)
-	}
-
-	if !s.pinnedPreDispatchE2EE(ctx, w, prov, upstreamModel) {
-		return
-	}
-
-	pinnedReq := provider.PinnedRequest{
-		Method:   http.MethodPost,
-		Path:     endpointPath,
-		Headers:  headers,
-		Body:     body,
-		Model:    upstreamModel,
-		E2EE:     prov.E2EE,
-		Endpoint: endpoint,
-	}
-	if prov.E2EE {
-		if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
-			pinnedReq.SigningKey = cachedKey
-		}
-	}
-
-	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-
-	pinnedResp, err := prov.PinnedHandler.HandlePinned(reqCtx, &pinnedReq)
-	if err != nil {
-		s.recordNegativeCache(ctx, prov, upstreamModel, "pinned_request_failed", nil, err)
-		// This error log is the WARN+ block record for pinned request connection failures.
-		slog.ErrorContext(ctx, "pinned request failed", "provider", prov.Name, "model", upstreamModel, "path", endpointPath, "err", err)
-		http.Error(w, fmt.Sprintf("pinned connection failed: %v", err), http.StatusBadGateway)
-		return
-	}
-	defer pinnedResp.Body.Close()
-	if tlsct.IsRedirectStatus(pinnedResp.StatusCode) {
-		if pinnedResp.Session != nil {
-			pinnedResp.Session.Zero()
-		}
-		slog.WarnContext(ctx, "upstream returned an unexpected redirect", "provider", prov.Name)
-		http.Error(w, "upstream returned an unexpected redirect", http.StatusBadGateway)
-		return
-	}
-
-	report := pinnedResp.Report
-	if report != nil {
-		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), report)
-	} else if cached, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
-		report = cached
-	}
-	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
-		s.recordNegativeCache(ctx, prov, upstreamModel, "blocked_report", report, nil)
-		return
-	}
-	if !s.pinnedPostDispatchE2EE(ctx, w, prov, upstreamModel, report, pinnedResp.Report != nil) {
-		return
-	}
-	if pinnedResp.SigningKey != "" {
-		s.signingKeyCache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), pinnedResp.SigningKey)
-	}
-
-	// Copy response headers, excluding hop-by-hop headers that Go's
-	// HTTP stack manages (matching handlePinnedChat's filtering).
-	for key, vals := range pinnedResp.Header {
-		switch key {
-		case "Transfer-Encoding", "Content-Encoding", "Content-Length", "Connection":
-			continue
-		}
-		for _, v := range vals {
-			w.Header().Add(key, v)
-		}
-	}
-
-	// Non-OK: forward error response directly (no E2EE decryption needed).
-	if pinnedResp.StatusCode != http.StatusOK {
-		if pinnedResp.Session != nil {
-			defer pinnedResp.Session.Zero()
-		}
-		s.logUpstreamStatus(ctx, prov.Name, upstreamModel, endpointPath, pinnedResp.StatusCode)
-		w.WriteHeader(pinnedResp.StatusCode)
-		_, _ = io.Copy(w, io.LimitReader(pinnedResp.Body, 10<<20))
-		return
-	}
-
-	ms := s.stats.getModelStats(prov.Name, cacheModelFor(ctx, upstreamModel))
-	session := pinnedResp.Session
-	if session != nil {
-		s.stats.e2ee.Add(1)
-		defer session.Zero()
-	} else {
-		s.stats.plaintext.Add(1)
-	}
-
-	// RelayNonStreamForEndpoint reads the full body, decrypts endpoint-specific
-	// fields if session is non-nil, and writes to w.
-	_, relayErr := e2ee.RelayNonStreamForEndpoint(ctx, w, pinnedResp.Body, session, endpoint)
-
-	s.handlePinnedPostRelay(ctx, prov, upstreamModel, report, session, ms, relayErr)
 }
 
 // clearE2EEFailureIfFresh clears a prior E2EE failure if the attestation

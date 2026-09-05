@@ -300,3 +300,70 @@ func TestAuthorizationBlockedInferenceNeverForwards(t *testing.T) {
 		}
 	})
 }
+
+func TestAuthorizedDecryptFailureRequiresFreshAuthorization(t *testing.T) {
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		private := authorizedTestKey(t)
+		var requests atomic.Int32
+		upstream := authority.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			encap, err := hex.DecodeString(r.Header.Get("Ehbp-Encapsulated-Key"))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = decryptAuthorizedTestRequest(t, private, encap, io.LimitReader(r.Body, 1<<20))
+			body, nonce := encryptAuthorizedTestResponse(t, private, encap, [][]byte{[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")})
+			if requests.Add(1) == 1 {
+				body[len(body)-1] ^= 1
+			}
+			w.Header().Set("Ehbp-Response-Nonce", nonce)
+			_, _ = w.Write(body)
+		}))
+		defer upstream.Close()
+		server := newTLSBindingTestServerHandle()
+		server.authorizations = newAuthorizationStore(10, 2, time.Second)
+		defer server.Close()
+		route, err := provider.NewResolvedRoute(upstream.URL, tinfoil.RouterRepo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prov := &provider.Provider{Name: "tinfoil_v3_cloud", BaseURL: upstream.URL, StaticRoute: route, UsesTLSBinding: true, E2EE: true, Encryptor: tinfoil.NewE2EE(), Preparer: tinfoil.NewPreparer("test")}
+		key, err := route.AuthorizationKey(prov.Name, "model")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fp := sha256.Sum256(upstream.Certificate().RawSubjectPublicKeyInfo)
+		report := &attestation.VerificationReport{Provider: prov.Name, Model: "model", TLSAuthority: route.Authority(), TLSKeyFP: hex.EncodeToString(fp[:]), Factors: []attestation.FactorResult{{Name: attestation.FactorTEEReportData, Status: attestation.Pass}, {Name: attestation.FactorE2EEUsable, Status: attestation.Skip}}}
+		candidate, err := newAuthorization(key, report, hex.EncodeToString(private.PublicKey().Bytes()), true, false, time.Time{}, false, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := loadTestAuthorization(t, server.authorizations, key, candidate)
+		input := &authorizedRequest{provider: prov, route: route, key: key, body: []byte(`{"model":"model","messages":[{"role":"user","content":"test"}]}`), path: "/v1/chat/completions", contentType: "application/json", endpoint: e2ee.EndpointChat}
+		if _, err := server.inferAuthorized(t.Context(), newInferenceRecorder(), input); err == nil {
+			t.Fatal("unauthenticated response accepted")
+		}
+		if _, ok := server.authorizations.acquire(key); ok || requests.Load() != 1 {
+			t.Fatal("failed authorization retained or decryption failure replayed")
+		}
+		fresh := loadTestAuthorization(t, server.authorizations, key, candidate)
+		if first.generation == fresh.generation {
+			t.Fatal("recovery reused failed authorization")
+		}
+		recorder := newInferenceRecorder()
+		if _, err := server.inferAuthorized(t.Context(), recorder, input); err != nil {
+			t.Fatal(err)
+		}
+		current, ok := server.authorizations.acquire(key)
+		if !ok || requests.Load() != 2 || !strings.Contains(recorder.Body.String(), "ok") {
+			t.Fatal("fresh authorization did not recover inference")
+		}
+		for _, factor := range current.report.Factors {
+			if factor.Name == attestation.FactorE2EEUsable && factor.Status == attestation.Pass {
+				return
+			}
+		}
+		t.Fatal("successful response did not promote current report")
+	})
+}

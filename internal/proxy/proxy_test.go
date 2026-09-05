@@ -526,14 +526,14 @@ func TestInvalidJSONBody400(t *testing.T) {
 	}
 }
 
-// pathCapturingPinnedHandler records the PinnedRequest.Path from each call
+// pathCapturingUpstream records the upstream path from each call
 // and returns a stub OK response.
-type pathCapturingPinnedHandler struct {
+type pathCapturingUpstream struct {
 	mu   sync.Mutex
 	path string
 }
 
-func (h *pathCapturingPinnedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *pathCapturingUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.path = r.URL.Path
 	h.mu.Unlock()
@@ -542,7 +542,7 @@ func (h *pathCapturingPinnedHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 }
 
 // newNeardirectProxyServer creates a neardirect-backed proxy server with all
-// endpoint paths configured and a stub PinnedHandler attached.
+// endpoint paths configured and a TLS test upstream.
 func newNeardirectProxyServer(t *testing.T, authority *testtls.Authority, handler http.Handler) *httptest.Server {
 	t.Helper()
 	return newNeardirectProxyFixture(t, authority, handler, true)
@@ -618,10 +618,10 @@ func TestEmbeddings_InvalidJSON400(t *testing.T) {
 	})
 }
 
-func TestEmbeddings_PinnedOK(t *testing.T) {
+func TestEmbeddings_AttestedTLSOK(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		handler := &pathCapturingPinnedHandler{}
+		handler := &pathCapturingUpstream{}
 		proxySrv := newNeardirectProxyServer(t, authority, handler)
 		defer proxySrv.Close()
 
@@ -641,7 +641,7 @@ func TestEmbeddings_PinnedOK(t *testing.T) {
 		gotPath := handler.path
 		handler.mu.Unlock()
 		if gotPath != "/v1/embeddings" {
-			t.Errorf("PinnedRequest.Path = %q, want /v1/embeddings", gotPath)
+			t.Errorf("upstream path = %q, want /v1/embeddings", gotPath)
 		}
 	})
 }
@@ -709,10 +709,10 @@ func TestImages_InvalidJSON400(t *testing.T) {
 	})
 }
 
-func TestImages_PinnedOK(t *testing.T) {
+func TestImages_AttestedTLSOK(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		handler := &pathCapturingPinnedHandler{}
+		handler := &pathCapturingUpstream{}
 		proxySrv := newNeardirectProxyServer(t, authority, handler)
 		defer proxySrv.Close()
 
@@ -732,12 +732,12 @@ func TestImages_PinnedOK(t *testing.T) {
 		gotPath := handler.path
 		handler.mu.Unlock()
 		if gotPath != "/v1/images/generations" {
-			t.Errorf("PinnedRequest.Path = %q, want /v1/images/generations", gotPath)
+			t.Errorf("upstream path = %q, want /v1/images/generations", gotPath)
 		}
 	})
 }
 
-func TestImages_PinnedE2EESessionRelayed(t *testing.T) {
+func TestImages_AttestedTLSE2EESessionRelayed(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
 		// When a pinned non-chat endpoint returns an E2EE session, the proxy
@@ -781,24 +781,23 @@ func TestImages_ProviderDoesNotSupport400(t *testing.T) {
 	}
 }
 
-// headerPinnedHandler returns upstream response headers alongside the body,
+// headerUpstream returns upstream response headers alongside the body,
 // allowing tests to verify the proxy forwards them to the client.
-type headerPinnedHandler struct {
+type headerUpstream struct {
 	extraHeaders http.Header
 }
 
-func (h headerPinnedHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+func (h headerUpstream) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	maps.Copy(w.Header(), h.extraHeaders)
 	_, _ = io.WriteString(w, `{"data":"ok"}`)
 }
 
-func TestNonChat_PinnedOK_ForwardsUpstreamHeaders(t *testing.T) {
+func TestNonChat_AttestedTLSOK_ForwardsUpstreamHeaders(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		// Regression: handlePinnedNonChat must forward upstream response headers
-		// (rate-limit, request IDs, etc.) to the client, matching handlePinnedChat.
-		handler := headerPinnedHandler{
+		// Non-chat responses must preserve upstream rate-limit and request ID headers.
+		handler := headerUpstream{
 			extraHeaders: http.Header{
 				"X-Request-Id":          []string{"req-abc-123"},
 				"X-Ratelimit-Remaining": []string{"42"},
@@ -866,10 +865,10 @@ func TestAudio_MissingModel400(t *testing.T) {
 	})
 }
 
-func TestAudio_PinnedOK(t *testing.T) {
+func TestAudio_AttestedTLSOK(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		handler := &pathCapturingPinnedHandler{}
+		handler := &pathCapturingUpstream{}
 		proxySrv := newNeardirectProxyServer(t, authority, handler)
 		defer proxySrv.Close()
 
@@ -892,15 +891,15 @@ func TestAudio_PinnedOK(t *testing.T) {
 		gotPath := handler.path
 		handler.mu.Unlock()
 		if gotPath != "/v1/audio/transcriptions" {
-			t.Errorf("PinnedRequest.Path = %q, want /v1/audio/transcriptions", gotPath)
+			t.Errorf("upstream path = %q, want /v1/audio/transcriptions", gotPath)
 		}
 	})
 }
 
-func TestAudio_PinnedOK_FileBeforeModel(t *testing.T) {
+func TestAudio_AttestedTLSOK_FileBeforeModel(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		handler := &pathCapturingPinnedHandler{}
+		handler := &pathCapturingUpstream{}
 		proxySrv := newNeardirectProxyServer(t, authority, handler)
 		defer proxySrv.Close()
 
@@ -923,7 +922,7 @@ func TestAudio_PinnedOK_FileBeforeModel(t *testing.T) {
 		gotPath := handler.path
 		handler.mu.Unlock()
 		if gotPath != "/v1/audio/transcriptions" {
-			t.Errorf("PinnedRequest.Path = %q, want /v1/audio/transcriptions", gotPath)
+			t.Errorf("upstream path = %q, want /v1/audio/transcriptions", gotPath)
 		}
 	})
 }
@@ -951,8 +950,8 @@ func TestAudio_ProviderDoesNotSupport400(t *testing.T) {
 	}
 }
 
-func TestAudio_NonPinnedE2EEFails400(t *testing.T) {
-	// Chutes has E2EE=true and no PinnedHandler (app-layer E2EE).
+func TestAudio_ChutesE2EEFails400(t *testing.T) {
+	// Chutes enables application-layer E2EE.
 	// Audio multipart must fail-closed for non-pinned E2EE.
 	cfg := &config.Config{
 		ListenAddr: "127.0.0.1:0",
@@ -1061,10 +1060,10 @@ func TestRerank_InvalidJSON400(t *testing.T) {
 	})
 }
 
-func TestRerank_PinnedOK(t *testing.T) {
+func TestRerank_AttestedTLSOK(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		handler := &pathCapturingPinnedHandler{}
+		handler := &pathCapturingUpstream{}
 		proxySrv := newNeardirectProxyServer(t, authority, handler)
 		defer proxySrv.Close()
 
@@ -1084,7 +1083,7 @@ func TestRerank_PinnedOK(t *testing.T) {
 		gotPath := handler.path
 		handler.mu.Unlock()
 		if gotPath != "/v1/rerank" {
-			t.Errorf("PinnedRequest.Path = %q, want /v1/rerank", gotPath)
+			t.Errorf("upstream path = %q, want /v1/rerank", gotPath)
 		}
 	})
 }
@@ -1152,10 +1151,10 @@ func TestScore_InvalidJSON400(t *testing.T) {
 	})
 }
 
-func TestScore_PinnedOK(t *testing.T) {
+func TestScore_AttestedTLSOK(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		handler := &pathCapturingPinnedHandler{}
+		handler := &pathCapturingUpstream{}
 		proxySrv := newNeardirectProxyServer(t, authority, handler)
 		defer proxySrv.Close()
 
@@ -1175,7 +1174,7 @@ func TestScore_PinnedOK(t *testing.T) {
 		gotPath := handler.path
 		handler.mu.Unlock()
 		if gotPath != "/v1/score" {
-			t.Errorf("PinnedRequest.Path = %q, want /v1/score", gotPath)
+			t.Errorf("upstream path = %q, want /v1/score", gotPath)
 		}
 	})
 }
@@ -1211,7 +1210,7 @@ func TestEmbeddings_NegativeCache503(t *testing.T) {
 		proxySrv := newNeardirectProxyFixture(t, authority, plainTestUpstream{}, false)
 		defer proxySrv.Close()
 
-		// First request: blocked attestation in pinned handler → 502.
+		// First request: blocked attestation → 502.
 		resp1, err := http.Post(proxySrv.URL+"/v1/embeddings", "application/json",
 			strings.NewReader(`{"model":"neardirect:test-model","input":"hello"}`))
 		if err != nil {
@@ -3607,12 +3606,6 @@ func TestHandleIndex_AfterRequest(t *testing.T) {
 // --------------------------------------------------------------------------
 // Phase 4: Cache coherence and signing key tests
 // --------------------------------------------------------------------------
-
-// TestPinnedPath_E2EE_NilReportBlocked verifies that an E2EE provider on the
-// pinned path blocks the request when the pinned handler returns a nil report
-// (SPKI cache hit) and the attestation cache is empty. Previously this was a
-// fail-open: enforceReport returned true for nil reports, and the E2EE binding
-// check short-circuited on report==nil.
 
 // --- Nonce pool unit tests ---
 

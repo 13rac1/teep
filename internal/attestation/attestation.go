@@ -57,18 +57,9 @@ func ParseNonce(s string) (Nonce, error) {
 // to dispatch to the correct ReportDataVerifier via multi.Verifier.
 type BackendFormat string
 
-// AttestationCacheTTL is the shared TTL for all attestation-related caches:
-// the SPKI pin cache, the attestation report cache, and the signing key cache.
-// All three must use the same TTL to prevent one cache outliving another,
-// which would cause nil-report or missing-key errors on SPKI cache hits
-// after the report or signing key has expired.
-//
-// The value is kept relatively short (1 hour) because some providers
-// (nearcloud in particular) do not expose a mechanism for the proxy to
-// detect when an E2EE signing key or TLS key rotates — keys change when
-// the backend VM reboots or when a gateway load balancer selects a
-// different backend. If providers expose key-rotation signals in the
-// future, this TTL could be extended until an actual rotation event.
+// AttestationCacheTTL bounds the report and signing-key caches for providers
+// without TLS binding. TLS-binding providers use atomic authorizations whose
+// expiry comes only from authenticated evidence.
 const AttestationCacheTTL = 1 * time.Hour
 
 // BackendFormat constants for known attestation backends.
@@ -519,11 +510,8 @@ type signingKeyEntry struct {
 	fetchedAt  time.Time
 }
 
-// SigningKeyCache caches REPORTDATA-verified signing keys by provider+model.
-// The signing key is bound to the TDX quote via REPORTDATA; it only changes
-// on VM restart (new TDX quote). The TTL must be ≥ the SPKI cache TTL to
-// prevent "no signing key available" errors on pinned connections where an
-// SPKI cache hit skips attestation.
+// SigningKeyCache stores REPORTDATA-verified signing keys for providers without
+// TLS binding. TLS-binding providers keep keys in atomic authorizations.
 type SigningKeyCache struct {
 	mu            sync.RWMutex
 	entries       map[cacheKey]*signingKeyEntry

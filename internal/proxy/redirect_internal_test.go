@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
 
@@ -21,12 +21,22 @@ func TestInferenceRejectsRedirects(t *testing.T) {
 		}))
 		for _, binding := range []bool{false, true} {
 			s := newTLSBindingTestServerHandle()
-			prov := &provider.Provider{Name: "test", BaseURL: ts.URL, UsesTLSBinding: binding}
+			t.Cleanup(s.Close)
+			if binding {
+				s.authorizations = newAuthorizationStore(2, 1, time.Second)
+				input := tlsAuthorizationInput(t, s, "neardirect", "model", ts.URL, fp)
+				recorder := newInferenceRecorder()
+				s.handleAuthorizedEndpoint(t.Context(), recorder, input)
+				if recorder.Code != http.StatusBadGateway || recorder.Header().Get("Location") != "" {
+					t.Fatal("authorized redirect escaped to downstream client")
+				}
+				continue
+			}
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL, http.NoBody)
 			if err != nil {
 				t.Fatal(err)
 			}
-			sent, failure := s.sendUpstreamRequest(context.Background(), prov, "model", ts.URL, fp, req)
+			sent, failure := s.sendUpstreamRequest(req)
 			if failure == nil || failure.code != http.StatusBadGateway || sent.resp != nil {
 				t.Fatalf("redirect returned downstream response or wrong error: %+v, %v", sent, failure)
 			}

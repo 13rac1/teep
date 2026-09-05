@@ -8,7 +8,7 @@ import (
 )
 
 // E2EE implements provider.RequestEncryptor for NEAR AI E2EE
-// (Ed25519/X25519 + XChaCha20-Poly1305). Used by both neardirect (pinned path)
+// (Ed25519/X25519 + XChaCha20-Poly1305). Used by both neardirect
 // and nearcloud (gateway path).
 type E2EE struct{}
 

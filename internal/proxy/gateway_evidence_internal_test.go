@@ -46,7 +46,7 @@ func TestFetchAndVerify_VerifiesGatewayEvidence(t *testing.T) {
 		// document came from. For a gateway provider that is the gateway
 		// report, and choosing the core one instead fails every measurement
 		// factor. SEE: attestation.SupplyChainSEVResult.
-		SigstoreRepoForModel: func(string) string { return "tinfoilsh/confidential-model-router" },
+		StaticRoute: gatewaySupplyChainRoute(t),
 	}
 
 	report, gotRaw := s.fetchAndVerify(context.Background(), prov, "test-model")
@@ -91,10 +91,10 @@ func TestFetchAndVerify_GatewaySuppliesSupplyChainResult(t *testing.T) {
 		GatewayNonceHex:       nonce.Hex(),
 	}
 	prov := &provider.Provider{
-		Name:                 "tinfoil_v3_cloud",
-		Attester:             &mockAttesterWithRaw{raw: raw},
-		SupplyChainPolicy:    attestation.NoSupplyChainPolicy(),
-		SigstoreRepoForModel: func(string) string { return "tinfoilsh/confidential-model-router" },
+		Name:              "tinfoil_v3_cloud",
+		Attester:          &mockAttesterWithRaw{raw: raw},
+		SupplyChainPolicy: attestation.NoSupplyChainPolicy(),
+		StaticRoute:       gatewaySupplyChainRoute(t),
 	}
 
 	report, _ := s.fetchAndVerify(context.Background(), prov, "test-model")
@@ -141,7 +141,7 @@ func TestFetchAndVerify_GatewayProviderActivatesE2EE(t *testing.T) {
 		E2EEKeyBoundByGateway: true,
 		Attester:              &mockAttesterWithRaw{raw: raw},
 		SupplyChainPolicy:     attestation.NoSupplyChainPolicy(),
-		SigstoreRepoForModel:  func(string) string { return "tinfoilsh/confidential-model-router" },
+		StaticRoute:           gatewaySupplyChainRoute(t),
 	}
 
 	report, _ := s.fetchAndVerify(context.Background(), prov, "test-model")
@@ -230,4 +230,13 @@ func TestFetchAndVerify_PreservesGatewayEventLog(t *testing.T) {
 		}
 	}
 	t.Fatal("missing gateway event log factor")
+}
+
+func gatewaySupplyChainRoute(t *testing.T) provider.ResolvedRoute {
+	t.Helper()
+	route, err := provider.NewResolvedRoute("https://inference.tinfoil.sh", "tinfoilsh/confidential-model-router")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return route
 }

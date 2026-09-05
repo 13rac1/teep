@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -21,6 +22,12 @@ func TestFetchAttestation_HappyPath(t *testing.T) {
 
 func TestFetchAttestation_TransportBindingFailures(t *testing.T) {
 	for _, mode := range []string{"only_backend_matches", "missing", "malformed", "wrong_length", "redirect"} {
+		t.Run(mode, func(t *testing.T) { testGatewayTransportBinding(t, mode, false) })
+	}
+}
+
+func TestAttesterHTTPFailures(t *testing.T) {
+	for _, mode := range []string{"http_error", "invalid_json", "long_error"} {
 		t.Run(mode, func(t *testing.T) { testGatewayTransportBinding(t, mode, false) })
 	}
 }
@@ -51,6 +58,15 @@ func testGatewayTransportBinding(t *testing.T, mode string, wantSuccess bool) {
 			if mode == "redirect" {
 				w.Header().Set("Location", "/target")
 				w.WriteHeader(http.StatusFound)
+				return
+			}
+			if mode == "http_error" || mode == "long_error" {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(strings.Repeat("x", 4096)))
+				return
+			}
+			if mode == "invalid_json" {
+				_, _ = w.Write([]byte(`{"gateway_attestation":`))
 				return
 			}
 			gatewayFP := fingerprint
@@ -105,4 +121,30 @@ func testGatewayTransportBinding(t *testing.T, mode string, wantSuccess bool) {
 			t.Fatal("gateway evidence was lost")
 		}
 	})
+}
+
+func nearcloudAttestationJSON(spkiHash, nonceHex string) string {
+	return fmt.Sprintf(`{
+		"gateway_attestation": {
+			"request_nonce": %q,
+			"intel_quote": "",
+			"event_log": "",
+			"tls_cert_fingerprint": %q,
+			"info": {
+				"tcb_info": "{\"app_compose\":\"test-compose\"}"
+			}
+		},
+		"model_attestations": [
+			{
+				"model_name": "test-model",
+				"intel_quote": "",
+				"nvidia_payload": "",
+				"signing_public_key": "04aaaa",
+				"signing_address": "0xtest",
+				"signing_algo": "ecdsa",
+				"tls_cert_fingerprint": %q,
+				"request_nonce": %q
+			}
+		]
+	}`, nonceHex, spkiHash, spkiHash, nonceHex)
 }

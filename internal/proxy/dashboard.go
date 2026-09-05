@@ -125,8 +125,6 @@ type dashboardCache struct {
 	Hits            int64  `json:"hits"`
 	Misses          int64  `json:"misses"`
 	SigningKeys     int    `json:"signing_keys"`
-	SPKICerts       int    `json:"spki_certs"`
-	SPKIDomains     int    `json:"spki_domains"`
 	ModelsCount     int    `json:"models_count"`
 	ModelsCachedAgo string `json:"models_cached_ago"`
 }
@@ -197,8 +195,6 @@ func (s *Server) buildCacheStats(hits, misses int64) dashboardCache {
 		Hits:            hits,
 		Misses:          misses,
 		SigningKeys:     s.signingKeyCache.Len() + signingKeys,
-		SPKICerts:       s.spkiCache.Len(),
-		SPKIDomains:     s.spkiCache.DomainCount(),
 		ModelsCount:     modelsCount,
 		ModelsCachedAgo: modelsCachedAgo,
 	}
