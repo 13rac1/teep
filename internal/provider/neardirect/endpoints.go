@@ -2,16 +2,15 @@ package neardirect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
@@ -20,6 +19,9 @@ import (
 )
 
 const (
+	maxDiscoveryBody        = 1 << 20
+	maxDiscoveryMappings    = 4096
+	maxDiscoveryModelLength = 256
 	// defaultEndpointsURL is the NEAR AI endpoint discovery URL.
 	defaultEndpointsURL = "https://completions.near.ai/endpoints"
 
@@ -90,7 +92,8 @@ func newEndpointResolverForTest(url string) *EndpointResolver {
 func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, error) {
 	r.mu.RLock()
 	domain, ok := r.mapping[model]
-	stale := time.Since(r.fetchedAt) > endpointsTTL
+	observed := r.fetchedAt
+	stale := time.Since(observed) > endpointsTTL
 	r.mu.RUnlock()
 
 	if ok && !stale {
@@ -104,9 +107,7 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 	// DoChan lets cancelled callers return immediately while the
 	// shared refresh continues in the background.
 	ch := r.sf.DoChan("refresh", func() (any, error) {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
-		defer cancel()
-		return nil, r.refresh(rctx)
+		return nil, r.refreshAfter(ctx, observed)
 	})
 
 	var err error
@@ -137,6 +138,15 @@ func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, e
 	return domain, nil
 }
 
+// ResolveRoute fixes the selected authority before authorization access.
+func (r *EndpointResolver) ResolveRoute(ctx context.Context, model string) (provider.ResolvedRoute, error) {
+	domain, err := r.Resolve(ctx, model)
+	if err != nil {
+		return provider.ResolvedRoute{}, err
+	}
+	return provider.NewResolvedRoute("https://"+domain, "")
+}
+
 // refresh fetches the endpoint mapping from the discovery URL and replaces
 // the cached mapping. Holds the write lock only for the swap.
 func (r *EndpointResolver) refresh(ctx context.Context) error {
@@ -152,36 +162,22 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDiscoveryBody+1))
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
+	}
+
+	if len(body) > maxDiscoveryBody {
+		return fmt.Errorf("endpoint discovery body exceeds %d bytes", maxDiscoveryBody)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, provider.Truncate(string(body), 256))
 	}
 
-	var er endpointsResponse
-	if _, _, err := jsonstrict.UnmarshalWarn(body, &er, "nearai endpoint discovery"); err != nil {
-		return fmt.Errorf("unmarshal: %w", err)
-	}
-
-	mapping := make(map[string]string)
-	for _, ep := range er.Endpoints {
-		if !isValidDomain(ep.Domain, r.restrictToNearAI) {
-			slog.WarnContext(ctx, "nearai: endpoint discovery: skipping invalid domain", "domain", ep.Domain)
-			continue
-		}
-		for _, m := range ep.Models {
-			if prior, exists := mapping[m]; exists && prior != ep.Domain {
-				slog.WarnContext(ctx, "nearai: endpoint discovery: duplicate model mapping; last value wins",
-					"model", m,
-					"first_domain", prior,
-					"second_domain", ep.Domain,
-				)
-			}
-			mapping[m] = ep.Domain
-		}
+	mapping, err := parseEndpointMapping(body, r.restrictToNearAI)
+	if err != nil {
+		return err
 	}
 
 	r.mu.Lock()
@@ -192,49 +188,74 @@ func (r *EndpointResolver) refresh(ctx context.Context) error {
 	return nil
 }
 
-// isValidDomain rejects domain strings that are empty, contain schemes,
-// spaces, path separators, punycode labels, or do not belong to near.ai.
-// Accepts host:port but only for near.ai hosts.
-func isValidDomain(d string, restrictToNearAI bool) bool {
-	if d == "" {
-		return false
+func canonicalDiscoveryAuthority(domain string, restrictToNearAI bool) (string, error) {
+	authority, err := tlsct.HTTPSOriginAuthority("https://" + domain)
+	if err != nil {
+		return "", err
 	}
-
-	for _, r := range d {
-		if unicode.IsSpace(r) || r < 0x20 || r == 0x7f {
-			return false
-		}
-		if r > unicode.MaxASCII {
-			return false
-		}
-	}
-	if strings.ContainsAny(d, "/\\") || strings.Contains(d, "://") {
-		return false
-	}
-
-	host := d
-	if strings.Count(d, ":") > 0 {
-		h, p, err := net.SplitHostPort(d)
+	host := authority
+	if strings.Contains(authority, ":") {
+		host, _, err = net.SplitHostPort(authority)
 		if err != nil {
-			return false
+			return "", errors.New("invalid discovery authority")
 		}
-		port, err := strconv.Atoi(p)
-		if err != nil || port <= 0 || port > 65535 {
-			return false
+	}
+	if net.ParseIP(host) != nil || strings.HasPrefix(host, "xn--") || strings.Contains(host, ".xn--") {
+		return "", errors.New("discovery requires a DNS hostname without punycode")
+	}
+	if restrictToNearAI && host != "near.ai" && !strings.HasSuffix(host, ".near.ai") {
+		return "", errors.New("discovery authority is not owned by NEAR AI")
+	}
+	return authority, nil
+}
+
+func parseEndpointMapping(body []byte, restrictToNearAI bool) (map[string]string, error) {
+	var response endpointsResponse
+	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &response, "nearai endpoint discovery")
+	if err != nil {
+		return nil, fmt.Errorf("decode endpoint discovery: %w", err)
+	}
+	if len(unknown) != 0 || len(missing) != 0 {
+		return nil, fmt.Errorf("endpoint discovery fields: unknown %v, missing %v", unknown, missing)
+	}
+	if len(response.Endpoints) == 0 {
+		return nil, errors.New("endpoint discovery has no endpoints")
+	}
+	mapping := make(map[string]string)
+	for _, endpoint := range response.Endpoints {
+		authority, err := canonicalDiscoveryAuthority(endpoint.Domain, restrictToNearAI)
+		if err != nil {
+			return nil, fmt.Errorf("invalid endpoint authority: %w", err)
 		}
-		host = h
+		if len(endpoint.Models) == 0 {
+			return nil, errors.New("endpoint has no models")
+		}
+		for _, model := range endpoint.Models {
+			if model == "" || len(model) > maxDiscoveryModelLength || strings.ContainsFunc(model, func(c rune) bool { return c < 32 || c == 127 }) {
+				return nil, errors.New("endpoint has an invalid model identifier")
+			}
+			if _, exists := mapping[model]; exists {
+				return nil, errors.New("duplicate model in endpoint discovery")
+			}
+			if len(mapping) >= maxDiscoveryMappings {
+				return nil, fmt.Errorf("endpoint discovery exceeds %d mappings", maxDiscoveryMappings)
+			}
+			mapping[model] = authority
+		}
 	}
+	return mapping, nil
+}
 
-	host = strings.TrimSuffix(strings.ToLower(host), ".")
-	if host == "" || strings.Contains(host, "..") {
-		return false
+// refreshAfter runs inside the singleflight callback. A caller can arrive here
+// after another refresh has completed since it inspected the mapping.
+func (r *EndpointResolver) refreshAfter(ctx context.Context, observed time.Time) error {
+	r.mu.RLock()
+	refreshed := !r.fetchedAt.Equal(observed) && time.Since(r.fetchedAt) <= endpointsTTL
+	r.mu.RUnlock()
+	if refreshed {
+		return nil
 	}
-	if strings.HasPrefix(host, "xn--") || strings.Contains(host, ".xn--") {
-		return false
-	}
-
-	if !restrictToNearAI {
-		return true
-	}
-	return host == "near.ai" || strings.HasSuffix(host, ".near.ai")
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
+	defer cancel()
+	return r.refresh(rctx)
 }

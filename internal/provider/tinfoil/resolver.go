@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -155,18 +156,18 @@ func (r *DirectResolver) Resolve(ctx context.Context, model string) (string, err
 func (r *DirectResolver) ResolveMapping(ctx context.Context, model string) (ModelMapping, error) {
 	r.mu.RLock()
 	m, ok := r.mapping[model]
-	stale := time.Since(r.fetchedAt) > resolverTTL
+	observed := r.fetchedAt
+	stale := time.Since(observed) > resolverTTL
 	r.mu.RUnlock()
 
 	if ok && !stale {
+		m.Domains = slices.Clone(m.Domains)
 		return m, nil
 	}
 
 	// Collapse concurrent refreshes into a single HTTP call.
 	ch := r.sf.DoChan("refresh", func() (any, error) {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
-		defer cancel()
-		return nil, r.refresh(rctx)
+		return nil, r.refreshAfter(ctx, observed)
 	})
 
 	var err error
@@ -194,6 +195,7 @@ func (r *DirectResolver) ResolveMapping(ctx context.Context, model string) (Mode
 	if !ok {
 		return ModelMapping{}, fmt.Errorf("unknown model %q (not in tinfoil proxy discovery)", model)
 	}
+	m.Domains = slices.Clone(m.Domains)
 	return m, nil
 }
 
@@ -228,6 +230,19 @@ func (m ModelMapping) SelectDomain(promptCacheKey string) string {
 		}
 	}
 	return bestDomain
+}
+
+// ResolveRoute selects the sticky domain and effective repository together.
+func (r *DirectResolver) ResolveRoute(ctx context.Context, model string) (provider.ResolvedRoute, error) {
+	mapping, err := r.ResolveMapping(ctx, model)
+	if err != nil {
+		return provider.ResolvedRoute{}, err
+	}
+	repo := mapping.Repo
+	if repo == "" {
+		repo = RepoForModel(model)
+	}
+	return provider.NewResolvedRoute("https://"+mapping.SelectDomain(PromptCacheKeyFromContext(ctx)), repo)
 }
 
 // refresh fetches the model-to-enclave mapping from the proxy discovery
@@ -409,4 +424,18 @@ func isValidBackendDomain(d string) bool {
 	}
 
 	return true
+}
+
+// refreshAfter runs inside the singleflight callback. A caller can arrive here
+// after another refresh has completed since it inspected the mapping.
+func (r *DirectResolver) refreshAfter(ctx context.Context, observed time.Time) error {
+	r.mu.RLock()
+	refreshed := !r.fetchedAt.Equal(observed) && time.Since(r.fetchedAt) <= resolverTTL
+	r.mu.RUnlock()
+	if refreshed {
+		return nil
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
+	defer cancel()
+	return r.refresh(rctx)
 }

@@ -238,7 +238,7 @@ func TestPinnedHandler_SPKICacheHit(t *testing.T) {
 	spkiHash := computeTestServerSPKI(t, srv)
 
 	// The endpoint resolver maps to the test server's address.
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
@@ -540,7 +540,7 @@ func TestHandlePinned_CacheMiss(t *testing.T) {
 	spkiHash = computeTestServerSPKI(t, srv)
 	t.Logf("test server SPKI: %s", spkiHash)
 
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
@@ -617,7 +617,7 @@ func TestHandlePinned_InapplicableNVSwitchDoesNotBlock(t *testing.T) {
 	defer srv.Close()
 
 	spkiHash = computeTestServerSPKI(t, srv)
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
@@ -694,7 +694,7 @@ func TestHandlePinned_OfflineOnlineAndInapplicableFactorsDoNotBlock(t *testing.T
 	defer srv.Close()
 
 	spkiHash = computeTestServerSPKI(t, srv)
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
@@ -766,7 +766,7 @@ func TestHandlePinned_CacheHitViaSetDialer(t *testing.T) {
 	defer srv.Close()
 
 	spkiHash := computeTestServerSPKI(t, srv)
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -842,7 +842,7 @@ func TestHandlePinned_MismatchedFingerprint(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
@@ -901,7 +901,7 @@ func TestHandlePinned_BlockedReportDoesNotPopulateSPKICache(t *testing.T) {
 	defer srv.Close()
 
 	spkiHash = computeTestServerSPKI(t, srv)
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
@@ -1090,7 +1090,7 @@ func TestHandlePinned_ConcurrentRequests_SingleflightDedup(t *testing.T) {
 	defer srv.Close()
 
 	spkiHash = computeTestServerSPKI(t, srv)
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
@@ -1170,7 +1170,7 @@ func TestHandlePinned_AttestationTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
@@ -1232,7 +1232,7 @@ func TestHandlePinned_MalformedAttestationResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)
@@ -1318,7 +1318,7 @@ func TestHandlePinned_BlockedThenRecovery(t *testing.T) {
 	defer srv.Close()
 
 	spkiHash = computeTestServerSPKI(t, srv)
-	domain := hostFromURL(t, srv.URL)
+	domain := "test.near.ai"
 	endpointSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"endpoints":[{"domain":"%s","models":["test-model"]}]}`, domain)

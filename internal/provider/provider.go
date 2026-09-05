@@ -191,6 +191,12 @@ type Provider struct {
 	// May be nil if the provider does not support attestation.
 	Attester Attester
 
+	// StaticRoute is the validated origin for a static TLS-binding provider.
+	StaticRoute ResolvedRoute
+
+	// ResolveRoute selects one immutable route before authorization access.
+	ResolveRoute func(context.Context, string) (ResolvedRoute, error)
+
 	// Preparer injects provider-specific headers into outgoing requests.
 	// May be nil if no special headers are needed.
 	Preparer RequestPreparer

@@ -112,19 +112,23 @@ func (a *DirectAttester) SetClient(c *http.Client) {
 // prompt_cache_key is present in the context, the resolver uses
 // hash-based sticky routing for cache-aware backend selection.
 func (a *DirectAttester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
-	m, err := a.resolver.ResolveMapping(ctx, model)
+	route, err := a.resolver.ResolveRoute(ctx, model)
 	if err != nil {
 		return nil, fmt.Errorf("tinfoil direct: resolve model %q: %w", model, err)
 	}
-	promptCacheKey := PromptCacheKeyFromContext(ctx)
-	domain := m.SelectDomain(promptCacheKey)
-	baseURL := "https://" + domain
-	slog.DebugContext(ctx, "tinfoil direct: resolved model domain", "model", model, "domain", domain, "repo", m.Repo)
-	raw, err := fetchAndVerifyAttestation(ctx, a.client, baseURL, a.apiKey, nonce)
+	return a.FetchAttestationForRoute(ctx, route, model, nonce)
+}
+
+// FetchAttestationForRoute uses the authority and repository from one snapshot.
+func (a *DirectAttester) FetchAttestationForRoute(ctx context.Context, route provider.ResolvedRoute, _ string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	if route.Authority() == "" || route.SupplyChainRepo() == "" {
+		return nil, errors.New("tinfoil direct: attestation requires a route and repository")
+	}
+	raw, err := fetchAndVerifyAttestation(ctx, a.client, route.BaseURL(), a.apiKey, nonce)
 	if err != nil {
 		return nil, err
 	}
-	raw.TinfoilRepo = m.Repo
+	raw.TinfoilRepo = route.SupplyChainRepo()
 	return raw, nil
 }
 
