@@ -17,6 +17,7 @@ package neardirect
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -189,6 +190,24 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 		slog.DebugContext(ctx, "nearai model resolved", "model", model, "domain", domain)
 	}
 
+	route, err := provider.NewResolvedRoute(baseURL, "")
+	if err != nil {
+		return nil, fmt.Errorf("nearai: resolve route: %w", err)
+	}
+	return fetchAttestationForRoute(ctx, a, route, model, nonce)
+}
+
+// FetchAttestationForRoute uses the supplied route without another resolution.
+func (a *Attester) FetchAttestationForRoute(ctx context.Context, route provider.ResolvedRoute, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	return fetchAttestationForRoute(ctx, a, route, model, nonce)
+}
+
+func fetchAttestationForRoute(ctx context.Context, a *Attester, route provider.ResolvedRoute, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	if route.Authority() == "" {
+		return nil, errors.New("nearai: attestation requires a resolved route")
+	}
+	baseURL := route.BaseURL()
+
 	endpoint, err := url.Parse(baseURL + attestationPath)
 	if err != nil {
 		return nil, fmt.Errorf("nearai: parse endpoint base URL %q: %w", baseURL, err)
@@ -211,12 +230,8 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	if err := tlsct.CompareSPKIFingerprints(peerSPKI, raw.TLSFingerprint); err != nil {
 		return nil, fmt.Errorf("nearai: attestation TLS binding: %w", err)
 	}
-	authority, err := tlsct.HTTPSOriginAuthority(baseURL)
-	if err != nil {
-		return nil, fmt.Errorf("nearai: attestation authority: %w", err)
-	}
 	raw.TransportTLSFingerprint = raw.TLSFingerprint
-	raw.TransportTLSAuthority = authority
+	raw.TransportTLSAuthority = route.Authority()
 	return raw, nil
 }
 

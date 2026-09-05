@@ -25,6 +25,7 @@ func TestHTTPSOriginAuthority(t *testing.T) {
 		"https://example.com:", "https://[fe80::1%25eth0]", "https://%65xample.com",
 		"https://éxample.com", "https://-example.com", "https://example..com",
 		"https:example.com", "https://example.com/a%2fb",
+		"https://[example.com]", "https://[127.0.0.1]",
 	} {
 		if _, err := HTTPSOriginAuthority(origin); err == nil {
 			t.Errorf("accepted invalid origin %q", origin)

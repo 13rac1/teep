@@ -58,6 +58,12 @@ func HTTPSOriginAuthority(origin string) (string, error) {
 		u.RawFragment != "" || u.Opaque != "" || strings.ContainsAny(origin, "%#") {
 		return "", errors.New("expected origin-only absolute HTTPS URL")
 	}
+	if strings.HasPrefix(u.Host, "[") {
+		address, err := netip.ParseAddr(u.Hostname())
+		if err != nil || !address.Is6() {
+			return "", errors.New("bracketed authority must contain an IPv6 address")
+		}
+	}
 	host, err := canonicalOriginHost(u.Hostname())
 	if err != nil {
 		return "", err
