@@ -166,6 +166,17 @@ Reference implementations to mirror when adding providers or verification logic:
 - Prefer mocks over live tests: any live-network test must require the `TEEP_LIVE_TESTS` environment variable or API keys.
 - ALWAYS add regression test coverage for code review issues and audit findings.
 
+### Maintain Documentation
+
+- Keep documentation consistent with the implementation in the same change that alters behavior. Describe the current contracts, supported use, and limitations; do not preserve every implementation detail or a running history of edits.
+- Use [README.md](README.md) for setup and use, [README_ADVANCED.md](README_ADVANCED.md) for architecture and attestation, and [API support](docs/api_support.md) for endpoint support and encryption restrictions. Update affected examples when configuration or CLI behavior changes.
+- Keep shared HTTP and TLS behavior in [the transport reference](docs/transport/README.md), including its retry, redirect, and testing documents. Update linked regression tests and test names when behavior or coverage changes. Provider documents should link to these shared contracts rather than duplicate them.
+- Expand [provider documentation](docs/providers/) to cover every supported provider, using [Tinfoil provider support](docs/providers/tinfoil/tinfoil_support.md) as the reference for structure and depth. When adding or changing a provider, add or update its documentation for configuration, supported endpoints, routing, trust boundaries, attestation evidence and binding, TLS and E2EE behavior, supply-chain verification, factor enforcement, known limitations, and test coverage. Describe each provider's actual guarantees, including differences between direct and gateway modes.
+- Keep [measurement allowlists](docs/measurement_allowlists.md) and [attestation gaps](docs/attestation_gaps/README.md) consistent with validation and known limitations. Distinguish what teep independently verifies from provider assertions and verification delegated to a gateway.
+- Keep [implementation plans](docs/plans/) consistent with the completed design. Mark pre-implementation descriptions and investigation results as historical, and link completed plans to maintained reference documentation. Do not leave abandoned designs described as current behavior.
+- Keep the code-review instructions in [.github/instructions](.github/instructions/) in sync with `AGENTS.md` and its security rules. When these rules change, update the affected review instructions in the same change; do not retain conflicting or weaker security requirements.
+- Check documentation links, code references, and examples for accuracy. Prefer one maintained explanation with links from related documents over repeated descriptions that can diverge.
+
 ### Writing Style
 
 Use ASD-STE100 (Simplified Technical English) as the basis for style decisions in comments, commit messages, and user-visible strings: active voice, one meaning per word, no metaphors or idioms, no invented compound words.
