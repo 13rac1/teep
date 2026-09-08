@@ -36,6 +36,28 @@ Reference providers for implementation patterns:
 `REPORTDATA[0:32]` means bytes at indices 0 through 31 (32 bytes).
 `REPORTDATA[32:64]` means bytes at indices 32 through 63 (32 bytes).
 
+### AMD certificate retrieval
+
+For both Tinfoil aliases, `teep serve` and `teep verify` use the AMD ASK/ARK
+VCEK signing chains embedded in the pinned `go-sev-guest` dependency (Milan,
+Genoa, and Turin). They obtain per-chip VCEK certificates from
+`https://kds-proxy.tinfoil.sh`, preserving the chip ID and TCB query.
+Unsupported signing chains and failed retrievals return errors; retrieval does
+not switch to AMD KDS after a proxy failure. No filesystem cache is added.
+
+The proxy supplies collateral, not a trust decision. Teep still verifies the
+AMD certificate chain, report signature, report binding, and applicable factor
+policy. Offline mode retains its explicit network-check exclusions. This change
+does not change authorization reuse or initiate additional attestations.
+
+The shared attestation client requires TLS 1.3, system WebPKI and CT, enables
+HTTP/2 negotiation and connection reuse, and rejects redirects. The AMD-host
+TLS 1.2 exception does not apply to Tinfoil's proxy. See the
+[transport reference](../../transport/README.md). `TestTinfoilKDS` exercises
+concurrent TLS 1.3/HTTP/2 retrieval and rejects corrupt certificates, invalid
+report signatures, redirects, failed retrievals, and oversized responses.
+`TestTinfoilKDSEmbeddedChains` checks chain isolation and unsupported URLs.
+
 ### V3 Attestation Format
 
 Tinfoil's attestation endpoint supports both a legacy format and the current V3
@@ -2134,8 +2156,9 @@ Teep supports Tinfoil enclaves running on AMD SEV-SNP.
      version, guest policy.
 
 3. **Verify SEV-SNP Attestation**:
-   - Fetch VCEK certificate from AMD KDS (cache with filesystem caching).
-   - Verify report signature against VCEK chain rooted at AMD Genoa ARK.
+   - Fetch the VCEK certificate through Tinfoil’s KDS proxy; use embedded AMD
+     ASK/ARK chains as described in [AMD certificate retrieval](#amd-certificate-retrieval).
+   - Verify the report signature against the VCEK chain rooted at the applicable AMD ARK.
    - Validate guest policy (SMT=true, Debug=false, etc.).
    - Validate TCB minimums (BlSpl=0x07, TeeSpl=0x00, SnpSpl=0x0e,
      UcodeSpl=0x48).

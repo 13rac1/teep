@@ -18,6 +18,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -110,7 +111,11 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 
 	// Build per-call verifiers so concurrent Run calls don't race on a global.
 	verifier := attestation.NewTDXVerifier(opts.Offline, attestation.NewCollateralGetter(client), opts.VerificationTime)
-	sevVerifier := attestation.NewSEVVerifier(opts.Offline, attestation.NewSEVCertGetter(client))
+	sevGetter := attestation.NewSEVCertGetter(client)
+	if opts.ProviderName == "tinfoil_v3_cloud" || opts.ProviderName == "tinfoil_v3_direct" {
+		sevGetter = tinfoil.NewSEVCertGetter(client)
+	}
+	sevVerifier := attestation.NewSEVVerifier(opts.Offline, sevGetter)
 
 	// Inject shared client into attester for capture/replay.
 	type clientSetter interface{ SetClient(*http.Client) }

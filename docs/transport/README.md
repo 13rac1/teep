@@ -49,6 +49,11 @@ Relay connection reuse does not extend the lifetime of a backend
 authorization. NEAR cloud also attests its gateway: the gateway SPKI
 identifies the TLS peer; the model backend fingerprint is separate evidence.
 
+Tinfoil SEV-SNP collateral uses embedded AMD signing chains and a VCEK proxy.
+The proxy uses the shared TLS 1.3/CT client with HTTP/2 negotiation; it does not
+use the TLS 1.2 exception for `kdsintf.amd.com`. See
+[Tinfoil certificate retrieval](../providers/tinfoil/tinfoil_support.md#amd-certificate-retrieval).
+
 ## Routes and authorizations
 
 Resolve an immutable request route before verification or encryption. Do not

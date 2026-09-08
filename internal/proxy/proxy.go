@@ -424,6 +424,7 @@ type Server struct {
 	attestClient       *http.Client            // for attestation fetches
 	collateral         trust.HTTPSGetter       // for Intel PCS collateral fetches
 	verifyQuote        attestation.TDXVerifier // constructed from cfg.Offline + collateral
+	tinfoilSEVVerifier attestation.SEVVerifier
 	sevVerifier        attestation.SEVVerifier // constructed from cfg.Offline + AMD KDS getter
 	upstreamClient     *http.Client            // for chat completions forwards
 	pinnedUpstreams    *pinnedUpstreamPools    // provider+authority SPKI-pinned pools
@@ -477,6 +478,7 @@ func New(cfg *config.Config) (*Server, error) {
 	// (effectively time.Now()) for collateral/cert currency checks.
 	s.verifyQuote = attestation.NewTDXVerifier(cfg.Offline, s.collateral, time.Time{})
 	s.sevVerifier = attestation.NewSEVVerifier(cfg.Offline, attestation.NewSEVCertGetter(s.attestClient))
+	s.tinfoilSEVVerifier = attestation.NewSEVVerifier(cfg.Offline, tinfoil.NewSEVCertGetter(s.attestClient))
 
 	for name, cp := range cfg.Providers {
 		if cp == nil {
@@ -1005,7 +1007,7 @@ func (s *Server) verifySEV(
 	}
 	slog.DebugContext(ctx, "SEV-SNP verification starting", "provider", prov.Name)
 	start := time.Now()
-	result := s.sevVerifier(ctx, raw.SEVReportBytes)
+	result := s.sevVerifierFor(prov)(ctx, raw.SEVReportBytes)
 	if prov.ReportDataVerifier != nil && result.ParseErr == nil {
 		detail, err := prov.ReportDataVerifier.VerifyReportData(result.ReportData, raw, nonce)
 		if errors.Is(err, multi.ErrNoVerifier) {
@@ -1035,7 +1037,7 @@ func (s *Server) verifyGatewaySEV(
 		return nil
 	}
 	slog.DebugContext(ctx, "gateway SEV-SNP verification starting", "provider", prov.Name)
-	result := s.sevVerifier(ctx, raw.GatewaySEVReportBytes)
+	result := s.sevVerifierFor(prov)(ctx, raw.GatewaySEVReportBytes)
 	if prov.ReportDataVerifier != nil && result.ParseErr == nil {
 		detail, err := prov.ReportDataVerifier.VerifyReportData(result.ReportData, raw, nonce)
 		if errors.Is(err, multi.ErrNoVerifier) {
@@ -2974,5 +2976,15 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(report); err != nil {
 		slog.Error("encode response", "error", err)
+	}
+}
+
+// sevVerifierFor selects the collateral source without changing verification policy.
+func (s *Server) sevVerifierFor(prov *provider.Provider) attestation.SEVVerifier {
+	switch prov.Name {
+	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
+		return s.tinfoilSEVVerifier
+	default:
+		return s.sevVerifier
 	}
 }

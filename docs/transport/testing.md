@@ -11,6 +11,7 @@ tests.
 
 | Behavior to preserve | Representative coverage |
 | --- | --- |
+| Concurrent KDS retrieval uses TLS 1.3/HTTP2 and verifies signed evidence; retrieval failures are terminal | `TestTinfoilKDS`, `TestTinfoilKDSEmbeddedChains` in [Tinfoil KDS tests](../../internal/provider/tinfoil/kds_test.go) |
 | Canceled discovery and capture collection do not race | `TestCanceledDiscoveryCapture` in [capture cancellation tests](../../internal/verify/capture_cancellation_test.go) |
 | Standalone EHBP rejects encrypted provider error events and malformed data without exposing response content | `TestStandaloneEHBPStreamCompletion` in [EHBP completion tests](../../internal/verify/ehbp_completion_test.go) |
 | Tinfoil report tests use separate model and authority parameters; explicit authority avoids discovery | `TestTinfoilIntegrationReportLookup` in [report lookup tests](../../internal/proxy/tinfoil_report_lookup_test.go) |

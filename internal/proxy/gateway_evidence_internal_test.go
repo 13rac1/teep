@@ -22,7 +22,7 @@ import (
 func TestFetchAndVerify_VerifiesGatewayEvidence(t *testing.T) {
 	s := newMinimalServer()
 	s.cfg = &config.Config{}
-	s.sevVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
+	s.tinfoilSEVVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
 		if len(report) == 0 {
 			t.Error("SEV verifier called with no report bytes")
 		}
@@ -77,7 +77,7 @@ func TestFetchAndVerify_GatewaySuppliesSupplyChainResult(t *testing.T) {
 	var gotReportBytes []byte
 	s := newMinimalServer()
 	s.cfg = &config.Config{Offline: true}
-	s.sevVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
+	s.tinfoilSEVVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
 		gotReportBytes = report
 		return &attestation.SEVVerifyResult{Measurement: make([]byte, 48)}
 	}
@@ -123,7 +123,7 @@ func TestFetchAndVerify_GatewaySuppliesSupplyChainResult(t *testing.T) {
 func TestFetchAndVerify_GatewayProviderActivatesE2EE(t *testing.T) {
 	s := newMinimalServer()
 	s.cfg = &config.Config{Offline: true}
-	s.sevVerifier = func(_ context.Context, _ []byte) *attestation.SEVVerifyResult {
+	s.tinfoilSEVVerifier = func(_ context.Context, _ []byte) *attestation.SEVVerifyResult {
 		return &attestation.SEVVerifyResult{Measurement: make([]byte, 48)}
 	}
 
