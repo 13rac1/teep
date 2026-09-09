@@ -1,5 +1,10 @@
 # Plan: NEAR AI HTTP/2 Connection Reuse and Multiplexing
 
+The proposed [stable NEAR backend selection plan](near_backend_selection.md)
+addresses indexed NearDirect routing and NearCloud key affinity while retaining
+the authorization reuse contract described here. That routing work is not yet
+implemented.
+
 This plan defines the target transport and authorization design and its phase
 structure. Implementation and the [transport reference](../transport/README.md)
 must conform to this design. [API support](../api_support.md) defines endpoint
