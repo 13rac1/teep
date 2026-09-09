@@ -47,6 +47,12 @@ fields agree. E2EE admission requires successful binding even if `allow_fail`
 permits this factor to fail. The gateway's separate signing-address scheme is
 unchanged.
 
+NEAR responses use provider-specific typed envelopes with strict nested
+decoding. Direct responses must repeat one complete model report consistently;
+cloud responses must contain distinct gateway evidence and an unambiguous
+model array. See the [NEAR parser contract](docs/providers/near/near_attestation.md) for field
+validation, representation comparison, and schema-policy boundaries.
+
 ### NEAR AI Cloud (Gateway TLS Pinning)
 
 NEAR AI Cloud routes all traffic through a single TEE-attested API gateway (`cloud-api.near.ai`) that itself runs in an Intel TDX enclave. The proxy:

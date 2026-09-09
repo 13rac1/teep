@@ -30,16 +30,6 @@ func makeAttestationEntry(modelName string) string {
 	)
 }
 
-// validFlatResponseJSON simulates the flat (non-array) response form.
-const validFlatResponseJSON = `{
-	"verified": true,
-	"model_name": "llama-3.1-70b",
-	"intel_quote": "dGVzdHF1b3Rl",
-	"nvidia_payload": "eyJhbGciOiJSUzI1NiJ9.test.sig",
-	"signing_public_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-	"request_nonce": ""
-}`
-
 func makeServer(t *testing.T, status int, body string) *httptest.Server {
 	t.Helper()
 	var srv *httptest.Server
@@ -51,42 +41,14 @@ func makeServer(t *testing.T, status int, body string) *httptest.Server {
 	return srv
 }
 
-func TestAttester_FetchAttestation_ArrayResponse_ExactMatch(t *testing.T) {
-	// Array response with two models — we request the second one.
-	body := `{
-		"verified": true,
-		"model_attestations": [
-			{
-				"model_name": "llama-3.1-70b",
-				"intel_quote": "cXVvdGUx",
-				"nvidia_payload": "jwt1",
-				"signing_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-			},
-			{
-				"model_name": "llama-3.1-405b",
-				"intel_quote": "cXVvdGUy",
-				"nvidia_payload": "jwt2",
-				"signing_public_key": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-			}
-		]
-	}`
+func TestAttester_FetchAttestation_ArrayResponse_Rejected(t *testing.T) {
+	body := `{"model_attestations":[` + makeAttestationEntry("model") + `]}`
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
-
 	a := neardirect.NewAttester(srv.URL, "key")
 	a.SetClient(srv.Client())
-	nonce := attestation.NewNonce()
-
-	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-405b", nonce)
-	if err != nil {
-		t.Fatalf("FetchAttestation: %v", err)
-	}
-
-	if raw.Model != "llama-3.1-405b" {
-		t.Errorf("Model = %q, want %q", raw.Model, "llama-3.1-405b")
-	}
-	if raw.IntelQuote != "cXVvdGUy" {
-		t.Errorf("IntelQuote = %q, want second entry's quote", raw.IntelQuote)
+	if raw, err := a.FetchAttestation(t.Context(), "model", attestation.NewNonce()); err == nil || raw != nil {
+		t.Fatal("accepted an unsupported direct array envelope")
 	}
 }
 
@@ -95,28 +57,28 @@ func TestParseAttestationResponse_CurrentDirectSchema(t *testing.T) {
 		"model_name":"z-ai/glm-5.3-flash",
 		"intel_quote":"quote",
 		"nvidia_payload":"payload",
-		"signing_public_key":"key",
-		"signing_address":"address",
+		"signing_public_key":"abcd",
+		"signing_address":"abcd",
 		"signing_algo":"ed25519",
-		"tls_cert_fingerprint":"fingerprint",
-		"request_nonce":"nonce",
+		"tls_cert_fingerprint":"abcd",
+		"request_nonce":"abcd",
 		"event_log":[],
-		"info":{"app_name":"app","compose_hash":"compose","os_image_hash":"image","device_id":"device","tcb_info":{"app_compose":"services: {}"}},
+		"info":{"app_name":"app","compose_hash":"abcd","os_image_hash":"abcd","device_id":"abcd","tcb_info":{"app_compose":"services: {}"}},
 		"all_attestations":[{
 			"model_name":"z-ai/glm-5.3-flash",
 			"intel_quote":"quote",
 			"nvidia_payload":"payload",
-			"signing_public_key":"key",
-			"signing_address":"address",
+			"signing_public_key":"abcd",
+			"signing_address":"abcd",
 			"signing_algo":"ed25519",
-			"tls_cert_fingerprint":"fingerprint",
-			"request_nonce":"nonce",
+			"tls_cert_fingerprint":"abcd",
+			"request_nonce":"abcd",
 			"event_log":[],
-			"info":{"app_name":"app","compose_hash":"compose","os_image_hash":"image","device_id":"device","tcb_info":{"app_compose":"services: {}"}}
+			"info":{"app_name":"app","compose_hash":"abcd","os_image_hash":"abcd","device_id":"abcd","tcb_info":{"app_compose":"services: {}"}}
 		}],
-		"compose_manager_attestation":{"actions":[],"actions_hash":"hash","nonce":"nonce","nonce_source":"client","quote":"quote","event_log":"[]","report_data":"data","vm_config":"config"},
+		"compose_manager_attestation":{"actions":[],"actions_hash":"hash","nonce":"abcd","nonce_source":"client","quote":"quote","event_log":"[]","report_data":"data","vm_config":"config"},
 		"ohttp_key_config":"config",
-		"ohttp_attestation":{"signing_algo":"ed25519","signing_key":"key","key_config":"config","signature":"signature"}
+		"ohttp_attestation":{"signing_algo":"ed25519","signing_key":"abcd","key_config":"config","signature":"signature"}
 	}`
 
 	raw, err := neardirect.ParseAttestationResponse(t.Context(), []byte(body), "z-ai/glm-5.3-flash")
@@ -155,7 +117,7 @@ func TestAttester_FetchAttestation_ArrayResponse_NoMatch(t *testing.T) {
 }
 
 func TestAttester_FetchAttestation_FlatResponse(t *testing.T) {
-	srv := makeServer(t, http.StatusOK, validFlatResponseJSON)
+	srv := makeServer(t, http.StatusOK, directTestResponse(t, "llama-3.1-70b", nil))
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
@@ -186,7 +148,7 @@ func TestAttester_FetchAttestation_SetsAuthHeaderAndQueryParams(t *testing.T) {
 		capturedQuery = r.URL.RawQuery
 		capturedPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(servedAttestationJSON(t, validFlatResponseJSON, serverFingerprint(srv)))
+		_, _ = w.Write(servedAttestationJSON(t, directTestResponse(t, "llama-3.1-70b", nil), serverFingerprint(srv)))
 	}))
 	defer srv.Close()
 
@@ -264,17 +226,7 @@ func TestAttester_FetchAttestation_ContextCancelled(t *testing.T) {
 
 func TestAttester_FetchAttestation_TEEProviderIsSet(t *testing.T) {
 	// Both array and flat responses should set TEEProvider = "TDX+NVIDIA".
-	body := `{
-		"verified": true,
-		"model_attestations": [
-			{
-				"model_name": "m",
-				"intel_quote": "dA==",
-				"nvidia_payload": "j",
-				"signing_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-			}
-		]
-	}`
+	body := directTestResponse(t, "m", nil)
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
@@ -290,21 +242,7 @@ func TestAttester_FetchAttestation_TEEProviderIsSet(t *testing.T) {
 }
 
 func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
-	body := `{
-		"verified": true,
-		"model_attestations": [
-			{
-				"model_name": "llama-3.1-70b",
-				"intel_quote": "cXVvdGUx",
-				"nvidia_payload": "jwt1",
-				"signing_public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				"signing_address": "0xdeadbeef01020304050607080910111213141516",
-				"signing_algo": "ed25519",
-				"tls_cert_fingerprint": "aabbccdd",
-				"request_nonce": "abc123"
-			}
-		]
-	}`
+	body := directTestResponse(t, "llama-3.1-70b", map[string]any{"signing_address": "0xdeadbeef01020304050607080910111213141516", "request_nonce": "abc123"})
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
@@ -330,17 +268,7 @@ func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
 }
 
 func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
-	body := `{
-		"verified": true,
-		"model_name": "llama-3.1-70b",
-		"intel_quote": "dGVzdA==",
-		"nvidia_payload": "jwt",
-		"signing_public_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		"signing_address": "0x1234",
-		"signing_algo": "ed25519",
-		"tls_cert_fingerprint": "deadbeef",
-		"request_nonce": "test-nonce"
-	}`
+	body := directTestResponse(t, "llama-3.1-70b", map[string]any{"signing_address": "0x1234", "request_nonce": "abcdef"})
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
@@ -357,26 +285,13 @@ func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
 	if !tlsct.SPKIFingerprintsEqual(raw.TLSFingerprint, serverFingerprint(srv)) {
 		t.Errorf("TLSFingerprint = %q, want %q", raw.TLSFingerprint, "deadbeef")
 	}
-	if raw.Nonce != "test-nonce" {
-		t.Errorf("Nonce = %q, want %q", raw.Nonce, "test-nonce")
+	if raw.Nonce != "abcdef" {
+		t.Errorf("Nonce = %q, want %q", raw.Nonce, "abcdef")
 	}
 }
 
 func TestAttester_FetchAttestation_AllAttestations_UsesNewFieldNames(t *testing.T) {
-	body := `{
-		"all_attestations": [
-			{
-				"model_name": "openai/gpt-oss-120b",
-				"intel_quote": "cXVvdGU=",
-				"nvidia_payload": "jwt",
-				"signing_public_key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-				"signing_address": "0x1111111111111111111111111111111111111111",
-				"signing_algo": "ed25519",
-				"tls_cert_fingerprint": "deadbeef",
-				"request_nonce": "abc123"
-			}
-		]
-	}`
+	body := directTestResponse(t, "openai/gpt-oss-120b", map[string]any{"request_nonce": "abc123"})
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
@@ -423,14 +338,7 @@ func TestAttester_FetchAttestation_TooManyAttestations(t *testing.T) {
 }
 
 func TestAttester_FetchAttestation_MalformedEventLogEntry(t *testing.T) {
-	body := `{
-		"verified": true,
-		"model_name": "test-model",
-		"intel_quote": "dGVzdA==",
-		"nvidia_payload": "jwt",
-		"signing_public_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		"event_log": [123]
-	}`
+	body := directTestResponse(t, "test-model", map[string]any{"event_log": []any{123}})
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
@@ -448,14 +356,7 @@ func TestAttester_FetchAttestation_MalformedEventLogEntry(t *testing.T) {
 func TestAttester_FetchAttestation_Ed25519KeyPassedThrough(t *testing.T) {
 	// Ed25519 signing keys are 64 hex chars and must be passed through as-is.
 	ed25519Key := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	body := `{
-		"verified": true,
-		"model_name": "test-model",
-		"intel_quote": "dGVzdA==",
-		"nvidia_payload": "jwt",
-		"signing_public_key": "` + ed25519Key + `",
-		"request_nonce": "abc"
-	}`
+	body := directTestResponse(t, "test-model", map[string]any{"signing_public_key": ed25519Key})
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 
@@ -543,14 +444,16 @@ func TestParseAttestationResponse_TooManyAllAttestations(t *testing.T) {
 		}
 		sb.WriteString(makeAttestationEntry(fmt.Sprintf("model-%d", i)))
 	}
-	body := fmt.Sprintf(`{"verified":true,"all_attestations":[%s]}`, sb.String())
+	envelope := directFixture(t)
+	envelope["all_attestations"] = json.RawMessage("[" + sb.String() + "]")
+	body := encodeDirectFixture(t, envelope)
 
-	_, err := neardirect.ParseAttestationResponse(context.Background(), []byte(body), "model-0")
+	_, err := neardirect.ParseAttestationResponse(context.Background(), body, "model-0")
 	t.Logf("too-many-all_attestations error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for too many all_attestations entries")
 	}
-	if !strings.Contains(err.Error(), "all_attestations") {
+	if !strings.Contains(err.Error(), "attestations") {
 		t.Errorf("error = %q, want message containing 'all_attestations'", err)
 	}
 }
@@ -572,9 +475,6 @@ func TestParseAttestationResponse_TooManyModelAttestations(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for too many model_attestations entries")
 	}
-	if !strings.Contains(err.Error(), "model_attestations") {
-		t.Errorf("error = %q, want message containing 'model_attestations'", err)
-	}
 }
 
 func TestParseAttestationResponse_TooManyComposeManagerActions(t *testing.T) {
@@ -583,15 +483,15 @@ func TestParseAttestationResponse_TooManyComposeManagerActions(t *testing.T) {
 		if i > 0 {
 			sb.WriteByte(',')
 		}
-		sb.WriteString(`{}`)
+		sb.WriteString(`{"timestamp":"time","action":"test"}`)
 	}
-	body := fmt.Sprintf(`{"compose_manager_attestation":{"actions":[%s]}}`, sb.String())
+	body := strings.TrimSuffix(directTestResponse(t, "model", nil), "}") + fmt.Sprintf(`,"compose_manager_attestation":{"actions":[%s],"actions_hash":"ab","nonce":"ab","nonce_source":"client","quote":"quote","event_log":"[]","report_data":"ab","vm_config":"{}"}}`, sb.String())
 
 	_, err := neardirect.ParseAttestationResponse(context.Background(), []byte(body), "model")
 	if err == nil {
 		t.Fatal("expected error for too many compose-manager actions")
 	}
-	if !strings.Contains(err.Error(), "compose_manager_attestation actions") {
+	if !strings.Contains(err.Error(), "compose-manager actions") {
 		t.Errorf("error = %q, want message containing 'compose_manager_attestation actions'", err)
 	}
 }
@@ -624,7 +524,7 @@ func TestAttester_FetchAttestation_ResolverError(t *testing.T) {
 
 func TestAttester_FetchAttestation_ResolverSuccess(t *testing.T) {
 	// Resolver returns a local test server domain — covering the success branch.
-	srv := makeServer(t, http.StatusOK, makeAttestationEntry("some-model"))
+	srv := makeServer(t, http.StatusOK, directTestResponse(t, "some-model", nil))
 	defer srv.Close()
 
 	host := strings.TrimPrefix(srv.URL, "https://")

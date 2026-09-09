@@ -2,7 +2,7 @@ package neardirect_test
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -43,7 +43,7 @@ func TestDirectAttestationTransportBinding(t *testing.T) {
 					case "wrong_length":
 						fp = "ab"
 					}
-					_, _ = fmt.Fprintf(w, `{"model_name":"model","intel_quote":"quote","tls_cert_fingerprint":%q,"request_nonce":%q}`, fp, r.URL.Query().Get("nonce"))
+					_, _ = io.WriteString(w, directTestResponse(t, "model", map[string]any{"tls_cert_fingerprint": fp, "request_nonce": r.URL.Query().Get("nonce")}))
 				}))
 				fingerprint = serverFingerprint(ts)
 				client := tlsct.NewHTTPClientWithTransport(time.Second, tlsct.NewPooledTransport(), true)
