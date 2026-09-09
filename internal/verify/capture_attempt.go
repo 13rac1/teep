@@ -14,21 +14,34 @@ type verificationCapture struct {
 	attestationDiscovery *capture.RecordingTransport
 	discovery            *capture.RecordingTransport
 	evidence             *capture.RecordingTransport
+	freshEvidence        *capture.RecordingTransport
 }
 
 func (c *verificationCapture) beginEvidence(client *http.Client) {
+	c.freshEvidence = nil
 	c.evidence = capture.WrapRecording(c.attestation)
 	client.Transport = c.evidence
 }
 
 // entries snapshots completed exchanges, including on caller cancellation.
 func (c *verificationCapture) entries() []capture.RecordedEntry {
-	entries := c.discovery.Snapshot()
+	var entries []capture.RecordedEntry
+	if c.discovery != nil {
+		entries = c.discovery.Snapshot()
+	}
 	if c.attestationDiscovery != nil {
 		entries = append(entries, c.attestationDiscovery.Snapshot()...)
 	}
 	if c.evidence != nil {
 		entries = append(entries, c.evidence.Snapshot()...)
 	}
+	if c.freshEvidence != nil {
+		entries = append(entries, c.freshEvidence.Snapshot()...)
+	}
 	return entries
+}
+
+func (c *verificationCapture) recordFreshEvidence(base http.RoundTripper) http.RoundTripper {
+	c.freshEvidence = capture.WrapRecording(base)
+	return c.freshEvidence
 }

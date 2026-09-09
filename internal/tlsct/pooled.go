@@ -23,8 +23,9 @@ func NewPooledTransport() *http.Transport {
 // SocketBudget shares physical socket admission across independently owned pools.
 // Its limit applies to each dial address, including a configured proxy address.
 type SocketBudget struct {
-	budgets *connectionBudgets
-	limit   int
+	budgets     *connectionBudgets
+	limit       int
+	pooledLimit int
 }
 
 // NewSocketBudget constructs an immutable admission limit with synchronized state.
@@ -32,7 +33,7 @@ func NewSocketBudget(limit int) *SocketBudget {
 	if limit <= 0 {
 		panic("connection limit must be positive")
 	}
-	return &SocketBudget{budgets: newConnectionBudgets(connectionSetupTimeout), limit: limit}
+	return &SocketBudget{budgets: newConnectionBudgets(connectionSetupTimeout), limit: limit, pooledLimit: limit}
 }
 
 func newConnectionBudgets(timeout time.Duration) *connectionBudgets {
@@ -48,7 +49,7 @@ func NewPooledTransportWithBudget(budget *SocketBudget) *http.Transport {
 	transport := pooledTransport(connectionSetupTimeout)
 	transport.MaxConnsPerHost = budget.limit
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		return budget.budgets.dial(ctx, network, address, budget.limit)
+		return budget.budgets.dialWithShare(ctx, network, address, budget.limit, budget.pooledLimit)
 	}
 	return transport
 }
@@ -75,4 +76,23 @@ func pooledTransport(handshakeTimeout time.Duration) *http.Transport {
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 	}
+}
+
+// NewAttestationSocketBudget reserves one aggregate slot from long-lived pools.
+func NewAttestationSocketBudget(limit int) *SocketBudget {
+	if limit < 2 {
+		panic("shared attestation socket limit must be at least two")
+	}
+	budget := NewSocketBudget(limit)
+	budget.pooledLimit = limit - 1
+	return budget
+}
+
+// Fresh returns an immutable admission view for operation-owned pools. It
+// shares aggregate physical-socket accounting and has no pooled-share charge.
+func (b *SocketBudget) Fresh() *SocketBudget {
+	if b == nil {
+		panic("socket budget is required")
+	}
+	return &SocketBudget{budgets: b.budgets, limit: b.limit}
 }

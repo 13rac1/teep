@@ -59,12 +59,13 @@ func TestNearCloudIntegrationModel_PrefixHandling(t *testing.T) {
 	}
 }
 
-// gateway with Offline true (skips Intel PCS, NRAS, PoC network calls).
+// TLS-only gateway tests use online serve policy with the explicit E2EE allowance.
 func integrationNearCloudConfig(t *testing.T) *config.Config {
 	t.Helper()
 	return &config.Config{
-		ListenAddr: "127.0.0.1:0",
-		Offline:    true,
+		ListenAddr:        "127.0.0.1:0",
+		Offline:           false,
+		ProviderAllowFail: map[string][]string{"nearcloud": append(config.MergedAllowFail("nearcloud", "", &config.Config{}, false), attestation.FactorE2EEUsable)},
 		Providers: map[string]*config.Provider{
 			"nearcloud": {
 				Name:    "nearcloud",

@@ -17,7 +17,7 @@ tests.
 | Tinfoil report tests use separate model and authority parameters; explicit authority avoids discovery | `TestTinfoilIntegrationReportLookup` in [report lookup tests](../../internal/proxy/tinfoil_report_lookup_test.go) |
 | Reject SPKI mismatch before sending request bytes; enforce CT and WebPKI | `TestSPKIPinnedClientRejectsBeforeSendingRequest`, `TestSPKIPinnedClientRejectsModifiedTrust` in [pinned tests](../../internal/tlsct/pinned_test.go) |
 | HTTP/2 physical bounds, concurrent overload rejection, and recovery after stream completion | `TestHTTP2ConcurrentStreamConnectionBound` in [connection tests](../../internal/tlsct/http2_limits_test.go) |
-| Independent attestation pools share socket admission, preserve full capacity and capture, and keep metadata independent | `TestAttestationFactorySharedBudget`, `TestAttestationFactoryFullPooledAllowance` in [factory tests](../../internal/config/attestation_client_test.go) |
+| Independent pools share socket admission and capture; metadata retains an independent full allowance | `TestAttestationFactorySharedBudget`, `TestAttestationFactoryFullPooledAllowance` in [factory tests](../../internal/config/attestation_client_test.go) |
 | Nested TLS transports consume the same socket allowance and release permits on cleanup | `TestNestedAttestationTransportSharesSocketBudget` in [shared budget tests](../../internal/tlsct/shared_budget_test.go) |
 | HTTP/1.1 sequential reuse; closing one HTTP/2 stream preserves another | [Stream lifetime tests](../../internal/tlsct/stream_lifetime_test.go) |
 | Provider, authority, and SPKI pool isolation | `TestAttestedPoolsRespectProviderAuthorityAndKey` in [pool tests](../../internal/proxy/tls_binding_internal_test.go) |
@@ -54,7 +54,12 @@ tests.
 | --- | --- |
 | TUF verification cancellation reaches headers, body reads, and subsequent downloads without canceling other operations | `TestTrustedRootVerificationCancellation` |
 | Captured backend and gateway SEV evidence passes production verification | `TestVerifyRun_Tinfoil_Fixture` |
-| Delayed discovery callers reuse a newly published mapping; stale mappings still require refresh | `TestDiscoveryDelayedRefresh` in both NEAR direct and Tinfoil |
+| Tinfoil delayed discovery callers reuse a newly published mapping | `TestDiscoveryDelayedRefresh` in Tinfoil |
+| Established NEAR routes never refresh metadata; caller cancellation cannot cancel shared selection | `TestEstablishedSelectionSurvivesMetadataExpiry`, `TestSelectionWaiterCancellationAndShutdown` |
+| Metadata failures delay new work without extending the delay; concurrent recovery shares one fetch; cancellation and capacity failures create no delay | `TestMetadataFailureDelayRecovery`, `TestMetadataCanceledAndCapacityFetchesDoNotDelayRecovery`, `TestMetadataOwnerCancellationDoesNotInstallDelay` |
+| Inference and Explore preserve route error classifications, retry advice, and cached authorization under concurrent use | `TestRouteErrorResponsesPreserveAuthorization` |
+| Standalone TLS-only probes retry only eligible connection-establishment failures, at most once | `TestStandaloneTLSOnlyConnectionRetry` |
+| Fresh NEAR fetches use independent connections within reserved aggregate capacity | `TestDirectFetchOwnsFreshConnections`, `TestAttestationFactoryReservesFreshCapacity`, `TestReservedBudgetAcrossHTTPSProxyOrigins` |
 | Concurrent key rejections run one shared full online re-attestation, create fresh retry sessions, and preserve replacement authorization against a delayed rejection | `TestIntegration_NearDirectKeyRecovery`, `TestIntegration_NearCloudKeyRecovery`, `TestIntegration_TinfoilKeyRecovery` |
 | Router verification is shared across models while report outcomes remain separate and bounded | `TestAuthorizationRouterSharesVerificationAcrossModels`, `TestAuthorizationRouterModelViewsBounded` |
 | TLS-only key-error envelopes retain authorization without retry under concurrent use | `TestAuthorizedTLSOnlyKeyErrorsRetainAuthorization` |

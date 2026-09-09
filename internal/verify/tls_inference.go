@@ -36,6 +36,11 @@ func standaloneAttesterForRoute(ctx context.Context, opts *Options, attester pro
 			return nil, err
 		}
 	}
+	if opts.nearRoute == nil && !opts.replay {
+		if err := recordNearSelection(opts, attester); err != nil {
+			return nil, err
+		}
+	}
 	if scoped, ok := attester.(provider.RouteAttester); ok {
 		return provider.AttesterForRoute(scoped, *route)
 	}
@@ -49,7 +54,17 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 	logical, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	current, err := runEvidence(logical, opts, route)
-	if err != nil || opts.Offline || opts.CapturedE2EE != nil || opts.Provider.APIKey == "" || current.report.Blocked() {
+	if nearTLSOnly(opts) {
+		current.e2ee = nil
+		current.tlsInference = opts.CapturedTLSInference
+		if current.tlsInference == nil {
+			current.tlsInference = &attestation.TLSInferenceResult{Detail: "TLS-only streaming chat probe skipped"}
+		}
+		if current.report != nil {
+			current.report.MarkTLSInference(current.tlsInference)
+		}
+	}
+	if err != nil || opts.Offline || opts.replay || opts.CapturedE2EE != nil || opts.Provider.APIKey == "" || current.report.Blocked() {
 		return current, err
 	}
 	var client *http.Client
@@ -69,8 +84,8 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 			}
 		}
 		report := current.report
-		if report.Blocked() || !report.ReportDataBindingPassed() {
-			return current, false, errors.New("attestation does not authorize E2EE")
+		if report.Blocked() || ((!nearTLSOnly(opts) || opts.ProviderName == "nearcloud") && !report.ReportDataBindingPassed()) {
+			return current, false, errors.New("attestation does not authorize the configured inference mode")
 		}
 		selected, identityErr := report.TransportIdentity()
 		if identityErr != nil || selected.Authority() != route.Authority() {
@@ -87,7 +102,12 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 			identity = selected
 		}
 		var retry bool
-		current.e2ee, retry, err = testStandaloneInference(attemptCtx, opts, *route, current.raw, client)
+		probe, canRetry, probeErr := testStandaloneInference(attemptCtx, opts, *route, current.raw, client)
+		retry, err = canRetry, probeErr
+		if probe != nil {
+			current.e2ee = probe.e2ee
+			current.tlsInference = probe.tlsInference
+		}
 		if contextErr := attemptCtx.Err(); contextErr != nil {
 			err = contextErr
 			if current.e2ee != nil {
@@ -103,7 +123,11 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 		}
 		return current, retry, err
 	})
-	completeTLSInference(&result, err)
+	if nearTLSOnly(opts) {
+		completeTLSOnlyInference(&result, err)
+	} else {
+		completeTLSInference(&result, err)
+	}
 	// A failed inference test is represented by the factor report, as in the
 	// other standalone verification paths.
 	if result.report != nil {
@@ -134,8 +158,13 @@ func completeTLSInference(result *verificationOutcome, err error) {
 
 // testStandaloneInference uses the same encryption, headers, framing, and
 // rejection recognition as the proxy, while retaining standalone report output.
-func testStandaloneInference(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, client *http.Client) (*attestation.E2EETestResult, bool, error) {
-	prov := &provider.Provider{Name: opts.ProviderName, E2EE: true}
+type standaloneProbe struct {
+	e2ee         *attestation.E2EETestResult
+	tlsInference *attestation.TLSInferenceResult
+}
+
+func testStandaloneInference(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, client *http.Client) (*standaloneProbe, bool, error) {
+	prov := &provider.Provider{Name: opts.ProviderName, E2EE: !nearTLSOnly(opts)}
 	switch opts.ProviderName {
 	case "nearcloud", "neardirect":
 		prov.Encryptor, prov.Preparer = neardirect.NewE2EE(), neardirect.NewPreparer(opts.Provider.APIKey)
@@ -164,15 +193,21 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 		return nil, false, err
 	}
 	if rejected {
-		return nil, true, &standaloneKeyRejectionError{}
+		return nil, prov.E2EE, &standaloneKeyRejectionError{}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, false, standaloneInferenceError(resp, encrypted.EHBP)
 	}
-	if encrypted.EHBP != nil {
-		return verifyEHBPStreamResponse(resp, encrypted.EHBP), false, nil
+	if !prov.E2EE {
+		if err := verifyTLSOnlyStream(resp); err != nil {
+			return nil, false, err
+		}
+		return &standaloneProbe{tlsInference: &attestation.TLSInferenceResult{Attempted: true, Detail: "TLS-only streaming chat probe succeeded; no E2EE test performed"}}, false, nil
 	}
-	return verifyE2EEStreamResponse(resp, encrypted.Session, opts.ProviderName), false, nil
+	if encrypted.EHBP != nil {
+		return &standaloneProbe{e2ee: verifyEHBPStreamResponse(resp, encrypted.EHBP)}, false, nil
+	}
+	return &standaloneProbe{e2ee: verifyE2EEStreamResponse(resp, encrypted.Session, opts.ProviderName)}, false, nil
 }
 
 func standaloneInferenceError(resp *http.Response, session *e2ee.EHBPSession) error {

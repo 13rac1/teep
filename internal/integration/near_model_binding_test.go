@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"crypto/subtle"
 	"encoding/hex"
+	"net/http"
 	"regexp"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
@@ -26,10 +28,14 @@ func testNearSignedModelKeySubstitution(t *testing.T, name string) {
 	var raw *attestation.RawAttestation
 	var err error
 	if name == "neardirect" {
-		attester := neardirect.NewAttester(extractBaseURL(t, env.entries), "", true)
-		attester.SetClient(env.client)
+		route, routeErr := provider.NewResolvedRoute("https://"+env.manifest.NearRoute.Authority, "")
+		if routeErr != nil {
+			t.Fatal(routeErr)
+		}
+		attester := neardirect.NewAttester(env.manifest.NearConfig.Origin, "", true)
+		attester.SetClientFactory(func() *http.Client { return &http.Client{Transport: env.client.Transport} })
 		attester.SetMetadataClient(env.client)
-		raw, err = attester.FetchAttestation(ctx, env.manifest.Model, env.nonce)
+		raw, err = attester.FetchAttestationForRoute(ctx, route, env.manifest.Model, env.nonce)
 	} else {
 		attester := nearcloud.NewAttester("", true)
 		attester.SetClient(env.client)

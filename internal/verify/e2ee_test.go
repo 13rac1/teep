@@ -673,7 +673,7 @@ func TestStandaloneNearInvalidSigningKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, retry, err := testStandaloneInference(context.Background(), &Options{ProviderName: "nearcloud", Provider: &config.Provider{APIKey: "key"}, ModelName: "model"}, route, &attestation.RawAttestation{SigningKey: "invalid"}, nil)
+	_, retry, err := testStandaloneInference(context.Background(), &Options{ProviderName: "nearcloud", Provider: &config.Provider{APIKey: "key", E2EE: true}, ModelName: "model"}, route, &attestation.RawAttestation{SigningKey: "invalid"}, nil)
 	if err == nil || retry {
 		t.Fatalf("invalid key: retry=%v err=%v", retry, err)
 	}
@@ -747,7 +747,7 @@ func TestStandaloneNearHTTPError(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer client.CloseIdleConnections()
-		_, retry, err := testStandaloneInference(context.Background(), &Options{ProviderName: "nearcloud", Provider: &config.Provider{APIKey: "key"}, ModelName: "model"}, route, &attestation.RawAttestation{SigningKey: hex.EncodeToString(pub)}, client)
+		_, retry, err := testStandaloneInference(context.Background(), &Options{ProviderName: "nearcloud", Provider: &config.Provider{APIKey: "key", E2EE: true}, ModelName: "model"}, route, &attestation.RawAttestation{SigningKey: hex.EncodeToString(pub)}, client)
 		if err == nil || retry {
 			t.Fatalf("ordinary HTTP error: retry=%v err=%v", retry, err)
 		}

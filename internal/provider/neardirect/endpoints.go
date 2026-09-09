@@ -4,200 +4,123 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/nearparse"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/tlsct"
-	"golang.org/x/sync/singleflight"
 )
 
 const (
 	maxDiscoveryBody        = 1 << 20
 	maxDiscoveryMappings    = 4096
 	maxDiscoveryModelLength = 256
-	// defaultEndpointsURL is the NEAR AI endpoint discovery URL.
-	defaultEndpointsURL = "https://completions.near.ai/endpoints"
-
-	// endpointsTTL is how long endpoint mappings are cached before refresh.
-	endpointsTTL = 5 * time.Minute
-
-	// refreshTimeout bounds how long a singleflight refresh can take.
-	// The refresh context is detached from caller cancellation (via
-	// WithoutCancel) so one caller's cancel doesn't abort the shared
-	// refresh, but any deadline on the parent context may still shorten
-	// the effective timeout.
-	refreshTimeout = 30 * time.Second
+	defaultEndpointsURL     = "https://completions.near.ai/endpoints"
+	defaultCountURL         = "https://completions.near.ai/backends/count"
+	endpointsTTL            = 5 * time.Minute
+	refreshTimeout          = 30 * time.Second
+	selectionTimeout        = 60 * time.Second
+	maxCountFetches         = 16
+	metadataFailureDelay    = time.Second
 )
 
-// endpointsResponse is the JSON shape returned by the endpoints URL.
 type endpointsResponse struct {
 	Endpoints []endpointEntry `json:"endpoints"`
 }
-
-// endpointEntry is one element of the endpoints array.
 type endpointEntry struct {
-	Domain string   `json:"domain"`
-	Models []string `json:"models"`
+	Domain  string   `json:"domain"`
+	Models  []string `json:"models"`
+	unknown []string
 }
 
-// EndpointResolver maps model names to backend domains via the NEAR AI
-// endpoint discovery API. Results are cached with a 5-minute TTL and
-// refreshed lazily on the next Resolve call after expiry.
-//
-// Thread-safe for concurrent use.
+// EndpointResolver owns bounded metadata operations and immutable model routes.
+// Caller cancellation ends only its wait; Stop cancels and joins owned work.
 type EndpointResolver struct {
 	endpointsURL     string
+	countURL         string
 	client           *http.Client
 	restrictToNearAI bool
-
-	mu        sync.RWMutex
-	mapping   map[string]string // model → domain
-	fetchedAt time.Time
-
-	sf singleflight.Group
+	selector         func(context.Context, uint64) (uint64, error)
+	now              func() time.Time
+	mu               sync.Mutex
+	owner            context.Context //nolint:containedctx // Resolver lifecycle owns shared work.
+	cancel           context.CancelFunc
+	closed           bool
+	workers          sync.WaitGroup
+	endpoints        metadataRecord
+	counts           map[string]*metadataRecord
+	activeCounts     int
+	selections       map[string]*selectionOperation
+	selectionOrigin  string
 }
 
-// NewEndpointResolver returns a resolver that discovers endpoints from
-// the default NEAR AI URL (https://completions.near.ai/endpoints).
+// NewEndpointResolver owns initial metadata and lifetime model selections.
 func NewEndpointResolver(offline ...bool) *EndpointResolver {
-	ctEnabled := len(offline) == 0 || !offline[0]
-	return &EndpointResolver{
-		endpointsURL:     defaultEndpointsURL,
-		client:           tlsct.NewHTTPClient(30*time.Second, ctEnabled),
-		restrictToNearAI: true,
-		mapping:          make(map[string]string),
-	}
+	return &EndpointResolver{endpointsURL: defaultEndpointsURL, countURL: defaultCountURL,
+		client: config.NewAttestationClient(len(offline) > 0 && offline[0]), restrictToNearAI: true, selector: randomIndex, now: time.Now}
 }
 
-// SetClient replaces the discovery client. Call it only before concurrent use
-// or cleanup. The caller retains ownership of the client.
+// SetClient configures the metadata client before concurrent use.
 func (r *EndpointResolver) SetClient(client *http.Client) { r.client = client }
 
-// newEndpointResolverForTest returns a resolver pointing at a custom URL.
-func newEndpointResolverForTest(url string) *EndpointResolver {
-	return &EndpointResolver{
-		endpointsURL:     url,
-		client:           tlsct.NewHTTPClient(1 * time.Second),
-		restrictToNearAI: false,
-		mapping:          make(map[string]string),
-	}
-}
-
-// Resolve returns the backend domain for the given model. If the cached
-// mapping is stale (older than 5 minutes), it refreshes from the endpoints
-// API first. Returns an error if the model is not found after refresh.
+// Resolve acquires canonical metadata for an initial selection. Established
+// route users must use ResolveConfigured, which does not refresh metadata.
 func (r *EndpointResolver) Resolve(ctx context.Context, model string) (string, error) {
-	r.mu.RLock()
-	domain, ok := r.mapping[model]
-	observed := r.fetchedAt
-	stale := time.Since(observed) > endpointsTTL
-	r.mu.RUnlock()
-
-	if ok && !stale {
-		return domain, nil
-	}
-
-	// Collapse concurrent refreshes into a single HTTP call.
-	// Use a detached context with a fixed timeout so one caller's
-	// cancellation doesn't fail the refresh for all collapsed callers,
-	// while still bounding how long the refresh can block.
-	// DoChan lets cancelled callers return immediately while the
-	// shared refresh continues in the background.
-	ch := r.sf.DoChan("refresh", func() (any, error) {
-		return nil, r.refreshAfter(ctx, observed)
-	})
-
-	var err error
-	select {
-	case <-ctx.Done():
-		return "", fmt.Errorf("endpoint discovery: %w", ctx.Err())
-	case res := <-ch:
-		err = res.Err
-	}
-	if err != nil {
-		if ok {
-			slog.WarnContext(ctx, "nearai endpoint discovery refresh failed",
-				"model", model,
-				"stale_domain", domain,
-				"err", err,
-			)
-		}
-		return "", fmt.Errorf("endpoint discovery: %w", err)
-	}
-
-	r.mu.RLock()
-	domain, ok = r.mapping[model]
-	r.mu.RUnlock()
-
-	if !ok {
-		return "", fmt.Errorf("unknown model %q (not in endpoint discovery)", model)
-	}
-	return domain, nil
+	snapshot, err := r.mappingForModel(ctx, model)
+	return snapshot.authority, err
 }
 
-// ResolveRoute fixes the selected authority before authorization access.
+// ResolveRoute selects a route for the default NEAR origin.
 func (r *EndpointResolver) ResolveRoute(ctx context.Context, model string) (provider.ResolvedRoute, error) {
-	domain, err := r.Resolve(ctx, model)
-	if err != nil {
-		return provider.ResolvedRoute{}, err
-	}
-	return provider.NewResolvedRoute("https://"+domain, "")
+	return r.ResolveConfigured(ctx, model, nearroute.Origin{Authority: "completions.near.ai"})
 }
 
-// CloseIdleConnections releases idle discovery connections.
-func (r *EndpointResolver) CloseIdleConnections() {
-	r.mu.RLock()
-	client := r.client
-	r.mu.RUnlock()
-	client.CloseIdleConnections()
-}
-
-// refresh fetches the endpoint mapping from the discovery URL and replaces
-// the cached mapping. Holds the write lock only for the swap.
-func (r *EndpointResolver) refresh(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.endpointsURL, http.NoBody)
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	provider.SetUserAgent(req)
-
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("GET %s: %w", r.endpointsURL, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDiscoveryBody+1))
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
-	}
-
-	if len(body) > maxDiscoveryBody {
-		return fmt.Errorf("endpoint discovery body exceeds %d bytes", maxDiscoveryBody)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, provider.Truncate(string(body), 256))
-	}
-
-	mapping, err := parseEndpointMapping(body, r.restrictToNearAI)
-	if err != nil {
-		return err
-	}
-
+// Stop stops admission, cancels shared operations, and waits for cleanup.
+func (r *EndpointResolver) Stop() {
 	r.mu.Lock()
-	r.mapping = mapping
-	r.fetchedAt = time.Now()
+	r.closed = true
+	if r.cancel != nil {
+		r.cancel()
+	}
 	r.mu.Unlock()
+	r.workers.Wait()
+}
 
-	return nil
+// CloseIdleConnections releases idle metadata sockets without ending selection ownership.
+func (r *EndpointResolver) CloseIdleConnections() { r.client.CloseIdleConnections() }
+
+func (r *EndpointResolver) initializeLocked() {
+	if r.owner == nil {
+		r.owner, r.cancel = context.WithCancel(context.Background())
+	}
+	if r.counts == nil {
+		r.counts = make(map[string]*metadataRecord)
+	}
+	if r.selections == nil {
+		r.selections = make(map[string]*selectionOperation)
+	}
+}
+
+func (r *EndpointResolver) mappingForModel(ctx context.Context, model string) (mappingSnapshot, error) {
+	if err := nearroute.ValidateModel(model); err != nil {
+		return mappingSnapshot{}, err
+	}
+	snapshot, err := r.metadata(ctx, "")
+	if err != nil {
+		return mappingSnapshot{}, err
+	}
+	authority, ok := snapshot.mapping[model]
+	if !ok {
+		return mappingSnapshot{}, resolutionError(nearroute.UnknownModel, "model absent from endpoint discovery", nil)
+	}
+	return mappingSnapshot{authority: authority, fetchedAt: snapshot.fetchedAt}, nil
 }
 
 func canonicalDiscoveryAuthority(domain string, restrictToNearAI bool) (string, error) {
@@ -222,6 +145,12 @@ func canonicalDiscoveryAuthority(domain string, restrictToNearAI bool) (string, 
 }
 
 func parseEndpointMapping(body []byte, restrictToNearAI bool) (map[string]string, error) {
+	if len(body) > maxDiscoveryBody {
+		return nil, errors.New("endpoint discovery exceeds size limit")
+	}
+	if err := jsonstrict.ValidateUniqueFields(body); err != nil {
+		return nil, err
+	}
 	var response endpointsResponse
 	unknown, missing, err := jsonstrict.Unmarshal(body, &response)
 	if err != nil {
@@ -235,6 +164,9 @@ func parseEndpointMapping(body []byte, restrictToNearAI bool) (map[string]string
 	}
 	mapping := make(map[string]string)
 	for _, endpoint := range response.Endpoints {
+		if len(endpoint.unknown) > 0 {
+			return nil, fmt.Errorf("unknown endpoint fields: %v", endpoint.unknown)
+		}
 		authority, err := canonicalDiscoveryAuthority(endpoint.Domain, restrictToNearAI)
 		if err != nil {
 			return nil, fmt.Errorf("invalid endpoint authority: %w", err)
@@ -243,7 +175,7 @@ func parseEndpointMapping(body []byte, restrictToNearAI bool) (map[string]string
 			return nil, errors.New("endpoint has no models")
 		}
 		for _, model := range endpoint.Models {
-			if model == "" || len(model) > maxDiscoveryModelLength || strings.ContainsFunc(model, func(c rune) bool { return c < 32 || c == 127 }) {
+			if nearroute.ValidateModel(model) != nil {
 				return nil, errors.New("endpoint has an invalid model identifier")
 			}
 			if _, exists := mapping[model]; exists {
@@ -258,16 +190,14 @@ func parseEndpointMapping(body []byte, restrictToNearAI bool) (map[string]string
 	return mapping, nil
 }
 
-// refreshAfter runs inside the singleflight callback. A caller can arrive here
-// after another refresh has completed since it inspected the mapping.
-func (r *EndpointResolver) refreshAfter(ctx context.Context, observed time.Time) error {
-	r.mu.RLock()
-	refreshed := !r.fetchedAt.Equal(observed) && time.Since(r.fetchedAt) <= endpointsTTL
-	r.mu.RUnlock()
-	if refreshed {
-		return nil
+func (e *endpointEntry) UnmarshalJSON(data []byte) error {
+	type fields endpointEntry
+	var out fields
+	unknown, err := nearparse.Object(data, &out, "endpoint")
+	if err != nil {
+		return err
 	}
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
-	defer cancel()
-	return r.refresh(rctx)
+	out.unknown = unknown
+	*e = endpointEntry(out)
+	return nil
 }

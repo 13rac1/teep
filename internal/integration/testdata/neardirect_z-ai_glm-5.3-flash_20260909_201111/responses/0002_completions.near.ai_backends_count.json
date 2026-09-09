@@ -1,0 +1,21 @@
+{
+  "method": "GET",
+  "url": "https://completions.near.ai/backends/count?domain=glm-5-3-flash.completions.near.ai",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEJI3zU8YSeA3D4v5Fc7pr/SYQbP1+PTvgjAyUJpb3lrO1wC8S9K/bT+om99EXA/enUpSTyMGzFHHQ4tLskj1few==",
+  "headers": {
+    "Content-Length": [
+      "123"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Wed, 09 Sep 2026 20:11:00 GMT"
+    ]
+  },
+  "duration_ms": 88
+}

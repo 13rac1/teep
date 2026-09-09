@@ -61,3 +61,88 @@ Regression coverage includes the direct and cloud `parser_contract_test.go`
 files, `TestNearSignedModelKeySubstitution`, and the provider signed-evidence
 fixture suites. Transport requirements remain in the
 [shared transport reference](../../transport/README.md).
+
+## NearDirect backend selection
+
+Each provider instance establishes one route per model. For the default NEAR
+origins, it reads `/endpoints`, validates `/backends/count` for the canonical
+model authority, and selects a random unsigned 64-bit index below the healthy
+count. The resulting `model-iN.completions.near.ai` authority remains fixed for
+the resolver's lifetime. An index identifies a routing name, not a permanent
+physical machine. NEAR can map that name to another backend when its fleet changes.
+
+| Configured HTTPS origin | Initial metadata | Route |
+| --- | --- | --- |
+| `api.near.ai` or `completions.near.ai`, including port 443 | Endpoint list and count | Selected indexed model authority |
+| Canonical model name under `completions.near.ai` | Endpoint list must match the model; count required | Selected indexed model authority |
+| Explicit `model-iN.completions.near.ai` | Endpoint list must match the canonical model; no count | Configured indexed authority |
+| Any valid origin with a non-default port | None | Exact static authority |
+| Other valid HTTPS origin | None | Exact static authority |
+
+Indices use canonical decimal uint64 syntax. Invalid, overflowing, ambiguous,
+or excessively long names are rejected. An explicit index need not be below
+the current healthy count. Model identifiers must contain 1–256 bytes and no
+C0 or DEL control characters. Metadata cannot authenticate the selected backend:
+full evidence verification and the attested TLS handshake remain required.
+
+Endpoint and count snapshots last five minutes and serve only initial route
+selection. Established routes never refresh discovery, including after
+metadata expiry, an outage, authorization eviction, or failed TLS authentication.
+Each new full NearDirect verification owns a fresh attestation connection pool
+and closes it after the fetch. If an index now reaches another TLS identity,
+the failed handshake sends no inference bytes; the next request verifies the
+new backend on the same route. Other model selections and authorizations remain
+unchanged. See the [shared retry rules](../../transport/retries.md).
+
+Endpoint membership is checked before a route slot is reserved, including during
+cold discovery and refresh. Unknown models consume no selection slots.
+Shared selection lasts at most 60 seconds; metadata operations last at most
+30 seconds. Caller cancellation ends its wait without canceling other callers.
+The resolver retains at most 4096 established or pending selections, 4096 count
+records, and 16 active count fetches. Established routes are not evicted. Eligible
+completed count records can be evicted; pending fetches and the one-second delay
+after a metadata failure remain protected. Shutdown cancels and joins owned work.
+
+Invalid or unknown models return HTTP 400. Metadata retrieval, validation, and
+configured-model mismatches return 502. Capacity, protected failure delays, and
+metadata expiry before publication return 503 with `Retry-After: 1`. Cancellation
+and caller deadlines retain their existing HTTP classifications. These failures
+do not authorize a different backend or plaintext inference.
+
+Report requests read an established selection and cached authorization, or return
+404. An explicit authority selects only that exact cached scope. Report reads do
+not fetch metadata or update selection recency.
+
+## Standalone inference and captures
+
+The standalone verifier probes streaming chat only. It does not validate image,
+embedding, rerank, score, or audio inference. A failed chat probe remains a failed
+verification outcome, including for a model that supports only another endpoint.
+NEAR probes use the configured E2EE mode. Live proxy tests use online admission
+in both modes; TLS-only tests add only the documented `e2ee_usable` allowance. As in `serve`, TLS-only configuration
+requires `e2ee = false` and an explicit allowlist containing `e2ee_usable` in
+addition to the provider defaults. A configured `allow_fail` list replaces the
+default list; disabling
+encryption alone does not waive an enforced E2EE factor. TLS-only probes create no encryption
+session and record `tls_inference` separately from `e2ee_usable`. An unattempted,
+nonfailed probe remains visible as an unenforced `Skip`. Attempted probes and recorded failures
+remain enforced operational outcomes, outside `allow_fail`. Successful TLS-only
+chat does not establish E2EE success or independently prove gateway backend-key
+selection. Offline, missing-credential, and replay conditions do not start a live probe.
+
+NEAR captures record the effective origin and E2EE boolean even when
+inference is skipped. For NearDirect, the origin is its normalized configured origin. For NearCloud,
+it is the fixed `https://cloud-api.near.ai` gateway; `base_url` does not select
+attestation, inference, or capture routing. Replay rejects a change to the
+effective origin or E2EE mode before verification.
+NearDirect captures also record a typed discovered, explicit-index, or static route.
+Replay validates the selected authority and exact index against the required captured
+metadata, then verifies the recorded attestation peer and signed evidence at that
+route. It performs no random selection or live inference. Missing selection metadata
+requires a new capture; a manifest cannot substitute for authenticated evidence.
+
+Regression coverage includes [selection tests](../../../internal/provider/neardirect/selection_test.go),
+[metadata admission tests](../../../internal/provider/neardirect/metadata_capacity_test.go),
+[fresh fetch tests](../../../internal/provider/neardirect/transport_binding_test.go),
+[replay checks](../../../internal/verify/near_capture_test.go), and
+[TLS-only probe tests](../../../internal/verify/tls_probe_test.go).

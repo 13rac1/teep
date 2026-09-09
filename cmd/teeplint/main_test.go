@@ -1925,3 +1925,25 @@ func fromConfig(n int) {
 		t.Error("expected failure: provider not found in int-cased switch")
 	}
 }
+
+func TestCheckAttesterClientField_Factory(t *testing.T) {
+	for _, tt := range []struct {
+		field string
+		valid bool
+	}{
+		{"newClient func() *http.Client", true},
+		{"newClient func(context.Context) *http.Client", false},
+		{"newClient func() (*http.Client, error)", false},
+		{"newClient func()", false},
+		{"newClient func() string", false},
+	} {
+		t.Run(tt.field, func(t *testing.T) {
+			f, fset := parseGo(t, "package p; type Attester struct {"+tt.field+"}")
+			r := newResult()
+			checkAttesterClientField(r, &providerInfo{name: "test", files: []*ast.File{f}, fset: fset})
+			if (r.failed == 0) != tt.valid {
+				t.Fatalf("failures=%d, valid=%v", r.failed, tt.valid)
+			}
+		})
+	}
+}

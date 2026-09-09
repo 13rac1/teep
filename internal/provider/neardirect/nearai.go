@@ -18,15 +18,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/nearparse"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -40,10 +40,10 @@ const (
 // Attester fetches attestation data from NEAR AI's /v1/attestation/report
 // endpoint. The nonce is sent as a query parameter and echoed back.
 type Attester struct {
-	baseURL  string
-	apiKey   string
-	client   *http.Client
-	resolver DomainResolver
+	origin    nearroute.Origin
+	apiKey    string
+	newClient func() *http.Client
+	resolver  DomainResolver
 }
 
 // NewAttester returns a NEAR AI Attester configured with the given base URL
@@ -53,29 +53,32 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 }
 
 // NewAttesterWithResolver returns a NEAR AI Attester configured with the given
-// base URL, API key, and model->domain resolver.
+// validated base URL, API key, and model resolver. An invalid origin is a
+// construction error and panics; configuration loaders return it before construction.
 func NewAttesterWithResolver(baseURL, apiKey string, resolver DomainResolver, offline ...bool) *Attester {
-	return &Attester{
-		baseURL:  baseURL,
-		apiKey:   apiKey,
-		client:   config.NewAttestationClient(len(offline) > 0 && offline[0]),
-		resolver: resolver,
+	origin, err := nearroute.ParseOrigin(baseURL)
+	if err != nil {
+		panic(fmt.Sprintf("invalid NEAR configured origin: %v", err))
 	}
+	factory := config.NewAttestationClientFactory(len(offline) > 0 && offline[0], tlsct.NewAttestationSocketBudget(tlsct.MaxConnectionsPerHost), nil)
+	return &Attester{origin: origin, apiKey: apiKey, newClient: factory.NewFreshClient, resolver: resolver}
 }
 
 // CloseIdleConnections releases idle attestation and discovery connections.
-// Call SetClient only before concurrent use or cleanup.
+// Configure client factories only before concurrent use or cleanup.
 func (a *Attester) CloseIdleConnections() {
-	a.client.CloseIdleConnections()
 	if closer, ok := a.resolver.(interface{ CloseIdleConnections() }); ok {
 		closer.CloseIdleConnections()
 	}
 }
 
-// SetClient assigns the attestation client. Metadata has separate ownership.
-// Call it only before concurrent use or cleanup.
-func (a *Attester) SetClient(c *http.Client) {
-	a.client = c
+// SetClientFactory supplies an independently owned pool for every full fetch.
+// Replay factories may return clients backed by an explicit replay transport.
+func (a *Attester) SetClientFactory(factory func() *http.Client) {
+	if factory == nil {
+		panic("attestation client factory is required")
+	}
+	a.newClient = factory
 }
 
 // SetMetadataClient assigns the discovery client before concurrent use.
@@ -120,7 +123,9 @@ func fetchAttestationForRoute(ctx context.Context, a *Attester, route provider.R
 	q.Set("signing_algo", "ed25519")
 	endpoint.RawQuery = q.Encode()
 
-	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
+	client := a.newClient()
+	defer client.CloseIdleConnections()
+	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, client, endpoint.String(), a.apiKey, nearparse.MaxEvidenceBytes)
 	if err != nil {
 		return nil, fmt.Errorf("nearai: %w", err)
 	}
@@ -135,11 +140,6 @@ func fetchAttestationForRoute(ctx context.Context, a *Attester, route provider.R
 	raw.TransportTLSFingerprint = raw.TLSFingerprint
 	raw.TransportTLSAuthority = route.Authority()
 	return raw, nil
-}
-
-func shouldResolveModelDomain(host string) bool {
-	host = strings.ToLower(host)
-	return host == "api.near.ai" || host == "completions.near.ai"
 }
 
 // Preparer injects the NEAR AI Authorization header into an outgoing request.
@@ -178,25 +178,52 @@ func (p *Preparer) PrepareRequest(req *http.Request, headers http.Header, _ *e2e
 
 // ResolveRoute selects the same origin that a standalone attestation will use.
 func (a *Attester) ResolveRoute(ctx context.Context, model string) (provider.ResolvedRoute, error) {
-	base, err := url.Parse(a.baseURL)
-	if err != nil {
-		return provider.ResolvedRoute{}, fmt.Errorf("nearai: parse base URL %q: %w", a.baseURL, err)
+	if err := nearroute.ValidateModel(model); err != nil {
+		return provider.ResolvedRoute{}, err
 	}
-	if shouldResolveModelDomain(base.Hostname()) {
-		if a.resolver == nil {
-			return provider.ResolvedRoute{}, errors.New("missing NEAR route resolver")
-		}
-		domain, err := a.resolver.Resolve(ctx, model)
-		if err != nil {
-			return provider.ResolvedRoute{}, fmt.Errorf("nearai: resolve model %q: %w", model, err)
-		}
-		slog.DebugContext(ctx, "nearai model resolved", "model", model, "domain", domain)
-		return provider.NewResolvedRoute("https://"+domain, "")
+	if err := ctx.Err(); err != nil {
+		return provider.ResolvedRoute{}, err
 	}
-	return provider.NewResolvedRoute(a.baseURL, "")
+	configured := a.origin
+	if configured.Static {
+		return provider.NewResolvedRoute("https://"+configured.Authority, "")
+	}
+	if a.resolver == nil {
+		return provider.ResolvedRoute{}, errors.New("missing NEAR route resolver")
+	}
+	return a.resolver.ResolveConfigured(ctx, model, configured)
 }
 
 // DomainResolver maps a model name to a backend authority.
 type DomainResolver interface {
-	Resolve(context.Context, string) (string, error)
+	ResolveConfigured(context.Context, string, nearroute.Origin) (provider.ResolvedRoute, error)
+}
+
+// StopResolution cancels and joins metadata/selection work without closing injected clients.
+func (a *Attester) StopResolution() {
+	if owner, ok := a.resolver.(interface{ Stop() }); ok {
+		owner.Stop()
+	}
+}
+
+// LookupRoute reads a static or established route without initial selection.
+func (a *Attester) LookupRoute(model string) (provider.ResolvedRoute, bool) {
+	if nearroute.ValidateModel(model) != nil {
+		return provider.ResolvedRoute{}, false
+	}
+	origin := a.origin
+	if origin.Static || origin.Indexed {
+		route, err := provider.NewResolvedRoute("https://"+origin.Authority, "")
+		return route, err == nil
+	}
+	if resolver, ok := a.resolver.(interface {
+		LookupSelection(string) (Selection, bool)
+	}); ok {
+		selection, found := resolver.LookupSelection(model)
+		if found {
+			route, err := provider.NewResolvedRoute("https://"+selection.Authority, "")
+			return route, err == nil
+		}
+	}
+	return provider.ResolvedRoute{}, false
 }

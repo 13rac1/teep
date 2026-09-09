@@ -310,7 +310,7 @@ func checkResponseStruct(r *result, p *providerInfo, want string) {
 	r.failf("%s struct not found in %s", want, p.name)
 }
 
-// Attester.client *http.Client field.
+// Attester owns an HTTP client or an operation-owned HTTP client factory.
 func checkAttesterClientField(r *result, p *providerInfo) {
 	for _, f := range p.files {
 		for _, decl := range f.Decls {
@@ -329,9 +329,9 @@ func checkAttesterClientField(r *result, p *providerInfo) {
 				}
 				for _, field := range st.Fields.List {
 					for _, name := range field.Names {
-						if name.Name == "client" && typeString(field.Type) == "*http.Client" {
+						if (name.Name == "client" && typeString(field.Type) == "*http.Client") || isHTTPClientFactory(field.Type) {
 							pos := p.fset.Position(name.Pos())
-							r.passf("Attester.client *http.Client (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+							r.passf("Attester HTTP client ownership (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 							return
 						}
 					}
@@ -339,7 +339,14 @@ func checkAttesterClientField(r *result, p *providerInfo) {
 			}
 		}
 	}
-	r.failf("Attester.client *http.Client field not found in %s", p.name)
+	r.failf("Attester HTTP client or factory field not found in %s", p.name)
+}
+
+// isHTTPClientFactory recognizes a zero-argument factory with exactly one client result.
+func isHTTPClientFactory(expr ast.Expr) bool {
+	factory, ok := expr.(*ast.FuncType)
+	return ok && factory.Params.NumFields() == 0 && factory.Results.NumFields() == 1 &&
+		typeString(factory.Results.List[0].Type) == "*http.Client"
 }
 
 // Parse function exists.

@@ -26,6 +26,9 @@ func (s *Server) Close() {
 	}
 	for _, prov := range s.providers {
 		for _, owner := range []any{prov.Attester, prov.ModelLister, prov.E2EEMaterialFetcher} {
+			if stopper, ok := owner.(interface{ StopResolution() }); ok {
+				stopper.StopResolution()
+			}
 			if closer, ok := owner.(interface{ CloseIdleConnections() }); ok {
 				closer.CloseIdleConnections()
 			}

@@ -25,6 +25,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -288,6 +289,11 @@ func Load() (*Config, error) {
 	}
 
 	applyEnvOverrides(cfg)
+	if cp := cfg.Providers["neardirect"]; cp != nil {
+		if _, err := nearroute.ParseOrigin(cp.BaseURL); err != nil {
+			return nil, fmt.Errorf("neardirect configured origin: %w", err)
+		}
+	}
 	if !cfg.maxConnsDefined {
 		logDefaultMaxConnsDiagnostics()
 	}

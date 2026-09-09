@@ -41,7 +41,11 @@ func TestNearDirectConfiguredRouteParity(t *testing.T) {
 	observed := &unexpectedRouteIO{}
 	client := tlsct.NewHTTPClient(time.Second)
 	client.Transport = observed
-	attester.SetClient(client)
+	attester.SetClientFactory(func() *http.Client {
+		fresh := *client
+		fresh.Transport = observed
+		return &fresh
+	})
 	var wg sync.WaitGroup
 	for _, model := range []string{"one", "two"} {
 		for range 8 {
@@ -63,10 +67,10 @@ func TestNearDirectConfiguredRouteParity(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	// Resolving a fixed origin is local even if a caller has already canceled.
+	// Canceled callers do not obtain a new request route.
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, _, err := resolveRequestRoute(ctx, prov, "uncatalogued"); err != nil {
+	if _, _, err := resolveRequestRoute(ctx, prov, "uncatalogued"); !errors.Is(err, context.Canceled) {
 		t.Error(err)
 	}
 	if observed.calls.Load() != 0 {

@@ -26,7 +26,7 @@ The provider's infrastructure never sees plaintext — only the TEE enclave can 
 
 ### NEAR AI Direct (TLS Pinning)
 
-NEAR AI Direct connects to model-specific inference nodes and binds the TLS certificate to the attestation. The proxy:
+NEAR AI Direct establishes one indexed route per model and binds its TLS certificate to attestation. See the [routing and capture contract](docs/providers/near/near_attestation.md#neardirect-backend-selection) for configured origins, lifetime selection, and fresh attestation connections. The proxy:
 
 1. Resolves the model's subdomain via `completions.near.ai/endpoints`.
 2. Connects to the model-specific subdomain.
@@ -296,3 +296,8 @@ When configured:
 - `rtmr*_allow` values are enforced in `event_log_integrity` after event-log replay matches quote RTMRs.
 
 Empty allowlists disable policy for that measurement.
+
+Standalone NEAR TLS-only chat probes add an operational `tls_inference` result.
+An attempted failure blocks verification and cannot be listed in `allow_fail`.
+This result is separate from the provider's E2EE factors and does not claim
+E2EE success. See [standalone modes and captures](docs/providers/near/near_attestation.md#standalone-inference-and-captures).

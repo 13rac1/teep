@@ -1,3 +1,6 @@
+> Historical implementation design. Current NEAR backend selection and fresh
+> attestation pool ownership are specified in the [maintained NEAR contract](../providers/near/near_attestation.md#neardirect-backend-selection).
+
 # Plan: NEAR AI HTTP/2 Connection Reuse and Multiplexing
 
 The proposed [stable NEAR backend selection plan](near_backend_selection.md)

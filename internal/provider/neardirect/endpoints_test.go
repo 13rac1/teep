@@ -81,7 +81,7 @@ func TestEndpointResolver_RefreshOnStale(t *testing.T) {
 
 	// Force staleness by backdating fetchedAt.
 	r.mu.Lock()
-	r.fetchedAt = time.Now().Add(-10 * time.Minute)
+	r.endpoints.snapshot.fetchedAt = time.Now().Add(-10 * time.Minute)
 	r.mu.Unlock()
 
 	// Second call triggers refresh.
@@ -177,7 +177,7 @@ func TestEndpointResolver_FailClosedOnRefreshError(t *testing.T) {
 
 	// Force staleness.
 	r.mu.Lock()
-	r.fetchedAt = time.Now().Add(-10 * time.Minute)
+	r.endpoints.snapshot.fetchedAt = time.Now().Add(-10 * time.Minute)
 	r.mu.Unlock()
 
 	// Refresh fails — must return error, not stale data.
@@ -201,4 +201,12 @@ func TestEndpointResolver_ContextCancelled(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
+}
+
+func newEndpointResolverForTest(endpoint string) *EndpointResolver {
+	r := NewEndpointResolver()
+	r.endpointsURL = endpoint
+	r.restrictToNearAI = false
+	r.client.Timeout = time.Second
+	return r
 }

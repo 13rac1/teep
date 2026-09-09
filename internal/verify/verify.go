@@ -25,23 +25,29 @@ import (
 
 // Options holds all parameters for Run.
 type Options struct {
-	Config         *config.Config
-	Provider       *config.Provider
-	ProviderName   string
-	ModelName      string
-	CaptureDir     string
-	Offline        bool
-	Client         *http.Client                // nil = use default
-	MetadataClient *http.Client                // nil = use a separately owned metadata pool
-	Nonce          attestation.Nonce           // zero = generate new
-	CapturedE2EE   *attestation.E2EETestResult // nil = run live test
-	NVIDIAVerifier *attestation.NVIDIAVerifier // nil = use default
+	Config                   *config.Config
+	Provider                 *config.Provider
+	ProviderName             string
+	ModelName                string
+	CaptureDir               string
+	Offline                  bool
+	Client                   *http.Client        // nil = use default
+	AttestationClientFactory func() *http.Client // creates an independent NearDirect fetch pool
+	MetadataClient           *http.Client        // nil = use a separately owned metadata pool
+	Nonce                    attestation.Nonce   // zero = generate new
+	CapturedTLSInference     *attestation.TLSInferenceResult
+	CapturedE2EE             *attestation.E2EETestResult // nil = run live test
+	NVIDIAVerifier           *attestation.NVIDIAVerifier // nil = use default
 	// VerificationTime is the time used for cryptographic validity checks
 	// during replay. Zero means use the verifier's live wall clock. It must
 	// not affect context deadlines, HTTP timeouts, cache TTLs, or timing logs.
 	VerificationTime time.Time
 
-	capture *verificationCapture
+	capture     *verificationCapture
+	nearConfig  *capture.NearConfig
+	nearRoute   *capture.NearRoute
+	replayRoute provider.ResolvedRoute
+	replay      bool
 }
 
 // CfgLoader loads config and provider for the named provider.
@@ -57,35 +63,38 @@ type CfgLoader func(providerName string) (*config.Config, *config.Provider, erro
 // generated nonce.
 func Run(ctx context.Context, opts *Options) (report *attestation.VerificationReport, retErr error) {
 	local := *opts
-	if local.Client == nil {
-		local.Client = config.NewAttestationClient(local.Offline)
-		defer local.Client.CloseIdleConnections()
+	var err error
+	if local.ProviderName == "neardirect" || local.ProviderName == "nearcloud" {
+		local.nearConfig, err = nearCaptureConfig(local.ProviderName, local.Provider)
+		if err != nil {
+			return nil, err
+		}
 	}
-	if local.MetadataClient == nil {
-		local.MetadataClient = config.NewAttestationClient(local.Offline)
-		defer local.MetadataClient.CloseIdleConnections()
-	}
+	defer local.initializeClients()()
 	if nonceIsZero(local.Nonce) {
 		local.Nonce = attestation.NewNonce()
 	}
 	var result verificationOutcome
 	if local.CaptureDir != "" {
 		local.capture = &verificationCapture{
-			discovery:            capture.WrapRecording(local.MetadataClient.Transport),
 			attestation:          local.Client.Transport,
 			attestationDiscovery: capture.WrapRecording(local.Client.Transport),
 		}
-		metadata := *local.MetadataClient
-		metadata.Transport = local.capture.discovery
-		local.MetadataClient = &metadata
+		if local.MetadataClient != nil {
+			local.capture.discovery = capture.WrapRecording(local.MetadataClient.Transport)
+			metadata := *local.MetadataClient
+			metadata.Transport = local.capture.discovery
+			local.MetadataClient = &metadata
+		}
 		client := *local.Client
 		client.Transport = local.capture.attestationDiscovery
 		local.Client = &client
 		defer func() {
-			retErr = saveCapture(ctx, opts, local.capture.entries(), local.Nonce, result.e2ee, report, retErr)
+			local.CapturedTLSInference = result.tlsInference
+			retErr = saveCapture(ctx, &local, local.capture.entries(), local.Nonce, result.e2ee, report, retErr)
 		}()
 	}
-	route := provider.ResolvedRoute{}
+	route := local.replayRoute
 	if providerUsesTLSBinding(local.ProviderName) {
 		result, retErr = runTLSVerification(ctx, &local, &route)
 	} else {
@@ -95,9 +104,10 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 }
 
 type verificationOutcome struct {
-	report *attestation.VerificationReport
-	raw    *attestation.RawAttestation
-	e2ee   *attestation.E2EETestResult
+	report       *attestation.VerificationReport
+	raw          *attestation.RawAttestation
+	e2ee         *attestation.E2EETestResult
+	tlsInference *attestation.TLSInferenceResult
 }
 
 func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRoute) (out verificationOutcome, retErr error) {
@@ -109,16 +119,13 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		return verificationOutcome{}, fmt.Errorf("attester init: %w", err)
 	}
 
-	client := opts.Client
-	if client == nil {
-		client = config.NewAttestationClient(opts.Offline)
-		defer client.CloseIdleConnections()
+	if stopper, ok := attester.(interface{ StopResolution() }); ok {
+		defer stopper.StopResolution()
 	}
 
+	client := opts.Client
+
 	nonce := opts.Nonce
-	if nonceIsZero(nonce) {
-		nonce = attestation.NewNonce()
-	}
 
 	var e2eeResult *attestation.E2EETestResult
 
@@ -130,13 +137,12 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 	}
 	sevVerifier := attestation.NewSEVVerifier(opts.Offline, sevGetter)
 
-	// Inject shared client into attester for capture/replay.
-	type clientSetter interface{ SetClient(*http.Client) }
-	if cs, ok := attester.(clientSetter); ok {
-		cs.SetClient(client)
+	if err := configureAttestationClient(attester, opts, client); err != nil {
+		return verificationOutcome{}, err
 	}
-
-	defer configureMetadataClient(attester, opts)()
+	if setter, ok := attester.(interface{ SetMetadataClient(*http.Client) }); ok {
+		setter.SetMetadataClient(opts.MetadataClient)
+	}
 
 	if providerUsesTLSBinding(opts.ProviderName) {
 		attester, err = standaloneAttesterForRoute(ctx, opts, attester, route)
@@ -200,11 +206,8 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 	}
 	sigstoreResults, rekorResults := checkSigstore(ctx, allDigests, digestToRepo, scPolicy, client, opts.Offline)
 
-	if opts.CapturedE2EE != nil {
-		e2eeResult = opts.CapturedE2EE
-	} else if !providerUsesTLSBinding(opts.ProviderName) || opts.Offline || opts.Provider.APIKey == "" {
-		e2eeResult = testE2EE(ctx, raw, opts.ProviderName, opts.Provider, opts.ModelName, opts.Offline)
-	}
+	e2eeResult = evidenceE2EEOutcome(ctx, opts, raw)
+
 	if e2eeResult != nil && e2eeResult.KeyType == "" {
 		e2eeResult.KeyType = raw.E2EEKeyType()
 	}
@@ -289,6 +292,10 @@ func Replay(ctx context.Context, captureDir string, cfgLoader CfgLoader) (report
 		return nil, "", fmt.Errorf("load config for replay: %w", err)
 	}
 
+	replayRoute, err := validateNearReplay(&manifest, cp, entries)
+	if err != nil {
+		return nil, "", err
+	}
 	replayClient := &http.Client{
 		CheckRedirect: tlsct.RejectRedirect,
 		Transport:     capture.NewReplayTransport(entries),
@@ -297,16 +304,22 @@ func Replay(ctx context.Context, captureDir string, cfgLoader CfgLoader) (report
 
 	capturedE2EE := e2eeResultFromOutcome(manifest.E2EE)
 	report, err = Run(ctx, &Options{
-		Config:           cfg,
-		Provider:         cp,
-		ProviderName:     manifest.Provider,
-		ModelName:        manifest.Model,
-		Offline:          false,
-		Client:           replayClient,
-		MetadataClient:   replayClient,
-		Nonce:            nonce,
-		CapturedE2EE:     capturedE2EE,
-		VerificationTime: verificationTimeForCapture(&manifest),
+		replay:         true,
+		replayRoute:    replayRoute,
+		Config:         cfg,
+		Provider:       cp,
+		ProviderName:   manifest.Provider,
+		ModelName:      manifest.Model,
+		Offline:        false,
+		Client:         replayClient,
+		MetadataClient: replayClient,
+		AttestationClientFactory: func() *http.Client {
+			return &http.Client{Transport: replayClient.Transport, Timeout: config.AttestationTimeout, CheckRedirect: tlsct.RejectRedirect}
+		},
+		Nonce:                nonce,
+		CapturedTLSInference: tlsInferenceFromCapture(manifest.TLSInference),
+		CapturedE2EE:         capturedE2EE,
+		VerificationTime:     verificationTimeForCapture(&manifest),
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("replay verification: %w", err)
@@ -356,13 +369,16 @@ func saveCapture(
 		capturedAt = opts.VerificationTime.Add(-totalDuration).UTC()
 	}
 	subdir, saveErr := capture.Save(opts.CaptureDir, &capture.Manifest{
-		Provider:   opts.ProviderName,
-		Model:      opts.ModelName,
-		NonceHex:   nonce.Hex(),
-		CapturedAt: capturedAt,
-		DurationMS: totalDuration.Milliseconds(),
-		E2EE:       outcomeFromE2EEResult(e2eeResult),
-		Error:      errMsg,
+		TLSInference: tlsInferenceToCapture(opts.CapturedTLSInference),
+		NearConfig:   opts.nearConfig,
+		NearRoute:    opts.nearRoute,
+		Provider:     opts.ProviderName,
+		Model:        opts.ModelName,
+		NonceHex:     nonce.Hex(),
+		CapturedAt:   capturedAt,
+		DurationMS:   totalDuration.Milliseconds(),
+		E2EE:         outcomeFromE2EEResult(e2eeResult),
+		Error:        errMsg,
 	}, reportText, entries)
 	if saveErr != nil {
 		slog.Error("save capture failed", "err", saveErr)
@@ -565,17 +581,34 @@ func nonceIsZero(nonce attestation.Nonce) bool {
 	return subtle.ConstantTimeCompare(nonce[:], zero[:]) == 1
 }
 
-// configureMetadataClient retains caller ownership and closes only local pools.
-func configureMetadataClient(attester provider.Attester, opts *Options) func() {
-	setter, ok := attester.(interface{ SetMetadataClient(*http.Client) })
-	if !ok {
-		return func() {}
+func configureAttestationClient(attester provider.Attester, opts *Options, client *http.Client) error {
+	// Inject shared client into attester for capture/replay.
+	type clientSetter interface{ SetClient(*http.Client) }
+	if cs, ok := attester.(clientSetter); ok {
+		cs.SetClient(client)
 	}
-	if opts.MetadataClient != nil {
-		setter.SetMetadataClient(opts.MetadataClient)
-		return func() {}
+
+	if setter, ok := attester.(interface{ SetClientFactory(func() *http.Client) }); ok {
+		if opts.AttestationClientFactory == nil {
+			return errors.New("NearDirect verification requires an explicit attestation client factory")
+		}
+		setter.SetClientFactory(func() *http.Client {
+			fresh := opts.AttestationClientFactory()
+			if opts.capture != nil {
+				fresh.Transport = opts.capture.recordFreshEvidence(fresh.Transport)
+			}
+			return fresh
+		})
 	}
-	metadata := config.NewAttestationClient(opts.Offline)
-	setter.SetMetadataClient(metadata)
-	return metadata.CloseIdleConnections
+	return nil
+}
+
+func evidenceE2EEOutcome(ctx context.Context, opts *Options, raw *attestation.RawAttestation) *attestation.E2EETestResult {
+	if opts.CapturedE2EE != nil {
+		return opts.CapturedE2EE
+	}
+	if !nearTLSOnly(opts) && (!providerUsesTLSBinding(opts.ProviderName) || opts.Offline || opts.Provider.APIKey == "") {
+		return testE2EE(ctx, raw, opts.ProviderName, opts.Provider, opts.ModelName, opts.Offline)
+	}
+	return nil
 }

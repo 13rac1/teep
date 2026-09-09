@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -54,19 +57,26 @@ func testLiveNearHTTP2(t *testing.T, name string) {
 		t.Fatal("resolve live NEAR route failed")
 	}
 	attestationTrace := &nearTransportObservation{}
-	attestationClient := config.NewAttestationClient(false)
-	attestationClient.Transport = &observedNearTransport{base: attestationClient.Transport, observation: attestationTrace}
-	defer attestationClient.CloseIdleConnections()
-	setter, ok := prov.Attester.(interface{ SetClient(*http.Client) })
-	if !ok {
-		t.Fatal("attester does not expose its client")
+
+	factory := config.NewAttestationClientFactory(false, tlsct.NewAttestationSocketBudget(tlsct.MaxConnectionsPerHost), func(base http.RoundTripper) http.RoundTripper {
+		return &observedNearTransport{base: base, observation: attestationTrace}
+	})
+	switch setter := prov.Attester.(type) {
+	case interface{ SetClientFactory(func() *http.Client) }:
+		setter.SetClientFactory(factory.NewFreshClient)
+	case interface{ SetClient(*http.Client) }:
+		client := factory.NewClient()
+		defer client.CloseIdleConnections()
+		setter.SetClient(client)
+	default:
+		t.Fatal("attester does not expose client ownership")
 	}
-	setter.SetClient(attestationClient)
+
 	value, blocked, err := server.loadAuthorization(ctx, prov, route, key)
 	if err != nil || blocked != nil {
 		t.Fatal("live NEAR attestation did not authorize inference; see factor diagnostics")
 	}
-	attestationTrace.assertHTTP2(t, value.identity)
+	attestationTrace.assertHTTP2(t, value.report)
 	client, err := server.pinnedClientForIdentity(name, value.identity)
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +99,7 @@ func testLiveNearHTTP2(t *testing.T, name string) {
 		})
 	}
 	wg.Wait()
-	inferenceTrace.assertHTTP2(t, value.identity)
+	inferenceTrace.assertHTTP2(t, value.report)
 	inferenceTrace.assertReuseAndOverlap(t)
 }
 
@@ -100,6 +110,9 @@ func liveNearTextModel(ctx context.Context, t *testing.T, prov *provider.Provide
 		t.Fatal("live NEAR model discovery failed")
 	}
 	wanted := strings.TrimPrefix(os.Getenv("NEARAI_E2EE_MODEL"), prov.Name+":")
+	if wanted == "" {
+		wanted = "z-ai/glm-5.3-flash"
+	}
 	for _, raw := range models {
 		var model struct {
 			ID               string   `json:"id"`
@@ -109,7 +122,7 @@ func liveNearTextModel(ctx context.Context, t *testing.T, prov *provider.Provide
 		if _, _, err := jsonstrict.Unmarshal(raw, &model); err != nil || model.ID == "" {
 			t.Fatal("invalid live NEAR model metadata")
 		}
-		if slices.Contains(model.OutputModalities, "text") && (wanted == "" || wanted == model.ID) {
+		if slices.Contains(model.OutputModalities, "text") && wanted == model.ID {
 			return model.ID
 		}
 	}
@@ -125,11 +138,35 @@ func runLiveNearInference(ctx context.Context, server *Server, template *authori
 		return err
 	}
 	input.body = body
-	out, err := server.inferAuthorized(ctx, newInferenceRecorder(), &input)
+	recorder := newInferenceRecorder()
+	recorder.Code = 0 // Zero distinguishes failure before a response was written.
+	out, err := server.inferAuthorized(ctx, recorder, &input)
 	if err != nil || out.status != "ok" {
-		return errors.New("live NEAR encrypted inference failed; no response body is logged")
+		return liveInferenceFailure(out.status, recorder.Code, err)
 	}
 	return nil
+}
+
+// liveInferenceFailure reports only local classifications, never error text or bodies.
+func liveInferenceFailure(stage string, status int, err error) error {
+	category := "response"
+	switch {
+	case errors.Is(err, context.Canceled):
+		category = "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		category = "deadline"
+	case errors.Is(err, tlsct.ErrConnectionCapacity):
+		category = "connection_capacity"
+	case tlsct.IsTrustFailure(err):
+		category = "tls_trust"
+	case errors.Is(err, e2ee.ErrDecryptionFailed):
+		category = "response_authentication"
+	default:
+		if _, ok := errors.AsType[*url.Error](err); ok {
+			category = "transport"
+		}
+	}
+	return fmt.Errorf("live inference failed: stage=%s status=%d category=%s", stage, status, category)
 }
 
 type nearTransportRecord struct {
@@ -202,15 +239,26 @@ type observedNearBody struct {
 
 func (b *observedNearBody) Close() error { err := b.ReadCloser.Close(); b.finish(); return err }
 
-func (o *nearTransportObservation) assertHTTP2(t *testing.T, identity tlsct.TransportIdentity) {
+func (o *nearTransportObservation) assertHTTP2(t *testing.T, report *attestation.VerificationReport) {
 	t.Helper()
+	identity, err := report.TransportIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirePin := true
+	for _, factor := range report.Factors {
+		if report.Provider == "nearcloud" && factor.Name == attestation.FactorTLSKeyBinding && !factor.Enforced {
+			requirePin = false
+		}
+	}
+
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if len(o.records) == 0 {
 		t.Fatal("no transport observations")
 	}
 	for _, record := range o.records {
-		if record.protocol != 2 || !record.identity.Equal(identity) {
+		if record.protocol != 2 || record.identity.Authority() != identity.Authority() || (requirePin && !tlsct.SPKIFingerprintsEqual(record.identity.Fingerprint(), identity.Fingerprint())) {
 			t.Error("HTTP/2 transport identity differs from attested route")
 		}
 	}

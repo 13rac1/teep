@@ -3,7 +3,9 @@
 The shared proxy and standalone inference loop permits at most two attempts
 (one retry) under one caller deadline. Each attempt obtains valid
 authorization and creates a fresh encryption session. Clean up the rejected
-attempt before starting the next one. An HTTP error alone does not prove that
+attempt before starting the next one. Connection-establishment retries apply to TLS-only probes as well as encrypted
+requests. They reuse the current evidence; key-rejection replay remains
+restricted to E2EE attempts. An HTTP error alone does not prove that
 the provider did not process inference.
 
 ## Retry and invalidation decisions
@@ -139,3 +141,12 @@ The contract review used these source revisions:
 A provider protocol change requires new evidence and tests before changing the
 recognizer. Keep the exact accepted response and endpoint set visible here.
 See [required regression coverage](testing.md).
+
+## NearDirect lifetime selection
+
+Retry and invalidation decisions retain the model's selected indexed authority.
+A failed SPKI handshake sends no inference bytes and does not replay the request.
+The next full verification uses a fresh attestation pool on that same authority.
+Metadata expiry, backend failure, key change, or authorization eviction cannot
+trigger rediscovery for an established model or invalidate other models' routes.
+See the [NEAR routing contract](../providers/near/near_attestation.md#neardirect-backend-selection).

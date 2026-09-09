@@ -16,7 +16,9 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -46,7 +48,11 @@ func TestAttester_FetchAttestation_ArrayResponse_Rejected(t *testing.T) {
 	srv := makeServer(t, http.StatusOK, body)
 	defer srv.Close()
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	if raw, err := a.FetchAttestation(t.Context(), "model", attestation.NewNonce()); err == nil || raw != nil {
 		t.Fatal("accepted an unsupported direct array envelope")
 	}
@@ -108,7 +114,11 @@ func TestAttester_FetchAttestation_ArrayResponse_NoMatch(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	_, err := a.FetchAttestation(context.Background(), "unknown-model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for model not in attestation list")
@@ -121,7 +131,11 @@ func TestAttester_FetchAttestation_FlatResponse(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -154,7 +168,11 @@ func TestAttester_FetchAttestation_SetsAuthHeaderAndQueryParams(t *testing.T) {
 
 	nonce := attestation.NewNonce()
 	a := neardirect.NewAttester(srv.URL, "nearai-secret")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	_, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", nonce)
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -188,7 +206,11 @@ func TestAttester_FetchAttestation_HTTP500(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	_, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for HTTP 500, got nil")
@@ -200,7 +222,11 @@ func TestAttester_FetchAttestation_InvalidJSON(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	_, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
@@ -214,7 +240,11 @@ func TestAttester_FetchAttestation_ContextCancelled(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -231,7 +261,11 @@ func TestAttester_FetchAttestation_TEEProviderIsSet(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	raw, err := a.FetchAttestation(context.Background(), "m", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -247,7 +281,11 @@ func TestAttester_FetchAttestation_NewFieldsPropagated(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -273,7 +311,11 @@ func TestAttester_FetchAttestation_FlatResponse_NewFields(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	raw, err := a.FetchAttestation(context.Background(), "llama-3.1-70b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -296,7 +338,11 @@ func TestAttester_FetchAttestation_AllAttestations_UsesNewFieldNames(t *testing.
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	raw, err := a.FetchAttestation(context.Background(), "openai/gpt-oss-120b", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -329,7 +375,11 @@ func TestAttester_FetchAttestation_TooManyAttestations(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	_, err := a.FetchAttestation(context.Background(), "m-0", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for too many attestation entries")
@@ -343,7 +393,11 @@ func TestAttester_FetchAttestation_MalformedEventLogEntry(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	_, err := a.FetchAttestation(context.Background(), "test-model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for malformed event_log entry")
@@ -361,7 +415,11 @@ func TestAttester_FetchAttestation_Ed25519KeyPassedThrough(t *testing.T) {
 	defer srv.Close()
 
 	a := neardirect.NewAttester(srv.URL, "key")
-	a.SetClient(srv.Client())
+	a.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	raw, err := a.FetchAttestation(context.Background(), "test-model", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("FetchAttestation: %v", err)
@@ -428,9 +486,9 @@ func TestPreparer_PrepareRequest_NoSessionRequired(t *testing.T) {
 	}
 }
 
-func TestAttester_SetClient(t *testing.T) {
+func TestAttester_SetClientFactory(t *testing.T) {
 	a := neardirect.NewAttester("https://api.near.ai", "key")
-	a.SetClient(&http.Client{})
+	a.SetClientFactory(func() *http.Client { return &http.Client{} })
 	t.Log("SetClient accepted non-nil client")
 }
 
@@ -503,21 +561,24 @@ type mockResolver struct {
 	err    error
 }
 
-func (m *mockResolver) Resolve(_ context.Context, _ string) (string, error) {
+func (m *mockResolver) ResolveConfigured(_ context.Context, _ string, _ nearroute.Origin) (provider.ResolvedRoute, error) {
 	m.calls.Add(1)
-	return m.domain, m.err
+	if m.err != nil {
+		return provider.ResolvedRoute{}, m.err
+	}
+	return provider.NewResolvedRoute("https://"+m.domain, "")
 }
 
 func TestAttester_FetchAttestation_ResolverError(t *testing.T) {
-	// Use api.near.ai as the base URL so shouldResolveModelDomain returns true,
-	// then inject a resolver that always fails — covering the error branch.
+	// Default NEAR origins require successful model resolution.
+	resolverErr := errors.New("resolver down")
 	attester := neardirect.NewAttesterWithResolver(
 		"https://api.near.ai", "test-key",
-		&mockResolver{err: errors.New("resolver down")},
+		&mockResolver{err: resolverErr},
 	)
 	_, err := attester.FetchAttestation(context.Background(), "some-model", attestation.NewNonce())
 	t.Logf("ResolverError: %v", err)
-	if err == nil || !strings.Contains(err.Error(), "resolve model") {
+	if !errors.Is(err, resolverErr) {
 		t.Errorf("expected resolver error, got: %v", err)
 	}
 }
@@ -533,7 +594,11 @@ func TestAttester_FetchAttestation_ResolverSuccess(t *testing.T) {
 		"https://api.near.ai", "test-key",
 		resolver,
 	)
-	attester.SetClient(srv.Client())
+	attester.SetClientFactory(func() *http.Client {
+		client := *srv.Client()
+		client.Transport = client.Transport.(*http.Transport).Clone()
+		return &client
+	})
 	_, err := attester.FetchAttestation(context.Background(), "some-model", attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("resolved attestation: %v", err)

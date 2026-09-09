@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"testing"
 	"time"
@@ -11,12 +12,12 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/defaults"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
 // extractBaseURL returns scheme+host from the first captured entry.
-// The DomainResolver has its own HTTP client and isn't captured, so we
-// extract the resolved base URL from the captured attestation request.
+// This helper is for providers whose first entry is their evidence request.
 func extractBaseURL(t *testing.T, entries []capture.RecordedEntry) string {
 	t.Helper()
 	if len(entries) == 0 {
@@ -33,14 +34,18 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 	ctx := context.Background()
 	env := loadFixture(t, "neardirect")
 
-	// Extract base URL from captured traffic to bypass DomainResolver.
-	baseURL := extractBaseURL(t, env.entries)
+	// This test verifies signed evidence at its recorded route; replay tests validate selection metadata.
+	baseURL := "https://" + env.manifest.NearRoute.Authority
 	t.Logf("base URL: %s", baseURL)
 
 	attester := neardirect.NewAttester(baseURL, "", true)
-	attester.SetClient(env.client)
+	attester.SetClientFactory(func() *http.Client { return &http.Client{Transport: env.client.Transport} })
 	attester.SetMetadataClient(env.client)
-	raw, err := attester.FetchAttestation(ctx, env.manifest.Model, env.nonce)
+	route, err := provider.NewResolvedRoute(baseURL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := attester.FetchAttestationForRoute(ctx, route, env.manifest.Model, env.nonce)
 	if err != nil {
 		t.Fatalf("fetch attestation: %v", err)
 	}

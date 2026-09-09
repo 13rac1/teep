@@ -17,12 +17,13 @@ const MaxEvidenceBytes = 1 << 20
 const MaxEvents = 10000
 
 // Object decodes one object boundary and returns unknown field paths. Missing
-// required fields and null supported fields are structural errors.
-func Object(data []byte, target any, path string) ([]string, error) {
+// required fields and null supported fields are structural errors, except for
+// fields explicitly listed as nullable by a protocol caller.
+func Object(data []byte, target any, path string, nullable ...string) ([]string, error) {
 	if len(data) > MaxEvidenceBytes {
 		return nil, fmt.Errorf("%s: object exceeds size limit %d bytes", path, MaxEvidenceBytes)
 	}
-	return jsonstrict.UnmarshalObject(data, target, path)
+	return jsonstrict.UnmarshalObject(data, target, path, nullable...)
 }
 
 // EncodedObject accepts one object or its one defined JSON string encoding.

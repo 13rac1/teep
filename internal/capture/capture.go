@@ -60,14 +60,38 @@ type E2EEOutcome struct {
 	KeyType   string `json:"key_type,omitempty"`
 }
 
+// TLSInferenceOutcome records a TLS-only probe independently of E2EE.
+type TLSInferenceOutcome struct {
+	Attempted bool   `json:"attempted"`
+	Failed    bool   `json:"failed"`
+	Detail    string `json:"detail"`
+}
+
+// NearConfig records the effective origin and inference mode even when the probe was skipped.
+type NearConfig struct {
+	Origin string `json:"origin"`
+	E2EE   bool   `json:"e2ee"`
+}
+
+// NearRoute records selection metadata. Static routes have no canonical authority or index.
+type NearRoute struct {
+	Canonical string  `json:"canonical,omitempty"`
+	Index     *uint64 `json:"index,omitempty"`
+	Authority string  `json:"authority"`
+	Mode      string  `json:"mode"`
+}
+
 // Manifest holds top-level metadata for a capture directory.
 type Manifest struct {
-	Provider   string       `json:"provider"`
-	Model      string       `json:"model"`
-	NonceHex   string       `json:"nonce_hex"`
-	CapturedAt time.Time    `json:"captured_at"`
-	DurationMS int64        `json:"duration_ms,omitempty"`
-	E2EE       *E2EEOutcome `json:"e2ee,omitempty"`
+	TLSInference *TLSInferenceOutcome `json:"tls_inference,omitempty"`
+	NearConfig   *NearConfig          `json:"near_config,omitempty"`
+	NearRoute    *NearRoute           `json:"near_route,omitempty"`
+	Provider     string               `json:"provider"`
+	Model        string               `json:"model"`
+	NonceHex     string               `json:"nonce_hex"`
+	CapturedAt   time.Time            `json:"captured_at"`
+	DurationMS   int64                `json:"duration_ms,omitempty"`
+	E2EE         *E2EEOutcome         `json:"e2ee,omitempty"`
 	// Error is set when verification failed. May contain provider HTTP response
 	// fragments; treat capture directories as potentially sensitive.
 	Error string `json:"error,omitempty"`

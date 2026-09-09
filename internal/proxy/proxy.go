@@ -51,6 +51,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/provider/venice"
@@ -456,7 +457,7 @@ func New(cfg *config.Config) (*Server, error) {
 	onErr := func() { s.stats.httpErrors.Add(1) }
 
 	attestFactory := config.NewAttestationClientFactory(cfg.Offline,
-		tlsct.NewSocketBudget(tlsct.MaxConnectionsPerHost), func(base http.RoundTripper) http.RoundTripper {
+		tlsct.NewAttestationSocketBudget(tlsct.MaxConnectionsPerHost), func(base http.RoundTripper) http.RoundTripper {
 			return tlsct.WrapCounting(base, onReq, onErr)
 		})
 	attestClient := attestFactory.NewClient()
@@ -503,7 +504,10 @@ func New(cfg *config.Config) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}
-		if setter, ok := p.Attester.(interface{ SetClient(*http.Client) }); ok {
+		switch setter := p.Attester.(type) {
+		case interface{ SetClientFactory(func() *http.Client) }:
+			setter.SetClientFactory(attestFactory.NewFreshClient)
+		case interface{ SetClient(*http.Client) }:
 			setter.SetClient(attestFactory.NewClient())
 		}
 		if setter, ok := p.Attester.(interface{ SetMetadataClient(*http.Client) }); ok {
@@ -695,6 +699,9 @@ func fromConfig(
 		p.SupplyChainPolicy = venice.SupplyChainPolicy()
 		p.ModelLister = venice.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "neardirect":
+		if _, err := nearroute.ParseOrigin(cp.BaseURL); err != nil {
+			return nil, err
+		}
 		p.ChatPath = "/v1/chat/completions"
 		p.EmbeddingsPath = "/v1/embeddings"
 		p.AudioPath = "/v1/audio/transcriptions"
@@ -1596,6 +1603,13 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 		}
 
 		prov, upstreamModel, ok := s.resolveModel(model)
+		if prov != nil && (prov.Name == "neardirect" || prov.Name == "nearcloud") {
+			if err := nearroute.ValidateModel(upstreamModel); err != nil {
+				s.logInferenceBlock(ctx, "validate_model", ep.name, prov.Name, "", http.StatusBadRequest, err)
+				writeRouteError(w, err)
+				return
+			}
+		}
 		if !ok {
 			s.logInferenceBlock(ctx, "resolve_model", ep.name, "", model, http.StatusBadRequest, fmt.Errorf("unknown model %q", model))
 			http.Error(w, fmt.Sprintf("unknown model %q: use provider:model format (e.g. venice:qwen3-5b)", model), http.StatusBadRequest)
@@ -1677,8 +1691,9 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 			if routeErr != nil {
 				status = "route_failed"
 				s.stats.errors.Add(1)
-				s.logInferenceBlock(ctx, "resolve_route", ep.name, prov.Name, upstreamModel, http.StatusBadGateway, routeErr)
-				http.Error(w, "resolve upstream route failed", http.StatusBadGateway)
+				code, _ := routeErrorResponse(routeErr)
+				s.logInferenceBlock(ctx, "resolve_route", ep.name, prov.Name, upstreamModel, code, routeErr)
+				writeRouteError(w, routeErr)
 				return
 			}
 			ctx = withCacheModel(ctx, key.Model()+"@"+key.Authority())
@@ -2987,9 +3002,26 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	var ok bool
 	if prov := s.providers[provName]; prov != nil && prov.UsesTLSBinding {
 		var key provider.AuthorizationKey
-		if selected.Authority() != "" {
+		switch {
+		case selected.Authority() != "":
 			key, err = selected.AuthorizationKey(provName, model)
-		} else {
+		case provName == "neardirect":
+			lookup, exists := prov.Attester.(interface {
+				LookupRoute(string) (provider.ResolvedRoute, bool)
+			})
+			if !exists {
+				http.Error(w, "no established report route", http.StatusNotFound)
+				return
+			}
+			route, found := lookup.LookupRoute(model)
+			if !found {
+				http.Error(w, "no established report route", http.StatusNotFound)
+				return
+			}
+			key, err = route.AuthorizationKey(provName, model)
+		case provName == "nearcloud":
+			key, err = prov.StaticRoute.AuthorizationKey(provName, model)
+		default:
 			_, key, err = resolveRequestRoute(r.Context(), prov, model)
 		}
 		if err != nil {

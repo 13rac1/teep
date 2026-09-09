@@ -101,3 +101,41 @@ func factoryRequest(t *testing.T, client *http.Client, endpoint string) (bool, e
 	resp.Body.Close()
 	return reused, err
 }
+
+func TestAttestationFactoryReservesFreshCapacity(t *testing.T) {
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		server := authority.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+		factory := NewAttestationClientFactory(false, tlsct.NewAttestationSocketBudget(2), nil)
+		pooled, collateral, fresh, excess := factory.NewClient(), factory.NewClient(), factory.NewFreshClient(), factory.NewFreshClient()
+		for _, client := range []*http.Client{pooled, collateral, fresh, excess} {
+			t.Cleanup(client.CloseIdleConnections)
+		}
+		if _, err := factoryRequest(t, pooled, server.URL); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := factoryRequest(t, collateral, server.URL); !errors.Is(err, tlsct.ErrConnectionCapacity) {
+			t.Fatalf("pooled share exceeded: %v", err)
+		}
+		if _, err := factoryRequest(t, fresh, server.URL); err != nil {
+			t.Fatalf("reserved fresh capacity unavailable: %v", err)
+		}
+		if _, err := factoryRequest(t, excess, server.URL); !errors.Is(err, tlsct.ErrConnectionCapacity) {
+			t.Fatalf("fresh factories multiplied aggregate capacity: %v", err)
+		}
+		fresh.CloseIdleConnections()
+		if reused, err := factoryRequest(t, pooled, server.URL); err != nil || !reused {
+			t.Fatalf("fresh cleanup affected pooled connection: reuse=%v err=%v", reused, err)
+		}
+		if _, err := factoryRequest(t, collateral, server.URL); !errors.Is(err, tlsct.ErrConnectionCapacity) {
+			t.Fatalf("collateral acquired reserved slot: %v", err)
+		}
+		pooled.CloseIdleConnections()
+		if _, err := factoryRequest(t, collateral, server.URL); err != nil {
+			t.Fatalf("collateral did not recover after physical close: %v", err)
+		}
+		if _, err := factoryRequest(t, excess, server.URL); err != nil {
+			t.Fatalf("fresh permit not released: %v", err)
+		}
+	})
+}

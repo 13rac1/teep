@@ -15,6 +15,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/reqid"
 )
 
@@ -91,6 +92,13 @@ func (s *Server) handleExploreAttest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prov, upstreamModel, ok := s.resolveModel(req.Model)
+	if prov != nil && (prov.Name == "neardirect" || prov.Name == "nearcloud") {
+		if err := nearroute.ValidateModel(upstreamModel); err != nil {
+			s.logInferenceBlock(ctx, "validate_model", "explore_attest", prov.Name, "", http.StatusBadRequest, err)
+			writeRouteError(w, err)
+			return
+		}
+	}
 	if !ok {
 		http.Error(w, fmt.Sprintf("unknown model: %q", req.Model), http.StatusBadRequest)
 		return
@@ -99,7 +107,7 @@ func (s *Server) handleExploreAttest(w http.ResponseWriter, r *http.Request) {
 	if prov.UsesTLSBinding {
 		route, key, routeErr := resolveRequestRoute(ctx, prov, upstreamModel)
 		if routeErr != nil {
-			http.Error(w, "resolve route failed", http.StatusBadGateway)
+			writeRouteError(w, routeErr)
 			return
 		}
 		value, blocked, loadErr := s.loadAuthorization(ctx, prov, route, key)

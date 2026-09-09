@@ -30,7 +30,6 @@ func TestRouteFailuresLogDiscoveryDiagnostics(t *testing.T) {
 		}
 		for _, request := range []*http.Request{
 			httptest.NewRequest(http.MethodPost, "https://proxy.test/v1/chat/completions", strings.NewReader(`{"model":"neardirect:model","messages":[{"role":"user","content":"test"}]}`)),
-			httptest.NewRequest(http.MethodGet, "https://proxy.test/v1/tee/report?provider=neardirect&model=model", http.NoBody),
 		} {
 			recorder := httptest.NewRecorder()
 			logs := captureSlogWithLevel(t, slog.LevelWarn, func() { server.ServeHTTP(recorder, request) })
@@ -42,6 +41,12 @@ func TestRouteFailuresLogDiscoveryDiagnostics(t *testing.T) {
 					t.Fatalf("%s log missing %q: %s", request.URL.Path, want, logs)
 				}
 			}
+		}
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "https://proxy.test/v1/tee/report?provider=neardirect&model=model", http.NoBody)
+		logs := captureSlogWithLevel(t, slog.LevelWarn, func() { server.ServeHTTP(recorder, request) })
+		if recorder.Code != http.StatusNotFound || strings.Contains(logs, diagnostic) {
+			t.Fatalf("report lookup performed discovery: status=%d", recorder.Code)
 		}
 	})
 }

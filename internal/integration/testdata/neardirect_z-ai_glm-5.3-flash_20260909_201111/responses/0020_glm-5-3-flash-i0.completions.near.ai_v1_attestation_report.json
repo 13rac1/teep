@@ -1,0 +1,27 @@
+{
+  "method": "GET",
+  "url": "https://glm-5-3-flash-i0.completions.near.ai/v1/attestation/report?include_tls_fingerprint=true\u0026nonce=f265dbd59f4ed9c8d6f140038f052b1705cd20f7bf7ae81c5f5857a73d7dec39\u0026signing_algo=ed25519",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAExk6awkESgxA8M+2xxzmojzTJgTeSkjzjgKrP4nCFMg7XeLioG/gMXtGSkIxhoSBGa0dA8DcnAzK7yzO3JcMT+Q==",
+  "headers": {
+    "Content-Length": [
+      "331266"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Wed, 09 Sep 2026 20:11:00 GMT"
+    ],
+    "Server": [
+      "nginx/1.29.5"
+    ],
+    "X-Request-Id": [
+      "a68e2465-cd30-4ad9-9de4-6eb6f9040968"
+    ]
+  },
+  "duration_ms": 641
+}

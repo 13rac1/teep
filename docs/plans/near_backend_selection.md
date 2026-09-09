@@ -1011,11 +1011,13 @@ Do not change NearDirect TLS-only factor-allowance semantics in this repair.
 
 ## Capture configuration and route records
 
-For NEAR captures, record the normalized configured HTTPS origin and configured
+For NEAR captures, record the effective HTTPS origin and configured
 E2EE boolean independently of the inference outcome, including skipped inference.
-Use the same existing origin normalization for capture and replay. Before
+For NearDirect, normalize the configured origin. For NearCloud, record the
+fixed `https://cloud-api.near.ai` gateway used for attestation and inference;
+its unused `base_url` setting must not change capture or replay. Before
 replay verification, require both values to match the current provider
-configuration; otherwise return a clear configuration-mismatch error. Do not
+effective configuration; otherwise return a clear configuration-mismatch error. Do not
 override configuration, infer missing values, or add equivalence rules between
 different origins. This compares two settings, not a saved copy of the full
 configuration; current verification policy remains in force.
