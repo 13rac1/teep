@@ -23,7 +23,7 @@ The audit MUST classify every security check in the system as one of:
 
 - [`internal/attestation/measurement_policy.go`](../../../internal/attestation/measurement_policy.go)
 - [`internal/config/config_test.go`](../../../internal/config/config_test.go)
-- [`internal/provider/nearcloud/pinned.go`](../../../internal/provider/nearcloud/pinned.go)
+- [`internal/proxy/authorized_inference.go`](../../../internal/proxy/authorized_inference.go)
 
 ## Required Checks
 
@@ -110,10 +110,10 @@ Audit each cache layer and produce this table:
 
 | Cache | Keys | TTL | Bounds/Eviction | Stale Behavior | Security-Critical Notes |
 |-------|------|-----|-----------------|----------------|-------------------------|
-| Attestation report cache | provider, model | ~minutes | ... | ... | Signing key MUST NOT be cached; must be fetched fresh for each E2EE session |
-| Negative cache | provider, model | ~seconds | ... | ... | Must prevent repeated upstream requests; must expire so recovery is possible |
-| SPKI pin cache | gateway domain, spkiHash | ~hour | ... | ... | Must be populated only after successful attestation of BOTH gateway and model; eviction must force re-attestation |
-| Signing key cache | provider, model | ~minute | ... | ... | Shorter than attestation cache; holds REPORTDATA-verified signing key for E2EE |
+| TLS-binding authorization | provider, model, authority | Authenticated evidence bound only | 1000 entries, eviction | Full verification on miss | Report, bound E2EE key, and transport identity are one generation |
+| Negative cache | provider, model, authority | Bounded retry delay | Bounded entries | Reject until expiry | Failed verification never publishes authorization |
+| Inference transport pools | provider, authority; selected attested SPKI | Idle connection timeout only | 1000 pools, 16 physical connections per authority | Replace on key change | Handshake pin before any inference bytes |
+| Non-TLS-binding report/signing-key caches | provider, model | Existing provider policy | Existing bounds | Existing re-verification | Separate from TLS-binding authorization |
 | PCS collateral cache | platform FMSPC | ~hours | ... | ... | TCB info and CRL freshness |
 | CT log cache | domain | ~hours | ... | ... | CT check is for the gateway TLS cert |
 | JWKS cache | JWKS URL | ~1 hour | ... | ... | Keyfunc auto-refresh with rate-limited unknown-kid fallback |
@@ -124,7 +124,7 @@ Verify:
 - stale-serving behavior and guardrails,
 - whether any cache uses unbounded maps (potential memory exhaustion),
 - maximum entry limits and whether they are configurable,
-- that the SPKI pin cache uses the gateway's domain and SPKI (since the proxy connects to the gateway).
+- that the authorization transport identity contains the gateway authority and SPKI, while backend evidence remains distinct.
 
 ### Negative Cache Recovery Semantics
 
@@ -133,7 +133,7 @@ Verify and report:
 - negative entries expire on bounded TTL,
 - negative cache size is bounded with eviction,
 - negative-cache hit returns explicit client error (e.g., HTTP 503) rather than fail-open,
-- negative cache key specificity (domain + SPKI or model + provider).
+- negative cache key specificity (provider, model, and canonical authority for TLS-binding providers).
 
 ### Offline Mode Safety
 
@@ -180,7 +180,7 @@ Verify:
 ### Cryptography Best Practices
 
 - **Constant-time comparison**: Factor comparisons use `subtle.ConstantTimeCompare` consistently.
-- **No signing key caching across E2EE sessions**: Each session requires a fresh key exchange.
+- **Fresh E2EE sessions**: A currently authorized public key may be reused; every request and retry requires a fresh ephemeral key exchange.
 - **Nonce entropy**: `crypto/rand` only, hard abort on failure.
 
 ### General Security Audit Practices

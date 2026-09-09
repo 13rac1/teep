@@ -114,7 +114,7 @@ func TestEndpointResolver_HTTP500(t *testing.T) {
 }
 
 func TestEndpointResolver_InvalidDomain(t *testing.T) {
-	// Domains that fail isValidDomain should be silently skipped.
+	// One invalid domain must reject the entire discovery response.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
@@ -138,13 +138,8 @@ func TestEndpointResolver_InvalidDomain(t *testing.T) {
 	r := newEndpointResolverForTest(srv.URL)
 	r.restrictToNearAI = true
 
-	// The only valid domain should resolve.
-	domain, err := r.Resolve(context.Background(), "m-good")
-	if err != nil {
-		t.Fatalf("Resolve m-good: %v", err)
-	}
-	if domain != "valid.near.ai" {
-		t.Errorf("domain = %q, want %q", domain, "valid.near.ai")
+	if _, err := r.Resolve(context.Background(), "m-good"); err == nil {
+		t.Fatal("invalid discovery published a partial routing map")
 	}
 
 	// All invalid-domain models should fail.

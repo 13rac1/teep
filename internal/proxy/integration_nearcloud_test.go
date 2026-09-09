@@ -77,12 +77,12 @@ func integrationNearCloudConfig(t *testing.T) *config.Config {
 }
 
 // integrationNearCloudE2EEConfig returns a config pointing at the live
-// cloud-api.near.ai gateway with E2EE enabled and Offline true.
+// cloud-api.near.ai gateway with E2EE and the online serve policy enabled.
 func integrationNearCloudE2EEConfig(t *testing.T) *config.Config {
 	t.Helper()
 	return &config.Config{
 		ListenAddr: "127.0.0.1:0",
-		Offline:    true,
+		Offline:    false,
 		Providers: map[string]*config.Provider{
 			"nearcloud": {
 				Name:    "nearcloud",
@@ -108,37 +108,34 @@ func postNearCloudContentChat(t *testing.T, proxyURL, model string, stream bool)
 func TestIntegration_NearCloud(t *testing.T) {
 	skipNearCloudIntegration(t)
 
-	t.Run("NonStream", runNearCloudNonStream)
-	t.Run("Streaming", runNearCloudStreaming)
-	t.Run("Models", runNearCloudModels)
-	t.Run("E2EEStreaming", runNearCloudE2EEStreaming)
-	t.Run("E2EENonStream", runNearCloudE2EENonStream)
-	t.Run("AttestationReport", runNearCloudAttestationReport)
-	t.Run("E2EEStreamingWithTools", runNearCloudE2EEStreamingWithTools)
-	t.Run("E2EENonStreamWithTools", runNearCloudE2EENonStreamWithTools)
-	t.Run("GLMReasoning", runNearCloudGLMReasoning)
-	t.Run("E2EEStreamingMultimodalContentArray", runNearCloudE2EEStreamingMultimodalContentArray)
-	t.Run("E2EENonStreamMultimodalContentArray", runNearCloudE2EENonStreamMultimodalContentArray)
+	plain := newProxyServer(t, integrationNearCloudConfig(t))
+	encrypted := newProxyServer(t, integrationNearCloudE2EEConfig(t))
+
+	t.Run("NonStream", func(t *testing.T) { runNearCloudNonStream(t, plain.URL) })
+	t.Run("Streaming", func(t *testing.T) { runNearCloudStreaming(t, plain.URL) })
+	t.Run("Models", func(t *testing.T) { runNearCloudModels(t, plain.URL) })
+	t.Run("E2EEStreaming", func(t *testing.T) { runNearCloudE2EEStreaming(t, encrypted.URL) })
+	t.Run("E2EENonStream", func(t *testing.T) { runNearCloudE2EENonStream(t, encrypted.URL) })
+	t.Run("AttestationReport", func(t *testing.T) { runNearCloudAttestationReport(t, encrypted.URL) })
+	t.Run("E2EEStreamingWithTools", func(t *testing.T) { runNearCloudE2EEStreamingWithTools(t, encrypted.URL) })
+	t.Run("E2EENonStreamWithTools", func(t *testing.T) { runNearCloudE2EENonStreamWithTools(t, encrypted.URL) })
+	t.Run("GLMReasoning", func(t *testing.T) { runNearCloudGLMReasoning(t, plain.URL, encrypted.URL) })
+	t.Run("E2EEStreamingMultimodalContentArray", func(t *testing.T) { runNearCloudE2EEStreamingMultimodalContentArray(t, encrypted.URL) })
+	t.Run("E2EENonStreamMultimodalContentArray", func(t *testing.T) { runNearCloudE2EENonStreamMultimodalContentArray(t, encrypted.URL) })
 }
 
-func runNearCloudGLMReasoning(t *testing.T) {
-	plainSrv := newProxyServer(t, integrationNearCloudConfig(t))
-	defer plainSrv.Close()
-	e2eeSrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
-	defer e2eeSrv.Close()
-
+func runNearCloudGLMReasoning(t *testing.T, plainURL, e2eeURL string) {
+	t.Helper()
 	const model = "nearcloud:z-ai/glm-5.3-flash"
-	runReasoningResponseTests(t, plainSrv.URL, e2eeSrv.URL, model)
+	runReasoningResponseTests(t, plainURL, e2eeURL, model)
 	t.Run("Repairs", func(t *testing.T) {
-		runGLMReasoningRepairTests(t, e2eeSrv.URL, model)
+		runGLMReasoningRepairTests(t, e2eeURL, model)
 	})
 }
 
-func runNearCloudNonStream(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearCloudConfig(t))
-	defer proxySrv.Close()
-
-	resp := postNearCloudContentChat(t, proxySrv.URL, nearCloudIntegrationModel(), false)
+func runNearCloudNonStream(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postNearCloudContentChat(t, proxyURL, nearCloudIntegrationModel(), false)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -157,11 +154,9 @@ func runNearCloudNonStream(t *testing.T) {
 	t.Logf("response: %q", content)
 }
 
-func runNearCloudStreaming(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearCloudConfig(t))
-	defer proxySrv.Close()
-
-	resp := postNearCloudContentChat(t, proxySrv.URL, nearCloudIntegrationModel(), true)
+func runNearCloudStreaming(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postNearCloudContentChat(t, proxyURL, nearCloudIntegrationModel(), true)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -185,11 +180,9 @@ func runNearCloudStreaming(t *testing.T) {
 	t.Logf("response (%d chunks): %q", len(chunks), content)
 }
 
-func runNearCloudModels(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearCloudConfig(t))
-	defer proxySrv.Close()
-
-	resp, err := integrationClient.Get(proxySrv.URL + "/v1/models")
+func runNearCloudModels(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp, err := integrationClient.Get(proxyURL + "/v1/models")
 	if err != nil {
 		t.Fatalf("GET /v1/models: %v", err)
 	}
@@ -228,42 +221,32 @@ func runNearCloudModels(t *testing.T) {
 	}
 }
 
-func runNearCloudE2EEStreaming(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
-	defer proxySrv.Close()
-	resp := postNearCloudContentChat(t, proxySrv.URL, nearCloudIntegrationModel(), true)
+func runNearCloudE2EEStreaming(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postNearCloudContentChat(t, proxyURL, nearCloudIntegrationModel(), true)
 	defer resp.Body.Close()
 	assertStreamResponse(t, resp)
 }
 
-func runNearCloudE2EENonStream(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
-	defer proxySrv.Close()
-
-	resp := postNearCloudContentChat(t, proxySrv.URL, nearCloudIntegrationModel(), false)
+func runNearCloudE2EENonStream(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postNearCloudContentChat(t, proxyURL, nearCloudIntegrationModel(), false)
 	defer resp.Body.Close()
 	assertNonStreamResponse(t, resp)
 }
 
-func runNearCloudAttestationReport(t *testing.T) {
-	// Online mode with E2EE so the report includes Intel PCS, NRAS, PoC,
-	// gateway results, and e2ee_usable transitions to Pass after a live
-	// E2EE roundtrip. Non-streaming avoids relay timeout issues while
-	// still exercising the full E2EE path through the proxy.
-	cfg := integrationNearCloudE2EEConfig(t)
-	cfg.Offline = false
-	proxySrv := newProxyServer(t, cfg)
-	defer proxySrv.Close()
-
+func runNearCloudAttestationReport(t *testing.T, proxyURL string) {
+	t.Helper()
+	// Use the suite's online E2EE proxy and its current authorization.
 	model := nearCloudIntegrationModel()
 	_, upstreamModel, _ := strings.Cut(model, ":")
 
-	// First chat request triggers attestation + E2EE and populates the report cache.
-	chatResp := postNearCloudContentChat(t, proxySrv.URL, model, false)
-	io.Copy(io.Discard, chatResp.Body)
-	chatResp.Body.Close()
+	// Exercise E2EE even when this subtest is selected on its own.
+	chatResp := postNearCloudContentChat(t, proxyURL, model, false)
+	defer chatResp.Body.Close()
+	assertNonStreamResponse(t, chatResp)
 
-	reportURL := fmt.Sprintf("%s/v1/tee/report?provider=nearcloud&model=%s", proxySrv.URL, upstreamModel)
+	reportURL := fmt.Sprintf("%s/v1/tee/report?provider=nearcloud&model=%s", proxyURL, upstreamModel)
 	reportResp, err := integrationClient.Get(reportURL)
 	if err != nil {
 		t.Fatalf("GET report: %v", err)
@@ -356,32 +339,27 @@ func runNearCloudAttestationReport(t *testing.T) {
 	logReportScore(t, &report)
 }
 
-func runNearCloudE2EEStreamingWithTools(t *testing.T) {
+func runNearCloudE2EEStreamingWithTools(t *testing.T, proxyURL string) {
+	t.Helper()
 	// Validate that tool-call function leaves are surfaced as plaintext after E2EE relay decryption.
-	proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
-	defer proxySrv.Close()
-	resp := postChatWithTools(t, proxySrv.URL, nearCloudIntegrationModel(), true)
+	resp := postChatWithTools(t, proxyURL, nearCloudIntegrationModel(), true)
 	defer resp.Body.Close()
 	if !assertStreamToolCallLeaves(t, resp, "nearcloud") {
 		t.Fatal("nearcloud: expected at least one tool call in streaming tools integration test")
 	}
 }
 
-func runNearCloudE2EENonStreamWithTools(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
-	defer proxySrv.Close()
-
-	resp := postChatWithTools(t, proxySrv.URL, nearCloudIntegrationModel(), false)
+func runNearCloudE2EENonStreamWithTools(t *testing.T, proxyURL string) {
+	t.Helper()
+	resp := postChatWithTools(t, proxyURL, nearCloudIntegrationModel(), false)
 	defer resp.Body.Close()
 	if !assertNonStreamToolCallLeaves(t, resp, "nearcloud") {
 		t.Fatal("nearcloud: expected at least one tool call in non-stream tools integration test")
 	}
 }
 
-func runNearCloudE2EEStreamingMultimodalContentArray(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
-	defer proxySrv.Close()
-
+func runNearCloudE2EEStreamingMultimodalContentArray(t *testing.T, proxyURL string) {
+	t.Helper()
 	model := nearCloudVLModel()
 	body := fmt.Sprintf(`{
 		"model": %q,
@@ -397,7 +375,7 @@ func runNearCloudE2EEStreamingMultimodalContentArray(t *testing.T) {
 		"reasoning_effort": "none"
 	}`, model, testPNG())
 
-	resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/chat/completions", body)
+	resp, err := integrationPostJSON(t, proxyURL+"/v1/chat/completions", body)
 	if err != nil {
 		t.Fatalf("POST chat (multimodal stream E2EE): %v", err)
 	}
@@ -406,10 +384,8 @@ func runNearCloudE2EEStreamingMultimodalContentArray(t *testing.T) {
 	assertStreamMultimodalResponse(t, resp, "nearcloud")
 }
 
-func runNearCloudE2EENonStreamMultimodalContentArray(t *testing.T) {
-	proxySrv := newProxyServer(t, integrationNearCloudE2EEConfig(t))
-	defer proxySrv.Close()
-
+func runNearCloudE2EENonStreamMultimodalContentArray(t *testing.T, proxyURL string) {
+	t.Helper()
 	model := nearCloudVLModel()
 	body := fmt.Sprintf(`{
 		"model": %q,
@@ -425,7 +401,7 @@ func runNearCloudE2EENonStreamMultimodalContentArray(t *testing.T) {
 		"reasoning_effort": "none"
 	}`, model, testPNG())
 
-	resp, err := integrationPostJSON(t, proxySrv.URL+"/v1/chat/completions", body)
+	resp, err := integrationPostJSON(t, proxyURL+"/v1/chat/completions", body)
 	if err != nil {
 		t.Fatalf("POST chat (multimodal non-stream E2EE): %v", err)
 	}

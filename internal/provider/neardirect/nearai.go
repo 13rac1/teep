@@ -10,13 +10,14 @@
 // TDX and NVIDIA attestation payloads for one inference node, plus
 // signing_address, tls_cert_fingerprint, and the echoed nonce.
 //
-// When E2EE is enabled, the PinnedHandler encrypts the request body using the
+// When E2EE is enabled, the request encryptor encrypts the request body using the
 // Ed25519/X25519/XChaCha20-Poly1305 protocol (same as nearcloud).
 package neardirect
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
@@ -162,8 +164,23 @@ func NewAttesterWithResolver(baseURL, apiKey string, resolver DomainResolver, of
 	}
 }
 
-// SetClient replaces the HTTP client used for attestation fetches.
-func (a *Attester) SetClient(c *http.Client) { a.client = c }
+// CloseIdleConnections releases idle attestation and discovery connections.
+// Call SetClient only before concurrent use or cleanup.
+func (a *Attester) CloseIdleConnections() {
+	a.client.CloseIdleConnections()
+	if closer, ok := a.resolver.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
+// SetClient shares the caller's client with attestation and endpoint discovery.
+// Call it only before concurrent use or cleanup.
+func (a *Attester) SetClient(c *http.Client) {
+	a.client = c
+	if setter, ok := a.resolver.(interface{ SetClient(*http.Client) }); ok {
+		setter.SetClient(c)
+	}
+}
 
 // FetchAttestation fetches TEE attestation from NEAR AI. The nonce is sent as
 // a query parameter; NEAR AI echoes it back in the response. Query parameters
@@ -172,21 +189,23 @@ func (a *Attester) SetClient(c *http.Client) { a.client = c }
 // for E2EE key exchange. The model parameter selects which attestation to use
 // when the response contains multiple entries.
 func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
-	baseURL := a.baseURL
-
-	base, err := url.Parse(a.baseURL)
+	route, err := a.ResolveRoute(ctx, model)
 	if err != nil {
-		return nil, fmt.Errorf("nearai: parse base URL %q: %w", a.baseURL, err)
+		return nil, err
 	}
+	return fetchAttestationForRoute(ctx, a, route, model, nonce)
+}
 
-	if shouldResolveModelDomain(base.Hostname()) && a.resolver != nil {
-		domain, err := a.resolver.Resolve(ctx, model)
-		if err != nil {
-			return nil, fmt.Errorf("nearai: resolve model %q: %w", model, err)
-		}
-		baseURL = "https://" + domain
-		slog.DebugContext(ctx, "nearai model resolved", "model", model, "domain", domain)
+// FetchAttestationForRoute uses the supplied route without another resolution.
+func (a *Attester) FetchAttestationForRoute(ctx context.Context, route provider.ResolvedRoute, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	return fetchAttestationForRoute(ctx, a, route, model, nonce)
+}
+
+func fetchAttestationForRoute(ctx context.Context, a *Attester, route provider.ResolvedRoute, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	if route.Authority() == "" {
+		return nil, errors.New("nearai: attestation requires a resolved route")
 	}
+	baseURL := route.BaseURL()
 
 	endpoint, err := url.Parse(baseURL + attestationPath)
 	if err != nil {
@@ -198,12 +217,21 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("signing_algo", "ed25519")
 	endpoint.RawQuery = q.Encode()
 
-	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
+	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("nearai: %w", err)
 	}
 
-	return ParseAttestationResponse(ctx, body, model)
+	raw, err := ParseAttestationResponse(ctx, body, model)
+	if err != nil {
+		return nil, err
+	}
+	if err := tlsct.CompareSPKIFingerprints(peerSPKI, raw.TLSFingerprint); err != nil {
+		return nil, fmt.Errorf("nearai: attestation TLS binding: %w", err)
+	}
+	raw.TransportTLSFingerprint = raw.TLSFingerprint
+	raw.TransportTLSAuthority = route.Authority()
+	return raw, nil
 }
 
 func shouldResolveModelDomain(host string) bool {
@@ -213,7 +241,7 @@ func shouldResolveModelDomain(host string) bool {
 
 // ParseAttestationResponse unmarshals a NEAR AI attestation JSON response body
 // and selects the entry matching model. Used by both FetchAttestation (HTTP
-// client path) and PinnedHandler (raw connection path).
+// client path).
 func ParseAttestationResponse(_ context.Context, body []byte, model string) (*attestation.RawAttestation, error) {
 	var ar attestationResponse
 	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, "nearai attestation")
@@ -340,7 +368,47 @@ func NewPreparer(apiKey string) *Preparer {
 }
 
 // PrepareRequest injects the NEAR AI Authorization header into req.
-func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string) error {
+func (p *Preparer) PrepareRequest(req *http.Request, headers http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if len(headers) == 0 {
+		return nil
+	}
+	names := []string{"X-Signing-Algo", "X-Client-Pub-Key", "X-Encryption-Version", "X-Encrypt-All-Fields"}
+	for _, name := range names {
+		if len(headers.Values(name)) != 1 || headers.Get(name) == "" {
+			return fmt.Errorf("incomplete NEAR E2EE headers: %s", name)
+		}
+	}
+	if headers.Get("X-Signing-Algo") != "ed25519" || headers.Get("X-Encryption-Version") != "2" || headers.Get("X-Encrypt-All-Fields") != "true" {
+		return errors.New("invalid NEAR E2EE protocol headers")
+	}
+	for _, name := range names {
+		req.Header.Set(name, headers.Get(name))
+	}
 	return nil
+}
+
+// ResolveRoute selects the same origin that a standalone attestation will use.
+func (a *Attester) ResolveRoute(ctx context.Context, model string) (provider.ResolvedRoute, error) {
+	base, err := url.Parse(a.baseURL)
+	if err != nil {
+		return provider.ResolvedRoute{}, fmt.Errorf("nearai: parse base URL %q: %w", a.baseURL, err)
+	}
+	if shouldResolveModelDomain(base.Hostname()) {
+		if a.resolver == nil {
+			return provider.ResolvedRoute{}, errors.New("missing NEAR route resolver")
+		}
+		domain, err := a.resolver.Resolve(ctx, model)
+		if err != nil {
+			return provider.ResolvedRoute{}, fmt.Errorf("nearai: resolve model %q: %w", model, err)
+		}
+		slog.DebugContext(ctx, "nearai model resolved", "model", model, "domain", domain)
+		return provider.NewResolvedRoute("https://"+domain, "")
+	}
+	return provider.NewResolvedRoute(a.baseURL, "")
+}
+
+// DomainResolver maps a model name to a backend authority.
+type DomainResolver interface {
+	Resolve(context.Context, string) (string, error)
 }

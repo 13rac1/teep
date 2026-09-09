@@ -25,24 +25,20 @@ var ErrSPKIMismatch = errors.New("TLS peer SPKI does not match attested fingerpr
 //
 // Certificate-transparency enforcement is composed into the same handshake
 // through NewHTTPClientWithTransport. The caller must dedicate base to this
-// pin; a transport pool must never contain connections authenticated under
+// authority and pin. Proxy selection occurs once for that origin. A transport
+// pool must never contain connections authenticated under
 // different expected fingerprints. TLS session resumption remains disabled.
 func NewSPKIPinnedHTTPClientWithTransport(
 	timeout time.Duration,
 	base *http.Transport,
-	expectedSPKI string,
+	identity TransportIdentity,
 	ctEnabled ...bool,
 ) (*http.Client, error) {
-	expected, err := decodeSPKI(expectedSPKI)
-	if err != nil {
-		return nil, fmt.Errorf("invalid expected SPKI fingerprint: %w", err)
+	if identity.Authority() == "" {
+		return nil, errors.New("SPKI-pinned client requires a transport identity")
 	}
 	if base == nil {
-		dt, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			return nil, errors.New("http.DefaultTransport is not *http.Transport")
-		}
-		base = dt.Clone()
+		base = NewPooledTransport()
 	}
 	if err := validateSystemWebPKITransport(base); err != nil {
 		return nil, err
@@ -56,54 +52,34 @@ func NewSPKIPinnedHTTPClientWithTransport(
 			return errors.New("TLS peer did not provide a certificate")
 		}
 		actual := sha256.Sum256(state.PeerCertificates[0].RawSubjectPublicKeyInfo)
-		if subtle.ConstantTimeCompare(actual[:], expected) != 1 {
+		if subtle.ConstantTimeCompare(actual[:], identity.fingerprint[:]) != 1 {
 			return ErrSPKIMismatch
 		}
 		return nil
 	}
 	base.TLSClientConfig = tlsConfig
 
-	return NewHTTPClientWithTransport(timeout, base, ctEnabled...), nil
+	client := NewHTTPClientWithTransport(timeout, base, ctEnabled...)
+	if err := configurePinnedProxy(base, identity.Authority(), ctEnabledFromOpt(ctEnabled...)); err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 func validateSystemWebPKITransport(base *http.Transport) error {
 	if base.DialTLSContext != nil || base.DialTLS != nil { //nolint:staticcheck // deprecated hook must also be rejected
 		return errors.New("SPKI-pinned transport must not set a custom TLS dialer")
 	}
-	cfg := base.TLSClientConfig
-	if cfg == nil {
-		return nil
+	if base.TLSClientConfig != nil {
+		return errors.New("SPKI-pinned transport must not provide a custom TLSClientConfig")
 	}
-	if cfg.InsecureSkipVerify {
-		return errors.New("SPKI-pinned transport must not disable certificate verification")
-	}
-	if cfg.RootCAs != nil {
-		return errors.New("SPKI-pinned transport must use system root CAs")
-	}
-	if cfg.VerifyPeerCertificate != nil {
-		return errors.New("SPKI-pinned transport must not set VerifyPeerCertificate")
-	}
-	if cfg.VerifyConnection != nil {
-		return errors.New("SPKI-pinned transport must not set VerifyConnection")
-	}
-	if cfg.ServerName != "" {
-		return errors.New("SPKI-pinned transport must derive the server name from the request URL")
-	}
-	return errors.New("SPKI-pinned transport must not provide a custom TLSClientConfig")
+	return nil
 }
 
 // SPKIFingerprintsEqual compares two hex-encoded SHA-256 SPKI fingerprints in
 // constant time. Malformed fingerprints never match.
 func SPKIFingerprintsEqual(left, right string) bool {
-	l, err := decodeSPKI(left)
-	if err != nil {
-		return false
-	}
-	r, err := decodeSPKI(right)
-	if err != nil {
-		return false
-	}
-	return subtle.ConstantTimeCompare(l, r) == 1
+	return CompareSPKIFingerprints(left, right) == nil
 }
 
 func decodeSPKI(value string) ([]byte, error) {

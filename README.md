@@ -105,7 +105,7 @@ Exits with code 1 if any enforced factor fails. For the full factor list, see [V
 ## FAQ
 
 **Does this slow down my app?**
-The first request to a provider takes an extra 200–500ms while teep fetches and verifies the attestation. After that, results are cached for 10 minutes — subsequent requests add under 1ms.
+The first request for an uncached authorization fetches and fully verifies attestation. NEAR and Tinfoil TLS-binding providers reuse that authorization while its attested identity and required encryption keys remain usable, until explicit invalidation, eviction, or process exit. Evidence expiration alone does not trigger renewal. Other providers retain their existing cache policies. See [authorization reuse and approval withdrawal](docs/transport/README.md#routes-and-authorizations).
 
 **What does this actually protect against?**
 Teep protects your prompts from the AI company's employees, a compromised data center, and a network attacker who can see your traffic. It does not protect against a malicious model or hardware backdoors. See [Verification Factors](#verification-factors) for exactly what each provider currently proves.
@@ -124,8 +124,8 @@ Yes. Teep is open source under AGPL-3.0. Dual licensing is available for commerc
 | Provider | What teep does |
 |----------|---------------|
 | [Venice AI](https://venice.ai) | End-to-end encryption (ECDH + AES-256-GCM) |
-| [NEAR AI Direct](https://near.ai) | TLS connection pinning to model-specific TEE nodes |
-| [NEAR AI Cloud](https://near.ai) | TLS connection pinning through TEE-attested gateway |
+| [NEAR AI Direct](https://near.ai) | Attested HTTP/2 pools to model-specific TEE nodes |
+| [NEAR AI Cloud](https://near.ai) | Attested HTTP/2 pools through a TEE-attested gateway |
 | [NanoGPT](https://nano-gpt.com) | TEE attestation with Intel TDX + NVIDIA GPU |
 | [Chutes](https://chutes.ai) | End-to-end encryption (ML-KEM-768 + ChaCha20-Poly1305) with multi-instance failover |
 | [Phala Cloud](https://phala.network) | Format-agnostic gateway supporting Chutes and dStack attestation backends |

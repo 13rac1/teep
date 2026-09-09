@@ -2,6 +2,12 @@
 
 This document describes the OpenAI-compatible API endpoints supported by each provider, their E2EE protocols, and the field-level encryption coverage when E2EE is active.
 
+SSE data fields pass through the same encryption policy checks with or without
+one space after `data:`. Streaming relay, reassembly, and standalone verification
+share the parser, including LF, CRLF, CR, and an initial UTF-8 byte-order mark.
+NEAR and EHBP completion markers use the same parsing rules; trailing data
+still fails.
+
 ## Endpoint Surface
 
 Teep exposes two endpoint categories:
@@ -37,7 +43,7 @@ These are teep runtime/observability endpoints, not OpenAI-compatible inference 
 | `/health` | GET | Health API | JSON process health snapshot |
 | `/events` | GET | Dashboard status API | Server-Sent Events stream for live dashboard updates |
 | `/metrics` | GET | Prometheus API | Prometheus text-format counters |
-| `/v1/tee/report` | GET | Teep status API | Cached attestation report for a provider/model (`provider` and `model` query params required) |
+| `/v1/tee/report` | GET | Teep status API | Cached attestation report (`provider` and `model` required; optional `authority` selects an exact cached TLS scope; see [report selection](transport/README.md#cached-report-selection)) |
 
 Operational endpoints are intended for local monitoring and process supervision. In the current server implementation, these endpoints are unauthenticated and access control relies on binding to loopback by default.
 
@@ -191,17 +197,23 @@ NearDirect and NearCloud both use the NearAI field-encryption protocol: Ed25519/
 
 ### NearDirect
 
-**Upstream:** Model TEE inference-proxy instances at `*.completions.near.ai`, resolved per-model via the `/endpoints` discovery API.
+**Upstream:** Model TEE inference-proxy instances at `*.completions.near.ai`.
+With `base_url = "https://completions.near.ai"` (the default), or
+`https://api.near.ai`, both `serve` and `verify` resolve the model through
+`/endpoints`. Set `[providers.neardirect].base_url` to an explicit HTTPS backend
+origin to disable endpoint discovery in both commands. That origin is used for
+attestation and inference for every requested model; all attestation, TLS, and
+E2EE checks still apply. The `/v1/models` catalog remains gateway-provided.
 
 **E2EE protocol:** Ed25519/X25519 ECDH + XChaCha20-Poly1305 (field-level encryption).
 
-**Connection model:** TLS-pinned to the inference machine. On an SPKI cache miss, attestation is fetched inline and the subsequent inference uses that same TCP connection. On an SPKI cache hit, the proxy may open a fresh TLS connection that is validated against the cached attested SPKI pin rather than re-running attestation inline. In both cases, the TLS certificate is validated with standard CA-based verification, and the connection is additionally bound to the attested TEE with attestation-based SPKI pinning.
+**Connection model:** An immutable route selects the model authority once per request. Full attestation authenticates that authority and its TLS SPKI before publishing a complete authorization. Inference uses a pooled transport scoped to the provider, authority, and attested SPKI. Every new connection requires TLS 1.3, WebPKI, Certificate Transparency, and a matching attested key before request bytes are sent. HTTP/2 permits concurrent streams; HTTP/1.1 peers retain sequential reuse. Fully verified authorizations remain reusable while their attested identities and required keys remain usable, until explicit invalidation, eviction, or process exit. Evidence expiration alone does not trigger renewal. See [authorization reuse and approval withdrawal](transport/README.md#routes-and-authorizations).
 
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|
 | Chat completions | `/v1/chat/completions` | Yes | Sensitive fields encrypted; streaming forced when E2EE active |
 | Embeddings | `/v1/embeddings` | Yes | Sensitive fields encrypted; supports string and array input formats |
-| Audio transcriptions | `/v1/audio/transcriptions` | No (pinned TLS) | Multipart body; E2EE not applied. Connection is TLS-pinned to attested TEE |
+| Audio transcriptions | `/v1/audio/transcriptions` | Requires E2EE disabled | Multipart requests use attested TLS to the model TEE. The proxy rejects this endpoint when field-level E2EE is enabled |
 | Image generation | `/v1/images/generations` | Yes | Sensitive fields encrypted; `prompt`, `b64_json`, and `revised_prompt` encrypted |
 | Reranking | `/v1/rerank` | Yes | Sensitive fields encrypted; `query` and `documents[]` encrypted |
 | Score | `/v1/score` | Request only | Request fields (`text_1`, `text_2`) encrypted; response `data[].score` currently plaintext (known upstream NearAI limitation) |
@@ -214,18 +226,18 @@ NearDirect and NearCloud both use the NearAI field-encryption protocol: Ed25519/
 
 **E2EE protocol:** Same as NearDirect — Ed25519/X25519 ECDH + XChaCha20-Poly1305 (field-level encryption).
 
-**Connection model:** TLS-pinned to the gateway TEE only. This pinning binds clients to the cloud gateway, not to the underlying per-model inference machine. Gateway forwards requests to model TEE internally.
+**Connection model:** Attestation-bound pooled HTTP/2 to the gateway TEE at `cloud-api.near.ai`. The `tls_key_binding` factor and inference transport use the authenticated gateway TLS fingerprint. The model backend fingerprint remains a separately authenticated evidence field; it never selects the gateway transport pin. The same atomic authorization and connection constraints as NearDirect apply. Each encrypted request uses a fresh E2EE session with the currently attested model key.
 
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|
 | Chat completions | `/v1/chat/completions` | Yes | Gateway forwards E2EE headers to model TEE |
 | Embeddings | `/v1/embeddings` | Yes | Gateway forwards E2EE headers to model TEE |
-| Audio transcriptions | `/v1/audio/transcriptions` | No (pinned TLS) | Multipart body; E2EE not applied. Gateway pinning only covers the cloud gateway |
+| Audio transcriptions | Not configured | Not supported | The proxy has no NearCloud audio route |
 | Image generation | `/v1/images/generations` | Yes | Gateway forwards E2EE headers to model TEE |
 | Reranking | `/v1/rerank` | Yes | Gateway forwards E2EE headers to model TEE |
 | Score | `/v1/score` | Request only | Request fields (`text_1`, `text_2`) encrypted; response `data[].score` currently plaintext (known upstream NearAI limitation) |
 
-NearCloud keeps the same NearAI field-encryption behavior as NearDirect for the supported endpoints, but its TLS binding is to the gateway only rather than to the underlying per-model inference machine. Audio remains unwired because the multipart request body cannot be field-encrypted safely in the current pinned flow.
+NearCloud keeps the same NearAI field-encryption behavior as NearDirect for the supported endpoints, but its TLS binding is to the gateway only rather than to the underlying per-model inference machine. Audio is not supported because the multipart request body cannot use the current field-encryption protocol. Gateway TLS pinning alone does not protect the multipart body through to the model backend.
 
 **E2EE field coverage:** Matches the shared NearAI tables above; score response `data[].score` is currently plaintext due to a known upstream NearAI limitation.
 
@@ -322,7 +334,7 @@ When a Chutes-format backend is detected, the attestation is parsed using the Ch
 | Chat completions | `/v1/chat/completions` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Responses | `/v1/responses` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Embeddings | `/v1/embeddings` | Yes | Full-body EHBP encryption |
-| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but current proxy guard rejects non-pinned E2EE multipart requests before routing. Plaintext mode can forward after attestation |
+| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but the proxy rejects Tinfoil multipart requests when E2EE is enabled. With E2EE disabled, it forwards over attested, SPKI-pinned TLS |
 | Text-to-speech | `/v1/audio/speech` | Yes | Full-body EHBP encryption |
 
 **E2EE field coverage:** EHBP encrypts the entire HTTP request and response body. There are **no field-level encryption gaps** — all request fields (messages, tools, parameters) and all response fields (content, tool_calls, usage) are encrypted by construction. Adding new OpenAI API fields requires zero changes to the encryption layer.
@@ -348,7 +360,7 @@ When a Chutes-format backend is detected, the attestation is parsed using the Ch
 | Chat completions | `/v1/chat/completions` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Responses | `/v1/responses` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Embeddings | `/v1/embeddings` | Yes | Full-body EHBP encryption |
-| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but current proxy guard rejects non-pinned E2EE multipart requests before routing. Plaintext mode can forward after attestation |
+| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but the proxy rejects Tinfoil multipart requests when E2EE is enabled. With E2EE disabled, it forwards over attested, SPKI-pinned TLS |
 | Text-to-speech | `/v1/audio/speech` | Yes | Full-body EHBP encryption |
 
 **E2EE field coverage:** Identical to Tinfoil Cloud — full-body EHBP, no field-level gaps.

@@ -22,6 +22,9 @@ import (
 )
 
 const (
+	// nvidiaJWTLeeway bounds clock skew in NRAS admission time checks.
+	nvidiaJWTLeeway = 10 * time.Second
+
 	// defaultNvidiaJWKSURL is NVIDIA's public JWKS endpoint for attestation JWT verification.
 	defaultNvidiaJWKSURL = "https://nras.attestation.nvidia.com/.well-known/jwks.json"
 
@@ -38,6 +41,8 @@ const (
 // Fields are populated even on partial failure. Supports both EAT (local SPDM
 // verification) and JWT (NRAS cloud verification) formats.
 type NvidiaVerifyResult struct {
+	// admission contains verified JWT time claims for initial publication only.
+	admission AdmissionTime
 	// SignatureErr is non-nil if signature verification failed.
 	// For EAT: cert chain or SPDM ECDSA signature failure.
 	// For JWT: JWT signature verification failure.
@@ -358,6 +363,7 @@ func (v *NVIDIAVerifier) verifyNVIDIAJWT(ctx context.Context, jwtPayload, jwksUR
 	parserOpts := append([]jwt.ParserOption{
 		jwt.WithValidMethods([]string{"ES256", "ES384", "ES512"}),
 		jwt.WithExpirationRequired(),
+		jwt.WithLeeway(nvidiaJWTLeeway),
 	}, opts...)
 	token, err := jwt.ParseWithClaims(jwtPayload, claims, kf.Keyfunc, parserOpts...)
 
@@ -393,6 +399,14 @@ func (v *NVIDIAVerifier) verifyNVIDIAJWT(ctx context.Context, jwtPayload, jwksUR
 
 	result.Algorithm = token.Method.Alg()
 	extractPartialClaims(claims, result)
+	if claims.ExpiresAt == nil {
+		result.ClaimsErr = errors.New("verified NVIDIA JWT has no expiration")
+		return result
+	}
+	result.admission = AdmissionTime{expires: claims.ExpiresAt.Add(nvidiaJWTLeeway)}
+	if claims.NotBefore != nil {
+		result.admission.notBefore = claims.NotBefore.Add(-nvidiaJWTLeeway)
+	}
 	return result
 }
 

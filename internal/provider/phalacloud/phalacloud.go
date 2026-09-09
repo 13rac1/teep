@@ -127,3 +127,6 @@ func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.Chut
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	return nil
 }
+
+// CloseIdleConnections releases idle connections owned by this component.
+func (a *Attester) CloseIdleConnections() { a.client.CloseIdleConnections() }

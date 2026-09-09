@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -58,7 +57,7 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 		return StreamStats{}, fmt.Errorf("%w: streaming not supported", ErrRelayFailed)
 	}
 
-	scanner, cleanup := newSSEScanner(body)
+	scanner, cleanup := NewSSEScanner(body)
 	defer cleanup()
 
 	var streamKey []byte
@@ -69,10 +68,10 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		if !strings.HasPrefix(line, "data: ") {
+		data, isData := SSEData(line)
+		if !isData {
 			continue
 		}
-		data := line[len("data: "):]
 		if data == "[DONE]" {
 			if headerWritten {
 				fmt.Fprintf(w, "data: [DONE]\n\n")

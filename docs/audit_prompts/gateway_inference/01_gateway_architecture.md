@@ -11,13 +11,13 @@ Certificate Transparency MUST be consulted for the TLS certificate of the gatewa
 ## Primary Files
 
 - [`internal/provider/nearcloud/nearcloud.go`](../../../internal/provider/nearcloud/nearcloud.go)
-- [`internal/provider/nearcloud/pinned.go`](../../../internal/provider/nearcloud/pinned.go)
+- [`internal/proxy/authorized_inference.go`](../../../internal/proxy/authorized_inference.go)
 - [`internal/tlsct/checker.go`](../../../internal/tlsct/checker.go)
 
 ## Secondary Context Files
 
 - [`internal/provider/nearcloud/nearcloud_test.go`](../../../internal/provider/nearcloud/nearcloud_test.go)
-- [`internal/provider/nearcloud/pinned_test.go`](../../../internal/provider/nearcloud/pinned_test.go)
+- [`internal/provider/nearcloud/transport_binding_test.go`](../../../internal/provider/nearcloud/transport_binding_test.go)
 
 ## Required Checks
 

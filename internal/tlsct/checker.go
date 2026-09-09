@@ -69,8 +69,9 @@ func NewChecker() *Checker {
 	c := &Checker{
 		entries: make(map[string]certCacheEntry),
 		logListHTTP: &http.Client{
-			Timeout:   20 * time.Second,
-			Transport: WrapLogging(base),
+			CheckRedirect: RejectRedirect,
+			Timeout:       20 * time.Second,
+			Transport:     WrapLogging(base),
 		},
 	}
 	c.enabled.Store(ctEnabledDefault)
@@ -92,11 +93,7 @@ func (c *Checker) SetEnabled(enabled bool) {
 // TLS handshakes, before sending HTTP requests. All outgoing requests are
 // logged at DEBUG level via WrapLogging.
 func NewHTTPClient(timeout time.Duration, ctEnabled ...bool) *http.Client {
-	dt, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		panic("http.DefaultTransport is not *http.Transport")
-	}
-	client := NewHTTPClientWithTransport(timeout, dt.Clone(), ctEnabled...)
+	client := NewHTTPClientWithTransport(timeout, NewPooledTransport(), ctEnabled...)
 	client.Transport = WrapLogging(client.Transport)
 	return client
 }
@@ -106,12 +103,9 @@ func NewHTTPClient(timeout time.Duration, ctEnabled ...bool) *http.Client {
 // while using the provided base transport settings.
 func NewHTTPClientWithTransport(timeout time.Duration, base *http.Transport, ctEnabled ...bool) *http.Client {
 	if base == nil {
-		dt, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			panic("http.DefaultTransport is not *http.Transport")
-		}
-		base = dt.Clone()
+		base = NewPooledTransport()
 	}
+
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13}
 	if base.TLSClientConfig != nil {
 		tlsConfig = base.TLSClientConfig.Clone()
@@ -125,8 +119,9 @@ func NewHTTPClientWithTransport(timeout time.Duration, base *http.Transport, ctE
 	}
 	base.TLSClientConfig = tlsConfig
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: base,
+		CheckRedirect: RejectRedirect,
+		Timeout:       timeout,
+		Transport:     base,
 	}
 }
 
@@ -162,7 +157,7 @@ func addCTVerifyConnection(config *tls.Config, checker *Checker) {
 		}
 		host := ctConnectionHost(&state, configuredServerName)
 		if err := checker.checkTLSState(host, &state, checker.loadLogListForHandshake); err != nil {
-			return fmt.Errorf("certificate transparency check failed: %w", err)
+			return &ctVerificationError{err: err}
 		}
 		return nil
 	}

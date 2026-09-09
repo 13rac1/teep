@@ -19,6 +19,14 @@ func WrapLogging(base http.RoundTripper) http.RoundTripper {
 	return &loggingTransport{base: base}
 }
 
+func (t *loggingTransport) CloseIdleConnections() { closeIdleConnections(t.base) }
+
+func closeIdleConnections(base http.RoundTripper) {
+	if closer, ok := base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
 func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
 	resp, err := t.base.RoundTrip(req)
@@ -66,6 +74,8 @@ func WrapCounting(base http.RoundTripper, onRequest, onError func()) http.RoundT
 	return &countingTransport{base: base, onRequest: onRequest, onError: onError}
 }
 
+func (t *countingTransport) CloseIdleConnections() { closeIdleConnections(t.base) }
+
 func (t *countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.onRequest != nil {
 		t.onRequest()
@@ -91,6 +101,13 @@ type tls12FallbackTransport struct {
 	warnOnce sync.Once
 }
 
+func (t *tls12FallbackTransport) CloseIdleConnections() {
+	closeIdleConnections(t.Default)
+	for _, transport := range t.Hosts {
+		closeIdleConnections(transport)
+	}
+}
+
 // NewTLS12FallbackTransport wraps defaultRT with a host-dispatch layer.
 // Requests to any host in tls12Hosts are routed through a separate
 // http.Transport with MinVersion TLS 1.2 (no CT). All other requests use
@@ -106,15 +123,10 @@ func NewTLS12FallbackTransport(defaultRT http.RoundTripper, tls12Hosts ...string
 	if len(tls12Hosts) == 0 {
 		return defaultRT
 	}
-	fallback := &http.Transport{
-		// Pin both Min and Max to TLS 1.2 so the fallback transport never
-		// negotiates TLS 1.3 (which would bypass CT enforcement). This
-		// keeps the workaround behavior consistent with its intent and
-		// makes removal of the fallback less urgent operationally.
-		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12},
-		MaxIdleConnsPerHost: 2,
-		IdleConnTimeout:     30 * time.Second,
-	}
+	fallback := NewPooledTransport()
+	fallback.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12}
+	fallback.ForceAttemptHTTP2 = false
+
 	return NewTLS12FallbackTransportWithFallback(defaultRT, fallback, tls12Hosts)
 }
 

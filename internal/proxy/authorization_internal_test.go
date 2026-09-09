@@ -1,0 +1,331 @@
+package proxy
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider"
+)
+
+func testAuthorizationCandidate(t *testing.T, model string) (provider.AuthorizationKey, *authorization) {
+	t.Helper()
+	route, err := provider.NewResolvedRoute("https://a.near.ai", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := route.AuthorizationKey("neardirect", model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := &attestation.VerificationReport{Provider: "neardirect", Model: model, TLSAuthority: route.Authority(), TLSKeyFP: strings.Repeat("ab", 32), Metadata: map[string]string{"model": model}}
+	value, err := newAuthorization(key, report, "", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key, value
+}
+
+func loadTestAuthorization(t *testing.T, store *authorizationStore, key provider.AuthorizationKey, candidate *authorization) *authorization {
+	t.Helper()
+	value, blocked, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
+		return authorizationVerification{candidate: candidate}, nil
+	})
+	if err != nil || blocked != nil || value == nil {
+		t.Fatalf("load authorization: %v", err)
+	}
+	return value
+}
+
+func TestAuthorizationCounts(t *testing.T) {
+	store := newAuthorizationStore(10, 2, time.Second)
+	defer store.close()
+	now := time.Now()
+	key, candidate := testAuthorizationCandidate(t, "encrypted")
+	candidate.signingKey = "retained public key"
+	value := loadTestAuthorization(t, store, key, candidate)
+	plainKey, plain := testAuthorizationCandidate(t, "tls-only")
+	loadTestAuthorization(t, store, plainKey, plain)
+	thirdKey, third := testAuthorizationCandidate(t, "third")
+	loadTestAuthorization(t, store, thirdKey, third)
+	store.now = func() time.Time { return now.Add(time.Hour) }
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 20 {
+				if entries, keys := store.counts(); entries != 3 || keys != 1 {
+					t.Errorf("entries=%d keys=%d, want 3 and 1", entries, keys)
+				}
+				store.promote(key, value.generation, "verified response")
+			}
+		})
+	}
+	wg.Wait()
+	store.close()
+	if entries, keys := store.counts(); entries != 0 || keys != 0 {
+		t.Fatal("closed store reported authorizations")
+	}
+}
+
+func TestAuthorizationSameKeySingleflight(t *testing.T) {
+	store := newAuthorizationStore(maxAuthorizations, maxAuthorizationVerifications, authorizationVerificationTimeout)
+	defer store.close()
+	key, candidate := testAuthorizationCandidate(t, "model")
+	var calls atomic.Int32
+	var wg sync.WaitGroup
+	results := make(chan *authorization, 32)
+	for range 32 {
+		wg.Go(func() {
+			value, _, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
+				calls.Add(1)
+				return authorizationVerification{candidate: candidate}, nil
+			})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			results <- value
+		})
+	}
+	wg.Wait()
+	close(results)
+	var generation authorizationGeneration
+	for value := range results {
+		if generation == 0 {
+			generation = value.generation
+		}
+		if value.generation != generation {
+			t.Error("joiners received different authorization generations")
+		}
+		value.report.Metadata["model"] = "caller mutation"
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("verification calls = %d", calls.Load())
+	}
+	value, ok := store.acquire(key)
+	if !ok || value.report.Metadata["model"] != "model" {
+		t.Fatal("caller mutated cached report")
+	}
+}
+
+func TestAuthorizationStaleGenerationCannotChangeReplacement(t *testing.T) {
+	store := newAuthorizationStore(2, 1, time.Second)
+	defer store.close()
+	key, candidate := testAuthorizationCandidate(t, "model")
+	a := loadTestAuthorization(t, store, key, candidate)
+	store.invalidate(key)
+	b := loadTestAuthorization(t, store, key, candidate)
+	if a.generation == b.generation {
+		t.Fatal("replacement reused generation")
+	}
+	if store.deleteGeneration(key, a.generation) || store.promote(key, a.generation, "late result") {
+		t.Fatal("old result changed replacement authorization")
+	}
+	if !store.promote(key, b.generation, "E2EE succeeded") {
+		t.Fatal("current result was not promoted")
+	}
+	current, ok := store.acquire(key)
+	if !ok || current.generation != b.generation {
+		t.Fatal("promotion changed authorization lifetime or generation")
+	}
+}
+
+func TestAuthorizationLifetimeAndAcquisition(t *testing.T) {
+	store := newAuthorizationStore(2, 1, time.Second)
+	defer store.close()
+	key, candidate := testAuthorizationCandidate(t, "model")
+	a := loadTestAuthorization(t, store, key, candidate)
+	store.now = func() time.Time { return time.Now().Add(24 * time.Hour) }
+	if _, ok := store.acquire(key); !ok {
+		t.Fatal("invented local authorization TTL")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store.deleteGeneration(key, a.generation)
+	if _, ok := store.acquire(key); ok {
+		t.Fatal("acquired deleted generation")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("deletion canceled an already acquired attempt")
+	}
+}
+
+func TestAuthorizationInvalidationPreventsLatePublication(t *testing.T) {
+	for _, shutdown := range []bool{false, true} {
+		store := newAuthorizationStore(2, 1, time.Second)
+		key, candidate := testAuthorizationCandidate(t, "model")
+		started := make(chan struct{})
+		release := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			_, _, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
+				close(started)
+				<-release // Simulate verification that completes after cancellation.
+				return authorizationVerification{candidate: candidate}, nil
+			})
+			done <- err
+		}()
+		<-started
+		if shutdown {
+			store.close()
+		} else {
+			store.invalidate(key)
+		}
+		close(release)
+		if err := <-done; err == nil {
+			t.Fatal("invalidated verification published authorization")
+		}
+		if _, ok := store.acquire(key); ok {
+			t.Fatal("late publication survived invalidation")
+		}
+		store.close()
+	}
+}
+
+func TestAuthorizationVerificationAdmissionAndCancellation(t *testing.T) {
+	store := newAuthorizationStore(2, 1, time.Second)
+	defer store.close()
+	key, candidate := testAuthorizationCandidate(t, "model")
+	other, _ := testAuthorizationCandidate(t, "other")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	var calls atomic.Int32
+	verify := func(verifyCtx context.Context) (authorizationVerification, error) {
+		calls.Add(1)
+		close(started)
+		<-release
+		return authorizationVerification{candidate: candidate}, verifyCtx.Err()
+	}
+	go func() { _, _, err := store.load(ctx, key, nil, nil, verify); done <- err }()
+	<-started
+	_, _, err := store.load(context.Background(), other, nil, nil, verify)
+	if _, ok := errors.AsType[*verificationOverloadError](err); !ok {
+		t.Fatalf("distinct key did not fail fast: %v", err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("caller cancellation: %v", err)
+	}
+	joined := make(chan error, 1)
+	go func() { _, _, err := store.load(context.Background(), key, nil, nil, verify); joined <- err }()
+	close(release)
+	if err := <-joined; err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("cancellation restarted shared verification")
+	}
+}
+
+func TestAuthorizationAgeAndEviction(t *testing.T) {
+	store := newAuthorizationStore(1, 1, time.Second)
+	defer store.close()
+	later := time.Now().Add(time.Hour)
+	key, candidate := testAuthorizationCandidate(t, "model")
+	_, _, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
+		store.now = func() time.Time { return later }
+		return authorizationVerification{candidate: candidate}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = time.Now
+	a := loadTestAuthorization(t, store, key, candidate)
+	other, replacement := testAuthorizationCandidate(t, "other")
+	loadTestAuthorization(t, store, other, replacement)
+	if _, ok := store.acquire(key); ok {
+		t.Fatal("capacity eviction did not prevent acquisition")
+	}
+	if a.identity.Authority() != key.Authority() {
+		t.Fatal("eviction changed an acquired snapshot")
+	}
+}
+
+func TestAuthorizationBlockedReportNotCached(t *testing.T) {
+	store := newAuthorizationStore(1, 1, time.Second)
+	defer store.close()
+	key, _ := testAuthorizationCandidate(t, "model")
+	blocked := &attestation.VerificationReport{Factors: []attestation.FactorResult{{Status: attestation.Fail, Enforced: true}}}
+	value, report, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
+		return authorizationVerification{blocked: blocked}, nil
+	})
+	if err != nil || value != nil || report == nil || !report.Blocked() {
+		t.Fatal("blocked report was not returned for diagnostics")
+	}
+	if _, ok := store.acquire(key); ok {
+		t.Fatal("blocked report became authorization")
+	}
+}
+
+func TestAuthorizationNegativeRecheck(t *testing.T) {
+	store := newAuthorizationStore(1, 1, time.Second)
+	defer store.close()
+	key, _ := testAuthorizationCandidate(t, "model")
+	failure := errors.New("recent attestation failure")
+	var checks atomic.Int32
+	negative := func() error {
+		if checks.Add(1) > 1 {
+			return failure
+		}
+		return nil
+	}
+	_, _, err := store.load(context.Background(), key, negative, nil, func(context.Context) (authorizationVerification, error) {
+		t.Error("verification started despite negative cache")
+		return authorizationVerification{}, errors.New("unexpected verification")
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("negative recheck: %v", err)
+	}
+}
+
+func TestAuthorizationConstructorRejectsIncompleteMaterial(t *testing.T) {
+	key, candidate := testAuthorizationCandidate(t, "model")
+	for _, tc := range []struct {
+		name       string
+		change     func(*attestation.VerificationReport)
+		signingKey string
+		encrypt    bool
+	}{
+		{"wrong model", func(r *attestation.VerificationReport) { r.Model = "other" }, "", false},
+		{"missing TLS identity", func(r *attestation.VerificationReport) { r.TLSKeyFP = "" }, "", false},
+		{"wrong authority", func(r *attestation.VerificationReport) { r.TLSAuthority = "b.near.ai" }, "", false},
+		{"unbound key", func(*attestation.VerificationReport) {}, strings.Repeat("ab", 32), true},
+		{"empty bound key", func(r *attestation.VerificationReport) {
+			r.Factors = []attestation.FactorResult{{Name: attestation.FactorTEEReportData, Status: attestation.Pass}}
+		}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := candidate.report.Clone()
+			tc.change(report)
+			if _, err := newAuthorization(key, report, tc.signingKey, tc.encrypt, false); err == nil {
+				t.Fatal("incomplete authorization accepted")
+			}
+		})
+	}
+}
+
+func TestAuthorizationLookupObservation(t *testing.T) {
+	store := newAuthorizationStore(2, 1, time.Second)
+	defer store.close()
+	key, candidate := testAuthorizationCandidate(t, "model")
+	var observations []bool
+	observe := func(hit bool) { observations = append(observations, hit) }
+	verify := func(context.Context) (authorizationVerification, error) {
+		return authorizationVerification{candidate: candidate}, nil
+	}
+	for range 2 {
+		if _, _, err := store.load(t.Context(), key, nil, observe, verify); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(observations) != 2 || observations[0] || !observations[1] {
+		t.Fatalf("initial lookups=%v, want [false true]", observations)
+	}
+}

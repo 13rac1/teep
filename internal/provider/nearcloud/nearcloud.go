@@ -1,4 +1,4 @@
-// Package nearcloud implements the Attester and PinnedHandler for the NEAR AI
+// Package nearcloud implements attestation fetching for the NEAR AI
 // cloud gateway (cloud-api.near.ai). Unlike the neardirect package which connects
 // to model-specific subdomains, nearcloud routes all traffic through a single
 // TEE-attested API gateway that itself runs in an Intel TDX enclave.
@@ -21,6 +21,7 @@ import (
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
@@ -36,8 +37,7 @@ const (
 	maxModelAttestations      = 256
 )
 
-// GatewayHost returns the fixed host used for SPKI cache keying and pinned
-// TLS connections to the NEAR AI cloud gateway.
+// GatewayHost returns the authority used for gateway attestation and inference.
 func GatewayHost() string { return gatewayHost }
 
 // gatewayResponse is the top-level JSON shape returned by the gateway
@@ -187,7 +187,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("signing_algo", "ed25519")
 	endpoint.RawQuery = q.Encode()
 
-	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
+	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
 	if err != nil {
 		return nil, fmt.Errorf("nearcloud: %w", err)
 	}
@@ -196,6 +196,11 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	if err != nil {
 		return nil, err
 	}
+	if err := tlsct.CompareSPKIFingerprints(peerSPKI, gwRaw.TLSCertFingerprint); err != nil {
+		return nil, fmt.Errorf("nearcloud: gateway attestation TLS binding: %w", err)
+	}
+	raw.TransportTLSFingerprint = gwRaw.TLSCertFingerprint
+	raw.TransportTLSAuthority = gatewayHost
 	raw.GatewayIntelQuote = gwRaw.IntelQuote
 	raw.GatewayNonceHex = gwRaw.NonceHex
 	raw.GatewayAppCompose = gwRaw.AppCompose
@@ -204,3 +209,6 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	raw.GatewayTLSFingerprint = gwRaw.TLSCertFingerprint
 	return raw, nil
 }
+
+// CloseIdleConnections releases idle connections owned by this component.
+func (a *Attester) CloseIdleConnections() { a.client.CloseIdleConnections() }

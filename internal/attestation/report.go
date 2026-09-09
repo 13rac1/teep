@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"filippo.io/edwards25519"
+	"github.com/13rac1/teep/internal/tlsct"
 	"github.com/google/go-tdx-guest/pcs"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
 )
@@ -143,15 +144,11 @@ type VerificationReport struct {
 	NotApplicableCount int               `json:"not_applicable"`
 	Metadata           map[string]string `json:"metadata,omitempty"`
 
-	// TLSKeyFP is the attested upstream TLS leaf SPKI fingerprint
-	// (RawAttestation.TinfoilTLSKeyFP at the time this report was built).
-	// It is cached alongside the rest of the report so that per-response
-	// upstream TLS binding verification can run on every request — cache
-	// hit or miss, not only the miss that originally fetched attestation.
-	// Empty for providers/backends that do not populate a TLS key
-	// fingerprint. Internal to the proxy; not part of the public report
-	// display or API response.
-	TLSKeyFP string `json:"-"`
+	// TLSKeyFP and TLSAuthority identify the attested inference transport.
+	// NEAR cloud binds the gateway; its backend fingerprint remains separate
+	// model evidence. These fields are internal and excluded from report JSON.
+	TLSKeyFP     string `json:"-"`
+	TLSAuthority string `json:"-"`
 
 	// E2EEBindingFactor names the factor whose REPORTDATA binding covers the
 	// key clients encrypt to. Empty means FactorTEEReportData.
@@ -878,9 +875,10 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		}
 	}
 
-	tlsKeyFP := ""
+	tlsKeyFP, tlsAuthority := "", ""
 	if in.Raw != nil {
-		tlsKeyFP = in.Raw.TinfoilTLSKeyFP
+		tlsKeyFP = in.Raw.TransportTLSFingerprint
+		tlsAuthority = in.Raw.TransportTLSAuthority
 	}
 
 	return &VerificationReport{
@@ -896,6 +894,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		NotApplicableCount: notApplicable,
 		Metadata:           buildMetadata(in),
 		TLSKeyFP:           tlsKeyFP,
+		TLSAuthority:       tlsAuthority,
 		E2EEBindingFactor:  e2eeBindingFactor(in),
 	}
 }
@@ -1712,6 +1711,15 @@ func validateSecp256k1Hex(s string) error {
 // ---------------------------------------------------------------------------
 
 func evalTLSKeyBinding(in *ReportInput) []FactorResult {
+	if in.ProviderUsesTLSBinding {
+		if _, err := tlsct.NewTransportIdentity(in.Raw.TransportTLSAuthority, in.Raw.TransportTLSFingerprint); err != nil {
+			return factor(TierSupplyChain, FactorTLSKeyBinding, Fail,
+				"provider declares TLS binding but derived transport identity is invalid: "+err.Error())
+		}
+		return factor(TierSupplyChain, FactorTLSKeyBinding, Pass,
+			"TLS transport SPKI bound to attestation")
+	}
+
 	switch {
 	case in.Raw.TLSFingerprint != "":
 		fpPreview := in.Raw.TLSFingerprint
@@ -1720,12 +1728,6 @@ func evalTLSKeyBinding(in *ReportInput) []FactorResult {
 		}
 		return factor(TierSupplyChain, FactorTLSKeyBinding, Pass,
 			fmt.Sprintf("TLS certificate SPKI bound to attestation (%s)", fpPreview))
-	case in.ProviderUsesTLSBinding:
-		// Provider declares live TLS channel binding but the attestation
-		// has no TLSFingerprint. This is a hard failure — a provider that
-		// should bind TLS must not silently skip it.
-		return factor(TierSupplyChain, FactorTLSKeyBinding, Fail,
-			"provider declares TLS binding but attestation has no TLS fingerprint")
 	case in.Raw.SigningKey != "":
 		return factor(TierSupplyChain, FactorTLSKeyBinding, Skip,
 			"provider uses E2EE key exchange; TLS binding not applicable")

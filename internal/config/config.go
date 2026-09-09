@@ -12,6 +12,7 @@ package config
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -733,6 +734,9 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		resp, err := t.Base.RoundTrip(req)
 		if err != nil {
+			if errors.Is(err, tlsct.ErrConnectionCapacity) {
+				return nil, err
+			}
 			lastErr = err
 			continue
 		}
@@ -756,12 +760,16 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // transport routes KDS requests to a separate base while everything else
 // uses TLS 1.3 + CT.
 func NewAttestationClient(offline bool) *http.Client {
-	client := tlsct.NewHTTPClientWithTransport(AttestationTimeout, &http.Transport{
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-	}, !offline)
+	client := tlsct.NewHTTPClientWithTransport(AttestationTimeout, tlsct.NewPooledTransport(), !offline)
 	client.Transport = tlsct.NewTLS12FallbackTransport(client.Transport, attestation.AMDKDSHost)
 	client.Transport = tlsct.WrapLogging(client.Transport)
 	client.Transport = &RetryTransport{Base: client.Transport}
 	return client
+}
+
+// CloseIdleConnections forwards transport cleanup through this wrapper.
+func (t *RetryTransport) CloseIdleConnections() {
+	if closer, ok := t.Base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
 }

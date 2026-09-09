@@ -23,7 +23,6 @@ func newTestServer(t *testing.T) *Server {
 		cache:           attestation.NewCache(0),
 		negCache:        attestation.NewNegativeCache(0),
 		signingKeyCache: attestation.NewSigningKeyCache(0),
-		spkiCache:       attestation.NewSPKICache(),
 		stats:           stats{startTime: time.Now().Add(-time.Second), models: make(map[string]*modelStats)},
 	}
 }
@@ -154,7 +153,6 @@ func TestBuildDashboardData_NonZeroModelStats(t *testing.T) {
 		cache:           attestation.NewCache(0),
 		negCache:        attestation.NewNegativeCache(0),
 		signingKeyCache: attestation.NewSigningKeyCache(0),
-		spkiCache:       attestation.NewSPKICache(),
 		stats:           stats{models: make(map[string]*modelStats)},
 		providers: map[string]*provider.Provider{
 			"venice": {
@@ -251,7 +249,6 @@ func TestBuildDashboardData_MultiProvider(t *testing.T) {
 		cache:           attestation.NewCache(0),
 		negCache:        attestation.NewNegativeCache(0),
 		signingKeyCache: attestation.NewSigningKeyCache(0),
-		spkiCache:       attestation.NewSPKICache(),
 		stats:           stats{models: make(map[string]*modelStats)},
 		providers: map[string]*provider.Provider{
 			"venice": {
@@ -305,7 +302,6 @@ func newPopulatedServer(t *testing.T) *Server {
 		cache:           attestation.NewCache(10 * time.Minute),
 		negCache:        attestation.NewNegativeCache(10 * time.Minute),
 		signingKeyCache: attestation.NewSigningKeyCache(0),
-		spkiCache:       attestation.NewSPKICache(),
 		stats:           stats{startTime: time.Now().Add(-time.Hour), models: make(map[string]*modelStats)},
 		providers: map[string]*provider.Provider{
 			"venice": {
@@ -636,7 +632,6 @@ func TestBuildDashboardData_NegBlocked(t *testing.T) {
 		cache:           attestation.NewCache(0),
 		negCache:        attestation.NewNegativeCache(time.Minute),
 		signingKeyCache: attestation.NewSigningKeyCache(0),
-		spkiCache:       attestation.NewSPKICache(),
 		stats:           stats{models: make(map[string]*modelStats)},
 	}
 	// Record in reverse alphabetical order to verify sort.
@@ -667,7 +662,6 @@ func TestBuildDashboardData_E2EEFailures(t *testing.T) {
 		cache:           attestation.NewCache(0),
 		negCache:        attestation.NewNegativeCache(0),
 		signingKeyCache: attestation.NewSigningKeyCache(0),
-		spkiCache:       attestation.NewSPKICache(),
 		stats:           stats{models: make(map[string]*modelStats)},
 	}
 	s.e2eeFailed.Store(providerModelKey{provider: "chutes", model: "llama-70b"}, true)
@@ -690,7 +684,6 @@ func TestBuildDashboardData_ProviderErrors(t *testing.T) {
 		cache:           attestation.NewCache(0),
 		negCache:        attestation.NewNegativeCache(0),
 		signingKeyCache: attestation.NewSigningKeyCache(0),
-		spkiCache:       attestation.NewSPKICache(),
 		stats:           stats{models: make(map[string]*modelStats)},
 		providers: map[string]*provider.Provider{
 			"venice": {
@@ -737,8 +730,8 @@ func TestBuildCacheStats_SeededModels(t *testing.T) {
 	s.modelsMu.Unlock()
 
 	cs := s.buildCacheStats(10, 5)
-	t.Logf("buildCacheStats: models_count=%d models_cached_ago=%q signing_keys=%d spki_certs=%d",
-		cs.ModelsCount, cs.ModelsCachedAgo, cs.SigningKeys, cs.SPKICerts)
+	t.Logf("buildCacheStats: models_count=%d models_cached_ago=%q signing_keys=%d",
+		cs.ModelsCount, cs.ModelsCachedAgo, cs.SigningKeys)
 
 	if cs.ModelsCount != 3 {
 		t.Errorf("ModelsCount = %d, want 3", cs.ModelsCount)

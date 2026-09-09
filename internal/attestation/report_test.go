@@ -1582,6 +1582,8 @@ func TestEvalTLSKeyBinding_ProviderUsesTLSBinding(t *testing.T) {
 	t.Run("pass_when_provider_declares_binding_and_has_fingerprint", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.TLSFingerprint = "aabbccddee112233445566778899aabb"
+		raw.TransportTLSFingerprint = strings.Repeat("ab", 32)
+		raw.TransportTLSAuthority = "example.com"
 		assertSingleFactor(t, evalTLSKeyBinding(&ReportInput{
 			Raw:                    raw,
 			ProviderUsesTLSBinding: true,

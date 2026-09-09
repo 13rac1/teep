@@ -2,13 +2,8 @@ package proxy
 
 import (
 	"bytes"
-	"context"
-	"crypto/ecdh"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -187,138 +182,6 @@ func TestTruncTo(t *testing.T) {
 	if got := truncTo("", 5); got != "" {
 		t.Errorf("truncTo('',5) = %q, want ''", got)
 	}
-}
-
-// --------------------------------------------------------------------------
-// unwrapEHBPResponse
-// --------------------------------------------------------------------------
-
-// An EHBP upstream encrypts error responses too, and the non-200 path does not
-// run the success path's decryption. Relaying those bytes verbatim shows the
-// client ciphertext instead of the reason the request failed.
-func TestEHBPErrorBody(t *testing.T) {
-	const nonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	session, err := e2ee.NewEHBPSession(testX25519PubKey(t))
-	if err != nil {
-		t.Fatalf("NewEHBPSession: %v", err)
-	}
-	defer session.Zero()
-
-	newResp := func(nonceHex string) *http.Response {
-		r := &http.Response{
-			Header: http.Header{},
-			Body:   io.NopCloser(bytes.NewReader([]byte("ciphertext-bytes"))),
-		}
-		if nonceHex != "" {
-			r.Header.Set("Ehbp-Response-Nonce", nonceHex)
-		}
-		return r
-	}
-
-	t.Run("no session passes through", func(t *testing.T) {
-		resp := newResp("")
-		defer resp.Body.Close()
-		body, ok := ehbpErrorBody(resp, nil)
-		if !ok || body == nil {
-			t.Fatal("a body that was never encrypted must relay unchanged")
-		}
-	})
-	// Without the nonce there is no way to decrypt, so the bytes must not be
-	// relayed: they are ciphertext and would reach the client as mojibake.
-	t.Run("session but no nonce is withheld", func(t *testing.T) {
-		resp := newResp("")
-		defer resp.Body.Close()
-		if _, ok := ehbpErrorBody(resp, session); ok {
-			t.Error("ciphertext relayed with no response nonce to decrypt it")
-		}
-	})
-	t.Run("session but short nonce is withheld", func(t *testing.T) {
-		resp := newResp("abcd")
-		defer resp.Body.Close()
-		if _, ok := ehbpErrorBody(resp, session); ok {
-			t.Error("ciphertext relayed with an invalid response nonce")
-		}
-	})
-	t.Run("session and nonce decrypts", func(t *testing.T) {
-		resp := newResp(nonce)
-		defer resp.Body.Close()
-		body, ok := ehbpErrorBody(resp, session)
-		if !ok || body == nil {
-			t.Error("a decryptable error body must be relayed as plaintext")
-		}
-	})
-}
-
-func TestUnwrapEHBPResponse_MissingNonce(t *testing.T) {
-	s := &Server{}
-	resp := &http.Response{Header: http.Header{}}
-	rec := httptest.NewRecorder()
-	ri := &responseInterceptor{ResponseWriter: rec}
-
-	status, ok := s.unwrapEHBPResponse(t.Context(), resp, nil, "test", "model", ri, rec)
-	if ok {
-		t.Error("expected ok=false for missing nonce")
-	}
-	if status != "ehbp_missing_nonce" {
-		t.Errorf("status = %q, want ehbp_missing_nonce", status)
-	}
-}
-
-func TestUnwrapEHBPResponse_BadNonceLength(t *testing.T) {
-	s := &Server{}
-	resp := &http.Response{Header: http.Header{}}
-	resp.Header.Set("Ehbp-Response-Nonce", "tooshort")
-	rec := httptest.NewRecorder()
-	ri := &responseInterceptor{ResponseWriter: rec}
-
-	status, ok := s.unwrapEHBPResponse(t.Context(), resp, nil, "test", "model", ri, rec)
-	if ok {
-		t.Error("expected ok=false for bad nonce length")
-	}
-	if status != "ehbp_invalid_nonce" {
-		t.Errorf("status = %q, want ehbp_invalid_nonce", status)
-	}
-}
-
-func TestUnwrapEHBPResponse_ValidNonce(t *testing.T) {
-	s := &Server{}
-	resp := &http.Response{
-		Header: http.Header{},
-		Body:   io.NopCloser(bytes.NewReader([]byte("body"))),
-	}
-	resp.Header.Set("Ehbp-Response-Nonce", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-
-	// Create an EHBP session — DecryptResponse wraps body lazily, so it succeeds.
-	key := testX25519PubKey(t)
-	session, err := e2ee.NewEHBPSession(key)
-	if err != nil {
-		t.Fatalf("NewEHBPSession: %v", err)
-	}
-	defer session.Zero()
-
-	rec := httptest.NewRecorder()
-	ri := &responseInterceptor{ResponseWriter: rec}
-
-	status, ok := s.unwrapEHBPResponse(t.Context(), resp, session, "test", "model", ri, rec)
-	if !ok {
-		t.Errorf("expected ok=true, got status=%q", status)
-	}
-	if status != "" {
-		t.Errorf("status = %q, want empty", status)
-	}
-	// resp.Body should now be the decrypted reader wrapper.
-	if resp.Body == nil {
-		t.Error("resp.Body should not be nil after successful unwrap")
-	}
-}
-
-func testX25519PubKey(t *testing.T) []byte {
-	t.Helper()
-	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate X25519 key: %v", err)
-	}
-	return priv.PublicKey().Bytes()
 }
 
 // --------------------------------------------------------------------------
@@ -536,335 +399,23 @@ func TestFetchAndVerify_NilAttester(t *testing.T) {
 // pinnedPreDispatchE2EE
 // --------------------------------------------------------------------------
 
-func TestPinnedPreDispatchE2EE_BindingFailed(t *testing.T) {
-	s := &Server{
-		cfg:      &config.Config{ListenAddr: "127.0.0.1:8337"},
-		cache:    attestation.NewCache(time.Minute),
-		negCache: attestation.NewNegativeCache(0),
-		stats:    stats{startTime: time.Now(), models: make(map[string]*modelStats)},
-	}
-	s.spkiCache = attestation.NewSPKICache()
-
-	// Cache a report where binding is not passed.
-	report := &attestation.VerificationReport{
-		Provider: "test",
-		Model:    "model",
-		Factors: []attestation.FactorResult{
-			{Name: "tee_reportdata_binding", Status: attestation.Fail, Detail: "binding failed"},
-		},
-	}
-	s.cache.Put("test", "model", report)
-
-	prov := &provider.Provider{Name: "test", E2EE: true}
-	rec := httptest.NewRecorder()
-	ok := s.pinnedPreDispatchE2EE(t.Context(), rec, prov, "model")
-	if ok {
-		t.Error("expected false for failed binding")
-	}
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("status = %d, want 502", rec.Code)
-	}
-}
-
-func TestPinnedPostDispatchE2EE_StaleReportRefusesWhenPriorFailure(t *testing.T) {
-	s := newTestServer(t)
-	s.signingKeyCache = attestation.NewSigningKeyCache(time.Minute)
-
-	// Simulate prior E2EE failure.
-	s.e2eeFailed.Store(providerModelKey{"test", "model"}, true)
-
-	report := &attestation.VerificationReport{
-		Factors: []attestation.FactorResult{
-			{Name: "tee_reportdata_binding", Status: attestation.Pass},
-		},
-	}
-	// Put in cache so cache invalidation is exercised.
-	s.cache.Put("test", "model", report)
-
-	prov := &provider.Provider{Name: "test", E2EE: true}
-	rec := httptest.NewRecorder()
-	// freshReport=false → prior failure not clearable.
-	ok := s.pinnedPostDispatchE2EE(t.Context(), rec, prov, "model", report, false)
-	if ok {
-		t.Error("expected false when prior failure exists and report is stale")
-	}
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503", rec.Code)
-	}
-}
-
 // --------------------------------------------------------------------------
-// handlePinnedChat — error path (PinnedHandler returns error)
 // --------------------------------------------------------------------------
 
-type errorPinnedHandler struct {
-	err error
-}
-
-func (h *errorPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	return nil, h.err
-}
-
-func TestHandlePinnedChat_PinnedHandlerError(t *testing.T) {
-	s := newTestServer(t)
-	s.signingKeyCache = attestation.NewSigningKeyCache(0)
-	s.spkiCache = attestation.NewSPKICache()
-
-	prov := &provider.Provider{
-		Name:          "test",
-		E2EE:          false,
-		PinnedHandler: &errorPinnedHandler{err: errors.New("connection refused")},
-		SPKIDomainForModel: func(_ context.Context, _ string) (string, bool) {
-			return "test.example", true
-		},
-	}
-
-	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
-	r.Header.Set("Content-Type", "application/json")
-
-	s.handlePinnedChat(t.Context(), rec, r, prov, "model", []byte(`{}`), true, "/v1/chat/completions", e2ee.EndpointChat, "application/json")
-
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("status = %d, want 502", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "pinned connection failed") {
-		t.Errorf("body = %q, should mention pinned connection failed", rec.Body.String())
-	}
-}
-
 // --------------------------------------------------------------------------
-// handlePinnedChat — non-OK status forwarding
 // --------------------------------------------------------------------------
 
-type staticPinnedHandler struct {
-	resp *provider.PinnedResponse
-}
-
-func (h *staticPinnedHandler) HandlePinned(_ context.Context, _ *provider.PinnedRequest) (*provider.PinnedResponse, error) {
-	return h.resp, nil
-}
-
-func TestHandlePinnedChat_NonOKStatus(t *testing.T) {
-	s := &Server{
-		cfg:      &config.Config{ListenAddr: "127.0.0.1:8337"},
-		cache:    attestation.NewCache(time.Minute),
-		negCache: attestation.NewNegativeCache(time.Minute),
-		stats:    stats{startTime: time.Now(), models: make(map[string]*modelStats)},
-	}
-	s.signingKeyCache = attestation.NewSigningKeyCache(time.Minute)
-	s.spkiCache = attestation.NewSPKICache()
-
-	passingReport := &attestation.VerificationReport{
-		Provider: "test",
-		Model:    "model",
-		Factors: []attestation.FactorResult{
-			{Name: "tee_reportdata_binding", Status: attestation.Pass},
-		},
-	}
-	s.cache.Put("test", "model", passingReport)
-
-	prov := &provider.Provider{
-		Name: "test",
-		E2EE: false,
-		PinnedHandler: &staticPinnedHandler{
-			resp: &provider.PinnedResponse{
-				StatusCode: http.StatusBadRequest,
-				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(strings.NewReader(`{"error":"bad request"}`)),
-				Report:     passingReport,
-			},
-		},
-	}
-
-	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
-
-	s.handlePinnedChat(t.Context(), rec, r, prov, "model", []byte(`{}`), false, "/v1/chat/completions", e2ee.EndpointChat, "application/json")
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "bad request") {
-		t.Errorf("body = %q, should contain upstream error", rec.Body.String())
-	}
-}
-
 // --------------------------------------------------------------------------
-// handlePinnedChat — OK plaintext response relayed
 // --------------------------------------------------------------------------
 
-func TestHandlePinnedChat_PlaintextStreamRelay(t *testing.T) {
-	s := &Server{
-		cfg:      &config.Config{ListenAddr: "127.0.0.1:8337"},
-		cache:    attestation.NewCache(time.Minute),
-		negCache: attestation.NewNegativeCache(time.Minute),
-		stats:    stats{startTime: time.Now(), models: make(map[string]*modelStats)},
-	}
-	s.signingKeyCache = attestation.NewSigningKeyCache(time.Minute)
-	s.spkiCache = attestation.NewSPKICache()
-
-	passingReport := &attestation.VerificationReport{
-		Provider: "test",
-		Model:    "model",
-		Factors: []attestation.FactorResult{
-			{Name: "tee_reportdata_binding", Status: attestation.Pass},
-		},
-	}
-	s.cache.Put("test", "model", passingReport)
-
-	sseBody := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n",
-		`{"choices":[{"delta":{"content":"hello"}}]}`)
-
-	prov := &provider.Provider{
-		Name: "test",
-		E2EE: false,
-		PinnedHandler: &staticPinnedHandler{
-			resp: &provider.PinnedResponse{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-				Body:       io.NopCloser(strings.NewReader(sseBody)),
-				Report:     passingReport,
-			},
-		},
-	}
-
-	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
-
-	s.handlePinnedChat(t.Context(), rec, r, prov, "model", []byte(`{}`), true, "/v1/chat/completions", e2ee.EndpointChat, "application/json")
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "hello") {
-		t.Errorf("body = %q, should contain relayed content", rec.Body.String())
-	}
-}
-
 // --------------------------------------------------------------------------
-// handlePinnedNonChat — error path
 // --------------------------------------------------------------------------
 
-func TestHandlePinnedNonChat_PinnedHandlerError(t *testing.T) {
-	s := newTestServer(t)
-	s.signingKeyCache = attestation.NewSigningKeyCache(0)
-	s.spkiCache = attestation.NewSPKICache()
-
-	prov := &provider.Provider{
-		Name:          "test",
-		E2EE:          false,
-		PinnedHandler: &errorPinnedHandler{err: errors.New("upstream down")},
-		SPKIDomainForModel: func(_ context.Context, _ string) (string, bool) {
-			return "test.example", true
-		},
-	}
-
-	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{}`))
-	r.Header.Set("Content-Type", "application/json")
-
-	s.handlePinnedNonChat(t.Context(), rec, r, prov, "model", []byte(`{}`), "/v1/embeddings", e2ee.EndpointEmbeddings)
-
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("status = %d, want 502", rec.Code)
-	}
-}
-
 // --------------------------------------------------------------------------
-// handlePinnedNonChat — non-OK status forwarding
 // --------------------------------------------------------------------------
 
-func TestHandlePinnedNonChat_NonOKStatus(t *testing.T) {
-	s := &Server{
-		cfg:      &config.Config{ListenAddr: "127.0.0.1:8337"},
-		cache:    attestation.NewCache(time.Minute),
-		negCache: attestation.NewNegativeCache(time.Minute),
-		stats:    stats{startTime: time.Now(), models: make(map[string]*modelStats)},
-	}
-	s.signingKeyCache = attestation.NewSigningKeyCache(time.Minute)
-	s.spkiCache = attestation.NewSPKICache()
-
-	passingReport := &attestation.VerificationReport{
-		Factors: []attestation.FactorResult{
-			{Name: "tee_reportdata_binding", Status: attestation.Pass},
-		},
-	}
-	s.cache.Put("test", "model", passingReport)
-
-	prov := &provider.Provider{
-		Name: "test",
-		E2EE: false,
-		PinnedHandler: &staticPinnedHandler{
-			resp: &provider.PinnedResponse{
-				StatusCode: http.StatusNotFound,
-				Header:     http.Header{},
-				Body:       io.NopCloser(strings.NewReader("not found")),
-				Report:     passingReport,
-			},
-		},
-	}
-
-	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{}`))
-
-	s.handlePinnedNonChat(t.Context(), rec, r, prov, "model", []byte(`{}`), "/v1/embeddings", e2ee.EndpointEmbeddings)
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "not found") {
-		t.Errorf("body = %q, should contain upstream error", rec.Body.String())
-	}
-}
-
 // --------------------------------------------------------------------------
-// handlePinnedNonChat — OK plaintext response
 // --------------------------------------------------------------------------
-
-func TestHandlePinnedNonChat_PlaintextRelay(t *testing.T) {
-	s := &Server{
-		cfg:      &config.Config{ListenAddr: "127.0.0.1:8337"},
-		cache:    attestation.NewCache(time.Minute),
-		negCache: attestation.NewNegativeCache(time.Minute),
-		stats:    stats{startTime: time.Now(), models: make(map[string]*modelStats)},
-	}
-	s.signingKeyCache = attestation.NewSigningKeyCache(time.Minute)
-	s.spkiCache = attestation.NewSPKICache()
-
-	passingReport := &attestation.VerificationReport{
-		Factors: []attestation.FactorResult{
-			{Name: "tee_reportdata_binding", Status: attestation.Pass},
-		},
-	}
-	s.cache.Put("test", "model", passingReport)
-
-	respBody := `{"data":[{"embedding":[0.1,0.2]}]}`
-	prov := &provider.Provider{
-		Name: "test",
-		E2EE: false,
-		PinnedHandler: &staticPinnedHandler{
-			resp: &provider.PinnedResponse{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(strings.NewReader(respBody)),
-				Report:     passingReport,
-			},
-		},
-	}
-
-	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{}`))
-
-	s.handlePinnedNonChat(t.Context(), rec, r, prov, "model", []byte(`{}`), "/v1/embeddings", e2ee.EndpointEmbeddings)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "embedding") {
-		t.Errorf("body = %q, should contain embedding data", rec.Body.String())
-	}
-}
 
 // --------------------------------------------------------------------------
 // parseAudioModelRequest
@@ -939,95 +490,10 @@ func TestRecordTokPerSec_ZeroDuration(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// handlePinnedPostRelay — E2EE decryption failure with cached report
 // --------------------------------------------------------------------------
 
-func TestHandlePinnedPostRelay_DecryptionFailure_DemotesCachedReport(t *testing.T) {
-	s := &Server{
-		cfg:             &config.Config{ListenAddr: "127.0.0.1:8337"},
-		cache:           attestation.NewCache(time.Minute),
-		negCache:        attestation.NewNegativeCache(time.Minute),
-		signingKeyCache: attestation.NewSigningKeyCache(time.Minute),
-		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
-	}
-
-	report := &attestation.VerificationReport{
-		Provider: "test",
-		Model:    "model",
-		Factors: []attestation.FactorResult{
-			{Name: "e2ee_usable", Status: attestation.Pass, Detail: "ok"},
-		},
-	}
-	s.cache.Put("test", "model", report)
-	s.signingKeyCache.Put("test", "model", "some-key")
-
-	prov := &provider.Provider{Name: "test", E2EE: true}
-	ms := &modelStats{}
-	session := &noopDecryptor{}
-
-	relayErr := fmt.Errorf("%w: bad ciphertext", e2ee.ErrDecryptionFailed)
-	s.handlePinnedPostRelay(t.Context(), prov, "model", report, session, ms, relayErr)
-
-	// e2eeFailed should be set.
-	if _, failed := s.e2eeFailed.Load(providerModelKey{"test", "model"}); !failed {
-		t.Error("expected e2eeFailed to be set")
-	}
-	// Attestation cache should be cleared after demoting.
-	if _, ok := s.cache.Get("test", "model"); ok {
-		t.Error("expected attestation cache to be deleted")
-	}
-	// Signing key cache should be cleared.
-	if _, ok := s.signingKeyCache.Get("test", "model"); ok {
-		t.Error("expected signing key cache to be deleted")
-	}
-	if ms.errors.Load() != 1 {
-		t.Errorf("ms.errors = %d, want 1", ms.errors.Load())
-	}
-}
-
 // --------------------------------------------------------------------------
-// handlePinnedPostRelay — success promotes e2ee_usable
 // --------------------------------------------------------------------------
-
-func TestHandlePinnedPostRelay_SuccessPromotesE2EE(t *testing.T) {
-	s := &Server{
-		cfg:             &config.Config{ListenAddr: "127.0.0.1:8337"},
-		cache:           attestation.NewCache(time.Minute),
-		negCache:        attestation.NewNegativeCache(time.Minute),
-		signingKeyCache: attestation.NewSigningKeyCache(time.Minute),
-		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
-	}
-
-	report := &attestation.VerificationReport{
-		Provider: "test",
-		Model:    "model",
-		Factors: []attestation.FactorResult{
-			{Name: "e2ee_usable", Status: attestation.Skip, Detail: "pending"},
-		},
-	}
-	s.cache.Put("test", "model", report)
-
-	prov := &provider.Provider{Name: "test", E2EE: true}
-	ms := &modelStats{}
-	session := &noopDecryptor{}
-
-	s.handlePinnedPostRelay(t.Context(), prov, "model", report, session, ms, nil)
-
-	// e2ee_usable should be promoted to Pass in cache.
-	cached, ok := s.cache.Get("test", "model")
-	if !ok {
-		t.Fatal("expected cached report")
-	}
-	for _, f := range cached.Factors {
-		if f.Name == "e2ee_usable" {
-			if f.Status != attestation.Pass {
-				t.Errorf("e2ee_usable status = %v, want Pass", f.Status)
-			}
-			return
-		}
-	}
-	t.Error("e2ee_usable factor not found in cached report")
-}
 
 // --------------------------------------------------------------------------
 // enforceReport — blocked writes JSON body
@@ -1222,7 +688,6 @@ func TestBuildDashboardData_SkipsCountAsWarned(t *testing.T) {
 		cache:           attestation.NewCache(time.Minute),
 		negCache:        attestation.NewNegativeCache(time.Minute),
 		signingKeyCache: attestation.NewSigningKeyCache(time.Minute),
-		spkiCache:       attestation.NewSPKICache(),
 		providers:       map[string]*provider.Provider{"test": {Name: "test"}},
 		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 	}
@@ -1272,7 +737,6 @@ func TestBuildDashboardData_BlockedFactors(t *testing.T) {
 		cache:           attestation.NewCache(time.Minute),
 		negCache:        attestation.NewNegativeCache(time.Minute),
 		signingKeyCache: attestation.NewSigningKeyCache(time.Minute),
-		spkiCache:       attestation.NewSPKICache(),
 		providers: map[string]*provider.Provider{
 			"test": {Name: "test"},
 		},

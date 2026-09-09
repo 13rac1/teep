@@ -42,10 +42,10 @@ func TestRecordingTransport(t *testing.T) {
 	}
 
 	// Verify recorded entry.
-	if len(rec.Entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(rec.Entries))
+	if len(rec.Snapshot()) != 1 {
+		t.Fatalf("entries = %d, want 1", len(rec.Snapshot()))
 	}
-	e := rec.Entries[0]
+	e := rec.Snapshot()[0]
 	t.Logf("entry: method=%s url=%s status=%d proto=%s duration=%s", e.Method, e.URL, e.Status, e.Proto, e.Duration)
 	if e.Duration < 0 {
 		t.Error("Duration should be >= 0")
@@ -538,10 +538,10 @@ func TestRecordingTransport_TLS(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	if len(rec.Entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(rec.Entries))
+	if len(rec.Snapshot()) != 1 {
+		t.Fatalf("entries = %d, want 1", len(rec.Snapshot()))
 	}
-	e := rec.Entries[0]
+	e := rec.Snapshot()[0]
 	t.Logf("TLS version: %q, cipher: %q, duration: %s", e.TLSVersion, e.TLSCipher, e.Duration)
 	if e.TLSVersion == "" {
 		t.Error("TLSVersion should be set for TLS connection")

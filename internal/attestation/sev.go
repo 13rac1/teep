@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/13rac1/teep/internal/tlsct"
 	sevabi "github.com/google/go-sev-guest/abi"
@@ -59,14 +58,10 @@ func (g *sevClientHTTPSGetter) GetContext(ctx context.Context, url string) ([]by
 // AMD KDS or Intel PCS certificate endpoint.
 const maxCertResponseSize = 256 << 10 // 256 KiB — typical cert chains are well under 10 KiB
 
-// NewSEVCertGetter wraps an *http.Client as a trust.HTTPSGetter with retry
-// logic for AMD KDS certificate fetches.
+// NewSEVCertGetter adapts the shared attestation client to certificate retrieval.
+// The client owns retry policy, including immediate capacity-error rejection.
 func NewSEVCertGetter(client *http.Client) trust.HTTPSGetter {
-	return &trust.RetryHTTPSGetter{
-		Timeout:       30 * time.Second,
-		MaxRetryDelay: 5 * time.Second,
-		Getter:        &sevClientHTTPSGetter{client: client},
-	}
+	return &sevClientHTTPSGetter{client: client}
 }
 
 // SEVTCBVersion contains the TCB version components from an SEV-SNP report.
@@ -283,14 +278,8 @@ func VerifySEVReportOnline(ctx context.Context, report []byte, getter trust.HTTP
 		return result
 	}
 
-	// Use RawSnpReportContext which handles VCEK cert fetching, chain
-	// verification, and signature verification in one call.
-	opts := &sevverify.Options{
-		Getter: getter,
-	}
-	if err := sevverify.RawSnpReportContext(ctx, report, opts); err != nil {
-		// Record both cert chain and signature as failed; they share the
-		// same root cause from the unified verify call.
+	err := verifySEVEvidence(ctx, report, getter)
+	if err != nil {
 		result.CertChainErr = err
 		result.SignatureErr = err
 		slog.DebugContext(ctx, "SEV-SNP online verification failed", "err", err)
@@ -314,4 +303,29 @@ func NewSEVVerifier(offline bool, getter trust.HTTPSGetter) SEVVerifier {
 	return func(ctx context.Context, report []byte) *SEVVerifyResult {
 		return VerifySEVReportOnline(ctx, report, getter)
 	}
+}
+
+// verifySEVEvidence verifies the certificate chain and report signature.
+func verifySEVEvidence(ctx context.Context, raw []byte, getter trust.HTTPSGetter) (retErr error) {
+	report, err := sevabi.ReportToProto(raw)
+	if err != nil {
+		return err
+	}
+	if getter == nil {
+		return errors.New("SEV certificate getter is required")
+	}
+	// go-sev-guest converts certificate fetch errors to text. Preserve their
+	// causes within this verification, without sharing failure state across callers.
+	observed := &sevEvidenceGetter{base: getter}
+	defer func() {
+		if retErr != nil {
+			retErr = errors.Join(retErr, observed.failure())
+		}
+	}()
+	opts := &sevverify.Options{Getter: observed}
+	evidence, err := sevverify.GetAttestationFromReportContext(ctx, report, opts)
+	if err != nil {
+		return err
+	}
+	return sevverify.SnpAttestationContext(ctx, evidence, opts)
 }

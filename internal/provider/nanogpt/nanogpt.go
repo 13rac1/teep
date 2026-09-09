@@ -214,3 +214,6 @@ func parseDstack(ctx context.Context, body []byte) (*attestation.RawAttestation,
 		RawBody:       body,
 	}, nil
 }
+
+// CloseIdleConnections releases idle connections owned by this component.
+func (a *Attester) CloseIdleConnections() { a.client.CloseIdleConnections() }

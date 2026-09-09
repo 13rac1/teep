@@ -18,7 +18,7 @@ The TLS pinning targets the gateway's certificate (since the proxy connects to t
 
 ## Secondary Context Files
 
-- [`internal/provider/nearcloud/pinned.go`](../../../internal/provider/nearcloud/pinned.go)
+- [`internal/proxy/authorized_inference.go`](../../../internal/proxy/authorized_inference.go)
 - [`internal/provider/nearcloud/nearcloud.go`](../../../internal/provider/nearcloud/nearcloud.go)
 - [`internal/tlsct/checker.go`](../../../internal/tlsct/checker.go)
 - [`internal/attestation/spki_test.go`](../../../internal/attestation/spki_test.go)
@@ -98,9 +98,9 @@ Verify and report:
 - SPKI hash algorithm (expected SHA-256 over DER SubjectPublicKeyInfo),
 - the gateway's attested `tls_cert_fingerprint` matches the live connection SPKI using constant-time hex comparison,
 - this comparison is a hard error if it fails (not a skip),
-- attestation fetch and inference request occur on one TLS connection (preventing TOCTOU),
-- response-body close semantics closing underlying TCP connection,
-- `InsecureSkipVerify` justification and cryptographic compensation,
+- attestation fetch and inference handshakes authenticate the same gateway SPKI before any inference bytes are sent,
+- response-body close semantics preserving unrelated HTTP/2 streams,
+- absence of `InsecureSkipVerify` and preservation of system WebPKI,
 - `ServerName` SNI behavior when custom TLS verification is used,
 - there is NO code path that confuses the gateway and model TLS fingerprints.
 
@@ -111,17 +111,19 @@ Verify and report:
 - CT cache keying and TTL behavior,
 - whether CT failure blocks the connection or is advisory-only.
 
-### Pin Cache & Connection Lifetime
+### Authorization Cache & Connection Lifetime
 
 Verify and report:
-- pin-cache keys (gateway domain → spkiHex), TTL, max entries per domain, eviction strategy, and whether total domain count is bounded,
-- that the SPKI pin cache uses the gateway's domain and SPKI (since the proxy connects to the gateway, not the model backend directly),
-- cache miss behavior (must trigger full re-attestation of BOTH gateway and model, never pass-through),
-- singleflight/concurrency collapse behavior with post-win double-check,
-- whether singleflight key includes both domain and SPKI (so a certificate rotation triggers a new attestation),
-- connection reuse policy (`Connection: close` on chat request),
-- that the response body wrapper closes the underlying TCP connection,
-- that cache eviction under memory pressure does not silently allow unattested connections.
+- authorization keys include provider, model, and canonical authority,
+- the complete report, E2EE key, transport identity, and optional authenticated expiry publish atomically,
+- gateway transport pinning uses the gateway fingerprint, never the model backend fingerprint,
+- cache misses verify both gateway and model before forwarding,
+- concurrent misses join one bounded full verification,
+- expiry and eviction prevent later use of stale authorization,
+- conditional invalidation and report promotion cannot modify a replacement generation,
+- pools are scoped to provider, authority, and attested SPKI,
+- HTTP/2 stream cancellation preserves unrelated requests,
+- no independent SPKI cache or local authorization TTL remains.
 
 ### Offline Mode for Pinned Connections
 
@@ -129,7 +131,7 @@ For the pinned connection path, verify whether offline mode is honored. The offl
 
 ## Go Best-Practice Audit Points
 
-- **`sync.RWMutex` correctness**: Verify that `SPKICache` operations use correct lock modes.
+- **`sync.RWMutex` correctness**: Verify that authorization and transport-pool operations use correct lock modes.
 - **Interface-based provider pluggability**: Verify that REPORTDATA verifiers are pluggable per provider and that a missing verifier fails closed.
 - **Error wrapping**: Verify TLS and SPKI errors are wrapped with `%w`.
 

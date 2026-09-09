@@ -10,12 +10,16 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/tlsct"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/root"
+	"github.com/sigstore/sigstore-go/pkg/tuf"
 	"github.com/sigstore/sigstore-go/pkg/verify"
+	"github.com/theupdateframework/go-tuf/v2/metadata/fetcher"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -156,7 +160,10 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 	}
 
 	// Get trusted root from Sigstore TUF.
-	trustedRoot, err := root.FetchTrustedRoot()
+	rootClient := tlsct.NewHTTPClient(30 * time.Second)
+	defer rootClient.CloseIdleConnections()
+	rootFetcher := newTrustedRootFetcher(ctx, rootClient)
+	trustedRoot, err := root.FetchTrustedRootWithOptions(tuf.DefaultOptions().WithFetcher(rootFetcher))
 	if err != nil {
 		return nil, "", SignerIdentity{}, fmt.Errorf("fetch Sigstore trusted root: %w", err)
 	}
@@ -275,3 +282,18 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// newTrustedRootFetcher retains the dependency's one-attempt download policy.
+func newTrustedRootFetcher(ctx context.Context, client *http.Client) *fetcher.DefaultFetcher {
+	f := fetcher.NewDefaultFetcher()
+	f.SetHTTPClient(trustedRootDo(func(req *http.Request) (*http.Response, error) {
+		return client.Do(req.WithContext(ctx))
+	}))
+	return f
+}
+
+// trustedRootDo attaches the verification context before http.Client applies
+// its download timeout, including while the fetcher reads the response body.
+type trustedRootDo func(*http.Request) (*http.Response, error)
+
+func (do trustedRootDo) Do(req *http.Request) (*http.Response, error) { return do(req) }

@@ -22,7 +22,7 @@ import (
 func TestFetchAndVerify_VerifiesGatewayEvidence(t *testing.T) {
 	s := newMinimalServer()
 	s.cfg = &config.Config{}
-	s.sevVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
+	s.tinfoilSEVVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
 		if len(report) == 0 {
 			t.Error("SEV verifier called with no report bytes")
 		}
@@ -46,7 +46,7 @@ func TestFetchAndVerify_VerifiesGatewayEvidence(t *testing.T) {
 		// document came from. For a gateway provider that is the gateway
 		// report, and choosing the core one instead fails every measurement
 		// factor. SEE: attestation.SupplyChainSEVResult.
-		SigstoreRepoForModel: func(string) string { return "tinfoilsh/confidential-model-router" },
+		StaticRoute: gatewaySupplyChainRoute(t),
 	}
 
 	report, gotRaw := s.fetchAndVerify(context.Background(), prov, "test-model")
@@ -77,7 +77,7 @@ func TestFetchAndVerify_GatewaySuppliesSupplyChainResult(t *testing.T) {
 	var gotReportBytes []byte
 	s := newMinimalServer()
 	s.cfg = &config.Config{Offline: true}
-	s.sevVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
+	s.tinfoilSEVVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
 		gotReportBytes = report
 		return &attestation.SEVVerifyResult{Measurement: make([]byte, 48)}
 	}
@@ -91,10 +91,10 @@ func TestFetchAndVerify_GatewaySuppliesSupplyChainResult(t *testing.T) {
 		GatewayNonceHex:       nonce.Hex(),
 	}
 	prov := &provider.Provider{
-		Name:                 "tinfoil_v3_cloud",
-		Attester:             &mockAttesterWithRaw{raw: raw},
-		SupplyChainPolicy:    attestation.NoSupplyChainPolicy(),
-		SigstoreRepoForModel: func(string) string { return "tinfoilsh/confidential-model-router" },
+		Name:              "tinfoil_v3_cloud",
+		Attester:          &mockAttesterWithRaw{raw: raw},
+		SupplyChainPolicy: attestation.NoSupplyChainPolicy(),
+		StaticRoute:       gatewaySupplyChainRoute(t),
 	}
 
 	report, _ := s.fetchAndVerify(context.Background(), prov, "test-model")
@@ -123,7 +123,7 @@ func TestFetchAndVerify_GatewaySuppliesSupplyChainResult(t *testing.T) {
 func TestFetchAndVerify_GatewayProviderActivatesE2EE(t *testing.T) {
 	s := newMinimalServer()
 	s.cfg = &config.Config{Offline: true}
-	s.sevVerifier = func(_ context.Context, _ []byte) *attestation.SEVVerifyResult {
+	s.tinfoilSEVVerifier = func(_ context.Context, _ []byte) *attestation.SEVVerifyResult {
 		return &attestation.SEVVerifyResult{Measurement: make([]byte, 48)}
 	}
 
@@ -141,7 +141,7 @@ func TestFetchAndVerify_GatewayProviderActivatesE2EE(t *testing.T) {
 		E2EEKeyBoundByGateway: true,
 		Attester:              &mockAttesterWithRaw{raw: raw},
 		SupplyChainPolicy:     attestation.NoSupplyChainPolicy(),
-		SigstoreRepoForModel:  func(string) string { return "tinfoilsh/confidential-model-router" },
+		StaticRoute:           gatewaySupplyChainRoute(t),
 	}
 
 	report, _ := s.fetchAndVerify(context.Background(), prov, "test-model")
@@ -157,8 +157,7 @@ func TestFetchAndVerify_GatewayProviderActivatesE2EE(t *testing.T) {
 // fromConfig owns the declaration, so the wiring is asserted where it is set.
 func TestFromConfig_TinfoilCloudBindsE2EEToGateway(t *testing.T) {
 	cp := &config.Provider{Name: "tinfoil_v3_cloud", BaseURL: "https://inference.tinfoil.sh", APIKey: "test-key"}
-	p, err := fromConfig(cp, attestation.NewSPKICache(), true, nil,
-		attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{}, nil, nil, nil)
+	p, err := fromConfig(cp, true, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
 	if err != nil {
 		t.Fatalf("fromConfig: %v", err)
 	}
@@ -197,4 +196,47 @@ func TestFetchAndVerify_VerifiesGatewayTDXEvidence(t *testing.T) {
 			t.Fatalf("gateway TDX evidence was never verified: %s", f.Detail)
 		}
 	}
+}
+
+func TestFetchAndVerify_PreservesGatewayEventLog(t *testing.T) {
+	s := newMinimalServer()
+	s.cfg = &config.Config{Offline: true}
+	entries := []attestation.EventLogEntry{{IMR: 0, Digest: strings.Repeat("ab", 48)}}
+	rtmrs, err := attestation.ReplayEventLog(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.verifyQuote = func(context.Context, string) *attestation.TDXVerifyResult {
+		return &attestation.TDXVerifyResult{RTMRs: rtmrs}
+	}
+	prov := &provider.Provider{
+		Name: "nearcloud",
+		Attester: &mockAttesterWithRaw{raw: &attestation.RawAttestation{
+			GatewayIntelQuote: "gateway-quote",
+			GatewayEventLog:   entries,
+		}},
+		SupplyChainPolicy: attestation.NoSupplyChainPolicy(),
+	}
+	report, _ := s.fetchAndVerify(context.Background(), prov, "test-model")
+	if report == nil {
+		t.Fatal("missing report")
+	}
+	for _, factor := range report.Factors {
+		if factor.Name == attestation.FactorGWEventLogIntegrity {
+			if factor.Status != attestation.Pass {
+				t.Fatalf("gateway event log: %s: %s", factor.Status, factor.Detail)
+			}
+			return
+		}
+	}
+	t.Fatal("missing gateway event log factor")
+}
+
+func gatewaySupplyChainRoute(t *testing.T) provider.ResolvedRoute {
+	t.Helper()
+	route, err := provider.NewResolvedRoute("https://inference.tinfoil.sh", "tinfoilsh/confidential-model-router")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return route
 }

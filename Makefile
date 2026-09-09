@@ -38,27 +38,27 @@ coverage-full: ## Full coverage without -short (live integration tests still nee
 	@echo "Coverage HTML written to coverage.html"
 
 test-live: ## Run live network tests (dials external hosts, requires internet)
-	TEEP_LIVE_TESTS=1 go test -race -v ./internal/tlsct/ -run TestLive
+	TEEP_LIVE_TESTS=1 go test -count=1 -race -v ./internal/tlsct/ -run TestLive
 
-integration: integration-tinfoil integration-tinfoil-direct integration-neardirect integration-nearcloud integration-venice integration-chutes integration-phalacloud integration-nanogpt integration-tinfoil-fixture integration-tinfoil-direct-fixture integration-neardirect-fixture integration-nearcloud-fixture integration-venice-fixture integration-chutes-fixture ## Run all integration tests
+integration: integration-concurrent-providers integration-tinfoil integration-tinfoil-direct integration-neardirect integration-nearcloud integration-venice integration-chutes integration-phalacloud integration-nanogpt integration-tinfoil-fixture integration-tinfoil-direct-fixture integration-neardirect-fixture integration-nearcloud-fixture integration-venice-fixture integration-chutes-fixture ## Run all integration tests
 
 integration-venice: ## Run Venice integration tests (requires VENICE_API_KEY)
-	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_Venice ./internal/proxy/
+	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 300s -run TestIntegration_Venice ./internal/proxy/
 
 integration-neardirect: ## Run NEAR Direct integration tests (requires NEARAI_API_KEY)
-	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 600s -run TestIntegration_NearDirect ./internal/proxy/
+	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 600s -run TestIntegration_NearDirect ./internal/proxy/
 
 integration-nearcloud: ## Run NearCloud gateway integration tests (requires NEARAI_API_KEY)
-	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 600s -run TestIntegration_NearCloud ./internal/proxy/
+	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 600s -run TestIntegration_NearCloud ./internal/proxy/
 
 integration-nanogpt: ## Run NanoGPT integration tests (requires NANOGPT_API_KEY)
-	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 120s -run TestIntegration_NanoGPT ./internal/proxy/
+	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 120s -run TestIntegration_NanoGPT ./internal/proxy/
 
 integration-phalacloud: ## Run Phala Cloud integration tests (requires PHALA_API_KEY)
-	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 120s -run TestIntegration_PhalaCloud ./internal/proxy/
+	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 120s -run TestIntegration_PhalaCloud ./internal/proxy/
 
 integration-chutes: ## Run Chutes integration tests (requires CHUTES_API_KEY)
-	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 600s -run TestIntegration_Chutes ./internal/proxy/
+	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 600s -run TestIntegration_Chutes ./internal/proxy/
 
 integration-neardirect-fixture: ## Run NEAR Direct fixture integration test (no API key needed)
 	go test -v -race -timeout 60s -run TestIntegration_NearDirect_Fixture ./internal/integration/
@@ -73,10 +73,10 @@ integration-chutes-fixture: ## Run Chutes fixture integration test (no API key n
 	go test -v -race -timeout 60s -run TestIntegration_Chutes_Fixture ./internal/integration/
 
 integration-tinfoil: ## Run Tinfoil cloud integration tests (requires TINFOIL_API_KEY)
-	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_Tinfoil$$ ./internal/proxy/
+	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 300s -run 'TestIntegration_Tinfoil($$|KeyRecovery)' ./internal/proxy/
 
 integration-tinfoil-direct: ## Run Tinfoil direct integration tests (requires TINFOIL_API_KEY)
-	TEEP_TESTS_LOAD_DOTENV=1 go test -v -race -timeout 300s -run TestIntegration_TinfoilDirect ./internal/proxy/
+	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 300s -run TestIntegration_TinfoilDirect ./internal/proxy/
 
 integration-tinfoil-fixture: ## Run Tinfoil cloud fixture integration test (no API key needed)
 	go test -v -race -timeout 60s -run TestIntegration_Tinfoil_Fixture$$ ./internal/integration/
@@ -114,10 +114,10 @@ report-venice: build ## Verify Venice attestation (requires VENICE_API_KEY)
 	./teep verify venice --model e2ee-qwen3-5-122b-a10b --log-level debug --capture /tmp/teep-attestation-venice
 
 report-neardirect: build ## Verify NEAR Direct attestation (requires NEARAI_API_KEY)
-	./teep verify neardirect --model Qwen/Qwen3.5-122B-A10B --log-level debug --capture /tmp/teep-attestation-neardirect
+	./teep verify neardirect --model z-ai/glm-5.3-flash --log-level debug --capture /tmp/teep-attestation-neardirect
 
 report-nearcloud: build ## Verify NearCloud gateway attestation (requires NEARAI_API_KEY)
-	./teep verify nearcloud --model Qwen/Qwen3.5-122B-A10B --log-level debug --capture /tmp/teep-attestation-nearcloud
+	./teep verify nearcloud --model z-ai/glm-5.3-flash --log-level debug --capture /tmp/teep-attestation-nearcloud
 
 report-nanogpt: build ## Verify NanoGPT attestation (requires NANOGPT_API_KEY)
 	./teep verify nanogpt --model TEE/gemma-3-27b-it --log-level debug --capture /tmp/teep-attestation-nanogpt
@@ -139,3 +139,7 @@ e2e-venice: ## Run Venice E2E test (requires VENICE_API_KEY)
 
 clean: ## Remove built binary
 	rm -f teep
+
+.PHONY: integration-concurrent-providers
+integration-concurrent-providers: ## Run concurrent NEAR and Tinfoil cloud integration (requires both API keys)
+	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 600s -run '^TestIntegration_ConcurrentProviders$$' ./internal/proxy/
