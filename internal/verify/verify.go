@@ -17,6 +17,7 @@ import (
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/defaults"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/provider/venice"
@@ -63,6 +64,14 @@ type CfgLoader func(providerName string) (*config.Config, *config.Provider, erro
 // generated nonce.
 func Run(ctx context.Context, opts *Options) (report *attestation.VerificationReport, retErr error) {
 	local := *opts
+	if opts.CapturedE2EE != nil {
+		value := *opts.CapturedE2EE
+		local.CapturedE2EE = &value
+	}
+	if opts.CapturedTLSInference != nil {
+		value := *opts.CapturedTLSInference
+		local.CapturedTLSInference = &value
+	}
 	var err error
 	if local.ProviderName == "neardirect" || local.ProviderName == "nearcloud" {
 		local.nearConfig, err = nearCaptureConfig(local.ProviderName, local.Provider)
@@ -104,6 +113,7 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 }
 
 type verificationOutcome struct {
+	modelKey     e2ee.NearModelKey
 	report       *attestation.VerificationReport
 	raw          *attestation.RawAttestation
 	e2ee         *attestation.E2EETestResult

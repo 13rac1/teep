@@ -1,6 +1,10 @@
 package verify
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -87,7 +91,7 @@ func TestNearRecordedSelectionValidation(t *testing.T) {
 }
 
 func TestNearTLSOnlySignedCaptureReplay(t *testing.T) {
-	for _, fixture := range []string{"neardirect_z-ai_glm-5.3-flash_20260909_202322", "nearcloud_z-ai_glm-5.3-flash_20260909_202336"} {
+	for _, fixture := range []string{"neardirect_z-ai_glm-5.3-flash_20260909_202322", "nearcloud_z-ai_glm-5.3-flash_20260909_204035"} {
 		t.Run(fixture, func(t *testing.T) {
 			dir := "../integration/testdata/near_tls_only/" + fixture
 			manifest, _, err := capture.Load(dir)
@@ -123,5 +127,42 @@ func TestNearTLSOnlySignedCaptureReplay(t *testing.T) {
 				t.Fatal("replay accepted a changed E2EE mode")
 			}
 		})
+	}
+}
+
+func TestNearCloudTLSOnlyReplayRejectsSubstitutedBoundKey(t *testing.T) {
+	dir := "../integration/testdata/near_tls_only/nearcloud_z-ai_glm-5.3-flash_20260909_204035"
+	manifest, entries, err := capture.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	defer clear(private)
+	replacement := hex.EncodeToString(private.Public().(ed25519.PublicKey))
+	field := regexp.MustCompile(`("signing_public_key"\s*:\s*")[^"]*(")`)
+	changed := false
+	for i := range entries {
+		if strings.Contains(entries[i].URL, "cloud-api.near.ai/v1/attestation/report?") {
+			entries[i].Body = field.ReplaceAll(entries[i].Body, []byte(`${1}`+replacement+`${2}`))
+			changed = true
+		}
+	}
+	if !changed {
+		t.Fatal("capture has no gateway evidence")
+	}
+	altered, err := capture.Save(t.TempDir(), &manifest, "", entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp := &config.Provider{Name: "nearcloud", BaseURL: manifest.NearConfig.Origin, E2EE: false}
+	policy := config.ProviderDefaultAllowFail()["nearcloud"]
+	policy = append(policy, attestation.FactorE2EEUsable, attestation.FactorTEEReportData)
+	cfg := &config.Config{Providers: map[string]*config.Provider{"nearcloud": cp}, ProviderAllowFail: map[string][]string{"nearcloud": policy}}
+	report, _, err := Replay(t.Context(), altered, func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Blocked() {
+		t.Fatal("recorded TLS-only success authorized a substituted key under a binding allowance")
 	}
 }

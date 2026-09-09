@@ -1,0 +1,16 @@
+{
+  "tls_inference": {
+    "attempted": true,
+    "failed": false,
+    "detail": "TLS-only streaming chat probe succeeded; no E2EE test performed"
+  },
+  "near_config": {
+    "origin": "https://cloud-api.near.ai",
+    "e2ee": false
+  },
+  "provider": "nearcloud",
+  "model": "z-ai/glm-5.3-flash",
+  "nonce_hex": "237c01a463513dc2f52ce724b0cffb33ff521752f06377512434077e3ff878ed",
+  "captured_at": "2026-09-09T20:40:35.511673Z",
+  "duration_ms": 8852
+}

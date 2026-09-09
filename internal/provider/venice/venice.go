@@ -319,7 +319,7 @@ func NewPreparer(apiKey string) *Preparer {
 }
 
 // PrepareRequest merges pre-built E2EE headers into req and sets Authorization.
-func (p *Preparer) PrepareRequest(req *http.Request, e2eeHeaders http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string) error {
+func (p *Preparer) PrepareRequest(req *http.Request, e2eeHeaders http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string, _ provider.PreparationData) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	maps.Copy(req.Header, e2eeHeaders)
 	return nil

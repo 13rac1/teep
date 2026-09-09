@@ -70,6 +70,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	}
 	q := endpoint.Query()
 	q.Set("model", model)
+	q.Set("provider", "near")
 	q.Set("nonce", nonce.Hex())
 	q.Set("include_tls_fingerprint", "true")
 	q.Set("signing_algo", "ed25519")

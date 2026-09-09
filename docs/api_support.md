@@ -239,6 +239,13 @@ E2EE checks still apply. The `/v1/models` catalog remains gateway-provided.
 
 NearCloud keeps the same NearAI field-encryption behavior as NearDirect for the supported endpoints, but its TLS binding is to the gateway only rather than to the underlying per-model inference machine. Audio is not supported because the multipart request body cannot use the current field-encryption protocol. Gateway TLS pinning alone does not protect the multipart body through to the model backend.
 
+Every supported NearCloud request sends the authenticated model key as
+`X-Model-Pub-Key`, including TLS-only requests. Gateway configuration and
+endpoint behavior can ignore this hint; it does not establish non-chat backend
+affinity. E2EE recovery requires an [exact supported key rejection](transport/retries.md#recognized-provider-responses), including the chat stale-key rejection.
+Generic image errors retain authorization and do not replay; automatic image
+key-retirement recovery is unsupported. See [NEAR routing and limitations](providers/near/near_attestation.md#nearcloud-model-routing), including mandatory TLS-only model-key binding and gateway authentication requirements.
+
 **E2EE field coverage:** Matches the shared NearAI tables above; score response `data[].score` is currently plaintext due to a known upstream NearAI limitation.
 
 ---

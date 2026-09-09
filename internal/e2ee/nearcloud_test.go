@@ -188,7 +188,7 @@ func TestEncryptChatMessagesNearCloud(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, pubHex)
+	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestNearCloudSessionIsResponseFieldEncrypted_NestedPaths(t *testing.T) {
 
 func TestEncryptChatMessagesNearCloud_InvalidKey(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
-	_, _, err := EncryptChatMessagesNearCloud(body, "bad-key")
+	_, _, err := EncryptChatMessagesNearCloud(body, NearModelKey{})
 	t.Logf("invalid key error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for invalid signing key")
@@ -301,7 +301,7 @@ func TestEncryptChatMessagesNearCloud_InvalidKey(t *testing.T) {
 
 func TestEncryptChatMessagesNearCloud_InvalidBody(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
-	_, _, err := EncryptChatMessagesNearCloud([]byte("not json"), pubHex)
+	_, _, err := EncryptChatMessagesNearCloud([]byte("not json"), testNearModelKey(t, pubHex))
 	t.Logf("invalid body error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for invalid body")
@@ -310,7 +310,7 @@ func TestEncryptChatMessagesNearCloud_InvalidBody(t *testing.T) {
 
 func TestEncryptChatMessagesNearCloud_InvalidMessages(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
-	_, _, err := EncryptChatMessagesNearCloud([]byte(`{"model":"m","messages":"not-an-array"}`), pubHex)
+	_, _, err := EncryptChatMessagesNearCloud([]byte(`{"model":"m","messages":"not-an-array"}`), testNearModelKey(t, pubHex))
 	t.Logf("invalid messages error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for invalid messages")
@@ -354,14 +354,14 @@ func TestNearCloudSessionZero(t *testing.T) {
 		t.Fatalf("SetModelKeyEd25519: %v", err)
 	}
 
-	t.Logf("before Zero: x25519Priv=%v, modelX25519=%v", session.x25519Priv != nil, session.modelX25519 != nil)
+	t.Logf("before Zero: x25519Priv=%v, modelX25519=%v", session.x25519Priv != nil, session.ModelX25519Pub() != nil)
 	session.Zero()
-	t.Logf("after Zero: x25519Priv=%v, modelX25519=%v", session.x25519Priv != nil, session.modelX25519 != nil)
+	t.Logf("after Zero: x25519Priv=%v, modelX25519=%v", session.x25519Priv != nil, session.ModelX25519Pub() != nil)
 
 	if session.x25519Priv != nil {
 		t.Error("x25519Priv not nil after Zero()")
 	}
-	if session.modelX25519 != nil {
+	if session.ModelX25519Pub() != nil {
 		t.Error("modelX25519 not nil after Zero()")
 	}
 }
@@ -550,7 +550,7 @@ func TestEncryptChatMessagesNearCloud_VLContent(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, pubHex)
+	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptChatMessagesNearCloud VL: %v", err)
 	}
@@ -649,7 +649,7 @@ func TestEncryptChatMessagesNearCloud_ToolCallConversation(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, pubHex)
+	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
@@ -747,7 +747,7 @@ func TestEncryptChatMessagesNearCloud_PreservesExtraFields(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, pubHex)
+	encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
@@ -836,7 +836,7 @@ func TestEncryptChatMessagesNearCloud_NullContentVariants(t *testing.T) {
 				t.Fatalf("marshal: %v", err)
 			}
 
-			encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, pubHex)
+			encBody, session, err := EncryptChatMessagesNearCloud(bodyJSON, testNearModelKey(t, pubHex))
 			if err != nil {
 				t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 			}
@@ -986,7 +986,7 @@ func TestEncryptImagePromptNearCloud(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	encBody, session, err := EncryptImagePromptNearCloud(bodyJSON, pubHex)
+	encBody, session, err := EncryptImagePromptNearCloud(bodyJSON, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptImagePromptNearCloud: %v", err)
 	}
@@ -1034,7 +1034,7 @@ func TestEncryptImagePromptNearCloud(t *testing.T) {
 }
 
 func TestEncryptImagePromptNearCloud_InvalidKey(t *testing.T) {
-	_, _, err := EncryptImagePromptNearCloud([]byte(`{"model":"m","prompt":"test"}`), "bad-key")
+	_, _, err := EncryptImagePromptNearCloud([]byte(`{"model":"m","prompt":"test"}`), NearModelKey{})
 	if err == nil {
 		t.Fatal("expected error for invalid key")
 	}
@@ -1042,7 +1042,7 @@ func TestEncryptImagePromptNearCloud_InvalidKey(t *testing.T) {
 
 func TestEncryptImagePromptNearCloud_MissingPrompt(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
-	_, _, err := EncryptImagePromptNearCloud([]byte(`{"model":"m"}`), pubHex)
+	_, _, err := EncryptImagePromptNearCloud([]byte(`{"model":"m"}`), testNearModelKey(t, pubHex))
 	if err == nil {
 		t.Fatal("expected error for missing prompt")
 	}
@@ -1050,7 +1050,7 @@ func TestEncryptImagePromptNearCloud_MissingPrompt(t *testing.T) {
 
 func TestEncryptImagePromptNearCloud_InvalidBody(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
-	_, _, err := EncryptImagePromptNearCloud([]byte("not json"), pubHex)
+	_, _, err := EncryptImagePromptNearCloud([]byte("not json"), testNearModelKey(t, pubHex))
 	if err == nil {
 		t.Fatal("expected error for invalid body")
 	}
@@ -1060,7 +1060,7 @@ func TestEncryptEmbeddingsNearCloud_StringArray(t *testing.T) {
 	pubHex, seed := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","input":["hello","world"]}`)
 
-	encBody, session, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	encBody, session, err := EncryptEmbeddingsNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptEmbeddingsNearCloud: %v", err)
 	}
@@ -1099,7 +1099,7 @@ func TestEncryptEmbeddingsNearCloud_UnsupportedArrayElementType(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","input":["hello",123]}`)
 
-	_, _, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	_, _, err := EncryptEmbeddingsNearCloud(body, testNearModelKey(t, pubHex))
 	if err == nil {
 		t.Fatal("expected error for non-string input array element")
 	}
@@ -1112,7 +1112,7 @@ func TestEncryptEmbeddingsNearCloud_UnsupportedInputType(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","input":123}`)
 
-	_, _, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	_, _, err := EncryptEmbeddingsNearCloud(body, testNearModelKey(t, pubHex))
 	if err == nil {
 		t.Fatal("expected error for unsupported input type")
 	}
@@ -1125,7 +1125,7 @@ func TestEncryptRerankNearCloud_ObjectDocuments(t *testing.T) {
 	pubHex, seed := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","query":"hello","documents":[{"text":"first","title":"doc-1"},"second"]}`)
 
-	encBody, session, err := EncryptRerankNearCloud(body, pubHex)
+	encBody, session, err := EncryptRerankNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptRerankNearCloud: %v", err)
 	}
@@ -1199,7 +1199,7 @@ func TestEncryptRerankNearCloud_UnsupportedDocumentType(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","query":"hello","documents":[123]}`)
 
-	_, _, err := EncryptRerankNearCloud(body, pubHex)
+	_, _, err := EncryptRerankNearCloud(body, testNearModelKey(t, pubHex))
 	if err == nil {
 		t.Fatal("expected error for unsupported rerank document type")
 	}
@@ -1267,7 +1267,7 @@ func TestContentPlaintext(t *testing.T) {
 func TestEncryptScoreNearCloud(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","text_1":"hello","text_2":"world"}`)
-	enc, session, err := EncryptScoreNearCloud(body, pubHex)
+	enc, session, err := EncryptScoreNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptScoreNearCloud: %v", err)
 	}
@@ -1289,7 +1289,7 @@ func TestEncryptScoreNearCloud(t *testing.T) {
 func TestEncryptScoreNearCloud_NoTextField(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m"}`)
-	enc, session, err := EncryptScoreNearCloud(body, pubHex)
+	enc, session, err := EncryptScoreNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptScoreNearCloud: %v", err)
 	}
@@ -1308,7 +1308,7 @@ func TestEncryptScoreNearCloud_NoTextField(t *testing.T) {
 func TestEncryptEmbeddingsNearCloud_SingleString(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","input":"hello world"}`)
-	enc, session, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	enc, session, err := EncryptEmbeddingsNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptEmbeddingsNearCloud: %v", err)
 	}
@@ -1334,7 +1334,7 @@ func TestEncryptEmbeddingsNearCloud_SingleString(t *testing.T) {
 func TestEncryptEmbeddingsNearCloud_NullInput(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","input":null}`)
-	enc, session, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	enc, session, err := EncryptEmbeddingsNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptEmbeddingsNearCloud(null input): %v", err)
 	}
@@ -1576,7 +1576,7 @@ func TestEncryptTopLevelFields_FunctionCallString(t *testing.T) {
 func TestEncryptChatMessagesNearCloud_StreamForcing(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}],"stream":false}`)
-	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	enc, session, err := EncryptChatMessagesNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
@@ -1614,7 +1614,7 @@ func TestEncryptChatMessagesNearCloud_WithTools(t *testing.T) {
 		"messages":[{"role":"user","content":"hi"}],
 		"tools":[{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object"}}}]
 	}`)
-	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	enc, session, err := EncryptChatMessagesNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
@@ -1636,7 +1636,7 @@ func TestEncryptChatMessagesNearCloud_WithToolCalls(t *testing.T) {
 		"model":"m",
 		"messages":[{"role":"assistant","tool_calls":[{"id":"tc1","type":"function","function":{"name":"fn","arguments":"{}"}}]}]
 	}`)
-	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	enc, session, err := EncryptChatMessagesNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
@@ -1659,7 +1659,7 @@ func TestEncryptChatMessagesNearCloud_NullContent(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	// Null content is standard for tool-call assistant messages.
 	body := []byte(`{"model":"m","messages":[{"role":"assistant","content":null}]}`)
-	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	enc, session, err := EncryptChatMessagesNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
@@ -1681,7 +1681,7 @@ func TestEncryptChatMessagesNearCloud_NullContent(t *testing.T) {
 func TestEncryptChatMessagesNearCloud_WithName(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi","name":"alice"}]}`)
-	enc, session, err := EncryptChatMessagesNearCloud(body, pubHex)
+	enc, session, err := EncryptChatMessagesNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptChatMessagesNearCloud: %v", err)
 	}
@@ -1707,7 +1707,7 @@ func TestEncryptChatMessagesNearCloud_WithName(t *testing.T) {
 func TestEncryptImagePromptNearCloud_NonStringPrompt(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","prompt":123}`)
-	_, _, err := EncryptImagePromptNearCloud(body, pubHex)
+	_, _, err := EncryptImagePromptNearCloud(body, testNearModelKey(t, pubHex))
 	if err == nil {
 		t.Fatal("expected error for non-string prompt")
 	}
@@ -1720,7 +1720,7 @@ func TestEncryptImagePromptNearCloud_NonStringPrompt(t *testing.T) {
 func TestEncryptRerankNearCloud_StringDocuments(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","query":"search","documents":["doc1","doc2"]}`)
-	enc, session, err := EncryptRerankNearCloud(body, pubHex)
+	enc, session, err := EncryptRerankNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptRerankNearCloud: %v", err)
 	}
@@ -1743,7 +1743,7 @@ func TestEncryptRerankNearCloud_StringDocuments(t *testing.T) {
 func TestEncryptRerankNearCloud_UnsupportedDocType(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","query":"q","documents":[123]}`)
-	_, _, err := EncryptRerankNearCloud(body, pubHex)
+	_, _, err := EncryptRerankNearCloud(body, testNearModelKey(t, pubHex))
 	if err == nil {
 		t.Fatal("expected error for unsupported document type")
 	}
@@ -1756,7 +1756,7 @@ func TestEncryptRerankNearCloud_UnsupportedDocType(t *testing.T) {
 func TestEncryptEmbeddingsNearCloud_ArrayInput(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","input":["hello","world"]}`)
-	enc, session, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	enc, session, err := EncryptEmbeddingsNearCloud(body, testNearModelKey(t, pubHex))
 	if err != nil {
 		t.Fatalf("EncryptEmbeddingsNearCloud: %v", err)
 	}
@@ -1781,7 +1781,7 @@ func TestEncryptEmbeddingsNearCloud_ArrayInput(t *testing.T) {
 func TestEncryptEmbeddingsNearCloud_ArrayNonStringElement(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
 	body := []byte(`{"model":"m","input":["hello",123]}`)
-	_, _, err := EncryptEmbeddingsNearCloud(body, pubHex)
+	_, _, err := EncryptEmbeddingsNearCloud(body, testNearModelKey(t, pubHex))
 	if err == nil {
 		t.Fatal("expected error for non-string array element")
 	}

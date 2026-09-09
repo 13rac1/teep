@@ -27,38 +27,34 @@ func NewE2EE() *E2EE { return &E2EE{} }
 //
 // Unsupported endpoints fail closed.
 func (n *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error) {
+	modelKey, err := e2ee.ParseNearModelKey(raw.SigningKey)
+	if err != nil {
+		return e2ee.EncryptResult{}, err
+	}
+	return n.EncryptRequestWithModelKey(body, modelKey, endpoint)
+}
+
+// EncryptRequestWithModelKey uses the key from the acquired authorization.
+// Each call creates independent ephemeral encryption and response session material.
+func (n *E2EE) EncryptRequestWithModelKey(body []byte, modelKey e2ee.NearModelKey, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error) {
+	var encrypt func([]byte, e2ee.NearModelKey) ([]byte, *e2ee.NearCloudSession, error)
 	switch endpoint {
 	case e2ee.EndpointChat:
-		encBody, session, err := e2ee.EncryptChatMessagesNearCloud(body, raw.SigningKey)
-		if err != nil {
-			return e2ee.EncryptResult{}, err
-		}
-		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
+		encrypt = e2ee.EncryptChatMessagesNearCloud
 	case e2ee.EndpointImages:
-		encBody, session, err := e2ee.EncryptImagePromptNearCloud(body, raw.SigningKey)
-		if err != nil {
-			return e2ee.EncryptResult{}, err
-		}
-		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
+		encrypt = e2ee.EncryptImagePromptNearCloud
 	case e2ee.EndpointEmbeddings:
-		encBody, session, err := e2ee.EncryptEmbeddingsNearCloud(body, raw.SigningKey)
-		if err != nil {
-			return e2ee.EncryptResult{}, err
-		}
-		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
+		encrypt = e2ee.EncryptEmbeddingsNearCloud
 	case e2ee.EndpointRerank:
-		encBody, session, err := e2ee.EncryptRerankNearCloud(body, raw.SigningKey)
-		if err != nil {
-			return e2ee.EncryptResult{}, err
-		}
-		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
+		encrypt = e2ee.EncryptRerankNearCloud
 	case e2ee.EndpointScore:
-		encBody, session, err := e2ee.EncryptScoreNearCloud(body, raw.SigningKey)
-		if err != nil {
-			return e2ee.EncryptResult{}, err
-		}
-		return e2ee.EncryptResult{Body: encBody, Session: session}, nil
+		encrypt = e2ee.EncryptScoreNearCloud
 	default:
 		return e2ee.EncryptResult{}, fmt.Errorf("NearAI E2EE not supported for endpoint %q", endpoint)
 	}
+	encBody, session, err := encrypt(body, modelKey)
+	if err != nil {
+		return e2ee.EncryptResult{}, err
+	}
+	return e2ee.EncryptResult{Body: encBody, Session: session}, nil
 }

@@ -47,7 +47,7 @@ func testGatewayTransportBinding(t *testing.T, mode string, wantSuccess bool) {
 				t.Error("attestation did not negotiate HTTP/2")
 			}
 			q := r.URL.Query()
-			if q.Get("model") != "test-model" || q.Get("include_tls_fingerprint") != "true" || q.Get("signing_algo") != "ed25519" {
+			if q.Get("model") != "test-model" || q.Get("include_tls_fingerprint") != "true" || q.Get("signing_algo") != "ed25519" || q.Get("provider") != "near" || len(q["provider"]) != 1 {
 				t.Error("missing attestation query parameters")
 			}
 			if !tlsct.SPKIFingerprintsEqual(q.Get("nonce"), nonce.Hex()) {

@@ -13,7 +13,8 @@ the provider did not process inference.
 | Outcome | Retry this request? | Shared authorization action |
 | --- | --- | --- |
 | Typed DNS error marked temporary or timed out, or a dial error, before any `GotConn` | At most once, if the context remains valid | Retain; acquire valid authorization again |
-| Exact supported key rejection before inference | At most once | Conditionally remove the generation used; acquire authorization again |
+| Exact supported key rejection before inference, E2EE attempt | At most once | Conditionally remove the generation used; acquire authorization again |
+| Exact NearCloud chat 421 stale-key rejection, TLS-only attempt | No | Conditionally remove the generation used; the next request acquires authorization |
 | Origin TLS WebPKI, CT, or SPKI authentication failure | No | Conditionally remove the generation used |
 | HTTPS forward-proxy handshake failure | No | Retain origin authorization, including replacement generations |
 | Response authentication, decryption, or encryption-policy failure | No | Conditionally remove the generation used and record a negative-cache cooldown |
@@ -81,7 +82,8 @@ successful complete verification.
 
 ## Recognized provider responses
 
-All responses below arrive over attested TLS. NEAR responses require HTTP 400,
+Responses arrive over the authorized TLS transport, including any explicit factor
+allowance. The existing NEAR decryption-rejection contract requires HTTP 400,
 media type `application/json`, and the exact message `Decryption failed`.
 Key recovery applies only when the attempt used an E2EE session. A TLS-only
 request handles the same envelope as an ordinary upstream error: it does not
@@ -121,6 +123,33 @@ error if the body exceeds the size limit or cannot be read. A well-formed respon
 another type or message is not a key rejection. Do not search raw body strings
 or recursively parse nested error text to expand these contracts.
 
+## NearCloud stale routing key
+
+NearCloud chat (`/v1/chat/completions`) additionally recognizes HTTP 421 with
+one `Content-Type: application/json` header and this exact envelope:
+
+```json
+{"error":{"type":"provider_error","message":"The encryption key is no longer valid. Please refresh your attestation report and retry.","param":null,"code":null}}
+```
+
+`param` and `code` may be absent or null; every non-null value is rejected.
+The same strict parsing, duplicate checks, encrypted-error exclusion, and
+64 KiB limit apply. Other statuses, endpoints, types, or messages establish no
+stale-key contract.
+
+Both E2EE and TLS-only attempts conditionally remove only the generation whose
+routing key they sent. An E2EE attempt may retry once with acquired authorization
+and a fresh session, including a replacement already published by another
+request. TLS-only returns HTTP 421 without replay. Its next request fully
+verifies on a cache miss. Standalone TLS-only verification fails the probe
+without replay or automatic re-attestation. These failures create no cooldown
+and do not close gateway pools whose transport identity remains valid.
+
+Image HTTP 404/500 responses and nested stale-key text do not authorize replay
+or invalidation. Generic errors can describe request failures with a valid key.
+Automatic image key-retirement recovery is unsupported; see the
+[NEAR limitations](../providers/near/near_attestation.md#nearcloud-model-routing).
+
 ## NEAR contract evidence
 
 The contract review used these source revisions:
@@ -137,6 +166,11 @@ The contract review used these source revisions:
   The embeddings service preserves `CompletionError::ProviderError`, which
   emits `provider_error`. Image, rerank, and score retain raw backend response
   strings and do not establish the same outer JSON response contract.
+
+The stale-key contract uses [cloud-api at `1c8057f3`](https://github.com/nearai/cloud-api/tree/1c8057f3620a77d0aef9f3a16c5711fd2e6ee21c):
+`retry_with_fallback_caps` rejects a missing chat key before dispatch;
+`crates/services/src/completions/mod.rs` and the API conversions produce the
+421 envelope above. Image conversions do not provide an equivalent contract.
 
 A provider protocol change requires new evidence and tests before changing the
 recognizer. Keep the exact accepted response and endpoint set visible here.

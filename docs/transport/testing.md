@@ -62,7 +62,7 @@ tests.
 | Fresh NEAR fetches use independent connections within reserved aggregate capacity | `TestDirectFetchOwnsFreshConnections`, `TestAttestationFactoryReservesFreshCapacity`, `TestReservedBudgetAcrossHTTPSProxyOrigins` |
 | Concurrent key rejections run one shared full online re-attestation, create fresh retry sessions, and preserve replacement authorization against a delayed rejection | `TestIntegration_NearDirectKeyRecovery`, `TestIntegration_NearCloudKeyRecovery`, `TestIntegration_TinfoilKeyRecovery` |
 | Router verification is shared across models while report outcomes remain separate and bounded | `TestAuthorizationRouterSharesVerificationAcrossModels`, `TestAuthorizationRouterModelViewsBounded` |
-| TLS-only key-error envelopes retain authorization without retry under concurrent use | `TestAuthorizedTLSOnlyKeyErrorsRetainAuthorization` |
+| Ordinary TLS-only key-error envelopes (excluding the exact NearCloud 421) retain authorization without retry under concurrent use | `TestAuthorizedTLSOnlyKeyErrorsRetainAuthorization` |
 | Ambiguous rejection envelopes fail concurrent requests without replay or authorization invalidation | `TestAuthorizedDuplicateRejectionRetainsAuthorization` |
 | NEAR discovery uses the injected client's transport and releases idle connections with owner cleanup | `TestAttesterDiscoveryUsesOwnedClient` |
 | SEV report and certificate signature failures reject admission under concurrent verification | `TestSEVOnlineRequiresAuthenticatedEvidence` |
@@ -157,3 +157,20 @@ failures cannot extend a cooldown or remove replacement authorization.
 `TestReportLookupDoesNotObserveModels` verifies that concurrent report queries
 leave authorization recency and observed inference models unchanged, and return
 independent report snapshots.
+
+## NearCloud routing and stale keys
+
+- `TestNearModelKeyConcurrentSessionReuse` checks that two models share their own immutable conversions across concurrent requests while session keys remain fresh and cross-model decryption fails.
+- [Preparer tests](../../internal/provider/nearcloud/preparer_test.go) cover concurrent authenticated headers, canonical encoding, TLS-only preparation, and production encryption.
+- [Admission tests](../../internal/proxy/authorization_near_keys_test.go) and [signed replay tests](../../internal/verify/near_capture_test.go) reject unbound TLS-only routing keys even with a factor allowance.
+- [Stale-key tests](../../internal/proxy/nearcloud_stale_key_test.go) cover TLS-only invalidation without replay, late-generation isolation, and encrypted retries using an already-published replacement and fresh session.
+- [Image policy tests](../../internal/proxy/nearcloud_image_policy_test.go) retain authorization and gateway connections across generic failures.
+- [Mixed-key gateway tests](../../internal/proxy/nearcloud_affinity_test.go) exercise honored hints, disabled affinity, empty maps, and unknown groups with concurrent streaming and non-streaming clients. The production encryption path blocks decryption by the wrong backend key; unauthenticated responses fail without replay. TLS-only success does not establish E2EE success.
+- `TestIntegration_NearCloudKeyRecovery` exercises the exact 421 envelope with full online verification and real encrypted recovery.
+
+NearCloud positive replay uses the capture from 2026-09-10, whose recorded TLS
+peer matches the reported fingerprint. The earlier capture from 2026-09-09 at
+20:40:25 records a mismatch and is retained for
+`TestReverifyRejectsCapturedGatewaySPKIMismatch` in
+[reverify TLS tests](../../cmd/teep/reverify_tls_test.go). Production replay must
+reject that evidence before inference; fixture tests do not waive TLS binding.

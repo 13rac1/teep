@@ -31,6 +31,7 @@ type authorization struct {
 	key        provider.AuthorizationKey
 	report     *attestation.VerificationReport
 	signingKey string
+	modelKey   e2ee.NearModelKey
 	identity   tlsct.TransportIdentity
 	generation authorizationGeneration
 }
@@ -49,37 +50,39 @@ func newAuthorization(key provider.AuthorizationKey, report *attestation.Verific
 	if identity.Authority() != key.Authority() {
 		return nil, errors.New("authorization authority does not match route")
 	}
-	if requireE2EE {
+	var modelKey e2ee.NearModelKey
+	if requireE2EE || key.ProviderName() == "nearcloud" {
 		if !report.ReportDataBindingPassed() {
-			return nil, errors.New("authorization E2EE key is not authenticated by REPORTDATA")
+			return nil, errors.New("authorization model key is not authenticated by REPORTDATA")
 		}
-		if err := validateAuthorizationKey(key.ProviderName(), signingKey); err != nil {
+		modelKey, err = validateAuthorizationKey(key.ProviderName(), signingKey)
+		if err != nil {
 			return nil, err
 		}
 	} else {
 		signingKey = ""
 	}
-	return &authorization{key: key, report: report.Clone(), signingKey: signingKey, identity: identity}, nil
+	return &authorization{key: key, report: report.Clone(), signingKey: signingKey, modelKey: modelKey, identity: identity}, nil
 }
 
-func validateAuthorizationKey(name, key string) error {
+func validateAuthorizationKey(name, key string) (e2ee.NearModelKey, error) {
 	switch name {
 	case "nearcloud", "neardirect":
-		return e2ee.ValidateModelKeyEd25519(key)
+		return e2ee.ParseNearModelKey(key)
 	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
 		decoded, err := hex.DecodeString(key)
 		if err != nil {
-			return fmt.Errorf("invalid EHBP public key: %w", err)
+			return e2ee.NearModelKey{}, fmt.Errorf("invalid EHBP public key: %w", err)
 		}
 		// Exercise the production key agreement to reject low-order public keys.
 		session, err := e2ee.NewEHBPSession(decoded)
 		if err != nil {
-			return err
+			return e2ee.NearModelKey{}, err
 		}
 		session.Zero()
-		return nil
+		return e2ee.NearModelKey{}, nil
 	default:
-		return errors.New("unsupported TLS-binding authorization provider")
+		return e2ee.NearModelKey{}, errors.New("unsupported TLS-binding authorization provider")
 	}
 }
 
@@ -407,7 +410,7 @@ func (s *authorizationStore) close() {
 	clear(s.entries)
 }
 
-// counts returns live authorizations and retained encryption keys without
+// counts returns live authorizations and retained model keys without
 // copying reports or changing cache recency.
 func (s *authorizationStore) counts() (entries, signingKeys int) {
 	if s == nil {

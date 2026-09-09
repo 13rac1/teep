@@ -1,4 +1,6 @@
-# NEAR attestation response parsing
+# NEAR routing and attestation
+
+## Attestation response parsing
 
 Teep selects the parser from the configured provider before decoding evidence.
 A parsing failure blocks verification. Teep does not try another envelope or
@@ -145,4 +147,64 @@ Regression coverage includes [selection tests](../../../internal/provider/neardi
 [metadata admission tests](../../../internal/provider/neardirect/metadata_capacity_test.go),
 [fresh fetch tests](../../../internal/provider/neardirect/transport_binding_test.go),
 [replay checks](../../../internal/verify/near_capture_test.go), and
-[TLS-only probe tests](../../../internal/verify/tls_probe_test.go).
+[TLS-only probe tests](../../../internal/verify/tls_probe_test.go). The probe validates
+every chunk and choice, including after valid text, while permitting null content,
+usage-only chunks with an empty choices array, and provider extensions. Only
+exactly named supported fields contribute to probe success; case-variant
+extensions cannot overwrite supported values. An explicit
+standalone attestation client factory is retained when the collateral client is omitted.
+
+## NearCloud model routing
+
+NearCloud uses the fixed `cloud-api.near.ai` gateway authority. Attestation
+requests select `provider=near`, with a fresh client nonce, Ed25519 signing,
+and TLS binding. Teep does not select a gateway backend index or accept a
+Chutes report as NEAR model evidence.
+
+Every supported inference request carries exactly one `X-Model-Pub-Key` header:
+the acquired authorization's 32-byte Ed25519 model key, encoded as 64 lowercase
+hexadecimal characters. The stateless preparer replaces inbound hints. E2EE
+requests use that same authorization for their fresh encryption session.
+Authorization admission retains the immutable validated model key and its
+X25519 conversion. Encryption and header preparation use that acquired value
+without repeating conversion for each request. TLS-only preparation uses its
+canonical encoding without creating an encryption session. Each encrypted
+request still creates fresh ephemeral session material. Key validation does
+not replace REPORTDATA authentication. Standalone admission retains the same
+value across connection retries and validates new material after key rejection.
+NearDirect does not send this gateway hint.
+
+TLS-only NearCloud requests also require a valid model key and successful
+REPORTDATA binding before authorization publication or standalone inference.
+An allowance for the binding factor cannot authorize a substituted key. Retaining
+the routing key does not enable encryption or establish E2EE success.
+
+The header is a routing hint, not independent evidence of backend selection.
+Gateway deployment settings and endpoint implementations can ignore it. Teep
+does not claim non-chat backend affinity; E2EE responses must still authenticate.
+The gateway remains the TLS peer, and its SPKI must match the reported fingerprint.
+Attestation-authenticated gateway TLS also requires successful gateway REPORTDATA
+binding; `gateway_tee_reportdata_binding` is separately allowed to fail by default.
+A model-key replacement can reuse gateway connections whose transport identity
+remains valid.
+
+Only the exact documented chat HTTP 421 stale-key envelope invalidates the
+used authorization generation in both modes. E2EE permits one retry with newly
+acquired authorization and fresh session material; TLS-only returns the rejection
+without replay. A replacement already published by another request remains
+usable. See the [exact envelope and retry contract](../../transport/retries.md#nearcloud-stale-routing-key).
+
+Generic image errors, including 404 and 500, do not establish key retirement or
+rejection before inference. They cause no replay, authorization removal, or
+cooldown. Ordinary malformed bodies, read failures, and cancellation retain
+these rules; independent transport or response-authentication failures retain
+their own invalidation contracts. If a retired image key produces only generic
+errors, requests can fail until authorization is otherwise evicted or the
+process restarts. There is no automatic image key-retirement recovery or
+authorization TTL. The standalone chat probe does not validate image recovery.
+
+Coverage includes [routing header tests](../../../internal/provider/nearcloud/preparer_test.go),
+[admission tests](../../../internal/proxy/authorization_near_keys_test.go),
+[stale-key tests](../../../internal/proxy/nearcloud_stale_key_test.go),
+[image error tests](../../../internal/proxy/nearcloud_image_policy_test.go), and
+signed capture replay in [verification tests](../../../internal/verify/near_capture_test.go).

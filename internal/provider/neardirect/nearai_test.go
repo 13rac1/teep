@@ -467,7 +467,7 @@ func TestPreparer_PrepareRequest_SetsAuthHeader(t *testing.T) {
 	p := neardirect.NewPreparer("nearai-key")
 	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/v1/chat/completions", http.NoBody)
 
-	if err := p.PrepareRequest(req, nil, nil, false, ""); err != nil {
+	if err := p.PrepareRequest(req, nil, nil, false, "", provider.PreparationData{}); err != nil {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
 
@@ -481,7 +481,7 @@ func TestPreparer_PrepareRequest_NoSessionRequired(t *testing.T) {
 	p := neardirect.NewPreparer("key")
 	req, _ := http.NewRequest(http.MethodPost, "https://api.near.ai/", http.NoBody)
 
-	if err := p.PrepareRequest(req, nil, nil, false, ""); err != nil {
+	if err := p.PrepareRequest(req, nil, nil, false, "", provider.PreparationData{}); err != nil {
 		t.Fatalf("PrepareRequest with nil session: %v", err)
 	}
 }
@@ -653,7 +653,7 @@ func TestPreparerPreservesCompleteE2EEHeaders(t *testing.T) {
 	headers := http.Header{"X-Signing-Algo": {"ed25519"}, "X-Client-Pub-Key": {strings.Repeat("ab", 32)}, "X-Encryption-Version": {"2"}, "X-Encrypt-All-Fields": {"true"}, "X-Unrelated": {"ignored"}}
 	preparer := neardirect.NewPreparer("test-key")
 	request := httptest.NewRequest(http.MethodPost, "https://test.near.ai/v1/chat/completions", http.NoBody)
-	if err := preparer.PrepareRequest(request, headers, nil, true, "/v1/chat/completions"); err != nil {
+	if err := preparer.PrepareRequest(request, headers, nil, true, "/v1/chat/completions", provider.PreparationData{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"X-Signing-Algo", "X-Client-Pub-Key", "X-Encryption-Version", "X-Encrypt-All-Fields"} {
@@ -662,7 +662,7 @@ func TestPreparerPreservesCompleteE2EEHeaders(t *testing.T) {
 		}
 		incomplete := headers.Clone()
 		incomplete.Del(name)
-		if err := preparer.PrepareRequest(request, incomplete, nil, true, "/v1/chat/completions"); err == nil {
+		if err := preparer.PrepareRequest(request, incomplete, nil, true, "/v1/chat/completions", provider.PreparationData{}); err == nil {
 			t.Errorf("accepted missing %s", name)
 		}
 	}

@@ -1,6 +1,9 @@
 # Plan: stable NEAR backend selection
 
-Investigation date: 2026-09-09. This document defines the phased implementation design.
+Investigation date: 2026-09-09. This document is the historical implementation
+design. The maintained contracts are [NEAR routing and attestation](../providers/near/near_attestation.md)
+and the [transport reference](../transport/README.md). The implementation instructions
+and investigation results below describe the original design context.
 Read [AGENTS.md](../../AGENTS.md), the [transport reference](../transport/README.md),
 the [retry contract](../transport/retries.md), and
 [transport testing](../transport/testing.md) before implementation. Those

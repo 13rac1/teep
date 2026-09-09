@@ -18,6 +18,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/tlsct"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
@@ -75,7 +76,18 @@ func tlsAuthorizationInput(t *testing.T, server *Server, name, model, origin, fi
 	prov := &provider.Provider{Name: name, BaseURL: origin, StaticRoute: route, UsesTLSBinding: true,
 		Attester: &mockAttester{err: errors.New("test attestation unavailable after invalidation")}}
 	report := &attestation.VerificationReport{Provider: name, Model: model, TLSAuthority: route.Authority(), TLSKeyFP: fingerprint}
-	candidate, err := newAuthorization(key, report, "", false, false)
+	signingKey := ""
+	if name == "nearcloud" {
+		session, err := e2ee.NewNearCloudSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		signingKey = session.ClientEd25519PubHex()
+		session.Zero()
+		report.Factors = []attestation.FactorResult{{Name: attestation.FactorTEEReportData, Status: attestation.Pass}}
+		prov.Preparer = nearcloud.NewPreparer("test")
+	}
+	candidate, err := newAuthorization(key, report, signingKey, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

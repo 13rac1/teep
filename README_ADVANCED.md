@@ -58,10 +58,12 @@ validation, representation comparison, and schema-policy boundaries.
 NEAR AI Cloud routes all traffic through a single TEE-attested API gateway (`cloud-api.near.ai`) that itself runs in an Intel TDX enclave. The proxy:
 
 1. Connects to `cloud-api.near.ai`.
-2. Fetches attestation on the same TLS connection — the response includes both model attestation and gateway attestation.
-3. Verifies the gateway's TLS certificate SPKI matches the attested fingerprint (same binding scheme as Direct).
+2. Fetches attestation with `provider=near` on the same TLS connection. The response includes model and gateway attestation.
+3. Verifies that the gateway TLS peer SPKI matches the reported fingerprint. Attestation authentication also requires successful gateway REPORTDATA binding, which is separately allowed to fail by default.
 4. Verifies the gateway's own TDX quote, event log, and compose binding (Tier 4 factors).
-5. Sends the request through the gateway SPKI pool, with the required model E2EE key from its cached authorization. New model backend scopes require full verification.
+5. Sends the request through the gateway SPKI pool with `X-Model-Pub-Key` from its cached authorization. TLS-only requests also require successful model-key binding. E2EE uses the same key for a fresh encryption session. New model backend scopes require full verification.
+
+The gateway hint does not independently prove backend selection. See [NEAR routing and recovery limits](docs/providers/near/near_attestation.md#nearcloud-model-routing).
 
 The gateway adds 13 additional verification factors (Tier 4) covering gateway nonce, TDX quote, cert chain, debug mode, measurement allowlists, REPORTDATA binding, compose binding, CPU registry, and event log integrity.
 

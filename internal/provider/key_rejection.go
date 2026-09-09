@@ -22,7 +22,11 @@ func KeyRejection(resp *http.Response, name, path string) (bool, error) {
 	}
 	isTinfoil := name == "tinfoil_v3_cloud" || name == "tinfoil_v3_direct"
 	nearType, isNear := nearRejectionType(name, path)
-	candidate := isTinfoil && resp.StatusCode == http.StatusUnprocessableEntity || isNear && resp.StatusCode == http.StatusBadRequest
+	staleKey := name == "nearcloud" && path == "/v1/chat/completions" && resp.StatusCode == http.StatusMisdirectedRequest
+	if staleKey && len(resp.Header.Values("Content-Type")) != 1 {
+		return false, errors.New("stale-key response requires one content type")
+	}
+	candidate := staleKey || isTinfoil && resp.StatusCode == http.StatusUnprocessableEntity || isNear && resp.StatusCode == http.StatusBadRequest
 	if !candidate || len(resp.Header.Values("Ehbp-Response-Nonce")) != 0 {
 		return false, nil
 	}
@@ -50,6 +54,9 @@ func KeyRejection(resp *http.Response, name, path string) (bool, error) {
 	}
 	if isTinfoil {
 		return ehbpKeyRejection(body)
+	}
+	if staleKey {
+		return nearStaleKeyRejection(body)
 	}
 	return nearKeyRejection(body, nearType)
 }
@@ -108,4 +115,36 @@ func nearRejectionType(name, path string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+const nearStaleKeyMessage = "The encryption key is no longer valid. Please refresh your attestation report and retry."
+
+type nullOnly struct{}
+
+func (*nullOnly) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) != "null" {
+		return errors.New("optional stale-key error fields must be null")
+	}
+	return nil
+}
+
+func nearStaleKeyRejection(body []byte) (bool, error) {
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	unknown, missing, err := jsonstrict.Unmarshal(body, &envelope)
+	if err != nil || len(unknown) != 0 || len(missing) != 0 {
+		return false, errors.New("malformed NEAR stale-key response")
+	}
+	var detail struct {
+		Type    *string   `json:"type"`
+		Message *string   `json:"message"`
+		Param   *nullOnly `json:"param,omitempty"`
+		Code    *nullOnly `json:"code,omitempty"`
+	}
+	unknown, missing, err = jsonstrict.Unmarshal(envelope.Error, &detail)
+	if err != nil || len(unknown) != 0 || len(missing) != 0 || detail.Type == nil || detail.Message == nil {
+		return false, errors.New("malformed NEAR stale-key detail")
+	}
+	return *detail.Type == "provider_error" && *detail.Message == nearStaleKeyMessage, nil
 }

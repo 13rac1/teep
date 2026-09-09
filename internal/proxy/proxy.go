@@ -730,7 +730,7 @@ func fromConfig(
 		p.Encryptor = neardirect.NewE2EE()
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
-		p.Preparer = neardirect.NewPreparer(cp.APIKey)
+		p.Preparer = nearcloud.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
 		p.GatewayReportDataVerifier = nearcloud.GatewayReportDataVerifier{}
 		p.SupplyChainPolicy = nearcloud.SupplyChainPolicy()
@@ -2583,7 +2583,7 @@ func (s *Server) doUpstreamRoundtrip(
 		upstreamReq.Header.Set("Content-Type", contentType)
 		provider.SetUserAgent(upstreamReq)
 
-		if prepErr := provider.PrepareInferenceHeaders(upstreamReq, prov, session, meta, stream, endpointPath); prepErr != nil {
+		if prepErr := provider.PrepareInferenceHeaders(upstreamReq, prov, session, meta, stream, endpointPath, provider.PreparationData{}); prepErr != nil {
 			cancel()
 			e2ee.ZeroSessions(session, meta, nil)
 			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},

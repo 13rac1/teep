@@ -76,7 +76,7 @@ func testTLSOnlyConnectionRetry(t *testing.T, authority *testtls.Authority, name
 	attempts := 0
 	probe, err := tlsct.RunInferenceAttempts(t.Context(), func(ctx context.Context) (*standaloneProbe, bool, error) {
 		attempts++
-		return testStandaloneInference(ctx, opts, route, &attestation.RawAttestation{SigningKey: model.ClientEd25519PubHex()}, client)
+		return testStandaloneInference(ctx, opts, route, &attestation.RawAttestation{SigningKey: model.ClientEd25519PubHex()}, standaloneTestModelKey(t, model.ClientEd25519PubHex()), client)
 	})
 	wantAttempts, wantReceived := 2, int32(0)
 	if failure == "capacity" {

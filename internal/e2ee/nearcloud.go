@@ -25,14 +25,11 @@ type NearCloudSession struct {
 	// ed25519PubHex is the client's Ed25519 public key (64 hex chars),
 	// sent in the X-Client-Pub-Key header.
 	ed25519PubHex string
-	// modelEd25519Hex is the model's Ed25519 public key (64 hex chars).
-	modelEd25519Hex string
+	// modelKey retains the validated model key for encryption and routing headers.
+	modelKey NearModelKey
 	// x25519Priv is the client's X25519 private key (derived from Ed25519
 	// seed) used for decrypting incoming response chunks.
 	x25519Priv *ecdh.PrivateKey
-	// modelX25519 is the model's X25519 public key (converted from its
-	// Ed25519 public key) used for encrypting outgoing messages.
-	modelX25519 *ecdh.PublicKey
 }
 
 // NewNearCloudSession generates a fresh Ed25519 key pair and derives the X25519
@@ -58,26 +55,27 @@ func (s *NearCloudSession) ClientEd25519PubHex() string { return s.ed25519PubHex
 // SetModelKeyEd25519 parses and validates the model's Ed25519 public key (64 hex
 // chars) and converts it to an X25519 public key for encryption.
 func (s *NearCloudSession) SetModelKeyEd25519(ed25519PubHex string) error {
-	if len(ed25519PubHex) != 64 {
-		return fmt.Errorf("model ed25519 public key must be 64 hex chars, got %d", len(ed25519PubHex))
-	}
-	edPubBytes, err := hex.DecodeString(ed25519PubHex)
+	key, err := ParseNearModelKey(ed25519PubHex)
 	if err != nil {
-		return fmt.Errorf("model ed25519 key is not valid hex: %w", err)
+		return err
 	}
-	x25519Pub, err := Ed25519PubToX25519(edPubBytes)
-	if err != nil {
-		return fmt.Errorf("convert model ed25519 to x25519: %w", err)
+	return s.SetModelKey(key)
+}
+
+// SetModelKey retains an immutable validated key without repeating curve conversion.
+func (s *NearCloudSession) SetModelKey(key NearModelKey) error {
+	if key.x25519 == nil {
+		return errors.New("NEAR session requires a validated model key")
 	}
-	s.modelEd25519Hex = ed25519PubHex
-	s.modelX25519 = x25519Pub
+	s.modelKey = key
 	return nil
 }
 
+// ModelKeyEd25519 returns the immutable key already validated for this session.
+func (s *NearCloudSession) ModelKeyEd25519() NearModelKey { return s.modelKey }
+
 // ModelX25519Pub returns the model's X25519 public key.
-func (s *NearCloudSession) ModelX25519Pub() *ecdh.PublicKey {
-	return s.modelX25519
-}
+func (s *NearCloudSession) ModelX25519Pub() *ecdh.PublicKey { return s.modelKey.x25519 }
 
 // IsEncryptedChunk returns true if val looks like a NearCloud E2EE encrypted chunk.
 func (s *NearCloudSession) IsEncryptedChunk(val string) bool {
@@ -94,7 +92,7 @@ func (s *NearCloudSession) Decrypt(ciphertextHex string) ([]byte, error) {
 // key bytes in place. The actual key material persists until GC reclaims it.
 func (s *NearCloudSession) Zero() {
 	s.x25519Priv = nil
-	s.modelX25519 = nil
+	s.modelKey = NearModelKey{}
 }
 
 // IsResponseFieldEncrypted reports whether a response field is encrypted in
@@ -260,20 +258,19 @@ func IsEncryptedChunkXChaCha20(s string) bool {
 
 // EncryptChatMessagesNearCloud creates a NearCloud E2EE session, encrypts chat
 // request fields supported by inference-proxy's X-Encrypt-All-Fields mode, and
-// forces stream=true. The signingKey is the model's Ed25519 public key
-// (64 hex chars) from the attestation response.
+// forces stream=true. The model key must come from verified attestation.
 //
 // Encrypted message fields: content, reasoning_content, reasoning, refusal,
 // name, audio.data, tool_calls[].function.{name,arguments}, and
 // function_call.{name,arguments}. Encrypted top-level fields: tools[].function
 // name/description/parameters, tool_choice.function.name,
 // function_call.name (object form only). Other fields are preserved unchanged.
-func EncryptChatMessagesNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
+func EncryptChatMessagesNearCloud(body []byte, modelKey NearModelKey) ([]byte, *NearCloudSession, error) {
 	session, err := NewNearCloudSession()
 	if err != nil {
 		return nil, nil, fmt.Errorf("create NearCloud E2EE session: %w", err)
 	}
-	if err := session.SetModelKeyEd25519(signingKey); err != nil {
+	if err := session.SetModelKey(modelKey); err != nil {
 		session.Zero()
 		return nil, nil, fmt.Errorf("set model key ed25519: %w", err)
 	}
@@ -616,15 +613,15 @@ func contentPlaintext(raw json.RawMessage) ([]byte, error) {
 	return nil, fmt.Errorf("unsupported content type (starts with %q)", raw[0])
 }
 
-// newNearCloudSessionAndBody creates a NearCloud E2EE session, validates the model key,
+// newNearCloudSessionAndBody creates a NearCloud E2EE session with its validated model key,
 // and parses the request body. On any error, the session is zeroed and error is returned.
 // This eliminates repeated boilerplate across endpoint-specific encryptors.
-func newNearCloudSessionAndBody(body []byte, signingKey, contextName string) (*NearCloudSession, map[string]json.RawMessage, error) {
+func newNearCloudSessionAndBody(body []byte, modelKey NearModelKey, contextName string) (*NearCloudSession, map[string]json.RawMessage, error) {
 	session, err := NewNearCloudSession()
 	if err != nil {
 		return nil, nil, fmt.Errorf("create NearCloud E2EE session: %w", err)
 	}
-	if err := session.SetModelKeyEd25519(signingKey); err != nil {
+	if err := session.SetModelKey(modelKey); err != nil {
 		session.Zero()
 		return nil, nil, fmt.Errorf("set model key ed25519: %w", err)
 	}
@@ -639,10 +636,9 @@ func newNearCloudSessionAndBody(body []byte, signingKey, contextName string) (*N
 }
 
 // EncryptImagePromptNearCloud creates a NearCloud E2EE session and encrypts
-// the "prompt" field in an image generation request. The signingKey is the
-// model's Ed25519 public key (64 hex chars) from the attestation response.
-func EncryptImagePromptNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
-	session, full, err := newNearCloudSessionAndBody(body, signingKey, "image")
+// the "prompt" field in an image generation request. The model key must come from verified attestation.
+func EncryptImagePromptNearCloud(body []byte, modelKey NearModelKey) ([]byte, *NearCloudSession, error) {
+	session, full, err := newNearCloudSessionAndBody(body, modelKey, "image")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -672,15 +668,15 @@ func EncryptImagePromptNearCloud(body []byte, signingKey string) ([]byte, *NearC
 }
 
 // EncryptEmbeddingsNearCloud creates a NearCloud E2EE session and encrypts the
-// "input" field of an embeddings request. The signingKey is the model's Ed25519
-// public key (64 hex chars) from the attestation response.
+// "input" field of an embeddings request. The model key must come from
+// verified attestation.
 //
 // Encrypted field: input when present and non-null. Supported shapes are a JSON
 // string or an array of JSON strings.
 // The pinned handler sets the X-Encrypt-All-Fields header; this helper only
 // rewrites the request body and returns the session for response decryption.
-func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
-	session, full, err := newNearCloudSessionAndBody(body, signingKey, "embeddings")
+func EncryptEmbeddingsNearCloud(body []byte, modelKey NearModelKey) ([]byte, *NearCloudSession, error) {
+	session, full, err := newNearCloudSessionAndBody(body, modelKey, "embeddings")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -744,14 +740,13 @@ func EncryptEmbeddingsNearCloud(body []byte, signingKey string) ([]byte, *NearCl
 }
 
 // EncryptRerankNearCloud creates a NearCloud E2EE session and encrypts the
-// "query" and "documents" fields of a rerank request. The signingKey is the
-// model's Ed25519 public key (64 hex chars) from the attestation response.
+// "query" and "documents" fields of a rerank request. The model key must come from verified attestation.
 //
 // Encrypted fields: query (string); documents as either strings or objects with
 // a text field. Object-form documents keep non-text metadata plaintext to match
 // NearAI's actual field-level encryption behavior.
-func EncryptRerankNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
-	session, full, err := newNearCloudSessionAndBody(body, signingKey, "rerank")
+func EncryptRerankNearCloud(body []byte, modelKey NearModelKey) ([]byte, *NearCloudSession, error) {
+	session, full, err := newNearCloudSessionAndBody(body, modelKey, "rerank")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -819,12 +814,11 @@ func encryptRerankDocument(docRaw json.RawMessage, idx int, session *NearCloudSe
 }
 
 // EncryptScoreNearCloud creates a NearCloud E2EE session and encrypts the
-// "text_1" and "text_2" fields of a score request. The signingKey is the
-// model's Ed25519 public key (64 hex chars) from the attestation response.
+// "text_1" and "text_2" fields of a score request. The model key must come from verified attestation.
 //
 // Encrypted fields: text_1 (string), text_2 (string).
-func EncryptScoreNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSession, error) {
-	session, full, err := newNearCloudSessionAndBody(body, signingKey, "score")
+func EncryptScoreNearCloud(body []byte, modelKey NearModelKey) ([]byte, *NearCloudSession, error) {
+	session, full, err := newNearCloudSessionAndBody(body, modelKey, "score")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -844,18 +838,8 @@ func EncryptScoreNearCloud(body []byte, signingKey string) ([]byte, *NearCloudSe
 // ValidateModelKeyEd25519 checks if the given hex string is a valid Ed25519
 // public key suitable for NearCloud E2EE.
 func ValidateModelKeyEd25519(ed25519PubHex string) error {
-	if len(ed25519PubHex) != 64 {
-		return fmt.Errorf("expected 64 hex chars, got %d", len(ed25519PubHex))
-	}
-	b, err := hex.DecodeString(ed25519PubHex)
-	if err != nil {
-		return fmt.Errorf("not valid hex: %w", err)
-	}
-	_, err = Ed25519PubToX25519(b)
-	if err != nil {
-		return fmt.Errorf("not a valid ed25519 point: %w", err)
-	}
-	return nil
+	_, err := ParseNearModelKey(ed25519PubHex)
+	return err
 }
 
 // deriveKeyEd25519 derives a 32-byte encryption key from a shared secret using

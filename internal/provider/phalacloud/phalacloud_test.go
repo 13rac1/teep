@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"github.com/13rac1/teep/internal/provider"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -308,7 +309,7 @@ func TestPreparer_SetsAuthHeader(t *testing.T) {
 	p := phalacloud.NewPreparer("sk-test-123")
 	req, _ := http.NewRequest(http.MethodPost, "https://api.redpill.ai/v1/chat/completions", http.NoBody)
 
-	if err := p.PrepareRequest(req, nil, nil, false, ""); err != nil {
+	if err := p.PrepareRequest(req, nil, nil, false, "", provider.PreparationData{}); err != nil {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
 	if req.Header.Get("Authorization") != "Bearer sk-test-123" {

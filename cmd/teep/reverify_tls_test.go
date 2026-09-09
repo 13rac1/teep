@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,11 +10,12 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/capture"
+	"github.com/13rac1/teep/internal/tlsct"
 )
 
 func TestReverifyRejectsMissingCapturedTLSPeer(t *testing.T) {
 	for name, fixture := range map[string]string{
-		"nearcloud":  "nearcloud_z-ai_glm-5.3-flash_20260909_201120",
+		"nearcloud":  "nearcloud_z-ai_glm-5.3-flash_20260910_153519",
 		"neardirect": "neardirect_z-ai_glm-5.3-flash_20260909_201111",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -39,5 +41,17 @@ func TestReverifyRejectsMissingCapturedTLSPeer(t *testing.T) {
 				t.Fatalf("missing peer data was not rejected: %v", err)
 			}
 		})
+	}
+}
+
+func TestReverifyRejectsCapturedGatewaySPKIMismatch(t *testing.T) {
+	const fixture = "../../internal/integration/testdata/nearcloud_z-ai_glm-5.3-flash_20260909_204025"
+	cfg := filepath.Join(t.TempDir(), "teep.toml")
+	if err := os.WriteFile(cfg, []byte("[providers.nearcloud]\napi_key = \"test-key\"\ne2ee = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEEP_CONFIG", cfg)
+	if err := runReverify(t.Context(), fixture); !errors.Is(err, tlsct.ErrSPKIMismatch) {
+		t.Fatalf("captured gateway mismatch was not rejected: %v", err)
 	}
 }

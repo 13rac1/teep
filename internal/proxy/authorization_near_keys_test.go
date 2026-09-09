@@ -123,3 +123,43 @@ func TestAuthorizationConcurrentNearModelKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestNearCloudTLSOnlyRequiresBoundRoutingKey(t *testing.T) {
+	candidate := nearKeyCandidate(t, "nearcloud", "model")
+	for _, kind := range []string{"missing binding", "failed allowed binding", "missing key", "invalid key", "valid"} {
+		t.Run(kind, func(t *testing.T) {
+			report := candidate.report.Clone()
+			key := candidate.signingKey
+			switch kind {
+			case "missing binding":
+				report.Factors = nil
+			case "failed allowed binding":
+				report.Factors = []attestation.FactorResult{{Name: attestation.FactorTEEReportData, Status: attestation.Fail, Enforced: false}}
+			case "missing key":
+				key = ""
+			case "invalid key":
+				key = "invalid"
+			}
+			result, err := newAuthorization(candidate.key, report, key, false, false)
+			if kind != "valid" {
+				if err == nil || result != nil {
+					t.Fatal("TLS-only authorization accepted unauthenticated routing key")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if subtle.ConstantTimeCompare([]byte(result.signingKey), []byte(key)) != 1 {
+				t.Fatal("TLS-only authorization discarded routing key")
+			}
+			store := newAuthorizationStore(2, 1, time.Second)
+			defer store.close()
+			loadTestAuthorization(t, store, result.key, result)
+			entries, keys := store.counts()
+			if entries != 1 || keys != 1 {
+				t.Fatal("routing key not included in retained model-key count")
+			}
+		})
+	}
+}

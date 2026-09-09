@@ -631,7 +631,7 @@ func nrasJWTExpired(t *testing.T, fixtureDir string) bool {
 }
 
 func TestRunReverify_NearCloud_Fixture(t *testing.T) {
-	fdir := "../../internal/integration/testdata/nearcloud_z-ai_glm-5.3-flash_20260909_201120"
+	fdir := "../../internal/integration/testdata/nearcloud_z-ai_glm-5.3-flash_20260910_153519"
 
 	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
 	cfgContent := "[providers.nearcloud]\nbase_url = \"https://cloud-api.near.ai\"\napi_key = \"test-key\"\ne2ee = true\n"

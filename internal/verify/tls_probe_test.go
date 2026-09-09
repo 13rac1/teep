@@ -10,6 +10,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/tlsct"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
@@ -18,8 +19,17 @@ import (
 func TestStandaloneTLSOnlyChatProbe(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		for _, status := range []int{http.StatusOK, http.StatusInternalServerError} {
+		for _, status := range []int{http.StatusOK, http.StatusInternalServerError, http.StatusMisdirectedRequest} {
 			t.Run(http.StatusText(status), func(t *testing.T) {
+				name := "neardirect"
+				model, err := e2ee.NewNearCloudSession()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer model.Zero()
+				if status == http.StatusMisdirectedRequest {
+					name = "nearcloud"
+				}
 				calls := 0
 				upstream := authority.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					calls++
@@ -30,6 +40,15 @@ func TestStandaloneTLSOnlyChatProbe(t *testing.T) {
 						if r.Header.Get(name) != "" {
 							t.Error("TLS-only probe enabled encryption")
 						}
+					}
+					if status == http.StatusMisdirectedRequest {
+						if len(r.Header.Values("X-Model-Pub-Key")) != 1 {
+							t.Error("missing routing key")
+						}
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(status)
+						_, _ = fmt.Fprint(w, `{"error":{"type":"provider_error","message":"The encryption key is no longer valid. Please refresh your attestation report and retry.","param":null,"code":null}}`)
+						return
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
 					w.WriteHeader(status)
@@ -49,7 +68,7 @@ func TestStandaloneTLSOnlyChatProbe(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer client.CloseIdleConnections()
-				probe, retry, err := testStandaloneInference(t.Context(), &Options{ProviderName: "neardirect", Provider: &config.Provider{BaseURL: upstream.URL, APIKey: "test", E2EE: false}, ModelName: "model"}, route, &attestation.RawAttestation{}, client)
+				probe, retry, err := testStandaloneInference(t.Context(), &Options{ProviderName: name, Provider: &config.Provider{BaseURL: upstream.URL, APIKey: "test", E2EE: false}, ModelName: "model"}, route, &attestation.RawAttestation{SigningKey: model.ClientEd25519PubHex()}, standaloneTestModelKey(t, model.ClientEd25519PubHex()), client)
 				if retry || calls != 1 {
 					t.Fatal("TLS-only probe replayed")
 				}
@@ -141,4 +160,13 @@ func TestTLSOnlyProbeValidatesEveryChunk(t *testing.T) {
 			}
 		})
 	}
+}
+
+func standaloneTestModelKey(t *testing.T, text string) e2ee.NearModelKey {
+	t.Helper()
+	key, err := e2ee.ParseNearModelKey(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
 }
