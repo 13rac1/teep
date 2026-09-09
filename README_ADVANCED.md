@@ -38,6 +38,15 @@ NEAR AI Direct connects to model-specific inference nodes and binds the TLS cert
 
 The report, transport identity, and required authenticated E2EE key form one cached authorization. Evidence expiration alone does not trigger renewal. HTTP/2 streams and reconnects reuse authorization within its attested scope. See the [transport contract](docs/transport/README.md#routes-and-authorizations) for admission checks, key failure classification, and approval withdrawal.
 
+Both NEAR providers require `signing_algo=ed25519` for model REPORTDATA binding.
+The signing address must contain the same 32 bytes as the validated Ed25519
+public key; it is not a hash of that key. Teep compares the decoded values in
+constant time before checking the address, TLS fingerprint, and nonce against
+REPORTDATA. A substituted public key fails binding even when repeated response
+fields agree. E2EE admission requires successful binding even if `allow_fail`
+permits this factor to fail. The gateway's separate signing-address scheme is
+unchanged.
+
 ### NEAR AI Cloud (Gateway TLS Pinning)
 
 NEAR AI Cloud routes all traffic through a single TEE-attested API gateway (`cloud-api.near.ai`) that itself runs in an Intel TDX enclave. The proxy:
