@@ -55,7 +55,7 @@ type providerArchetype string
 
 const (
 	// archetypeDirect: owns its attestation format, has attestationResponse
-	// struct, calls jsonstrict.UnmarshalWarn directly.
+	// struct, calls an internal/jsonstrict decoder directly.
 	archetypeDirect providerArchetype = "direct"
 	// archetypeGateway: detects format via formatdetect.Detect(), delegates
 	// parsing to backend providers.
@@ -361,19 +361,20 @@ func checkParseFunc(r *result, p *providerInfo, want string) *ast.FuncDecl {
 	return nil
 }
 
-// Parse function calls jsonstrict.UnmarshalWarn.
+// Parse function calls an internal/jsonstrict decoder. Diagnostic policy
+// determines whether the caller also logs; strict decoding does not require it.
 func checkParseFuncUsesJSONStrict(r *result, p *providerInfo, fd *ast.FuncDecl) {
 	if fd == nil {
-		r.failf("jsonstrict.UnmarshalWarn — no parse function in %s", p.name)
+		r.failf("internal/jsonstrict — no parse function in %s", p.name)
 		return
 	}
-	if containsCall(fd.Body, "jsonstrict", "UnmarshalWarn") {
+	if containsCall(fd.Body, "jsonstrict", "Unmarshal") || containsCall(fd.Body, "jsonstrict", "UnmarshalWarn") {
 		pos := p.fset.Position(fd.Name.Pos())
-		r.passf("%s uses jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+		r.passf("%s uses internal/jsonstrict (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 		return
 	}
 	pos := p.fset.Position(fd.Name.Pos())
-	r.failf("%s does not call jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+	r.failf("%s does not call an internal/jsonstrict decoder (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 }
 
 // Parse function calls formatdetect.Detect.

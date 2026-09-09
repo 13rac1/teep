@@ -470,17 +470,27 @@ func (T) ParseAttestationResponse() {}
 // =============================================================================
 
 func TestCheckParseFuncUsesJSONStrict_Pass(t *testing.T) {
-	f, fset := parseGo(t, `package p
-func Parse() {
-	jsonstrict.UnmarshalWarn(nil, nil, "test")
+	for _, decoder := range []string{"Unmarshal", "UnmarshalWarn"} {
+		t.Run(decoder, func(t *testing.T) {
+			f, fset := parseGo(t, "package p; func Parse() { jsonstrict."+decoder+"(nil, nil) }")
+			fd := findFunc(f, "Parse")
+			p := &providerInfo{name: "test", files: []*ast.File{f}, fset: fset}
+			r := newResult()
+			checkParseFuncUsesJSONStrict(r, p, fd)
+			if r.failed != 0 {
+				t.Errorf("expected strict decoding to pass, got %d failures", r.failed)
+			}
+		})
+	}
 }
-`)
-	fd := findFunc(f, "Parse")
+
+func TestCheckParseFuncUsesJSONStrict_RejectsOrdinaryJSON(t *testing.T) {
+	f, fset := parseGo(t, "package p; func Parse() { json.Unmarshal(nil, nil) }")
 	p := &providerInfo{name: "test", files: []*ast.File{f}, fset: fset}
 	r := newResult()
-	checkParseFuncUsesJSONStrict(r, p, fd)
-	if r.failed != 0 {
-		t.Errorf("expected pass, got %d failures", r.failed)
+	checkParseFuncUsesJSONStrict(r, p, findFunc(f, "Parse"))
+	if r.failed == 0 {
+		t.Fatal("ordinary JSON decoding satisfied strict parser requirement")
 	}
 }
 

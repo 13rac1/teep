@@ -198,6 +198,8 @@ on every attempt and that transport wrappers preserve idle-connection cleanup.
   validation proves the contents of later discovery responses.
 - JSON unmarshalling MUST use the internal/jsonstrict parser.
 - All low-level parsers MUST return unknown field names to callers instead of logging or deduplicating them internally. Callers own the policy decision to fail, warn once per logical operation, or use lower-severity logging in hot paths.
+- Use `jsonstrict.Unmarshal` in low-level parsers. `jsonstrict.UnmarshalWarn` is appropriate only where the caller owns the diagnostic policy. Architectural checks must recognize nonlogging strict decoding; they must not require parsers to log.
+- Do not record implementation status or validation logs in plans. Keep one commit per implementation phase and record its behavior, tests, and remaining validation in the commit description.
 - Malformed attestation data MUST fail the entire response, not skip elements.
 - **Do not request fallback-based nil handling for internal objects and required
   arguments after validated construction**. A panic is acceptable for a
