@@ -25,7 +25,7 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
       - name: Check attested transport and authorization behavior
-        run: go test -short -race -count=1 ./internal/tlsct ./internal/proxy ./internal/provider ./internal/verify -run 'TestAuthorized|TestAuthorization|TestHTTP2|TestPinnedHTTP1|TestPinnedHTTPSProxy|TestGenericInference|TestPooledTransport|TestAttestedPools|TestPrepareInference|TestStandalone|TestNearHTTP2|TestWrappedClient|TestNearKeyRejection|TestCallerDeadline'
+        run: go test -short -race -count=1 ./internal/tlsct ./internal/proxy ./internal/provider/... ./internal/config ./internal/verify
       - name: Check TDX and NRAS admission behavior
         run: go test -race ./internal/attestation -run 'TestTDXAdmission|TestNVIDIAJWTLeeway|TestTDXVerificationPreservesCapacityCause'
   check:

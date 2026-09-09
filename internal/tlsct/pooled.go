@@ -48,6 +48,12 @@ func NewPooledTransportWithBudget(budget *SocketBudget) *http.Transport {
 	}
 	transport := pooledTransport(connectionSetupTimeout)
 	transport.MaxConnsPerHost = budget.limit
+	if budget.pooledLimit > 0 {
+		// Let this pool wait for its own connections instead of requesting
+		// the slot reserved for fresh fetches. Cross-pool exhaustion still
+		// fails immediately in shared physical-socket admission.
+		transport.MaxConnsPerHost = min(budget.limit, budget.pooledLimit)
+	}
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		return budget.budgets.dialWithShare(ctx, network, address, budget.limit, budget.pooledLimit)
 	}

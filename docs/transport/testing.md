@@ -55,11 +55,14 @@ tests.
 | TUF verification cancellation reaches headers, body reads, and subsequent downloads without canceling other operations | `TestTrustedRootVerificationCancellation` |
 | Captured backend and gateway SEV evidence passes production verification | `TestVerifyRun_Tinfoil_Fixture` |
 | Tinfoil delayed discovery callers reuse a newly published mapping | `TestDiscoveryDelayedRefresh` in Tinfoil |
-| Established NEAR routes never refresh metadata; caller cancellation cannot cancel shared selection | `TestEstablishedSelectionSurvivesMetadataExpiry`, `TestSelectionWaiterCancellationAndShutdown` |
+| Established NEAR routes never refresh metadata; caller cancellation cannot cancel shared selection | `TestEstablishedSelectionSurvivesMetadataExpiry`, `TestSelectionWaiterCancellationAndShutdown`, `TestSelectionAcquiredSnapshotsSurviveReplacement` |
+| Pooled, fresh, unreserved, and nested collateral transports align dial admission; queued cancellation retains admitted TLS handshakes and subsequent requests complete; cleanup releases all physical socket permits within a bounded wait for asynchronous dial completion | `TestAttestationTransportAdmissionAlignment` in [admission tests](../../internal/tlsct/attestation_alignment_test.go) |
 | Metadata failures delay new work without extending the delay; concurrent recovery shares one fetch; cancellation and capacity failures create no delay | `TestMetadataFailureDelayRecovery`, `TestMetadataCanceledAndCapacityFetchesDoNotDelayRecovery`, `TestMetadataOwnerCancellationDoesNotInstallDelay` |
 | Inference and Explore preserve route error classifications, retry advice, and cached authorization under concurrent use | `TestRouteErrorResponsesPreserveAuthorization` |
 | Standalone TLS-only probes retry only eligible connection-establishment failures, at most once | `TestStandaloneTLSOnlyConnectionRetry` |
 | Fresh NEAR fetches use independent connections within reserved aggregate capacity | `TestDirectFetchOwnsFreshConnections`, `TestAttestationFactoryReservesFreshCapacity`, `TestReservedBudgetAcrossHTTPSProxyOrigins` |
+| Offline TLS index remapping and late trust failures preserve replacement generations; eviction retains the selected route | `TestAuthorizedNearDirectRemappingPreservesReplacement`, `TestAuthorizationNearDirectEvictionRetainsSelection` in [lifecycle unit tests](../../internal/proxy/neardirect_lifecycle_test.go); synthetic parser evidence does not establish signed-quote admission |
+| Live eviction joins one full online verification without rediscovery or changing the selected route | `TestIntegration_NearDirectAuthorizationEviction` in [eviction integration](../../internal/proxy/integration_neardirect_eviction_test.go) |
 | Concurrent key rejections run one shared full online re-attestation, create fresh retry sessions, and preserve replacement authorization against a delayed rejection | `TestIntegration_NearDirectKeyRecovery`, `TestIntegration_NearCloudKeyRecovery`, `TestIntegration_TinfoilKeyRecovery` |
 | Router verification is shared across models while report outcomes remain separate and bounded | `TestAuthorizationRouterSharesVerificationAcrossModels`, `TestAuthorizationRouterModelViewsBounded` |
 | Ordinary TLS-only key-error envelopes (excluding the exact NearCloud 421) retain authorization without retry under concurrent use | `TestAuthorizedTLSOnlyKeyErrorsRetainAuthorization` |
@@ -117,7 +120,10 @@ excluded suites in the PR rather than treating an incomplete run as success.
 Run the transport, authorization, request preparation, and standalone tests
 with the race detector on the minimum supported Go version and the other
 versions in [CI](../../.github/workflows/ci.yml). The CI matrix is the
-maintained version list. The same matrix checks upstream TDX certificate-time
+maintained version list. The matrix runs all short tests in the transport, proxy,
+provider (including subpackages), configuration, and standalone verification
+packages. It does not filter test names, so new admission and resolver regressions
+remain included. The same matrix checks upstream TDX certificate-time
 rejection in [TDX admission tests](../../internal/attestation/tdx_admission_test.go)
 and NRAS time claims in `TestNVIDIAJWTLeeway`.
 `TestAuthorizationNRASAdmissionAndReuse` verifies publication-time rejection and

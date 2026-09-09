@@ -407,7 +407,15 @@ aggregate capacity. Admission checks both limits atomically and releases permits
 only on failed dials or physical connection closure. A fresh factory cannot
 multiply the aggregate allowance. Metadata and inference have independent budgets.
 
-A collateral cache miss can still fail when its pooled share is full. This local
+Each transport's `MaxConnsPerHost` matches its admission view: 15 for
+long-lived attestation pools, 16 for fresh fetches and unreserved clients.
+The common constructor also configures nested collateral transports. Requests
+can wait within their own transport for a connection, under their deadlines;
+this does not add a shared-budget queue or enable strict HTTP/2 stream admission.
+
+A collateral cache miss can still fail when other pools exhaust its shared
+allowance, or HTTP/2 expansion requires another physical socket that cannot
+be admitted. This local
 capacity failure does not publish authorization, start a negative-cache delay,
 flush another pool, or authorize inference replay. Later verification can succeed
 after a pooled socket closes. HTTPS proxy connections count against their dialed
