@@ -17,6 +17,8 @@ tests.
 | Tinfoil report tests use separate model and authority parameters; explicit authority avoids discovery | `TestTinfoilIntegrationReportLookup` in [report lookup tests](../../internal/proxy/tinfoil_report_lookup_test.go) |
 | Reject SPKI mismatch before sending request bytes; enforce CT and WebPKI | `TestSPKIPinnedClientRejectsBeforeSendingRequest`, `TestSPKIPinnedClientRejectsModifiedTrust` in [pinned tests](../../internal/tlsct/pinned_test.go) |
 | HTTP/2 physical bounds, concurrent overload rejection, and recovery after stream completion | `TestHTTP2ConcurrentStreamConnectionBound` in [connection tests](../../internal/tlsct/http2_limits_test.go) |
+| Independent attestation pools share socket admission, preserve full capacity and capture, and keep metadata independent | `TestAttestationFactorySharedBudget`, `TestAttestationFactoryFullPooledAllowance` in [factory tests](../../internal/config/attestation_client_test.go) |
+| Nested TLS transports consume the same socket allowance and release permits on cleanup | `TestNestedAttestationTransportSharesSocketBudget` in [shared budget tests](../../internal/tlsct/shared_budget_test.go) |
 | HTTP/1.1 sequential reuse; closing one HTTP/2 stream preserves another | [Stream lifetime tests](../../internal/tlsct/stream_lifetime_test.go) |
 | Provider, authority, and SPKI pool isolation | `TestAttestedPoolsRespectProviderAuthorityAndKey` in [pool tests](../../internal/proxy/tls_binding_internal_test.go) |
 | Shared verification for the same authorization key, replacement generations, invalidation during verification, age-independent reuse, eviction, and blocked reports | [Authorization tests](../../internal/proxy/authorization_internal_test.go) |

@@ -441,8 +441,6 @@ type Server struct {
 // New builds a Server from cfg. Providers are given their Attester and
 // Preparer implementations based on provider name.
 func New(cfg *config.Config) (*Server, error) {
-	attestClient := config.NewAttestationClient(cfg.Offline)
-
 	s := &Server{
 		cfg:             cfg,
 		providers:       make(map[string]*provider.Provider, len(cfg.Providers)),
@@ -451,16 +449,18 @@ func New(cfg *config.Config) (*Server, error) {
 		signingKeyCache: attestation.NewSigningKeyCache(signingKeyCacheTTL),
 		authorizations:  newAuthorizationStore(maxAuthorizations, maxAuthorizationVerifications, authorizationVerificationTimeout),
 		mux:             http.NewServeMux(),
-		attestClient:    attestClient,
 		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 	}
 
 	onReq := func() { s.stats.httpRequests.Add(1) }
 	onErr := func() { s.stats.httpErrors.Add(1) }
 
-	attestClient.Transport = tlsct.WrapCounting(
-		attestClient.Transport,
-		onReq, onErr)
+	attestFactory := config.NewAttestationClientFactory(cfg.Offline,
+		tlsct.NewSocketBudget(tlsct.MaxConnectionsPerHost), func(base http.RoundTripper) http.RoundTripper {
+			return tlsct.WrapCounting(base, onReq, onErr)
+		})
+	attestClient := attestFactory.NewClient()
+	s.attestClient = attestClient
 
 	upstreamTransport := newUpstreamTransport()
 	upstreamClient := tlsct.NewHTTPClientWithTransport(0, upstreamTransport, !cfg.Offline)
@@ -502,6 +502,16 @@ func New(cfg *config.Config) (*Server, error) {
 		p, err := fromConfig(cp, cfg.Offline, mergedPolicy, mergedGWPolicy)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
+		}
+		if setter, ok := p.Attester.(interface{ SetClient(*http.Client) }); ok {
+			setter.SetClient(attestFactory.NewClient())
+		}
+		if setter, ok := p.Attester.(interface{ SetMetadataClient(*http.Client) }); ok {
+			metadataFactory := config.NewAttestationClientFactory(cfg.Offline,
+				tlsct.NewSocketBudget(tlsct.MaxConnectionsPerHost), func(base http.RoundTripper) http.RoundTripper {
+					return tlsct.WrapCounting(base, onReq, onErr)
+				})
+			setter.SetMetadataClient(metadataFactory.NewClient())
 		}
 		s.providers[name] = p
 		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE)
@@ -1315,9 +1325,7 @@ func (s *Server) verifyTinfoilSupplyChain(
 	}
 
 	// Sigstore DSSE bundle verification.
-	client := config.NewAttestationClient(s.cfg.Offline)
-	defer client.CloseIdleConnections()
-	sv := tinfoil.NewSigstoreVerifier(client)
+	sv := tinfoil.NewSigstoreVerifier(s.attestClient)
 	predicateBytes, predicateType, signer, err := sv.FetchAndVerify(ctx, sigstoreRepo)
 	if err != nil {
 		result.SigstoreErr = err

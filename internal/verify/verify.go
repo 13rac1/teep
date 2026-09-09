@@ -32,6 +32,7 @@ type Options struct {
 	CaptureDir     string
 	Offline        bool
 	Client         *http.Client                // nil = use default
+	MetadataClient *http.Client                // nil = use a separately owned metadata pool
 	Nonce          attestation.Nonce           // zero = generate new
 	CapturedE2EE   *attestation.E2EETestResult // nil = run live test
 	NVIDIAVerifier *attestation.NVIDIAVerifier // nil = use default
@@ -60,14 +61,25 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 		local.Client = config.NewAttestationClient(local.Offline)
 		defer local.Client.CloseIdleConnections()
 	}
+	if local.MetadataClient == nil {
+		local.MetadataClient = config.NewAttestationClient(local.Offline)
+		defer local.MetadataClient.CloseIdleConnections()
+	}
 	if nonceIsZero(local.Nonce) {
 		local.Nonce = attestation.NewNonce()
 	}
 	var result verificationOutcome
 	if local.CaptureDir != "" {
-		local.capture = &verificationCapture{discovery: capture.WrapRecording(local.Client.Transport)}
+		local.capture = &verificationCapture{
+			discovery:            capture.WrapRecording(local.MetadataClient.Transport),
+			attestation:          local.Client.Transport,
+			attestationDiscovery: capture.WrapRecording(local.Client.Transport),
+		}
+		metadata := *local.MetadataClient
+		metadata.Transport = local.capture.discovery
+		local.MetadataClient = &metadata
 		client := *local.Client
-		client.Transport = local.capture.discovery
+		client.Transport = local.capture.attestationDiscovery
 		local.Client = &client
 		defer func() {
 			retErr = saveCapture(ctx, opts, local.capture.entries(), local.Nonce, result.e2ee, report, retErr)
@@ -123,6 +135,8 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 	if cs, ok := attester.(clientSetter); ok {
 		cs.SetClient(client)
 	}
+
+	defer configureMetadataClient(attester, opts)()
 
 	if providerUsesTLSBinding(opts.ProviderName) {
 		attester, err = standaloneAttesterForRoute(ctx, opts, attester, route)
@@ -289,6 +303,7 @@ func Replay(ctx context.Context, captureDir string, cfgLoader CfgLoader) (report
 		ModelName:        manifest.Model,
 		Offline:          false,
 		Client:           replayClient,
+		MetadataClient:   replayClient,
 		Nonce:            nonce,
 		CapturedE2EE:     capturedE2EE,
 		VerificationTime: verificationTimeForCapture(&manifest),
@@ -548,4 +563,19 @@ func PrintReportDiff(a, b string) {
 func nonceIsZero(nonce attestation.Nonce) bool {
 	var zero attestation.Nonce
 	return subtle.ConstantTimeCompare(nonce[:], zero[:]) == 1
+}
+
+// configureMetadataClient retains caller ownership and closes only local pools.
+func configureMetadataClient(attester provider.Attester, opts *Options) func() {
+	setter, ok := attester.(interface{ SetMetadataClient(*http.Client) })
+	if !ok {
+		return func() {}
+	}
+	if opts.MetadataClient != nil {
+		setter.SetMetadataClient(opts.MetadataClient)
+		return func() {}
+	}
+	metadata := config.NewAttestationClient(opts.Offline)
+	setter.SetMetadataClient(metadata)
+	return metadata.CloseIdleConnections
 }

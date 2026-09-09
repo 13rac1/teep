@@ -28,6 +28,7 @@ func testNearSignedModelKeySubstitution(t *testing.T, name string) {
 	if name == "neardirect" {
 		attester := neardirect.NewAttester(extractBaseURL(t, env.entries), "", true)
 		attester.SetClient(env.client)
+		attester.SetMetadataClient(env.client)
 		raw, err = attester.FetchAttestation(ctx, env.manifest.Model, env.nonce)
 	} else {
 		attester := nearcloud.NewAttester("", true)

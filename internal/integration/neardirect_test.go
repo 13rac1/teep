@@ -39,6 +39,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 
 	attester := neardirect.NewAttester(baseURL, "", true)
 	attester.SetClient(env.client)
+	attester.SetMetadataClient(env.client)
 	raw, err := attester.FetchAttestation(ctx, env.manifest.Model, env.nonce)
 	if err != nil {
 		t.Fatalf("fetch attestation: %v", err)

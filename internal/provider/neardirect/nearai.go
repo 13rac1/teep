@@ -72,10 +72,14 @@ func (a *Attester) CloseIdleConnections() {
 	}
 }
 
-// SetClient shares the caller's client with attestation and endpoint discovery.
+// SetClient assigns the attestation client. Metadata has separate ownership.
 // Call it only before concurrent use or cleanup.
 func (a *Attester) SetClient(c *http.Client) {
 	a.client = c
+}
+
+// SetMetadataClient assigns the discovery client before concurrent use.
+func (a *Attester) SetMetadataClient(c *http.Client) {
 	if setter, ok := a.resolver.(interface{ SetClient(*http.Client) }); ok {
 		setter.SetClient(c)
 	}

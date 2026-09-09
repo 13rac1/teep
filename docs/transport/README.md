@@ -340,11 +340,20 @@ Configure injected clients before concurrent use or cleanup.
 Transport wrappers, including retry and capture wrappers, must forward
 `CloseIdleConnections` to their underlying pools so client cleanup remains
 effective. Standalone verification closes clients it creates; callers retain
-ownership of injected clients. Per-operation Sigstore clients also close
-idle connections when verification ends.
-NEAR direct attestation and endpoint discovery share the injected client, so
-standalone client cleanup also closes idle discovery connections. Discovery
-requests use that client's transport wrappers, including capture and replay.
+ownership of injected clients. Sigstore verification uses the server's shared
+attestation client.
+
+The [attestation client factory](../../internal/config/attestation_client.go)
+creates independent connection pools with one explicitly supplied socket budget.
+Server attesters and collateral clients share this budget, including each
+client's nested AMD KDS transport. Closing a client releases only its own
+physical sockets. The per-address allowance remains 16; no slot is reserved.
+
+NEAR direct endpoint discovery has a separate metadata client and socket budget.
+`SetClient` assigns only attestation transport; `SetMetadataClient` assigns
+metadata transport. Standalone verification owns both default clients, records
+both pools, and accepts explicit injection of each for replay. Each recorder
+retains cleanup forwarding to its underlying pool.
 
 Standalone capture retains the original route-discovery responses and the
 final attestation attempt, with its nonce and inference test outcome. A

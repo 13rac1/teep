@@ -53,10 +53,12 @@ func TestVerificationCaptureKeepsFinalEvidence(t *testing.T) {
 				return string(body)
 			}
 			get(client, "/discovery")
+			state.attestation = state.discovery.Base
 			state.beginEvidence(client)
 			get(client, "/evidence")
 			// The preceding request has completed before the next attempt starts.
 			attempt.Store("final evidence")
+			state.attestation = state.discovery.Base
 			state.beginEvidence(client)
 			get(client, "/evidence")
 			entries := state.entries()
@@ -88,6 +90,7 @@ func TestVerificationCaptureFinalOutcomeReplay(t *testing.T) {
 			cfg := &config.Config{Providers: map[string]*config.Provider{manifest.Provider: cp}}
 			state := &verificationCapture{discovery: capture.WrapRecording(capture.NewReplayTransport(entries))}
 			client := &http.Client{Transport: state.discovery}
+			state.attestation = state.discovery.Base
 			state.beginEvidence(client)
 			stale := entries[0]
 			stale.Body = []byte("invalid prior attestation")

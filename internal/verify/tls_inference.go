@@ -72,7 +72,7 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 		if report.Blocked() || !report.ReportDataBindingPassed() {
 			return current, false, errors.New("attestation does not authorize E2EE")
 		}
-		selected, identityErr := tlsct.NewTransportIdentity(report.TLSAuthority, report.TLSKeyFP)
+		selected, identityErr := report.TransportIdentity()
 		if identityErr != nil || selected.Authority() != route.Authority() {
 			return current, false, errors.New("attested identity does not match resolved route")
 		}

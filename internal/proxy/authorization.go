@@ -42,7 +42,7 @@ func newAuthorization(key provider.AuthorizationKey, report *attestation.Verific
 	if report.Blocked() && !force {
 		return nil, errors.New("authorization report is blocked")
 	}
-	identity, err := tlsct.NewTransportIdentity(report.TLSAuthority, report.TLSKeyFP)
+	identity, err := report.TransportIdentity()
 	if err != nil {
 		return nil, err
 	}

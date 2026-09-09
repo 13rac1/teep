@@ -37,8 +37,8 @@ func TestAttesterDiscoveryUsesOwnedClient(t *testing.T) {
 		defer client.CloseIdleConnections()
 		var observed atomic.Int32
 		client.Transport = tlsct.WrapCounting(client.Transport, func() { observed.Add(1) }, nil)
-		// The injection used by standalone verification must also govern discovery.
-		attester.SetClient(client)
+		// Standalone verification explicitly injects its metadata client.
+		attester.SetMetadataClient(client)
 		var wg sync.WaitGroup
 		for range 8 {
 			wg.Go(func() {

@@ -53,9 +53,11 @@ Implementation:
 
 ## Attestation and collateral retrieval
 
-Collateral retrieval and inference have different retry contracts. Both the
-proxy and standalone verifier construct their shared attestation client with
-`config.NewAttestationClient`. Intel PCS and AMD KDS getters delegate retries
+Collateral retrieval and inference have different retry contracts. The
+proxy and standalone verifier use the
+[attestation client factory](README.md#request-and-response-ownership) to
+construct clients with shared socket admission and independently owned pools.
+Intel PCS and AMD KDS getters delegate retries
 to that client; they must not add a second retry loop. The client permits up
 to three attempts for eligible transport errors and HTTP 5xx responses, under
 one HTTP timeout and the enclosing verification deadline. Local socket
