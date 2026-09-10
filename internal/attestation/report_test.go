@@ -121,14 +121,14 @@ func allExcept(exclude ...string) []string {
 // BuildReport-level tests (cross-cutting concerns)
 // ---------------------------------------------------------------------------
 
-// TestBuildReportFactorCount ensures exactly 35 factors are produced.
+// TestBuildReportFactorCount ensures exactly 36 factors are produced.
 func TestBuildReportFactorCount(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
-	if len(report.Factors) != 35 {
-		t.Errorf("factor count: got %d, want 35", len(report.Factors))
+	if len(report.Factors) != 36 {
+		t.Errorf("factor count: got %d, want 36", len(report.Factors))
 	}
 }
 
@@ -202,8 +202,8 @@ func TestBuildReportInapplicableOverride(t *testing.T) {
 
 	// NotApplicable factors must not appear in the score denominator.
 	scoreDenom := report.Passed + report.Failed + report.Skipped
-	if report.NotApplicableCount != 8 {
-		t.Errorf("NotApplicableCount: got %d, want 8", report.NotApplicableCount)
+	if report.NotApplicableCount != 9 {
+		t.Errorf("NotApplicableCount: got %d, want 9", report.NotApplicableCount)
 	}
 	if scoreDenom+report.NotApplicableCount != len(report.Factors) {
 		t.Errorf("score denominator (%d) + N/A (%d) != total factors (%d)",
@@ -2616,14 +2616,15 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 		GatewayNonce:    gatewayNonce,
 	})
 
-	// Base 35 + 13 gateway factors = 48
+	// Base 36 + 15 gateway factors = 51
 	// Gateway factors: gateway_nonce_match, gateway_tee_quote_present,
 	// gateway_tee_quote_structure, gateway_tee_cert_chain, gateway_tee_quote_signature,
 	// gateway_tee_debug_disabled, gateway_tee_measurement, gateway_tee_hardware_config,
 	// gateway_tee_boot_config, gateway_tee_reportdata_binding,
-	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity
-	if len(report.Factors) != 50 {
-		t.Errorf("factor count with gateway: got %d, want 50", len(report.Factors))
+	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity,
+	// gateway_tee_tcb_current, gateway_tee_tcb_not_revoked
+	if len(report.Factors) != 51 {
+		t.Errorf("factor count with gateway: got %d, want 51", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}
@@ -3380,7 +3381,8 @@ func TestCheckComponentRepoPolicy_NoComponentRepos(t *testing.T) {
 }
 
 func TestCheckComponentRepoPolicy_GatewayPolicyNoGatewayRepos(t *testing.T) {
-	// Policy has gateway components but GatewayImageRepos is empty → fail.
+	// Policy has gateway components, the report carries gateway evidence,
+	// but GatewayImageRepos is empty → fail.
 	scPolicy := &SupplyChainPolicy{
 		Images: []ImageProvenance{
 			{Repo: "myrepo/model", ModelTier: true},
@@ -3389,6 +3391,7 @@ func TestCheckComponentRepoPolicy_GatewayPolicyNoGatewayRepos(t *testing.T) {
 	}
 	in := &ReportInput{
 		Raw:               &RawAttestation{},
+		GatewayTDX:        &TDXVerifyResult{},
 		ImageRepos:        []string{"myrepo/model"},
 		GatewayImageRepos: nil, // no gateway component repos
 	}
@@ -3398,6 +3401,27 @@ func TestCheckComponentRepoPolicy_GatewayPolicyNoGatewayRepos(t *testing.T) {
 	}
 	if result.Status != Fail {
 		t.Errorf("status = %v, want Fail", result.Status)
+	}
+}
+
+func TestCheckComponentRepoPolicy_GatewayPolicyNoGatewayEvidence(t *testing.T) {
+	// Policy has gateway components, but this report carries no gateway
+	// evidence (a provider can serve gateway and non-gateway formats under
+	// one name — venice dstack vs ACI/1). The gateway repo requirement must
+	// not fail the non-gateway format.
+	scPolicy := &SupplyChainPolicy{
+		Images: []ImageProvenance{
+			{Repo: "myrepo/model", ModelTier: true},
+			{Repo: "myrepo/gateway", GatewayTier: true},
+		},
+	}
+	in := &ReportInput{
+		Raw:               &RawAttestation{},
+		ImageRepos:        []string{"myrepo/model"},
+		GatewayImageRepos: nil,
+	}
+	if result, done := checkComponentRepoPolicy(in, scPolicy); done {
+		t.Errorf("expected no policy violation without gateway evidence, got %+v", result)
 	}
 }
 
@@ -4879,4 +4903,241 @@ func TestEvidenceVerifiedIsNotAllowlistable(t *testing.T) {
 	if slices.Contains(KnownFactors, FactorEvidenceVerified) {
 		t.Error("FactorEvidenceVerified is in KnownFactors; allow_fail would accept it")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// evalACIKeyCustody tests (Venice ACI/1)
+// ---------------------------------------------------------------------------
+
+func TestEvalACIKeyCustody(t *testing.T) {
+	t.Run("not_applicable_dstack", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatDstack},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), NotApplicable)
+	})
+
+	t.Run("fail_nil_result", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
+	})
+
+	t.Run("fail_error", func(t *testing.T) {
+		in := &ReportInput{
+			Raw:       &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{Err: errors.New("test error")},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
+	})
+
+	t.Run("fail_digest_mismatch", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				KeysetDigestMatch:  false,
+				SigningKeyInKeyset: true,
+				CustodyChainValid:  true,
+				Detail:             "keyset digest mismatch",
+			},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
+	})
+
+	t.Run("fail_signing_key_not_in_keyset", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				KeysetDigestMatch:  true,
+				SigningKeyInKeyset: false,
+				CustodyChainValid:  true,
+				Detail:             "signing key is not in the keyset e2ee_public_keys",
+			},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
+	})
+
+	t.Run("fail_custody_chain_invalid", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				KeysetDigestMatch:    true,
+				SigningKeyInKeyset:   true,
+				CustodyChainValid:    false,
+				GatewayIdentityValid: false,
+				KeysetNotExpired:     true,
+				Detail:               "key custody: recovered KMS root is not accepted",
+			},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
+	})
+
+	t.Run("fail_gateway_identity_invalid", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				KeysetDigestMatch:    true,
+				SigningKeyInKeyset:   true,
+				CustodyChainValid:    true,
+				GatewayIdentityValid: false,
+				KeysetNotExpired:     true,
+				Detail:               "keyset subject does not name the accepted app id",
+			},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
+	})
+
+	t.Run("fail_expired", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				KeysetDigestMatch:    true,
+				SigningKeyInKeyset:   true,
+				CustodyChainValid:    true,
+				GatewayIdentityValid: true,
+				KeysetNotExpired:     false,
+				Detail:               "keyset expired",
+			},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Fail)
+	})
+
+	t.Run("pass", func(t *testing.T) {
+		in := &ReportInput{
+			Raw: &RawAttestation{BackendFormat: FormatACI1},
+			ACIKeyset: &ACIKeysetResult{
+				KeysetDigestMatch:    true,
+				SigningKeyInKeyset:   true,
+				CustodyChainValid:    true,
+				GatewayIdentityValid: true,
+				KeysetNotExpired:     true,
+				Detail:               "all checks passed",
+			},
+		}
+		assertSingleFactor(t, evalACIKeyCustody(in), Pass)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Venice ACI/1 gateway report tests
+// ---------------------------------------------------------------------------
+
+// aciGatewayRaw builds a minimal ACI/1 RawAttestation with gateway evidence,
+// as venice.aciToRaw produces it: quote and event log in the Gateway fields,
+// core quote fields empty, TEEHardware cleared.
+func aciGatewayRaw(nonce Nonce, signingKey string) *RawAttestation {
+	return &RawAttestation{
+		BackendFormat:     FormatACI1,
+		Verified:          true,
+		Nonce:             nonce.Hex(),
+		Model:             "test-model",
+		TEEProvider:       "phala",
+		SigningKey:        signingKey,
+		GatewayIntelQuote: "dGVzdA==", // base64("test") — not a real quote
+		GatewayNonceHex:   nonce.Hex(),
+	}
+}
+
+// TestBuildReport_ACIGatewayEvidence: an ACI/1 report retargets E2EE
+// authorization to the gateway REPORTDATA factor, renders the compose and
+// Sigstore supply-chain gaps as Fail (never Skip or NotApplicable), and
+// includes the gateway tier.
+func TestBuildReport_ACIGatewayEvidence(t *testing.T) {
+	nonce := NewNonce()
+	raw := aciGatewayRaw(nonce, validSigningKey(t))
+	report := BuildReport(&ReportInput{
+		Provider:              "venice",
+		Model:                 "test-model",
+		Raw:                   raw,
+		Nonce:                 nonce,
+		AllowFail:             DefaultAllowFail,
+		GatewayTDX:            &TDXVerifyResult{TeeTCBSVN: make([]byte, 16)},
+		GatewayNonceHex:       nonce.Hex(),
+		GatewayNonce:          nonce,
+		E2EEKeyBoundByGateway: true,
+	})
+
+	if report.E2EEBindingFactor != FactorGWReportData {
+		t.Errorf("E2EEBindingFactor = %q, want %q", report.E2EEBindingFactor, FactorGWReportData)
+	}
+	byName := map[string]FactorResult{}
+	for _, f := range report.Factors {
+		byName[f.Name] = f
+	}
+	for factorName, wantDetail := range map[string]string{
+		FactorComposeBinding: "ACI/1 publishes no compose manifest",
+		FactorSigstoreVerify: "ACI/1 publishes no image digests",
+	} {
+		f, ok := byName[factorName]
+		if !ok {
+			t.Fatalf("factor %s missing from report", factorName)
+		}
+		if f.Status != Fail {
+			t.Errorf("%s status = %s, want Fail — the gap must stay visible", factorName, f.Status)
+		}
+		if !strings.Contains(f.Detail, wantDetail) {
+			t.Errorf("%s detail = %q, want it to contain %q", factorName, f.Detail, wantDetail)
+		}
+	}
+	if _, ok := byName[FactorGWReportData]; !ok {
+		t.Error("gateway tier missing: no gateway_tee_reportdata_binding factor")
+	}
+}
+
+// TestBuildReport_ACIEmptyQuoteFailsClosed: an ACI/1 report with no gateway
+// TDX result (as an empty evidence.quote would produce if the parser did not
+// already reject it) must trip the non-suppressible evidence_verified
+// failure — the waived core factors must never stand alone.
+func TestBuildReport_ACIEmptyQuoteFailsClosed(t *testing.T) {
+	nonce := NewNonce()
+	raw := &RawAttestation{
+		BackendFormat: FormatACI1,
+		Verified:      true,
+		Nonce:         nonce.Hex(),
+		Model:         "test-model",
+		SigningKey:    validSigningKey(t),
+		// No GatewayIntelQuote: the empty-quote case.
+	}
+	report := BuildReport(&ReportInput{
+		Provider:  "venice",
+		Model:     "test-model",
+		Raw:       raw,
+		Nonce:     nonce,
+		AllowFail: KnownFactors, // waive everything waivable
+	})
+	for _, f := range report.Factors {
+		if f.Name == FactorEvidenceVerified {
+			if f.Status != Fail || !f.Enforced {
+				t.Errorf("evidence_verified: status=%s enforced=%v, want enforced Fail", f.Status, f.Enforced)
+			}
+			return
+		}
+	}
+	t.Error("evidence_verified factor missing: an ACI/1 report without a gateway quote did not fail closed")
+}
+
+// TestBuildReport_ACIGatewayUnverifiedFailsClosed: gateway evidence supplied
+// without a GatewayTDX result must trip the non-suppressible
+// evidence_verified failure.
+func TestBuildReport_ACIGatewayUnverifiedFailsClosed(t *testing.T) {
+	nonce := NewNonce()
+	raw := aciGatewayRaw(nonce, validSigningKey(t))
+	report := BuildReport(&ReportInput{
+		Provider:  "venice",
+		Model:     "test-model",
+		Raw:       raw,
+		Nonce:     nonce,
+		AllowFail: KnownFactors, // waive everything waivable; evidence_verified must still block
+	})
+
+	for _, f := range report.Factors {
+		if f.Name == FactorEvidenceVerified {
+			if f.Status != Fail || !f.Enforced {
+				t.Errorf("evidence_verified: status=%s enforced=%v, want enforced Fail", f.Status, f.Enforced)
+			}
+			return
+		}
+	}
+	t.Error("evidence_verified factor missing: unverified gateway evidence did not fail closed")
 }

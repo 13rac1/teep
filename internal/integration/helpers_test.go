@@ -76,6 +76,12 @@ func findFixtureDir(t *testing.T, prefix string) string {
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix+"_") {
 			continue
 		}
+		// The "venice_aci_" fixture series shares the "venice" name prefix
+		// with the dstack fixtures. Exclude it from a bare "venice" scan so
+		// a newer ACI capture cannot select itself into the dstack tests.
+		if prefix == "venice" && strings.HasPrefix(e.Name(), "venice_aci_") {
+			continue
+		}
 		dir := filepath.Join("testdata", e.Name())
 		manifest, _, err := capture.Load(dir)
 		if err != nil {
@@ -92,8 +98,8 @@ func findFixtureDir(t *testing.T, prefix string) string {
 	return filepath.Join("testdata", latest)
 }
 
-func serveAllowFail(providerName string) []string {
-	return config.MergedAllowFail(providerName, &config.Config{}, false)
+func serveAllowFail(providerName string, format attestation.BackendFormat) []string {
+	return config.MergedAllowFail(providerName, format, &config.Config{}, false)
 }
 
 func fixtureE2EEResult(o *capture.E2EEOutcome) *attestation.E2EETestResult {

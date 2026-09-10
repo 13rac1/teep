@@ -65,6 +65,7 @@ const AttestationCacheTTL = 1 * time.Hour
 // BackendFormat constants for known attestation backends.
 const (
 	FormatDstack  BackendFormat = "dstack"
+	FormatACI1    BackendFormat = "aci/1"
 	FormatChutes  BackendFormat = "chutes"
 	FormatTinfoil BackendFormat = "tinfoil"
 	FormatGateway BackendFormat = "gateway"
@@ -193,6 +194,22 @@ type RawAttestation struct {
 	// Populated by the DirectAttester from the proxy discovery endpoint.
 	// Empty for the cloud provider (which always uses the router repo).
 	TinfoilRepo string `json:"-"`
+
+	// ACI/1-specific fields — populated by the Venice ACI/1 parser
+	// (internal/provider/venice/aci.go). ACI/1 publishes no manifest for
+	// the machine serving inference; its verifiable provenance is the
+	// gateway app_compose (in GatewayAppCompose) plus a workload keyset
+	// whose keys are connected to a dstack-KMS root by signature chains.
+	ACISourceRepoURL        string `json:"-"` // attestation.source_provenance.repo_url
+	ACIWorkloadKeysetDigest string `json:"-"` // top-level workload_keyset_digest
+	ACIDownstreamTLSDomain  string `json:"-"` // attestation.evidence.downstream_tls_binding.domain
+	ACIDownstreamTLSSPKI    string `json:"-"` // attestation.evidence.downstream_tls_binding.spki_sha256
+	// ACIWorkloadKeyset and ACIKeyCustody hold parsed venice ACI structs
+	// (opaque `any` here because concrete types would create an
+	// attestation → venice import cycle; the venice package type-asserts
+	// them back). Nil for non-ACI/1 formats.
+	ACIWorkloadKeyset any `json:"-"`
+	ACIKeyCustody     any `json:"-"`
 
 	// Gateway fields — populated by providers with TEE-attested API gateways.
 	// Empty for providers without a gateway (e.g. Venice, NEAR AI direct).

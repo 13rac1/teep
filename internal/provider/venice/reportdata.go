@@ -15,6 +15,17 @@ import (
 // REPORTDATA[0:20] = keccak256(pubkey_bytes_without_04_prefix)[12:32]
 // This is the keccak256-derived address of the uncompressed secp256k1 public
 // key — the same derivation used by dstack to identify enclave keys.
+//
+// Reused unchanged for ACI/1: the caller always passes the 64 REPORTDATA
+// bytes parsed from the binary intel_quote (in.TDX.ReportData — see
+// internal/verify/attest.go and internal/proxy/proxy.go), and that binding
+// scheme is identical across both Venice formats (same keccak256(signing
+// key)+nonce layout). The ACI/1 JSON response also carries top-level
+// "report_data" / "quote_report_data" fields, but those are informational
+// echoes of the same bytes, not a separate binding to verify — this verifier
+// does not read them. Do not add ACI/1-specific branching here; if ACI/1
+// ever changes its REPORTDATA layout, that is a new format requiring its own
+// verifier registered via multi.Verifier.
 type ReportDataVerifier struct{}
 
 // VerifyReportData checks that reportData[0:20] matches the keccak256-derived

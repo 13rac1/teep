@@ -108,10 +108,13 @@ test-fuzz: ## Fuzz all attestation parsers (FUZZTIME=30s by default)
 
 check: lint test ## Run lint + test
 
-reports: report-tinfoil report-tinfoil-direct report-neardirect report-nearcloud report-venice report-chutes report-phalacloud report-nanogpt ## Run all attestation reports
+reports: report-tinfoil report-tinfoil-direct report-neardirect report-nearcloud report-venice report-venice-aci report-chutes report-phalacloud report-nanogpt ## Run all attestation reports
 
-report-venice: build ## Verify Venice attestation (requires VENICE_API_KEY)
+report-venice: build ## Verify Venice dstack attestation (requires VENICE_API_KEY)
 	./teep verify venice --model e2ee-qwen3-5-122b-a10b --log-level debug --capture /tmp/teep-attestation-venice
+
+report-venice-aci: build ## Verify Venice ACI/1 attestation (requires VENICE_API_KEY)
+	./teep verify venice --model e2ee-glm-5-2-p --log-level debug --capture /tmp/teep-attestation-venice-aci
 
 report-neardirect: build ## Verify NEAR Direct attestation (requires NEARAI_API_KEY)
 	./teep verify neardirect --model z-ai/glm-5.3-flash --log-level debug --capture /tmp/teep-attestation-neardirect

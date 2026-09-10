@@ -105,6 +105,25 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 	}
 }
 
+// newGatewayReportDataVerifier returns the REPORTDATA verifier for a
+// provider's gateway quote (GatewayIntelQuote), or nil for providers
+// without a TDX gateway — evalGatewayReportDataBinding then fails closed if
+// gateway evidence is present.
+// SYNC: proxy.fromConfig sets Provider.GatewayReportDataVerifier for the
+// same providers.
+func newGatewayReportDataVerifier(name string) provider.ReportDataVerifier {
+	switch name {
+	case "nearcloud":
+		return nearcloud.GatewayReportDataVerifier{}
+	case "venice":
+		// The ACI/1 gateway quote binds the same keccak256(signing key)+nonce
+		// REPORTDATA as the dstack model quote, so the verifier is shared.
+		return venice.ReportDataVerifier{}
+	default:
+		return nil
+	}
+}
+
 // supplyChainPolicy returns the supply chain policy for a known provider
 // name, or an error for an unrecognized one. Known providers always return
 // non-nil: a real policy or the NoSupplyChainPolicy sentinel (SEE:
@@ -158,13 +177,6 @@ func providerUsesTLSBinding(providerName string) bool {
 	default:
 		return false
 	}
-}
-
-// providerE2EEKeyBoundByGateway returns true for providers whose E2EE key is
-// bound by the gateway attestation rather than the model endpoint's.
-// SYNC: proxy.fromConfig sets Provider.E2EEKeyBoundByGateway for the same set.
-func providerE2EEKeyBoundByGateway(providerName string) bool {
-	return providerName == "tinfoil_v3_cloud"
 }
 
 // e2eeEnabledByDefault reports whether the named provider has E2EE enabled

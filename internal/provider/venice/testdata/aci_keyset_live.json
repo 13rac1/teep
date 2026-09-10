@@ -1,0 +1,83 @@
+{
+ "workload_keyset_digest": "sha256:664045b310dfad49e4211c324db3ddb82895b5d4424364099637fc35944c46bf",
+ "signing_public_key": "04943cea0b4babf60f6e2031e9a00866a37c4ae696fb45895b3a9b38ab8cbb898f42c85b704aceaa0a396cf26f7fdf79d83205be7e11d3a5d70419a68277158c3d",
+ "app_id": "fdb7a14e5a6675f752e2cb69c9067a98ca402918",
+ "workload_keyset": {
+  "subject": null,
+  "not_after": 1790265204,
+  "receipt_signing_keys": [
+   {
+    "key_id": "dstack-kms-receipt-ed25519-v1",
+    "algo": "ed25519",
+    "public_key": "110f3824daeeef29dbeba9677a5794ffed257b1082d9fd4599b3c0819953aa0a"
+   }
+  ],
+  "e2ee_public_keys": [
+   {
+    "key_id": "dstack-kms-e2ee-v1",
+    "algo": "secp256k1-aes-256-gcm-hkdf-sha256",
+    "public_key": "04943cea0b4babf60f6e2031e9a00866a37c4ae696fb45895b3a9b38ab8cbb898f42c85b704aceaa0a396cf26f7fdf79d83205be7e11d3a5d70419a68277158c3d"
+   },
+   {
+    "key_id": "dstack-kms-e2ee-x25519-v1",
+    "algo": "x25519-aes-256-gcm-hkdf-sha256",
+    "public_key": "408e82d159832cfae15007781bcade0badee7d50e9f76d50eaa1777464006537"
+   }
+  ],
+  "tls_public_keys": [
+   {
+    "spki_sha256": "22ad6f73dd10547af55d06825c8015413968a439b8f76adc3a6aba9a32e6c71b",
+    "domain": "tee.redpill.ai"
+   },
+   {
+    "spki_sha256": "8bafb8e6ddc55e3e662b6385a2820494fc6e90c64688136860b1851a81b7ee06",
+    "domain": "inference.phala.com"
+   },
+   {
+    "spki_sha256": "c68585e7dc00a55d3082a9c860cb916e1788c5daec51505e413d27ab94f7d4c7",
+    "domain": "api.redpill.ai"
+   }
+  ]
+ },
+ "key_custody": {
+  "provider": "dstack-kms",
+  "keys": [
+   {
+    "role": "receipt",
+    "path": "aci/receipt-ed25519/v1",
+    "purpose": "aci.receipt.ed25519.v1",
+    "algo": "ed25519",
+    "public_key": "110f3824daeeef29dbeba9677a5794ffed257b1082d9fd4599b3c0819953aa0a",
+    "kms_public_key": "02f7fb3ed8c352d316dfdc19458a9f29c06eb7e74130b3808d784e2fd401a2c12d",
+    "signature_chain": [
+     "d1f59335effc2688acdf502ee34d8d3373b0e7e6be493075383714ce5673a29973f224690437c483ae3fdd37172df3abad82877c4023ed7c5a64d5acaf18477c00",
+     "5c2fe36bdb1e434c0a371579bcbce07c4e7b89eba45affa089191baec84f23ad77b24a594aa28427b6b7a5f348b0ecf5597abfd9a2add05ddb55c521ba38a38501"
+    ]
+   },
+   {
+    "role": "e2ee-secp256k1",
+    "path": "aci/e2ee/v1",
+    "purpose": "aci.e2ee.v1",
+    "algo": "secp256k1-aes-256-gcm-hkdf-sha256",
+    "public_key": "04943cea0b4babf60f6e2031e9a00866a37c4ae696fb45895b3a9b38ab8cbb898f42c85b704aceaa0a396cf26f7fdf79d83205be7e11d3a5d70419a68277158c3d",
+    "kms_public_key": "03943cea0b4babf60f6e2031e9a00866a37c4ae696fb45895b3a9b38ab8cbb898f",
+    "signature_chain": [
+     "452d6f86a807fef0ce0d65e6c5cd25a0a249b1fd8608d26c3efe17fc10346f4c2d3dfb8969d10dc1feac1d595b3816f63faa40ac370a3a233ce1d712d418c89701",
+     "5c2fe36bdb1e434c0a371579bcbce07c4e7b89eba45affa089191baec84f23ad77b24a594aa28427b6b7a5f348b0ecf5597abfd9a2add05ddb55c521ba38a38501"
+    ]
+   },
+   {
+    "role": "e2ee-x25519",
+    "path": "aci/e2ee-x25519/v1",
+    "purpose": "aci.e2ee.x25519.v1",
+    "algo": "x25519-aes-256-gcm-hkdf-sha256",
+    "public_key": "408e82d159832cfae15007781bcade0badee7d50e9f76d50eaa1777464006537",
+    "kms_public_key": "03892f86b3f55f78cc0760cec933cf8e2a92862fb173c2d221cc25895847cbb5eb",
+    "signature_chain": [
+     "358cd661ca4f5e986ed950ca083bf7bcfef6ab4b839ca11a953b156d64f82b1c51a213730d5777b4c845170827680d41e8220c2f950a38081025ff16eb3789ba00",
+     "5c2fe36bdb1e434c0a371579bcbce07c4e7b89eba45affa089191baec84f23ad77b24a594aa28427b6b7a5f348b0ecf5597abfd9a2add05ddb55c521ba38a38501"
+    ]
+   }
+  ]
+ }
+}

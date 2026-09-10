@@ -679,6 +679,9 @@ func fromConfig(
 		p.Preparer = venice.NewPreparer(cp.APIKey)
 		p.Encryptor = venice.NewE2EE()
 		p.ReportDataVerifier = venice.ReportDataVerifier{}
+		// The ACI/1 gateway quote binds the same keccak256(signing key)+nonce
+		// REPORTDATA as the dstack model quote, so the verifier is shared.
+		p.GatewayReportDataVerifier = venice.ReportDataVerifier{}
 		p.SupplyChainPolicy = venice.SupplyChainPolicy()
 		p.ModelLister = venice.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "neardirect":
@@ -712,6 +715,7 @@ func fromConfig(
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
+		p.GatewayReportDataVerifier = nearcloud.GatewayReportDataVerifier{}
 		p.SupplyChainPolicy = nearcloud.SupplyChainPolicy()
 		p.UsesTLSBinding = true
 		p.BaseURL = "https://" + nearcloud.GatewayHost()
@@ -787,9 +791,6 @@ func fromConfig(
 		p.ResponsesPath = "/v1/responses"
 		p.SpeechPath = "/v1/audio/speech"
 		p.UsesTLSBinding = true
-		// The router is the gateway, and its REPORTDATA binds the HPKE key
-		// clients encrypt to. SEE: tinfoil.asGatewayEvidence.
-		p.E2EEKeyBoundByGateway = true
 		p.Attester = tinfoil.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = tinfoil.NewPreparer(cp.APIKey)
 		p.Encryptor = tinfoil.NewE2EE()
@@ -906,7 +907,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	nvidiaResult, nvidiaDur := verifyNVIDIA(ctx, raw, nonce, prov.Name)
 	nrasResult, nrasDur := s.verifyNVIDIAOnline(ctx, raw, prov.Name)
 	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)
-	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, prov.SupplyChainPolicy)
+	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, gatewayComposeResult, prov.SupplyChainPolicy)
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
 	tinfoilSC, tinfoilSCDur := s.verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, prov, upstreamModel)
 
@@ -933,11 +934,12 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		Model:                  upstreamModel,
 		Raw:                    raw,
 		Nonce:                  nonce,
-		AllowFail:              config.MergedAllowFail(prov.Name, s.cfg, s.cfg.Offline),
+		AllowFail:              config.MergedAllowFail(prov.Name, raw.BackendFormat, s.cfg, s.cfg.Offline),
 		Policy:                 prov.MeasurementPolicy,
 		GatewayPolicy:          prov.GatewayMeasurementPolicy,
 		SupplyChainPolicy:      prov.SupplyChainPolicy,
 		ImageRepos:             sc.ImageRepos,
+		GatewayImageRepos:      sc.GatewayImageRepos,
 		DigestToRepo:           sc.DigestToRepo,
 		TDX:                    tdxResult,
 		SEV:                    sevResult,
@@ -955,10 +957,11 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		Sigstore:               sc.Sigstore,
 		Rekor:                  sc.Rekor,
 		TinfoilSC:              tinfoilSC,
+		ACIKeyset:              venice.VerifyACIKeyset(raw, time.Time{}),
 		E2EEConfigured:         prov.E2EE,
 		Inapplicable:           inapplicableForProvider(prov.Name),
 		ProviderUsesTLSBinding: prov.UsesTLSBinding,
-		E2EEKeyBoundByGateway:  prov.E2EEKeyBoundByGateway,
+		E2EEKeyBoundByGateway:  provider.GatewayBindsE2EEKey(prov.Name, raw.BackendFormat),
 	}
 	report := attestation.BuildReport(input)
 	if report.Blocked() && !s.cfg.Force && errors.Is(input.VerificationErrors(), tlsct.ErrConnectionCapacity) {
@@ -1053,8 +1056,11 @@ func (s *Server) verifyGatewaySEV(
 
 // verifyGatewayTDX runs gateway TDX verification, REPORTDATA binding, compose
 // binding, and Proof of Cloud for providers that populate GatewayIntelQuote.
+// The REPORTDATA binding scheme is per-provider (prov.GatewayReportDataVerifier);
+// with no verifier configured the binding detail stays empty and
+// evalGatewayReportDataBinding fails closed.
 //
-// SYNC: verify.verifyNearcloudGateway does the same for teep verify. Without
+// SYNC: verify.verifyGatewayTDX does the same for teep verify. Without
 // this the proxy supplies gateway evidence it never verified, and
 // unverifiedEvidence blocks the provider outright.
 func (s *Server) verifyGatewayTDX(
@@ -1068,8 +1074,8 @@ func (s *Server) verifyGatewayTDX(
 	}
 	slog.DebugContext(ctx, "gateway TDX verification starting", "provider", prov.Name)
 	tdx := s.verifyQuote(ctx, raw.GatewayIntelQuote)
-	if tdx.ParseErr == nil {
-		detail, err := nearcloud.GatewayReportDataVerifier{}.VerifyReportData(tdx.ReportData, raw, nonce)
+	if tdx.ParseErr == nil && prov.GatewayReportDataVerifier != nil {
+		detail, err := prov.GatewayReportDataVerifier.VerifyReportData(tdx.ReportData, raw, nonce)
 		tdx.ReportDataBindingErr = err
 		tdx.ReportDataBindingDetail = detail
 	}
@@ -1183,11 +1189,12 @@ func (s *Server) verifyPoC(
 // supplyChainResult holds the outputs of compose binding, sigstore, and rekor
 // verification. Zero value is safe to use (nil slices/maps/pointers).
 type supplyChainResult struct {
-	Compose      *attestation.ComposeBindingResult
-	Sigstore     []attestation.SigstoreResult
-	ImageRepos   []string
-	DigestToRepo map[string]string
-	Rekor        []attestation.RekorProvenance
+	Compose           *attestation.ComposeBindingResult
+	Sigstore          []attestation.SigstoreResult
+	ImageRepos        []string
+	GatewayImageRepos []string
+	DigestToRepo      map[string]string
+	Rekor             []attestation.RekorProvenance
 }
 
 // verifySupplyChain runs compose binding, sigstore digest, and rekor provenance checks.
@@ -1200,35 +1207,53 @@ func (s *Server) verifySupplyChain(
 	ctx context.Context,
 	raw *attestation.RawAttestation,
 	tdxResult *attestation.TDXVerifyResult,
+	gatewayCompose *attestation.ComposeBindingResult,
 	scPolicy *attestation.SupplyChainPolicy,
 ) (supplyChainResult, time.Duration) {
 	if scPolicy == nil {
 		panic("verifySupplyChain: nil SupplyChainPolicy; provider must supply a real policy or attestation.NoSupplyChainPolicy()")
 	}
-	if raw.AppCompose == "" || tdxResult == nil || tdxResult.ParseErr != nil {
-		if tdxResult != nil && tdxResult.ParseErr != nil {
-			slog.WarnContext(ctx, "supply chain verification skipped: TDX quote parse failed",
-				"parse_err", tdxResult.ParseErr)
-		} else {
-			slog.DebugContext(ctx, "supply chain verification skipped",
-				"has_compose", raw.AppCompose != "",
-				"has_tdx", tdxResult != nil)
-		}
-		return supplyChainResult{}, 0
-	}
 	start := time.Now()
-	sc := supplyChainResult{
-		Compose: &attestation.ComposeBindingResult{Checked: true},
-	}
-	sc.Compose.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+	var sc supplyChainResult
 
-	if sc.Compose.Err == nil {
-		cd := attestation.ExtractComposeDigests(raw.AppCompose)
-		sc.ImageRepos = cd.Repos
-		sc.DigestToRepo = cd.DigestToRepo
-		if len(cd.Digests) > 0 && !s.cfg.Offline {
-			sc.Sigstore = s.rekorClient.CheckSigstoreDigests(ctx, cd.Digests)
+	// Model-tier compose binding and digest extraction.
+	var modelCD attestation.ComposeDigests
+	switch {
+	case raw.AppCompose != "" && tdxResult != nil && tdxResult.ParseErr == nil:
+		sc.Compose = &attestation.ComposeBindingResult{Checked: true}
+		sc.Compose.Err = attestation.VerifyComposeBinding(raw.AppCompose, tdxResult.MRConfigID)
+		if sc.Compose.Err == nil {
+			modelCD = attestation.ExtractComposeDigests(raw.AppCompose)
+			sc.ImageRepos = modelCD.Repos
 		}
+	case tdxResult != nil && tdxResult.ParseErr != nil:
+		slog.WarnContext(ctx, "supply chain verification skipped: TDX quote parse failed",
+			"parse_err", tdxResult.ParseErr)
+	default:
+		slog.DebugContext(ctx, "model supply chain verification skipped",
+			"has_compose", raw.AppCompose != "",
+			"has_tdx", tdxResult != nil)
+	}
+
+	// Gateway-tier digest extraction. Digests count only after the gateway
+	// compose binding verified — an unbound manifest proves nothing.
+	var gatewayCD attestation.ComposeDigests
+	if gatewayCompose != nil && gatewayCompose.Err == nil && raw.GatewayAppCompose != "" {
+		gatewayCD = attestation.ExtractComposeDigests(raw.GatewayAppCompose)
+		sc.GatewayImageRepos = gatewayCD.Repos
+	}
+
+	if len(modelCD.Digests) == 0 && len(gatewayCD.Digests) == 0 {
+		return sc, time.Since(start)
+	}
+
+	// One deduplicated Sigstore/Rekor pass over the merged digest set.
+	// SYNC: verify.Run merges the same way (attestation.MergeComposeDigests:
+	// model digests first, first-writer-wins with conflict logging).
+	allDigests, digestToRepo := attestation.MergeComposeDigests(modelCD, gatewayCD)
+	sc.DigestToRepo = digestToRepo
+	if !s.cfg.Offline {
+		sc.Sigstore = s.rekorClient.CheckSigstoreDigests(ctx, allDigests)
 	}
 
 	if len(sc.Sigstore) > 0 && !s.cfg.Offline {

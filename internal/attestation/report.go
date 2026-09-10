@@ -88,6 +88,7 @@ const (
 	FactorNvidiaNRAS           = "nvidia_nras_verified"
 	FactorE2EECapable          = "e2ee_capable"
 	FactorE2EEUsable           = "e2ee_usable"
+	FactorACIKeyCustody        = "aci_key_custody"
 	FactorTLSKeyBinding        = "tls_key_binding"
 	FactorCPUGPUChain          = "cpu_gpu_chain"
 	FactorNVSwitchBinding      = "nvswitch_binding"
@@ -509,6 +510,80 @@ var TinfoilDirectDefaultAllowFail = []string{
 	FactorComponentRecognition,
 }
 
+// VeniceACIDefaultAllowFail is the default allow_fail list for Venice models
+// that return the ACI/1 attestation format. Selected per response format,
+// not per provider: Venice's dstack models keep the global DefaultAllowFail.
+// SEE: config.MergedAllowFail.
+//
+// DANGER: this list accepts a provider that proves nothing about the machine
+// that runs the model. The ACI/1 quote describes the private-ai-gateway CVM
+// (zero GPUs, downstream TLS hop, model-agnostic KMS keys), verified in
+// Tier 4; every core factor that describes the inference host fails and is
+// listed here so the provider stays usable. Removing an entry blocks every
+// ACI/1 model; that is the honest default and it is held back only because
+// the alternative is no service.
+//
+// Enforced and deliberately absent from this list: aci_key_custody
+// and gateway_tee_reportdata_binding — together they prove the E2EE key teep
+// encrypts to is the gateway's KMS-issued, hardware-bound key, and E2EE
+// authorization reads the gateway factor for ACI/1
+// (SEE: provider.GatewayBindsE2EEKey). Also enforced: the gateway quote
+// chain (gateway_nonce_match, quote present/structure/cert_chain/signature,
+// debug_disabled, measurement, event_log_integrity) and the NVIDIA payload
+// signature and nonce factors — the relayed GPU evidence is real and
+// client-nonce-fresh even though cpu_gpu_chain cannot bind it to the
+// attested CPU.
+var VeniceACIDefaultAllowFail = []string{
+	// No inference-host evidence. The gateway is the only attested
+	// principal, so every core factor that describes the machine running
+	// the model fails.
+	FactorTEEQuotePresent,
+	FactorTEEQuoteStructure,
+	FactorTEECertChain,
+	FactorTEEQuoteSignature,
+	FactorTEEDebugDisabled,
+	FactorTEEMeasurement,
+	FactorTEEHardwareConfig,
+	FactorTEEBootConfig,
+	FactorTEEReportData,
+	FactorIntelPCSCollateral,
+	FactorTEETCBCurrent,
+	FactorTEETCBNotRevoked,
+	FactorMeasuredWeights,
+	FactorEventLogIntegrity,
+	FactorCPUGPUChain,
+	FactorCPUIDRegistry,
+
+	// ACI/1 publishes no compose manifest and no image digests, so the
+	// compose supply-chain factors fail structurally.
+	// SEE: docs/attestation_gaps/venice_aci_gateway.md.
+	FactorComposeBinding,
+	FactorSigstoreVerify,
+	FactorBuildTransparency,
+	FactorProviderSigner,
+	FactorComponentSignature,
+	FactorComponentRecognition,
+
+	// Waivers venice already carries via the global DefaultAllowFail.
+	FactorNvidiaPayloadPresent,
+	FactorNvidiaClaims,
+	FactorNvidiaNRAS,
+	FactorE2EECapable,
+	FactorE2EEUsable,
+	FactorResponseSchema,
+	FactorTLSKeyBinding,
+
+	// Gateway waivers. hardware_config and boot_config cover RTMR churn on
+	// the dev-channel gateway image (the same treatment venice's dstack
+	// model tier gets); cpu_id_registry mirrors nearcloud — a Proof of
+	// Cloud outage must not block. gateway_compose_binding is enforced: the
+	// gateway publishes its app_compose and the quote's MRConfigID measures
+	// it.
+	FactorGWHardwareConfig,
+	FactorGWBootConfig,
+	FactorGWCPUIDRegistry,
+}
+
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{
@@ -519,6 +594,7 @@ var KnownFactors = []string{
 	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
 	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaSignature, FactorNvidiaClaims,
 	FactorNvidiaClientNonce, FactorNvidiaNRAS, FactorE2EECapable, FactorE2EEUsable,
+	FactorACIKeyCustody,
 	FactorTLSKeyBinding, FactorCPUGPUChain, FactorNVSwitchBinding,
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
@@ -649,6 +725,21 @@ func (r *RawAttestation) E2EEKeyType() string {
 	return "ecdsa"
 }
 
+// ACIKeysetResult holds the result of Venice ACI/1 workload keyset
+// verification: the JCS keyset digest recompute, the check that the E2EE
+// signing key teep encrypts to is a member of the keyset, and the dstack-KMS
+// custody chain from an accepted KMS root to that key. Nil for non-ACI/1
+// attestation formats. SEE: venice.VerifyACIKeyset.
+type ACIKeysetResult struct {
+	KeysetDigestMatch    bool   // recomputed sha256(JCS(workload_keyset)) == declared workload_keyset_digest
+	SigningKeyInKeyset   bool   // top-level signing_public_key is a member of the keyset e2ee_public_keys
+	CustodyChainValid    bool   // dstack-KMS signature chain verified to an accepted KMS root for an accepted app id
+	GatewayIdentityValid bool   // custody chain valid AND a non-null keyset subject names the accepted app id
+	KeysetNotExpired     bool   // the keyset not_after is in the future at verification time
+	Err                  error  // non-nil if verification could not complete (malformed input, bad hex, etc.)
+	Detail               string // summary of the above
+}
+
 // TinfoilComponentResult holds per-component Tinfoil Sigstore verification.
 type TinfoilComponentResult struct {
 	Repo             string
@@ -752,6 +843,10 @@ type ReportInput struct {
 	GatewayCompose  *ComposeBindingResult
 	GatewayEventLog []EventLogEntry
 	GatewayPolicy   MeasurementPolicy // separate measurement allowlists for gateway CVM (GW-M-04)
+
+	// ACIKeyset holds the result of Venice ACI/1 workload keyset
+	// verification. Nil for non-ACI/1 providers/formats.
+	ACIKeyset *ACIKeysetResult
 
 	// TinfoilSC holds Tinfoil-specific Sigstore supply chain results.
 	// Nil for non-Tinfoil providers.
@@ -933,6 +1028,14 @@ func unverifiedEvidence(in *ReportInput) []string {
 	if len(in.Raw.GatewaySEVReportBytes) > 0 && in.GatewaySEV == nil {
 		missing = append(missing, "gateway_sev_report")
 	}
+	// ACI/1 waives the core tee_* factors on the premise that the gateway
+	// tier carries the CPU evidence. A response that omits the gateway quote
+	// would build no gateway tier and leave nothing enforced that needs a
+	// quote, so require a verified gateway TDX result whenever the format is
+	// ACI/1 — independent of the parser's own empty-quote rejection.
+	if in.Raw.BackendFormat == FormatACI1 && in.GatewayTDX == nil {
+		missing = append(missing, "aci_gateway_quote")
+	}
 	return missing
 }
 
@@ -974,6 +1077,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalNvidiaNRASVerified,
 		evalE2EECapable,
 		evalE2EEUsable,
+		evalACIKeyCustody,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -1674,6 +1778,39 @@ func evalE2EEUsable(in *ReportInput) []FactorResult {
 	return factor(TierBinding, FactorE2EEUsable, Skip, detail)
 }
 
+// evalACIKeyCustody evaluates Venice ACI/1's key custody factor. The
+// verification chain is: the gateway TDX quote's REPORTDATA binds the
+// top-level signing_public_key (SEE: gateway_tee_reportdata_binding); that
+// key must be a member of the keyset e2ee_public_keys; the keyset digest
+// must recompute; and the dstack-KMS custody chain must connect the same key
+// to an accepted KMS root, with the app id read from the quote-bound RTMR3
+// event log (SEE: gateway_event_log_integrity). The custody chain is what
+// connects the keys to an authority outside the response — the digest and
+// membership checks alone prove only self-consistency. NotApplicable for
+// every format other than ACI/1. Enforced whenever ACI/1 is in use; never
+// added to any allow_fail list because it is verifiable from data already
+// present in the attestation response.
+func evalACIKeyCustody(in *ReportInput) []FactorResult {
+	if in.Raw.BackendFormat != FormatACI1 {
+		return factor(TierBinding, FactorACIKeyCustody, NotApplicable,
+			"not ACI/1 format")
+	}
+	if in.ACIKeyset == nil {
+		return factor(TierBinding, FactorACIKeyCustody, Fail,
+			"ACI/1 keyset verification was not performed")
+	}
+	if in.ACIKeyset.Err != nil {
+		return factor(TierBinding, FactorACIKeyCustody, Fail,
+			fmt.Sprintf("keyset verification error: %v", in.ACIKeyset.Err))
+	}
+	if !in.ACIKeyset.KeysetDigestMatch || !in.ACIKeyset.SigningKeyInKeyset ||
+		!in.ACIKeyset.CustodyChainValid || !in.ACIKeyset.GatewayIdentityValid ||
+		!in.ACIKeyset.KeysetNotExpired {
+		return factor(TierBinding, FactorACIKeyCustody, Fail, in.ACIKeyset.Detail)
+	}
+	return factor(TierBinding, FactorACIKeyCustody, Pass, in.ACIKeyset.Detail)
+}
+
 // validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519
 // public key) and that the bytes form a valid point on the Ed25519 curve.
 func validateEd25519Hex(s string) error {
@@ -1868,7 +2005,13 @@ func checkComponentRepoPolicy(in *ReportInput, scPolicy *SupplyChainPolicy) (Fac
 			return fail, true
 		}
 	}
-	if scPolicy.HasGatewayImages() {
+	// Gateway repos are required only when this report carries gateway
+	// evidence: a provider can serve gateway and non-gateway formats under
+	// one name (venice dstack vs ACI/1), and a policy that lists gateway
+	// images must not fail the formats that have no gateway. A gateway
+	// quote supplied without verification is blocked by unverifiedEvidence
+	// before this factor matters.
+	if scPolicy.HasGatewayImages() && (in.GatewayTDX != nil || in.GatewaySEV != nil) {
 		if len(in.GatewayImageRepos) == 0 {
 			fail.Detail = "no attested gateway component repositories extracted from compose"
 			return fail, true
@@ -2541,6 +2684,14 @@ func evalCPUIDRegistry(in *ReportInput) []FactorResult {
 }
 func evalComposeBinding(in *ReportInput) []FactorResult {
 	switch {
+	case in.Raw != nil && in.Raw.BackendFormat == FormatACI1:
+		// ACI/1 publishes no compose manifest for the inference host — a
+		// permanent structural absence, not evidence that failed to arrive.
+		// Fail rather than Skip so the gap stays visible when the factor is
+		// waived (a waived Skip never surfaces in the score). The gateway's
+		// own manifest is verified by gateway_compose_binding.
+		return factor(TierSupplyChain, FactorComposeBinding, Fail,
+			"ACI/1 publishes no compose manifest for the inference host; workload composition is not verifiable")
 	case in.Compose == nil || !in.Compose.Checked:
 		return factor(TierSupplyChain, FactorComposeBinding, Skip, "no app_compose in attestation response")
 	case in.Compose.Err != nil:
@@ -2550,6 +2701,15 @@ func evalComposeBinding(in *ReportInput) []FactorResult {
 	}
 }
 func evalSigstoreVerification(in *ReportInput) []FactorResult {
+	if in.Raw != nil && in.Raw.BackendFormat == FormatACI1 && len(in.Sigstore) == 0 {
+		// ACI/1 publishes no image digests for the inference host — a
+		// permanent structural absence. Fail rather than Skip so the gap
+		// stays visible when the factor is waived. When the gateway compose
+		// binding verified, its digest-pinned images populate in.Sigstore
+		// and evaluate below.
+		return factor(TierSupplyChain, FactorSigstoreVerify, Fail,
+			"ACI/1 publishes no image digests for the inference host; Sigstore verification is not possible")
+	}
 	if len(in.Sigstore) == 0 {
 		return factor(TierSupplyChain, FactorSigstoreVerify, Skip, "no component digests to verify")
 	}
@@ -3388,6 +3548,14 @@ func buildMetadata(in *ReportInput) map[string]string {
 				m[fmt.Sprintf("gateway_rtmr%d", i)] = v
 			}
 		}
+	}
+
+	// ACI/1 gateways attest the TLS pin of their own downstream hop. teep
+	// never dials that domain, so the pin is reported as metadata rather
+	// than verified; its integrity is covered by aci_key_custody.
+	if in.Raw != nil && in.Raw.ACIDownstreamTLSDomain != "" {
+		m["gateway_downstream_tls"] = fmt.Sprintf("%s spki %s",
+			in.Raw.ACIDownstreamTLSDomain, in.Raw.ACIDownstreamTLSSPKI)
 	}
 
 	if len(m) == 0 {

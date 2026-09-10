@@ -1,0 +1,60 @@
+{
+  "method": "GET",
+  "url": "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv6Igg4P1K49tlTjZ+zM3G7LAAbDYdYq2/ASS3RpVbWSULT0KCf2hxCKquFUpq9yJUHogXVvxzZkLOvyKudAy7QnrKHBx8Art9eUzRGQ0BaJfiPLV5PZGr28hI8DrdGU10GGnRoqLn+ybN3wxtbSflV1m1milDdJs1aWXz/E4+Uy+1RfWcVsU1nLmdWn6VFOMOV2PP/wJhbJGHTACLREnJ3tTciiaaqQWQYXHXYapJLRrpW/JkPQYtMYT86zHMeUnrVbdKchmqLoEsQYPNRKkVKxejBTz8fSsu7x5TnvBktlE7MdklSz7H6tT1YfPQUDt2Aa1b/65i/626wlpRSe6zQIDAQAB",
+  "headers": {
+    "Accept-Ranges": [
+      "bytes"
+    ],
+    "Age": [
+      "9"
+    ],
+    "Connection": [
+      "keep-alive"
+    ],
+    "Content-Length": [
+      "294"
+    ],
+    "Content-Type": [
+      "binary/octet-stream"
+    ],
+    "Date": [
+      "Wed, 26 Aug 2026 01:07:23 GMT"
+    ],
+    "Etag": [
+      "\"a3d246a50122dbdb11caf9749a4fc40f\""
+    ],
+    "Last-Modified": [
+      "Thu, 26 Feb 2026 13:04:11 GMT"
+    ],
+    "Server": [
+      "AmazonS3"
+    ],
+    "Vary": [
+      "Accept-Encoding"
+    ],
+    "Via": [
+      "1.1 83a84568820d835ad60fa1c2aba27de2.cloudfront.net (CloudFront)"
+    ],
+    "X-Amz-Cf-Id": [
+      "8YxsP_wwgbXNqUdJtqcQ48M3LjM2iMVUyh0Impwb1lJqy0C7H1u6eQ=="
+    ],
+    "X-Amz-Cf-Pop": [
+      "SFO53-P4"
+    ],
+    "X-Amz-Server-Side-Encryption": [
+      "AES256"
+    ],
+    "X-Amz-Version-Id": [
+      "f2FY9v6BmcG11MrdDIsyVYNLKiHrbdVG"
+    ],
+    "X-Cache": [
+      "Hit from cloudfront"
+    ]
+  },
+  "duration_ms": 102
+}

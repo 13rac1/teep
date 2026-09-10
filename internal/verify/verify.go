@@ -19,6 +19,7 @@ import (
 	"github.com/13rac1/teep/internal/defaults"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
+	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -165,8 +166,9 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		}
 	}
 
-	// Gateway verification (nearcloud-specific fields).
-	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyNearcloudGateway(ctx, raw, nonce, client, opts.Offline, verifier, opts.VerificationTime)
+	// Gateway verification for providers that populate GatewayIntelQuote.
+	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyGatewayTDX(ctx, raw, nonce, client, opts.Offline, verifier,
+		newGatewayReportDataVerifier(opts.ProviderName), opts.VerificationTime)
 	var gatewayCD attestation.ComposeDigests
 	if gatewayCompose != nil && gatewayCompose.Err == nil {
 		gatewayCD = attestation.ExtractComposeDigests(raw.GatewayAppCompose)
@@ -205,7 +207,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		Model:                  opts.ModelName,
 		Raw:                    raw,
 		Nonce:                  nonce,
-		AllowFail:              config.MergedAllowFail(opts.ProviderName, cfg, opts.Offline),
+		AllowFail:              config.MergedAllowFail(opts.ProviderName, raw.BackendFormat, cfg, opts.Offline),
 		Policy:                 mergedPolicy,
 		GatewayPolicy:          mergedGWPolicy,
 		SupplyChainPolicy:      scPolicy,
@@ -228,11 +230,12 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		GatewayCompose:         gatewayCompose,
 		GatewayEventLog:        raw.GatewayEventLog,
 		TinfoilSC:              tinfoilSC,
+		ACIKeyset:              venice.VerifyACIKeyset(raw, opts.VerificationTime),
 		E2EETest:               e2eeResult,
 		E2EEConfigured:         providerUsesTLSBinding(opts.ProviderName) && opts.Provider.E2EE,
 		Inapplicable:           inapplicableFactors(opts.ProviderName),
 		ProviderUsesTLSBinding: providerUsesTLSBinding(opts.ProviderName),
-		E2EEKeyBoundByGateway:  providerE2EEKeyBoundByGateway(opts.ProviderName),
+		E2EEKeyBoundByGateway:  provider.GatewayBindsE2EEKey(opts.ProviderName, raw.BackendFormat),
 	})
 
 	if providerUsesTLSBinding(opts.ProviderName) && !report.Blocked() {
@@ -478,6 +481,7 @@ var metadataDisplayOrder = []struct {
 	{"nonce_source", "Nonce source"},
 	{"candidates", "Candidates"},
 	{"event_log", "Event log"},
+	{"gateway_downstream_tls", "Gateway downstream TLS"},
 	// Self-check metadata
 	{"version", "Version"},
 	{"commit", "Commit"},

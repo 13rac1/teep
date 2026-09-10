@@ -157,7 +157,7 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 		Policy:            modelPolicy,
 		GatewayPolicy:     gatewayPolicy,
 		SupplyChainPolicy: nearcloud.SupplyChainPolicy(),
-		AllowFail:         serveAllowFail("nearcloud"),
+		AllowFail:         serveAllowFail("nearcloud", attestation.FormatGateway),
 		E2EETest:          fixtureE2EEResult(env.manifest.E2EE),
 		Inapplicable:      attestation.DefaultInapplicableFactors(),
 	})

@@ -11,6 +11,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/nearcloud"
 )
 
 // --------------------------------------------------------------------------
@@ -123,13 +124,13 @@ func TestCheckPoC_Online_CanceledContext(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// verifyNearcloudGateway nil-guard
+// verifyGatewayTDX nil-guard
 // --------------------------------------------------------------------------
 
-func TestVerifyNearcloudGateway_NoQuote(t *testing.T) {
+func TestVerifyGatewayTDX_NoQuote(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{GatewayIntelQuote: ""}
-	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, offlineTDXVerifier, time.Time{})
+	tdx, compose, poc := verifyGatewayTDX(ctx, raw, attestation.Nonce{}, nil, true, offlineTDXVerifier, nil, time.Time{})
 	if tdx != nil {
 		t.Errorf("expected nil tdx, got %v", tdx)
 	}
@@ -379,7 +380,7 @@ func TestVerifyNVIDIA_GPUEvidence_BadNonce(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// verifyNearcloudGateway — non-empty GatewayIntelQuote (parse error path)
+// verifyGatewayTDX — non-empty GatewayIntelQuote (parse error path)
 // --------------------------------------------------------------------------
 
 func TestVerifyNVIDIA_GPUEvidence_Online_CanceledCtx(t *testing.T) {
@@ -517,10 +518,11 @@ func TestTruncTo(t *testing.T) {
 	}
 }
 
-func TestVerifyNearcloudGateway_WithQuote_ParseError(t *testing.T) {
+func TestVerifyGatewayTDX_WithQuote_ParseError(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{GatewayIntelQuote: "not-a-real-tdx-quote"}
-	tdx, compose, poc := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, offlineTDXVerifier, time.Time{})
+	tdx, compose, poc := verifyGatewayTDX(ctx, raw, attestation.Nonce{}, nil, true, offlineTDXVerifier,
+		nearcloud.GatewayReportDataVerifier{}, time.Time{})
 	if tdx == nil {
 		t.Fatal("expected non-nil TDX result for non-empty GatewayIntelQuote")
 	}
@@ -640,14 +642,15 @@ func TestVerifySEV_ParseOK_NoVerifier(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// verifyNearcloudGateway — ParseErr == nil paths
+// verifyGatewayTDX — ParseErr == nil paths
 // --------------------------------------------------------------------------
 
-func TestVerifyNearcloudGateway_ParseOK_NoCompose(t *testing.T) {
+func TestVerifyGatewayTDX_ParseOK_NoCompose(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{GatewayIntelQuote: "fakequote"}
 	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil
-	tdx, compose, _ := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult), time.Time{})
+	tdx, compose, _ := verifyGatewayTDX(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult),
+		nearcloud.GatewayReportDataVerifier{}, time.Time{})
 	if tdx == nil {
 		t.Fatal("expected non-nil TDX result")
 	}
@@ -658,14 +661,15 @@ func TestVerifyNearcloudGateway_ParseOK_NoCompose(t *testing.T) {
 	}
 }
 
-func TestVerifyNearcloudGateway_ParseOK_WithCompose(t *testing.T) {
+func TestVerifyGatewayTDX_ParseOK_WithCompose(t *testing.T) {
 	ctx := context.Background()
 	raw := &attestation.RawAttestation{
 		GatewayIntelQuote: "fakequote",
 		GatewayAppCompose: `{"docker_compose_file":"services:\n  app:\n    image: myapp:latest\n"}`,
 	}
 	tdxResult := &attestation.TDXVerifyResult{} // ParseErr == nil, MRConfigID zero
-	tdx, compose, _ := verifyNearcloudGateway(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult), time.Time{})
+	tdx, compose, _ := verifyGatewayTDX(ctx, raw, attestation.Nonce{}, nil, true, stubTDXVerifier(tdxResult),
+		nearcloud.GatewayReportDataVerifier{}, time.Time{})
 	if tdx == nil {
 		t.Fatal("expected non-nil TDX result")
 	}

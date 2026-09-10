@@ -255,6 +255,24 @@ var factorRegistry = []factorInfo{
 			"failure causes this factor to fail. Skipped when offline, when " +
 			"the provider does not support E2EE, or when no API key is set.",
 	},
+	{
+		Name:    attestation.FactorACIKeyCustody,
+		Tier:    2,
+		Summary: "ACI/1 key custody chain verified to an accepted KMS root",
+		Description: "Venice ACI/1 specific: recomputes the workload keyset " +
+			"digest (SHA-256 over the JCS-canonicalized keyset), checks that " +
+			"the top-level signing_public_key is a member of the keyset " +
+			"e2ee_public_keys, and verifies the dstack-KMS custody chain — " +
+			"the app key signs the E2EE key's derivation purpose, the KMS " +
+			"root signs the app key together with the app id measured into " +
+			"the quote's RTMR3, and the recovered root must be an accepted " +
+			"dstack-KMS root. The gateway quote's REPORTDATA binds the same " +
+			"signing key (see gateway_tee_reportdata_binding), completing " +
+			"the chain from hardware to the key teep encrypts to. Not " +
+			"applicable for non-ACI/1 formats. Always enforced (never added " +
+			"to allow_fail) because it is verifiable from data already " +
+			"present in the attestation response.",
+	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
 		Name:    attestation.FactorTLSKeyBinding,
@@ -596,12 +614,13 @@ var tierRegistry = []tierInfo{
 		Name:   "Gateway Attestation",
 		Label:  "Tier 4: Gateway Attestation",
 		Description: "Applies to providers that route requests through an " +
-			"attested gateway: nearcloud (cloud-api.near.ai, Intel TDX) and " +
-			"tinfoil_v3_cloud (inference.tinfoil.sh, AMD SEV-SNP). Verifies the " +
+			"attested gateway: nearcloud (cloud-api.near.ai, Intel TDX), " +
+			"tinfoil_v3_cloud (inference.tinfoil.sh, AMD SEV-SNP), and Venice " +
+			"ACI/1 models (private-ai-gateway, Intel TDX). Verifies the " +
 			"gateway itself with its own quote, certificate chain, measurement " +
-			"and REPORTDATA binding. For tinfoil_v3_cloud this tier carries all " +
-			"the evidence there is: the router is attested, the model backend " +
-			"behind it exposes none.",
+			"and REPORTDATA binding. For tinfoil_v3_cloud and Venice ACI/1 " +
+			"this tier carries all the CPU evidence there is: the gateway is " +
+			"attested, the machine serving inference behind it exposes none.",
 	},
 }
 

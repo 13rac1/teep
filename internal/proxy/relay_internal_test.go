@@ -949,7 +949,7 @@ func TestVerifySupplyChain_NilPolicyPanics(t *testing.T) {
 			t.Errorf("panic value = %v, want message mentioning nil SupplyChainPolicy", r)
 		}
 	}()
-	s.verifySupplyChain(context.Background(), raw, nil, nil)
+	s.verifySupplyChain(context.Background(), raw, nil, nil, nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -959,13 +959,13 @@ func TestVerifySupplyChain_NilPolicyPanics(t *testing.T) {
 func TestVerifySupplyChain_EmptyAppCompose(t *testing.T) {
 	s := newMinimalServer()
 	raw := &attestation.RawAttestation{} // AppCompose == ""
-	sc, dur := s.verifySupplyChain(context.Background(), raw, nil, attestation.NoSupplyChainPolicy())
+	sc, dur := s.verifySupplyChain(context.Background(), raw, nil, nil, attestation.NoSupplyChainPolicy())
 	t.Logf("verifySupplyChain(empty AppCompose): compose=%v dur=%v", sc.Compose, dur)
 	if sc.Compose != nil {
 		t.Error("expected empty supplyChainResult for empty AppCompose")
 	}
-	if dur != 0 {
-		t.Errorf("expected 0 duration for skipped supply chain, got %v", dur)
+	if sc.Sigstore != nil || sc.Rekor != nil || sc.DigestToRepo != nil {
+		t.Errorf("expected no supply chain work with no compose data: %+v", sc)
 	}
 }
 
@@ -973,7 +973,7 @@ func TestVerifySupplyChain_TDXParseErr(t *testing.T) {
 	s := newMinimalServer()
 	raw := &attestation.RawAttestation{AppCompose: "version: '3'\nservices:\n  app:\n    image: ubuntu:latest\n"}
 	tdxResult := &attestation.TDXVerifyResult{ParseErr: errors.New("parse failed")}
-	sc, _ := s.verifySupplyChain(context.Background(), raw, tdxResult, attestation.NoSupplyChainPolicy())
+	sc, _ := s.verifySupplyChain(context.Background(), raw, tdxResult, nil, attestation.NoSupplyChainPolicy())
 	t.Logf("verifySupplyChain(TDX ParseErr): compose=%v", sc.Compose)
 	if sc.Compose != nil {
 		t.Error("expected empty result when TDX ParseErr is set")
@@ -985,7 +985,7 @@ func TestVerifySupplyChain_WithAppCompose(t *testing.T) {
 	raw := &attestation.RawAttestation{AppCompose: `{"docker_compose_file":"version: '3'\n"}`}
 	// TDXVerifyResult with no ParseErr but empty MRConfigID — VerifyComposeBinding returns error.
 	tdxResult := &attestation.TDXVerifyResult{}
-	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, attestation.NoSupplyChainPolicy())
+	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, nil, attestation.NoSupplyChainPolicy())
 	t.Logf("verifySupplyChain(AppCompose): compose=%v dur=%v", sc.Compose, dur)
 	if sc.Compose == nil {
 		t.Error("expected non-nil Compose result when AppCompose is set")
@@ -1296,7 +1296,7 @@ func TestVerifySupplyChain_SuccessPath(t *testing.T) {
 	raw := &attestation.RawAttestation{AppCompose: appCompose}
 	tdxResult := &attestation.TDXVerifyResult{MRConfigID: mrConfigID}
 
-	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, attestation.NoSupplyChainPolicy())
+	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, nil, attestation.NoSupplyChainPolicy())
 	t.Logf("verifySupplyChain(success): compose=%+v dur=%v", sc.Compose, dur)
 	if sc.Compose == nil {
 		t.Fatal("expected non-nil Compose result")
@@ -1376,6 +1376,7 @@ func TestVerifySupplyChain_UsesPolicyAwareRekorSelection(t *testing.T) {
 		context.Background(),
 		&attestation.RawAttestation{AppCompose: appCompose},
 		&attestation.TDXVerifyResult{MRConfigID: mrConfigIDForAppCompose(appCompose)},
+		nil,
 		policy,
 	)
 	if len(sc.Rekor) != 1 {
@@ -2064,5 +2065,83 @@ func TestBuildUpstreamBody_FreshAttestation_SEVReportParseErr(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "fresh SEV-SNP report parse failed") {
 		t.Errorf("error %q should mention fresh SEV-SNP report parse", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// verifySupplyChain — gateway compose digests
+// ---------------------------------------------------------------------------
+
+// TestVerifySupplyChain_GatewayDigestsMerged: a verified gateway compose
+// contributes its digests through attestation.MergeComposeDigests — model
+// digests first, first-writer-wins on a repo conflict, one deduplicated
+// digest set — matching the verify.Run path.
+func TestVerifySupplyChain_GatewayDigestsMerged(t *testing.T) {
+	s := newMinimalServer()
+	s.cfg = &config.Config{Offline: true} // no Sigstore/Rekor network in this test
+
+	const sharedDigest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const gatewayDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	modelCompose := mustAppComposeJSON(t,
+		"services:\n  app:\n    image: modelrepo/app@sha256:"+sharedDigest+"\n")
+	gatewayCompose := mustAppComposeJSON(t,
+		"services:\n  ingress:\n    image: gatewayrepo/ingress@sha256:"+gatewayDigest+
+			"\n  shared:\n    image: gatewayrepo/other@sha256:"+sharedDigest+"\n")
+
+	raw := &attestation.RawAttestation{
+		AppCompose:        modelCompose,
+		GatewayAppCompose: gatewayCompose,
+	}
+	sc, _ := s.verifySupplyChain(
+		context.Background(),
+		raw,
+		&attestation.TDXVerifyResult{MRConfigID: mrConfigIDForAppCompose(modelCompose)},
+		&attestation.ComposeBindingResult{Checked: true},
+		attestation.NoSupplyChainPolicy(),
+	)
+
+	if len(sc.ImageRepos) != 1 || sc.ImageRepos[0] != "modelrepo/app" {
+		t.Errorf("ImageRepos = %v, want [modelrepo/app]", sc.ImageRepos)
+	}
+	wantGW := map[string]bool{"gatewayrepo/ingress": true, "gatewayrepo/other": true}
+	if len(sc.GatewayImageRepos) != 2 || !wantGW[sc.GatewayImageRepos[0]] || !wantGW[sc.GatewayImageRepos[1]] {
+		t.Errorf("GatewayImageRepos = %v, want the two gateway repos", sc.GatewayImageRepos)
+	}
+	// First-writer-wins: the model repo keeps the shared digest.
+	if got := sc.DigestToRepo[sharedDigest]; got != "modelrepo/app" {
+		t.Errorf("DigestToRepo[shared] = %q, want modelrepo/app (model digests first)", got)
+	}
+	if got := sc.DigestToRepo[gatewayDigest]; got != "gatewayrepo/ingress" {
+		t.Errorf("DigestToRepo[gateway] = %q, want gatewayrepo/ingress", got)
+	}
+	if len(sc.DigestToRepo) != 2 {
+		t.Errorf("len(DigestToRepo) = %d, want 2 (deduplicated)", len(sc.DigestToRepo))
+	}
+}
+
+// TestVerifySupplyChain_GatewayDigestsRequireVerifiedBinding: an unverified
+// gateway compose contributes nothing.
+func TestVerifySupplyChain_GatewayDigestsRequireVerifiedBinding(t *testing.T) {
+	s := newMinimalServer()
+	s.cfg = &config.Config{Offline: true}
+
+	gatewayCompose := mustAppComposeJSON(t,
+		"services:\n  ingress:\n    image: gatewayrepo/ingress@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n")
+	raw := &attestation.RawAttestation{GatewayAppCompose: gatewayCompose}
+
+	tests := []struct {
+		name    string
+		compose *attestation.ComposeBindingResult
+	}{
+		{"nil result", nil},
+		{"binding failed", &attestation.ComposeBindingResult{Checked: true, Err: errors.New("mismatch")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc, _ := s.verifySupplyChain(context.Background(), raw, nil, tt.compose, attestation.NoSupplyChainPolicy())
+			if len(sc.GatewayImageRepos) != 0 || len(sc.DigestToRepo) != 0 {
+				t.Errorf("unverified gateway compose contributed digests: %+v", sc)
+			}
+		})
 	}
 }

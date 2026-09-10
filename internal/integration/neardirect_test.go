@@ -127,7 +127,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 		Rekor:             rekorResults,
 		Policy:            modelPolicy,
 		SupplyChainPolicy: neardirect.SupplyChainPolicy(),
-		AllowFail:         serveAllowFail("neardirect"),
+		AllowFail:         serveAllowFail("neardirect", attestation.FormatDstack),
 		E2EETest:          fixtureE2EEResult(env.manifest.E2EE),
 		Inapplicable:      attestation.DefaultInapplicableFactors(),
 	})

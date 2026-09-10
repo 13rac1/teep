@@ -22,8 +22,36 @@ func DefaultMeasurementPolicy() attestation.MeasurementPolicy {
 	return p
 }
 
-// SupplyChainPolicy returns the supply chain policy for Venice.
-// Venice uses the same container images as neardirect.
+// DefaultGatewayMeasurementPolicy returns the default TDX measurement
+// allowlists for the Venice ACI/1 private-ai-gateway CVM. The gateway runs a
+// dstack image, so MRTD/MRSEAM come from the shared dstack base list; the
+// enforced gateway_tee_measurement factor checks those. RTMR allowlists are
+// filled from captured gateway values as they are observed —
+// gateway_tee_hardware_config and gateway_tee_boot_config are waived by
+// default (SEE: attestation.VeniceACIDefaultAllowFail) because the
+// private-ai-gateway-dev channel redeploys often and its RTMRs churn with
+// each image.
+func DefaultGatewayMeasurementPolicy() attestation.MeasurementPolicy {
+	return attestation.DstackBaseMeasurementPolicy()
+}
+
+// SupplyChainPolicy returns the supply chain policy for Venice. The model
+// tier uses the same container images as neardirect (dstack models). The
+// gateway tier lists the images from the ACI/1 private-ai-gateway compose
+// manifest; the manifest pins each by sha256 digest and the quote's
+// MRConfigID measures the manifest, so ComposeBindingOnly is the evidence
+// level the platform provides.
 func SupplyChainPolicy() *attestation.SupplyChainPolicy {
-	return neardirect.SupplyChainPolicy()
+	p := neardirect.SupplyChainPolicy()
+	p.Images = append(p.Images,
+		attestation.ImageProvenance{Repo: "dstacktee/dstack-ingress", GatewayTier: true,
+			Provenance: attestation.ComposeBindingOnly},
+		attestation.ImageProvenance{Repo: "ghcr.io/redpill-ai/private-ai-launcher", GatewayTier: true,
+			Provenance: attestation.ComposeBindingOnly},
+		attestation.ImageProvenance{Repo: "dstacktee/dstack-verifier", GatewayTier: true,
+			Provenance: attestation.ComposeBindingOnly},
+		attestation.ImageProvenance{Repo: "prom/node-exporter", GatewayTier: true,
+			Provenance: attestation.ComposeBindingOnly},
+	)
+	return p
 }
