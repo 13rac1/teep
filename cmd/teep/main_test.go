@@ -631,10 +631,10 @@ func nrasJWTExpired(t *testing.T, fixtureDir string) bool {
 }
 
 func TestRunReverify_NearCloud_Fixture(t *testing.T) {
-	fdir := "../../internal/integration/testdata/nearcloud_qwen_qwen3.5-122b-a10b_20260629_020657"
+	fdir := "../../internal/integration/testdata/nearcloud_z-ai_glm-5.3-flash_20260910_153519"
 
 	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
-	cfgContent := "[providers.nearcloud]\napi_key = \"test-key\"\n"
+	cfgContent := "[providers.nearcloud]\nbase_url = \"https://cloud-api.near.ai\"\napi_key = \"test-key\"\ne2ee = true\n"
 	if err := os.WriteFile(cfgFile, []byte(cfgContent), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -653,10 +653,10 @@ func TestRunReverify_NearCloud_Fixture(t *testing.T) {
 }
 
 func TestRunReverify_NearDirect_Fixture(t *testing.T) {
-	fdir := "../../internal/integration/testdata/neardirect_qwen_qwen3.5-122b-a10b_20260629_020637"
+	fdir := "../../internal/integration/testdata/neardirect_z-ai_glm-5.3-flash_20260909_201111"
 
 	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
-	cfgContent := "[providers.neardirect]\nbase_url = \"https://qwen35-122b.completions.near.ai\"\napi_key = \"test-key\"\n"
+	cfgContent := "[providers.neardirect]\nbase_url = \"https://completions.near.ai\"\napi_key = \"test-key\"\ne2ee = true\n"
 	if err := os.WriteFile(cfgFile, []byte(cfgContent), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

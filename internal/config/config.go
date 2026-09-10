@@ -25,6 +25,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -288,6 +289,11 @@ func Load() (*Config, error) {
 	}
 
 	applyEnvOverrides(cfg)
+	if cp := cfg.Providers["neardirect"]; cp != nil {
+		if _, err := nearroute.ParseOrigin(cp.BaseURL); err != nil {
+			return nil, fmt.Errorf("neardirect configured origin: %w", err)
+		}
+	}
 	if !cfg.maxConnsDefined {
 		logDefaultMaxConnsDiagnostics()
 	}
@@ -782,11 +788,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // transport routes KDS requests to a separate base while everything else
 // uses TLS 1.3 + CT.
 func NewAttestationClient(offline bool) *http.Client {
-	client := tlsct.NewHTTPClientWithTransport(AttestationTimeout, tlsct.NewPooledTransport(), !offline)
-	client.Transport = tlsct.NewTLS12FallbackTransport(client.Transport, attestation.AMDKDSHost)
-	client.Transport = tlsct.WrapLogging(client.Transport)
-	client.Transport = &RetryTransport{Base: client.Transport}
-	return client
+	return NewAttestationClientFactory(offline, tlsct.NewSocketBudget(tlsct.MaxConnectionsPerHost), nil).NewClient()
 }
 
 // CloseIdleConnections forwards transport cleanup through this wrapper.

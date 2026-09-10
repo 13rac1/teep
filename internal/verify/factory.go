@@ -14,6 +14,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/provider/venice"
@@ -62,6 +63,9 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 	case "venice":
 		return venice.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	case "neardirect":
+		if _, err := nearroute.ParseOrigin(cp.BaseURL); err != nil {
+			return nil, err
+		}
 		return neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	case "nearcloud":
 		return nearcloud.NewAttester(cp.APIKey, offline), nil

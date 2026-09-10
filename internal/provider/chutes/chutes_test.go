@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/13rac1/teep/internal/provider"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -479,7 +480,7 @@ func TestPreparer_SetsAuthHeader(t *testing.T) {
 	p := chutes.NewPreparer("sk-test-123", "https://api.chutes.ai")
 	req, _ := http.NewRequest(http.MethodPost, "https://llm.chutes.ai/v1/chat/completions", http.NoBody)
 
-	if err := p.PrepareRequest(req, nil, nil, false, ""); err != nil {
+	if err := p.PrepareRequest(req, nil, nil, false, "", provider.PreparationData{}); err != nil {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
 	if req.Header.Get("Authorization") != "Bearer sk-test-123" {
@@ -505,7 +506,7 @@ func TestPreparer_RejectsInvalidAPIBaseURL(t *testing.T) {
 				InstanceID: "inst-1",
 				E2ENonce:   "nonce-1",
 			}
-			err := p.PrepareRequest(req, nil, meta, true, "/v1/chat/completions")
+			err := p.PrepareRequest(req, nil, meta, true, "/v1/chat/completions", provider.PreparationData{})
 			if err == nil {
 				t.Fatalf("expected error for apiBaseURL=%q", tc.apiBaseURL)
 			}
@@ -524,7 +525,7 @@ func TestPreparer_E2EE_RejectsEmptyPath(t *testing.T) {
 		InstanceID: "inst-1",
 		E2ENonce:   "nonce-1",
 	}
-	err := p.PrepareRequest(req, nil, meta, true, "")
+	err := p.PrepareRequest(req, nil, meta, true, "", provider.PreparationData{})
 	if err == nil {
 		t.Fatal("expected error for empty path with E2EE meta")
 	}
@@ -550,7 +551,7 @@ func TestPreparer_E2EE_MultiPath(t *testing.T) {
 				InstanceID: "inst-1",
 				E2ENonce:   "nonce-1",
 			}
-			err := p.PrepareRequest(req, nil, meta, false, tc.path)
+			err := p.PrepareRequest(req, nil, meta, false, tc.path, provider.PreparationData{})
 			if err != nil {
 				t.Fatalf("PrepareRequest: %v", err)
 			}

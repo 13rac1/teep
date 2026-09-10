@@ -42,13 +42,19 @@ type E2EEMaterialFetcher interface {
 	Invalidate(chuteID string)
 }
 
+// PreparationData is immutable authenticated material acquired with this request's authorization.
+// It must not be populated from inbound headers or inference bodies.
+type PreparationData struct {
+	ModelKey e2ee.NearModelKey
+}
+
 // RequestPreparer injects provider-specific headers into an outgoing upstream
 // request. e2eeHeaders contains pre-built E2EE protocol headers (may be nil
-// for plaintext or Chutes paths). meta is non-nil for Chutes requests.
+// when E2EE is disabled or for Chutes paths). meta is non-nil for Chutes requests.
 // path is the endpoint path for this request (e.g. "/v1/embeddings"); used by
 // Chutes to set X-E2E-Path dynamically per endpoint type.
 type RequestPreparer interface {
-	PrepareRequest(req *http.Request, e2eeHeaders http.Header, meta *e2ee.ChutesE2EE, stream bool, path string) error
+	PrepareRequest(req *http.Request, e2eeHeaders http.Header, meta *e2ee.ChutesE2EE, stream bool, path string, authenticated PreparationData) error
 }
 
 // RequestEncryptor encrypts an outgoing request body for a provider's E2EE

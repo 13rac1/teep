@@ -26,7 +26,7 @@ The provider's infrastructure never sees plaintext — only the TEE enclave can 
 
 ### NEAR AI Direct (TLS Pinning)
 
-NEAR AI Direct connects to model-specific inference nodes and binds the TLS certificate to the attestation. The proxy:
+NEAR AI Direct establishes one indexed route per model and binds its TLS certificate to attestation. See the [routing and capture contract](docs/providers/near/near_attestation.md#neardirect-backend-selection) for configured origins, lifetime selection, and fresh attestation connections. The proxy:
 
 1. Resolves the model's subdomain via `completions.near.ai/endpoints`.
 2. Connects to the model-specific subdomain.
@@ -38,15 +38,32 @@ NEAR AI Direct connects to model-specific inference nodes and binds the TLS cert
 
 The report, transport identity, and required authenticated E2EE key form one cached authorization. Evidence expiration alone does not trigger renewal. HTTP/2 streams and reconnects reuse authorization within its attested scope. See the [transport contract](docs/transport/README.md#routes-and-authorizations) for admission checks, key failure classification, and approval withdrawal.
 
+Both NEAR providers require `signing_algo=ed25519` for model REPORTDATA binding.
+The signing address must contain the same 32 bytes as the validated Ed25519
+public key; it is not a hash of that key. Teep compares the decoded values in
+constant time before checking the address, TLS fingerprint, and nonce against
+REPORTDATA. A substituted public key fails binding even when repeated response
+fields agree. E2EE admission requires successful binding even if `allow_fail`
+permits this factor to fail. The gateway's separate signing-address scheme is
+unchanged.
+
+NEAR responses use provider-specific typed envelopes with strict nested
+decoding. Direct responses must repeat one complete model report consistently;
+cloud responses must contain distinct gateway evidence and an unambiguous
+model array. See the [NEAR parser contract](docs/providers/near/near_attestation.md) for field
+validation, representation comparison, and schema-policy boundaries.
+
 ### NEAR AI Cloud (Gateway TLS Pinning)
 
 NEAR AI Cloud routes all traffic through a single TEE-attested API gateway (`cloud-api.near.ai`) that itself runs in an Intel TDX enclave. The proxy:
 
 1. Connects to `cloud-api.near.ai`.
-2. Fetches attestation on the same TLS connection — the response includes both model attestation and gateway attestation.
-3. Verifies the gateway's TLS certificate SPKI matches the attested fingerprint (same binding scheme as Direct).
+2. Fetches attestation with `provider=near` on the same TLS connection. The response includes model and gateway attestation.
+3. Verifies that the gateway TLS peer SPKI matches the reported fingerprint. Attestation authentication also requires successful gateway REPORTDATA binding, which is separately allowed to fail by default.
 4. Verifies the gateway's own TDX quote, event log, and compose binding (Tier 4 factors).
-5. Sends the request through the gateway SPKI pool, with the required model E2EE key from its cached authorization. New model backend scopes require full verification.
+5. Sends the request through the gateway SPKI pool with `X-Model-Pub-Key` from its cached authorization. TLS-only requests also require successful model-key binding. E2EE uses the same key for a fresh encryption session. New model backend scopes require full verification.
+
+The gateway hint does not independently prove backend selection. See [NEAR routing and recovery limits](docs/providers/near/near_attestation.md#nearcloud-model-routing).
 
 The gateway adds 13 additional verification factors (Tier 4) covering gateway nonce, TDX quote, cert chain, debug mode, measurement allowlists, REPORTDATA binding, compose binding, CPU registry, and event log integrity.
 
@@ -281,3 +298,8 @@ When configured:
 - `rtmr*_allow` values are enforced in `event_log_integrity` after event-log replay matches quote RTMRs.
 
 Empty allowlists disable policy for that measurement.
+
+Standalone NEAR TLS-only chat probes add an operational `tls_inference` result.
+An attempted failure blocks verification and cannot be listed in `allow_fail`.
+This result is separate from the provider's E2EE factors and does not claim
+E2EE success. See [standalone modes and captures](docs/providers/near/near_attestation.md#standalone-inference-and-captures).

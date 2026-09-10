@@ -470,17 +470,27 @@ func (T) ParseAttestationResponse() {}
 // =============================================================================
 
 func TestCheckParseFuncUsesJSONStrict_Pass(t *testing.T) {
-	f, fset := parseGo(t, `package p
-func Parse() {
-	jsonstrict.UnmarshalWarn(nil, nil, "test")
+	for _, decoder := range []string{"Unmarshal", "UnmarshalWarn"} {
+		t.Run(decoder, func(t *testing.T) {
+			f, fset := parseGo(t, "package p; func Parse() { jsonstrict."+decoder+"(nil, nil) }")
+			fd := findFunc(f, "Parse")
+			p := &providerInfo{name: "test", files: []*ast.File{f}, fset: fset}
+			r := newResult()
+			checkParseFuncUsesJSONStrict(r, p, fd)
+			if r.failed != 0 {
+				t.Errorf("expected strict decoding to pass, got %d failures", r.failed)
+			}
+		})
+	}
 }
-`)
-	fd := findFunc(f, "Parse")
+
+func TestCheckParseFuncUsesJSONStrict_RejectsOrdinaryJSON(t *testing.T) {
+	f, fset := parseGo(t, "package p; func Parse() { json.Unmarshal(nil, nil) }")
 	p := &providerInfo{name: "test", files: []*ast.File{f}, fset: fset}
 	r := newResult()
-	checkParseFuncUsesJSONStrict(r, p, fd)
-	if r.failed != 0 {
-		t.Errorf("expected pass, got %d failures", r.failed)
+	checkParseFuncUsesJSONStrict(r, p, findFunc(f, "Parse"))
+	if r.failed == 0 {
+		t.Fatal("ordinary JSON decoding satisfied strict parser requirement")
 	}
 }
 
@@ -1913,5 +1923,27 @@ func fromConfig(n int) {
 	checkFromConfigFieldAssignment(r, fd, []string{"alpha"}, "ChatPath")
 	if r.failed == 0 {
 		t.Error("expected failure: provider not found in int-cased switch")
+	}
+}
+
+func TestCheckAttesterClientField_Factory(t *testing.T) {
+	for _, tt := range []struct {
+		field string
+		valid bool
+	}{
+		{"newClient func() *http.Client", true},
+		{"newClient func(context.Context) *http.Client", false},
+		{"newClient func() (*http.Client, error)", false},
+		{"newClient func()", false},
+		{"newClient func() string", false},
+	} {
+		t.Run(tt.field, func(t *testing.T) {
+			f, fset := parseGo(t, "package p; type Attester struct {"+tt.field+"}")
+			r := newResult()
+			checkAttesterClientField(r, &providerInfo{name: "test", files: []*ast.File{f}, fset: fset})
+			if (r.failed == 0) != tt.valid {
+				t.Fatalf("failures=%d, valid=%v", r.failed, tt.valid)
+			}
+		})
 	}
 }

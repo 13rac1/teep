@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 )
 
 // ReportDataVerifier validates NEAR AI's REPORTDATA binding scheme:
@@ -29,16 +30,9 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 		return "", errors.New("tls_cert_fingerprint absent from attestation response")
 	}
 
-	// Decode signing address — strip optional "0x" prefix.
-	addrHex := strings.TrimPrefix(raw.SigningAddress, "0x")
-	addrBytes, err := hex.DecodeString(addrHex)
+	addrBytes, err := modelSigningAddress(raw)
 	if err != nil {
-		return "", fmt.Errorf("signing_address is not valid hex: %w", err)
-	}
-	// Accept 20 bytes (keccak256-derived address, same format as EIP-55, for
-	// ECDSA) or 32 bytes (Ed25519 public key hash for v2 protocol).
-	if len(addrBytes) != 20 && len(addrBytes) != 32 {
-		return "", fmt.Errorf("signing_address must decode to 20 or 32 bytes, got %d", len(addrBytes))
+		return "", err
 	}
 
 	fpBytes, err := hex.DecodeString(raw.TLSFingerprint)
@@ -65,4 +59,30 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 	}
 
 	return "REPORTDATA binds sha256(signing_address + tls_fingerprint) + nonce", nil
+}
+
+// modelSigningAddress checks the Ed25519 protocol's address: the public key
+// bytes themselves. The gateway uses a separate signing-address scheme.
+func modelSigningAddress(raw *attestation.RawAttestation) ([]byte, error) {
+	if raw.SigningAlgo != "ed25519" {
+		return nil, errors.New("signing_algo must be ed25519")
+	}
+	if err := e2ee.ValidateModelKeyEd25519(raw.SigningKey); err != nil {
+		return nil, fmt.Errorf("invalid model signing key: %w", err)
+	}
+	key, err := hex.DecodeString(raw.SigningKey)
+	if err != nil {
+		return nil, fmt.Errorf("decode model signing key: %w", err)
+	}
+	address, err := hex.DecodeString(strings.TrimPrefix(raw.SigningAddress, "0x"))
+	if err != nil {
+		return nil, fmt.Errorf("signing_address is not valid hex: %w", err)
+	}
+	if len(address) != 32 {
+		return nil, fmt.Errorf("signing_address must decode to 32 bytes, got %d", len(address))
+	}
+	if subtle.ConstantTimeCompare(key, address) != 1 {
+		return nil, errors.New("model signing key does not match signing_address")
+	}
+	return address, nil
 }

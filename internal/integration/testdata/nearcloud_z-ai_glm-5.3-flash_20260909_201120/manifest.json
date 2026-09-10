@@ -1,0 +1,16 @@
+{
+  "near_config": {
+    "origin": "https://cloud-api.near.ai",
+    "e2ee": true
+  },
+  "provider": "nearcloud",
+  "model": "z-ai/glm-5.3-flash",
+  "nonce_hex": "3f26aa8b29453e0d51716716519dadb56ce27e2ac86f304486da1460e032e7c7",
+  "captured_at": "2026-09-09T20:11:20.042051Z",
+  "duration_ms": 9331,
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE nearcloud: 26 encrypted fields decrypted across 29 chunks",
+    "key_type": "ed25519"
+  }
+}

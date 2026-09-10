@@ -10,17 +10,14 @@ package nearcloud
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
-	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
-	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/nearparse"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -30,54 +27,10 @@ const (
 
 	// attestationPath is the API path for TEE attestation reports.
 	attestationPath = "/v1/attestation/report"
-
-	// maxGatewayEventLogEntries bounds gateway event log entries to avoid
-	// memory amplification from oversized attestation responses.
-	maxGatewayEventLogEntries = 10_000
-	maxModelAttestations      = 256
 )
 
 // GatewayHost returns the authority used for gateway attestation and inference.
 func GatewayHost() string { return gatewayHost }
-
-// gatewayResponse is the top-level JSON shape returned by the gateway
-// attestation endpoint. It wraps the standard neardirect model_attestations
-// with an additional gateway_attestation section.
-type gatewayResponse struct {
-	GatewayAttestation gatewayAttestation  `json:"gateway_attestation"`
-	ModelAttestations  []ignoredJSONObject `json:"model_attestations,omitempty"`
-	TLSCertificate     string              `json:"tls_certificate,omitempty"`
-	OHTTPAttestation   *ignoredJSONObject  `json:"ohttp_attestation,omitempty"`
-	OHTTPKeyConfig     string              `json:"ohttp_key_config,omitempty"`
-}
-
-// ignoredJSONObject recognizes an object without allocating maps for fields
-// that the shared model-attestation parser validates in a separate pass.
-type ignoredJSONObject struct{}
-
-// tcbInfo holds the parsed info.tcb_info object from the gateway attestation.
-type tcbInfo struct {
-	AppCompose string `json:"app_compose"`
-}
-
-// UnmarshalJSON handles tcb_info being either a direct JSON object or a
-// JSON-encoded string containing JSON (double-encoded by some dstack versions).
-func (t *tcbInfo) UnmarshalJSON(data []byte) error {
-	type alias tcbInfo
-	return json.Unmarshal(provider.UnwrapDoubleEncoded(data), (*alias)(t))
-}
-
-// gatewayAttestation holds the gateway's own TDX attestation data.
-type gatewayAttestation struct {
-	RequestNonce       string `json:"request_nonce"`
-	SigningAddress     string `json:"signing_address"`
-	IntelQuote         string `json:"intel_quote"`
-	EventLog           string `json:"event_log"` // JSON string, not array
-	TLSCertFingerprint string `json:"tls_cert_fingerprint"`
-	Info               struct {
-		TCBInfo tcbInfo `json:"tcb_info"`
-	} `json:"info"`
-}
 
 // GatewayRaw holds parsed gateway attestation fields ready for verification.
 type GatewayRaw struct {
@@ -87,71 +40,6 @@ type GatewayRaw struct {
 	AppCompose         string
 	TLSCertFingerprint string
 	EventLog           []attestation.EventLogEntry
-}
-
-// ParseGatewayResponse extracts gateway attestation fields and delegates model
-// attestation parsing to neardirect.ParseAttestationResponse. Returns both the
-// gateway-specific data and the model RawAttestation.
-func ParseGatewayResponse(ctx context.Context, body []byte, model string) (*GatewayRaw, *attestation.RawAttestation, error) {
-	var gr gatewayResponse
-	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &gr, "nearcloud gateway")
-	if err != nil {
-		return nil, nil, fmt.Errorf("nearcloud: unmarshal gateway response: %w", err)
-	}
-	if len(gr.ModelAttestations) > maxModelAttestations {
-		return nil, nil, fmt.Errorf("nearcloud: model_attestations has %d entries, max %d", len(gr.ModelAttestations), maxModelAttestations)
-	}
-
-	// GW-M-01: Reject a missing or empty gateway_attestation section early so
-	// downstream checks don't silently operate on zero-value fields.
-	if gr.GatewayAttestation.IntelQuote == "" && gr.GatewayAttestation.TLSCertFingerprint == "" {
-		return nil, nil, errors.New("nearcloud: gateway_attestation section missing or empty")
-	}
-
-	gw := &GatewayRaw{
-		NonceHex:           gr.GatewayAttestation.RequestNonce,
-		SigningAddress:     gr.GatewayAttestation.SigningAddress,
-		IntelQuote:         gr.GatewayAttestation.IntelQuote,
-		AppCompose:         gr.GatewayAttestation.Info.TCBInfo.AppCompose,
-		TLSCertFingerprint: gr.GatewayAttestation.TLSCertFingerprint,
-	}
-
-	// Gateway event_log is a JSON string (not a native array).
-	if gr.GatewayAttestation.EventLog != "" {
-		var rawEntries []json.RawMessage
-		if err := json.Unmarshal([]byte(gr.GatewayAttestation.EventLog), &rawEntries); err != nil {
-			return nil, nil, fmt.Errorf("nearcloud: parse gateway event_log string: %w", err)
-		}
-		if len(rawEntries) > maxGatewayEventLogEntries {
-			return nil, nil, fmt.Errorf("nearcloud: gateway event_log has %d entries, max %d", len(rawEntries), maxGatewayEventLogEntries)
-		}
-		entries := make([]attestation.EventLogEntry, 0, len(rawEntries))
-		for i, r := range rawEntries {
-			var e attestation.EventLogEntry
-			if err := json.Unmarshal(r, &e); err != nil {
-				return nil, nil, fmt.Errorf("nearcloud: gateway event_log entry %d: %w", i, err)
-			}
-			entries = append(entries, e)
-		}
-		gw.EventLog = entries
-	}
-
-	// Model attestation parsed by the shared neardirect parser.
-	raw, err := neardirect.ParseAttestationResponse(ctx, body, model)
-	if err != nil {
-		return nil, nil, fmt.Errorf("nearcloud: parse model attestation: %w", err)
-	}
-	// Propagate gateway-level unknown/missing fields. Neardirect already
-	// captures model-level fields; duplicates are possible if both layers
-	// report the same key.
-	if len(unknown) > 0 {
-		raw.UnknownFields = append(raw.UnknownFields, unknown...)
-	}
-	if len(missing) > 0 {
-		raw.MissingFields = append(raw.MissingFields, missing...)
-	}
-
-	return gw, raw, nil
 }
 
 // Attester fetches attestation from the NEAR AI cloud gateway for use by
@@ -182,12 +70,13 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	}
 	q := endpoint.Query()
 	q.Set("model", model)
+	q.Set("provider", "near")
 	q.Set("nonce", nonce.Hex())
 	q.Set("include_tls_fingerprint", "true")
 	q.Set("signing_algo", "ed25519")
 	endpoint.RawQuery = q.Encode()
 
-	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
+	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, a.client, endpoint.String(), a.apiKey, nearparse.MaxEvidenceBytes)
 	if err != nil {
 		return nil, fmt.Errorf("nearcloud: %w", err)
 	}

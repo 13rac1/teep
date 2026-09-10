@@ -112,7 +112,7 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 	var rekorResults []attestation.RekorProvenance
 	for _, sr := range sigstoreResults {
 		if sr.OK {
-			prov := rc.FetchRekorProvenance(ctx, sr.Digest)
+			prov := rc.FetchRekorProvenanceForPolicy(ctx, sr.Digest, digestToRepo[sr.Digest], nearcloud.SupplyChainPolicy())
 			t.Logf("  rekor: digest=%s hasCert=%v err=%v", prov.Digest[:min(16, len(prov.Digest))], prov.HasCert, prov.Err)
 			rekorResults = append(rekorResults, prov)
 		}
@@ -182,12 +182,17 @@ func assertNearcloudReport(t *testing.T, report *attestation.VerificationReport)
 		"nvidia_payload_present",
 		"nvidia_nonce_client_bound",
 		"e2ee_capable",
-		"tls_key_binding",
 		"compose_binding",
 		"sigstore_verification",
 		"build_transparency_log",
 		"event_log_integrity",
+		"tls_key_binding",
 	})
+
+	// A successful report must provide a usable strict transport identity.
+	if _, err := report.TransportIdentity(); err != nil {
+		t.Fatalf("gateway transport policy: %v", err)
+	}
 
 	// Gateway factors (Tier 4) that must pass.
 	assertMustPass(t, report, []string{

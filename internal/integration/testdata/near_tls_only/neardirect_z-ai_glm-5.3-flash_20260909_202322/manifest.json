@@ -1,0 +1,22 @@
+{
+  "tls_inference": {
+    "attempted": true,
+    "failed": false,
+    "detail": "TLS-only streaming chat probe succeeded; no E2EE test performed"
+  },
+  "near_config": {
+    "origin": "https://completions.near.ai",
+    "e2ee": false
+  },
+  "near_route": {
+    "canonical": "glm-5-3-flash.completions.near.ai",
+    "index": 1,
+    "authority": "glm-5-3-flash-i1.completions.near.ai",
+    "mode": "discovered"
+  },
+  "provider": "neardirect",
+  "model": "z-ai/glm-5.3-flash",
+  "nonce_hex": "11d95e12447e82de4533a73d7b05e01a6c5f157e33bc5ffccb8f9c11948a4756",
+  "captured_at": "2026-09-09T20:23:22.255001Z",
+  "duration_ms": 6742
+}

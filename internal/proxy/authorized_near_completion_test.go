@@ -17,6 +17,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
@@ -121,6 +122,9 @@ func nearCompletionAuthorization(t *testing.T, name, origin, fp string) (*Server
 	}
 	defer clear(private)
 	prov := &provider.Provider{Name: name, BaseURL: origin, StaticRoute: route, UsesTLSBinding: true, E2EE: true, Encryptor: neardirect.NewE2EE(), Preparer: neardirect.NewPreparer("test"), Attester: &mockAttester{err: errors.New("unexpected re-attestation")}}
+	if name == "nearcloud" {
+		prov.Preparer = nearcloud.NewPreparer("test")
+	}
 	// This negative test isolates response failure policy with an authenticated
 	// key. Fixture and live integration suites validate complete evidence.
 	report := &attestation.VerificationReport{Provider: name, Model: key.Model(), TLSAuthority: route.Authority(), TLSKeyFP: fp, Factors: []attestation.FactorResult{{Name: attestation.FactorTEEReportData, Status: attestation.Pass}, {Name: attestation.FactorE2EEUsable, Status: attestation.Skip}}}

@@ -1,14 +1,15 @@
 package nearcloud
 
-import "encoding/json"
+import "github.com/13rac1/teep/internal/provider/nearparse"
 
-// ExtractGatewayAppCompose exposes tcbInfo unmarshalling + AppCompose for external tests.
+// ExtractGatewayAppCompose exposes the shared TCB decoder for external tests.
 func ExtractGatewayAppCompose(data []byte) (string, error) {
-	if len(data) == 0 {
-		return "", nil
+	object, err := nearparse.EncodedObject(data)
+	if err != nil {
+		return "", err
 	}
-	var t tcbInfo
-	if err := json.Unmarshal(data, &t); err != nil {
+	var t nearparse.TCB
+	if _, err := nearparse.Object(object, &t, "tcb_info"); err != nil {
 		return "", err
 	}
 	return t.AppCompose, nil

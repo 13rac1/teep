@@ -100,14 +100,17 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	}
 	if tlsct.IsRedirectStatus(ur.Resp.StatusCode) {
 		err = errors.New("upstream returned an unexpected redirect")
-	} else if ur.Session != nil || ur.EHBP != nil {
+	} else if ur.Session != nil || ur.EHBP != nil || (input.provider.Name == "nearcloud" && input.path == "/v1/chat/completions" && ur.Resp.StatusCode == http.StatusMisdirectedRequest) {
 		var rejected bool
 		rejected, err = provider.KeyRejection(ur.Resp, input.provider.Name, input.path)
 		if rejected {
 			s.authorizations.deleteGeneration(input.key, value.generation)
+			if !input.provider.E2EE {
+				return result, false, nil
+			}
 			cleanupAuthorized(ur)
 			result.upstream = nil
-			return result, true, errors.New("upstream rejected the attested encryption key")
+			return result, input.provider.E2EE, errors.New("upstream rejected the attested model key")
 		}
 	}
 	if err != nil {
@@ -120,7 +123,7 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 
 func (s *Server) prepareAuthorizedRequest(ctx context.Context, input *authorizedRequest, value *authorization) (*upstreamResult, error) {
 	req, encrypted, err := provider.PrepareInference(ctx, input.provider, input.route, &provider.InferenceInput{
-		Body: input.body, SigningKey: value.signingKey, Path: input.path, ContentType: input.contentType, Stream: input.stream, Endpoint: input.endpoint,
+		Body: input.body, SigningKey: value.signingKey, ModelKey: value.modelKey, Path: input.path, ContentType: input.contentType, Stream: input.stream, Endpoint: input.endpoint,
 	})
 	if err != nil {
 		return nil, err

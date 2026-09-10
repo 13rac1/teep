@@ -15,7 +15,8 @@ import (
 // Callers must authenticate the key before preparing an attempt.
 type InferenceInput struct {
 	Body              []byte
-	SigningKey        string
+	SigningKey        string            // Non-NEAR protocol key.
+	ModelKey          e2ee.NearModelKey // NEAR key from the acquired authorization.
 	Path, ContentType string
 	Stream            bool
 	Endpoint          e2ee.EndpointType
@@ -36,7 +37,7 @@ func PrepareInference(ctx context.Context, prov *Provider, route ResolvedRoute, 
 			return nil, e2ee.EncryptResult{}, errors.New("inference requires an encryptor")
 		}
 		var err error
-		encrypted, err = prov.Encryptor.EncryptRequest(input.Body, &attestation.RawAttestation{SigningKey: input.SigningKey}, input.Endpoint)
+		encrypted, err = encryptInference(prov, input)
 		if err != nil {
 			return nil, e2ee.EncryptResult{}, err
 		}
@@ -62,10 +63,26 @@ func prepareInferenceRequest(ctx context.Context, prov *Provider, route Resolved
 	req.Header.Set("Content-Type", input.ContentType)
 	SetUserAgent(req)
 	SetEHBPHeaders(req, encrypted.EHBP)
-	if err := PrepareInferenceHeaders(req, prov, encrypted.Session, encrypted.Chutes, input.Stream, input.Path); err != nil {
+	authenticated := PreparationData{ModelKey: input.ModelKey}
+	if err := PrepareInferenceHeaders(req, prov, encrypted.Session, encrypted.Chutes, input.Stream, input.Path, authenticated); err != nil {
 		return nil, err
 	}
 	return req, nil
+}
+
+// encryptInference keeps NEAR requests on the validated-key interface. Missing
+// typed material fails closed; it never reparses a different string key.
+func encryptInference(prov *Provider, input *InferenceInput) (e2ee.EncryptResult, error) {
+	if prov.Name == "nearcloud" || prov.Name == "neardirect" {
+		encryptor, ok := prov.Encryptor.(interface {
+			EncryptRequestWithModelKey([]byte, e2ee.NearModelKey, e2ee.EndpointType) (e2ee.EncryptResult, error)
+		})
+		if !ok {
+			return e2ee.EncryptResult{}, errors.New("NEAR inference requires a validated-key encryptor")
+		}
+		return encryptor.EncryptRequestWithModelKey(input.Body, input.ModelKey, input.Endpoint)
+	}
+	return prov.Encryptor.EncryptRequest(input.Body, &attestation.RawAttestation{SigningKey: input.SigningKey}, input.Endpoint)
 }
 
 // SetEHBPHeaders sets EHBP headers on the upstream request.
@@ -82,8 +99,11 @@ func SetEHBPHeaders(req *http.Request, ehbp *e2ee.EHBPSession) {
 // It builds protocol-specific headers from the Decryptor via type switch, then
 // delegates to the provider's Preparer. When no Preparer is configured, it sets
 // only the Authorization header.
-func PrepareInferenceHeaders(req *http.Request, prov *Provider, session e2ee.Decryptor, meta *e2ee.ChutesE2EE, stream bool, endpointPath string) error {
+func PrepareInferenceHeaders(req *http.Request, prov *Provider, session e2ee.Decryptor, meta *e2ee.ChutesE2EE, stream bool, endpointPath string, authenticated PreparationData) error {
 	if prov.Preparer == nil {
+		if prov.Name == "nearcloud" {
+			return errors.New("NearCloud requires an authenticated request preparer")
+		}
 		if prov.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+prov.APIKey)
 		}
@@ -105,5 +125,5 @@ func PrepareInferenceHeaders(req *http.Request, prov *Provider, session e2ee.Dec
 		e2eeHeaders.Set("X-Encryption-Version", "2")
 		e2eeHeaders.Set("X-Encrypt-All-Fields", "true")
 	}
-	return prov.Preparer.PrepareRequest(req, e2eeHeaders, meta, stream, endpointPath)
+	return prov.Preparer.PrepareRequest(req, e2eeHeaders, meta, stream, endpointPath, authenticated)
 }

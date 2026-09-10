@@ -3177,7 +3177,7 @@ type mockPreparer struct {
 	apiKey string
 }
 
-func (m *mockPreparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string) error {
+func (m *mockPreparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string, _ provider.PreparationData) error {
 	m.called = true
 	req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	return nil
@@ -3652,7 +3652,7 @@ type noopPreparer struct {
 	apiKey string
 }
 
-func (p noopPreparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string) error {
+func (p noopPreparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string, _ provider.PreparationData) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	return nil

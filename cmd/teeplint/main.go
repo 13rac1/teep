@@ -55,7 +55,7 @@ type providerArchetype string
 
 const (
 	// archetypeDirect: owns its attestation format, has attestationResponse
-	// struct, calls jsonstrict.UnmarshalWarn directly.
+	// struct, calls an internal/jsonstrict decoder directly.
 	archetypeDirect providerArchetype = "direct"
 	// archetypeGateway: detects format via formatdetect.Detect(), delegates
 	// parsing to backend providers.
@@ -310,7 +310,7 @@ func checkResponseStruct(r *result, p *providerInfo, want string) {
 	r.failf("%s struct not found in %s", want, p.name)
 }
 
-// Attester.client *http.Client field.
+// Attester owns an HTTP client or an operation-owned HTTP client factory.
 func checkAttesterClientField(r *result, p *providerInfo) {
 	for _, f := range p.files {
 		for _, decl := range f.Decls {
@@ -329,9 +329,9 @@ func checkAttesterClientField(r *result, p *providerInfo) {
 				}
 				for _, field := range st.Fields.List {
 					for _, name := range field.Names {
-						if name.Name == "client" && typeString(field.Type) == "*http.Client" {
+						if (name.Name == "client" && typeString(field.Type) == "*http.Client") || isHTTPClientFactory(field.Type) {
 							pos := p.fset.Position(name.Pos())
-							r.passf("Attester.client *http.Client (%s:%d)", filepath.Base(pos.Filename), pos.Line)
+							r.passf("Attester HTTP client ownership (%s:%d)", filepath.Base(pos.Filename), pos.Line)
 							return
 						}
 					}
@@ -339,7 +339,14 @@ func checkAttesterClientField(r *result, p *providerInfo) {
 			}
 		}
 	}
-	r.failf("Attester.client *http.Client field not found in %s", p.name)
+	r.failf("Attester HTTP client or factory field not found in %s", p.name)
+}
+
+// isHTTPClientFactory recognizes a zero-argument factory with exactly one client result.
+func isHTTPClientFactory(expr ast.Expr) bool {
+	factory, ok := expr.(*ast.FuncType)
+	return ok && factory.Params.NumFields() == 0 && factory.Results.NumFields() == 1 &&
+		typeString(factory.Results.List[0].Type) == "*http.Client"
 }
 
 // Parse function exists.
@@ -361,19 +368,20 @@ func checkParseFunc(r *result, p *providerInfo, want string) *ast.FuncDecl {
 	return nil
 }
 
-// Parse function calls jsonstrict.UnmarshalWarn.
+// Parse function calls an internal/jsonstrict decoder. Diagnostic policy
+// determines whether the caller also logs; strict decoding does not require it.
 func checkParseFuncUsesJSONStrict(r *result, p *providerInfo, fd *ast.FuncDecl) {
 	if fd == nil {
-		r.failf("jsonstrict.UnmarshalWarn — no parse function in %s", p.name)
+		r.failf("internal/jsonstrict — no parse function in %s", p.name)
 		return
 	}
-	if containsCall(fd.Body, "jsonstrict", "UnmarshalWarn") {
+	if containsCall(fd.Body, "jsonstrict", "Unmarshal") || containsCall(fd.Body, "jsonstrict", "UnmarshalWarn") {
 		pos := p.fset.Position(fd.Name.Pos())
-		r.passf("%s uses jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+		r.passf("%s uses internal/jsonstrict (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 		return
 	}
 	pos := p.fset.Position(fd.Name.Pos())
-	r.failf("%s does not call jsonstrict.UnmarshalWarn (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
+	r.failf("%s does not call an internal/jsonstrict decoder (%s:%d)", fd.Name.Name, filepath.Base(pos.Filename), pos.Line)
 }
 
 // Parse function calls formatdetect.Detect.

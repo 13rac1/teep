@@ -211,8 +211,12 @@ func TestIntegrationConfigsUseServeAllowFailPolicy(t *testing.T) {
 			if cfg.AllowFail != nil || cfg.GlobalAllowFailDefined {
 				t.Fatalf("integration config must not set global allow_fail")
 			}
-			if len(cfg.ProviderAllowFail) != 0 {
-				t.Fatalf("integration config must not set provider allow_fail: %+v", cfg.ProviderAllowFail)
+			tlsOnlyNear := (tt.providerName == "neardirect" || tt.providerName == "nearcloud") && !cfg.Providers[tt.providerName].E2EE
+			if !tlsOnlyNear && len(cfg.ProviderAllowFail) != 0 {
+				t.Fatal("integration config must not override provider allow_fail")
+			}
+			if (tt.providerName == "neardirect" || tt.providerName == "nearcloud") && cfg.Offline {
+				t.Fatal("positive NEAR integration requires online admission")
 			}
 			if providerCfg := cfg.Providers[tt.providerName]; providerCfg == nil {
 				t.Fatalf("missing provider %q", tt.providerName)
@@ -220,6 +224,12 @@ func TestIntegrationConfigsUseServeAllowFailPolicy(t *testing.T) {
 
 			got := config.MergedAllowFail(tt.providerName, "", cfg, cfg.Offline)
 			want := config.MergedAllowFail(tt.providerName, "", &config.Config{Offline: cfg.Offline}, cfg.Offline)
+			if tlsOnlyNear {
+				want = append(want, attestation.FactorE2EEUsable)
+				if len(cfg.ProviderAllowFail) != 1 {
+					t.Fatal("TLS-only policy changed another provider")
+				}
+			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("effective allow_fail mismatch:\ngot  %v\nwant %v", got, want)
 			}

@@ -19,9 +19,13 @@ func TestAttesterDiscoveryUsesOwnedClient(t *testing.T) {
 		closed := make(chan struct{})
 		var closeOnce sync.Once
 		var requests atomic.Int32
-		upstream := authority.NewTLSServerWithConfig(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstream := authority.NewTLSServerWithConfig(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			requests.Add(1)
 			w.Header().Set("Content-Type", "application/json")
+			if req.URL.Path == "/count" {
+				_, _ = w.Write([]byte(`{"domain":"model.completions.near.ai","requested_domain":"model.completions.near.ai","healthy":1,"total":1}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"endpoints":[{"domain":"model.completions.near.ai","models":["model"]}]}`))
 		}), func(server *httptest.Server) {
 			server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
@@ -32,13 +36,15 @@ func TestAttesterDiscoveryUsesOwnedClient(t *testing.T) {
 		})
 		resolver := NewEndpointResolver()
 		resolver.endpointsURL = upstream.URL
+		resolver.countURL = upstream.URL + "/count"
+		defer resolver.Stop()
 		attester := NewAttesterWithResolver("https://completions.near.ai", "test", resolver)
 		client := tlsct.NewHTTPClient(5 * time.Second)
 		defer client.CloseIdleConnections()
 		var observed atomic.Int32
 		client.Transport = tlsct.WrapCounting(client.Transport, func() { observed.Add(1) }, nil)
-		// The injection used by standalone verification must also govern discovery.
-		attester.SetClient(client)
+		// Standalone verification explicitly injects its metadata client.
+		attester.SetMetadataClient(client)
 		var wg sync.WaitGroup
 		for range 8 {
 			wg.Go(func() {
@@ -47,14 +53,14 @@ func TestAttesterDiscoveryUsesOwnedClient(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if route.Authority() != "model.completions.near.ai" {
+				if route.Authority() != "model-i0.completions.near.ai" {
 					t.Error("unexpected discovered authority")
 				}
 			})
 		}
 		wg.Wait()
-		if requests.Load() != 1 || observed.Load() != 1 {
-			t.Fatalf("discovery requests=%d observed=%d, want one request through the injected client", requests.Load(), observed.Load())
+		if requests.Load() != 2 || observed.Load() != 2 {
+			t.Fatalf("discovery requests=%d observed=%d, want two requests through the injected client", requests.Load(), observed.Load())
 		}
 		// This is the cleanup performed by verify.Run for its owned client.
 		client.CloseIdleConnections()

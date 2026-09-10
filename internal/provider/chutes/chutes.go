@@ -322,7 +322,7 @@ func NewPreparer(apiKey, apiBaseURL string) *Preparer {
 // sessions, it also sets the E2EE headers and rewrites the full URL to the
 // platform API's /e2e/invoke endpoint. The path parameter specifies the
 // TEE-internal endpoint path for X-E2E-Path (e.g. "/v1/embeddings").
-func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, meta *e2ee.ChutesE2EE, stream bool, path string) error {
+func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, meta *e2ee.ChutesE2EE, stream bool, path string, _ provider.PreparationData) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	if meta != nil {
 		if path == "" {

@@ -51,6 +51,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/provider/venice"
@@ -441,8 +442,6 @@ type Server struct {
 // New builds a Server from cfg. Providers are given their Attester and
 // Preparer implementations based on provider name.
 func New(cfg *config.Config) (*Server, error) {
-	attestClient := config.NewAttestationClient(cfg.Offline)
-
 	s := &Server{
 		cfg:             cfg,
 		providers:       make(map[string]*provider.Provider, len(cfg.Providers)),
@@ -451,16 +450,18 @@ func New(cfg *config.Config) (*Server, error) {
 		signingKeyCache: attestation.NewSigningKeyCache(signingKeyCacheTTL),
 		authorizations:  newAuthorizationStore(maxAuthorizations, maxAuthorizationVerifications, authorizationVerificationTimeout),
 		mux:             http.NewServeMux(),
-		attestClient:    attestClient,
 		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 	}
 
 	onReq := func() { s.stats.httpRequests.Add(1) }
 	onErr := func() { s.stats.httpErrors.Add(1) }
 
-	attestClient.Transport = tlsct.WrapCounting(
-		attestClient.Transport,
-		onReq, onErr)
+	attestFactory := config.NewAttestationClientFactory(cfg.Offline,
+		tlsct.NewAttestationSocketBudget(tlsct.MaxConnectionsPerHost), func(base http.RoundTripper) http.RoundTripper {
+			return tlsct.WrapCounting(base, onReq, onErr)
+		})
+	attestClient := attestFactory.NewClient()
+	s.attestClient = attestClient
 
 	upstreamTransport := newUpstreamTransport()
 	upstreamClient := tlsct.NewHTTPClientWithTransport(0, upstreamTransport, !cfg.Offline)
@@ -502,6 +503,19 @@ func New(cfg *config.Config) (*Server, error) {
 		p, err := fromConfig(cp, cfg.Offline, mergedPolicy, mergedGWPolicy)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
+		}
+		switch setter := p.Attester.(type) {
+		case interface{ SetClientFactory(func() *http.Client) }:
+			setter.SetClientFactory(attestFactory.NewFreshClient)
+		case interface{ SetClient(*http.Client) }:
+			setter.SetClient(attestFactory.NewClient())
+		}
+		if setter, ok := p.Attester.(interface{ SetMetadataClient(*http.Client) }); ok {
+			metadataFactory := config.NewAttestationClientFactory(cfg.Offline,
+				tlsct.NewSocketBudget(tlsct.MaxConnectionsPerHost), func(base http.RoundTripper) http.RoundTripper {
+					return tlsct.WrapCounting(base, onReq, onErr)
+				})
+			setter.SetMetadataClient(metadataFactory.NewClient())
 		}
 		s.providers[name] = p
 		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE)
@@ -685,6 +699,9 @@ func fromConfig(
 		p.SupplyChainPolicy = venice.SupplyChainPolicy()
 		p.ModelLister = venice.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 	case "neardirect":
+		if _, err := nearroute.ParseOrigin(cp.BaseURL); err != nil {
+			return nil, err
+		}
 		p.ChatPath = "/v1/chat/completions"
 		p.EmbeddingsPath = "/v1/embeddings"
 		p.AudioPath = "/v1/audio/transcriptions"
@@ -713,7 +730,7 @@ func fromConfig(
 		p.Encryptor = neardirect.NewE2EE()
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
-		p.Preparer = neardirect.NewPreparer(cp.APIKey)
+		p.Preparer = nearcloud.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
 		p.GatewayReportDataVerifier = nearcloud.GatewayReportDataVerifier{}
 		p.SupplyChainPolicy = nearcloud.SupplyChainPolicy()
@@ -1315,9 +1332,7 @@ func (s *Server) verifyTinfoilSupplyChain(
 	}
 
 	// Sigstore DSSE bundle verification.
-	client := config.NewAttestationClient(s.cfg.Offline)
-	defer client.CloseIdleConnections()
-	sv := tinfoil.NewSigstoreVerifier(client)
+	sv := tinfoil.NewSigstoreVerifier(s.attestClient)
 	predicateBytes, predicateType, signer, err := sv.FetchAndVerify(ctx, sigstoreRepo)
 	if err != nil {
 		result.SigstoreErr = err
@@ -1588,6 +1603,13 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 		}
 
 		prov, upstreamModel, ok := s.resolveModel(model)
+		if prov != nil && (prov.Name == "neardirect" || prov.Name == "nearcloud") {
+			if err := nearroute.ValidateModel(upstreamModel); err != nil {
+				s.logInferenceBlock(ctx, "validate_model", ep.name, prov.Name, "", http.StatusBadRequest, err)
+				writeRouteError(w, err)
+				return
+			}
+		}
 		if !ok {
 			s.logInferenceBlock(ctx, "resolve_model", ep.name, "", model, http.StatusBadRequest, fmt.Errorf("unknown model %q", model))
 			http.Error(w, fmt.Sprintf("unknown model %q: use provider:model format (e.g. venice:qwen3-5b)", model), http.StatusBadRequest)
@@ -1669,8 +1691,9 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 			if routeErr != nil {
 				status = "route_failed"
 				s.stats.errors.Add(1)
-				s.logInferenceBlock(ctx, "resolve_route", ep.name, prov.Name, upstreamModel, http.StatusBadGateway, routeErr)
-				http.Error(w, "resolve upstream route failed", http.StatusBadGateway)
+				code, _ := routeErrorResponse(routeErr)
+				s.logInferenceBlock(ctx, "resolve_route", ep.name, prov.Name, upstreamModel, code, routeErr)
+				writeRouteError(w, routeErr)
 				return
 			}
 			ctx = withCacheModel(ctx, key.Model()+"@"+key.Authority())
@@ -2560,7 +2583,7 @@ func (s *Server) doUpstreamRoundtrip(
 		upstreamReq.Header.Set("Content-Type", contentType)
 		provider.SetUserAgent(upstreamReq)
 
-		if prepErr := provider.PrepareInferenceHeaders(upstreamReq, prov, session, meta, stream, endpointPath); prepErr != nil {
+		if prepErr := provider.PrepareInferenceHeaders(upstreamReq, prov, session, meta, stream, endpointPath, provider.PreparationData{}); prepErr != nil {
 			cancel()
 			e2ee.ZeroSessions(session, meta, nil)
 			return &upstreamResult{E2EEDur: e2eeDur, UpstreamDur: upstreamDur},
@@ -2979,9 +3002,26 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	var ok bool
 	if prov := s.providers[provName]; prov != nil && prov.UsesTLSBinding {
 		var key provider.AuthorizationKey
-		if selected.Authority() != "" {
+		switch {
+		case selected.Authority() != "":
 			key, err = selected.AuthorizationKey(provName, model)
-		} else {
+		case provName == "neardirect":
+			lookup, exists := prov.Attester.(interface {
+				LookupRoute(string) (provider.ResolvedRoute, bool)
+			})
+			if !exists {
+				http.Error(w, "no established report route", http.StatusNotFound)
+				return
+			}
+			route, found := lookup.LookupRoute(model)
+			if !found {
+				http.Error(w, "no established report route", http.StatusNotFound)
+				return
+			}
+			key, err = route.AuthorizationKey(provName, model)
+		case provName == "nearcloud":
+			key, err = prov.StaticRoute.AuthorizationKey(provName, model)
+		default:
 			_, key, err = resolveRequestRoute(r.Context(), prov, model)
 		}
 		if err != nil {

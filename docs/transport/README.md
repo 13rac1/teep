@@ -64,9 +64,15 @@ its evidence authenticates a model-independent router, so models share one
 provider-and-authority authorization generation. Transport identity includes
 the canonical HTTPS authority and attested SPKI.
 
-Discovery refreshes share bounded work. A delayed caller rechecks whether a
-fresh mapping was published after its initial lookup before starting another
-refresh. A failed required refresh does not authorize use of a stale mapping.
+Discovery refreshes share bounded work. Tinfoil refresh callers recheck whether a
+fresh mapping was published before starting another refresh. A failed required
+refresh does not authorize use of a stale mapping.
+
+NearDirect selects one indexed authority per model for the provider lifetime.
+Its five-minute metadata cache is used only for initial selections. Established
+routes, re-attestation, authorization eviction, and report reads perform no
+recurring discovery. A backend failure cannot invalidate other model selections.
+See the [NEAR route contract](../providers/near/near_attestation.md#neardirect-backend-selection).
 
 The shared authorization store publishes the report, authenticated encryption
 key, and transport identity together. Fully verify an uncached authorization.
@@ -340,11 +346,21 @@ Configure injected clients before concurrent use or cleanup.
 Transport wrappers, including retry and capture wrappers, must forward
 `CloseIdleConnections` to their underlying pools so client cleanup remains
 effective. Standalone verification closes clients it creates; callers retain
-ownership of injected clients. Per-operation Sigstore clients also close
-idle connections when verification ends.
-NEAR direct attestation and endpoint discovery share the injected client, so
-standalone client cleanup also closes idle discovery connections. Discovery
-requests use that client's transport wrappers, including capture and replay.
+ownership of injected clients. Sigstore verification uses the server's shared
+attestation client.
+
+The [attestation client factory](../../internal/config/attestation_client.go)
+creates independent connection pools with one explicitly supplied socket budget.
+Server attesters and collateral clients share this budget, including each
+client's nested AMD KDS transport. Closing a client releases only its own
+physical sockets. The server reserves one of the 16 slots from long-lived
+pools for fresh NearDirect fetches; see [fresh pool admission](#fresh-neardirect-attestation-pools).
+
+NEAR direct endpoint discovery has a separate metadata client and socket budget.
+`SetClientFactory` supplies an owned pool for each full fetch; `SetMetadataClient` assigns
+metadata transport. Standalone verification owns both default clients, records
+both pools, and accepts explicit injection of each for replay. Each recorder
+retains cleanup forwarding to its underlying pool.
 
 Standalone capture retains the original route-discovery responses and the
 final attestation attempt, with its nonce and inference test outcome. A
@@ -380,3 +396,27 @@ Reuse the shared implementation where those contracts apply. Add a
 provider-specific behavior only with an explicit contract and regression
 coverage. Update these documents and their linked tests in the same change as
 any transport behavior change.
+
+### Fresh NearDirect attestation pools
+
+Each full NearDirect evidence fetch owns an independent pool and closes its idle
+connections after retrieval. All attestation pools, including nested collateral
+transports, share one server-owned per-address budget of 16 pending or open sockets.
+Long-lived pooled clients can hold at most 15; fresh fetches use the remaining
+aggregate capacity. Admission checks both limits atomically and releases permits
+only on failed dials or physical connection closure. A fresh factory cannot
+multiply the aggregate allowance. Metadata and inference have independent budgets.
+
+Each transport's `MaxConnsPerHost` matches its admission view: 15 for
+long-lived attestation pools, 16 for fresh fetches and unreserved clients.
+The common constructor also configures nested collateral transports. Requests
+can wait within their own transport for a connection, under their deadlines;
+this does not add a shared-budget queue or enable strict HTTP/2 stream admission.
+
+A collateral cache miss can still fail when other pools exhaust its shared
+allowance, or HTTP/2 expansion requires another physical socket that cannot
+be admitted. This local
+capacity failure does not publish authorization, start a negative-cache delay,
+flush another pool, or authorize inference replay. Later verification can succeed
+after a pooled socket closes. HTTPS proxy connections count against their dialed
+proxy address, including tunnels for different origin authorities.

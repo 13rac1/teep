@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider/nearparse"
 	"github.com/13rac1/teep/internal/tlsct"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
@@ -27,7 +28,7 @@ func TestFetchAttestation_TransportBindingFailures(t *testing.T) {
 }
 
 func TestAttesterHTTPFailures(t *testing.T) {
-	for _, mode := range []string{"http_error", "invalid_json", "long_error"} {
+	for _, mode := range []string{"http_error", "invalid_json", "long_error", "oversized"} {
 		t.Run(mode, func(t *testing.T) { testGatewayTransportBinding(t, mode, false) })
 	}
 }
@@ -46,7 +47,7 @@ func testGatewayTransportBinding(t *testing.T, mode string, wantSuccess bool) {
 				t.Error("attestation did not negotiate HTTP/2")
 			}
 			q := r.URL.Query()
-			if q.Get("model") != "test-model" || q.Get("include_tls_fingerprint") != "true" || q.Get("signing_algo") != "ed25519" {
+			if q.Get("model") != "test-model" || q.Get("include_tls_fingerprint") != "true" || q.Get("signing_algo") != "ed25519" || q.Get("provider") != "near" || len(q["provider"]) != 1 {
 				t.Error("missing attestation query parameters")
 			}
 			if !tlsct.SPKIFingerprintsEqual(q.Get("nonce"), nonce.Hex()) {
@@ -63,6 +64,10 @@ func testGatewayTransportBinding(t *testing.T, mode string, wantSuccess bool) {
 			if mode == "http_error" || mode == "long_error" {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(strings.Repeat("x", 4096)))
+				return
+			}
+			if mode == "oversized" {
+				_, _ = w.Write([]byte(strings.Repeat("x", nearparse.MaxEvidenceBytes+1)))
 				return
 			}
 			if mode == "invalid_json" {
@@ -105,6 +110,7 @@ func testGatewayTransportBinding(t *testing.T, mode string, wantSuccess bool) {
 		a := NewAttester("test-key", true)
 		a.SetClient(client)
 		raw, err := a.FetchAttestation(context.Background(), "test-model", nonce)
+		assertGatewayFetchLimit(t, mode, err)
 		if !wantSuccess {
 			if err == nil || raw != nil {
 				t.Fatal("invalid gateway binding returned usable attestation")
@@ -126,11 +132,12 @@ func testGatewayTransportBinding(t *testing.T, mode string, wantSuccess bool) {
 func nearcloudAttestationJSON(spkiHash, nonceHex string) string {
 	return fmt.Sprintf(`{
 		"gateway_attestation": {
+"signing_address":"ab", "signing_algo":"ecdsa", "report_data":"ab", "vpc":{"vpc_server_app_id":"ab","vpc_hostname":"test.internal"},
 			"request_nonce": %q,
 			"intel_quote": "",
-			"event_log": "",
+			"event_log": "[]",
 			"tls_cert_fingerprint": %q,
-			"info": {
+			"info": {"app_name":"app","compose_hash":"ab","os_image_hash":"ab","device_id":"ab",
 				"tcb_info": "{\"app_compose\":\"test-compose\"}"
 			}
 		},
@@ -143,8 +150,16 @@ func nearcloudAttestationJSON(spkiHash, nonceHex string) string {
 				"signing_address": "0xtest",
 				"signing_algo": "ecdsa",
 				"tls_cert_fingerprint": %q,
-				"request_nonce": %q
+				"request_nonce": %q,
+"event_log":[],"info":{"app_name":"app","compose_hash":"ab","os_image_hash":"ab","device_id":"ab","tcb_info":{"app_compose":"test-compose"}}
 			}
 		]
 	}`, nonceHex, spkiHash, spkiHash, nonceHex)
+}
+
+func assertGatewayFetchLimit(t *testing.T, mode string, err error) {
+	t.Helper()
+	if mode == "oversized" && (err == nil || !strings.Contains(err.Error(), fmt.Sprintf("attestation response body exceeds size limit %d", nearparse.MaxEvidenceBytes))) {
+		t.Fatalf("fetch did not enforce the parser byte limit: %v", err)
+	}
 }

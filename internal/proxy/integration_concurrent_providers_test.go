@@ -129,10 +129,51 @@ func concurrentLiveModels(ctx context.Context, t *testing.T, prov *provider.Prov
 			models = append(models, model.ID)
 		}
 	}
-	if len(models) < 2 {
-		t.Fatal("concurrent coverage requires two chat models per provider")
+	selected, err := selectConcurrentLiveModels(prov.Name, models)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return models[:2]
+	return selected
+}
+
+func selectConcurrentLiveModels(providerName string, chatModels []string) ([]string, error) {
+	if providerName == "nearcloud" || providerName == "neardirect" {
+		// Use general-purpose models. Catalog ordering can put specialized
+		// text models first, which does not establish chat suitability.
+		selected := []string{"z-ai/glm-5.3-flash", "deepseek-ai/DeepSeek-V4-Flash"}
+		for _, model := range selected {
+			if !slices.Contains(chatModels, model) {
+				return nil, fmt.Errorf("%s concurrency test requires catalog chat model %q", providerName, model)
+			}
+		}
+		return selected, nil
+	}
+	if len(chatModels) < 2 {
+		return nil, errors.New("concurrent coverage requires two chat models per provider")
+	}
+	return chatModels[:2], nil
+}
+
+func TestConcurrentLiveModelsSelection(t *testing.T) {
+	for _, name := range []string{"nearcloud", "neardirect"} {
+		t.Run(name, func(t *testing.T) {
+			catalog := []string{"openai/privacy-filter", "deepseek-ai/DeepSeek-V4-Flash", "z-ai/glm-5.3-flash"}
+			want := []string{"z-ai/glm-5.3-flash", "deepseek-ai/DeepSeek-V4-Flash"}
+			for range catalog {
+				got, err := selectConcurrentLiveModels(name, catalog)
+				if err != nil || !slices.Equal(got, want) {
+					t.Fatalf("catalog order changed selected chat models: got=%v err=%v", got, err)
+				}
+				catalog = append(catalog[1:], catalog[0])
+			}
+			for _, missing := range want {
+				available := slices.DeleteFunc(slices.Clone(catalog), func(model string) bool { return model == missing })
+				if _, err := selectConcurrentLiveModels(name, available); err == nil {
+					t.Fatalf("selected a substitute for missing model %q", missing)
+				}
+			}
+		})
+	}
 }
 
 func concurrentLiveWave(ctx context.Context, t *testing.T, server *httptest.Server, routes []concurrentLiveRoute) {

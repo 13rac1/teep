@@ -3,6 +3,7 @@ package venice_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/13rac1/teep/internal/provider"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -571,7 +572,7 @@ func TestPreparer_PrepareRequest_SetsHeaders(t *testing.T) {
 	e2eeHeaders.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
 
 	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/api/v1/chat/completions", http.NoBody)
-	if err := p.PrepareRequest(req, e2eeHeaders, nil, false, ""); err != nil {
+	if err := p.PrepareRequest(req, e2eeHeaders, nil, false, "", provider.PreparationData{}); err != nil {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
 
@@ -593,7 +594,7 @@ func TestPreparer_PrepareRequest_NilHeaders(t *testing.T) {
 	p := venice.NewPreparer("test-api-key")
 
 	req, _ := http.NewRequest(http.MethodPost, "https://api.venice.ai/", http.NoBody)
-	if err := p.PrepareRequest(req, nil, nil, false, ""); err != nil {
+	if err := p.PrepareRequest(req, nil, nil, false, "", provider.PreparationData{}); err != nil {
 		t.Fatalf("PrepareRequest with nil headers: %v", err)
 	}
 	if got := req.Header.Get("Authorization"); got != "Bearer test-api-key" {

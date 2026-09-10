@@ -270,6 +270,11 @@ func (r *VerificationReport) MarkE2EEFailed(detail string) {
 	}
 }
 
+// TransportIdentity returns the report's strict attested transport identity.
+func (r *VerificationReport) TransportIdentity() (tlsct.TransportIdentity, error) {
+	return tlsct.NewTransportIdentity(r.TLSAuthority, r.TLSKeyFP)
+}
+
 // recomputeCounters recalculates all summary counters from the Factors slice.
 // Called after any post-build factor mutation to prevent counter desync.
 func (r *VerificationReport) recomputeCounters() {

@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"github.com/13rac1/teep/internal/provider"
 	"math/big"
 	"net"
 	"net/http"
@@ -234,7 +235,7 @@ func TestNewPreparer(t *testing.T) {
 func TestPreparer_PrepareRequest(t *testing.T) {
 	p := NewPreparer("test-key-123")
 	req, _ := http.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", http.NoBody)
-	if err := p.PrepareRequest(req, nil, nil, false, ""); err != nil {
+	if err := p.PrepareRequest(req, nil, nil, false, "", provider.PreparationData{}); err != nil {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
 	got := req.Header.Get("Authorization")

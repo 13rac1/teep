@@ -1,0 +1,57 @@
+Attestation Report: neardirect / z-ai/glm-5.3-flash
+═══════════════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  App:           dstack-nvidia-0.5.11
+  Compose hash:  533e43fd215d56ec...
+  OS image:      a6eafc5f007f642d...
+  Device:        e3b0c44298fc1c14...
+  PPID:          c9823bdff81c3275...
+  Event log:     30 entries
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars)  [ENFORCED]
+  ✓ tee_quote_present                 TDX quote present (10020 hex chars)  [ENFORCED]
+  ✓ tee_quote_structure               valid QuoteV4, MRTD: df4d77c857de652b...  [ENFORCED]
+  ✓ tee_cert_chain                    certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tee_quote_signature               quote signature verified  [ENFORCED]
+  ✓ tee_debug_disabled                debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ tee_measurement                   MRTD/MRSEAM policy matched  [ENFORCED]
+  ✓ tee_hardware_config               RTMR0 policy matched  [ALLOWED]
+  ✓ tee_boot_config                   RTMR1/RTMR2 policy matched  [ALLOWED]
+  ✓ signing_key_present               enclave pubkey present (5a0210f244...)  [ENFORCED]
+  ✓ response_schema                   attestation response matches expected schema  [ALLOWED]
+
+Tier 2: Binding & Crypto
+  ✓ tee_reportdata_binding            REPORTDATA binds sha256(signing_address + tls_fingerprint) + nonce  [ENFORCED]
+  ✓ intel_pcs_collateral              Intel PCS collateral fetched (TCB status: UpToDate)  [ENFORCED]
+  ✓ tee_tcb_current                   TCB is UpToDate per Intel PCS  [ENFORCED]
+  ✓ tee_tcb_not_revoked               TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present            NVIDIA payload present (98222 chars)  [ENFORCED]
+  ✓ nvidia_signature                  EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)  [ENFORCED]
+  ✓ nvidia_claims                     EAT: arch=HOPPER, 8 GPUs, nonce verified  [ENFORCED]
+  ✓ nvidia_nonce_client_bound         EAT nonce matches client nonce (8 GPUs)  [ENFORCED]
+  ✓ nvidia_nras_verified              NRAS: true (JWT verified)  [ENFORCED]
+  ✓ e2ee_capable                      enclave ed25519 public key valid; E2EE key exchange possible (ed25519)  [ENFORCED]
+  - e2ee_usable                       E2EE not configured for this provider  [ALLOWED]
+  — aci_key_custody                   not ACI/1 format
+  ✓ tls_inference                     TLS-only streaming chat probe succeeded; no E2EE test performed  [ENFORCED]
+
+Tier 3: Supply Chain & Channel Integrity
+  ✓ tls_key_binding                   TLS transport SPKI bound to attestation  [ENFORCED]
+  ✗ cpu_gpu_chain                     CPU-GPU attestation not bound  [ALLOWED]
+  — nvswitch_binding                  NVSwitch fabric verification is Tinfoil-specific
+  ✗ measured_model_weights            no model weight hashes  [ALLOWED]
+  ✓ build_transparency_log            2 component(s) verified by Fulcio provenance; 1 present in Sigstore (nearai/compose-manager@8cf272a, github-hosted; log integrity: SET 3/3, inclusion 3/3)  [ENFORCED]
+  ✓ component_recognition             4 model component(s) recognized  [ALLOWED]
+  ✓ provider_signer_recognition       3 component signer(s) recognized provider-wide  [ENFORCED]
+  ✓ component_signature_recognition   3 component signature policy match(es)  [ENFORCED]
+  ✗ cpu_id_registry                   hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  ✓ compose_binding                   sha256(app_compose) matches MRConfigID  [ENFORCED]
+  ✓ sigstore_verification             3 component digest(s) found in Sigstore transparency log; 1 not Sigstore-signed (compose-pinned)  [ENFORCED]
+  — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
+  ✓ event_log_integrity               event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
+
+Score: 30/34 passed, 1 skipped, 3 failed (0 enforced, 3 allowed), 3 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

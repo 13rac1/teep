@@ -21,16 +21,15 @@ func TestDiscoveryDelayedRefresh(t *testing.T) {
 		defer upstream.Close()
 		resolver := newEndpointResolverForTest(upstream.URL)
 		defer resolver.client.CloseIdleConnections()
-		observed := resolver.fetchedAt
 		if _, err := resolver.Resolve(t.Context(), "known"); err != nil {
 			t.Fatal(err)
 		}
-		// Reproduce callers delayed between their initial read and singleflight.
+		// Delayed metadata callers must reuse a still-fresh publication.
 		// Include unknown-model callers: a completed refresh already answered them.
 		var wg sync.WaitGroup
 		for range 32 {
 			wg.Go(func() {
-				if err := resolver.refreshAfter(t.Context(), observed); err != nil {
+				if _, err := resolver.Resolve(t.Context(), "known"); err != nil {
 					t.Error(err)
 				}
 			})
@@ -40,9 +39,9 @@ func TestDiscoveryDelayedRefresh(t *testing.T) {
 			t.Fatalf("redundant discovery requests: %d", calls.Load())
 		}
 		resolver.mu.Lock()
-		resolver.fetchedAt = time.Now().Add(-10 * time.Minute)
+		resolver.endpoints.snapshot.fetchedAt = time.Now().Add(-10 * time.Minute)
 		resolver.mu.Unlock()
-		if err := resolver.refreshAfter(t.Context(), observed); err != nil {
+		if _, err := resolver.Resolve(t.Context(), "known"); err != nil {
 			t.Fatal(err)
 		}
 		if calls.Load() != 2 {

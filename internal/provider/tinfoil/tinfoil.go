@@ -19,6 +19,7 @@
 package tinfoil
 
 import (
+	"github.com/13rac1/teep/internal/provider"
 	"net/http"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -42,7 +43,7 @@ func NewPreparer(apiKey string) *Preparer {
 }
 
 // PrepareRequest sets the Authorization header on req.
-func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string) error {
+func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string, _ provider.PreparationData) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	return nil
 }

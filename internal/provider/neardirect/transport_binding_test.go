@@ -2,13 +2,15 @@ package neardirect_test
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
@@ -43,13 +45,17 @@ func TestDirectAttestationTransportBinding(t *testing.T) {
 					case "wrong_length":
 						fp = "ab"
 					}
-					_, _ = fmt.Fprintf(w, `{"model_name":"model","intel_quote":"quote","tls_cert_fingerprint":%q,"request_nonce":%q}`, fp, r.URL.Query().Get("nonce"))
+					_, _ = io.WriteString(w, directTestResponse(t, "model", map[string]any{"tls_cert_fingerprint": fp, "request_nonce": r.URL.Query().Get("nonce")}))
 				}))
 				fingerprint = serverFingerprint(ts)
 				client := tlsct.NewHTTPClientWithTransport(time.Second, tlsct.NewPooledTransport(), true)
 				defer client.CloseIdleConnections()
 				a := neardirect.NewAttester(ts.URL, "test-key")
-				a.SetClient(client)
+				a.SetClientFactory(func() *http.Client {
+					fresh := *client
+					fresh.Transport = client.Transport.(*http.Transport).Clone()
+					return &fresh
+				})
 				raw, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
 				if mode != "match" {
 					if err == nil || raw != nil {
@@ -68,6 +74,34 @@ func TestDirectAttestationTransportBinding(t *testing.T) {
 					t.Fatal("incorrect direct transport identity")
 				}
 			})
+		}
+	})
+}
+
+func TestDirectFetchOwnsFreshConnections(t *testing.T) {
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		var fingerprint string
+		var addresses sync.Map
+		upstream := authority.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, loaded := addresses.LoadOrStore(r.RemoteAddr, true); loaded {
+				t.Error("full attestation reused a previous fetch connection")
+			}
+			_, _ = io.WriteString(w, directTestResponse(t, "model", map[string]any{"tls_cert_fingerprint": fingerprint, "request_nonce": r.URL.Query().Get("nonce")}))
+		}))
+		fingerprint = serverFingerprint(upstream)
+		a := neardirect.NewAttester(upstream.URL, "test")
+		factory := config.NewAttestationClientFactory(false, tlsct.NewAttestationSocketBudget(2), nil)
+		a.SetClientFactory(factory.NewFreshClient)
+		for range 3 {
+			if _, err := a.FetchAttestation(t.Context(), "model", attestation.NewNonce()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		count := 0
+		addresses.Range(func(_, _ any) bool { count++; return true })
+		if count != 3 {
+			t.Fatalf("fresh connections=%d", count)
 		}
 	})
 }

@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"testing"
 
@@ -29,15 +30,17 @@ func TestVerifyRun_Venice_Fixture(t *testing.T) {
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, baseURL)
 
 	report, err := verify.Run(context.Background(), &verify.Options{
-		Config:           cfg,
-		Provider:         cp,
-		ProviderName:     env.manifest.Provider,
-		ModelName:        env.manifest.Model,
-		Offline:          false,
-		Client:           env.client,
-		Nonce:            env.nonce,
-		CapturedE2EE:     fixtureE2EEResult(env.manifest.E2EE),
-		VerificationTime: fixtureVerificationTime(&env),
+		Config:                   cfg,
+		Provider:                 cp,
+		ProviderName:             env.manifest.Provider,
+		ModelName:                env.manifest.Model,
+		Offline:                  false,
+		Client:                   env.client,
+		MetadataClient:           env.client,
+		AttestationClientFactory: func() *http.Client { return &http.Client{Transport: env.client.Transport} },
+		Nonce:                    env.nonce,
+		CapturedE2EE:             fixtureE2EEResult(env.manifest.E2EE),
+		VerificationTime:         fixtureVerificationTime(&env),
 	})
 	if err != nil {
 		t.Fatalf("verify.Run: %v", err)
@@ -54,22 +57,11 @@ func TestVerifyRun_Venice_Fixture(t *testing.T) {
 
 func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
 	env := loadFixture(t, "neardirect")
-	baseURL := extractBaseURL(t, env.entries)
-	t.Logf("base URL: %s", baseURL)
 
-	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, baseURL)
+	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, env.manifest.NearConfig.Origin)
+	cp.E2EE = env.manifest.NearConfig.E2EE
+	report, _, err := verify.Replay(context.Background(), findFixtureDir(t, "neardirect"), func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil })
 
-	report, err := verify.Run(context.Background(), &verify.Options{
-		Config:           cfg,
-		Provider:         cp,
-		ProviderName:     env.manifest.Provider,
-		ModelName:        env.manifest.Model,
-		Offline:          false,
-		Client:           env.client,
-		Nonce:            env.nonce,
-		CapturedE2EE:     fixtureE2EEResult(env.manifest.E2EE),
-		VerificationTime: fixtureVerificationTime(&env),
-	})
 	if err != nil {
 		t.Fatalf("verify.Run: %v", err)
 	}
@@ -121,16 +113,18 @@ func TestVerifyRun_WithCapture_Venice(t *testing.T) {
 	captureDir := t.TempDir()
 
 	report, err := verify.Run(context.Background(), &verify.Options{
-		Config:           cfg,
-		Provider:         cp,
-		ProviderName:     env.manifest.Provider,
-		ModelName:        env.manifest.Model,
-		Offline:          false,
-		Client:           env.client,
-		Nonce:            env.nonce,
-		CaptureDir:       captureDir,
-		CapturedE2EE:     fixtureE2EEResult(env.manifest.E2EE),
-		VerificationTime: fixtureVerificationTime(&env),
+		Config:                   cfg,
+		Provider:                 cp,
+		ProviderName:             env.manifest.Provider,
+		ModelName:                env.manifest.Model,
+		Offline:                  false,
+		Client:                   env.client,
+		MetadataClient:           env.client,
+		AttestationClientFactory: func() *http.Client { return &http.Client{Transport: env.client.Transport} },
+		Nonce:                    env.nonce,
+		CaptureDir:               captureDir,
+		CapturedE2EE:             fixtureE2EEResult(env.manifest.E2EE),
+		VerificationTime:         fixtureVerificationTime(&env),
 	})
 	if err != nil {
 		t.Fatalf("verify.Run with capture: %v", err)
@@ -159,15 +153,17 @@ func TestVerifyRun_Tinfoil_Fixture(t *testing.T) {
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, baseURL)
 
 	report, err := verify.Run(context.Background(), &verify.Options{
-		Config:           cfg,
-		Provider:         cp,
-		ProviderName:     env.manifest.Provider,
-		ModelName:        env.manifest.Model,
-		Offline:          false,
-		Client:           env.client,
-		Nonce:            env.nonce,
-		CapturedE2EE:     fixtureE2EEResult(env.manifest.E2EE),
-		VerificationTime: fixtureVerificationTime(&env),
+		Config:                   cfg,
+		Provider:                 cp,
+		ProviderName:             env.manifest.Provider,
+		ModelName:                env.manifest.Model,
+		Offline:                  false,
+		Client:                   env.client,
+		MetadataClient:           env.client,
+		AttestationClientFactory: func() *http.Client { return &http.Client{Transport: env.client.Transport} },
+		Nonce:                    env.nonce,
+		CapturedE2EE:             fixtureE2EEResult(env.manifest.E2EE),
+		VerificationTime:         fixtureVerificationTime(&env),
 	})
 	if err != nil {
 		t.Fatalf("verify.Run: %v", err)
@@ -210,15 +206,17 @@ func TestVerifyRun_TinfoilDirect_Fixture(t *testing.T) {
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, "https://inference.tinfoil.sh")
 
 	report, err := verify.Run(context.Background(), &verify.Options{
-		Config:           cfg,
-		Provider:         cp,
-		ProviderName:     env.manifest.Provider,
-		ModelName:        env.manifest.Model,
-		Offline:          false,
-		Client:           env.client,
-		Nonce:            env.nonce,
-		CapturedE2EE:     fixtureE2EEResult(env.manifest.E2EE),
-		VerificationTime: fixtureVerificationTime(&env),
+		Config:                   cfg,
+		Provider:                 cp,
+		ProviderName:             env.manifest.Provider,
+		ModelName:                env.manifest.Model,
+		Offline:                  false,
+		Client:                   env.client,
+		MetadataClient:           env.client,
+		AttestationClientFactory: func() *http.Client { return &http.Client{Transport: env.client.Transport} },
+		Nonce:                    env.nonce,
+		CapturedE2EE:             fixtureE2EEResult(env.manifest.E2EE),
+		VerificationTime:         fixtureVerificationTime(&env),
 	})
 	if err != nil {
 		t.Fatalf("verify.Run: %v", err)

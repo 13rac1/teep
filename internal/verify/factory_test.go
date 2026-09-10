@@ -14,7 +14,7 @@ import (
 )
 
 func TestNewAttester(t *testing.T) {
-	cp := &config.Provider{BaseURL: "http://localhost", APIKey: "key"}
+	cp := &config.Provider{BaseURL: "https://localhost", APIKey: "key"}
 
 	t.Run("tinfoil_v3_cloud", func(t *testing.T) {
 		a, err := newAttester("tinfoil_v3_cloud", cp, false)

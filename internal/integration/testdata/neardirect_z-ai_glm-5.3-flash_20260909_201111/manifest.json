@@ -1,0 +1,22 @@
+{
+  "near_config": {
+    "origin": "https://completions.near.ai",
+    "e2ee": true
+  },
+  "near_route": {
+    "canonical": "glm-5-3-flash.completions.near.ai",
+    "index": 0,
+    "authority": "glm-5-3-flash-i0.completions.near.ai",
+    "mode": "discovered"
+  },
+  "provider": "neardirect",
+  "model": "z-ai/glm-5.3-flash",
+  "nonce_hex": "f265dbd59f4ed9c8d6f140038f052b1705cd20f7bf7ae81c5f5857a73d7dec39",
+  "captured_at": "2026-09-09T20:11:11.999627Z",
+  "duration_ms": 23584,
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE neardirect: 94 encrypted fields decrypted across 97 chunks",
+    "key_type": "ed25519"
+  }
+}

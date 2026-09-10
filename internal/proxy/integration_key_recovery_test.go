@@ -199,7 +199,7 @@ func (t *recoveryTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	status, media, body := http.StatusBadRequest, "application/json", `{"error":{"type":"bad_request","message":"Decryption failed"}}`
 	if t.name == "nearcloud" {
-		body = `{"error":{"type":"invalid_request_error","message":"Decryption failed"}}`
+		status, body = http.StatusMisdirectedRequest, cloudStaleKeyBody
 	}
 	if t.name == "tinfoil_v3_cloud" {
 		status, media, body = http.StatusUnprocessableEntity, "application/problem+json", `{"type":"urn:ietf:params:ehbp:error:key-config"}`

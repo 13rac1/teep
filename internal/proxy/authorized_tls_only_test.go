@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
 
@@ -47,7 +49,17 @@ func TestAuthorizedTLSOnlyKeyErrorsRetainAuthorization(t *testing.T) {
 				input.key = key
 				report := first.report.Clone()
 				report.Provider = tc.name
-				candidate, err := newAuthorization(key, report, "", false, false)
+				signingKey := ""
+				if tc.name == "nearcloud" {
+					session, err := e2ee.NewNearCloudSession()
+					if err != nil {
+						t.Fatal(err)
+					}
+					signingKey = session.ClientEd25519PubHex()
+					session.Zero()
+					input.provider.Preparer = nearcloud.NewPreparer("test")
+				}
+				candidate, err := newAuthorization(key, report, signingKey, false, false)
 				if err != nil {
 					t.Fatal(err)
 				}

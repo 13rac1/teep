@@ -17,8 +17,11 @@ tests.
 | Tinfoil report tests use separate model and authority parameters; explicit authority avoids discovery | `TestTinfoilIntegrationReportLookup` in [report lookup tests](../../internal/proxy/tinfoil_report_lookup_test.go) |
 | Reject SPKI mismatch before sending request bytes; enforce CT and WebPKI | `TestSPKIPinnedClientRejectsBeforeSendingRequest`, `TestSPKIPinnedClientRejectsModifiedTrust` in [pinned tests](../../internal/tlsct/pinned_test.go) |
 | HTTP/2 physical bounds, concurrent overload rejection, and recovery after stream completion | `TestHTTP2ConcurrentStreamConnectionBound` in [connection tests](../../internal/tlsct/http2_limits_test.go) |
+| Independent pools share socket admission and capture; metadata retains an independent full allowance | `TestAttestationFactorySharedBudget`, `TestAttestationFactoryFullPooledAllowance` in [factory tests](../../internal/config/attestation_client_test.go) |
+| Nested TLS transports consume the same socket allowance and release permits on cleanup | `TestNestedAttestationTransportSharesSocketBudget` in [shared budget tests](../../internal/tlsct/shared_budget_test.go) |
 | HTTP/1.1 sequential reuse; closing one HTTP/2 stream preserves another | [Stream lifetime tests](../../internal/tlsct/stream_lifetime_test.go) |
 | Provider, authority, and SPKI pool isolation | `TestAttestedPoolsRespectProviderAuthorityAndKey` in [pool tests](../../internal/proxy/tls_binding_internal_test.go) |
+| Concurrent models with shared provider configuration retain format-specific policy and E2EE binding | `TestVerifyRun_ConcurrentVeniceFormats` in [Venice format replay tests](../../internal/integration/venice_concurrent_formats_test.go) |
 | Shared verification for the same authorization key, replacement generations, invalidation during verification, age-independent reuse, eviction, and blocked reports | [Authorization tests](../../internal/proxy/authorization_internal_test.go) |
 | Caller deadlines stop waiting for a connection, buffered response processing, and downstream writes | [Authorization wait tests](../../internal/proxy/authorization_wait_test.go), [response lifetime tests](../../internal/proxy/response_lifetime_test.go) |
 | Exact rejection recognition, duplicate-member rejection, bounded parsing, body ownership, and unsupported endpoints | [Rejection tests](../../internal/provider/key_rejection_test.go), [duplicate-member tests](../../internal/provider/key_rejection_duplicates_test.go) |
@@ -52,10 +55,18 @@ tests.
 | --- | --- |
 | TUF verification cancellation reaches headers, body reads, and subsequent downloads without canceling other operations | `TestTrustedRootVerificationCancellation` |
 | Captured backend and gateway SEV evidence passes production verification | `TestVerifyRun_Tinfoil_Fixture` |
-| Delayed discovery callers reuse a newly published mapping; stale mappings still require refresh | `TestDiscoveryDelayedRefresh` in both NEAR direct and Tinfoil |
+| Tinfoil delayed discovery callers reuse a newly published mapping | `TestDiscoveryDelayedRefresh` in Tinfoil |
+| Established NEAR routes never refresh metadata; caller cancellation cannot cancel shared selection | `TestEstablishedSelectionSurvivesMetadataExpiry`, `TestSelectionWaiterCancellationAndShutdown`, `TestSelectionAcquiredSnapshotsSurviveReplacement` |
+| Pooled, fresh, unreserved, and nested collateral transports align dial admission; queued cancellation retains admitted TLS handshakes and subsequent requests complete; cleanup releases all physical socket permits within a bounded wait for asynchronous dial completion | `TestAttestationTransportAdmissionAlignment` in [admission tests](../../internal/tlsct/attestation_alignment_test.go) |
+| Metadata failures delay new work without extending the delay; concurrent recovery shares one fetch; cancellation and capacity failures create no delay | `TestMetadataFailureDelayRecovery`, `TestMetadataCanceledAndCapacityFetchesDoNotDelayRecovery`, `TestMetadataOwnerCancellationDoesNotInstallDelay` |
+| Inference and Explore preserve route error classifications, retry advice, and cached authorization under concurrent use | `TestRouteErrorResponsesPreserveAuthorization` |
+| Standalone TLS-only probes retry only eligible connection-establishment failures, at most once | `TestStandaloneTLSOnlyConnectionRetry` |
+| Fresh NEAR fetches use independent connections within reserved aggregate capacity | `TestDirectFetchOwnsFreshConnections`, `TestAttestationFactoryReservesFreshCapacity`, `TestReservedBudgetAcrossHTTPSProxyOrigins` |
+| Offline TLS index remapping and late trust failures preserve replacement generations; eviction retains the selected route | `TestAuthorizedNearDirectRemappingPreservesReplacement`, `TestAuthorizationNearDirectEvictionRetainsSelection` in [lifecycle unit tests](../../internal/proxy/neardirect_lifecycle_test.go); synthetic parser evidence does not establish signed-quote admission |
+| Live eviction joins one full online verification without rediscovery or changing the selected route | `TestIntegration_NearDirectAuthorizationEviction` in [eviction integration](../../internal/proxy/integration_neardirect_eviction_test.go) |
 | Concurrent key rejections run one shared full online re-attestation, create fresh retry sessions, and preserve replacement authorization against a delayed rejection | `TestIntegration_NearDirectKeyRecovery`, `TestIntegration_NearCloudKeyRecovery`, `TestIntegration_TinfoilKeyRecovery` |
 | Router verification is shared across models while report outcomes remain separate and bounded | `TestAuthorizationRouterSharesVerificationAcrossModels`, `TestAuthorizationRouterModelViewsBounded` |
-| TLS-only key-error envelopes retain authorization without retry under concurrent use | `TestAuthorizedTLSOnlyKeyErrorsRetainAuthorization` |
+| Ordinary TLS-only key-error envelopes (excluding the exact NearCloud 421) retain authorization without retry under concurrent use | `TestAuthorizedTLSOnlyKeyErrorsRetainAuthorization` |
 | Ambiguous rejection envelopes fail concurrent requests without replay or authorization invalidation | `TestAuthorizedDuplicateRejectionRetainsAuthorization` |
 | NEAR discovery uses the injected client's transport and releases idle connections with owner cleanup | `TestAttesterDiscoveryUsesOwnedClient` |
 | SEV report and certificate signature failures reject admission under concurrent verification | `TestSEVOnlineRequiresAuthenticatedEvidence` |
@@ -110,7 +121,10 @@ excluded suites in the PR rather than treating an incomplete run as success.
 Run the transport, authorization, request preparation, and standalone tests
 with the race detector on the minimum supported Go version and the other
 versions in [CI](../../.github/workflows/ci.yml). The CI matrix is the
-maintained version list. The same matrix checks upstream TDX certificate-time
+maintained version list. The matrix runs all short tests in the transport, proxy,
+provider (including subpackages), configuration, and standalone verification
+packages. It does not filter test names, so new admission and resolver regressions
+remain included. The same matrix checks upstream TDX certificate-time
 rejection in [TDX admission tests](../../internal/attestation/tdx_admission_test.go)
 and NRAS time claims in `TestNVIDIAJWTLeeway`.
 `TestAuthorizationNRASAdmissionAndReuse` verifies publication-time rejection and
@@ -150,3 +164,20 @@ failures cannot extend a cooldown or remove replacement authorization.
 `TestReportLookupDoesNotObserveModels` verifies that concurrent report queries
 leave authorization recency and observed inference models unchanged, and return
 independent report snapshots.
+
+## NearCloud routing and stale keys
+
+- `TestNearModelKeyConcurrentSessionReuse` checks that two models share their own immutable conversions across concurrent requests while session keys remain fresh and cross-model decryption fails.
+- [Preparer tests](../../internal/provider/nearcloud/preparer_test.go) cover concurrent authenticated headers, canonical encoding, TLS-only preparation, and production encryption.
+- [Admission tests](../../internal/proxy/authorization_near_keys_test.go) and [signed replay tests](../../internal/verify/near_capture_test.go) reject unbound TLS-only routing keys even with a factor allowance.
+- [Stale-key tests](../../internal/proxy/nearcloud_stale_key_test.go) cover TLS-only invalidation without replay, late-generation isolation, and encrypted retries using an already-published replacement and fresh session.
+- [Image policy tests](../../internal/proxy/nearcloud_image_policy_test.go) retain authorization and gateway connections across generic failures.
+- [Mixed-key gateway tests](../../internal/proxy/nearcloud_affinity_test.go) exercise honored hints, disabled affinity, empty maps, and unknown groups with concurrent streaming and non-streaming clients. The production encryption path blocks decryption by the wrong backend key; unauthenticated responses fail without replay. TLS-only success does not establish E2EE success.
+- `TestIntegration_NearCloudKeyRecovery` exercises the exact 421 envelope with full online verification and real encrypted recovery.
+
+NearCloud positive replay uses the capture from 2026-09-10, whose recorded TLS
+peer matches the reported fingerprint. The earlier capture from 2026-09-09 at
+20:40:25 records a mismatch and is retained for
+`TestReverifyRejectsCapturedGatewaySPKIMismatch` in
+[reverify TLS tests](../../cmd/teep/reverify_tls_test.go). Production replay must
+reject that evidence before inference; fixture tests do not waive TLS binding.

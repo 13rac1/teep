@@ -22,6 +22,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 	"golang.org/x/net/http2"
@@ -219,7 +220,7 @@ func TestAuthorizedReportLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.providers = map[string]*provider.Provider{"neardirect": {Name: "neardirect", UsesTLSBinding: true, StaticRoute: route}}
+	server.providers = map[string]*provider.Provider{"neardirect": {Name: "neardirect", UsesTLSBinding: true, StaticRoute: route, Attester: neardirect.NewAttester(route.BaseURL(), "test")}}
 	loadTestAuthorization(t, server.authorizations, key, value)
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.test/report?provider=neardirect&model=model", http.NoBody)
 	rec := newInferenceRecorder()

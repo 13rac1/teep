@@ -113,6 +113,15 @@ func serveNearMultiplexRequest(t *testing.T, w http.ResponseWriter, r *http.Requ
 		http.Error(w, "unknown route", http.StatusBadRequest)
 		return
 	}
+	hint := r.Header.Get("X-Model-Pub-Key")
+	if name == "nearcloud" {
+		if len(r.Header.Values("X-Model-Pub-Key")) != 1 || subtle.ConstantTimeCompare([]byte(hint), []byte(key.edPubHex)) != 1 {
+			t.Error("gateway did not receive the acquired model key")
+		}
+	} else if hint != "" {
+		t.Error("direct request acquired a gateway routing hint")
+	}
+
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	mock := &mockNearUpstream{keys: key, providerName: name}
 	mock.serve(w, r, true)

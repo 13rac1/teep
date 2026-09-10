@@ -27,11 +27,15 @@ type connectionBudgets struct {
 }
 
 type connectionBudget struct {
-	slots chan struct{}
-	users int
+	active int
+	pooled int
 }
 
 func (b *connectionBudgets) dial(ctx context.Context, network, address string, limit int) (net.Conn, error) {
+	return b.dialWithShare(ctx, network, address, limit, 0)
+}
+
+func (b *connectionBudgets) dialWithShare(ctx context.Context, network, address string, limit, pooledLimit int) (net.Conn, error) {
 	if limit <= 0 {
 		return nil, errors.New("connection limit must be positive")
 	}
@@ -40,24 +44,20 @@ func (b *connectionBudgets) dial(ctx context.Context, network, address string, l
 	if err := setup.Err(); err != nil {
 		return nil, err
 	}
-	group := b.reference(address, limit)
-	select {
-	case group.slots <- struct{}{}:
-	default:
-		// A completed HTTP/2 stream does not release a socket permit. Waiting
-		// here would strand the dial even after a connection can accept streams.
-		b.release(address, group, false)
-		return nil, ErrConnectionCapacity
+	group, err := b.acquire(address, limit, pooledLimit)
+	if err != nil {
+		return nil, err
 	}
 	conn, err := b.dialer.DialContext(setup, network, address)
 	if err != nil {
-		b.release(address, group, true)
+		b.release(address, group, pooledLimit > 0)
 		return nil, err
 	}
-	return &budgetedConnection{Conn: conn, release: func() { b.release(address, group, true) }}, nil
+	return &budgetedConnection{Conn: conn, release: func() { b.release(address, group, pooledLimit > 0) }}, nil
 }
 
-func (b *connectionBudgets) reference(address string, limit int) *connectionBudget {
+// acquire admits aggregate and pooled-share permits atomically, without a queue.
+func (b *connectionBudgets) acquire(address string, limit, pooledLimit int) (*connectionBudget, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.hosts == nil {
@@ -65,21 +65,27 @@ func (b *connectionBudgets) reference(address string, limit int) *connectionBudg
 	}
 	group := b.hosts[address]
 	if group == nil {
-		group = &connectionBudget{slots: make(chan struct{}, limit)}
-		b.hosts[address] = group
+		group = &connectionBudget{}
 	}
-	group.users++
-	return group
+	if group.active >= limit || (pooledLimit > 0 && group.pooled >= pooledLimit) {
+		return nil, ErrConnectionCapacity
+	}
+	group.active++
+	if pooledLimit > 0 {
+		group.pooled++
+	}
+	b.hosts[address] = group
+	return group, nil
 }
 
-func (b *connectionBudgets) release(address string, group *connectionBudget, acquired bool) {
-	if acquired {
-		<-group.slots
-	}
+func (b *connectionBudgets) release(address string, group *connectionBudget, pooled bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	group.users--
-	if group.users == 0 {
+	group.active--
+	if pooled {
+		group.pooled--
+	}
+	if group.active == 0 {
 		delete(b.hosts, address)
 	}
 }

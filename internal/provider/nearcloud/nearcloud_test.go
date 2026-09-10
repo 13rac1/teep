@@ -16,11 +16,12 @@ import (
 func minimalGatewayJSON(model, nonceHex, spkiHash string) string {
 	return fmt.Sprintf(`{
 		"gateway_attestation": {
+"signing_address":"ab", "signing_algo":"ecdsa", "report_data":"ab", "vpc":{"vpc_server_app_id":"ab","vpc_hostname":"test.internal"},
 			"request_nonce": %q,
 			"intel_quote": "",
-			"event_log": "",
+			"event_log": "[]",
 			"tls_cert_fingerprint": %q,
-			"info": {
+			"info": {"app_name":"app","compose_hash":"ab","os_image_hash":"ab","device_id":"ab",
 				"tcb_info": "{\"app_compose\":\"test-compose\"}"
 			}
 		},
@@ -33,7 +34,8 @@ func minimalGatewayJSON(model, nonceHex, spkiHash string) string {
 				"signing_address": "0xtest",
 				"signing_algo": "ecdsa",
 				"tls_cert_fingerprint": %q,
-				"request_nonce": %q
+				"request_nonce": %q,
+"event_log":[],"info":{"app_name":"app","compose_hash":"ab","os_image_hash":"ab","device_id":"ab","tcb_info":{"app_compose":"test-compose"}}
 			}
 		]
 	}`, nonceHex, spkiHash, model, spkiHash, nonceHex)
@@ -69,18 +71,7 @@ func TestParseGatewayResponse_HappyPath(t *testing.T) {
 }
 
 func TestParseGatewayResponse_EventLog(t *testing.T) {
-	body := []byte(`{
-		"gateway_attestation": {
-			"request_nonce": "abc",
-			"intel_quote": "",
-			"event_log": "[{\"imr\":0,\"digest\":\"abc123\",\"event_type\":1,\"event\":\"\",\"event_payload\":\"\"}]",
-			"tls_cert_fingerprint": "fp",
-			"info": {"tcb_info": "{}"}
-		},
-		"model_attestations": [
-			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
-		]
-	}`)
+	body := cloudTestResponse(t, map[string]any{"event_log": `[{"imr":0,"digest":"abc123","event_type":1,"event":"","event_payload":""}]`})
 
 	gw, _, err := nearcloud.ParseGatewayResponse(context.Background(), body, "m")
 	if err != nil {
@@ -105,24 +96,13 @@ func TestParseGatewayResponse_EmptyEventLog(t *testing.T) {
 		t.Fatalf("ParseGatewayResponse: %v", err)
 	}
 	t.Logf("event log: %v", gw.EventLog)
-	if gw.EventLog != nil {
+	if len(gw.EventLog) != 0 {
 		t.Errorf("EventLog = %v, want nil", gw.EventLog)
 	}
 }
 
 func TestParseGatewayResponse_MalformedEventLog(t *testing.T) {
-	body := []byte(`{
-		"gateway_attestation": {
-			"request_nonce": "abc",
-			"intel_quote": "",
-			"event_log": "{not an array}",
-			"tls_cert_fingerprint": "fp",
-			"info": {"tcb_info": "{}"}
-		},
-		"model_attestations": [
-			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
-		]
-	}`)
+	body := cloudTestResponse(t, map[string]any{"event_log": `{not an array}`})
 
 	_, _, err := nearcloud.ParseGatewayResponse(context.Background(), body, "m")
 	t.Logf("error: %v", err)
@@ -136,25 +116,14 @@ func TestParseGatewayResponse_MalformedEventLog(t *testing.T) {
 
 func TestParseGatewayResponse_MalformedEventLogEntry(t *testing.T) {
 	// Valid JSON array but entry has wrong type for a field.
-	body := []byte(`{
-		"gateway_attestation": {
-			"request_nonce": "abc",
-			"intel_quote": "",
-			"event_log": "[{\"imr\":\"not-an-int\"}]",
-			"tls_cert_fingerprint": "fp",
-			"info": {"tcb_info": "{}"}
-		},
-		"model_attestations": [
-			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
-		]
-	}`)
+	body := cloudTestResponse(t, map[string]any{"event_log": `[{"imr":"not-an-int"}]`})
 
 	_, _, err := nearcloud.ParseGatewayResponse(context.Background(), body, "m")
 	t.Logf("error: %v", err)
 	if err == nil {
 		t.Fatal("expected error for malformed event log entry")
 	}
-	if !strings.Contains(err.Error(), "event_log entry") {
+	if !strings.Contains(err.Error(), "event_log[0]") {
 		t.Errorf("error should mention event_log entry: %v", err)
 	}
 }
@@ -170,24 +139,13 @@ func TestParseGatewayResponse_EventLogTooManyEntries(t *testing.T) {
 	}
 	sb.WriteString("]")
 
-	body := fmt.Appendf(nil, `{
-		"gateway_attestation": {
-			"request_nonce": "abc",
-			"intel_quote": "",
-			"event_log": %q,
-			"tls_cert_fingerprint": "fp",
-			"info": {"tcb_info": "{}"}
-		},
-		"model_attestations": [
-			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
-		]
-	}`, sb.String())
+	body := cloudTestResponse(t, map[string]any{"event_log": sb.String()})
 
 	_, _, err := nearcloud.ParseGatewayResponse(context.Background(), body, "m")
 	if err == nil {
 		t.Fatal("expected error for oversized gateway event_log")
 	}
-	if !strings.Contains(err.Error(), "event_log has") {
+	if !strings.Contains(err.Error(), "event_log") {
 		t.Errorf("error should mention event_log entry limit: %v", err)
 	}
 }
@@ -200,7 +158,7 @@ func TestParseGatewayResponse_TooManyModelAttestations(t *testing.T) {
 		}
 		sb.WriteString(`{}`)
 	}
-	body := fmt.Appendf(nil, `{"gateway_attestation":{},"model_attestations":[%s]}`, sb.String())
+	body := cloudModelsResponse(t, []byte("["+sb.String()+"]"))
 
 	_, _, err := nearcloud.ParseGatewayResponse(context.Background(), body, "model")
 	if err == nil {
@@ -220,18 +178,7 @@ func TestParseGatewayResponse_MalformedJSON(t *testing.T) {
 }
 
 func TestParseGatewayResponse_MalformedTCBInfo(t *testing.T) {
-	body := []byte(`{
-		"gateway_attestation": {
-			"request_nonce": "abc",
-			"intel_quote": "",
-			"event_log": "",
-			"tls_cert_fingerprint": "fp",
-			"info": {"tcb_info": "{not valid json}"}
-		},
-		"model_attestations": [
-			{"model_name": "m", "request_nonce": "abc", "signing_public_key": "04aaaa", "signing_address": "0x1", "signing_algo": "ecdsa"}
-		]
-	}`)
+	body := cloudTestResponse(t, map[string]any{"info": map[string]any{"app_name": "app", "compose_hash": "ab", "os_image_hash": "ab", "device_id": "ab", "tcb_info": "{not valid json}"}})
 
 	_, _, err := nearcloud.ParseGatewayResponse(context.Background(), body, "m")
 	t.Logf("error: %v", err)
@@ -248,7 +195,7 @@ func TestParseGatewayResponse_NoModel(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing model")
 	}
-	if !strings.Contains(err.Error(), "model-b") {
+	if !strings.Contains(err.Error(), "requested model") {
 		t.Errorf("error should mention requested model: %v", err)
 	}
 }
@@ -261,14 +208,16 @@ func TestExtractGatewayAppCompose(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:  "nil input",
-			input: nil,
-			want:  "",
+			name:    "nil input",
+			input:   nil,
+			want:    "",
+			wantErr: true,
 		},
 		{
-			name:  "empty input",
-			input: []byte{},
-			want:  "",
+			name:    "empty input",
+			input:   []byte{},
+			want:    "",
+			wantErr: true,
 		},
 		{
 			name:  "raw JSON object with app_compose",
@@ -281,9 +230,10 @@ func TestExtractGatewayAppCompose(t *testing.T) {
 			want:  "wrapped-compose",
 		},
 		{
-			name:  "object missing app_compose",
-			input: []byte(`{"other":"field"}`),
-			want:  "",
+			name:    "object missing app_compose",
+			input:   []byte(`{"other":"field"}`),
+			want:    "",
+			wantErr: true,
 		},
 		{
 			name:    "invalid JSON",

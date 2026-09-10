@@ -21,6 +21,8 @@ import (
 // invariant that catches the same fault from the other side.
 func TestFetchAndVerify_VerifiesGatewayEvidence(t *testing.T) {
 	s := newMinimalServer()
+	s.attestClient = config.NewAttestationClient(false)
+	t.Cleanup(s.attestClient.CloseIdleConnections)
 	s.cfg = &config.Config{}
 	s.tinfoilSEVVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
 		if len(report) == 0 {
@@ -76,6 +78,8 @@ func TestFetchAndVerify_VerifiesGatewayEvidence(t *testing.T) {
 func TestFetchAndVerify_GatewaySuppliesSupplyChainResult(t *testing.T) {
 	var gotReportBytes []byte
 	s := newMinimalServer()
+	s.attestClient = config.NewAttestationClient(false)
+	t.Cleanup(s.attestClient.CloseIdleConnections)
 	s.cfg = &config.Config{Offline: true}
 	s.tinfoilSEVVerifier = func(_ context.Context, report []byte) *attestation.SEVVerifyResult {
 		gotReportBytes = report
@@ -122,6 +126,8 @@ func TestFetchAndVerify_GatewaySuppliesSupplyChainResult(t *testing.T) {
 // CI, so the decision is asserted here without a network.
 func TestFetchAndVerify_GatewayProviderActivatesE2EE(t *testing.T) {
 	s := newMinimalServer()
+	s.attestClient = config.NewAttestationClient(false)
+	t.Cleanup(s.attestClient.CloseIdleConnections)
 	s.cfg = &config.Config{Offline: true}
 	s.tinfoilSEVVerifier = func(_ context.Context, _ []byte) *attestation.SEVVerifyResult {
 		return &attestation.SEVVerifyResult{Measurement: make([]byte, 48)}
@@ -187,6 +193,8 @@ func TestGatewayBindsE2EEKey(t *testing.T) {
 // in KnownFactors, so no allow_fail list can excuse it.
 func TestFetchAndVerify_VerifiesGatewayTDXEvidence(t *testing.T) {
 	s := newMinimalServer()
+	s.attestClient = config.NewAttestationClient(false)
+	t.Cleanup(s.attestClient.CloseIdleConnections)
 	s.cfg = &config.Config{Offline: true}
 	s.verifyQuote = attestation.NewTDXVerifier(true, nil, time.Time{})
 
@@ -215,6 +223,8 @@ func TestFetchAndVerify_VerifiesGatewayTDXEvidence(t *testing.T) {
 
 func TestFetchAndVerify_PreservesGatewayEventLog(t *testing.T) {
 	s := newMinimalServer()
+	s.attestClient = config.NewAttestationClient(false)
+	t.Cleanup(s.attestClient.CloseIdleConnections)
 	s.cfg = &config.Config{Offline: true}
 	entries := []attestation.EventLogEntry{{IMR: 0, Digest: strings.Repeat("ab", 48)}}
 	rtmrs, err := attestation.ReplayEventLog(entries)

@@ -123,7 +123,7 @@ func NewPreparer(apiKey string) *Preparer {
 }
 
 // PrepareRequest injects the Authorization header into req.
-func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string) error {
+func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string, _ provider.PreparationData) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	return nil
 }

@@ -1,14 +1,15 @@
 package neardirect
 
-import "encoding/json"
+import "github.com/13rac1/teep/internal/provider/nearparse"
 
-// ExtractAppCompose exposes tcbInfo unmarshalling for external tests.
+// ExtractAppCompose exposes the shared TCB decoder for external tests.
 func ExtractAppCompose(data []byte) string {
-	if len(data) == 0 {
+	object, err := nearparse.EncodedObject(data)
+	if err != nil {
 		return ""
 	}
-	var t tcbInfo
-	if err := json.Unmarshal(data, &t); err != nil {
+	var t nearparse.TCB
+	if _, err := nearparse.Object(object, &t, "tcb_info"); err != nil {
 		return ""
 	}
 	return t.AppCompose
