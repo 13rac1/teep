@@ -21,6 +21,7 @@ tests.
 | Nested TLS transports consume the same socket allowance and release permits on cleanup | `TestNestedAttestationTransportSharesSocketBudget` in [shared budget tests](../../internal/tlsct/shared_budget_test.go) |
 | HTTP/1.1 sequential reuse; closing one HTTP/2 stream preserves another | [Stream lifetime tests](../../internal/tlsct/stream_lifetime_test.go) |
 | Provider, authority, and SPKI pool isolation | `TestAttestedPoolsRespectProviderAuthorityAndKey` in [pool tests](../../internal/proxy/tls_binding_internal_test.go) |
+| Concurrent models with shared provider configuration retain format-specific policy and E2EE binding | `TestVerifyRun_ConcurrentVeniceFormats` in [Venice format replay tests](../../internal/integration/venice_concurrent_formats_test.go) |
 | Shared verification for the same authorization key, replacement generations, invalidation during verification, age-independent reuse, eviction, and blocked reports | [Authorization tests](../../internal/proxy/authorization_internal_test.go) |
 | Caller deadlines stop waiting for a connection, buffered response processing, and downstream writes | [Authorization wait tests](../../internal/proxy/authorization_wait_test.go), [response lifetime tests](../../internal/proxy/response_lifetime_test.go) |
 | Exact rejection recognition, duplicate-member rejection, bounded parsing, body ownership, and unsupported endpoints | [Rejection tests](../../internal/provider/key_rejection_test.go), [duplicate-member tests](../../internal/provider/key_rejection_duplicates_test.go) |

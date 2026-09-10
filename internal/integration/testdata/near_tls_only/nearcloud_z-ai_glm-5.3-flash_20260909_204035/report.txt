@@ -34,6 +34,7 @@ Tier 2: Binding & Crypto
   ✓ nvidia_nras_verified              NRAS: true (JWT verified)  [ENFORCED]
   ✓ e2ee_capable                      enclave ed25519 public key valid; E2EE key exchange possible (ed25519)  [ENFORCED]
   - e2ee_usable                       E2EE not configured for this provider  [ALLOWED]
+  — aci_key_custody                   not ACI/1 format
   ✓ tls_inference                     TLS-only streaming chat probe succeeded; no E2EE test performed  [ENFORCED]
 
 Tier 3: Supply Chain & Channel Integrity
@@ -68,6 +69,6 @@ Tier 4: Gateway Attestation
   — gateway_tee_tcb_current           TCB minimums for a TDX gateway are checked by the Intel PCS collateral
   — gateway_tee_tcb_not_revoked       TDX revocation is checked by the Intel PCS collateral
 
-Score: 41/47 passed, 1 skipped, 5 failed (0 enforced, 5 allowed), 4 n/a
+Score: 41/47 passed, 1 skipped, 5 failed (0 enforced, 5 allowed), 5 n/a
 
 Run 'teep help tiers' for scoring or 'teep help factors' for details.
