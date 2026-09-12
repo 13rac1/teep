@@ -259,12 +259,27 @@ For TOML configuration, enforcement policies, and measurement allowlists, see [R
 ## Development
 
 ```bash
-make           # build
+make           # check agent instructions and show help
+make build     # build
 make test      # run tests with race detector
 make test-live # run live network tests (requires internet)
 make lint      # golangci-lint (strict config)
 make check     # fmt + vet + lint + test
 ```
+
+### Ensure AGENTS.md is followed
+
+The repository has an `AGENTS.md` file, and not a `CLAUDE.md` file, on
+principle.
+
+Anthropic has [persistently refused](https://github.com/anthropics/claude-code/issues/6235) to [support AGENTS.md](https://github.com/anthropics/claude-code/issues/31005). At this point, there is very little explaination for their foot dragging, other than to force projects
+to choose between either advertising for them by adding a CLAUDE.md file, or accepting undirected submissions from their [sabotage](https://yellow.com/news/claude-fable-5-silently-sabotaging-ai-work)-[prone](https://arstechnica.com/tech-policy/2026/07/anthropic-outed-for-claude-tracker-that-secretly-monitored-chinese-users/) [anti-competitive](https://github.com/anthropics/claude-code/issues/53171) code agent harness.
+
+Therefore, all Makefile build, help, and test targets ensure that when they are
+invoked from Claude Code, a local non-tracked `CLAUDE.md` file exists as a
+symlink to `AGENTS.md`.
+
+Keep the symlink local with an entry in Git's `.git/info/exclude`, not `.gitignore`.
 
 ## License
 
