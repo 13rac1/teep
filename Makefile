@@ -7,6 +7,12 @@ LDFLAGS  = -X main.Version=$(VERSION) -X main.Commit=$(COMMIT)
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-22s %s\n", $$1, $$2}'
 
+.PHONY: check-agent-instructions
+help build build-debug check: check-agent-instructions
+
+check-agent-instructions: ## Handle https://github.com/anthropics/claude-code/issues/31005
+	go test -count=1 -race ./cmd/teep -run '^TestAgentInstructions(Untracked)?$$'
+
 build: ## Build the teep binary
 	go build -ldflags "$(LDFLAGS)" -trimpath -o teep ./cmd/teep
 
