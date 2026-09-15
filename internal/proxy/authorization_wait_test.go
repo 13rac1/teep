@@ -94,6 +94,13 @@ func TestCallerDeadlineStopsConnectionWait(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 			t.Fatalf("caller deadline did not stop wait: %v", err)
 		}
+		if result.outcome.trace == nil {
+			t.Fatal("missing attempt timing")
+		}
+		fields := result.outcome.trace.TimingDiagnostics()
+		if fields[0] != "failure_phase" || fields[1] != "connection_acquire" {
+			t.Fatalf("incorrect queued request phase: %v", fields)
+		}
 		if inference.Load() != 0 {
 			t.Fatal("canceled request sent inference")
 		}

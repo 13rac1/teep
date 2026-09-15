@@ -423,6 +423,14 @@ proxy address, including tunnels for different origin authorities.
 
 ## Inference diagnostics
 
+These diagnostics apply to the shared TLS-bound authorization handler
+(`UsesTLSBinding`): NEAR Direct, NEAR Cloud, Tinfoil cloud, and Tinfoil direct.
+They apply with either HTTP/2 or HTTP/1.1. Other providers keep their existing
+relay diagnostics. A provider migrated to this handler inherits the diagnostics
+without provider-specific logging code. Enabling HTTP/2 alone does not select
+this handler; migration must satisfy its route, authorization, and TLS identity
+contracts. See the [provider migration tests](testing.md).
+
 DEBUG records identify when shared verification starts and when a caller receives
 its result. `authorization_verification_shared` means multiple callers joined
 the same singleflight operation, including callers that subsequently canceled.
@@ -431,7 +439,11 @@ verification success. A cache hit does not emit these verification records.
 
 Fresh authorization publication emits an INFO record with provider, model,
 authority, accepted public SPKI fingerprint, publication time, and generation.
-Origin trust failures include the generation used and whether that generation
+Inference failure warnings include the authority, generation used, and publication
+time when authorization was acquired. Caller cancellation includes these fields
+in the completion record. Successful completion also includes the authority,
+generation used, and publication time, including the replacement used after a
+retry. Origin trust failures also state whether that generation
 was removed. SPKI mismatch warnings also include the TLS SNI and expected and
 observed public SPKI fingerprints. A late failure can therefore be distinguished
 from removal of the current generation. These records do not contain inference
@@ -455,3 +467,54 @@ the caller context from the upstream operation. A reported trust or decryption
 failure remains a warning even when the caller context has also been canceled.
 Cancellation retains the existing authorization and retry behavior. Allowed
 factor failures still produce warnings on fresh verification.
+
+Failed and canceled inference completion records include `failure_phase` and
+available `connection_acquire`, `tls_handshake`, `response_header_wait`, and
+`upstream_protocol` fields. Failures before authorization is acquired use
+`failure_phase=authorization`. Connection acquisition includes dialing and TLS;
+these durations overlap and must not be summed. `response_header_wait` starts
+at Go's successful `WroteRequest` callback and stops when response headers arrive.
+It is omitted when no successful write callback has been observed, including
+when an early HTTP/2 rejection aborts the request body write.
+For HTTP/1.1, this callback can run before the final transport buffer flush, so
+the interval can include a blocked or failed request write. Before response
+headers arrive, the phase after this callback is `response_headers` only for
+confirmed HTTP/2 connections. HTTP/1.1 and unknown protocols use
+`request_write_or_response_headers` because tracing cannot distinguish the two.
+A body-processing failure does not extend the recorded header wait. TLS time
+measures elapsed time with at least one active origin handshake reported by
+net/http for the application attempt, including speculative dials and
+transport-internal retries. Overlapping handshakes count once; this is not the
+sum of individual handshake durations. It does not measure
+an HTTPS forward proxy's outer handshake separately. A reused connection needs
+no handshake, but a speculative dial can still contribute TLS time. After a
+repeated connection acquisition, pending establishment is reported as
+`connection_acquire`: late TLS callbacks cannot reliably identify which
+acquisition they describe. Protocol comes from the assigned connection or
+response, not speculative handshake completion. Both use `HTTP/2.0` or
+`HTTP/1.1` when those protocols are known.
+
+Socket diagnostics accompany the WARN failure record, or the INFO completion
+record for caller cancellation. Trace callbacks can overlap and complete after a
+request ends; snapshots are synchronized.
+The final attempt supplies these diagnostics; the existing top-level durations
+continue to accumulate across application retries. Completion records include
+`inference_attempts` and `inference_timeout_budget`. The budget is the remaining
+time at logical request creation, limited by both the configured upstream timeout
+and the caller deadline. `upstream_status_code` records received response status,
+including HTTP rejections classified in the response-body phase. Errors
+encountered while copying non-200 response bodies appear alongside the HTTP
+status in the failure warning. Retry records
+also include the rejected response status when available. Retries scheduled after connection establishment failures
+or model-key rejection emit the attempt number, `retry_reason`, error, authorization
+identity, and available timing and connection fields from the failed attempt. A retry
+reason records the decision to retry, not a guarantee that the next attempt
+starts before the caller cancels.
+
+Regression coverage: [SPKI rejection](../../internal/tlsct/pinned_test.go),
+[failed-handshake diagnostics](../../internal/tlsct/connection_diagnostics_test.go),
+[proxy peer attribution](../../internal/tlsct/pinned_proxy_test.go),
+[cancellation classification](../../internal/proxy/authorized_logging_test.go),
+[emitted inference diagnostics](../../internal/proxy/authorized_diagnostic_logging_test.go),
+[connection waiting](../../internal/proxy/authorization_wait_test.go), and
+[header waiting and reuse](../../internal/tlsct/inference_timing_test.go).

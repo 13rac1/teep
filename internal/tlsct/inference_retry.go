@@ -14,14 +14,26 @@ import (
 type InferenceAttempt struct {
 	assigned    atomic.Bool
 	connections attemptConnections
+	timing      inferenceTiming
 }
 
 // Context attaches the per-attempt connection assignment trace.
 func (a *InferenceAttempt) Context(ctx context.Context) context.Context {
-	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
-		a.assigned.Store(true)
-		a.connections.gotConn(info.Conn, info.Reused)
-	}})
+	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GetConn: func(string) { a.timing.getConn() },
+		GotConn: func(info httptrace.GotConnInfo) {
+			a.assigned.Store(true)
+			a.connections.gotConn(info.Conn, info.Reused)
+			protocol := ""
+			if conn, ok := info.Conn.(*tls.Conn); ok {
+				protocol = conn.ConnectionState().NegotiatedProtocol
+			}
+			a.timing.gotConn(protocol)
+		},
+		TLSHandshakeStart: a.timing.tlsStart,
+		TLSHandshakeDone:  func(_ tls.ConnectionState, _ error) { a.timing.tlsDone() },
+		WroteRequest:      func(info httptrace.WroteRequestInfo) { a.timing.wroteRequest(info.Err) },
+	})
 }
 
 // RetryConnectionFailure accepts only typed establishment failures before

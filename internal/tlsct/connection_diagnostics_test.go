@@ -43,6 +43,10 @@ func TestFailedHandshakeHasNoAssignedConnection(t *testing.T) {
 					t.Errorf("missing mismatch: %v", err)
 					return
 				}
+				timing := diagnosticFields(attempt.TimingDiagnostics())
+				if timing["failure_phase"] != "tls_handshake" {
+					t.Errorf("incorrect handshake phase: %v", timing)
+				}
 				fields := diagnosticFields(attempt.ConnectionDiagnostics())
 				if fields["connection_assigned"] != false || fields["remote_addr"] != nil {
 					t.Errorf("incorrect failed handshake diagnostics: %v", fields)

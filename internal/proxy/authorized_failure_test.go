@@ -188,7 +188,13 @@ func TestAuthorizedCancellationRetainsSharedAuthorization(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		outcome := server.handleAuthorizedEndpoint(ctx, cancelResponseWriter{newInferenceRecorder(), cancel}, input)
-		if outcome.status != "canceled" || len(outcome.summary) != 2 || outcome.summary[1] != "caller" {
+		caller := false
+		for i := 0; i < len(outcome.summary); i += 2 {
+			if outcome.summary[i] == "cancellation_source" && outcome.summary[i+1] == "caller" {
+				caller = true
+			}
+		}
+		if outcome.status != "canceled" || !caller {
 			t.Fatalf("status=%q", outcome.status)
 		}
 		value, ok := server.authorizations.acquire(input.key)
