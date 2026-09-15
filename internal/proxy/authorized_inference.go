@@ -96,6 +96,7 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 			removed := s.authorizations.deleteGeneration(input.key, value.generation)
 			result.outcome.diagnostics = authorizationFailureDiagnostics(value, err, removed)
 		}
+		result.outcome.diagnostics = append(result.outcome.diagnostics, trace.ConnectionDiagnostics()...)
 		cleanupAuthorized(ur)
 		result.upstream = nil
 		return result, retry, err

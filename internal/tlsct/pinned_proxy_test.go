@@ -99,12 +99,22 @@ func TestPinnedHTTPSProxyConcurrentHTTP2(t *testing.T) {
 		}
 		defer client.CloseIdleConnections()
 		send := func() {
-			resp, err := client.Get(origin.URL)
+			attempt := &InferenceAttempt{}
+			req, err := http.NewRequestWithContext(attempt.Context(t.Context()), http.MethodGet, origin.URL, http.NoBody)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			resp, err := client.Do(req)
 			if err != nil {
 				t.Error(err)
 				return
 			}
 			resp.Body.Close()
+			fields := diagnosticFields(attempt.ConnectionDiagnostics())
+			if fields["remote_addr"] != proxy.Listener.Addr().String() {
+				t.Errorf("assigned address must identify the proxy: %v", fields)
+			}
 			if resp.StatusCode != http.StatusNoContent {
 				t.Error("unexpected origin status")
 			}
@@ -164,7 +174,8 @@ func TestPinnedHTTPSProxyRejectsTrustFailures(t *testing.T) {
 				}
 				defer client.CloseIdleConnections()
 				body := &countingReader{}
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, origin.URL, io.NopCloser(body))
+				attempt := &InferenceAttempt{}
+				req, err := http.NewRequestWithContext(attempt.Context(t.Context()), http.MethodPost, origin.URL, io.NopCloser(body))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -174,6 +185,10 @@ func TestPinnedHTTPSProxyRejectsTrustFailures(t *testing.T) {
 				}
 				if err == nil || requests.Load() != 0 || body.reads.Load() != 0 {
 					t.Fatal("trust failure did not prevent origin request transmission")
+				}
+				fields := diagnosticFields(attempt.ConnectionDiagnostics())
+				if fields["connection_assigned"] != false || fields["remote_addr"] != nil {
+					t.Fatalf("failed handshake reported an assigned peer: %v", fields)
 				}
 				if failure == "origin_pin" {
 					if !IsOriginTrustFailure(err) {

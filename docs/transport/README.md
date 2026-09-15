@@ -440,3 +440,10 @@ errors independently of these diagnostic fields. Model-key rejection and
 response authentication failures also report generation removal; response
 failures state whether this event recorded a cooldown. A late failure cannot
 remove a replacement generation or renew its cooldown.
+
+Connection diagnostics use standard HTTP tracing without replacing dialers or
+wrapping sockets. `remote_addr` and `connection_reused` describe the last
+assigned connection. A failed handshake before assignment has no peer address
+available from this trace. There are no socket identifiers or dial candidates.
+With a forward proxy, the address identifies the proxy socket, not the origin
+or a backend behind a CONNECT tunnel.

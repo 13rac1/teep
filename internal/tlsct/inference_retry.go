@@ -11,11 +11,17 @@ import (
 
 // InferenceAttempt records whether any connection was assigned to an attempt.
 // The flag remains set across any transport-internal retry.
-type InferenceAttempt struct{ assigned atomic.Bool }
+type InferenceAttempt struct {
+	assigned    atomic.Bool
+	connections attemptConnections
+}
 
 // Context attaches the per-attempt connection assignment trace.
 func (a *InferenceAttempt) Context(ctx context.Context) context.Context {
-	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { a.assigned.Store(true) }})
+	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+		a.assigned.Store(true)
+		a.connections.gotConn(info.Conn, info.Reused)
+	}})
 }
 
 // RetryConnectionFailure accepts only typed establishment failures before
