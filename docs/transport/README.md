@@ -540,7 +540,9 @@ the response size. The byte count uses successful write counts, including partia
 writes that return an error; it does not prove client receipt. An end marker does not establish successful
 completion: remaining response bytes must still pass completion validation.
 `response_io_failure` distinguishes observed body read, downstream write, and
-downstream flush errors. `response_body_read_failed` preserves an observed read
+downstream flush errors. Response interceptors preserve flush errors and record
+that a flush commits headers. A failed flush prevents response success and does
+not invalidate authorization. `response_body_read_failed` preserves an observed read
 failure when writing or flushing the error response also fails. Body reads can
 fail from network I/O, decryption, or context cancellation; this field does not assign blame to the provider.
 
@@ -550,7 +552,8 @@ failures retain the handler warning. A canceled context alone cannot establish
 why the client stopped waiting. Compare these fields with the client's timeout
 and cancellation logs and the provider's logs using the request time.
 
-Regression coverage: [SPKI rejection](../../internal/tlsct/pinned_test.go),
+Regression coverage: [downstream flush failures](../../internal/proxy/response_flush_test.go),
+[SPKI rejection](../../internal/tlsct/pinned_test.go),
 [failed-handshake diagnostics](../../internal/tlsct/connection_diagnostics_test.go),
 [proxy peer attribution](../../internal/tlsct/pinned_proxy_test.go),
 [cancellation classification](../../internal/proxy/authorized_logging_test.go),
