@@ -1,6 +1,7 @@
 package tlsct
 
 import (
+	"log/slog"
 	"net"
 	"sync"
 )
@@ -24,13 +25,13 @@ func (a *attemptConnections) gotConn(conn net.Conn, reused bool) {
 // ConnectionDiagnostics reports the last assigned connection. HTTP tracing does
 // not expose the socket for failed handshakes. RemoteAddr can identify a forward
 // proxy rather than the origin; it does not identify a backend behind a tunnel.
-func (a *InferenceAttempt) ConnectionDiagnostics() []any {
+func (a *InferenceAttempt) ConnectionDiagnostics() []slog.Attr {
 	c := &a.connections
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	attrs := []any{"connection_assigned", a.assigned.Load()}
+	attrs := []slog.Attr{slog.Bool("connection_assigned", a.assigned.Load())}
 	if c.remote != "" {
-		attrs = append(attrs, "remote_addr", c.remote, "connection_reused", c.reused)
+		attrs = append(attrs, slog.String("remote_addr", c.remote), slog.Bool("connection_reused", c.reused))
 	}
 	return attrs
 }

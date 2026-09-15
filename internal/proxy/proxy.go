@@ -1667,21 +1667,21 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 
 		var attestDur, e2eeDur, upstreamDur time.Duration
 		var status string
-		var completionDiagnostics []any
+		var completionDiagnostics []slog.Attr
 		defer func() {
-			attrs := make([]any, 0, 18+len(completionDiagnostics))
+			attrs := make([]slog.Attr, 0, 18+len(completionDiagnostics))
 			attrs = append(attrs,
-				"endpoint", ep.name,
-				"provider", prov.Name,
-				"model", upstreamModel,
-				"stream", stream,
-				"status", status,
-				"attest", fmtDur(attestDur),
-				"e2ee", fmtDur(e2eeDur),
-				"upstream", fmtDur(upstreamDur),
-				"total", fmtDur(time.Since(requestStart)),
+				slog.String("endpoint", ep.name),
+				slog.String("provider", prov.Name),
+				slog.String("model", upstreamModel),
+				slog.Bool("stream", stream),
+				slog.String("status", status),
+				slog.String("attest", fmtDur(attestDur)),
+				slog.String("e2ee", fmtDur(e2eeDur)),
+				slog.String("upstream", fmtDur(upstreamDur)),
+				slog.String("total", fmtDur(time.Since(requestStart))),
 			)
-			slog.InfoContext(ctx, "request complete", append(attrs, completionDiagnostics...)...)
+			slog.LogAttrs(ctx, slog.LevelInfo, "request complete", append(attrs, completionDiagnostics...)...)
 		}()
 
 		s.stats.requests.Add(1)
@@ -2409,7 +2409,8 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
 // writer's capability.
 type responseInterceptor struct {
 	http.ResponseWriter
-	headerSent bool
+	headerSent   bool
+	bytesWritten int64
 }
 
 // Unwrap lets ResponseController reach the server's deadline support.
@@ -2422,7 +2423,9 @@ func (ri *responseInterceptor) WriteHeader(code int) {
 
 func (ri *responseInterceptor) Write(b []byte) (int, error) {
 	ri.headerSent = true
-	return ri.ResponseWriter.Write(b)
+	n, err := ri.ResponseWriter.Write(b)
+	ri.bytesWritten += int64(n)
+	return n, err
 }
 
 // responseInterceptorFlusher extends responseInterceptor with Flush support.

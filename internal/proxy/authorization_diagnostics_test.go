@@ -25,11 +25,9 @@ func TestAuthorizationFailureDiagnosticsRetainAttemptGeneration(t *testing.T) {
 	mismatch := &tlsct.SPKIMismatchError{Authority: identity.Authority(), ServerName: "model.example", Expected: identity.Fingerprint(), Observed: strings.Repeat("cd", 32)}
 	for _, removed := range []bool{false, true} {
 		attrs := authorizationFailureDiagnostics(value, errors.Join(errors.New("handshake"), mismatch), removed)
-		fields := make(map[string]any)
-		for i := 0; i < len(attrs); i += 2 {
-			fields[attrs[i].(string)] = attrs[i+1]
-		}
-		if fields["authorization_generation"] != authorizationGeneration(7) || fields["authorization_removed"] != removed || fields["authorization_published_at"] != published || fields["tls_sni"] != "model.example" {
+		fields := diagnosticFields(t, attrs)
+		publishedAt, ok := fields["authorization_published_at"].(time.Time)
+		if fields["authorization_generation"] != uint64(7) || fields["authorization_removed"] != removed || !ok || !publishedAt.Equal(published) || fields["tls_sni"] != "model.example" {
 			t.Fatalf("incorrect attempt diagnostics: %v", fields)
 		}
 		for _, name := range []string{"expected_spki", "observed_spki"} {

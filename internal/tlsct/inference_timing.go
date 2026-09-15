@@ -1,6 +1,7 @@
 package tlsct
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -74,27 +75,27 @@ func (a *InferenceAttempt) ResponseHeadersReceived(protocol string) {
 // HTTP/1.1, that interval can include the final transport buffer flush.
 // Concurrent handshakes count once. These overlapping durations must not be
 // added together.
-func (a *InferenceAttempt) TimingDiagnostics() []any {
+func (a *InferenceAttempt) TimingDiagnostics() []slog.Attr {
 	t := &a.timing
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := time.Now()
-	attrs := []any{"failure_phase", t.phase()}
+	attrs := []slog.Attr{slog.String("failure_phase", t.phase())}
 	if !t.acquire.IsZero() {
-		attrs = append(attrs, "connection_acquire", timingElapsed(t.acquire, t.connected, now))
+		attrs = append(attrs, slog.Duration("connection_acquire", timingElapsed(t.acquire, t.connected, now)))
 	}
 	if t.tlsSeen {
 		duration := t.tlsDuration
 		if t.tlsActive > 0 {
 			duration += now.Sub(t.tlsStarted)
 		}
-		attrs = append(attrs, "tls_handshake", duration)
+		attrs = append(attrs, slog.Duration("tls_handshake", duration))
 	}
 	if !t.written.IsZero() {
-		attrs = append(attrs, "response_header_wait", timingElapsed(t.written, t.headers, now))
+		attrs = append(attrs, slog.Duration("response_header_wait", timingElapsed(t.written, t.headers, now)))
 	}
 	if t.protocol != "" {
-		attrs = append(attrs, "upstream_protocol", t.protocol)
+		attrs = append(attrs, slog.String("upstream_protocol", t.protocol))
 	}
 	return attrs
 }

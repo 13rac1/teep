@@ -427,10 +427,15 @@ These diagnostics apply to the shared TLS-bound authorization handler
 (`UsesTLSBinding`): NEAR Direct, NEAR Cloud, Tinfoil cloud, and Tinfoil direct.
 They apply with either HTTP/2 or HTTP/1.1. Other providers keep their existing
 relay diagnostics. A provider migrated to this handler inherits the diagnostics
-without provider-specific logging code. Enabling HTTP/2 alone does not select
+without provider-specific logging code. Authorization and inference diagnostic
+loggers belong to each authorization store; tests inject separate handlers
+before starting operations. Enabling HTTP/2 alone does not select
 this handler; migration must satisfy its route, authorization, and TLS identity
 contracts. See the [provider migration tests](testing.md).
 
+Each initial authorization lookup emits a DEBUG record with
+`authorization_cache_hit`. A miss can lead to shared verification or a blocking
+error; it does not prove that this caller started verification.
 DEBUG records identify when shared verification starts and when a caller receives
 its result. `authorization_verification_shared` means multiple callers joined
 the same singleflight operation, including callers that subsequently canceled.
@@ -463,8 +468,13 @@ or a backend behind a CONNECT tunnel.
 Caller cancellation emits the INFO completion record with `status=canceled`
 and `cancellation_source=caller`, without a duplicate failure warning. Internal
 cancellation and expired deadlines remain warnings; the source distinguishes
-the caller context from the upstream operation. A reported trust or decryption
-failure remains a warning even when the caller context has also been canceled.
+the caller context from the upstream operation. An independent failure, including
+invalid SSE completion, an empty stream, or an oversized response, remains a
+warning when joined with cancellation or a deadline error. Downstream write and
+flush errors also remain available when the caller cancels at the same time.
+Joined cancellation and deadline errors retain `cancellation_source` even when
+an independent failure takes precedence in the status and warning.
+Cancellation alone must explain the failure to suppress its warning.
 Cancellation retains the existing authorization and retry behavior. Allowed
 factor failures still produce warnings on fresh verification.
 
@@ -511,10 +521,40 @@ identity, and available timing and connection fields from the failed attempt. A 
 reason records the decision to retry, not a guarantee that the next attempt
 starts before the caller cancels.
 
+Response-body failures, including non-streaming and non-200 responses, report
+`response_body_bytes_read`, `response_body_read_failed`, and any observed
+`response_io_failure`. When bytes were read, `response_last_read_ago` reports
+how long ago that occurred. Byte counts refer to the relay input, after any
+outer response decryption. A non-200 response reports these fields even when
+its body was copied without an I/O error.
+
+Stream failures also report `stream_elapsed`, `stream_chunks_processed`, and
+`stream_end_marker_seen`. When a data chunk was processed, `stream_last_chunk_ago`
+reports how long ago that occurred. Chunks processed do not prove client
+receipt or generated tokens. SSE reassembly also records the end marker in its
+returned statistics, including when subsequent completion validation fails.
+Completion records include `downstream_headers_committed`, measured when
+authorized inference returns, before any final handler-generated error response.
+Failure records also include `downstream_bytes_written`; successful records omit
+the response size. The byte count uses successful write counts, including partial
+writes that return an error; it does not prove client receipt. An end marker does not establish successful
+completion: remaining response bytes must still pass completion validation.
+`response_io_failure` distinguishes observed body read, downstream write, and
+downstream flush errors. `response_body_read_failed` preserves an observed read
+failure when writing or flushing the error response also fails. Body reads can
+fail from network I/O, decryption, or context cancellation; this field does not assign blame to the provider.
+
+The SSE scanner and non-streaming SSE reassembly return errors to the request
+handler without a separate ERROR record. Caller cancellation uses the INFO completion record; other
+failures retain the handler warning. A canceled context alone cannot establish
+why the client stopped waiting. Compare these fields with the client's timeout
+and cancellation logs and the provider's logs using the request time.
+
 Regression coverage: [SPKI rejection](../../internal/tlsct/pinned_test.go),
 [failed-handshake diagnostics](../../internal/tlsct/connection_diagnostics_test.go),
 [proxy peer attribution](../../internal/tlsct/pinned_proxy_test.go),
 [cancellation classification](../../internal/proxy/authorized_logging_test.go),
 [emitted inference diagnostics](../../internal/proxy/authorized_diagnostic_logging_test.go),
+[stream cancellation and authentication](../../internal/proxy/authorized_failure_test.go),
 [connection waiting](../../internal/proxy/authorization_wait_test.go), and
 [header waiting and reuse](../../internal/tlsct/inference_timing_test.go).

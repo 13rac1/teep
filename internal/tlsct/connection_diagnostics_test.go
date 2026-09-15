@@ -2,6 +2,7 @@ package tlsct
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"sync"
 	"testing"
@@ -9,10 +10,10 @@ import (
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
 
-func diagnosticFields(attrs []any) map[string]any {
-	fields := make(map[string]any)
-	for i := 0; i < len(attrs); i += 2 {
-		fields[attrs[i].(string)] = attrs[i+1]
+func diagnosticFields(attrs []slog.Attr) map[string]any {
+	fields := make(map[string]any, len(attrs))
+	for _, attr := range attrs {
+		fields[attr.Key] = attr.Value.Any()
 	}
 	return fields
 }

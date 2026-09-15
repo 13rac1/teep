@@ -97,8 +97,8 @@ func TestCallerDeadlineStopsConnectionWait(t *testing.T) {
 		if result.outcome.trace == nil {
 			t.Fatal("missing attempt timing")
 		}
-		fields := result.outcome.trace.TimingDiagnostics()
-		if fields[0] != "failure_phase" || fields[1] != "connection_acquire" {
+		fields := diagnosticFields(t, result.outcome.trace.TimingDiagnostics())
+		if fields["failure_phase"] != "connection_acquire" {
 			t.Fatalf("incorrect queued request phase: %v", fields)
 		}
 		if inference.Load() != 0 {

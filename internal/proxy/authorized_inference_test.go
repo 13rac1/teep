@@ -197,7 +197,7 @@ func TestAuthorizedRejectionPreservesReplacement(t *testing.T) {
 		replacement.report.Metadata = map[string]string{"generation": "replacement"}
 		old = loadTestAuthorization(t, server.authorizations, key, candidate)
 		prov := &provider.Provider{Name: key.ProviderName(), BaseURL: upstream.URL, StaticRoute: route, UsesTLSBinding: true, E2EE: true, Encryptor: tinfoil.NewE2EE(), Preparer: tinfoil.NewPreparer("test")}
-		logs := captureInferenceDiagnostics(t)
+		logs := captureAuthorizationDiagnostics(t, server.authorizations)
 		used, err := server.inferAuthorized(context.Background(), newInferenceRecorder(), &authorizedRequest{provider: prov, route: route, key: key, body: []byte(`{"model":"model"}`), path: "/v1/chat/completions", contentType: "application/json", endpoint: e2ee.EndpointChat})
 		if err != nil {
 			t.Fatal(err)
@@ -219,18 +219,16 @@ func TestAuthorizedRejectionPreservesReplacement(t *testing.T) {
 		if requests.Load() != 2 || used.report.Metadata["generation"] != "replacement" {
 			t.Fatal("retry did not use replacement authorization")
 		}
-		fields := make(map[string]any)
-		for i := 0; i < len(used.summary); i += 2 {
-			fields[used.summary[i].(string)] = used.summary[i+1]
-		}
-		if fields["inference_attempts"] != 2 || fields["retry_reason"] != "model_key_rejected" {
+		fields := diagnosticFields(t, used.summary)
+		if fields["inference_attempts"] != int64(2) || fields["retry_reason"] != "model_key_rejected" {
 			t.Fatalf("missing retry diagnostics: %v", fields)
 		}
 		current, ok := server.authorizations.acquire(key)
 		if !ok || current.generation == old.generation {
 			t.Fatal("rejection erased replacement generation")
 		}
-		if fields["authorization_generation"] != current.generation || fields["authorization_published_at"] != current.publishedAt || fields["authority"] != current.identity.Authority() {
+		published, ok := fields["authorization_published_at"].(time.Time)
+		if fields["authorization_generation"] != uint64(current.generation) || !ok || !published.Equal(current.publishedAt) || fields["authority"] != current.identity.Authority() {
 			t.Fatalf("successful retry did not report the replacement identity: %v", fields)
 		}
 	})

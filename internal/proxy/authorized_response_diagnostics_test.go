@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -46,5 +47,43 @@ func TestAuthorizedHTTPFailurePreservesBodyReadError(t *testing.T) {
 				t.Fatal("response content included in diagnostic")
 			}
 		})
+	}
+}
+
+func TestAuthorizedNonStreamFailureDiagnostics(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable} {
+		for _, writeFailure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("status=%d/write_failure=%t", status, writeFailure), func(t *testing.T) {
+				server := newTLSBindingTestServerHandle()
+				defer server.Close()
+				key, value := testAuthorizationCandidate(t, "model")
+				input := &authorizedRequest{key: key, endpoint: e2ee.EndpointChat}
+				const response = "private response"
+				var body io.Reader = strings.NewReader(response)
+				var writer http.ResponseWriter = newInferenceRecorder()
+				wantOperation, wantErr := "response_body_read", io.ErrUnexpectedEOF
+				if writeFailure {
+					writer = partialDiagnosticWriter{newInferenceRecorder()}
+					wantOperation, wantErr = "downstream_write", io.ErrClosedPipe
+				} else {
+					body = io.MultiReader(body, authorizedReadFailure{io.ErrUnexpectedEOF})
+				}
+				// Exercise response I/O without replacing a cryptographic pathway.
+				result := authorizedResponse{authorization: value, upstream: &upstreamResult{Resp: &http.Response{
+					StatusCode: status, Header: make(http.Header), Body: io.NopCloser(body),
+				}}}
+				err := server.relayAuthorized(t.Context(), writer, input, &result)
+				if !errors.Is(err, wantErr) {
+					t.Fatalf("lost response failure: %v", err)
+				}
+				fields := diagnosticFields(t, result.relayDiagnostics)
+				if fields["response_io_failure"] != wantOperation || fields["response_body_read_failed"] != !writeFailure || fields["response_body_bytes_read"] != int64(len(response)) || fields["response_last_read_ago"] == nil {
+					t.Fatalf("incorrect response diagnostics: %v", fields)
+				}
+				if fields["stream_chunks_processed"] != nil || strings.Contains(fmt.Sprint(result.relayDiagnostics), response) {
+					t.Fatalf("unexpected response diagnostics: %v", fields)
+				}
+			})
+		}
 	}
 }

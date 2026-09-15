@@ -32,9 +32,11 @@ var ErrRelayFailed = errors.New("relay failed")
 
 // StreamStats holds token throughput metrics collected during SSE relay.
 type StreamStats struct {
-	Chunks   int           // number of SSE data chunks with delta/content
-	Tokens   int           // completion_tokens from usage (0 if unavailable)
-	Duration time.Duration // time from first to last chunk
+	Chunks        int           // number of SSE data chunks with delta/content
+	Tokens        int           // completion_tokens from usage (0 if unavailable)
+	Duration      time.Duration // time from first to last chunk
+	LastChunkAt   time.Time     // last processed data chunk, not confirmed client delivery
+	EndMarkerSeen bool          // received [DONE], even if completion validation fails
 }
 
 // EffectiveTokens returns Tokens if available (from usage), else Chunks.
@@ -52,6 +54,7 @@ func (s *StreamStats) recordChunk(data string, firstChunk *time.Time) {
 		*firstChunk = now
 	}
 	s.Chunks++
+	s.LastChunkAt = now
 	s.Duration = now.Sub(*firstChunk)
 	var u usageInfo
 	if json.Unmarshal([]byte(data), &u) == nil && u.Usage != nil {
@@ -1097,6 +1100,7 @@ func reassembleNonStream(body io.Reader, session Decryptor, endpoint EndpointTyp
 			continue
 		}
 		if data == "[DONE]" {
+			stats.EndMarkerSeen = true
 			if err := FinishSSE(scanner); err != nil {
 				return nil, stats, fmt.Errorf("reassemble completion: %w", err)
 			}
@@ -1291,6 +1295,7 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 
 	process := func(line string) bool {
 		if data, ok := SSEData(line); ok && data == "[DONE]" {
+			stats.EndMarkerSeen = true
 			if err := FinishSSE(scanner); err != nil {
 				decryptErr = fmt.Errorf("%w: SSE completion: %w", ErrRelayFailed, err)
 				WriteSSEError(w, flusher, "stream completion failed")
@@ -1320,7 +1325,6 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 	}
 
 	if err := scanner.Err(); err != nil {
-		slog.ErrorContext(ctx, "SSE scanner error", "err", err)
 		return stats, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 	if err := CheckSSEEndMarker(session, endpoint, false); err != nil {
@@ -1379,7 +1383,6 @@ func relaySSELine(ctx context.Context, w http.ResponseWriter, flusher http.Flush
 func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor, endpoint EndpointType) (StreamStats, error) {
 	result, stats, err := ReassembleNonStream(body, session, endpoint)
 	if err != nil {
-		slog.ErrorContext(ctx, "E2EE non-stream reassembly failed", "err", err)
 		http.Error(w, "response reassembly failed", http.StatusBadGateway)
 		return stats, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
