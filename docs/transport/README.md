@@ -447,3 +447,11 @@ assigned connection. A failed handshake before assignment has no peer address
 available from this trace. There are no socket identifiers or dial candidates.
 With a forward proxy, the address identifies the proxy socket, not the origin
 or a backend behind a CONNECT tunnel.
+
+Caller cancellation emits the INFO completion record with `status=canceled`
+and `cancellation_source=caller`, without a duplicate failure warning. Internal
+cancellation and expired deadlines remain warnings; the source distinguishes
+the caller context from the upstream operation. A reported trust or decryption
+failure remains a warning even when the caller context has also been canceled.
+Cancellation retains the existing authorization and retry behavior. Allowed
+factor failures still produce warnings on fresh verification.

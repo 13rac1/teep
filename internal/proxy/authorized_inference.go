@@ -30,6 +30,7 @@ type authorizedRequest struct {
 type authorizedOutcome struct {
 	report                          *attestation.VerificationReport
 	status                          string
+	summary                         []any
 	diagnostics                     []any
 	attestDur, e2eeDur, upstreamDur time.Duration
 }
@@ -236,15 +237,14 @@ func (s *Server) handleAuthorizedEndpoint(ctx context.Context, w http.ResponseWr
 	ri, writer := newResponseInterceptor(w)
 	out, err := s.inferAuthorized(ctx, writer, input)
 	if err != nil {
-		attrs := append([]any{"provider", input.provider.Name, "model", input.key.Model(), "err", err}, out.diagnostics...)
-		slog.WarnContext(ctx, "authorized inference failed", attrs...)
+		warn := classifyAuthorizedFailure(ctx, err, &out)
+		if warn {
+			attrs := append([]any{"provider", input.provider.Name, "model", input.key.Model(), "err", err}, out.diagnostics...)
+			attrs = append(attrs, out.summary...)
+			slog.WarnContext(ctx, "authorized inference failed", attrs...)
+		}
 		s.stats.errors.Add(1)
 		s.stats.getModelStats(input.key.ProviderName(), input.key.Model()+"@"+input.key.Authority()).errors.Add(1)
-		if errors.Is(err, context.Canceled) {
-			out.status = "canceled"
-		} else if errors.Is(err, context.DeadlineExceeded) {
-			out.status = "deadline_exceeded"
-		}
 		if !ri.headerSent {
 			code := http.StatusBadGateway
 			if _, ok := errors.AsType[*verificationOverloadError](err); ok || errors.Is(err, tlsct.ErrConnectionCapacity) {

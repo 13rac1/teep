@@ -1667,8 +1667,10 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 
 		var attestDur, e2eeDur, upstreamDur time.Duration
 		var status string
+		var completionDiagnostics []any
 		defer func() {
-			slog.InfoContext(ctx, "request complete",
+			attrs := make([]any, 0, 18+len(completionDiagnostics))
+			attrs = append(attrs,
 				"endpoint", ep.name,
 				"provider", prov.Name,
 				"model", upstreamModel,
@@ -1679,6 +1681,7 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 				"upstream", fmtDur(upstreamDur),
 				"total", fmtDur(time.Since(requestStart)),
 			)
+			slog.InfoContext(ctx, "request complete", append(attrs, completionDiagnostics...)...)
 		}()
 
 		s.stats.requests.Add(1)
@@ -1725,6 +1728,7 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 				observe(outcome.report, prov.E2EE)
 			}
 			status, attestDur, e2eeDur, upstreamDur = outcome.status, outcome.attestDur, outcome.e2eeDur, outcome.upstreamDur
+			completionDiagnostics = outcome.summary
 			return
 		}
 
