@@ -64,7 +64,7 @@ func TestAuthorizedSSEFailureClassification(t *testing.T) {
 					prefix = "data:"
 				}
 				response := authorizedResponse{authorization: value, upstream: &upstreamResult{Session: session, Resp: &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(prefix + data + "\n\ndata:[DONE]\n\n"))}}}
-				err = server.relayAuthorized(t.Context(), newInferenceRecorder(), input, response)
+				err = server.relayAuthorized(t.Context(), newInferenceRecorder(), input, &response)
 				if err == nil {
 					t.Fatal("invalid response succeeded")
 				}

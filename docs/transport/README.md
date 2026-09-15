@@ -420,3 +420,23 @@ capacity failure does not publish authorization, start a negative-cache delay,
 flush another pool, or authorize inference replay. Later verification can succeed
 after a pooled socket closes. HTTPS proxy connections count against their dialed
 proxy address, including tunnels for different origin authorities.
+
+## Inference diagnostics
+
+DEBUG records identify when shared verification starts and when a caller receives
+its result. `authorization_verification_shared` means multiple callers joined
+the same singleflight operation, including callers that subsequently canceled.
+It does not distinguish the initiating caller from later callers or establish
+verification success. A cache hit does not emit these verification records.
+
+Fresh authorization publication emits an INFO record with provider, model,
+authority, accepted public SPKI fingerprint, publication time, and generation.
+Origin trust failures include the generation used and whether that generation
+was removed. SPKI mismatch warnings also include the TLS SNI and expected and
+observed public SPKI fingerprints. A late failure can therefore be distinguished
+from removal of the current generation. These records do not contain inference
+content, credentials, or encryption secrets. Trust and retry decisions use typed
+errors independently of these diagnostic fields. Model-key rejection and
+response authentication failures also report generation removal; response
+failures state whether this event recorded a cooldown. A late failure cannot
+remove a replacement generation or renew its cooldown.

@@ -35,7 +35,7 @@ func TestAuthorizedNearReadFailureRetainsAuthorization(t *testing.T) {
 			defer session.Zero()
 			input := &authorizedRequest{provider: &provider.Provider{Name: "neardirect", E2EE: true}, key: key, endpoint: e2ee.EndpointChat}
 			result := authorizedResponse{authorization: value, upstream: &upstreamResult{Session: session, Resp: &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(authorizedReadFailure{readErr})}}}
-			err = server.relayAuthorized(t.Context(), newInferenceRecorder(), input, result)
+			err = server.relayAuthorized(t.Context(), newInferenceRecorder(), input, &result)
 			if !errors.Is(err, readErr) {
 				t.Fatalf("lost read error: %v", err)
 			}

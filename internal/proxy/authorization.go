@@ -28,12 +28,13 @@ type authorizationGeneration uint64
 // authorization contains only immutable, verified authorization material.
 // Callers must clone its report before modifying it or returning it to a client.
 type authorization struct {
-	key        provider.AuthorizationKey
-	report     *attestation.VerificationReport
-	signingKey string
-	modelKey   e2ee.NearModelKey
-	identity   tlsct.TransportIdentity
-	generation authorizationGeneration
+	key         provider.AuthorizationKey
+	report      *attestation.VerificationReport
+	signingKey  string
+	modelKey    e2ee.NearModelKey
+	identity    tlsct.TransportIdentity
+	generation  authorizationGeneration
+	publishedAt time.Time
 }
 
 func newAuthorization(key provider.AuthorizationKey, report *attestation.VerificationReport, signingKey string, requireE2EE, force bool) (*authorization, error) {
@@ -105,6 +106,7 @@ func (*verificationOverloadError) Error() string {
 }
 
 type authorizationStore struct {
+	logger         *slog.Logger // Optional test logger. Nil uses slog.Default at call time.
 	mu             sync.Mutex
 	entries        map[provider.AuthorizationKey]authorizationRecord
 	active         map[provider.AuthorizationKey]*authorizationOperation
@@ -125,6 +127,14 @@ func newAuthorizationStore(capacity, verifications int, timeout time.Duration) *
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &authorizationStore{entries: make(map[provider.AuthorizationKey]authorizationRecord), active: make(map[provider.AuthorizationKey]*authorizationOperation), capacity: capacity, admission: make(chan struct{}, verifications), timeout: timeout, lifecycle: ctx, cancel: cancel, now: time.Now}
+}
+
+// log returns the configured test logger or the current default logger.
+func (s *authorizationStore) log() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
 }
 
 // acquire is the attempt boundary: deletion prevents subsequent acquisitions,
@@ -233,6 +243,7 @@ func (s *authorizationStore) load(ctx context.Context, key provider.Authorizatio
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
 		case completed := <-result:
+			s.log().DebugContext(ctx, "authorization verification result received", "provider", key.ProviderName(), "model", key.Model(), "authority", key.Authority(), "authorization_verification_shared", completed.Shared)
 			if completed.Err != nil {
 				return nil, nil, completed.Err
 			}
@@ -263,6 +274,7 @@ func (s *authorizationStore) verifyShared(key provider.AuthorizationKey, negativ
 		return authorizationVerification{}, err
 	}
 	defer s.finish(key, op)
+	s.log().DebugContext(op.ctx, "authorization verification started", "provider", key.ProviderName(), "model", key.Model(), "authority", key.Authority())
 	result, err := verify(op.ctx)
 	if err != nil {
 		return authorizationVerification{}, err
@@ -274,7 +286,7 @@ func (s *authorizationStore) verifyShared(key provider.AuthorizationKey, negativ
 		return authorizationVerification{}, errors.New("verification did not produce authorization")
 	}
 	if err := s.publish(key, op, result.candidate, result.admission); err != nil {
-		slog.WarnContext(op.ctx, "authorization publication failed", "provider", key.ProviderName(), "model", key.Model(), "authority", key.Authority(), "err", err)
+		s.log().WarnContext(op.ctx, "authorization publication failed", "provider", key.ProviderName(), "model", key.Model(), "authority", key.Authority(), "err", err)
 		return authorizationVerification{}, err
 	}
 	return authorizationVerification{}, nil
@@ -310,17 +322,27 @@ func (s *authorizationStore) finish(key provider.AuthorizationKey, op *authoriza
 }
 
 func (s *authorizationStore) publish(key provider.AuthorizationKey, op *authorizationOperation, candidate *authorization, admission attestation.AdmissionTime) error {
+	value, err := s.publishValue(key, op, candidate, admission)
+	if err != nil {
+		return err
+	}
+	key = key.EvidenceScope()
+	s.log().InfoContext(op.ctx, "authorization published", "provider", key.ProviderName(), "model", key.Model(), "authority", key.Authority(), "spki", value.identity.Fingerprint(), "authorization_generation", value.generation, "authorization_published_at", value.publishedAt)
+	return nil
+}
+
+func (s *authorizationStore) publishValue(key provider.AuthorizationKey, op *authorizationOperation, candidate *authorization, admission attestation.AdmissionTime) (*authorization, error) {
 	key = key.EvidenceScope()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.active[key] != op || op.ctx.Err() != nil {
-		return errors.New("authorization verification was invalidated")
+		return nil, errors.New("authorization verification was invalidated")
 	}
 	if candidate.key.EvidenceScope() != key {
-		return errors.New("authorization candidate does not match publication key")
+		return nil, errors.New("authorization candidate does not match publication key")
 	}
 	if err := admission.Check(s.now()); err != nil {
-		return err
+		return nil, err
 	}
 	if s.nextGeneration == ^authorizationGeneration(0) {
 		panic("authorization generation exhausted")
@@ -329,9 +351,10 @@ func (s *authorizationStore) publish(key provider.AuthorizationKey, op *authoriz
 	value := *candidate
 	value.report = candidate.report.Clone()
 	value.generation = s.nextGeneration
+	value.publishedAt = s.now()
 	s.entries[key] = authorizationRecord{value: &value, lastUsed: s.now()}
 	s.evictLocked(key)
-	return nil
+	return &value, nil
 }
 
 func (s *authorizationStore) evictLocked(keep provider.AuthorizationKey) {

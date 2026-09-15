@@ -30,6 +30,7 @@ type authorizedRequest struct {
 type authorizedOutcome struct {
 	report                          *attestation.VerificationReport
 	status                          string
+	diagnostics                     []any
 	attestDur, e2eeDur, upstreamDur time.Duration
 }
 
@@ -92,7 +93,8 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	if err != nil {
 		retry := trace.RetryConnectionFailure(attemptCtx, err)
 		if tlsct.IsOriginTrustFailure(err) {
-			s.authorizations.deleteGeneration(input.key, value.generation)
+			removed := s.authorizations.deleteGeneration(input.key, value.generation)
+			result.outcome.diagnostics = authorizationFailureDiagnostics(value, err, removed)
 		}
 		cleanupAuthorized(ur)
 		result.upstream = nil
@@ -104,7 +106,8 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 		var rejected bool
 		rejected, err = provider.KeyRejection(ur.Resp, input.provider.Name, input.path)
 		if rejected {
-			s.authorizations.deleteGeneration(input.key, value.generation)
+			removed := s.authorizations.deleteGeneration(input.key, value.generation)
+			logAuthorizationRejection(ctx, input, value, "model_key_rejected", removed, false)
 			if !input.provider.E2EE {
 				return result, false, nil
 			}
@@ -164,7 +167,7 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	out.report = value.report
 	started := time.Now()
 	defer func() { out.upstreamDur += time.Since(started) }()
-	if err := s.relayAuthorized(result.upstream.Request.Context(), w, input, result); err != nil { //nolint:contextcheck // The request retains the attempt context derived from ctx with the caller deadline.
+	if err := s.relayAuthorized(result.upstream.Request.Context(), w, input, &result); err != nil { //nolint:contextcheck // The request retains the attempt context derived from ctx with the caller deadline.
 		return out, err
 	}
 	if input.provider.E2EE {
@@ -175,7 +178,7 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	return out, nil
 }
 
-func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result authorizedResponse) (retErr error) {
+func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result *authorizedResponse) (retErr error) {
 	writer, err := newResponseLifetime(ctx, w)
 	if err != nil {
 		return err
@@ -190,19 +193,22 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	resp := ur.Resp
 	copyAuthorizedHeaders(w.Header(), resp.Header)
 	var body io.Reader = resp.Body
-	invalidate := func() { s.rejectResponseAuthorization(input.key, result.authorization.generation) }
+	invalidate := func(reason string) {
+		removed := s.rejectResponseAuthorization(input.key, result.authorization.generation)
+		logAuthorizationRejection(ctx, input, result.authorization, reason, removed, removed)
+	}
 	// EHBP permits plaintext non-success diagnostics. Attested TLS still
 	// authenticates the peer; these errors do not establish E2EE success.
 	success := resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
 	if ur.EHBP != nil && (success || len(resp.Header.Values("Ehbp-Response-Nonce")) != 0) {
 		nonce := resp.Header.Get("Ehbp-Response-Nonce")
 		if len(resp.Header.Values("Ehbp-Response-Nonce")) != 1 {
-			invalidate()
+			invalidate("response_nonce_count")
 			return errors.New("EHBP response must contain one response nonce")
 		}
 		plain, err := ur.EHBP.DecryptResponse(resp.Body, nonce)
 		if err != nil {
-			invalidate()
+			invalidate("response_authentication")
 			return errors.New("EHBP response authentication failed")
 		}
 		defer plain.Close()
@@ -213,14 +219,14 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 		w.WriteHeader(resp.StatusCode)
 		_, err := io.Copy(w, io.LimitReader(body, 10<<20))
 		if errors.Is(err, e2ee.ErrDecryptionFailed) {
-			invalidate()
+			invalidate("response_decryption")
 		}
 		return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
 	}
 	streamStats, err := relayResponse(ctx, w, body, ur.Session, ur.Meta, input.stream, input.endpoint)
 	recordTokPerSec(s.stats.getModelStats(input.key.ProviderName(), input.key.Model()+"@"+input.key.Authority()), streamStats)
 	if errors.Is(err, e2ee.ErrDecryptionFailed) {
-		invalidate()
+		invalidate("response_decryption")
 	}
 	return err
 }
@@ -229,7 +235,8 @@ func (s *Server) handleAuthorizedEndpoint(ctx context.Context, w http.ResponseWr
 	ri, writer := newResponseInterceptor(w)
 	out, err := s.inferAuthorized(ctx, writer, input)
 	if err != nil {
-		slog.WarnContext(ctx, "authorized inference failed", "provider", input.provider.Name, "model", input.key.Model(), "err", err)
+		attrs := append([]any{"provider", input.provider.Name, "model", input.key.Model(), "err", err}, out.diagnostics...)
+		slog.WarnContext(ctx, "authorized inference failed", attrs...)
 		s.stats.errors.Add(1)
 		s.stats.getModelStats(input.key.ProviderName(), input.key.Model()+"@"+input.key.Authority()).errors.Add(1)
 		if errors.Is(err, context.Canceled) {
@@ -274,15 +281,33 @@ func copyAuthorizedHeaders(dst, src http.Header) {
 // rejectResponseAuthorization records the cooldown before releasing the store
 // lock. No acquisition can observe the removal before the cooldown, and a late
 // response from an older generation cannot extend it or affect a replacement.
-func (s *Server) rejectResponseAuthorization(key provider.AuthorizationKey, generation authorizationGeneration) {
+func (s *Server) rejectResponseAuthorization(key provider.AuthorizationKey, generation authorizationGeneration) bool {
 	key = key.EvidenceScope()
 	store := s.authorizations
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	record, ok := store.entries[key]
 	if !ok || record.value.generation != generation {
-		return
+		return false
 	}
 	s.negCache.Record(key.ProviderName(), key.SingleflightKey())
 	delete(store.entries, key)
+	return true
+}
+
+// authorizationFailureDiagnostics describes the generation actually used by the
+// failed attempt, even when another caller has already published a replacement.
+func authorizationFailureDiagnostics(value *authorization, err error, removed bool) []any {
+	attrs := []any{"authority", value.identity.Authority(), "authorization_generation", value.generation, "authorization_published_at", value.publishedAt, "authorization_removed", removed}
+	if mismatch, ok := errors.AsType[*tlsct.SPKIMismatchError](err); ok {
+		attrs = append(attrs, "tls_sni", mismatch.ServerName, "expected_spki", mismatch.Expected, "observed_spki", mismatch.Observed)
+	}
+	return attrs
+}
+
+func logAuthorizationRejection(ctx context.Context, input *authorizedRequest, value *authorization, reason string, removed, cooldown bool) {
+	attrs := make([]any, 0, 16)
+	attrs = append(attrs, "provider", input.provider.Name, "model", input.key.Model(), "reason", reason, "cooldown_recorded", cooldown)
+	attrs = append(attrs, authorizationFailureDiagnostics(value, nil, removed)...)
+	slog.WarnContext(ctx, "response authorization rejected", attrs...)
 }
