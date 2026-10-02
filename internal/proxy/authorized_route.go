@@ -69,7 +69,9 @@ func (s *Server) loadAuthorization(ctx context.Context, prov *provider.Provider,
 	}
 	negative := func() error {
 		if _, blocked := s.negCache.ActiveInfo(key.ProviderName(), key.EvidenceScope().SingleflightKey()); blocked {
-			return &httpError{503, "neg_cached", errors.New("attestation recently failed for this route")}
+			// The negative cache is scoped by evidence, which includes the
+			// candidate authority, so its entry names this candidate.
+			return &provider.CandidateError{Err: &httpError{503, "neg_cached", errors.New("attestation recently failed for this route")}}
 		}
 		return nil
 	}
@@ -107,7 +109,7 @@ func (s *Server) loadAuthorization(ctx context.Context, prov *provider.Provider,
 		candidate, err := newAuthorization(key, report, raw.SigningKey, scoped.E2EE, s.cfg.Force)
 		if err != nil {
 			recordFailure("invalid_authorization", err)
-			return authorizationVerification{}, fmt.Errorf("construct authorization: %w", err)
+			return authorizationVerification{}, &provider.CandidateError{Err: fmt.Errorf("construct authorization: %w", err)}
 		}
 		return authorizationVerification{candidate: candidate, admission: admission}, nil
 	})

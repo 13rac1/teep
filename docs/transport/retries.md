@@ -80,6 +80,42 @@ identity. These rules avoid unnecessary verification and early negative
 caching while preserving fail-closed acquisition: a cache miss still requires
 successful complete verification.
 
+## Tinfoil direct enclave candidate failover
+
+Discovery returns a list of enclave candidates for each model. We order them
+by domain name, or by a SHA-256 ranking of `prompt_cache_key` and domain when
+the request sets `prompt_cache_key`.
+
+When a candidate fails, the proxy and `teep verify` skip it and fully verify
+the next one. Each candidate gets its own authorization, with the same factor
+enforcement as the first.
+
+We try the next candidate when:
+
+- An enforced factor fails. One host can fail where others pass.
+- We fail to fetch evidence (connection, TLS, malformed evidence, nonce or
+  channel-binding mismatch, HTTP 5xx).
+- NVIDIA admission time checks fail, we fail to build the authorization, or
+  the negative cache has an entry for the candidate.
+
+We stop on all other errors, including caller cancellation, local socket
+capacity, and HTTP 401/403. These errors say nothing about the candidate. We
+try the next candidate on a new error source only after its call site wraps
+it in `provider.CandidateError`.
+
+We try at most 8 candidates within the caller's deadline, then fail closed.
+`teep verify` can retry once, so it runs at most 16 evidence collections.
+Replay and capture try only the first candidate.
+
+We skip a failed candidate for 2 minutes. If we skip all candidates, we use
+the full list.
+
+Implementation:
+[candidate order and skip list](../../internal/provider/tinfoil/resolver.go),
+[failover rules](../../internal/provider/failover.go),
+[proxy](../../internal/proxy/authorized_inference.go), and
+[`teep verify`](../../internal/verify/tls_inference.go).
+
 ## Recognized provider responses
 
 Responses arrive over the authorized TLS transport, including any explicit factor

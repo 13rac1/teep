@@ -169,7 +169,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 
 	raw, err := fetchAttestation(ctx, attester, opts.ProviderName, opts.ModelName, nonce)
 	if err != nil {
-		return verificationOutcome{}, fmt.Errorf("fetch attestation: %w", err)
+		return verificationOutcome{}, &provider.CandidateError{Err: fmt.Errorf("fetch attestation: %w", err)}
 	}
 
 	tdxResult := verifyTDX(ctx, raw, nonce, opts.ProviderName, verifier)
@@ -272,7 +272,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		}
 		if err := attestation.NVIDIAAdmission(nrasResult).Check(admissionNow); err != nil {
 			slog.WarnContext(ctx, "attestation admission failed", "provider", opts.ProviderName, "model", opts.ModelName, "err", err)
-			return verificationOutcome{}, err
+			return verificationOutcome{}, &provider.CandidateError{Err: err}
 		}
 	}
 	return verificationOutcome{report: report, raw: raw, e2ee: e2eeResult}, nil

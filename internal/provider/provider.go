@@ -168,6 +168,11 @@ type Provider struct {
 	// ResolveRoute selects one immutable route before authorization access.
 	ResolveRoute func(context.Context, string) (ResolvedRoute, error)
 
+	// RecordCandidateFailure excludes a failing candidate from later
+	// selection. Nil for providers whose discovery yields a single candidate
+	// per model; candidate failover is then inert.
+	RecordCandidateFailure CandidateFailureRecorder
+
 	// Preparer injects provider-specific headers into outgoing requests.
 	// May be nil if no special headers are needed.
 	Preparer RequestPreparer

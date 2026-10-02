@@ -118,7 +118,7 @@ structured field (i.e., any non-V3 response).
 | GPU attestation | Inference enclave's own SPDM evidence; GPU evidence hash bound into REPORTDATA |
 | GPU-CPU binding | Yes — SHA-256 of inference enclave GPU/NVSwitch evidence in REPORTDATA hash |
 | Trust boundary | Inference enclave directly; no router intermediary; smaller TCB |
-| Model discovery | `GET https://inference.tinfoil.sh/.well-known/tinfoil-proxy` maps model names to actual backend enclave domains and per-model Sigstore repos. The resolver validates Tinfoil-owned domain suffixes, caches mappings for 5 minutes, and uses `prompt_cache_key` for sticky backend selection. |
+| Model discovery | `GET https://inference.tinfoil.sh/.well-known/tinfoil-proxy` maps model names to actual backend enclave domains and per-model Sigstore repos. See [enclave candidate failover](../../transport/retries.md#tinfoil-direct-enclave-candidate-failover). |
 
 ## Supported Endpoints
 

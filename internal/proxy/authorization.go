@@ -320,7 +320,7 @@ func (s *authorizationStore) publish(key provider.AuthorizationKey, op *authoriz
 		return errors.New("authorization candidate does not match publication key")
 	}
 	if err := admission.Check(s.now()); err != nil {
-		return err
+		return &provider.CandidateError{Err: err}
 	}
 	if s.nextGeneration == ^authorizationGeneration(0) {
 		panic("authorization generation exhausted")

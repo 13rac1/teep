@@ -846,6 +846,7 @@ func fromConfig(
 		// fails. SEE: attestation.OrgSignerPolicy.
 		p.SupplyChainPolicy = tinfoil.DirectSupplyChainPolicy()
 		p.ResolveRoute = resolver.ResolveRoute
+		p.RecordCandidateFailure = resolver.RecordCandidateFailure
 		p.ModelLister = provider.NewValidatingModelLister(
 			provider.NewModelLister(tinfoil.DefaultBaseURL, cp.APIKey, config.NewAttestationClient(offline)),
 			provider.ValidateTinfoilEntry,
@@ -912,7 +913,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	if err != nil {
 		slog.ErrorContext(ctx, "attestation fetch failed", "provider", prov.Name, "model", upstreamModel, "err", err)
 		failure("attestation_fetch_failed", err)
-		return nil, nil, attestation.AdmissionTime{}, err
+		return nil, nil, attestation.AdmissionTime{}, &provider.CandidateError{Err: err}
 	}
 	fetchDur := time.Since(fetchStart)
 	slog.DebugContext(ctx, "attestation fetch complete", "provider", prov.Name, "elapsed", fetchDur)

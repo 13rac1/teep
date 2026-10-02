@@ -164,7 +164,7 @@ func (r *EndpointResolver) fetchMetadata(ctx context.Context, cancel context.Can
 }
 
 func metadataFailureEligible(err error) bool {
-	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, tlsct.ErrConnectionCapacity)
+	return !tlsct.IsLocalError(err)
 }
 
 func snapshotFresh(fetchedAt, now time.Time) bool {

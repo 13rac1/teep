@@ -107,10 +107,11 @@ func (a *DirectAttester) SetClient(c *http.Client) {
 	a.resolver.SetClient(c)
 }
 
-// FetchAttestation resolves the model to a per-model domain and fetches
+// FetchAttestation resolves the model to one per-model domain and fetches
 // attestation from that enclave's well-known endpoint. When a
 // prompt_cache_key is present in the context, the resolver uses
 // hash-based sticky routing for cache-aware backend selection.
+// It tries only one candidate. The proxy and teep verify try the others.
 func (a *DirectAttester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	route, err := a.resolver.ResolveRoute(ctx, model)
 	if err != nil {

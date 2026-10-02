@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,9 +23,30 @@ func SetUserAgent(req *http.Request) {
 	tlsct.SetUserAgent(req)
 }
 
+// HTTPStatusError reports a non-200 attestation endpoint response.
+type HTTPStatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("attestation endpoint returned HTTP %d: %s", e.StatusCode, e.Body)
+}
+
+// IsAuthFailure reports whether err is an HTTP 401 or 403 credential
+// rejection. Credentials are provider-wide, so every candidate fails the
+// same way and failover must not walk on it.
+func IsAuthFailure(err error) bool {
+	statusErr, ok := errors.AsType[*HTTPStatusError](err)
+	if !ok {
+		return false
+	}
+	return statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden
+}
+
 // FetchAttestationJSON performs a GET to url with a Bearer token, reads up to
-// limit bytes, and returns the response body. Returns an error with the
-// truncated body for non-200 responses.
+// limit bytes, and returns the response body. Returns an *HTTPStatusError
+// with the truncated body for non-200 responses.
 func FetchAttestationJSON(ctx context.Context, client *http.Client, url, apiKey string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
@@ -49,7 +71,7 @@ func FetchAttestationJSON(ctx context.Context, client *http.Client, url, apiKey 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("attestation endpoint returned HTTP %d: %s", resp.StatusCode, Truncate(string(body), 512))
+		return nil, &HTTPStatusError{StatusCode: resp.StatusCode, Body: Truncate(string(body), 512)}
 	}
 
 	return body, nil
@@ -91,7 +113,7 @@ func FetchAttestationWithTLS(ctx context.Context, client *http.Client, url, apiK
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("attestation endpoint returned HTTP %d: %s", resp.StatusCode, Truncate(string(body), 512))
+		return nil, "", &HTTPStatusError{StatusCode: resp.StatusCode, Body: Truncate(string(body), 512)}
 	}
 
 	return body, peerSPKIHex, nil

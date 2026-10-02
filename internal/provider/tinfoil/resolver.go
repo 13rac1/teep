@@ -1,9 +1,9 @@
 package tinfoil
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -37,6 +37,9 @@ const (
 
 	// refreshTimeout bounds how long a singleflight refresh can take.
 	refreshTimeout = 30 * time.Second
+
+	// skipCooldown is how long we skip a candidate domain after it fails.
+	skipCooldown = 2 * time.Minute
 )
 
 // promptCacheKeyCtxKey is the context key for the OpenAI prompt_cache_key
@@ -109,6 +112,11 @@ type DirectResolver struct {
 	mapping   map[string]ModelMapping // model → mapping
 	fetchedAt time.Time
 
+	// skip maps model → candidate domain → the time at which the domain
+	// becomes eligible for selection again. RecordCandidateFailure deletes
+	// expired entries.
+	skip map[string]map[string]time.Time
+
 	sf singleflight.Group
 }
 
@@ -138,16 +146,15 @@ func (r *DirectResolver) SetClient(c *http.Client) {
 // proxy discovery endpoint first. Returns an error if the model is not
 // found after refresh.
 //
-// When a prompt_cache_key is present in the context (set via
-// WithPromptCacheKey), the resolver uses hash-based sticky routing to
-// select a backend enclave domain, maximizing vLLM APC cache hit rates.
+// Resolve does not return skipped candidates. When a prompt_cache_key is present in the context (set via
+// WithPromptCacheKey), the resolver uses hash-based sticky routing to select
+// a backend enclave domain, maximizing vLLM APC cache hit rates.
 func (r *DirectResolver) Resolve(ctx context.Context, model string) (string, error) {
 	m, err := r.ResolveMapping(ctx, model)
 	if err != nil {
 		return "", err
 	}
-	promptCacheKey := PromptCacheKeyFromContext(ctx)
-	return m.SelectDomain(promptCacheKey), nil
+	return r.selectDomain(model, m, PromptCacheKeyFromContext(ctx)), nil
 }
 
 // ResolveMapping returns the full model mapping (domain + repo) for the
@@ -209,30 +216,45 @@ func (r *DirectResolver) ResolveMapping(ctx context.Context, model string) (Mode
 // When promptCacheKey is empty, it falls back to the lexicographically
 // smallest domain for deterministic selection (capture/replay consistency).
 func (m ModelMapping) SelectDomain(promptCacheKey string) string {
-	if len(m.Domains) == 0 {
+	ranked := rankedDomains(m.Domains, promptCacheKey)
+	if len(ranked) == 0 {
 		return m.Domain
 	}
-	if promptCacheKey == "" {
-		return m.Domains[0]
-	}
-
-	// Hash prompt_cache_key with each domain and pick the lowest hash.
-	// This ensures that the same prompt_cache_key always routes to the
-	// same backend, as long as the set of available domains doesn't change.
-	bestDomain := ""
-	bestHash := ""
-	for _, domain := range m.Domains {
-		h := sha256.Sum256([]byte(promptCacheKey + ":" + domain))
-		hashHex := hex.EncodeToString(h[:])
-		if bestHash == "" || hashHex < bestHash {
-			bestHash = hashHex
-			bestDomain = domain
-		}
-	}
-	return bestDomain
+	return ranked[0]
 }
 
-// ResolveRoute selects the sticky domain and effective repository together.
+// rankedDomains orders candidate domains for selection. An empty
+// promptCacheKey keeps the existing order. A non-empty key ranks all domains
+// ascending by sha256(promptCacheKey+":"+domain): the same key selects the
+// same first domain for a fixed discovery snapshot. These digests are
+// routing values, not secrets.
+func rankedDomains(domains []string, promptCacheKey string) []string {
+	if promptCacheKey == "" {
+		return domains
+	}
+	type rankedDomain struct {
+		domain string
+		digest [sha256.Size]byte
+	}
+	ranked := make([]rankedDomain, len(domains))
+	for i, domain := range domains {
+		ranked[i] = rankedDomain{
+			domain: domain,
+			digest: sha256.Sum256([]byte(promptCacheKey + ":" + domain)),
+		}
+	}
+	slices.SortFunc(ranked, func(a, b rankedDomain) int {
+		return bytes.Compare(a.digest[:], b.digest[:])
+	})
+	ordered := make([]string, len(ranked))
+	for i, entry := range ranked {
+		ordered[i] = entry.domain
+	}
+	return ordered
+}
+
+// ResolveRoute returns the sticky domain and its repository. It does not
+// return skipped candidates.
 func (r *DirectResolver) ResolveRoute(ctx context.Context, model string) (provider.ResolvedRoute, error) {
 	mapping, err := r.ResolveMapping(ctx, model)
 	if err != nil {
@@ -242,7 +264,34 @@ func (r *DirectResolver) ResolveRoute(ctx context.Context, model string) (provid
 	if repo == "" {
 		repo = RepoForModel(model)
 	}
-	return provider.NewResolvedRoute("https://"+mapping.SelectDomain(PromptCacheKeyFromContext(ctx)), repo)
+	domain := r.selectDomain(model, mapping, PromptCacheKeyFromContext(ctx))
+	return provider.NewResolvedRoute("https://"+domain, repo)
+}
+
+// RecordCandidateFailure skips domain for model during skipCooldown.
+func (r *DirectResolver) RecordCandidateFailure(ctx context.Context, model, domain string) {
+	if model == "" || domain == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	if r.skip == nil {
+		r.skip = make(map[string]map[string]time.Time)
+	}
+	entries := r.skip[model]
+	if entries == nil {
+		entries = make(map[string]time.Time)
+		r.skip[model] = entries
+	}
+	for d, eligible := range entries {
+		if !eligible.After(now) {
+			delete(entries, d)
+		}
+	}
+	entries[domain] = now.Add(skipCooldown)
+	slog.WarnContext(ctx, "tinfoil: enclave candidate failed; skipping until cooldown expires",
+		"model", model, "domain", domain, "cooldown", skipCooldown)
 }
 
 // CloseIdleConnections releases idle discovery connections.
@@ -251,6 +300,37 @@ func (r *DirectResolver) CloseIdleConnections() {
 	client := r.client
 	r.mu.RUnlock()
 	client.CloseIdleConnections()
+}
+
+// selectDomain returns the first ranked domain that is not skipped for the
+// model. If all domains are skipped, it returns the first ranked domain, so
+// that a model whose enclaves all failed can still get one more attempt.
+func (r *DirectResolver) selectDomain(model string, m ModelMapping, promptCacheKey string) string {
+	ranked := rankedDomains(m.Domains, promptCacheKey)
+	if len(ranked) == 0 {
+		return m.Domain
+	}
+	r.mu.RLock()
+	skipped := r.skip[model]
+	if len(skipped) == 0 {
+		r.mu.RUnlock()
+		return ranked[0]
+	}
+	now := time.Now()
+	available := make([]string, 0, len(ranked))
+	for _, domain := range ranked {
+		if eligible, ok := skipped[domain]; ok && eligible.After(now) {
+			continue
+		}
+		available = append(available, domain)
+	}
+	r.mu.RUnlock()
+	if len(available) == 0 {
+		slog.Warn("tinfoil: all enclave candidates skipped; using full candidate order",
+			"model", model, "count", len(ranked))
+		return ranked[0]
+	}
+	return available[0]
 }
 
 // refresh fetches the model-to-enclave mapping from the proxy discovery
@@ -301,13 +381,6 @@ func (r *DirectResolver) refresh(ctx context.Context) error {
 		// Domains are sorted lexicographically for deterministic
 		// selection. The attestation verification will confirm the
 		// enclave's identity regardless of which backend is selected.
-		//
-		// TODO: Add chutes-style instance pool handling with a skip set
-		// for failing/skipped enclaves. The Tinfoil router uses a similar
-		// pattern (NextEnclave with a skip map) to avoid overloaded or
-		// circuit-broken backends. Teep could maintain a per-model skip
-		// set populated by attestation failures or TLS binding mismatches,
-		// and exclude those domains from selection until they recover.
 		domains := sortedEnclaveDomains(pm.Enclaves)
 		if len(domains) == 0 {
 			slog.WarnContext(ctx, "tinfoil: proxy discovery: model has no enclaves",

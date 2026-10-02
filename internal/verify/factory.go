@@ -4,6 +4,7 @@ package verify
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -83,6 +84,19 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", name)
 	}
+}
+
+// newCandidateReporter returns the failover reporter for providers whose
+// discovery yields several candidates per model, and nil for all others.
+func newCandidateReporter(name string, cp *config.Provider, offline bool, client *http.Client) failoverReporter {
+	if name != "tinfoil_v3_direct" {
+		return nil
+	}
+	resolver := tinfoil.NewDirectResolver(cp.APIKey, offline)
+	if client != nil {
+		resolver.SetClient(client)
+	}
+	return resolver
 }
 
 func newReportDataVerifier(name string) provider.ReportDataVerifier {

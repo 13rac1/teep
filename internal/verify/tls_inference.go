@@ -50,10 +50,64 @@ func standaloneAttesterForRoute(ctx context.Context, opts *Options, attester pro
 	return attester, nil
 }
 
+// failoverReporter records failed candidates and resolves the next one.
+type failoverReporter interface {
+	RecordCandidateFailure(ctx context.Context, model, authority string)
+	ResolveRoute(ctx context.Context, model string) (provider.ResolvedRoute, error)
+}
+
+// standaloneFailoverReporter returns nil, which disables failover, during
+// replay and capture: replay must repeat the captured attempts, and capture
+// records only the final attempt's evidence.
+func standaloneFailoverReporter(opts *Options) failoverReporter {
+	if opts.replay || opts.capture != nil {
+		return nil
+	}
+	return newCandidateReporter(opts.ProviderName, opts.Provider, opts.Offline, opts.Client)
+}
+
+// evidenceCandidate is one candidate route and the outcome of its evidence.
+type evidenceCandidate struct {
+	opts     *Options
+	route    provider.ResolvedRoute
+	evidence func(context.Context, *Options, *provider.ResolvedRoute) (verificationOutcome, error)
+	outcome  verificationOutcome
+}
+
+func (c *evidenceCandidate) Attempt(ctx context.Context) (bool, error) {
+	var err error
+	c.outcome, err = c.evidence(ctx, c.opts, &c.route)
+	return c.outcome.report != nil && c.outcome.report.Blocked(), err
+}
+
+func (c *evidenceCandidate) Authority() string { return c.route.Authority() }
+
+// verifyWithFailover runs evidence on candidates until one passes, and sets
+// route to the last candidate that it tried. A nil reporter disables failover.
+func verifyWithFailover(ctx context.Context, opts *Options, route *provider.ResolvedRoute, reporter failoverReporter, evidence func(context.Context, *Options, *provider.ResolvedRoute) (verificationOutcome, error)) (verificationOutcome, error) {
+	var record func(context.Context, string)
+	if reporter != nil {
+		record = func(ctx context.Context, authority string) {
+			reporter.RecordCandidateFailure(ctx, opts.ModelName, authority)
+		}
+	}
+	next := func(ctx context.Context) (*evidenceCandidate, error) {
+		resolved, err := reporter.ResolveRoute(ctx, opts.ModelName)
+		if err != nil {
+			return nil, err
+		}
+		return &evidenceCandidate{opts: opts, route: resolved, evidence: evidence}, nil
+	}
+	final, err := provider.RunFailover(ctx, &evidenceCandidate{opts: opts, route: *route, evidence: evidence}, record, next)
+	*route = final.route
+	return final.outcome, err
+}
+
 func runTLSVerification(ctx context.Context, opts *Options, route *provider.ResolvedRoute) (verificationOutcome, error) {
 	logical, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	current, err := runEvidence(logical, opts, route)
+	reporter := standaloneFailoverReporter(opts)
+	current, err := verifyWithFailover(logical, opts, route, reporter, runEvidence)
 	if nearTLSOnly(opts) {
 		current.e2ee = nil
 		current.tlsInference = opts.CapturedTLSInference
@@ -82,7 +136,7 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 	result, err := tlsct.RunInferenceAttempts(logical, func(attemptCtx context.Context) (verificationOutcome, bool, error) {
 		if refresh {
 			opts.Nonce = attestation.NewNonce()
-			current, err = runEvidence(attemptCtx, opts, route)
+			current, err = verifyWithFailover(attemptCtx, opts, route, reporter, runEvidence)
 			if err != nil {
 				return current, false, err
 			}

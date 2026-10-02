@@ -38,6 +38,8 @@ type authorizedResponse struct {
 	authorization *authorization
 	upstream      *upstreamResult
 	blocked       *attestation.VerificationReport
+	// final is the request the attempt used, after any candidate failover.
+	final *authorizedRequest
 }
 
 func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedRequest) (authorizedResponse, error) {
@@ -64,10 +66,49 @@ func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedReque
 	return result, err
 }
 
+// authorizationCandidate is one candidate request and the result of its
+// authorization.
+type authorizationCandidate struct {
+	server  *Server
+	req     *authorizedRequest
+	value   *authorization
+	blocked *attestation.VerificationReport
+}
+
+func (c *authorizationCandidate) Attempt(ctx context.Context) (bool, error) {
+	var err error
+	c.value, c.blocked, err = c.server.loadAuthorization(ctx, c.req.provider, c.req.route, c.req.key)
+	return c.blocked != nil, err
+}
+
+func (c *authorizationCandidate) Authority() string { return c.req.key.Authority() }
+
+// loadAuthorizationWithFailover gets authorization from one candidate after
+// another. Each candidate has its own route and key, because authorization
+// uses the authority as its key. It does not change input.
+func (s *Server) loadAuthorizationWithFailover(ctx context.Context, input *authorizedRequest) (*authorization, *attestation.VerificationReport, *authorizedRequest, error) {
+	var record func(context.Context, string)
+	if recordModel := input.provider.RecordCandidateFailure; recordModel != nil {
+		record = func(ctx context.Context, authority string) { recordModel(ctx, input.key.Model(), authority) }
+	}
+	next := func(ctx context.Context) (*authorizationCandidate, error) {
+		route, key, err := resolveRequestRoute(ctx, input.provider, input.key.Model())
+		if err != nil {
+			return nil, err
+		}
+		req := *input
+		req.route, req.key = route, key
+		return &authorizationCandidate{server: s, req: &req}, nil
+	}
+	final, err := provider.RunFailover(ctx, &authorizationCandidate{server: s, req: input}, record, next)
+	return final.value, final.blocked, final.req, err
+}
+
 func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest) (result authorizedResponse, retry bool, err error) {
 	started := time.Now()
-	value, blocked, err := s.loadAuthorization(ctx, input.provider, input.route, input.key)
-	result = authorizedResponse{authorization: value, blocked: blocked, outcome: authorizedOutcome{status: "authorization_failed", attestDur: time.Since(started)}}
+	value, blocked, resolved, err := s.loadAuthorizationWithFailover(ctx, input)
+	input = resolved
+	result = authorizedResponse{authorization: value, blocked: blocked, outcome: authorizedOutcome{status: "authorization_failed", attestDur: time.Since(started)}, final: input}
 	if err != nil || blocked != nil {
 		return result, false, err
 	}
@@ -146,6 +187,10 @@ func cleanupAuthorized(ur *upstreamResult) {
 func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, input *authorizedRequest) (out authorizedOutcome, err error) {
 	result, err := s.authorizedRoundtrip(ctx, input)
 	out = result.outcome
+	if result.final != nil {
+		// Stats, invalidation, and promotion must name the route used.
+		input = result.final
+	}
 	if err != nil {
 		return out, err
 	}
@@ -164,7 +209,7 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	out.report = value.report
 	started := time.Now()
 	defer func() { out.upstreamDur += time.Since(started) }()
-	if err := s.relayAuthorized(result.upstream.Request.Context(), w, input, result); err != nil { //nolint:contextcheck // The request retains the attempt context derived from ctx with the caller deadline.
+	if err := s.relayAuthorized(result.upstream.Request.Context(), w, input, &result); err != nil { //nolint:contextcheck // The request retains the attempt context derived from ctx with the caller deadline.
 		return out, err
 	}
 	if input.provider.E2EE {
@@ -175,7 +220,7 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	return out, nil
 }
 
-func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result authorizedResponse) (retErr error) {
+func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result *authorizedResponse) (retErr error) {
 	writer, err := newResponseLifetime(ctx, w)
 	if err != nil {
 		return err

@@ -16,6 +16,14 @@ type connectionCapacityError string
 
 func (e connectionCapacityError) Error() string { return string(e) }
 
+// IsLocalError reports whether err comes from local conditions — caller
+// cancellation or deadline, or exhausted local connection capacity — and not
+// from the remote peer. Failover and negative caches must not attribute these
+// errors to a candidate.
+func IsLocalError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrConnectionCapacity)
+}
+
 // connectionBudgets holds physical connection permits until Close. net/http's
 // HTTP/2 stream-capacity handling can remove a live connection from its own
 // MaxConnsPerHost accounting before that connection closes.
