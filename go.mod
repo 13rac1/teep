@@ -12,9 +12,10 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/certificate-transparency-go v1.3.3
 	github.com/google/go-sev-guest v0.15.0
-	github.com/google/go-tdx-guest v0.3.2-0.20260305110651-91f9a52f36c7
+	github.com/google/go-tdx-guest v0.3.2-0.20260908172713-48f3644ca143
 	github.com/peterbourgon/ff/v4 v4.0.0-beta.1
 	github.com/sigstore/sigstore-go v1.2.1
+	github.com/theupdateframework/go-tuf/v2 v2.4.2-0.20260407074541-7e8f69f906ef
 	github.com/transparency-dev/merkle v0.0.2
 	golang.org/x/crypto v0.52.0
 	golang.org/x/net v0.55.0
@@ -71,7 +72,6 @@ require (
 	github.com/sigstore/rekor-tiles/v2 v2.2.2-0.20260601073857-5d098a2b6443 // indirect
 	github.com/sigstore/sigstore v1.10.8 // indirect
 	github.com/sigstore/timestamp-authority/v2 v2.1.2 // indirect
-	github.com/theupdateframework/go-tuf/v2 v2.4.2-0.20260407074541-7e8f69f906ef // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
