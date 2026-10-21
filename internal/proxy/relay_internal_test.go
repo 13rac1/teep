@@ -214,6 +214,8 @@ func newMinimalServer() *Server {
 		cache:           attestation.NewCache(time.Minute),
 		negCache:        attestation.NewNegativeCache(time.Minute),
 		signingKeyCache: attestation.NewSigningKeyCache(time.Minute),
+		reportEpochs:    make(map[providerModelKey]uint64),
+		reportPubs:      make(map[providerModelKey]uint64),
 		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 	}
 }
@@ -226,7 +228,7 @@ func TestClassifyRelayOutcome_NilError(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "test"}
 	ms := &modelStats{}
-	result := s.classifyRelayOutcome(context.Background(), nil, false, prov, "model", ms, false, "")
+	result := s.classifyRelayOutcome(context.Background(), nil, &attestResult{}, prov, "model", ms, false, "")
 	if result != "" {
 		t.Errorf("classifyRelayOutcome(nil) = %q, want empty", result)
 	}
@@ -237,7 +239,7 @@ func TestClassifyRelayOutcome_NonDecryptionError(t *testing.T) {
 	prov := &provider.Provider{Name: "test"}
 	ms := &modelStats{}
 	relayErr := errors.New("upstream connection reset")
-	result := s.classifyRelayOutcome(context.Background(), relayErr, false, prov, "model", ms, false, "")
+	result := s.classifyRelayOutcome(context.Background(), relayErr, &attestResult{}, prov, "model", ms, false, "")
 	if result != "relay_failed" {
 		t.Errorf("classifyRelayOutcome(non-decryption err) = %q, want relay_failed", result)
 	}
@@ -248,65 +250,116 @@ func TestClassifyRelayOutcome_DecryptionErrorNotE2EEActive(t *testing.T) {
 	prov := &provider.Provider{Name: "test"}
 	ms := &modelStats{}
 	// ErrDecryptionFailed but e2eeActive=false → should NOT call handleE2EEDecryptionFailure.
-	result := s.classifyRelayOutcome(context.Background(), e2ee.ErrDecryptionFailed, false, prov, "model", ms, false, "")
+	result := s.classifyRelayOutcome(context.Background(), e2ee.ErrDecryptionFailed, &attestResult{}, prov, "model", ms, false, "")
 	if result != "relay_failed" {
 		t.Errorf("classifyRelayOutcome(decrypt err, not e2ee active) = %q, want relay_failed", result)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// clearE2EEFailureIfFresh
+// checkE2EEFailure
 // ---------------------------------------------------------------------------
 
-func TestClearE2EEFailureIfFresh_NoFailure(t *testing.T) {
+func TestCheckE2EEFailure_NoFailure(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "venice"}
 	ms := &modelStats{}
 	ar := &attestResult{}
 
 	w := httptest.NewRecorder()
-	proceed := s.clearE2EEFailureIfFresh(context.Background(), w, prov, "model", ar, ms)
+	proceed := s.checkE2EEFailure(context.Background(), w, prov, "model", ar, ms)
 	if !proceed {
 		t.Error("expected proceed=true when no failure recorded")
 	}
 }
 
-func TestClearE2EEFailureIfFresh_FailureWithFreshAttestation(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{Name: "venice"}
-	ms := &modelStats{}
-	// Record a failure for this provider+model.
-	key := providerModelKey{prov.Name, "model"}
-	s.e2eeFailed.Store(key, true)
-	// Fresh attestation clears the failure.
-	ar := &attestResult{Raw: &attestation.RawAttestation{}}
-
-	w := httptest.NewRecorder()
-	proceed := s.clearE2EEFailureIfFresh(context.Background(), w, prov, "model", ar, ms)
-	if !proceed {
-		t.Error("expected proceed=true after clearing failure with fresh attestation")
-	}
-	if _, still := s.e2eeFailed.Load(key); still {
-		t.Error("expected failure to be cleared from e2eeFailed")
-	}
-}
-
-func TestClearE2EEFailureIfFresh_FailureWithCachedAttestation(t *testing.T) {
+// A recorded failure means that the request's report predates it, also for
+// the request that holds the raw attestation. The request deletes the cache
+// entries because the cache still holds the publication that it used, also
+// after a success replaced the report with an annotated copy.
+func TestCheckE2EEFailure_DeletesReportItUsed(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "venice"}
 	ms := &modelStats{}
 	key := providerModelKey{prov.Name, "model"}
 	s.e2eeFailed.Store(key, true)
-	// Cached attestation (ar.Raw == nil) — should fail closed.
-	ar := &attestResult{Raw: nil}
+	used := &attestation.VerificationReport{}
+	pub := publishTestReport(s, key, used.Clone())
+	s.signingKeyCache.Put(prov.Name, "model", "used-key")
+	ar := &attestResult{Report: used, Raw: &attestation.RawAttestation{}, Publication: pub}
 
 	w := httptest.NewRecorder()
-	proceed := s.clearE2EEFailureIfFresh(context.Background(), w, prov, "model", ar, ms)
+	proceed := s.checkE2EEFailure(context.Background(), w, prov, "model", ar, ms)
 	if proceed {
-		t.Error("expected proceed=false when failure recorded and attestation is cached")
+		t.Error("expected proceed=false when a failure is recorded")
 	}
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	if _, ok := s.cache.Get(prov.Name, "model"); ok {
+		t.Error("report that the request used is still cached")
+	}
+	if _, ok := s.signingKeyCache.Get(prov.Name, "model"); ok {
+		t.Error("signing key of the report that the request used is still cached")
+	}
+	if _, still := s.e2eeFailed.Load(key); !still {
+		t.Error("request cleared the recorded failure")
+	}
+}
+
+// After the request deletes the publication that it used, that publication
+// is not current. A later decryption failure on it logs a warning and does not
+// increment the epoch, so it cannot stop a recovery verification.
+func TestCheckE2EEFailure_DeletionEndsPublication(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "venice"}
+	key := providerModelKey{prov.Name, "model"}
+	s.e2eeFailed.Store(key, true)
+	pub := publishTestReport(s, key, &attestation.VerificationReport{})
+	ar := &attestResult{Report: &attestation.VerificationReport{}, Publication: pub}
+	if s.checkE2EEFailure(context.Background(), httptest.NewRecorder(), prov, "model", ar, &modelStats{}) {
+		t.Fatal("expected proceed=false when a failure is recorded")
+	}
+	if _, ok := s.cache.Get(prov.Name, "model"); ok {
+		t.Fatal("report that the request used is still cached")
+	}
+	logs := captureSlog(t, func() {
+		s.handleE2EEDecryptionFailure(context.Background(), prov, "model", pub, &modelStats{}, false, "", errors.New("decrypt error"))
+	})
+	if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "current report kept") {
+		t.Fatalf("late failure diagnostic missing:\n%s", logs)
+	}
+	if s.reportEpoch(key) != 0 {
+		t.Fatal("late failure on the deleted publication incremented the epoch")
+	}
+}
+
+// A request must not delete a replacement report that it did not use.
+func TestCheckE2EEFailure_KeepsReplacementReport(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "venice"}
+	ms := &modelStats{}
+	key := providerModelKey{prov.Name, "model"}
+	s.e2eeFailed.Store(key, true)
+	used := &attestation.VerificationReport{}
+	usedPub := publishTestReport(s, key, used)
+	replacement := &attestation.VerificationReport{}
+	publishTestReport(s, key, replacement)
+	s.signingKeyCache.Put(prov.Name, "model", "replacement-key")
+	ar := &attestResult{Report: used, Publication: usedPub}
+
+	w := httptest.NewRecorder()
+	if s.checkE2EEFailure(context.Background(), w, prov, "model", ar, ms) {
+		t.Error("expected proceed=false when a failure is recorded")
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	if cached, ok := s.cache.Get(prov.Name, "model"); !ok || cached != replacement {
+		t.Error("request deleted a replacement report")
+	}
+	if key, ok := s.signingKeyCache.Get(prov.Name, "model"); !ok || key != "replacement-key" {
+		t.Error("request deleted the signing key of a replacement report")
 	}
 }
 
@@ -355,7 +408,7 @@ func TestHandleE2EEDecryptionFailure_NonChutes(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "venice"}
 	ms := &modelStats{}
-	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", ms, false, "", errors.New("decrypt error"))
+	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", 0, ms, false, "", errors.New("decrypt error"))
 	t.Logf("result = %q, ms.errors = %d", result, ms.errors.Load())
 	if result != "e2ee_decrypt_failed" {
 		t.Errorf("result = %q, want %q", result, "e2ee_decrypt_failed")
@@ -370,7 +423,7 @@ func TestHandleE2EEDecryptionFailure_Chutes_WithFetcher(t *testing.T) {
 	fetcher := &internalMockFetcher{}
 	prov := &provider.Provider{Name: "chutes", E2EEMaterialFetcher: fetcher}
 	ms := &modelStats{}
-	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", ms, true, "chute-id", errors.New("decrypt error"))
+	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", 0, ms, true, "chute-id", errors.New("decrypt error"))
 	t.Logf("result = %q, invalidated = %v", result, fetcher.invalidated)
 	if result != "e2ee_decrypt_failed" {
 		t.Errorf("result = %q, want %q", result, "e2ee_decrypt_failed")
@@ -384,7 +437,7 @@ func TestHandleE2EEDecryptionFailure_Chutes_NilFetcher(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "chutes", E2EEMaterialFetcher: nil}
 	ms := &modelStats{}
-	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", ms, true, "", errors.New("decrypt error"))
+	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", 0, ms, true, "", errors.New("decrypt error"))
 	t.Logf("result = %q", result)
 	if result != "e2ee_decrypt_failed" {
 		t.Errorf("result = %q, want %q", result, "e2ee_decrypt_failed")
@@ -676,8 +729,9 @@ func TestHandleE2EEDecryptionFailure_LogsSingleError(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "venice"}
 	ms := &modelStats{}
+	pub := publishTestReport(s, providerModelKey{prov.Name, "model"}, &attestation.VerificationReport{})
 	logs := captureSlog(t, func() {
-		_ = s.handleE2EEDecryptionFailure(t.Context(), prov, "model", ms, false, "", errors.New("decrypt error"))
+		_ = s.handleE2EEDecryptionFailure(t.Context(), prov, "model", pub, ms, false, "", errors.New("decrypt error"))
 	})
 
 	for _, want := range []string{

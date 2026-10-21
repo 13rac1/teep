@@ -575,8 +575,11 @@ func TestAttestAndCache_AttestFailed(t *testing.T) {
 		cache:           attestation.NewCache(time.Minute),
 		negCache:        attestation.NewNegativeCache(time.Minute),
 		signingKeyCache: attestation.NewSigningKeyCache(time.Minute),
+		authorizations:  newAuthorizationStore(maxAuthorizations, maxAuthorizationVerifications, authorizationVerificationTimeout),
+		reportAdmission: make(chan struct{}, maxAuthorizationVerifications),
 		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 	}
+	defer s.Close()
 
 	// Provider with nil Attester → fetchAndVerify returns nil.
 	prov := &provider.Provider{Name: "test"}

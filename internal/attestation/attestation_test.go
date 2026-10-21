@@ -663,6 +663,53 @@ func TestCacheDelete(t *testing.T) {
 	}
 }
 
+// Put gives each stored report a new publication number. Replace swaps only
+// the entry of the expected publication and keeps its number and the time at
+// which the entry was populated, so it does not extend the entry's lifetime.
+func TestCacheReplace(t *testing.T) {
+	c := NewCache(time.Minute)
+	old := &VerificationReport{Model: "old"}
+	next := &VerificationReport{Model: "next"}
+	if c.Replace("venice", "m1", 1, next) {
+		t.Fatal("Replace stored a report for an absent entry")
+	}
+	if _, ok := c.Get("venice", "m1"); ok {
+		t.Fatal("Replace created an entry")
+	}
+	first := c.Put("venice", "m1", old)
+	pub := c.Put("venice", "m1", old)
+	if first == 0 || pub == first {
+		t.Fatalf("Put assigned publications %d and %d, want two different nonzero numbers", first, pub)
+	}
+	fetchedAt := c.Models()[0].FetchedAt
+	time.Sleep(time.Millisecond)
+	if c.Replace("venice", "m1", first, next) {
+		t.Fatal("Replace overwrote a different publication")
+	}
+	if got, _ := c.Get("venice", "m1"); got != old {
+		t.Fatal("failed Replace changed the entry")
+	}
+	if !c.Replace("venice", "m1", pub, next) {
+		t.Fatal("Replace did not replace the expected publication")
+	}
+	if got, gotPub, _ := c.GetPublication("venice", "m1"); got != next || gotPub != pub {
+		t.Fatalf("Replace stored report %v publication %d, want the new report and publication %d", got, gotPub, pub)
+	}
+	if got := c.Models()[0].FetchedAt; !got.Equal(fetchedAt) {
+		t.Fatalf("Replace changed the fetch time from %v to %v", fetchedAt, got)
+	}
+
+	expired := NewCache(time.Nanosecond)
+	expiredPub := expired.Put("venice", "m1", old)
+	time.Sleep(time.Millisecond)
+	if expired.Replace("venice", "m1", expiredPub, next) {
+		t.Fatal("Replace renewed an expired entry")
+	}
+	if _, gotPub, ok := expired.GetPublication("venice", "m1"); ok || gotPub != 0 {
+		t.Fatal("GetPublication returned an expired entry")
+	}
+}
+
 func TestCacheDelete_NoopOnMiss(t *testing.T) {
 	c := NewCache(time.Minute)
 	// Should not panic when deleting a missing key.

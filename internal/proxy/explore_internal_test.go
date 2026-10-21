@@ -318,9 +318,10 @@ func TestHandleExploreAttest_Success(t *testing.T) {
 		t.Errorf("Provider = %q, want testprov", report.Provider)
 	}
 
-	// Verify the report was cached.
-	if _, ok := s.cache.Get("testprov", "test-model"); !ok {
-		t.Error("attestation report not found in cache after successful attest")
+	// The report cache accepts only shared verifications, which check for
+	// invalidation before they publish.
+	if _, ok := s.cache.Get("testprov", "test-model"); ok {
+		t.Error("explore attestation wrote the report cache")
 	}
 }
 
