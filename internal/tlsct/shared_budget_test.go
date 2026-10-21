@@ -24,9 +24,9 @@ func TestNestedAttestationTransportSharesSocketBudget(t *testing.T) {
 			t.Fatal(err)
 		}
 		budget := NewSocketBudget(1)
-		ordinary := NewHTTPClientWithTransport(time.Second*5, NewPooledTransportWithBudget(budget), true)
+		ordinary := NewHTTPClientWithBudget(time.Second*5, budget, true)
 		defer ordinary.CloseIdleConnections()
-		nested := NewHTTPClientWithTransport(time.Second*5, NewPooledTransportWithBudget(budget), true)
+		nested := NewHTTPClientWithBudget(time.Second*5, budget, true)
 		nested.Transport = NewTLS12FallbackTransportWithBudget(nested.Transport, budget, endpoint.Hostname())
 		defer nested.CloseIdleConnections()
 		request := func(client *http.Client) error {
@@ -52,11 +52,13 @@ func TestNestedAttestationTransportSharesSocketBudget(t *testing.T) {
 		if err := request(nested); err != nil {
 			t.Fatalf("nested transport failed after release: %v", err)
 		}
-		if err := request(ordinary); !errors.Is(err, ErrConnectionCapacity) {
+		other := NewHTTPClientWithBudget(time.Second*5, budget, true)
+		defer other.CloseIdleConnections()
+		if err := request(other); !errors.Is(err, ErrConnectionCapacity) {
 			t.Fatalf("nested socket was not accounted: %v", err)
 		}
 		nested.CloseIdleConnections()
-		if err := request(ordinary); err != nil {
+		if err := request(other); err != nil {
 			t.Fatalf("nested cleanup did not release permit: %v", err)
 		}
 	})

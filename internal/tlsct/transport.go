@@ -123,19 +123,21 @@ func NewTLS12FallbackTransport(defaultRT http.RoundTripper, tls12Hosts ...string
 	if len(tls12Hosts) == 0 {
 		return defaultRT
 	}
-	return newTLS12FallbackTransport(defaultRT, NewPooledTransport(), tls12Hosts)
+	fallback := NewPooledTransport()
+	return newTLS12FallbackTransport(defaultRT, fallback, fallback, tls12Hosts)
 }
 
 // NewTLS12FallbackTransportWithBudget includes the nested pool in shared admission.
 func NewTLS12FallbackTransportWithBudget(defaultRT http.RoundTripper, budget *SocketBudget, tls12Hosts ...string) http.RoundTripper {
-	return newTLS12FallbackTransport(defaultRT, NewPooledTransportWithBudget(budget), tls12Hosts)
+	pool := newBudgetedPool(budget)
+	return newTLS12FallbackTransport(defaultRT, pool.Transport, pool, tls12Hosts)
 }
 
-func newTLS12FallbackTransport(defaultRT http.RoundTripper, fallback *http.Transport, tls12Hosts []string) http.RoundTripper {
+func newTLS12FallbackTransport(defaultRT http.RoundTripper, fallback *http.Transport, rt http.RoundTripper, tls12Hosts []string) http.RoundTripper {
 	fallback.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12}
 	fallback.ForceAttemptHTTP2 = false
 
-	return NewTLS12FallbackTransportWithFallback(defaultRT, fallback, tls12Hosts)
+	return NewTLS12FallbackTransportWithFallback(defaultRT, rt, tls12Hosts)
 }
 
 // NewTLS12FallbackTransportWithFallback is the testable core of

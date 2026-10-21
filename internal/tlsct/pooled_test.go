@@ -176,3 +176,21 @@ func TestPooledTransportProxyEnvironment(t *testing.T) {
 		}
 	}
 }
+
+func TestSocketBudgetRejectsInvalidConfiguration(t *testing.T) {
+	for name, construct := range map[string]func(){
+		"zero limit":                  func() { NewSocketBudget(0) },
+		"attestation limit below two": func() { NewAttestationSocketBudget(1) },
+		"fresh view of nil budget":    func() { (*SocketBudget)(nil).Fresh() },
+		"client with nil budget":      func() { NewHTTPClientWithBudget(time.Second, nil, false) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("invalid socket budget accepted")
+				}
+			}()
+			construct()
+		})
+	}
+}

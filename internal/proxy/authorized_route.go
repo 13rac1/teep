@@ -11,8 +11,10 @@ import (
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
-// Close cancels shared verification and closes idle inference, attestation,
-// and provider discovery connections. Active inference streams may finish.
+// Close cancels shared verification, closes idle inference connections, and
+// closes all attestation and provider discovery connections. Active inference
+// streams may finish. Active attestation and discovery fetches end, and their
+// clients are not usable after Close.
 // Callers that serve Server through another HTTP server must call Close.
 func (s *Server) Close() {
 	if s.authorizations != nil {

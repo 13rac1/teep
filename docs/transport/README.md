@@ -337,10 +337,11 @@ attempts and include the resolved authority in model metrics. Do not perform ano
 lookup solely to label the completed request.
 
 Callers that embed the proxy in another HTTP server must call `Server.Close`
-to cancel shared verification and close idle inference, attestation, model
-discovery, endpoint discovery, and nonce-fetch connections. Provider components
-forward cleanup to their owned clients and resolvers, including wrapped model
-listers. Active inference streams may finish under their existing deadlines.
+to cancel shared verification, close idle inference connections, and close all
+attestation, model discovery, endpoint discovery, and nonce-fetch connections.
+Provider components forward cleanup to their owned clients and resolvers,
+including wrapped model listers. Active inference streams may finish under
+their existing deadlines. Active attestation and discovery fetches end.
 Configure injected clients before concurrent use or cleanup.
 
 Transport wrappers, including retry and capture wrappers, must forward
@@ -355,6 +356,15 @@ Server attesters and collateral clients share this budget, including each
 client's nested AMD KDS transport. Closing a client releases only its own
 physical sockets. The server reserves one of the 16 slots from long-lived
 pools for fresh NearDirect fetches; see [fresh pool admission](#fresh-neardirect-attestation-pools).
+
+Go's `CloseIdleConnections` does not close an HTTP/2 connection that a dial
+adds to the pool after cleanup ran. That connection would keep its socket
+permit until the idle timeout. Each pool on a socket budget therefore records
+its sockets. Its cleanup cancels every dial of the pool, waits until the dials
+return, and closes every socket of the pool, so the pool holds no permit when
+cleanup returns. Cleanup also closes the sockets of active requests, and the
+pool is not usable after cleanup. Owners call it only after their last request
+or at process shutdown, never to rotate the connections of a busy shared pool.
 
 NEAR direct endpoint discovery has a separate metadata client and socket budget.
 `SetClientFactory` supplies an owned pool for each full fetch; `SetMetadataClient` assigns
