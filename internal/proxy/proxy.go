@@ -664,10 +664,13 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// FlushError preserves downstream failures for ResponseController callers.
+func (r *statusRecorder) FlushError() error {
+	return http.NewResponseController(r.ResponseWriter).Flush()
+}
+
 func (r *statusRecorder) Flush() {
-	if f, ok := r.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+	_ = r.FlushError()
 }
 
 // fromConfig constructs a provider.Provider from a config.Provider, attaching
@@ -1667,18 +1670,21 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 
 		var attestDur, e2eeDur, upstreamDur time.Duration
 		var status string
+		var completionDiagnostics []slog.Attr
 		defer func() {
-			slog.InfoContext(ctx, "request complete",
-				"endpoint", ep.name,
-				"provider", prov.Name,
-				"model", upstreamModel,
-				"stream", stream,
-				"status", status,
-				"attest", fmtDur(attestDur),
-				"e2ee", fmtDur(e2eeDur),
-				"upstream", fmtDur(upstreamDur),
-				"total", fmtDur(time.Since(requestStart)),
+			attrs := make([]slog.Attr, 0, 18+len(completionDiagnostics))
+			attrs = append(attrs,
+				slog.String("endpoint", ep.name),
+				slog.String("provider", prov.Name),
+				slog.String("model", upstreamModel),
+				slog.Bool("stream", stream),
+				slog.String("status", status),
+				slog.String("attest", fmtDur(attestDur)),
+				slog.String("e2ee", fmtDur(e2eeDur)),
+				slog.String("upstream", fmtDur(upstreamDur)),
+				slog.String("total", fmtDur(time.Since(requestStart))),
 			)
+			slog.LogAttrs(ctx, slog.LevelInfo, "request complete", append(attrs, completionDiagnostics...)...)
 		}()
 
 		s.stats.requests.Add(1)
@@ -1725,6 +1731,7 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 				observe(outcome.report, prov.E2EE)
 			}
 			status, attestDur, e2eeDur, upstreamDur = outcome.status, outcome.attestDur, outcome.e2eeDur, outcome.upstreamDur
+			completionDiagnostics = outcome.summary
 			return
 		}
 
@@ -2405,7 +2412,8 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, body io.Reader,
 // writer's capability.
 type responseInterceptor struct {
 	http.ResponseWriter
-	headerSent bool
+	headerSent   bool
+	bytesWritten int64
 }
 
 // Unwrap lets ResponseController reach the server's deadline support.
@@ -2418,26 +2426,33 @@ func (ri *responseInterceptor) WriteHeader(code int) {
 
 func (ri *responseInterceptor) Write(b []byte) (int, error) {
 	ri.headerSent = true
-	return ri.ResponseWriter.Write(b)
+	n, err := ri.ResponseWriter.Write(b)
+	ri.bytesWritten += int64(n)
+	return n, err
 }
 
 // responseInterceptorFlusher extends responseInterceptor with Flush support.
 // Returned by newResponseInterceptor when the underlying writer is flushable.
 type responseInterceptorFlusher struct {
 	*responseInterceptor
-	flusher http.Flusher
 }
 
 func (rif *responseInterceptorFlusher) Flush() {
-	rif.flusher.Flush()
+	_ = rif.FlushError()
+}
+
+// FlushError preserves downstream failures for ResponseController callers.
+func (rif *responseInterceptorFlusher) FlushError() error {
+	rif.headerSent = true
+	return http.NewResponseController(rif.ResponseWriter).Flush()
 }
 
 // newResponseInterceptor wraps w in a responseInterceptor. The returned writer
 // satisfies http.Flusher only if w does.
 func newResponseInterceptor(w http.ResponseWriter) (*responseInterceptor, http.ResponseWriter) {
 	ri := &responseInterceptor{ResponseWriter: w}
-	if f, ok := w.(http.Flusher); ok {
-		return ri, &responseInterceptorFlusher{responseInterceptor: ri, flusher: f}
+	if _, ok := w.(http.Flusher); ok {
+		return ri, &responseInterceptorFlusher{responseInterceptor: ri}
 	}
 	return ri, ri
 }

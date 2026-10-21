@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -13,10 +14,18 @@ func TestResponseFailureCooldownGeneration(t *testing.T) {
 	key, candidate := testAuthorizationCandidate(t, "model")
 	old := loadTestAuthorization(t, server.authorizations, key, candidate)
 	var wg sync.WaitGroup
+	var removed atomic.Int32
 	for range 32 {
-		wg.Go(func() { server.rejectResponseAuthorization(key, old.generation) })
+		wg.Go(func() {
+			if server.rejectResponseAuthorization(key, old.generation) {
+				removed.Add(1)
+			}
+		})
 	}
 	wg.Wait()
+	if removed.Load() != 1 {
+		t.Fatalf("removals=%d, want one for the failed generation", removed.Load())
+	}
 	info, ok := server.negCache.ActiveInfo(key.ProviderName(), key.EvidenceScope().SingleflightKey())
 	if !ok {
 		t.Fatal("missing failure cooldown")
@@ -28,9 +37,16 @@ func TestResponseFailureCooldownGeneration(t *testing.T) {
 	// failure must neither remove the replacement nor refresh the old cooldown.
 	replacement := loadTestAuthorization(t, server.authorizations, key, candidate)
 	for range 32 {
-		wg.Go(func() { server.rejectResponseAuthorization(key, old.generation) })
+		wg.Go(func() {
+			if server.rejectResponseAuthorization(key, old.generation) {
+				removed.Add(1)
+			}
+		})
 	}
 	wg.Wait()
+	if removed.Load() != 1 {
+		t.Fatalf("removals=%d, want one for the failed generation", removed.Load())
+	}
 	after, _ := server.negCache.ActiveInfo(key.ProviderName(), key.EvidenceScope().SingleflightKey())
 	if !after.RecordedAt.Equal(info.RecordedAt) {
 		t.Fatal("old failure extended cooldown")

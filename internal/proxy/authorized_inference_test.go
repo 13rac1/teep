@@ -197,16 +197,39 @@ func TestAuthorizedRejectionPreservesReplacement(t *testing.T) {
 		replacement.report.Metadata = map[string]string{"generation": "replacement"}
 		old = loadTestAuthorization(t, server.authorizations, key, candidate)
 		prov := &provider.Provider{Name: key.ProviderName(), BaseURL: upstream.URL, StaticRoute: route, UsesTLSBinding: true, E2EE: true, Encryptor: tinfoil.NewE2EE(), Preparer: tinfoil.NewPreparer("test")}
+		logs := captureAuthorizationDiagnostics(t, server.authorizations)
 		used, err := server.inferAuthorized(context.Background(), newInferenceRecorder(), &authorizedRequest{provider: prov, route: route, key: key, body: []byte(`{"model":"model"}`), path: "/v1/chat/completions", contentType: "application/json", endpoint: e2ee.EndpointChat})
 		if err != nil {
 			t.Fatal(err)
 		}
+		retryLog := ""
+		for line := range strings.SplitSeq(logs.String(), "\n") {
+			if strings.Contains(line, "authorized inference retry scheduled") {
+				retryLog = line
+			}
+		}
+		// An early HTTP/2 rejection can abort the request body write, so
+		// response_header_wait is optional. TestInferenceTimingHeaderWaitAndReuse
+		// checks that duration after a successful WroteRequest callback.
+		for _, field := range []string{"upstream_status_code=422", "retry_reason=model_key_rejected", "upstream rejected the attested model key", fmt.Sprintf("authorization_generation=%d", old.generation)} {
+			if !strings.Contains(retryLog, field) {
+				t.Fatalf("missing %q in retry log: %s", field, retryLog)
+			}
+		}
 		if requests.Load() != 2 || used.report.Metadata["generation"] != "replacement" {
 			t.Fatal("retry did not use replacement authorization")
+		}
+		fields := diagnosticFields(t, used.summary)
+		if fields["inference_attempts"] != int64(2) || fields["retry_reason"] != "model_key_rejected" {
+			t.Fatalf("missing retry diagnostics: %v", fields)
 		}
 		current, ok := server.authorizations.acquire(key)
 		if !ok || current.generation == old.generation {
 			t.Fatal("rejection erased replacement generation")
+		}
+		published, ok := fields["authorization_published_at"].(time.Time)
+		if fields["authorization_generation"] != uint64(current.generation) || !ok || !published.Equal(current.publishedAt) || fields["authority"] != current.identity.Authority() {
+			t.Fatalf("successful retry did not report the replacement identity: %v", fields)
 		}
 	})
 }

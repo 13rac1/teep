@@ -31,13 +31,15 @@ func TestCallerDeadlineStopsBufferedResponses(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
 		for _, tc := range []struct {
-			name   string
-			stream bool
-			status int
+			name    string
+			stream  bool
+			status  int
+			outcome string
 		}{
-			{"stream", true, http.StatusOK},
-			{"nonstream", false, http.StatusOK},
-			{"encrypted_error", false, http.StatusUnprocessableEntity},
+			{"stream", true, http.StatusOK, "deadline_exceeded"},
+			{"nonstream", false, http.StatusOK, "deadline_exceeded"},
+			// The HTTP failure remains the outcome when delivery also times out.
+			{"encrypted_error", false, http.StatusUnprocessableEntity, "upstream_failed"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				private := authorizedTestKey(t)
@@ -65,7 +67,7 @@ func TestCallerDeadlineStopsBufferedResponses(t *testing.T) {
 				defer cancel()
 				writer := &delayedResponseWriter{inferenceRecorder: newInferenceRecorder()}
 				out := server.handleAuthorizedEndpoint(ctx, writer, input)
-				if out.status != "deadline_exceeded" || writer.writes != 1 || !writer.deadline.Equal(expires) {
+				if out.status != tc.outcome || writer.writes != 1 || !writer.deadline.Equal(expires) {
 					t.Fatalf("status=%s writes=%d deadline=%v", out.status, writer.writes, writer.deadline)
 				}
 				if out.report != nil {

@@ -420,3 +420,144 @@ capacity failure does not publish authorization, start a negative-cache delay,
 flush another pool, or authorize inference replay. Later verification can succeed
 after a pooled socket closes. HTTPS proxy connections count against their dialed
 proxy address, including tunnels for different origin authorities.
+
+## Inference diagnostics
+
+These diagnostics apply to the shared TLS-bound authorization handler
+(`UsesTLSBinding`): NEAR Direct, NEAR Cloud, Tinfoil cloud, and Tinfoil direct.
+They apply with either HTTP/2 or HTTP/1.1. Other providers keep their existing
+relay diagnostics. A provider migrated to this handler inherits the diagnostics
+without provider-specific logging code. Authorization and inference diagnostic
+loggers belong to each authorization store; tests inject separate handlers
+before starting operations. Enabling HTTP/2 alone does not select
+this handler; migration must satisfy its route, authorization, and TLS identity
+contracts. See the [provider migration tests](testing.md).
+
+Each initial authorization lookup emits a DEBUG record with
+`authorization_cache_hit`. A miss can lead to shared verification or a blocking
+error; it does not prove that this caller started verification.
+DEBUG records identify when shared verification starts and when a caller receives
+its result. `authorization_verification_shared` means multiple callers joined
+the same singleflight operation, including callers that subsequently canceled.
+It does not distinguish the initiating caller from later callers or establish
+verification success. A cache hit does not emit these verification records.
+
+Fresh authorization publication emits an INFO record with provider, model,
+authority, accepted public SPKI fingerprint, publication time, and generation.
+Inference failure warnings include the authority, generation used, and publication
+time when authorization was acquired. Caller cancellation includes these fields
+in the completion record. Successful completion also includes the authority,
+generation used, and publication time, including the replacement used after a
+retry. Origin trust failures also state whether that generation
+was removed. SPKI mismatch warnings also include the TLS SNI and expected and
+observed public SPKI fingerprints. A late failure can therefore be distinguished
+from removal of the current generation. These records do not contain inference
+content, credentials, or encryption secrets. Trust and retry decisions use typed
+errors independently of these diagnostic fields. Model-key rejection and
+response authentication failures also report generation removal; response
+failures state whether this event recorded a cooldown. A late failure cannot
+remove a replacement generation or renew its cooldown.
+
+Connection diagnostics use standard HTTP tracing without replacing dialers or
+wrapping sockets. `remote_addr` and `connection_reused` describe the last
+assigned connection. A failed handshake before assignment has no peer address
+available from this trace. There are no socket identifiers or dial candidates.
+With a forward proxy, the address identifies the proxy socket, not the origin
+or a backend behind a CONNECT tunnel.
+
+Caller cancellation emits the INFO completion record with `status=canceled`
+and `cancellation_source=caller`, without a duplicate failure warning. Internal
+cancellation and expired deadlines remain warnings; the source distinguishes
+the caller context from the upstream operation. An independent failure, including
+invalid SSE completion, an empty stream, or an oversized response, remains a
+warning when joined with cancellation or a deadline error. Downstream write and
+flush errors also remain available when the caller cancels at the same time.
+Joined cancellation and deadline errors retain `cancellation_source` even when
+an independent failure takes precedence in the status and warning.
+Cancellation alone must explain the failure to suppress its warning.
+Cancellation retains the existing authorization and retry behavior. Allowed
+factor failures still produce warnings on fresh verification.
+
+Failed and canceled inference completion records include `failure_phase` and
+available `connection_acquire`, `tls_handshake`, `response_header_wait`, and
+`upstream_protocol` fields. Failures before authorization is acquired use
+`failure_phase=authorization`. Connection acquisition includes dialing and TLS;
+these durations overlap and must not be summed. `response_header_wait` starts
+at Go's successful `WroteRequest` callback and stops when response headers arrive.
+It is omitted when no successful write callback has been observed, including
+when an early HTTP/2 rejection aborts the request body write.
+For HTTP/1.1, this callback can run before the final transport buffer flush, so
+the interval can include a blocked or failed request write. Before response
+headers arrive, the phase after this callback is `response_headers` only for
+confirmed HTTP/2 connections. HTTP/1.1 and unknown protocols use
+`request_write_or_response_headers` because tracing cannot distinguish the two.
+A body-processing failure does not extend the recorded header wait. TLS time
+measures elapsed time with at least one active origin handshake reported by
+net/http for the application attempt, including speculative dials and
+transport-internal retries. Overlapping handshakes count once; this is not the
+sum of individual handshake durations. It does not measure
+an HTTPS forward proxy's outer handshake separately. A reused connection needs
+no handshake, but a speculative dial can still contribute TLS time. After a
+repeated connection acquisition, pending establishment is reported as
+`connection_acquire`: late TLS callbacks cannot reliably identify which
+acquisition they describe. Protocol comes from the assigned connection or
+response, not speculative handshake completion. Both use `HTTP/2.0` or
+`HTTP/1.1` when those protocols are known.
+
+Socket diagnostics accompany the WARN failure record, or the INFO completion
+record for caller cancellation. Trace callbacks can overlap and complete after a
+request ends; snapshots are synchronized.
+The final attempt supplies these diagnostics; the existing top-level durations
+continue to accumulate across application retries. Completion records include
+`inference_attempts` and `inference_timeout_budget`. The budget is the remaining
+time at logical request creation, limited by both the configured upstream timeout
+and the caller deadline. `upstream_status_code` records received response status,
+including HTTP rejections classified in the response-body phase. Errors
+encountered while copying non-200 response bodies appear alongside the HTTP
+status in the failure warning. Retry records
+also include the rejected response status when available. Retries scheduled after connection establishment failures
+or model-key rejection emit the attempt number, `retry_reason`, error, authorization
+identity, and available timing and connection fields from the failed attempt. A retry
+reason records the decision to retry, not a guarantee that the next attempt
+starts before the caller cancels.
+
+Response-body failures, including non-streaming and non-200 responses, report
+`response_body_bytes_read`, `response_body_read_failed`, and any observed
+`response_io_failure`. When bytes were read, `response_last_read_ago` reports
+how long ago that occurred. Byte counts refer to the relay input, after any
+outer response decryption. A non-200 response reports these fields even when
+its body was copied without an I/O error.
+
+Stream failures also report `stream_elapsed`, `stream_chunks_processed`, and
+`stream_end_marker_seen`. When a data chunk was processed, `stream_last_chunk_ago`
+reports how long ago that occurred. Chunks processed do not prove client
+receipt or generated tokens. SSE reassembly also records the end marker in its
+returned statistics, including when subsequent completion validation fails.
+Completion records include `downstream_headers_committed`, measured when
+authorized inference returns, before any final handler-generated error response.
+Failure records also include `downstream_bytes_written`; successful records omit
+the response size. The byte count uses successful write counts, including partial
+writes that return an error; it does not prove client receipt. An end marker does not establish successful
+completion: remaining response bytes must still pass completion validation.
+`response_io_failure` distinguishes observed body read, downstream write, and
+downstream flush errors. Response interceptors preserve flush errors and record
+that a flush commits headers. A failed flush prevents response success and does
+not invalidate authorization. `response_body_read_failed` preserves an observed read
+failure when writing or flushing the error response also fails. Body reads can
+fail from network I/O, decryption, or context cancellation; this field does not assign blame to the provider.
+
+The SSE scanner and non-streaming SSE reassembly return errors to the request
+handler without a separate ERROR record. Caller cancellation uses the INFO completion record; other
+failures retain the handler warning. A canceled context alone cannot establish
+why the client stopped waiting. Compare these fields with the client's timeout
+and cancellation logs and the provider's logs using the request time.
+
+Regression coverage: [downstream flush failures](../../internal/proxy/response_flush_test.go),
+[SPKI rejection](../../internal/tlsct/pinned_test.go),
+[failed-handshake diagnostics](../../internal/tlsct/connection_diagnostics_test.go),
+[proxy peer attribution](../../internal/tlsct/pinned_proxy_test.go),
+[cancellation classification](../../internal/proxy/authorized_logging_test.go),
+[emitted inference diagnostics](../../internal/proxy/authorized_diagnostic_logging_test.go),
+[stream cancellation and authentication](../../internal/proxy/authorized_failure_test.go),
+[connection waiting](../../internal/proxy/authorization_wait_test.go), and
+[header waiting and reuse](../../internal/tlsct/inference_timing_test.go).

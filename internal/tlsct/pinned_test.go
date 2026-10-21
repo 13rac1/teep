@@ -46,6 +46,11 @@ func TestSPKIPinnedClientRejectsBeforeSendingRequest(t *testing.T) {
 		if !errors.Is(err, ErrSPKIMismatch) {
 			t.Fatalf("Do error = %v, want ErrSPKIMismatch", err)
 		}
+		mismatch, ok := errors.AsType[*SPKIMismatchError](err)
+		actual := sha256.Sum256(ts.Certificate().RawSubjectPublicKeyInfo)
+		if !ok || !SPKIFingerprintsEqual(mismatch.Expected, hexFingerprint(wrong)) || !SPKIFingerprintsEqual(mismatch.Observed, hexFingerprint(actual)) || mismatch.Authority != pinnedTestIdentity(t, ts.URL, hexFingerprint(wrong)).Authority() {
+			t.Fatalf("missing handshake identity diagnostics: %v", err)
+		}
 		if got := requests.Load(); got != 0 {
 			t.Fatalf("server received %d requests, want 0", got)
 		}

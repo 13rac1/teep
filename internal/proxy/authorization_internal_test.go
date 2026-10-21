@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,6 +76,7 @@ func TestAuthorizationCounts(t *testing.T) {
 func TestAuthorizationSameKeySingleflight(t *testing.T) {
 	store := newAuthorizationStore(maxAuthorizations, maxAuthorizationVerifications, authorizationVerificationTimeout)
 	defer store.close()
+	logs := captureAuthorizationDiagnostics(t, store)
 	key, candidate := testAuthorizationCandidate(t, "model")
 	var calls atomic.Int32
 	var wg sync.WaitGroup
@@ -106,6 +108,9 @@ func TestAuthorizationSameKeySingleflight(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("verification calls = %d", calls.Load())
+	}
+	if strings.Count(logs.String(), "authorization verification started") != 1 || !strings.Contains(logs.String(), "authorization verification result received") {
+		t.Fatalf("incorrect shared verification diagnostics: %s", logs.String())
 	}
 	value, ok := store.acquire(key)
 	if !ok || value.report.Metadata["model"] != "model" {
@@ -327,5 +332,19 @@ func TestAuthorizationLookupObservation(t *testing.T) {
 	}
 	if len(observations) != 2 || observations[0] || !observations[1] {
 		t.Fatalf("initial lookups=%v, want [false true]", observations)
+	}
+}
+
+func TestAuthorizationStoreUsesCurrentDefaultLogger(t *testing.T) {
+	store := newAuthorizationStore(1, 1, time.Second)
+	defer store.close()
+	previous := slog.Default()
+	logger := slog.New(slog.DiscardHandler)
+	slog.SetDefault(logger)
+	defer slog.SetDefault(previous)
+	// Other tests can leave verification logs in progress. Check logger
+	// selection without capturing those concurrent writes.
+	if store.log() != logger {
+		t.Fatal("store did not use the current default logger")
 	}
 }

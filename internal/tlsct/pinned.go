@@ -16,6 +16,17 @@ import (
 // written on the connection.
 var ErrSPKIMismatch = errors.New("TLS peer SPKI does not match attested fingerprint")
 
+// SPKIMismatchError records public identity metadata from one failed handshake.
+// It preserves ErrSPKIMismatch for trust classification and never contains keys
+// used to encrypt inference or request content.
+type SPKIMismatchError struct {
+	Authority, ServerName string
+	Expected, Observed    string
+}
+
+func (e *SPKIMismatchError) Error() string { return ErrSPKIMismatch.Error() }
+func (e *SPKIMismatchError) Unwrap() error { return ErrSPKIMismatch }
+
 // NewSPKIPinnedHTTPClientWithTransport returns an HTTP client that performs
 // system-root WebPKI verification and then compares the live leaf SPKI with
 // the attested fingerprint during every new TLS handshake. It rejects any
@@ -53,7 +64,7 @@ func NewSPKIPinnedHTTPClientWithTransport(
 		}
 		actual := sha256.Sum256(state.PeerCertificates[0].RawSubjectPublicKeyInfo)
 		if subtle.ConstantTimeCompare(actual[:], identity.fingerprint[:]) != 1 {
-			return ErrSPKIMismatch
+			return &SPKIMismatchError{Authority: identity.Authority(), ServerName: state.ServerName, Expected: identity.Fingerprint(), Observed: hex.EncodeToString(actual[:])}
 		}
 		return nil
 	}

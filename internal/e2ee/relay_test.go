@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -739,9 +740,12 @@ func TestRelayReassembledNonStream(t *testing.T) {
 	input := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", data)
 
 	rec := httptest.NewRecorder()
-	_, err := RelayReassembledNonStream(context.Background(), rec, strings.NewReader(input), session, EndpointChat)
+	stats, err := RelayReassembledNonStream(context.Background(), rec, strings.NewReader(input), session, EndpointChat)
 	if err != nil {
 		t.Fatalf("RelayReassembledNonStream: %v", err)
+	}
+	if !stats.EndMarkerSeen {
+		t.Fatal("completed reassembly did not record the end marker")
 	}
 
 	if rec.Code != http.StatusOK {
@@ -2451,6 +2455,7 @@ func (*failReader) Read([]byte) (int, error) { return 0, errors.New("read failed
 
 // failAfterReader succeeds for the first read (returning data) then fails.
 type failAfterReader struct {
+	err  error
 	data []byte
 	read bool
 }
@@ -2460,6 +2465,9 @@ func (r *failAfterReader) Read(p []byte) (int, error) {
 		r.read = true
 		n := copy(p, r.data)
 		return n, nil
+	}
+	if r.err != nil {
+		return 0, r.err
 	}
 	return 0, errors.New("mid-stream read failure")
 }
@@ -3731,5 +3739,46 @@ func TestCollectOriginalStringFields_NonString(t *testing.T) {
 	result := collectOriginalStringFields(delta)
 	if _, ok := result["content"]; ok {
 		t.Error("non-string should be excluded")
+	}
+}
+
+func TestRelayStreamCancellationProgress(t *testing.T) {
+	for _, done := range []bool{false, true} {
+		t.Run(strconv.FormatBool(done), func(t *testing.T) {
+			data := "data: {}\n\n"
+			if done {
+				data += "data: [DONE]\n\n"
+			}
+			reader := &failAfterReader{data: []byte(data), err: context.Canceled}
+			stats, err := RelayStream(t.Context(), httptest.NewRecorder(), reader, nil, EndpointChat)
+			if !errors.Is(err, ErrRelayFailed) || !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation cause lost: %v", err)
+			}
+			if stats.Chunks != 1 || stats.LastChunkAt.IsZero() || stats.EndMarkerSeen != done {
+				t.Fatalf("incorrect progress: %+v", stats)
+			}
+		})
+	}
+}
+
+func TestRelayReassembledNonStreamCancellationProgress(t *testing.T) {
+	for _, done := range []bool{false, true} {
+		t.Run(strconv.FormatBool(done), func(t *testing.T) {
+			session := testVeniceSession(t)
+			defer session.Zero()
+			chunk := sseChunkJSON(t, encryptForClient(t, "reassembled", session))
+			data := "data: " + chunk + "\n\n"
+			if done {
+				data += "data: [DONE]\n\n"
+			}
+			reader := &failAfterReader{data: []byte(data), err: context.Canceled}
+			stats, err := RelayReassembledNonStream(t.Context(), httptest.NewRecorder(), reader, session, EndpointChat)
+			if !errors.Is(err, ErrRelayFailed) || !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation cause lost: %v", err)
+			}
+			if stats.Chunks != 1 || stats.LastChunkAt.IsZero() || stats.EndMarkerSeen != done {
+				t.Fatalf("incorrect reassembly progress: %+v", stats)
+			}
+		})
 	}
 }

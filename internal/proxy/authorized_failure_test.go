@@ -158,7 +158,7 @@ type cancelResponseWriter struct {
 
 func (w cancelResponseWriter) Write(_ []byte) (int, error) {
 	w.cancel()
-	return 0, errors.New("downstream disconnected")
+	return 0, context.Canceled
 }
 
 func TestAuthorizedCancellationRetainsSharedAuthorization(t *testing.T) {
@@ -187,9 +187,20 @@ func TestAuthorizedCancellationRetainsSharedAuthorization(t *testing.T) {
 		input.stream = true
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
+		logs := captureAuthorizationDiagnostics(t, server.authorizations)
 		outcome := server.handleAuthorizedEndpoint(ctx, cancelResponseWriter{newInferenceRecorder(), cancel}, input)
-		if outcome.status != "canceled" {
+		if strings.Contains(logs.String(), "authorized inference failed") {
+			t.Fatal("caller cancellation emitted a failure warning")
+		}
+		diagnostics := diagnosticFields(t, outcome.summary)
+		if outcome.status != "canceled" || diagnostics["cancellation_source"] != "caller" {
 			t.Fatalf("status=%q", outcome.status)
+		}
+		if diagnostics["downstream_headers_committed"] != true || diagnostics["downstream_bytes_written"] != int64(0) || diagnostics["response_io_failure"] != "downstream_write" || diagnostics["stream_chunks_processed"] != int64(1) || diagnostics["stream_end_marker_seen"] != false {
+			t.Fatalf("unexpected stream diagnostics: %v", diagnostics)
+		}
+		if n, ok := diagnostics["response_body_bytes_read"].(int64); !ok || n <= 0 {
+			t.Fatal("missing response read progress")
 		}
 		value, ok := server.authorizations.acquire(input.key)
 		if !ok || value.generation != first.generation {
@@ -198,6 +209,9 @@ func TestAuthorizedCancellationRetainsSharedAuthorization(t *testing.T) {
 		next := server.handleAuthorizedEndpoint(t.Context(), newInferenceRecorder(), input)
 		if next.status != "ok" || requests.Load() != 2 {
 			t.Fatal("another client could not use the existing authorization")
+		}
+		if _, ok := diagnosticFields(t, next.summary)["downstream_bytes_written"]; ok {
+			t.Fatal("successful completion logged the response size")
 		}
 	})
 }
@@ -282,4 +296,81 @@ func assertResponseCooldown(t *testing.T, server *Server, input *authorizedReque
 		})
 	}
 	wg.Wait()
+}
+
+func TestAuthorizedStreamDecryptionFailureSurvivesCallerCancellation(t *testing.T) {
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		private := authorizedTestKey(t)
+		upstream := authority.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			encap, err := hex.DecodeString(r.Header.Get("Ehbp-Encapsulated-Key"))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = decryptAuthorizedTestRequest(t, private, encap, io.LimitReader(r.Body, 1<<20))
+			body, nonce := encryptAuthorizedTestResponse(t, private, encap, [][]byte{[]byte("data: {}\n\n")})
+			body[len(body)-1] ^= 1
+			w.Header().Set("Ehbp-Response-Nonce", nonce)
+			_, _ = w.Write(body)
+		}))
+		defer upstream.Close()
+		server, input, _ := authorizedFailureFixture(t, upstream, private)
+		input.stream = true
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		out, err := server.inferAuthorized(ctx, cancelResponseWriter{newInferenceRecorder(), cancel}, input)
+		if !errors.Is(err, e2ee.ErrDecryptionFailed) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("lost response failure or cancellation: %v", err)
+		}
+		if !classifyAuthorizedFailure(ctx, err, &out) || out.status == "canceled" {
+			t.Fatal("caller cancellation suppressed the decryption failure")
+		}
+		if _, ok := server.authorizations.acquire(input.key); ok {
+			t.Fatal("decryption failure retained authorization")
+		}
+	})
+}
+
+func TestAuthorizedStreamFailureSurvivesCallerCancellation(t *testing.T) {
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		for _, tc := range []struct{ name, body, diagnostic string }{
+			{"error_event", "event: error\n\n", "upstream SSE error event"},
+			{"invalid_completion", "data: [DONE]\n\ndata: unexpected\n\n", "unexpected SSE data after end marker"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				private := authorizedTestKey(t)
+				upstream := authority.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					encap, err := hex.DecodeString(r.Header.Get("Ehbp-Encapsulated-Key"))
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					_ = decryptAuthorizedTestRequest(t, private, encap, io.LimitReader(r.Body, 1<<20))
+					body, nonce := encryptAuthorizedTestResponse(t, private, encap, [][]byte{[]byte(tc.body)})
+					w.Header().Set("Ehbp-Response-Nonce", nonce)
+					_, _ = w.Write(body)
+				}))
+				defer upstream.Close()
+				server, input, first := authorizedFailureFixture(t, upstream, private)
+				input.stream = true
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				logs := captureAuthorizationDiagnostics(t, server.authorizations)
+				out := server.handleAuthorizedEndpoint(ctx, cancelResponseWriter{newInferenceRecorder(), cancel}, input)
+				if out.status != "upstream_failed" {
+					t.Fatalf("status=%s", out.status)
+				}
+				for _, field := range []string{"level=WARN", "authorized inference failed", tc.diagnostic} {
+					if !strings.Contains(logs.String(), field) {
+						t.Fatalf("missing %q in logs: %s", field, logs.String())
+					}
+				}
+				if value, ok := server.authorizations.acquire(input.key); !ok || value.generation != first.generation {
+					t.Fatal("non-cryptographic stream failure invalidated authorization")
+				}
+			})
+		}
+	})
 }

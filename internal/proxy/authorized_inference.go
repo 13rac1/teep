@@ -30,14 +30,19 @@ type authorizedRequest struct {
 type authorizedOutcome struct {
 	report                          *attestation.VerificationReport
 	status                          string
+	summary                         []slog.Attr // Completion summary: INFO for every request, also appended to failure warnings.
+	trace                           *tlsct.InferenceAttempt
+	diagnostics                     []slog.Attr // Warning-only detail; caller cancellation moves it into summary.
 	attestDur, e2eeDur, upstreamDur time.Duration
 }
 
 type authorizedResponse struct {
-	outcome       authorizedOutcome
-	authorization *authorization
-	upstream      *upstreamResult
-	blocked       *attestation.VerificationReport
+	outcome          authorizedOutcome
+	authorization    *authorization
+	upstream         *upstreamResult
+	blocked          *attestation.VerificationReport
+	relayDiagnostics []slog.Attr
+	retryReason      string
 }
 
 func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedRequest) (authorizedResponse, error) {
@@ -46,15 +51,28 @@ func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedReque
 		timeout = upstreamStreamTimeout
 	}
 	logical, cancel := context.WithTimeout(ctx, timeout)
+	deadline, _ := logical.Deadline()
+	budget := max(0, time.Until(deadline))
 	var attestDur, e2eeDur, upstreamDur time.Duration
+	attempts := 0
+	lastRetry := ""
 	result, err := tlsct.RunInferenceAttempts(logical, func(attemptCtx context.Context) (authorizedResponse, bool, error) {
+		attempts++
 		result, retry, err := s.authorizedAttempt(attemptCtx, input)
+		if retry && attempts < 2 && attemptCtx.Err() == nil {
+			lastRetry = result.retryReason
+			s.logAuthorizedRetry(attemptCtx, input, &result, attempts, err)
+		}
 		attestDur += result.outcome.attestDur
 		e2eeDur += result.outcome.e2eeDur
 		upstreamDur += result.outcome.upstreamDur
 		return result, retry, err
 	})
 	result.outcome.attestDur, result.outcome.e2eeDur, result.outcome.upstreamDur = attestDur, e2eeDur, upstreamDur
+	result.outcome.summary = append(result.outcome.summary, slog.Int("inference_attempts", attempts), slog.Duration("inference_timeout_budget", budget))
+	if lastRetry != "" {
+		result.outcome.summary = append(result.outcome.summary, slog.String("retry_reason", lastRetry))
+	}
 	if result.upstream == nil {
 		cancel()
 	} else {
@@ -71,9 +89,11 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	if err != nil || blocked != nil {
 		return result, false, err
 	}
+	result.outcome.diagnostics = authorizationIdentityDiagnostics(value)
 	result.outcome.status = "upstream_failed"
 	attemptCtx, cancel := context.WithCancel(ctx)
 	trace := &tlsct.InferenceAttempt{}
+	result.outcome.trace = trace
 	started = time.Now()
 	ur, err := s.prepareAuthorizedRequest(trace.Context(attemptCtx), input, value)
 	result.outcome.e2eeDur = time.Since(started)
@@ -91,20 +111,28 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	}
 	if err != nil {
 		retry := trace.RetryConnectionFailure(attemptCtx, err)
+		if retry {
+			result.retryReason = "connection_establishment"
+		}
 		if tlsct.IsOriginTrustFailure(err) {
-			s.authorizations.deleteGeneration(input.key, value.generation)
+			removed := s.authorizations.deleteGeneration(input.key, value.generation)
+			result.outcome.diagnostics = authorizationFailureDiagnostics(value, err, removed)
 		}
 		cleanupAuthorized(ur)
 		result.upstream = nil
 		return result, retry, err
 	}
+	trace.ResponseHeadersReceived(ur.Resp.Proto)
+	result.outcome.summary = append(result.outcome.summary, slog.Int("upstream_status_code", ur.Resp.StatusCode))
 	if tlsct.IsRedirectStatus(ur.Resp.StatusCode) {
 		err = errors.New("upstream returned an unexpected redirect")
 	} else if ur.Session != nil || ur.EHBP != nil || (input.provider.Name == "nearcloud" && input.path == "/v1/chat/completions" && ur.Resp.StatusCode == http.StatusMisdirectedRequest) {
 		var rejected bool
 		rejected, err = provider.KeyRejection(ur.Resp, input.provider.Name, input.path)
 		if rejected {
-			s.authorizations.deleteGeneration(input.key, value.generation)
+			removed := s.authorizations.deleteGeneration(input.key, value.generation)
+			s.logAuthorizationRejection(ctx, input, value, "model_key_rejected", removed, false)
+			result.retryReason = "model_key_rejected"
 			if !input.provider.E2EE {
 				return result, false, nil
 			}
@@ -164,7 +192,8 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	out.report = value.report
 	started := time.Now()
 	defer func() { out.upstreamDur += time.Since(started) }()
-	if err := s.relayAuthorized(result.upstream.Request.Context(), w, input, result); err != nil { //nolint:contextcheck // The request retains the attempt context derived from ctx with the caller deadline.
+	if err := s.relayAuthorized(result.upstream.Request.Context(), w, input, &result); err != nil { //nolint:contextcheck // The request retains the attempt context derived from ctx with the caller deadline.
+		out.summary = append(out.summary, result.relayDiagnostics...)
 		return out, err
 	}
 	if input.provider.E2EE {
@@ -172,17 +201,20 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 		s.authorizations.promote(input.key, value.generation, "E2EE roundtrip succeeded via proxy")
 	}
 	out.status = "ok"
+	out.summary = append(out.summary, authorizationIdentityDiagnostics(value)...)
 	return out, nil
 }
 
-func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result authorizedResponse) (retErr error) {
+func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result *authorizedResponse) (retErr error) {
 	writer, err := newResponseLifetime(ctx, w)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := writer.check(); err != nil {
-			retErr = err
+		for _, err := range []error{writer.err, writer.contextErr()} {
+			if err != nil && !errors.Is(retErr, err) {
+				retErr = errors.Join(retErr, err)
+			}
 		}
 	}()
 	w = writer
@@ -190,53 +222,90 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	resp := ur.Resp
 	copyAuthorizedHeaders(w.Header(), resp.Header)
 	var body io.Reader = resp.Body
-	invalidate := func() { s.rejectResponseAuthorization(input.key, result.authorization.generation) }
+	invalidate := func(reason string) {
+		removed := s.rejectResponseAuthorization(input.key, result.authorization.generation)
+		s.logAuthorizationRejection(ctx, input, result.authorization, reason, removed, removed)
+	}
 	// EHBP permits plaintext non-success diagnostics. Attested TLS still
 	// authenticates the peer; these errors do not establish E2EE success.
 	success := resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
 	if ur.EHBP != nil && (success || len(resp.Header.Values("Ehbp-Response-Nonce")) != 0) {
 		nonce := resp.Header.Get("Ehbp-Response-Nonce")
 		if len(resp.Header.Values("Ehbp-Response-Nonce")) != 1 {
-			invalidate()
+			invalidate("response_nonce_count")
 			return errors.New("EHBP response must contain one response nonce")
 		}
 		plain, err := ur.EHBP.DecryptResponse(resp.Body, nonce)
 		if err != nil {
-			invalidate()
+			invalidate("response_authentication")
 			return errors.New("EHBP response authentication failed")
 		}
 		defer plain.Close()
 		body = plain
 	}
-	body = responseLifetimeReader{Reader: body, check: writer.check}
+	progress := &responseReadProgress{Reader: body}
+	body = responseLifetimeReader{Reader: progress, check: writer.check}
 	if resp.StatusCode != http.StatusOK {
 		w.WriteHeader(resp.StatusCode)
 		_, err := io.Copy(w, io.LimitReader(body, 10<<20))
 		if errors.Is(err, e2ee.ErrDecryptionFailed) {
-			invalidate()
+			invalidate("response_decryption")
 		}
-		return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
+		result.relayDiagnostics = responseFailureDiagnostics(progress, writer)
+		return errors.Join(fmt.Errorf("upstream returned HTTP %d", resp.StatusCode), err)
 	}
+	started := time.Now()
 	streamStats, err := relayResponse(ctx, w, body, ur.Session, ur.Meta, input.stream, input.endpoint)
+	if err != nil || writer.check() != nil {
+		if input.stream {
+			result.relayDiagnostics = streamFailureDiagnostics(started, streamStats, progress, writer)
+		} else {
+			result.relayDiagnostics = responseFailureDiagnostics(progress, writer)
+		}
+	}
 	recordTokPerSec(s.stats.getModelStats(input.key.ProviderName(), input.key.Model()+"@"+input.key.Authority()), streamStats)
 	if errors.Is(err, e2ee.ErrDecryptionFailed) {
-		invalidate()
+		invalidate("response_decryption")
 	}
 	return err
 }
 
+// handleAuthorizedEndpoint writes summary attributes to the INFO completion
+// record for every request. Warning-only diagnostics go to the WARN record for
+// an independent failure; caller cancellation moves them into summary instead.
 func (s *Server) handleAuthorizedEndpoint(ctx context.Context, w http.ResponseWriter, input *authorizedRequest) authorizedOutcome {
 	ri, writer := newResponseInterceptor(w)
 	out, err := s.inferAuthorized(ctx, writer, input)
+	out.summary = append(out.summary, slog.Bool("downstream_headers_committed", ri.headerSent))
 	if err != nil {
-		slog.WarnContext(ctx, "authorized inference failed", "provider", input.provider.Name, "model", input.key.Model(), "err", err)
+		out.summary = append(out.summary, slog.Int64("downstream_bytes_written", ri.bytesWritten))
+		if len(out.diagnostics) == 0 {
+			out.diagnostics = []slog.Attr{slog.String("authority", input.key.Authority())}
+		}
+		warn := classifyAuthorizedFailure(ctx, err, &out)
+		if out.trace != nil {
+			out.summary = append(out.summary, out.trace.TimingDiagnostics()...)
+			connection := out.trace.ConnectionDiagnostics()
+			if warn {
+				out.diagnostics = append(out.diagnostics, connection...)
+			} else {
+				out.summary = append(out.summary, connection...)
+			}
+		} else {
+			out.summary = append(out.summary, slog.String("failure_phase", "authorization"))
+		}
+		if !warn {
+			out.summary = append(out.summary, out.diagnostics...)
+		}
+		if warn {
+			attrs := make([]slog.Attr, 0, 3+len(out.diagnostics)+len(out.summary))
+			attrs = append(attrs, slog.String("provider", input.provider.Name), slog.String("model", input.key.Model()), slog.Any("err", err))
+			attrs = append(attrs, out.diagnostics...)
+			attrs = append(attrs, out.summary...)
+			s.authorizations.log().LogAttrs(ctx, slog.LevelWarn, "authorized inference failed", attrs...)
+		}
 		s.stats.errors.Add(1)
 		s.stats.getModelStats(input.key.ProviderName(), input.key.Model()+"@"+input.key.Authority()).errors.Add(1)
-		if errors.Is(err, context.Canceled) {
-			out.status = "canceled"
-		} else if errors.Is(err, context.DeadlineExceeded) {
-			out.status = "deadline_exceeded"
-		}
 		if !ri.headerSent {
 			code := http.StatusBadGateway
 			if _, ok := errors.AsType[*verificationOverloadError](err); ok || errors.Is(err, tlsct.ErrConnectionCapacity) {
@@ -274,15 +343,48 @@ func copyAuthorizedHeaders(dst, src http.Header) {
 // rejectResponseAuthorization records the cooldown before releasing the store
 // lock. No acquisition can observe the removal before the cooldown, and a late
 // response from an older generation cannot extend it or affect a replacement.
-func (s *Server) rejectResponseAuthorization(key provider.AuthorizationKey, generation authorizationGeneration) {
+func (s *Server) rejectResponseAuthorization(key provider.AuthorizationKey, generation authorizationGeneration) bool {
 	key = key.EvidenceScope()
 	store := s.authorizations
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	record, ok := store.entries[key]
 	if !ok || record.value.generation != generation {
-		return
+		return false
 	}
 	s.negCache.Record(key.ProviderName(), key.SingleflightKey())
 	delete(store.entries, key)
+	return true
+}
+
+// authorizationFailureDiagnostics describes the generation actually used by the
+// failed attempt, even when another caller has already published a replacement.
+func authorizationFailureDiagnostics(value *authorization, err error, removed bool) []slog.Attr {
+	attrs := append(authorizationIdentityDiagnostics(value), slog.Bool("authorization_removed", removed))
+	if mismatch, ok := errors.AsType[*tlsct.SPKIMismatchError](err); ok {
+		attrs = append(attrs, slog.String("tls_authority", mismatch.Authority), slog.String("tls_sni", mismatch.ServerName), slog.String("expected_spki", mismatch.Expected), slog.String("observed_spki", mismatch.Observed))
+	}
+	return attrs
+}
+
+func (s *Server) logAuthorizationRejection(ctx context.Context, input *authorizedRequest, value *authorization, reason string, removed, cooldown bool) {
+	attrs := make([]slog.Attr, 0, 8)
+	attrs = append(attrs, slog.String("provider", input.provider.Name), slog.String("model", input.key.Model()), slog.String("reason", reason), slog.Bool("cooldown_recorded", cooldown))
+	attrs = append(attrs, authorizationFailureDiagnostics(value, nil, removed)...)
+	s.authorizations.log().LogAttrs(ctx, slog.LevelWarn, "response authorization rejected", attrs...)
+}
+
+func authorizationIdentityDiagnostics(value *authorization) []slog.Attr {
+	return []slog.Attr{slog.String("authority", value.identity.Authority()), slog.Uint64("authorization_generation", uint64(value.generation)), slog.Time("authorization_published_at", value.publishedAt)}
+}
+
+func (s *Server) logAuthorizedRetry(ctx context.Context, input *authorizedRequest, result *authorizedResponse, attempt int, err error) {
+	attrs := []slog.Attr{slog.String("provider", input.provider.Name), slog.String("model", input.key.Model()), slog.Int("inference_attempt", attempt), slog.String("retry_reason", result.retryReason), slog.Any("err", err)}
+	attrs = append(attrs, result.outcome.diagnostics...)
+	attrs = append(attrs, result.outcome.summary...)
+	if result.outcome.trace != nil {
+		attrs = append(attrs, result.outcome.trace.TimingDiagnostics()...)
+		attrs = append(attrs, result.outcome.trace.ConnectionDiagnostics()...)
+	}
+	s.authorizations.log().LogAttrs(ctx, slog.LevelWarn, "authorized inference retry scheduled", attrs...)
 }

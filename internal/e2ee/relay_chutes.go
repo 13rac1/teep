@@ -73,6 +73,7 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 			continue
 		}
 		if data == "[DONE]" {
+			stats.EndMarkerSeen = true
 			if headerWritten {
 				fmt.Fprintf(w, "data: [DONE]\n\n")
 				flusher.Flush()
@@ -125,6 +126,7 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 				firstChunk = now
 			}
 			stats.Chunks++
+			stats.LastChunkAt = now
 			stats.Duration = now.Sub(firstChunk)
 			notifyChunk(ctx, len(plaintext))
 
@@ -147,7 +149,6 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		slog.ErrorContext(ctx, "chutes SSE scanner error", "err", err)
 		return stats, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 	return stats, nil

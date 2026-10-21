@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 )
@@ -10,9 +11,10 @@ import (
 // by the same context that authorizes the upstream attempt.
 type responseLifetime struct {
 	http.ResponseWriter
-	controller *http.ResponseController
-	contextErr func() error
-	err        error
+	controller      *http.ResponseController
+	contextErr      func() error
+	err             error
+	failedOperation string
 }
 
 func newResponseLifetime(ctx context.Context, w http.ResponseWriter) (*responseLifetime, error) {
@@ -40,18 +42,27 @@ func (w *responseLifetime) Write(body []byte) (int, error) {
 	}
 	n, err := w.ResponseWriter.Write(body)
 	w.err = err
+	if err != nil {
+		w.failedOperation = "downstream_write"
+	}
 	return n, w.check()
 }
 
 func (w *responseLifetime) Flush() {
 	if w.check() == nil {
 		w.err = w.controller.Flush()
+		if w.err != nil {
+			w.failedOperation = "downstream_flush"
+		}
 	}
 }
 
 func (w *responseLifetime) check() error {
-	if err := w.contextErr(); err != nil {
-		return err
+	if err := w.contextErr(); err != nil && !errors.Is(w.err, err) {
+		if w.err == nil {
+			return err
+		}
+		return errors.Join(w.err, err)
 	}
 	return w.err
 }

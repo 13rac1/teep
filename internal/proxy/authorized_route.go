@@ -74,6 +74,7 @@ func (s *Server) loadAuthorization(ctx context.Context, prov *provider.Provider,
 		return nil
 	}
 	observe := func(hit bool) {
+		s.authorizations.log().DebugContext(ctx, "authorization cache lookup", "provider", key.ProviderName(), "model", key.Model(), "authority", key.Authority(), "authorization_cache_hit", hit)
 		if hit {
 			s.stats.cacheHits.Add(1)
 		} else {
