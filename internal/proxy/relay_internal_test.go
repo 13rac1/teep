@@ -1550,11 +1550,12 @@ func TestBuildUpstreamBody_FreshRaw_WithKey_Success(t *testing.T) {
 	}
 }
 
-// TestBuildUpstreamBody_CachedSigningKey verifies that when a signing key is
-// in the cache and freshRaw is nil, buildUpstreamBody uses the cached key and
-// calls Encryptor (covering the signingKeyCache hit path).
+// TestBuildUpstreamBody_CachedSigningKey verifies that when a passing report
+// and its signing key are cached and freshRaw is nil, buildUpstreamBody uses
+// the cached key and calls Encryptor (covering the signingKeyCache hit path).
 func TestBuildUpstreamBody_CachedSigningKey(t *testing.T) {
 	s := newMinimalServer()
+	publishTestReport(s, providerModelKey{"test", "model"}, bindingReport())
 	s.signingKeyCache.Put("test", "model", "cached-key-value")
 	mockEnc := &mockRequestEncryptor{err: errors.New("encryptor reached with cached key")}
 	prov := &provider.Provider{
@@ -1575,40 +1576,14 @@ func TestBuildUpstreamBody_CachedSigningKey(t *testing.T) {
 	}
 }
 
-// TestBuildUpstreamBody_E2EEMaterialFetcher_NoCachedKey verifies the debug path
-// when a nonce-pool fetcher is set but the signing key cache is empty.
-// Falls through to fresh attestation (which fails because Attester returns error).
-func TestBuildUpstreamBody_E2EEMaterialFetcher_NoCachedKey(t *testing.T) {
-	s := newMinimalServer()
-	// No key in signingKeyCache — forces "no cached signing key; skipping nonce pool".
-	fetcher := &mockE2EEMaterialFetcher{}
-	mockEnc := &mockRequestEncryptor{}
-	mockAtt := &mockAttester{err: errors.New("mock attester error")}
-	prov := &provider.Provider{
-		Name:                "test",
-		E2EE:                false,
-		Encryptor:           mockEnc,
-		Attester:            mockAtt,
-		E2EEMaterialFetcher: fetcher,
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	t.Logf("buildUpstreamBody(no cached key): err=%v", err)
-	// Falls through to fresh attest which returns our mock error.
-	if err == nil {
-		t.Error("expected error from mock attester")
-	}
-	if !strings.Contains(err.Error(), "mock attester error") {
-		t.Errorf("error %q should mention 'mock attester error'", err.Error())
-	}
-}
-
 // TestBuildUpstreamBody_E2EEMaterialFetcher_FetchError verifies the log path
-// when FetchE2EEMaterial returns an error — falls through to fresh attestation.
+// when FetchE2EEMaterial returns an error — falls through to full verification.
 func TestBuildUpstreamBody_E2EEMaterialFetcher_FetchError(t *testing.T) {
 	s := newMinimalServer()
+	publishTestReport(s, providerModelKey{"test", "model"}, bindingReport())
 	s.signingKeyCache.Put("test", "model", "some-cached-key")
 	fetcher := &mockE2EEMaterialFetcher{err: errors.New("fetch material error")}
-	mockAtt := &mockAttester{err: errors.New("attester fallback error")}
+	mockAtt := &mockAttester{err: errors.New("attester error")}
 	prov := &provider.Provider{
 		Name:                "test",
 		Encryptor:           &mockRequestEncryptor{},
@@ -1617,17 +1592,18 @@ func TestBuildUpstreamBody_E2EEMaterialFetcher_FetchError(t *testing.T) {
 	}
 	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
 	t.Logf("buildUpstreamBody(fetch error): err=%v", err)
-	// Falls through to fresh attest.
+	// Falls through to full verification, which this minimal server cannot start.
 	if err == nil {
-		t.Error("expected error from mock attester fallback")
+		t.Error("expected error from full verification")
 	}
 }
 
 // TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMismatch verifies that when the
 // nonce pool returns a key different from the cached key, the pool is invalidated
-// and fresh attestation is attempted.
+// and full verification is attempted.
 func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMismatch(t *testing.T) {
 	s := newMinimalServer()
+	publishTestReport(s, providerModelKey{"test", "model"}, bindingReport())
 	s.signingKeyCache.Put("test", "model", "cached-key-ABC")
 	fetcher := &mockE2EEMaterialFetcher{
 		material: &provider.E2EEMaterial{
@@ -1645,7 +1621,7 @@ func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMismatch(t *testing.T) {
 	}
 	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
 	t.Logf("buildUpstreamBody(key mismatch): err=%v invalidated=%v", err, fetcher.invalidated)
-	// Pool invalidated, falls through to fresh attest.
+	// Pool invalidated, falls through to full verification.
 	if len(fetcher.invalidated) == 0 {
 		t.Error("expected pool to be invalidated on key mismatch")
 	}
@@ -1660,6 +1636,7 @@ func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMismatch(t *testing.T) {
 func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMatch(t *testing.T) {
 	s := newMinimalServer()
 	matchKey := "matching-pub-key"
+	publishTestReport(s, providerModelKey{"test", "model"}, bindingReport())
 	s.signingKeyCache.Put("test", "model", matchKey)
 	fetcher := &mockE2EEMaterialFetcher{
 		material: &provider.E2EEMaterial{
@@ -1683,28 +1660,6 @@ func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "encryptor called with nonce pool key") {
 		t.Errorf("error %q should come from mock encryptor", err.Error())
-	}
-}
-
-// TestBuildUpstreamBody_FreshAttestation_AttesterError verifies the fresh-attestation
-// path when no signing key is cached and no E2EEMaterialFetcher is set.
-func TestBuildUpstreamBody_FreshAttestation_AttesterError(t *testing.T) {
-	s := newMinimalServer()
-	// Cache empty, no fetcher → raw == nil → fresh attest required.
-	mockAtt := &mockAttester{err: errors.New("attester network error")}
-	prov := &provider.Provider{
-		Name:                "test",
-		Attester:            mockAtt,
-		SkipSigningKeyCache: false,
-		E2EEMaterialFetcher: nil,
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	t.Logf("buildUpstreamBody(fresh attest error): err=%v", err)
-	if err == nil {
-		t.Error("expected error from mock attester")
-	}
-	if !strings.Contains(err.Error(), "attester network error") {
-		t.Errorf("error %q should mention attester error", err.Error())
 	}
 }
 
@@ -2061,7 +2016,7 @@ func TestVerifySEV_WithReportDataVerifier_Success(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildUpstreamBody — fresh attestation TDX/SEV REPORTDATA verification paths
+// mockAttesterWithRaw
 // ---------------------------------------------------------------------------
 
 // mockAttesterWithRaw returns a specific RawAttestation.
@@ -2072,54 +2027,6 @@ type mockAttesterWithRaw struct {
 
 func (m *mockAttesterWithRaw) FetchAttestation(_ context.Context, _ string, _ attestation.Nonce) (*attestation.RawAttestation, error) {
 	return m.raw, m.err
-}
-
-func TestBuildUpstreamBody_FreshAttestation_NoTEEEvidence(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{
-		Name:      "test",
-		Attester:  &mockAttesterWithRaw{raw: &attestation.RawAttestation{SigningKey: "key"}},
-		Encryptor: &mockRequestEncryptor{},
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	if err == nil {
-		t.Fatal("expected error for no TEE evidence")
-	}
-	if !strings.Contains(err.Error(), "no TEE evidence") {
-		t.Errorf("error %q should mention no TEE evidence", err.Error())
-	}
-}
-
-func TestBuildUpstreamBody_FreshAttestation_TDXQuoteParseErr(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{
-		Name:      "test",
-		Attester:  &mockAttesterWithRaw{raw: &attestation.RawAttestation{SigningKey: "key", IntelQuote: "invalid-hex"}},
-		Encryptor: &mockRequestEncryptor{},
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	if err == nil {
-		t.Fatal("expected error for TDX quote parse failure")
-	}
-	if !strings.Contains(err.Error(), "fresh TDX quote parse failed") {
-		t.Errorf("error %q should mention fresh TDX quote parse", err.Error())
-	}
-}
-
-func TestBuildUpstreamBody_FreshAttestation_SEVReportParseErr(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{
-		Name:      "test",
-		Attester:  &mockAttesterWithRaw{raw: &attestation.RawAttestation{SigningKey: "key", SEVReportBytes: []byte("too-short")}},
-		Encryptor: &mockRequestEncryptor{},
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	if err == nil {
-		t.Fatal("expected error for SEV report parse failure")
-	}
-	if !strings.Contains(err.Error(), "fresh SEV-SNP report parse failed") {
-		t.Errorf("error %q should mention fresh SEV-SNP report parse", err.Error())
-	}
 }
 
 // ---------------------------------------------------------------------------

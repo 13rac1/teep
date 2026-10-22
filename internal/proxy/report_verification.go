@@ -68,7 +68,8 @@ func (s *Server) loadReport(ctx context.Context, prov *provider.Provider, upstre
 // verifyReportShared runs one report verification under a server-owned
 // context with the authorization store's time limit. It checks the report and
 // negative caches again because a verification that completed after the
-// caller's lookup can have populated them. A panic becomes an error for the
+// caller's lookup can have populated them. A cached report that requires a
+// signing key that is not cached is a cache miss. A panic becomes an error for the
 // waiters, because the verification does not run in a request goroutine.
 func (s *Server) verifyReportShared(prov *provider.Provider, upstreamModel string, key providerModelKey, leader string) (shared *sharedReport, err error) {
 	defer func() {
@@ -78,7 +79,7 @@ func (s *Server) verifyReportShared(prov *provider.Provider, upstreamModel strin
 		}
 	}()
 	slog.Info("shared attestation verification started", "provider", prov.Name, "model", upstreamModel, "leader_req", leader)
-	if report, publication, ok := s.cache.GetPublication(key.provider, key.model); ok {
+	if report, publication, ok := s.cache.GetPublication(key.provider, key.model); ok && s.cachedReportComplete(prov, key, report) {
 		return &sharedReport{report: report, publication: publication}, nil
 	}
 	if s.negCache.IsBlocked(key.provider, key.model) {
@@ -114,6 +115,93 @@ func (s *Server) verifyReportShared(prov *provider.Provider, upstreamModel strin
 	return &sharedReport{report: report, raw: raw, publication: publication}, nil
 }
 
+// cachedReportComplete reports whether a cached report needs no signing key or
+// has its signing key in the signing key cache. A report that a request can use
+// for E2EE needs its key, because the report and the key are one authorization.
+// The condition is the one under which publishReport caches the key.
+func (s *Server) cachedReportComplete(prov *provider.Provider, key providerModelKey, report *attestation.VerificationReport) bool {
+	if !prov.E2EE || !report.ReportDataBindingPassed() || (report.Blocked() && !s.cfg.Force) {
+		return true
+	}
+	_, ok := s.signingKeyCache.Get(key.provider, key.model)
+	return ok
+}
+
+// keyPublication is a signing key with the report publication that the key
+// belongs to. A request that encrypts to the key records its outcome on that
+// publication.
+type keyPublication struct {
+	signingKey  string
+	report      *attestation.VerificationReport
+	publication uint64
+}
+
+// currentSigningKey returns the signing key of the current report publication
+// for key, with the publication number and the report. publishReport writes the
+// key and the report under reportMu, and every deletion of either holds
+// reportMu, so a read of both under reportMu gives a key and the publication
+// that it belongs to. It returns false if no report is cached, the report does
+// not pass enforcement, its REPORTDATA binding did not pass, or no key is
+// cached. The binding check reads the report that the key pairs with, a check
+// of a different kind from the publishReport condition.
+func (s *Server) currentSigningKey(key providerModelKey) (keyPublication, bool) {
+	s.reportMu.Lock()
+	defer s.reportMu.Unlock()
+	report, publication, ok := s.cache.GetPublication(key.provider, key.model)
+	if !ok || (report.Blocked() && !s.cfg.Force) || !report.ReportDataBindingPassed() {
+		return keyPublication{}, false
+	}
+	signingKey, ok := s.signingKeyCache.Get(key.provider, key.model)
+	if !ok {
+		return keyPublication{}, false
+	}
+	return keyPublication{signingKey: signingKey, report: report, publication: publication}, true
+}
+
+// loadSigningKey starts or joins the full verification for a provider and
+// model whose cached report has no usable signing key, and returns the
+// attestation material for the request and the publication that its key
+// belongs to. staleKey is a cached key that the request cannot use. It is
+// deleted only if the cache still holds it, so a key that a later verification
+// published stays. The verification publishes a key only if its report passes,
+// so the request uses only a key that the signing key cache holds after the
+// verification, with the current publication. A provider with a nonce pool
+// needs the instance and nonce of the verified attestation. A request that did
+// not receive them fails, and its retry takes them from the nonce pool.
+func (s *Server) loadSigningKey(ctx context.Context, prov *provider.Provider, upstreamModel, staleKey string) (*attestation.RawAttestation, keyPublication, error) {
+	key := providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}
+	if staleKey != "" {
+		s.reportMu.Lock()
+		if cached, ok := s.signingKeyCache.Get(key.provider, key.model); ok && subtle.ConstantTimeCompare([]byte(cached), []byte(staleKey)) == 1 {
+			s.signingKeyCache.Delete(key.provider, key.model)
+		}
+		s.reportMu.Unlock()
+	}
+	slog.InfoContext(ctx, "E2EE key exchange: no usable cached signing key; starting full verification", "provider", prov.Name, "model", upstreamModel)
+	_, raw, _, err := s.loadReport(ctx, prov, upstreamModel)
+	if err != nil {
+		// This warning is the WARN+ block record for the request.
+		slog.WarnContext(ctx, "E2EE key exchange: verification for the signing key failed; request blocked",
+			"provider", prov.Name, "model", upstreamModel, "err", err)
+		return nil, keyPublication{}, fmt.Errorf("verify signing key: %w", err)
+	}
+	current, ok := s.currentSigningKey(key)
+	if !ok {
+		slog.WarnContext(ctx, "E2EE key exchange: no verified signing key after verification; request blocked",
+			"provider", prov.Name, "model", upstreamModel)
+		return nil, keyPublication{}, errors.New("no verified signing key after attestation verification")
+	}
+	if raw != nil && subtle.ConstantTimeCompare([]byte(raw.SigningKey), []byte(current.signingKey)) == 1 {
+		return raw, current, nil
+	}
+	if prov.SkipSigningKeyCache {
+		slog.WarnContext(ctx, "E2EE key exchange: verified E2EE material went to another request; request blocked",
+			"provider", prov.Name, "model", upstreamModel)
+		return nil, keyPublication{}, errors.New("verified E2EE material went to another request")
+	}
+	return &attestation.RawAttestation{SigningKey: current.signingKey}, current, nil
+}
+
 // reportEpoch returns the number of invalidations of the cached report for a
 // provider and model. A verification publishes only if the epoch that it read
 // before its fetch is still current.
@@ -146,12 +234,16 @@ func (s *Server) storeReportLocked(key providerModelKey, report *attestation.Ver
 // verification, unless the verified NRAS evidence is not time eligible now or
 // the cached report was invalidated after the verification read epoch, and
 // returns the report's publication number.
-// It caches the signing key only if the report passes enforceReport: a key
-// from a failed attestation must not be reused on a cache hit. Waiters
-// without the raw attestation then use this key instead of fetching
-// attestation again. The key is written first, so that a request that finds
-// the report also finds its key. A passing report is the fresh
-// re-attestation for every waiter, so it clears a prior E2EE failure.
+// It caches the signing key only if the report passes enforceReport and its
+// REPORTDATA binding passed: a key from a failed attestation, or a key that
+// REPORTDATA does not bind because allow_fail excuses the binding factor, must
+// not be reused on a cache hit. Waiters without the raw attestation then use
+// this key instead of fetching attestation again. Any other publication
+// deletes the cached key, so that a cache hit on this publication finds no
+// key instead of the key of an earlier publication. The key is written first,
+// so that a request that finds the report also finds its key. A passing report
+// is the fresh re-attestation for every waiter, so it clears a prior E2EE
+// failure.
 func (s *Server) publishReport(ctx context.Context, prov *provider.Provider, upstreamModel string, key providerModelKey, epoch uint64,
 	admission attestation.AdmissionTime, report *attestation.VerificationReport, raw *attestation.RawAttestation,
 ) (uint64, error) {
@@ -166,11 +258,14 @@ func (s *Server) publishReport(ctx context.Context, prov *provider.Provider, ups
 		return 0, errReportInvalidated
 	}
 	passed := !report.Blocked() || s.cfg.Force
-	if passed && raw.SigningKey != "" {
+	if passed && report.ReportDataBindingPassed() && raw.SigningKey != "" {
 		if prev, ok := s.signingKeyCache.Get(key.provider, key.model); ok && subtle.ConstantTimeCompare([]byte(prev), []byte(raw.SigningKey)) == 0 {
 			slog.WarnContext(ctx, "signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
 		}
 		s.signingKeyCache.Put(key.provider, key.model, raw.SigningKey)
+	} else {
+		// A key of an earlier publication must not pair with this one.
+		s.signingKeyCache.Delete(key.provider, key.model)
 	}
 	publication := s.storeReportLocked(key, report)
 	if !passed {

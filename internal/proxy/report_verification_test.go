@@ -44,7 +44,23 @@ func (a *heldReportAttester) FetchAttestation(ctx context.Context, _ string, non
 	if a.err != nil {
 		return nil, a.err
 	}
-	return &attestation.RawAttestation{Nonce: nonce.Hex(), NonceSource: "client", SigningKey: "attested-key"}, nil
+	return &attestation.RawAttestation{Nonce: nonce.Hex(), NonceSource: "client", SigningKey: "attested-key", IntelQuote: testQuote}, nil
+}
+
+// testQuote is the TDX quote of the test evidence. It does not parse, so the
+// default policy blocks the test evidence. Tests of real evidence under the
+// default policy replay captured fixtures in internal/integration.
+const testQuote = "test-quote"
+
+// bindTestEvidence makes the verification of the test evidence pass the
+// REPORTDATA binding factor: the quote verifier accepts testQuote and the
+// REPORTDATA verifier accepts its binding. Other factors still fail, so it
+// also selects the force policy, which gives a report that passes with a
+// signing key that REPORTDATA binds.
+func bindTestEvidence(s *Server, prov *provider.Provider) {
+	s.cfg.Force = true
+	s.verifyQuote = func(context.Context, string) *attestation.TDXVerifyResult { return &attestation.TDXVerifyResult{} }
+	prov.ReportDataVerifier = &mockReportDataVerifier{}
 }
 
 // newReportTestServer builds the production server for a provider that uses
@@ -294,7 +310,9 @@ func TestReportVerificationCachesSigningKeyOnce(t *testing.T) {
 			attester := newHeldReportAttester(nil)
 			s, prov := newReportTestServer(t, attester)
 			// The enforcement policy is the subject of this test.
-			s.cfg.Force = force
+			if force {
+				bindTestEvidence(s, prov)
+			}
 			s.signingKeyCache.Put(prov.Name, "model", "previous-key")
 			const n = 8
 			done := make(chan reportAttempt, n)
@@ -320,8 +338,8 @@ func TestReportVerificationCachesSigningKeyOnce(t *testing.T) {
 			if force && (key != "attested-key" || rotations != 1 || raws != 1) {
 				t.Fatalf("passing report: cached key=%q rotation warnings=%d raw receivers=%d", key, rotations, raws)
 			}
-			if !force && (key != "previous-key" || rotations != 0) {
-				t.Fatalf("blocked report changed the signing key cache: key=%q rotation warnings=%d", key, rotations)
+			if !force && (key != "" || rotations != 0) {
+				t.Fatalf("blocked report left a signing key: key=%q rotation warnings=%d", key, rotations)
 			}
 			if attester.calls.Load() != 1 {
 				t.Fatalf("attestation fetches = %d, want 1", attester.calls.Load())
@@ -359,7 +377,7 @@ func TestReportVerificationClearsE2EEFailureForEveryWaiter(t *testing.T) {
 	s, prov := newReportTestServer(t, attester)
 	// The test evidence fails TDX verification, and the default policy blocks
 	// it. Force is the only policy that gives a passing report here.
-	s.cfg.Force = true
+	bindTestEvidence(s, prov)
 	failure := providerModelKey{prov.Name, "model"}
 	s.e2eeFailed.Store(failure, true)
 	const n = 12
@@ -376,7 +394,6 @@ func TestReportVerificationClearsE2EEFailureForEveryWaiter(t *testing.T) {
 					return
 				}
 				// endpointHandler runs this check for an E2EE-active report.
-				// The test evidence cannot pass the report data binding.
 				if !s.checkE2EEFailure(t.Context(), rec, prov, "model", ar, ms) {
 					t.Error("waiter of the passing verification failed the E2EE failure check")
 				}
@@ -788,8 +805,8 @@ func TestReportVerificationNRASAdmissionBeforePublication(t *testing.T) {
 	for _, delayed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("delayed=%v", delayed), func(t *testing.T) {
 			s, prov := newReportTestServer(t, newHeldReportAttester(nil))
-			// Force gives a passing report, which writes the signing key and
-			// clears the E2EE failure when it publishes.
+			// Force gives a passing report, which writes the signing key that
+			// REPORTDATA binds and clears the E2EE failure when it publishes.
 			s.cfg.Force = true
 			key := providerModelKey{prov.Name, "model"}
 			s.e2eeFailed.Store(key, true)
@@ -801,7 +818,7 @@ func TestReportVerificationNRASAdmissionBeforePublication(t *testing.T) {
 			var err error
 			logs := captureSlog(t, func() {
 				_, err = s.publishReport(t.Context(), prov, "model", key, s.reportEpoch(key), admission,
-					&attestation.VerificationReport{}, &attestation.RawAttestation{SigningKey: "attested-key"})
+					bindingReport(), &attestation.RawAttestation{SigningKey: "attested-key"})
 			})
 			_, cached := s.cache.Get(key.provider, key.model)
 			_, keyCached := s.signingKeyCache.Get(key.provider, key.model)

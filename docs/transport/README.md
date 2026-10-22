@@ -97,6 +97,21 @@ enforces the shared report as after a cache hit.
 Only one waiting request receives the raw attestation for E2EE key exchange,
 because it can contain a single-use nonce. The Explore attestation endpoint
 does not write the report cache.
+For an E2EE request, a cached report without its signing key is a cache miss.
+The request starts or joins the verification and uses only the signing key
+that the verification publishes. If the Chutes nonce pool fails or returns a
+key that is not the cached key, the request deletes that cached key and does
+the same. A Chutes request that waited for the verification and did not receive
+its instance and nonce fails that attempt, and the Chutes retry takes them from
+the nonce pool with the published key. Only the verification writes the
+signing-key cache, and only for a report that passes enforcement and whose
+REPORTDATA binding passed, also when `allow_fail` excuses the binding factor. A
+request reads the signing key, the current report and its publication number
+together under the lock that the verification publishes under, and fails if
+that report does not pass enforcement or its REPORTDATA binding did not pass.
+The request outcome (E2EE failure or success) applies to the publication of
+the key that the request used, not to the report that the request enforced
+before a later verification published.
 
 An E2EE decryption failure deletes both cache entries and, except for Chutes,
 records the failure. A verification that started before the failure does not

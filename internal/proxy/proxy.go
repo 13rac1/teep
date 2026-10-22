@@ -355,6 +355,11 @@ type upstreamBody struct {
 	Meta       *e2ee.ChutesE2EE
 	ChuteID    string // For MarkFailed (from raw attestation, not meta)
 	InstanceID string // For MarkFailed (from raw attestation, not meta)
+	// Report and Publication identify the report publication of the cached
+	// signing key that the body is encrypted to. Report is nil if the body
+	// uses the attestation of the request's own verification, or no key.
+	Report      *attestation.VerificationReport
+	Publication uint64
 }
 
 // chatRequest is a minimal parse of an OpenAI chat completions request.
@@ -1767,8 +1772,6 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 			status = failStatus
 			return
 		}
-		report := ar.Report
-
 		if ar.E2EEActive {
 			if ok := s.checkE2EEFailure(ctx, w, prov, upstreamModel, ar, ms); !ok {
 				status = "e2ee_recovery_pending"
@@ -1789,7 +1792,7 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 		}
 
 		if ar.E2EEActive {
-			s.markReportE2EEUsable(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}, ar.Publication, report)
+			s.markReportE2EEUsable(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}, ar.Publication, ar.Report)
 		}
 		s.stats.lastSuccessAt.Store(time.Now().UnixNano())
 		status = "ok"
@@ -1868,6 +1871,7 @@ func (s *Server) relayWithRetry(
 			}
 			return result
 		}
+		ar.useKeyPublication(ur)
 		resp := ur.Resp
 		session := ur.Session
 		meta := ur.Meta
@@ -2088,6 +2092,14 @@ type attestResult struct {
 	Publication uint64
 	E2EEActive  bool
 	AttestDur   time.Duration
+}
+
+// useKeyPublication makes the request outcome apply to the publication of the
+// cached signing key that the request used, if it used one.
+func (ar *attestResult) useKeyPublication(ur *upstreamResult) {
+	if ur.Report != nil {
+		ar.Report, ar.Publication = ur.Report, ur.Publication
+	}
 }
 
 // attestAndCache checks the attestation cache, starts or joins the shared
@@ -2518,6 +2530,10 @@ type upstreamResult struct {
 	Cancel      context.CancelFunc
 	E2EEDur     time.Duration
 	UpstreamDur time.Duration
+	// Report and Publication are the fields of the same name of the
+	// upstreamBody that the request sent.
+	Report      *attestation.VerificationReport
+	Publication uint64
 }
 
 type upstreamSendResult struct {
@@ -2572,6 +2588,8 @@ func (s *Server) doUpstreamRoundtrip(
 		err         error
 		e2eeDur     time.Duration
 		upstreamDur time.Duration
+		report      *attestation.VerificationReport
+		publication uint64
 	)
 
 	for attempt := range maxAttempts {
@@ -2599,6 +2617,7 @@ func (s *Server) doUpstreamRoundtrip(
 
 		session = ub.Session
 		meta = ub.Meta
+		report, publication = ub.Report, ub.Publication
 
 		var attemptCtx context.Context
 		attemptCtx, cancel = context.WithTimeout(ctx, upstreamTimeout)
@@ -2677,6 +2696,8 @@ func (s *Server) doUpstreamRoundtrip(
 		Cancel:      cancel,
 		E2EEDur:     e2eeDur,
 		UpstreamDur: upstreamDur,
+		Report:      report,
+		Publication: publication,
 	}, nil
 }
 
@@ -2685,7 +2706,8 @@ func (s *Server) doUpstreamRoundtrip(
 //
 // When freshRaw is non-nil (cache miss path), its signing key is reused — the
 // REPORTDATA binding was already verified by fetchAndVerify. When freshRaw is
-// nil (cache hit), a fresh attestation is fetched and re-verified.
+// nil (cache hit), the request uses the cached signing key. If no usable key
+// is cached, the request starts or joins a full verification.
 func (s *Server) buildUpstreamBody(
 	ctx context.Context,
 	rawBody []byte,
@@ -2703,9 +2725,14 @@ func (s *Server) buildUpstreamBody(
 	}
 
 	raw := freshRaw
+	// used is the cached signing key that the request uses and the publication
+	// that it belongs to.
+	var used keyPublication
 	if raw == nil {
-		// Cache hit path: try the signing key cache before re-fetching attestation.
+		// Cache hit path: use the signing key cache.
 		// Some providers (e.g. Chutes) need fresh instance/nonce data per request.
+		// staleKey is a cached key that the nonce pool cannot use.
+		var staleKey string
 
 		// Fast path: providers with a nonce pool (Chutes) can get E2EE
 		// material without full re-attestation. The pool provides a fresh
@@ -2715,30 +2742,33 @@ func (s *Server) buildUpstreamBody(
 		//
 		// Only consume from the nonce pool if we already have a cached
 		// signing key. This avoids wasting nonces when the signing key
-		// cache is cold (fresh attestation is needed anyway). The pool
+		// cache is cold (full verification is needed anyway). The pool
 		// key must match the attested key via constant-time comparison
 		// to keep ML-KEM bound to a verified TDX quote.
 		if prov.E2EEMaterialFetcher != nil {
-			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); !ok {
+			if current, ok := s.currentSigningKey(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}); !ok {
 				slog.DebugContext(ctx, "E2EE key exchange: no cached signing key; skipping nonce pool",
 					"provider", prov.Name, "model", upstreamModel,
 				)
-				// Fall through to fresh attestation below.
+				// Fall through to full verification below.
 			} else {
+				cachedKey := current.signingKey
 				mat, err := prov.E2EEMaterialFetcher.FetchE2EEMaterial(ctx, upstreamModel)
 				switch {
 				case err != nil:
-					slog.ErrorContext(ctx, "E2EE key exchange: failed to fetch nonce pool material; falling back to fresh attestation",
+					slog.ErrorContext(ctx, "E2EE key exchange: failed to fetch nonce pool material; starting full verification",
 						"provider", prov.Name, "model", upstreamModel,
 					)
-					// Fall through to fresh attestation below (raw remains nil).
+					staleKey = cachedKey
+					// Fall through to full verification below (raw remains nil).
 				case subtle.ConstantTimeCompare([]byte(cachedKey), []byte(mat.E2EPubKey)) != 1:
 					slog.DebugContext(ctx, "E2EE key exchange: nonce pool key mismatch; invalidating pool",
 						"provider", prov.Name, "model", upstreamModel,
 						"instance_id", mat.InstanceID,
 					)
 					prov.E2EEMaterialFetcher.Invalidate(mat.ChuteID)
-					// Fall through to fresh attestation below.
+					staleKey = cachedKey
+					// Fall through to full verification below.
 				default:
 					slog.DebugContext(ctx, "E2EE key exchange: using nonce pool",
 						"provider", prov.Name, "model", upstreamModel,
@@ -2750,54 +2780,22 @@ func (s *Server) buildUpstreamBody(
 						E2ENonce:   mat.E2ENonce,
 						ChuteID:    mat.ChuteID,
 					}
+					used = current
 				}
 			}
 		} else if !prov.SkipSigningKeyCache {
-			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
+			if current, ok := s.currentSigningKey(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}); ok {
 				slog.DebugContext(ctx, "E2EE key exchange: using cached signing key", "provider", prov.Name, "model", upstreamModel)
-				raw = &attestation.RawAttestation{SigningKey: cachedKey}
+				raw = &attestation.RawAttestation{SigningKey: current.signingKey}
+				used = current
 			}
 		}
 		if raw == nil {
-			// Signing key not cached: fetch fresh attestation and re-verify.
-			slog.DebugContext(ctx, "E2EE key exchange: fetching fresh attestation (cache hit path)", "provider", prov.Name, "model", upstreamModel)
-			nonce := attestation.NewNonce()
+			// A report without a usable signing key is a cache miss.
 			var err error
-			raw, err = prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
-			if err != nil {
-				return nil, fmt.Errorf("fetch signing key: %w", err)
+			if raw, used, err = s.loadSigningKey(ctx, prov, upstreamModel, staleKey); err != nil {
+				return nil, err
 			}
-			// Only REPORTDATA binding is needed here, not full online
-			// verification. The primary fetchAndVerify() path already
-			// did online verification for the cached report.
-			switch {
-			case raw.IntelQuote != "":
-				// Live serving: zero time.Time means "use the real wall clock".
-				tdxResult := attestation.VerifyTDXQuoteOffline(ctx, raw.IntelQuote, time.Time{})
-				if tdxResult.ParseErr != nil {
-					return nil, fmt.Errorf("fresh TDX quote parse failed: %w", tdxResult.ParseErr)
-				}
-				if prov.ReportDataVerifier != nil {
-					_, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
-					if err != nil {
-						return nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", err)
-					}
-				}
-			case len(raw.SEVReportBytes) > 0:
-				sevResult := attestation.VerifySEVReportOffline(ctx, raw.SEVReportBytes)
-				if sevResult.ParseErr != nil {
-					return nil, fmt.Errorf("fresh SEV-SNP report parse failed: %w", sevResult.ParseErr)
-				}
-				if prov.ReportDataVerifier != nil {
-					_, err := prov.ReportDataVerifier.VerifyReportData(sevResult.ReportData, raw, nonce)
-					if err != nil {
-						return nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", err)
-					}
-				}
-			default:
-				return nil, errors.New("fresh attestation has no TEE evidence; cannot verify signing key binding")
-			}
-			s.signingKeyCache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), raw.SigningKey)
 		}
 	} else {
 		slog.DebugContext(ctx, "E2EE key exchange: reusing attestation from verification (cache miss path)", "provider", prov.Name, "model", upstreamModel)
@@ -2816,11 +2814,13 @@ func (s *Server) buildUpstreamBody(
 		return nil, errors.New("streaming request encryption requires authorized inference")
 	}
 	return &upstreamBody{
-		Body:       result.Body,
-		Session:    result.Session,
-		Meta:       result.Chutes,
-		ChuteID:    raw.ChuteID,
-		InstanceID: raw.InstanceID,
+		Body:        result.Body,
+		Session:     result.Session,
+		Meta:        result.Chutes,
+		ChuteID:     raw.ChuteID,
+		InstanceID:  raw.InstanceID,
+		Report:      used.report,
+		Publication: used.publication,
 	}, nil
 }
 
