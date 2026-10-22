@@ -93,7 +93,9 @@ func (r *EndpointResolver) Stop() {
 	r.workers.Wait()
 }
 
-// CloseIdleConnections releases idle metadata sockets without ending selection ownership.
+// CloseIdleConnections runs the cleanup of the metadata client without ending
+// selection ownership. The default client closes all its sockets, ends active
+// metadata fetches, and is not usable after cleanup.
 func (r *EndpointResolver) CloseIdleConnections() { r.client.CloseIdleConnections() }
 
 func (r *EndpointResolver) initializeLocked() {

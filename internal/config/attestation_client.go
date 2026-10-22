@@ -35,7 +35,7 @@ func (f *AttestationClientFactory) NewFreshClient() *http.Client {
 }
 
 func (f *AttestationClientFactory) newClient(budget *tlsct.SocketBudget) *http.Client {
-	client := tlsct.NewHTTPClientWithTransport(AttestationTimeout, tlsct.NewPooledTransportWithBudget(budget), !f.offline)
+	client := tlsct.NewHTTPClientWithBudget(AttestationTimeout, budget, !f.offline)
 	client.Transport = tlsct.NewTLS12FallbackTransportWithBudget(client.Transport, budget, attestation.AMDKDSHost)
 	client.Transport = tlsct.WrapLogging(client.Transport)
 	client.Transport = &RetryTransport{Base: client.Transport}

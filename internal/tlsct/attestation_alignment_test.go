@@ -72,8 +72,7 @@ func testAttestationAdmission(t *testing.T, authority *testtls.Authority, mode s
 		}
 	})
 	defer unblock()
-	transport := NewPooledTransportWithBudget(budget)
-	client := NewHTTPClientWithTransport(5*time.Second, transport, true)
+	client := NewHTTPClientWithBudget(5*time.Second, budget, true)
 	if mode == "nested_tls12" {
 		client.Transport = NewTLS12FallbackTransportWithBudget(client.Transport, budget, "127.0.0.1")
 	}
@@ -120,31 +119,12 @@ func testAttestationAdmission(t *testing.T, authority *testtls.Authority, mode s
 	if requests.Load() != int32(allowance+24) {
 		t.Error("request lost or replayed after queued cancellation")
 	}
+	// HTTP/2 can finish every request on one connection while another dial
+	// completes in the background. Cleanup of an idle pool must still
+	// release every permit before it returns.
 	client.CloseIdleConnections()
-	waitForAdmissionSocketRelease(t, budget)
-}
-
-func waitForAdmissionSocketRelease(t *testing.T, budget *SocketBudget) {
-	t.Helper()
-	// HTTP/2 can finish requests on one connection while another dial is still
-	// completing. CloseIdleConnections cancels unused dials without joining
-	// their goroutines, so physical socket permits can be released afterward.
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	tick := time.NewTicker(time.Millisecond)
-	defer tick.Stop()
-	for {
-		budget.budgets.mu.Lock()
-		remaining := len(budget.budgets.hosts)
-		budget.budgets.mu.Unlock()
-		if remaining == 0 {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("closed pools retained socket permits for %d addresses: %v", remaining, ctx.Err())
-		case <-tick.C:
-		}
+	if remaining := heldSocketAddresses(budget); remaining != 0 {
+		t.Fatalf("closed pools retained socket permits for %d addresses", remaining)
 	}
 }
 

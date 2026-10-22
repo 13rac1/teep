@@ -46,9 +46,10 @@ func TestReservedBudgetAcrossHTTPSProxyOrigins(t *testing.T) {
 		})
 		budget := NewAttestationSocketBudget(2)
 		clientFor := func(view *SocketBudget) *http.Client {
-			transport := NewPooledTransportWithBudget(view)
-			transport.Proxy = http.ProxyURL(proxyTestURL(t, proxy.URL))
-			client := NewHTTPClientWithTransport(5*time.Second, transport, true)
+			pool := newBudgetedPool(view)
+			pool.Proxy = http.ProxyURL(proxyTestURL(t, proxy.URL))
+			client := NewHTTPClientWithTransport(5*time.Second, pool.Transport, true)
+			client.Transport = pool
 			t.Cleanup(client.CloseIdleConnections)
 			return client
 		}
