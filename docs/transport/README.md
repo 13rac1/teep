@@ -101,7 +101,9 @@ For an E2EE request, a cached report without its signing key is a cache miss.
 The request starts or joins the verification and uses only the signing key
 that the verification publishes. If the Chutes nonce pool fails or returns a
 key that is not the cached key, the request deletes that cached key and does
-the same. A Chutes request that waited for the verification and did not receive
+the same. It deletes the key only if the publication that it read the key with
+is still current, so it does not delete the key of a later publication, also
+when that key has the same bytes. A Chutes request that waited for the verification and did not receive
 its instance and nonce fails that attempt, and the Chutes retry takes them from
 the nonce pool with the published key. Only the verification writes the
 signing-key cache, and only for a report that passes enforcement and whose

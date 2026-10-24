@@ -200,19 +200,23 @@ func (s *Server) currentSigningKey(key providerModelKey) (keyPublication, bool) 
 // loadSigningKey starts or joins the full verification for a provider and
 // model whose cached report has no usable signing key, and returns the
 // attestation material for the request and the publication that its key
-// belongs to. staleKey is a cached key that the request cannot use. It is
-// deleted only if the cache still holds it, so a key that a later verification
-// published stays. The verification publishes a key only if its report passes,
+// belongs to. stale is a cached key that the request cannot use, with the
+// publication that the request read it with. It is deleted only if that
+// publication is still current and the cache still holds the key, so a key
+// that a later verification published stays, also when it has the same bytes.
+// The verification publishes a key only if its report passes,
 // so the request uses only a key that the signing key cache holds after the
 // verification, with the current publication. A provider with a nonce pool
 // needs the instance and nonce of the verified attestation. A request that did
 // not receive them fails, and its retry takes them from the nonce pool.
-func (s *Server) loadSigningKey(ctx context.Context, prov *provider.Provider, upstreamModel, staleKey string) (*attestation.RawAttestation, keyPublication, error) {
+func (s *Server) loadSigningKey(ctx context.Context, prov *provider.Provider, upstreamModel string, stale keyPublication) (*attestation.RawAttestation, keyPublication, error) {
 	key := providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}
-	if staleKey != "" {
+	if stale.signingKey != "" {
 		s.reportMu.Lock()
-		if cached, ok := s.signingKeyCache.Get(key.provider, key.model); ok && subtle.ConstantTimeCompare([]byte(cached), []byte(staleKey)) == 1 {
-			s.signingKeyCache.Delete(key.provider, key.model)
+		if current, ok := s.reportPubs[key]; ok && current == stale.publication {
+			if cached, ok := s.signingKeyCache.Get(key.provider, key.model); ok && subtle.ConstantTimeCompare([]byte(cached), []byte(stale.signingKey)) == 1 {
+				s.signingKeyCache.Delete(key.provider, key.model)
+			}
 		}
 		s.reportMu.Unlock()
 	}

@@ -344,17 +344,17 @@ func TestBuildUpstreamBodyChutesPoolMismatchUsesVerifiedAttestation(t *testing.T
 func TestLoadSigningKeyKeepsReplacementKey(t *testing.T) {
 	t.Run("venice", func(t *testing.T) {
 		attester := &mockAttester{err: errors.New("unexpected fetch")}
-		s, prov, _, _ := newKeyMissTestServer(t, attester)
+		s, prov, _, pub := newKeyMissTestServer(t, attester)
 		s.signingKeyCache.Put(prov.Name, "model", "new-key")
-		raw, _, err := s.loadSigningKey(t.Context(), prov, "model", "old-key")
+		raw, _, err := s.loadSigningKey(t.Context(), prov, "model", keyPublication{signingKey: "old-key", publication: pub})
 		if err != nil || raw.SigningKey != "new-key" {
 			t.Fatalf("raw=%v err=%v, want the replacement key", raw, err)
 		}
 	})
 	t.Run("chutes", func(t *testing.T) {
 		attester := newHeldReportAttester(nil)
-		s, prov, _, _ := newChutesKeyMissTestServer(t, attester, &mockE2EEMaterialFetcher{}, "new-key")
-		_, _, err := s.loadSigningKey(t.Context(), prov, "model", "old-key")
+		s, prov, _, pub := newChutesKeyMissTestServer(t, attester, &mockE2EEMaterialFetcher{}, "new-key")
+		_, _, err := s.loadSigningKey(t.Context(), prov, "model", keyPublication{signingKey: "old-key", publication: pub})
 		if err == nil || !strings.Contains(err.Error(), "went to another request") {
 			t.Fatalf("err = %v, want material for another request", err)
 		}
@@ -365,4 +365,41 @@ func TestLoadSigningKeyKeepsReplacementKey(t *testing.T) {
 			t.Fatal("complete cached report started a fetch")
 		}
 	})
+}
+
+// A request that read a key with publication A must not delete the key of a
+// later publication B, also when B published the same key bytes while the
+// request waited for the nonce pool.
+func TestLoadSigningKeyKeepsSameKeyOfReplacementPublication(t *testing.T) {
+	attester := newHeldReportAttester(nil)
+	close(attester.release)
+	s, prov, _, _ := newChutesKeyMissTestServer(t, attester, &mockE2EEMaterialFetcher{}, "attested-key")
+	key := providerModelKey{prov.Name, "model"}
+	read, ok := s.currentSigningKey(key)
+	if !ok {
+		t.Fatal("no signing key for publication A")
+	}
+	// While the request waits for the nonce pool, a decryption failure ends
+	// publication A and a new verification publishes B with the same key.
+	s.handleE2EEDecryptionFailure(t.Context(), prov, "model", read.publication, &modelStats{}, true, "", errors.New("decrypt error"))
+	replacement, err := s.publishReport(t.Context(), prov, "model", key, s.reportEpoch(key), attestation.AdmissionTime{}, bindingReport(), &attestation.RawAttestation{SigningKey: "attested-key"})
+	if err != nil || replacement == read.publication {
+		t.Fatalf("publication B = %d (A %d), err=%v", replacement, read.publication, err)
+	}
+
+	// The nonce pool failed, so the request starts or joins full verification
+	// with the key that it read.
+	_, _, err = s.loadSigningKey(t.Context(), prov, "model", read)
+	if err == nil || !strings.Contains(err.Error(), "went to another request") {
+		t.Fatalf("err = %v, want material for another request", err)
+	}
+	if cached, ok := s.signingKeyCache.Get(prov.Name, "model"); !ok || cached != "attested-key" {
+		t.Fatalf("cached key = %q (present %v), want the key of publication B", cached, ok)
+	}
+	if current, ok := s.currentSigningKey(key); !ok || current.publication != replacement {
+		t.Fatalf("current publication = %d (present %v), want B %d", current.publication, ok, replacement)
+	}
+	if attester.calls.Load() != 0 {
+		t.Fatalf("attestation fetches = %d, want 0: publication B is complete", attester.calls.Load())
+	}
 }

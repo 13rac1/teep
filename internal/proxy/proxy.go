@@ -2731,8 +2731,9 @@ func (s *Server) buildUpstreamBody(
 	if raw == nil {
 		// Cache hit path: use the signing key cache.
 		// Some providers (e.g. Chutes) need fresh instance/nonce data per request.
-		// staleKey is a cached key that the nonce pool cannot use.
-		var staleKey string
+		// stale is a cached key that the nonce pool cannot use, with the
+		// publication that the request read it with.
+		var stale keyPublication
 
 		// Fast path: providers with a nonce pool (Chutes) can get E2EE
 		// material without full re-attestation. The pool provides a fresh
@@ -2759,7 +2760,7 @@ func (s *Server) buildUpstreamBody(
 					slog.ErrorContext(ctx, "E2EE key exchange: failed to fetch nonce pool material; starting full verification",
 						"provider", prov.Name, "model", upstreamModel,
 					)
-					staleKey = cachedKey
+					stale = current
 					// Fall through to full verification below (raw remains nil).
 				case subtle.ConstantTimeCompare([]byte(cachedKey), []byte(mat.E2EPubKey)) != 1:
 					slog.DebugContext(ctx, "E2EE key exchange: nonce pool key mismatch; invalidating pool",
@@ -2767,7 +2768,7 @@ func (s *Server) buildUpstreamBody(
 						"instance_id", mat.InstanceID,
 					)
 					prov.E2EEMaterialFetcher.Invalidate(mat.ChuteID)
-					staleKey = cachedKey
+					stale = current
 					// Fall through to full verification below.
 				default:
 					slog.DebugContext(ctx, "E2EE key exchange: using nonce pool",
@@ -2793,7 +2794,7 @@ func (s *Server) buildUpstreamBody(
 		if raw == nil {
 			// A report without a usable signing key is a cache miss.
 			var err error
-			if raw, used, err = s.loadSigningKey(ctx, prov, upstreamModel, staleKey); err != nil {
+			if raw, used, err = s.loadSigningKey(ctx, prov, upstreamModel, stale); err != nil {
 				return nil, err
 			}
 		}
