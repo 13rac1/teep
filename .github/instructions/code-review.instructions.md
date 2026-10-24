@@ -199,7 +199,7 @@ on every attempt and that transport wrappers preserve idle-connection cleanup.
 - JSON unmarshalling MUST use the internal/jsonstrict parser.
 - All low-level parsers MUST return unknown field names to callers instead of logging or deduplicating them internally. Callers own the policy decision to fail, warn once per logical operation, or use lower-severity logging in hot paths.
 - Use `jsonstrict.Unmarshal` in low-level parsers. `jsonstrict.UnmarshalWarn` is appropriate only where the caller owns the diagnostic policy. Architectural checks must recognize nonlogging strict decoding; they must not require parsers to log.
-- Do not record implementation status or validation logs in plans. Keep one commit per implementation phase and record its behavior, tests, and remaining validation in the commit description.
+- Keep one commit per implementation phase. Record the phase's status in the plan only as a link to its commit. The commit message explains the problem, why this change, its user-visible effect, and what a reviewer needs to verify it. The code and its comments explain how the code works. The reference document holds the contract. Review history and check output stay in the review and the check.
 - Malformed attestation data MUST fail the entire response, not skip elements.
 - **Do not request fallback-based nil handling for internal objects and required
   arguments after validated construction**. A panic is acceptable for a
@@ -371,3 +371,4 @@ commit messages, and user-visible strings, and to your own review comments.
   interleaving and the violated contract. Separate demonstrated defects from
   uncertainty or optional simplification; do not propose a bypass for a provider
   that correctly fails verification.
+- A commit message explains the problem, the reason for the change, its effect, and what to verify. Ask for reasoning about how the code works to move to a comment at the decision point, and for a contract to move to the document that holds it.
