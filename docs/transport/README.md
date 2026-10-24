@@ -168,7 +168,8 @@ or triggering attestation.
 The server owns the context for shared verification and limits its duration.
 Cancellation of one waiting client does not cancel work needed by other
 clients. Recheck NRAS admission time eligibility and invalidation before initial
-publication. A stale
+publication. A verification whose context ended at its time limit or at server
+shutdown does not publish, also when it completed before the end. A stale
 request may remove or update only the generation it used, never a replacement
 published by another request. Tinfoil trusted-root metadata and target
 downloads inherit the verification context, including response body reads.

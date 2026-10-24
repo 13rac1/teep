@@ -274,9 +274,10 @@ func (s *Server) storeReportLocked(key providerModelKey, report *attestation.Ver
 }
 
 // publishReport writes the signing key and then the report of a shared
-// verification, unless the verified NRAS evidence is not time eligible now or
-// the cached report was invalidated after the verification read epoch, and
-// returns the report's publication number.
+// verification, unless the verification context ended, the verified NRAS
+// evidence is not time eligible now, or the cached report was invalidated
+// after the verification read epoch, and returns the report's publication
+// number.
 // It caches the signing key only if the report passes enforceReport and its
 // REPORTDATA binding passed: a key from a failed attestation, or a key that
 // REPORTDATA does not bind because allow_fail excuses the binding factor, must
@@ -292,6 +293,13 @@ func (s *Server) publishReport(ctx context.Context, prov *provider.Provider, ups
 ) (uint64, error) {
 	s.reportMu.Lock()
 	defer s.reportMu.Unlock()
+	// A verification can complete and then wait for reportMu while its time
+	// limit passes or the server closes. It must not publish after its
+	// context ended, as the authorization store does not.
+	if err := ctx.Err(); err != nil {
+		slog.WarnContext(ctx, "shared attestation verification ended before publication; result not published", "provider", prov.Name, "model", upstreamModel, "err", err)
+		return 0, err
+	}
 	if err := admission.Check(s.authorizations.now()); err != nil {
 		slog.WarnContext(ctx, "verified NRAS evidence is not time eligible; result not published", "provider", prov.Name, "model", upstreamModel, "err", err)
 		return 0, err

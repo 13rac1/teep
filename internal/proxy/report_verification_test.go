@@ -866,6 +866,50 @@ func waitForReportWaiter(t *testing.T) {
 	})
 }
 
+// A shared verification that completes and then waits for the publication
+// lock while the server closes must not publish: its context ended, as at its
+// time limit. Its waiter fails and the caches stay empty.
+func TestReportVerificationEndedBeforePublication(t *testing.T) {
+	attester := newHeldReportAttester(nil)
+	s, prov := newReportTestServer(t, attester)
+	// Force gives a passing report, which would write the report and its key.
+	bindTestEvidence(s, prov)
+	prov.E2EE = true
+	done := make(chan reportAttempt, 1)
+	var attempt reportAttempt
+	logs := captureSlog(t, func() {
+		startReportAttempt(t.Context(), s, prov, "model", done)
+		waitForCondition(t, "shared fetch", func() bool { return attester.calls.Load() == 1 })
+		s.reportMu.Lock()
+		close(attester.release)
+		waitForCondition(t, "verification waiting to publish", func() bool {
+			buf := make([]byte, 1<<20)
+			buf = buf[:runtime.Stack(buf, true)]
+			for g := range strings.SplitSeq(string(buf), "\n\n") {
+				if strings.Contains(g, " [sync.Mutex.Lock") && strings.Contains(g, "proxy.(*Server).publishReport(") {
+					return true
+				}
+			}
+			return false
+		})
+		s.Close()
+		s.reportMu.Unlock()
+		attempt = <-done
+	})
+	if attempt.status != "attest_failed" {
+		t.Fatalf("status = %q, want attest_failed", attempt.status)
+	}
+	if _, ok := s.cache.Get(prov.Name, "model"); ok {
+		t.Fatal("verification published its report after its context ended")
+	}
+	if _, ok := s.signingKeyCache.Get(prov.Name, "model"); ok {
+		t.Fatal("verification published its signing key after its context ended")
+	}
+	if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "ended before publication") {
+		t.Fatalf("unpublished verification diagnostic missing:\n%s", logs)
+	}
+}
+
 // A waiter must not acquire a publication that an invalidation ended after
 // the shared verification published it and before the waiter resumed. Chutes
 // records no E2EE failure, so nothing would stop the waiter later from using
