@@ -248,6 +248,15 @@ Preferred patterns:
   successful requests. Check race-test results from `make check` and
   `make integration`; unrun or externally blocked suites are not passing evidence.
 
+Review shared state by enumeration. For a change that touches state read
+under a lock, list every site that reads it. For each site, state where the
+value is used after the lock is released and what closes the window between
+the read and the use: the use happens under the same lock, or the value
+carries its generation and the use rechecks that the generation is current.
+Each mutation names the generation it changes and acts only when that
+generation is current. A site with an open window is a finding; a change that
+adds a read site adds it to the list.
+
 ## Go Conventions
 
 - Ensure Effective Go idioms and best practices are followed.
@@ -372,3 +381,6 @@ commit messages, and user-visible strings, and to your own review comments.
   uncertainty or optional simplification; do not propose a bypass for a provider
   that correctly fails verification.
 - A commit message explains the problem, the reason for the change, its effect, and what to verify. Ask for reasoning about how the code works to move to a comment at the decision point, and for a contract to move to the document that holds it.
+- After an amendment round, review the final change as a whole against this
+  document, with the enumeration in Concurrency Safety. The delta of the round
+  shows what moved; the whole shows what the moves left open.
