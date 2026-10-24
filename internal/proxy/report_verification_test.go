@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -846,5 +847,81 @@ func TestReportVerificationNRASAdmissionBeforePublication(t *testing.T) {
 				t.Fatalf("waiter status = %q, want attest_failed", status)
 			}
 		})
+	}
+}
+
+// waitForReportWaiter waits until a goroutine is blocked in loadReport on the
+// result of a shared verification, so it has joined the flight in progress.
+func waitForReportWaiter(t *testing.T) {
+	t.Helper()
+	waitForCondition(t, "report waiter in the shared verification", func() bool {
+		buf := make([]byte, 1<<20)
+		buf = buf[:runtime.Stack(buf, true)]
+		for g := range strings.SplitSeq(string(buf), "\n\n") {
+			if strings.Contains(g, " [select]:") && strings.Contains(g, "proxy.(*Server).loadReport(") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// A waiter must not acquire a publication that an invalidation ended after
+// the shared verification published it and before the waiter resumed. Chutes
+// records no E2EE failure, so nothing would stop the waiter later from using
+// the raw attestation of the ended publication. The waiter verifies again
+// and gets the new publication.
+func TestReportVerificationWaiterSkipsEndedPublication(t *testing.T) {
+	attester := newHeldReportAttester(nil)
+	s, prov := newReportTestServer(t, attester)
+	key := providerModelKey{prov.Name, "model"}
+
+	// The flight runs the production verification, and then a Chutes
+	// decryption failure on another request ends the publication before the
+	// waiters receive the result.
+	var ended uint64
+	flight := s.reportFlight.DoChan(reportFlightKey(key), func() (any, error) {
+		shared, err := s.verifyReportShared(prov, "model", key, "leader")
+		if err != nil {
+			return nil, err
+		}
+		ended = shared.publication
+		s.handleE2EEDecryptionFailure(context.Background(), prov, "model", shared.publication, &modelStats{}, true, "", errors.New("decrypt error"))
+		return shared, nil
+	})
+	waitForCondition(t, "shared fetch", func() bool { return attester.calls.Load() == 1 })
+
+	type loaded struct {
+		raw         *attestation.RawAttestation
+		publication uint64
+		err         error
+	}
+	done := make(chan loaded, 1)
+	var got loaded
+	logs := captureSlog(t, func() {
+		go func() {
+			_, raw, publication, err := s.loadReport(t.Context(), prov, "model")
+			done <- loaded{raw, publication, err}
+		}()
+		waitForReportWaiter(t)
+		close(attester.release)
+		<-flight
+		got = <-done
+	})
+
+	if got.err != nil {
+		t.Fatalf("loadReport: %v", got.err)
+	}
+	if got.publication == ended || !s.reportPublicationCurrent(key, got.publication) {
+		t.Fatalf("waiter publication = %d (ended %d), want the current publication", got.publication, ended)
+	}
+	if got.raw == nil {
+		t.Fatal("waiter of the new verification did not receive its raw attestation")
+	}
+	if attester.calls.Load() != 2 {
+		t.Fatalf("attestation fetches = %d, want 2", attester.calls.Load())
+	}
+	if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "verifying again") {
+		t.Fatalf("ended publication diagnostic missing:\n%s", logs)
 	}
 }

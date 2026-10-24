@@ -116,7 +116,10 @@ before a later verification published.
 An E2EE decryption failure deletes both cache entries and, except for Chutes,
 records the failure. A verification that started before the failure does not
 publish its result, its waiting requests fail, and the next request starts a
-new verification. A passing verification that started after the failure
+new verification. A failure can also end a publication after the verification
+published it and before a waiting request resumes. That request does not use
+the ended publication or its raw attestation: it starts or joins one new
+verification, and fails if that publication also ends before it resumes. A passing verification that started after the failure
 clears it for all of its waiting requests. A request that finds the failure
 still recorded fails with HTTP 503 and deletes the cache entries only if they
 hold the publication of the report that the request used. That deletion also

@@ -40,8 +40,39 @@ func reportFlightKey(key providerModelKey) string {
 // model that miss in the report cache, and returns the report, the raw
 // attestation for one waiter, and the report's publication number. The caller's
 // context limits only its wait for the result.
+//
+// An invalidation can end the publication after the verification published it
+// and before this waiter resumes. The waiter then must not acquire the ended
+// publication or its raw attestation: for Chutes no E2EE failure flag stops a
+// request later. loadReport checks under reportMu that the publication is
+// still current, and otherwise starts or joins one new verification. A second
+// ended publication fails the request.
 func (s *Server) loadReport(ctx context.Context, prov *provider.Provider, upstreamModel string) (*attestation.VerificationReport, *attestation.RawAttestation, uint64, error) {
 	key := providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}
+	for attempt := 0; ; attempt++ {
+		shared, err := s.awaitSharedReport(ctx, prov, upstreamModel, key)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if s.reportPublicationCurrent(key, shared.publication) {
+			if shared.claimed.CompareAndSwap(false, true) {
+				return shared.report, shared.raw, shared.publication, nil
+			}
+			return shared.report, nil, shared.publication, nil
+		}
+		if attempt > 0 {
+			slog.WarnContext(ctx, "attestation cache was invalidated again before the request used the verification; request blocked",
+				"provider", prov.Name, "model", upstreamModel)
+			return nil, nil, 0, errReportInvalidated
+		}
+		slog.WarnContext(ctx, "attestation cache was invalidated before the request used the verification; verifying again",
+			"provider", prov.Name, "model", upstreamModel)
+	}
+}
+
+// awaitSharedReport starts or joins the shared verification for key and waits
+// for its result or the end of the caller's context.
+func (s *Server) awaitSharedReport(ctx context.Context, prov *provider.Provider, upstreamModel string, key providerModelKey) (*sharedReport, error) {
 	leader := reqid.FromContext(ctx)
 	// Waiters share the leader's upstreamModel: the key's cache model scopes the cached report and key.
 	result := s.reportFlight.DoChan(reportFlightKey(key), func() (any, error) { //nolint:contextcheck // The server owns the shared verification context, independent of each waiter.
@@ -49,20 +80,28 @@ func (s *Server) loadReport(ctx context.Context, prov *provider.Provider, upstre
 	})
 	select {
 	case <-ctx.Done():
-		return nil, nil, 0, ctx.Err()
+		return nil, ctx.Err()
 	case completed := <-result:
 		if completed.Err != nil {
-			return nil, nil, 0, completed.Err
+			return nil, completed.Err
 		}
 		shared, ok := completed.Val.(*sharedReport)
 		if !ok {
-			return nil, nil, 0, errors.New("invalid shared report result")
+			return nil, errors.New("invalid shared report result")
 		}
-		if shared.claimed.CompareAndSwap(false, true) {
-			return shared.report, shared.raw, shared.publication, nil
-		}
-		return shared.report, nil, shared.publication, nil
+		return shared, nil
 	}
+}
+
+// reportPublicationCurrent reports whether publication is the current
+// publication for key. An invalidation ends the current publication under
+// reportMu, so a publication that is current here was not invalidated before
+// the request acquired it.
+func (s *Server) reportPublicationCurrent(key providerModelKey, publication uint64) bool {
+	s.reportMu.Lock()
+	defer s.reportMu.Unlock()
+	current, ok := s.reportPubs[key]
+	return ok && current == publication
 }
 
 // verifyReportShared runs one report verification under a server-owned
