@@ -42,6 +42,7 @@ tests.
 | SSE completion consumes trailing EHBP frames before reporting success | `TestAuthorizedEHBPStreamCompletion`, `TestStandaloneEHBPStreamCompletion`, and `TestReassembleSSECompletion` |
 | SSE trailing-line limits account for CRLF, with conservative bounds for LF, CR, and unterminated lines | `TestFinishSSETrailingByteLimit` in [SSE completion tests](../../internal/e2ee/sse_completion_test.go) |
 | Standalone capture retains discovery and final attempt evidence; successful and failed inference outcomes replay with signed Tinfoil evidence | `TestVerificationCaptureKeepsFinalEvidence`, `TestVerificationCaptureFinalOutcomeReplay` in [capture tests](../../internal/verify/capture_attempt_test.go) |
+| A transport failure is recorded and replays as the same error text; a capture with a failed trust server request passes its self-check | `TestRecordingTransport_FailedExchangeReplays` in [capture tests](../../internal/capture/capture_test.go), `TestVerifyRun_VeniceACI_CaptureRecordsTransportFailure` in [Venice ACI/1 replay tests](../../internal/integration/venice_aci_test.go) |
 | Server cleanup closes provider clients; retry and capture wrappers forward cleanup | `TestServerCloseProviderConnections` and `TestAttestationClientCloseIdleConnections` |
 | Concurrent report acquisition and promotion preserve ownership | `TestAuthorizationConcurrentReportOwnership` |
 | Client cleanup reaches each wrapped connection pool | `TestWrappedClientClosesIdleConnections` in [transport tests](../../internal/tlsct/transport_test.go) |

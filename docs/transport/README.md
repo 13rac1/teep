@@ -378,6 +378,12 @@ retry after key rejection uses a new client nonce and replaces the recorded evid
 it does not resolve the route again. Replay therefore cannot select evidence
 from the rejected key's attempt, including collateral fetched at the same URL.
 Capture self-check verifies the saved final report, including inference errors.
+Capture records a request whose transport fails, such as a TLS certificate
+error from an external service, with its method, URL, request body and error
+text. Replay returns that recorded text for the matching request, so the
+replayed factor detail is the live one. A client timeout replays without the
+client's "(Client.Timeout exceeded ...)" suffix, because the client adds that
+text outside the transport.
 Capture collection takes synchronized snapshots of completed exchanges. A
 canceled discovery caller can collect a partial capture while detached
 discovery finishes; that operation must not race with capture collection.

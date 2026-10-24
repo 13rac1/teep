@@ -806,6 +806,59 @@ func TestRecordingTransport_BaseError(t *testing.T) {
 	}
 }
 
+// A transport failure is recorded, survives Save and Load, and replays as the
+// same client error text. The text carries the time of the failure, as a TLS
+// certificate error does, so replay must return the recorded text.
+func TestRecordingTransport_FailedExchangeReplays(t *testing.T) {
+	failure := "tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time " +
+		time.Now().UTC().Format(time.RFC3339Nano) + " is after 2026-09-07T23:59:59Z"
+	base := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return nil, errors.New(failure)
+	})
+	rec := WrapRecording(base)
+	const target = "https://trust-server.example.com/get_jwt"
+	const reqBody = `{"quote":"00"}`
+	post := func(rt http.RoundTripper) error {
+		resp, err := (&http.Client{Transport: rt}).Post(target, "application/json", strings.NewReader(reqBody))
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return err
+	}
+	liveErr := post(rec)
+	if liveErr == nil {
+		t.Fatal("live request succeeded, want the transport error")
+	}
+
+	entries := rec.Snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("recorded %d entries, want 1", len(entries))
+	}
+	if entries[0].Err != failure || entries[0].Method != http.MethodPost || entries[0].URL != target || string(entries[0].ReqBody) != reqBody {
+		t.Fatalf("recorded entry = %+v, want the failed POST with its error text", entries[0])
+	}
+
+	subdir, err := Save(t.TempDir(), &Manifest{Provider: "p", Model: "m", NonceHex: "00", CapturedAt: time.Now()}, "", entries)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	_, loaded, err := Load(subdir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].Err != failure {
+		t.Fatalf("loaded entries = %+v, want the recorded error text", loaded)
+	}
+
+	replayErr := post(NewReplayTransport(loaded))
+	if replayErr == nil {
+		t.Fatal("replayed request succeeded, want the recorded transport error")
+	}
+	if replayErr.Error() != liveErr.Error() {
+		t.Errorf("replay error = %q, want the live error %q", replayErr, liveErr)
+	}
+}
+
 // errReader is an io.Reader that always returns an error.
 type errReader struct{ err error }
 

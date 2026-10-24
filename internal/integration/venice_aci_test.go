@@ -2,12 +2,16 @@ package integration
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/verify"
 )
@@ -156,4 +160,71 @@ func loadAllACIRaws(t *testing.T) []aciFixtureRaw {
 		raws = append(raws, aciFixtureRaw{model: raw.Model, raw: raw})
 	}
 	return raws
+}
+
+// trustServerFailure fails every request to one Proof of Cloud trust server
+// at transport level and sends all other requests to the fixture replay. The
+// error text carries the current time, as a TLS certificate error does.
+type trustServerFailure struct {
+	host string
+	next http.RoundTripper
+}
+
+func (f trustServerFailure) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Host == f.host {
+		return nil, errors.New("tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time " +
+			time.Now().UTC().Format(time.RFC3339Nano) + " is after 2026-09-07T23:59:59Z")
+	}
+	return f.next.RoundTrip(req)
+}
+
+// A live transport error on an external check must replay as the same
+// failure. One trust server fails during a captured Venice ACI/1
+// verification; the capture self-check replays the saved capture and must
+// produce the same report, so Run returns no error.
+func TestVerifyRun_VeniceACI_CaptureRecordsTransportFailure(t *testing.T) {
+	env := loadFixture(t, "venice_aci")
+	baseURL := extractBaseURL(t, env.entries)
+	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, baseURL)
+	const failingHost = "trust-server.scrtlabs.com"
+	client := &http.Client{Transport: trustServerFailure{host: failingHost, next: env.client.Transport}}
+
+	captureDir := t.TempDir()
+	report, err := verify.Run(context.Background(), &verify.Options{
+		Config:           cfg,
+		Provider:         cp,
+		ProviderName:     env.manifest.Provider,
+		ModelName:        env.manifest.Model,
+		Client:           client,
+		Nonce:            env.nonce,
+		CaptureDir:       captureDir,
+		CapturedE2EE:     fixtureE2EEResult(env.manifest.E2EE),
+		VerificationTime: fixtureVerificationTime(&env),
+	})
+	if err != nil {
+		t.Fatalf("verify.Run with capture: %v", err)
+	}
+	assertNoEnforcedFailures(t, report)
+	f := findFactor(t, report, "gateway_cpu_id_registry")
+	if !strings.Contains(f.Detail, failingHost) || !strings.Contains(f.Detail, "certificate has expired") {
+		t.Fatalf("gateway_cpu_id_registry detail = %q, want the trust server transport failure", f.Detail)
+	}
+
+	dirs, err := os.ReadDir(captureDir)
+	if err != nil || len(dirs) != 1 {
+		t.Fatalf("capture dir entries = %v (err %v), want one capture", dirs, err)
+	}
+	_, entries, err := capture.Load(filepath.Join(captureDir, dirs[0].Name()))
+	if err != nil {
+		t.Fatalf("load capture: %v", err)
+	}
+	var failed int
+	for i := range entries {
+		if entries[i].Err != "" {
+			failed++
+		}
+	}
+	if failed == 0 {
+		t.Error("capture holds no failed exchange; the trust server failure was not recorded")
+	}
 }

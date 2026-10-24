@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,6 +46,13 @@ type RecordedEntry struct {
 	ReqBody     []byte        `json:"req_body_base64,omitempty"`
 	Body        []byte        `json:"-"`
 	Duration    time.Duration `json:"-"`
+
+	// Err is the error text of an exchange whose base transport failed
+	// (for example a TLS certificate error). Such an entry has no status,
+	// headers or body. Replay returns this exact text for the matching
+	// request: the text can carry the time of the failure, so replay
+	// cannot rebuild it.
+	Err string `json:"error,omitempty"`
 }
 
 // E2EEOutcome records the result of a live E2EE test for capture/replay.
@@ -105,8 +113,9 @@ type RecordingTransport struct {
 }
 
 // WrapRecording wraps base with a RecordingTransport. It must be the outermost
-// transport in the chain (above RetryTransport) so only the final successful
-// response is recorded; intermediate retry attempts are invisible to the recorder.
+// transport in the chain (above RetryTransport) so only the final outcome of
+// each request, a response or a transport error, is recorded; intermediate
+// retry attempts are invisible to the recorder.
 // base must be non-nil.
 func WrapRecording(base http.RoundTripper) *RecordingTransport {
 	return &RecordingTransport{Base: base}
@@ -149,6 +158,21 @@ func (t *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	resp, err := t.Base.RoundTrip(req)
 	elapsed := time.Since(start)
 	if err != nil {
+		// Record the failed exchange so that replay gives the verifier the
+		// same failure. The text is the transport-level error: http.Client
+		// adds the "Post \"<url>\": " prefix around it in both live and
+		// replay runs. A "(Client.Timeout exceeded ...)" suffix comes from
+		// the client's own timer and is not part of this text, so a replayed
+		// client timeout does not carry it.
+		t.mu.Lock()
+		t.entries = append(t.entries, RecordedEntry{
+			Method:   req.Method,
+			URL:      req.URL.String(),
+			ReqBody:  reqBody,
+			Err:      err.Error(),
+			Duration: elapsed,
+		})
+		t.mu.Unlock()
 		return nil, err
 	}
 
@@ -252,6 +276,13 @@ func (t *replayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				}
 			}
 		}
+		if e.Err != "" {
+			slog.DebugContext(req.Context(), "replay hit: recorded transport error",
+				"method", e.Method,
+				"url", e.URL,
+			)
+			return nil, errors.New(e.Err)
+		}
 		slog.DebugContext(req.Context(), "replay hit",
 			"method", e.Method,
 			"url", e.URL,
@@ -326,6 +357,7 @@ func Save(dir string, m *Manifest, reportText string, entries []RecordedEntry) (
 			PeerSPKIDER: base64Encode(e.PeerSPKIDER),
 			Headers:     e.Headers,
 			ReqBody:     base64Encode(e.ReqBody),
+			Error:       e.Err,
 			DurationMS:  e.Duration.Milliseconds(),
 		}, "", "  ")
 		if err != nil {
@@ -355,6 +387,7 @@ type entryMeta struct {
 	PeerSPKIDER string      `json:"peer_spki_der_base64,omitempty"`
 	Headers     http.Header `json:"headers"`
 	ReqBody     string      `json:"req_body_base64,omitempty"`
+	Error       string      `json:"error,omitempty"`
 	DurationMS  int64       `json:"duration_ms,omitempty"`
 }
 
@@ -450,6 +483,7 @@ func Load(dir string) (Manifest, []RecordedEntry, error) {
 			PeerSPKIDER: peerSPKIDER,
 			Headers:     meta.Headers,
 			ReqBody:     reqBody,
+			Err:         meta.Error,
 			Body:        body,
 			Duration:    time.Duration(meta.DurationMS) * time.Millisecond,
 		})
