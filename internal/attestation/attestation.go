@@ -241,10 +241,12 @@ type cacheKey struct {
 	model    string
 }
 
-// cacheEntry stores a verified report and the time it was populated.
+// cacheEntry stores a verified report, its publication number, and the time
+// it was populated.
 type cacheEntry struct {
-	report    *VerificationReport
-	fetchedAt time.Time
+	report      *VerificationReport
+	publication uint64
+	fetchedAt   time.Time
 }
 
 // evictWarnInterval throttles eviction warnings so that sustained cache
@@ -259,6 +261,7 @@ type Cache struct {
 	entries       map[cacheKey]*cacheEntry
 	ttl           time.Duration
 	lastEvictWarn time.Time
+	published     uint64 // last publication number that Put assigned
 }
 
 // NewCache returns a Cache with the specified TTL.
@@ -272,21 +275,31 @@ func NewCache(ttl time.Duration) *Cache {
 // Get returns the cached VerificationReport for the given provider and model,
 // or (nil, false) if absent or expired.
 func (c *Cache) Get(provider, model string) (*VerificationReport, bool) {
+	report, _, ok := c.GetPublication(provider, model)
+	return report, ok
+}
+
+// GetPublication returns the cached VerificationReport for the given provider
+// and model and the publication number that Put assigned to it, or
+// (nil, 0, false) if absent or expired.
+func (c *Cache) GetPublication(provider, model string) (*VerificationReport, uint64, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.entries[cacheKey{provider, model}]
 	if !ok || time.Since(e.fetchedAt) > c.ttl {
-		return nil, false
+		return nil, 0, false
 	}
-	return e.report, true
+	return e.report, e.publication, true
 }
 
 // maxCacheEntries is the threshold above which expired entries are evicted
 // during Put/Record to prevent unbounded memory growth.
 const maxCacheEntries = 1000
 
-// Put stores a VerificationReport for the given provider and model.
-func (c *Cache) Put(provider, model string, report *VerificationReport) {
+// Put stores a VerificationReport for the given provider and model and
+// returns its publication number. Each Put assigns a new number, starting at
+// 1, so no two stored reports have the same number.
+func (c *Cache) Put(provider, model string, report *VerificationReport) uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key := cacheKey{provider, model}
@@ -324,10 +337,29 @@ func (c *Cache) Put(provider, model string, report *VerificationReport) {
 			c.lastEvictWarn = now
 		}
 	}
+	c.published++
 	c.entries[key] = &cacheEntry{
-		report:    report,
-		fetchedAt: time.Now(),
+		report:      report,
+		publication: c.published,
+		fetchedAt:   time.Now(),
 	}
+	return c.published
+}
+
+// Replace stores report in place of the entry with the given publication
+// number for the given provider and model. It keeps the entry's publication
+// number and the time at which the entry was populated, so a replacement does
+// not extend the entry's lifetime. It returns false and changes nothing if the
+// entry is absent, expired, or has a different publication number.
+func (c *Cache) Replace(provider, model string, publication uint64, report *VerificationReport) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[cacheKey{provider, model}]
+	if !ok || e.publication != publication || time.Since(e.fetchedAt) > c.ttl {
+		return false
+	}
+	c.entries[cacheKey{provider, model}] = &cacheEntry{report: report, publication: publication, fetchedAt: e.fetchedAt}
+	return true
 }
 
 // Delete removes the cached report for the given provider and model.

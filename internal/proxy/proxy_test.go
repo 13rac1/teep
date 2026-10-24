@@ -3658,7 +3658,7 @@ func (p noopPreparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.C
 	return nil
 }
 
-// mockAttester records FetchAttestation calls for fallback-path testing.
+// mockAttester records FetchAttestation calls for full verification testing.
 type mockAttester struct {
 	mu    sync.Mutex
 	calls int
@@ -3714,7 +3714,7 @@ func newNoncePoolTestServer(t *testing.T, upstreamURL string) (srv *proxy.Server
 
 // TestNoncePoolAccept verifies that when the signing key cache has a key
 // matching the nonce pool's E2EPubKey, the pool material is used without
-// falling back to fresh attestation.
+// full verification.
 func TestNoncePoolAccept(t *testing.T) {
 	const signingKey = "matching-signing-key"
 	const wantContent = "nonce pool accepted"
@@ -3770,7 +3770,7 @@ func TestNoncePoolAccept(t *testing.T) {
 
 // TestNoncePoolReject_ColdSigningKeyCache verifies that when the signing key
 // cache is empty, the nonce pool is skipped entirely (no nonce consumed) and
-// the proxy falls back to fresh attestation.
+// the proxy starts full verification.
 func TestNoncePoolReject_ColdSigningKeyCache(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -3803,9 +3803,9 @@ func TestNoncePoolReject_ColdSigningKeyCache(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Fallback attestation fails (mock attester), so proxy returns 500.
+	// Full verification fails (mock attester), so proxy returns 500.
 	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (fallback attestation fails)", resp.StatusCode)
+		t.Fatalf("status = %d, want 500 (full verification fails)", resp.StatusCode)
 	}
 
 	fetcher.mu.Lock()
@@ -3817,13 +3817,13 @@ func TestNoncePoolReject_ColdSigningKeyCache(t *testing.T) {
 	attester.mu.Lock()
 	defer attester.mu.Unlock()
 	if attester.calls != 1 {
-		t.Errorf("attester.calls = %d, want 1 (fallback to fresh attestation)", attester.calls)
+		t.Errorf("attester.calls = %d, want 1 (full verification)", attester.calls)
 	}
 }
 
 // TestNoncePoolMismatch_Invalidate verifies that when the nonce pool's
 // E2EPubKey differs from the cached signing key, the pool is invalidated
-// and the proxy falls back to fresh attestation.
+// and the proxy starts full verification.
 func TestNoncePoolMismatch_Invalidate(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -3857,9 +3857,9 @@ func TestNoncePoolMismatch_Invalidate(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Fallback attestation fails (mock attester), so proxy returns 500.
+	// Full verification fails (mock attester), so proxy returns 500.
 	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (fallback attestation fails after mismatch)", resp.StatusCode)
+		t.Fatalf("status = %d, want 500 (full verification fails after mismatch)", resp.StatusCode)
 	}
 
 	fetcher.mu.Lock()
@@ -3877,7 +3877,7 @@ func TestNoncePoolMismatch_Invalidate(t *testing.T) {
 	attester.mu.Lock()
 	defer attester.mu.Unlock()
 	if attester.calls != 1 {
-		t.Errorf("attester.calls = %d, want 1 (fallback to fresh attestation after mismatch)", attester.calls)
+		t.Errorf("attester.calls = %d, want 1 (full verification after mismatch)", attester.calls)
 	}
 }
 

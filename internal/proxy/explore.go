@@ -131,8 +131,9 @@ func (s *Server) handleExploreAttest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "attestation fetch failed; see server logs", http.StatusBadGateway)
 		return
 	}
-
-	s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), report)
+	// Do not write this report to the report cache. The endpoint does not
+	// enforce it, and only the shared verification publishes, under the
+	// invalidation epoch and with the signing key.
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(report); err != nil {

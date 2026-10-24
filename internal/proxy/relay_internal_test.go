@@ -214,6 +214,8 @@ func newMinimalServer() *Server {
 		cache:           attestation.NewCache(time.Minute),
 		negCache:        attestation.NewNegativeCache(time.Minute),
 		signingKeyCache: attestation.NewSigningKeyCache(time.Minute),
+		reportEpochs:    make(map[providerModelKey]uint64),
+		reportPubs:      make(map[providerModelKey]uint64),
 		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 	}
 }
@@ -226,7 +228,7 @@ func TestClassifyRelayOutcome_NilError(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "test"}
 	ms := &modelStats{}
-	result := s.classifyRelayOutcome(context.Background(), nil, false, prov, "model", ms, false, "")
+	result := s.classifyRelayOutcome(context.Background(), nil, &attestResult{}, prov, "model", ms, false, "")
 	if result != "" {
 		t.Errorf("classifyRelayOutcome(nil) = %q, want empty", result)
 	}
@@ -237,7 +239,7 @@ func TestClassifyRelayOutcome_NonDecryptionError(t *testing.T) {
 	prov := &provider.Provider{Name: "test"}
 	ms := &modelStats{}
 	relayErr := errors.New("upstream connection reset")
-	result := s.classifyRelayOutcome(context.Background(), relayErr, false, prov, "model", ms, false, "")
+	result := s.classifyRelayOutcome(context.Background(), relayErr, &attestResult{}, prov, "model", ms, false, "")
 	if result != "relay_failed" {
 		t.Errorf("classifyRelayOutcome(non-decryption err) = %q, want relay_failed", result)
 	}
@@ -248,65 +250,116 @@ func TestClassifyRelayOutcome_DecryptionErrorNotE2EEActive(t *testing.T) {
 	prov := &provider.Provider{Name: "test"}
 	ms := &modelStats{}
 	// ErrDecryptionFailed but e2eeActive=false → should NOT call handleE2EEDecryptionFailure.
-	result := s.classifyRelayOutcome(context.Background(), e2ee.ErrDecryptionFailed, false, prov, "model", ms, false, "")
+	result := s.classifyRelayOutcome(context.Background(), e2ee.ErrDecryptionFailed, &attestResult{}, prov, "model", ms, false, "")
 	if result != "relay_failed" {
 		t.Errorf("classifyRelayOutcome(decrypt err, not e2ee active) = %q, want relay_failed", result)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// clearE2EEFailureIfFresh
+// checkE2EEFailure
 // ---------------------------------------------------------------------------
 
-func TestClearE2EEFailureIfFresh_NoFailure(t *testing.T) {
+func TestCheckE2EEFailure_NoFailure(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "venice"}
 	ms := &modelStats{}
 	ar := &attestResult{}
 
 	w := httptest.NewRecorder()
-	proceed := s.clearE2EEFailureIfFresh(context.Background(), w, prov, "model", ar, ms)
+	proceed := s.checkE2EEFailure(context.Background(), w, prov, "model", ar, ms)
 	if !proceed {
 		t.Error("expected proceed=true when no failure recorded")
 	}
 }
 
-func TestClearE2EEFailureIfFresh_FailureWithFreshAttestation(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{Name: "venice"}
-	ms := &modelStats{}
-	// Record a failure for this provider+model.
-	key := providerModelKey{prov.Name, "model"}
-	s.e2eeFailed.Store(key, true)
-	// Fresh attestation clears the failure.
-	ar := &attestResult{Raw: &attestation.RawAttestation{}}
-
-	w := httptest.NewRecorder()
-	proceed := s.clearE2EEFailureIfFresh(context.Background(), w, prov, "model", ar, ms)
-	if !proceed {
-		t.Error("expected proceed=true after clearing failure with fresh attestation")
-	}
-	if _, still := s.e2eeFailed.Load(key); still {
-		t.Error("expected failure to be cleared from e2eeFailed")
-	}
-}
-
-func TestClearE2EEFailureIfFresh_FailureWithCachedAttestation(t *testing.T) {
+// A recorded failure means that the request's report predates it, also for
+// the request that holds the raw attestation. The request deletes the cache
+// entries because the cache still holds the publication that it used, also
+// after a success replaced the report with an annotated copy.
+func TestCheckE2EEFailure_DeletesReportItUsed(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "venice"}
 	ms := &modelStats{}
 	key := providerModelKey{prov.Name, "model"}
 	s.e2eeFailed.Store(key, true)
-	// Cached attestation (ar.Raw == nil) — should fail closed.
-	ar := &attestResult{Raw: nil}
+	used := &attestation.VerificationReport{}
+	pub := publishTestReport(s, key, used.Clone())
+	s.signingKeyCache.Put(prov.Name, "model", "used-key")
+	ar := &attestResult{Report: used, Raw: &attestation.RawAttestation{}, Publication: pub}
 
 	w := httptest.NewRecorder()
-	proceed := s.clearE2EEFailureIfFresh(context.Background(), w, prov, "model", ar, ms)
+	proceed := s.checkE2EEFailure(context.Background(), w, prov, "model", ar, ms)
 	if proceed {
-		t.Error("expected proceed=false when failure recorded and attestation is cached")
+		t.Error("expected proceed=false when a failure is recorded")
 	}
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	if _, ok := s.cache.Get(prov.Name, "model"); ok {
+		t.Error("report that the request used is still cached")
+	}
+	if _, ok := s.signingKeyCache.Get(prov.Name, "model"); ok {
+		t.Error("signing key of the report that the request used is still cached")
+	}
+	if _, still := s.e2eeFailed.Load(key); !still {
+		t.Error("request cleared the recorded failure")
+	}
+}
+
+// After the request deletes the publication that it used, that publication
+// is not current. A later decryption failure on it logs a warning and does not
+// increment the epoch, so it cannot stop a recovery verification.
+func TestCheckE2EEFailure_DeletionEndsPublication(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "venice"}
+	key := providerModelKey{prov.Name, "model"}
+	s.e2eeFailed.Store(key, true)
+	pub := publishTestReport(s, key, &attestation.VerificationReport{})
+	ar := &attestResult{Report: &attestation.VerificationReport{}, Publication: pub}
+	if s.checkE2EEFailure(context.Background(), httptest.NewRecorder(), prov, "model", ar, &modelStats{}) {
+		t.Fatal("expected proceed=false when a failure is recorded")
+	}
+	if _, ok := s.cache.Get(prov.Name, "model"); ok {
+		t.Fatal("report that the request used is still cached")
+	}
+	logs := captureSlog(t, func() {
+		s.handleE2EEDecryptionFailure(context.Background(), prov, "model", pub, &modelStats{}, false, "", errors.New("decrypt error"))
+	})
+	if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "current report kept") {
+		t.Fatalf("late failure diagnostic missing:\n%s", logs)
+	}
+	if s.reportEpoch(key) != 0 {
+		t.Fatal("late failure on the deleted publication incremented the epoch")
+	}
+}
+
+// A request must not delete a replacement report that it did not use.
+func TestCheckE2EEFailure_KeepsReplacementReport(t *testing.T) {
+	s := newMinimalServer()
+	prov := &provider.Provider{Name: "venice"}
+	ms := &modelStats{}
+	key := providerModelKey{prov.Name, "model"}
+	s.e2eeFailed.Store(key, true)
+	used := &attestation.VerificationReport{}
+	usedPub := publishTestReport(s, key, used)
+	replacement := &attestation.VerificationReport{}
+	publishTestReport(s, key, replacement)
+	s.signingKeyCache.Put(prov.Name, "model", "replacement-key")
+	ar := &attestResult{Report: used, Publication: usedPub}
+
+	w := httptest.NewRecorder()
+	if s.checkE2EEFailure(context.Background(), w, prov, "model", ar, ms) {
+		t.Error("expected proceed=false when a failure is recorded")
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	if cached, ok := s.cache.Get(prov.Name, "model"); !ok || cached != replacement {
+		t.Error("request deleted a replacement report")
+	}
+	if key, ok := s.signingKeyCache.Get(prov.Name, "model"); !ok || key != "replacement-key" {
+		t.Error("request deleted the signing key of a replacement report")
 	}
 }
 
@@ -355,7 +408,7 @@ func TestHandleE2EEDecryptionFailure_NonChutes(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "venice"}
 	ms := &modelStats{}
-	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", ms, false, "", errors.New("decrypt error"))
+	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", 0, ms, false, "", errors.New("decrypt error"))
 	t.Logf("result = %q, ms.errors = %d", result, ms.errors.Load())
 	if result != "e2ee_decrypt_failed" {
 		t.Errorf("result = %q, want %q", result, "e2ee_decrypt_failed")
@@ -370,7 +423,7 @@ func TestHandleE2EEDecryptionFailure_Chutes_WithFetcher(t *testing.T) {
 	fetcher := &internalMockFetcher{}
 	prov := &provider.Provider{Name: "chutes", E2EEMaterialFetcher: fetcher}
 	ms := &modelStats{}
-	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", ms, true, "chute-id", errors.New("decrypt error"))
+	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", 0, ms, true, "chute-id", errors.New("decrypt error"))
 	t.Logf("result = %q, invalidated = %v", result, fetcher.invalidated)
 	if result != "e2ee_decrypt_failed" {
 		t.Errorf("result = %q, want %q", result, "e2ee_decrypt_failed")
@@ -384,7 +437,7 @@ func TestHandleE2EEDecryptionFailure_Chutes_NilFetcher(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "chutes", E2EEMaterialFetcher: nil}
 	ms := &modelStats{}
-	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", ms, true, "", errors.New("decrypt error"))
+	result := s.handleE2EEDecryptionFailure(context.Background(), prov, "model", 0, ms, true, "", errors.New("decrypt error"))
 	t.Logf("result = %q", result)
 	if result != "e2ee_decrypt_failed" {
 		t.Errorf("result = %q, want %q", result, "e2ee_decrypt_failed")
@@ -676,8 +729,9 @@ func TestHandleE2EEDecryptionFailure_LogsSingleError(t *testing.T) {
 	s := newMinimalServer()
 	prov := &provider.Provider{Name: "venice"}
 	ms := &modelStats{}
+	pub := publishTestReport(s, providerModelKey{prov.Name, "model"}, &attestation.VerificationReport{})
 	logs := captureSlog(t, func() {
-		_ = s.handleE2EEDecryptionFailure(t.Context(), prov, "model", ms, false, "", errors.New("decrypt error"))
+		_ = s.handleE2EEDecryptionFailure(t.Context(), prov, "model", pub, ms, false, "", errors.New("decrypt error"))
 	})
 
 	for _, want := range []string{
@@ -1496,11 +1550,12 @@ func TestBuildUpstreamBody_FreshRaw_WithKey_Success(t *testing.T) {
 	}
 }
 
-// TestBuildUpstreamBody_CachedSigningKey verifies that when a signing key is
-// in the cache and freshRaw is nil, buildUpstreamBody uses the cached key and
-// calls Encryptor (covering the signingKeyCache hit path).
+// TestBuildUpstreamBody_CachedSigningKey verifies that when a passing report
+// and its signing key are cached and freshRaw is nil, buildUpstreamBody uses
+// the cached key and calls Encryptor (covering the signingKeyCache hit path).
 func TestBuildUpstreamBody_CachedSigningKey(t *testing.T) {
 	s := newMinimalServer()
+	publishTestReport(s, providerModelKey{"test", "model"}, bindingReport())
 	s.signingKeyCache.Put("test", "model", "cached-key-value")
 	mockEnc := &mockRequestEncryptor{err: errors.New("encryptor reached with cached key")}
 	prov := &provider.Provider{
@@ -1521,40 +1576,14 @@ func TestBuildUpstreamBody_CachedSigningKey(t *testing.T) {
 	}
 }
 
-// TestBuildUpstreamBody_E2EEMaterialFetcher_NoCachedKey verifies the debug path
-// when a nonce-pool fetcher is set but the signing key cache is empty.
-// Falls through to fresh attestation (which fails because Attester returns error).
-func TestBuildUpstreamBody_E2EEMaterialFetcher_NoCachedKey(t *testing.T) {
-	s := newMinimalServer()
-	// No key in signingKeyCache — forces "no cached signing key; skipping nonce pool".
-	fetcher := &mockE2EEMaterialFetcher{}
-	mockEnc := &mockRequestEncryptor{}
-	mockAtt := &mockAttester{err: errors.New("mock attester error")}
-	prov := &provider.Provider{
-		Name:                "test",
-		E2EE:                false,
-		Encryptor:           mockEnc,
-		Attester:            mockAtt,
-		E2EEMaterialFetcher: fetcher,
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	t.Logf("buildUpstreamBody(no cached key): err=%v", err)
-	// Falls through to fresh attest which returns our mock error.
-	if err == nil {
-		t.Error("expected error from mock attester")
-	}
-	if !strings.Contains(err.Error(), "mock attester error") {
-		t.Errorf("error %q should mention 'mock attester error'", err.Error())
-	}
-}
-
 // TestBuildUpstreamBody_E2EEMaterialFetcher_FetchError verifies the log path
-// when FetchE2EEMaterial returns an error — falls through to fresh attestation.
+// when FetchE2EEMaterial returns an error — falls through to full verification.
 func TestBuildUpstreamBody_E2EEMaterialFetcher_FetchError(t *testing.T) {
 	s := newMinimalServer()
+	publishTestReport(s, providerModelKey{"test", "model"}, bindingReport())
 	s.signingKeyCache.Put("test", "model", "some-cached-key")
 	fetcher := &mockE2EEMaterialFetcher{err: errors.New("fetch material error")}
-	mockAtt := &mockAttester{err: errors.New("attester fallback error")}
+	mockAtt := &mockAttester{err: errors.New("attester error")}
 	prov := &provider.Provider{
 		Name:                "test",
 		Encryptor:           &mockRequestEncryptor{},
@@ -1563,17 +1592,18 @@ func TestBuildUpstreamBody_E2EEMaterialFetcher_FetchError(t *testing.T) {
 	}
 	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
 	t.Logf("buildUpstreamBody(fetch error): err=%v", err)
-	// Falls through to fresh attest.
+	// Falls through to full verification, which this minimal server cannot start.
 	if err == nil {
-		t.Error("expected error from mock attester fallback")
+		t.Error("expected error from full verification")
 	}
 }
 
 // TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMismatch verifies that when the
 // nonce pool returns a key different from the cached key, the pool is invalidated
-// and fresh attestation is attempted.
+// and full verification is attempted.
 func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMismatch(t *testing.T) {
 	s := newMinimalServer()
+	publishTestReport(s, providerModelKey{"test", "model"}, bindingReport())
 	s.signingKeyCache.Put("test", "model", "cached-key-ABC")
 	fetcher := &mockE2EEMaterialFetcher{
 		material: &provider.E2EEMaterial{
@@ -1591,7 +1621,7 @@ func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMismatch(t *testing.T) {
 	}
 	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
 	t.Logf("buildUpstreamBody(key mismatch): err=%v invalidated=%v", err, fetcher.invalidated)
-	// Pool invalidated, falls through to fresh attest.
+	// Pool invalidated, falls through to full verification.
 	if len(fetcher.invalidated) == 0 {
 		t.Error("expected pool to be invalidated on key mismatch")
 	}
@@ -1606,6 +1636,7 @@ func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMismatch(t *testing.T) {
 func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMatch(t *testing.T) {
 	s := newMinimalServer()
 	matchKey := "matching-pub-key"
+	publishTestReport(s, providerModelKey{"test", "model"}, bindingReport())
 	s.signingKeyCache.Put("test", "model", matchKey)
 	fetcher := &mockE2EEMaterialFetcher{
 		material: &provider.E2EEMaterial{
@@ -1629,28 +1660,6 @@ func TestBuildUpstreamBody_E2EEMaterialFetcher_KeyMatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "encryptor called with nonce pool key") {
 		t.Errorf("error %q should come from mock encryptor", err.Error())
-	}
-}
-
-// TestBuildUpstreamBody_FreshAttestation_AttesterError verifies the fresh-attestation
-// path when no signing key is cached and no E2EEMaterialFetcher is set.
-func TestBuildUpstreamBody_FreshAttestation_AttesterError(t *testing.T) {
-	s := newMinimalServer()
-	// Cache empty, no fetcher → raw == nil → fresh attest required.
-	mockAtt := &mockAttester{err: errors.New("attester network error")}
-	prov := &provider.Provider{
-		Name:                "test",
-		Attester:            mockAtt,
-		SkipSigningKeyCache: false,
-		E2EEMaterialFetcher: nil,
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	t.Logf("buildUpstreamBody(fresh attest error): err=%v", err)
-	if err == nil {
-		t.Error("expected error from mock attester")
-	}
-	if !strings.Contains(err.Error(), "attester network error") {
-		t.Errorf("error %q should mention attester error", err.Error())
 	}
 }
 
@@ -2007,7 +2016,7 @@ func TestVerifySEV_WithReportDataVerifier_Success(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildUpstreamBody — fresh attestation TDX/SEV REPORTDATA verification paths
+// mockAttesterWithRaw
 // ---------------------------------------------------------------------------
 
 // mockAttesterWithRaw returns a specific RawAttestation.
@@ -2018,54 +2027,6 @@ type mockAttesterWithRaw struct {
 
 func (m *mockAttesterWithRaw) FetchAttestation(_ context.Context, _ string, _ attestation.Nonce) (*attestation.RawAttestation, error) {
 	return m.raw, m.err
-}
-
-func TestBuildUpstreamBody_FreshAttestation_NoTEEEvidence(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{
-		Name:      "test",
-		Attester:  &mockAttesterWithRaw{raw: &attestation.RawAttestation{SigningKey: "key"}},
-		Encryptor: &mockRequestEncryptor{},
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	if err == nil {
-		t.Fatal("expected error for no TEE evidence")
-	}
-	if !strings.Contains(err.Error(), "no TEE evidence") {
-		t.Errorf("error %q should mention no TEE evidence", err.Error())
-	}
-}
-
-func TestBuildUpstreamBody_FreshAttestation_TDXQuoteParseErr(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{
-		Name:      "test",
-		Attester:  &mockAttesterWithRaw{raw: &attestation.RawAttestation{SigningKey: "key", IntelQuote: "invalid-hex"}},
-		Encryptor: &mockRequestEncryptor{},
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	if err == nil {
-		t.Fatal("expected error for TDX quote parse failure")
-	}
-	if !strings.Contains(err.Error(), "fresh TDX quote parse failed") {
-		t.Errorf("error %q should mention fresh TDX quote parse", err.Error())
-	}
-}
-
-func TestBuildUpstreamBody_FreshAttestation_SEVReportParseErr(t *testing.T) {
-	s := newMinimalServer()
-	prov := &provider.Provider{
-		Name:      "test",
-		Attester:  &mockAttesterWithRaw{raw: &attestation.RawAttestation{SigningKey: "key", SEVReportBytes: []byte("too-short")}},
-		Encryptor: &mockRequestEncryptor{},
-	}
-	_, err := s.buildUpstreamBody(context.Background(), []byte(`{}`), "model", true, prov, nil, e2ee.EndpointChat)
-	if err == nil {
-		t.Fatal("expected error for SEV report parse failure")
-	}
-	if !strings.Contains(err.Error(), "fresh SEV-SNP report parse failed") {
-		t.Errorf("error %q should mention fresh SEV-SNP report parse", err.Error())
-	}
 }
 
 // ---------------------------------------------------------------------------
