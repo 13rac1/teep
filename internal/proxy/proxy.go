@@ -751,6 +751,7 @@ func fromConfig(
 	case "nanogpt":
 		p.ChatPath = "/v1/chat/completions"
 		p.Attester = nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline)
+		p.ModelLister = nanogpt.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
 		p.ReportDataVerifier = multi.Verifier{
 			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
 				attestation.FormatDstack: venice.ReportDataVerifier{},
