@@ -393,6 +393,46 @@ func TestFetchAttestation_Success(t *testing.T) {
 	}
 }
 
+// The evidence response of a chute carries every instance and exceeds 2 MiB.
+// FetchAttestation accepts an evidence body up to the evidence bound and
+// rejects a larger one.
+func TestFetchAttestation_EvidenceBodySizeBound(t *testing.T) {
+	quote := fakeQuoteBase64()
+	instances := `{"instances": [{"instance_id": "inst-001", "e2e_pubkey": "dGVzdC1wdWJrZXk=", "nonces": ["n1"]}]}`
+	evidence := func(gpuEvidenceBytes int) string {
+		return `{"evidence": [{"quote": "` + quote + `", "gpu_evidence": [{"certificate": "cert1", "evidence": "` +
+			strings.Repeat("e", gpuEvidenceBytes) + `", "arch": "HOPPER"}], "instance_id": "inst-001", "certificate": "dGxzLWNlcnQ="}], "failed_instance_ids": []}`
+	}
+	for _, tc := range []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{"3 MiB", 3 << 20, false},
+		{"over 16 MiB", 16<<20 + 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := twoStepServer(t, instances, evidence(tc.size))
+			defer srv.Close()
+			a := chutes.NewAttester(srv.URL, "test-key")
+			a.SetModelsBase(srv.URL)
+			raw, err := a.FetchAttestation(context.Background(), "test/model", attestation.NewNonce())
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "exceeds size limit") {
+					t.Fatalf("err = %v, want the evidence size limit error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("FetchAttestation: %v", err)
+			}
+			if raw.IntelQuote != fakeQuoteHex() {
+				t.Errorf("IntelQuote = %q, want %q", raw.IntelQuote, fakeQuoteHex())
+			}
+		})
+	}
+}
+
 func TestFetchAttestation_InstancesHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

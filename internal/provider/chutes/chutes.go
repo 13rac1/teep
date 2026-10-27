@@ -53,8 +53,13 @@ const (
 	// maxGPUEvidence bounds the number of GPU evidence entries per instance.
 	maxGPUEvidence = 64
 
-	// maxBodySize is the maximum response body size (2 MiB).
+	// maxBodySize is the maximum response body size (2 MiB) of the instance list.
 	maxBodySize = 2 << 20
+
+	// maxEvidenceBodySize is the maximum evidence response body size (16 MiB).
+	// One evidence response carries the TDX quote and GPU evidence of every
+	// instance of the chute, so it exceeds 2 MiB for a chute with many instances.
+	maxEvidenceBodySize = 16 << 20
 )
 
 // e2eInstancesResponse is the JSON response from GET /e2e/instances/{chute}.
@@ -157,7 +162,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	evidenceURL.RawQuery = q.Encode()
 
 	slog.DebugContext(ctx, "chutes: fetching evidence", "url_path", evidenceURL.Path)
-	evidenceBody, err := provider.FetchAttestationJSON(ctx, a.client, evidenceURL.String(), a.apiKey, maxBodySize)
+	evidenceBody, err := provider.FetchAttestationJSON(ctx, a.client, evidenceURL.String(), a.apiKey, maxEvidenceBodySize)
 	if err != nil {
 		return nil, fmt.Errorf("chutes: fetch evidence: %w", err)
 	}
