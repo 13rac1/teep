@@ -105,7 +105,10 @@ the same. It deletes the key only if the publication that it read the key with
 is still current, so it does not delete the key of a later publication, also
 when that key has the same bytes. A Chutes request that waited for the verification and did not receive
 its instance and nonce fails that attempt, and the Chutes retry takes them from
-the nonce pool with the published key. Only the verification writes the
+the nonce pool with the published key. A request uses the instance and nonce of
+the verification only while that verification's publication is current; if a
+replacement published in the meantime, also with the same key bytes, the
+request does not use them under the replacement's publication. Only the verification writes the
 signing-key cache, and only for a report that passes enforcement and whose
 REPORTDATA binding passed, also when `allow_fail` excuses the binding factor. A
 request reads the signing key, the current report and its publication number

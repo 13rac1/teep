@@ -221,7 +221,7 @@ func (s *Server) loadSigningKey(ctx context.Context, prov *provider.Provider, up
 		s.reportMu.Unlock()
 	}
 	slog.InfoContext(ctx, "E2EE key exchange: no usable cached signing key; starting full verification", "provider", prov.Name, "model", upstreamModel)
-	_, raw, _, err := s.loadReport(ctx, prov, upstreamModel)
+	_, raw, rawPublication, err := s.loadReport(ctx, prov, upstreamModel)
 	if err != nil {
 		// This warning is the WARN+ block record for the request.
 		slog.WarnContext(ctx, "E2EE key exchange: verification for the signing key failed; request blocked",
@@ -234,7 +234,11 @@ func (s *Server) loadSigningKey(ctx context.Context, prov *provider.Provider, up
 			"provider", prov.Name, "model", upstreamModel)
 		return nil, keyPublication{}, errors.New("no verified signing key after attestation verification")
 	}
-	if raw != nil && subtle.ConstantTimeCompare([]byte(raw.SigningKey), []byte(current.signingKey)) == 1 {
+	// The raw attestation belongs to the publication that loadReport returned.
+	// A replacement can publish between loadReport and currentSigningKey, also
+	// with the same key bytes; the request then must not use the raw material
+	// of the ended publication under the number of the replacement.
+	if raw != nil && current.publication == rawPublication && subtle.ConstantTimeCompare([]byte(raw.SigningKey), []byte(current.signingKey)) == 1 {
 		return raw, current, nil
 	}
 	if prov.SkipSigningKeyCache {

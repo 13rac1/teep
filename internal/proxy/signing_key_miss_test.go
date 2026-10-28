@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -401,5 +402,72 @@ func TestLoadSigningKeyKeepsSameKeyOfReplacementPublication(t *testing.T) {
 	}
 	if attester.calls.Load() != 0 {
 		t.Fatalf("attestation fetches = %d, want 0: publication B is complete", attester.calls.Load())
+	}
+}
+
+// The raw attestation that a Chutes request receives from a verification
+// belongs to that verification's publication. A replacement can end it and
+// publish the same key bytes between loadReport and the read of the current
+// key. The request must not then use the raw instance and nonce under the
+// replacement's publication number. A replacer runs against each
+// verification so that some rounds place the replacement between the two
+// reads; the invariant must hold in every round.
+func TestLoadSigningKeyRawKeepsItsPublication(t *testing.T) {
+	attester := newHeldReportAttester(nil)
+	close(attester.release)
+	s, prov, _, initial := newChutesKeyMissTestServer(t, attester, &mockE2EEMaterialFetcher{}, "attested-key")
+	// Force gives a passing report from the test evidence, so the
+	// verification publishes the key that its REPORTDATA binds.
+	bindTestEvidence(s, prov)
+	key := providerModelKey{prov.Name, "model"}
+	current := initial
+	const rounds = 500
+	for round := range rounds {
+		// End the current publication, so the request starts a verification.
+		s.handleE2EEDecryptionFailure(t.Context(), prov, "model", current, &modelStats{}, true, "", errors.New("decrypt error"))
+
+		replacements := make(chan uint64, 4)
+		stop := make(chan struct{})
+		replacer := make(chan struct{})
+		go func() {
+			defer close(replacer)
+			defer close(replacements)
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				s.reportMu.Lock()
+				if _, ok := s.reportPubs[key]; ok {
+					// A verification published: end it and publish the same key as
+					// a replacement under one hold of the lock.
+					s.cache.Delete(key.provider, key.model)
+					s.signingKeyCache.Delete(key.provider, key.model)
+					s.invalidateReportLocked(key)
+					s.signingKeyCache.Put(key.provider, key.model, "attested-key")
+					replacement := s.storeReportLocked(key, bindingReport())
+					s.reportMu.Unlock()
+					replacements <- replacement
+					return
+				}
+				s.reportMu.Unlock()
+				runtime.Gosched()
+			}
+		}()
+
+		raw, used, err := s.loadSigningKey(t.Context(), prov, "model", keyPublication{})
+		close(stop)
+		<-replacer
+		var replaced uint64
+		for r := range replacements {
+			replaced = r
+		}
+		if err == nil && raw.Nonce != "" && replaced != 0 && used.publication == replaced {
+			t.Fatalf("round %d: raw attestation of a verification returned with the replacement publication %d", round, replaced)
+		}
+		s.reportMu.Lock()
+		current = s.reportPubs[key]
+		s.reportMu.Unlock()
 	}
 }
