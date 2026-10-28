@@ -26,10 +26,13 @@ func PrepareUpstreamHeaders(req *http.Request, prov *provider.Provider, session 
 	return provider.PrepareInferenceHeaders(req, prov, session, meta, stream, endpointPath, provider.PreparationData{})
 }
 
-// PutAttestationCache injects a report into the attestation cache.
+// PutAttestationCache injects a report into the attestation cache as the
+// current publication, as a shared verification publishes it.
 // Exported for use in external tests that need to simulate cache hits.
 func (s *Server) PutAttestationCache(providerName, model string, report *attestation.VerificationReport) {
-	s.cache.Put(providerName, model, report)
+	s.reportMu.Lock()
+	defer s.reportMu.Unlock()
+	s.storeReportLocked(providerModelKey{providerName, model}, report)
 }
 
 // PutSigningKeyCache injects a signing key into the signing key cache.

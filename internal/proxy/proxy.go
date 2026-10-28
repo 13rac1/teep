@@ -7,7 +7,7 @@
 //  1. Parse model name from request body.
 //  2. Resolve model → provider. Unknown model → 400.
 //  3. Check negative cache. Blocked → 503.
-//  4. Check attestation cache. On miss, fetch + verify + cache.
+//  4. Check attestation cache. On miss, start or join the shared fetch + verify + cache.
 //  5. Any enforced factor Fail (not in allow_fail) → 502 with report JSON.
 //  6. If E2EE and tee_reportdata_binding Pass: encrypt messages, set headers.
 //     If E2EE required but binding fails: block request (no plaintext fallback).
@@ -355,6 +355,11 @@ type upstreamBody struct {
 	Meta       *e2ee.ChutesE2EE
 	ChuteID    string // For MarkFailed (from raw attestation, not meta)
 	InstanceID string // For MarkFailed (from raw attestation, not meta)
+	// Report and Publication identify the report publication of the cached
+	// signing key that the body is encrypted to. Report is nil if the body
+	// uses the attestation of the request's own verification, or no key.
+	Report      *attestation.VerificationReport
+	Publication uint64
 }
 
 // chatRequest is a minimal parse of an OpenAI chat completions request.
@@ -437,6 +442,11 @@ type Server struct {
 	modelsCache        []json.RawMessage // cached /v1/models response
 	modelsCachedAt     time.Time         // when modelsCache was populated
 	modelsFlight       singleflight.Group
+	reportFlight       singleflight.Group          // one report cache verification per provider and model
+	reportAdmission    chan struct{}               // limits in-flight report cache verifications
+	reportMu           sync.Mutex                  // orders report cache publication and invalidation
+	reportEpochs       map[providerModelKey]uint64 // report cache invalidation counts; protected by reportMu
+	reportPubs         map[providerModelKey]uint64 // current report publication numbers; protected by reportMu
 }
 
 // New builds a Server from cfg. Providers are given their Attester and
@@ -449,6 +459,11 @@ func New(cfg *config.Config) (*Server, error) {
 		negCache:        attestation.NewNegativeCache(negativeCacheTTL),
 		signingKeyCache: attestation.NewSigningKeyCache(signingKeyCacheTTL),
 		authorizations:  newAuthorizationStore(maxAuthorizations, maxAuthorizationVerifications, authorizationVerificationTimeout),
+		// A separate admission channel, so the authorization store's providers
+		// keep their full verification capacity.
+		reportAdmission: make(chan struct{}, maxAuthorizationVerifications),
+		reportEpochs:    make(map[providerModelKey]uint64),
+		reportPubs:      make(map[providerModelKey]uint64),
 		mux:             http.NewServeMux(),
 		stats:           stats{startTime: time.Now(), models: make(map[string]*modelStats)},
 	}
@@ -1757,10 +1772,8 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 			status = failStatus
 			return
 		}
-		report := ar.Report
-
 		if ar.E2EEActive {
-			if ok := s.clearE2EEFailureIfFresh(ctx, w, prov, upstreamModel, ar, ms); !ok {
+			if ok := s.checkE2EEFailure(ctx, w, prov, upstreamModel, ar, ms); !ok {
 				status = "e2ee_recovery_pending"
 				return
 			}
@@ -1779,9 +1792,7 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 		}
 
 		if ar.E2EEActive {
-			cloned := report.Clone()
-			cloned.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
-			s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), cloned)
+			s.markReportE2EEUsable(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}, ar.Publication, ar.Report)
 		}
 		s.stats.lastSuccessAt.Store(time.Now().UnixNano())
 		status = "ok"
@@ -1860,6 +1871,7 @@ func (s *Server) relayWithRetry(
 			}
 			return result
 		}
+		ar.useKeyPublication(ur)
 		resp := ur.Resp
 		session := ur.Session
 		meta := ur.Meta
@@ -1960,7 +1972,7 @@ func (s *Server) relayWithRetry(
 		break
 	}
 
-	result.status = s.classifyRelayOutcome(ctx, relayErr, ar.E2EEActive, prov, upstreamModel, ms, chutesE2EE, lastChuteID)
+	result.status = s.classifyRelayOutcome(ctx, relayErr, ar, prov, upstreamModel, ms, chutesE2EE, lastChuteID)
 	// Chutes relay functions do not write HTTP error responses for pre-header
 	// decryption failures (allowing the retry loop to attempt new instances).
 	// Write the error response here after all retries are exhausted.
@@ -1979,7 +1991,7 @@ func (s *Server) relayWithRetry(
 func (s *Server) classifyRelayOutcome(
 	ctx context.Context,
 	relayErr error,
-	e2eeActive bool,
+	ar *attestResult,
 	prov *provider.Provider,
 	upstreamModel string,
 	ms *modelStats,
@@ -1990,8 +2002,8 @@ func (s *Server) classifyRelayOutcome(
 		return ""
 	}
 	// Post-relay enforcement: handle decryption failures that could not be retried.
-	if errors.Is(relayErr, e2ee.ErrDecryptionFailed) && e2eeActive {
-		return s.handleE2EEDecryptionFailure(ctx, prov, upstreamModel, ms, chutesE2EE, lastChuteID, relayErr)
+	if errors.Is(relayErr, e2ee.ErrDecryptionFailed) && ar.E2EEActive {
+		return s.handleE2EEDecryptionFailure(ctx, prov, upstreamModel, ar.Publication, ms, chutesE2EE, lastChuteID, relayErr)
 	}
 	// Non-decryption relay errors (e.g. streaming unsupported, empty
 	// upstream, read failures): the error response has already been written
@@ -2005,10 +2017,17 @@ func (s *Server) classifyRelayOutcome(
 
 // handleE2EEDecryptionFailure records an unretriable E2EE decryption failure,
 // invalidates caches, and returns the status string for request logging.
+// publication is the publication number of the report that the failing
+// request used. If that report is no longer the current publication for the
+// provider and model, the function changes no report state: a later
+// verification published a replacement, or an invalidation already ended the
+// report and a verification of a later epoch can publish. A report that
+// expired without a replacement is still current.
 func (s *Server) handleE2EEDecryptionFailure(
 	ctx context.Context,
 	prov *provider.Provider,
 	upstreamModel string,
+	publication uint64,
 	ms *modelStats,
 	chutesE2EE bool,
 	lastChuteID string,
@@ -2017,55 +2036,75 @@ func (s *Server) handleE2EEDecryptionFailure(
 	s.stats.errors.Add(1)
 	ms.errors.Add(1)
 
-	if chutesE2EE {
-		// For Chutes, per-instance failures are already handled via
-		// MarkFailed. Invalidate the nonce pool for this chute so the
-		// next request fetches fresh instances.
-		if prov.E2EEMaterialFetcher != nil && lastChuteID != "" {
-			prov.E2EEMaterialFetcher.Invalidate(lastChuteID)
-		}
-	} else {
+	// For Chutes, per-instance failures are already handled via
+	// MarkFailed. Invalidate the nonce pool for this chute so the
+	// next request fetches fresh instances.
+	if chutesE2EE && prov.E2EEMaterialFetcher != nil && lastChuteID != "" {
+		prov.E2EEMaterialFetcher.Invalidate(lastChuteID)
+	}
+
+	key := providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}
+	// A shared report verification publishes under the same lock, so it
+	// cannot publish evidence from before this invalidation.
+	s.reportMu.Lock()
+	if current, ok := s.reportPubs[key]; !ok || current != publication {
+		s.reportMu.Unlock()
+		// This warning is the WARN+ block record for a failure on an earlier publication.
+		slog.WarnContext(ctx, "E2EE decryption failed on an earlier attestation report; current report kept",
+			"provider", prov.Name, "model", upstreamModel,
+			"factor", attestation.FactorE2EEUsable,
+			"err", relayErr)
+		return "e2ee_decrypt_failed"
+	}
+	if !chutesE2EE {
 		// Non-Chutes: mark the provider+model pair as globally failed.
 		// This is a stronger signal — possible MITM or server-side E2EE
 		// breakage. Block all subsequent requests until re-attestation.
-		s.e2eeFailed.Store(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}, true)
+		s.e2eeFailed.Store(key, true)
 	}
 
-	// Demote e2ee_usable in the cached report so the report endpoint
-	// reflects the failure. The cache entry is about to be deleted, but
-	// a concurrent reader may still see it briefly. Keep the report detail
-	// sanitized: relayErr may wrap lower-level decrypt errors that include
-	// upstream content, which must never be exposed via the report endpoint.
-	detail := "E2EE decryption failed (see server logs, req=" + reqid.FromContext(ctx) + ")"
-	if cachedReport, ok := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
-		cloned := cachedReport.Clone()
-		cloned.MarkE2EEFailed(detail)
-		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), cloned)
-	}
 	// Invalidate caches to force full re-attestation on the next request.
-	s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
-	s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
+	s.cache.Delete(key.provider, key.model)
+	s.signingKeyCache.Delete(key.provider, key.model)
+	// Chutes records no failure, but the deletion above still requires
+	// attestation fetched after this failure. A verification that started
+	// earlier must not publish or give waiters evidence from before it.
+	s.invalidateReportLocked(key)
+	s.reportMu.Unlock()
 
 	// This error log is the WARN+ block record for the e2ee_usable failure.
 	slog.ErrorContext(ctx, "E2EE decryption failed; caches invalidated",
 		"provider", prov.Name, "model", upstreamModel,
 		"factor", attestation.FactorE2EEUsable,
 		"tier", attestation.TierBinding,
-		"detail", detail,
+		"detail", "E2EE decryption failed (see server logs, req="+reqid.FromContext(ctx)+")",
 		"err", relayErr)
 	return "e2ee_decrypt_failed"
 }
 
-// attestResult holds the outcome of attestAndCache on success.
+// attestResult holds the outcome of attestAndCache on success. Publication is
+// the report cache publication number of Report. Request outcomes change
+// report state only for this publication. Outcomes compare publication
+// numbers, not report pointers: a copy that records e2ee_usable keeps the number.
 type attestResult struct {
-	Report     *attestation.VerificationReport
-	Raw        *attestation.RawAttestation
-	E2EEActive bool
-	AttestDur  time.Duration
+	Report      *attestation.VerificationReport
+	Raw         *attestation.RawAttestation
+	Publication uint64
+	E2EEActive  bool
+	AttestDur   time.Duration
 }
 
-// attestAndCache checks the attestation cache, fetches and verifies on miss,
-// enforces the report, caches the signing key, and determines E2EE status.
+// useKeyPublication makes the request outcome apply to the publication of the
+// cached signing key that the request used, if it used one.
+func (ar *attestResult) useKeyPublication(ur *upstreamResult) {
+	if ur.Report != nil {
+		ar.Report, ar.Publication = ur.Report, ur.Publication
+	}
+}
+
+// attestAndCache checks the attestation cache, starts or joins the shared
+// verification on miss, enforces the report, caches the signing key, and
+// determines E2EE status.
 // On failure it writes the HTTP error response, increments error stats, and
 // returns a non-empty status string. On success it returns (result, "").
 func (s *Server) attestAndCache(
@@ -2077,37 +2116,24 @@ func (s *Server) attestAndCache(
 ) (result *attestResult, failStatus string) {
 	attestStart := time.Now()
 	var raw *attestation.RawAttestation
-	report, cached := s.cache.Get(prov.Name, cacheModelFor(ctx, upstreamModel))
+	report, publication, cached := s.cache.GetPublication(prov.Name, cacheModelFor(ctx, upstreamModel))
 	if cached {
 		s.stats.cacheHits.Add(1)
 	} else {
 		s.stats.cacheMisses.Add(1)
-		report, raw = s.fetchAndVerify(ctx, prov, upstreamModel)
-		if report == nil {
+		var err error
+		report, raw, publication, err = s.loadReport(ctx, prov, upstreamModel)
+		if err != nil {
 			s.stats.errors.Add(1)
 			ms.errors.Add(1)
-			// fetchAndVerify logs the attestation fetch failure at Error before returning nil.
-			http.Error(w, "attestation fetch failed; see server logs", http.StatusBadGateway)
-			return &attestResult{AttestDur: time.Since(attestStart)}, "attest_failed"
+			return &attestResult{AttestDur: time.Since(attestStart)}, writeReportLoadError(ctx, w, prov, upstreamModel, err)
 		}
-		s.logReportAllowedFailures(ctx, report, prov, upstreamModel)
-		s.cache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), report)
 	}
 
 	if !s.enforceReport(ctx, w, report, prov, upstreamModel) {
 		s.stats.errors.Add(1)
 		ms.errors.Add(1)
 		return &attestResult{AttestDur: time.Since(attestStart)}, "blocked"
-	}
-
-	// Only cache the signing key after attestation passes. Caching before
-	// the Blocked() check would allow a key from a failed attestation to
-	// be reused for E2EE on a subsequent cache-hit request.
-	if raw != nil && raw.SigningKey != "" {
-		if prev, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok && subtle.ConstantTimeCompare([]byte(prev), []byte(raw.SigningKey)) == 0 {
-			slog.WarnContext(ctx, "signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)
-		}
-		s.signingKeyCache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), raw.SigningKey)
 	}
 
 	e2eeActive := prov.E2EE && report.ReportDataBindingPassed()
@@ -2118,10 +2144,11 @@ func (s *Server) attestAndCache(
 	}
 
 	return &attestResult{
-		Report:     report,
-		Raw:        raw,
-		E2EEActive: e2eeActive,
-		AttestDur:  time.Since(attestStart),
+		Report:      report,
+		Raw:         raw,
+		Publication: publication,
+		E2EEActive:  e2eeActive,
+		AttestDur:   time.Since(attestStart),
 	}, ""
 }
 
@@ -2503,6 +2530,10 @@ type upstreamResult struct {
 	Cancel      context.CancelFunc
 	E2EEDur     time.Duration
 	UpstreamDur time.Duration
+	// Report and Publication are the fields of the same name of the
+	// upstreamBody that the request sent.
+	Report      *attestation.VerificationReport
+	Publication uint64
 }
 
 type upstreamSendResult struct {
@@ -2557,6 +2588,8 @@ func (s *Server) doUpstreamRoundtrip(
 		err         error
 		e2eeDur     time.Duration
 		upstreamDur time.Duration
+		report      *attestation.VerificationReport
+		publication uint64
 	)
 
 	for attempt := range maxAttempts {
@@ -2584,6 +2617,7 @@ func (s *Server) doUpstreamRoundtrip(
 
 		session = ub.Session
 		meta = ub.Meta
+		report, publication = ub.Report, ub.Publication
 
 		var attemptCtx context.Context
 		attemptCtx, cancel = context.WithTimeout(ctx, upstreamTimeout)
@@ -2662,6 +2696,8 @@ func (s *Server) doUpstreamRoundtrip(
 		Cancel:      cancel,
 		E2EEDur:     e2eeDur,
 		UpstreamDur: upstreamDur,
+		Report:      report,
+		Publication: publication,
 	}, nil
 }
 
@@ -2670,7 +2706,8 @@ func (s *Server) doUpstreamRoundtrip(
 //
 // When freshRaw is non-nil (cache miss path), its signing key is reused — the
 // REPORTDATA binding was already verified by fetchAndVerify. When freshRaw is
-// nil (cache hit), a fresh attestation is fetched and re-verified.
+// nil (cache hit), the request uses the cached signing key. If no usable key
+// is cached, the request starts or joins a full verification.
 func (s *Server) buildUpstreamBody(
 	ctx context.Context,
 	rawBody []byte,
@@ -2688,9 +2725,15 @@ func (s *Server) buildUpstreamBody(
 	}
 
 	raw := freshRaw
+	// used is the cached signing key that the request uses and the publication
+	// that it belongs to.
+	var used keyPublication
 	if raw == nil {
-		// Cache hit path: try the signing key cache before re-fetching attestation.
+		// Cache hit path: use the signing key cache.
 		// Some providers (e.g. Chutes) need fresh instance/nonce data per request.
+		// stale is a cached key that the nonce pool cannot use, with the
+		// publication that the request read it with.
+		var stale keyPublication
 
 		// Fast path: providers with a nonce pool (Chutes) can get E2EE
 		// material without full re-attestation. The pool provides a fresh
@@ -2700,30 +2743,33 @@ func (s *Server) buildUpstreamBody(
 		//
 		// Only consume from the nonce pool if we already have a cached
 		// signing key. This avoids wasting nonces when the signing key
-		// cache is cold (fresh attestation is needed anyway). The pool
+		// cache is cold (full verification is needed anyway). The pool
 		// key must match the attested key via constant-time comparison
 		// to keep ML-KEM bound to a verified TDX quote.
 		if prov.E2EEMaterialFetcher != nil {
-			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); !ok {
+			if current, ok := s.currentSigningKey(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}); !ok {
 				slog.DebugContext(ctx, "E2EE key exchange: no cached signing key; skipping nonce pool",
 					"provider", prov.Name, "model", upstreamModel,
 				)
-				// Fall through to fresh attestation below.
+				// Fall through to full verification below.
 			} else {
+				cachedKey := current.signingKey
 				mat, err := prov.E2EEMaterialFetcher.FetchE2EEMaterial(ctx, upstreamModel)
 				switch {
 				case err != nil:
-					slog.ErrorContext(ctx, "E2EE key exchange: failed to fetch nonce pool material; falling back to fresh attestation",
+					slog.ErrorContext(ctx, "E2EE key exchange: failed to fetch nonce pool material; starting full verification",
 						"provider", prov.Name, "model", upstreamModel,
 					)
-					// Fall through to fresh attestation below (raw remains nil).
+					stale = current
+					// Fall through to full verification below (raw remains nil).
 				case subtle.ConstantTimeCompare([]byte(cachedKey), []byte(mat.E2EPubKey)) != 1:
 					slog.DebugContext(ctx, "E2EE key exchange: nonce pool key mismatch; invalidating pool",
 						"provider", prov.Name, "model", upstreamModel,
 						"instance_id", mat.InstanceID,
 					)
 					prov.E2EEMaterialFetcher.Invalidate(mat.ChuteID)
-					// Fall through to fresh attestation below.
+					stale = current
+					// Fall through to full verification below.
 				default:
 					slog.DebugContext(ctx, "E2EE key exchange: using nonce pool",
 						"provider", prov.Name, "model", upstreamModel,
@@ -2735,54 +2781,22 @@ func (s *Server) buildUpstreamBody(
 						E2ENonce:   mat.E2ENonce,
 						ChuteID:    mat.ChuteID,
 					}
+					used = current
 				}
 			}
 		} else if !prov.SkipSigningKeyCache {
-			if cachedKey, ok := s.signingKeyCache.Get(prov.Name, cacheModelFor(ctx, upstreamModel)); ok {
+			if current, ok := s.currentSigningKey(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}); ok {
 				slog.DebugContext(ctx, "E2EE key exchange: using cached signing key", "provider", prov.Name, "model", upstreamModel)
-				raw = &attestation.RawAttestation{SigningKey: cachedKey}
+				raw = &attestation.RawAttestation{SigningKey: current.signingKey}
+				used = current
 			}
 		}
 		if raw == nil {
-			// Signing key not cached: fetch fresh attestation and re-verify.
-			slog.DebugContext(ctx, "E2EE key exchange: fetching fresh attestation (cache hit path)", "provider", prov.Name, "model", upstreamModel)
-			nonce := attestation.NewNonce()
+			// A report without a usable signing key is a cache miss.
 			var err error
-			raw, err = prov.Attester.FetchAttestation(ctx, upstreamModel, nonce)
-			if err != nil {
-				return nil, fmt.Errorf("fetch signing key: %w", err)
+			if raw, used, err = s.loadSigningKey(ctx, prov, upstreamModel, stale); err != nil {
+				return nil, err
 			}
-			// Only REPORTDATA binding is needed here, not full online
-			// verification. The primary fetchAndVerify() path already
-			// did online verification for the cached report.
-			switch {
-			case raw.IntelQuote != "":
-				// Live serving: zero time.Time means "use the real wall clock".
-				tdxResult := attestation.VerifyTDXQuoteOffline(ctx, raw.IntelQuote, time.Time{})
-				if tdxResult.ParseErr != nil {
-					return nil, fmt.Errorf("fresh TDX quote parse failed: %w", tdxResult.ParseErr)
-				}
-				if prov.ReportDataVerifier != nil {
-					_, err := prov.ReportDataVerifier.VerifyReportData(tdxResult.ReportData, raw, nonce)
-					if err != nil {
-						return nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", err)
-					}
-				}
-			case len(raw.SEVReportBytes) > 0:
-				sevResult := attestation.VerifySEVReportOffline(ctx, raw.SEVReportBytes)
-				if sevResult.ParseErr != nil {
-					return nil, fmt.Errorf("fresh SEV-SNP report parse failed: %w", sevResult.ParseErr)
-				}
-				if prov.ReportDataVerifier != nil {
-					_, err := prov.ReportDataVerifier.VerifyReportData(sevResult.ReportData, raw, nonce)
-					if err != nil {
-						return nil, fmt.Errorf("fresh signing key REPORTDATA binding failed: %w", err)
-					}
-				}
-			default:
-				return nil, errors.New("fresh attestation has no TEE evidence; cannot verify signing key binding")
-			}
-			s.signingKeyCache.Put(prov.Name, cacheModelFor(ctx, upstreamModel), raw.SigningKey)
 		}
 	} else {
 		slog.DebugContext(ctx, "E2EE key exchange: reusing attestation from verification (cache miss path)", "provider", prov.Name, "model", upstreamModel)
@@ -2801,19 +2815,24 @@ func (s *Server) buildUpstreamBody(
 		return nil, errors.New("streaming request encryption requires authorized inference")
 	}
 	return &upstreamBody{
-		Body:       result.Body,
-		Session:    result.Session,
-		Meta:       result.Chutes,
-		ChuteID:    raw.ChuteID,
-		InstanceID: raw.InstanceID,
+		Body:        result.Body,
+		Session:     result.Session,
+		Meta:        result.Chutes,
+		ChuteID:     raw.ChuteID,
+		InstanceID:  raw.InstanceID,
+		Report:      used.report,
+		Publication: used.publication,
 	}, nil
 }
 
-// clearE2EEFailureIfFresh clears a prior E2EE failure if the attestation
-// result has fresh attestation (ar.Raw != nil). Otherwise it fails closed,
-// invalidates caches, and writes an HTTP error. Returns true if the caller
-// should proceed.
-func (s *Server) clearE2EEFailureIfFresh(
+// checkE2EEFailure fails closed and writes an HTTP error if an E2EE
+// decryption failure is recorded for the provider and model. A passing shared
+// verification clears the failure when it publishes its report, so a recorded
+// failure means that the request's report predates the failure. The request
+// deletes the cached report and signing key only if the cache still holds the
+// publication of the report that it used; it must not delete a replacement.
+// Returns true if the caller should proceed.
+func (s *Server) checkE2EEFailure(
 	ctx context.Context,
 	w http.ResponseWriter,
 	prov *provider.Provider,
@@ -2826,14 +2845,14 @@ func (s *Server) clearE2EEFailureIfFresh(
 	if !failed {
 		return true
 	}
-	if ar.Raw != nil {
-		s.e2eeFailed.Delete(key)
-		slog.InfoContext(ctx, "Cleared prior E2EE failure after successful re-attestation",
-			"provider", prov.Name, "model", upstreamModel)
-		return true
+	s.reportMu.Lock()
+	if _, publication, ok := s.cache.GetPublication(key.provider, key.model); ok && publication == ar.Publication {
+		s.cache.Delete(key.provider, key.model)
+		s.signingKeyCache.Delete(key.provider, key.model)
+		// A later decryption failure on the deleted publication is not current.
+		delete(s.reportPubs, key)
 	}
-	s.cache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
-	s.signingKeyCache.Delete(prov.Name, cacheModelFor(ctx, upstreamModel))
+	s.reportMu.Unlock()
 	// This error log is the WARN+ block record for stale e2ee_usable failures.
 	slog.ErrorContext(ctx, "E2EE previously failed; cached attestation insufficient for recovery",
 		"provider", prov.Name, "model", upstreamModel,

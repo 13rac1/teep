@@ -304,10 +304,16 @@ func (s *authorizationStore) begin(key provider.AuthorizationKey) (*authorizatio
 	default:
 		return nil, &verificationOverloadError{}
 	}
-	ctx, cancel := context.WithTimeout(s.lifecycle, s.timeout)
+	ctx, cancel := s.verificationContext()
 	op := &authorizationOperation{ctx: ctx, cancel: cancel}
 	s.active[key] = op
 	return op, nil
+}
+
+// verificationContext returns the context for one shared verification. Server
+// shutdown or the store's verification time limit ends it, not a request.
+func (s *authorizationStore) verificationContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(s.lifecycle, s.timeout)
 }
 
 func (s *authorizationStore) finish(key provider.AuthorizationKey, op *authorizationOperation) {

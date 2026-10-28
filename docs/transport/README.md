@@ -80,7 +80,70 @@ Reuse it while its attested identity and required encryption keys remain usable,
 until explicit invalidation, eviction, or process exit. Evidence expiration alone
 does not trigger renewal. Do not maintain independent pin or key caches with
 different lifetimes. This policy applies to TLS-binding providers in both normal
-and `--offline` operation; other provider caches retain their existing behavior.
+and `--offline` operation.
+
+Venice, Chutes, NanoGPT, and Phala Cloud do not use the authorization store.
+They keep a separate report cache and signing-key cache, each with an
+expiration time. On a report cache miss, concurrent requests for the same
+provider and model join one verification. As in the store, the server owns
+the verification context and the 2-minute time limit, and a separate limit of
+16 in-flight verifications rejects an attempt past the limit with HTTP 503.
+Before it publishes, the verification rechecks verified NRAS time eligibility
+and the invalidation epoch, under the same lock that an E2EE decryption failure
+uses. If a check fails, it does not publish and its waiting requests fail.
+The verification fills the signing-key cache when the report passes
+enforcement, and then fills the report cache. Each waiting request then
+enforces the shared report as after a cache hit.
+Only one waiting request receives the raw attestation for E2EE key exchange,
+because it can contain a single-use nonce. The Explore attestation endpoint
+does not write the report cache.
+For an E2EE request, a cached report without its signing key is a cache miss.
+The request starts or joins the verification and uses only the signing key
+that the verification publishes. If the Chutes nonce pool fails or returns a
+key that is not the cached key, the request deletes that cached key and does
+the same. It deletes the key only if the publication that it read the key with
+is still current, so it does not delete the key of a later publication, also
+when that key has the same bytes. A Chutes request that waited for the verification and did not receive
+its instance and nonce fails that attempt, and the Chutes retry takes them from
+the nonce pool with the published key. A request uses the instance and nonce of
+the verification only while that verification's publication is current; if a
+replacement published in the meantime, also with the same key bytes, the
+request does not use them under the replacement's publication. Only the verification writes the
+signing-key cache, and only for a report that passes enforcement and whose
+REPORTDATA binding passed, also when `allow_fail` excuses the binding factor. A
+request reads the signing key, the current report and its publication number
+together under the lock that the verification publishes under, and fails if
+that report does not pass enforcement or its REPORTDATA binding did not pass.
+The request outcome (E2EE failure or success) applies to the publication of
+the key that the request used, not to the report that the request enforced
+before a later verification published.
+
+An E2EE decryption failure deletes both cache entries and, except for Chutes,
+records the failure. A verification that started before the failure does not
+publish its result, its waiting requests fail, and the next request starts a
+new verification. A failure can also end a publication after the verification
+published it and before a waiting request resumes. That request does not use
+the ended publication or its raw attestation: it starts or joins one new
+verification, and fails if that publication also ends before it resumes. A passing verification that started after the failure
+clears it for all of its waiting requests. A request that finds the failure
+still recorded fails with HTTP 503 and deletes the cache entries only if they
+hold the publication of the report that the request used. That deletion also
+ends the publication, so a later decryption failure on it does not change the
+invalidation epoch.
+The report cache path uses two numbers for each provider and model. The
+invalidation epoch counts E2EE decryption failures that invalidated the cache.
+A verification publishes only if the epoch has not changed since it started.
+The publication number identifies one published report: each publication gets
+a new number, also when a report expires at its TTL and a new verification
+publishes under the same epoch. A request outcome changes only the publication
+that the request used. A decryption failure on a publication that a later
+publication or an invalidation replaced logs a warning and keeps the current
+report, its signing key, and any verification in progress, also when the
+cache is empty. A decryption failure on a report that expired without a
+replacement still invalidates. A successful E2EE round trip records the
+`e2ee_usable` result in a copy of the cached report only if the cache still
+holds that publication. The copy keeps the publication number and the fetch
+time, so the success does not extend the report's lifetime.
 
 Fresh client nonce binding and all enforced verification factors remain admission
 requirements. TDX uses the pinned upstream `github.com/google/go-tdx-guest` module.
@@ -108,7 +171,8 @@ or triggering attestation.
 The server owns the context for shared verification and limits its duration.
 Cancellation of one waiting client does not cancel work needed by other
 clients. Recheck NRAS admission time eligibility and invalidation before initial
-publication. A stale
+publication. A verification whose context ended at its time limit or at server
+shutdown does not publish, also when it completed before the end. A stale
 request may remove or update only the generation it used, never a replacement
 published by another request. Tinfoil trusted-root metadata and target
 downloads inherit the verification context, including response body reads.
@@ -268,9 +332,10 @@ requests resuming after active streams finish.
 
 Each pool currently permits 16 physical connections per dial address and 10
 idle connections per host. The idle timeout is 90 seconds. TCP dialing and TLS
-handshakes each have a separate five-minute time limit. Shared full
-verification admits 16 concurrent operations. These values are implementation
-settings, not cryptographic guarantees or a global provider connection limit.
+handshakes each have a separate five-minute time limit. The authorization store
+and the report cache each admit 16 concurrent shared verifications. These values
+are implementation settings, not cryptographic guarantees or a global provider
+connection limit.
 Earlier caller deadlines still apply. Change limits with the
 corresponding concurrency tests. If a peer advertises 128 streams per connection,
 16 connections provide a nominal 2,048 simultaneous streams per pool. This is
