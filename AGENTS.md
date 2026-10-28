@@ -42,6 +42,8 @@ The proxy receives concurrent API inference requests to multiple models from mul
 This repository is managed by Git and hosted on GitHub.
 
 - For multi-phase plans, use one commit per phase.
+- A pull request whose purpose is a bug fix changes only what the bug requires: the defect, a regression test that fails without the fix, and the documentation that described the old behavior. Improvements, refactors, and hardening go in their own pull requests.
+- A bug found during other work is fixed in that work as its own commit, named as a fix in the subject, with its regression test. Never add code that preserves known wrong behavior so that other work can proceed; fix the bug or record it in an issue.
 - Ensure new code has unit test coverage before committing.
   - Run `make check` before each commit.
   - Stage only specific files you modified. Do not use `git add .` or `git add -A`.

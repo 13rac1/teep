@@ -367,6 +367,9 @@ commit messages, and user-visible strings, and to your own review comments.
 - Be specific: cite the code location and explain the risk.
 - Prioritize fail-open and fallback defects above all other issues.
 - Flag any weakening of existing validation, even if "temporary".
+- A bug-fix pull request contains only the fix, its regression test, and the
+  documentation it corrects. In other work, a bug fix is its own commit with its own
+  test; ask for anything that preserves known wrong behavior to be removed.
 - Ground findings in a concrete input, execution path, or concurrency
   interleaving and the violated contract. Separate demonstrated defects from
   uncertainty or optional simplification; do not propose a bypass for a provider
