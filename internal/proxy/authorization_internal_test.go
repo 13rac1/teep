@@ -348,3 +348,44 @@ func TestAuthorizationStoreUsesCurrentDefaultLogger(t *testing.T) {
 		t.Fatal("store did not use the current default logger")
 	}
 }
+
+// A panic in a shared verification runs in the singleflight goroutine, not in
+// a request goroutine. It must fail every waiter with an error and a warning,
+// and the store must continue: the next verification of the key publishes.
+func TestAuthorizationVerificationPanicFailsWaiters(t *testing.T) {
+	const waiters = 8
+	store := newAuthorizationStore(10, waiters, time.Second)
+	defer store.close()
+	key, candidate := testAuthorizationCandidate(t, "model")
+	var calls atomic.Int32
+	errs := make(chan error, waiters)
+	logs := captureSlog(t, func() {
+		var wg sync.WaitGroup
+		for range waiters {
+			wg.Go(func() {
+				_, _, err := store.load(context.Background(), key, nil, nil, func(context.Context) (authorizationVerification, error) {
+					calls.Add(1)
+					panic("verifier failure")
+				})
+				errs <- err
+			})
+		}
+		wg.Wait()
+	})
+	close(errs)
+	for err := range errs {
+		if err == nil || !strings.Contains(err.Error(), "authorization verification panicked: verifier failure") {
+			t.Fatalf("waiter err = %v, want the verification panic error", err)
+		}
+	}
+	if got := strings.Count(logs, "level=WARN"); got == 0 || got != int(calls.Load()) || !strings.Contains(logs, "authorization verification panicked") {
+		t.Fatalf("warnings = %d for %d panics:\n%s", got, calls.Load(), logs)
+	}
+	if _, ok := store.acquire(key); ok {
+		t.Fatal("panicked verification published an authorization")
+	}
+	// The panic released its operation and admission slot.
+	if value := loadTestAuthorization(t, store, key, candidate); value == nil {
+		t.Fatal("store did not publish after a panicked verification")
+	}
+}
