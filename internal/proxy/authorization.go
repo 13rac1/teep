@@ -260,7 +260,17 @@ func (s *authorizationStore) load(ctx context.Context, key provider.Authorizatio
 	}
 }
 
-func (s *authorizationStore) verifyShared(key provider.AuthorizationKey, negative func() error, verify authorizationVerifyFunc) (authorizationVerification, error) {
+// verifyShared runs one shared verification. It runs in the singleflight
+// goroutine, not in a request goroutine, so a panic in verify would end the
+// process. The panic becomes an error for the waiters, with a warning, and the
+// deferred finish releases the operation and its admission slot.
+func (s *authorizationStore) verifyShared(key provider.AuthorizationKey, negative func() error, verify authorizationVerifyFunc) (shared authorizationVerification, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.log().Warn("authorization verification panicked", "provider", key.ProviderName(), "model", key.Model(), "authority", key.Authority(), "panic", r)
+			shared, err = authorizationVerification{}, fmt.Errorf("authorization verification panicked: %v", r)
+		}
+	}()
 	if _, ok := s.lookup(key); ok {
 		return authorizationVerification{}, nil
 	}

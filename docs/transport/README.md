@@ -176,6 +176,8 @@ shutdown does not publish, also when it completed before the end. A stale
 request may remove or update only the generation it used, never a replacement
 published by another request. Tinfoil trusted-root metadata and target
 downloads inherit the verification context, including response body reads.
+A panic in a shared verification fails its waiting requests with an error and
+a warning; it does not end the process.
 
 The caller deadline limits each inference attempt.
 This bound also applies while waiting for a connection, processing buffered
