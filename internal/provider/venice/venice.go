@@ -30,6 +30,7 @@ import (
 	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/aci"
 )
 
 // attestationPath is the Venice API path for TEE attestation.
@@ -76,59 +77,6 @@ func (t *tcbInfo) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(provider.UnwrapDoubleEncoded(data), (*alias)(t))
 }
 
-// ServerVerification holds Venice's gateway-level verification result.
-// The gateway re-verifies the TDX quote and reports its findings; this is
-// an untrusted claim (the gateway is not hardware-attested itself).
-type ServerVerification struct {
-	TDX struct {
-		Valid                 bool   `json:"valid"`
-		SignatureValid        bool   `json:"signatureValid"`
-		CertificateChainValid bool   `json:"certificateChainValid"`
-		RootCAPinned          bool   `json:"rootCaPinned"`
-		AttestationKeyMatch   bool   `json:"attestationKeyMatch"`
-		ReportData            string `json:"reportData"`
-		Measurements          struct {
-			MRTD          string `json:"mrtd"`
-			MRConfigID    string `json:"mrconfigid"`
-			MROwner       string `json:"mrowner"`
-			MROwnerConfig string `json:"mrownerconfig"`
-			RTMR0         string `json:"rtmr0"`
-			RTMR1         string `json:"rtmr1"`
-			RTMR2         string `json:"rtmr2"`
-			RTMR3         string `json:"rtmr3"`
-			TDAttributes  string `json:"tdAttributes"`
-			XFAM          string `json:"xfam"`
-		} `json:"measurements"`
-		CRLCheck struct {
-			Checked bool `json:"checked"`
-			Revoked bool `json:"revoked"`
-		} `json:"crlCheck"`
-	} `json:"tdx"`
-	Nvidia struct {
-		Valid             bool `json:"valid"`
-		SignatureVerified bool `json:"signatureVerified"`
-		CertificateChain  struct {
-			Valid              bool   `json:"valid"`
-			IntermediatePinned bool   `json:"intermediatePinned"`
-			LeafCertExpiry     string `json:"leafCertExpiry"`
-		} `json:"certificateChainStatus"`
-	} `json:"nvidia"`
-	SigningAddressBinding struct {
-		Bound             bool   `json:"bound"`
-		ReportDataAddress string `json:"reportDataAddress"`
-	} `json:"signingAddressBinding"`
-	NonceBinding struct {
-		Bound  bool   `json:"bound"`
-		Method string `json:"method"`
-	} `json:"nonceBinding"`
-	NvidiaNonceBinding struct {
-		Bound  bool   `json:"bound"`
-		Method string `json:"method"`
-	} `json:"nvidiaNonceBinding"`
-	VerifiedAt             string `json:"verifiedAt"`
-	VerificationDurationMs int    `json:"verificationDurationMs"`
-}
-
 // veniceInfo holds the nested "info" object from Venice's attestation
 // response, containing dstack environment metadata.
 type veniceInfo struct {
@@ -159,16 +107,16 @@ type attestationResponse struct {
 	NvidiaPayload  string `json:"nvidia_payload"`
 
 	// Extended fields (10 propagated to RawAttestation).
-	EventLog           eventLogFlexible    `json:"event_log"`
-	Info               veniceInfo          `json:"info"`
-	ServerVerification *ServerVerification `json:"server_verification"`
-	ModelName          string              `json:"model_name"`
-	UpstreamModel      string              `json:"upstream_model"`
-	SigningAlgo        string              `json:"signing_algo"`
-	TEEHardware        string              `json:"tee_hardware"`
-	NonceSource        string              `json:"nonce_source"`
-	CandidatesAvail    int                 `json:"candidates_available"`
-	CandidatesEval     int                 `json:"candidates_evaluated"`
+	EventLog           eventLogFlexible        `json:"event_log"`
+	Info               veniceInfo              `json:"info"`
+	ServerVerification *aci.ServerVerification `json:"server_verification"`
+	ModelName          string                  `json:"model_name"`
+	UpstreamModel      string                  `json:"upstream_model"`
+	SigningAlgo        string                  `json:"signing_algo"`
+	TEEHardware        string                  `json:"tee_hardware"`
+	NonceSource        string                  `json:"nonce_source"`
+	CandidatesAvail    int                     `json:"candidates_available"`
+	CandidatesEval     int                     `json:"candidates_evaluated"`
 
 	// Duplicate top-level fields (parsed to silence jsonstrict, not propagated).
 	// quote == intel_quote; vm_config == info.vm_config. Venice flattens these.
@@ -237,7 +185,7 @@ func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.Ra
 	case attestation.FormatDstack:
 		return parseDstack(ctx, body)
 	case attestation.FormatACI1:
-		return parseACI(ctx, body)
+		return aci.Parse(ctx, body, "venice")
 	default:
 		if !json.Valid(body) {
 			return nil, errors.New("venice: attestation response is not valid JSON")
@@ -258,7 +206,7 @@ func parseDstack(ctx context.Context, body []byte) (*attestation.RawAttestation,
 		return nil, fmt.Errorf("venice dstack: unmarshal attestation response: %w", err)
 	}
 
-	logEventLog(ctx, ar.EventLog)
+	aci.LogEventLog(ctx, ar.EventLog, "venice")
 
 	return &attestation.RawAttestation{
 		BackendFormat:  attestation.FormatDstack,
@@ -289,21 +237,6 @@ func parseDstack(ctx context.Context, body []byte) (*attestation.RawAttestation,
 		MissingFields: missing,
 		RawBody:       body,
 	}, nil
-}
-
-// logEventLog logs event log entries at debug level. Shared by the dstack and
-// ACI/1 parsers, which both carry a TDX RTMR event log (at different JSON
-// locations).
-func logEventLog(ctx context.Context, entries []attestation.EventLogEntry) {
-	slog.DebugContext(ctx, "venice event log", "entries", len(entries))
-	for i, e := range entries {
-		digest := e.Digest
-		if len(digest) > 16 {
-			digest = digest[:16] + "..."
-		}
-		slog.DebugContext(ctx, "event log entry", "index", i, "imr", e.IMR,
-			"event", e.Event, "type", e.EventType, "digest", digest)
-	}
 }
 
 // Preparer injects Venice E2EE headers into an outgoing chat completions

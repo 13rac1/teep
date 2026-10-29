@@ -1841,8 +1841,8 @@ func TestMergedAllowFail_VeniceFormatLayer(t *testing.T) {
 	cfg := &Config{}
 
 	aci := MergedAllowFail("venice", attestation.FormatACI1, cfg, false)
-	if !reflect.DeepEqual(aci, attestation.VeniceACIDefaultAllowFail) {
-		t.Errorf("venice/aci1: got %v, want VeniceACIDefaultAllowFail", aci)
+	if !reflect.DeepEqual(aci, attestation.ACIDefaultAllowFail) {
+		t.Errorf("venice/aci1: got %v, want ACIDefaultAllowFail", aci)
 	}
 
 	dstack := MergedAllowFail("venice", attestation.FormatDstack, cfg, false)
@@ -1895,8 +1895,8 @@ func TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced(t *testing.T) {
 		"nvidia_signature",
 		"nvidia_nonce_client_bound",
 	} {
-		if slices.Contains(attestation.VeniceACIDefaultAllowFail, name) {
-			t.Errorf("VeniceACIDefaultAllowFail contains %s; it must stay enforced", name)
+		if slices.Contains(attestation.ACIDefaultAllowFail, name) {
+			t.Errorf("ACIDefaultAllowFail contains %s; it must stay enforced", name)
 		}
 	}
 }

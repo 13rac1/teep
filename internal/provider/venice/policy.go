@@ -28,7 +28,7 @@ func DefaultMeasurementPolicy() attestation.MeasurementPolicy {
 // enforced gateway_tee_measurement factor checks those. RTMR allowlists are
 // filled from captured gateway values as they are observed —
 // gateway_tee_hardware_config and gateway_tee_boot_config are waived by
-// default (SEE: attestation.VeniceACIDefaultAllowFail) because the
+// default (SEE: attestation.ACIDefaultAllowFail) because the
 // private-ai-gateway-dev channel redeploys often and its RTMRs churn with
 // each image.
 func DefaultGatewayMeasurementPolicy() attestation.MeasurementPolicy {

@@ -1,4 +1,9 @@
-package venice
+// Package aci verifies the ACI/1 attestation format of the dstack
+// private-ai-gateway: the response parser, the workload keyset digest, the
+// keyset expiry and the dstack-KMS key custody chain. Every provider that
+// answers with ACI/1 uses this package with the pins of the gateway it
+// reaches.
+package aci
 
 import (
 	"crypto/sha256"
@@ -35,7 +40,7 @@ import (
 //     event.
 //
 // The hardware chain is: TDX quote → REPORTDATA binds signing_public_key
-// (SEE: ReportDataVerifier) → membership in workload_keyset.e2ee_public_keys
+// (SEE: venice.ReportDataVerifier) → membership in workload_keyset.e2ee_public_keys
 // → custody chain from the accepted KMS root over the same key, with app_id
 // measured into the quote's RTMR3 (integrity of that log is the enforced
 // gateway_event_log_integrity factor).
@@ -49,36 +54,57 @@ import (
 // only for this derivation path, not for any key the app happens to hold.
 const e2eeCustodyPurpose = "aci.e2ee.v1"
 
-// defaultACIKMSRootAllow lists accepted dstack-KMS root public keys
-// (compressed secp256k1, hex) for the Venice ACI/1 gateway.
+// Pins are the accepted identities of one ACI/1 gateway deployment.
+type Pins struct {
+	// KMSRoots lists accepted dstack-KMS root public keys (compressed
+	// secp256k1, hex).
+	KMSRoots []string
+	// GatewayAppIDs lists accepted dstack app ids (hex, the RTMR3 "app-id"
+	// event payload).
+	GatewayAppIDs []string
+}
+
+// gatewayKMSRootAllow lists accepted dstack-KMS root public keys for the
+// Phala private-ai-gateway deployment that Venice, Phala Cloud and NanoGPT
+// reach.
 //
-// The value was recovered from the custody signature chains of live
+// The value was recovered from the custody signature chains of live Venice
 // attestations of two different models on 2026-08-25 and is trust-on-first-
-// use. DANGER: an attacker who controls this list controls which KMS —
+// use. Live Phala Cloud and NanoGPT attestations of 2026-10-27 give the same
+// value. DANGER: an attacker who controls this list controls which KMS —
 // and therefore which key-releasing authority — teep accepts for every
-// Venice ACI/1 model. Corroborate against the dstack KmsAuth registry
-// (Phala publishes the KMS root on-chain) before extending it.
+// ACI/1 model. Corroborate against the dstack KmsAuth registry (Phala
+// publishes the KMS root on-chain) before extending it.
 // SEE: docs/attestation_gaps/venice_aci_gateway.md.
-var defaultACIKMSRootAllow = []string{
+var gatewayKMSRootAllow = []string{
 	"0334c76e0c3f52ec64cbf9bbf5c910c272330166fd656c0a86bb330963e46910e1",
 }
 
-// defaultACIGatewayAppIDAllow lists accepted dstack app ids (hex, the RTMR3
-// "app-id" event payload) for the Venice ACI/1 gateway. The app id is the
-// dstack-KMS application identity; pinning it is what says "this key belongs
-// to the private-ai-gateway", not merely to some tenant of the same KMS. The
-// value is authenticated: the RTMR3 event log replay recomputes the app-id
-// event digest, and gateway_event_log_integrity checks the replay against the
-// quote.
+// gatewayAppIDAllow lists accepted dstack app ids for the same deployment.
+// The app id is the dstack-KMS application identity; pinning it is what says
+// "this key belongs to the private-ai-gateway", not merely to some tenant of
+// the same KMS. The value is authenticated: the RTMR3 event log replay
+// recomputes the app-id event digest, and gateway_event_log_integrity checks
+// the replay against the quote.
 //
-// The value was observed on two models of the live gateway on 2026-08-25 and
-// is trust-on-first-use. DANGER: an attacker who adds an app id here makes
-// teep accept that dstack app as the Venice gateway. The gateway runs a
-// dev-channel image, so the app id can change on redeploy — a mismatch fails
-// aci_key_custody closed, which is correct; refresh the pin from a new
-// capture. SEE: docs/attestation_gaps/venice_aci_gateway.md.
-var defaultACIGatewayAppIDAllow = []string{
+// The value was observed on two Venice models of the live gateway on
+// 2026-08-25 and is trust-on-first-use; live Phala Cloud and NanoGPT
+// attestations of 2026-10-27 give the same value. DANGER: an attacker who
+// adds an app id here makes teep accept that dstack app as the gateway. The
+// gateway runs a dev-channel image, so the app id can change on redeploy — a
+// mismatch fails aci_key_custody closed, which is correct; refresh the pin
+// from a new capture. SEE: docs/attestation_gaps/venice_aci_gateway.md.
+var gatewayAppIDAllow = []string{
 	"fdb7a14e5a6675f752e2cb69c9067a98ca402918",
+}
+
+// GatewayPins returns a copy of the pins of the Phala private-ai-gateway
+// deployment, so that a caller cannot change the accepted identities.
+func GatewayPins() Pins {
+	return Pins{
+		KMSRoots:      slices.Clone(gatewayKMSRootAllow),
+		GatewayAppIDs: slices.Clone(gatewayAppIDAllow),
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -305,15 +331,15 @@ func jcsSHA256Hex(v any) (string, error) {
 	return "sha256:" + hex.EncodeToString(h[:]), nil
 }
 
-// VerifyACIKeyset performs ACI/1 workload keyset verification using fields
+// VerifyKeyset performs ACI/1 workload keyset verification using fields
 // from a RawAttestation: the keyset digest recompute, the signing-key
 // membership check, the dstack-KMS custody chain for the E2EE key, the
-// gateway identity pin, and the keyset expiry. Returns nil for non-ACI/1
+// gateway identity pins, and the keyset expiry. Returns nil for non-ACI/1
 // formats. app_id is read from the RTMR3 "app-id" event in
 // raw.GatewayEventLog; the enforced gateway_event_log_integrity factor is
 // what proves that log matches the quote. now is the verification time (the
 // capture time on replay); a zero value resolves to the wall clock.
-func VerifyACIKeyset(raw *attestation.RawAttestation, now time.Time) *attestation.ACIKeysetResult {
+func VerifyKeyset(raw *attestation.RawAttestation, now time.Time, pins Pins) *attestation.ACIKeysetResult {
 	if raw.BackendFormat != attestation.FormatACI1 {
 		return nil
 	}
@@ -337,7 +363,7 @@ func VerifyACIKeyset(raw *attestation.RawAttestation, now time.Time) *attestatio
 		now = time.Now()
 	}
 	return verifyKeyset(keyset, custody, raw.ACIWorkloadKeysetDigest, raw.SigningKey,
-		appID, now, defaultACIKMSRootAllow, defaultACIGatewayAppIDAllow)
+		appID, now, pins.KMSRoots, pins.GatewayAppIDs)
 }
 
 // appIDFromEventLog returns the payload of the single RTMR3 dstack-runtime
@@ -453,26 +479,37 @@ func verifyKeyset(
 	return result
 }
 
+// maxKeysetLifetime bounds how far after the verification time a keyset's
+// not_after may lie. ACI/1 §3.1 says a verifier "SHOULD reject an
+// implausibly distant not_after"; the observed gateway keysets expire 25 to
+// 29 days after capture.
+const maxKeysetLifetime = 365 * 24 * time.Hour
+
 // keysetNotExpired reports whether the keyset not_after (a unix-seconds
-// timestamp) is in the future at now. An unparseable value is treated as
-// expired (fail closed) with a describing detail.
+// timestamp) is in the future at now and not more than maxKeysetLifetime
+// after it. An unparseable value is treated as expired (fail closed) with a
+// describing detail.
 //
-// NOTE: not_after is self-asserted. Venice's gateway REPORTDATA binds only
-// the E2EE signing key and nonce (SEE: ReportDataVerifier), not the keyset
-// digest, so this is a rotation bound that holds against an honest gateway,
-// not a hardware-enforced expiry.
+// NOTE: not_after is self-asserted. The gateway REPORTDATA binds only
+// the E2EE signing key and nonce (SEE: venice.ReportDataVerifier), not the
+// keyset digest, so this is a rotation bound that holds against an honest
+// gateway, not a hardware-enforced expiry.
 // SEE: docs/attestation_gaps/venice_aci_gateway.md residual exposure 7.
 func keysetNotExpired(notAfter string, now time.Time) (ok bool, detail string) {
 	na, err := notAfterCanonical(notAfter)
 	if err != nil {
 		return false, fmt.Sprintf("keyset not_after is unparseable: %v", err)
 	}
+	tooDistant := fmt.Sprintf("keyset not_after %d is more than %d days after %d", na, int(maxKeysetLifetime.Hours()/24), now.Unix())
 	if na > math.MaxInt64 {
-		// not_after == u64::MAX means the keyset never expires.
-		return true, ""
+		return false, tooDistant
 	}
-	if now.Unix() >= int64(na) {
+	notAfterUnix := int64(na)
+	if now.Unix() >= notAfterUnix {
 		return false, fmt.Sprintf("keyset expired: not_after %d is not after %d", na, now.Unix())
+	}
+	if notAfterUnix > now.Add(maxKeysetLifetime).Unix() {
+		return false, tooDistant
 	}
 	return true, ""
 }
