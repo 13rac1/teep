@@ -1,9 +1,8 @@
-package venice
+package aci
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 
@@ -42,6 +41,59 @@ type aciResponse struct {
 	NonceSource        string              `json:"nonce_source"`
 	CandidatesAvail    int                 `json:"candidates_available"`
 	CandidatesEval     int                 `json:"candidates_evaluated"`
+}
+
+// ServerVerification holds the gateway-level verification result of a Venice response.
+// The gateway re-verifies the TDX quote and reports its findings; this is
+// an untrusted claim (the gateway is not hardware-attested itself).
+type ServerVerification struct {
+	TDX struct {
+		Valid                 bool   `json:"valid"`
+		SignatureValid        bool   `json:"signatureValid"`
+		CertificateChainValid bool   `json:"certificateChainValid"`
+		RootCAPinned          bool   `json:"rootCaPinned"`
+		AttestationKeyMatch   bool   `json:"attestationKeyMatch"`
+		ReportData            string `json:"reportData"`
+		Measurements          struct {
+			MRTD          string `json:"mrtd"`
+			MRConfigID    string `json:"mrconfigid"`
+			MROwner       string `json:"mrowner"`
+			MROwnerConfig string `json:"mrownerconfig"`
+			RTMR0         string `json:"rtmr0"`
+			RTMR1         string `json:"rtmr1"`
+			RTMR2         string `json:"rtmr2"`
+			RTMR3         string `json:"rtmr3"`
+			TDAttributes  string `json:"tdAttributes"`
+			XFAM          string `json:"xfam"`
+		} `json:"measurements"`
+		CRLCheck struct {
+			Checked bool `json:"checked"`
+			Revoked bool `json:"revoked"`
+		} `json:"crlCheck"`
+	} `json:"tdx"`
+	Nvidia struct {
+		Valid             bool `json:"valid"`
+		SignatureVerified bool `json:"signatureVerified"`
+		CertificateChain  struct {
+			Valid              bool   `json:"valid"`
+			IntermediatePinned bool   `json:"intermediatePinned"`
+			LeafCertExpiry     string `json:"leafCertExpiry"`
+		} `json:"certificateChainStatus"`
+	} `json:"nvidia"`
+	SigningAddressBinding struct {
+		Bound             bool   `json:"bound"`
+		ReportDataAddress string `json:"reportDataAddress"`
+	} `json:"signingAddressBinding"`
+	NonceBinding struct {
+		Bound  bool   `json:"bound"`
+		Method string `json:"method"`
+	} `json:"nonceBinding"`
+	NvidiaNonceBinding struct {
+		Bound  bool   `json:"bound"`
+		Method string `json:"method"`
+	} `json:"nvidiaNonceBinding"`
+	VerifiedAt             string `json:"verifiedAt"`
+	VerificationDurationMs int    `json:"verificationDurationMs"`
 }
 
 // aciServiceCaps holds service capability declarations. Serving is
@@ -141,15 +193,29 @@ type aciEvidence struct {
 	DownstreamTLSBinding aciTLSBinding `json:"downstream_tls_binding"`
 }
 
-// parseACI unmarshals a Venice ACI/1-format attestation JSON response body
-// into a RawAttestation.
-func parseACI(ctx context.Context, body []byte) (*attestation.RawAttestation, error) {
+// Parse unmarshals an ACI/1-format attestation JSON response body into a
+// RawAttestation. provider names the provider in diagnostics and errors.
+func Parse(ctx context.Context, body []byte, provider string) (*attestation.RawAttestation, error) {
 	var ar aciResponse
-	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, "venice aci/1 attestation")
+	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, provider+" aci/1 attestation")
 	if err != nil {
-		return nil, fmt.Errorf("venice aci/1: unmarshal attestation response: %w", err)
+		return nil, fmt.Errorf("%s aci/1: unmarshal attestation response: %w", provider, err)
 	}
-	return aciToRaw(ctx, &ar, unknown, missing, body)
+	return aciToRaw(ctx, &ar, unknown, missing, body, provider)
+}
+
+// LogEventLog logs TDX RTMR event log entries at debug level. provider names
+// the provider in the summary record.
+func LogEventLog(ctx context.Context, entries []attestation.EventLogEntry, provider string) {
+	slog.DebugContext(ctx, provider+" event log", "entries", len(entries))
+	for i, e := range entries {
+		digest := e.Digest
+		if len(digest) > 16 {
+			digest = digest[:16] + "..."
+		}
+		slog.DebugContext(ctx, "event log entry", "index", i, "imr", e.IMR,
+			"event", e.Event, "type", e.EventType, "digest", digest)
+	}
 }
 
 // aciToRaw converts a parsed ACI/1 attestation response to RawAttestation.
@@ -168,28 +234,29 @@ func parseACI(ctx context.Context, body []byte) (*attestation.RawAttestation, er
 //
 // The quote's REPORTDATA binding is the same keccak256(signing key)+nonce
 // scheme dstack uses, so venice.ReportDataVerifier is reused unchanged for
-// the gateway quote — see the comment on ReportDataVerifier in reportdata.go.
-func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, body []byte) (*attestation.RawAttestation, error) {
+// the gateway quote — see the comment on ReportDataVerifier in
+// internal/provider/venice/reportdata.go.
+func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, body []byte, provider string) (*attestation.RawAttestation, error) {
 	// The gateway TDX quote is the whole of the CPU evidence for ACI/1 — the
 	// core tee_* factors are waived on the premise that Tier 4 carries it. An
 	// empty quote would build no gateway tier and produce a report with no
 	// enforced factor that needs a quote, so reject it here (defense in
 	// depth: unverifiedEvidence also fails a nil GatewayTDX for ACI/1).
 	if ar.Attestation.Evidence.Quote == "" {
-		return nil, errors.New("venice aci/1: attestation.evidence.quote is empty")
+		return nil, fmt.Errorf("%s aci/1: attestation.evidence.quote is empty", provider)
 	}
 	var eventLog []attestation.EventLogEntry
 	if ar.Attestation.Evidence.EventLog != "" {
 		if err := json.Unmarshal([]byte(ar.Attestation.Evidence.EventLog), &eventLog); err != nil {
-			return nil, fmt.Errorf("venice aci/1: decode evidence.event_log: %w", err)
+			return nil, fmt.Errorf("%s aci/1: decode evidence.event_log: %w", provider, err)
 		}
 	}
-	logEventLog(ctx, eventLog)
+	LogEventLog(ctx, eventLog, provider)
 	if ar.IntelQuote != ar.Attestation.Evidence.Quote {
 		// The top-level intel_quote is documented as an echo of
 		// attestation.evidence.quote. A divergence means the response is not
 		// what the format promises; the nested field is the attested source.
-		slog.WarnContext(ctx, "venice aci/1: top-level intel_quote differs from attestation.evidence.quote; using the nested field")
+		slog.WarnContext(ctx, provider+" aci/1: top-level intel_quote differs from attestation.evidence.quote; using the nested field")
 	}
 	return &attestation.RawAttestation{
 		BackendFormat:   attestation.FormatACI1,

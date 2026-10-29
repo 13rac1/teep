@@ -22,7 +22,7 @@ const DstackRuntimeEventType = 0x08000001
 // event_payload) — the event and event_payload strings would otherwise be free
 // text that survives the replay, letting a caller read attacker-chosen values
 // (such as the app-id) out of a log that still matched the quote. SEE:
-// appIDFromEventLog in internal/provider/venice/keyset.go, which reads those
+// appIDFromEventLog in internal/provider/aci/keyset.go, which reads those
 // fields.
 //
 // Based on github.com/Dstack-TEE/dstack/sdk/go/dstack (Apache-2.0).

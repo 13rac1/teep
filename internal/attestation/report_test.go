@@ -5024,7 +5024,7 @@ func TestEvalACIKeyCustody(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // aciGatewayRaw builds a minimal ACI/1 RawAttestation with gateway evidence,
-// as venice.aciToRaw produces it: quote and event log in the Gateway fields,
+// as aci.Parse produces it: quote and event log in the Gateway fields,
 // core quote fields empty, TEEHardware cleared.
 func aciGatewayRaw(nonce Nonce, signingKey string) *RawAttestation {
 	return &RawAttestation{

@@ -196,7 +196,7 @@ type RawAttestation struct {
 	TinfoilRepo string `json:"-"`
 
 	// ACI/1-specific fields — populated by the Venice ACI/1 parser
-	// (internal/provider/venice/aci.go). ACI/1 publishes no manifest for
+	// (internal/provider/aci/aci.go). ACI/1 publishes no manifest for
 	// the machine serving inference; its verifiable provenance is the
 	// gateway app_compose (in GatewayAppCompose) plus a workload keyset
 	// whose keys are connected to a dstack-KMS root by signature chains.

@@ -172,7 +172,7 @@ openai/gpt-oss-120b); asserted continuously by
    specific attested instance.
 2. **The KMS root and gateway app id are trust-on-first-use.** The accepted
    dstack-KMS root and the accepted gateway app id in
-   `internal/provider/venice/keyset.go` were recovered from live
+   `internal/provider/aci/keyset.go` were recovered from live
    attestations of two models. Whoever controls those lists controls which
    key-releasing authority and which dstack app teep accepts as the gateway.
    Corroborate the KMS root against the dstack KmsAuth registry (Phala
@@ -293,7 +293,7 @@ response changes a model to a weaker format. Addresses residual exposure 3.
 - **dstack examples (ingress image provenance):** https://github.com/Dstack-TEE/dstack-examples
 - **Phala inference API (the downstream hop):** https://api.redpill.ai
 - **Related teep assessment:** [dstack_integrity.md](dstack_integrity.md)
-- **ACI/1 parsing and custody verification:** `internal/provider/venice/aci.go`, `internal/provider/venice/keyset.go`
+- **ACI/1 parsing and custody verification:** `internal/provider/aci/aci.go`, `internal/provider/aci/keyset.go`
 - **Gateway image policy:** `internal/provider/venice/policy.go`
 - **Replay coverage:** `internal/integration/venice_aci_test.go`
 

@@ -734,7 +734,7 @@ func (r *RawAttestation) E2EEKeyType() string {
 // verification: the JCS keyset digest recompute, the check that the E2EE
 // signing key teep encrypts to is a member of the keyset, and the dstack-KMS
 // custody chain from an accepted KMS root to that key. Nil for non-ACI/1
-// attestation formats. SEE: venice.VerifyACIKeyset.
+// attestation formats. SEE: aci.VerifyKeyset.
 type ACIKeysetResult struct {
 	KeysetDigestMatch    bool   // recomputed sha256(JCS(workload_keyset)) == declared workload_keyset_digest
 	SigningKeyInKeyset   bool   // top-level signing_public_key is a member of the keyset e2ee_public_keys
