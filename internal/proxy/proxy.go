@@ -648,11 +648,16 @@ func (c *monitoredConn) Close() error {
 }
 
 // ServeHTTP implements http.Handler so Server can be used with httptest.NewServer.
-// Unmatched routes are logged before returning 404.
+// A 404 from a request that matches no route is logged as an unmatched route.
+// A 404 that a matched handler writes (for example "no cached report") is
+// that handler's own response and is not logged here.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec := &statusRecorder{ResponseWriter: w}
 	s.mux.ServeHTTP(rec, r)
-	if rec.status == http.StatusNotFound {
+	if rec.status != http.StatusNotFound {
+		return
+	}
+	if _, pattern := s.mux.Handler(r); pattern == "" {
 		ctx := reqid.WithID(r.Context(), reqid.New())
 		slog.WarnContext(ctx, "unmatched route", "method", r.Method, "path", r.URL.Path)
 	}
