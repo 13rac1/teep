@@ -1,10 +1,13 @@
 package aci
 
 import (
+	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -41,6 +44,21 @@ type aciResponse struct {
 	NonceSource        string              `json:"nonce_source"`
 	CandidatesAvail    int                 `json:"candidates_available"`
 	CandidatesEval     int                 `json:"candidates_evaluated"`
+
+	// AllAttestations is the gateway variant's list of attestation objects.
+	// teep accepts exactly one entry, equal to the top-level fields
+	// (SEE: checkAllAttestations). A nil value means the field is absent
+	// (the Venice variant); an empty list is present and fails the check.
+	AllAttestations []json.RawMessage `json:"all_attestations,omitempty"`
+}
+
+// veniceEchoFields are the dstack-compatible top-level fields that the Venice
+// variant of the response carries and the gateway variant omits. In a gateway
+// variant response they are not reported as missing.
+var veniceEchoFields = map[string]bool{
+	"verified": true, "nonce": true, "model": true, "tee_provider": true,
+	"server_verification": true, "upstream_model": true, "tee_hardware": true,
+	"nonce_source": true, "candidates_available": true, "candidates_evaluated": true,
 }
 
 // ServerVerification holds the gateway-level verification result of a Venice response.
@@ -195,13 +213,94 @@ type aciEvidence struct {
 
 // Parse unmarshals an ACI/1-format attestation JSON response body into a
 // RawAttestation. provider names the provider in diagnostics and errors.
+//
+// Two variants of the response exist. The Venice variant carries
+// dstack-compatible top-level fields (nonce, model, verified, ...). The
+// gateway variant omits them and adds all_attestations, which must hold
+// exactly one entry equal to the top-level fields; any other content fails
+// the parse. A field that neither variant defines is reported as unknown in a
+// Venice variant response, and fails the parse of a gateway variant response,
+// because the entry does not carry it.
 func Parse(ctx context.Context, body []byte, provider string) (*attestation.RawAttestation, error) {
 	var ar aciResponse
-	unknown, missing, err := jsonstrict.UnmarshalWarn(body, &ar, provider+" aci/1 attestation")
+	unknown, missing, err := jsonstrict.Unmarshal(body, &ar)
 	if err != nil {
 		return nil, fmt.Errorf("%s aci/1: unmarshal attestation response: %w", provider, err)
 	}
+	if ar.AllAttestations != nil {
+		if err := checkAllAttestations(body, ar.AllAttestations); err != nil {
+			return nil, fmt.Errorf("%s aci/1: %w", provider, err)
+		}
+		missing = slices.DeleteFunc(missing, func(name string) bool { return veniceEchoFields[name] })
+	}
+	label := provider + " aci/1 attestation"
+	if len(unknown) > 0 {
+		slog.WarnContext(ctx, "unexpected JSON fields", "fields", unknown, "label", label)
+	}
+	if len(missing) > 0 {
+		slog.WarnContext(ctx, "missing JSON fields", "fields", missing, "label", label)
+	}
 	return aciToRaw(ctx, &ar, unknown, missing, body, provider)
+}
+
+// checkAllAttestations requires the gateway variant's all_attestations to
+// hold exactly one entry whose fields are the top-level fields of the
+// response, other than all_attestations, with equal values. The entry is a
+// second copy of the attested data; a different copy would leave the
+// verifier to choose which one is attested.
+func checkAllAttestations(body []byte, entries []json.RawMessage) error {
+	if len(entries) != 1 {
+		return fmt.Errorf("all_attestations has %d entries, want exactly 1", len(entries))
+	}
+	top, err := canonicalFields(body)
+	if err != nil {
+		return fmt.Errorf("canonicalize response: %w", err)
+	}
+	delete(top, "all_attestations")
+	entry, err := canonicalFields(entries[0])
+	if err != nil {
+		return fmt.Errorf("canonicalize all_attestations[0]: %w", err)
+	}
+	for name := range entry {
+		if _, ok := top[name]; !ok {
+			return fmt.Errorf("all_attestations[0].%s is not a top-level field", name)
+		}
+	}
+	for name, value := range top {
+		other, ok := entry[name]
+		if !ok {
+			return fmt.Errorf("all_attestations[0] has no %s field", name)
+		}
+		if subtle.ConstantTimeCompare(value, other) != 1 {
+			return fmt.Errorf("all_attestations[0].%s differs from the top-level field", name)
+		}
+	}
+	return nil
+}
+
+// canonicalFields decodes a JSON object and re-encodes each member value in
+// one form (object keys sorted, numbers kept as written), so that two
+// encodings of the same value compare equal.
+func canonicalFields(object []byte) (map[string][]byte, error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(object, &members); err != nil {
+		return nil, err
+	}
+	out := make(map[string][]byte, len(members))
+	for name, raw := range members {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		var value any
+		if err := dec.Decode(&value); err != nil {
+			return nil, fmt.Errorf("member %s: %w", name, err)
+		}
+		canonical, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("member %s: %w", name, err)
+		}
+		out[name] = canonical
+	}
+	return out, nil
 }
 
 // LogEventLog logs TDX RTMR event log entries at debug level. provider names

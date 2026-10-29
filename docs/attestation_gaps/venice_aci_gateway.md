@@ -120,7 +120,13 @@ are self-asserted, and it is the origin of residual exposure 7.
   proves the E2EE key is the gateway's KMS-issued, hardware-bound key, and
   the expiry check is advisory (it holds against an honest gateway, not
   against one that rewrites `not_after` and recomputes the digest). See
-  residual exposure 7.
+  residual exposure 7. A keyset whose `not_after` is more than 365 days
+  after the verification time fails the check (ACI/1 §3.1).
+- `nonce_match` and `gateway_nonce_match`: a response that echoes the
+  client nonce must echo it exactly. A response of the gateway variant,
+  which echoes no nonce, passes only when the gateway REPORTDATA binding
+  verifies the client nonce and, when the GPU evidence carries a nonce, that
+  nonce is the client nonce.
 - `gateway_compose_binding` (enforced): the gateway publishes its
   `app_compose` and `sha256(app_compose)` matches the quote's MRConfigID.
   The manifest pins its four images by sha256 digest
@@ -130,14 +136,17 @@ are self-asserted, and it is the origin of residual exposure 7.
 - The relayed NVIDIA evidence: per-GPU cert chains and SPDM signatures
   verify, and the EAT nonce matches the client nonce (fresh, not replayed).
 
-### Failed and waived (`VeniceACIDefaultAllowFail`)
+### Failed and waived (`ACIDefaultAllowFail`)
 
 Every core factor that describes the inference host: the twelve `tee_*`
 factors, `measured_model_weights`, `event_log_integrity`,
 `cpu_id_registry`, and the model-tier supply-chain factors. `cpu_gpu_chain`
 fails because the GPUs cannot be bound to any attested CPU — the only
-attested CPU is the gateway's, and the GPUs are not in it. These render as
-failed-but-allowed so the gap stays visible in every report; removing an
+attested CPU is the gateway's, and the GPUs are not in it.
+`aci_backend_named` fails because the attestation names no backend for the
+requested model: the gateway variant of the response names no model, and
+the Venice variant names one only as the provider's assertion. These render
+as failed-but-allowed so the gap stays visible in every report; removing an
 entry from the list blocks every ACI/1 model.
 
 ## Detailed Gap Analysis
@@ -311,7 +320,7 @@ which no `allow_fail` entry can suppress.
 **Host evidence:** The twelve core `tee_*` factors,
 `measured_model_weights`, `event_log_integrity`, `cpu_id_registry`,
 `cpu_gpu_chain` and the model-tier supply-chain factors are in
-`VeniceACIDefaultAllowFail`. They render as failed-but-allowed rather than
+`ACIDefaultAllowFail`. They render as failed-but-allowed rather than
 skipped, so every report states the gap. Removing an entry blocks every
 ACI/1 model.
 
