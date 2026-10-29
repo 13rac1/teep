@@ -204,6 +204,9 @@ type RawAttestation struct {
 	ACIWorkloadKeysetDigest string `json:"-"` // top-level workload_keyset_digest
 	ACIDownstreamTLSDomain  string `json:"-"` // attestation.evidence.downstream_tls_binding.domain
 	ACIDownstreamTLSSPKI    string `json:"-"` // attestation.evidence.downstream_tls_binding.spki_sha256
+	// ACIGatewayVariant is true for the gateway variant of an ACI/1 response:
+	// it carries all_attestations and defines no echoed nonce or model.
+	ACIGatewayVariant bool `json:"-"`
 	// ACIWorkloadKeyset and ACIKeyCustody hold parsed venice ACI structs
 	// (opaque `any` here because concrete types would create an
 	// attestation → venice import cycle; the venice package type-asserts

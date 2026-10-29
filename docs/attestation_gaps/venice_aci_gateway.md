@@ -122,11 +122,12 @@ are self-asserted, and it is the origin of residual exposure 7.
   against one that rewrites `not_after` and recomputes the digest). See
   residual exposure 7. A keyset whose `not_after` is more than 365 days
   after the verification time fails the check (ACI/1 §3.1).
-- `nonce_match` and `gateway_nonce_match`: a response that echoes the
-  client nonce must echo it exactly. A response of the gateway variant,
-  which echoes no nonce, passes only when the gateway REPORTDATA binding
-  verifies the client nonce and, when the GPU evidence carries a nonce, that
-  nonce is the client nonce.
+- `nonce_match` and `gateway_nonce_match`: a Venice-variant response must
+  echo the client nonce exactly; one without the echo fails. A
+  gateway-variant response, which carries no echoed nonce, passes only when
+  the gateway quote's signature and certificate chain verify, its REPORTDATA
+  binding verifies the client nonce and, when the GPU evidence carries a
+  nonce, that nonce is the client nonce.
 - `gateway_compose_binding` (enforced): the gateway publishes its
   `app_compose` and `sha256(app_compose)` matches the quote's MRConfigID.
   The manifest pins its four images by sha256 digest
@@ -143,9 +144,10 @@ factors, `measured_model_weights`, `event_log_integrity`,
 `cpu_id_registry`, and the model-tier supply-chain factors. `cpu_gpu_chain`
 fails because the GPUs cannot be bound to any attested CPU — the only
 attested CPU is the gateway's, and the GPUs are not in it.
-`aci_backend_named` fails because the attestation names no backend for the
-requested model: the gateway variant of the response names no model, and
-the Venice variant names one only as the provider's assertion. These render
+`aci_backend_named` fails because no attested evidence binds a backend for
+the requested model: the gateway variant of the response names no model,
+and the Venice variant names one only as the provider's assertion, which the
+detail repeats. These render
 as failed-but-allowed so the gap stays visible in every report; removing an
 entry from the list blocks every ACI/1 model.
 

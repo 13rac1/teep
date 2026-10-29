@@ -145,7 +145,7 @@ Is the hardware genuine? These checks verify the TDX quote (or SEV-SNP report) i
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 1 | `nonce_match` | Attestation response nonce matches submitted nonce; for an ACI/1 response without an echoed nonce, the gateway quote REPORTDATA and the GPU evidence bind it |
+| 1 | `nonce_match` | Attestation response nonce matches submitted nonce; for a gateway-variant ACI/1 response, which carries no echoed nonce, the verified gateway quote REPORTDATA and the GPU evidence bind it |
 | 2 | `tee_quote_present` | Attestation includes a hardware quote (Intel TDX or AMD SEV-SNP) |
 | 3 | `tee_quote_structure` | Hardware quote parses as valid QuoteV4 or SEV-SNP report |
 | 4 | `tee_cert_chain` | Certificate chain verifies against Intel or AMD root CA |
@@ -180,7 +180,7 @@ Is the encryption bound to the hardware? These checks verify the encryption key 
 | 21 | `e2ee_capable` | Provider returned enough info for E2EE key exchange |
 | 22 | `e2ee_usable` | E2EE round-trip succeeded with the verified enclave key |
 | 23 | `aci_key_custody` | ACI/1: workload keyset digest recomputed, signing key is a keyset E2EE key, the dstack-KMS custody chain verifies to an accepted KMS root, and the keyset expires within 365 days |
-| 24 | `aci_backend_named` | ACI/1: the attestation names a backend for the requested model (allowed to fail by default; the gateway attests itself, not the backend) |
+| 24 | `aci_backend_named` | ACI/1: attested evidence binds a backend for the requested model; no ACI/1 evidence does today, so it fails, allowed by default, and names any provider-asserted model and upstream model |
 
 </details>
 
@@ -220,7 +220,7 @@ factors state that.
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 35 | `gateway_nonce_match` | Gateway request nonce matches the client nonce; for an ACI/1 response without an echoed nonce, the gateway quote REPORTDATA and the GPU evidence bind it |
+| 35 | `gateway_nonce_match` | Gateway request nonce matches the client nonce; for a gateway-variant ACI/1 response, which carries no echoed nonce, the verified gateway quote REPORTDATA and the GPU evidence bind it |
 | 36 | `gateway_tee_quote_present` | Gateway quote or report is present |
 | 37 | `gateway_tee_quote_structure` | Gateway quote parses as valid QuoteV4 or SEV-SNP report |
 | 38 | `gateway_tee_cert_chain` | Gateway cert chain verifies against Intel or AMD root CA |

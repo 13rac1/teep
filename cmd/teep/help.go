@@ -34,10 +34,10 @@ var factorRegistry = []factorInfo{
 		Description: "Verifies that the nonce returned in the attestation response " +
 			"matches the random nonce sent by the client. This prevents replay " +
 			"attacks where an attacker presents a stale but valid attestation " +
-			"from a previous session. For an ACI/1 response that echoes no " +
-			"nonce, it checks the client nonce where the evidence binds it: " +
-			"the gateway quote REPORTDATA, and the GPU evidence when it " +
-			"carries a nonce.",
+			"from a previous session. For a gateway-variant ACI/1 response, " +
+			"which carries no echoed nonce, it checks the client nonce where " +
+			"the evidence binds it: the verified gateway quote REPORTDATA, and " +
+			"the GPU evidence when it carries a nonce.",
 	},
 	{
 		Name:    attestation.FactorTEEQuotePresent,
@@ -280,13 +280,15 @@ var factorRegistry = []factorInfo{
 	{
 		Name:    attestation.FactorACIBackendNamed,
 		Tier:    2,
-		Summary: "ACI/1 attestation names a backend for the requested model",
-		Description: "ACI/1 specific: states whether the attestation names the " +
-			"backend that serves the requested model. The quote attests the " +
-			"gateway, not a backend. The gateway variant of the response names " +
-			"no model; the Venice variant's model and upstream_model fields are " +
-			"the provider's assertion. Allowed to fail by default for ACI/1, so " +
-			"every ACI/1 report states the gap. Not applicable for other formats.",
+		Summary: "ACI/1 evidence binds a backend for the requested model",
+		Description: "ACI/1 specific: passes only when attested evidence binds " +
+			"the backend that serves the requested model. The quote attests " +
+			"the gateway, not a backend, and its REPORTDATA binds no model, so " +
+			"the factor fails today. The detail names the model and " +
+			"upstream_model fields of the Venice variant as the provider's " +
+			"assertion when the response has them. Allowed to fail by default " +
+			"for ACI/1, so every ACI/1 report states the gap. Not applicable " +
+			"for other formats.",
 	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
@@ -457,9 +459,10 @@ var factorRegistry = []factorInfo{
 		Description: "Verifies that the nonce returned by the cloud-api.near.ai gateway " +
 			"matches the random nonce sent by the client. The gateway runs in its " +
 			"own TDX enclave and has a separate nonce from the model attestation. " +
-			"For an ACI/1 response that echoes no nonce, it checks the client " +
-			"nonce where the evidence binds it: the gateway quote REPORTDATA, " +
-			"and the GPU evidence when it carries a nonce.",
+			"For a gateway-variant ACI/1 response, which carries no echoed " +
+			"nonce, it checks the client nonce where the evidence binds it: the " +
+			"verified gateway quote REPORTDATA, and the GPU evidence when it " +
+			"carries a nonce.",
 	},
 	{
 		Name:    attestation.FactorGWQuotePresent,

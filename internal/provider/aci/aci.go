@@ -13,11 +13,12 @@ import (
 	"github.com/13rac1/teep/internal/jsonstrict"
 )
 
-// aciResponse is the JSON structure returned by Venice's ACI/1 attestation
-// format (api_version == "aci/1"). ACI/1 includes both a nested
+// aciResponse is the JSON structure of an ACI/1 attestation response
+// (api_version == "aci/1") of the private-ai-gateway. It has a nested
 // "attestation" block (workload keyset, source provenance, evidence) and
-// dstack-compatible top-level fields (nonce, model, verified, intel_quote,
-// etc.).
+// top-level fields: the Venice variant adds dstack-compatible echo fields
+// (nonce, model, verified, ...), and the gateway variant adds
+// all_attestations instead.
 //
 // SEE: spec/aci.md in https://github.com/Dstack-TEE/private-ai-gateway —
 // the attested workload named by attestation.source_provenance.repo_url.
@@ -47,9 +48,11 @@ type aciResponse struct {
 
 	// AllAttestations is the gateway variant's list of attestation objects.
 	// teep accepts exactly one entry, equal to the top-level fields
-	// (SEE: checkAllAttestations). A nil value means the field is absent
-	// (the Venice variant); an empty list is present and fails the check.
-	AllAttestations []json.RawMessage `json:"all_attestations,omitempty"`
+	// (SEE: checkAllAttestations). It is decoded raw so that presence is
+	// exact: nil means the member is absent (the Venice variant); any present
+	// value, also a literal null or an empty list, selects the gateway variant
+	// and must pass the check.
+	AllAttestations json.RawMessage `json:"all_attestations,omitempty"`
 }
 
 // veniceEchoFields are the dstack-compatible top-level fields that the Venice
@@ -61,9 +64,9 @@ var veniceEchoFields = map[string]bool{
 	"nonce_source": true, "candidates_available": true, "candidates_evaluated": true,
 }
 
-// ServerVerification holds the gateway-level verification result of a Venice response.
-// The gateway re-verifies the TDX quote and reports its findings; this is
-// an untrusted claim (the gateway is not hardware-attested itself).
+// ServerVerification holds the server_verification field of a Venice
+// response, in both of Venice's formats: Venice's own re-verification of the
+// TDX quote. It is an untrusted claim, not hardware-attested.
 type ServerVerification struct {
 	TDX struct {
 		Valid                 bool   `json:"valid"`
@@ -152,7 +155,7 @@ type aciKey struct {
 
 // aciSourceProvenance holds the source_provenance object in ACI/1 responses.
 // ACI/1's supply-chain provenance is a git repo + commit; image_digest and
-// image_provenance are declared nullable because Venice does not currently
+// image_provenance are declared nullable because the gateway does not currently
 // publish them. These fields are not bound into the quote; the quote-bound
 // provenance is the gateway app_compose (evidence.app_compose), whose hash
 // the quote's MRConfigID and RTMR3 compose-hash event measure.
@@ -222,25 +225,39 @@ type aciEvidence struct {
 // Venice variant response, and fails the parse of a gateway variant response,
 // because the entry does not carry it.
 func Parse(ctx context.Context, body []byte, provider string) (*attestation.RawAttestation, error) {
+	// Duplicate member names, also differently escaped ones, make the
+	// decoded value depend on which copy a reader takes.
+	if err := jsonstrict.ValidateUniqueFields(body); err != nil {
+		return nil, fmt.Errorf("%s aci/1: attestation response: %w", provider, err)
+	}
 	var ar aciResponse
 	unknown, missing, err := jsonstrict.Unmarshal(body, &ar)
 	if err != nil {
 		return nil, fmt.Errorf("%s aci/1: unmarshal attestation response: %w", provider, err)
 	}
-	if ar.AllAttestations != nil {
-		if err := checkAllAttestations(body, ar.AllAttestations); err != nil {
+	gatewayVariant := ar.AllAttestations != nil
+	if gatewayVariant {
+		// The gateway variant defines every field it carries. An unknown
+		// field, also a case-folded alias of a defined one (encoding/json
+		// matches names without case), is not part of the variant.
+		if len(unknown) > 0 {
+			return nil, fmt.Errorf("%s aci/1: gateway variant has undefined fields %q", provider, unknown)
+		}
+		var entries []json.RawMessage
+		if err := json.Unmarshal(ar.AllAttestations, &entries); err != nil || entries == nil {
+			return nil, fmt.Errorf("%s aci/1: all_attestations is not a list", provider)
+		}
+		if err := checkAllAttestations(body, entries); err != nil {
 			return nil, fmt.Errorf("%s aci/1: %w", provider, err)
 		}
 		missing = slices.DeleteFunc(missing, func(name string) bool { return veniceEchoFields[name] })
 	}
-	label := provider + " aci/1 attestation"
-	if len(unknown) > 0 {
-		slog.WarnContext(ctx, "unexpected JSON fields", "fields", unknown, "label", label)
+	raw, err := aciToRaw(ctx, &ar, unknown, missing, body, provider)
+	if err != nil {
+		return nil, err
 	}
-	if len(missing) > 0 {
-		slog.WarnContext(ctx, "missing JSON fields", "fields", missing, "label", label)
-	}
-	return aciToRaw(ctx, &ar, unknown, missing, body, provider)
+	raw.ACIGatewayVariant = gatewayVariant
+	return raw, nil
 }
 
 // checkAllAttestations requires the gateway variant's all_attestations to
@@ -318,8 +335,9 @@ func LogEventLog(ctx context.Context, entries []attestation.EventLogEntry, provi
 }
 
 // aciToRaw converts a parsed ACI/1 attestation response to RawAttestation.
-// ACI/1 includes dstack-compatible top-level fields (nonce, model, verified,
-// etc.) alongside the nested "attestation" block.
+// The Venice variant adds dstack-compatible top-level fields (nonce, model,
+// verified, ...) to the nested "attestation" block; the gateway variant
+// omits them.
 //
 // The attested CVM is the private-ai-gateway, not the machine serving
 // inference: its vm_config reports zero GPUs, it pins a downstream TLS hop,
@@ -351,7 +369,7 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 		}
 	}
 	LogEventLog(ctx, eventLog, provider)
-	if ar.IntelQuote != ar.Attestation.Evidence.Quote {
+	if ar.IntelQuote != "" && ar.IntelQuote != ar.Attestation.Evidence.Quote {
 		// The top-level intel_quote is documented as an echo of
 		// attestation.evidence.quote. A divergence means the response is not
 		// what the format promises; the nested field is the attested source.

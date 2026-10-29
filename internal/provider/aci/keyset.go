@@ -490,7 +490,7 @@ const maxKeysetLifetime = 365 * 24 * time.Hour
 // after it. An unparseable value is treated as expired (fail closed) with a
 // describing detail.
 //
-// NOTE: not_after is self-asserted. Venice's gateway REPORTDATA binds only
+// NOTE: not_after is self-asserted. The gateway REPORTDATA binds only
 // the E2EE signing key and nonce (SEE: venice.ReportDataVerifier), not the
 // keyset digest, so this is a rotation bound that holds against an honest
 // gateway, not a hardware-enforced expiry.

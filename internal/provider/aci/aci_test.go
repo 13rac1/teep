@@ -50,7 +50,7 @@ func TestParseErrorsNameProvider(t *testing.T) {
 	for _, tc := range []struct {
 		name, body, want string
 	}{
-		{"not JSON", `{`, "phalacloud aci/1: unmarshal attestation response"},
+		{"not JSON", `{`, "phalacloud aci/1: attestation response"},
 		{"empty quote", `{"api_version":"aci/1","attestation":{"evidence":{"quote":""}}}`, "phalacloud aci/1: attestation.evidence.quote is empty"},
 		{"bad event log", `{"api_version":"aci/1","attestation":{"evidence":{"quote":"00","event_log":"{"}}}`, "phalacloud aci/1: decode evidence.event_log"},
 	} {

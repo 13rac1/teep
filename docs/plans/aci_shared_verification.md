@@ -159,18 +159,25 @@ expires". ACI/1 §3.1 says a verifier "SHOULD reject an implausibly distant
 ### Response variants
 
 The parser accepts the Venice variant (dstack-compatible top-level fields)
-and the gateway variant of finding 3 under strict decoding: a field that
-neither variant defines is an error. Rules:
+and the gateway variant of finding 3 under strict decoding. Duplicate member
+names fail both variants. Rules for the gateway variant:
 
-- `all_attestations` must hold exactly one entry, and that entry must equal
-  the top-level attestation fields; any other content fails the parse.
-- Without an echoed nonce, `gateway_nonce_match` evaluates the client nonce
-  that the verified quote REPORTDATA and the GPU evidence bind, and its
-  detail says so. The REPORTDATA comparison itself stays in
+- A present `all_attestations`, also a literal null, selects the gateway
+  variant. It must hold exactly one entry, and that entry must equal the
+  top-level attestation fields; any other content fails the parse.
+- A field that the gateway variant does not define fails the parse, also a
+  case-folded alias of a defined field.
+- `nonce_match` and `gateway_nonce_match` of a gateway-variant response,
+  which carries no echoed nonce, evaluate the client nonce that the verified
+  gateway quote (signature and certificate chain) REPORTDATA and the GPU
+  evidence bind, and the detail says so. A Venice-variant response without
+  its echoed nonce fails as before. The REPORTDATA comparison itself stays in
   `gateway_tee_reportdata_binding`.
-- A new factor states, for an ACI/1 response without an echoed model, that
-  the attestation names no backend for the requested model. It is in the
-  default allow_fail list of every ACI/1 provider.
+- A new factor, `aci_backend_named`, passes only when attested evidence binds
+  a backend for the requested model. No ACI/1 evidence does today, so it
+  fails and its detail names the provider-asserted model and upstream model
+  when the response has them. It is in the default allow_fail list of every
+  ACI/1 provider.
 
 ### Transport
 

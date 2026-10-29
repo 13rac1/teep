@@ -1129,14 +1129,17 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 // Tier 1: Core Attestation evaluators
 // ---------------------------------------------------------------------------
 
-// aciEvidenceNonce evaluates the client nonce of an ACI/1 response that
-// echoes no nonce, where the evidence binds it: the gateway quote REPORTDATA,
-// which the gateway REPORTDATA verifier checks against the client nonce, and
-// the GPU evidence when it carries a nonce. The missing echo is not a failure
-// on its own; a REPORTDATA binding that did not verify, or a GPU evidence
-// nonce that differs, is.
+// aciEvidenceNonce evaluates the client nonce of a gateway-variant ACI/1
+// response, which carries no echoed nonce, where the evidence binds it: the
+// gateway quote REPORTDATA, which the gateway REPORTDATA verifier checks
+// against the client nonce, and the GPU evidence when it carries a nonce. The
+// REPORTDATA counts only when the quote's signature and certificate chain
+// verify, so that the detail does not describe a forged quote as binding.
+// Collateral errors are left to the gateway TCB factors: they concern the
+// currency of the platform, not the authenticity of the quote.
 func aciEvidenceNonce(in *ReportInput) (status Status, detail string) {
 	if in.GatewayTDX == nil || in.GatewayTDX.ParseErr != nil ||
+		in.GatewayTDX.SignatureErr != nil || in.GatewayTDX.CertChainErr != nil ||
 		in.GatewayTDX.ReportDataBindingErr != nil || in.GatewayTDX.ReportDataBindingDetail == "" {
 		return Fail, "no echoed nonce, and the gateway quote REPORTDATA binding of the client nonce did not verify"
 	}
@@ -1152,7 +1155,7 @@ func aciEvidenceNonce(in *ReportInput) (status Status, detail string) {
 
 func evalNonceMatch(in *ReportInput) []FactorResult {
 	if in.Raw.Nonce == "" {
-		if in.Raw.BackendFormat == FormatACI1 {
+		if in.Raw.ACIGatewayVariant {
 			status, detail := aciEvidenceNonce(in)
 			return factor(TierCore, FactorNonceMatch, status, detail)
 		}
@@ -1849,26 +1852,23 @@ func evalACIKeyCustody(in *ReportInput) []FactorResult {
 	return factor(TierBinding, FactorACIKeyCustody, Pass, in.ACIKeyset.Detail)
 }
 
-// evalACIBackendNamed states whether an ACI/1 attestation names the backend
-// that serves the requested model. The quote attests the gateway, not a
-// backend: the gateway variant of the response names no model, and the
-// Venice variant's model and upstream_model fields are the provider's
-// assertion. Allowed to fail by default (ACIDefaultAllowFail), so every
-// ACI/1 report states the gap.
+// evalACIBackendNamed states whether attested evidence of an ACI/1 response
+// binds the backend that serves the requested model. The quote attests the
+// gateway, not a backend, and its REPORTDATA binds no model: the gateway
+// variant of the response names no model, and the Venice variant's model and
+// upstream_model fields are the provider's assertion. No ACI/1 evidence
+// binds a backend today, so the factor fails, and its detail names the
+// provider-asserted fields when the response has them. Allowed to fail by
+// default (ACIDefaultAllowFail), so every ACI/1 report states the gap.
 func evalACIBackendNamed(in *ReportInput) []FactorResult {
 	if in.Raw.BackendFormat != FormatACI1 {
 		return factor(TierBinding, FactorACIBackendNamed, NotApplicable, "not ACI/1 format")
 	}
-	if in.Raw.Model == "" || in.Raw.UpstreamModel == "" {
-		return factor(TierBinding, FactorACIBackendNamed, Fail,
-			"the attestation names no backend for the requested model")
+	detail := "the attestation binds no backend for the requested model"
+	if in.Raw.Model != "" || in.Raw.UpstreamModel != "" {
+		detail += fmt.Sprintf("; the response names model %q / upstream %q, provider-asserted", in.Raw.Model, in.Raw.UpstreamModel)
 	}
-	if in.Raw.Model != in.Model {
-		return factor(TierBinding, FactorACIBackendNamed, Fail,
-			fmt.Sprintf("the attestation names model %q, not the requested model %q", in.Raw.Model, in.Model))
-	}
-	return factor(TierBinding, FactorACIBackendNamed, Pass,
-		fmt.Sprintf("the attestation names upstream model %q for model %q (provider-asserted)", in.Raw.UpstreamModel, in.Model))
+	return factor(TierBinding, FactorACIBackendNamed, Fail, detail)
 }
 
 // validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519
@@ -2867,7 +2867,7 @@ func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 
 func evalGatewayNonceMatch(in *ReportInput) []FactorResult {
 	switch {
-	case in.GatewayNonceHex == "" && in.Raw.BackendFormat == FormatACI1:
+	case in.GatewayNonceHex == "" && in.Raw.ACIGatewayVariant:
 		status, detail := aciEvidenceNonce(in)
 		return factor(TierGateway, FactorGWNonceMatch, status, detail)
 	case in.GatewayNonceHex == "":

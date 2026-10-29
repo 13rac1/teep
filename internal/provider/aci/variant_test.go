@@ -64,6 +64,9 @@ func TestParseGatewayVariant(t *testing.T) {
 	if raw.Nonce != "" || raw.Model != "" || raw.GatewayNonceHex != "" {
 		t.Fatalf("gateway variant echoed nonce=%q model=%q", raw.Nonce, raw.Model)
 	}
+	if !raw.ACIGatewayVariant {
+		t.Fatal("gateway variant response not marked as the gateway variant")
+	}
 	if raw.GatewayIntelQuote == "" || raw.ACIWorkloadKeysetDigest == "" {
 		t.Fatal("gateway evidence missing")
 	}
@@ -87,6 +90,9 @@ func TestParseVeniceVariantStillReportsMissingEcho(t *testing.T) {
 	}
 	if !slices.Contains(raw.MissingFields, "nonce") {
 		t.Fatalf("missing = %v, want nonce reported for the Venice variant", raw.MissingFields)
+	}
+	if raw.ACIGatewayVariant {
+		t.Fatal("Venice variant response marked as the gateway variant")
 	}
 }
 
@@ -142,22 +148,68 @@ func TestParseAllAttestationsEncodingIndependent(t *testing.T) {
 	}
 }
 
-// A top-level field that neither variant defines fails the parse of a
-// gateway variant response: the single all_attestations entry must carry
-// every top-level field, so a field outside it is not part of the attested
-// copy.
+// A field that the gateway variant does not define fails its parse, also when
+// the all_attestations entry carries the same field, and also when the field
+// is a case-folded alias of a defined one: encoding/json matches member names
+// without case, so the alias would set the struct field that a
+// case-sensitive reader of the body takes from the original member.
 func TestParseGatewayVariantUndefinedField(t *testing.T) {
+	for _, tc := range []struct {
+		name, field, value string
+	}{
+		{"undefined field", "undefined_field", `true`},
+		{"case-folded alias", "Signing_Public_Key", `"04aa"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := mutateBody(t, gatewayVariantBody(t), func(top, entry map[string]json.RawMessage) []json.RawMessage {
+				top[tc.field] = json.RawMessage(tc.value)
+				entry[tc.field] = json.RawMessage(tc.value)
+				return nil
+			})
+			_, err := Parse(context.Background(), body, "phalacloud")
+			if err == nil || !strings.Contains(err.Error(), "gateway variant has undefined fields") || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("err = %v, want the undefined field %s to fail the parse", err, tc.field)
+			}
+		})
+	}
+}
+
+// A literal null all_attestations is present: it selects the gateway variant
+// and fails, instead of reading as the absent member of the Venice variant.
+func TestParseAllAttestationsNull(t *testing.T) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(gatewayVariantBody(t), &top); err != nil {
 		t.Fatal(err)
 	}
-	top["undefined_field"] = json.RawMessage(`true`)
+	top["all_attestations"] = json.RawMessage(`null`)
 	body, err := json.Marshal(top)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = Parse(context.Background(), body, "phalacloud")
-	if err == nil || !strings.Contains(err.Error(), "all_attestations[0] has no undefined_field field") {
-		t.Fatalf("err = %v, want the undefined field to fail the parse", err)
+	if err == nil || !strings.Contains(err.Error(), "all_attestations is not a list") {
+		t.Fatalf("err = %v, want a null all_attestations to fail the parse", err)
+	}
+}
+
+// A duplicate member name fails the parse of either variant, also when the
+// copies are escaped differently.
+func TestParseDuplicateMember(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{"gateway variant", gatewayVariantBody(t)},
+		{"Venice variant", fixtureBody(t)},
+	} {
+		for _, dup := range []string{`"signing_address":"0x00",`, `"signing_address":"0x00",`} {
+			t.Run(tc.name+" "+dup, func(t *testing.T) {
+				body := append([]byte("{"+dup), tc.body[1:]...)
+				_, err := Parse(context.Background(), body, "phalacloud")
+				if err == nil || !strings.Contains(err.Error(), "phalacloud aci/1: attestation response") {
+					t.Fatalf("err = %v, want the duplicate member to fail the parse", err)
+				}
+			})
+		}
 	}
 }
