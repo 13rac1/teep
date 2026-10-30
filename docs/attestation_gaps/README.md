@@ -10,6 +10,7 @@ New reports should follow [TEMPLATE.md](TEMPLATE.md).
 
 ## Reports
 
+- [ACI/1 Specification: Assurance Limits and Deployment Requirements](aci_specification.md)
 - [Dstack Integrity Chain: In-Band Discovery Gap](dstack_integrity.md)
 - [NearCloud E2EE: Gateway Header-Forwarding Gaps](e2ee_plaintext_gaps.md)
 - [Hardware Attestation Binding Issues and Mitigations](gpu_cpu_binding.md)
