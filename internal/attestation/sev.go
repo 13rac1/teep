@@ -85,6 +85,11 @@ type SEVVerifyResult struct {
 	// CertChainErr is non-nil if VCEK certificate chain verification failed.
 	CertChainErr error
 
+	// FetchErr is non-nil if the certificate getter failed to retrieve the
+	// VCEK certificate or its ASK/ARK chain. The certificate chain and report
+	// signature are then not verified, and CertChainErr and SignatureErr are nil.
+	FetchErr error
+
 	// DebugEnabled is true if the guest policy debug bit is set.
 	DebugEnabled bool
 
@@ -278,12 +283,16 @@ func VerifySEVReportOnline(ctx context.Context, report []byte, getter trust.HTTP
 		return result
 	}
 
-	err := verifySEVEvidence(ctx, report, getter)
-	if err != nil {
-		result.CertChainErr = err
-		result.SignatureErr = err
-		slog.DebugContext(ctx, "SEV-SNP online verification failed", "err", err)
-	} else {
+	outcome := verifySEVEvidence(ctx, report, getter)
+	switch {
+	case outcome.fetchErr != nil:
+		result.FetchErr = outcome.fetchErr
+		slog.DebugContext(ctx, "SEV-SNP certificate retrieval failed", "err", outcome.fetchErr)
+	case outcome.verifyErr != nil:
+		result.CertChainErr = outcome.verifyErr
+		result.SignatureErr = outcome.verifyErr
+		slog.DebugContext(ctx, "SEV-SNP online verification failed", "err", outcome.verifyErr)
+	default:
 		result.OnlineVerified = true
 	}
 
@@ -305,27 +314,37 @@ func NewSEVVerifier(offline bool, getter trust.HTTPSGetter) SEVVerifier {
 	}
 }
 
+// sevEvidenceOutcome holds at most one error. fetchErr means the getter did
+// not deliver a certificate, so no verification decision was made. verifyErr
+// means verification rejected the evidence or could not start.
+type sevEvidenceOutcome struct {
+	fetchErr  error
+	verifyErr error
+}
+
 // verifySEVEvidence verifies the certificate chain and report signature.
-func verifySEVEvidence(ctx context.Context, raw []byte, getter trust.HTTPSGetter) (retErr error) {
+func verifySEVEvidence(ctx context.Context, raw []byte, getter trust.HTTPSGetter) sevEvidenceOutcome {
 	report, err := sevabi.ReportToProto(raw)
 	if err != nil {
-		return err
+		return sevEvidenceOutcome{verifyErr: err}
 	}
 	if getter == nil {
-		return errors.New("SEV certificate getter is required")
+		return sevEvidenceOutcome{verifyErr: errors.New("SEV certificate getter is required")}
 	}
-	// go-sev-guest converts certificate fetch errors to text. Preserve their
-	// causes within this verification, without sharing failure state across callers.
+	// go-sev-guest converts certificate fetch errors to text and uses the same
+	// error type for fetch and parse failures. The getter errors recorded here
+	// are the only exact retrieval signal. Each verification owns its record.
 	observed := &sevEvidenceGetter{base: getter}
-	defer func() {
-		if retErr != nil {
-			retErr = errors.Join(retErr, observed.failure())
-		}
-	}()
 	opts := &sevverify.Options{Getter: observed}
 	evidence, err := sevverify.GetAttestationFromReportContext(ctx, report, opts)
-	if err != nil {
-		return err
+	if err == nil {
+		err = sevverify.SnpAttestationContext(ctx, evidence, opts)
 	}
-	return sevverify.SnpAttestationContext(ctx, evidence, opts)
+	if err == nil {
+		return sevEvidenceOutcome{}
+	}
+	if fetchErr := observed.failure(); fetchErr != nil {
+		return sevEvidenceOutcome{fetchErr: errors.Join(err, fetchErr)}
+	}
+	return sevEvidenceOutcome{verifyErr: err}
 }

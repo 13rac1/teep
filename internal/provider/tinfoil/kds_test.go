@@ -78,12 +78,20 @@ func TestTinfoilKDS(t *testing.T) {
 				for range 8 {
 					wg.Go(func() {
 						result := attestation.VerifySEVReportOnline(t.Context(), raw, getter)
-						if mode == "valid" {
-							if !result.OnlineVerified || result.CertChainErr != nil || result.SignatureErr != nil {
-								t.Errorf("verified=%v chain=%v signature=%v", result.OnlineVerified, result.CertChainErr, result.SignatureErr)
+						switch mode {
+						case "valid":
+							if !result.OnlineVerified || result.FetchErr != nil || result.CertChainErr != nil || result.SignatureErr != nil {
+								t.Errorf("verified=%v fetch=%v chain=%v signature=%v", result.OnlineVerified, result.FetchErr, result.CertChainErr, result.SignatureErr)
 							}
-						} else if result.OnlineVerified || (result.CertChainErr == nil && result.SignatureErr == nil) {
-							t.Error("invalid evidence accepted")
+						case "report_signature", "certificate_signature":
+							if result.OnlineVerified || result.FetchErr != nil || result.CertChainErr == nil || result.SignatureErr == nil {
+								t.Errorf("invalid evidence: verified=%v fetch=%v chain=%v signature=%v", result.OnlineVerified, result.FetchErr, result.CertChainErr, result.SignatureErr)
+							}
+						default:
+							// The getter rejected the response, so no certificate was retrieved.
+							if result.OnlineVerified || result.FetchErr == nil || result.CertChainErr != nil || result.SignatureErr != nil {
+								t.Errorf("failed retrieval: verified=%v fetch=%v chain=%v signature=%v", result.OnlineVerified, result.FetchErr, result.CertChainErr, result.SignatureErr)
+							}
 						}
 					})
 				}

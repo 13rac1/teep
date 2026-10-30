@@ -1062,6 +1062,45 @@ func TestEvalSEVParseDependent(t *testing.T) {
 	})
 }
 
+// A failed AMD KDS retrieval fails both factors with a detail that names the
+// retrieval. It must not report invalid evidence or offline mode, and a
+// rejection of retrieved evidence must not read as a retrieval failure.
+func TestEvalSEVParseDependent_FetchErr(t *testing.T) {
+	kdsDown := errors.New("dial tcp: i/o timeout")
+	for _, tc := range []struct {
+		name   string
+		sev    *SEVVerifyResult
+		status Status
+		want   string
+		reject []string
+	}{
+		{"fetch_err", &SEVVerifyResult{FetchErr: kdsDown}, Fail, "retrieval failed", []string{"invalid", "offline mode"}},
+		{"cert_chain_err", &SEVVerifyResult{CertChainErr: errors.New("bad cert"), SignatureErr: errors.New("bad cert")}, Fail, "", []string{"retrieval"}},
+		{"offline", &SEVVerifyResult{}, Skip, "offline mode", []string{"retrieval"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.sev.Measurement = make([]byte, 48)
+			core := evalTEEParseDependent(buildSEVInput(tc.sev))
+			gw := evalGatewayParseDependent(&ReportInput{GatewaySEV: tc.sev})
+			for _, f := range []FactorResult{
+				assertFactor(t, core, FactorTEECertChain, tc.status),
+				assertFactor(t, core, FactorTEEQuoteSignature, tc.status),
+				assertFactor(t, gw, FactorGWCertChain, tc.status),
+				assertFactor(t, gw, FactorGWQuoteSignature, tc.status),
+			} {
+				if !strings.Contains(f.Detail, tc.want) {
+					t.Errorf("%s detail %q does not contain %q", f.Name, f.Detail, tc.want)
+				}
+				for _, word := range tc.reject {
+					if strings.Contains(f.Detail, word) {
+						t.Errorf("%s detail %q contains %q", f.Name, f.Detail, word)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestEvalSEVMeasurement(t *testing.T) {
 	meas := strings.Repeat("ab", 48)
 	measBytes, _ := hex.DecodeString(meas)
@@ -4892,9 +4931,8 @@ func TestTinfoilCloud_KDSOutageDoesNotBlock(t *testing.T) {
 		Nonce:     nonce,
 		AllowFail: TinfoilCloudDefaultAllowFail,
 		GatewaySEV: &SEVVerifyResult{
-			Measurement:  make([]byte, 48),
-			CertChainErr: kdsDown,
-			SignatureErr: kdsDown,
+			Measurement: make([]byte, 48),
+			FetchErr:    kdsDown,
 		},
 		Inapplicable: DefaultInapplicableFactors(),
 	})
