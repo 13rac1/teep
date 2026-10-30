@@ -1524,6 +1524,9 @@ func evalSEVParseDependent(in *ReportInput) []FactorResult {
 	}
 
 	switch {
+	case in.SEV.FetchErr != nil:
+		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Fail,
+			Detail: fmt.Sprintf("AMD KDS certificate retrieval failed; VCEK cert chain not verified: %v", in.SEV.FetchErr)})
 	case in.SEV.CertChainErr != nil:
 		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Fail,
 			Detail: fmt.Sprintf("VCEK cert chain verification failed: %v", in.SEV.CertChainErr)})
@@ -1536,6 +1539,9 @@ func evalSEVParseDependent(in *ReportInput) []FactorResult {
 	}
 
 	switch {
+	case in.SEV.FetchErr != nil:
+		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Fail,
+			Detail: fmt.Sprintf("AMD KDS certificate retrieval failed; SEV-SNP report signature not verified: %v", in.SEV.FetchErr)})
 	case in.SEV.SignatureErr != nil:
 		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Fail,
 			Detail: fmt.Sprintf("SEV-SNP report signature invalid: %v", in.SEV.SignatureErr)})
@@ -4089,6 +4095,9 @@ func evalGatewaySEVParseDependent(in *ReportInput) []FactorResult {
 	}}
 
 	switch {
+	case in.GatewaySEV.FetchErr != nil:
+		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWCertChain, Status: Fail,
+			Detail: fmt.Sprintf("AMD KDS certificate retrieval failed; gateway VCEK cert chain not verified: %v", in.GatewaySEV.FetchErr)})
 	case in.GatewaySEV.CertChainErr != nil:
 		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWCertChain, Status: Fail,
 			Detail: fmt.Sprintf("gateway VCEK cert chain verification failed: %v", in.GatewaySEV.CertChainErr)})
@@ -4101,6 +4110,9 @@ func evalGatewaySEVParseDependent(in *ReportInput) []FactorResult {
 	}
 
 	switch {
+	case in.GatewaySEV.FetchErr != nil:
+		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWQuoteSignature, Status: Fail,
+			Detail: fmt.Sprintf("AMD KDS certificate retrieval failed; gateway report signature not verified: %v", in.GatewaySEV.FetchErr)})
 	case in.GatewaySEV.SignatureErr != nil:
 		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWQuoteSignature, Status: Fail,
 			Detail: fmt.Sprintf("gateway report signature invalid: %v", in.GatewaySEV.SignatureErr)})

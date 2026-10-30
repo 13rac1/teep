@@ -47,6 +47,10 @@ Genoa, and Turin). They obtain per-chip VCEK certificates from
 `https://kds-proxy.tinfoil.sh`, preserving the chip ID and TCB query.
 Unsupported signing chains and failed retrievals return errors; retrieval does
 not switch to AMD KDS after a proxy failure. No filesystem cache is added.
+A getter error, including an unsupported signing chain, fails the certificate
+chain and report signature factors with a detail that names the certificate
+retrieval. A retrieved certificate or report that does not verify fails the
+same factors with the verification error.
 
 The proxy supplies collateral, not a trust decision. Teep still verifies the
 AMD certificate chain, report signature, report binding, and applicable factor
