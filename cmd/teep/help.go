@@ -34,7 +34,9 @@ var factorRegistry = []factorInfo{
 		Description: "Verifies that the nonce returned in the attestation response " +
 			"matches the random nonce sent by the client. This prevents replay " +
 			"attacks where an attacker presents a stale but valid attestation " +
-			"from a previous session.",
+			"from a previous session. A gateway-variant ACI/1 response " +
+			"echoes no nonce, so this factor fails; its freshness rests on " +
+			"gateway_tee_reportdata_binding.",
 	},
 	{
 		Name:    attestation.FactorTEEQuotePresent,
@@ -259,7 +261,7 @@ var factorRegistry = []factorInfo{
 		Name:    attestation.FactorACIKeyCustody,
 		Tier:    2,
 		Summary: "ACI/1 key custody chain verified to an accepted KMS root",
-		Description: "Venice ACI/1 specific: recomputes the workload keyset " +
+		Description: "ACI/1 specific: recomputes the workload keyset " +
 			"digest (SHA-256 over the JCS-canonicalized keyset), checks that " +
 			"the top-level signing_public_key is a member of the keyset " +
 			"e2ee_public_keys, and verifies the dstack-KMS custody chain — " +
@@ -268,10 +270,24 @@ var factorRegistry = []factorInfo{
 			"the quote's RTMR3, and the recovered root must be an accepted " +
 			"dstack-KMS root. The gateway quote's REPORTDATA binds the same " +
 			"signing key (see gateway_tee_reportdata_binding), completing " +
-			"the chain from hardware to the key teep encrypts to. Not " +
-			"applicable for non-ACI/1 formats. Always enforced (never added " +
-			"to allow_fail) because it is verifiable from data already " +
-			"present in the attestation response.",
+			"the chain from hardware to the key teep encrypts to. The keyset " +
+			"must be unexpired and expire at most 365 days after the " +
+			"verification time. Not applicable for non-ACI/1 formats. Always " +
+			"enforced (never added to allow_fail) because it is verifiable " +
+			"from data already present in the attestation response.",
+	},
+	{
+		Name:    attestation.FactorACIBackendNamed,
+		Tier:    2,
+		Summary: "ACI/1 evidence binds a backend for the requested model",
+		Description: "ACI/1 specific: passes only when attested evidence binds " +
+			"the backend that serves the requested model. The quote attests " +
+			"the gateway, not a backend, and its REPORTDATA binds no model, so " +
+			"the factor fails today. The detail names the model and " +
+			"upstream_model fields of the Venice variant as the provider's " +
+			"assertion when the response has them. Allowed to fail by default " +
+			"for ACI/1, so every ACI/1 report states the gap. Not applicable " +
+			"for other formats.",
 	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
@@ -441,7 +457,9 @@ var factorRegistry = []factorInfo{
 		Summary: "Gateway nonce matches request",
 		Description: "Verifies that the nonce returned by the cloud-api.near.ai gateway " +
 			"matches the random nonce sent by the client. The gateway runs in its " +
-			"own TDX enclave and has a separate nonce from the model attestation.",
+			"own TDX enclave and has a separate nonce from the model attestation. " +
+			"A gateway-variant ACI/1 response echoes no nonce, so this factor " +
+			"fails; its freshness rests on gateway_tee_reportdata_binding.",
 	},
 	{
 		Name:    attestation.FactorGWQuotePresent,

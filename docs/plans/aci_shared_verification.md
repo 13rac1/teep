@@ -103,9 +103,12 @@ not committed.
 
 1. **Pins:** one shared pin list for the gateway deployment (accepted KMS
    root, gateway app id), used by Venice, Phala Cloud and NanoGPT.
-2. **Nonce:** the client nonce is evaluated where the evidence binds it: the
-   quote REPORTDATA and the GPU evidence. A missing echoed `request_nonce` is
-   not a failure on its own.
+2. **Nonce:** `nonce_match` and `gateway_nonce_match` check the echoed nonce
+   only. A gateway-variant response echoes none, so both fail visibly; its
+   freshness rests on `gateway_tee_reportdata_binding`, and the GPU evidence
+   nonce on `nvidia_nonce_client_bound` (revised 2026-10-31: the earlier
+   rule passed both factors on the REPORTDATA binding, a second pass of an
+   enforced factor).
 3. **`all_attestations`:** exactly one entry, equal to the top-level fields;
    any other content fails the parse.
 4. **Unnamed model:** a new factor, allowed to fail by default, that states
@@ -159,18 +162,24 @@ expires". ACI/1 §3.1 says a verifier "SHOULD reject an implausibly distant
 ### Response variants
 
 The parser accepts the Venice variant (dstack-compatible top-level fields)
-and the gateway variant of finding 3 under strict decoding: a field that
-neither variant defines is an error. Rules:
+and the gateway variant of finding 3 under strict decoding. Duplicate member
+names fail both variants. Rules for the gateway variant:
 
-- `all_attestations` must hold exactly one entry, and that entry must equal
-  the top-level attestation fields; any other content fails the parse.
-- Without an echoed nonce, `gateway_nonce_match` evaluates the client nonce
-  that the verified quote REPORTDATA and the GPU evidence bind, and its
-  detail says so. The REPORTDATA comparison itself stays in
+- A present `all_attestations`, also a literal null, selects the gateway
+  variant. It must hold exactly one entry, and that entry must equal the
+  top-level attestation fields; any other content fails the parse.
+- A field that the gateway variant does not define fails the parse, also a
+  case-folded alias of a defined field.
+- `nonce_match` and `gateway_nonce_match` of a gateway-variant response fail
+  with the detail "no echoed nonce; freshness rests on
+  gateway_tee_reportdata_binding". A Venice-variant response without its
+  echoed nonce fails as before. The REPORTDATA comparison stays in
   `gateway_tee_reportdata_binding`.
-- A new factor states, for an ACI/1 response without an echoed model, that
-  the attestation names no backend for the requested model. It is in the
-  default allow_fail list of every ACI/1 provider.
+- A new factor, `aci_backend_named`, passes only when attested evidence binds
+  a backend for the requested model. No ACI/1 evidence does today, so it
+  fails and its detail names the provider-asserted model and upstream model
+  when the response has them. It is in the default allow_fail list of every
+  ACI/1 provider.
 
 ### Transport
 

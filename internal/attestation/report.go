@@ -89,6 +89,7 @@ const (
 	FactorE2EECapable          = "e2ee_capable"
 	FactorE2EEUsable           = "e2ee_usable"
 	FactorACIKeyCustody        = "aci_key_custody"
+	FactorACIBackendNamed      = "aci_backend_named"
 	FactorTLSKeyBinding        = "tls_key_binding"
 	FactorCPUGPUChain          = "cpu_gpu_chain"
 	FactorNVSwitchBinding      = "nvswitch_binding"
@@ -515,9 +516,10 @@ var TinfoilDirectDefaultAllowFail = []string{
 	FactorComponentRecognition,
 }
 
-// VeniceACIDefaultAllowFail is the default allow_fail list for Venice models
-// that return the ACI/1 attestation format. Selected per response format,
-// not per provider: Venice's dstack models keep the global DefaultAllowFail.
+// ACIDefaultAllowFail is the default allow_fail list for models that return
+// the ACI/1 attestation format of the private-ai-gateway. Selected per
+// response format, not per provider: Venice's dstack models keep the global
+// DefaultAllowFail.
 // SEE: config.MergedAllowFail.
 //
 // DANGER: this list accepts a provider that proves nothing about the machine
@@ -538,7 +540,7 @@ var TinfoilDirectDefaultAllowFail = []string{
 // signature and nonce factors — the relayed GPU evidence is real and
 // client-nonce-fresh even though cpu_gpu_chain cannot bind it to the
 // attested CPU.
-var VeniceACIDefaultAllowFail = []string{
+var ACIDefaultAllowFail = []string{
 	// No inference-host evidence. The gateway is the only attested
 	// principal, so every core factor that describes the machine running
 	// the model fails.
@@ -587,6 +589,11 @@ var VeniceACIDefaultAllowFail = []string{
 	FactorGWHardwareConfig,
 	FactorGWBootConfig,
 	FactorGWCPUIDRegistry,
+
+	// The gateway attests itself, not a backend for the requested model.
+	// The gateway variant of the response names no model; the Venice
+	// variant names one only as the provider's assertion.
+	FactorACIBackendNamed,
 }
 
 // KnownFactors is the complete set of factor names produced by BuildReport.
@@ -599,7 +606,7 @@ var KnownFactors = []string{
 	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
 	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaSignature, FactorNvidiaClaims,
 	FactorNvidiaClientNonce, FactorNvidiaNRAS, FactorE2EECapable, FactorE2EEUsable,
-	FactorACIKeyCustody,
+	FactorACIKeyCustody, FactorACIBackendNamed,
 	FactorTLSKeyBinding, FactorCPUGPUChain, FactorNVSwitchBinding,
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
@@ -1083,6 +1090,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalE2EECapable,
 		evalE2EEUsable,
 		evalACIKeyCustody,
+		evalACIBackendNamed,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -1121,8 +1129,17 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 // Tier 1: Core Attestation evaluators
 // ---------------------------------------------------------------------------
 
+// aciNoEchoDetail is the detail of the nonce factors for a gateway-variant
+// ACI/1 response. The variant echoes no nonce, so the factors fail; the
+// client nonce is checked only by gateway_tee_reportdata_binding and, in GPU
+// evidence, by nvidia_nonce_client_bound.
+const aciNoEchoDetail = "no echoed nonce; freshness rests on gateway_tee_reportdata_binding"
+
 func evalNonceMatch(in *ReportInput) []FactorResult {
 	if in.Raw.Nonce == "" {
+		if in.Raw.ACIGatewayVariant {
+			return factor(TierCore, FactorNonceMatch, Fail, aciNoEchoDetail)
+		}
 		return factor(TierCore, FactorNonceMatch, Fail, "nonce field absent from attestation response")
 	}
 	if subtle.ConstantTimeCompare([]byte(in.Raw.Nonce), []byte(in.Nonce.Hex())) != 1 {
@@ -1814,6 +1831,25 @@ func evalACIKeyCustody(in *ReportInput) []FactorResult {
 		return factor(TierBinding, FactorACIKeyCustody, Fail, in.ACIKeyset.Detail)
 	}
 	return factor(TierBinding, FactorACIKeyCustody, Pass, in.ACIKeyset.Detail)
+}
+
+// evalACIBackendNamed states whether attested evidence of an ACI/1 response
+// binds the backend that serves the requested model. The quote attests the
+// gateway, not a backend, and its REPORTDATA binds no model: the gateway
+// variant of the response names no model, and the Venice variant's model and
+// upstream_model fields are the provider's assertion. No ACI/1 evidence
+// binds a backend today, so the factor fails, and its detail names the
+// provider-asserted fields when the response has them. Allowed to fail by
+// default (ACIDefaultAllowFail), so every ACI/1 report states the gap.
+func evalACIBackendNamed(in *ReportInput) []FactorResult {
+	if in.Raw.BackendFormat != FormatACI1 {
+		return factor(TierBinding, FactorACIBackendNamed, NotApplicable, "not ACI/1 format")
+	}
+	detail := "the attestation binds no backend for the requested model"
+	if in.Raw.Model != "" || in.Raw.UpstreamModel != "" {
+		detail += fmt.Sprintf("; the response names model %q / upstream %q, provider-asserted", in.Raw.Model, in.Raw.UpstreamModel)
+	}
+	return factor(TierBinding, FactorACIBackendNamed, Fail, detail)
 }
 
 // validateEd25519Hex checks that s is 64 valid hex characters (32-byte Ed25519
@@ -2812,6 +2848,8 @@ func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 
 func evalGatewayNonceMatch(in *ReportInput) []FactorResult {
 	switch {
+	case in.GatewayNonceHex == "" && in.Raw.ACIGatewayVariant:
+		return factor(TierGateway, FactorGWNonceMatch, Fail, aciNoEchoDetail)
 	case in.GatewayNonceHex == "":
 		return factor(TierGateway, FactorGWNonceMatch, Fail, "gateway request_nonce absent")
 	case subtle.ConstantTimeCompare([]byte(in.GatewayNonceHex), []byte(in.GatewayNonce.Hex())) == 1:

@@ -490,7 +490,7 @@ const maxKeysetLifetime = 365 * 24 * time.Hour
 // after it. An unparseable value is treated as expired (fail closed) with a
 // describing detail.
 //
-// NOTE: not_after is self-asserted. Venice's gateway REPORTDATA binds only
+// NOTE: not_after is self-asserted. The gateway REPORTDATA binds only
 // the E2EE signing key and nonce (SEE: venice.ReportDataVerifier), not the
 // keyset digest, so this is a rotation bound that holds against an honest
 // gateway, not a hardware-enforced expiry.
@@ -500,16 +500,18 @@ func keysetNotExpired(notAfter string, now time.Time) (ok bool, detail string) {
 	if err != nil {
 		return false, fmt.Sprintf("keyset not_after is unparseable: %v", err)
 	}
-	tooDistant := fmt.Sprintf("keyset not_after %d is more than %d days after %d", na, int(maxKeysetLifetime.Hours()/24), now.Unix())
+	tooDistant := func() string {
+		return fmt.Sprintf("keyset not_after %d is more than %d days after %d", na, int(maxKeysetLifetime.Hours()/24), now.Unix())
+	}
 	if na > math.MaxInt64 {
-		return false, tooDistant
+		return false, tooDistant()
 	}
 	notAfterUnix := int64(na)
 	if now.Unix() >= notAfterUnix {
 		return false, fmt.Sprintf("keyset expired: not_after %d is not after %d", na, now.Unix())
 	}
 	if notAfterUnix > now.Add(maxKeysetLifetime).Unix() {
-		return false, tooDistant
+		return false, tooDistant()
 	}
 	return true, ""
 }

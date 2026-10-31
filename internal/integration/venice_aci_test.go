@@ -22,7 +22,7 @@ import (
 // inference, so the report puts the quote in the gateway tier: the gateway
 // chain, the key custody factor, and the gateway compose binding are
 // enforced and must pass; the core tee_* factors fail and are waived by
-// VeniceACIDefaultAllowFail. The fixture is selected via the "venice_aci"
+// ACIDefaultAllowFail. The fixture is selected via the "venice_aci"
 // prefix, which the bare "venice" (dstack) fixture lookup excludes — SEE:
 // findFixtureDir.
 func TestVerifyRun_VeniceACI_Fixture(t *testing.T) {
