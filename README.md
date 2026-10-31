@@ -262,8 +262,8 @@ For TOML configuration, enforcement policies, and measurement allowlists, see [R
 make           # build
 make test      # run tests with race detector
 make test-live # run live network tests (requires internet)
-make lint      # golangci-lint (strict config)
-make check     # fmt + vet + lint + test
+make lint      # go mod tidy check, gofmt, go vet, golangci-lint, teeplint
+make check     # lint + test
 ```
 
 ## License

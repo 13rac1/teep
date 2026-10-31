@@ -33,7 +33,7 @@ The proxy receives concurrent API inference requests to multiple models from mul
 
 ## Core Commands
 
-- Run local tests: `make check` (quick: fmt + vet + lint + unit tests).
+- Run local tests: `make check` (quick: go mod tidy check + fmt + vet + lint + unit tests).
 - Run full integration tests: `make integration` (slow; optional API keys or config).
 - Generate provider verification reports: `make reports` (requires API keys or config).
 
