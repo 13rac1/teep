@@ -90,7 +90,9 @@ vet: ## Run go vet
 teeplint: ## Run architectural linter
 	go run ./cmd/teeplint
 
-lint: vet teeplint ## Run gofmt + go vet + golangci-lint + teeplint
+lint: vet teeplint ## Run go mod tidy check + gofmt + go vet + golangci-lint + teeplint
+	@echo "go mod tidy check..."
+	go mod tidy -diff
 	@echo "gofmt check..."
 	@test -z "$$(gofmt -l cmd/ internal/)" || { gofmt -l cmd/ internal/; exit 1; }
 	golangci-lint run ./cmd/... ./internal/...
