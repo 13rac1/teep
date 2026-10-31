@@ -150,9 +150,6 @@ func parseEndpointMapping(body []byte, restrictToNearAI bool) (map[string]string
 	if len(body) > maxDiscoveryBody {
 		return nil, errors.New("endpoint discovery exceeds size limit")
 	}
-	if err := jsonstrict.ValidateUniqueFields(body); err != nil {
-		return nil, err
-	}
 	var response endpointsResponse
 	unknown, missing, err := jsonstrict.Unmarshal(body, &response)
 	if err != nil {

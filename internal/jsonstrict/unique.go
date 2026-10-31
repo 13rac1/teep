@@ -1,65 +1,35 @@
 package jsonstrict
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
+
+	strict "github.com/13rac1/jsonstrict"
 )
 
-type objectFields struct {
-	names    map[string]struct{}
-	wantName bool
-}
-
-// ValidateUniqueFields rejects duplicate object members at every depth, including
-// names that use different JSON escapes for the same string. Callers must bound
-// input size. The iterative traversal uses no recursion and logs no input data.
-// This is an opt-in check for protocols that require unambiguous JSON objects.
+// ValidateUniqueFields rejects a document that is not one JSON value, that
+// has duplicate object members at any depth (also names that use different
+// JSON escapes for the same string), or that has a string with invalid UTF-8.
+// It decodes no fields; Unmarshal makes the same checks while it decodes, so a
+// caller needs this only for a document that it does not decode with
+// Unmarshal. Callers must bound input size. The errors name no member.
 func ValidateUniqueFields(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	var stack []objectFields
-	started := false
-	for {
-		token, err := decoder.Token()
-		if errors.Is(err, io.EOF) && started && len(stack) == 0 {
-			return nil
-		}
-		if err != nil {
-			return errors.New("invalid JSON document")
-		}
-		if started && len(stack) == 0 {
-			return errors.New("multiple JSON values")
-		}
-		started = true
-		if token == json.Delim('}') || token == json.Delim(']') {
-			stack = stack[:len(stack)-1] // Decoder validates matching delimiters.
-			continue
-		}
-		if len(stack) != 0 {
-			object := &stack[len(stack)-1]
-			if object.names != nil {
-				if object.wantName {
-					name, ok := token.(string)
-					if !ok {
-						return errors.New("invalid JSON member name")
-					}
-					if _, exists := object.names[name]; exists {
-						return errors.New("duplicate JSON member")
-					}
-					object.names[name] = struct{}{}
-					object.wantName = false
-					continue
-				}
-				object.wantName = true
-			}
-		}
-		switch token {
-		case json.Delim('{'):
-			stack = append(stack, objectFields{names: make(map[string]struct{}), wantName: true})
-		case json.Delim('['):
-			stack = append(stack, objectFields{})
-		}
+	// The library decodes into a struct, so the document becomes the value of
+	// one member. json.Valid first makes sure that the document is one
+	// complete JSON value, so the wrapping cannot join it with other text.
+	if !json.Valid(data) {
+		return errors.New("invalid JSON document")
 	}
+	wrapped := make([]byte, 0, len(data)+6)
+	wrapped = append(wrapped, `{"v":`...)
+	wrapped = append(wrapped, data...)
+	wrapped = append(wrapped, '}')
+	var doc struct {
+		V json.RawMessage `json:"v"`
+	}
+	result, err := strict.Unmarshal(wrapped, &doc)
+	if err != nil {
+		return errors.New("invalid JSON document")
+	}
+	return structuralError(&result)
 }
