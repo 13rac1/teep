@@ -49,9 +49,6 @@ func KeyRejection(resp *http.Response, name, path string) (bool, error) {
 	if len(body) > 64<<10 {
 		return false, errors.New("key rejection response exceeds limit")
 	}
-	if err := jsonstrict.ValidateUniqueFields(body); err != nil {
-		return false, errors.New("malformed key rejection response")
-	}
 	if isTinfoil {
 		return ehbpKeyRejection(body)
 	}
