@@ -15,6 +15,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 )
 
@@ -122,9 +123,14 @@ func verifyNVIDIA(
 			}
 			return eat, nil
 		}
+		requesterNonce, err := chutes.GPURequesterNonce(nonce, raw.SigningKey)
+		if err != nil {
+			eat = &attestation.NvidiaVerifyResult{SignatureErr: fmt.Errorf("GPU requester nonce: %w", err)}
+			return eat, nil
+		}
 		slog.DebugContext(ctx, "NVIDIA GPU direct verification starting", "gpus", len(raw.GPUEvidence))
 		nvidiaStart := time.Now()
-		eat = attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce)
+		eat = attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce, requesterNonce)
 		slog.DebugContext(ctx, "NVIDIA GPU direct verification complete", "elapsed", time.Since(nvidiaStart))
 	}
 	if !offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {
@@ -133,7 +139,11 @@ func verifyNVIDIA(
 		nras = nv.VerifyNRAS(ctx, raw.NvidiaPayload, client, nrasJWTOpts...)
 		slog.DebugContext(ctx, "NVIDIA NRAS verification complete", "elapsed", time.Since(nrasStart))
 	} else if !offline && len(raw.GPUEvidence) > 0 {
-		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
+		requesterNonce, err := chutes.GPURequesterNonce(nonce, raw.SigningKey)
+		if err != nil {
+			return eat, &attestation.NvidiaVerifyResult{SignatureErr: fmt.Errorf("GPU requester nonce: %w", err)}
+		}
+		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, requesterNonce.Hex())
 		slog.DebugContext(ctx, "NVIDIA NRAS verification starting (synthesized EAT)")
 		nrasStart := time.Now()
 		nras = nv.VerifyNRAS(ctx, eatJSON, client, nrasJWTOpts...)
