@@ -368,4 +368,7 @@ func TestVerifyNVIDIAGPUDirect_BadCertificate(t *testing.T) {
 	if result.SignatureErr == nil {
 		t.Fatal("expected SignatureErr for bad certificate")
 	}
+	if result.Nonce != "" {
+		t.Errorf("Nonce = %q for evidence that did not verify, want empty", result.Nonce)
+	}
 }
