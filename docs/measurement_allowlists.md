@@ -173,21 +173,40 @@ MRSEAM identifies the Intel TDX module version running on the host platform.
 Values are deterministic per TDX module release and do not depend on the guest
 image or provider.
 
-**Primary source:** Intel publishes MRSEAM hashes in TDX module release notes:
-- Repository: `github.com/intel/confidential-computing.tdx.tdx-module`
-- Each release tag contains the MRSEAM hash for that version
+**Primary source:** Intel publishes MRSEAM hashes in "TDX Module Releases and
+Hashes":
+- Repository: `github.com/intel/confidential-computing.tdx.tdx-module`, the
+  README of the default branch `intel_tdx_module_overview`
+- Each release tag repeats the MRSEAM hash for that version
 
 **Secondary source:** Tinfoil maintains a curated list of accepted MRSEAM values:
 - Repository: `github.com/tinfoilsh/tinfoil-python`
+- `ACCEPTED_MR_SEAMS` in `src/tinfoil/attestation/attestation_tdx.py` at
+  commit `19f526483468946a1367548f7377e62b8ed0732e` lists four modules
+  (2.0.08, 1.5.16, 1.5.25, 2.0.14) and none of 1.5.24, 1.5.28, 1.5.34 or
+  2.0.18.
 
-**Known values (as of this writing):**
+**Procedure:** take the full hash of the module version from Intel's table,
+check its prefix against the MRSEAM of a captured quote, and add it with its
+version label to the shared list (`internal/attestation/dstack_defaults.go`)
+or to the Chutes extension (`internal/provider/chutes/policy.go`). The
+shared list reaches Venice, NanoGPT, NEAR Direct, NEAR Cloud (model and
+gateway), Tinfoil and Chutes.
 
-| MRSEAM (truncated) | TDX Module | Platform |
-|---------------------|------------|----------|
-| `49b66faa451d19eb...` | 1.5.08 | Sapphire/Emerald Rapids |
-| `7bf063280e94fb05...` | 1.5.16 | Sapphire/Emerald Rapids |
-| `476a2997c62bccc7...` | 2.0.08 | Granite Rapids |
-| `685f891ea5c20e8f...` | 2.0.02 | Granite Rapids |
+**Allowed values:**
+
+| MRSEAM (truncated) | TDX Module | Platform | Allowed for |
+|---------------------|------------|----------|-------------|
+| `49b66faa451d19eb...` | 1.5.08 | Sapphire/Emerald Rapids | shared list |
+| `7bf063280e94fb05...` | 1.5.16 | Sapphire/Emerald Rapids | shared list |
+| `d0d80c085166ba78...` | 1.5.20 | Sapphire/Emerald Rapids | shared list |
+| `489e585f1c54bc5a...` | 1.5.24 | Sapphire/Emerald Rapids | shared list |
+| `476a2997c62bccc7...` | 2.0.08 | Granite Rapids | shared list |
+| `685f891ea5c20e8f...` | 2.0.02 | Granite Rapids | shared list |
+| `2d2de102461684f1...` | 2.0.18 | Granite Rapids / Clearwater Forest | shared list |
+| `5b38e33a6487958b...` | 1.5.06 | Sapphire/Emerald Rapids | Chutes only |
+| `346bc77a1846cac2...` | 1.5.28 | Sapphire/Emerald Rapids | Chutes only |
+| `ab62561a173acbd1...` | 1.5.34 | Sapphire/Emerald Rapids | Chutes only |
 
 A reasonable policy is to allow the set of non-deprecated module versions for
 your target platform family. This does not require provider cooperation.
@@ -223,6 +242,11 @@ dstack-mr measure
 |-------------------|---------------|
 | `b24d3b24e9e3c160...` | dstack-nvidia-0.5.4.1 |
 | `f06dfda6dce1cf90...` | dstack-nvidia-0.5.5 |
+| `df4d77c857de652b...` | dstack-nvidia-0.5.11 and 0.5.12 |
+
+For dstack-nvidia-0.5.12, RTMR1 and RTMR2 are not allowed until they are
+computed with `mk-image-mr` from meta-dstack on the release files: no
+published value exists for the nvidia image.
 
 ### RTMR0 — Hardware Configuration
 
@@ -272,6 +296,50 @@ dstack-mr measure  # from github.com/Dstack-TEE/dstack
 
 **If deployment config is unknown:** Pin observed values using
 `teep verify --update-config`.
+
+### sek8s (Chutes) — MRTD and RTMR0-2
+
+Chutes runs sek8s, not dstack, so the dstack procedures above do not apply.
+The sek8s repository publishes no measurement hashes. Chutes serves its
+golden values in an unsigned feed (`api.chutes.ai/servers/tee/measurements`).
+NEAR mirrors that feed through reviewed pull requests in
+`github.com/nearai/cloud-api`, file
+`crates/services/src/attestation/chutes_golden_measurements.json`. teep's
+values are from commit `8e708a64bd097905720760da40ecaf0b556be3eb` ("NEAR
+mirror" below).
+
+**Procedure:**
+
+1. Fetch the file at a fixed commit of `nearai/cloud-api`.
+2. For each accepted sek8s release, take its `mrtd`, `rtmr1` and `rtmr2`, and
+   the `rtmr0` of every hardware row.
+3. Add the values to `internal/provider/chutes/policy.go` with the release,
+   the hardware row name, and the commit and file path in the comment.
+4. Check them against a live capture (`teep verify chutes --capture`): the
+   MRTD and RTMR values of the instance teep selects must be in the lists.
+
+teep enforces only the Chutes MRTD and MRSEAM. The RTMR0-2 checks
+(`tee_hardware_config`, `tee_boot_config`) are allowed to fail by default
+(`ChutesDefaultAllowFail`), so a Chutes instance with an unlisted RTMR value
+is served. The values rest on Chutes' unsigned feed and NEAR's review of it,
+not on a reproducible build.
+
+**Allowed values (sek8s):**
+
+| Register | Value (truncated) | sek8s release | Source |
+|----------|-------------------|---------------|--------|
+| MRTD | `ddc6efcdd2309e10...` | 1.3.0 | NEAR mirror; also in the Chutes captures of 2026-05 and 2026-06 |
+| MRTD | `261ce538b435e2d0...` | 1.3.1, 1.4.0, 1.4.1 | NEAR mirror |
+| RTMR1 | `f858ed2aecba4ecd...` | 1.3.0 | NEAR mirror; also in the Chutes captures |
+| RTMR1 | `d3a862ff47357f37...` | 1.4.0, 1.4.1 | NEAR mirror |
+| RTMR2 | `7719f4fde518994a...` | 1.3.0 | NEAR mirror; also in the Chutes captures |
+| RTMR2 | `8feee49b83c0f912...` | 1.4.0 | NEAR mirror |
+| RTMR2 | `da23f73e0fddeb81...` | 1.4.1 | NEAR mirror |
+| RTMR0 | 6 hardware rows | 1.3.0 | NEAR mirror; `2864b11878e81290...` (8xh200) is also in the Chutes captures |
+| RTMR0 | 11 hardware rows | 1.4.0, 1.4.1 | NEAR mirror |
+
+The comments in `internal/provider/chutes/policy.go` list each RTMR0 row
+with its release and hardware row name.
 
 ### RTMR3 — Runtime Events
 

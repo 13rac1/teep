@@ -20,6 +20,10 @@ var dstackMRSEAMAllow = map[string]struct{}{
 	"685f891ea5c20e8fa27b151bf34bf3b50fbaf7143cc53662727cbdb167c0ad8385f1f6f3571539a91e104a1c96d75e04": {},
 	// TDX module 1.5.20 — Sapphire/Emerald Rapids
 	"d0d80c085166ba78ccc69af268e5753cf0f3394523cb4ff7c50b08d9265c82489c099c377be6a400e4d2b57da924012c": {},
+	// TDX module 1.5.24 — Sapphire/Emerald Rapids (Intel, TDX Module Releases and Hashes)
+	"489e585f1c54bc5a02066c8c6ec21619ff0334ec6f21e07e2a35202c59183789c8057e7d97dd591bb08314b185819e72": {},
+	// TDX module 2.0.18 — Granite Rapids / Clearwater Forest (Intel, TDX Module Releases and Hashes)
+	"2d2de102461684f14c8d0984a09d895e3e9e15944ce020a03b977e1f114d5e1ed32ef666a47fd19a5851b3800eda3afa": {},
 }
 
 // dstackMRTDAllow contains the TD virtual firmware measurement hashes for
@@ -29,7 +33,7 @@ var dstackMRTDAllow = map[string]struct{}{
 	"b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217": {},
 	// dstack-nvidia-0.5.5 (os_image_hash da9a3d...)
 	"f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077": {},
-	// dstack-nvidia-0.5.11 (os_image_hash a6eafc...)
+	// dstack-nvidia-0.5.11 (os_image_hash a6eafc...); 0.5.12 has the same MRTD
 	"df4d77c857de652bd0fafa343a2026b51071ee03773d076d283abf1a7d36ff91ffa279ee4a617ac664f7e2a2c8d5891b": {},
 }
 

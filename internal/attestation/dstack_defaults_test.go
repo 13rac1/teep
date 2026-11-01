@@ -6,8 +6,19 @@ import (
 )
 
 func TestDstackMRSEAMAllow(t *testing.T) {
-	if len(dstackMRSEAMAllow) != 5 {
-		t.Errorf("dstackMRSEAMAllow has %d entries, want 5", len(dstackMRSEAMAllow))
+	if len(dstackMRSEAMAllow) != 7 {
+		t.Errorf("dstackMRSEAMAllow has %d entries, want 7", len(dstackMRSEAMAllow))
+	}
+	// TDX modules 1.5.24 and 2.0.18, from Intel's table of module hashes.
+	for _, tc := range []struct{ name, value string }{
+		{"1.5.24", "489e585f1c54bc5a02066c8c6ec21619ff0334ec6f21e07e2a35202c59183789c8057e7d97dd591bb08314b185819e72"},
+		{"2.0.18", "2d2de102461684f14c8d0984a09d895e3e9e15944ce020a03b977e1f114d5e1ed32ef666a47fd19a5851b3800eda3afa"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, ok := dstackMRSEAMAllow[tc.value]; !ok {
+				t.Error("not in dstackMRSEAMAllow")
+			}
+		})
 	}
 	for h := range dstackMRSEAMAllow {
 		b, err := hex.DecodeString(h)
