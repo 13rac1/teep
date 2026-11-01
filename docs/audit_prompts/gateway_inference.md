@@ -166,7 +166,7 @@ Sek8s uses standard Intel TDX registers, but the measurements reflect a differen
 
 | Register | Sek8s behavior | Difference from dstack |
 |----------|---------------|------------------------|
-| **MRSEAM** | Same Intel TDX module values | Fleet may include different TDX module versions (1.5.0d, 2.0.06) |
+| **MRSEAM** | Same Intel TDX module values | Fleet may include different TDX module versions (1.5.06, 1.5.28, 1.5.34) |
 | **MRTD** | Sek8s-specific OVMF firmware image | Different firmware image; distinct MRTD value |
 | **RTMR0** | ACPI tables, early boot; sek8s host-tools fix memory/vCPU/GPU sizing for determinism | Deterministic per deployment class (e.g., 8×H200) |
 | **RTMR1** | Kernel + initramfs per sek8s image build | Different kernel; deterministic per build |
@@ -196,7 +196,7 @@ For sek8s-based CVMs, the verification process differs from dstack in several im
 
 2. **MRTD, RTMR0-2 are the primary verification surface**: Since compose binding and event log replay are unavailable, the MRTD and RTMR0-2 measurement allowlists are the most important client-side controls. These are pinned from known-good Chutes deployments in `internal/provider/chutes/policy.go`.
 
-3. **MRSEAM allowlist extended for sek8s fleet**: The sek8s fleet runs TDX module versions (1.5.0d, 2.0.06) that may differ from the dstack fleet. These are included in the chutes measurement policy.
+3. **MRSEAM allowlist extended for sek8s fleet**: The sek8s fleet runs TDX module versions (1.5.06, 1.5.28, 1.5.34) that may differ from the dstack fleet. These are included in the chutes measurement policy.
 
 4. **RTMR3 verified server-side only**: The Chutes validator verifies RTMR3 against reference baselines as part of LUKS boot enforcement. Teep cannot independently replay RTMR3.
 
@@ -236,11 +236,11 @@ The `tee_hardware_config` / `gateway_tee_hardware_config` (RTMR0) and `tee_boot_
 
 Chutes uses a separate set of Go-coded measurement defaults, defined in `internal/provider/chutes/policy.go`:
 
-**MRSEAM** — Extended allowlist including TDX module versions 1.5.0d and 2.0.06, in addition to the dstack fleet versions. These are observed from the Chutes sek8s fleet.
+**MRSEAM** — Extended allowlist including TDX module versions 1.5.06, 1.5.28 and 1.5.34, in addition to the dstack fleet versions. These are observed from the Chutes sek8s fleet.
 
-**MRTD** — Single value corresponding to the sek8s OVMF firmware image, distinct from dstack's OVMF.
+**MRTD** — The sek8s OVMF firmware images, distinct from dstack's OVMF: sek8s 1.3.0, and 1.3.1/1.4.0/1.4.1, which share one value.
 
-**RTMR0, RTMR1, RTMR2** — Values specific to the sek8s 8×H200 deployment class. Sek8s host-tools explicitly fix VM parameters (memory, vCPU, GPU MMIO, PCI hole sizing) to make these deterministic.
+**RTMR0, RTMR1, RTMR2** — RTMR1 and RTMR2 are per sek8s release; RTMR0 is per hardware row (8×H200, 8×B200, 8×B300 and 8×RTX PRO 6000 classes). Sek8s host-tools fix VM parameters (memory, vCPU, GPU MMIO, PCI hole sizing) to make these deterministic. Their checks (`tee_hardware_config`, `tee_boot_config`) are allowed to fail for Chutes by default, so they are not the enforcement surface.
 
 **RTMR3** — Not enforced by teep. Sek8s validates RTMR3 server-side via its LUKS boot enforcement; the event log is not exposed to clients.
 
@@ -248,7 +248,7 @@ Chutes uses a separate set of Go-coded measurement defaults, defined in `interna
 
 **Measurement bootstrapping.** The `teep verify chutes --model <model> --update-config` command captures observed sek8s measurements. Unlike dstack, there is no reference-value reproduction tooling available to teep; values are pinned from observed deployments.
 
-**Residual risk.** The sek8s measurement defaults are pinned from observed Chutes deployments and cannot be independently reproduced without building sek8s from source. Additionally, the absence of compose binding, event log replay, and Sigstore/Rekor checks means that the MRTD/RTMR0-2 allowlists are the sole client-side controls for the sek8s boot chain. See `docs/attestation_gaps/sek8s_integrity.md` for a detailed trust model analysis.
+**Residual risk.** The sek8s measurement defaults are pinned from observed Chutes deployments and from NEAR's reviewed mirror of Chutes' unsigned measurement feed, and cannot be independently reproduced without building sek8s from source. Additionally, the absence of compose binding, event log replay, and Sigstore/Rekor checks means that the MRTD/RTMR0-2 allowlists are the sole client-side controls for the sek8s boot chain. See `docs/attestation_gaps/sek8s_integrity.md` for a detailed trust model analysis.
 
 ---
 
@@ -384,9 +384,9 @@ The audit MUST verify:
 > **Known divergence: Chutes/Sek8s.** Chutes uses a fundamentally different measurement model:
 > - **MRCONFIGID is not used.** Sek8s does not bind compose hashes. The `compose_binding` factor returns `Skip` with explanation.
 > - **RTMR3 is not client-verifiable.** No event log is exposed; `event_log_integrity` returns `Skip`.
-> - **Separate MRSEAM allowlist.** Chutes includes TDX module versions 1.5.0d and 2.0.06 not present in the dstack allowlist.
+> - **Separate MRSEAM allowlist.** Chutes includes TDX module versions 1.5.06, 1.5.28 and 1.5.34 not present in the dstack allowlist.
 > - **Separate MRTD value.** Sek8s OVMF firmware is distinct from dstack OVMF.
-> - **RTMR0-2 are the primary enforcement surface.** Since compose binding and event log replay are unavailable, these measurement allowlists are the sole client-side boot chain controls.
+> - **MRTD and MRSEAM are the enforcement surface.** Compose binding and event log replay are unavailable, and the RTMR0-2 checks (`tee_hardware_config`, `tee_boot_config`) are allowed to fail for Chutes by default. The audit MUST state that a Chutes instance with an unlisted RTMR0-2 is served.
 > - **REPORTDATA binding scheme differs.** `SHA256(nonce_hex + e2e_pubkey_base64)` — no signing_address or tls_fingerprint.
 > - **No gateway measurement policy.** The Chutes gateway is unattested and produces no TDX quote.
 > - The audit for chutes MUST evaluate whether the MRTD/RTMR0-2 allowlists provide sufficient assurance given the absence of compose binding, event log, and Sigstore/Rekor checks. See `docs/attestation_gaps/sek8s_integrity.md`.
@@ -823,7 +823,7 @@ The chutes trust model differs from the nearcloud gateway model. The Chutes gate
 **Residual trust assumptions specific to chutes/sek8s** (documented in `docs/attestation_gaps/sek8s_integrity.md`):
 - **Cosign admission controller**: Teep trusts that the cosign admission webhook inside each sek8s TEE VM is correctly configured and enforcing. Teep has zero visibility into which containers are running.
 - **LUKS boot enforcement**: Teep trusts that the Chutes validator (`chutes-api`) correctly withholds the LUKS decryption key for VMs whose measurements do not match reference values. If the LUKS passphrase leaked, measurement-passing VMs could be substituted.
-- **Reference measurement correctness**: Teep's pinned MRTD/RTMR0-2 values are captured from observed Chutes deployments. They are only trustworthy if the deployment was running the correct sek8s image at capture time.
+- **Reference measurement correctness**: Teep's pinned MRTD/RTMR0-2 values are captured from observed Chutes deployments or copied from NEAR's reviewed mirror of Chutes' unsigned measurement feed. They are only trustworthy if the deployment was running the correct sek8s image at capture time, or if the feed states the values of the published sek8s release.
 - **Runtime attestation**: RTMR3/IMA verification is entirely server-side. Teep trusts that Chutes re-attests running VMs.
 - **Model weight integrity**: Depends entirely on the measured boot chain preventing unauthorized image loading. Neither watchtower verification nor cllmv per-token verification is available to teep for TEE instances.
 
