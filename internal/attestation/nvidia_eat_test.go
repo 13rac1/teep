@@ -349,7 +349,8 @@ func TestParseCertChain_NoCertificates(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVerifyNVIDIAGPUDirect_EmptyEvidence(t *testing.T) {
-	result := VerifyNVIDIAGPUDirect(context.Background(), []GPUEvidence{}, NewNonce())
+	nonce := NewNonce()
+	result := VerifyNVIDIAGPUDirect(context.Background(), []GPUEvidence{}, nonce, nonce)
 	if result.SignatureErr == nil {
 		t.Fatal("expected SignatureErr for empty evidence")
 	}
@@ -362,7 +363,8 @@ func TestVerifyNVIDIAGPUDirect_BadCertificate(t *testing.T) {
 	evidence := []GPUEvidence{
 		{Arch: "HOPPER", Certificate: "bm90LXBlbS1kYXRh", Evidence: "dGVzdA=="},
 	}
-	result := VerifyNVIDIAGPUDirect(context.Background(), evidence, NewNonce())
+	nonce := NewNonce()
+	result := VerifyNVIDIAGPUDirect(context.Background(), evidence, nonce, nonce)
 	if result.SignatureErr == nil {
 		t.Fatal("expected SignatureErr for bad certificate")
 	}
