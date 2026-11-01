@@ -1,4 +1,4 @@
-package venice
+package aci
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -242,7 +243,7 @@ func TestWorkloadKeyset_ToCanonicalValue(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// verifyKeyset / VerifyACIKeyset tests
+// verifyKeyset / VerifyKeyset tests
 // ---------------------------------------------------------------------------
 
 // signRecoverable signs keccak256(message) with priv and returns the
@@ -283,9 +284,36 @@ type aciTestFixture struct {
 	rootHex    string
 }
 
-// fixtureNow is a fixed verification time before the fixtures' not_after, so
-// the expiry check passes deterministically.
-var fixtureNow = time.Unix(1_700_000_000, 0)
+// fixtureNow is a fixed verification time about 30 days before the fixtures'
+// not_after (1790265204, the live sample's), so the expiry check and its
+// upper bound pass deterministically.
+var fixtureNow = time.Unix(1_787_700_000, 0)
+
+// The keyset expiry check accepts a not_after up to maxKeysetLifetime after
+// the verification time and rejects a not_after past it, including the value
+// that once meant "never expires" (ACI/1 §3.1).
+func TestKeysetNotExpiredBound(t *testing.T) {
+	limit := fixtureNow.Add(maxKeysetLifetime).Unix()
+	for _, tc := range []struct {
+		name     string
+		notAfter string
+		ok       bool
+		detail   string
+	}{
+		{"at the bound", strconv.FormatInt(limit, 10), true, ""},
+		{"one second past the bound", strconv.FormatInt(limit+1, 10), false, "is more than 365 days after"},
+		{"former never-expires value", "18446744073709551615", false, "is more than 365 days after"},
+		{"at the verification time", strconv.FormatInt(fixtureNow.Unix(), 10), false, "keyset expired"},
+		{"one second after the verification time", strconv.FormatInt(fixtureNow.Unix()+1, 10), true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, detail := keysetNotExpired(tc.notAfter, fixtureNow)
+			if ok != tc.ok || !strings.Contains(detail, tc.detail) {
+				t.Fatalf("keysetNotExpired(%s) = %v %q, want %v with %q", tc.notAfter, ok, detail, tc.ok, tc.detail)
+			}
+		})
+	}
+}
 
 // run verifies the fixture with its own root and app-id allowlists.
 func (fx *aciTestFixture) run() *attestation.ACIKeysetResult {
@@ -496,22 +524,22 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 	})
 }
 
-func TestVerifyACIKeyset_NonACI(t *testing.T) {
+func TestVerifyKeysetRaw_NonACI(t *testing.T) {
 	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatDstack}
-	if result := VerifyACIKeyset(raw, fixtureNow); result != nil {
+	if result := VerifyKeyset(raw, fixtureNow, GatewayPins()); result != nil {
 		t.Error("expected nil for non-ACI/1 format")
 	}
 }
 
-func TestVerifyACIKeyset_MissingStructs(t *testing.T) {
+func TestVerifyKeysetRaw_MissingStructs(t *testing.T) {
 	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatACI1}
-	result := VerifyACIKeyset(raw, fixtureNow)
+	result := VerifyKeyset(raw, fixtureNow, GatewayPins())
 	if result == nil || result.Err == nil {
 		t.Fatalf("expected an error result for a missing keyset, got %+v", result)
 	}
 }
 
-func TestVerifyACIKeyset_HappyPath(t *testing.T) {
+func TestVerifyKeysetRaw_HappyPath(t *testing.T) {
 	fx := keysetFixture(t)
 	raw := &attestation.RawAttestation{
 		BackendFormat:           attestation.FormatACI1,
@@ -526,9 +554,9 @@ func TestVerifyACIKeyset_HappyPath(t *testing.T) {
 
 	// The default allowlist does not contain the test root, so the custody
 	// chain must be rejected...
-	result := VerifyACIKeyset(raw, fixtureNow)
+	result := VerifyKeyset(raw, fixtureNow, GatewayPins())
 	if result == nil || result.Err != nil {
-		t.Fatalf("VerifyACIKeyset: %+v", result)
+		t.Fatalf("VerifyKeyset: %+v", result)
 	}
 	if result.CustodyChainValid {
 		t.Error("CustodyChainValid = true for a root outside the default allowlist")
@@ -544,12 +572,12 @@ func TestVerifyACIKeyset_HappyPath(t *testing.T) {
 	}
 }
 
-// TestVerifyACIKeyset_LiveSample replays the workload keyset, custody chain,
+// TestVerifyKeysetRaw_LiveSample replays the workload keyset, custody chain,
 // and app id captured from a live Venice ACI/1 attestation (2026-08-25,
 // model e2ee-glm-5-2-p) through the full verification, pinning the digest
 // scheme, the custody chain construction, and the default KMS root
 // allowlist against real provider data.
-func TestVerifyACIKeyset_LiveSample(t *testing.T) {
+func TestVerifyKeysetRaw_LiveSample(t *testing.T) {
 	data, err := os.ReadFile("testdata/aci_keyset_live.json")
 	if err != nil {
 		t.Fatal(err)
@@ -572,7 +600,7 @@ func TestVerifyACIKeyset_LiveSample(t *testing.T) {
 	}
 
 	result := verifyKeyset(&fx.WorkloadKeyset, &fx.KeyCustody, fx.WorkloadKeysetDigest,
-		fx.SigningPublicKey, appID, fixtureNow, defaultACIKMSRootAllow, defaultACIGatewayAppIDAllow)
+		fx.SigningPublicKey, appID, fixtureNow, gatewayKMSRootAllow, gatewayAppIDAllow)
 	if result.Err != nil {
 		t.Fatalf("verifyKeyset(live sample): %v", result.Err)
 	}

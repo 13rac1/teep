@@ -120,7 +120,13 @@ are self-asserted, and it is the origin of residual exposure 7.
   proves the E2EE key is the gateway's KMS-issued, hardware-bound key, and
   the expiry check is advisory (it holds against an honest gateway, not
   against one that rewrites `not_after` and recomputes the digest). See
-  residual exposure 7.
+  residual exposure 7. A keyset whose `not_after` is more than 365 days
+  after the verification time fails the check (ACI/1 §3.1).
+- `nonce_match` and `gateway_nonce_match`: a Venice-variant response must
+  echo the client nonce exactly; one without the echo fails. A
+  gateway-variant response echoes no nonce, so both fail; its freshness
+  rests on `gateway_tee_reportdata_binding`, and the GPU evidence nonce on
+  `nvidia_nonce_client_bound`.
 - `gateway_compose_binding` (enforced): the gateway publishes its
   `app_compose` and `sha256(app_compose)` matches the quote's MRConfigID.
   The manifest pins its four images by sha256 digest
@@ -130,14 +136,18 @@ are self-asserted, and it is the origin of residual exposure 7.
 - The relayed NVIDIA evidence: per-GPU cert chains and SPDM signatures
   verify, and the EAT nonce matches the client nonce (fresh, not replayed).
 
-### Failed and waived (`VeniceACIDefaultAllowFail`)
+### Failed and waived (`ACIDefaultAllowFail`)
 
 Every core factor that describes the inference host: the twelve `tee_*`
 factors, `measured_model_weights`, `event_log_integrity`,
 `cpu_id_registry`, and the model-tier supply-chain factors. `cpu_gpu_chain`
 fails because the GPUs cannot be bound to any attested CPU — the only
-attested CPU is the gateway's, and the GPUs are not in it. These render as
-failed-but-allowed so the gap stays visible in every report; removing an
+attested CPU is the gateway's, and the GPUs are not in it.
+`aci_backend_named` fails because no attested evidence binds a backend for
+the requested model: the gateway variant of the response names no model,
+and the Venice variant names one only as the provider's assertion, which the
+detail repeats. These render
+as failed-but-allowed so the gap stays visible in every report; removing an
 entry from the list blocks every ACI/1 model.
 
 ## Detailed Gap Analysis
@@ -172,7 +182,7 @@ openai/gpt-oss-120b); asserted continuously by
    specific attested instance.
 2. **The KMS root and gateway app id are trust-on-first-use.** The accepted
    dstack-KMS root and the accepted gateway app id in
-   `internal/provider/venice/keyset.go` were recovered from live
+   `internal/provider/aci/keyset.go` were recovered from live
    attestations of two models. Whoever controls those lists controls which
    key-releasing authority and which dstack app teep accepts as the gateway.
    Corroborate the KMS root against the dstack KmsAuth registry (Phala
@@ -293,7 +303,7 @@ response changes a model to a weaker format. Addresses residual exposure 3.
 - **dstack examples (ingress image provenance):** https://github.com/Dstack-TEE/dstack-examples
 - **Phala inference API (the downstream hop):** https://api.redpill.ai
 - **Related teep assessment:** [dstack_integrity.md](dstack_integrity.md)
-- **ACI/1 parsing and custody verification:** `internal/provider/venice/aci.go`, `internal/provider/venice/keyset.go`
+- **ACI/1 parsing and custody verification:** `internal/provider/aci/aci.go`, `internal/provider/aci/keyset.go`
 - **Gateway image policy:** `internal/provider/venice/policy.go`
 - **Replay coverage:** `internal/integration/venice_aci_test.go`
 
@@ -311,7 +321,7 @@ which no `allow_fail` entry can suppress.
 **Host evidence:** The twelve core `tee_*` factors,
 `measured_model_weights`, `event_log_integrity`, `cpu_id_registry`,
 `cpu_gpu_chain` and the model-tier supply-chain factors are in
-`VeniceACIDefaultAllowFail`. They render as failed-but-allowed rather than
+`ACIDefaultAllowFail`. They render as failed-but-allowed rather than
 skipped, so every report states the gap. Removing an entry blocks every
 ACI/1 model.
 

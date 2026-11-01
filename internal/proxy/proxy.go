@@ -47,6 +47,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/aci"
 	chutesProvider "github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
@@ -998,7 +999,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		Sigstore:               sc.Sigstore,
 		Rekor:                  sc.Rekor,
 		TinfoilSC:              tinfoilSC,
-		ACIKeyset:              venice.VerifyACIKeyset(raw, time.Time{}),
+		ACIKeyset:              aci.VerifyKeyset(raw, time.Time{}, aci.GatewayPins()),
 		E2EEConfigured:         prov.E2EE,
 		Inapplicable:           inapplicableForProvider(prov.Name),
 		ProviderUsesTLSBinding: prov.UsesTLSBinding,

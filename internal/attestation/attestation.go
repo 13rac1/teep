@@ -196,7 +196,7 @@ type RawAttestation struct {
 	TinfoilRepo string `json:"-"`
 
 	// ACI/1-specific fields — populated by the Venice ACI/1 parser
-	// (internal/provider/venice/aci.go). ACI/1 publishes no manifest for
+	// (internal/provider/aci/aci.go). ACI/1 publishes no manifest for
 	// the machine serving inference; its verifiable provenance is the
 	// gateway app_compose (in GatewayAppCompose) plus a workload keyset
 	// whose keys are connected to a dstack-KMS root by signature chains.
@@ -204,10 +204,13 @@ type RawAttestation struct {
 	ACIWorkloadKeysetDigest string `json:"-"` // top-level workload_keyset_digest
 	ACIDownstreamTLSDomain  string `json:"-"` // attestation.evidence.downstream_tls_binding.domain
 	ACIDownstreamTLSSPKI    string `json:"-"` // attestation.evidence.downstream_tls_binding.spki_sha256
-	// ACIWorkloadKeyset and ACIKeyCustody hold parsed venice ACI structs
-	// (opaque `any` here because concrete types would create an
-	// attestation → venice import cycle; the venice package type-asserts
-	// them back). Nil for non-ACI/1 formats.
+	// ACIGatewayVariant is true for the gateway variant of an ACI/1 response:
+	// it carries all_attestations and defines no echoed nonce or model.
+	ACIGatewayVariant bool `json:"-"`
+	// ACIWorkloadKeyset and ACIKeyCustody hold the parsed ACI/1 structs of
+	// the aci package (opaque `any` here because concrete types would create
+	// an attestation → aci import cycle; aci.VerifyKeyset type-asserts them
+	// back). Nil for non-ACI/1 formats.
 	ACIWorkloadKeyset any `json:"-"`
 	ACIKeyCustody     any `json:"-"`
 

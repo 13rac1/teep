@@ -121,14 +121,14 @@ func allExcept(exclude ...string) []string {
 // BuildReport-level tests (cross-cutting concerns)
 // ---------------------------------------------------------------------------
 
-// TestBuildReportFactorCount ensures exactly 36 factors are produced.
+// TestBuildReportFactorCount ensures exactly 37 factors are produced.
 func TestBuildReportFactorCount(t *testing.T) {
 	nonce := NewNonce()
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
-	if len(report.Factors) != 36 {
-		t.Errorf("factor count: got %d, want 36", len(report.Factors))
+	if len(report.Factors) != 37 {
+		t.Errorf("factor count: got %d, want 37", len(report.Factors))
 	}
 }
 
@@ -202,8 +202,8 @@ func TestBuildReportInapplicableOverride(t *testing.T) {
 
 	// NotApplicable factors must not appear in the score denominator.
 	scoreDenom := report.Passed + report.Failed + report.Skipped
-	if report.NotApplicableCount != 9 {
-		t.Errorf("NotApplicableCount: got %d, want 9", report.NotApplicableCount)
+	if report.NotApplicableCount != 10 {
+		t.Errorf("NotApplicableCount: got %d, want 10", report.NotApplicableCount)
 	}
 	if scoreDenom+report.NotApplicableCount != len(report.Factors) {
 		t.Errorf("score denominator (%d) + N/A (%d) != total factors (%d)",
@@ -2616,15 +2616,15 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 		GatewayNonce:    gatewayNonce,
 	})
 
-	// Base 36 + 15 gateway factors = 51
+	// Base 37 + 15 gateway factors = 52
 	// Gateway factors: gateway_nonce_match, gateway_tee_quote_present,
 	// gateway_tee_quote_structure, gateway_tee_cert_chain, gateway_tee_quote_signature,
 	// gateway_tee_debug_disabled, gateway_tee_measurement, gateway_tee_hardware_config,
 	// gateway_tee_boot_config, gateway_tee_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity,
 	// gateway_tee_tcb_current, gateway_tee_tcb_not_revoked
-	if len(report.Factors) != 51 {
-		t.Errorf("factor count with gateway: got %d, want 51", len(report.Factors))
+	if len(report.Factors) != 52 {
+		t.Errorf("factor count with gateway: got %d, want 52", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}
@@ -5024,7 +5024,7 @@ func TestEvalACIKeyCustody(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // aciGatewayRaw builds a minimal ACI/1 RawAttestation with gateway evidence,
-// as venice.aciToRaw produces it: quote and event log in the Gateway fields,
+// as aci.Parse produces it: quote and event log in the Gateway fields,
 // core quote fields empty, TEEHardware cleared.
 func aciGatewayRaw(nonce Nonce, signingKey string) *RawAttestation {
 	return &RawAttestation{

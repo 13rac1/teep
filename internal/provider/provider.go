@@ -89,7 +89,7 @@ type ReportDataVerifier interface {
 // (SEE: attestation.ReportInput.E2EEKeyBoundByGateway). True for the Tinfoil
 // router (its REPORTDATA binds the HPKE key, SEE: tinfoil.asGatewayEvidence)
 // and for every Venice ACI/1 response (ACI/1 defines signing_public_key as
-// the gateway's endorsed E2EE key, SEE: venice.aciToRaw). Shared by
+// the gateway's endorsed E2EE key, SEE: aci.Parse). Shared by
 // proxy and verify so the two report paths cannot diverge.
 func GatewayBindsE2EEKey(name string, format attestation.BackendFormat) bool {
 	return name == "tinfoil_v3_cloud" || (name == "venice" && format == attestation.FormatACI1)
