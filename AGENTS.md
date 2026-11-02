@@ -76,6 +76,22 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 - Positive-path integration tests MUST use the same factor enforcement as `teep verify` and `teep serve`. Unit and negative-path tests may select an explicit policy only when that policy behavior is itself under test.
 - If you can't make development progress due to a failing factor or other validation, STOP and ask for advice.
 
+### Enforcement and allow_fail
+
+- No provider passes every factor today. A policy that enforces every factor
+  blocks every provider. `allow_fail` lets a provider serve while every factor
+  it fails stays in its report.
+- Enforce a factor when the provider controls it and every instance in its
+  fleet passes it. Allow a factor to fail when its value changes by hardware
+  class or by host, or when the values it needs come from a list the provider
+  does not publish.
+- When a provider cannot pass a factor, allow the factor to fail. Do not pass it
+  on other evidence.
+- A failed allowed factor is a finding. Report it, and record it in the
+  provider's attestation gap document.
+- Change a factor from allowed to enforced in its own pull request. State the
+  live fleet data that shows every instance passes it.
+
 ### Always Ensure Attestation Integrity
 
 - Every forwarded request MUST be covered by a valid authorization from fully verified attestation for its provider, model or route, cryptographic identity, and key epoch.
