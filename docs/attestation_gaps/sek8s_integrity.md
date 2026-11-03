@@ -219,11 +219,11 @@ Teep returns `Fail` for `measured_model_weights` with detail "no model weight ha
 ### Short-term: Pin observed measurements (done)
 
 Sek8s measurement defaults have been captured and coded in `internal/provider/chutes/policy.go`:
-- MRTD, RTMR0, RTMR1, RTMR2 pinned from known-good Chutes deployments
-- MRSEAM allowlist extended for sek8s fleet TDX module versions (1.5.0d, 2.0.06)
+- MRTD, RTMR0, RTMR1, RTMR2 pinned from captured Chutes quotes and from NEAR's reviewed mirror of Chutes' unsigned measurement feed (sek8s 1.3.1, 1.4.0 and 1.4.1; RTMR0 rows for the 8×H200, 8×B200, 8×B300 and 8×RTX PRO 6000 classes)
+- MRSEAM allowlist extended for sek8s fleet TDX module versions (1.5.06, 1.5.28, 1.5.34)
 - Registered in `internal/defaults/defaults.go`
 
-Teep now rejects quotes from VMs running unexpected firmware, kernels, or boot configurations.
+Teep rejects quotes from VMs running unexpected firmware (MRTD) or TDX modules (MRSEAM). The RTMR0-2 checks (`tee_hardware_config`, `tee_boot_config`) are allowed to fail for Chutes by default, so a VM with an unexpected kernel or boot configuration is reported, not refused.
 
 ### Medium-term: Request evidence API enrichment
 

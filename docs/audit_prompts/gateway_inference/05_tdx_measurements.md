@@ -113,9 +113,9 @@ The `tee_hardware_config` / `gateway_tee_hardware_config` (RTMR0) and `tee_boot_
 > - **MRCONFIGID is not used.** Sek8s does not bind compose hashes. The `compose_binding` factor returns `Skip`.
 > - **RTMR3 is not client-verifiable.** No event log is exposed. `event_log_integrity` returns `Skip`.
 > - **REPORTDATA** = `SHA256(nonce_hex + e2e_pubkey_base64)` — binds nonce and ML-KEM-768 public key (no signing_address or tls_fingerprint).
-> - **MRSEAM** includes TDX module versions 1.5.0d and 2.0.06 (in addition to the dstack fleet versions). Enforced via `tee_measurement`.
-> - **MRTD** is a single sek8s-specific OVMF value, distinct from dstack. Enforced via `tee_measurement`.
-> - **RTMR0** corresponds to the sek8s 8×H200 deployment class (fixed VM parameters for determinism).
+> - **MRSEAM** includes TDX module versions 1.5.06, 1.5.28 and 1.5.34 (in addition to the dstack fleet versions). Enforced via `tee_measurement`.
+> - **MRTD** holds the sek8s-specific OVMF values (sek8s 1.3.0, and 1.3.1/1.4.x), distinct from dstack. Enforced via `tee_measurement`.
+> - **RTMR0** is listed per hardware row (8×H200, 8×B200, 8×B300 and 8×RTX PRO 6000 classes; fixed VM parameters for determinism). RTMR0-2 checks are allowed to fail for Chutes by default.
 > - **RTMR1** is deterministic per sek8s image build.
 > - **RTMR2** is deterministic per deployment class kernel command line.
 > - MRSIGNERSEAM, MROWNER, MROWNERCONFIG are expected to be all-zeros.
