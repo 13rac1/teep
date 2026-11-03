@@ -26,12 +26,16 @@ identifiers. -->
 
 ## The Problem
 
-<!-- Plain language. What is missing or broken, why it matters for users and
-customers, what could go wrong. Write for someone who knows what TEE attestation
-is and why it matters, but does not know the specifics of TDX registers, SPDM
-sessions, or dstack event logs.
+<!-- Three plain sentences, in this order:
+  1. Who the attackers are.
+  2. What they can reach (prompts, answers, keys, the choice of machine).
+  3. What a user keeps when the client does every check available today.
 
-Avoid jargon here — save protocol details for Technical Background below.
+Write for someone who knows what TEE attestation is and why it matters, but
+does not know the specifics of TDX registers, SPDM sessions, or dstack event
+logs. No section numbers of a specification and no protocol vocabulary
+(field names, message names, factor names, protocol-specific terms): they
+belong in Technical Background, Detailed Gap Analysis and Remediation.
 
 Write for the product manager responsible for the provider's infrastructure —
 they may have no knowledge of teep or how it works. Describe what is missing
@@ -46,15 +50,25 @@ to do. -->
 
 ## Impact
 
-<!-- Concrete risks. What could an attacker do? What do users lose? What should
-providers worry about? Frame severity clearly.
+<!-- Concrete risks. For each gap, write these four labelled lines first, in
+this order, then at most one sentence of prose:
+
+  - **Who:** the attacker (an operator, a reseller, a man-in-the-middle,
+    a holder of a credential).
+  - **What they do:** the action, in plain words.
+  - **What they get:** what the attacker reads, changes or controls.
+  - **What stops it today:** the control that exists now, or "nothing".
+
+The same language rule as The Problem applies: no section numbers and no
+protocol vocabulary. Frame severity clearly.
 
 Before listing impacts, verify that no compensating controls exist elsewhere in
 the protocol. Check for: signing key rotation schedules, alternative
 authentication, request nonces that prevent replay, independent freshness
 mechanisms, and any other means by which the protocol achieves the same goal
 through a different path. If compensating controls exist, the gap may be a
-best-practice violation rather than a security vulnerability.
+best-practice violation rather than a security vulnerability. The **What
+stops it today** line names the controls that this check finds.
 
 For gaps in the industry-wide hardware or protocol stack where no compensating
 controls currently exist, state this explicitly and frame the unmitigated
@@ -72,6 +86,9 @@ Distinguish security impact from operational impact:
 If the gap is a standards violation but has no identifiable security impact
 beyond best practice, note this explicitly — it may belong in a nitpick
 category rather than a gap report.
+
+Check before you finish: a reader who does not know the protocol can name
+the attacker and what they get from each Impact item.
 
 Examples of good impact framing from existing reports:
 - "A forged quote is cryptographically indistinguishable from a legitimate one"
