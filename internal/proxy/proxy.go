@@ -947,7 +947,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	gatewaySEVResult := s.verifyGatewaySEV(ctx, raw, nonce, prov)
 	gatewayTDXResult, gatewayComposeResult, gatewayPoCResult := s.verifyGatewayTDX(ctx, raw, nonce, prov)
 	nvidiaResult, nvidiaDur := verifyNVIDIA(ctx, raw, nonce, prov.Name)
-	nrasResult, nrasDur := s.verifyNVIDIAOnline(ctx, raw, prov.Name)
+	nrasResult, nrasDur := s.verifyNVIDIAOnline(ctx, raw, nonce, prov.Name)
 	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)
 	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, gatewayComposeResult, prov.SupplyChainPolicy)
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
@@ -1158,8 +1158,14 @@ func verifyNVIDIA(
 				SignatureErr: fmt.Errorf("parse server nonce: %w", err),
 			}, 0
 		}
+		requesterNonce, err := chutesProvider.GPURequesterNonce(nonce, raw.SigningKey)
+		if err != nil {
+			return &attestation.NvidiaVerifyResult{
+				SignatureErr: fmt.Errorf("GPU requester nonce: %w", err),
+			}, 0
+		}
 		start := time.Now()
-		result := attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce)
+		result := attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce, requesterNonce)
 		dur := time.Since(start)
 		slog.DebugContext(ctx, "NVIDIA GPU direct verification complete", "provider", provName, "elapsed", dur)
 		return result, dur
@@ -1171,6 +1177,7 @@ func verifyNVIDIA(
 func (s *Server) verifyNVIDIAOnline(
 	ctx context.Context,
 	raw *attestation.RawAttestation,
+	nonce attestation.Nonce,
 	provName string,
 ) (*attestation.NvidiaVerifyResult, time.Duration) {
 	if s.cfg.Offline {
@@ -1186,7 +1193,11 @@ func (s *Server) verifyNVIDIAOnline(
 	}
 	if len(raw.GPUEvidence) > 0 {
 		slog.DebugContext(ctx, "NVIDIA NRAS verification starting (synthesized EAT)", "provider", provName)
-		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
+		requesterNonce, err := chutesProvider.GPURequesterNonce(nonce, raw.SigningKey)
+		if err != nil {
+			return &attestation.NvidiaVerifyResult{SignatureErr: fmt.Errorf("GPU requester nonce: %w", err)}, 0
+		}
+		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, requesterNonce.Hex())
 		start := time.Now()
 		result := s.nvidiaVerifier.VerifyNRAS(ctx, eatJSON, s.attestClient)
 		dur := time.Since(start)

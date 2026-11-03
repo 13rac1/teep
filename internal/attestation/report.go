@@ -421,8 +421,11 @@ var PhalaCloudDefaultAllowFail = []string{
 // Chutes runs sek8s inside Intel TDX VMs and supports NVIDIA GPU attestation.
 // Core TDX quote integrity (structure, cert chain, signature, debug mode,
 // MRTD/MRSEAM) and REPORTDATA binding are enforced. TDX hardware/boot config
-// and NVIDIA signature/NRAS are allowed to fail because these factors are not
-// yet consistent across the Chutes fleet. Supply-chain and build provenance
+// and NVIDIA NRAS are allowed to fail because these factors are not yet
+// consistent across the Chutes fleet. nvidia_signature is allowed to fail
+// until the operator decides to enforce it; the GPU evidence now verifies on
+// all direct Chutes captures (requester nonce of chutes.GPURequesterNonce).
+// Supply-chain and build provenance
 // factors remain allowed-to-fail until the sek8s platform exposes the
 // necessary evidence.
 var ChutesDefaultAllowFail = []string{

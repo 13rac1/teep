@@ -349,14 +349,15 @@ func verifySPDMEvidence(ctx context.Context, evidence []byte, expectedNonce Nonc
 
 // VerifyNVIDIAGPUDirect verifies per-GPU SPDM evidence directly, without an
 // EAT envelope. Used by chutes-format providers that return individual GPU
-// evidence entries. The serverNonce is the nonce from the attestation response
-// (typically server-generated); it must match the SPDM requester nonce embedded
-// in each GPU's evidence.
-func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, serverNonce Nonce) *NvidiaVerifyResult {
+// evidence entries. nonce is the nonce of the attestation, which the result
+// reports. requesterNonce must match the SPDM requester nonce embedded in each
+// GPU's evidence; the provider derives it from nonce (SEE:
+// chutes.GPURequesterNonce).
+func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, nonce, requesterNonce Nonce) *NvidiaVerifyResult {
 	result := &NvidiaVerifyResult{
 		Format:   "SPDM",
 		GPUCount: len(evidence),
-		Nonce:    serverNonce.Hex(),
+		Nonce:    nonce.Hex(),
 	}
 
 	if len(evidence) == 0 {
@@ -369,7 +370,7 @@ func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, serverNo
 	slog.DebugContext(ctx, "NVIDIA GPU direct verification starting",
 		"gpu_count", len(evidence),
 		"arch", result.Arch,
-		"nonce_prefix", serverNonce.HexPrefix(),
+		"nonce_prefix", requesterNonce.HexPrefix(),
 	)
 
 	rootCA, err := loadPinnedNVIDIARootCA()
@@ -384,7 +385,7 @@ func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, serverNo
 			Certificate: ev.Certificate,
 			Evidence:    ev.Evidence,
 		}
-		err := verifyGPUEvidence(ctx, internal, serverNonce, rootCA)
+		err := verifyGPUEvidence(ctx, internal, requesterNonce, rootCA)
 		if err != nil {
 			result.SignatureErr = fmt.Errorf("GPU %d verification failed: %w", i, err)
 			return result

@@ -82,7 +82,7 @@ There is no E2EE and no explicit REPORTDATA binding for the TLS key — channel 
 Chutes runs multiple confidential compute instances per model. The proxy uses a two-step protocol:
 
 1. **Discovery**: `GET /e2e/instances/{chute}` returns a list of available instances, each with an ML-KEM-768 public key and a one-time nonce.
-2. **Evidence**: `GET /chutes/{chute}/evidence?nonce={hex}` returns the TDX quote and optional GPU evidence for the selected instance.
+2. **Evidence**: `GET /chutes/{chute}/evidence?nonce={hex}` returns the TDX quote and optional GPU evidence for the selected instance. The GPU evidence answers the SPDM requester nonce `sha256(nonce_hex + e2e_pubkey_base64)` over the client nonce, the value that REPORTDATA binds.
 3. Verifies the TDX quote and REPORTDATA binding: `sha256(nonce_hex + e2e_pubkey_base64)` is placed in REPORTDATA.
 4. Performs ML-KEM-768 key encapsulation to derive a shared secret.
 5. Encrypts the request body with ChaCha20-Poly1305.

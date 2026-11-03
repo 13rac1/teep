@@ -80,7 +80,11 @@ func TestIntegration_Chutes_Fixture(t *testing.T) {
 		if parseErr != nil {
 			t.Fatalf("parse GPU verification nonce: %v", parseErr)
 		}
-		nvidiaResult = attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce)
+		requesterNonce, nonceErr := chutes.GPURequesterNonce(env.nonce, raw.SigningKey)
+		if nonceErr != nil {
+			t.Fatalf("GPU requester nonce: %v", nonceErr)
+		}
+		nvidiaResult = attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce, requesterNonce)
 		t.Logf("NVIDIA GPU direct: format=%s sig_err=%v claims_err=%v", nvidiaResult.Format, nvidiaResult.SignatureErr, nvidiaResult.ClaimsErr)
 	}
 
@@ -94,7 +98,11 @@ func TestIntegration_Chutes_Fixture(t *testing.T) {
 		t.Logf("NRAS: format=%s sig_err=%v claims_err=%v result=%v",
 			nrasResult.Format, nrasResult.SignatureErr, nrasResult.ClaimsErr, nrasResult.OverallResult)
 	} else if len(raw.GPUEvidence) > 0 {
-		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, raw.Nonce)
+		requesterNonce, nonceErr := chutes.GPURequesterNonce(env.nonce, raw.SigningKey)
+		if nonceErr != nil {
+			t.Fatalf("GPU requester nonce: %v", nonceErr)
+		}
+		eatJSON := attestation.GPUEvidenceToEAT(raw.GPUEvidence, requesterNonce.Hex())
 		nrasResult = attestation.DefaultNVIDIAVerifier().VerifyNRAS(ctx, eatJSON, env.client,
 			jwt.WithTimeFunc(func() time.Time { return env.manifest.CapturedAt }),
 			jwt.WithLeeway(10*time.Second),
@@ -146,6 +154,7 @@ func assertChutesReport(t *testing.T, report *attestation.VerificationReport) {
 		"signing_key_present",
 		"tee_reportdata_binding",
 		"nvidia_payload_present",
+		"nvidia_signature",
 		"nvidia_claims",
 		"nvidia_nonce_client_bound",
 		"e2ee_capable",

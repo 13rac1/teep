@@ -919,7 +919,7 @@ func TestVerifyNVIDIAOnline_Offline(t *testing.T) {
 	s := newMinimalServer()
 	s.cfg.Offline = true
 	raw := &attestation.RawAttestation{NvidiaPayload: `{"test": true}`}
-	result, dur := s.verifyNVIDIAOnline(context.Background(), raw, "test-provider")
+	result, dur := s.verifyNVIDIAOnline(context.Background(), raw, attestation.NewNonce(), "test-provider")
 	t.Logf("verifyNVIDIAOnline(offline): result=%v dur=%v", result, dur)
 	if result != nil {
 		t.Error("expected nil result in offline mode")
@@ -934,7 +934,7 @@ func TestVerifyNVIDIAOnline_Empty(t *testing.T) {
 	s.nvidiaVerifier = attestation.NewNVIDIAVerifier("http://nras.example.com", "http://jwks.example.com")
 	s.attestClient = http.DefaultClient
 	raw := &attestation.RawAttestation{} // no payload, no GPUEvidence
-	result, dur := s.verifyNVIDIAOnline(context.Background(), raw, "test-provider")
+	result, dur := s.verifyNVIDIAOnline(context.Background(), raw, attestation.NewNonce(), "test-provider")
 	t.Logf("verifyNVIDIAOnline(empty): result=%v dur=%v", result, dur)
 	if result != nil {
 		t.Error("expected nil result for empty raw")
@@ -955,7 +955,7 @@ func TestVerifyNVIDIAOnline_JSONPayload(t *testing.T) {
 	s.nvidiaVerifier = attestation.NewNVIDIAVerifier(srv.URL, srv.URL)
 	s.attestClient = srv.Client()
 	raw := &attestation.RawAttestation{NvidiaPayload: `{"test": true}`}
-	result, _ := s.verifyNVIDIAOnline(context.Background(), raw, "test-provider")
+	result, _ := s.verifyNVIDIAOnline(context.Background(), raw, attestation.NewNonce(), "test-provider")
 	t.Logf("verifyNVIDIAOnline(JSON payload): result=%v", result)
 	if result == nil {
 		t.Error("expected non-nil result when JSON payload is set")
@@ -976,7 +976,7 @@ func TestVerifyNVIDIAOnline_GPUEvidence(t *testing.T) {
 		GPUEvidence: []attestation.GPUEvidence{{Certificate: "cert", Evidence: "ev", Arch: "HOPPER"}},
 		Nonce:       strings.Repeat("aa", 32),
 	}
-	result, _ := s.verifyNVIDIAOnline(context.Background(), raw, "test-provider")
+	result, _ := s.verifyNVIDIAOnline(context.Background(), raw, attestation.NewNonce(), "test-provider")
 	t.Logf("verifyNVIDIAOnline(GPUEvidence): result=%v", result)
 	if result == nil {
 		t.Error("expected non-nil result when GPUEvidence is set")

@@ -10,6 +10,19 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 )
 
+// GPURequesterNonce returns the SPDM requester nonce that the GPU evidence of
+// a Chutes attestation must answer: SHA256(nonce_hex + e2e_pubkey_base64),
+// the value that REPORTDATA[0:32] binds. nonce is the client's nonce, never
+// the nonce that a response states (raw.Nonce is server-controlled in the
+// chutes format that gateways relay). Evidence that answers this value is
+// bound to the client nonce and the instance's ML-KEM-768 key.
+func GPURequesterNonce(nonce attestation.Nonce, e2ePubKey string) (attestation.Nonce, error) {
+	if e2ePubKey == "" {
+		return attestation.Nonce{}, errors.New("e2e_pubkey absent from attestation response")
+	}
+	return sha256.Sum256([]byte(nonce.Hex() + e2ePubKey)), nil
+}
+
 // ReportDataVerifier validates the Chutes REPORTDATA binding scheme:
 //
 //	[0:32] = SHA256(nonce_hex_string + e2e_pubkey_base64_string)
