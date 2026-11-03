@@ -357,7 +357,6 @@ func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, nonce, r
 	result := &NvidiaVerifyResult{
 		Format:   "SPDM",
 		GPUCount: len(evidence),
-		Nonce:    nonce.Hex(),
 	}
 
 	if len(evidence) == 0 {
@@ -392,6 +391,9 @@ func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, nonce, r
 		}
 	}
 
+	// The nonce is reported only for evidence whose every GPU verified: the
+	// nonce binding rests on the verified SPDM evidence.
+	result.Nonce = nonce.Hex()
 	slog.DebugContext(ctx, "NVIDIA GPU direct verification complete",
 		"gpu_count", len(evidence),
 		"arch", result.Arch,

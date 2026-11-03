@@ -1647,6 +1647,10 @@ func evalNvidiaClientNonceBound(in *ReportInput) []FactorResult {
 		}
 		return factor(TierBinding, FactorNvidiaClientNonce, Skip, "NVIDIA verification not attempted")
 	}
+	if in.Nvidia.SignatureErr != nil {
+		return factor(TierBinding, FactorNvidiaClientNonce, Fail,
+			"the NVIDIA evidence did not verify, so it proves no nonce binding")
+	}
 	if in.Nvidia.Nonce == "" {
 		return factor(TierBinding, FactorNvidiaClientNonce, Skip, "nonce field not found in NVIDIA payload")
 	}
@@ -3492,6 +3496,8 @@ func nvidiaSignatureDetail(r *NvidiaVerifyResult) string {
 		return fmt.Sprintf("EAT: %d GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: %s)", r.GPUCount, r.Arch)
 	case "JWT":
 		return fmt.Sprintf("JWT signature valid (%s)", r.Algorithm)
+	case "SPDM":
+		return fmt.Sprintf("SPDM: %d GPU cert chains and ECDSA P-384 signatures verified (arch: %s)", r.GPUCount, r.Arch)
 	default:
 		return "signature valid"
 	}
@@ -3514,6 +3520,8 @@ func nvidiaClientNonceDetail(r *NvidiaVerifyResult) string {
 	switch r.Format {
 	case "EAT":
 		return fmt.Sprintf("EAT nonce matches client nonce (%d GPUs)", r.GPUCount)
+	case "SPDM":
+		return fmt.Sprintf("SPDM evidence of %d GPUs answers the requester nonce derived from the client nonce and the instance key", r.GPUCount)
 	default:
 		return "NVIDIA nonce matches client nonce"
 	}

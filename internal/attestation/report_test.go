@@ -1420,6 +1420,25 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Skip)
 	})
 
+	// Evidence that did not verify proves no nonce binding, also when it
+	// states the client nonce.
+	t.Run("fail_unverified_evidence", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.GPUEvidence = []GPUEvidence{{Arch: "HOPPER"}}
+		nv := &NvidiaVerifyResult{Format: "SPDM", GPUCount: 1, Nonce: nonce.Hex(), SignatureErr: errors.New("requester nonce mismatch")}
+		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Fail)
+	})
+
+	t.Run("pass_spdm", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.GPUEvidence = []GPUEvidence{{Arch: "HOPPER"}}
+		nv := &NvidiaVerifyResult{Format: "SPDM", GPUCount: 8, Nonce: nonce.Hex()}
+		f := assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
+		if want := "SPDM evidence of 8 GPUs"; !strings.Contains(f.Detail, want) {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+	})
+
 	t.Run("pass_non_eat_format", func(t *testing.T) {
 		// Cover nvidiaClientNonceDetail default branch (non-EAT format).
 		raw := buildMinimalRaw(nonce, sigKey)
@@ -1821,6 +1840,11 @@ func TestNvidiaSignatureDetail(t *testing.T) {
 			"JWT format",
 			&NvidiaVerifyResult{Format: "JWT", Algorithm: "ES384"},
 			"JWT signature valid (ES384)",
+		},
+		{
+			"SPDM format",
+			&NvidiaVerifyResult{Format: "SPDM", GPUCount: 8, Arch: "BLACKWELL"},
+			"SPDM: 8 GPU cert chains and ECDSA P-384 signatures verified (arch: BLACKWELL)",
 		},
 		{
 			"unknown format",
