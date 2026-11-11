@@ -49,7 +49,7 @@ Tier 3: Supply Chain & Channel Integrity
   ✓ component_signature_recognition   9 component signature policy match(es)  [ENFORCED]
   ✗ cpu_id_registry                   hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
   ✓ compose_binding                   sha256(app_compose) matches MRConfigID  [ENFORCED]
-  ✓ sigstore_verification             9 component digest(s) found in Sigstore transparency log; 1 not Sigstore-signed (compose-pinned)  [ENFORCED]
+  ✓ sigstore_verification             9 component digest(s) found in Sigstore transparency log; 1 not Sigstore-signed (compose-pinned)  [ALLOWED]
   — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
   ✓ event_log_integrity               event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
 

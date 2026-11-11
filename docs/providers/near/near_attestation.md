@@ -64,6 +64,70 @@ files, `TestNearSignedModelKeySubstitution`, and the provider signed-evidence
 fixture suites. Transport requirements remain in the
 [shared transport reference](../../transport/README.md).
 
+## Supply chain: image index and platform manifest
+
+NEAR's supply-chain policy (`internal/provider/neardirect/policy.go`)
+requires that `nearaidev/compose-manager-launcher` has a Sigstore
+attestation from the `build.yml` or `promote.yml` workflow of
+`nearai/compose-manager` on `refs/heads/master`. `sigstore_verification`
+looks up each image digest of the measured compose in Rekor.
+
+A multi-platform image has two kinds of digest. The image index lists one
+platform manifest per platform; the build workflow signs the index digest,
+and Rekor indexes the attestation under that digest. A compose can pin
+either digest. Teep finds a Rekor entry only for the digest that the
+attestation names, and Rekor has no lookup from a platform manifest to the
+index that lists it.
+
+Example, checked on 2026-11-11:
+
+- `nearaidev/compose-manager-launcher@sha256:91fdff3cfa3543d72656b2368c7d8a0a83d95a0f1087378c897aa1537acdba56`
+  is an OCI image index (Docker Hub). Its `linux/amd64` manifest is
+  `sha256:079a14b41deb11e0e27f9b69648e8b3d89bd6fb9ccf6071643b8f447fa415085`.
+- Rekor has two entries for the index digest. One of them is a DSSE
+  attestation signed by
+  `https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master`
+  in [workflow run 28089759418](https://github.com/nearai/compose-manager/actions/runs/28089759418)
+  of 2026-06-24. Rekor has no entry for the manifest digest.
+- The NEAR composes of the DeepSeek-V4.1-Flash-1017 models pin the manifest
+  digest, both on NearDirect and in the model attestation of NearCloud
+  (GitHub issue #189).
+
+The index, its manifest, and the Rekor entries of each digest:
+
+```sh
+crane manifest nearaidev/compose-manager-launcher@sha256:91fdff3cfa3543d72656b2368c7d8a0a83d95a0f1087378c897aa1537acdba56
+curl -s -H 'Content-Type: application/json' \
+  -d '{"hash":"sha256:91fdff3cfa3543d72656b2368c7d8a0a83d95a0f1087378c897aa1537acdba56"}' \
+  https://rekor.sigstore.dev/api/v1/index/retrieve
+curl -s -H 'Content-Type: application/json' \
+  -d '{"hash":"sha256:079a14b41deb11e0e27f9b69648e8b3d89bd6fb9ccf6071643b8f447fa415085"}' \
+  https://rekor.sigstore.dev/api/v1/index/retrieve
+```
+
+To find the Rekor entry for a pinned manifest digest, teep would have to
+resolve the manifest to its index. The steps:
+
+1. List the candidate indexes of the image from the registry (its tags).
+2. Fetch each candidate index by digest and check that its bytes hash to
+   that digest, so that the registry needs no trust.
+3. Accept an index only if it lists the exact pinned manifest digest for
+   the platform of the measured compose.
+4. Look up the index digest in Rekor and verify its attestation against
+   the pinned workflow identity, as today.
+
+The chain stays bound to the measured compose: compose → manifest digest →
+index bytes (hash-checked) → signed index. Teep does not do this today. It
+would add registry requests for each new manifest digest; their count
+depends on the number of tags of the image.
+
+Until teep resolves the chain or NEAR pins the index digest,
+`sigstore_verification` is in `NeardirectDefaultAllowFail` and
+`NearcloudDefaultAllowFail`: teep reports the failure, and it does not block
+requests. `build_transparency_log`, `compose_binding` and
+`event_log_integrity` stay enforced. The gap is recorded in
+[dstack integrity](../../attestation_gaps/dstack_integrity.md#image-digests-index-and-platform-manifest).
+
 ## NearDirect backend selection
 
 Each provider instance establishes one route per model. For the default NEAR

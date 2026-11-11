@@ -199,6 +199,10 @@ RTMR3 is computed by the dstack runtime from the compose hash, instance ID, key 
 
 The core of the gap is `RTMR0` and `RTMR2`: these registers vary per deployment class and cannot be derived without hardware configuration details that providers do not publish. `MRSEAM`, `MRTD`, and `RTMR1` can be pinned from public sources today, though the process is manual and fragile across version changes.
 
+### Image digests: index and platform manifest
+
+Sigstore authenticates a compose image only through the digest that its attestation names. NEAR's build workflow for `nearaidev/compose-manager-launcher` signs the image index digest, and NEAR's composes for the DeepSeek-V4.1-Flash-1017 models pin the `linux/amd64` platform manifest digest that the index lists (GitHub issue #189). Rekor has no entry for the manifest digest and no lookup from a manifest to its index, so `sigstore_verification` fails for these composes although a signed index exists. See [NEAR supply chain](../providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest) for the digests, the Rekor entries and the steps that would resolve the chain.
+
 ---
 
 ## Remediation
@@ -326,7 +330,7 @@ When a provider supplies a quote, event log, and compose manifest, teep performs
 - enforce `RTMR0`–`RTMR2` allowlists when configured (pinnable from observed reports via `--update-config`)
 - verify `MRCONFIGID` against the published compose manifest
 - replay the event log and check `RTMR3` consistency
-- inspect compose-listed images and apply repository allowlists and supply-chain signature checks via Sigstore and Rekor
+- inspect compose-listed images and apply repository allowlists and supply-chain signature checks via Sigstore and Rekor; for NEAR, `sigstore_verification` is allowed to fail while the composes pin a platform manifest digest (see [Image digests](#image-digests-index-and-platform-manifest))
 
 This provides meaningful coverage of both the boot chain and the application layer. The limitation is not in teep's enforcement capability but in the **discovery and maintenance** of the values it enforces.
 

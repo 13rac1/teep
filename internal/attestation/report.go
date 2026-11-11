@@ -348,6 +348,14 @@ var NearcloudDefaultAllowFail = []string{
 	FactorComponentRecognition,
 	FactorCPUIDRegistry,
 	FactorResponseSchema,
+	// NEAR's measured composes pin the platform manifest digest of
+	// nearaidev/compose-manager-launcher, while the Sigstore attestation
+	// that its build workflow logs in Rekor names the image index digest.
+	// Rekor cannot be searched by the manifest digest, so the check finds
+	// no entry. The failure is reported, not blocking, until teep resolves
+	// a manifest to its signed index or NEAR pins the index digest.
+	// SEE: docs/providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest
+	FactorSigstoreVerify,
 	// Gateway factors.
 	FactorGWHardwareConfig,
 	FactorGWBootConfig,
@@ -366,6 +374,14 @@ var NeardirectDefaultAllowFail = []string{
 	FactorComponentRecognition,
 	FactorCPUIDRegistry,
 	FactorResponseSchema,
+	// NEAR's measured composes pin the platform manifest digest of
+	// nearaidev/compose-manager-launcher, while the Sigstore attestation
+	// that its build workflow logs in Rekor names the image index digest.
+	// Rekor cannot be searched by the manifest digest, so the check finds
+	// no entry. The failure is reported, not blocking, until teep resolves
+	// a manifest to its signed index or NEAR pins the index digest.
+	// SEE: docs/providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest
+	FactorSigstoreVerify,
 }
 
 // NanoGPTDefaultAllowFail is the nanogpt-specific default allow_fail list.
