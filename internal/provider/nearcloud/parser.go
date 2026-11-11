@@ -39,7 +39,7 @@ type gatewayAttestation struct {
 	EventLog           nearparse.EncodedEventLog `json:"event_log"`
 	TLSCertFingerprint string                    `json:"tls_cert_fingerprint"`
 	ReportData         string                    `json:"report_data"`
-	VPC                gatewayVPC                `json:"vpc"`
+	VPC                *gatewayVPC               `json:"vpc,omitempty"`
 	Info               nearparse.DecodedInfo     `json:"info"`
 	unknown            []string
 }
@@ -53,12 +53,16 @@ func (g *gatewayAttestation) UnmarshalJSON(data []byte) error {
 	}
 	unknown = append(unknown, out.Info.UnknownFields("nearcloud.gateway_attestation")...)
 	unknown = append(unknown, out.EventLog.Log.UnknownFields("nearcloud.gateway_attestation.event_log")...)
-	unknown = append(unknown, out.VPC.unknown...)
+	if out.VPC != nil {
+		unknown = append(unknown, out.VPC.unknown...)
+	}
 	out.unknown = unknown
 	*g = gatewayAttestation(out)
 	return nil
 }
 
+// gatewayVPC is optional: a gateway response can omit it. Teep decodes it
+// when present and does not use its values in a factor or in the report.
 type gatewayVPC struct {
 	ServerAppID string `json:"vpc_server_app_id"`
 	Hostname    string `json:"vpc_hostname"`
