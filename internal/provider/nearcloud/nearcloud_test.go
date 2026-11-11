@@ -187,19 +187,6 @@ func TestParseGatewayResponse_MalformedTCBInfo(t *testing.T) {
 	}
 }
 
-func TestParseGatewayResponse_NoModel(t *testing.T) {
-	body := []byte(minimalGatewayJSON("model-a", "abc", "fp"))
-
-	_, _, err := nearcloud.ParseGatewayResponse(context.Background(), body, "model-b")
-	t.Logf("error: %v", err)
-	if err == nil {
-		t.Fatal("expected error for missing model")
-	}
-	if !strings.Contains(err.Error(), "requested model") {
-		t.Errorf("error should mention requested model: %v", err)
-	}
-}
-
 func TestExtractGatewayAppCompose(t *testing.T) {
 	tests := []struct {
 		name    string

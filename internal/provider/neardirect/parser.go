@@ -52,8 +52,9 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 	}
 	flat := nearparse.Model{Fields: envelope.ModelFields}
 	repeated := envelope.AllAttestations[0]
-	if model == "" || flat.Fields.ModelName != model || repeated.Fields.ModelName != model {
-		return nil, errors.New("neardirect: attestation does not match requested model")
+	match, err := nearparse.MatchModelName(model, flat.Fields.ModelName)
+	if err != nil {
+		return nil, fmt.Errorf("neardirect: %w", err)
 	}
 	if !flat.Equal(&repeated) {
 		return nil, errors.New("neardirect: repeated attestation reports disagree")
@@ -67,6 +68,7 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 	}
 	raw := flat.Raw(body)
 	raw.Verified, raw.UnknownFields = envelope.Verified, unknown
+	raw.ModelNameMatch = string(match)
 	return raw, nil
 }
 

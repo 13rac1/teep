@@ -8,8 +8,19 @@ select a valid subset of a malformed response.
 
 | Provider | Required envelope |
 | --- | --- |
-| NearDirect | A complete flat model report and `all_attestations` containing exactly one copy of that report. Both reports must identify the requested model and agree in every supported field. |
-| NearCloud | `gateway_attestation` and a nonempty `model_attestations` array containing exactly one requested-model entry. Every entry must be structurally valid, and model names must be unique. Flat model fields and `all_attestations` are forbidden. |
+| NearDirect | A complete flat model report and `all_attestations` containing exactly one copy of that report. Both reports must name a model and agree in every supported field. |
+| NearCloud | `gateway_attestation` and a nonempty `model_attestations` array. Every entry must be structurally valid, and model names must be unique. Teep selects the entry with the requested name; else the one entry whose name contains, or is contained in, the requested name; else the only entry of the array. Any other array fails. Flat model fields and `all_attestations` are forbidden. |
+
+The attested model name is the provider's assertion. Teep verifies model
+identity only through `measured_model_weights`, which NEAR does not
+provide. A name that differs from the requested model does not fail
+verification:
+
+- When one name contains the other (for example `z-ai/glm-5.3-flash` for
+  `z-ai/glm-5.3-flash-long`), teep logs both names at info level.
+- When neither name contains the other, teep logs both names at warn level.
+- In both cases the report names the attested model under its header, and
+  states whether one name contains the other.
 
 The shared fetch and parser response limit is 1 MiB. Model arrays are limited to 256 entries; each event
 log and compose-manager action array is limited to 10,000 entries. Missing

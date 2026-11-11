@@ -134,6 +134,7 @@ func fetchAttestationForRoute(ctx context.Context, a *Attester, route provider.R
 	if err != nil {
 		return nil, err
 	}
+	attestation.LogModelNameMatch(ctx, "neardirect", model, raw)
 	if err := tlsct.CompareSPKIFingerprints(peerSPKI, raw.TLSFingerprint); err != nil {
 		return nil, fmt.Errorf("nearai: attestation TLS binding: %w", err)
 	}

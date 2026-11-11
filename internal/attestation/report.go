@@ -133,6 +133,12 @@ type FactorResult struct {
 // VerificationReport holds the factor-by-factor results of an attestation
 // verification run. Produced by BuildReport.
 type VerificationReport struct {
+	// AttestedModel is the model name that the report attests, set only
+	// when it is not the requested Model; AttestedModelMatch is "contains"
+	// or "differs" (SEE: RawAttestation.ModelNameMatch).
+	AttestedModel      string `json:"attested_model,omitempty"`
+	AttestedModelMatch string `json:"attested_model_match,omitempty"`
+
 	Title              string            `json:"title,omitempty"` // header label; defaults to "Attestation Report"
 	Provider           string            `json:"provider"`
 	Model              string            `json:"model"`
@@ -986,12 +992,18 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	}
 
 	tlsKeyFP, tlsAuthority := "", ""
+	attestedModel, attestedMatch := "", ""
 	if in.Raw != nil {
 		tlsKeyFP = in.Raw.TransportTLSFingerprint
 		tlsAuthority = in.Raw.TransportTLSAuthority
+		if in.Raw.ModelNameMatch != "" {
+			attestedModel, attestedMatch = in.Raw.Model, in.Raw.ModelNameMatch
+		}
 	}
 
 	return &VerificationReport{
+		AttestedModel:      attestedModel,
+		AttestedModelMatch: attestedMatch,
 		Provider:           in.Provider,
 		Model:              in.Model,
 		Timestamp:          time.Now(),
