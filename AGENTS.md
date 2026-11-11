@@ -50,6 +50,7 @@ This repository is managed by Git and hosted on GitHub.
 - Ensure major features have integration test coverage upon plan completion.
   - Run `make integration` and `make reports` when finishing a plan or any major change.
 - Do not mention audit identifiers in code or commit messages.
+- A pull request body follows [the pull request template](.github/PULL_REQUEST_TEMPLATE.md): Problem, Change, Effect and To verify, and a Point of discussion only for a design question that the reviewer must decide.
 
 ## Repository Rules
 
