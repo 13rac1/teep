@@ -18,6 +18,11 @@ equivalent escaped names), and invalid field types are errors. These structural
 errors cannot be permitted through `response_schema` allowances. Compose-manager
 service arrays also reject null elements.
 
+The NearCloud `gateway_attestation.vpc` object is optional. When it is
+present, its members are required and its unknown members are returned like
+other unknown fields. Teep does not use its values in a factor or in the
+report.
+
 Typed nested decoders validate model reports, info, TCB information, event
 entries, gateway evidence, and supported auxiliary objects before assigning
 the decoded values. TCB information accepts an object or one JSON-string
