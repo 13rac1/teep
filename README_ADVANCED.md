@@ -186,10 +186,10 @@ Each factor produces PASS, FAIL, or SKIP. Factors marked `[ENFORCED]` cause the 
 | 25 | `cpu_gpu_chain` | CPU (TDX) and GPU (NVIDIA) attestations are cryptographically bound. Without this, attestations could come from different machines. |
 | 26 | `nvswitch_binding` | NVSwitch fabric evidence hash verified in REPORTDATA. On multi-GPU NVLink nodes, authenticates the inter-GPU communication fabric. Skips when topology does not use NVSwitch. |
 | 27 | `measured_model_weights` | Attestation includes hashes of model weight files. Without this, a compromised provider could load a backdoored model. |
-| 28 | `build_transparency_log` | Runtime measurements match an immutable transparency log. Proves the running code matches an audited source revision. |
+| 28 | `build_transparency_log` | Evaluates applicable component provenance and transparency evidence under provider policy. Does not by itself establish a source audit. |
 | 29 | `cpu_id_registry` | CPU PPID verified against the Proof of Cloud registry — a vendor-neutral, append-only log of hardware identities verified by alliance members. Uses threshold multisig across Secret Labs, Nillion, and iEx.ec. |
 | 30 | `compose_binding` | `sha256(app_compose)` matches TDX MRConfigID (encoded as `0x01 + sha256`). Binds the docker-compose deployment manifest to hardware attestation. |
-| 31 | `sigstore_verification` | Container image sha256 digests from docker-compose found in Sigstore transparency log. Proves verifiable CI/CD provenance. |
+| 31 | `sigstore_verification` | Checks component digest lookup results under provider policy, including explicit compose-only exceptions. A passing aggregate does not mean every image has a verified signature. |
 | 32 | `sigstore_code_verified` | Tinfoil-specific: Sigstore DSSE bundle code measurements match live enclave's SEV-SNP MEASUREMENT or TDX RTMRs. Skipped for non-Tinfoil providers. |
 | 33 | `event_log_integrity` | TDX event log replayed: `RTMR_new = SHA384(RTMR_old ‖ digest)` starting from 48 zero bytes. All 4 replayed RTMRs match quote. Proves the log is authentic and complete. |
 
@@ -219,6 +219,65 @@ exposes none, and the core `tee_*` factors state that.
 | 46 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match the gateway TDX quote. |
 | 47 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP; TDX defers to Intel PCS collateral). |
 | 48 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP; TDX defers to Intel PCS collateral). |
+
+## Supply-chain evidence and policy
+
+Supply-chain checks establish different properties. An allowed repository name
+identifies a permitted component; it does not authenticate an image. For dstack
+compose evidence, [compose binding](internal/attestation/compose.go) compares the
+quote's MRCONFIGID prefix with the version byte and SHA-256 of the original
+`app_compose` bytes. This binds the manifest to the attested environment. A digest
+in that manifest identifies image bytes; a mutable tag alone does not. Neither
+form of compose binding establishes a publisher signature or a source audit.
+
+The [component policy and evaluators](internal/attestation/report.go) distinguish:
+
+- `ComposeBindingOnly`: no Sigstore provenance is required for that component.
+  Digest-pinned compose evidence supplies the image reference; tag-only manifests
+  provide a weaker configuration binding. Do not interpret this policy as image
+  signature verification.
+- `SigstorePresent`: evaluate transparency evidence, including Rekor signed-entry
+  timestamps and inclusion proofs in the provenance path. A configured signing-key
+  fingerprint adds an identity constraint; this category does not imply the same
+  workflow/source identity checks as `FulcioSigned`.
+- `FulcioSigned`: check Fulcio certificate presence, configured OIDC issuer and
+  workflow identity, and allowed source repository, together with the applicable
+  transparency checks. Some policy entries explicitly set `NoDSSE`, which omits
+  the DSSE signature-error check. Such entries must not be described as providing
+  that additional signature guarantee.
+
+Repository recognition, signer recognition, transparency, and attested measurement
+matching have separate outcomes. Read factor details and effective policy together:
+a pass with compose-only exceptions is not a claim that every component is signed,
+and an allowed failure remains a failure. Current factor defaults and recognition
+rules live in [the attestation implementation](internal/attestation/report.go) and
+[provider defaults](internal/defaults/defaults.go); avoid treating a copied list of
+factor names as the policy specification.
+
+Provider evidence determines the scope of these checks:
+
+| Provider | Supply-chain scope and implementation |
+| --- | --- |
+| NearDirect | Model-tier compose and component policy. See [policy](internal/provider/neardirect/policy.go) and [NEAR reference](docs/providers/near/near_attestation.md). |
+| NearCloud | Extends the model policy with gateway components. Model and gateway compose bindings remain separate even when digest retrievals are shared. See [policy](internal/provider/nearcloud/policy.go) and [NEAR reference](docs/providers/near/near_attestation.md). |
+| Venice | Includes the NEAR model-tier policy for dstack evidence and compose-only gateway components for ACI/1. ACI/1 gateway evidence does not establish model-host software identity. See [policy](internal/provider/venice/policy.go) and [ACI/1 trust boundaries](docs/attestation_gaps/venice_aci_gateway.md). |
+| Tinfoil | Signed release evidence and measurement matching use the Tinfoil pathway. Cloud authenticates the router; direct authenticates the selected model enclave. See [policy](internal/provider/tinfoil/policy.go) and [Tinfoil reference](docs/providers/tinfoil/tinfoil_support.md). |
+| NanoGPT | Component policy uses `ComposeBindingOnly`; tag-based references do not establish immutable image identity. See [policy](internal/provider/nanogpt/policy.go). |
+| Chutes | Uses an explicit no-supply-chain-surface policy; validator-side cosign/IMA is not client-verified image provenance. See [sek8s evidence limitations](docs/attestation_gaps/sek8s_integrity.md). |
+| PhalaCloud | Uses an explicit no-supply-chain-surface policy; this is not evidence that upstream software provenance passed. See [provider construction](internal/proxy/proxy.go). |
+
+Provider construction requires a real policy or the explicit
+`NoSupplyChainPolicy()` sentinel. A missing policy is not interchangeable with that
+sentinel. Measurement allowlists are a separate trust input; see
+[measurement policy and provenance](docs/measurement_allowlists.md).
+
+These checks supply admission results. Their reuse follows the
+[transport authorization contract](docs/transport/README.md), which separates
+HTTP/2 connection reuse from authorization lifetime and publishes authenticated
+identity, encryption key, and report together for migrated providers. Other
+providers retain their own runtime behavior until migrated. Proposed portable
+persistence and operator decisions are specified in the
+[cache plan](docs/plans/supply_chain_caching.md), not assumed to be implemented here.
 
 ## TOML Configuration
 
