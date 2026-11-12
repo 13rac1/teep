@@ -77,7 +77,7 @@ var providerDefaultAllowFail = map[string][]string{
 // for the models that do attest the inference host.
 var providerFormatDefaultAllowFail = map[string]map[attestation.BackendFormat][]string{
 	"venice": {
-		attestation.FormatACI1: attestation.ACIDefaultAllowFail,
+		attestation.FormatACI1: attestation.VeniceACIDefaultAllowFail,
 	},
 }
 

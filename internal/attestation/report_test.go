@@ -5224,7 +5224,7 @@ func TestGatewayMeasurementAllowed(t *testing.T) {
 		allowFail []string
 	}{
 		{"nearcloud", NearcloudDefaultAllowFail},
-		{"venice", ACIDefaultAllowFail},
+		{"venice", VeniceACIDefaultAllowFail},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			if !slices.Contains(tc.allowFail, FactorGWMeasurement) {

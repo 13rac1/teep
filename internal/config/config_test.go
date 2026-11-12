@@ -1841,8 +1841,8 @@ func TestMergedAllowFail_VeniceFormatLayer(t *testing.T) {
 	cfg := &Config{}
 
 	aci := MergedAllowFail("venice", attestation.FormatACI1, cfg, false)
-	if !reflect.DeepEqual(aci, attestation.ACIDefaultAllowFail) {
-		t.Errorf("venice/aci1: got %v, want ACIDefaultAllowFail", aci)
+	if !reflect.DeepEqual(aci, attestation.VeniceACIDefaultAllowFail) {
+		t.Errorf("venice/aci1: got %v, want VeniceACIDefaultAllowFail", aci)
 	}
 
 	dstack := MergedAllowFail("venice", attestation.FormatDstack, cfg, false)
@@ -1883,19 +1883,33 @@ func TestMergedAllowFail_TOMLOverridesFormatLayer(t *testing.T) {
 // TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced: the factors that
 // prove the E2EE key is the gateway's KMS-issued, hardware-bound key must
 // never be waived by default — together they are the whole of what
-// authorizes E2EE for ACI/1.
+// authorizes E2EE for ACI/1. The NVIDIA factors stay enforced in the shared
+// ACI/1 list; only the Venice list allows them, because the Venice response
+// carries no GPU evidence.
 func TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced(t *testing.T) {
-	for _, name := range []string{
+	keyBinding := []string{
 		attestation.FactorACIKeyCustody,
 		"gateway_tee_reportdata_binding",
 		"gateway_tee_quote_signature",
 		"gateway_event_log_integrity",
 		"nonce_match",
-		"nvidia_signature",
-		"nvidia_nonce_client_bound",
-	} {
+	}
+	for _, list := range []struct {
+		name  string
+		names []string
+	}{{"ACIDefaultAllowFail", attestation.ACIDefaultAllowFail}, {"VeniceACIDefaultAllowFail", attestation.VeniceACIDefaultAllowFail}} {
+		for _, name := range keyBinding {
+			if slices.Contains(list.names, name) {
+				t.Errorf("%s contains %s; it must stay enforced", list.name, name)
+			}
+		}
+	}
+	for _, name := range []string{"nvidia_signature", "nvidia_nonce_client_bound"} {
 		if slices.Contains(attestation.ACIDefaultAllowFail, name) {
 			t.Errorf("ACIDefaultAllowFail contains %s; it must stay enforced", name)
+		}
+		if !slices.Contains(attestation.VeniceACIDefaultAllowFail, name) {
+			t.Errorf("VeniceACIDefaultAllowFail does not allow %s to fail", name)
 		}
 	}
 }

@@ -379,7 +379,7 @@ var NearcloudDefaultAllowFail = []string{
 
 // VeniceDefaultAllowFail is the venice-specific default allow_fail list for
 // the dstack attestation format. It is the global DefaultAllowFail and one
-// more factor. The ACI/1 models of Venice use ACIDefaultAllowFail.
+// more factor. The ACI/1 models of Venice use VeniceACIDefaultAllowFail.
 var VeniceDefaultAllowFail = append(slices.Clone(DefaultAllowFail),
 	// The Venice dstack composes pin the platform manifest of
 	// nearaidev/compose-manager-launcher (079a14b4…). The attestation that
@@ -566,6 +566,20 @@ var TinfoilDirectDefaultAllowFail = []string{
 	FactorNVSwitchBinding,
 	FactorComponentRecognition,
 }
+
+// VeniceACIDefaultAllowFail is the default allow_fail list for the ACI/1
+// models of Venice: ACIDefaultAllowFail and the two NVIDIA factors that need
+// GPU evidence. Other providers that derive their ACI/1 lists from
+// ACIDefaultAllowFail keep these factors enforced.
+var VeniceACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
+	// The Venice ACI/1 response carries gpu_evidence_omitted and no
+	// nvidia_payload (observed 2026-11-12), so the GPU signature and its
+	// client nonce cannot be checked. The failure is reported and does
+	// not block requests until the response carries GPU evidence again.
+	// SEE: docs/attestation_gaps/venice_aci_gateway.md.
+	FactorNvidiaSignature,
+	FactorNvidiaClientNonce,
+)
 
 // ACIDefaultAllowFail is the default allow_fail list for models that return
 // the ACI/1 attestation format of the private-ai-gateway. Selected per
