@@ -5167,9 +5167,10 @@ func TestBuildReport_ACIGatewayUnverifiedFailsClosed(t *testing.T) {
 }
 
 // A launcher digest without a Rekor entry fails sigstore_verification for
-// both NEAR providers, and the failure is reported, not enforced: NEAR's
-// composes pin the platform manifest digest, while the logged attestation
-// names the image index digest.
+// both NEAR providers, and the failure is reported, not enforced. The newer
+// DeepSeek-V4.1-Flash-1017 and -abliterated composes pin the platform manifest,
+// while the logged attestation names the index. Older captured GLM composes
+// pin the index directly and do not require this exception.
 func TestNearSigstoreVerificationAllowed(t *testing.T) {
 	for _, tc := range []struct {
 		provider  string

@@ -348,11 +348,13 @@ var NearcloudDefaultAllowFail = []string{
 	FactorComponentRecognition,
 	FactorCPUIDRegistry,
 	FactorResponseSchema,
-	// NEAR's measured composes pin the platform manifest digest of
-	// nearaidev/compose-manager-launcher, while the Sigstore attestation
+	// The newer DeepSeek-V4.1-Flash-1017 and -abliterated composes pin
+	// the platform manifest of nearaidev/compose-manager-launcher; the
+	// older captured GLM-5.3-Flash composes pin its index. The attestation
 	// that its build workflow logs in Rekor names the image index digest.
-	// Rekor cannot be searched by the manifest digest, so the check finds
-	// no entry. The failure is reported, not blocking, until teep resolves
+	// Searching Rekor for this manifest digest finds no entry. This
+	// provider-wide exception also permits missing entries for other
+	// model and gateway images. The failure is reported until teep resolves
 	// a manifest to its signed index or NEAR pins the index digest.
 	// SEE: docs/providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest
 	FactorSigstoreVerify,
@@ -374,11 +376,13 @@ var NeardirectDefaultAllowFail = []string{
 	FactorComponentRecognition,
 	FactorCPUIDRegistry,
 	FactorResponseSchema,
-	// NEAR's measured composes pin the platform manifest digest of
-	// nearaidev/compose-manager-launcher, while the Sigstore attestation
+	// The newer DeepSeek-V4.1-Flash-1017 and -abliterated composes pin
+	// the platform manifest of nearaidev/compose-manager-launcher; the
+	// older captured GLM-5.3-Flash composes pin its index. The attestation
 	// that its build workflow logs in Rekor names the image index digest.
-	// Rekor cannot be searched by the manifest digest, so the check finds
-	// no entry. The failure is reported, not blocking, until teep resolves
+	// Searching Rekor for this manifest digest finds no entry. This
+	// provider-wide exception also permits missing entries for other
+	// model images. The failure is reported until teep resolves
 	// a manifest to its signed index or NEAR pins the index digest.
 	// SEE: docs/providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest
 	FactorSigstoreVerify,
