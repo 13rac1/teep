@@ -18,7 +18,7 @@ disappears. Pick the variant by background, and on surfaces that switch themes
 ```html
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/brand/teep-logo.svg">
-  <img alt="teep" src="docs/brand/teep-logo-light.svg" width="200">
+  <img alt="TEE Proof" src="docs/brand/teep-logo-light.svg" width="162">
 </picture>
 ```
 
@@ -64,9 +64,9 @@ status. Keep amber and coral for things that are actually wrong.
 
 ## Type
 
-teep is terminal-native, so the identity is monospace. The wordmark is set in a
-monospace face (`JetBrains Mono` → `SF Mono` → `ui-monospace`), lowercase, tight
-tracking. Body copy and data use the system sans for legibility, always with
+The wordmark is `TEE Proof`, set in IBM Plex Sans SemiBold and converted to
+outlines, so it renders the same without the font. Body copy and data use the system sans for legibility, always with
 tabular numerals so live counters don't jitter.
 
-The wordmark is always lowercase: `teep`, never `Teep` or `TEEP`.
+`teep` is the short form of TEE Proof and the name of the command. Write it in
+lowercase: `teep`, never `Teep` or `TEEP`.

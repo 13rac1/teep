@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/brand/teep-logo.svg">
-  <img alt="TEE Proof" src="docs/brand/teep-logo-light.svg" width="200">
+  <img alt="TEE Proof" src="docs/brand/teep-logo-light.svg" width="162">
 </picture>
 
 # TEE Proof
