@@ -814,3 +814,35 @@ func TestStoreModelsCache_SkipsEmpty(t *testing.T) {
 		t.Error("empty store overwrote existing cache")
 	}
 }
+
+// The dashboard status lines use the checked-state wording and do not use
+// the earlier outcome wording.
+func TestDashboardTemplate_StatusWording(t *testing.T) {
+	raw, err := templateFS.ReadFile("templates/dashboard.html")
+	if err != nil {
+		t.Fatalf("read dashboard template: %v", err)
+	}
+	body := string(raw)
+	for _, want := range []string{
+		`" verified · "`,
+		`" verified";`,
+		`"All enforced factors passed · requests end-to-end encrypted."`,
+		`" without end-to-end encryption."`,
+		`"No enforced factor failed."`,
+		`"All enforced factors passed · end-to-end encrypted"`,
+		`"No enforced factor failed · encryption available"`,
+		`"No enforced factor failed"`,
+		`" failed (allowed)"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard template missing %s", want)
+		}
+	}
+	for _, old := range []string{
+		`" sealed`, "Secure enclave", "verified hardware", "standard connections", "non-critical",
+	} {
+		if strings.Contains(body, old) {
+			t.Errorf("dashboard template still contains %q", old)
+		}
+	}
+}
