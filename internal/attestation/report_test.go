@@ -770,6 +770,17 @@ func TestEvalTDXMeasurement(t *testing.T) {
 	})
 }
 
+// A parsed SEV-SNP gateway report has no separate boot measurement:
+// gateway_tee_boot_config does not apply, even when the measurement factor
+// fails.
+func TestEvalGatewayBootConfig_SEVNotApplicable(t *testing.T) {
+	in := &ReportInput{Raw: &RawAttestation{}, GatewaySEV: &SEVVerifyResult{}}
+	f := assertSingleFactor(t, evalGatewayBootConfig(in), NotApplicable)
+	if f.Detail != "SEV-SNP has no separate boot measurement; the launch measurement (gateway_tee_measurement) covers it" {
+		t.Errorf("detail = %q", f.Detail)
+	}
+}
+
 func TestEvalTDXHardwareConfig(t *testing.T) {
 	makeRTMRs := func(t *testing.T, r0hex string) [4][48]byte {
 		t.Helper()
@@ -1100,9 +1111,11 @@ func TestEvalSEVHardwareConfig(t *testing.T) {
 	})
 }
 
+// SEV-SNP has no separate boot measurement: the factor does not apply, and
+// tee_measurement carries the result.
 func TestEvalSEVBootConfig(t *testing.T) {
 	in := buildSEVInput(&SEVVerifyResult{})
-	f := assertSingleFactor(t, evalTEEBootConfig(in), Pass)
+	f := assertSingleFactor(t, evalTEEBootConfig(in), NotApplicable)
 	if !strings.Contains(f.Detail, "launch measurement") {
 		t.Errorf("detail %q should mention launch measurement", f.Detail)
 	}
@@ -4746,10 +4759,10 @@ func TestEvalTEEBootConfig_Tinfoil(t *testing.T) {
 		}
 	})
 
-	t.Run("sev_pass", func(t *testing.T) {
+	t.Run("sev_not_applicable", func(t *testing.T) {
 		in := buildTinfoilInput(nil)
 		in.SEV = &SEVVerifyResult{}
-		f := assertSingleFactor(t, evalTEEBootConfig(in), Pass)
+		f := assertSingleFactor(t, evalTEEBootConfig(in), NotApplicable)
 		if !strings.Contains(f.Detail, "SEV-SNP") {
 			t.Errorf("detail %q should mention SEV-SNP", f.Detail)
 		}

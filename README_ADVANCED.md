@@ -157,7 +157,7 @@ Each factor produces PASS, FAIL, or SKIP. Factors marked `[ENFORCED]` cause the 
 | 6 | `tee_debug_disabled` | TD_ATTRIBUTES debug bit is 0. A debug enclave lets the host read enclave memory. |
 | 7 | `tee_measurement` | MRTD and MRSEAM match configured measurement policy allowlists. Skipped when no allowlist is configured. |
 | 8 | `tee_hardware_config` | RTMR[0] matches the hardware config allowlist. Skipped when no allowlist is configured. |
-| 9 | `tee_boot_config` | RTMR[1] and RTMR[2] match the boot config allowlists. Skipped when no allowlist is configured. |
+| 9 | `tee_boot_config` | RTMR[1] and RTMR[2] match the boot config allowlists. Skipped when no allowlist is configured. Not applicable to SEV-SNP, whose launch measurement (`tee_measurement`) covers the boot. |
 | 10 | `signing_key_present` | Enclave ECDH public key present in response. Required for E2EE key exchange. |
 | 11 | `response_schema` | Attestation response JSON matches expected schema (no unknown or missing fields). |
 
@@ -212,7 +212,7 @@ exposes none, and the core `tee_*` factors state that.
 | 39 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave). |
 | 40 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and Venice ACI/1: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
 | 41 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
-| 42 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. |
+| 42 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. Not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot. |
 | 43 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified: nearcloud binds `sha256(signing_address ‖ tls_fingerprint)`; Venice ACI/1 binds `keccak256(signing key)` + nonce; Tinfoil binds the HPKE key and endorsed section hashes. |
 | 44 | `gateway_compose_binding` | Gateway `sha256(app_compose)` matches TDX MRConfigID. Enforced for Venice ACI/1 — the gateway publishes its manifest with digest-pinned images. |
 | 45 | `gateway_cpu_id_registry` | Gateway CPU PPID verified against the Proof of Cloud registry. |
