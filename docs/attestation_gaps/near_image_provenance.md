@@ -37,7 +37,7 @@ image reference; it is not caused by a particular client's configuration.
 - **Who:** A malicious operator or an attacker who can replace a deployed Docker image.
 - **What they do:** Run a launcher image without verifiable evidence that NEAR's approved GitHub Actions workflow built it, when the customer accepts images whose signed build records cannot be found.
 - **What they get:** The ability to run container code with access to the customer data and credentials available to that container.
-- **What stops it today:** Blocking requests until the image's signed build record is found and its signature is verified would prevent this case. Teep finds the record but does not yet verify its signature; see [Teep Status](#teep-status). Machine authentication and encrypted connections do not establish who built the image.
+- **What stops it today:** Blocking requests until the image's signed build record is found and its signature is verified would prevent this case. Machine authentication and encrypted connections do not establish who built the image.
 
 The missing build record leaves the client unable to distinguish a legitimate
 NEAR image from an unapproved image solely from the deployed image digest.
@@ -319,7 +319,6 @@ separate [dstack boot-measurement gap](dstack_integrity.md).
 - **Formats and tools:** [OCI distribution definitions](https://github.com/opencontainers/distribution-spec/blob/97274622c11112caa21efb8c52acca3c6b8fa7f1/spec.md#definitions), [Skopeo copy options](https://github.com/containers/skopeo/blob/8360e9e41548eee4bd1e41d231955ba85529e303/docs/skopeo-copy.1.md#options).
 - **Client implementation:** [NEAR policy](../../internal/provider/neardirect/policy.go), [Rekor client](../../internal/attestation/rekor.go), [factor evaluation](../../internal/attestation/report.go), [verify retrieval](../../internal/verify/attest.go), [proxy retrieval](../../internal/proxy/proxy.go).
 - **Captured evidence:** [NEAR signed TLS-only captures](../../internal/integration/testdata/near_tls_only/) and [capture replay tests](../../internal/verify/near_capture_test.go).
-- **Teep defect:** [Issue #164](https://github.com/13rac1/teep/issues/164).
 - **Related gap:** [Dstack integrity](dstack_integrity.md).
 
 ---
@@ -333,15 +332,6 @@ with enforcement enabled. Teep currently reports
 `sigstore_verification` failures as allowed for both NEAR providers; the
 exception therefore affects models that did not require it too. The
 parent-index resolver described above is not implemented.
-
-A passing `sigstore_verification` shows only that a Rekor entry exists for the
-digest. Teep does not yet validate the signing certificate's chain to Fulcio,
-verify the signature over the signed statement, or check the statement's
-subject against the image digest; `NoDSSE` in the NEAR policy skips the
-signature error. See the
-[teep publisher-verification defect](../providers/near/near_attestation.md#teep-publisher-verification-defect)
-and [issue #164](https://github.com/13rac1/teep/issues/164). Resolving the
-parent index would not close this defect.
 
 ### Temporary teep policy
 
