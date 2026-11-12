@@ -156,13 +156,14 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 // than 200. teep decrypts and authenticates a response body only for 200, and
 // a client takes any 2xx for success, so such a response would reach the
 // client unchecked. It is refused before anything is relayed, and the
-// generation ends.
+// generation ends with a failure cooldown, as for a response that fails
+// authentication.
 func (s *Server) refuseUncheckedSuccess(ctx context.Context, input *authorizedRequest, value *authorization, status int) error {
 	if !input.provider.E2EE || !isUncheckedSuccess(status) {
 		return nil
 	}
-	removed := s.authorizations.deleteGeneration(input.key, value.generation)
-	s.logAuthorizationRejection(ctx, input, value, "unexpected_success_status", removed, false)
+	removed := s.rejectResponseAuthorization(input.key, value.generation)
+	s.logAuthorizationRejection(ctx, input, value, "unexpected_success_status", removed, removed)
 	return fmt.Errorf("upstream answered HTTP %d; an encrypted response must be HTTP 200 to be checked", status)
 }
 

@@ -37,8 +37,8 @@ func uncheckedSuccessUpstream(status int, requests *atomic.Int32) http.Handler {
 }
 
 // A TLS-binding provider with E2EE refuses a 2xx response other than 200
-// before anything is relayed, ends the authorization generation, and does
-// not send the request again.
+// before anything is relayed, ends the authorization generation with a
+// failure cooldown, and does not send the request again.
 func TestAuthorizedRefusesUncheckedSuccess(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
@@ -67,6 +67,9 @@ func TestAuthorizedRefusesUncheckedSuccess(t *testing.T) {
 						}
 						if _, ok := server.authorizations.acquire(input.key); ok {
 							t.Error("the authorization generation was not ended")
+						}
+						if !server.negCache.IsBlocked(input.key.ProviderName(), input.key.EvidenceScope().SingleflightKey()) {
+							t.Error("no failure cooldown was recorded")
 						}
 						if requests.Load() != 1 {
 							t.Errorf("upstream requests=%d, want 1", requests.Load())
