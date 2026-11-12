@@ -10,6 +10,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
@@ -26,13 +27,11 @@ func TestNewAttester(t *testing.T) {
 		}
 	})
 
+	// The provider is disabled: newAttester refuses it with its message.
 	t.Run("tinfoil_v3_direct", func(t *testing.T) {
-		a, err := newAttester("tinfoil_v3_direct", cp, true) // offline to avoid network
-		if err != nil {
-			t.Fatalf("newAttester(tinfoil_v3_direct): %v", err)
-		}
-		if a == nil {
-			t.Error("newAttester(tinfoil_v3_direct) returned nil")
+		a, err := newAttester("tinfoil_v3_direct", cp, true)
+		if a != nil || err == nil || err.Error() != tinfoil.DirectDisabledMessage {
+			t.Fatalf("newAttester(tinfoil_v3_direct) = %v, %v; want the disabled message", a, err)
 		}
 	})
 

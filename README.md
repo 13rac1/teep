@@ -132,7 +132,7 @@ Yes. Teep is open source under AGPL-3.0. Dual licensing is available for commerc
 | [Chutes](https://chutes.ai) | End-to-end encryption (ML-KEM-768 + ChaCha20-Poly1305) with multi-instance failover |
 | [Phala Cloud](https://phala.network) | Format-agnostic gateway supporting Chutes and dStack attestation backends |
 | [Tinfoil](https://tinfoil.sh) (Cloud) | End-to-end encryption (HPKE X25519 + AES-256-GCM) via Tinfoil's model router |
-| [Tinfoil](https://tinfoil.sh) (Direct) | End-to-end encryption (HPKE X25519 + AES-256-GCM) directly to per-model enclaves |
+| [Tinfoil](https://tinfoil.sh) (Direct) | Disabled: Tinfoil's enclave hosts do not answer attestation requests (observed 2026-11-12). Use Tinfoil (Cloud). |
 
 See [README_ADVANCED.md](README_ADVANCED.md) for cryptographic details.
 

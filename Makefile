@@ -40,7 +40,8 @@ coverage-full: ## Full coverage without -short (live integration tests still nee
 test-live: ## Run live network tests (dials external hosts, requires internet)
 	TEEP_LIVE_TESTS=1 go test -count=1 -race -v ./internal/tlsct/ -run TestLive
 
-integration: integration-concurrent-providers integration-tinfoil integration-tinfoil-direct integration-neardirect integration-nearcloud integration-venice integration-chutes integration-phalacloud integration-nanogpt integration-tinfoil-fixture integration-tinfoil-direct-fixture integration-neardirect-fixture integration-nearcloud-fixture integration-venice-fixture integration-chutes-fixture ## Run all integration tests
+# integration-tinfoil-direct and report-tinfoil-direct are not in the aggregate targets: tinfoil_v3_direct is disabled.
+integration: integration-concurrent-providers integration-tinfoil integration-neardirect integration-nearcloud integration-venice integration-chutes integration-phalacloud integration-nanogpt integration-tinfoil-fixture integration-tinfoil-direct-fixture integration-neardirect-fixture integration-nearcloud-fixture integration-venice-fixture integration-chutes-fixture ## Run all integration tests
 
 integration-venice: ## Run Venice integration tests (requires VENICE_API_KEY)
 	TEEP_TESTS_LOAD_DOTENV=1 go test -count=1 -v -race -timeout 300s -run TestIntegration_Venice ./internal/proxy/
@@ -110,7 +111,7 @@ test-fuzz: ## Fuzz all attestation parsers (FUZZTIME=30s by default)
 
 check: lint test ## Run lint + test
 
-reports: report-tinfoil report-tinfoil-direct report-neardirect report-nearcloud report-venice report-venice-aci report-chutes report-phalacloud report-nanogpt ## Run all attestation reports
+reports: report-tinfoil report-neardirect report-nearcloud report-venice report-venice-aci report-chutes report-phalacloud report-nanogpt ## Run all attestation reports
 
 report-venice: build ## Verify Venice dstack attestation (requires VENICE_API_KEY)
 	./teep verify venice --model e2ee-qwen3-5-122b-a10b --log-level debug --capture /tmp/teep-attestation-venice

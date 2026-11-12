@@ -15,8 +15,8 @@ import (
 func TestTinfoilIntegrationReportLookup(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		const name, model = "tinfoil_v3_direct", "org/model"
-		s, err := proxy.New(&config.Config{Providers: map[string]*config.Provider{name: {Name: name}}})
+		const name, model = "tinfoil_v3_cloud", "org/model"
+		s, err := proxy.New(&config.Config{Providers: map[string]*config.Provider{name: {Name: name, BaseURL: "https://inference.tinfoil.sh"}}})
 		if err != nil {
 			t.Fatal(err)
 		}

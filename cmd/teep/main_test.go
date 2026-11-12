@@ -16,6 +16,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
 )
 
 // buildTestReport constructs a VerificationReport with test factors.
@@ -142,6 +143,15 @@ func TestPruneInactiveProviders_NilProvider(t *testing.T) {
 // --------------------------------------------------------------------------
 // providerNotFoundError tests
 // --------------------------------------------------------------------------
+
+// teep verify tinfoil_v3_direct names the reason the provider is disabled,
+// not an API key that does not configure it.
+func TestProviderNotFoundError_TinfoilDirectDisabled(t *testing.T) {
+	cfg := &config.Config{Providers: map[string]*config.Provider{"tinfoil_v3_cloud": {Name: "tinfoil_v3_cloud"}}}
+	if err := providerNotFoundError("tinfoil_v3_direct", cfg); err == nil || err.Error() != tinfoil.DirectDisabledMessage {
+		t.Fatalf("err = %v, want the disabled message", err)
+	}
+}
 
 func TestProviderNotFoundError_KnownNoConfig(t *testing.T) {
 	cfg := &config.Config{Providers: map[string]*config.Provider{}}

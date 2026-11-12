@@ -28,6 +28,7 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/proxy"
 	"github.com/13rac1/teep/internal/reqid"
 	"github.com/13rac1/teep/internal/verify"
@@ -390,6 +391,10 @@ func pruneInactiveProviders(providers map[string]*config.Provider) error {
 
 // providerNotFoundError returns a descriptive error when a provider is not configured.
 func providerNotFoundError(name string, cfg *config.Config) error {
+	if name == "tinfoil_v3_direct" {
+		// TINFOIL_API_KEY does not configure the disabled provider.
+		return errors.New(tinfoil.DirectDisabledMessage)
+	}
 	envVar, known := verify.ProviderEnvVar(name)
 	if known && len(cfg.Providers) == 0 {
 		return fmt.Errorf("provider %q not configured (set %s or add [providers.%s] to config)", name, envVar, name)

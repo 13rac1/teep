@@ -18,7 +18,10 @@ The providers differ in their trust boundary:
   key bound in REPORTDATA is the router's key, not the inference enclave's key.
   This is architecturally analogous to the `nearcloud` provider in teep.
 
-- **`tinfoil_v3_direct`**: Connects directly to per-model inference enclaves
+- **`tinfoil_v3_direct`** (disabled): teep refuses this provider at startup,
+  because Tinfoil's enclave hosts do not answer attestation requests (observed
+  2026-11-12). Use `tinfoil_v3_cloud`. The description below applies when the
+  provider is enabled again. Connects directly to per-model inference enclaves
   resolved from the router's `/.well-known/tinfoil-proxy` discovery endpoint
   (for example, backend domains such as `gemma4-31b-1.inf10.tinfoil.sh`).
   Teep verifies the selected inference enclave directly. The HPKE key bound in

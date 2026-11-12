@@ -222,6 +222,8 @@ func TestIntegration_Tinfoil(t *testing.T) {
 }
 
 func TestIntegration_TinfoilDirect(t *testing.T) {
+	// fromConfig refuses the disabled provider, so this test cannot run.
+	t.Skip(tinfoilProvider.DirectDisabledMessage)
 	skipTinfoilIntegration(t)
 
 	plainSrv := newProxyServer(t, integrationTinfoilDirectPlaintextConfig(t))

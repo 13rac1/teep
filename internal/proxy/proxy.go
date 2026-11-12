@@ -702,6 +702,9 @@ func fromConfig(
 	policy attestation.MeasurementPolicy,
 	gatewayPolicy attestation.MeasurementPolicy,
 ) (*provider.Provider, error) {
+	if cp.Name == "tinfoil_v3_direct" {
+		return nil, errors.New(tinfoil.DirectDisabledMessage)
+	}
 	p := &provider.Provider{
 		Name:                     cp.Name,
 		BaseURL:                  cp.BaseURL,
@@ -877,7 +880,7 @@ func fromConfig(
 		)
 
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", cp.Name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct (disabled))", cp.Name)
 	}
 
 	// Every provider sets a real SupplyChainPolicy or the
