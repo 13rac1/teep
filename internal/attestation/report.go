@@ -1655,14 +1655,24 @@ func evalNvidiaSignature(in *ReportInput) []FactorResult {
 		}
 		return factor(TierBinding, FactorNvidiaSignature, Fail, "NVIDIA verification was not attempted")
 	}
-	if in.Nvidia.SignatureErr != nil {
-		if in.Nvidia.Format == "" {
-			// The verification failed before it reached a signature.
-			return factor(TierBinding, FactorNvidiaSignature, Fail, fmt.Sprintf("NVIDIA evidence was not verified: %v", in.Nvidia.SignatureErr))
-		}
-		return factor(TierBinding, FactorNvidiaSignature, Fail, fmt.Sprintf("signature invalid: %v", in.Nvidia.SignatureErr))
+	if !in.Nvidia.SignaturesVerified || in.Nvidia.SignatureErr != nil {
+		return factor(TierBinding, FactorNvidiaSignature, Fail, "NVIDIA evidence was not verified: "+nvidiaFailureCause(in.Nvidia))
 	}
 	return factor(TierBinding, FactorNvidiaSignature, Pass, nvidiaSignatureDetail(in.Nvidia))
+}
+
+// nvidiaFailureCause names why NVIDIA evidence did not verify: the signature
+// error, else the error that stopped the verification before the
+// signatures, else that no signature was checked.
+func nvidiaFailureCause(r *NvidiaVerifyResult) string {
+	switch {
+	case r.SignatureErr != nil:
+		return r.SignatureErr.Error()
+	case r.ClaimsErr != nil:
+		return r.ClaimsErr.Error() + "; no signature was checked"
+	default:
+		return "no signature was checked"
+	}
 }
 func evalNvidiaClaims(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
@@ -1671,7 +1681,10 @@ func evalNvidiaClaims(in *ReportInput) []FactorResult {
 		}
 		return factor(TierBinding, FactorNvidiaClaims, Fail, "NVIDIA verification was not attempted")
 	}
-	if in.Nvidia.SignatureErr != nil {
+	if in.Nvidia.ClaimsErr != nil {
+		return factor(TierBinding, FactorNvidiaClaims, Fail, fmt.Sprintf("claims invalid: %v", in.Nvidia.ClaimsErr))
+	}
+	if !in.Nvidia.SignaturesVerified || in.Nvidia.SignatureErr != nil {
 		// Claims of evidence that did not verify prove nothing.
 		return factor(TierBinding, FactorNvidiaClaims, Fail, "NVIDIA evidence was not verified; claims not checked")
 	}
@@ -1682,9 +1695,6 @@ func evalNvidiaClaims(in *ReportInput) []FactorResult {
 		// and only NRAS compares measurements (nvidia_nras_verified).
 		return factor(TierBinding, FactorNvidiaClaims, NotApplicable,
 			"SPDM evidence carries no claims; the measurements are compared by NRAS (nvidia_nras_verified)")
-	}
-	if in.Nvidia.ClaimsErr != nil {
-		return factor(TierBinding, FactorNvidiaClaims, Fail, fmt.Sprintf("claims invalid: %v", in.Nvidia.ClaimsErr))
 	}
 	return factor(TierBinding, FactorNvidiaClaims, Pass, nvidiaClaimsDetail(in.Nvidia))
 }
