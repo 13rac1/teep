@@ -130,6 +130,48 @@ func TestNearTLSOnlySignedCaptureReplay(t *testing.T) {
 	}
 }
 
+// This tests an explicit operator policy that enforces Sigstore lookup.
+// The captured GLM composes pin the signed index directly, so they must
+// pass without the exception added for the newer DeepSeek deployments.
+func TestNearGLMIndexPinPassesEnforcedSigstore(t *testing.T) {
+	for _, fixture := range []string{
+		"neardirect_z-ai_glm-5.3-flash_20260909_202322",
+		"nearcloud_z-ai_glm-5.3-flash_20260909_204035",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			dir := "../integration/testdata/near_tls_only/" + fixture
+			manifest, _, err := capture.Load(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp := &config.Provider{Name: manifest.Provider, BaseURL: manifest.NearConfig.Origin, E2EE: false}
+			allowFail := []string{attestation.FactorE2EEUsable}
+			for _, name := range config.ProviderDefaultAllowFail()[manifest.Provider] {
+				if name != attestation.FactorSigstoreVerify {
+					allowFail = append(allowFail, name)
+				}
+			}
+			cfg := &config.Config{Providers: map[string]*config.Provider{manifest.Provider: cp}, ProviderAllowFail: map[string][]string{manifest.Provider: allowFail}}
+			report, _, err := Replay(t.Context(), dir, func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Blocked() {
+				t.Fatal("GLM index-pinned capture failed with Sigstore lookup enforced")
+			}
+			for _, factor := range report.Factors {
+				if factor.Name == attestation.FactorSigstoreVerify {
+					if factor.Status != attestation.Pass || !factor.Enforced {
+						t.Fatalf("Sigstore lookup: status %s, enforced %v; want enforced pass", factor.Status, factor.Enforced)
+					}
+					return
+				}
+			}
+			t.Fatal("Sigstore lookup factor missing")
+		})
+	}
+}
+
 func TestNearCloudTLSOnlyReplayRejectsSubstitutedBoundKey(t *testing.T) {
 	dir := "../integration/testdata/near_tls_only/nearcloud_z-ai_glm-5.3-flash_20260909_204035"
 	manifest, entries, err := capture.Load(dir)
