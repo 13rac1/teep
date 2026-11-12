@@ -50,7 +50,7 @@ func runVersion() error {
 			rev = r
 		}
 	}
-	fmt.Printf("teep %s (%s, %s)\n", Version, shortCommit(rev), goVer)
+	fmt.Printf("TEE Proof (teep) %s (%s, %s)\n", Version, shortCommit(rev), goVer)
 	return nil
 }
 

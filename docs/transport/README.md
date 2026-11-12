@@ -261,7 +261,7 @@ to the remaining TLS and encryption checks. External supply-chain audits do not
 by themselves invalidate running instances.
 
 Maintainers publish an advisory when approval must be withdrawn. Operators,
-package managers, or a future teep updater must deliver the corrected package or
+package managers, or a future TEE Proof updater must deliver the corrected package or
 policy and restart every affected instance. Restart clears cached authorizations;
 the updated admission policy must reject the withdrawn state. Restart alone can
 approve the same state again. Instances that do not receive the update and restart

@@ -1,4 +1,4 @@
-# teep brand
+# TEE Proof brand
 
 The mark is a **held prompt**: your prompt (the chevron) cradled inside teep's
 guards. It says, in one glyph, what teep is — a protective wrapper that keeps the

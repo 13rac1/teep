@@ -2,7 +2,7 @@
 
 ## Overview
 
-Teep supports two Tinfoil providers with attestation verification and E2EE.
+TEE Proof (teep) supports two Tinfoil providers with attestation verification and E2EE.
 Tinfoil runs OpenAI-compatible inference in secure enclaves (TDX and SEV-SNP).
 Attestation is fetched from a well-known HTTP endpoint on the enclave, verified
 against hardware roots of trust and Sigstore supply-chain attestations, and

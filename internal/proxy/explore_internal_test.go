@@ -40,8 +40,10 @@ func TestHandleExplorePage_ValidHTML(t *testing.T) {
 	if _, err := html.Parse(strings.NewReader(body)); err != nil {
 		t.Fatalf("HTML parse error: %v", err)
 	}
-	if !strings.Contains(body, "teep") {
-		t.Error("explore page missing 'teep' text")
+	for _, want := range []string{"<title>TEE Proof — explore</title>", `<span class="word">TEE Proof</span>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("explore page missing %q", want)
+		}
 	}
 	if !strings.Contains(body, "/v1/models") {
 		t.Error("explore page missing /v1/models fetch")

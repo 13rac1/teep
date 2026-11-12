@@ -541,3 +541,19 @@ func TestBuildSelfCheckReport_EmptyVersion(t *testing.T) {
 		t.Errorf("expected model=%q when Version is empty, got %q", "dev", report.Model)
 	}
 }
+
+// teep version names the product as TEE Proof, with teep as its short form.
+func TestRunVersion_ProductName(t *testing.T) {
+	orig := Version
+	Version = "v0.3.0"
+	defer func() { Version = orig }()
+
+	out := captureStdout(t, func() {
+		if err := runVersion(); err != nil {
+			t.Errorf("runVersion: %v", err)
+		}
+	})
+	if !strings.HasPrefix(out, "TEE Proof (teep) v0.3.0 (") {
+		t.Errorf("runVersion output = %q, want prefix %q", out, "TEE Proof (teep) v0.3.0 (")
+	}
+}

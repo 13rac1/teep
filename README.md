@@ -1,7 +1,9 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/brand/teep-logo.svg">
-  <img alt="teep" src="docs/brand/teep-logo-light.svg" width="200">
+  <img alt="TEE Proof" src="docs/brand/teep-logo-light.svg" width="200">
 </picture>
+
+# TEE Proof
 
 [![CI](https://github.com/13rac1/teep/actions/workflows/ci.yml/badge.svg)](https://github.com/13rac1/teep/actions/workflows/ci.yml)
 [![Coverage](https://raw.githubusercontent.com/13rac1/teep/badges/coverage.svg)](https://github.com/13rac1/teep/actions/workflows/ci.yml)
@@ -9,7 +11,7 @@
 
 **Verify that AI providers can't read your prompts — even if they wanted to.**
 
-When you type a prompt into an AI API, the company can read everything — your questions, your code, your medical questions, your unreleased ideas. Teep changes that. It's a local proxy that sits between your app and the AI provider, verifies the model is running in a secure hardware vault, and encrypts your conversation so only that hardware can read it — not the company, not their employees, not an attacker who's compromised their servers.
+When you type a prompt into an AI API, the company can read everything — your questions, your code, your medical questions, your unreleased ideas. TEE Proof changes that. It's a local proxy that sits between your app and the AI provider, verifies the model is running in a secure hardware vault, and encrypts your conversation so only that hardware can read it — not the company, not their employees, not an attacker who's compromised their servers. `teep` is the short form of TEE Proof and the name of its command.
 
 ```
 Client (any OpenAI SDK) ──► localhost:8337 (teep)
