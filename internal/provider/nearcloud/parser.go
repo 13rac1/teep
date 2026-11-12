@@ -99,7 +99,7 @@ func ParseGatewayResponse(_ context.Context, body []byte, model string) (*Gatewa
 			return nil, nil, errors.New("nearcloud: forbidden direct representation")
 		}
 	}
-	selected, unknown, err := envelope.ModelAttestations.Select(model, "nearcloud.model_attestations")
+	selected, match, unknown, err := envelope.ModelAttestations.Select(model, "nearcloud.model_attestations")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -109,6 +109,7 @@ func ParseGatewayResponse(_ context.Context, body []byte, model string) (*Gatewa
 	unknown = append(unknown, envelope.OHTTPAttestation.UnknownFields("nearcloud")...)
 	raw := selected.Raw(body)
 	raw.UnknownFields = unknown
+	raw.ModelNameMatch = string(match)
 	gw := &GatewayRaw{NonceHex: gateway.RequestNonce, SigningAddress: gateway.SigningAddress, IntelQuote: gateway.IntelQuote,
 		AppCompose: gateway.Info.Info.TCBInfo.AppCompose, TLSCertFingerprint: gateway.TLSCertFingerprint, EventLog: gateway.EventLog.Log.Values()}
 	return gw, raw, nil

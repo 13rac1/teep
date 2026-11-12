@@ -82,28 +82,48 @@ func (m *Models) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Select rejects duplicate or missing model identities after complete decoding.
-func (m Models) Select(requested, path string) (Model, []string, error) {
+// Select rejects duplicate or empty model identities after complete
+// decoding, and selects the entry of the requested model: the entry with
+// the exact name; else the one entry whose name contains, or is contained
+// in, the requested name; else the only entry of the array. Any other
+// array has no entry that teep can attribute to the request, and fails.
+func (m Models) Select(requested, path string) (Model, ModelNameMatch, []string, error) {
+	if requested == "" {
+		return Model{}, "", nil, errors.New("requested model name is empty")
+	}
 	seen := make(map[string]bool, len(m))
-	var selected Model
 	var unknown []string
-	found := false
+	exact, contains := -1, []int(nil)
 	for i := range m {
 		entry := &m[i]
 		unknown = append(unknown, entry.UnknownFields(fmt.Sprintf("%s[%d]", path, i))...)
 		name := entry.Fields.ModelName
 		if name == "" || seen[name] {
-			return Model{}, unknown, errors.New("empty or duplicate attestation model")
+			return Model{}, "", unknown, errors.New("empty or duplicate attestation model")
 		}
 		seen[name] = true
-		if name == requested {
-			selected, found = *entry, true
+		match, err := MatchModelName(requested, name)
+		if err != nil {
+			return Model{}, "", unknown, err
+		}
+		switch match {
+		case ModelNameExact:
+			exact = i
+		case ModelNameContains:
+			contains = append(contains, i)
+		case ModelNameDiffers:
 		}
 	}
-	if !found {
-		return Model{}, unknown, errors.New("requested model absent from attestation")
+	switch {
+	case exact >= 0:
+		return m[exact], ModelNameExact, unknown, nil
+	case len(contains) == 1:
+		return m[contains[0]], ModelNameContains, unknown, nil
+	case len(contains) == 0 && len(m) == 1:
+		return m[0], ModelNameDiffers, unknown, nil
+	default:
+		return Model{}, "", unknown, errors.New("no attestation entry can be attributed to the requested model")
 	}
-	return selected, unknown, nil
 }
 
 // Raw builds verification inputs only from supported validated fields.

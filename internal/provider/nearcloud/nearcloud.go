@@ -85,6 +85,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	if err != nil {
 		return nil, err
 	}
+	attestation.LogModelNameMatch(ctx, "nearcloud", model, raw)
 	if err := tlsct.CompareSPKIFingerprints(peerSPKI, gwRaw.TLSCertFingerprint); err != nil {
 		return nil, fmt.Errorf("nearcloud: gateway attestation TLS binding: %w", err)
 	}

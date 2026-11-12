@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -91,6 +92,20 @@ type EventLogEntry struct {
 	EventPayload string `json:"event_payload"`
 }
 
+// LogModelNameMatch logs a NEAR report whose attested model name is not the
+// requested one: at info level when one name contains the other, at warn
+// level when neither does. The name is the provider's assertion.
+func LogModelNameMatch(ctx context.Context, provider, requested string, raw *RawAttestation) {
+	switch raw.ModelNameMatch {
+	case "contains":
+		slog.InfoContext(ctx, "attested model name differs from the requested model; one contains the other",
+			"provider", provider, "requested_model", requested, "attested_model", raw.Model)
+	case "differs":
+		slog.WarnContext(ctx, "attested model name differs from the requested model; neither contains the other",
+			"provider", provider, "requested_model", requested, "attested_model", raw.Model)
+	}
+}
+
 // RawAttestation holds the parsed fields from a TEE provider's attestation
 // endpoint response (Venice /tee/attestation, NEAR /attestation/report, etc.).
 // All fields are raw strings exactly as returned by the provider; higher layers
@@ -100,6 +115,11 @@ type RawAttestation struct {
 	// uses. Set by Attesters during ParseAttestationResponse. Gateway providers
 	// use this to dispatch to the correct ReportDataVerifier.
 	BackendFormat BackendFormat
+
+	// ModelNameMatch states how Model, the attested model name, relates to
+	// the requested model: "" (the same name), "contains" (one name
+	// contains the other) or "differs". Set by the NEAR parsers.
+	ModelNameMatch string
 
 	// Verified is the server-side verification result. This is a convenience
 	// flag from the provider — clients must perform their own client-side checks.

@@ -431,6 +431,17 @@ func verifyCapture(ctx context.Context, captureDir, originalReport string, cfgLo
 
 const reportFactorNameWidth = 33
 
+// writeAttestedModel states the attested model name when it is not the
+// requested model. The name is the provider's assertion.
+func writeAttestedModel(b *strings.Builder, r *attestation.VerificationReport) {
+	switch r.AttestedModelMatch {
+	case "contains":
+		fmt.Fprintf(b, "Attested model: %s (requested %s; one name contains the other)\n\n", r.AttestedModel, r.Model)
+	case "differs":
+		fmt.Fprintf(b, "Attested model: %s (requested %s; neither name contains the other)\n\n", r.AttestedModel, r.Model)
+	}
+}
+
 // FormatReport renders a VerificationReport as a human-readable string.
 func FormatReport(r *attestation.VerificationReport) string {
 	var b strings.Builder
@@ -446,6 +457,7 @@ func FormatReport(r *attestation.VerificationReport) string {
 	b.WriteString("\n")
 	b.WriteString(separator)
 	b.WriteString("\n\n")
+	writeAttestedModel(&b, r)
 
 	if len(r.Metadata) > 0 {
 		writeMetadataBlock(&b, r.Metadata)
