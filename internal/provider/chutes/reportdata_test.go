@@ -71,6 +71,22 @@ func TestReportDataVerifier_MissingSigningKey(t *testing.T) {
 	t.Logf("error: %v", err)
 }
 
+// A response that echoes no nonce has none to compare; the binding is
+// checked against the client nonce.
+func TestReportDataVerifier_NotEchoed(t *testing.T) {
+	nonce := attestation.NewNonce()
+	raw := &attestation.RawAttestation{SigningKey: "dGVzdC1wdWJrZXk=", NonceSource: attestation.NonceSourceNotEchoed}
+	var reportData [64]byte
+	sum := sha256.Sum256([]byte(nonce.Hex() + raw.SigningKey))
+	copy(reportData[:32], sum[:])
+	if _, err := (chutes.ReportDataVerifier{}).VerifyReportData(reportData, raw, nonce); err != nil {
+		t.Fatalf("VerifyReportData: %v", err)
+	}
+	if _, err := (chutes.ReportDataVerifier{}).VerifyReportData(reportData, raw, attestation.NewNonce()); err == nil {
+		t.Fatal("VerifyReportData accepted another client nonce")
+	}
+}
+
 func TestReportDataVerifier_MissingNonce(t *testing.T) {
 	nonce := attestation.NewNonce()
 	var reportData [64]byte

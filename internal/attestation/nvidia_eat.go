@@ -349,8 +349,8 @@ func verifySPDMEvidence(ctx context.Context, evidence []byte, expectedNonce Nonc
 
 // VerifyNVIDIAGPUDirect verifies per-GPU SPDM evidence directly, without an
 // EAT envelope. Used by chutes-format providers that return individual GPU
-// evidence entries. nonce is the nonce of the attestation, which the result
-// reports. requesterNonce must match the SPDM requester nonce embedded in each
+// evidence entries. nonce is the client nonce, which the result reports
+// once every GPU verified. requesterNonce must match the SPDM requester nonce embedded in each
 // GPU's evidence; the provider derives it from nonce (SEE:
 // chutes.GPURequesterNonce).
 func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, nonce, requesterNonce Nonce) *NvidiaVerifyResult {

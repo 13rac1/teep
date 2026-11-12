@@ -467,6 +467,19 @@ func TestEvalNonceMatch(t *testing.T) {
 	}
 }
 
+// A response that echoes no nonce fails nonce_match with the reason, and
+// names the factor that checks the client nonce.
+func TestEvalNonceMatch_NotEchoed(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	raw.Nonce = ""
+	raw.NonceSource = NonceSourceNotEchoed
+	f := assertSingleFactor(t, evalNonceMatch(&ReportInput{Raw: raw, Nonce: nonce}), Fail)
+	if f.Detail != "no echoed nonce; freshness rests on tee_reportdata_binding" {
+		t.Errorf("detail = %q", f.Detail)
+	}
+}
+
 func TestEvalNonceMatch_WithNonceSource(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)

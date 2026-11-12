@@ -3,11 +3,11 @@ Attestation Report: chutes / zai-org/GLM-5-TEE
 
   Hardware:      intel-tdx
   PPID:          ba8cf63a4d1696f1...
-  Nonce source:  client
+  Nonce source:  not_echoed
   Candidates:    1/2 evaluated
 
 Tier 1: Core Attestation
-  ✓ nonce_match                       nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✗ nonce_match                       no echoed nonce; freshness rests on tee_reportdata_binding  [ALLOWED]
   ✓ tee_quote_present                 TDX quote present (10486 hex chars)  [ENFORCED]
   ✓ tee_quote_structure               valid QuoteV4, MRTD: ddc6efcdd2309e10...  [ENFORCED]
   ✓ tee_cert_chain                    certificate chain valid (Intel root CA)  [ENFORCED]
@@ -47,6 +47,6 @@ Tier 3: Supply Chain & Channel Integrity
   — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
   — event_log_integrity               Chutes RTMR verification is validator-side; event log not exposed
 
-Score: 18/26 passed, 1 skipped, 7 failed (0 enforced, 7 allowed), 9 n/a
+Score: 17/26 passed, 1 skipped, 8 failed (0 enforced, 8 allowed), 9 n/a
 
 Run 'teep help tiers' for scoring or 'teep help factors' for details.

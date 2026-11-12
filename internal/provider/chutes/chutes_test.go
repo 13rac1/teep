@@ -65,11 +65,12 @@ func TestParseAttestationResponse_Success(t *testing.T) {
 	if raw.SigningKey != "dGVzdC1wdWJrZXk=" {
 		t.Errorf("SigningKey = %q, want e2e_pubkey", raw.SigningKey)
 	}
-	if raw.Nonce != nonce.Hex() {
-		t.Errorf("Nonce = %q, want %q", raw.Nonce, nonce.Hex())
+	// The evidence response echoes no nonce.
+	if raw.Nonce != "" {
+		t.Errorf("Nonce = %q, want none", raw.Nonce)
 	}
-	if raw.NonceSource != "client" {
-		t.Errorf("NonceSource = %q, want client", raw.NonceSource)
+	if raw.NonceSource != attestation.NonceSourceNotEchoed {
+		t.Errorf("NonceSource = %q, want %q", raw.NonceSource, attestation.NonceSourceNotEchoed)
 	}
 	if raw.SigningAlgo != "ml-kem-768" {
 		t.Errorf("SigningAlgo = %q, want ml-kem-768", raw.SigningAlgo)

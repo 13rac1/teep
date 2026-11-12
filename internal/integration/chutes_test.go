@@ -76,15 +76,11 @@ func TestIntegration_Chutes_Fixture(t *testing.T) {
 		nvidiaResult = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, env.nonce)
 		t.Logf("NVIDIA EAT: format=%s sig_err=%v claims_err=%v", nvidiaResult.Format, nvidiaResult.SignatureErr, nvidiaResult.ClaimsErr)
 	} else if len(raw.GPUEvidence) > 0 {
-		serverNonce, parseErr := attestation.ParseNonce(raw.Nonce)
-		if parseErr != nil {
-			t.Fatalf("parse GPU verification nonce: %v", parseErr)
-		}
 		requesterNonce, nonceErr := chutes.GPURequesterNonce(env.nonce, raw.SigningKey)
 		if nonceErr != nil {
 			t.Fatalf("GPU requester nonce: %v", nonceErr)
 		}
-		nvidiaResult = attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce, requesterNonce)
+		nvidiaResult = attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, env.nonce, requesterNonce)
 		t.Logf("NVIDIA GPU direct: format=%s sig_err=%v claims_err=%v", nvidiaResult.Format, nvidiaResult.SignatureErr, nvidiaResult.ClaimsErr)
 	}
 
@@ -143,8 +139,17 @@ func TestIntegration_Chutes_Fixture(t *testing.T) {
 func assertChutesReport(t *testing.T, report *attestation.VerificationReport) {
 	t.Helper()
 
+	// The evidence response echoes no nonce: nonce_match fails and is
+	// allowed; the client nonce is checked by tee_reportdata_binding and
+	// nvidia_nonce_client_bound, which must pass.
+	if f := findFactor(t, report, "nonce_match"); f.Status != attestation.Fail || f.Enforced ||
+		f.Detail != "no echoed nonce; freshness rests on tee_reportdata_binding" {
+		t.Errorf("nonce_match: status=%s enforced=%v detail=%q, want the allowed no-echo failure", f.Status, f.Enforced, f.Detail)
+	}
+	if report.Blocked() {
+		t.Error("report is blocked")
+	}
 	assertMustPass(t, report, []string{
-		"nonce_match",
 		"tee_quote_present",
 		"tee_quote_structure",
 		"tee_cert_chain",

@@ -289,9 +289,11 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 		"has_e2e_pubkey", matchedInst.E2EPubKey != "",
 	)
 
+	// The evidence response echoes no nonce: Nonce stays empty, and the
+	// client nonce is checked by the REPORTDATA binding and the GPU
+	// requester nonce.
 	return &attestation.RawAttestation{
 		BackendFormat: attestation.FormatChutes,
-		Nonce:         nonce.Hex(),
 		TEEProvider:   "TDX+NVIDIA",
 		SigningKey:    matchedInst.E2EPubKey,
 		SigningAlgo:   "ml-kem-768",
@@ -299,7 +301,7 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 		GPUEvidence:   matched.GPUEvidence,
 
 		TEEHardware: "intel-tdx",
-		NonceSource: "client",
+		NonceSource: attestation.NonceSourceNotEchoed,
 
 		CandidatesAvail: len(ar.Evidence),
 		CandidatesEval:  skipped + 1,

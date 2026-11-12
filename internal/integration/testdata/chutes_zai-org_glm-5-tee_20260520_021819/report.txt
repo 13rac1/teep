@@ -3,11 +3,11 @@ Attestation Report: chutes / zai-org/GLM-5-TEE
 
   Hardware:      intel-tdx
   PPID:          30243a409394d073...
-  Nonce source:  client
+  Nonce source:  not_echoed
   Candidates:    1/4 evaluated
 
 Tier 1: Core Attestation
-  ✓ nonce_match                nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✗ nonce_match                no echoed nonce; freshness rests on tee_reportdata_binding  [ALLOWED]
   ✓ tdx_quote_present          TDX quote present (10486 hex chars)  [ENFORCED]
   ✓ tdx_quote_structure        valid QuoteV4, MRTD: ddc6efcdd2309e10...  [ENFORCED]
   ✓ tdx_cert_chain             certificate chain valid (Intel root CA)  [ENFORCED]
@@ -41,6 +41,6 @@ Tier 3: Supply Chain & Channel Integrity
   ? sigstore_verification      chutes attestation does not include container image digests; cosign verification is validator-side only  [ALLOWED]
   ? event_log_integrity        chutes performs RTMR verification validator-side against a golden baseline; event log not exposed to clients  [ALLOWED]
 
-Score: 17/29 passed, 5 skipped, 7 failed (0 enforced, 7 allowed)
+Score: 16/29 passed, 5 skipped, 8 failed (0 enforced, 8 allowed)
 
 Run 'teep help tiers' for scoring or 'teep help factors' for details.

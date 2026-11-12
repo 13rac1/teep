@@ -36,7 +36,9 @@ var factorRegistry = []factorInfo{
 			"attacks where an attacker presents a stale but valid attestation " +
 			"from a previous session. A gateway-variant ACI/1 response " +
 			"echoes no nonce, so this factor fails; its freshness rests on " +
-			"gateway_tee_reportdata_binding.",
+			"gateway_tee_reportdata_binding. The Chutes evidence response " +
+			"echoes no nonce either; its freshness rests on " +
+			"tee_reportdata_binding.",
 	},
 	{
 		Name:    attestation.FactorTEEQuotePresent,
