@@ -384,6 +384,7 @@ commit messages, and user-visible strings, and to your own review comments.
   uncertainty or optional simplification; do not propose a bypass for a provider
   that correctly fails verification.
 - A commit message explains the problem, the reason for the change, its effect, and what to verify. Ask for reasoning about how the code works to move to a comment at the decision point, and for a contract to move to the document that holds it.
+- A pull request body follows `.github/PULL_REQUEST_TEMPLATE.md`: Problem, Change, Effect and To verify, and a Point of discussion only for a design question that the reviewer must decide.
 - After an amendment round, review the final change as a whole against this
   document, with the enumeration in Concurrency Safety. The delta of the round
   shows what moved; the whole shows what the moves left open.
