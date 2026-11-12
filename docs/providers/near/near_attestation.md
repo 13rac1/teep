@@ -80,6 +80,165 @@ files, `TestNearSignedModelKeySubstitution`, and the provider signed-evidence
 fixture suites. Transport requirements remain in the
 [shared transport reference](../../transport/README.md).
 
+## Supply chain: image index and platform manifest
+
+The lookup mismatch was reported on 2026-11-11 for NEAR's
+`deepseek-ai/DeepSeek-V4.1-Flash-1017` and
+`deepseek-ai/DeepSeek-V4.1-Flash-1017-abliterated` deployments. The retained
+`z-ai/glm-5.3-flash` captures use the earlier index pin and pass the same
+lookup without the temporary exception. This is a change in the compose's image
+reference; it is not evidence that every NEAR model or its entire attestation
+response changed format.
+
+| Deployment evidence | Launcher compose pin | Parent-index discovery needed? |
+| --- | --- | --- |
+| GLM-5.3-Flash, NearDirect and NearCloud captures of 2026-09-09 | Signed index `91fdff3c…` | No; the pinned digest can be looked up directly. |
+| Both DeepSeek-V4.1-Flash-1017 models, reported on 2026-11-11 | Platform manifest `079a14b4…` | Yes; the publisher evidence names the containing index. |
+
+The [gap report's scope and evidence](../../attestation_gaps/near_image_provenance.md#scope-and-evidence)
+separates the reported DeepSeek deployments, retained GLM captures, and
+provider-wide policy effects. Captures establish behavior at their recorded
+dates, not the current state of every backend.
+
+NEAR's [supply-chain policy](../../../internal/provider/neardirect/policy.go)
+names the `build.yml` or `promote.yml` workflow of `nearai/compose-manager`
+on `refs/heads/master` for `nearaidev/compose-manager-launcher`.
+`sigstore_verification` looks up each image digest of the measured compose
+in Rekor. Separate factors check the provenance records that were retrieved.
+The [NEAR image provenance gap report](../../attestation_gaps/near_image_provenance.md)
+describes the DeepSeek lookup failure. The separate teep publisher-verification
+defect is tracked in [issue #164](https://github.com/13rac1/teep/issues/164).
+
+A container image index lists platform manifests and can also contain build
+attestation manifests. Even a single-platform build can produce an index.
+NEAR's launcher build workflow signs the index digest,
+and Rekor indexes the attestation under that digest. A compose can pin
+either digest. Teep finds a Rekor entry only for the digest that the
+attestation names, and Rekor has no lookup from a platform manifest to the
+index that lists it.
+
+Example, checked on 2026-11-11:
+
+- `nearaidev/compose-manager-launcher@sha256:91fdff3cfa3543d72656b2368c7d8a0a83d95a0f1087378c897aa1537acdba56`
+  is an OCI image index (Docker Hub). Its `linux/amd64` manifest is
+  `sha256:079a14b41deb11e0e27f9b69648e8b3d89bd6fb9ccf6071643b8f447fa415085`.
+- Rekor has two entries for the index digest. One of them is a DSSE
+  attestation signed by
+  `https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master`
+  in [workflow run 28089759418](https://github.com/nearai/compose-manager/actions/runs/28089759418)
+  of 2026-06-24. Rekor has no entry for the manifest digest.
+- The investigation of `deepseek-ai/DeepSeek-V4.1-Flash-1017` and
+  `deepseek-ai/DeepSeek-V4.1-Flash-1017-abliterated` reported this platform
+  manifest pin on NearDirect. PR #191 also reports it in NearCloud model
+  evidence. This does not establish a changed gateway image format.
+- The retained `z-ai/glm-5.3-flash` captures instead pin index `91fdff3c…`
+  directly. `TestNearGLMIndexPinPassesEnforcedSigstore` verifies that both
+  provider captures pass with `sigstore_verification` enforced.
+
+The index, its manifest, and the Rekor entries of each digest:
+
+```sh
+crane manifest nearaidev/compose-manager-launcher@sha256:91fdff3cfa3543d72656b2368c7d8a0a83d95a0f1087378c897aa1537acdba56
+curl -s -H 'Content-Type: application/json' \
+  -d '{"hash":"sha256:91fdff3cfa3543d72656b2368c7d8a0a83d95a0f1087378c897aa1537acdba56"}' \
+  https://rekor.sigstore.dev/api/v1/index/retrieve
+curl -s -H 'Content-Type: application/json' \
+  -d '{"hash":"sha256:079a14b41deb11e0e27f9b69648e8b3d89bd6fb9ccf6071643b8f447fa415085"}' \
+  https://rekor.sigstore.dev/api/v1/index/retrieve
+```
+
+With the index pin in the GLM captures, teep can query Rekor directly for
+the measured digest. The reported DeepSeek platform manifest pin requires
+an additional discovery step:
+find a signed index that contains that manifest. One possible procedure is:
+
+1. List the candidate indexes of the image from the registry (its tags).
+2. Fetch each candidate index by digest and check that its bytes hash to
+   that digest, so that the registry needs no trust.
+3. Accept an index only if it lists the exact pinned manifest digest for
+   the platform of the measured compose.
+4. Obtain the complete signed statement or bundle for the index. Verify its
+   signature, certificate trust and workflow identity, its subject digest,
+   and its transparency evidence. A Rekor search result alone is insufficient.
+
+This would establish: measured compose → manifest digest → index membership
+and hash → independently verified signed index. Teep does not implement
+this procedure today. It would add tag enumeration and candidate-index
+retrievals to the existing provenance requests. Search work grows with the
+number of candidate tags and indexes; pagination, rate limits, outages and
+bounded search limits can prevent a new authorization.
+
+Tags do not enumerate all stored indexes. A signed index can remain available
+by digest after its last tag moves, disappears, or is copied as a platform
+manifest. On 2026-11-12, Docker Hub still listed the example's signed index
+under `prod-20260702-8e07c35`, while `prod`, `latest`, and
+`staging-20260624-8e07c35` identified the child manifest. This establishes
+current discoverability for that image, not a retention guarantee or a
+history of tag pruning. NEAR's build workflow copies stamped staging tags
+without `--all`; its launcher promotion workflow uses `--all` to retain the
+index. See the gap report's
+[source evidence and limits](../../attestation_gaps/near_image_provenance.md#finding-the-containing-index-through-registry-tags).
+
+Discovery failure must block an enforced image check. It does not prove the
+image is malicious, and a missing tag does not make a forged signature valid.
+A verified cache can reduce repeated discovery, but cannot supply evidence
+that was never acquired. A stable parent-index hint can supply candidates
+without being trusted, provided the verifier checks the complete chain.
+
+### Teep publisher-verification defect
+
+[Issue #164](https://github.com/13rac1/teep/issues/164) tracks a teep verification
+defect: the Rekor path reads the claimed publisher identity from a certificate
+without validating its chain to Fulcio, and does not independently verify the
+signed statement's subject against the image digest. It affects the older GLM
+captures too and is independent of the DeepSeek compose digest choice.
+
+The current NEAR policy sets `NoDSSE: true` for the launcher and
+compose-manager. The captured [Rekor DSSE records](https://github.com/sigstore/rekor/blob/2c0ee5be82d2b88ddf94d456a6d92f35d20fa45f/pkg/types/dsse/README.md)
+contain `spec.signatures`,
+`payloadHash` and `envelopeHash`; they omit the full signed payload.
+Teep's `verifyDSSESignature` expects a complete envelope at
+`spec.content.envelope`, so it cannot verify these signatures through that
+path. `NoDSSE` ignores signature errors generally, including errors caused
+by incomplete records and invalid signatures.
+
+For retrieved records, teep checks Rekor log evidence and expected identity
+metadata extracted from the certificate.
+[Rekor verifies envelope signatures on submission](https://github.com/sigstore/rekor/blob/2c0ee5be82d2b88ddf94d456a6d92f35d20fa45f/pkg/types/dsse/v0.0.1/entry.go#L282-L300),
+but its signed log record is not a substitute for the missing client checks.
+Parent-index discovery alone would retain this defect.
+This can be corrected in teep by retrieving complete signed evidence,
+validating certificate trust and signing-time eligibility, and verifying the
+signature and subject digest. Rekor's record alone omits the payload needed
+for that last step. Removing `NoDSSE` without implementing this pathway would
+block the currently supported records. The code fix belongs to issue #164;
+it is not a provider boot-measurement limitation or a consequence of the
+DeepSeek image-reference change.
+
+### Temporary default enforcement
+
+To accommodate the two reported DeepSeek deployments while teep cannot
+resolve their chain,
+`sigstore_verification` is in `NeardirectDefaultAllowFail` and
+`NearcloudDefaultAllowFail`: teep reports the failure, and it does not block
+requests. The exception applies to every model image for both providers
+and to gateway images for NearCloud, including models such as the captured
+GLM deployment that already pass the lookup. Its scope is broader than the
+reported DeepSeek launcher mismatch.
+Missing log entries and search errors can therefore leave other components
+without provenance verification too.
+
+Both `serve` and `verify` fetch Rekor provenance only for digests whose
+search succeeded. `build_transparency_log` and signer-recognition factors
+evaluate that retrieved subset; a passing result does not establish
+coverage of a missing component. A deployment must still pass the other
+enforced factors. Compose binding and event-log integrity authenticate the
+supplied configuration, not the publisher of an image whose provenance
+was not verified. The
+[NEAR image provenance report](../../attestation_gaps/near_image_provenance.md#teep-status)
+records this policy exposure separately from the existing signature limitation
+and the [dstack boot-measurement gap](../../attestation_gaps/dstack_integrity.md).
+
 ## NearDirect backend selection
 
 Each provider instance establishes one route per model. For the default NEAR

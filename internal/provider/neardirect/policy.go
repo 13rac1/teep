@@ -36,7 +36,11 @@ func SupplyChainPolicy() *attestation.SupplyChainPolicy {
 		{Repo: "otel/opentelemetry-collector-contrib", ModelTier: true, Provenance: attestation.SigstorePresent,
 			KeyFingerprint: "a8bd282038915eaf2ca9ac7d4cc2605ce6e7ae8aed5b19b06370e285f8a9d72e"},
 		{Repo: "nearaidev/compose-manager", ModelTier: true, Provenance: attestation.FulcioSigned,
-			NoDSSE:     true, // Rekor DSSE envelope has no signatures as of 2026-03
+			// Rekor stores signatures and payload hashes, but not the full
+			// envelope required by teep's DSSE verifier. This exception does
+			// not establish independent publisher-signature verification.
+			// SEE: docs/attestation_gaps/near_image_provenance.md
+			NoDSSE:     true,
 			OIDCIssuer: GithubOIDC,
 			OIDCIdentities: []string{
 				"https://github.com/nearai/compose-manager/.github/workflows/build.yml@refs/heads/master",
@@ -47,6 +51,7 @@ func SupplyChainPolicy() *attestation.SupplyChainPolicy {
 				"https://github.com/nearai/compose-manager",
 			}},
 		{Repo: "nearaidev/compose-manager-launcher", ModelTier: true, Provenance: attestation.FulcioSigned,
+			// The same Rekor envelope limitation applies to the launcher.
 			NoDSSE:     true,
 			OIDCIssuer: GithubOIDC,
 			OIDCIdentities: []string{

@@ -5165,3 +5165,33 @@ func TestBuildReport_ACIGatewayUnverifiedFailsClosed(t *testing.T) {
 	}
 	t.Error("evidence_verified factor missing: unverified gateway evidence did not fail closed")
 }
+
+// A launcher digest without a Rekor entry fails sigstore_verification for
+// both NEAR providers, and the failure is reported, not enforced. The newer
+// DeepSeek-V4.1-Flash-1017 and -abliterated composes pin the platform manifest,
+// while the logged attestation names the index. Older captured GLM composes
+// pin the index directly and do not require this exception.
+func TestNearSigstoreVerificationAllowed(t *testing.T) {
+	for _, tc := range []struct {
+		provider  string
+		allowFail []string
+	}{
+		{"neardirect", NeardirectDefaultAllowFail},
+		{"nearcloud", NearcloudDefaultAllowFail},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			report := BuildReport(&ReportInput{
+				Provider:  tc.provider,
+				Model:     "test-model",
+				Raw:       &RawAttestation{},
+				Nonce:     NewNonce(),
+				AllowFail: tc.allowFail,
+				Sigstore:  []SigstoreResult{{Digest: "079a14b41deb11e0e27f9b69648e8b3d89bd6fb9ccf6071643b8f447fa415085", Status: 404}},
+			})
+			f := findFactor(t, report, FactorSigstoreVerify)
+			if f.Status != Fail || f.Enforced {
+				t.Errorf("%s sigstore_verification: status %s, enforced %v; want a failure that is not enforced", tc.provider, f.Status, f.Enforced)
+			}
+		})
+	}
+}

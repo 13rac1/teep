@@ -1,37 +1,53 @@
 # Dstack Integrity Chain: In-Band Discovery Gap
 
-Dstack-based confidential inference providers do not publish expected boot-chain measurement values in a signed, machine-readable format. Verifiers can enforce measurement allowlists today, but all allowlist values must be sourced and maintained out-of-band. Provider infrastructure changes silently invalidate those values, forcing a choice between strict enforcement with unplanned outages and relaxed enforcement that masks potential compromises.
+Dstack-based confidential inference providers do not publish complete,
+authenticated reference measurements for their firmware, operating systems and
+hardware configurations. Customers must maintain approved measurements outside
+the attestation exchange. Infrastructure updates can then force a choice between
+blocked requests and accepting machine software they cannot fully authenticate.
 
 ## The Problem
 
-A TEE attestation proves that the software running inside a confidential VM matches specific measurements. Dstack-based providers produce Intel TDX quotes containing these measurements, and verifiers can check them against expected values. The enforcement machinery works. The problem is operational: no dstack-based provider publishes the expected measurement values in an authenticated, machine-readable channel that verifiers can consume automatically.
+A malicious operator or an attacker who controls a provider's deployment can
+choose the software that handles customer data inside a confidential machine.
+That software can read or change the prompts, responses and credentials
+available to it; encrypting the connection does not protect data from the
+software that receives it. A client that authenticates the machine and its
+connection still needs independent evidence that the installed software is
+approved.
 
-Dstack's TDX measurement chain includes registers that identify the firmware, kernel, hardware configuration, and the docker compose manifest of the confidential VM. The application-layer registers (compose manifest binding and runtime event log) can be verified in-band from the attestation evidence itself. The boot-chain registers (firmware, kernel, hardware configuration) must be compared against externally-sourced expected values — and those expected values are what providers do not publish.
+Providers do not supply all the authenticated reference values needed to
+recognize approved firmware, operating systems and hardware configurations.
+Customers can maintain their own approved values, but ordinary infrastructure
+updates can then block service until those values are reviewed and updated.
+Accepting unrecognized values restores service while removing that check
+against compromised software.
 
-In the case of NearAI, the docker compose manifest contents are provided in-line, which allows the container images to be fully authenticated via Sigstore, even if they change dynamically. However, there is no signed release manifest that binds the usage of a specific dstack base image version and hardware configuration to expected current TDX measurement values. Unlike the docker compose manifest, no NearAI API fields provide base dstack or hardware configuration profiles in-band that can be cross-checked in Sigstore.
-
-This creates three operational problems:
-
-1. **Silent breakage.** When a provider updates its dstack image, kernel, or hardware configuration, measurement values change without notice. Strict verifiers fail closed, blocking inference until the operator discovers the change and updates allowlists manually.
-
-2. **Forced trade-off between safety and availability.** Operators must choose between strict enforcement (fail closed on any unexpected value, accepting unplanned outages) and relaxed enforcement (permitting unverified infrastructure changes to pass silently).
-
-3. **No way to distinguish upgrades from compromises.** Bootstrapping allowlist values from observed attestation reports requires trusting the environment at the time of observation. Without an authenticated source, a legitimate provider upgrade and a compromised lower stack both look the same: unexpected measurement drift.
+Application-image discovery has a separate limitation; see
+[NEAR DeepSeek image provenance](near_image_provenance.md).
 
 ## Impact
 
-No compensating controls exist in the dstack attestation protocol for automated discovery of boot-chain measurement baselines. The compose manifest binding and event log replay provide application-layer verification, but the boot-chain registers that establish platform integrity have no authenticated in-band source.
+### Security: accepting unrecognized machine software
 
-**Security impact:**
+- **Who:** A malicious operator or an attacker who controls deployed firmware or operating-system software.
+- **What they do:** Run an unapproved version while the client permits unrecognized measurements.
+- **What they get:** Access to customer data processed by the affected machine, subject to the control gained over its software.
+- **What stops it today:** Reviewed approved measurements can block unexpected software. Hardware authentication and encrypted connections do not supply missing software approval.
 
-- A compromised lower stack (firmware, kernel, or hypervisor configuration) produces measurements that differ from expected values, but so does a routine provider upgrade. Without an authenticated channel for measurement baselines, verifiers cannot distinguish the two. An attacker who compromises the provider's infrastructure between allowlist updates could operate undetected until the next manual audit.
-- Operators who relax enforcement to avoid outages from legitimate provider changes also relax enforcement against actual compromises. The same configuration knob that keeps service running also reduces the security guarantee.
+An ordinary upgrade can produce the same unfamiliar measurements, so observing
+new values alone does not establish that they are safe.
 
-**Operational impact:**
+### Availability: preventing verification of legitimate deployments
 
-- Strict measurement enforcement causes unplanned outages whenever a provider updates firmware, kernel, or hardware configuration — changes that happen without advance notice.
-- Per-deployment-class variation in hardware configuration (CPU count, memory, GPU count) means a fleet with multiple hardware profiles requires multiple pinned values, all maintained manually.
-- Providers have no mechanism to announce measurement changes before rolling out infrastructure updates, so verifiers cannot pre-configure new allowlist values.
+- **Who:** An attacker who can disrupt access to software releases or measurement references.
+- **What they do:** Prevent clients from obtaining approved reference measurements for a deployment.
+- **What they get:** The ability to interrupt service when clients require all approval evidence.
+- **What stops it today:** Locally maintained approved measurements reduce this dependency, but do not establish approval of an unfamiliar deployment.
+
+Legitimate infrastructure updates and unavailable reference sources can cause
+similar interruptions without an attacker; service can remain blocked until
+operators obtain and review the required measurements.
 
 ---
 
@@ -95,14 +111,21 @@ graph TD
     style F fill:#ff9,stroke:#333
     style G fill:#9f9,stroke:#333
     style H fill:#9f9,stroke:#333
-    style I fill:#9f9,stroke:#333
+    style I fill:#ff9,stroke:#333
 ```
 
-Green nodes are either verifiable from authoritative sources (MRSEAM from Intel, MRTD from dstack reproducible release builds, Sigstore docker image signatures) or already verified in-band (MRCONFIGID, RTMR3). Yellow nodes can be pinned from observed attestation reports, but those pins are **out-of-band and fragile** — they break without warning when a provider changes hardware configuration, kernel version, or rootfs layout.
+Green nodes have authoritative reference sources (MRSEAM from Intel and MRTD
+from dstack reproducible builds) or bindings that can be checked against the
+supplied evidence (MRCONFIGID and RTMR3). Yellow boot-chain nodes require
+additional expected values that vary with deployment configuration. The yellow
+container node requires separate image evidence: binding a compose file to a
+quote does not independently authenticate the publishers of its images.
 
-Without measurement allowlists configured, verifiers can check only the green nodes — application-layer bindings and compose-file docker container images. With allowlists configured, the full chain can be enforced, including authentication of dynamic changes to docker compose file images via online Sigstore checks.
+Measurement allowlists can enforce boot-chain expectations where values have
+been obtained and reviewed. They do not close NEAR's
+[application-image discovery gap](near_image_provenance.md).
 
-But the yellow nodes require externally-sourced expected values, and the lack of an authenticated delivery channel for those values creates the operational tension described in [The Problem](#the-problem) above:
+The yellow boot-chain nodes require external expected values. The lack of an authenticated delivery channel for those values creates the operational tension described in [The Problem](#the-problem):
 
 - **Strict pins** cause verifiers to fail closed when a provider changes infrastructure, blocking inference until the operator updates allowlists
 - **Relaxed pins** let measurement drift pass silently, potentially masking a lower-stack compromise as a routine update
@@ -260,7 +283,7 @@ If Sigstore is not practical, the next-best option is a provider-signed JSON man
 
 Tinfoil's V3 attestation format is a concrete implementation of the recommended in-band publication model. Tinfoil's `pri-build-action` GitHub Actions workflow computes expected measurement values for every deployment configuration and publishes them as a signed Sigstore bundle (DSSE in-toto attestation with a `snp-tdx-multiplatform/v1` predicate) in the Rekor transparency log.
 
-Verifiers fetch the Sigstore bundle for the deployment's GitHub repository and tag, verify the DSSE signature against the Sigstore root of trust (Fulcio certificate, SCT, transparency log entry), extract the measurement predicate, and compare every register value against the hardware attestation report. This eliminates the three operational problems identified in [The Problem](#the-problem):
+Verifiers fetch the Sigstore bundle for the deployment's GitHub repository and tag, verify the DSSE signature against the Sigstore root of trust (Fulcio certificate, SCT, transparency log entry), extract the measurement predicate, and compare every register value against the hardware attestation report. This addresses the boot-measurement publication problems described in [The Problem](#the-problem), provided the matching bundle is available and verifies:
 
 1. **No silent breakage.** Infrastructure changes that produce new measurements also produce new bundles — there is no window where measurements drift without a corresponding update to the verification baseline.
 
@@ -311,6 +334,7 @@ Unlike dstack, where RTMR0 varies with CPU/RAM/GPU count and operators must main
 - **Phala Trust Center:** [Trust Center Technical Details](https://docs.phala.com/dstack/trust-center-technical) and [Verify the Platform](https://docs.phala.com/phala-cloud/attestation/verify-the-platform)
 - **dstack attestation guide:** [dstack attestation.md](https://github.com/Dstack-TEE/dstack/blob/master/attestation.md)
 - **dstack attestation tutorial:** `Dstack-TEE/dstack` (`docs/tutorials/attestation-verification.md`)
+- **Application-image evidence and sources:** [NEAR image provenance](near_image_provenance.md) and [NEAR provider reference](../providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest)
 
 ---
 
@@ -318,7 +342,7 @@ Unlike dstack, where RTMR0 varies with CPU/RAM/GPU count and operators must main
 
 ### Current Enforcement
 
-When a provider supplies a quote, event log, and compose manifest, teep performs both application-layer and boot-chain verification:
+When a provider supplies a quote, event log, and compose manifest, teep can check the boot chain and bind the supplied runtime configuration:
 
 - verify the TDX quote structure and PCS collateral
 - verify caller binding through `REPORTDATA` where the provider-specific protocol supports it
@@ -326,9 +350,10 @@ When a provider supplies a quote, event log, and compose manifest, teep performs
 - enforce `RTMR0`–`RTMR2` allowlists when configured (pinnable from observed reports via `--update-config`)
 - verify `MRCONFIGID` against the published compose manifest
 - replay the event log and check `RTMR3` consistency
-- inspect compose-listed images and apply repository allowlists and supply-chain signature checks via Sigstore and Rekor
 
-This provides meaningful coverage of both the boot chain and the application layer. The limitation is not in teep's enforcement capability but in the **discovery and maintenance** of the values it enforces.
+Boot-chain checks depend on the effective measurement policy. Verification of
+the bound compose does not establish approval of its application images; that
+requires separate publisher evidence.
 
 Because providers do not publish authenticated measurement baselines in-band, teep operators must either derive values from source (feasible for `MRSEAM` and `MRTD`, difficult for `RTMR0`–`RTMR2` without hardware specs) or bootstrap them from observation (`teep verify --update-config`). Either way, the operator bears the burden of detecting and responding to legitimate infrastructure changes, with no automated mechanism to distinguish a routine dstack upgrade from a compromised lower stack.
 
