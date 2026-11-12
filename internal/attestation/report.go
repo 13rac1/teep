@@ -1440,10 +1440,11 @@ func evalTEEBootConfig(in *ReportInput) []FactorResult {
 		return evalTDXBootConfig(in)
 	case in.SEV != nil && in.SEV.ParseErr == nil:
 		// SEV-SNP uses a single launch measurement (checked by tee_measurement)
-		// rather than separate boot config registers. There is no additional
-		// boot config to verify beyond what tee_measurement already covers.
-		return factor(TierCore, FactorTEEBootConfig, Pass,
-			"SEV-SNP boot config covered by launch measurement (tee_measurement)")
+		// rather than separate boot config registers. Nothing is compared
+		// here, so the factor does not apply; tee_measurement carries the
+		// result.
+		return factor(TierCore, FactorTEEBootConfig, NotApplicable,
+			"SEV-SNP has no separate boot measurement; the launch measurement (tee_measurement) covers it")
 	default:
 		return factor(TierCore, FactorTEEBootConfig, Skip, "no parseable TEE quote/report; cannot check boot config")
 	}
@@ -3035,8 +3036,10 @@ func evalGatewayBootConfig(in *ReportInput) []FactorResult {
 			return factor(TierGateway, FactorGWBootConfig, Fail,
 				"no parseable gateway report; boot config not checked")
 		}
-		return factor(TierGateway, FactorGWBootConfig, Pass,
-			"gateway SEV-SNP boot config covered by the launch measurement")
+		// Nothing is compared here: gateway_tee_measurement carries the
+		// result for the launch measurement.
+		return factor(TierGateway, FactorGWBootConfig, NotApplicable,
+			"SEV-SNP has no separate boot measurement; the launch measurement (gateway_tee_measurement) covers it")
 	}
 	if in.GatewayTDX == nil || in.GatewayTDX.ParseErr != nil {
 		return factor(TierGateway, FactorGWBootConfig, Skip, "no parseable gateway TDX quote; cannot check RTMR1/RTMR2")

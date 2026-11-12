@@ -155,7 +155,7 @@ Is the hardware genuine? These checks verify the TDX quote (or SEV-SNP report) i
 | 6 | `tee_debug_disabled` | TD_ATTRIBUTES debug bit is 0 (production enclave) |
 | 7 | `tee_measurement` | MRTD and MRSEAM match configured measurement policy allowlists |
 | 8 | `tee_hardware_config` | RTMR[0] matches hardware config allowlist |
-| 9 | `tee_boot_config` | RTMR[1] and RTMR[2] match boot config allowlists |
+| 9 | `tee_boot_config` | RTMR[1] and RTMR[2] match boot config allowlists; not applicable to SEV-SNP, whose launch measurement (`tee_measurement`) covers the boot |
 | 10 | `signing_key_present` | Enclave ECDH public key present (API field: `signing_key`) |
 | 11 | `response_schema` | Attestation response JSON matches expected schema (no unknown or missing fields) |
 
@@ -230,7 +230,7 @@ factors state that.
 | 40 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave) |
 | 41 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists |
 | 42 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches hardware config allowlist |
-| 43 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match boot config allowlists |
+| 43 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match boot config allowlists; not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot |
 | 44 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified |
 | 45 | `gateway_compose_binding` | Gateway sha256(app_compose) matches TDX MRConfigID |
 | 46 | `gateway_cpu_id_registry` | Gateway CPU PPID verified in Proof of Cloud registry |

@@ -117,7 +117,8 @@ var factorRegistry = []factorInfo{
 			"kernel and initrd boot chain; RTMR2 reflects the rootfs and " +
 			"application layer. Together they prove the boot sequence loaded " +
 			"the expected software stack. Skipped when no RTMR1/RTMR2 " +
-			"policy is configured.",
+			"policy is configured. Not applicable to SEV-SNP, which has no " +
+			"separate boot measurement; tee_measurement covers it.",
 	},
 	{
 		Name:    attestation.FactorSigningKeyPresent,
@@ -527,7 +528,9 @@ var factorRegistry = []factorInfo{
 		Description: "Checks that the gateway RTMR1 and RTMR2 from the TDX quote " +
 			"match the configured gateway measurement policy allowlists. Verifies " +
 			"the gateway booted the expected kernel, initrd, and rootfs. Skipped " +
-			"when no gateway RTMR1/RTMR2 policy is configured.",
+			"when no gateway RTMR1/RTMR2 policy is configured. Not applicable " +
+			"to an SEV-SNP gateway, which has no separate boot measurement; " +
+			"gateway_tee_measurement covers it.",
 	},
 	{
 		Name:    attestation.FactorGWReportData,

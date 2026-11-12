@@ -53,7 +53,7 @@ Tier 4: Gateway Attestation
   ✓ gateway_tee_debug_disabled        gateway debug bit is 0 (production guest)  [ENFORCED]
   ✓ gateway_tee_measurement           SEV-SNP code measurement matches Sigstore predicate (6d657b353726893e...)  [ENFORCED]
   ✓ gateway_tee_hardware_config       gateway SEV-SNP guest policy valid (policy=0x0000000000030000)  [ENFORCED]
-  ✓ gateway_tee_boot_config           gateway SEV-SNP boot config covered by the launch measurement  [ENFORCED]
+  — gateway_tee_boot_config           SEV-SNP has no separate boot measurement; the launch measurement (gateway_tee_measurement) covers it
   ✓ gateway_tee_reportdata_binding    v3: reportdata_hash verified, nonce_bound=true, gpu_bound=false  [ENFORCED]
   — gateway_compose_binding           compose binding is a dstack TDX concept; the gateway is SEV-SNP
   — gateway_cpu_id_registry           Proof of Cloud queries an Intel TDX quote; the gateway is SEV-SNP
@@ -61,6 +61,6 @@ Tier 4: Gateway Attestation
   ✓ gateway_tee_tcb_current           gateway SEV-SNP TCB meets minimums (bl=0x0a tee=0x00 snp=0x17 ucode=0x54)  [ENFORCED]
   ✓ gateway_tee_tcb_not_revoked       gateway SEV-SNP TCB at or above minimum thresholds; AMD CRL not checked  [ENFORCED]
 
-Score: 23/42 passed, 9 skipped, 10 failed (0 enforced, 10 allowed), 8 n/a
+Score: 22/41 passed, 9 skipped, 10 failed (0 enforced, 10 allowed), 9 n/a
 
 Run 'teep help tiers' for scoring or 'teep help factors' for details.
