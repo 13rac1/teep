@@ -204,13 +204,13 @@ var factorRegistry = []factorInfo{
 	{
 		Name:    attestation.FactorNvidiaClaims,
 		Tier:    2,
-		Summary: "NVIDIA attestation claims valid",
-		Description: "Validates the claims within the NVIDIA attestation payload, " +
-			"including GPU architecture, driver version, and confidential " +
-			"computing mode. For EAT tokens, checks per-GPU evidence " +
-			"claims. For JWTs, checks the overall attestation result. " +
-			"It fails when the evidence did not verify, and is not " +
-			"applicable to direct SPDM evidence, which carries no claims.",
+		Summary: "NVIDIA EAT nonce matches and evidence verified",
+		Description: "For an EAT payload, checks that its top-level nonce " +
+			"matches the client nonce and that the evidence verified. It " +
+			"fails when the evidence did not verify, and is not applicable " +
+			"to direct SPDM evidence, which carries no claims. The GPU " +
+			"architecture, GPU count, driver version and confidential " +
+			"computing mode that a payload reports are not checked.",
 	},
 	{
 		Name:    attestation.FactorNvidiaClientNonce,

@@ -1375,8 +1375,8 @@ func TestEvalNvidiaClaims(t *testing.T) {
 		raw.NvidiaPayload = `{"evidence_list":[]}`
 		nv := &NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 4, Nonce: nonce.Hex(), SignaturesVerified: true}
 		f := assertSingleFactor(t, evalNvidiaClaims(&ReportInput{Raw: raw, Nvidia: nv}), Pass)
-		if !strings.Contains(f.Detail, "arch=HOPPER") {
-			t.Errorf("detail should mention arch=HOPPER: %s", f.Detail)
+		if !strings.Contains(f.Detail, "arch reported: HOPPER") {
+			t.Errorf("detail should mention arch reported: HOPPER: %s", f.Detail)
 		}
 	})
 
@@ -1872,7 +1872,7 @@ func TestNvidiaClaimsDetail(t *testing.T) {
 		{
 			"EAT format",
 			&NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 4},
-			"EAT: arch=HOPPER, 4 GPUs, nonce verified",
+			"EAT: top-level nonce matches the client nonce (arch reported: HOPPER, 4 GPUs)",
 		},
 		{
 			"JWT format true",
@@ -4113,8 +4113,6 @@ func TestEvalNvidiaSignature_NilNvidiaWithPayload(t *testing.T) {
 	}
 }
 
-// TestEvalNvidiaClaims_NilNvidiaWithPayload covers L848: Nvidia=nil but
-// NvidiaPayload is present → Fail (verification was not attempted).
 // Claims of NVIDIA evidence that did not verify are not checked, whatever
 // its format. A verified SPDM result has no claims to check.
 func TestEvalNvidiaClaims_Verification(t *testing.T) {
@@ -4131,7 +4129,7 @@ func TestEvalNvidiaClaims_Verification(t *testing.T) {
 		{"spdm signature failed", &NvidiaVerifyResult{Format: "SPDM", GPUCount: 1, SignatureErr: errors.New("requester nonce mismatch")}, Fail, "NVIDIA evidence was not verified; claims not checked"},
 		{"eat signature failed", &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, SignatureErr: errors.New("bad cert chain")}, Fail, "NVIDIA evidence was not verified; claims not checked"},
 		{"spdm verified", &NvidiaVerifyResult{Format: "SPDM", GPUCount: 1, Arch: "HOPPER", Nonce: nonce.Hex(), SignaturesVerified: true}, NotApplicable, "SPDM evidence carries no claims; the measurements are compared by NRAS (nvidia_nras_verified)"},
-		{"eat verified", &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, Arch: "HOPPER", Nonce: nonce.Hex(), SignaturesVerified: true}, Pass, "EAT: arch=HOPPER, 1 GPUs, nonce verified"},
+		{"eat verified", &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, Arch: "HOPPER", Nonce: nonce.Hex(), SignaturesVerified: true}, Pass, "EAT: top-level nonce matches the client nonce (arch reported: HOPPER, 1 GPUs)"},
 		{"eat nonce mismatch", &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, Arch: "HOPPER", ClaimsErr: errors.New("EAT nonce mismatch")}, Fail, "claims invalid: EAT nonce mismatch"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4189,6 +4187,8 @@ func TestEvalNvidiaSignature_SPDMEmptyEvidence(t *testing.T) {
 	}
 }
 
+// TestEvalNvidiaClaims_NilNvidiaWithPayload covers L848: Nvidia=nil but
+// NvidiaPayload is present → Fail (verification was not attempted).
 func TestEvalNvidiaClaims_NilNvidiaWithPayload(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)

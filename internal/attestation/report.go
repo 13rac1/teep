@@ -3565,7 +3565,9 @@ func nvidiaSignatureDetail(r *NvidiaVerifyResult) string {
 func nvidiaClaimsDetail(r *NvidiaVerifyResult) string {
 	switch r.Format {
 	case "EAT":
-		return fmt.Sprintf("EAT: arch=%s, %d GPUs, nonce verified", r.Arch, r.GPUCount)
+		// The arch and GPU count are reported by the payload; no factor
+		// checks them.
+		return fmt.Sprintf("EAT: top-level nonce matches the client nonce (arch reported: %s, %d GPUs)", r.Arch, r.GPUCount)
 	case "JWT":
 		return fmt.Sprintf("JWT claims valid (overall result: %t)", r.OverallResult)
 	default:
