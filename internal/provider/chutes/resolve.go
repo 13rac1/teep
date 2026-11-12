@@ -102,8 +102,21 @@ func (r *ModelResolver) Resolve(ctx context.Context, model string) (string, erro
 	return "", fmt.Errorf("chutes: model %q not found in /v1/models listing; use a chute UUID or check available models", model)
 }
 
+// SetClient replaces the HTTP client used for /v1/models requests.
+func (r *ModelResolver) SetClient(c *http.Client) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.client = c
+}
+
 // CloseIdleConnections releases idle connections owned by this component.
-func (r *ModelResolver) CloseIdleConnections() { r.client.CloseIdleConnections() }
+func (r *ModelResolver) CloseIdleConnections() { r.httpClient().CloseIdleConnections() }
+
+func (r *ModelResolver) httpClient() *http.Client {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.client
+}
 
 // maybeRefresh fetches /v1/models if the cache has expired.
 func (r *ModelResolver) maybeRefresh(ctx context.Context) error {
@@ -135,7 +148,7 @@ func (r *ModelResolver) fetchModels(ctx context.Context) (map[string]string, err
 	req.Header.Set("Authorization", "Bearer "+r.apiKey)
 	provider.SetUserAgent(req)
 
-	resp, err := r.client.Do(req)
+	resp, err := r.httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("chutes: GET %s: %w", r.modelsBase+modelsPath, err)
 	}

@@ -111,8 +111,14 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 	}
 }
 
-// SetClient replaces the HTTP client used for attestation fetches.
-func (a *Attester) SetClient(c *http.Client) { a.client = c }
+// SetClient replaces the HTTP client used for attestation fetches and for
+// model-name resolution, so that capture records the /v1/models exchange and
+// replay serves it. The resolver stays the same object, because the nonce
+// pool shares it.
+func (a *Attester) SetClient(c *http.Client) {
+	a.client = c
+	a.resolver.SetClient(c)
+}
 
 // SetModelsBase overrides the URL used for /v1/models model-name resolution.
 // Primarily for testing.
