@@ -5195,3 +5195,83 @@ func TestNearSigstoreVerificationAllowed(t *testing.T) {
 		})
 	}
 }
+
+// blocksOn reports whether the named factor is one of the enforced failures
+// that block the report.
+func blocksOn(report *VerificationReport, name string) bool {
+	return slices.ContainsFunc(report.BlockedFactors(), func(f FactorResult) bool { return f.Name == name })
+}
+
+// A gateway MRTD that is not in the gateway measurement allowlist fails
+// gateway_tee_measurement. NEAR Cloud and the Venice ACI/1 format report the
+// failure and do not block on it. A list without the allowance blocks.
+func TestGatewayMeasurementAllowed(t *testing.T) {
+	build := func(provider string, allowFail []string) *VerificationReport {
+		return BuildReport(&ReportInput{
+			Provider:   provider,
+			Model:      "test-model",
+			Raw:        &RawAttestation{},
+			Nonce:      NewNonce(),
+			AllowFail:  allowFail,
+			GatewayTDX: &TDXVerifyResult{MRTD: make([]byte, 48)},
+			GatewayPolicy: MeasurementPolicy{
+				MRTDAllow: map[string]struct{}{strings.Repeat("ab", 48): {}},
+			},
+		})
+	}
+	for _, tc := range []struct {
+		provider  string
+		allowFail []string
+	}{
+		{"nearcloud", NearcloudDefaultAllowFail},
+		{"venice", ACIDefaultAllowFail},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			if !slices.Contains(tc.allowFail, FactorGWMeasurement) {
+				t.Fatalf("%s default allow_fail does not contain %s", tc.provider, FactorGWMeasurement)
+			}
+			report := build(tc.provider, tc.allowFail)
+			f := findFactor(t, report, FactorGWMeasurement)
+			if f.Status != Fail || f.Enforced {
+				t.Errorf("%s gateway_tee_measurement: status %s, enforced %v; want a failure that is not enforced", tc.provider, f.Status, f.Enforced)
+			}
+			if blocksOn(report, FactorGWMeasurement) {
+				t.Errorf("%s: gateway_tee_measurement blocks the report", tc.provider)
+			}
+		})
+	}
+	if !blocksOn(build("tinfoil_v3_cloud", TinfoilCloudDefaultAllowFail), FactorGWMeasurement) {
+		t.Error("tinfoil_v3_cloud: a gateway_tee_measurement failure does not block the report")
+	}
+}
+
+// A launcher digest without a Rekor entry fails sigstore_verification. The
+// Venice dstack format reports the failure and does not block on it. The
+// global default list has no such allowance and blocks.
+func TestVeniceSigstoreVerificationAllowed(t *testing.T) {
+	build := func(allowFail []string) *VerificationReport {
+		return BuildReport(&ReportInput{
+			Provider:  "venice",
+			Model:     "test-model",
+			Raw:       &RawAttestation{},
+			Nonce:     NewNonce(),
+			AllowFail: allowFail,
+			Sigstore:  []SigstoreResult{{Digest: "079a14b41deb11e0e27f9b69648e8b3d89bd6fb9ccf6071643b8f447fa415085", Status: 404}},
+		})
+	}
+	want := append(slices.Clone(DefaultAllowFail), FactorSigstoreVerify)
+	if !slices.Equal(VeniceDefaultAllowFail, want) {
+		t.Fatalf("VeniceDefaultAllowFail = %v, want DefaultAllowFail and %s", VeniceDefaultAllowFail, FactorSigstoreVerify)
+	}
+	report := build(VeniceDefaultAllowFail)
+	f := findFactor(t, report, FactorSigstoreVerify)
+	if f.Status != Fail || f.Enforced {
+		t.Errorf("venice sigstore_verification: status %s, enforced %v; want a failure that is not enforced", f.Status, f.Enforced)
+	}
+	if blocksOn(report, FactorSigstoreVerify) {
+		t.Error("venice: sigstore_verification blocks the report")
+	}
+	if !blocksOn(build(DefaultAllowFail), FactorSigstoreVerify) {
+		t.Error("global default: a sigstore_verification failure does not block the report")
+	}
+}

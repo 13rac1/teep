@@ -60,7 +60,7 @@ NEAR AI Cloud routes all traffic through a single TEE-attested API gateway (`clo
 1. Connects to `cloud-api.near.ai`.
 2. Fetches attestation with `provider=near` on the same TLS connection. The response includes model and gateway attestation.
 3. Verifies that the gateway TLS peer SPKI matches the reported fingerprint. Attestation authentication also requires successful gateway REPORTDATA binding, which is separately allowed to fail by default.
-4. Verifies the gateway's own TDX quote, event log, and compose binding (Tier 4 factors).
+4. Verifies the gateway's own TDX quote, event log, and compose binding (Tier 4 factors). A gateway MRTD that is not in the allowlist fails `gateway_tee_measurement`; teep reports this failure and does not block the request by default.
 5. Sends the request through the gateway SPKI pool with `X-Model-Pub-Key` from its cached authorization. TLS-only requests also require successful model-key binding. E2EE uses the same key for a fresh encryption session. New model backend scopes require full verification.
 
 The gateway hint does not independently prove backend selection. See [NEAR routing and recovery limits](docs/providers/near/near_attestation.md#nearcloud-model-routing).
@@ -189,7 +189,7 @@ Each factor produces PASS, FAIL, or SKIP. Factors marked `[ENFORCED]` cause the 
 | 28 | `build_transparency_log` | Checks retrieved component provenance and transparency evidence under provider policy. A pass does not establish a source audit or coverage of every image; see [teep publisher-verification defect](docs/providers/near/near_attestation.md#teep-publisher-verification-defect). |
 | 29 | `cpu_id_registry` | CPU PPID verified against the Proof of Cloud registry — a vendor-neutral, append-only log of hardware identities verified by alliance members. Uses threshold multisig across Secret Labs, Nillion, and iEx.ec. |
 | 30 | `compose_binding` | `sha256(app_compose)` matches TDX MRConfigID (encoded as `0x01 + sha256`). Binds the docker-compose deployment manifest to hardware attestation. |
-| 31 | `sigstore_verification` | Checks whether compose-listed image digests occur in the transparency log, with policy exceptions. Presence alone does not verify a publisher signature. teep's NEAR policy allows this factor to fail for the two DeepSeek models; the exception also covers other models and gateway images. See [affected models and prior GLM evidence](docs/attestation_gaps/near_image_provenance.md#scope-and-evidence). |
+| 31 | `sigstore_verification` | Checks whether compose-listed image digests occur in the transparency log, with policy exceptions. Presence alone does not verify a publisher signature. teep's NEAR policy allows this factor to fail for the two DeepSeek models; the exception also covers other models and gateway images. See [affected models and prior GLM evidence](docs/attestation_gaps/near_image_provenance.md#scope-and-evidence). The default policy for Venice dstack models allows the same failure, for the same launcher image. |
 | 32 | `sigstore_code_verified` | Tinfoil-specific: Sigstore DSSE bundle code measurements match live enclave's SEV-SNP MEASUREMENT or TDX RTMRs. Skipped for non-Tinfoil providers. |
 | 33 | `event_log_integrity` | TDX event log replayed: `RTMR_new = SHA384(RTMR_old ‖ digest)` starting from 48 zero bytes. All 4 replayed RTMRs match quote. Proves the log is authentic and complete. |
 
@@ -210,7 +210,7 @@ exposes none, and the core `tee_*` factors state that.
 | 37 | `gateway_tee_cert_chain` | Gateway certificate chain verifies against the Intel or AMD root CA. |
 | 38 | `gateway_tee_quote_signature` | Signature over the gateway quote body is valid. |
 | 39 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave). |
-| 40 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. |
+| 40 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and Venice ACI/1: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
 | 41 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
 | 42 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. |
 | 43 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified: nearcloud binds `sha256(signing_address ‖ tls_fingerprint)`; Venice ACI/1 binds `keccak256(signing key)` + nonce; Tinfoil binds the HPKE key and endorsed section hashes. |

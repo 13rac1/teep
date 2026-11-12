@@ -392,13 +392,13 @@ base_url = "https://api.venice.ai"
 		t.Fatalf("Load() error: %v", err)
 	}
 	// No allow_fail in TOML → cfg.AllowFail stays nil;
-	// MergedAllowFail falls back to DefaultAllowFail for venice.
+	// MergedAllowFail falls back to the Go default list for venice.
 	if cfg.AllowFail != nil {
 		t.Errorf("AllowFail after TOML with no [policy]: got %v, want nil", cfg.AllowFail)
 	}
 	af := MergedAllowFail("venice", "", cfg, false)
-	if len(af) != len(DefaultAllowFail) {
-		t.Errorf("MergedAllowFail(venice): got %d entries, want %d", len(af), len(DefaultAllowFail))
+	if len(af) != len(attestation.VeniceDefaultAllowFail) {
+		t.Errorf("MergedAllowFail(venice): got %d entries, want %d", len(af), len(attestation.VeniceDefaultAllowFail))
 	}
 }
 
@@ -1162,9 +1162,9 @@ func TestMergedAllowFailNonNearcloudUsesGlobalDefaults(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	af := MergedAllowFail("venice", "", cfg, false)
-	if len(af) != len(DefaultAllowFail) {
-		t.Errorf("MergedAllowFail(\"venice\"): got %d entries, want %d", len(af), len(DefaultAllowFail))
+	af := MergedAllowFail("unlisted", "", cfg, false)
+	if !reflect.DeepEqual(af, DefaultAllowFail) {
+		t.Errorf("MergedAllowFail(\"unlisted\"): got %v, want the global DefaultAllowFail", af)
 	}
 }
 
@@ -1846,19 +1846,19 @@ func TestMergedAllowFail_VeniceFormatLayer(t *testing.T) {
 	}
 
 	dstack := MergedAllowFail("venice", attestation.FormatDstack, cfg, false)
-	if !reflect.DeepEqual(dstack, attestation.DefaultAllowFail) {
-		t.Errorf("venice/dstack: got %v, want the global DefaultAllowFail (unchanged)", dstack)
+	if !reflect.DeepEqual(dstack, attestation.VeniceDefaultAllowFail) {
+		t.Errorf("venice/dstack: got %v, want VeniceDefaultAllowFail", dstack)
 	}
 
 	noFormat := MergedAllowFail("venice", "", cfg, false)
-	if !reflect.DeepEqual(noFormat, attestation.DefaultAllowFail) {
-		t.Errorf("venice/<none>: got %v, want the global DefaultAllowFail", noFormat)
+	if !reflect.DeepEqual(noFormat, attestation.VeniceDefaultAllowFail) {
+		t.Errorf("venice/<none>: got %v, want VeniceDefaultAllowFail", noFormat)
 	}
 
 	// An unknown future format must not inherit the ACI/1 waivers.
 	unknown := MergedAllowFail("venice", attestation.BackendFormat("aci/2"), cfg, false)
-	if !reflect.DeepEqual(unknown, attestation.DefaultAllowFail) {
-		t.Errorf("venice/aci2: got %v, want the global DefaultAllowFail", unknown)
+	if !reflect.DeepEqual(unknown, attestation.VeniceDefaultAllowFail) {
+		t.Errorf("venice/aci2: got %v, want VeniceDefaultAllowFail", unknown)
 	}
 }
 
@@ -1889,7 +1889,6 @@ func TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced(t *testing.T) {
 		attestation.FactorACIKeyCustody,
 		"gateway_tee_reportdata_binding",
 		"gateway_tee_quote_signature",
-		"gateway_tee_measurement",
 		"gateway_event_log_integrity",
 		"nonce_match",
 		"nvidia_signature",

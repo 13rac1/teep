@@ -64,6 +64,7 @@ var providerDefaultAllowFail = map[string][]string{
 	"phalacloud":        attestation.PhalaCloudDefaultAllowFail,
 	"tinfoil_v3_cloud":  attestation.TinfoilCloudDefaultAllowFail,
 	"tinfoil_v3_direct": attestation.TinfoilDirectDefaultAllowFail,
+	"venice":            attestation.VeniceDefaultAllowFail,
 }
 
 // providerFormatDefaultAllowFail maps (provider, attestation format) pairs to
@@ -71,7 +72,7 @@ var providerDefaultAllowFail = map[string][]string{
 // serve more than one attestation format under one name. Selected ahead of
 // providerDefaultAllowFail so a format-specific list cannot be diluted by a
 // provider-wide one; a (provider, format) pair not in this map falls through
-// to the provider layer. Venice's dstack models keep the global defaults —
+// to the provider layer. Venice's dstack models keep the provider list —
 // waiving the ACI/1 core-tier gaps provider-wide would weaken enforcement
 // for the models that do attest the inference host.
 var providerFormatDefaultAllowFail = map[string]map[attestation.BackendFormat][]string{
