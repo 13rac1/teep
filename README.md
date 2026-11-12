@@ -174,8 +174,8 @@ Is the encryption bound to the hardware? These checks verify the encryption key 
 | 13 | `intel_pcs_collateral` | Intel PCS collateral fetched for TCB status |
 | 14 | `tee_tcb_current` | TCB SVN meets minimum threshold |
 | 15 | `tee_tcb_not_revoked` | TCB SVN is not revoked per Intel PCS |
-| 16 | `nvidia_payload_present` | NVIDIA GPU attestation payload present |
-| 17 | `nvidia_signature` | NVIDIA EAT SPDM signature valid (ECDSA-P384) |
+| 16 | `nvidia_payload_present` | NVIDIA payload or GPU evidence present; nothing is verified here |
+| 17 | `nvidia_signature` | Each GPU's certificate chain verifies to the pinned NVIDIA root and its SPDM ECDSA P-384 signature covers the expected requester nonce |
 | 18 | `nvidia_claims` | NVIDIA EAT: the top-level nonce matches the client nonce and the evidence verified; fails otherwise; not applicable to direct SPDM evidence, which carries no claims. Architecture, GPU count, driver version and confidential computing mode are not checked |
 | 19 | `nvidia_nonce_client_bound` | Nonce in NVIDIA EAT payload matches submitted nonce |
 | 20 | `nvidia_nras_verified` | NVIDIA NRAS RIM measurement comparison passed |

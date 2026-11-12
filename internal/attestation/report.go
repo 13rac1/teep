@@ -1705,7 +1705,7 @@ func evalNvidiaClientNonceBound(in *ReportInput) []FactorResult {
 		}
 		return factor(TierBinding, FactorNvidiaClientNonce, Skip, "NVIDIA verification not attempted")
 	}
-	if in.Nvidia.SignatureErr != nil {
+	if !in.Nvidia.SignaturesVerified || in.Nvidia.SignatureErr != nil {
 		return factor(TierBinding, FactorNvidiaClientNonce, Fail,
 			"the NVIDIA evidence did not verify, so it proves no nonce binding")
 	}
@@ -3548,12 +3548,12 @@ func tdxQuoteVersion(r *TDXVerifyResult) string {
 }
 
 // nvidiaSignatureDetail returns the detail string for the nvidia_signature factor.
+// The NVIDIA result of a report is the local verification of an EAT payload
+// or of SPDM evidence; NRAS JWT results go to nvidia_nras_verified only.
 func nvidiaSignatureDetail(r *NvidiaVerifyResult) string {
 	switch r.Format {
 	case "EAT":
 		return fmt.Sprintf("EAT: %d GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: %s)", r.GPUCount, r.Arch)
-	case "JWT":
-		return fmt.Sprintf("JWT signature valid (%s)", r.Algorithm)
 	case "SPDM":
 		return fmt.Sprintf("SPDM: %d GPU cert chains and ECDSA P-384 signatures verified (arch: %s)", r.GPUCount, r.Arch)
 	default:
@@ -3568,8 +3568,6 @@ func nvidiaClaimsDetail(r *NvidiaVerifyResult) string {
 		// The arch and GPU count are reported by the payload; no factor
 		// checks them.
 		return fmt.Sprintf("EAT: top-level nonce matches the client nonce (arch reported: %s, %d GPUs)", r.Arch, r.GPUCount)
-	case "JWT":
-		return fmt.Sprintf("JWT claims valid (overall result: %t)", r.OverallResult)
 	default:
 		return "claims valid"
 	}

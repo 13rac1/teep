@@ -1395,7 +1395,7 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 	t.Run("pass", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "EAT", GPUCount: 8, Nonce: nonce.Hex()}
+		nv := &NvidiaVerifyResult{Format: "EAT", GPUCount: 8, Nonce: nonce.Hex(), SignaturesVerified: true}
 		f := assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
 		if !strings.Contains(f.Detail, "8 GPU") {
 			t.Errorf("detail should mention 8 GPU: %s", f.Detail)
@@ -1405,7 +1405,7 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 	t.Run("mismatch", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: "wrong-nonce"}
+		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: "wrong-nonce", SignaturesVerified: true}
 		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Fail)
 	})
 
@@ -1417,8 +1417,17 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 	t.Run("skip_empty_nonce", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: ""}
+		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: "", SignaturesVerified: true}
 		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Skip)
+	})
+
+	// A result whose signatures are not marked verified proves no nonce
+	// binding, even with a matching nonce and no signature error.
+	t.Run("fail_signatures_not_verified", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.NvidiaPayload = `{"evidence_list":[]}`
+		nv := &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, Nonce: nonce.Hex()}
+		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Fail)
 	})
 
 	// Evidence that did not verify proves no nonce binding, also when it
@@ -1433,7 +1442,7 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 	t.Run("pass_spdm", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.GPUEvidence = []GPUEvidence{{Arch: "HOPPER"}}
-		nv := &NvidiaVerifyResult{Format: "SPDM", GPUCount: 8, Nonce: nonce.Hex()}
+		nv := &NvidiaVerifyResult{Format: "SPDM", GPUCount: 8, Nonce: nonce.Hex(), SignaturesVerified: true}
 		f := assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
 		if want := "SPDM evidence of 8 GPUs"; !strings.Contains(f.Detail, want) {
 			t.Errorf("detail = %q, want %q", f.Detail, want)
@@ -1444,7 +1453,7 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 		// Cover nvidiaClientNonceDetail default branch (non-EAT format).
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "NRAS", Nonce: nonce.Hex()}
+		nv := &NvidiaVerifyResult{Format: "NRAS", Nonce: nonce.Hex(), SignaturesVerified: true}
 		f := assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
 		if !strings.Contains(f.Detail, "NVIDIA nonce matches") {
 			t.Errorf("detail = %q, want NVIDIA nonce matches", f.Detail)
@@ -1838,11 +1847,6 @@ func TestNvidiaSignatureDetail(t *testing.T) {
 			"EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)",
 		},
 		{
-			"JWT format",
-			&NvidiaVerifyResult{Format: "JWT", Algorithm: "ES384"},
-			"JWT signature valid (ES384)",
-		},
-		{
 			"SPDM format",
 			&NvidiaVerifyResult{Format: "SPDM", GPUCount: 8, Arch: "BLACKWELL"},
 			"SPDM: 8 GPU cert chains and ECDSA P-384 signatures verified (arch: BLACKWELL)",
@@ -1873,16 +1877,6 @@ func TestNvidiaClaimsDetail(t *testing.T) {
 			"EAT format",
 			&NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 4},
 			"EAT: top-level nonce matches the client nonce (arch reported: HOPPER, 4 GPUs)",
-		},
-		{
-			"JWT format true",
-			&NvidiaVerifyResult{Format: "JWT", OverallResult: true},
-			"JWT claims valid (overall result: true)",
-		},
-		{
-			"JWT format false",
-			&NvidiaVerifyResult{Format: "JWT", OverallResult: false},
-			"JWT claims valid (overall result: false)",
 		},
 		{
 			"unknown format",
