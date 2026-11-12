@@ -1,6 +1,6 @@
 # TDX Measurement Allowlists
 
-Teep can enforce allowlists for TDX measurement registers to verify that a CVM
+TEE Proof (teep) can enforce allowlists for TDX measurement registers to verify that a CVM
 booted the expected software stack. This document covers how allowlists work,
 how to configure them, and where to find canonical values for cross-checking.
 

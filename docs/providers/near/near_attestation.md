@@ -2,7 +2,7 @@
 
 ## Attestation response parsing
 
-Teep selects the parser from the configured provider before decoding evidence.
+TEE Proof (teep) selects the parser from the configured provider before decoding evidence.
 A parsing failure blocks verification. Teep does not try another envelope or
 select a valid subset of a malformed response.
 

@@ -1,4 +1,4 @@
-# Teep — Technical Reference
+# TEE Proof — Technical Reference
 
 Detailed cryptographic and attestation documentation for security engineers. For an overview, see [README.md](README.md).
 

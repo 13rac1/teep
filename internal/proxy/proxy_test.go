@@ -3428,7 +3428,7 @@ func TestHandleIndex_Fresh(t *testing.T) {
 	html := string(body)
 	t.Logf("response length: %d bytes", len(html))
 
-	for _, want := range []string{"teep", "venice", "Provider", "Requests", "Attestation Cache"} {
+	for _, want := range []string{"TEE Proof", "venice", "Provider", "Requests", "Attestation Cache"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("response missing %q", want)
 		}

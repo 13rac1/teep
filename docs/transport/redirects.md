@@ -1,6 +1,6 @@
 # Outbound redirect policy
 
-Teep HTTP clients return 3xx responses without requesting the redirect target.
+TEE Proof (teep) HTTP clients return 3xx responses without requesting the redirect target.
 The policy includes redirects to the same authority. Fetch callers reject
 these responses. Proxy inference returns HTTP 502 without copying the upstream
 `Location` header. A redirect does not authorize inference replay.

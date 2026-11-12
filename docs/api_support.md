@@ -10,7 +10,7 @@ still fails.
 
 ## Endpoint Surface
 
-Teep exposes two endpoint categories:
+TEE Proof (teep) exposes two endpoint categories:
 
 1. OpenAI-compatible API endpoints for inference and model discovery.
 2. Operational endpoints for health checks, dashboard/status streaming, Prometheus metrics, and attestation status.

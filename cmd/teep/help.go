@@ -683,7 +683,7 @@ func runHelp(args []string) {
 
 // printOverview prints the top-level help message.
 func printOverview() {
-	fmt.Print(`teep — TEE attestation verifier and E2EE proxy for AI providers
+	fmt.Print(`TEE Proof (teep) — TEE attestation verifier and E2EE proxy for AI providers
 
 Usage:
   teep serve      [flags]                          Start the HTTP proxy server.

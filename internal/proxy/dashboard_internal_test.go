@@ -419,6 +419,12 @@ func TestHandleIndex_ContainsInitialJSON(t *testing.T) {
 
 	body := rec.Body.String()
 
+	for _, want := range []string{"<title>TEE Proof — attestation proxy</title>", `<span class="word">TEE Proof</span>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard HTML missing %q", want)
+		}
+	}
+
 	// __INITIAL__ must be replaced — it should not appear in the output.
 	if strings.Contains(body, "__INITIAL__") {
 		t.Error("dashboard HTML still contains __INITIAL__ placeholder")

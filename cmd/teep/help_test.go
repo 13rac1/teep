@@ -243,8 +243,9 @@ func TestPrintFactorHelp(t *testing.T) {
 
 func TestRunHelp_NoArgs(t *testing.T) {
 	out := captureStdout(t, func() { runHelp(nil) })
-	if !strings.Contains(out, "teep") {
-		t.Error("runHelp(nil) should print overview")
+	if !strings.HasPrefix(out, "TEE Proof (teep) — ") {
+		first, _, _ := strings.Cut(out, "\n")
+		t.Errorf("runHelp(nil) overview starts with %q, want the TEE Proof (teep) header", first)
 	}
 }
 
