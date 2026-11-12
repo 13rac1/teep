@@ -85,6 +85,12 @@ func TestReportDataVerifier_NotEchoed(t *testing.T) {
 	if _, err := (chutes.ReportDataVerifier{}).VerifyReportData(reportData, raw, attestation.NewNonce()); err == nil {
 		t.Fatal("VerifyReportData accepted another client nonce")
 	}
+
+	// A stated nonce contradicts "not echoed".
+	raw.Nonce = nonce.Hex()
+	if _, err := (chutes.ReportDataVerifier{}).VerifyReportData(reportData, raw, nonce); err == nil {
+		t.Fatal("VerifyReportData accepted a stated nonce marked as not echoed")
+	}
 }
 
 func TestReportDataVerifier_MissingNonce(t *testing.T) {

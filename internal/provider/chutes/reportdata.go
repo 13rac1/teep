@@ -38,7 +38,11 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 		return "", errors.New("e2e_pubkey absent from attestation response")
 	}
 	// A response that echoes no nonce has none to compare; the preimage
-	// below uses the client nonce in every case.
+	// below uses the client nonce in every case. A nonce together with
+	// NonceSourceNotEchoed contradicts itself and is refused.
+	if raw.NonceSource == attestation.NonceSourceNotEchoed && raw.Nonce != "" {
+		return "", errors.New("attestation states a nonce but is marked as echoing none")
+	}
 	if raw.NonceSource != attestation.NonceSourceNotEchoed && subtle.ConstantTimeCompare([]byte(raw.Nonce), []byte(nonce.Hex())) != 1 {
 		return "", fmt.Errorf("nonce mismatch: attestation response nonce %q does not match client nonce", raw.Nonce)
 	}

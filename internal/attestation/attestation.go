@@ -172,7 +172,7 @@ type RawAttestation struct {
 	DeviceID        string          // TDX device ID
 	EventLog        []EventLogEntry // TDX RTMR extend events
 	EventLogCount   int             // number of event log entries
-	NonceSource     string          // "client" or "server"
+	NonceSource     string          // "client", "server", NonceSourceNotEchoed, or a value a provider states
 	CandidatesAvail int             // node pool size
 	CandidatesEval  int             // nodes evaluated
 

@@ -1174,9 +1174,9 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 // evidence, by nvidia_nonce_client_bound.
 const aciNoEchoDetail = "no echoed nonce; freshness rests on gateway_tee_reportdata_binding"
 
-// NonceSourceNotEchoed is the NonceSource of a response that echoes no
-// nonce, such as the Chutes evidence response. nonce_match fails for it with
-// noEchoDetail; the client nonce is checked by tee_reportdata_binding and,
+// NonceSourceNotEchoed is the NonceSource that the Chutes parser sets for
+// the Chutes evidence response, which echoes no nonce. nonce_match fails for
+// it with noEchoDetail; the client nonce is checked by tee_reportdata_binding and,
 // in GPU evidence, by nvidia_nonce_client_bound.
 const NonceSourceNotEchoed = "not_echoed"
 
@@ -1188,7 +1188,9 @@ func evalNonceMatch(in *ReportInput) []FactorResult {
 		if in.Raw.ACIGatewayVariant {
 			return factor(TierCore, FactorNonceMatch, Fail, aciNoEchoDetail)
 		}
-		if in.Raw.NonceSource == NonceSourceNotEchoed {
+		// Only the Chutes parser sets NonceSourceNotEchoed; some formats
+		// copy nonce_source from the response, so the format decides.
+		if in.Raw.BackendFormat == FormatChutes && in.Raw.NonceSource == NonceSourceNotEchoed {
 			return factor(TierCore, FactorNonceMatch, Fail, noEchoDetail)
 		}
 		return factor(TierCore, FactorNonceMatch, Fail, "nonce field absent from attestation response")
