@@ -793,6 +793,7 @@ func fromConfig(
 		p.ReportDataVerifier = multi.Verifier{
 			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
 				attestation.FormatDstack: venice.ReportDataVerifier{},
+				attestation.FormatChutes: chutesProvider.ReportDataVerifier{},
 			},
 		}
 		p.GatewayReportDataVerifier = venice.ReportDataVerifier{}
