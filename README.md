@@ -176,7 +176,7 @@ Is the encryption bound to the hardware? These checks verify the encryption key 
 | 15 | `tee_tcb_not_revoked` | TCB SVN is not revoked per Intel PCS |
 | 16 | `nvidia_payload_present` | NVIDIA GPU attestation payload present |
 | 17 | `nvidia_signature` | NVIDIA EAT SPDM signature valid (ECDSA-P384) |
-| 18 | `nvidia_claims` | NVIDIA EAT claims valid (architecture, GPU count) |
+| 18 | `nvidia_claims` | NVIDIA EAT claims valid (architecture, GPU count); fails when the evidence did not verify; not applicable to direct SPDM evidence, which carries no claims |
 | 19 | `nvidia_nonce_client_bound` | Nonce in NVIDIA EAT payload matches submitted nonce |
 | 20 | `nvidia_nras_verified` | NVIDIA NRAS RIM measurement comparison passed |
 | 21 | `e2ee_capable` | Provider returned enough info for E2EE key exchange |

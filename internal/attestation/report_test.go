@@ -4114,6 +4114,50 @@ func TestEvalNvidiaSignature_NilNvidiaWithPayload(t *testing.T) {
 
 // TestEvalNvidiaClaims_NilNvidiaWithPayload covers L848: Nvidia=nil but
 // NvidiaPayload is present → Fail (verification was not attempted).
+// Claims of NVIDIA evidence that did not verify are not checked, whatever
+// its format. A verified SPDM result has no claims to check.
+func TestEvalNvidiaClaims_Verification(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	raw.GPUEvidence = []GPUEvidence{{Arch: "HOPPER"}}
+	for _, tc := range []struct {
+		name   string
+		nv     *NvidiaVerifyResult
+		want   Status
+		detail string
+	}{
+		{"not reached", &NvidiaVerifyResult{SignatureErr: errors.New("GPU requester nonce: e2e_pubkey absent")}, Fail, "NVIDIA evidence was not verified; claims not checked"},
+		{"spdm signature failed", &NvidiaVerifyResult{Format: "SPDM", GPUCount: 1, SignatureErr: errors.New("requester nonce mismatch")}, Fail, "NVIDIA evidence was not verified; claims not checked"},
+		{"eat signature failed", &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, SignatureErr: errors.New("bad cert chain")}, Fail, "NVIDIA evidence was not verified; claims not checked"},
+		{"spdm verified", &NvidiaVerifyResult{Format: "SPDM", GPUCount: 1, Arch: "HOPPER", Nonce: nonce.Hex()}, NotApplicable, "SPDM evidence carries no claims; the measurements are compared by NRAS (nvidia_nras_verified)"},
+		{"eat verified", &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, Arch: "HOPPER", Nonce: nonce.Hex()}, Pass, "EAT: arch=HOPPER, 1 GPUs, nonce verified"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := assertSingleFactor(t, evalNvidiaClaims(&ReportInput{Raw: raw, Nvidia: tc.nv}), tc.want)
+			if f.Detail != tc.detail {
+				t.Errorf("detail = %q, want %q", f.Detail, tc.detail)
+			}
+		})
+	}
+}
+
+// A verification that failed before it reached a signature says so.
+func TestEvalNvidiaSignature_NotReached(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	raw.GPUEvidence = []GPUEvidence{{Arch: "HOPPER"}}
+	f := assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw,
+		Nvidia: &NvidiaVerifyResult{SignatureErr: errors.New("GPU requester nonce: e2e_pubkey absent")}}), Fail)
+	if f.Detail != "NVIDIA evidence was not verified: GPU requester nonce: e2e_pubkey absent" {
+		t.Errorf("detail = %q", f.Detail)
+	}
+	f = assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw,
+		Nvidia: &NvidiaVerifyResult{Format: "SPDM", SignatureErr: errors.New("bad sig")}}), Fail)
+	if f.Detail != "signature invalid: bad sig" {
+		t.Errorf("detail = %q", f.Detail)
+	}
+}
+
 func TestEvalNvidiaClaims_NilNvidiaWithPayload(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)

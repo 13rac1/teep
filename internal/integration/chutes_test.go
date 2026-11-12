@@ -155,7 +155,6 @@ func assertChutesReport(t *testing.T, report *attestation.VerificationReport) {
 		"tee_reportdata_binding",
 		"nvidia_payload_present",
 		"nvidia_signature",
-		"nvidia_claims",
 		"nvidia_nonce_client_bound",
 		"e2ee_capable",
 		"e2ee_usable",
@@ -169,6 +168,8 @@ func assertChutesReport(t *testing.T, report *attestation.VerificationReport) {
 		"event_log_integrity",
 		"sigstore_code_verified",
 		"nvswitch_binding",
+		// SPDM evidence carries no claims.
+		"nvidia_claims",
 	} {
 		assertFactorStatus(t, report, name, attestation.NotApplicable)
 	}

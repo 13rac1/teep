@@ -1656,6 +1656,10 @@ func evalNvidiaSignature(in *ReportInput) []FactorResult {
 		return factor(TierBinding, FactorNvidiaSignature, Fail, "NVIDIA verification was not attempted")
 	}
 	if in.Nvidia.SignatureErr != nil {
+		if in.Nvidia.Format == "" {
+			// The verification failed before it reached a signature.
+			return factor(TierBinding, FactorNvidiaSignature, Fail, fmt.Sprintf("NVIDIA evidence was not verified: %v", in.Nvidia.SignatureErr))
+		}
 		return factor(TierBinding, FactorNvidiaSignature, Fail, fmt.Sprintf("signature invalid: %v", in.Nvidia.SignatureErr))
 	}
 	return factor(TierBinding, FactorNvidiaSignature, Pass, nvidiaSignatureDetail(in.Nvidia))
@@ -1666,6 +1670,18 @@ func evalNvidiaClaims(in *ReportInput) []FactorResult {
 			return factor(TierBinding, FactorNvidiaClaims, Skip, "no NVIDIA payload to check")
 		}
 		return factor(TierBinding, FactorNvidiaClaims, Fail, "NVIDIA verification was not attempted")
+	}
+	if in.Nvidia.SignatureErr != nil {
+		// Claims of evidence that did not verify prove nothing.
+		return factor(TierBinding, FactorNvidiaClaims, Fail, "NVIDIA evidence was not verified; claims not checked")
+	}
+	if in.Nvidia.Format == "SPDM" {
+		// SPDM evidence carries no claims to check: VerifyNVIDIAGPUDirect
+		// checks the certificate chain, the signature and the requester
+		// nonce of each GPU (nvidia_signature, nvidia_nonce_client_bound),
+		// and only NRAS compares measurements (nvidia_nras_verified).
+		return factor(TierBinding, FactorNvidiaClaims, NotApplicable,
+			"SPDM evidence carries no claims; the measurements are compared by NRAS (nvidia_nras_verified)")
 	}
 	if in.Nvidia.ClaimsErr != nil {
 		return factor(TierBinding, FactorNvidiaClaims, Fail, fmt.Sprintf("claims invalid: %v", in.Nvidia.ClaimsErr))

@@ -208,7 +208,9 @@ var factorRegistry = []factorInfo{
 		Description: "Validates the claims within the NVIDIA attestation payload, " +
 			"including GPU architecture, driver version, and confidential " +
 			"computing mode. For EAT tokens, checks per-GPU evidence " +
-			"claims. For JWTs, checks the overall attestation result.",
+			"claims. For JWTs, checks the overall attestation result. " +
+			"It fails when the evidence did not verify, and is not " +
+			"applicable to direct SPDM evidence, which carries no claims.",
 	},
 	{
 		Name:    attestation.FactorNvidiaClientNonce,
