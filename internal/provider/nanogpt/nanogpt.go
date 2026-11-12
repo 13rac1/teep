@@ -27,10 +27,12 @@ import (
 // attestationPath is the NanoGPT API path for TEE attestation.
 const attestationPath = "/v1/tee/attestation"
 
-// maxAttestationBodySize bounds the attestation response body (8 MiB). The
-// Chutes evidence that NanoGPT relays holds the quote and GPU evidence of
-// every instance of a model. On 2026-11-12 the largest body was 2,956,002
-// bytes, for 12 instances with 8 GPUs each.
+// maxAttestationBodySize bounds the attestation response body (8 MiB) of
+// every NanoGPT attestation format: teep reads the body before it detects
+// the format. The largest bodies are the Chutes evidence that NanoGPT
+// relays, with the quote and GPU evidence of every instance of a model; the
+// largest observed on 2026-11-12 was 2,956,002 bytes, for 12 instances with
+// 8 GPUs each.
 const maxAttestationBodySize = 8 << 20
 
 // tcbInfo holds the parsed info.tcb_info object from NanoGPT's attestation

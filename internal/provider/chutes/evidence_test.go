@@ -15,8 +15,8 @@ import (
 
 func TestParseEvidence(t *testing.T) {
 	nonce := attestation.NewNonce()
-	body := chutestest.Marshal(t, chutestest.Evidence(nonce, "inst-a", "inst-b"))
-	raw, err := chutes.ParseEvidence(context.Background(), body, nonce)
+	body := chutestest.Marshal(t, chutestest.Evidence(t, nonce, "inst-a", "inst-b"))
+	raw, err := chutes.ParseEvidence(context.Background(), body, nonce, 256)
 	if err != nil {
 		t.Fatalf("ParseEvidence: %v", err)
 	}
@@ -46,11 +46,11 @@ func TestParseEvidence(t *testing.T) {
 // returned too.
 func TestParseEvidence_UnknownMembersReported(t *testing.T) {
 	nonce := attestation.NewNonce()
-	doc := chutestest.Evidence(nonce, "inst-a")
+	doc := chutestest.Evidence(t, nonce, "inst-a")
 	doc["note"] = "x"
-	chutestest.Entry(doc, 0)["region"] = "x"
-	delete(chutestest.Entry(doc, 0), "certificate")
-	raw, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, doc), nonce)
+	chutestest.Entry(t, doc, 0)["region"] = "x"
+	delete(chutestest.Entry(t, doc, 0), "certificate")
+	raw, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, doc), nonce, 256)
 	if err != nil {
 		t.Fatalf("ParseEvidence: %v", err)
 	}
@@ -68,10 +68,10 @@ func TestParseEvidence_UnknownMembersReported(t *testing.T) {
 // A non-empty failed or excluded list is not refused.
 func TestParseEvidence_FailedAndExcludedInstances(t *testing.T) {
 	nonce := attestation.NewNonce()
-	doc := chutestest.Evidence(nonce, "inst-a")
+	doc := chutestest.Evidence(t, nonce, "inst-a")
 	doc["failed_instance_ids"] = []any{"inst-f"}
 	doc["excluded_instance_ids"] = []any{"inst-x"}
-	if _, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, doc), nonce); err != nil {
+	if _, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, doc), nonce, 256); err != nil {
 		t.Fatalf("ParseEvidence: %v", err)
 	}
 }
@@ -88,45 +88,45 @@ func TestParseEvidence_Refused(t *testing.T) {
 		change func(map[string]any)
 		want   string
 	}{
-		{"no entries", chutestest.Evidence(nonce), nil, "no evidence entries"},
-		{"too many entries", chutestest.Evidence(nonce, tooMany...), nil, "max 256"},
-		{"duplicate instance id", chutestest.Evidence(nonce, "inst-a", "inst-a"), nil, "instance inst-a is in evidence and in evidence"},
-		{"empty instance id", chutestest.Evidence(nonce, ""), nil, "empty instance id"},
-		{"failed id with evidence", chutestest.Evidence(nonce, "inst-a"), func(d map[string]any) {
+		{"no entries", chutestest.Evidence(t, nonce), nil, "no evidence entries"},
+		{"too many entries", chutestest.Evidence(t, nonce, tooMany...), nil, "max 256"},
+		{"duplicate instance id", chutestest.Evidence(t, nonce, "inst-a", "inst-a"), nil, "instance inst-a is in evidence and in evidence"},
+		{"empty instance id", chutestest.Evidence(t, nonce, ""), nil, "empty instance id"},
+		{"failed id with evidence", chutestest.Evidence(t, nonce, "inst-a"), func(d map[string]any) {
 			d["failed_instance_ids"] = []any{"inst-a"}
 		}, "instance inst-a is in evidence and in failed_instance_ids"},
-		{"excluded id with evidence", chutestest.Evidence(nonce, "inst-a"), func(d map[string]any) {
+		{"excluded id with evidence", chutestest.Evidence(t, nonce, "inst-a"), func(d map[string]any) {
 			d["excluded_instance_ids"] = []any{"inst-a"}
 		}, "instance inst-a is in evidence and in excluded_instance_ids"},
-		{"id failed and excluded", chutestest.Evidence(nonce, "inst-a"), func(d map[string]any) {
+		{"id failed and excluded", chutestest.Evidence(t, nonce, "inst-a"), func(d map[string]any) {
 			d["failed_instance_ids"] = []any{"inst-f"}
 			d["excluded_instance_ids"] = []any{"inst-f"}
 		}, "in failed_instance_ids and in excluded_instance_ids"},
-		{"failed id twice", chutestest.Evidence(nonce, "inst-a"), func(d map[string]any) {
+		{"failed id twice", chutestest.Evidence(t, nonce, "inst-a"), func(d map[string]any) {
 			d["failed_instance_ids"] = []any{"inst-f", "inst-f"}
 		}, "in failed_instance_ids and in failed_instance_ids"},
-		{"no failed_instance_ids", chutestest.Evidence(nonce, "inst-a"), func(d map[string]any) {
+		{"no failed_instance_ids", chutestest.Evidence(t, nonce, "inst-a"), func(d map[string]any) {
 			delete(d, "failed_instance_ids")
 		}, "no failed_instance_ids"},
-		{"no excluded_instance_ids", chutestest.Evidence(nonce, "inst-a"), func(d map[string]any) {
+		{"no excluded_instance_ids", chutestest.Evidence(t, nonce, "inst-a"), func(d map[string]any) {
 			delete(d, "excluded_instance_ids")
 		}, "no excluded_instance_ids"},
-		{"failed_instance_ids of another type", chutestest.Evidence(nonce, "inst-a"), func(d map[string]any) {
+		{"failed_instance_ids of another type", chutestest.Evidence(t, nonce, "inst-a"), func(d map[string]any) {
 			d["failed_instance_ids"] = "inst-f"
 		}, "unmarshal"},
-		{"second entry of another nonce", chutestest.Evidence(nonce, "inst-a", "inst-b"), func(d map[string]any) {
-			e := chutestest.Entry(d, 1)
-			other := chutestest.Entry(chutestest.Evidence(attestation.NewNonce(), "inst-b"), 0)
+		{"second entry of another nonce", chutestest.Evidence(t, nonce, "inst-a", "inst-b"), func(d map[string]any) {
+			e := chutestest.Entry(t, d, 1)
+			other := chutestest.Entry(t, chutestest.Evidence(t, attestation.NewNonce(), "inst-b"), 0)
 			e["attested_body"] = other["attested_body"]
 		}, "instance inst-b: attested_body nonce is not the nonce"},
-		{"second entry of another tee_type", chutestest.Evidence(nonce, "inst-a", "inst-b"), func(d map[string]any) {
-			chutestest.Entry(d, 1)["tee_type"] = "sev-snp"
+		{"second entry of another tee_type", chutestest.Evidence(t, nonce, "inst-a", "inst-b"), func(d map[string]any) {
+			chutestest.Entry(t, d, 1)["tee_type"] = "sev-snp"
 		}, "tee_type"},
-		{"entry without signature", chutestest.Evidence(nonce, "inst-a"), func(d map[string]any) {
-			delete(chutestest.Entry(d, 0), "signature")
+		{"entry without signature", chutestest.Evidence(t, nonce, "inst-a"), func(d map[string]any) {
+			delete(chutestest.Entry(t, d, 0), "signature")
 		}, "no signature"},
-		{"quote that is not base64", chutestest.Evidence(nonce, "inst-a"), func(d map[string]any) {
-			e := chutestest.Entry(d, 0)
+		{"quote that is not base64", chutestest.Evidence(t, nonce, "inst-a"), func(d map[string]any) {
+			e := chutestest.Entry(t, d, 0)
 			e["quote"] = "!!"
 			body, _ := base64.StdEncoding.DecodeString(e["attested_body"].(string))
 			e["attested_body"] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(body), `"tdx_quote":"`+base64.StdEncoding.EncodeToString([]byte("quote of inst-a"))+`"`, `"tdx_quote":"!!"`, 1)))
@@ -136,7 +136,7 @@ func TestParseEvidence_Refused(t *testing.T) {
 			if tc.change != nil {
 				tc.change(tc.doc)
 			}
-			_, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, tc.doc), nonce)
+			_, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, tc.doc), nonce, 256)
 			t.Logf("err: %v", err)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
@@ -145,32 +145,17 @@ func TestParseEvidence_Refused(t *testing.T) {
 	}
 }
 
-// ParseInstanceAttestation applies the same instance id checks as
-// ParseEvidence.
-func TestParseInstanceAttestation_InstanceIDs(t *testing.T) {
+// The caller bounds the number of entries; the bound applies before any
+// entry is checked.
+func TestParseEvidence_MaxEntries(t *testing.T) {
 	nonce := attestation.NewNonce()
-	instances := [][]byte{[]byte(`{"instances":[{"instance_id":"inst-a","e2e_pubkey":"a2V5","nonces":[]}],"nonce_expires_in":0,"nonce_expires_at":0}`)}
-	if _, err := chutes.ParseInstanceAttestation(context.Background(), instances,
-		chutestest.Marshal(t, chutestest.Evidence(nonce, "inst-a", "inst-b")), "inst-a", nonce); err != nil {
-		t.Fatalf("ParseInstanceAttestation: %v", err)
+	doc := chutestest.Evidence(t, nonce, "inst-a", "inst-b")
+	if _, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, doc), nonce, 2); err != nil {
+		t.Fatalf("2 entries, max 2: %v", err)
 	}
-	for _, tc := range []struct {
-		name string
-		doc  map[string]any
-		want string
-	}{
-		{"other instance twice", chutestest.Evidence(nonce, "inst-a", "inst-b", "inst-b"), "instance inst-b is in evidence and in evidence"},
-		{"bound instance also failed", func() map[string]any {
-			d := chutestest.Evidence(nonce, "inst-a")
-			d["failed_instance_ids"] = []any{"inst-a"}
-			return d
-		}(), "instance inst-a is in evidence and in failed_instance_ids"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := chutes.ParseInstanceAttestation(context.Background(), instances, chutestest.Marshal(t, tc.doc), "inst-a", nonce)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("err = %v, want %q", err, tc.want)
-			}
-		})
+	delete(chutestest.Entry(t, doc, 1), "attested_body")
+	_, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, doc), nonce, 1)
+	if err == nil || !strings.Contains(err.Error(), "evidence has 2 entries, max 1") {
+		t.Fatalf("2 entries, max 1: err = %v, want the entry bound", err)
 	}
 }

@@ -10,8 +10,8 @@ import (
 )
 
 // maxChutesEvidenceInstances bounds the number of instances in the Chutes
-// evidence that NanoGPT relays. On 2026-11-12 the most was 43 instances,
-// for TEE/gemma4-31b:thinking.
+// evidence that NanoGPT relays. The most observed on 2026-11-12 was 43
+// instances.
 const maxChutesEvidenceInstances = 64
 
 // isChutesEvidence reports whether body, which formatdetect detects as a
@@ -31,13 +31,9 @@ func isChutesEvidence(body []byte) bool {
 // response can be shown to bind nonce, and nothing names the instance that
 // serves the request (SEE: chutes.ParseEvidence).
 func parseChutesEvidence(ctx context.Context, body []byte, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
-	raw, err := chutes.ParseEvidence(ctx, body, nonce)
+	raw, err := chutes.ParseEvidence(ctx, body, nonce, maxChutesEvidenceInstances)
 	if err != nil {
 		return nil, fmt.Errorf("nanogpt: %w", err)
-	}
-	if raw.CandidatesAvail > maxChutesEvidenceInstances {
-		return nil, fmt.Errorf("nanogpt: chutes evidence has %d instances, max %d",
-			raw.CandidatesAvail, maxChutesEvidenceInstances)
 	}
 	return raw, nil
 }

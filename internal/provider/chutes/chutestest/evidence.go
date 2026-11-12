@@ -13,7 +13,8 @@ import (
 // marshals it. Each entry has the members of the response and an
 // attested_body whose quote is the entry's quote and whose nonce is nonce.
 // The quotes are not TDX quotes.
-func Evidence(nonce attestation.Nonce, ids ...string) map[string]any {
+func Evidence(tb testing.TB, nonce attestation.Nonce, ids ...string) map[string]any {
+	tb.Helper()
 	entries := make([]any, len(ids))
 	for i, id := range ids {
 		quote := base64.StdEncoding.EncodeToString([]byte("quote of " + id))
@@ -22,7 +23,7 @@ func Evidence(nonce attestation.Nonce, ids ...string) map[string]any {
 			"nonce":    nonce.Hex(),
 		})
 		if err != nil {
-			panic(err) // a map of strings always marshals
+			tb.Fatalf("marshal attested_body: %v", err)
 		}
 		entries[i] = map[string]any{
 			"attested_body": base64.StdEncoding.EncodeToString(body),
@@ -52,15 +53,16 @@ func Marshal(tb testing.TB, doc map[string]any) []byte {
 }
 
 // Entry returns entry i of the evidence list of doc, a document of
-// Evidence. It panics when doc has no such entry.
-func Entry(doc map[string]any, i int) map[string]any {
+// Evidence.
+func Entry(tb testing.TB, doc map[string]any, i int) map[string]any {
+	tb.Helper()
 	entries, ok := doc["evidence"].([]any)
 	if !ok || i >= len(entries) {
-		panic("chutestest: no evidence entry")
+		tb.Fatalf("no evidence entry %d", i)
 	}
 	entry, ok := entries[i].(map[string]any)
 	if !ok {
-		panic("chutestest: evidence entry is not an object")
+		tb.Fatalf("evidence entry %d is not an object", i)
 	}
 	return entry
 }

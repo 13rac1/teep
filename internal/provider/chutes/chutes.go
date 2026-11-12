@@ -340,17 +340,21 @@ func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evi
 	if err := checkEvidence(ar); err != nil {
 		return nil, err
 	}
-	if err := checkInstanceIDs(ar); err != nil {
-		return nil, err
-	}
 	var matched *instanceEvidence
 	for i := range ar.Evidence {
-		if ar.Evidence[i].InstanceID == instanceID {
-			matched = &ar.Evidence[i]
+		if ar.Evidence[i].InstanceID != instanceID {
+			continue
 		}
+		if matched != nil {
+			return nil, fmt.Errorf("chutes: evidence lists instance %s twice", instanceID)
+		}
+		matched = &ar.Evidence[i]
 	}
 	if matched == nil {
 		return nil, fmt.Errorf("chutes: evidence has no entry for instance %s", instanceID)
+	}
+	if ar.ExcludedInstanceIDs == nil {
+		return nil, errors.New("chutes: evidence has no excluded_instance_ids")
 	}
 	if err := checkAttestedBody(matched, nonce); err != nil {
 		return nil, fmt.Errorf("chutes: instance %s: %w", instanceID, err)
@@ -369,19 +373,21 @@ func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evi
 
 // ParseEvidence returns the attestation of the first entry of an evidence
 // response that is relayed without an instance list, as NanoGPT relays it.
-// Every entry must pass the checks of the session path (checkInstanceIDs,
-// checkAttestedBody), so one malformed entry refuses the response. The
-// response names no E2EE public key, so the result has no SigningKey and no
-// quote in it can be shown to bind nonce; nothing names the instance that
-// serves a request either. nonce is the nonce of the evidence request.
-// Undefined and absent members are returned in UnknownFields and
-// MissingFields without logging; the caller decides.
+// The response may have at most maxEntries entries. Every entry must pass
+// the attested-body checks of the session path (checkAttestedBody), and the
+// instance ids must pass checkInstanceIDs, so one malformed entry refuses
+// the response. The response names no E2EE public key, so the result has no
+// SigningKey and no quote in it can be shown to bind nonce; nothing names
+// the instance that serves a request either. nonce is the nonce of the
+// evidence request. Unknown and missing
+// members are returned in UnknownFields and MissingFields without logging;
+// the caller decides.
 //
 // Instances in failed_instance_ids and excluded_instance_ids have no
 // evidence in the response. The meaning of the two lists is assumed from
 // their names: Chutes does not document it. A non-empty list is logged at
 // warn level, not refused.
-func ParseEvidence(ctx context.Context, evidenceBody []byte, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+func ParseEvidence(ctx context.Context, evidenceBody []byte, nonce attestation.Nonce, maxEntries int) (*attestation.RawAttestation, error) {
 	ar := &attestationResponse{}
 	unknown, missing, err := jsonstrict.Unmarshal(evidenceBody, ar)
 	if err != nil {
@@ -389,6 +395,9 @@ func ParseEvidence(ctx context.Context, evidenceBody []byte, nonce attestation.N
 	}
 	if err := checkEvidence(ar); err != nil {
 		return nil, err
+	}
+	if len(ar.Evidence) > maxEntries {
+		return nil, fmt.Errorf("chutes: evidence has %d entries, max %d", len(ar.Evidence), maxEntries)
 	}
 	if err := checkInstanceIDs(ar); err != nil {
 		return nil, err
@@ -415,10 +424,14 @@ func ParseEvidence(ctx context.Context, evidenceBody []byte, nonce attestation.N
 	return raw, nil
 }
 
-// checkInstanceIDs checks the instance ids of an evidence response with the
-// newer members: excluded_instance_ids and failed_instance_ids are present,
-// each id is non-empty, and no id is in two places (two entries, a list
-// twice, or an entry and a list).
+// checkInstanceIDs checks the instance ids of an evidence response that
+// ParseEvidence parses: excluded_instance_ids and failed_instance_ids are
+// present, each id is non-empty, and no id is in two places (two entries, a
+// list twice, or an entry and a list). The two nil checks refuse a missing
+// list. The missing-member report of jsonstrict does not: it goes to the
+// response_schema factor, which a provider may allow to fail. The member
+// types stay as they are because the direct path, where an older response
+// has no excluded_instance_ids, shares attestationResponse.
 func checkInstanceIDs(ar *attestationResponse) error {
 	if ar.ExcludedInstanceIDs == nil {
 		return errors.New("chutes: evidence has no excluded_instance_ids")

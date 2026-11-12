@@ -69,7 +69,7 @@ func evidenceIDs(n int) []string {
 func TestParseChutesEvidence_InstanceBound(t *testing.T) {
 	nonce := attestation.NewNonce()
 	raw, err := nanogpt.ParseAttestationResponse(context.Background(),
-		chutestest.Marshal(t, chutestest.Evidence(nonce, evidenceIDs(64)...)), nonce)
+		chutestest.Marshal(t, chutestest.Evidence(t, nonce, evidenceIDs(64)...)), nonce)
 	if err != nil {
 		t.Fatalf("64 instances: %v", err)
 	}
@@ -77,8 +77,8 @@ func TestParseChutesEvidence_InstanceBound(t *testing.T) {
 		t.Errorf("CandidatesAvail = %d, want 64", raw.CandidatesAvail)
 	}
 	_, err = nanogpt.ParseAttestationResponse(context.Background(),
-		chutestest.Marshal(t, chutestest.Evidence(nonce, evidenceIDs(65)...)), nonce)
-	if err == nil || !strings.Contains(err.Error(), "65 instances, max 64") {
+		chutestest.Marshal(t, chutestest.Evidence(t, nonce, evidenceIDs(65)...)), nonce)
+	if err == nil || !strings.Contains(err.Error(), "evidence has 65 entries, max 64") {
 		t.Fatalf("65 instances: err = %v, want the instance bound", err)
 	}
 }
@@ -90,12 +90,12 @@ func TestParseChutesEvidence_Refused(t *testing.T) {
 		change func(map[string]any)
 		want   string
 	}{
-		{"duplicate instance id", func(d map[string]any) { chutestest.Entry(d, 1)["instance_id"] = "inst-0" }, "instance inst-0 is in evidence and in evidence"},
+		{"duplicate instance id", func(d map[string]any) { chutestest.Entry(t, d, 1)["instance_id"] = "inst-0" }, "instance inst-0 is in evidence and in evidence"},
 		{"no failed_instance_ids", func(d map[string]any) { delete(d, "failed_instance_ids") }, "no failed_instance_ids"},
-		{"entry without attested_body", func(d map[string]any) { delete(chutestest.Entry(d, 0), "attested_body") }, "attested_body is not base64"},
+		{"entry without attested_body", func(d map[string]any) { delete(chutestest.Entry(t, d, 0), "attested_body") }, "attested_body is not base64"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			doc := chutestest.Evidence(nonce, evidenceIDs(2)...)
+			doc := chutestest.Evidence(t, nonce, evidenceIDs(2)...)
 			tc.change(doc)
 			_, err := nanogpt.ParseAttestationResponse(context.Background(), chutestest.Marshal(t, doc), nonce)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -109,7 +109,7 @@ func TestParseChutesEvidence_Refused(t *testing.T) {
 // factor, not refused.
 func TestParseChutesEvidence_UnknownMember(t *testing.T) {
 	nonce := attestation.NewNonce()
-	doc := chutestest.Evidence(nonce, evidenceIDs(1)...)
+	doc := chutestest.Evidence(t, nonce, evidenceIDs(1)...)
 	doc["region"] = "eu"
 	raw, err := nanogpt.ParseAttestationResponse(context.Background(), chutestest.Marshal(t, doc), nonce)
 	if err != nil {
@@ -137,7 +137,7 @@ func TestParseAttestationResponse_ChutesAttestationType(t *testing.T) {
 func TestAttester_FetchAttestation_BodyBound(t *testing.T) {
 	const limit = 8 << 20
 	nonce := attestation.NewNonce()
-	evidence := chutestest.Marshal(t, chutestest.Evidence(nonce, evidenceIDs(1)...))
+	evidence := chutestest.Marshal(t, chutestest.Evidence(t, nonce, evidenceIDs(1)...))
 	for _, tc := range []struct {
 		size int
 		want string
