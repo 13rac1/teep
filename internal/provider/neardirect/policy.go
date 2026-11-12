@@ -39,7 +39,7 @@ func SupplyChainPolicy() *attestation.SupplyChainPolicy {
 			// Rekor stores signatures and payload hashes, but not the full
 			// envelope required by teep's DSSE verifier. This exception does
 			// not establish independent publisher-signature verification.
-			// SEE: docs/attestation_gaps/near_image_provenance.md
+			// SEE: docs/providers/near/near_attestation.md#teep-publisher-verification-defect
 			NoDSSE:     true,
 			OIDCIssuer: GithubOIDC,
 			OIDCIdentities: []string{

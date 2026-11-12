@@ -3192,7 +3192,7 @@ type ImageProvenance struct {
 	OIDCIdentity   string         // SAN URI (workflow identity); checked for FulcioSigned
 	OIDCIdentities []string       // optional allowlist of SAN URIs; if set, any matching identity is accepted
 	SourceRepos    []string       // required when Provenance == FulcioSigned (repo ID and/or URL)
-	NoDSSE         bool           // true = DSSE envelope lacks signatures; skip DSSE check
+	NoDSSE         bool           // true = ignore DSSE signature errors; the Rekor record lacks the full envelope that verifyDSSESignature needs
 	// ProviderSignerTrusted marks this image's signer as trusted provider-wide.
 	// FulcioSigned entries with source repo policy and SigstorePresent entries
 	// with a key fingerprint are trusted provider-wide by default.
