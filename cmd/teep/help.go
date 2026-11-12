@@ -715,7 +715,7 @@ Environment variables:
   NANOGPT_API_KEY    NanoGPT API key.
   PHALA_API_KEY      Phala Cloud API key.
   CHUTES_API_KEY     Chutes API key.
-  TINFOIL_API_KEY    Tinfoil API key (used by tinfoil_v3_cloud and tinfoil_v3_direct).
+  TINFOIL_API_KEY    Tinfoil API key (used by tinfoil_v3_cloud).
 `)
 }
 
@@ -728,8 +728,10 @@ Usage:
 
 The proxy activates every provider whose API key is configured (via TOML or
 environment variable). Supported providers: venice, neardirect, nearcloud,
-nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct. All active
-providers are served simultaneously from a single proxy instance.
+nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct (disabled:
+Tinfoil's enclave hosts do not answer attestation requests, observed
+2026-11-12; use tinfoil_v3_cloud). All active providers are served
+simultaneously from a single proxy instance.
 
 Clients send requests to http://127.0.0.1:8337/v1/chat/completions (or the
 address set by TEEP_LISTEN_ADDR) using the same format as the OpenAI API.
@@ -777,7 +779,7 @@ Usage:
 
 PROVIDER:
   venice, neardirect, nearcloud, nanogpt, phalacloud, chutes,
-  tinfoil_v3_cloud, tinfoil_v3_direct
+  tinfoil_v3_cloud, tinfoil_v3_direct (disabled)
 
 Connects to the specified provider's attestation endpoint, fetches the TEE
 attestation for the given model, and runs all verification factors. The

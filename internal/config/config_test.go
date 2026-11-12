@@ -1255,6 +1255,25 @@ func TestMergedAllowFailNeardirectGoDefaults(t *testing.T) {
 	}
 }
 
+// TINFOIL_API_KEY configures tinfoil_v3_cloud only: tinfoil_v3_direct is
+// disabled, and proxy.New would refuse it at startup.
+func TestTinfoilAPIKeyDoesNotAddDisabledDirect(t *testing.T) {
+	unsetenv(t, "TEEP_CONFIG")
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	setenv(t, "TINFOIL_API_KEY", "test-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Providers["tinfoil_v3_cloud"] == nil {
+		t.Error("TINFOIL_API_KEY did not configure tinfoil_v3_cloud")
+	}
+	if cfg.Providers["tinfoil_v3_direct"] != nil {
+		t.Error("TINFOIL_API_KEY configured the disabled tinfoil_v3_direct")
+	}
+}
+
 func TestMergedAllowFailTinfoilDirectAllowsNVSwitchByDefault(t *testing.T) {
 	unsetenv(t, "TEEP_CONFIG")
 	unsetenv(t, "TEEP_LISTEN_ADDR")

@@ -28,6 +28,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
 )
 
 // ---------------------------------------------------------------------------
@@ -1058,6 +1059,20 @@ func TestVerifySupplyChain_WithAppCompose(t *testing.T) {
 // ---------------------------------------------------------------------------
 // fromConfig — all provider cases and error cases
 // ---------------------------------------------------------------------------
+
+// The disabled tinfoil_v3_direct provider is refused with its message before
+// anything is constructed.
+func TestFromConfig_TinfoilDirectDisabled(t *testing.T) {
+	cp := &config.Provider{Name: "tinfoil_v3_direct", APIKey: "test-key", BaseURL: "https://inference.tinfoil.sh"}
+	p, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
+	if p != nil || err == nil || err.Error() != tinfoil.DirectDisabledMessage {
+		t.Fatalf("fromConfig(tinfoil_v3_direct) = %v, %v; want the disabled message", p, err)
+	}
+	if _, err := New(&config.Config{Providers: map[string]*config.Provider{cp.Name: cp}}); err == nil ||
+		!strings.Contains(err.Error(), tinfoil.DirectDisabledMessage) {
+		t.Fatalf("New with tinfoil_v3_direct err = %v; want startup refused with the disabled message", err)
+	}
+}
 
 func TestFromConfig_UnknownProvider(t *testing.T) {
 	cp := &config.Provider{Name: "unknown-xyz-provider"}

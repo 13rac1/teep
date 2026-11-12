@@ -82,6 +82,14 @@ func asGatewayEvidence(raw *attestation.RawAttestation) error {
 	return nil
 }
 
+// DirectDisabledMessage is the error that refuses the tinfoil_v3_direct
+// provider. proxy.fromConfig and verify.newAttester return it before they
+// construct anything, and teep verify returns it when the provider is not
+// configured, because TINFOIL_API_KEY no longer configures it. To enable the
+// provider again, delete this constant and its uses, and restore the
+// TINFOIL_API_KEY line for tinfoil_v3_direct in config.applyEnvOverrides.
+const DirectDisabledMessage = "tinfoil_v3_direct is disabled: Tinfoil's enclave hosts do not answer attestation requests (observed 2026-11-12); use tinfoil_v3_cloud"
+
 // DirectAttester fetches attestation from per-model inference enclaves,
 // resolving each model to its dedicated domain via the DirectResolver.
 type DirectAttester struct {

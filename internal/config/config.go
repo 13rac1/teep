@@ -641,7 +641,8 @@ func applyEnvOverrides(cfg *Config) {
 	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://api.redpill.ai", false)
 	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai", true)
 	applyAPIKeyEnv(cfg, "tinfoil_v3_cloud", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", true)
-	applyAPIKeyEnv(cfg, "tinfoil_v3_direct", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", true)
+	// tinfoil_v3_direct is disabled (tinfoil.DirectDisabledMessage), so
+	// TINFOIL_API_KEY does not add it: proxy.New refuses it at startup.
 }
 
 // applyAPIKeyEnv sets or updates the API key for the named provider from the
