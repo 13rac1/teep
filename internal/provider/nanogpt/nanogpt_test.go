@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -248,6 +249,34 @@ func TestAttester_FetchAttestation_HTTP401(t *testing.T) {
 	_, err := a.FetchAttestation(context.Background(), "model", attestation.NewNonce())
 	if err == nil {
 		t.Fatal("expected error for HTTP 401, got nil")
+	}
+}
+
+// NanoGPT answers HTTP 400 for a model that Tinfoil serves: it gives no
+// nonce-bound attestation for it. The error names the status and the text of
+// the provider, not an attestation format.
+func TestAttester_FetchAttestation_HTTP400Tinfoil(t *testing.T) {
+	const text = "Fresh nonce-bound attestation is not available for Tinfoil via this endpoint. Use the official Tinfoil verification flow for freshness guarantees."
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"` + text + `"}`))
+	}))
+	defer srv.Close()
+
+	a := nanogpt.NewAttester(srv.URL, "key")
+	a.SetClient(srv.Client())
+	_, err := a.FetchAttestation(context.Background(), "TEE/llama3-3-70b", attestation.NewNonce())
+	if err == nil {
+		t.Fatal("FetchAttestation: got nil error for HTTP 400")
+	}
+	for _, want := range []string{"HTTP 400", text} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "format") {
+		t.Errorf("error %q names an attestation format", err)
 	}
 }
 
