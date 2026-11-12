@@ -164,6 +164,12 @@ on one HTTP/2 connection. `TestAuthorizedEncryptedErrors` checks authenticated e
 acquisition during a failure cooldown. `TestAuthorizedEHBPPlaintextStatus`
 checks non-2xx diagnostic status and bounded body passthrough without retry,
 invalidation, or E2EE promotion, and rejects nonce-free 2xx responses.
+`TestAuthorizedRefusesUncheckedSuccess` and `TestRelayRefusesUncheckedSuccess`
+check that an E2EE response with HTTP 201, 203 or 206 and a plaintext body is
+refused before any byte reaches the client, ends the authorization or the
+publication, and is not sent again, for Tinfoil cloud, NEAR Cloud, NEAR Direct
+and Venice, streaming and not. `TestAuthorizedUncheckedSuccessWithoutE2EE`
+checks that without E2EE such a response is relayed as an upstream failure.
 `TestResponseFailureCooldownGeneration` checks that concurrent and late response
 failures cannot extend a cooldown or remove replacement authorization.
 
