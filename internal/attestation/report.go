@@ -365,11 +365,33 @@ var NearcloudDefaultAllowFail = []string{
 	// SEE: docs/providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest
 	FactorSigstoreVerify,
 	// Gateway factors.
+	// The NEAR Cloud gateway runs an MRTD (7fe60787…) that is not in the
+	// gateway measurement allowlist of teep. The allowlist changes only
+	// with a teep release, so a gateway release makes this factor fail
+	// for every request. The failure is reported and does not block
+	// requests until teep verifies an allowlist update without a release.
+	FactorGWMeasurement,
 	FactorGWHardwareConfig,
 	FactorGWBootConfig,
 	FactorGWReportData,
 	FactorGWCPUIDRegistry,
 }
+
+// VeniceDefaultAllowFail is the venice-specific default allow_fail list for
+// the dstack attestation format. It is the global DefaultAllowFail and one
+// more factor. The ACI/1 models of Venice use ACIDefaultAllowFail.
+var VeniceDefaultAllowFail = append(slices.Clone(DefaultAllowFail),
+	// The Venice dstack composes pin the platform manifest of
+	// nearaidev/compose-manager-launcher (079a14b4…). The attestation that
+	// its build workflow logs in Rekor names the image index digest.
+	// Searching Rekor for this manifest digest finds no entry. This
+	// provider-wide exception also permits missing entries for other
+	// model images. The failure is reported and does not block requests
+	// until teep resolves a manifest to its signed index or the provider
+	// pins the index digest.
+	// SEE: docs/providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest
+	FactorSigstoreVerify,
+)
 
 // NeardirectDefaultAllowFail is the neardirect-specific default allow_fail
 // list. It enforces more factors than the global DefaultAllowFail, reflecting
@@ -547,8 +569,8 @@ var TinfoilDirectDefaultAllowFail = []string{
 
 // ACIDefaultAllowFail is the default allow_fail list for models that return
 // the ACI/1 attestation format of the private-ai-gateway. Selected per
-// response format, not per provider: Venice's dstack models keep the global
-// DefaultAllowFail.
+// response format, not per provider: Venice's dstack models use
+// VeniceDefaultAllowFail.
 // SEE: config.MergedAllowFail.
 //
 // DANGER: this list accepts a provider that proves nothing about the machine
@@ -565,7 +587,7 @@ var TinfoilDirectDefaultAllowFail = []string{
 // authorization reads the gateway factor for ACI/1
 // (SEE: provider.GatewayBindsE2EEKey). Also enforced: the gateway quote
 // chain (gateway_nonce_match, quote present/structure/cert_chain/signature,
-// debug_disabled, measurement, event_log_integrity) and the NVIDIA payload
+// debug_disabled, event_log_integrity) and the NVIDIA payload
 // signature and nonce factors — the relayed GPU evidence is real and
 // client-nonce-fresh even though cpu_gpu_chain cannot bind it to the
 // attested CPU.
@@ -618,6 +640,13 @@ var ACIDefaultAllowFail = []string{
 	FactorGWHardwareConfig,
 	FactorGWBootConfig,
 	FactorGWCPUIDRegistry,
+
+	// The Venice ACI/1 gateway runs an MRTD (7fe60787…) that is not in the
+	// gateway measurement allowlist of teep. The allowlist changes only
+	// with a teep release, so a gateway release makes this factor fail
+	// for every request. The failure is reported and does not block
+	// requests until teep verifies an allowlist update without a release.
+	FactorGWMeasurement,
 
 	// The gateway attests itself, not a backend for the requested model.
 	// The gateway variant of the response names no model; the Venice

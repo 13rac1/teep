@@ -60,7 +60,7 @@ Tier 4: Gateway Attestation
   ✓ gateway_tee_cert_chain            gateway certificate chain valid (Intel root CA)  [ENFORCED]
   ✓ gateway_tee_quote_signature       gateway quote signature verified  [ENFORCED]
   ✓ gateway_tee_debug_disabled        gateway debug bit is 0 (production enclave)  [ENFORCED]
-  ✓ gateway_tee_measurement           gateway MRTD/MRSEAM policy matched  [ENFORCED]
+  ✓ gateway_tee_measurement           gateway MRTD/MRSEAM policy matched  [ALLOWED]
   ✓ gateway_tee_hardware_config       gateway RTMR0 policy matched  [ALLOWED]
   ✓ gateway_tee_boot_config           gateway RTMR1/RTMR2 policy matched  [ALLOWED]
   ✓ gateway_tee_reportdata_binding    gateway REPORTDATA binds sha256(signing_address + tls_fingerprint) + nonce  [ALLOWED]

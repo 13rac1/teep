@@ -228,6 +228,11 @@ reported DeepSeek launcher mismatch.
 Missing log entries and search errors can therefore leave other components
 without provenance verification too.
 
+`gateway_tee_measurement` is in `NearcloudDefaultAllowFail` too: when the
+NearCloud gateway runs an MRTD that is not in the gateway measurement
+allowlist, teep reports the failure and does not block requests, until teep
+verifies an allowlist update without a release.
+
 Both `serve` and `verify` fetch Rekor provenance only for digests whose
 search succeeded. `build_transparency_log` and signer-recognition factors
 evaluate that retrieved subset; a passing result does not establish

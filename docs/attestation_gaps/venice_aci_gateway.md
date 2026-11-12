@@ -95,8 +95,7 @@ are self-asserted, and it is the origin of residual exposure 7.
 ### Enforced and verified
 
 - The gateway TDX quote: structure, Intel cert chain, signature, debug bit,
-  MRTD/MRSEAM against the dstack base allowlist, event log replay against
-  all four RTMRs, Proof of Cloud registration.
+  event log replay against all four RTMRs, Proof of Cloud registration.
 - `gateway_tee_reportdata_binding`: the quote's REPORTDATA binds the
   gateway's E2EE key (keccak256 address scheme) and the client nonce. E2EE
   authorization reads this factor for ACI/1 — the core
@@ -146,7 +145,9 @@ attested CPU is the gateway's, and the GPUs are not in it.
 `aci_backend_named` fails because no attested evidence binds a backend for
 the requested model: the gateway variant of the response names no model,
 and the Venice variant names one only as the provider's assertion, which the
-detail repeats. These render
+detail repeats. `gateway_tee_measurement` is in the list too: teep checks
+the gateway MRTD/MRSEAM against the dstack base allowlist, and a gateway
+MRTD that is not in it fails the factor without blocking. These render
 as failed-but-allowed so the gap stays visible in every report; removing an
 entry from the list blocks every ACI/1 model.
 
@@ -204,7 +205,9 @@ openai/gpt-oss-120b); asserted continuously by
 4. **Gateway measurements churn.** The gateway image is a dev channel
    (`dstack-dev-*`); RTMR0-2 change with each redeploy, so
    `gateway_tee_hardware_config` and `gateway_tee_boot_config` are waived.
-   MRTD/MRSEAM (enforced) come from the shared dstack base list.
+   MRTD/MRSEAM come from the shared dstack base list, which changes only
+   with a teep release; `gateway_tee_measurement` is allowed to fail until
+   teep verifies an allowlist update without a release.
 5. **The downstream TLS pin is reported, not verified.** The gateway
    attests the SPKI it pins for `api.redpill.ai`, but teep never dials that
    domain, so the report carries it as `gateway_downstream_tls` metadata.
