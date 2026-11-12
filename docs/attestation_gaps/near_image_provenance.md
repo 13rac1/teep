@@ -37,7 +37,7 @@ image reference; it is not caused by a particular client's configuration.
 - **Who:** A malicious operator or an attacker who can replace a deployed Docker image.
 - **What they do:** Run a launcher image without verifiable evidence that NEAR's approved GitHub Actions workflow built it, when the customer accepts images whose signed build records cannot be found.
 - **What they get:** The ability to run container code with access to the customer data and credentials available to that container.
-- **What stops it today:** Blocking requests until the image's signed build record is found and authenticated prevents this case. Machine authentication and encrypted connections do not establish who built the image.
+- **What stops it today:** Blocking requests until the image's signed build record is found and its signature is verified would prevent this case. Teep finds the record but does not yet verify its signature; see [Teep Status](#teep-status). Machine authentication and encrypted connections do not establish who built the image.
 
 The missing build record leaves the client unable to distinguish a legitimate
 NEAR image from an unapproved image solely from the deployed image digest.
@@ -184,7 +184,7 @@ Rekor record format. The reported affected models are:
 
 | Evidence | Launcher digest named by compose | Rekor lookup for the pinned digest |
 | --- | --- | --- |
-| `z-ai/glm-5.3-flash`, NearDirect and NearCloud captures of 2026-09-09 | Index `91fdff3c…` | Direct lookup succeeds; `sigstore_verification` passes with enforcement enabled. |
+| `z-ai/glm-5.3-flash`, NearDirect and NearCloud captures of 2026-09-09 | Index `91fdff3c…` | Direct lookup finds Rekor entries; `sigstore_verification`, which checks that an entry exists, passes with enforcement enabled. |
 | Both DeepSeek models, NearDirect investigation of 2026-11-11 | Platform manifest `079a14b4…` | No records; first find the containing signed index `91fdff3c…`. |
 | NearCloud model evidence reported with PR #191 for the affected DeepSeek deployment | Platform manifest `079a14b4…` | Same mismatch in model-tier evidence; this does not establish a changed gateway image format. |
 
@@ -252,12 +252,25 @@ skopeo copy --all "docker://${LAUNCHER_IMAGE}@${LAUNCHER_DIGEST}" "docker://${LA
 ```
 
 A stamped production tag can therefore name the signed index, and
-`prod-20260702-8e07c35` does. The same listing also shows tag names moving
-after promotion: `prod` and `latest` now name the child manifest, and the
-`prod-rollback-20260925-…` tag records a rollback to the affected build.
-Tag state therefore changes outside these workflows as well. The workflows
-establish different staging and promotion behavior, not a guarantee that a
-tag names the signed index of a deployed manifest when a client searches.
+`prod-20260702-8e07c35` does.
+
+The [rollback workflow](https://github.com/nearai/compose-manager/blob/bf97be3eb430e78898622c765a37e22fd40b2d22/.github/workflows/rollback.yml#L151-L153)
+copies the rollback target to `prod`, `latest` and a `prod-rollback-…` audit
+tag without `--all`:
+
+```yaml
+skopeo copy "docker://${image}@${digest}" "docker://${image}:prod"
+skopeo copy "docker://${image}@${digest}" "docker://${image}:latest"
+skopeo copy "docker://${image}@${digest}" "docker://${image}:${{ steps.resolve.outputs.audit_tag }}"
+```
+
+Each of these tags therefore names a platform manifest, not the signed index.
+Observed on 2026-11-12, Docker Hub showed `prod`, `latest` and
+`prod-rollback-20260925-213344-from-20260702-8e07c35` last updated on
+2026-09-25 between 21:33 and 21:34 UTC, each naming `079a14b4…`. NEAR's
+build, promotion and rollback workflows explain the split in the tag table.
+None of the three workflows guarantees that a tag names the signed index of a
+deployed manifest when a client searches.
 
 Candidate searches add registry requests, pagination and rate-limit exposure.
 A bounded search can stop before it finds a valid parent. A complete search
@@ -282,6 +295,9 @@ checks the index hash, exact child membership and the index digest named in
 NEAR's signed build record. Retaining tags helps clients find the index;
 verifying NEAR's signature authenticates the build.
 
+A rollback that copies with `--all`, as the promotion workflow does, keeps
+`prod` and `latest` on the signed index.
+
 ### Bound discovery and preserve enforcement
 
 Bound pagination, candidate counts, response sizes and verification time.
@@ -299,10 +315,11 @@ separate [dstack boot-measurement gap](dstack_integrity.md).
 ## References
 
 - **Scope evidence:** [DeepSeek model investigation](https://github.com/13rac1/teep/issues/189#issuecomment-6807723408) and [PR #191](https://github.com/13rac1/teep/pull/191).
-- **Provider behavior:** [NEAR provider reference](../providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest), [Docker Hub tags](https://hub.docker.com/v2/repositories/nearaidev/compose-manager-launcher/tags?page_size=100), [build workflow](https://github.com/nearai/compose-manager/blob/bf97be3eb430e78898622c765a37e22fd40b2d22/.github/workflows/build.yml), [promotion workflow](https://github.com/nearai/compose-manager/blob/bf97be3eb430e78898622c765a37e22fd40b2d22/.github/workflows/promote.yml).
+- **Provider behavior:** [NEAR provider reference](../providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest), [Docker Hub tags](https://hub.docker.com/v2/repositories/nearaidev/compose-manager-launcher/tags?page_size=100), [build workflow](https://github.com/nearai/compose-manager/blob/bf97be3eb430e78898622c765a37e22fd40b2d22/.github/workflows/build.yml), [promotion workflow](https://github.com/nearai/compose-manager/blob/bf97be3eb430e78898622c765a37e22fd40b2d22/.github/workflows/promote.yml), [rollback workflow](https://github.com/nearai/compose-manager/blob/bf97be3eb430e78898622c765a37e22fd40b2d22/.github/workflows/rollback.yml).
 - **Formats and tools:** [OCI distribution definitions](https://github.com/opencontainers/distribution-spec/blob/97274622c11112caa21efb8c52acca3c6b8fa7f1/spec.md#definitions), [Skopeo copy options](https://github.com/containers/skopeo/blob/8360e9e41548eee4bd1e41d231955ba85529e303/docs/skopeo-copy.1.md#options).
 - **Client implementation:** [NEAR policy](../../internal/provider/neardirect/policy.go), [Rekor client](../../internal/attestation/rekor.go), [factor evaluation](../../internal/attestation/report.go), [verify retrieval](../../internal/verify/attest.go), [proxy retrieval](../../internal/proxy/proxy.go).
 - **Captured evidence:** [NEAR signed TLS-only captures](../../internal/integration/testdata/near_tls_only/) and [capture replay tests](../../internal/verify/near_capture_test.go).
+- **Teep defect:** [Issue #164](https://github.com/13rac1/teep/issues/164).
 - **Related gap:** [Dstack integrity](dstack_integrity.md).
 
 ---
@@ -311,10 +328,20 @@ separate [dstack boot-measurement gap](dstack_integrity.md).
 
 The platform-manifest lookup failure is reported for the two DeepSeek
 models listed in [Scope and evidence](#scope-and-evidence). The older signed
-GLM captures pass that lookup with enforcement enabled. Teep currently reports
+GLM captures pass that lookup, which checks only that a Rekor entry exists,
+with enforcement enabled. Teep currently reports
 `sigstore_verification` failures as allowed for both NEAR providers; the
 exception therefore affects models that did not require it too. The
 parent-index resolver described above is not implemented.
+
+A passing `sigstore_verification` shows only that a Rekor entry exists for the
+digest. Teep does not yet validate the signing certificate's chain to Fulcio,
+verify the signature over the signed statement, or check the statement's
+subject against the image digest; `NoDSSE` in the NEAR policy skips the
+signature error. See the
+[teep publisher-verification defect](../providers/near/near_attestation.md#teep-publisher-verification-defect)
+and [issue #164](https://github.com/13rac1/teep/issues/164). Resolving the
+parent index would not close this defect.
 
 ### Temporary teep policy
 
