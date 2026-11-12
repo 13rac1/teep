@@ -304,17 +304,19 @@ function postureFor(atts, anyReq) {
     sub = blocked + " model" + (blocked>1?"s":"") + " blocked — prompts were never forwarded.";
   } else if (blocked > 0) {
     cls = "is-warn";
-    head = verified + " sealed · " + blocked + " blocked";
-    sub = "Some enclaves failed enforced checks and are refusing traffic.";
+    head = verified + " verified · " + blocked + " blocked";
+    sub = "Some models failed an enforced factor. TEE Proof blocks their requests.";
   } else if (e2ee === verified) {
     cls = "is-sealed";
-    head = verified + " enclave" + (verified>1?"s":"") + " sealed";
-    sub = "Running in verified hardware · end-to-end encrypted.";
+    head = verified + " enclave" + (verified>1?"s":"") + " verified";
+    sub = "All enforced factors passed · requests end-to-end encrypted.";
   } else {
     cls = "is-sealed";
     head = verified + " enclave" + (verified>1?"s":"") + " verified";
-    sub = e2ee > 0 ? e2ee + " end-to-end encrypted · the rest on standard connections."
-                   : "Running in verified hardware.";
+    // e2ee_usable is deferred: it stays Skip until the first encrypted
+    // request, so "all enforced factors passed" is not yet known here.
+    sub = e2ee > 0 ? e2ee + " end-to-end encrypted · " + (verified - e2ee) + " without end-to-end encryption."
+                   : "No enforced factor failed.";
   }
   return { cls: cls, head: head, sub: sub, frac: frac, verified: verified, blocked: blocked, e2ee: e2ee, pass: pass, scored: scored };
 }
@@ -364,11 +366,11 @@ function renderEnclaves(d) {
     if (a.blocked) {
       sub = "Blocked — " + esc((a.blocked_factors || []).join(", ") || "enforced factor failed");
     } else if (a.e2ee === "usable") {
-      sub = "Secure enclave · end-to-end encrypted";
+      sub = "All enforced factors passed · end-to-end encrypted";
     } else if (a.e2ee === "capable") {
-      sub = "Secure enclave · encryption available";
+      sub = "No enforced factor failed · encryption available";
     } else {
-      sub = "Secure enclave";
+      sub = "No enforced factor failed";
     }
     // Every card carries its own score, in the same terms as the Factors
     // passed tile. Without it a card says "end-to-end encrypted" and nothing
@@ -378,7 +380,7 @@ function renderEnclaves(d) {
       sub += " · " + cardScore.pass + "/" + cardScore.scored + " factors passed";
     }
     if (!a.blocked && a.allowed_failed > 0) {
-      sub += ", " + a.allowed_failed + " non-critical pending";
+      sub += ", " + a.allowed_failed + " failed (allowed)";
     }
     var meta = [];
     if (ms.requests) meta.push(ms.requests + " req");
