@@ -6,14 +6,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/13rac1/teep/internal/provider"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/chutes"
 )
 
@@ -609,6 +611,43 @@ func TestAttester_SetClient(t *testing.T) {
 	a := chutes.NewAttester("https://llm.chutes.ai", "key")
 	a.SetClient(&http.Client{})
 	t.Log("SetClient accepted non-nil client")
+}
+
+// roundTripFunc serves requests in the test without opening a connection.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// SetClient also routes model-name resolution through the new client, so
+// that capture records the /v1/models exchange and replay serves it. The
+// models base is a closed local port: a request through any other client
+// fails there and sends nothing off the host.
+func TestAttester_SetClientRoutesModelResolution(t *testing.T) {
+	a := chutes.NewAttester("https://api.chutes.ai", "key")
+	a.SetModelsBase("http://127.0.0.1:1")
+	shared := a.Resolver()
+
+	var urls []string
+	a.SetClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		urls = append(urls, r.Method+" "+r.URL.String())
+		body := `{"object":"list","data":[{"id":"zai-org/GLM-5-TEE","chute_id":"0df3133d-c477-56d2-b4db-f2093bb150a1","object":"model"}]}`
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})})
+
+	if a.Resolver() != shared {
+		t.Fatal("SetClient replaced the resolver that other components share")
+	}
+	got, err := shared.Resolve(context.Background(), "zai-org/GLM-5-TEE")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got != "0df3133d-c477-56d2-b4db-f2093bb150a1" {
+		t.Errorf("chute ID = %q", got)
+	}
+	if want := []string{"GET http://127.0.0.1:1/v1/models"}; !slices.Equal(urls, want) {
+		t.Errorf("requests through the new client = %v, want %v", urls, want)
+	}
 }
 
 func TestAttester_Resolver(t *testing.T) {
