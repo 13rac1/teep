@@ -26,7 +26,7 @@ the reference for the receipt rules in
 | 8a | HTTP 2xx other than 200 (201, 202, 203, 206, …), any body | gateway, or a backend status that the gateway passes through | no (refused before the relay) | n/a | yes |
 | 8b | HTTP 3xx | gateway | no (refused as a redirect before the relay) | n/a | no |
 | 8c | HTTP 4xx or 5xx, or a 412 that is not the session-refusal envelope | gateway or backend (status passed through) | no | n/a | no; status, headers and up to 10 MiB of the body are relayed as the gateway's error answer, stream and non-stream |
-| 9 | Reset or parse failure before any upstream line reached the client | gateway or network | no | n/a | no. The client gets teep's own error event or 502; no upstream header or body line reached it (headers are copied only after the pre-relay checks) |
+| 9 | Reset or parse failure before any upstream line reached the client | gateway or network | no | n/a | no. The client gets teep's own error event or 502; no upstream header or body line reached it (the relay copies the upstream headers only when it writes a 2xx status, and teep's own error carries none) |
 | 9a | A comment, `event:`, `id:` or `retry:` line, then a reset, before any data line | gateway | yes | read | yes, unless the receipt covers exactly what arrived |
 | 10 | Reset or cut during content | gateway or network | yes | read (the rest cannot be read) | yes, unless the receipt covers exactly what arrived |
 | 11 | Reset after [DONE] | gateway | yes | read = every byte sent | no if the receipt verifies |

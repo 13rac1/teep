@@ -71,6 +71,12 @@ type phalaCase struct {
 	// commentThenReset sends one SSE comment line and then resets the
 	// stream, before any data line.
 	commentThenReset bool
+	// resetBeforeLine sends the response headers and then resets the
+	// stream, before any line.
+	resetBeforeLine bool
+	// wantNoGatewayHeader requires that no upstream header reached the
+	// client.
+	wantNoGatewayHeader bool
 	// downstreamFailOn makes the write to the client fail once the body
 	// written so far contains it.
 	downstreamFailOn string
@@ -178,6 +184,9 @@ func TestAuthorizedPhalaCloudACIv2(t *testing.T) {
 			{name: "error event signed by the receipt", served: testKeysetA, tailAfterFirst: "event: error\n\n", signTail: true, wantErr: true, wantRelayed: true, wantReceiptGET: true},
 			// A comment line reaches the client as it is, so the stream
 			// counts as delivered although no data line came.
+			// Nothing reached the client, so teep answers with its own 502,
+			// which carries none of the upstream headers.
+			{name: "reset before any line", served: testKeysetA, resetBeforeLine: true, wantErr: true, wantNoGatewayHeader: true},
 			{name: "comment then reset, no data", served: testKeysetA, commentThenReset: true, wantErr: true, wantReceiptGET: true, ended: true},
 			// The client hangs up when it reads teep's error event, before
 			// teep claims the tail read: the stream is drained, and the
@@ -353,6 +362,9 @@ func phalaTestGateway(t *testing.T, gw *aciv2test.Gateway, tc *phalaCase, receip
 // held, or with a tail.
 func writePhalaStream(w http.ResponseWriter, r *http.Request, tc *phalaCase, stream string) {
 	switch {
+	case tc.resetBeforeLine:
+		http.NewResponseController(w).Flush()
+		panic(http.ErrAbortHandler)
 	case tc.commentThenReset:
 		_, _ = io.WriteString(w, ": keep-alive\n\n")
 		http.NewResponseController(w).Flush()
@@ -422,6 +434,9 @@ func checkPhalaResponse(t *testing.T, tc *phalaCase, rec *inferenceRecorder, rec
 	}
 	if tc.wantNoReceiptGET && receiptGETs != 0 {
 		t.Errorf("%d receipt GETs, want none", receiptGETs)
+	}
+	if tc.wantNoGatewayHeader && (rec.Code != http.StatusBadGateway || rec.Header().Get("X-Gateway-Header") != "" || rec.Header().Get("X-Receipt-Id") != "") {
+		t.Errorf("client status=%d gateway header=%q receipt id=%q; want teep's 502 without upstream headers", rec.Code, rec.Header().Get("X-Gateway-Header"), rec.Header().Get("X-Receipt-Id"))
 	}
 	if tc.noReceiptID && rec.Header().Get("X-Gateway-Header") != "" {
 		t.Error("a refused response sent a gateway header to the client")

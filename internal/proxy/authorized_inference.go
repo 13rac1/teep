@@ -426,10 +426,10 @@ func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.Response
 	}
 	// The upstream headers go to the client only for a response that
 	// passed the checks above; a refused response sends none of them.
-	copyAuthorizedHeaders(w.Header(), resp.Header)
 	progress := &responseReadProgress{Reader: body}
 	body = responseLifetimeReader{Reader: progress, check: writer.check}
 	if resp.StatusCode != http.StatusOK {
+		copyAuthorizedHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		_, err := io.Copy(w, io.LimitReader(body, 10<<20))
 		if errors.Is(err, e2ee.ErrDecryptionFailed) {
@@ -439,6 +439,10 @@ func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.Response
 		return errors.Join(fmt.Errorf("upstream returned HTTP %d", resp.StatusCode), err)
 	}
 	started := time.Now()
+	// The relay of a 200 response writes a 2xx status only for upstream
+	// content; any other status is teep's own error (a stream whose first
+	// read fails), which carries none of the upstream headers.
+	w = &upstreamHeaderWriter{ResponseWriter: w, src: resp.Header}
 	target := w
 	var held *heldResponse
 	if receipt != nil && !input.stream {
@@ -509,6 +513,9 @@ func (s *Server) handleAuthorizedEndpoint(ctx context.Context, w http.ResponseWr
 		s.stats.errors.Add(1)
 		s.stats.getModelStats(input.key.ProviderName(), input.key.Model()+"@"+input.key.Authority()).errors.Add(1)
 		if !ri.headerSent {
+			// The upstream headers were copied before the relay; teep's own
+			// error response carries none of them.
+			clear(writer.Header())
 			code := http.StatusBadGateway
 			if _, ok := errors.AsType[*verificationOverloadError](err); ok || errors.Is(err, tlsct.ErrConnectionCapacity) {
 				code = http.StatusServiceUnavailable
@@ -590,3 +597,41 @@ func (s *Server) logAuthorizedRetry(ctx context.Context, input *authorizedReques
 	}
 	s.authorizations.log().LogAttrs(ctx, slog.LevelWarn, "authorized inference retry scheduled", attrs...)
 }
+
+// upstreamHeaderWriter copies the upstream response headers to the client
+// when the first status written is a 2xx status, before it is written.
+type upstreamHeaderWriter struct {
+	http.ResponseWriter
+	src     http.Header
+	written bool
+}
+
+func (w *upstreamHeaderWriter) WriteHeader(code int) {
+	if !w.written {
+		w.written = true
+		if code >= http.StatusOK && code < http.StatusMultipleChoices {
+			copyAuthorizedHeaders(w.Header(), w.src)
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *upstreamHeaderWriter) Write(p []byte) (int, error) {
+	if !w.written {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+// Flush commits the headers as a 200 status when none was written, as the
+// writer below would.
+func (w *upstreamHeaderWriter) Flush() {
+	if !w.written {
+		w.WriteHeader(http.StatusOK)
+	}
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *upstreamHeaderWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
