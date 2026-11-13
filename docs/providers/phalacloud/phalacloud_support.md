@@ -4,7 +4,7 @@ Phala Cloud (RedPill) serves its TEE models through the dstack
 private-ai-gateway, a TDX CVM that forwards each request to an upstream
 inference service. teep verifies the gateway's ACI/1 attestation; it has no
 attestation of the machine that runs the model. The shared gateway analysis
-is in [Venice ACI/1: Attested Gateway, Unattested Inference Host](../../attestation_gaps/venice_aci_gateway.md),
+is in [ACI/1 Gateway: Attested Gateway, Unattested Inference Host](../../attestation_gaps/aci_gateway.md),
 and the limits of the ACI/1 specification are in
 [ACI/1 Specification: Gaps That No Deployment Can Close](../../attestation_gaps/aci_specification.md).
 

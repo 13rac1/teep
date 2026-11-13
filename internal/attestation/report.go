@@ -580,7 +580,7 @@ var VeniceACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
 	// nvidia_payload (observed 2026-11-12), so the GPU signature and its
 	// client nonce cannot be checked. The failure is reported and does
 	// not block requests until the response carries GPU evidence again.
-	// SEE: docs/attestation_gaps/venice_aci_gateway.md.
+	// SEE: docs/attestation_gaps/aci_gateway.md, residual exposure 10.
 	FactorNvidiaSignature,
 	FactorNvidiaClientNonce,
 )
@@ -632,7 +632,7 @@ var ACIDefaultAllowFail = []string{
 
 	// ACI/1 publishes no compose manifest and no image digests, so the
 	// compose supply-chain factors fail structurally.
-	// SEE: docs/attestation_gaps/venice_aci_gateway.md.
+	// SEE: docs/attestation_gaps/aci_gateway.md.
 	FactorComposeBinding,
 	FactorSigstoreVerify,
 	FactorBuildTransparency,

@@ -6,7 +6,7 @@ Others go to the dstack private-ai-gateway, a TDX CVM that forwards each
 request to an upstream inference service, and answer with the gateway's
 ACI/1 attestation. For an ACI/1 model teep verifies the gateway; it has no
 attestation of the machine that runs the model. The shared gateway analysis
-is in [Venice ACI/1: Attested Gateway, Unattested Inference Host](../../attestation_gaps/venice_aci_gateway.md),
+is in [ACI/1 Gateway: Attested Gateway, Unattested Inference Host](../../attestation_gaps/aci_gateway.md),
 and the limits of the ACI/1 specification are in
 [ACI/1 Specification: Gaps That No Deployment Can Close](../../attestation_gaps/aci_specification.md).
 
@@ -27,6 +27,13 @@ the requested model; the attestation response shows which kind of backend
 answered. `nano-gpt.com` is not a host of the gateway: for an ACI/1 model,
 NanoGPT is an unattested hop between teep and the gateway, and its TLS key
 is not in the gateway keyset.
+
+The gateway names, in `downstream_tls_binding`, the keyset TLS entry for the
+gateway hostname that the attestation request reached (ACI/1 §4.2). In the
+capture of 2026-10-29 it names `api.redpill.ai`, which is not a TEE-only
+hostname of the gateway: there, the gateway may route a request to an
+upstream without a TEE. teep cannot see which hostname NanoGPT uses for
+inference requests. SEE: [ACI/1 Gateway](../../attestation_gaps/aci_gateway.md).
 
 ## Attestation evidence and binding
 
@@ -81,6 +88,8 @@ and Phala Cloud. Other formats keep `NanoGPTDefaultAllowFail`.
   NanoGPT is an unattested hop in front of the gateway: it sees the request
   and response in plaintext.
 - The TLS key of `nano-gpt.com` is not bound to any attestation.
+- NanoGPT fetched the observed gateway attestation through `api.redpill.ai`,
+  which is not TEE-only.
 - `tls_key_binding` reports "provider uses E2EE key exchange", although
   NanoGPT has no E2EE in teep.
 

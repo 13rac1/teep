@@ -212,10 +212,11 @@ Is the software what it claims to be? These checks verify container provenance, 
 
 Available only for providers that route traffic through an independently-attested
 TEE gateway: `nearcloud` (Intel TDX), `tinfoil_v3_cloud` (AMD SEV-SNP), and
-Venice ACI/1 models (Intel TDX). These factors verify the gateway itself. For
-tinfoil_v3_cloud and Venice ACI/1 this tier carries the only CPU attestation
-there is — the machine serving inference exposes none, and the core tee_*
-factors state that.
+the ACI/1 models of Venice, Phala Cloud and NanoGPT (Intel TDX, one shared
+gateway). These factors verify the gateway itself. For tinfoil_v3_cloud and
+ACI/1 this tier carries the only CPU attestation there is — the machine
+serving inference exposes none, and the core tee_* factors state that. See
+[ACI/1 Gateway](docs/attestation_gaps/aci_gateway.md).
 
 <details>
 <summary>15 factors</summary>

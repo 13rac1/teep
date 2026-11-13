@@ -75,7 +75,7 @@ type Pins struct {
 // and therefore which key-releasing authority — teep accepts for every
 // ACI/1 model. Corroborate against the dstack KmsAuth registry (Phala
 // publishes the KMS root on-chain) before extending it.
-// SEE: docs/attestation_gaps/venice_aci_gateway.md.
+// SEE: docs/attestation_gaps/aci_gateway.md.
 var gatewayKMSRootAllow = []string{
 	"0334c76e0c3f52ec64cbf9bbf5c910c272330166fd656c0a86bb330963e46910e1",
 	// Observed on 2026-11-12 on the Phala Cloud, NanoGPT and Venice ACI/1
@@ -103,7 +103,7 @@ var gatewayKMSRootAllow = []string{
 // adds an app id here makes teep accept that dstack app as the gateway. The
 // gateway runs a dev-channel image, so the app id can change on redeploy — a
 // mismatch fails aci_key_custody closed, which is correct; refresh the pin
-// from a new capture. SEE: docs/attestation_gaps/venice_aci_gateway.md.
+// from a new capture. SEE: docs/attestation_gaps/aci_gateway.md.
 var gatewayAppIDAllow = []string{
 	"fdb7a14e5a6675f752e2cb69c9067a98ca402918",
 	// Observed on 2026-11-12 on the Phala Cloud, NanoGPT and Venice ACI/1
@@ -514,7 +514,7 @@ const maxKeysetLifetime = 365 * 24 * time.Hour
 // the E2EE signing key and nonce (SEE: venice.ReportDataVerifier), not the
 // keyset digest, so this is a rotation bound that holds against an honest
 // gateway, not a hardware-enforced expiry.
-// SEE: docs/attestation_gaps/venice_aci_gateway.md residual exposure 7.
+// SEE: docs/attestation_gaps/aci_gateway.md residual exposure 7.
 func keysetNotExpired(notAfter string, now time.Time) (ok bool, detail string) {
 	na, err := notAfterCanonical(notAfter)
 	if err != nil {

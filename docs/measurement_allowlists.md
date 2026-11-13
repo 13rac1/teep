@@ -116,8 +116,8 @@ rtmr2_allow = [
 
 ### Gateway policy
 
-For providers with a separate gateway CVM (nearcloud, and Venice for its
-ACI/1 models):
+For providers with a separate gateway CVM (nearcloud, and Venice, Phala
+Cloud and NanoGPT for their ACI/1 models):
 
 ```toml
 [providers.nearcloud.policy]
@@ -128,12 +128,14 @@ gateway_rtmr1_allow = ["..."]
 gateway_rtmr2_allow = ["..."]
 ```
 
-Venice's ACI/1 gateway runs a dev-channel dstack image whose RTMR0-2 change
-with each redeploy, so its Go defaults enforce only MRTD/MRSEAM (the shared
-dstack base list) and the RTMR gateway factors are waived by default. An
-operator who wants RTMR enforcement pins the observed values here and
-refreshes them when the gateway redeploys.
-SEE: docs/attestation_gaps/venice_aci_gateway.md.
+The ACI/1 gateway that Venice, Phala Cloud and NanoGPT share runs a
+dev-channel dstack image whose RTMR0-2 change with each redeploy, so its Go
+defaults (`aci.GatewayMeasurementPolicy`) enforce only MRTD/MRSEAM (the
+shared dstack base list) and the RTMR gateway factors are allowed to fail
+by default. An operator who wants RTMR enforcement pins the observed values
+in the policy section of each provider that uses the gateway (or in the
+global policy), and refreshes them when the gateway redeploys.
+SEE: docs/attestation_gaps/aci_gateway.md.
 
 ### Merge order
 
