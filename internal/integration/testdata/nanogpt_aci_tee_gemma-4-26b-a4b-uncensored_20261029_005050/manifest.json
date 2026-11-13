@@ -1,0 +1,7 @@
+{
+  "provider": "nanogpt",
+  "model": "TEE/gemma-4-26b-a4b-uncensored",
+  "nonce_hex": "849766a15b5fc2ba23f354d5ab9b2e0320ce0ef1351645aa796af6fd148b65a2",
+  "captured_at": "2026-10-29T00:50:50.266893113Z",
+  "duration_ms": 63393
+}

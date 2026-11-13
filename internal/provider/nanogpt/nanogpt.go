@@ -21,6 +21,7 @@ import (
 	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/aci"
 )
 
 // attestationPath is the NanoGPT API path for TEE attestation.
@@ -151,8 +152,9 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 
 // ParseAttestationResponse detects the attestation format from the JSON body
 // and delegates to the appropriate parser. For dstack format (the primary
-// NanoGPT backend), parsing is handled internally. Other formats (chutes)
-// are delegated to their respective packages.
+// NanoGPT backend), parsing is handled internally. Other formats (chutes and
+// the ACI/1 attestation of the private-ai-gateway) are delegated to their
+// respective packages.
 func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.RawAttestation, error) {
 	format := formatdetect.Detect(body)
 	slog.DebugContext(ctx, "nanogpt format detected", "format", format)
@@ -162,6 +164,8 @@ func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.Ra
 		return parseDstack(ctx, body)
 	case attestation.FormatChutes:
 		return provider.ParseChutesFormat(ctx, body, "nanogpt")
+	case attestation.FormatACI1:
+		return aci.Parse(ctx, body, "nanogpt")
 	case attestation.FormatTinfoil:
 		return nil, errors.New("nanogpt: tinfoil attestation format not yet supported")
 	case attestation.FormatGateway:

@@ -35,7 +35,8 @@ var registry = map[string]providerDefaults{
 		gateway: nearcloud.DefaultGatewayMeasurementPolicy(),
 	},
 	"nanogpt": {
-		model: nanogpt.DefaultMeasurementPolicy(),
+		model:   nanogpt.DefaultMeasurementPolicy(),
+		gateway: aci.GatewayMeasurementPolicy(),
 	},
 	"chutes": {
 		model: chutes.DefaultMeasurementPolicy(),

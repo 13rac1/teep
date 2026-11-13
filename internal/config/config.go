@@ -82,6 +82,9 @@ var providerFormatDefaultAllowFail = map[string]map[attestation.BackendFormat][]
 	"phalacloud": {
 		attestation.FormatACI1: attestation.ACIDefaultAllowFail,
 	},
+	"nanogpt": {
+		attestation.FormatACI1: attestation.ACIDefaultAllowFail,
+	},
 }
 
 // ProviderDefaultAllowFail returns a defensive copy of the provider-specific

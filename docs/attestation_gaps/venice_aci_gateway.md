@@ -138,7 +138,11 @@ are self-asserted, and it is the origin of residual exposure 7.
   `ghcr.io/edgelesssys/privatemode/privatemode-proxy` and
   `prom/node-exporter`, all compose-pinned. The Privatemode proxy is
   Edgeless Systems' client for an upstream; teep verifies only its digest
-  pin in the measured compose, not an attestation of its own.
+  pin in the measured compose, not an attestation of its own. The Venice
+  ACI/1 replay fixtures were captured in August 2026, when the compose ran
+  `dstacktee/dstack-ingress`. That image is not in the policy, so their
+  replay reports it as unrecognized in `provider_signer_recognition` and
+  `component_signature_recognition`, which are allowed failures.
 - The relayed NVIDIA evidence, when the response carries it: per-GPU cert
   chains and SPDM signatures verify, and the EAT nonce matches the client
   nonce (fresh, not replayed). Since 2026-11-12 the Venice response carries

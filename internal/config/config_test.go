@@ -1888,8 +1888,8 @@ func TestMergedAllowFail_VeniceFormatLayer(t *testing.T) {
 		t.Errorf("venice/dstack: got %v, want VeniceDefaultAllowFail", dstack)
 	}
 
-	// Phala Cloud answers with the same gateway's ACI/1 format and selects the
-	// same list; its other formats keep the provider list.
+	// Phala Cloud and NanoGPT answer with the same gateway's ACI/1 format and
+	// select the same list; their other formats keep the provider list.
 	phalaACI := MergedAllowFail("phalacloud", attestation.FormatACI1, cfg, false)
 	if !reflect.DeepEqual(phalaACI, attestation.ACIDefaultAllowFail) {
 		t.Errorf("phalacloud/aci1: got %v, want ACIDefaultAllowFail", phalaACI)
@@ -1897,6 +1897,14 @@ func TestMergedAllowFail_VeniceFormatLayer(t *testing.T) {
 	phalaDstack := MergedAllowFail("phalacloud", attestation.FormatDstack, cfg, false)
 	if !reflect.DeepEqual(phalaDstack, attestation.PhalaCloudDefaultAllowFail) {
 		t.Errorf("phalacloud/dstack: got %v, want PhalaCloudDefaultAllowFail", phalaDstack)
+	}
+	nanoACI := MergedAllowFail("nanogpt", attestation.FormatACI1, cfg, false)
+	if !reflect.DeepEqual(nanoACI, attestation.ACIDefaultAllowFail) {
+		t.Errorf("nanogpt/aci1: got %v, want ACIDefaultAllowFail", nanoACI)
+	}
+	nanoDstack := MergedAllowFail("nanogpt", attestation.FormatDstack, cfg, false)
+	if !reflect.DeepEqual(nanoDstack, attestation.NanoGPTDefaultAllowFail) {
+		t.Errorf("nanogpt/dstack: got %v, want NanoGPTDefaultAllowFail", nanoDstack)
 	}
 
 	noFormat := MergedAllowFail("venice", "", cfg, false)

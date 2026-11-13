@@ -87,9 +87,12 @@ and NanoGPT. Other formats keep `PhalaCloudDefaultAllowFail`.
 
 ## Test coverage
 
-- `TestVerifyRun_PhalaCloudACI_Fixture`, `TestPhalaCloudACI_PinsDecideCustody`
+- `TestVerifyRun_GatewayACI_Fixtures`, `TestGatewayACI_PinsDecideCustody`
   and `TestVerifyRun_ConcurrentACIProviders` in
-  [Phala Cloud ACI/1 replay tests](../../../internal/integration/phalacloud_aci_test.go)
+  [gateway ACI/1 replay tests](../../../internal/integration/gateway_aci_test.go)
   replay a live capture of 2026-10-29 from `tee.redpill.ai`.
+- `TestFromConfigGatewayACIProviders` in
+  [proxy gateway ACI/1 tests](../../../internal/proxy/gateway_aci_test.go)
+  checks the gateway verifier and image policy of `teep serve`.
 - `TestParseAttestationResponseACI` and `TestSupplyChainPolicyGatewayImages`
   in [Phala Cloud ACI/1 tests](../../../internal/provider/phalacloud/aci_test.go).

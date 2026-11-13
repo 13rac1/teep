@@ -423,19 +423,17 @@ func TestSupplyChainPolicy(t *testing.T) {
 	if p == nil {
 		t.Fatal("SupplyChainPolicy() returned nil")
 	}
-	if len(p.Images) != 10 {
-		t.Errorf("len(Images) = %d, want 10", len(p.Images))
-	}
+	modelImages := 0
 	for _, img := range p.Images {
-		if !img.ModelTier {
-			t.Errorf("image %q: ModelTier should be true", img.Repo)
+		if img.ModelTier {
+			modelImages++
 		}
 		if img.Provenance != attestation.ComposeBindingOnly {
 			t.Errorf("image %q: Provenance = %v, want ComposeBindingOnly", img.Repo, img.Provenance)
 		}
 	}
-	if p.HasGatewayImages() {
-		t.Error("NanoGPT policy should have no gateway images")
+	if modelImages != 10 {
+		t.Errorf("model-tier images = %d, want 10", modelImages)
 	}
 }
 

@@ -981,8 +981,9 @@ func TestSupplyChainPolicyNanoGPT(t *testing.T) {
 	if p.AllowedInModel("attacker/evil-image") {
 		t.Error("unexpected repo should not be allowed")
 	}
-	if p.HasGatewayImages() {
-		t.Error("NanoGPT policy should have no gateway images")
+	// The ACI/1 models answer with the private-ai-gateway's attestation.
+	if !p.AllowedInGateway("ghcr.io/dstack-tee/dstack-ingress") {
+		t.Error("NanoGPT policy should list the private-ai-gateway images")
 	}
 }
 

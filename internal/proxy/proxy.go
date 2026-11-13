@@ -781,6 +781,7 @@ func fromConfig(
 				attestation.FormatDstack: venice.ReportDataVerifier{},
 			},
 		}
+		p.GatewayReportDataVerifier = venice.ReportDataVerifier{}
 		p.SupplyChainPolicy = nanogpt.SupplyChainPolicy()
 	case "phalacloud":
 		u, err := url.Parse(cp.BaseURL)

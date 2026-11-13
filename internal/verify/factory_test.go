@@ -150,7 +150,7 @@ func TestNewGatewayReportDataVerifier(t *testing.T) {
 		{"phalacloud", venice.ReportDataVerifier{}},
 		{"nearcloud", nearcloud.GatewayReportDataVerifier{}},
 		{"neardirect", nil},
-		{"nanogpt", nil},
+		{"nanogpt", venice.ReportDataVerifier{}},
 		{"chutes", nil},
 	} {
 		if got := newGatewayReportDataVerifier(tc.provider); got != tc.want {

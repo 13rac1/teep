@@ -123,7 +123,7 @@ func newGatewayReportDataVerifier(name string) provider.ReportDataVerifier {
 	switch name {
 	case "nearcloud":
 		return nearcloud.GatewayReportDataVerifier{}
-	case "venice", "phalacloud":
+	case "venice", "phalacloud", "nanogpt":
 		// The ACI/1 gateway quote binds the same keccak256(signing key)+nonce
 		// REPORTDATA as the dstack model quote, so the verifier is shared.
 		return venice.ReportDataVerifier{}
