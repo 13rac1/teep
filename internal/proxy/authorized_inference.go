@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -442,7 +443,7 @@ func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.Response
 	// The relay of a 200 response writes a 2xx status only for upstream
 	// content; any other status is teep's own error (a stream whose first
 	// read fails), which carries none of the upstream headers.
-	w = &upstreamHeaderWriter{ResponseWriter: w, src: resp.Header}
+	w = newUpstreamHeaderWriter(w, resp.Header)
 	target := w
 	var held *heldResponse
 	if receipt != nil && !input.stream {
@@ -598,19 +599,38 @@ func (s *Server) logAuthorizedRetry(ctx context.Context, input *authorizedReques
 	s.authorizations.log().LogAttrs(ctx, slog.LevelWarn, "authorized inference retry scheduled", attrs...)
 }
 
-// upstreamHeaderWriter copies the upstream response headers to the client
-// when the first status written is a 2xx status, before it is written.
+// upstreamHeaderWriter puts the upstream response headers on the client
+// response before the relay, so that the relay sets its own headers over
+// them and keeps an upstream header that it sets only when absent (the media
+// type of a speech response). When the first status written is not a 2xx
+// status, the response is teep's own error: the upstream headers that still
+// have their upstream values are removed before it is written.
 type upstreamHeaderWriter struct {
 	http.ResponseWriter
-	src     http.Header
+	copied  http.Header
 	written bool
+}
+
+func newUpstreamHeaderWriter(w http.ResponseWriter, src http.Header) *upstreamHeaderWriter {
+	copied := http.Header{}
+	copyAuthorizedHeaders(copied, src)
+	dst := w.Header()
+	for name, values := range copied {
+		dst[name] = slices.Clone(values)
+	}
+	return &upstreamHeaderWriter{ResponseWriter: w, copied: copied}
 }
 
 func (w *upstreamHeaderWriter) WriteHeader(code int) {
 	if !w.written {
 		w.written = true
-		if code >= http.StatusOK && code < http.StatusMultipleChoices {
-			copyAuthorizedHeaders(w.Header(), w.src)
+		if code < http.StatusOK || code >= http.StatusMultipleChoices {
+			dst := w.Header()
+			for name, values := range w.copied {
+				if slices.Equal(dst[name], values) {
+					delete(dst, name)
+				}
+			}
 		}
 	}
 	w.ResponseWriter.WriteHeader(code)

@@ -354,6 +354,10 @@ func phalaTestGateway(t *testing.T, gw *aciv2test.Gateway, tc *phalaCase, receip
 		}
 		w.Header().Set("X-Gateway-Header", "1")
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		// Headers that teep's relay sets itself; the gateway's values must
+		// not replace teep's.
+		w.Header().Set("Cache-Control", "max-age=60")
+		w.Header().Set("X-Accel-Buffering", "yes")
 		writePhalaStream(w, r, tc, stream)
 	}
 }
@@ -425,6 +429,9 @@ func checkPhalaResponse(t *testing.T, tc *phalaCase, rec *inferenceRecorder, rec
 	}
 	if strings.Contains(rec.Body.String(), "plaintext-answer") {
 		t.Error("a plaintext answer reached the client")
+	}
+	if tc.wantRelayed && !tc.wantErr {
+		checkRelayHeaders(t, rec.Header(), tc.plain)
 	}
 	if tc.plain && !tc.wantRelayed && rec.Body.Len() > 0 {
 		t.Errorf("non-stream response written before its receipt verified: %d %q", rec.Code, rec.Body.String())
@@ -595,5 +602,23 @@ func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, tc *ph
 	current, ok := server.authorizations.acquire(key)
 	if gotEnded := !ok || current.generation != value.generation; gotEnded != tc.ended {
 		t.Errorf("generation ended = %v, want %v", gotEnded, tc.ended)
+	}
+}
+
+// checkRelayHeaders requires the headers that teep's relay sets: the
+// encrypted request of a non-stream response is a stream upstream, and teep
+// answers with the reassembled JSON body; a stream keeps teep's event-stream
+// headers. The upstream headers that teep does not set still reach the
+// client.
+func checkRelayHeaders(t *testing.T, h http.Header, nonStream bool) {
+	t.Helper()
+	want := map[string]string{"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Gateway-Header": "1"}
+	if nonStream {
+		want = map[string]string{"Content-Type": "application/json", "X-Gateway-Header": "1"}
+	}
+	for name, value := range want {
+		if got := h.Get(name); got != value {
+			t.Errorf("client %s = %q, want %q", name, got, value)
+		}
 	}
 }
