@@ -1,0 +1,27 @@
+{
+  "method": "GET",
+  "url": "https://qwen3-8-27b-i0.completions.near.ai/v1/attestation/report?include_tls_fingerprint=true\u0026nonce=d1f0c6da7578adb98af5c2aa48754ced21f6291ed08d601dca1a751dab0a824f\u0026signing_algo=ed25519",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGS1e/gMd6lzgFTp89G+KDtPickf3ALM6meN0r4FYUA48UyYI39ibceN3LS6p1mQ1VUeRZ/hBR+F4+3VYyF6QDQ==",
+  "headers": {
+    "Content-Length": [
+      "380356"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Fri, 13 Nov 2026 07:12:35 GMT"
+    ],
+    "Server": [
+      "nginx/1.29.5"
+    ],
+    "X-Request-Id": [
+      "9ff07024-8094-4f92-a56a-54282cab5d6e"
+    ]
+  },
+  "duration_ms": 306
+}

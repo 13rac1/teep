@@ -1,0 +1,114 @@
+{
+  "method": "GET",
+  "url": "https://github-proxy.tinfoil.sh/repos/tinfoilsh/confidential-model-router/releases/latest",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0kTyp3l+RC0/YfmlrFscBQI9xkUa8PlxFi9XgMuWgZhdIOOBlMAC9WdbaseymoEuTlc2Iq7iALbIUt5+xRaVgA==",
+  "headers": {
+    "Access-Control-Allow-Headers": [
+      "*"
+    ],
+    "Access-Control-Allow-Methods": [
+      "GET, OPTIONS"
+    ],
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Access-Control-Expose-Headers": [
+      "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+    ],
+    "Age": [
+      "2"
+    ],
+    "Cache-Control": [
+      "no-store"
+    ],
+    "Cf-Cache-Status": [
+      "HIT"
+    ],
+    "Cf-Ray": [
+      "a59c3d9f091eccf8-SJC"
+    ],
+    "Content-Security-Policy": [
+      "default-src 'none'"
+    ],
+    "Content-Type": [
+      "application/json; charset=utf-8"
+    ],
+    "Date": [
+      "Fri, 13 Nov 2026 08:00:05 GMT"
+    ],
+    "Etag": [
+      "W/\"d9652a0b0610edefcecdfc6cd4dba8006a358767e1764b0894029726390cc98b\""
+    ],
+    "Expires": [
+      "Sat, 14 Nov 2026 08:00:04 GMT"
+    ],
+    "Github-Authentication-Token-Expiration": [
+      "2027-05-21 20:41:17 UTC"
+    ],
+    "Last-Modified": [
+      "Thu, 12 Nov 2026 22:56:28 GMT"
+    ],
+    "Referrer-Policy": [
+      "origin-when-cross-origin, strict-origin-when-cross-origin"
+    ],
+    "Server": [
+      "cloudflare"
+    ],
+    "Strict-Transport-Security": [
+      "max-age=31536000; includeSubdomains; preload"
+    ],
+    "Vary": [
+      "accept-encoding"
+    ],
+    "X-Accepted-Github-Permissions": [
+      "contents=read"
+    ],
+    "X-Cache-Status": [
+      "REVALIDATED"
+    ],
+    "X-Content-Type-Options": [
+      "nosniff"
+    ],
+    "X-Frame-Options": [
+      "deny"
+    ],
+    "X-Github-Api-Version-Selected": [
+      "2026-03-10"
+    ],
+    "X-Github-Edge-Region": [
+      "westus3"
+    ],
+    "X-Github-Media-Type": [
+      "github.v3; format=json"
+    ],
+    "X-Github-Request-Id": [
+      "B587:110227:A92B06:B3B4CD:6AF6C36B"
+    ],
+    "X-Proxied-To": [
+      "https://api.github.com/repos/tinfoilsh/confidential-model-router/releases/latest"
+    ],
+    "X-Ratelimit-Limit": [
+      "5000"
+    ],
+    "X-Ratelimit-Remaining": [
+      "3607"
+    ],
+    "X-Ratelimit-Reset": [
+      "1794557151"
+    ],
+    "X-Ratelimit-Resource": [
+      "core"
+    ],
+    "X-Ratelimit-Used": [
+      "1393"
+    ],
+    "X-Xss-Protection": [
+      "0"
+    ]
+  },
+  "duration_ms": 282
+}

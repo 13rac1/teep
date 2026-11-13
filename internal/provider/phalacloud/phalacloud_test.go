@@ -39,7 +39,7 @@ func canonicalReport(t *testing.T) []byte {
 
 // fixtureTLSKey is the SPKI fingerprint that the canonical report fixture
 // lists for tee.redpill.ai, in the keyset and in downstream_tls_binding.
-const fixtureTLSKey = "951885459fbd27cad038c40a198e6a1fb63f4d18dd5d5a24d408d5d951488ffe"
+const fixtureTLSKey = "dd7451eed78f36e8e230047e0e1e91955810f802fea052996fa83add370a00ce"
 
 // The attester requests the canonical ACI/1 report with the client nonce
 // and no model over TLS, and pins the TLS key that the keyset lists for the

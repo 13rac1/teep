@@ -58,19 +58,24 @@ func TestVerifyRun_VeniceACI_Fixture(t *testing.T) {
 		"nonce_match",
 		"signing_key_present",
 		"aci_key_custody",
-		"nvidia_signature",
-		"nvidia_nonce_client_bound",
 		"gateway_nonce_match",
 		"gateway_tee_quote_present",
 		"gateway_tee_quote_structure",
 		"gateway_tee_cert_chain",
 		"gateway_tee_quote_signature",
 		"gateway_tee_debug_disabled",
-		"gateway_tee_measurement",
 		"gateway_tee_reportdata_binding",
 		"gateway_compose_binding",
 		"gateway_event_log_integrity",
 	})
+	assertAllowedFail(t, report, []string{"gateway_tee_measurement"}, "the gateway deployment of 2026-11-12 has an MRTD that is not in the dstack base allowlist; the factor is allowed to fail by default")
+	// Since 2026-11-12 the Venice ACI/1 response carries no GPU evidence:
+	// the GPU factors skip, and the Venice list allows them to fail.
+	for _, name := range []string{"nvidia_signature", "nvidia_nonce_client_bound"} {
+		if f := findFactor(t, report, name); f.Status != attestation.Skip || f.Enforced {
+			t.Errorf("%s: status=%s enforced=%v, want an allowed Skip without GPU evidence", name, f.Status, f.Enforced)
+		}
+	}
 
 	// E2EE authorization must read the gateway binding factor: the E2EE key
 	// is the gateway's, and the core tee_reportdata_binding never passes.
@@ -100,8 +105,9 @@ func TestVerifyRun_VeniceACI_Fixture(t *testing.T) {
 
 // TestVeniceACI_GatewayIdentityAcrossModels compares every captured ACI/1
 // fixture pairwise: models with different upstream vendors must present the
-// same gateway identity (keyset digest, signing key, downstream TLS pin)
-// while their relayed GPU evidence differs. This is the observable proof
+// same gateway identity (keyset digest, signing key, downstream TLS pin);
+// relayed GPU evidence, when a response carries it, differs. This is the
+// observable proof
 // that ACI/1 attests one shared gateway rather than per-model backends —
 // the basis for reporting it in the gateway tier.
 func TestVeniceACI_GatewayIdentityAcrossModels(t *testing.T) {
@@ -125,7 +131,7 @@ func TestVeniceACI_GatewayIdentityAcrossModels(t *testing.T) {
 		if first.raw.GatewayAppCompose != other.raw.GatewayAppCompose {
 			t.Errorf("gateway app_compose differs between %s and %s", first.model, other.model)
 		}
-		if first.raw.NvidiaPayload == other.raw.NvidiaPayload {
+		if first.raw.NvidiaPayload != "" && first.raw.NvidiaPayload == other.raw.NvidiaPayload {
 			t.Errorf("relayed GPU evidence is identical between %s and %s — expected per-backend GPUs",
 				first.model, other.model)
 		}

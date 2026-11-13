@@ -1,0 +1,99 @@
+{
+  "method": "POST",
+  "url": "https://api.venice.ai/api/v1/chat/completions",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXAoLvybW8UygNAGY20XaSDezuSeQ8gOv3LboLWr08Pi3U4/VZjN0t4sZ6XfNPeiAewRCG1W9FGJKZjXk+5jm2w==",
+  "headers": {
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Access-Control-Expose-Headers": [
+      "*"
+    ],
+    "Cache-Control": [
+      "no-cache"
+    ],
+    "Cdn-Cache-Control": [
+      "no-store"
+    ],
+    "Cf-Cache-Status": [
+      "DYNAMIC"
+    ],
+    "Cf-Ray": [
+      "a59be577c8938ac8-SJC"
+    ],
+    "Content-Security-Policy": [
+      "default-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests"
+    ],
+    "Content-Type": [
+      "text/event-stream; charset=utf-8"
+    ],
+    "Date": [
+      "Fri, 13 Nov 2026 06:59:55 GMT"
+    ],
+    "Permissions-Policy": [
+      "geolocation=(), camera=()"
+    ],
+    "Referrer-Policy": [
+      "strict-origin"
+    ],
+    "Server": [
+      "cloudflare"
+    ],
+    "Server-Timing": [
+      "cfCacheStatus;desc=\"DYNAMIC\"",
+      "cfEdge;dur=4,cfOrigin;dur=1054"
+    ],
+    "Set-Cookie": [
+      "__cf_bm=e9rFrR6VmxGCRwpbnt.Ls3FiWskBsLLWtoIf5j4ATO0-1794553194.205773-1.0.1.1-WVM05pids2lJd5wuLf9.XpJLT8RwK1g9v0yaZ9v4ZvSfrOsNd4ruY0t3irhOiK4VNA8j9Gkja1DeJV71S96G23OWQ5RpG.K.Os3.eELXce.VoCEvYZbTQIQXTfW0_tPX; HttpOnly; SameSite=None; Partitioned; Secure; Path=/; Domain=venice.ai; Expires=Fri, 13 Nov 2026 07:29:55 GMT",
+      "_cfuvid=dsEckL4cAwAbiygF2Lc1o6aBgDbyhydqziJEi_zeKHY-1794553194.205773-1.0.1.1-L4hjeSSoG4OV84ZX37TgrL..1TWMEltEwgUqeWjdb2M; HttpOnly; SameSite=None; Secure; Path=/; Domain=venice.ai"
+    ],
+    "Strict-Transport-Security": [
+      "max-age=31536000; includeSubDomains; preload"
+    ],
+    "Vary": [
+      "Accept-Encoding"
+    ],
+    "X-Content-Type-Options": [
+      "nosniff"
+    ],
+    "X-Frame-Options": [
+      "SAMEORIGIN"
+    ],
+    "X-Ratelimit-Limit-Requests": [
+      "150"
+    ],
+    "X-Ratelimit-Limit-Tokens": [
+      "10000000"
+    ],
+    "X-Ratelimit-Remaining-Requests": [
+      "149"
+    ],
+    "X-Ratelimit-Remaining-Tokens": [
+      "10000000"
+    ],
+    "X-Ratelimit-Reset-Requests": [
+      "1794553254259"
+    ],
+    "X-Ratelimit-Reset-Tokens": [
+      "1794553254259"
+    ],
+    "X-Venice-Balance-Diem": [
+      "2.99998835"
+    ],
+    "X-Venice-Tee": [
+      "true"
+    ],
+    "X-Venice-Tee-Provider": [
+      "phala"
+    ],
+    "X-Venice-Version": [
+      "outerface-api-server-us-east1-08356-5vk"
+    ]
+  },
+  "req_body_base64": "eyJtZXNzYWdlcyI6W3siY29udGVudCI6IjA0ZmI0N2ZmOTc4NDQ1YWNkNGNjZmQwMWNiZTI4N2VhMmRiOWM4NzIzZTI1YzIxOTJlMmM1ZDY2Yjk0NjM5ZTk1NGY4ZmE1MmFmYzhhYmJkMTVlNDFiYWIzOTAwMGRjMTkzMWZjMTUyYjY2ZTZlMzFhODhmODA1MGEzY2JhMjg5ODIzMGZmM2Q2M2FkNzIwMmUyNTVhNWFmNDg1NzBjYjg2YjQ4ZTNiZTVhOWNlMzgwZmYzMjFhYjRiYTc0YmIxZDUwYmI2MGIwZjE2MCIsInJvbGUiOiJ1c2VyIn1dLCJtb2RlbCI6ImUyZWUtZ2xtLTUtMi1wIiwic3RyZWFtIjp0cnVlfQ==",
+  "duration_ms": 1094
+}

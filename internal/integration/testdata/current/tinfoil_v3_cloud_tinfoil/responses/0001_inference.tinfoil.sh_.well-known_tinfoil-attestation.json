@@ -1,21 +1,21 @@
 {
   "method": "GET",
-  "url": "https://inference.tinfoil.sh/.well-known/tinfoil-attestation?nonce=dba9547f7be8e30095ffcb5f5460139904e42d0376ae0071565d2e78ec67e74e",
+  "url": "https://inference.tinfoil.sh/.well-known/tinfoil-attestation?nonce=acffef25e22b641dbac433e12c5d6d05245c35d0f705a6f31fe86928cb75d5c8",
   "status": 200,
-  "proto": "HTTP/1.1",
+  "proto": "HTTP/2.0",
   "tls_version": "TLS 1.3",
-  "tls_cipher": "TLS_AES_128_GCM_SHA256",
-  "peer_spki_der_base64": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAENpJd4jgMKZxBfGB5/fQfieiZ5PMiXK6hRWDTQGiQed2q4iR9HsawlwfKda2YGKqJiPJ+0ttxhbepZFUTDKqjZcUKLEmO6BoaQ6a3jyaSKDF4CnkVk0QztzRc5oiU/Eco",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEcYNbd9mBL3g7zhPMpQTbi/8gWfS9I0mqFzRIvz4nTzjVn+oc5ZMb24cfRQKoES8U5WNuGFuPU9TNtxJFpMuzHQ3HSCQKJV8rKZr/oJLuEfX8++IHrNBbLP8p7aLclBsZ",
   "headers": {
     "Content-Type": [
       "application/json"
     ],
     "Date": [
-      "Mon, 17 Aug 2026 00:34:20 GMT"
+      "Fri, 13 Nov 2026 08:00:04 GMT"
     ],
     "Tinfoil-Pt": [
-      "https://tinfoil.sh/predicate/sev-snp-guest/v2"
+      "https://tinfoil.sh/predicate/attestation/v3"
     ]
   },
-  "duration_ms": 171
+  "duration_ms": 120
 }

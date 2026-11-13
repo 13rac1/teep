@@ -1,5 +1,5 @@
-Attestation Report: tinfoil_v3_cloud / glm-5-2
-══════════════════════════════════════════════
+Attestation Report: tinfoil_v3_cloud / deepseek-v4-1-flash
+══════════════════════════════════════════════════════════
 
   Nonce source:  client
 
@@ -13,7 +13,7 @@ Tier 1: Core Attestation
   - tee_measurement                   no parseable TEE quote/report; cannot check measurements  [ALLOWED]
   - tee_hardware_config               no parseable TEE quote/report; cannot check hardware config  [ALLOWED]
   - tee_boot_config                   no parseable TEE quote/report; cannot check boot config  [ALLOWED]
-  ✓ signing_key_present               enclave pubkey present (4539df144c...)  [ENFORCED]
+  ✓ signing_key_present               enclave pubkey present (646cd56b6e...)  [ENFORCED]
   ✓ response_schema                   attestation response matches expected schema  [ENFORCED]
 
 Tier 2: Binding & Crypto
@@ -27,10 +27,14 @@ Tier 2: Binding & Crypto
   — nvidia_nonce_client_bound         Tinfoil binds GPU nonce freshness via REPORTDATA hash chain, not direct SPDM nonce
   — nvidia_nras_verified              NRAS is an EAT-JWT cloud service; Tinfoil uses direct SPDM verification
   ✓ e2ee_capable                      X25519 HPKE public key valid (32 bytes); EHBP E2EE key exchange possible  [ENFORCED]
-  ✓ e2ee_usable                       EHBP X25519: 70 chunks decrypted  [ENFORCED]
+  ✓ e2ee_usable                       EHBP X25519: 11 chunks decrypted  [ENFORCED]
+  — aci_key_custody                   not ACI/1 format
+  — aci_backend_named                 not ACI/1 format
+  — aci_session_verified              not the canonical ACI/1 report
+  — aci_receipt_verified              not the canonical ACI/1 report
 
 Tier 3: Supply Chain & Channel Integrity
-  ✓ tls_key_binding                   TLS certificate SPKI bound to attestation (198c3340b8b007ef...)  [ENFORCED]
+  ✓ tls_key_binding                   TLS transport SPKI bound to attestation  [ENFORCED]
   ✗ cpu_gpu_chain                     CPU-GPU attestation not bound  [ALLOWED]
   - nvswitch_binding                  no GPU evidence; NVSwitch check not applicable  [ALLOWED]
   ✗ measured_model_weights            no model weight hashes  [ALLOWED]
@@ -47,11 +51,11 @@ Tier 3: Supply Chain & Channel Integrity
 Tier 4: Gateway Attestation
   ✓ gateway_nonce_match               gateway nonce matches (64 hex chars)  [ENFORCED]
   ✓ gateway_tee_quote_present         gateway SEV-SNP report present (1184 bytes)  [ENFORCED]
-  ✓ gateway_tee_quote_structure       valid gateway SEV-SNP report, measurement: 6d657b353726893e...  [ENFORCED]
+  ✓ gateway_tee_quote_structure       valid gateway SEV-SNP report, measurement: 07c3b78a46e4035b...  [ENFORCED]
   ✓ gateway_tee_cert_chain            gateway certificate chain valid (AMD root CA)  [ALLOWED]
   ✓ gateway_tee_quote_signature       gateway SEV-SNP report signature verified  [ALLOWED]
   ✓ gateway_tee_debug_disabled        gateway debug bit is 0 (production guest)  [ENFORCED]
-  ✓ gateway_tee_measurement           SEV-SNP code measurement matches Sigstore predicate (6d657b353726893e...)  [ENFORCED]
+  ✓ gateway_tee_measurement           SEV-SNP code measurement matches Sigstore predicate (07c3b78a46e4035b...)  [ENFORCED]
   ✓ gateway_tee_hardware_config       gateway SEV-SNP guest policy valid (policy=0x0000000000030000)  [ENFORCED]
   — gateway_tee_boot_config           SEV-SNP has no separate boot measurement; the launch measurement (gateway_tee_measurement) covers it
   ✓ gateway_tee_reportdata_binding    v3: reportdata_hash verified, nonce_bound=true, gpu_bound=false  [ENFORCED]
@@ -61,6 +65,6 @@ Tier 4: Gateway Attestation
   ✓ gateway_tee_tcb_current           gateway SEV-SNP TCB meets minimums (bl=0x0a tee=0x00 snp=0x17 ucode=0x54)  [ENFORCED]
   ✓ gateway_tee_tcb_not_revoked       gateway SEV-SNP TCB at or above minimum thresholds; AMD CRL not checked  [ENFORCED]
 
-Score: 22/41 passed, 9 skipped, 10 failed (0 enforced, 10 allowed), 9 n/a
+Score: 22/41 passed, 9 skipped, 10 failed (0 enforced, 10 allowed), 13 n/a
 
 Run 'teep help tiers' for scoring or 'teep help factors' for details.

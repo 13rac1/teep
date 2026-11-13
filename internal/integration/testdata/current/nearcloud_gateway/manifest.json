@@ -4,13 +4,13 @@
     "e2ee": true
   },
   "provider": "nearcloud",
-  "model": "z-ai/glm-5.3-flash",
-  "nonce_hex": "5fec5e36c57e3b59e589f2f6cf9a055ab006095e1a82cc6a6117910ec90e11f2",
-  "captured_at": "2026-09-10T15:35:19.548906Z",
-  "duration_ms": 10191,
+  "model": "Qwen/Qwen3.8-27B",
+  "nonce_hex": "884c0f40079b3dcde28a1f97fa7c0d02395cfea4e167c9757179653080c6024b",
+  "captured_at": "2026-11-13T08:23:59.715407831Z",
+  "duration_ms": 6703,
   "e2ee": {
     "attempted": true,
-    "detail": "E2EE nearcloud: 85 encrypted fields decrypted across 88 chunks",
+    "detail": "E2EE nearcloud: 21 encrypted fields decrypted across 24 chunks",
     "key_type": "ed25519"
   }
 }

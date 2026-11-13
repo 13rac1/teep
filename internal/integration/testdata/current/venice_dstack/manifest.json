@@ -1,12 +1,12 @@
 {
   "provider": "venice",
-  "model": "e2ee-qwen3-6-35b-a3b",
-  "nonce_hex": "0d1d38f6a066f918b67e7344593cf2b0ae388a9e3c113b7a837d1fe88b72c1f1",
-  "captured_at": "2026-08-26T01:07:46.322945839Z",
-  "duration_ms": 3404,
+  "model": "e2ee-qwen3-8-27b",
+  "nonce_hex": "30d44029257123647cde6c4563505412a4fb0e84a7f7a25228d45c856a5f413f",
+  "captured_at": "2026-11-13T07:06:26.558498092Z",
+  "duration_ms": 6200,
   "e2ee": {
     "attempted": true,
-    "detail": "E2EE venice: 52 encrypted fields decrypted across 55 chunks",
+    "detail": "E2EE venice: 31 encrypted fields decrypted across 34 chunks",
     "key_type": "ecdsa"
   }
 }

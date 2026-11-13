@@ -27,7 +27,7 @@ func TestACIParsersRefuseFoldedAliases(t *testing.T) {
 	}
 	gateway := read("gateway_variant.json")
 	canonical := read("canonical_report.json")
-	receipt := read("receipt_20261101.json")
+	receipt := read("receipt.json")
 	sessionBody, _ := withID(t, smallSession(t))
 
 	cases := []struct {

@@ -12,7 +12,7 @@ import (
 // in Receipt.Unknown and stay in the signed form. A member of the other form
 // of upstream.verified still fails (TestParseReceiptRefusesMalformed).
 func TestParseReceiptReportsUndefinedMembers(t *testing.T) {
-	body, err := os.ReadFile("testdata/receipt_20261101.json")
+	body, err := os.ReadFile("testdata/receipt.json")
 	if err != nil {
 		t.Fatal(err)
 	}

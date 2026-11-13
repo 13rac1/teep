@@ -1,11 +1,11 @@
 {
   "method": "GET",
-  "url": "https://api.venice.ai/api/v1/tee/attestation?model=e2ee-gpt-oss-120b-p\u0026nonce=770a9d6aa19c950bbfbae57ae6071a774c61948d2e1e9f2c7448d6f7ce8d9d22",
+  "url": "https://api.venice.ai/api/v1/tee/attestation?model=e2ee-gpt-oss-120b-p\u0026nonce=f80c05a3ee2d4cadbda9f4c306192ee71bd6b154fb2cd774be78bc1c5feb5389",
   "status": 200,
-  "proto": "HTTP/1.1",
+  "proto": "HTTP/2.0",
   "tls_version": "TLS 1.3",
-  "tls_cipher": "TLS_AES_128_GCM_SHA256",
-  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE3Tfw627g4as/9ZY5+oS8wZSNKzDYFnflqGUyUq6kuZ/z4L5nSmBQBeWH3Rn+cElV9SqxdlPx369gku7a5PNJVQ==",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXAoLvybW8UygNAGY20XaSDezuSeQ8gOv3LboLWr08Pi3U4/VZjN0t4sZ6XfNPeiAewRCG1W9FGJKZjXk+5jm2w==",
   "headers": {
     "Access-Control-Allow-Origin": [
       "*"
@@ -17,10 +17,7 @@
       "DYNAMIC"
     ],
     "Cf-Ray": [
-      "a30ef082ea0ec52e-SJC"
-    ],
-    "Connection": [
-      "keep-alive"
+      "a59be757ba0e67b8-SJC"
     ],
     "Content-Security-Policy": [
       "default-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests"
@@ -29,10 +26,10 @@
       "application/json; charset=utf-8"
     ],
     "Date": [
-      "Wed, 26 Aug 2026 01:07:30 GMT"
+      "Fri, 13 Nov 2026 07:01:11 GMT"
     ],
     "Etag": [
-      "W/\"26e01-RbA//Dc/FofvDE/TQ/ESANMN1V0\""
+      "W/\"113d0-ufvZ4FsSDMGk2sv50h9gYgwUB2I\""
     ],
     "Permissions-Policy": [
       "geolocation=(), camera=()"
@@ -45,11 +42,11 @@
     ],
     "Server-Timing": [
       "cfCacheStatus;desc=\"DYNAMIC\"",
-      "cfEdge;dur=7,cfOrigin;dur=5279"
+      "cfEdge;dur=8,cfOrigin;dur=583"
     ],
     "Set-Cookie": [
-      "__cf_bm=s55RvrD6U75RoQhmASnkFxw6pH.Wwp0n_IRkm8lPdJ0-1787706445.2669163-1.0.1.1-7yyTjEG9ithRrQ7SvtY6TYBUHjg1cSNJRYxbTBZUht7uBJ10WhnWA.knCpV3Ca5P6Ns_nuXYXbtR82Twmax3pOoe635XEFwcW2onbbRUZM4AOAONHGpzn9Nt2UZ.S4I3; HttpOnly; SameSite=None; Secure; Path=/; Domain=venice.ai; Expires=Wed, 26 Aug 2026 01:37:30 GMT",
-      "_cfuvid=Gxv.IWiNEKPQt2yzkN64gzD.Z19waKdqECsS0NiG1v0-1787706445.2669163-1.0.1.1-zs5XdKrGPq4zD3qK9OlttQmRmVmRoc48D3wlv2rTVlU; HttpOnly; SameSite=None; Secure; Path=/; Domain=venice.ai"
+      "__cf_bm=DduNElVmsm_EAPiSNDGOMIULi7BrNLb_9VL8uCqDWUs-1794553271.0026758-1.0.1.1-zlGGwEAgaKjzP_BLzr7v07dZzg_SBdpJEATlPPStCgrgKy.yAbkMpJpOhSNi3nZd303Tj3BdjSZ7AnlLWzcnRJ.9H6.mYmaqmgxKVXa5a7SfbLDC2Z5GQ6qtAZg.KEgv; HttpOnly; SameSite=None; Partitioned; Secure; Path=/; Domain=venice.ai; Expires=Fri, 13 Nov 2026 07:31:11 GMT",
+      "_cfuvid=rJRTJeTgbmSZw7Ts8XiTHPb8N1GTsfHRzksvRmcBroo-1794553271.0026758-1.0.1.1-fteOA6lsDBPfx.okYitB73I.BwLcEaz_HDb4vdvf0c4; HttpOnly; SameSite=None; Secure; Path=/; Domain=venice.ai"
     ],
     "Speculation-Rules": [
       "\"/cdn-cgi/speculation\""
@@ -67,5 +64,5 @@
       "SAMEORIGIN"
     ]
   },
-  "duration_ms": 5424
+  "duration_ms": 704
 }

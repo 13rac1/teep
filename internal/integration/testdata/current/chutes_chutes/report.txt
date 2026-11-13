@@ -1,22 +1,22 @@
-Attestation Report: chutes / zai-org/GLM-5-TEE
-══════════════════════════════════════════════
+Attestation Report: chutes / Qwen/Qwen3.6-27B-TEE
+═════════════════════════════════════════════════
 
   Hardware:      intel-tdx
-  PPID:          ba8cf63a4d1696f1...
+  PPID:          3c04e8903aea5d30...
   Nonce source:  not_echoed
   Candidates:    1/2 evaluated
 
 Tier 1: Core Attestation
   ✗ nonce_match                       no echoed nonce; freshness rests on tee_reportdata_binding  [ALLOWED]
   ✓ tee_quote_present                 TDX quote present (10486 hex chars)  [ENFORCED]
-  ✓ tee_quote_structure               valid QuoteV4, MRTD: ddc6efcdd2309e10...  [ENFORCED]
+  ✓ tee_quote_structure               valid QuoteV4, MRTD: 261ce538b435e2d0...  [ENFORCED]
   ✓ tee_cert_chain                    certificate chain valid (Intel root CA)  [ENFORCED]
   ✓ tee_quote_signature               quote signature verified  [ENFORCED]
   ✓ tee_debug_disabled                debug bit is 0 (production enclave)  [ENFORCED]
   ✓ tee_measurement                   MRTD/MRSEAM policy matched  [ENFORCED]
-  ✗ tee_hardware_config               RTMR[0] not in policy allowlist: 2864b11878e81290...  [ALLOWED]
-  ✗ tee_boot_config                   RTMR[1] not in policy allowlist: f858ed2aecba4ecd...  [ALLOWED]
-  ✓ signing_key_present               enclave pubkey present (uZiJNGyxxP...)  [ENFORCED]
+  ✓ tee_hardware_config               RTMR0 policy matched  [ALLOWED]
+  ✗ tee_boot_config                   RTMR[2] not in policy allowlist: e1de99043052f3e1...  [ALLOWED]
+  ✓ signing_key_present               enclave pubkey present (XQk0kyxcqr...)  [ENFORCED]
   ✓ response_schema                   attestation response matches expected schema  [ALLOWED]
 
 Tier 2: Binding & Crypto
@@ -24,13 +24,17 @@ Tier 2: Binding & Crypto
   ✓ intel_pcs_collateral              Intel PCS collateral fetched (TCB status: UpToDate)  [ENFORCED]
   ✓ tee_tcb_current                   TCB is UpToDate per Intel PCS  [ENFORCED]
   ✓ tee_tcb_not_revoked               TCB status UpToDate is not Revoked  [ENFORCED]
-  ✓ nvidia_payload_present            GPU evidence present (8 GPUs, SPDM format)  [ENFORCED]
-  ✗ nvidia_signature                  signature invalid: GPU 0 verification failed: SPDM evidence: requester nonce mismatch: got 20c934acdd4b0f08b9f5a3ad6caf5fdf665d3538c90a495c09d1b6894ef1d583, want c7fe347ecca03db12e156e048bbe809024928ef0707a319796956fe7415148e4  [ALLOWED]
-  ✓ nvidia_claims                     claims valid  [ENFORCED]
-  ✓ nvidia_nonce_client_bound         NVIDIA nonce matches client nonce  [ENFORCED]
-  ✗ nvidia_nras_verified              NRAS result: false; all 8 GPUs: NONCE_NOT_MATCHING  [ALLOWED]
+  ✓ nvidia_payload_present            GPU evidence present (1 GPUs, SPDM format)  [ENFORCED]
+  ✓ nvidia_signature                  SPDM: 1 GPU cert chains and ECDSA P-384 signatures verified (arch: BLACKWELL)  [ALLOWED]
+  — nvidia_claims                     SPDM evidence carries no claims; the measurements are compared by NRAS (nvidia_nras_verified)
+  ✓ nvidia_nonce_client_bound         SPDM evidence of 1 GPUs answers the requester nonce derived from the client nonce and the instance key  [ENFORCED]
+  ✓ nvidia_nras_verified              NRAS: true (JWT verified)  [ALLOWED]
   ✓ e2ee_capable                      ML-KEM-768 public key valid (1184 bytes); post-quantum E2EE key exchange possible  [ENFORCED]
-  ✓ e2ee_usable                       E2EE chutes ML-KEM-768: 182 encrypted chunks decrypted; non-standard response headers: Alt-Svc: clear; Via: 1.1 google; X-Chutes-Quota-Remaining: 0; X-Chutes-Quota-Total: 0; X-Chutes-Quota-Used: 0; X-Chutes-Rl-User: 60  [ENFORCED]
+  ✓ e2ee_usable                       E2EE chutes ML-KEM-768: 288 encrypted chunks decrypted; non-standard response headers: Alt-Svc: clear; Via: 1.1 google; X-Chutes-Quota-Remaining: 0; X-Chutes-Quota-Total: 0; X-Chutes-Quota-Used: 0; X-Chutes-Rl-User: 60  [ENFORCED]
+  — aci_key_custody                   not ACI/1 format
+  — aci_backend_named                 not ACI/1 format
+  — aci_session_verified              not the canonical ACI/1 report
+  — aci_receipt_verified              not the canonical ACI/1 report
 
 Tier 3: Supply Chain & Channel Integrity
   - tls_key_binding                   provider uses E2EE key exchange; TLS binding not applicable  [ALLOWED]
@@ -47,6 +51,6 @@ Tier 3: Supply Chain & Channel Integrity
   — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
   — event_log_integrity               Chutes RTMR verification is validator-side; event log not exposed
 
-Score: 17/26 passed, 1 skipped, 8 failed (0 enforced, 8 allowed), 9 n/a
+Score: 19/25 passed, 1 skipped, 5 failed (0 enforced, 5 allowed), 14 n/a
 
 Run 'teep help tiers' for scoring or 'teep help factors' for details.

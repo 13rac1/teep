@@ -1,13 +1,12 @@
 {
   "provider": "venice",
   "model": "e2ee-gpt-oss-120b-p",
-  "nonce_hex": "770a9d6aa19c950bbfbae57ae6071a774c61948d2e1e9f2c7448d6f7ce8d9d22",
-  "captured_at": "2026-08-26T01:07:34.192755613Z",
-  "duration_ms": 9847,
+  "nonce_hex": "f80c05a3ee2d4cadbda9f4c306192ee71bd6b154fb2cd774be78bc1c5feb5389",
+  "captured_at": "2026-11-13T07:01:16.748124269Z",
+  "duration_ms": 7142,
   "e2ee": {
     "attempted": true,
-    "failed": true,
-    "error": "HTTP 500: {\"error\":\"Inference processing failed\"}",
+    "detail": "E2EE venice: 36 encrypted fields decrypted across 40 chunks",
     "key_type": "ecdsa"
   }
 }

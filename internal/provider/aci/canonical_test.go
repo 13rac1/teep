@@ -15,8 +15,8 @@ import (
 // The canonical report test vector is the body of a live request to
 // /v1/aci/attestation on tee.redpill.ai, with its client nonce and time.
 const (
-	canonicalNonce = "8e71d47d00a62b329b43b78eb08d196f0084f600e2e20710a7937c9a98e46d65"
-	canonicalTime  = "2026-10-30T07:05:52Z"
+	canonicalNonce = "557795a30c4cb185cdea0585d1a45fdfe4a56c95c239d572a91988a97b26a3eb"
+	canonicalTime  = "2026-11-13T07:32:54Z"
 )
 
 func canonicalBody(t *testing.T) []byte {

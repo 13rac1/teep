@@ -12,13 +12,13 @@ import (
 	"time"
 )
 
-const liveReceiptID = "rcpt-5f0a8bd19ba732a726e95519"
+const liveReceiptID = "rcpt-a5e04d28999676749887ca5a"
 
 // receiptServer serves the live receipt after notFound answers of HTTP 404,
 // and counts the requests.
 func receiptServer(t *testing.T, notFound int32, status int) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	body, err := os.ReadFile("testdata/receipt_20261101.json")
+	body, err := os.ReadFile("testdata/receipt.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestFetchReceipt(t *testing.T) {
 func TestFetchReceiptRefusesOtherReceipt(t *testing.T) {
 	srv, _ := receiptServer(t, 0, http.StatusOK)
 	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := os.ReadFile("testdata/receipt_20261101.json")
+		body, _ := os.ReadFile("testdata/receipt.json")
 		_, _ = w.Write(body)
 	})
 	if _, err := FetchReceipt(t.Context(), srv.Client(), srv.URL, "key", "rcpt-other"); err == nil || !strings.Contains(err.Error(), "served receipt") {

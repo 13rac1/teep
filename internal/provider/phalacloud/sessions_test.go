@@ -72,11 +72,11 @@ func TestFetchSessionsSelectsBoundedBundles(t *testing.T) {
 		if set.err != nil {
 			t.Fatal(set.err)
 		}
-		// The list, the Phala model CVM bundle, the Chutes bundle of three
-		// sessions, and the next Chutes bundle, which this server does not
-		// serve; its failure uses up the rest of the limit.
-		if len(requests) != 4 || !strings.HasPrefix(requests[0], aci.SessionsPath+"?") ||
-			requests[1] != aci.SessionsPath+"/"+phalaDirectSessionID || requests[2] != aci.SessionsPath+"/"+chutesSessionID {
+		// The list, the four Phala model CVM bundles (this server serves
+		// the first; the other three are not found), and the Chutes bundle
+		// of three sessions. No other bundle is requested.
+		if len(requests) != 6 || !strings.HasPrefix(requests[0], aci.SessionsPath+"?") ||
+			requests[1] != aci.SessionsPath+"/"+phalaDirectSessionID || requests[5] != aci.SessionsPath+"/"+chutesSessionID {
 			t.Fatalf("requests %q", requests)
 		}
 		if len(set.sessions) != 4 {
@@ -87,17 +87,12 @@ func TestFetchSessionsSelectsBoundedBundles(t *testing.T) {
 				t.Errorf("session %s holds its own copy of the bundle evidence", other.ID)
 			}
 		}
-		if len(set.refused) != 11 {
-			t.Errorf("refused %d sessions before the audit, want 11", len(set.refused))
-		}
-		for _, r := range set.refused {
-			if !strings.HasPrefix(r.Reason, "not fetched") {
-				t.Errorf("session %s refused: %s", r.ID, r.Reason)
-			}
+		if len(set.refused) != 14 {
+			t.Errorf("refused %d sessions before the audit, want 14", len(set.refused))
 		}
 
 		raw := &attestation.RawAttestation{ACISessions: set}
-		auditor := SessionAuditor{TDX: attestation.NewTDXVerifier(true, nil, time.Unix(1793473465, 0)), Offline: true}
+		auditor := SessionAuditor{TDX: attestation.NewTDXVerifier(true, nil, time.Unix(1794555200, 0)), Offline: true}
 		result := AuditSessions(context.Background(), auditor, raw)
 		if result.Err != nil {
 			t.Fatal(result.Err)
@@ -107,8 +102,8 @@ func TestFetchSessionsSelectsBoundedBundles(t *testing.T) {
 		if got := len(result.Pinned); got != 4 || result.Pinned[0].ID != phalaDirectSessionID {
 			t.Errorf("pinned %d sessions (%v), want 4 starting with the Phala model CVM", got, result.Pinned)
 		}
-		if got := len(result.Refused); got != 11 {
-			t.Errorf("refused %d sessions, want 11", got)
+		if got := len(result.Refused); got != 14 {
+			t.Errorf("refused %d sessions, want 14", got)
 		}
 	})
 }

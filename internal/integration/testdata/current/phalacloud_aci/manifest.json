@@ -1,12 +1,15 @@
 {
   "provider": "phalacloud",
   "model": "qwen/qwen3.8-27b",
-  "nonce_hex": "fe18059ee3cac15c7996de19fc14d5a2bfabd1d9d12060ff40c95ff01d644a24",
-  "captured_at": "2026-11-01T03:47:05.935252038Z",
-  "duration_ms": 53445,
+  "nonce_hex": "557795a30c4cb185cdea0585d1a45fdfe4a56c95c239d572a91988a97b26a3eb",
+  "captured_at": "2026-11-13T07:32:54.774755556Z",
+  "duration_ms": 14563,
   "e2ee": {
     "attempted": true,
-    "detail": "E2EE v2 secp256k1: 9 encrypted fields decrypted across 11 chunks",
-    "key_type": "ecdsa"
+    "detail": "E2EE v2 secp256k1: 8 encrypted fields decrypted across 11 chunks",
+    "key_type": "ecdsa",
+    "receipt": {
+      "detail": "receipt verified, including the request hash"
+    }
   }
 }

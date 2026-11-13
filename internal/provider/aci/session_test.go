@@ -14,9 +14,9 @@ import (
 // qwen/qwen3.8-27b. The Chutes session shares its evidence bundle with two
 // other sessions of the list.
 const (
-	phalaDirectSessionID = "4d849e211f7078bd8d27a748a7ac0ddfe164d2ef5c0e29e6e30292a371276320"
-	chutesSessionID      = "299f127652dcdb0edddda771afc55c80b31de39de1c38e26b7b57fd777ef68a1"
-	chutesBundleDigest   = "sha256:db6045f43a9df068aec310a34df802f0fa06342f4bd0beb888c42a1c4c15cc89"
+	phalaDirectSessionID = "f82e2a6b603a3d0b1abe395f979440f0da44a425b238cfcb5354f20906f43cc7"
+	chutesSessionID      = "18aa6d5d8b108534e293deb250cb7b2f99b5790b10a500d4d5066647bee1dcf4"
+	chutesBundleDigest   = "sha256:59ab9617c38fb81ee8d214b26e9f0fb77394e95c8e19665e393a238adedd4df7"
 )
 
 func readTestdata(t *testing.T, name string) []byte {
@@ -33,10 +33,10 @@ func TestParseSessionFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phala-direct session: %v", err)
 	}
-	if direct.VerifierID != "private-ai-verifier/phala-direct/v1" || direct.Endpoint != "https://qwen3-8-27b.use1-9b.phala.com" || direct.Identity == nil {
+	if direct.VerifierID != "private-ai-verifier/phala-direct/v1" || direct.Endpoint != "https://qwen3-8-27b.usc2-87.phala.com" || direct.Identity == nil {
 		t.Errorf("phala-direct session: verifier %q endpoint %q identity %v", direct.VerifierID, direct.Endpoint, direct.Identity != nil)
 	}
-	if b := direct.ChannelBindings; len(b) != 1 || b[0].Type != BindingTLSSPKI || b[0].SPKISHA256 != "1eff9bb68300cb00c2776a9ae583e5a058dfa96972cb4390b6e8c704b0a44040" {
+	if b := direct.ChannelBindings; len(b) != 1 || b[0].Type != BindingTLSSPKI || b[0].SPKISHA256 != "40b08c951ded6697cd92a41a09efa317afd47a889fa68f9846800c78f7211997" {
 		t.Errorf("phala-direct channel binding = %+v", b)
 	}
 	if direct.Evidence.MediaType != "application/json" || direct.Claims["tee_attested"].Source != "hardware_proven" {
@@ -50,7 +50,7 @@ func TestParseSessionFixtures(t *testing.T) {
 	if chutes.Identity != nil || chutes.EvidenceDigest != chutesBundleDigest {
 		t.Errorf("Chutes session: identity %v digest %s", chutes.Identity, chutes.EvidenceDigest)
 	}
-	if b := chutes.ChannelBindings; len(b) != 1 || b[0].Type != BindingE2EEPublicKey || b[0].KeyID != "fa2cbed2-284e-4ace-9de0-b003a928c000" || b[0].Algorithm != "chutes-ml-kem-768" {
+	if b := chutes.ChannelBindings; len(b) != 1 || b[0].Type != BindingE2EEPublicKey || b[0].KeyID != "5616c527-26bc-4bd4-9660-16ccae26994c" || b[0].Algorithm != "chutes-ml-kem-768" {
 		t.Errorf("Chutes channel binding = %+v", b)
 	}
 	parts, err := chutes.Evidence.Parts()
@@ -98,8 +98,8 @@ func TestParseSessionList(t *testing.T) {
 			sameBundle++
 		}
 	}
-	if len(sessions) != 15 || direct != 1 || chutes != 14 || sameBundle != 3 {
-		t.Errorf("sessions=%d phala-direct=%d chutes=%d bundle=%d, want 15, 1, 14, 3", len(sessions), direct, chutes, sameBundle)
+	if len(sessions) != 18 || direct != 4 || chutes != 14 || sameBundle != 3 {
+		t.Errorf("sessions=%d phala-direct=%d chutes=%d bundle=%d, want 18, 4, 14, 3", len(sessions), direct, chutes, sameBundle)
 	}
 }
 
@@ -254,7 +254,7 @@ func TestParseSessionRejectsUndefinedCanonicalForm(t *testing.T) {
 	body, id := withID(t, smallSession(t))
 	for name, changed := range map[string]string{
 		"duplicate member": strings.Replace(string(body), `{"api_version":"aci/1",`, `{"api_version":"aci/1","api_version":"aci/1",`, 1),
-		"fraction":         strings.Replace(string(body), `"established_at":1793473465`, `"established_at":1793473465.5`, 1),
+		"fraction":         strings.Replace(string(body), `"established_at":1794555115`, `"established_at":1794555115.5`, 1),
 	} {
 		if changed == string(body) {
 			t.Fatalf("%s: test did not change the record", name)

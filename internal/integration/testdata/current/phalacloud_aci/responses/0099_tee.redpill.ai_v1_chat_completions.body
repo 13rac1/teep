@@ -1,0 +1,24 @@
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":null,"role":"assistant"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":"04738c464b9516b20ab42e60464f570fda384f90603101a4b5dac5329aff146efa333a4aa578e7094d6e42711b1f2c99e31df8177912edf8f274fe752b8186f7afa24161d2ec62aa51be8e4d8f9da64a757f6340a15525c65feaf0c65400ab"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":"0471f7052de974b95825d13ff8ae19dcc0e8d0a22e53e07ffc6ddbbcf66b6e15cd902a86258333efc0c306c950e0d4bf057625c786714d2e98225edd2aac59b04473f440050b5222c1c648abfb3aea378f70811ddf02fe032876f451dce15c8e1500d843ffa1119f8996"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":"044de602494a46ec2c53d4db11927bda0b34831d4d4b16383334d59b139746a18fd6e522d86761132029037523c5b74e96e0a5226086379457d639e4a92c99c4ec702de768e5514b4b49af9853543c6591786baad9fcfcc700a10c54afadc16cc497a7b41d2c16e0"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":"041bffe9d32cd458f613645fbd10c2b505ef4939ccb3be78e56a3e89f9ba8e101eac7eec655d4751cf41e8a34650553c658bb08aa1250b9b337a262ac372b21ff7e9372ffd52492bc5f879af4d7426c5d48d3cf7293d44580079503641c7fc15a5ae81b0549af8c9"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":"04a0fd69063c71a4bea66b25c3b519d4f93e28b03ee44e30e13385a1178fa0235366bb7614c70235622f1e182d9f575e94536d3bc4e5069a79d7e2ac171e0bd97e9d699b1b1760f2bbaea512fef2703ec552ea93a45086c5eb99aba1c64f26a53763c2dfd2ad7e43312b"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":"04fa2f025ebebec8918c8a72ec581d237e3932413751f630ba3b64e9c279db96cb6378ccfec0f62f21354b5147db0171229c29898e317e09fd6ba33b1e8407b78c04a864e0554a1c2a58290c76f38db9b167b8b48bbaf67d14f1bf0c2de4456977"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":"04e09a10f4cd9f2644ce6ada66d24e1411e12b3c3a52e69726376467f722bcb508472f2e3e665318d7a76f9d3aa083c5ad05874be73b3dc9c28bb12867d2df9e45a5d57433b3ff64f85bcef608621f694df4b8c4fa518dc22ee93ec414cfbd8c66370cef19"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":null,"content":"04754e179b9f8c1a6723989bfa9a0ce904cee9ea50d74bbeff6cfcffdd368fc2005592cb85d9cf9918521962ec6ba4372b47f3df696ee0aee111591d67fc5f0a55c5e6da39d776a11d4f1f6fb11e7e4bfcb7f121c79f7ccbeaa358c2bd22495d519bdf80f0"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[{"index":0,"delta":{"reasoning_content":null},"logprobs":null,"finish_reason":"stop"}]}
+
+data: {"id":"req_f598820ddfab86db2040d0af7df92bfc","object":"chat.completion.chunk","created":1794555174,"model":"qwen/qwen3.8-27b","choices":[],"usage":{"prompt_tokens":54,"total_tokens":76,"completion_tokens":22,"prompt_tokens_details":null,"completion_tokens_details":{"reasoning_tokens":18},"reasoning_tokens":18,"cost":0.0000658}}
+
+data: [DONE]
+

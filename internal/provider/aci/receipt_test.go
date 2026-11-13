@@ -16,13 +16,13 @@ import (
 )
 
 // The live capture of 2026-11-01 whose pinned E2EE test exchange the
-// receipt of testdata/receipt_20261101.json covers.
+// receipt of testdata/receipt.json covers.
 const receiptCapture = "../../integration/testdata/current/phalacloud_aci"
 
 // receiptFixture returns the receipt and the check of its exchange.
 func receiptFixture(t *testing.T) (*Receipt, *ReceiptCheck) {
 	t.Helper()
-	body, err := os.ReadFile("testdata/receipt_20261101.json")
+	body, err := os.ReadFile("testdata/receipt.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func contentOf(t *testing.T, wire map[string]json.RawMessage) json.RawMessage {
 }
 
 // citedSession is the session that the live receipt cites.
-const citedSession = "e1495083e1aa6a98630a75824f35a843a8b976a0c31354324fbcef751e8db75d"
+const citedSession = "f82e2a6b603a3d0b1abe395f979440f0da44a425b238cfcb5354f20906f43cc7"
 
 func cited(c *ReceiptCheck) *attestation.ACIPinnedSession {
 	for i := range c.Sessions {
@@ -226,7 +226,7 @@ func TestVerifyReceiptWithoutRequestHash(t *testing.T) {
 }
 
 func TestParseReceiptRefusesMalformed(t *testing.T) {
-	body, err := os.ReadFile("testdata/receipt_20261101.json")
+	body, err := os.ReadFile("testdata/receipt.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func upstreamEvent(d map[string]any) map[string]any {
 func TestParseReceiptFailedUpstream(t *testing.T) {
 	r, c := receiptFixture(t)
 	var d map[string]any
-	live, err := os.ReadFile("testdata/receipt_20261101.json")
+	live, err := os.ReadFile("testdata/receipt.json")
 	if err != nil {
 		t.Fatal(err)
 	}

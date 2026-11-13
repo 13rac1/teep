@@ -1,7 +1,13 @@
 {
   "provider": "nanogpt",
   "model": "TEE/gemma-4-26b-a4b-uncensored",
-  "nonce_hex": "849766a15b5fc2ba23f354d5ab9b2e0320ce0ef1351645aa796af6fd148b65a2",
-  "captured_at": "2026-10-29T00:50:50.266893113Z",
-  "duration_ms": 63393
+  "nonce_hex": "68bdb48205fa8fd17a2ddc65d88f72e8681a2951e751285b19fced9fb9823f06",
+  "captured_at": "2026-11-13T07:50:51.354143452Z",
+  "duration_ms": 17409,
+  "e2ee": {
+    "attempted": true,
+    "failed": true,
+    "error": "SSE chunk 2: e2ee decryption failed: choices.0.delta.content: expected encrypted string but not recognised",
+    "key_type": "ecdsa"
+  }
 }

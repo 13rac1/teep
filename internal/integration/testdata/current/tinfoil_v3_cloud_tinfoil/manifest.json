@@ -1,12 +1,12 @@
 {
   "provider": "tinfoil_v3_cloud",
-  "model": "glm-5-2",
-  "nonce_hex": "dba9547f7be8e30095ffcb5f5460139904e42d0376ae0071565d2e78ec67e74e",
-  "captured_at": "2026-08-17T00:34:24.979755142Z",
-  "duration_ms": 1009,
+  "model": "deepseek-v4-1-flash",
+  "nonce_hex": "acffef25e22b641dbac433e12c5d6d05245c35d0f705a6f31fe86928cb75d5c8",
+  "captured_at": "2026-11-13T08:00:06.173218624Z",
+  "duration_ms": 706,
   "e2ee": {
     "attempted": true,
-    "detail": "EHBP X25519: 70 chunks decrypted",
+    "detail": "EHBP X25519: 11 chunks decrypted",
     "key_type": "x25519-hpke"
   }
 }

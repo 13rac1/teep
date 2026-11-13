@@ -128,6 +128,18 @@ func assertMustFail(t *testing.T, r *attestation.VerificationReport, names []str
 	}
 }
 
+// assertAllowedFail requires each named factor to fail without blocking:
+// the default policy allows it to fail, for the reason given.
+func assertAllowedFail(t *testing.T, r *attestation.VerificationReport, names []string, reason string) {
+	t.Helper()
+	for _, name := range names {
+		f := findFactor(t, r, name)
+		if f.Status != attestation.Fail || f.Enforced {
+			t.Errorf("factor %s: got %s enforced=%v, want an allowed Fail (%s)", name, f.Status, f.Enforced, reason)
+		}
+	}
+}
+
 func assertFactorStatus(t *testing.T, r *attestation.VerificationReport, name string, want attestation.Status) {
 	t.Helper()
 	f := findFactor(t, r, name)

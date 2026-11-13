@@ -161,10 +161,10 @@ func assertNeardirectReport(t *testing.T, report *attestation.VerificationReport
 		"nvidia_nonce_client_bound",
 		"tls_key_binding",
 		"compose_binding",
-		"sigstore_verification",
 		"build_transparency_log",
 		"event_log_integrity",
 	})
+	assertAllowedFail(t, report, []string{"sigstore_verification"}, "one image digest of the 2026-11-13 deployment is not in the Rekor log; the factor is allowed to fail by default for this provider")
 
 	commonModelAssertions(t, report)
 

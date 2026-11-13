@@ -1,0 +1,35 @@
+{
+  "method": "POST",
+  "url": "https://inference.tinfoil.sh/v1/chat/completions",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEcYNbd9mBL3g7zhPMpQTbi/8gWfS9I0mqFzRIvz4nTzjVn+oc5ZMb24cfRQKoES8U5WNuGFuPU9TNtxJFpMuzHQ3HSCQKJV8rKZr/oJLuEfX8++IHrNBbLP8p7aLclBsZ",
+  "headers": {
+    "Content-Type": [
+      "text/event-stream; charset=utf-8"
+    ],
+    "Date": [
+      "Fri, 13 Nov 2026 08:00:04 GMT"
+    ],
+    "Ehbp-Response-Nonce": [
+      "5be4964f0e036233e4af24f835184a42459c59379949b08c529ccd6a0b8679ac"
+    ],
+    "Server": [
+      "uvicorn"
+    ],
+    "Tinfoil-Enclave": [
+      "deepseek-v4-1-flash-inf28-0.tinfoil.containers.tinfoil.dev"
+    ],
+    "Tinfoil-Pt": [
+      "https://tinfoil.sh/predicate/sev-snp-guest/v2",
+      "https://tinfoil.sh/predicate/sev-snp-guest/v2"
+    ],
+    "Vary": [
+      "Origin"
+    ]
+  },
+  "req_body_base64": "AAAAcFLC18a735a6TBoQK5z9Evkxn6Q5945GZglvQjEZinTxV3mlvXZnPQQK8BGoPOqkyIYzOriMwkeKTB7Gfh+SOjPCU4tpzSjWC4YrSw689TCfWEu/93Sc4Mth7cTh3oREL40o2HXPWAkMPJsVYukoxME=",
+  "duration_ms": 193
+}

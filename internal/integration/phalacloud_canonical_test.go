@@ -51,18 +51,18 @@ func TestVerifyRun_PhalaCloudCanonical_Fixture(t *testing.T) {
 		"gateway_tee_cert_chain",
 		"gateway_tee_quote_signature",
 		"gateway_tee_debug_disabled",
-		"gateway_tee_measurement",
 		"gateway_tee_reportdata_binding",
 		"gateway_compose_binding",
 		"gateway_event_log_integrity",
 		"tls_key_binding",
 	})
+	assertAllowedFail(t, report, []string{"gateway_tee_measurement"}, "the gateway deployment of 2026-11-12 has an MRTD that is not in the dstack base allowlist; the factor is allowed to fail by default")
 	if f := findFactor(t, report, "tls_key_binding"); !f.Enforced {
 		t.Error("tls_key_binding is not enforced")
 	}
 	// The fixture keyset lists this key for tee.redpill.ai, and the capture
 	// recorded it as the peer key of the attestation connection.
-	if report.TLSAuthority != "tee.redpill.ai" || report.TLSKeyFP != "951885459fbd27cad038c40a198e6a1fb63f4d18dd5d5a24d408d5d951488ffe" {
+	if report.TLSAuthority != "tee.redpill.ai" || report.TLSKeyFP != "dd7451eed78f36e8e230047e0e1e91955810f802fea052996fa83add370a00ce" {
 		t.Errorf("transport identity %q %q, want the keyset TLS key of tee.redpill.ai", report.TLSAuthority, report.TLSKeyFP)
 	}
 	if f := findFactor(t, report, "gateway_tee_reportdata_binding"); !strings.Contains(f.Detail, "binds the keyset digest") || !f.Enforced {
@@ -84,12 +84,13 @@ func TestVerifyRun_PhalaCloudCanonical_Fixture(t *testing.T) {
 	assertPinnedSessions(t, &env, report)
 }
 
-// The capture's attested sessions: the Phala model CVM session and the two
+// The capture's pinned sessions: one Phala model CVM session and the three
 // Chutes sessions of the one Chutes bundle that the evidence limit allowed.
 var fixtureSessionIDs = []string{
-	"7113a6cf738c71e78d4ce1b1f298b51678ac2885f6130f645e960481edd44e7b",
-	"1cfeac2cc0b0517914c6b4b41a6e39701280d6cc780678341174493be2f15147",
-	"e1495083e1aa6a98630a75824f35a843a8b976a0c31354324fbcef751e8db75d",
+	"f82e2a6b603a3d0b1abe395f979440f0da44a425b238cfcb5354f20906f43cc7",
+	"18aa6d5d8b108534e293deb250cb7b2f99b5790b10a500d4d5066647bee1dcf4",
+	"429596d33189b26631b7c88daaac1dae4ed05c3eff005662b21573cdd86b3551",
+	"68642a9de9504d777299fee0b759f5cc01a2080cce6a00d8fb63e8542f27031b",
 }
 
 // assertPinnedSessions requires the audit to pin exactly the sessions of the

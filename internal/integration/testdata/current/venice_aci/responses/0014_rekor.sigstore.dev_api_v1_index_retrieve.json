@@ -2,22 +2,22 @@
   "method": "POST",
   "url": "https://rekor.sigstore.dev/api/v1/index/retrieve",
   "status": 200,
-  "proto": "HTTP/1.1",
+  "proto": "HTTP/2.0",
   "tls_version": "TLS 1.3",
-  "tls_cipher": "TLS_AES_128_GCM_SHA256",
-  "peer_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtgvDSlLymGTmHJAsurqdKlL9WKj4X/D1I6jRndwMjfeUja93Y99w3bk1Ng6XbC+eJtsDrzaU3mG4UfITO6bVwpP/Rh5HwHEghC8uvwRnY5I7ZxzsvYsFdOvYUrPuITmFigT96+mODCM6/W+guYxh4a3UfR2xaYZ+9oGogIs/vbZfnNBl95wrzdMvmLRx6RjaeTvuvgV9teQGQqOTU9QKXEUmdZSMdOEHDv4kyldkIeXkcrqIFr4GNOjF1mKUaG1nwvvSdhVucQQG6k2DS7x7kej/S6v6XmBVbe24CrzG67SNmX40NBauoWmsSaX3QZEi0KNkM6HLaQui2ES+9VPRTwIDAQAB",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwsNPWiXVmyxg8g0/m05J+eK+FA9kmmzGijilpDIiDxk3lQbrJXrITHCKUjcNEBjQiJMoukVFascbILrP59Uivl2TXp/C1ZhTpGogZOG3Q8snK8DqTPLobjQr+fqnjwAmVX4iSI1LVxgjb0/+Tnl8+1YtfwZOPKvJyR9YBDppbcyYgaN9aSX96+spOFJX939mbHvFyCbUGYTe5DWysoqZ9RLV6c9axkbkFnJvGcEbsb166BHNIeQdk7WDHNeDtlxOg9EeM9WM5zoOQ6NElNzG3TyAtjy4QgGSSupnZFSosCWUGQQ8kq1/kbdSnSF2UejRRRx25mawEgPvjFbJfbsW7QIDAQAB",
   "headers": {
     "Alt-Svc": [
       "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
     ],
     "Content-Length": [
-      "3"
+      "85"
     ],
     "Content-Type": [
       "application/json"
     ],
     "Date": [
-      "Wed, 26 Aug 2026 01:07:33 GMT"
+      "Fri, 13 Nov 2026 07:01:15 GMT"
     ],
     "Vary": [
       "Origin"
@@ -26,6 +26,6 @@
       "1.1 google"
     ]
   },
-  "req_body_base64": "eyJoYXNoIjoic2hhMjU2OmMwODNmZjllNmE1ZGRmMTBmNmM5ZTliYjFmNzRjYzYxOGRlZWJlY2ZlYTUyMDhiNTYzYzU3NDM5OWRiNDYzN2MifQ==",
-  "duration_ms": 128
+  "req_body_base64": "eyJoYXNoIjoic2hhMjU2OjIyYWViNjgwOGUzOGE1NjExNWY4NDNkNGQ2NmY0ODUyNDA3ZTcyZjYwODBkNWY4NzgxZmQ4MmQ5ZjgxOWRiNDEifQ==",
+  "duration_ms": 64
 }

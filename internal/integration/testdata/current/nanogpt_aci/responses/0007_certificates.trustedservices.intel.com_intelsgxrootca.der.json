@@ -11,7 +11,7 @@
       "bytes"
     ],
     "Age": [
-      "225"
+      "195"
     ],
     "Content-Length": [
       "294"
@@ -20,7 +20,7 @@
       "binary/octet-stream"
     ],
     "Date": [
-      "Thu, 29 Oct 2026 00:46:12 GMT"
+      "Fri, 13 Nov 2026 07:47:23 GMT"
     ],
     "Etag": [
       "\"a3d246a50122dbdb11caf9749a4fc40f\""
@@ -35,10 +35,10 @@
       "Accept-Encoding"
     ],
     "Via": [
-      "1.1 23ad473482cbcecf7ea47ad47c955886.cloudfront.net (CloudFront)"
+      "1.1 b8fa286a637a91a7f38c0cbf622153e6.cloudfront.net (CloudFront)"
     ],
     "X-Amz-Cf-Id": [
-      "iUc9nikWoizyg3B8DqfQxw9YWfKjXnDfXF6EXY47Bpv4UlNrT08kmw=="
+      "YKAxiW168kzBS4Mf1Kg-yaeZadG3BqZyqjl1Z8tX94Qf-tZq1ThVWg=="
     ],
     "X-Amz-Cf-Pop": [
       "SFO53-P4"
@@ -53,5 +53,5 @@
       "Hit from cloudfront"
     ]
   },
-  "duration_ms": 32
+  "duration_ms": 33
 }
