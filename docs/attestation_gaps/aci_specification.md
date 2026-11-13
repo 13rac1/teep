@@ -1,9 +1,13 @@
 # ACI/1 Specification: Assurance Limits and Deployment Requirements
 
-> **Specification read:** `spec/aci.md` of Dstack-TEE/private-ai-gateway at
-> commit
-> [`dd333b24324a96468bc19137fbcf6c45aeecc366`](https://github.com/Dstack-TEE/private-ai-gateway/blob/dd333b24324a96468bc19137fbcf6c45aeecc366/spec/aci.md)
+> **Specification read:** `spec/aci.md` and `spec/e2ee-v2.md` of
+> Dstack-TEE/private-ai-gateway at commit
+> [`8d0018f81e8dbadfe7b733bb294a0350f82b338c`](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/aci.md)
 > (version `aci/1`, marked draft). Section numbers below refer to that text.
+> Gaps 1 to 6 were first read at commit `dd333b24`; the changes up to
+> `8d0018f8` (a multipart constraint carrier, an E2EE v2 replay rule, and
+> the publication of stream receipts at the protocol terminal) close none
+> of them.
 
 This document lists security properties that the attested inference
 specification does not require. For each one, it states what the
@@ -107,6 +111,28 @@ not heard of the leak.
 
 The service's signed records of each request carry no independent time, so
 the service can also withhold or reorder them without anyone seeing it.
+
+**Gap 7: a streamed answer reaches the user before any signed record of it.**
+
+- **Who:** a party that controls the service or its keys.
+- **What they do:** changes a streamed answer while it is sent, or sends a
+  forged answer and stops before its end.
+- **What they get:** the content reaches the user before any signed
+  statement about it exists.
+- **What stops it today:** nothing before delivery. A client that fetches
+  the signed record after the stream ends finds the change afterwards; a
+  client that leaves the stream early has no record to check.
+
+**Gap 8: the records of the next-hop machines have no size limit.**
+
+- **Who:** the service operator.
+- **What they do:** serves records of the next-hop machines that are large
+  or many.
+- **What they get:** a client that verifies them before sending pays for
+  every record, or checks only some of them.
+- **What stops it today:** only the client's own limit: the protocol sets
+  none, and the list of records cannot be checked without the full record
+  of each.
 
 **Operational impact.** The protocol leaves the choice of trusted key
 services, accepted versions and withdrawal lists to each verifier, so two
@@ -251,7 +277,7 @@ upstream verification policy applies. The reference deployment keeps that
 configuration outside the measurement:
 
 - In the checked-in Venice capture of 2026-08-26
-  ([`venice_aci_e2ee-gpt-oss-120b-p_20260826_010734`](../../internal/integration/testdata/venice_aci_e2ee-gpt-oss-120b-p_20260826_010734/responses/0001_api.venice.ai_api_v1_tee_attestation.body)),
+  ([`venice_aci_e2ee-gpt-oss-120b-p_20260826_010734`](https://github.com/13rac1/teep/blob/2741df3874483ce1e9c0152f662c5e17cfdd2ea4/internal/integration/testdata/venice_aci_e2ee-gpt-oss-120b-p_20260826_010734/responses/0001_api.venice.ai_api_v1_tee_attestation.body)),
   the measured `evidence.app_compose` (sha256 `21d93ac7…`) seeds the
   upstream table with `[]` (`docker_compose_file` lines 194-196), with the
   comment "then managed at runtime via PUT /v1/admin/upstreams" (line 193).
@@ -388,6 +414,65 @@ verifier can treat it only as its stated `source`. A receipt proves what the
 service signed, not when, and the service can withhold or reorder receipts
 without a third party being able to see it.
 
+### Gap 7: A stream receipt exists only after the stream ends
+
+**What the specification defines.** A receipt is "a signed, per-request
+event log" (§7) whose `response.returned` event hashes the exact bytes
+returned on the wire, including the framing of a stream (e2ee-v2 §8). It is
+served by a separate endpoint (`GET /v1/aci/receipts/{id}`, §7.1). For a
+streamed response, the gateway publishes the receipt when the stream
+reaches its protocol terminal (§7.1). "Cancellation or failure can leave a
+reserved id unpublished even if an error terminal was returned", and "A
+receipt records the gateway's observed exchange; it does not prove client
+delivery or model-generation completeness" (§7.1). E2EE v2 authenticates
+each encrypted field with its AEAD tag; "Stream order and truncation are
+checked against the signed ACI receipt over the complete wire bytes"
+(e2ee-v2 §7).
+
+**The gap.** The specification defines no authentication of a single chunk
+or of a prefix of a stream. A client reads every chunk of a stream before
+any signed statement about it exists, so the receipt check can find a
+changed or forged stream only after delivery. A client that stops reading
+a stream early has bytes that no receipt covers: the receipt of the full
+stream hashes bytes it never received, and a cancelled stream may have no
+receipt. Observed on 2026-11-13 on Phala Cloud (`qwen/qwen3.8-27b`): a
+client that cut a stream after 4 seconds got HTTP 404 for the receipt
+until it was served 25 seconds later, and its `response.returned` hash
+matched no prefix of the received bytes.
+
+**What a deployment must add.** A signature or a running hash for each
+chunk, or a receipt for a cancelled stream over the bytes sent.
+
+**What a verifier cannot assume.** A verifier cannot assume that streamed
+content it has delivered is authentic: the receipt check is reactive, not
+preventive. A verifier whose client leaves a stream early cannot check what
+that client received.
+
+### Gap 8: Session records have no size bound
+
+**What the specification defines.** `GET /v1/aci/sessions/{session_id}`
+returns one session with its full evidence, and the list endpoint returns
+abbreviated entries that keep `evidence.digest` and drop `evidence.data`;
+"An abbreviated entry does not hash to its id — fetch the full record to
+verify (§9.2)" (§8.1).
+
+**The gap.** The specification sets no bound on the size of a session
+record or on the number of sessions that back a model, and defines no
+paging. Observed on 2026-11-13 on Phala Cloud (`qwen/qwen3.8-27b`): the list
+named 18 sessions, and the full record of one Chutes session was 4.2 MB.
+Sessions that share one evidence bundle carry the same `evidence.digest`,
+so one full record can stand for the bundle, but the specification does not
+say so.
+
+**What a deployment must add.** A bound on the record size and on the
+number of sessions per model, or paging; and a statement that sessions with
+the same `evidence.digest` share their evidence.
+
+**What a verifier cannot assume.** A verifier that bounds what it fetches
+verifies only part of the sessions that back a model. It cannot assume that
+the sessions it did not fetch would pass, and it pins only the sessions it
+verified.
+
 ---
 
 ## Remediation
@@ -435,6 +520,16 @@ one exists; define a model identifier and the evidence that
 `model_weights_provenance` requires (for example a model-signing format);
 and make the SCITT transparency-log binding normative for receipts.
 
+**Gap 7: chunk authentication.** Define a signature or a running hash
+over each chunk of a stream, which a client can check as it reads, or a
+receipt that the gateway publishes for a cancelled stream over the bytes it
+sent.
+
+**Gap 8: session size.** Define a maximum record size and a maximum number
+of sessions per model, or paging of the list; state that sessions with the
+same `evidence.digest` share their evidence, so that one full record per
+bundle suffices.
+
 ### Deployment Priority
 
 1. Gap 3 (measured routing): it requires only that existing configuration
@@ -450,61 +545,74 @@ and make the SCITT transparency-log binding normative for receipts.
    of every aggregator and upstream.
 6. Gap 6: depends on GPU binding, model signing and transparency log work
    outside ACI.
+7. Gap 8 (session size): a bound and a statement about shared bundles;
+   it changes no message.
+8. Gap 7 (chunk authentication): it changes the stream format and the
+   receipt.
 
 ---
 
 ## References
 
-- **Specification:** [ACI/1, `spec/aci.md` at `dd333b24`](https://github.com/Dstack-TEE/private-ai-gateway/blob/dd333b24324a96468bc19137fbcf6c45aeecc366/spec/aci.md)
+- **Specification:** [ACI/1, `spec/aci.md` at `8d0018f8`](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/aci.md) and [E2EE v2, `spec/e2ee-v2.md` at `8d0018f8`](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/e2ee-v2.md); Gaps 1 to 6 first read at [`dd333b24`](https://github.com/Dstack-TEE/private-ai-gateway/blob/dd333b24324a96468bc19137fbcf6c45aeecc366/spec/aci.md)
 - **Deployment evidence:** the measured gateway compose in
-  [the Venice ACI/1 capture of 2026-08-26](../../internal/integration/testdata/venice_aci_e2ee-gpt-oss-120b-p_20260826_010734/responses/0001_api.venice.ai_api_v1_tee_attestation.body)
+  [the Venice ACI/1 capture of 2026-08-26](https://github.com/13rac1/teep/blob/2741df3874483ce1e9c0152f662c5e17cfdd2ea4/internal/integration/testdata/venice_aci_e2ee-gpt-oss-120b-p_20260826_010734/responses/0001_api.venice.ai_api_v1_tee_attestation.body)
   (`evidence.app_compose`), and a live observation of 2026-10-29 of the
   public report of `tee.redpill.ai`, not checked in (`app_compose` sha256
   `aa767dbc886174737fcc77083851e3dbdea093b976404755a3f5a68c0d9e7992`)
 - **Standards named by the specification:** [RFC 8785 (JCS)](https://www.rfc-editor.org/rfc/rfc8785), [RFC 9334 (RATS)](https://www.rfc-editor.org/rfc/rfc9334), [RFC 9458 (Oblivious HTTP)](https://www.rfc-editor.org/rfc/rfc9458), [RFC 9943 (SCITT architecture)](https://www.rfc-editor.org/rfc/rfc9943)
-- **Deployment-level analysis:** [Venice ACI/1: Attested Gateway, Unattested Inference Host](venice_aci_gateway.md)
+- **Deployment-level analysis:** [ACI/1 Gateway: Attested Gateway, Unattested Inference Host](aci_gateway.md)
 - **Related gaps:** [Hardware Attestation Binding Issues and Mitigations](gpu_cpu_binding.md), [Model Weight Authentication](model_weights.md)
 
 ---
 
 ## Teep Status
 
-teep verifies ACI/1 responses for Venice
-(`internal/provider/venice/aci.go`, `internal/provider/venice/keyset.go`).
-The gaps of that deployment are in
-[Venice ACI/1: Attested Gateway, Unattested Inference Host](venice_aci_gateway.md).
+teep verifies the ACI/1 responses of Venice, Phala Cloud and NanoGPT
+(`internal/provider/aci`). Phala Cloud answers with the canonical report of
+`/v1/aci/attestation`; Venice and NanoGPT answer on a compatibility route
+whose quote binds the signing key and the client nonce, not the §3.2
+statement. The gaps of these deployments are in
+[ACI/1 Gateway: Attested Gateway, Unattested Inference Host](aci_gateway.md).
 teep's behavior for each gap:
 
-- **Gap 1:** teep fetches no sessions or receipts and pins no sessions. It
-  verifies the aggregator's quote, and it enforces `nvidia_signature` and
-  `nvidia_nonce_client_bound` on the GPU evidence that the deployment
-  relays with the client's nonce. No CPU evidence of the upstream reaches
-  teep, so the core `tee_*` factors fail and are allowed by default
-  (`VeniceACIDefaultAllowFail`).
-- **Gap 2:** teep has no per-model binding to an expected attestation
-  format; the response format selects the allow-fail list. A provider that
-  changes the format for a model therefore changes which factors teep
-  enforces, without a protocol signal. This is residual exposure 3 of the
-  [Venice document](venice_aci_gateway.md).
-- **Gap 3:** teep does not use `aci_verified` or `aci_session_ids` and
-  cannot observe the routing configuration. It reports the measured
-  gateway compose through `gateway_compose_binding`.
-- **Gap 4:** teep checks `now < not_after` in `aci_key_custody`. For
-  Venice this `not_after` is self-asserted: the REPORTDATA binds the
-  signing key and the client nonce, not the §3.2 statement, so the quote
-  does not cover `not_after`, and a party that rewrites the response can
-  change it (residual exposure 7 of the
-  [Venice document](venice_aci_gateway.md)). teep accepts
-  the maximum `not_after` value as a keyset that never expires and applies
-  no other upper bound, although §3.1 says a verifier "SHOULD reject an
-  implausibly distant `not_after`". teep has no provenance ordering and no
-  deny-list source.
-- **Gap 5:** teep pins the dstack-KMS root and the gateway app id that it
-  took from live attestations (trust on first use); residual exposure 2 of
-  the Venice document describes the on-chain corroboration that would
-  replace it.
+- **Gap 1:** for Phala Cloud, teep lists the sessions of the model, fetches
+  and audits a bounded set (`aci_session_verified`, enforced), pins the
+  verified sessions on every request (`aci_session_ids`), and checks that
+  each receipt cites a pinned session whose period holds `served_at`. The
+  evidence is still a snapshot: it answers the gateway's nonce, not the
+  client's. For Venice and NanoGPT teep fetches no sessions. Since
+  2026-11-12 the Venice response carries no GPU evidence, so the GPU
+  factors fail and are allowed for Venice.
+- **Gap 2:** NanoGPT is the reseller case. It makes the gateway request
+  under its own API key, so teep cannot fetch the receipts of NanoGPT
+  requests. It did not forward E2EE v2 on 2026-10-30, so teep sends
+  NanoGPT requests without E2EE by default and NanoGPT reads them.
+- **Gap 3:** for Phala Cloud, the session pins limit routing to upstreams
+  that teep verified. For Venice and NanoGPT teep cannot observe the
+  routing configuration; it reports the measured gateway compose through
+  `gateway_compose_binding`.
+- **Gap 4:** teep ends an ACI/1 authorization at the keyset `not_after` on
+  every route, and rejects a `not_after` more than 365 days ahead. For
+  Phala Cloud the §3.2 statement binds `not_after`; on the compatibility
+  route of Venice and NanoGPT it is self-asserted (residual exposure 7 of
+  the [gateway document](aci_gateway.md)). teep has no provenance ordering
+  and no deny-list source.
+- **Gap 5:** teep pins the dstack-KMS roots and gateway app ids it accepts
+  (`aci.GatewayPins`). The pair of the 2026-11-12 deployment was read once
+  from Phala's KMS contract; teep does not read the contract itself
+  (residual exposure 2 of the gateway document).
 - **Gap 6:** `cpu_gpu_chain` and `measured_model_weights` fail and are
-  allowed by default for ACI/1. teep keeps no receipt record.
+  allowed by default for ACI/1. teep verifies Phala Cloud receipts but
+  keeps no record of them.
+- **Gap 7:** teep checks the receipt of every Phala Cloud stream after it
+  ends and ends the shared authorization on a failure; the check is
+  reactive (residual exposure 12 of the gateway document). It holds a
+  non-stream response until its receipt verifies.
+- **Gap 8:** teep fetches the Phala model CVM bundles first, then Chutes
+  bundles within its own bound of 8 MiB, and rebuilds the sessions of a
+  fetched bundle from one full record; it pins only the sessions it
+  verified.
 
 teep's report for an ACI/1 response says which of these limits apply on
 every request, because the allowed factors render as failed, not skipped.
