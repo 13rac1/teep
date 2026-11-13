@@ -75,6 +75,9 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 		return current, nil
 	}
 
+	if err == nil {
+		markBlockedProbe(current.report)
+	}
 	if err != nil || opts.Offline || opts.replay || opts.CapturedE2EE != nil || opts.Provider.APIKey == "" || current.report.Blocked() {
 		return current, err
 	}
@@ -146,6 +149,15 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 	return result, err
 }
 
+// markBlockedProbe states in aci_receipt_verified that teep sends no probe:
+// the probe is an inference request, which a blocked report does not
+// authorize.
+func markBlockedProbe(report *attestation.VerificationReport) {
+	if report != nil && report.Blocked() {
+		report.MarkACIReceipt(nil, "no probe: the report blocks inference requests")
+	}
+}
+
 // completeTLSInference stores the same final outcome in the report and capture,
 // including failures before an encrypted response is available.
 func completeTLSInference(result *verificationOutcome, err error) {
@@ -163,6 +175,11 @@ func completeTLSInference(result *verificationOutcome, err error) {
 		result.report.MarkE2EEFailed(result.e2ee.Err.Error())
 	} else if result.e2ee != nil && result.e2ee.Attempted {
 		result.report.MarkE2EEUsable(result.e2ee.Detail)
+	}
+	// BuildReport ran before the probe, so the receipt check of the probe
+	// sets aci_receipt_verified here.
+	if result.e2ee != nil {
+		result.report.MarkACIReceipt(result.e2ee, "")
 	}
 }
 

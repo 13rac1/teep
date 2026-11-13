@@ -1,15 +1,19 @@
 package verify
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
@@ -24,6 +28,10 @@ import (
 // pinnedSessionID stands for an attested session that the audit pinned.
 const pinnedSessionID = "4d849e211f7078bd8d27a748a7ac0ddfe164d2ef5c0e29e6e30292a371276320"
 
+// probeTimeout bounds one probe, so that a receipt GET that is not answered
+// ends with the probe's context.
+const probeTimeout = 2 * time.Second
+
 // probeSessionExpires is the expires_at of the pinned session.
 const probeSessionExpires = 1893456000
 
@@ -34,13 +42,24 @@ type probeGateway struct {
 	gw     *aciv2test.Gateway
 	digest string
 	calls  atomic.Int32
+	// mu guards the fields below. A handler holds it while it runs, also
+	// one that does not answer, so a test changes the case only between
+	// requests.
+	mu sync.Mutex
 	// Per case: the served keyset digest ("" for the verified one), the
-	// change to the signed receipt, no X-Receipt-Id, and HTTP 404 on every
-	// receipt GET.
+	// change to the signed receipt, no X-Receipt-Id, HTTP 404 on every
+	// receipt GET, another HTTP status for the receipt GET, a receipt GET
+	// that ends without an answer, one whose body is shorter than its
+	// Content-Length, and one that does not answer before the probe's
+	// deadline.
 	served         string
 	receipt        func(*aciv2test.Receipt)
 	noReceiptID    bool
 	receiptMissing bool
+	receiptStatus  int
+	receiptHangup  bool
+	receiptShort   bool
+	receiptStall   bool
 	// refuse answers the chat request with session_not_accepted.
 	refuse bool
 	stream string
@@ -49,10 +68,29 @@ type probeGateway struct {
 
 func (p *probeGateway) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	p.calls.Add(1)
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if req.Header.Get("Authorization") != "Bearer secret-api-key" {
 		p.t.Errorf("request %s, Authorization %q", req.URL.Path, req.Header.Get("Authorization"))
 	}
 	if req.Method == http.MethodGet && req.URL.Path == aci.ReceiptsPath+"/rcpt-1" {
+		if p.receiptHangup {
+			// The server resets the stream or closes the connection.
+			panic(http.ErrAbortHandler)
+		}
+		if p.receiptShort {
+			w.Header().Set("Content-Length", strconv.Itoa(len(p.signed)+100))
+			_, _ = io.WriteString(w, p.signed)
+			return
+		}
+		if p.receiptStall {
+			<-req.Context().Done()
+			return
+		}
+		if p.receiptStatus != 0 {
+			w.WriteHeader(p.receiptStatus)
+			return
+		}
 		if p.receiptMissing || p.signed == "" {
 			http.NotFound(w, req)
 			return
@@ -149,7 +187,9 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 			t.Cleanup(client.CloseIdleConnections)
 			capture := &verificationCapture{}
 			opts := &Options{ProviderName: "phalacloud", Provider: &config.Provider{BaseURL: upstream.URL, APIKey: "secret-api-key", E2EE: true}, ModelName: "qwen/model", capture: capture}
-			got, retry, err := testStandaloneInference(t.Context(), opts, route, raw, e2ee.NearModelKey{}, pinned, client)
+			ctx, cancel := context.WithTimeout(t.Context(), probeTimeout)
+			defer cancel()
+			got, retry, err := testStandaloneInference(ctx, opts, route, raw, e2ee.NearModelKey{}, pinned, client)
 			lastRetry = retry
 			return got, capture, err
 		}
@@ -161,6 +201,9 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 			if err != nil || got == nil || got.e2ee == nil || got.e2ee.Err != nil {
 				t.Fatalf("probe = %+v, %v", got, err)
 			}
+			if f := completedReceiptFactor(t, got, err); f.Status != attestation.Pass || !f.Enforced {
+				t.Errorf("aci_receipt_verified = %+v, want an enforced Pass", f)
+			}
 			if !strings.Contains(got.e2ee.Detail, "E2EE v2 secp256k1: 2 encrypted fields") {
 				t.Errorf("detail = %q", got.e2ee.Detail)
 			}
@@ -168,7 +211,10 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 				t.Errorf("receipt = %+v", r)
 			}
 			entries := capture.entries()
-			if len(entries) != 2 || string(entries[0].Body) != gw.stream || entries[0].Headers.Get("X-Aci-Keyset-Digest") != gw.digest || string(entries[1].Body) != gw.signed {
+			gw.mu.Lock()
+			stream, signed := gw.stream, gw.signed
+			gw.mu.Unlock()
+			if len(entries) != 2 || string(entries[0].Body) != stream || entries[0].Headers.Get("X-Aci-Keyset-Digest") != gw.digest || string(entries[1].Body) != signed {
 				t.Fatalf("recorded %d entries, want the raw exchange and the receipt", len(entries))
 			}
 			for _, e := range entries {
@@ -179,10 +225,11 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 		})
 
 		otherResponse := func(r *aciv2test.Receipt) { r.Response = []byte("other") }
-		// A receipt that is missing or fails the check fails
-		// aci_receipt_verified (e2ee.Receipt); a receipt that cannot be
-		// fetched, and a response of another keyset, fail the probe
-		// (e2ee_usable).
+		// After a verified stream, every failure to obtain a verified
+		// receipt fails aci_receipt_verified (e2ee.Receipt): a receipt that
+		// the route does not serve or that fails the check, and a receipt
+		// request that fails or does not end. A response of another keyset
+		// fails the probe (e2ee_usable).
 		for _, tc := range []struct {
 			name      string
 			set       func(*probeGateway)
@@ -195,20 +242,25 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 				p.receipt = func(r *aciv2test.Receipt) { r.ServedAt = probeSessionExpires + 1 }
 			}, "outside the period", true},
 			{"no receipt id", func(p *probeGateway) { p.noReceiptID = true }, "X-Receipt-Id", true},
-			{"receipt not served", func(p *probeGateway) { p.receiptMissing = true }, "HTTP 404 after 3 attempts", false},
+			{"receipt not served", func(p *probeGateway) { p.receiptMissing = true }, "HTTP 404 after 3 attempts", true},
+			{"receipt route error", func(p *probeGateway) { p.receiptStatus = http.StatusInternalServerError }, "HTTP 500", true},
+			{"receipt route forbidden", func(p *probeGateway) { p.receiptStatus = http.StatusForbidden }, "HTTP 403", true},
+			{"receipt fetch aborted", func(p *probeGateway) { p.receiptHangup = true }, "the receipt request failed", true},
+			{"receipt body short", func(p *probeGateway) { p.receiptShort = true }, "the receipt request failed", true},
+			{"receipt not answered", func(p *probeGateway) { p.receiptStall = true }, "the receipt request failed", true},
 			{"other keyset", func(p *probeGateway) { p.served = "sha256:" + strings.Repeat("bb", 32) }, "another keyset digest", false},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				gw.served, gw.receipt, gw.noReceiptID, gw.receiptMissing = "", nil, false, false
-				tc.set(gw)
+				gw.configure(tc.set)
 				got, _, err := probe(t, attested)
 				checkProbeFailure(t, got, err, tc.want, tc.inReceipt)
+				checkReceiptFactor(t, got, err, tc.inReceipt)
 			})
 		}
 
 		t.Run("sessions refused", func(t *testing.T) {
-			gw.served, gw.receipt, gw.noReceiptID, gw.receiptMissing, gw.refuse = "", nil, false, false, true
-			defer func() { gw.refuse = false }()
+			gw.configure(func(p *probeGateway) { p.refuse = true })
+			defer gw.configure(nil)
 			got, _, err := probe(t, attested)
 			checkSessionsRefused(t, got, lastRetry, err)
 		})
@@ -224,6 +276,53 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 			}
 		})
 	})
+}
+
+// configure resets the case and applies set (nil for none).
+func (p *probeGateway) configure(set func(*probeGateway)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.served, p.receipt, p.noReceiptID, p.receiptMissing, p.receiptStatus, p.refuse = "", nil, false, false, 0, false
+	p.receiptHangup, p.receiptShort, p.receiptStall = false, false, false
+	if set != nil {
+		set(p)
+	}
+}
+
+// completedReceiptFactor completes the probe outcome in a report as teep
+// verify does: BuildReport has left aci_receipt_verified an enforced,
+// deferred Skip, because the probe runs after it. It returns the factor.
+func completedReceiptFactor(t *testing.T, got *standaloneProbe, err error) attestation.FactorResult {
+	t.Helper()
+	outcome := verificationOutcome{report: &attestation.VerificationReport{Factors: []attestation.FactorResult{
+		{Name: attestation.FactorE2EEUsable, Status: attestation.Skip, Deferred: true},
+		{Name: attestation.FactorACIReceiptVerified, Status: attestation.Skip, Deferred: true, Enforced: true},
+	}}}
+	if got != nil {
+		outcome.e2ee = got.e2ee
+	}
+	completeTLSInference(&outcome, err)
+	for _, f := range outcome.report.Factors {
+		if f.Name == attestation.FactorACIReceiptVerified {
+			return f
+		}
+	}
+	t.Fatal("no aci_receipt_verified factor")
+	return attestation.FactorResult{}
+}
+
+// checkReceiptFactor requires a receipt failure to block the report through
+// aci_receipt_verified, and a probe failure to leave the factor a deferred
+// Skip (e2ee_usable states it).
+func checkReceiptFactor(t *testing.T, got *standaloneProbe, err error, inReceipt bool) {
+	t.Helper()
+	f := completedReceiptFactor(t, got, err)
+	switch {
+	case inReceipt && (f.Status != attestation.Fail || !f.Enforced):
+		t.Errorf("aci_receipt_verified = %+v, want an enforced Fail", f)
+	case !inReceipt && (f.Status != attestation.Skip || !f.Deferred):
+		t.Errorf("aci_receipt_verified = %+v, want a deferred Skip", f)
+	}
 }
 
 // checkProbeFailure requires the probe to fail with want: in the receipt

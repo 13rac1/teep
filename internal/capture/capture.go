@@ -66,6 +66,21 @@ type E2EEOutcome struct {
 	ErrMsg    string `json:"error,omitempty"`
 	Detail    string `json:"detail,omitempty"`
 	KeyType   string `json:"key_type,omitempty"`
+	// Receipt is the ACI/1 receipt check of the probe, so that a replay
+	// states the live verdict of aci_receipt_verified. Nil when the probe
+	// did not reach the receipt check.
+	Receipt *ReceiptOutcome `json:"receipt,omitempty"`
+	// NoReceiptCheck says why a probe that ran did not check the receipt.
+	NoReceiptCheck string `json:"no_receipt_check,omitempty"`
+}
+
+// ReceiptOutcome records the result of the ACI/1 receipt check of a probe.
+// A replay restores it; it does not check the recorded receipt again.
+type ReceiptOutcome struct {
+	Failed  bool     `json:"failed,omitempty"`
+	ErrMsg  string   `json:"error,omitempty"`
+	Detail  string   `json:"detail,omitempty"`
+	Unknown []string `json:"unknown,omitempty"`
 }
 
 // TLSInferenceOutcome records a TLS-only probe independently of E2EE.

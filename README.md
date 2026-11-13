@@ -184,7 +184,7 @@ Is the encryption bound to the hardware? These checks verify the encryption key 
 | 23 | `aci_key_custody` | ACI/1: workload keyset digest recomputed, signing key is a keyset E2EE key, the dstack-KMS custody chain verifies to an accepted KMS root, and the keyset expires within 365 days |
 | 24 | `aci_backend_named` | ACI/1: attested evidence binds a backend for the requested model; no ACI/1 evidence does today, so it fails, allowed by default, and names any provider-asserted model and upstream model |
 | 25 | `aci_session_verified` | Phala Cloud ACI/1: at least one attested session of the model passed the audit of its evidence (quote, MRTD/MRSEAM, REPORTDATA with the session nonce, channel binding, GPU evidence, and for the Phala model CVM compose binding and event-log replay); each request pins the verified sessions |
-| 26 | `aci_receipt_verified` | Phala Cloud ACI/1: `teep verify` checks the signed receipt of its probe response (signature, keyset, request and response hashes, pinned session); skipped without a probe (in `teep serve`, which checks every response, or without an API key) |
+| 26 | `aci_receipt_verified` | Phala Cloud ACI/1: `teep verify` checks the signed receipt of its probe response (signature, keyset, request and response hashes, pinned session); fails on any failure to obtain a verified receipt after a verified probe stream; skipped without a receipt to check (in `teep serve`, which checks every response, when the report blocks requests, without an API key, or with `--offline`) |
 
 </details>
 

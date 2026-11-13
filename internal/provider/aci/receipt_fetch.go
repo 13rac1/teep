@@ -24,6 +24,12 @@ const (
 // not a receipt of the requested id.
 var ErrMalformedReceipt = errors.New("malformed receipt")
 
+// ErrReceiptNotServed marks an HTTP answer of the receipt route that is not
+// a receipt: any status other than 200, a 404 after the last attempt
+// included. It is the gateway's answer, unlike a transport error or the end
+// of the caller's context.
+var ErrReceiptNotServed = errors.New("receipt not served")
+
 // maxReceiptIDLen bounds an X-Receipt-Id value (29 characters on
 // 2026-11-01).
 const maxReceiptIDLen = 128
@@ -70,9 +76,9 @@ func FetchReceipt(ctx context.Context, client *http.Client, baseURL, apiKey, id 
 			}
 			return r, nil
 		case status != http.StatusNotFound:
-			return nil, fmt.Errorf("receipt %s: HTTP %d", id, status)
+			return nil, fmt.Errorf("%w: receipt %s: HTTP %d", ErrReceiptNotServed, id, status)
 		case attempt == ReceiptAttempts:
-			return nil, fmt.Errorf("receipt %s: HTTP 404 after %d attempts %s apart", id, ReceiptAttempts, ReceiptRetryDelay)
+			return nil, fmt.Errorf("%w: receipt %s: HTTP 404 after %d attempts %s apart", ErrReceiptNotServed, id, ReceiptAttempts, ReceiptRetryDelay)
 		}
 		timer := time.NewTimer(ReceiptRetryDelay)
 		select {

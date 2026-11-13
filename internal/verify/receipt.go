@@ -24,9 +24,13 @@ type probeReceipt struct {
 
 // verifyPhalaProbe checks the E2EE v2 stream of a Phala Cloud probe, then
 // fetches its receipt over the pinned client and verifies it (ACI/1 §9.3),
-// as teep serve does for every response. The stream and a failure to fetch
-// the receipt go to e2ee_usable; a receipt that is missing, malformed or
-// fails the check goes to aci_receipt_verified (result.Receipt).
+// as teep serve does for every response. A failure of the stream goes to
+// e2ee_usable. Once the stream verified, a missing or malformed receipt id
+// and every failure to obtain a verified receipt go to aci_receipt_verified
+// (result.Receipt): the gateway under test must not choose a class of
+// failure that does not block. That includes a failed receipt request (a
+// transport error, a short body, the end of ctx), which a network fault can
+// also cause; its detail says to run again.
 func verifyPhalaProbe(ctx context.Context, opts *Options, raw *attestation.RawAttestation, resp *http.Response, session *e2ee.ACIv2Session, pr *probeReceipt) *attestation.E2EETestResult {
 	id, idErr := aci.ReceiptID(resp.Header)
 	wire := aci.NewResponseHash(resp.Body)
@@ -42,31 +46,25 @@ func verifyPhalaProbe(ctx context.Context, opts *Options, raw *attestation.RawAt
 		result.Receipt = &attestation.ACIReceiptResult{Err: idErr}
 		return result
 	}
-	receipt, err := verifyProbeReceipt(ctx, opts, raw, id, wire, pr)
-	if err != nil {
-		// The receipt could not be fetched: a transport or HTTP failure of
-		// the probe, not a statement of the service.
-		result.Err = fmt.Errorf("receipt fetch: %w", err)
-		return result
-	}
-	result.Receipt = receipt
+	result.Receipt = verifyProbeReceipt(ctx, opts, raw, id, wire, pr)
 	return result
 }
 
-// verifyProbeReceipt fetches the receipt id and checks it. It returns a
-// nil result with an error when the response or the receipt could not be
-// read, and a result (with Err set when the check fails) otherwise.
-func verifyProbeReceipt(ctx context.Context, opts *Options, raw *attestation.RawAttestation, id string, wire *aci.ResponseHash, pr *probeReceipt) (*attestation.ACIReceiptResult, error) {
+// verifyProbeReceipt fetches the receipt id and checks it. Err is set when
+// teep did not obtain a receipt that verifies. The verified stream was read
+// to its end, so the hash of the response does not fail in practice; if it
+// does, the receipt cannot be checked and fails too.
+func verifyProbeReceipt(ctx context.Context, opts *Options, raw *attestation.RawAttestation, id string, wire *aci.ResponseHash, pr *probeReceipt) *attestation.ACIReceiptResult {
 	responseHash, err := wire.Finish()
 	if err != nil {
-		return nil, err
+		return &attestation.ACIReceiptResult{Err: fmt.Errorf("hash the probe response: %w", err)}
 	}
 	receipt, err := aci.FetchReceipt(ctx, pr.client, pr.route.BaseURL(), opts.Provider.APIKey, id)
-	if errors.Is(err, aci.ErrMalformedReceipt) {
-		return &attestation.ACIReceiptResult{Err: err}, nil
-	}
-	if err != nil {
-		return nil, err
+	switch {
+	case errors.Is(err, aci.ErrMalformedReceipt) || errors.Is(err, aci.ErrReceiptNotServed):
+		return &attestation.ACIReceiptResult{Err: err}
+	case err != nil:
+		return &attestation.ACIReceiptResult{Err: fmt.Errorf("the receipt request failed: %w; run again", err)}
 	}
 	check := &aci.ReceiptCheck{
 		Keys: raw.ACIReceiptKeys, KeysetDigest: raw.ACIWorkloadKeysetDigest, NotAfter: raw.ACIKeysetNotAfter,
@@ -88,5 +86,5 @@ func verifyProbeReceipt(ctx context.Context, opts *Options, raw *attestation.Raw
 		slog.WarnContext(ctx, "ACI receipt has members that teep does not define; they are not checked",
 			"provider", opts.ProviderName, "receipt_id", receipt.ID, "members", receipt.Unknown)
 	}
-	return result, nil
+	return result
 }

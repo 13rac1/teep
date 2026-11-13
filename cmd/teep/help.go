@@ -316,11 +316,18 @@ var factorRegistry = []factorInfo{
 			"§9.3): the signature under a keyset receipt key, the keyset " +
 			"digest, the endpoint, model and served time, the request and " +
 			"response hashes, and that the upstream session it cites is one " +
-			"that teep pinned. Fails on a missing, malformed or failed " +
-			"receipt. Skipped, and not blocking, when there is no probe: in " +
-			"teep serve, which checks the receipt of every response, without " +
-			"an API key, or when the probe failed before the receipt check " +
-			"(e2ee_usable reports that failure). Enforced. Not applicable " +
+			"that teep pinned. Once the probe stream verified, fails on " +
+			"every failure to obtain a verified receipt: a missing or " +
+			"malformed receipt id or receipt, a receipt that the gateway " +
+			"does not serve, a failed check, and a failed receipt request " +
+			"(a network fault can cause that one too; its detail says to " +
+			"run again). Skipped, and not blocking, when there is no " +
+			"receipt to check: in teep serve, which checks the receipt of " +
+			"every response, when the report blocks inference requests, " +
+			"without an API key, with --offline, or when the probe stream " +
+			"failed (e2ee_usable reports that failure). A replay keeps a " +
+			"recorded failure and shows a recorded pass as a deferred skip: " +
+			"it does not check the receipt again. Enforced. Not applicable " +
 			"for other formats.",
 	},
 	// Tier 3: Supply Chain & Channel Integrity

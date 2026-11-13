@@ -673,7 +673,12 @@ func evidenceE2EEOutcome(ctx context.Context, opts *Options, raw *attestation.Ra
 		if opts.capture != nil {
 			ctx = withE2EERecorder(ctx, opts.capture.recordE2EE)
 		}
-		return testE2EE(ctx, raw, opts.ProviderName, opts.Provider, opts.ModelName, opts.Offline)
+		result := testE2EE(ctx, raw, opts.ProviderName, opts.Provider, opts.ModelName, opts.Offline)
+		// testE2EE sends no probe offline, so there is no receipt to check.
+		if opts.Offline && raw != nil && raw.ACICanonicalReport && result != nil && result.Receipt == nil {
+			result.NoReceiptCheck = "not checked: teep verify --offline sends no probe"
+		}
+		return result
 	}
 	return nil
 }

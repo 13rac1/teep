@@ -200,10 +200,16 @@ checks the receipt after the stream ends. A failure is reported after the
 client has the content: it is logged at error level (`response receipt
 check failed`), and a failure of the service's statements ends the
 authorization generation, so the next request verifies again. In `teep verify`, the
-receipt of the probe is the factor `aci_receipt_verified`: a missing,
-malformed or failed receipt fails it, and its detail states whether the
-request hash was checked. A probe that fails before its receipt is checked,
-including a receipt that the gateway does not serve, fails `e2ee_usable`.
+receipt of the probe is the factor `aci_receipt_verified`. Once the probe
+stream verified, every failure to obtain a verified receipt fails it: a
+missing or malformed receipt id or receipt, a receipt that the gateway does
+not serve, a failed check, and a failed receipt request. Once the probe
+stream verified, the gateway under test cannot choose a failure that does
+not block. Before that, a stream that the gateway resets, also after
+`[DONE]`, fails `e2ee_usable`, which is allowed for Phala Cloud. A network
+fault can also fail the receipt request; the detail then says to run
+again. The detail of a verified receipt states whether the request hash
+was checked. A probe whose stream fails fails `e2ee_usable`.
 
 A receipt whose signature, keyset, response hash, cited session or
 `served_at` does not verify, a malformed receipt, and a response without
@@ -312,8 +318,10 @@ report carries no GPU evidence, and `nonce_match` and
 `aci_session_verified` and `aci_receipt_verified` are enforced.
 `aci_receipt_verified` is a deferred skip, which does not block, when there
 is no probe receipt to check: in `teep serve`, which checks the receipt of
-every response instead, in `teep verify` without an API key, after a probe
-that failed earlier, and in `teep verify --reverify`.
+every response instead, in `teep verify` when the report blocks inference
+requests (teep sends no probe then), without an API key, with `--offline`
+(an offline run sends no probe), and after a probe whose
+stream failed.
 
 ## Known limitations
 
@@ -339,9 +347,13 @@ that failed earlier, and in `teep verify --reverify`.
   content that the client has.
 - teep does not check the request hash of a request with a value that
   serde_json can write in another form (see [Receipts](#receipts)).
-- `teep verify --reverify` reuses the recorded result of the probe; it does
-  not check the recorded receipt again yet, so `aci_receipt_verified` is a
-  deferred skip in a replay.
+- `teep verify --reverify` does not check the recorded receipt again. A
+  recorded receipt failure stays a failure. A recorded pass becomes a
+  deferred skip that quotes the recorded verdict, because a factor does not
+  pass on a check that did not run, so a replayed report differs from the
+  live one in that line and in the score. Checking the receipt again needs
+  the restored request and the pinned sessions, which a capture does not
+  hold yet.
 
 ## Test coverage
 

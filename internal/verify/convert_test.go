@@ -137,3 +137,43 @@ func TestOutcomeE2EERoundTrip(t *testing.T) {
 		t.Errorf("Err message = %q, want %q", restored.Err.Error(), original.Err.Error())
 	}
 }
+
+// The receipt result of a probe survives the capture: a failed receipt still
+// blocks in a replay, a recorded pass becomes a deferred Skip that quotes it
+// (the replay checks nothing), and the reason why a probe did not check the
+// receipt is kept.
+func TestOutcomeReceiptRoundTrip(t *testing.T) {
+	failed := e2eeResultFromOutcome(outcomeFromE2EEResult(&attestation.E2EETestResult{
+		Attempted: true, Receipt: &attestation.ACIReceiptResult{Err: errors.New("signature"), Unknown: []string{"x"}},
+	}))
+	if failed.Err != nil || failed.Receipt == nil || failed.Receipt.Err == nil || failed.Receipt.Err.Error() != "signature" || len(failed.Receipt.Unknown) != 1 {
+		t.Fatalf("failed receipt restored as %+v / %+v", failed, failed.Receipt)
+	}
+	verified := e2eeResultFromOutcome(outcomeFromE2EEResult(&attestation.E2EETestResult{
+		Attempted: true, Receipt: &attestation.ACIReceiptResult{Detail: "receipt verified"},
+	}))
+	// A recorded pass is not a check: it comes back as a reason, so the
+	// factor is a deferred Skip and not a Pass.
+	if verified.Receipt != nil || verified.NoReceiptCheck != "recorded verdict: receipt verified; the replay does not check the receipt again" {
+		t.Fatalf("verified receipt restored as %+v / %q", verified.Receipt, verified.NoReceiptCheck)
+	}
+	passed := &attestation.VerificationReport{Factors: []attestation.FactorResult{
+		{Name: attestation.FactorACIReceiptVerified, Status: attestation.Skip, Deferred: true, Enforced: true},
+	}}
+	passed.MarkACIReceipt(verified, "")
+	if f := passed.Factors[0]; f.Status != attestation.Skip || !f.Deferred {
+		t.Errorf("a replayed pass gives %+v, want a deferred Skip", f)
+	}
+	offline := e2eeResultFromOutcome(outcomeFromE2EEResult(&attestation.E2EETestResult{Attempted: true, NoReceiptCheck: "not checked"}))
+	if offline.Receipt != nil || offline.NoReceiptCheck != "not checked" {
+		t.Fatalf("offline probe restored as %+v", offline)
+	}
+
+	report := &attestation.VerificationReport{Factors: []attestation.FactorResult{
+		{Name: attestation.FactorACIReceiptVerified, Status: attestation.Skip, Deferred: true, Enforced: true},
+	}}
+	report.MarkACIReceipt(failed, "")
+	if !report.Blocked() {
+		t.Error("a replayed failed receipt does not block")
+	}
+}

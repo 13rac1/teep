@@ -2,6 +2,7 @@ package aci
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,6 +64,11 @@ func TestFetchReceipt(t *testing.T) {
 			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 				t.Fatalf("err = %v, want %q", err, tc.wantErr)
 			}
+			// Every HTTP answer that is not a receipt is the gateway's
+			// statement (ErrReceiptNotServed).
+			if tc.wantErr != "" && !errors.Is(err, ErrReceiptNotServed) {
+				t.Errorf("err = %v, want ErrReceiptNotServed", err)
+			}
 			if got := calls.Load(); got != tc.wantCalls {
 				t.Errorf("%d requests, want %d", got, tc.wantCalls)
 			}
@@ -93,6 +99,23 @@ func TestFetchReceiptStopsAtDeadline(t *testing.T) {
 	}
 	if calls.Load() != 1 || time.Since(started) >= ReceiptRetryDelay {
 		t.Errorf("%d requests in %s, want 1 before the retry delay", calls.Load(), time.Since(started))
+	}
+}
+
+// A transport failure and the end of the caller's context are not answers
+// of the gateway, so they are not ErrReceiptNotServed.
+func TestFetchReceiptTransportFailureIsNotAnAnswer(t *testing.T) {
+	srv, _ := receiptServer(t, 0, http.StatusOK)
+	srv.Config.Handler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) })
+	_, err := FetchReceipt(t.Context(), srv.Client(), srv.URL, "key", liveReceiptID)
+	if err == nil || errors.Is(err, ErrReceiptNotServed) || errors.Is(err, ErrMalformedReceipt) {
+		t.Fatalf("aborted fetch: err = %v, want a transport error", err)
+	}
+	slow, _ := receiptServer(t, 3, http.StatusOK)
+	ctx, cancel := context.WithTimeout(t.Context(), ReceiptRetryDelay/2)
+	defer cancel()
+	if _, err := FetchReceipt(ctx, slow.Client(), slow.URL, "key", liveReceiptID); err == nil || errors.Is(err, ErrReceiptNotServed) {
+		t.Fatalf("fetch at the deadline: err = %v, want the context error", err)
 	}
 }
 

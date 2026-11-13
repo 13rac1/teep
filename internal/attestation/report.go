@@ -346,6 +346,28 @@ func (r *VerificationReport) MarkE2EEFailed(detail string) {
 	}
 }
 
+// MarkACIReceipt sets aci_receipt_verified from the probe t that ran after
+// the report was built, or, for a nil t, to a deferred Skip that states
+// noProbe. It changes the factor only while it is a deferred Skip, so a
+// recorded Pass or Fail is never replaced. The factor keeps its
+// enforcement, and the counters are recomputed. A report without the
+// factor is not changed.
+func (r *VerificationReport) MarkACIReceipt(t *E2EETestResult, noProbe string) {
+	for i := range r.Factors {
+		f := &r.Factors[i]
+		if f.Name != FactorACIReceiptVerified {
+			continue
+		}
+		if f.Status != Skip || !f.Deferred {
+			return
+		}
+		next := aciReceiptFactor(t, noProbe)
+		f.Status, f.Detail, f.Deferred = next.Status, next.Detail, next.Deferred
+		r.recomputeCounters()
+		return
+	}
+}
+
 // TransportIdentity returns the report's strict attested transport identity.
 func (r *VerificationReport) TransportIdentity() (tlsct.TransportIdentity, error) {
 	return tlsct.NewTransportIdentity(r.TLSAuthority, r.TLSKeyFP)
@@ -879,6 +901,9 @@ type E2EETestResult struct {
 	// response (aci_receipt_verified). Nil when the probe did not reach the
 	// receipt check.
 	Receipt *ACIReceiptResult
+	// NoReceiptCheck, when set, says why a probe that ran did not check
+	// the receipt (aci_receipt_verified stays a deferred Skip with it).
+	NoReceiptCheck string
 }
 
 // ACIReceiptResult is the result of the cryptographic check of the ACI/1
@@ -2177,25 +2202,37 @@ func evalACIReceiptVerified(in *ReportInput) []FactorResult {
 	if in.Raw == nil || !in.Raw.ACICanonicalReport {
 		return factor(TierBinding, FactorACIReceiptVerified, NotApplicable, "not the canonical ACI/1 report")
 	}
-	deferred := func(detail string) []FactorResult {
-		return []FactorResult{{Tier: TierBinding, Name: FactorACIReceiptVerified, Status: Skip, Detail: detail, Deferred: true}}
+	if in.E2EETest == nil {
+		// teep verify runs the probe after BuildReport and then sets the
+		// factor with MarkACIReceipt.
+		return []FactorResult{aciReceiptFactor(nil, "no probe: teep serve checks the receipt of every response")}
 	}
-	t := in.E2EETest
+	return []FactorResult{aciReceiptFactor(in.E2EETest, "")}
+}
+
+// aciReceiptFactor states the receipt check of probe t. A nil t is a
+// deferred Skip with noProbe as its detail.
+func aciReceiptFactor(t *E2EETestResult, noProbe string) FactorResult {
+	deferred := func(detail string) FactorResult {
+		return FactorResult{Tier: TierBinding, Name: FactorACIReceiptVerified, Status: Skip, Detail: detail, Deferred: true}
+	}
 	switch {
 	case t == nil:
-		return deferred("no probe: teep serve checks the receipt of every response")
+		return deferred(noProbe)
 	case t.NoAPIKey:
 		return deferred("no probe: an API key is required")
+	case t.Receipt == nil && t.NoReceiptCheck != "":
+		return deferred(t.NoReceiptCheck)
 	case t.Receipt == nil:
-		return deferred("no receipt check of the probe: the probe failed before it (SEE: e2ee_usable), or a replay reused the recorded probe")
+		return deferred("no receipt check of the probe: the probe stream failed (SEE: e2ee_usable), or a replayed capture holds no receipt result")
 	case t.Receipt.Err != nil:
-		return factor(TierBinding, FactorACIReceiptVerified, Fail, fmt.Sprintf("receipt: %v", t.Receipt.Err))
+		return FactorResult{Tier: TierBinding, Name: FactorACIReceiptVerified, Status: Fail, Detail: fmt.Sprintf("receipt: %v", t.Receipt.Err)}
 	}
 	detail := t.Receipt.Detail
 	if len(t.Receipt.Unknown) > 0 {
 		detail += fmt.Sprintf("; members not checked: %q", t.Receipt.Unknown)
 	}
-	return factor(TierBinding, FactorACIReceiptVerified, Pass, detail)
+	return FactorResult{Tier: TierBinding, Name: FactorACIReceiptVerified, Status: Pass, Detail: detail}
 }
 
 // refusalSummary names the reason of the first refused session.
