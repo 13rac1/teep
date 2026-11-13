@@ -393,6 +393,27 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 		}
 	})
 
+	// The digest comparison is constant-time over the whole value: a digest
+	// that differs only in its last character, or only in letter case,
+	// does not match.
+	t.Run("digest differs in one character or in case", func(t *testing.T) {
+		fx := keysetFixture(t)
+		last := fx.digest[len(fx.digest)-1]
+		other := byte('0')
+		if last == '0' {
+			other = '1'
+		}
+		for _, declared := range []string{fx.digest[:len(fx.digest)-1] + string(other), strings.ToUpper(fx.digest)} {
+			result := verifyKeyset(fx.keyset, fx.custody, declared, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex})
+			if result.KeysetDigestMatch {
+				t.Errorf("KeysetDigestMatch = true for declared digest %s", declared)
+			}
+		}
+		if !verifyKeyset(fx.keyset, fx.custody, fx.digest, fx.signingKey, fx.appID, fixtureNow, []string{fx.rootHex}, []string{fx.appIDHex}).KeysetDigestMatch {
+			t.Error("KeysetDigestMatch = false for the computed digest")
+		}
+	})
+
 	t.Run("signing key not in keyset", func(t *testing.T) {
 		fx := keysetFixture(t)
 		fx.keyset.E2EEPublicKeys = []aciKey{{KeyID: "other", Algo: "x", PublicKey: "04aabb"}}

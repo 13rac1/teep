@@ -182,11 +182,11 @@ func checkSingleAttestation(r *phalaDirectReport) error {
 // carries every value, and a value that the top-level copy states must be
 // the same.
 func checkPhalaDirectConsistency(r *phalaDirectReport, info *phalaDirectInfo, tcb *phalaDirectTCBInfo) ([]string, error) {
-	if r.Quote != r.IntelQuote || r.IntelQuote == "" {
+	if !equalCT(r.Quote, r.IntelQuote) || r.IntelQuote == "" {
 		return nil, errors.New("quote and intel_quote differ or are empty")
 	}
-	if r.VMConfig != info.VMConfig || info.ComposeHash != tcb.ComposeHash || info.DeviceID != tcb.DeviceID ||
-		info.OSImageHash != tcb.OSImageHash || info.MRAggregated != tcb.MRAggregated {
+	if r.VMConfig != info.VMConfig || !equalCT(info.ComposeHash, tcb.ComposeHash) || !equalCT(info.DeviceID, tcb.DeviceID) ||
+		!equalCT(info.OSImageHash, tcb.OSImageHash) || !equalCT(info.MRAggregated, tcb.MRAggregated) {
 		return nil, errors.New("info and tcb_info differ")
 	}
 	var top []attestation.EventLogEntry
@@ -200,7 +200,7 @@ func checkPhalaDirectConsistency(r *phalaDirectReport, info *phalaDirectInfo, tc
 	for i := range top {
 		a, b := top[i], tcb.EventLog[i]
 		if a.IMR != b.IMR || a.EventType != b.EventType || a.Event != b.Event ||
-			(a.Digest != "" && a.Digest != b.Digest) || (a.EventPayload != "" && a.EventPayload != b.EventPayload) {
+			(a.Digest != "" && !equalCT(a.Digest, b.Digest)) || (a.EventPayload != "" && a.EventPayload != b.EventPayload) {
 			return nil, fmt.Errorf("event_log[%d] differs from tcb_info.event_log[%d]", i, i)
 		}
 	}
@@ -326,6 +326,10 @@ func chutesEvidenceNonce(location string) (attestation.Nonce, error) {
 	}
 	return attestation.ParseNonce(values.Get("nonce"))
 }
+
+// equalCT reports whether a and b are equal, in constant time; for digests,
+// measurements and quotes.
+func equalCT(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
 
 // strictDecode decodes data into v and fails on a duplicate or a missing
 // member at any depth. It returns the paths of the members that teep does

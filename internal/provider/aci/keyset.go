@@ -521,7 +521,7 @@ func verifyKeyset(
 	if err != nil {
 		return &attestation.ACIKeysetResult{Err: fmt.Errorf("compute keyset digest: %w", err)}
 	}
-	keysetDigestMatch := computedDigest == declaredKeysetDigest
+	keysetDigestMatch := subtle.ConstantTimeCompare([]byte(computedDigest), []byte(declaredKeysetDigest)) == 1
 
 	// Check 2: the REPORTDATA-bound signing key is a keyset E2EE key.
 	signingKeyInKeyset := keysetContainsE2EEKey(keyset, signingKeyHex)

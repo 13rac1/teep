@@ -193,6 +193,26 @@ func TestPhalaDirectEvidenceRefusesMalformedReports(t *testing.T) {
 			top["event_log"] = string(b)
 			top["all_attestations"].([]any)[0].(map[string]any)["event_log"] = string(b)
 		}},
+		{"event digest differs", func(top map[string]any) {
+			var events []map[string]any
+			if err := json.Unmarshal([]byte(top["event_log"].(string)), &events); err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range events {
+				if d, _ := e["digest"].(string); d != "" {
+					e["digest"] = strings.Repeat("0", len(d))
+					break
+				}
+			}
+			b, _ := json.Marshal(events)
+			top["event_log"] = string(b)
+			top["all_attestations"].([]any)[0].(map[string]any)["event_log"] = string(b)
+		}},
+		{"compose hash differs from tcb_info", func(top map[string]any) {
+			info := top["info"].(map[string]any)
+			info["compose_hash"] = strings.Repeat("0", 64)
+			top["all_attestations"].([]any)[0].(map[string]any)["info"] = info
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := loadSession(t, "session_phala_direct.json", phalaDirectSessionID)

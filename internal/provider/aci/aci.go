@@ -450,7 +450,7 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 	}
 	ar.Attestation.WorkloadKeyset.served = served
 	LogEventLog(ctx, eventLog, provider)
-	if ar.IntelQuote != "" && ar.IntelQuote != ar.Attestation.Evidence.Quote {
+	if ar.IntelQuote != "" && subtle.ConstantTimeCompare([]byte(ar.IntelQuote), []byte(ar.Attestation.Evidence.Quote)) != 1 {
 		// The top-level intel_quote is documented as an echo of
 		// attestation.evidence.quote. A divergence means the response is not
 		// what the format promises; the nested field is the attested source.
