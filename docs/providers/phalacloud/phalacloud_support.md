@@ -209,6 +209,18 @@ recalled. The receipt fetch and check run under a context that teep owns,
 bounded to 30 seconds, so a client that hangs up does not decide their
 result.
 
+For Phala Cloud streams, per-response authenticity is reactive, not
+preventive. Streamed content reaches the client before its receipt is
+checked. The check finds a forged or altered stream after it was
+delivered, and ends the authorization generation; it does not prevent the
+delivery. A gateway can deliver one forged stream in this way once per
+verification: the next request verifies again, and a gateway that passes
+the verification can do it again. A non-stream response is held until its
+receipt verifies, so it is not delivered before the check. The gateway
+publishes no signed statement about a stream before its end, so a client
+that leaves early cannot check what it received (residual exposure 12 of
+the [gateway gap document](../../attestation_gaps/aci_gateway.md)).
+
 When the relay of a stream fails after content went out, teep names the
 client only from positive evidence:
 
