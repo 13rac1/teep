@@ -6,13 +6,17 @@ Status: proposal, no implementation yet.
 
 Some factors pass only against an allowlist: MRSEAM and MRTD in
 `tee_measurement`, RTMR0 in `tee_hardware_config`, RTMR1 and RTMR2 in
-`tee_boot_config`. teep can enforce such a factor only while its allowlist
-holds every value that the provider's fleet runs. The provider changes the
+`tee_boot_config`, and the same registers of a gateway in
+`gateway_tee_measurement`, `gateway_tee_hardware_config` and
+`gateway_tee_boot_config`. teep can enforce such a factor only while its
+allowlist holds every value that the provider's fleet runs. The provider changes the
 values first: a firmware, kernel or Intel TDX module update produces new
 values before a teep release can carry them.
 
 Today the allowlists are Go-coded defaults (`internal/defaults/defaults.go`,
-`internal/attestation/dstack_defaults.go`, `internal/provider/chutes/policy.go`).
+`internal/attestation/dstack_defaults.go`, `internal/provider/chutes/policy.go`,
+and `aci.GatewayMeasurementPolicy` in `internal/provider/aci/policy.go` for
+the ACI/1 gateway).
 For each field, the local TOML policy replaces the default when it sets
 that field ([measurement allowlists](../measurement_allowlists.md#merge-order)).
 A new value reaches a running installation only through a new release or a
@@ -32,6 +36,14 @@ when every instance in the fleet passes it. An allowlist that lacks the
 values of a new release keeps such a factor allowed until a teep release
 carries them; enforcing it needs a way to deliver new values without a
 release.
+
+A second example: the ACI/1 gateway that Venice, Phala Cloud and NanoGPT
+share was deployed again on 2026-11-12 with the MRTD `7fe60787…`, which the
+dstack base allowlist does not hold. `gateway_tee_measurement` is allowed to
+fail for the three ACI/1 routes and for NEAR Cloud, and the
+[ACI/1 gateway gap document](../attestation_gaps/aci_gateway.md) keeps it
+allowed until teep verifies an allowlist update without a release. Every
+factor whose values come from such an allowlist follows the same rule.
 
 Signed delivery removes the release delay. It does not decide which source
 teep accepts for a value (Open decision 5).
@@ -233,17 +245,39 @@ Checked on 2026-11-10. Source and date per item.
    decides whether `--offline` uses the stored file or the embedded file.
    Recommended: persist, verify again at startup, and use the stored file
    with `--offline`.
+8. **Gateway identity pins.** The accepted gateway app ids and dstack-KMS
+   roots (`aci.GatewayPins`, `internal/provider/aci/keyset.go`) are lists
+   that change with a gateway deployment too: the deployment of 2026-11-12
+   blocked every ACI/1 route through the enforced `aci_key_custody` until a
+   teep change added its pair. They differ from measurements: they name the
+   key-releasing authority and the application that teep accepts as the
+   gateway, so the signer of a file that carries them would control which
+   gateway teep trusts. Options: keep them in a teep release only; or carry
+   them in the allowlist file with a stricter review (for example the
+   on-chain evidence recorded for each pair, as the comment of the
+   2026-11-12 pair records it). Recommended: keep them in a release until
+   the review of a pin is defined.
+9. **Trusted root for replay and `--offline`.** The design loads the
+   Sigstore trusted root through TUF at each fetch, as Tinfoil does. A
+   Tinfoil capture records no trusted root, so its replay without network
+   cannot verify the Sigstore bundle: the re-verification of the
+   2026-11-13 Tinfoil captures with no network failed on the TUF fetch. The
+   same holds for a verified allowlist file. Options: record the trusted
+   root in each capture and with the stored file, or embed a trusted root in
+   each release for replay and `--offline`. This is the same decision as
+   for Tinfoil's bundles.
 
 ## Relation to other work
 
-- **Fixtures.** A live capture with signed, content-addressed records must
-  keep every signed record, so teep cannot reduce its size; where such
-  captures live is a separate open question for the repository. A replay
-  must verify against the list that applied at capture time, or a later
-  removal fails an old fixture. The capture manifest records the `version`
-  and the digest of the allowlist file, and replay uses that file; a place
-  that keeps captures outside the repository can also keep the published
-  files with their bundles.
+- **Fixtures.** The repository keeps one current capture per provider and
+  attestation format, in `internal/integration/testdata/current/`, and
+  replaces it with a new capture on a refresh
+  ([testing](../transport/testing.md)). A capture keeps every signed record,
+  so teep cannot reduce its size. A replay must verify against the list
+  that applied at capture time, or a later removal fails the current
+  fixture until its refresh. The capture manifest records the `version` and
+  the digest of the allowlist file, and replay uses that file and its
+  bundle (Open decision 9).
 - **Measurement allowlists.** The
   [cross-check](../measurement_allowlists.md#2-cross-check-values) and
   [rolling update](../measurement_allowlists.md#rolling-updates) procedures
@@ -254,9 +288,11 @@ Checked on 2026-11-10. Source and date per item.
   published file.
 - **Enforcement rule.** The "Enforcement and allow_fail" section of
   [AGENTS.md](../../AGENTS.md) enforces a factor when every instance passes
-  it. With this delivery path, a missing allowlist value no longer needs a
-  release; a factor still needs live fleet data that shows every instance
-  passes it before it is enforced.
+  it. A factor whose values come from an allowlist stays allowed to fail
+  until teep delivers allowlist updates without a release; this plan is
+  that delivery path. With it, a missing allowlist value no longer needs a
+  release, and a factor still needs live fleet data that shows every
+  instance passes it before it is enforced, in its own change.
 
 ## Phases (one commit each, after the decisions)
 
