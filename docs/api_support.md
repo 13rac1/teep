@@ -205,7 +205,7 @@ above, sends the request with `stream: true`, and decrypts each tool-call
   fields decrypted. It adds no field and removes no field.
 - **Non-streaming client:** teep joins the tool-call deltas by `index` into
   `choices[0].message.tool_calls`, with `id`, `type`, `function.name` and the
-  complete `function.arguments`. The message has no `content` key when the
+  complete `function.arguments`. The message has `"content": null` when the
   model sends no text.
 
 NearAI tool-call chunks differ from the OpenAI form. After the first
