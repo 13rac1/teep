@@ -549,58 +549,70 @@ func TestReassembleNonStream_ToolCalls(t *testing.T) {
 
 // TestReassembleNonStream_ToolCallOnlyContentNull checks that a response
 // with tool calls and no text keeps the content key with a null value, as
-// in an OpenAI chat message.
+// in an OpenAI chat message: when the first delta carries an empty content
+// string, and when no delta carries a content field.
 func TestReassembleNonStream_ToolCallOnlyContentNull(t *testing.T) {
-	session := testVeniceSession(t)
-	defer session.Zero()
+	toolCall := map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []map[string]any{{
+		"id": "call-abc", "type": "function", "index": 0,
+		"function": map[string]string{"name": "todowrite", "arguments": `{"todos": []}`},
+	}}}}
+	finish := map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}
+	for _, tc := range []struct {
+		name   string
+		chunks []map[string]any
+	}{
+		{"empty content string", []map[string]any{
+			{"index": 0, "delta": map[string]any{"role": "assistant", "content": ""}}, toolCall, finish,
+		}},
+		{"no content field", []map[string]any{
+			{"index": 0, "delta": map[string]any{"role": "assistant"}}, toolCall, finish,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := testVeniceSession(t)
+			defer session.Zero()
 
-	var sb strings.Builder
-	chunks := []map[string]any{
-		{"index": 0, "delta": map[string]any{"role": "assistant", "content": ""}},
-		{"index": 0, "delta": map[string]any{"tool_calls": []map[string]any{{
-			"id": "call-abc", "type": "function", "index": 0,
-			"function": map[string]string{"name": "todowrite", "arguments": `{"todos": []}`},
-		}}}},
-		{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"},
-	}
-	for _, choice := range chunks {
-		b, err := json.Marshal(map[string]any{
-			"id": "chatcmpl-1", "model": "test-model", "created": 1234567890,
-			"choices": []map[string]any{choice},
+			var sb strings.Builder
+			for _, choice := range tc.chunks {
+				b, err := json.Marshal(map[string]any{
+					"id": "chatcmpl-1", "model": "test-model", "created": 1234567890,
+					"choices": []map[string]any{choice},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				fmt.Fprintf(&sb, "data: %s\n\n", b)
+			}
+			sb.WriteString("data: [DONE]\n\n")
+
+			result, _, err := ReassembleNonStream(strings.NewReader(sb.String()), session, EndpointChat)
+			if err != nil {
+				t.Fatalf("ReassembleNonStream: %v", err)
+			}
+
+			var resp struct {
+				Choices []struct {
+					Message map[string]json.RawMessage `json:"message"`
+				} `json:"choices"`
+			}
+			if err := json.Unmarshal(result, &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if len(resp.Choices) != 1 {
+				t.Fatalf("choices len = %d, want 1", len(resp.Choices))
+			}
+			msg := resp.Choices[0].Message
+			content, ok := msg["content"]
+			if !ok {
+				t.Fatalf("message has no content key: %s", result)
+			}
+			if string(content) != "null" {
+				t.Errorf("content = %s, want null", content)
+			}
+			if _, ok := msg["tool_calls"]; !ok {
+				t.Errorf("message has no tool_calls: %s", result)
+			}
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		fmt.Fprintf(&sb, "data: %s\n\n", b)
-	}
-	sb.WriteString("data: [DONE]\n\n")
-
-	result, _, err := ReassembleNonStream(strings.NewReader(sb.String()), session, EndpointChat)
-	if err != nil {
-		t.Fatalf("ReassembleNonStream: %v", err)
-	}
-
-	var resp struct {
-		Choices []struct {
-			Message map[string]json.RawMessage `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(result, &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(resp.Choices) != 1 {
-		t.Fatalf("choices len = %d, want 1", len(resp.Choices))
-	}
-	msg := resp.Choices[0].Message
-	content, ok := msg["content"]
-	if !ok {
-		t.Fatalf("message has no content key: %s", result)
-	}
-	if string(content) != "null" {
-		t.Errorf("content = %s, want null", content)
-	}
-	if _, ok := msg["tool_calls"]; !ok {
-		t.Errorf("message has no tool_calls: %s", result)
 	}
 }
 
