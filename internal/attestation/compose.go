@@ -4,13 +4,14 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"regexp"
 	"strings"
+
+	"github.com/13rac1/teep/internal/jsonstrict"
 )
 
 // VerifyComposeBinding checks that sha256(appCompose) matches the MRConfigID
@@ -39,7 +40,19 @@ func VerifyComposeBinding(appCompose string, mrConfigID []byte) error {
 			hex.EncodeToString(mrConfigID),
 		)
 	}
-
+	// The quote binds these bytes, but teep reads the images from the
+	// docker_compose_file member. An app_compose object that teep and
+	// dstack read differently (a duplicate member, or a member that
+	// differs from docker_compose_file only in letter case) fails here,
+	// before the images are extracted. dstack decodes app_compose as a JSON
+	// object, so any other value (a list, a string, null, a leading byte
+	// order mark) fails too.
+	if !strings.HasPrefix(strings.TrimLeft(appCompose, " \t\r\n"), "{") {
+		return errors.New("app_compose is not a JSON object")
+	}
+	if _, err := ExtractDockerCompose(appCompose); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -49,10 +62,15 @@ type appComposePayload struct {
 }
 
 // ExtractDockerCompose extracts the docker_compose_file string from an
-// app_compose JSON payload. Returns ("", nil) if the field is absent.
+// app_compose JSON payload. Returns ("", nil) if the field is absent. It
+// decodes with jsonstrict: a duplicate member, or a member that differs from
+// docker_compose_file only in letter case, fails. dstack copies the member
+// with the exact name (jq) and does not read a case variant, while
+// encoding/json would take the last case-insensitive match. The other
+// app_compose members are not checked.
 func ExtractDockerCompose(appCompose string) (string, error) {
 	var payload appComposePayload
-	if err := json.Unmarshal([]byte(appCompose), &payload); err != nil {
+	if _, _, err := jsonstrict.Unmarshal([]byte(appCompose), &payload); err != nil {
 		return "", fmt.Errorf("parse app_compose JSON: %w", err)
 	}
 	return payload.DockerComposeFile, nil
