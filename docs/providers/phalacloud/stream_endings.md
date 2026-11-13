@@ -5,7 +5,9 @@ This table lists every way a streamed Phala Cloud response can end in
 against which bytes, and whether the authorization generation ends. It is
 the reference for the receipt rules in
 [Phala Cloud provider support](phalacloud_support.md#receipts) and the
-[retry contracts](../../transport/retries.md). A non-stream response and the
+[retry contracts](../../transport/retries.md). Every ending of a stream
+delivers content before its receipt check: the check is reactive, not
+preventive ([residual exposure 12](../../attestation_gaps/aci_gateway.md)). A non-stream response and the
 `teep verify` probe follow at the end.
 
 "Content" means at least one upstream line other than a blank separator was relayed to the client: a data chunk (`Chunks`) or a comment, `event:`, `id:` or `retry:` line (`Forwarded`).

@@ -402,6 +402,53 @@ date.
     ACI/1 (`VeniceACIDefaultAllowFail`). They return to enforced when the
     response carries GPU evidence again. Phala Cloud and NanoGPT are not
     affected by this allowance.
+12. **A streamed response reaches the client before any signed statement
+    about it exists.**
+
+    - **Who:** a party that controls the attested gateway or its keys.
+    - **What they do:** change a streamed response in flight, or send a
+      forged one and stall before its end.
+    - **What they get:** the content reaches the client before any signed
+      statement about it exists.
+    - **What stops it today:** nothing before delivery. teep reads the
+      stream to its end, checks the receipt, and ends the shared
+      authorization on a failure, so the attacker gets one such stream per
+      verification.
+
+    The receipt is one signed record over the whole exchange: its
+    `response.returned` event hashes the exact wire bytes of the response
+    ([E2EE v2 §8](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/e2ee-v2.md#8-aci-receipt-integration)).
+    A separate endpoint, `GET /v1/aci/receipts/{id}`, publishes it, and
+    for a stream the gateway publishes it when the stream reaches its
+    terminal ([ACI/1 §7.1](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/aci.md#71-lookup)). The
+    specification calls the receipt "a signed, per-request event log"
+    ([§7](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/aci.md#7-inference-receipts)), tells the client
+    to check it "before relying on a response" and calls a kept receipt
+    "your record of the exchange"
+    ([§9.3](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/aci.md#93-verify-the-response)). It states
+    that a receipt "does not prove client delivery or model-generation
+    completeness", and that cancellation "can leave a reserved id
+    unpublished" (§7.1). E2EE v2 authenticates each encrypted field with its
+    AEAD tag, but anyone can encrypt a field to the client's public key; it
+    checks stream order and truncation only "against the signed ACI receipt
+    over the complete wire bytes"
+    ([E2EE v2 §7](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/e2ee-v2.md#7-key-selection-validation-and-replay-protection)).
+    Neither document defines an authentication per chunk.
+
+    Observed on 2026-11-13 on Phala Cloud, model `qwen/qwen3.8-27b`: a
+    client that cut a stream after 4 seconds and 57,981 body bytes got HTTP
+    404 for the receipt until the receipt was served 25 seconds after the
+    cut, about when the full answer would have ended. A complete run of the
+    same prompt took 27 seconds, with 1,637 data lines, no comment lines,
+    and at most 0.22 seconds between lines. The `body_hash` of the receipt's
+    `response.returned` event matched no prefix of the bytes received,
+    compared at every read boundary. This is one observation; the hash of
+    the full answer was not confirmed.
+
+    A client that leaves a stream early therefore cannot check what it
+    received. What would close it, as gateway changes: a signature or a
+    running hash for each chunk, or a receipt for a cancelled stream over
+    the bytes that the gateway sent.
 
 ---
 
@@ -467,7 +514,7 @@ in `internal/provider/aci/policy.go`. Addresses residual exposure 6.
 
 ## References
 
-- **ACI/1 specification:** [`spec/aci.md` at `dd333b24`](https://github.com/Dstack-TEE/private-ai-gateway/blob/dd333b24324a96468bc19137fbcf6c45aeecc366/spec/aci.md)
+- **ACI/1 specification:** [`spec/aci.md` at `dd333b24`](https://github.com/Dstack-TEE/private-ai-gateway/blob/dd333b24324a96468bc19137fbcf6c45aeecc366/spec/aci.md); receipt timing (residual exposure 12): [`spec/aci.md`](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/aci.md) and [`spec/e2ee-v2.md`](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/e2ee-v2.md) at `8d0018f8`
 - **Specification limits:** [ACI/1 Specification: Assurance Limits and Deployment Requirements](aci_specification.md)
 - **Related teep assessment:** [dstack_integrity.md](dstack_integrity.md)
 - **Provider documents:** [Phala Cloud](../providers/phalacloud/phalacloud_support.md), [NanoGPT](../providers/nanogpt/nanogpt_support.md)
