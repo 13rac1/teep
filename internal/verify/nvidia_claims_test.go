@@ -5,13 +5,14 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/chutes/chutestest"
 )
 
 // nvidiaClaimsOf returns the nvidia_claims result of a report on raw.
 func nvidiaClaimsOf(t *testing.T, raw *attestation.RawAttestation, nonce attestation.Nonce, nv *attestation.NvidiaVerifyResult) attestation.FactorResult {
 	t.Helper()
-	report := attestation.BuildReport(&attestation.ReportInput{Provider: "chutes", Model: "m", Raw: raw, Nonce: nonce, Nvidia: nv})
+	report := attestation.BuildReport(&attestation.ReportInput{Provider: "chutes", Model: "m", Raw: raw, Nonce: nonce, Nvidia: nv, Inapplicable: chutes.InapplicableFactors()})
 	for _, f := range report.Factors {
 		if f.Name == attestation.FactorNvidiaClaims {
 			return f
@@ -38,6 +39,9 @@ func TestVerifyNVIDIA_UnverifiedGPUEvidence_ClaimsFail(t *testing.T) {
 	c := chutestest.Captures(t, "../integration/testdata")[0]
 	raw := *c.Raw
 	raw.GPUEvidence = append([]attestation.GPUEvidence(nil), c.Raw.GPUEvidence...)
+	if len(raw.GPUEvidence) == 0 || len(raw.GPUEvidence[0].Evidence) < 4 {
+		t.Fatalf("%s: no GPU evidence to change", c.Name)
+	}
 	raw.GPUEvidence[0].Evidence = "AAAA" + raw.GPUEvidence[0].Evidence[4:]
 	eat, _ = verifyNVIDIA(context.Background(), &raw, c.Nonce, nil, true, attestation.DefaultNVIDIAVerifier())
 	if eat == nil || eat.SignatureErr == nil || eat.Format != "SPDM" {
