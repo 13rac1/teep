@@ -673,6 +673,26 @@ var ACIDefaultAllowFail = []string{
 	FactorACIBackendNamed,
 }
 
+// PhalaCloudACIDefaultAllowFail is the default allow_fail list for the
+// gateway variant of the ACI/1 response that Phala Cloud serves. The
+// variant echoes no nonce, so nonce_match and gateway_nonce_match fail and
+// are allowed; freshness rests on the enforced
+// gateway_tee_reportdata_binding.
+var PhalaCloudACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
+	FactorNonceMatch,
+	FactorGWNonceMatch,
+)
+
+// NanoGPTACIDefaultAllowFail is the default allow_fail list for the gateway
+// variant of the ACI/1 response that NanoGPT relays. The variant echoes no
+// nonce, so nonce_match and gateway_nonce_match fail and are allowed;
+// freshness rests on the enforced gateway_tee_reportdata_binding, and the GPU
+// evidence nonce on the enforced nvidia_nonce_client_bound.
+var NanoGPTACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
+	FactorNonceMatch,
+	FactorGWNonceMatch,
+)
+
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
 var KnownFactors = []string{

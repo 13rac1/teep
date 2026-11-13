@@ -80,10 +80,10 @@ var providerFormatDefaultAllowFail = map[string]map[attestation.BackendFormat][]
 		attestation.FormatACI1: attestation.VeniceACIDefaultAllowFail,
 	},
 	"phalacloud": {
-		attestation.FormatACI1: attestation.ACIDefaultAllowFail,
+		attestation.FormatACI1: attestation.PhalaCloudACIDefaultAllowFail,
 	},
 	"nanogpt": {
-		attestation.FormatACI1: attestation.ACIDefaultAllowFail,
+		attestation.FormatACI1: attestation.NanoGPTACIDefaultAllowFail,
 	},
 }
 

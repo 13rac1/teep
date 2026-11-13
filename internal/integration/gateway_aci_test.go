@@ -66,12 +66,10 @@ func TestVerifyRun_GatewayACI_Fixtures(t *testing.T) {
 			logReportScore(t, report)
 			assertNoEnforcedFailures(t, report)
 			assertMustPass(t, report, []string{
-				"nonce_match",
 				"signing_key_present",
 				"aci_key_custody",
 				"nvidia_signature",
 				"nvidia_nonce_client_bound",
-				"gateway_nonce_match",
 				"gateway_tee_quote_present",
 				"gateway_tee_quote_structure",
 				"gateway_tee_cert_chain",
