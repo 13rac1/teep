@@ -55,6 +55,53 @@ these formats:
   with the shared ACI/1 parser (`internal/provider/aci`), which requires that
   copy to equal the top-level fields. Observed on 2026-10-29 for
   `TEE/gemma-4-26b-a4b-uncensored`.
+- Chutes, `attestation_type` form: an `all_attestations` list of Chutes
+  instances with their `e2e_pubkey`, parsed by `provider.ParseChutesFormat`.
+- Chutes evidence response: a top-level `evidence` list with one entry per
+  instance, and `failed_instance_ids` and `excluded_instance_ids`. Observed
+  on 2026-11-12 for 10 of 20 models. SEE: [Chutes evidence](#chutes-evidence).
+
+For a model that Tinfoil serves, NanoGPT gives no nonce-bound attestation:
+it answers HTTP 400, and teep fails with that status and NanoGPT's error
+text.
+
+The quote of either Chutes form is checked with the Chutes REPORTDATA
+binding, `SHA256(nonce_hex + e2e_pubkey)` (`chutes.ReportDataVerifier`), in
+`teep verify` and `teep serve`.
+
+### Chutes evidence
+
+NanoGPT relays the Chutes evidence response without the instance list, so
+no member names an `e2e_pubkey`. teep cannot check that any quote binds the
+client nonce, and nothing names the instance that serves the request. SEE:
+[NanoGPT Chutes Evidence: No Nonce Binding, No Serving Instance](../../attestation_gaps/nanogpt_chutes_evidence.md).
+
+`chutes.ParseEvidence` parses the response:
+
+- Every entry must pass the checks of the Chutes attested-session path:
+  `tee_type` is `tdx`, a `signature` is present, and `attested_body` holds
+  the quote of the entry and the nonce of the request. teep does not verify
+  the signature: Chutes does not publish its key.
+- `failed_instance_ids` and `excluded_instance_ids` are required. An empty
+  instance id, or an id in two places (two entries, one list twice, or an
+  entry and a list), refuses the response.
+- A non-empty `failed_instance_ids` or `excluded_instance_ids` is logged at
+  warn level and is not refused. Their meaning is assumed from the member
+  names: Chutes does not document it.
+- teep reports the first instance, with no signing key, and the number of
+  listed instances (`Candidates: 1/n evaluated`).
+- `nonce_match` fails: only the unverified `attested_body` states the
+  nonce, and no quote binds it. The factor is allowed for NanoGPT.
+- `nvidia_claims` fails: the GPU evidence is not verified, because its
+  requester nonce needs the `e2e_pubkey`.
+- Members that teep does not know go to `response_schema`.
+- The evidence is bounded at 64 instances. The 8 MiB read limit applies to
+  every NanoGPT attestation response, because teep reads the body before
+  it detects the format. The largest body observed on 2026-11-12 was
+  2,956,002 bytes, and the most instances observed were 43.
+
+`signing_key_present`, `e2ee_capable` and `nvidia_claims` fail and are
+enforced, so a model that answers with this format is blocked.
 
 For an ACI/1 response:
 
@@ -96,7 +143,10 @@ and repeat chunks, and teep cannot detect it until it verifies the signed
 ACI receipt. Under ACI/1 §7.6 a receipt is fetched with the API key that
 made the request, which is NanoGPT's key, so teep cannot fetch the receipts
 of NanoGPT requests. A model that answers with the dstack or Chutes
-format fails closed while E2EE is enabled.
+format fails closed while E2EE is enabled: `teep serve` refuses the request
+with "E2EE v2 requires an ACI/1 attestation". This includes the
+`attestation_type` Chutes form, although its quote can pass
+`tee_reportdata_binding`.
 
 Requests go over TLS 1.3 to `nano-gpt.com`, with WebPKI and Certificate
 Transparency enforced. No attestation binds the TLS key of `nano-gpt.com`.
@@ -133,6 +183,9 @@ Venice (`ACIDefaultAllowFail`) and the two nonce factors. Other formats keep `Na
 - The TLS key of `nano-gpt.com` is not bound to any attestation.
 - NanoGPT fetched the observed gateway attestation through `api.redpill.ai`,
   which is not TEE-only.
+- NanoGPT gives no nonce-bound attestation for models that Tinfoil serves.
+- A model that answers with the Chutes evidence response is blocked: the
+  response names no instance key and no serving instance.
 
 ## Test coverage
 
@@ -152,6 +205,18 @@ Venice (`ACIDefaultAllowFail`) and the two nonce factors. Other formats keep `Na
 - `TestACIv2DecryptChunkFailsClosed` and `TestACIv2AADTestVectors` in
   [E2EE v2 session tests](../../../internal/e2ee/aciv2_test.go), the AAD
   against the gateway's byte-exact test vectors.
+- `TestParseChutesEvidence_RealBody`, `TestParseChutesEvidence_InstanceBound`,
+  `TestParseChutesEvidence_Refused`, `TestParseChutesEvidence_UnknownMember`
+  and `TestAttester_FetchAttestation_BodyBound` in
+  [NanoGPT Chutes evidence tests](../../../internal/provider/nanogpt/chutes_evidence_test.go);
+  `TestParseEvidence_Refused` and the other tests in
+  [Chutes evidence tests](../../../internal/provider/chutes/evidence_test.go).
+- `TestAttester_FetchAttestation_HTTP400Tinfoil` in
+  [NanoGPT tests](../../../internal/provider/nanogpt/nanogpt_test.go).
+- `TestNewReportDataVerifier_NanoGPTChutesFormat` in
+  [verify factory tests](../../../internal/verify/factory_test.go) and
+  `TestFromConfig_NanogptChutesReportData` in
+  [proxy tests](../../../internal/proxy/relay_internal_test.go).
 - `TestTestE2EE_ACIv2` in
   [verify E2EE v2 tests](../../../internal/verify/e2ee_aciv2_test.go) and
   `TestBuildUpstreamBodyACIv2RefusesOtherFormat` in

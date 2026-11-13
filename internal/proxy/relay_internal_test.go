@@ -1098,6 +1098,32 @@ func TestFromConfig_Nanogpt(t *testing.T) {
 	}
 }
 
+// NanoGPT relays Chutes evidence: teep serve checks its quote with the
+// Chutes REPORTDATA binding, SHA256(nonce_hex + e2e_pubkey), as teep verify
+// does.
+func TestFromConfig_NanogptChutesReportData(t *testing.T) {
+	cp := &config.Provider{Name: "nanogpt", BaseURL: "https://nano-gpt.com", APIKey: "test-key"}
+	p, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})
+	if err != nil {
+		t.Fatalf("fromConfig(nanogpt): %v", err)
+	}
+	nonce := attestation.NewNonce()
+	const pubKey = "bWwta2VtLXB1YmxpYy1rZXk="
+	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatChutes, Nonce: nonce.Hex(), SigningKey: pubKey}
+	var reportData [64]byte
+	sum := sha256.Sum256([]byte(nonce.Hex() + pubKey))
+	copy(reportData[:32], sum[:])
+	detail, err := p.ReportDataVerifier.VerifyReportData(reportData, raw, nonce)
+	if err != nil {
+		t.Fatalf("VerifyReportData: %v", err)
+	}
+	t.Logf("detail: %s", detail)
+	reportData[0] ^= 1
+	if _, err := p.ReportDataVerifier.VerifyReportData(reportData, raw, nonce); err == nil || errors.Is(err, multi.ErrNoVerifier) {
+		t.Errorf("VerifyReportData(changed REPORTDATA) err = %v, want a binding failure", err)
+	}
+}
+
 func TestFromConfig_Phalacloud(t *testing.T) {
 	cp := &config.Provider{Name: "phalacloud", BaseURL: "https://api.redpill.ai", APIKey: "test-key"}
 	p, err := fromConfig(cp, false, attestation.MeasurementPolicy{}, attestation.MeasurementPolicy{})

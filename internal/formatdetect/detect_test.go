@@ -44,6 +44,36 @@ func TestDetect(t *testing.T) {
 			want: attestation.FormatChutes,
 		},
 		{
+			name: "chutes evidence list",
+			body: `{"evidence":[{"instance_id":"i"}],"failed_instance_ids":[],"excluded_instance_ids":[]}`,
+			want: attestation.FormatChutes,
+		},
+		{
+			name: "chutes evidence list with spaces",
+			body: `{"evidence" :  [ ]}`,
+			want: attestation.FormatChutes,
+		},
+		{
+			name: "evidence that is not a list",
+			body: `{"evidence":{"quote":"q"}}`,
+			want: "",
+		},
+		{
+			name: "null evidence",
+			body: `{"evidence":null}`,
+			want: "",
+		},
+		{
+			name: "dstack takes priority over evidence",
+			body: `{"intel_quote":"deadbeef","evidence":[]}`,
+			want: attestation.FormatDstack,
+		},
+		{
+			name: "unknown api_version takes priority over evidence",
+			body: `{"api_version":"aci/9","evidence":[]}`,
+			want: "",
+		},
+		{
 			name: "empty body",
 			body: `{}`,
 			want: "",

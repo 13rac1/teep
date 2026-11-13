@@ -1,10 +1,16 @@
 package verify
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/chutes"
@@ -290,5 +296,59 @@ func TestInapplicableFactors(t *testing.T) {
 				t.Errorf("inapplicableFactors(%q) should not be nil", p)
 			}
 		})
+	}
+}
+
+// NanoGPT relays Chutes evidence in the attestation_type format. Its quote
+// binds SHA256(nonce_hex + e2e_pubkey), the Chutes scheme, not the dstack
+// scheme of the other NanoGPT models.
+func TestNewReportDataVerifier_NanoGPTChutesFormat(t *testing.T) {
+	nonce := attestation.NewNonce()
+	const pubKey = "bWwta2VtLXB1YmxpYy1rZXk="
+	body, err := json.Marshal(map[string]any{
+		"attestation_type": "TDX",
+		"nonce":            nonce.Hex(),
+		"all_attestations": []map[string]any{{
+			"instance_id":  "inst-1",
+			"nonce":        nonce.Hex(),
+			"e2e_pubkey":   pubKey,
+			"intel_quote":  "",
+			"gpu_evidence": []any{},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := nanogpt.ParseAttestationResponse(context.Background(), body, nonce)
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse: %v", err)
+	}
+	if raw.BackendFormat != attestation.FormatChutes {
+		t.Fatalf("BackendFormat = %q, want %q", raw.BackendFormat, attestation.FormatChutes)
+	}
+
+	var reportData [64]byte
+	sum := sha256.Sum256([]byte(nonce.Hex() + pubKey))
+	copy(reportData[:32], sum[:])
+	v := newReportDataVerifier("nanogpt")
+	detail, err := v.VerifyReportData(reportData, raw, nonce)
+	if err != nil {
+		t.Fatalf("VerifyReportData: %v", err)
+	}
+	t.Logf("detail: %s", detail)
+
+	reportData[0] ^= 1
+	if _, err := v.VerifyReportData(reportData, raw, nonce); err == nil {
+		t.Error("VerifyReportData accepted a REPORTDATA that does not bind the nonce and key")
+	}
+}
+
+// A NanoGPT format without a REPORTDATA scheme gets no verifier, so the
+// factor fails with that cause.
+func TestNewReportDataVerifier_NanoGPTUnknownFormat(t *testing.T) {
+	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatTinfoil, SigningKey: "k"}
+	_, err := newReportDataVerifier("nanogpt").VerifyReportData([64]byte{}, raw, attestation.NewNonce())
+	if !errors.Is(err, multi.ErrNoVerifier) {
+		t.Fatalf("err = %v, want multi.ErrNoVerifier", err)
 	}
 }

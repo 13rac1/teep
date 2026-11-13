@@ -147,7 +147,7 @@ Is the hardware genuine? These checks verify the TDX quote (or SEV-SNP report) i
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 1 | `nonce_match` | Attestation response nonce matches submitted nonce; a gateway-variant ACI/1 response echoes no nonce, so it fails, and freshness rests on `gateway_tee_reportdata_binding`; the Chutes evidence response echoes no nonce either, so it fails, and freshness rests on `tee_reportdata_binding` |
+| 1 | `nonce_match` | Attestation response nonce matches submitted nonce; a gateway-variant ACI/1 response echoes no nonce, so it fails, and freshness rests on `gateway_tee_reportdata_binding`; the Chutes evidence response echoes no nonce either, so it fails, and freshness rests on `tee_reportdata_binding`; a nonce that only an unverified body states fails |
 | 2 | `tee_quote_present` | Attestation includes a hardware quote (Intel TDX or AMD SEV-SNP) |
 | 3 | `tee_quote_structure` | Hardware quote parses as valid QuoteV4 or SEV-SNP report |
 | 4 | `tee_cert_chain` | Certificate chain verifies against Intel or AMD root CA |

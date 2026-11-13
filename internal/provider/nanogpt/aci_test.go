@@ -16,7 +16,7 @@ func TestParseAttestationResponseACI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := nanogpt.ParseAttestationResponse(context.Background(), body)
+	raw, err := nanogpt.ParseAttestationResponse(context.Background(), body, attestation.NewNonce())
 	if err != nil {
 		t.Fatalf("ParseAttestationResponse: %v", err)
 	}

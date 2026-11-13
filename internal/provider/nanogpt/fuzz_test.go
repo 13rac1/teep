@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 )
 
@@ -36,7 +37,7 @@ func FuzzParseAttestationResponse(f *testing.F) {
 	f.Add([]byte(`not json`))
 
 	f.Fuzz(func(t *testing.T, body []byte) {
-		result, err := nanogpt.ParseAttestationResponse(context.Background(), body)
+		result, err := nanogpt.ParseAttestationResponse(context.Background(), body, attestation.Nonce{})
 		if err == nil && result == nil {
 			t.Error("ParseAttestationResponse returned nil, nil")
 		}

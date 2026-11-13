@@ -97,8 +97,14 @@ func newReportDataVerifier(name string) provider.ReportDataVerifier {
 	case "neardirect", "nearcloud":
 		return neardirect.ReportDataVerifier{}
 	case "nanogpt":
-		// NanoGPT uses the same dstack REPORTDATA binding as Venice.
-		return venice.ReportDataVerifier{}
+		// NanoGPT relays dstack and Chutes evidence; each format has its own
+		// REPORTDATA binding. SYNC: proxy.fromConfig for nanogpt.
+		return multi.Verifier{
+			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
+				attestation.FormatDstack: venice.ReportDataVerifier{},
+				attestation.FormatChutes: chutes.ReportDataVerifier{},
+			},
+		}
 	case "phalacloud":
 		return multi.Verifier{
 			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{

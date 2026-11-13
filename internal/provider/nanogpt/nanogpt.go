@@ -27,6 +27,14 @@ import (
 // attestationPath is the NanoGPT API path for TEE attestation.
 const attestationPath = "/v1/tee/attestation"
 
+// maxAttestationBodySize bounds the attestation response body (8 MiB) of
+// every NanoGPT attestation format: teep reads the body before it detects
+// the format. The largest bodies are the Chutes evidence that NanoGPT
+// relays, with the quote and GPU evidence of every instance of a model; the
+// largest observed on 2026-11-12 was 2,956,002 bytes, for 12 instances with
+// 8 GPUs each.
+const maxAttestationBodySize = 8 << 20
+
 // tcbInfo holds the parsed info.tcb_info object from NanoGPT's attestation
 // response. Contains dstack measurements and the docker-compose manifest.
 type tcbInfo struct {
@@ -143,19 +151,19 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	q.Set("nonce", nonce.Hex())
 	endpoint.RawQuery = q.Encode()
 
-	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 1<<20)
+	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, maxAttestationBodySize)
 	if err != nil {
 		return nil, fmt.Errorf("nanogpt: %w", err)
 	}
-	return ParseAttestationResponse(ctx, body)
+	return ParseAttestationResponse(ctx, body, nonce)
 }
 
 // ParseAttestationResponse detects the attestation format from the JSON body
 // and delegates to the appropriate parser. For dstack format (the primary
 // NanoGPT backend), parsing is handled internally. Other formats (chutes and
 // the ACI/1 attestation of the private-ai-gateway) are delegated to their
-// respective packages.
-func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.RawAttestation, error) {
+// respective packages. nonce is the nonce of the attestation request.
+func ParseAttestationResponse(ctx context.Context, body []byte, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	format := formatdetect.Detect(body)
 	slog.DebugContext(ctx, "nanogpt format detected", "format", format)
 
@@ -163,6 +171,9 @@ func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.Ra
 	case attestation.FormatDstack:
 		return parseDstack(ctx, body)
 	case attestation.FormatChutes:
+		if isChutesEvidence(body) {
+			return parseChutesEvidence(ctx, body, nonce)
+		}
 		return provider.ParseChutesFormat(ctx, body, "nanogpt")
 	case attestation.FormatACI1:
 		return aci.Parse(ctx, body, "nanogpt")

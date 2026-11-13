@@ -18,6 +18,7 @@ New reports should follow [TEMPLATE.md](TEMPLATE.md).
 - [Proof of Cloud Registry: JWT Validation Failure](poc_jwt_validation.md)
 - [Chutes/sek8s Integrity Chain](sek8s_integrity.md)
 - [ACI/1 Gateway: Attested Gateway, Unattested Inference Host](aci_gateway.md)
+- [NanoGPT Chutes Evidence: No Nonce Binding, No Serving Instance](nanogpt_chutes_evidence.md)
 
 NearCloud sends an authenticated model-key routing hint, but gateway behavior
 can ignore it and non-chat backend affinity is not established. Generic image
