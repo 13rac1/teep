@@ -155,10 +155,10 @@ func TestParseAllAttestationsEncodingIndependent(t *testing.T) {
 // case-sensitive reader of the body takes from the original member.
 func TestParseGatewayVariantUndefinedField(t *testing.T) {
 	for _, tc := range []struct {
-		name, field, value string
+		name, field, value, want string
 	}{
-		{"undefined field", "undefined_field", `true`},
-		{"case-folded alias", "Signing_Public_Key", `"04aa"`},
+		{"undefined field", "undefined_field", `true`, "gateway variant has undefined fields"},
+		{"case-folded alias", "Signing_Public_Key", `"04aa"`, "only by letter case"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := mutateBody(t, gatewayVariantBody(t), func(top, entry map[string]json.RawMessage) []json.RawMessage {
@@ -167,8 +167,8 @@ func TestParseGatewayVariantUndefinedField(t *testing.T) {
 				return nil
 			})
 			_, err := Parse(context.Background(), body, "phalacloud")
-			if err == nil || !strings.Contains(err.Error(), "gateway variant has undefined fields") || !strings.Contains(err.Error(), tc.field) {
-				t.Fatalf("err = %v, want the undefined field %s to fail the parse", err, tc.field)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q for %s", err, tc.want, tc.field)
 			}
 		})
 	}

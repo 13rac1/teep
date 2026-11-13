@@ -1,13 +1,19 @@
 // Package jsonstrict wraps github.com/13rac1/jsonstrict to provide strict JSON
 // unmarshaling that detects unknown and missing fields at every depth, and
-// rejects duplicate members and invalid UTF-8.
+// rejects duplicate members, members that match a defined field only by
+// letter case, and invalid UTF-8.
 //
 // Standard encoding/json silently ignores unknown JSON keys, does not report
-// absent ones, keeps the last of duplicated keys, and replaces invalid UTF-8.
-// This package returns unknown and missing field paths alongside the decoded
-// value, letting callers decide how to handle format drift, and fails the
-// decode for duplicate members and invalid UTF-8, which make the decoded value
-// ambiguous.
+// absent ones, keeps the last of duplicated keys, matches keys to fields
+// without regard to case, and replaces invalid UTF-8. This package returns
+// unknown and missing field paths alongside the decoded value, letting
+// callers decide how to handle format drift. It fails the decode for
+// duplicate members, case-folded aliases of defined fields and invalid UTF-8,
+// which make the decoded value ambiguous.
+//
+// These checks apply only to documents decoded through this package. A
+// value with its own UnmarshalJSON that calls encoding/json, and a document
+// decoded with encoding/json directly, get none of them.
 //
 // Field paths are dotted: a top-level field is its name ("nonce"), a nested
 // field joins the names ("attestation.report_data"), and a list element adds
@@ -20,6 +26,7 @@ package jsonstrict
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -30,12 +37,17 @@ import (
 )
 
 // unmarshal unmarshals data into v and returns the paths of any unknown JSON
-// keys and any missing struct fields as sorted slices. Duplicate members and
-// invalid UTF-8 fail the decode.
+// keys and any missing struct fields as sorted slices. Duplicate members,
+// members that match a defined field only by letter case (the library's
+// *CaseFoldError, wrapped), and invalid UTF-8 fail the decode.
 //
 // v must be a non-nil pointer to a struct.
 func unmarshal(data []byte, v any) (unknown, missing []string, err error) {
 	result, err := strict.Unmarshal(data, v)
+	if _, ok := errors.AsType[*strict.CaseFoldError](err); ok {
+		// The error names only defined fields, never a member of the input.
+		return nil, nil, fmt.Errorf("ambiguous JSON document: %w", err)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
