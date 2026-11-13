@@ -1,7 +1,0 @@
-{
-  "provider": "phalacloud",
-  "model": "phala/deepseek-v3.2",
-  "nonce_hex": "732f6f1c1b4445d4ab4ad892728343f7fcb0f595ce79f91ecfdeaae657bb7c7e",
-  "captured_at": "2026-06-10T01:49:17.310603Z",
-  "duration_ms": 11130
-}

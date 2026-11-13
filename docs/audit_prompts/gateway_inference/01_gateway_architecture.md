@@ -92,9 +92,9 @@ Chutes uses a gateway architecture where all traffic routes through the Chutes g
 - [`internal/provider/chutes/models.go`](../../../internal/provider/chutes/models.go) \u2014 TEE model discovery
 - [`internal/provider/chutes/resolve.go`](../../../internal/provider/chutes/resolve.go) \u2014 model name resolution
 - [`internal/provider/chutes/noncepool.go`](../../../internal/provider/chutes/noncepool.go) \u2014 nonce/instance caching
-- [`internal/provider/chutes_format.go`](../../../internal/provider/chutes_format.go) \u2014 gateway-wrapped format parsing
+- [`internal/provider/nanogpt/chutes_evidence.go`](../../../internal/provider/nanogpt/chutes_evidence.go) \u2014 the Chutes evidence response that NanoGPT relays
 
-When chutes evidence appears in a gateway-wrapped format, the audit MUST verify that the gateway-wrapped parsing extracts the inner chutes evidence correctly and applies all chutes-specific verification (TDX quote, REPORTDATA binding, measurement policy).
+When a gateway relays the Chutes evidence response, the audit MUST verify that its parsing applies all chutes-specific verification (TDX quote, REPORTDATA binding, measurement policy) and that what the relayed evidence cannot bind is reported, not passed.
 ## Section Deliverable
 
 Provide:

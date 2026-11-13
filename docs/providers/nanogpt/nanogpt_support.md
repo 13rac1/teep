@@ -55,11 +55,14 @@ these formats:
   with the shared ACI/1 parser (`internal/provider/aci`), which requires that
   copy to equal the top-level fields. Observed on 2026-10-29 for
   `TEE/gemma-4-26b-a4b-uncensored`.
-- Chutes, `attestation_type` form: an `all_attestations` list of Chutes
-  instances with their `e2e_pubkey`, parsed by `provider.ParseChutesFormat`.
 - Chutes evidence response: a top-level `evidence` list with one entry per
   instance, and `failed_instance_ids` and `excluded_instance_ids`. Observed
   on 2026-11-12 for 10 of 20 models. SEE: [Chutes evidence](#chutes-evidence).
+
+teep does not read the older `attestation_type` form of Chutes (an
+`all_attestations` list of instances with their `e2e_pubkey`): no provider
+sent it in the 2026-11-13 capture run, so its body is an unknown format, and
+Chutes evidence with an `attestation_type` member is refused.
 
 For a model that Tinfoil serves, NanoGPT gives no nonce-bound attestation:
 it answers HTTP 400, and teep fails with that status and NanoGPT's error
@@ -144,9 +147,7 @@ ACI receipt. Under ACI/1 §7.6 a receipt is fetched with the API key that
 made the request, which is NanoGPT's key, so teep cannot fetch the receipts
 of NanoGPT requests. A model that answers with the dstack or Chutes
 format fails closed while E2EE is enabled: `teep serve` refuses the request
-with "E2EE v2 requires an ACI/1 attestation". This includes the
-`attestation_type` Chutes form, although its quote can pass
-`tee_reportdata_binding`.
+with "E2EE v2 requires an ACI/1 attestation".
 
 Requests go over TLS 1.3 to `nano-gpt.com`, with WebPKI and Certificate
 Transparency enforced. No attestation binds the TLS key of `nano-gpt.com`.

@@ -14,9 +14,10 @@ import (
 // instances.
 const maxChutesEvidenceInstances = 64
 
-// isChutesEvidence reports whether body, which formatdetect detects as a
-// Chutes format, is the evidence response of Chutes (a top-level evidence
-// list) and not the attestation_type form.
+// isChutesEvidence reports whether body, which formatdetect detects as the
+// evidence response of Chutes (a top-level evidence list), carries no
+// attestation_type member. That member named an older gateway-wrapped form
+// that teep no longer reads.
 func isChutesEvidence(body []byte) bool {
 	var p struct {
 		AttestationType string `json:"attestation_type"`

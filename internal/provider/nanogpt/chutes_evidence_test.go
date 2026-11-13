@@ -3,6 +3,7 @@ package nanogpt_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -177,15 +178,26 @@ func TestParseChutesEvidence_UnknownMember(t *testing.T) {
 	}
 }
 
-// The attestation_type form of the Chutes format keeps its own parser.
-func TestParseAttestationResponse_ChutesAttestationType(t *testing.T) {
-	body := `{"attestation_type":"TDX","nonce":"n","all_attestations":[{"instance_id":"i","nonce":"n","e2e_pubkey":"k","intel_quote":"","gpu_evidence":[]}]}`
-	raw, err := nanogpt.ParseAttestationResponse(context.Background(), []byte(body), attestation.NewNonce())
-	if err != nil {
-		t.Fatalf("ParseAttestationResponse: %v", err)
+// The gateway-wrapped attestation_type form of Chutes is not read: its body
+// is an unknown format, and Chutes evidence with an attestation_type member
+// is refused.
+func TestParseAttestationResponse_RefusesAttestationTypeForm(t *testing.T) {
+	nonce := attestation.NewNonce()
+	old := `{"attestation_type":"TDX","nonce":"n","all_attestations":[{"instance_id":"i","nonce":"n","e2e_pubkey":"k","intel_quote":"","gpu_evidence":[]}]}`
+	if _, err := nanogpt.ParseAttestationResponse(context.Background(), []byte(old), nonce); err == nil || !strings.Contains(err.Error(), "unrecognized attestation format") {
+		t.Errorf("attestation_type form: err = %v, want an unrecognized format", err)
 	}
-	if raw.SigningKey != "k" {
-		t.Errorf("SigningKey = %q, want k from the attestation_type parser", raw.SigningKey)
+	var evidence map[string]json.RawMessage
+	if err := json.Unmarshal(chutestest.Marshal(t, chutestest.Evidence(t, nonce, evidenceIDs(1)...)), &evidence); err != nil {
+		t.Fatal(err)
+	}
+	evidence["attestation_type"] = json.RawMessage(`"chutes"`)
+	body, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nanogpt.ParseAttestationResponse(context.Background(), body, nonce); err == nil || !strings.Contains(err.Error(), "attestation_type") {
+		t.Errorf("evidence with attestation_type: err = %v, want it refused", err)
 	}
 }
 
