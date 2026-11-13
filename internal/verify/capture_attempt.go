@@ -15,6 +15,9 @@ type verificationCapture struct {
 	discovery            *capture.RecordingTransport
 	evidence             *capture.RecordingTransport
 	freshEvidence        *capture.RecordingTransport
+	// e2ee records the live E2EE test exchange. Replay does not send it
+	// again: the outcome comes from the manifest.
+	e2ee *capture.RecordingTransport
 }
 
 func (c *verificationCapture) beginEvidence(client *http.Client) {
@@ -38,7 +41,17 @@ func (c *verificationCapture) entries() []capture.RecordedEntry {
 	if c.freshEvidence != nil {
 		entries = append(entries, c.freshEvidence.Snapshot()...)
 	}
+	if c.e2ee != nil {
+		entries = append(entries, c.e2ee.Snapshot()...)
+	}
 	return entries
+}
+
+// recordE2EE wraps the transport of the live E2EE test client. A later E2EE
+// test of the same run replaces the recording.
+func (c *verificationCapture) recordE2EE(base http.RoundTripper) http.RoundTripper {
+	c.e2ee = capture.WrapRecording(base)
+	return c.e2ee
 }
 
 func (c *verificationCapture) recordFreshEvidence(base http.RoundTripper) http.RoundTripper {

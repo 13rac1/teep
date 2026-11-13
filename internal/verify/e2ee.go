@@ -26,6 +26,28 @@ import (
 // Actual provider paths: /v1/chat/completions (NearCloud) or /api/v1/chat/completions (Venice).
 const chatCompletionsEndpoint = e2ee.EndpointChat
 
+// e2eeRecorderKey is the context key of the transport wrapper that a
+// capturing run attaches for its live E2EE test exchange.
+type e2eeRecorderKey struct{}
+
+// withE2EERecorder returns ctx with a wrapper for the transport of the live
+// E2EE test client. A capturing run uses it to record the exchange: the
+// response headers, the raw response bytes and the request body. Request
+// headers, and with them the API key, are not recorded.
+func withE2EERecorder(ctx context.Context, wrap func(http.RoundTripper) http.RoundTripper) context.Context {
+	return context.WithValue(ctx, e2eeRecorderKey{}, wrap)
+}
+
+// e2eeTestClient returns the client of a live E2EE test request, with the
+// recording transport of ctx when the run captures.
+func e2eeTestClient(ctx context.Context) *http.Client {
+	client := tlsct.NewHTTPClient(60 * time.Second)
+	if wrap, ok := ctx.Value(e2eeRecorderKey{}).(func(http.RoundTripper) http.RoundTripper); ok && wrap != nil {
+		client.Transport = wrap(client.Transport)
+	}
+	return client
+}
+
 // testE2EE runs a live E2EE test inference if the provider is E2EE-capable.
 // Returns nil if the provider doesn't support E2EE, signalling callers to skip.
 // Returns a result with NoAPIKey=true if the API key is missing, or with Err
@@ -93,7 +115,7 @@ func testE2EEACIv2(ctx context.Context, raw *attestation.RawAttestation, provide
 	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
 	tlsct.SetUserAgent(req)
 
-	client := tlsct.NewHTTPClient(60 * time.Second)
+	client := e2eeTestClient(ctx)
 	resp, err := client.Do(req)
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP request: %w", err)}
@@ -260,7 +282,7 @@ func testE2EEChutes(ctx context.Context, raw *attestation.RawAttestation, cp *co
 // e2e, e2e_error, usage) instead of the per-field encryption used by other
 // providers.
 func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *attestation.E2EETestResult {
-	client := tlsct.NewHTTPClient(60 * time.Second)
+	client := e2eeTestClient(req.Context())
 	resp, err := client.Do(req)
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP request: %w", err)}
@@ -391,7 +413,7 @@ func doE2EEChutesStreamTest(req *http.Request, session *e2ee.ChutesSession) *att
 // doE2EEStreamTest sends an E2EE chat completions request and validates
 // that the SSE response contains properly encrypted content fields.
 func doE2EEStreamTest(req *http.Request, session e2ee.Decryptor, version string) *attestation.E2EETestResult {
-	client := tlsct.NewHTTPClient(60 * time.Second)
+	client := e2eeTestClient(req.Context())
 	resp, err := client.Do(req)
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP request: %w", err)}
