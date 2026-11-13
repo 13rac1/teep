@@ -187,7 +187,12 @@ openai/gpt-oss-120b); asserted continuously by
    attestations of two models. Whoever controls those lists controls which
    key-releasing authority and which dstack app teep accepts as the gateway.
    Corroborate the KMS root against the dstack KmsAuth registry (Phala
-   publishes it on-chain) before extending it.
+   publishes it on-chain) before extending it. The pair of the 2026-11-12
+   deployment (app id `89c51ab8…`, root `02a335ae…`) was read once from
+   Phala's Base KMS contract at block 56,649,485: the contract registers the
+   app id and pairs the root with the KMS CA key that the gateway quote
+   measures. The pair of 2026-08-25 is not registered there. teep does not
+   read the contract itself; the lists are still a pin.
 3. **A malicious provider can downgrade a dstack model to ACI/1 reporting.**
    teep has no authenticated binding from a model name to its expected
    attestation format, so the provider chooses the format per response and
