@@ -41,8 +41,8 @@ func listedIDs(t *testing.T, l *modelLister) []string {
 // The endpoint list of 2026-11-13 serves z-ai/glm-5.3-flash-long, which the
 // catalog does not list; teep lists it while the endpoint list serves it.
 func TestModelListerExtraModels(t *testing.T) {
-	if !slices.Contains(extraModels(), "z-ai/glm-5.3-flash-long") {
-		t.Fatalf("extra models = %v", extraModels())
+	if !slices.Contains(extraModels, "z-ai/glm-5.3-flash-long") {
+		t.Fatalf("extra models = %v", extraModels)
 	}
 	endpoints := func(models ...string) *Attester {
 		t.Helper()
