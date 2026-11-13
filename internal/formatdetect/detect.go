@@ -9,6 +9,7 @@
 //	"gateway_attestation" → gateway (NEAR cloud)
 //	"api_version"=="aci/1"→ ACI/1 (Venice)
 //	"intel_quote"         → dstack (Venice/NEAR direct)
+//	"evidence" (a list)   → chutes (the Chutes evidence response, NanoGPT)
 //
 // The api_version check is ordered before the intel_quote check because
 // ACI/1 response bodies also carry a top-level intel_quote field (the raw
@@ -38,6 +39,7 @@ type probe struct {
 	GatewayAttestation json.RawMessage `json:"gateway_attestation"`
 	APIVersion         string          `json:"api_version"`
 	IntelQuote         json.RawMessage `json:"intel_quote"`
+	Evidence           json.RawMessage `json:"evidence"`
 }
 
 // hasJSONValue reports whether raw represents a present, non-null JSON value
@@ -45,6 +47,11 @@ type probe struct {
 // json.RawMessage).
 func hasJSONValue(raw json.RawMessage) bool {
 	return len(raw) > 0 && string(raw) != "null"
+}
+
+// isJSONArray reports whether raw is a JSON array.
+func isJSONArray(raw json.RawMessage) bool {
+	return len(raw) > 0 && raw[0] == '['
 }
 
 // APIVersion returns the top-level api_version value in body, or "" when the
@@ -84,6 +91,9 @@ func Detect(body []byte) attestation.BackendFormat {
 		return ""
 	case hasJSONValue(p.IntelQuote):
 		return attestation.FormatDstack
+	case isJSONArray(p.Evidence):
+		// The Chutes evidence response: one entry for each instance.
+		return attestation.FormatChutes
 	default:
 		return ""
 	}

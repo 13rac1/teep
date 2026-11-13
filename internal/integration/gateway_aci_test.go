@@ -24,7 +24,7 @@ import (
 var gatewayACIFixtures = []struct {
 	prefix  string
 	baseURL string
-	parse   func(context.Context, []byte) (*attestation.RawAttestation, error)
+	parse   func(context.Context, []byte, attestation.Nonce) (*attestation.RawAttestation, error)
 }{
 	{"nanogpt_aci", "https://nano-gpt.com/api", nanogpt.ParseAttestationResponse},
 }
@@ -104,7 +104,7 @@ func TestGatewayACI_PinsDecideCustody(t *testing.T) {
 	for _, fx := range gatewayACIFixtures {
 		t.Run(fx.prefix, func(t *testing.T) {
 			env := loadFixture(t, fx.prefix)
-			raw, err := fx.parse(context.Background(), env.entries[0].Body)
+			raw, err := fx.parse(context.Background(), env.entries[0].Body, env.nonce)
 			if err != nil {
 				t.Fatalf("parse fixture attestation: %v", err)
 			}

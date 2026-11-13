@@ -340,21 +340,17 @@ func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evi
 	if err := checkEvidence(ar); err != nil {
 		return nil, err
 	}
+	if err := checkInstanceIDs(ar); err != nil {
+		return nil, err
+	}
 	var matched *instanceEvidence
 	for i := range ar.Evidence {
-		if ar.Evidence[i].InstanceID != instanceID {
-			continue
+		if ar.Evidence[i].InstanceID == instanceID {
+			matched = &ar.Evidence[i]
 		}
-		if matched != nil {
-			return nil, fmt.Errorf("chutes: evidence lists instance %s twice", instanceID)
-		}
-		matched = &ar.Evidence[i]
 	}
 	if matched == nil {
 		return nil, fmt.Errorf("chutes: evidence has no entry for instance %s", instanceID)
-	}
-	if ar.ExcludedInstanceIDs == nil {
-		return nil, errors.New("chutes: evidence has no excluded_instance_ids")
 	}
 	if err := checkAttestedBody(matched, nonce); err != nil {
 		return nil, fmt.Errorf("chutes: instance %s: %w", instanceID, err)
@@ -369,6 +365,94 @@ func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evi
 	raw.MissingFields = slices.Concat(missing, m)
 	raw.RawBody = evidenceBody
 	return raw, nil
+}
+
+// ParseEvidence returns the attestation of the first entry of an evidence
+// response that is relayed without an instance list, as NanoGPT relays it.
+// Every entry must pass the checks of the session path (checkInstanceIDs,
+// checkAttestedBody), so one malformed entry refuses the response. The
+// response names no E2EE public key, so the result has no SigningKey and no
+// quote in it can be shown to bind nonce; nothing names the instance that
+// serves a request either. nonce is the nonce of the evidence request.
+// Undefined and absent members are returned in UnknownFields and
+// MissingFields without logging; the caller decides.
+//
+// Instances in failed_instance_ids and excluded_instance_ids have no
+// evidence in the response. The meaning of the two lists is assumed from
+// their names: Chutes does not document it. A non-empty list is logged at
+// warn level, not refused.
+func ParseEvidence(ctx context.Context, evidenceBody []byte, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	ar := &attestationResponse{}
+	unknown, missing, err := jsonstrict.Unmarshal(evidenceBody, ar)
+	if err != nil {
+		return nil, fmt.Errorf("chutes: unmarshal evidence response: %w", err)
+	}
+	if err := checkEvidence(ar); err != nil {
+		return nil, err
+	}
+	if err := checkInstanceIDs(ar); err != nil {
+		return nil, err
+	}
+	for i := range ar.Evidence {
+		if err := checkAttestedBody(&ar.Evidence[i], nonce); err != nil {
+			return nil, fmt.Errorf("chutes: instance %s: %w", ar.Evidence[i].InstanceID, err)
+		}
+	}
+	if n, m := len(ar.FailedInstanceIDs), len(*ar.ExcludedInstanceIDs); n > 0 || m > 0 {
+		slog.WarnContext(ctx, "chutes: evidence response lists instances without evidence",
+			"failed_instances", n, "excluded_instances", m, "evidence_instances", len(ar.Evidence))
+	}
+	raw, err := instanceRaw(ctx, &ar.Evidence[0], "")
+	if err != nil {
+		return nil, err
+	}
+	raw.SigningAlgo = "" // no E2EE key is named
+	raw.CandidatesAvail = len(ar.Evidence)
+	raw.CandidatesEval = 1
+	raw.UnknownFields = unknown
+	raw.MissingFields = missing
+	raw.RawBody = evidenceBody
+	return raw, nil
+}
+
+// checkInstanceIDs checks the instance ids of an evidence response with the
+// newer members: excluded_instance_ids and failed_instance_ids are present,
+// each id is non-empty, and no id is in two places (two entries, a list
+// twice, or an entry and a list).
+func checkInstanceIDs(ar *attestationResponse) error {
+	if ar.ExcludedInstanceIDs == nil {
+		return errors.New("chutes: evidence has no excluded_instance_ids")
+	}
+	if ar.FailedInstanceIDs == nil {
+		return errors.New("chutes: evidence has no failed_instance_ids")
+	}
+	seen := make(map[string]string, len(ar.Evidence)+len(ar.FailedInstanceIDs)+len(*ar.ExcludedInstanceIDs))
+	add := func(id, where string) error {
+		if id == "" {
+			return fmt.Errorf("chutes: %s has an empty instance id", where)
+		}
+		if prev, ok := seen[id]; ok {
+			return fmt.Errorf("chutes: instance %s is in %s and in %s", id, prev, where)
+		}
+		seen[id] = where
+		return nil
+	}
+	for i := range ar.Evidence {
+		if err := add(ar.Evidence[i].InstanceID, "evidence"); err != nil {
+			return err
+		}
+	}
+	for _, id := range ar.FailedInstanceIDs {
+		if err := add(id, "failed_instance_ids"); err != nil {
+			return err
+		}
+	}
+	for _, id := range *ar.ExcludedInstanceIDs {
+		if err := add(id, "excluded_instance_ids"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkAttestedBody checks the newer members of an evidence entry: tee_type
