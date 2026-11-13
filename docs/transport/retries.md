@@ -16,6 +16,7 @@ the provider did not process inference.
 | Exact supported key rejection before inference, E2EE attempt | At most once | Conditionally remove the generation used; acquire authorization again |
 | Phala Cloud ACI/1 `session_not_accepted` (HTTP 412): the gateway refused the pinned attested sessions and did not forward the request | At most once, E2EE attempt | Conditionally remove the generation used; the next acquisition verifies the sessions again |
 | Phala Cloud ACI/1 receipt whose signature, keyset, response hash, cited session or `served_at` fails, a malformed receipt, or a successful response without one `X-Receipt-Id` | No | Conditionally remove the generation used |
+| Phala Cloud ACI/1 response with a 2xx status other than 200 | No | Refuse before relaying anything; conditionally remove the generation used |
 | Phala Cloud ACI/1 receipt whose request hash differs from the request sent, after the service's own statements verified | No | Retain; the statement depends on one client's request |
 | Phala Cloud ACI/1 receipt whose endpoint, method or model differs from the request sent, after the service's own statements verified | No | Stream: conditionally remove the generation used. Non-stream: retain |
 | Phala Cloud ACI/1 receipt not served: HTTP 404 on 3 attempts 200 ms apart, another HTTP status, or a connection failure | No | Non-stream: retain. Stream: conditionally remove the generation used |

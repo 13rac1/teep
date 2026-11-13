@@ -162,19 +162,27 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	return result, false, nil
 }
 
-// refuseUncheckedSuccess refuses an E2EE response with a 2xx status other
-// than 200. teep decrypts and authenticates a response body only for 200, and
-// a client takes any 2xx for success, so such a response would reach the
-// client unchecked. It is refused before anything is relayed, and the
-// generation ends with a failure cooldown, as for a response that fails
-// authentication.
+// refuseUncheckedSuccess refuses a response with a 2xx status other than 200
+// from an E2EE provider or from Phala Cloud. teep decrypts and authenticates
+// an E2EE response body, and checks the Phala Cloud keyset digest and
+// receipt, only for 200, and a client takes any 2xx for success, so such a
+// response would reach the client unchecked. It is refused before anything
+// is relayed, and the generation ends with the failure cooldown, as for a
+// response that fails authentication.
 func (s *Server) refuseUncheckedSuccess(ctx context.Context, input *authorizedRequest, value *authorization, status int) error {
-	if !input.provider.E2EE || !isUncheckedSuccess(status) {
+	if !refusesUncheckedSuccess(input.provider, status) {
 		return nil
 	}
 	removed := s.rejectResponseAuthorization(input.key, value.generation)
 	s.logAuthorizationRejection(ctx, input, value, "unexpected_success_status", removed, removed)
-	return fmt.Errorf("upstream answered HTTP %d; an encrypted response must be HTTP 200 to be checked", status)
+	return fmt.Errorf("upstream answered HTTP %d; the response must be HTTP 200 to be checked", status)
+}
+
+// refusesUncheckedSuccess reports whether teep refuses status from p: a 2xx
+// status other than 200 from an E2EE provider or from Phala Cloud, with or
+// without E2EE.
+func refusesUncheckedSuccess(p *provider.Provider, status int) bool {
+	return (p.E2EE || p.Name == "phalacloud") && isUncheckedSuccess(status)
 }
 
 // isUncheckedSuccess reports whether status is a 2xx status other than 200.
@@ -338,7 +346,7 @@ func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.Response
 		if err == nil && held != nil {
 			err = held.release(w)
 		}
-	case input.stream && streamStats.Chunks > 0:
+	case input.stream && (streamStats.Chunks > 0 || streamStats.Forwarded > 0):
 		// The stream failed after content reached the client: the check
 		// must still run, or the gateway could skip it.
 		s.checkReceiptAfterRelayFailure(clientCtx, input, result, receipt, relayEnding{err: err, downstream: writer.err, upstreamBody: resp.Body})

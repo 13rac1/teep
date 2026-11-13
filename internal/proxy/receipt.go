@@ -3,15 +3,16 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/jsonstrict"
 	"github.com/13rac1/teep/internal/provider/aci"
 )
 
@@ -68,6 +69,12 @@ type relayEnding struct {
 // not parse) is the gateway's.
 func endedByClient(clientCtx context.Context, ending relayEnding) bool {
 	if ending.downstream != nil && errors.Is(ending.err, ending.downstream) {
+		// The downstream write deadline is the attempt deadline, which
+		// teep sets: a write that fails on it is the client's only when
+		// the client's own context has ended too.
+		if errors.Is(ending.downstream, os.ErrDeadlineExceeded) || errors.Is(ending.downstream, context.DeadlineExceeded) {
+			return clientCtx.Err() != nil
+		}
 		return true
 	}
 	clientErr := clientCtx.Err()
@@ -157,8 +164,10 @@ func (s *Server) verifyResponseReceipt(ctx context.Context, input *authorizedReq
 	var body struct {
 		Model string `json:"model"`
 	}
-	if err := json.Unmarshal(input.body, &body); err != nil || body.Model == "" {
-		return s.receiptFailed(ctx, input, result, "receipt_request_model", errors.New("request body has no string model"), delivered)
+	// The body is the client's request after teep's rewrite, so a failure
+	// here is about that request and keeps the generation.
+	if _, _, err := jsonstrict.Unmarshal(input.body, &body); err != nil || body.Model == "" {
+		return s.receiptFailed(ctx, input, result, "receipt_request_model", errors.New("request body has no string model"), false)
 	}
 	client, err := s.pinnedClientForIdentity(input.provider.Name, value.identity)
 	if err != nil {

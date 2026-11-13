@@ -68,7 +68,7 @@ func CheckSSEEndMarker(session Decryptor, endpoint EndpointType, seen bool) erro
 		return errors.New("NEAR SSE stream ended without [DONE]")
 	}
 	// E2EE v2 requires the [DONE] marker. The marker is not authenticated:
-	// only the signed ACI receipt, which teep does not verify, shows that
+	// the signed ACI receipt, which teep checks for Phala Cloud, shows that
 	// the stream is complete.
 	if _, v2 := session.(*ACIv2Session); v2 && !seen {
 		return fmt.Errorf("%w: E2EE v2 SSE stream ended without [DONE]", ErrDecryptionFailed)

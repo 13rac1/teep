@@ -208,8 +208,9 @@ When the relay of a stream fails after content went out, teep names the
 client only from positive evidence:
 
 - The relay error is the error of the write to the client, or of the
-  client's own request context, which has ended (the client hung up or
-  its deadline passed), and the read from the gateway had not reached its
+  client's own request context, which has ended (the client hung up;
+  a client timeout shows as a hang-up, because teep serve sets no deadline
+  on the incoming request), and the read from the gateway had not reached its
   end: the generation stays, so that one client cannot force a new
   verification for every client, and teep logs at error level that content
   was relayed without a completed receipt check.
@@ -248,6 +249,10 @@ skip.
 A receipt whose signature, keyset, response hash, cited session or
 `served_at` does not verify, a malformed receipt, and a response without
 one `X-Receipt-Id` end the authorization generation that the request used.
+A response with a 2xx status other than 200 is refused before teep relays
+anything, and the generation ends: teep checks the keyset digest, decrypts
+and checks the receipt only for 200, and a client takes any 2xx for
+success. The gateway passes the status of the model backend through.
 For a stream, a receipt that the gateway does not serve (HTTP 404 on 3
 attempts, another HTTP status, or a connection failure) ends the
 generation too, because the content already went out. For a non-stream
@@ -462,7 +467,8 @@ stream failed.
   a non-stream response held until its receipt verifies, which failures
   end the generation, a stream reset after `[DONE]` or after its first
   chunk, five endings that do not parse, a receipt for another model or
-  another request, and a client that hangs up, whose deadline passes or
+  another request, a 2xx status other than 200, a comment line then a
+  reset, and a client that hangs up, whose deadline passes or
   whose connection breaks (the generation stays). `TestEndedByClient`
   checks who a relay failure names, teep's own deadline included, and
   `TestVerifyReceiptChecksServiceStatementsFirst` the order of the receipt

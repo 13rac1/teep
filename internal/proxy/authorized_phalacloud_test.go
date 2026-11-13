@@ -60,10 +60,16 @@ type phalaCase struct {
 	tailAfterFirst string
 	// signTail signs the receipt over the bytes served with the tail.
 	signTail bool
+	// commentThenReset sends one SSE comment line and then resets the
+	// stream, before any data line.
+	commentThenReset bool
 	// downstreamFailOn makes the write to the client fail once the body
 	// written so far contains it.
 	downstreamFailOn string
-	wantErr          bool
+	// status answers with this 2xx status and a plaintext body instead of
+	// the encrypted stream.
+	status  int
+	wantErr bool
 	// wantReceiptGET requires at least one receipt GET.
 	wantReceiptGET bool
 	wantRelayed    bool
@@ -107,6 +113,11 @@ func TestAuthorizedPhalaCloudACIv2(t *testing.T) {
 			// For a stream, which reached the client, a receipt that names
 			// another model ends the generation; one over another request
 			// (the client's choice) keeps it.
+			// A 2xx status other than 200 is not an answer that teep can
+			// check: it is refused before anything reaches the client, and
+			// the generation ends.
+			{name: "HTTP 201 with a plaintext stream", served: testKeysetA, status: http.StatusCreated, wantErr: true, ended: true},
+			{name: "HTTP 203 with a plaintext body, non-stream", served: testKeysetA, plain: true, status: http.StatusNonAuthoritativeInfo, wantErr: true, ended: true},
 			{name: "receipt of other model, stream", served: testKeysetA, receipt: func(r *aciv2test.Receipt) { r.Model = "other" }, wantErr: true, wantRelayed: true, ended: true},
 			{name: "receipt of other request, stream", served: testKeysetA, receipt: func(r *aciv2test.Receipt) { r.Request = []byte("{}") }, wantErr: true, wantRelayed: true},
 			{name: "receipt cites other session", served: testKeysetA, plain: true, receipt: func(r *aciv2test.Receipt) { r.SessionID = strings.Repeat("cd", 32) }, wantErr: true, ended: true},
@@ -131,6 +142,9 @@ func TestAuthorizedPhalaCloudACIv2(t *testing.T) {
 			// gateway that ended its stream with an error and signed what
 			// it sent verifies, and the generation stays.
 			{name: "error event signed by the receipt", served: testKeysetA, tailAfterFirst: "event: error\n\n", signTail: true, wantErr: true, wantRelayed: true, wantReceiptGET: true},
+			// A comment line reaches the client as it is, so the stream
+			// counts as delivered although no data line came.
+			{name: "comment then reset, no data", served: testKeysetA, commentThenReset: true, wantErr: true, wantReceiptGET: true, ended: true},
 			{name: "downstream write fails after the first chunk", served: testKeysetA, downstreamFailOn: "Hel", wantErr: true},
 			// A client that hangs up, or whose deadline passes, must not end
 			// the authorization that every client shares.
@@ -207,6 +221,19 @@ func phalaTestGateway(t *testing.T, gw *aciv2test.Gateway, tc *phalaCase, receip
 		if len(b.Provider.ACISessionIDs) != 1 || b.Provider.ACISessionIDs[0] != authorizedSessionID {
 			t.Errorf("provider.aci_session_ids = %q, want the authorized session", b.Provider.ACISessionIDs)
 		}
+		if tc.status != 0 {
+			w.Header().Set("X-Aci-Keyset-Digest", testKeysetA)
+			if tc.plain {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"plaintext-answer"}}]}`)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(tc.status)
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"plaintext-answer\"}}]}\n\ndata: [DONE]\n\n")
+			return
+		}
 		if tc.refuse {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusPreconditionFailed)
@@ -243,6 +270,10 @@ func phalaTestGateway(t *testing.T, gw *aciv2test.Gateway, tc *phalaCase, receip
 		}
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		switch {
+		case tc.commentThenReset:
+			_, _ = io.WriteString(w, ": keep-alive\n\n")
+			http.NewResponseController(w).Flush()
+			panic(http.ErrAbortHandler)
 		case tc.tailAfterFirst != "":
 			parts := strings.SplitAfter(stream, "\n\n")
 			_, _ = io.WriteString(w, parts[0]+parts[1]+tc.tailAfterFirst)
@@ -374,6 +405,9 @@ func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, tc *ph
 	}
 	if relayed := strings.Contains(rec.Body.String(), "Hel") && strings.Contains(rec.Body.String(), "lo"); relayed != tc.wantRelayed {
 		t.Errorf("decrypted content relayed = %v, want %v", relayed, tc.wantRelayed)
+	}
+	if strings.Contains(rec.Body.String(), "plaintext-answer") {
+		t.Error("a plaintext answer reached the client")
 	}
 	if tc.plain && !tc.wantRelayed && rec.Body.Len() > 0 {
 		t.Errorf("non-stream response written before its receipt verified: %d %q", rec.Code, rec.Body.String())

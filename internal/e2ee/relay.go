@@ -37,6 +37,7 @@ type StreamStats struct {
 	Duration      time.Duration // time from first to last chunk
 	LastChunkAt   time.Time     // last processed data chunk, not confirmed client delivery
 	EndMarkerSeen bool          // received [DONE], even if completion validation fails
+	Forwarded     int           // upstream lines other than blank separators written downstream
 }
 
 // EffectiveTokens returns Tokens if available (from usage), else Chunks.
@@ -1380,6 +1381,8 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 		done, written, derr := relaySSELine(ctx, w, flusher, line, session, endpoint)
 		if derr != nil {
 			decryptErr = derr
+		} else if line != "" {
+			stats.Forwarded++
 		}
 		if !done {
 			if data, ok := SSEData(line); ok && data != "[DONE]" {
