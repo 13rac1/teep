@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha512"
@@ -1342,7 +1343,7 @@ func TestEvalNvidiaSignature(t *testing.T) {
 	t.Run("pass", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 8, Nonce: nonce.Hex()}
+		nv := &NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 8, Nonce: nonce.Hex(), SignaturesVerified: true}
 		f := assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw, Nvidia: nv}), Pass)
 		if !strings.Contains(f.Detail, "HOPPER") || !strings.Contains(f.Detail, "8 GPU") {
 			t.Errorf("detail should mention HOPPER and 8 GPU: %s", f.Detail)
@@ -1372,10 +1373,10 @@ func TestEvalNvidiaClaims(t *testing.T) {
 	t.Run("pass", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 4, Nonce: nonce.Hex()}
+		nv := &NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 4, Nonce: nonce.Hex(), SignaturesVerified: true}
 		f := assertSingleFactor(t, evalNvidiaClaims(&ReportInput{Raw: raw, Nvidia: nv}), Pass)
-		if !strings.Contains(f.Detail, "arch=HOPPER") {
-			t.Errorf("detail should mention arch=HOPPER: %s", f.Detail)
+		if !strings.Contains(f.Detail, "arch reported: HOPPER") {
+			t.Errorf("detail should mention arch reported: HOPPER: %s", f.Detail)
 		}
 	})
 
@@ -1394,7 +1395,7 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 	t.Run("pass", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "EAT", GPUCount: 8, Nonce: nonce.Hex()}
+		nv := &NvidiaVerifyResult{Format: "EAT", GPUCount: 8, Nonce: nonce.Hex(), SignaturesVerified: true}
 		f := assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
 		if !strings.Contains(f.Detail, "8 GPU") {
 			t.Errorf("detail should mention 8 GPU: %s", f.Detail)
@@ -1404,7 +1405,7 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 	t.Run("mismatch", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: "wrong-nonce"}
+		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: "wrong-nonce", SignaturesVerified: true}
 		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Fail)
 	})
 
@@ -1416,8 +1417,17 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 	t.Run("skip_empty_nonce", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: ""}
+		nv := &NvidiaVerifyResult{Format: "EAT", Nonce: "", SignaturesVerified: true}
 		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Skip)
+	})
+
+	// A result whose signatures are not marked verified proves no nonce
+	// binding, even with a matching nonce and no signature error.
+	t.Run("fail_signatures_not_verified", func(t *testing.T) {
+		raw := buildMinimalRaw(nonce, sigKey)
+		raw.NvidiaPayload = `{"evidence_list":[]}`
+		nv := &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, Nonce: nonce.Hex()}
+		assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Fail)
 	})
 
 	// Evidence that did not verify proves no nonce binding, also when it
@@ -1432,7 +1442,7 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 	t.Run("pass_spdm", func(t *testing.T) {
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.GPUEvidence = []GPUEvidence{{Arch: "HOPPER"}}
-		nv := &NvidiaVerifyResult{Format: "SPDM", GPUCount: 8, Nonce: nonce.Hex()}
+		nv := &NvidiaVerifyResult{Format: "SPDM", GPUCount: 8, Nonce: nonce.Hex(), SignaturesVerified: true}
 		f := assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
 		if want := "SPDM evidence of 8 GPUs"; !strings.Contains(f.Detail, want) {
 			t.Errorf("detail = %q, want %q", f.Detail, want)
@@ -1443,7 +1453,7 @@ func TestEvalNvidiaClientNonceBound(t *testing.T) {
 		// Cover nvidiaClientNonceDetail default branch (non-EAT format).
 		raw := buildMinimalRaw(nonce, sigKey)
 		raw.NvidiaPayload = `{"evidence_list":[]}`
-		nv := &NvidiaVerifyResult{Format: "NRAS", Nonce: nonce.Hex()}
+		nv := &NvidiaVerifyResult{Format: "NRAS", Nonce: nonce.Hex(), SignaturesVerified: true}
 		f := assertSingleFactor(t, evalNvidiaClientNonceBound(&ReportInput{Raw: raw, Nonce: nonce, Nvidia: nv}), Pass)
 		if !strings.Contains(f.Detail, "NVIDIA nonce matches") {
 			t.Errorf("detail = %q, want NVIDIA nonce matches", f.Detail)
@@ -1837,11 +1847,6 @@ func TestNvidiaSignatureDetail(t *testing.T) {
 			"EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)",
 		},
 		{
-			"JWT format",
-			&NvidiaVerifyResult{Format: "JWT", Algorithm: "ES384"},
-			"JWT signature valid (ES384)",
-		},
-		{
 			"SPDM format",
 			&NvidiaVerifyResult{Format: "SPDM", GPUCount: 8, Arch: "BLACKWELL"},
 			"SPDM: 8 GPU cert chains and ECDSA P-384 signatures verified (arch: BLACKWELL)",
@@ -1871,17 +1876,7 @@ func TestNvidiaClaimsDetail(t *testing.T) {
 		{
 			"EAT format",
 			&NvidiaVerifyResult{Format: "EAT", Arch: "HOPPER", GPUCount: 4},
-			"EAT: arch=HOPPER, 4 GPUs, nonce verified",
-		},
-		{
-			"JWT format true",
-			&NvidiaVerifyResult{Format: "JWT", OverallResult: true},
-			"JWT claims valid (overall result: true)",
-		},
-		{
-			"JWT format false",
-			&NvidiaVerifyResult{Format: "JWT", OverallResult: false},
-			"JWT claims valid (overall result: false)",
+			"EAT: top-level nonce matches the client nonce (arch reported: HOPPER, 4 GPUs)",
 		},
 		{
 			"unknown format",
@@ -4109,6 +4104,80 @@ func TestEvalNvidiaSignature_NilNvidiaWithPayload(t *testing.T) {
 	t.Logf("detail: %s", f.Detail)
 	if !strings.Contains(f.Detail, "not attempted") {
 		t.Errorf("detail should mention not attempted: %s", f.Detail)
+	}
+}
+
+// Claims of NVIDIA evidence that did not verify are not checked, whatever
+// its format. A verified SPDM result has no claims to check.
+func TestEvalNvidiaClaims_Verification(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	raw.GPUEvidence = []GPUEvidence{{Arch: "HOPPER"}}
+	for _, tc := range []struct {
+		name   string
+		nv     *NvidiaVerifyResult
+		want   Status
+		detail string
+	}{
+		{"not reached", &NvidiaVerifyResult{SignatureErr: errors.New("GPU requester nonce: e2e_pubkey absent")}, Fail, "NVIDIA evidence was not verified; claims not checked"},
+		{"spdm signature failed", &NvidiaVerifyResult{Format: "SPDM", GPUCount: 1, SignatureErr: errors.New("requester nonce mismatch")}, Fail, "NVIDIA evidence was not verified; claims not checked"},
+		{"eat signature failed", &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, SignatureErr: errors.New("bad cert chain")}, Fail, "NVIDIA evidence was not verified; claims not checked"},
+		{"spdm verified", &NvidiaVerifyResult{Format: "SPDM", GPUCount: 1, Arch: "HOPPER", Nonce: nonce.Hex(), SignaturesVerified: true}, NotApplicable, "SPDM evidence carries no claims; the measurements are compared by NRAS (nvidia_nras_verified)"},
+		{"eat verified", &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, Arch: "HOPPER", Nonce: nonce.Hex(), SignaturesVerified: true}, Pass, "EAT: top-level nonce matches the client nonce (arch reported: HOPPER, 1 GPUs)"},
+		{"eat nonce mismatch", &NvidiaVerifyResult{Format: "EAT", GPUCount: 1, Arch: "HOPPER", ClaimsErr: errors.New("EAT nonce mismatch")}, Fail, "claims invalid: EAT nonce mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := assertSingleFactor(t, evalNvidiaClaims(&ReportInput{Raw: raw, Nvidia: tc.nv}), tc.want)
+			if f.Detail != tc.detail {
+				t.Errorf("detail = %q, want %q", f.Detail, tc.detail)
+			}
+		})
+	}
+}
+
+// A verification that failed before it reached a signature says so.
+func TestEvalNvidiaSignature_NotReached(t *testing.T) {
+	nonce := NewNonce()
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	raw.GPUEvidence = []GPUEvidence{{Arch: "HOPPER"}}
+	f := assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw,
+		Nvidia: &NvidiaVerifyResult{SignatureErr: errors.New("GPU requester nonce: e2e_pubkey absent")}}), Fail)
+	if f.Detail != "NVIDIA evidence was not verified: GPU requester nonce: e2e_pubkey absent" {
+		t.Errorf("detail = %q", f.Detail)
+	}
+	f = assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw,
+		Nvidia: &NvidiaVerifyResult{Format: "SPDM", SignatureErr: errors.New("bad sig")}}), Fail)
+	if f.Detail != "NVIDIA evidence was not verified: bad sig" {
+		t.Errorf("detail = %q", f.Detail)
+	}
+}
+
+// EAT evidence whose top-level nonce does not match returns before any
+// signature is checked: nvidia_signature must not pass it.
+func TestEvalNvidiaSignature_EATNonceMismatch(t *testing.T) {
+	nonce := NewNonce()
+	payload := `{"arch":"HOPPER","nonce":"` + NewNonce().Hex() + `","evidence_list":[{"arch":"HOPPER","certificate":"x","evidence":"y"}]}`
+	nv := VerifyNVIDIAPayload(context.Background(), payload, nonce)
+	if nv.SignaturesVerified || nv.ClaimsErr == nil {
+		t.Fatalf("result = %+v, want a claims error and no verified signatures", nv)
+	}
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	raw.NvidiaPayload = payload
+	f := assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw, Nvidia: nv}), Fail)
+	if !strings.HasPrefix(f.Detail, "NVIDIA evidence was not verified: EAT nonce mismatch") {
+		t.Errorf("detail = %q", f.Detail)
+	}
+}
+
+// SPDM verification of an empty evidence list checks no signature.
+func TestEvalNvidiaSignature_SPDMEmptyEvidence(t *testing.T) {
+	nonce := NewNonce()
+	nv := VerifyNVIDIAGPUDirect(context.Background(), nil, nonce, nonce)
+	raw := buildMinimalRaw(nonce, validSigningKey(t))
+	raw.GPUEvidence = []GPUEvidence{}
+	f := assertSingleFactor(t, evalNvidiaSignature(&ReportInput{Raw: raw, Nvidia: nv}), Fail)
+	if f.Detail != "NVIDIA evidence was not verified: GPU evidence list is empty" {
+		t.Errorf("detail = %q", f.Detail)
 	}
 }
 

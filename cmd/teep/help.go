@@ -187,28 +187,29 @@ var factorRegistry = []factorInfo{
 		Name:    attestation.FactorNvidiaPayloadPresent,
 		Tier:    2,
 		Summary: "NVIDIA attestation payload present",
-		Description: "Checks that the nvidia_payload field exists in the attestation " +
-			"response. This payload contains GPU attestation data (either an " +
-			"EAT token or JWT) that proves the inference is running on a " +
-			"genuine NVIDIA GPU with confidential computing enabled.",
+		Description: "Checks that the attestation response has an NVIDIA " +
+			"payload or GPU evidence. Nothing is verified here: " +
+			"nvidia_signature verifies the evidence.",
 	},
 	{
 		Name:    attestation.FactorNvidiaSignature,
 		Tier:    2,
 		Summary: "NVIDIA payload signature verified",
-		Description: "Verifies the cryptographic signature on the NVIDIA attestation " +
-			"payload. For EAT tokens, this validates SPDM ECDSA P-384 " +
-			"signatures on each GPU's cert chain. For JWTs, this verifies " +
-			"the token against NVIDIA's JWKS (JSON Web Key Set) endpoint.",
+		Description: "Verifies each GPU's certificate chain to the pinned " +
+			"NVIDIA root and its SPDM ECDSA P-384 signature over the expected " +
+			"requester nonce, for an EAT payload or direct SPDM evidence. It " +
+			"fails when any GPU did not verify or no signature was checked.",
 	},
 	{
 		Name:    attestation.FactorNvidiaClaims,
 		Tier:    2,
-		Summary: "NVIDIA attestation claims valid",
-		Description: "Validates the claims within the NVIDIA attestation payload, " +
-			"including GPU architecture, driver version, and confidential " +
-			"computing mode. For EAT tokens, checks per-GPU evidence " +
-			"claims. For JWTs, checks the overall attestation result.",
+		Summary: "NVIDIA EAT nonce matches and evidence verified",
+		Description: "For an EAT payload, checks that its top-level nonce " +
+			"matches the client nonce and that the evidence verified. It " +
+			"fails when the evidence did not verify, and is not applicable " +
+			"to direct SPDM evidence, which carries no claims. The GPU " +
+			"architecture, GPU count, driver version and confidential " +
+			"computing mode that a payload reports are not checked.",
 	},
 	{
 		Name:    attestation.FactorNvidiaClientNonce,

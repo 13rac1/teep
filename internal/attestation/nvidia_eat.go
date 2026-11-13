@@ -104,6 +104,7 @@ func verifyNVIDIAEAT(ctx context.Context, payload string, expectedNonce Nonce) *
 		}
 	}
 
+	result.SignaturesVerified = true
 	slog.DebugContext(ctx, "NVIDIA EAT verification complete", "gpu_count", len(eat.EvidenceList), "arch", eat.Arch)
 	return result
 }
@@ -393,6 +394,7 @@ func VerifyNVIDIAGPUDirect(ctx context.Context, evidence []GPUEvidence, nonce, r
 
 	// The nonce is reported only for evidence whose every GPU verified: the
 	// nonce binding rests on the verified SPDM evidence.
+	result.SignaturesVerified = true
 	result.Nonce = nonce.Hex()
 	slog.DebugContext(ctx, "NVIDIA GPU direct verification complete",
 		"gpu_count", len(evidence),
