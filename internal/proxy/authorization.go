@@ -192,12 +192,12 @@ func (r *authorizationRecord) observeModel(key provider.AuthorizationKey, limit 
 	r.models[key] = ""
 }
 
-// lookup returns immutable published material. Callers must clone its report.
-func (s *authorizationStore) lookup(key provider.AuthorizationKey) (*authorization, bool) {
+// has reports whether a usable authorization is published for key.
+func (s *authorizationStore) has(key provider.AuthorizationKey) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, ok := s.lookupLocked(key)
-	return record.value, ok
+	_, ok := s.lookupLocked(key)
+	return ok
 }
 
 func (s *authorizationStore) lookupLocked(key provider.AuthorizationKey) (authorizationRecord, bool) {
@@ -210,6 +210,15 @@ func (s *authorizationStore) lookupLocked(key provider.AuthorizationKey) (author
 		return authorizationRecord{}, false
 	}
 	now := s.now()
+	if keysetExpired(record.value.report, now) {
+		// ACI/1 §3.1: a client sends nothing new under a keyset after its
+		// not_after. The authorization ends, and the next load verifies
+		// again. Attempts that already acquired it continue.
+		delete(s.entries, key)
+		s.log().Info("authorization ended at the ACI/1 keyset not_after", "provider", key.ProviderName(), "model", key.Model(),
+			"authority", key.Authority(), "authorization_generation", record.value.generation, "keyset_not_after", record.value.report.ACIKeysetNotAfter)
+		return authorizationRecord{}, false
+	}
 	record.lastUsed = now
 	s.entries[key] = record
 	return record, true
@@ -280,7 +289,7 @@ func (s *authorizationStore) verifyShared(key provider.AuthorizationKey, negativ
 			shared, err = authorizationVerification{}, fmt.Errorf("authorization verification panicked: %v", r)
 		}
 	}()
-	if _, ok := s.lookup(key); ok {
+	if s.has(key) {
 		return authorizationVerification{}, nil
 	}
 	if negative != nil {
@@ -368,6 +377,9 @@ func (s *authorizationStore) publishValue(key provider.AuthorizationKey, op *aut
 	}
 	if err := admission.Check(s.now()); err != nil {
 		return nil, err
+	}
+	if keysetExpired(candidate.report, s.now()) {
+		return nil, fmt.Errorf("the ACI/1 keyset not_after %d passed before publication", candidate.report.ACIKeysetNotAfter)
 	}
 	if s.nextGeneration == ^authorizationGeneration(0) {
 		panic("authorization generation exhausted")
@@ -476,4 +488,11 @@ func (s *authorizationStore) counts() (entries, signingKeys int) {
 		}
 	}
 	return entries, signingKeys
+}
+
+// keysetExpired reports whether report binds an ACI/1 workload keyset whose
+// not_after (unix seconds) is not after now. A keyset not_after is the
+// lifetime of the keys, not an expiry of the evidence.
+func keysetExpired(report *attestation.VerificationReport, now time.Time) bool {
+	return report != nil && report.ACIKeysetNotAfter > 0 && now.Unix() >= report.ACIKeysetNotAfter
 }

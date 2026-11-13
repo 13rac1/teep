@@ -154,6 +154,8 @@ behavior.
 - Fully verify uncached TLS-binding authorization. Reuse it while its attested
   identity and required keys remain usable, until explicit invalidation, eviction,
   or process exit. Flag evidence-expiration renewal or connection-loss invalidation.
+  An ACI/1 keyset `not_after` is a key lifetime, not evidence expiry: flag a new
+  send under a keyset at or after its `not_after`.
   Recheck verified NRAS time eligibility only before initial publication. Caller
   deadlines still bound waiting, streaming, and downstream writes. Normal and
   offline reuse follow the same rule with their existing admission checks.

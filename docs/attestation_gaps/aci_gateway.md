@@ -353,7 +353,9 @@ date.
    REPORTDATA nonce. The `not_after` check is a rotation bound that holds
    against an honest gateway. Phala Cloud verifies the ACI/1 route, whose
    REPORTDATA binds the whole keyset; for Venice and NanoGPT, closing it
-   requires the provider to relay that route.
+   requires the provider to relay that route. `teep serve` sends no request
+   under a keyset from its `not_after` on: the cached authorization ends,
+   and the next request verifies again.
 8. **The TLS key binds only the hosts that teep connects to.** For Phala
    Cloud, teep compares the certificate key of `tee.redpill.ai` with the
    hardware-bound keyset entry for that host and pins inference connections
