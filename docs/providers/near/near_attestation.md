@@ -22,18 +22,27 @@ decrypted by every instance. The gateway, not teep, selects the instance.
 Teep therefore verifies every instance of the requested model and allows
 the request only if every instance passes:
 
-- Each entry of the name must have its own `info.instance_id`. Two entries
-  with the same instance id, or an entry without one, fail.
+- Each entry of the name must have its own `info.instance_id`: hex of at
+  most 32 bytes, equal to the payload of the entry's one RTMR3 dstack
+  runtime `instance-id` event. The event log replay of
+  `event_log_integrity` recomputes that event's digest from its payload, so
+  the id of an instance that passes the factor is bound to its quote. Two
+  entries with the same instance id, an entry without one, or an id that
+  differs from the event fail.
 - All entries of the name must hold the same signing key, signing
   algorithm and `ohttp_key_config`. Different keys fail, because teep
   cannot tell which instance holds the key it encrypts to.
 - A name with more than 8 entries fails.
 - Teep runs the full model verification on each instance against the same
-  gateway evidence. A factor passes only if it passes for every instance;
-  a failure names the instance that failed it. The report lists the
-  verified instance ids under `instances`.
+  gateway evidence. A factor passes only if it passes for every instance.
+  Each failed or skipped factor names an instance that did not pass it.
+  The report lists the instance ids under `instances`; the other metadata,
+  such as the compose hash, is the metadata of the first instance.
 - The NRAS time window of the authorization is the intersection of the
   windows of all instances.
+
+Teep verifies every entry that the gateway lists. It cannot see a holder
+of the shared signing key that the gateway does not list.
 
 NearDirect reports one instance for each endpoint and does not change.
 

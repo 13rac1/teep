@@ -31,8 +31,9 @@ type ModelFields struct {
 type Model struct {
 	Fields  ModelFields
 	unknown []string
-	// ohttpKeyConfig is the entry's ohttp_key_config. Teep does not verify
-	// it; Select compares it across the instances of one model.
+	// ohttpKeyConfig is the JSON text of the entry's ohttp_key_config, empty
+	// when the member is null or missing. Teep does not verify it; Select
+	// compares it across the instances of one model.
 	ohttpKeyConfig string
 }
 
@@ -44,12 +45,16 @@ func (m *Model) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var keys struct {
-		OHTTPKeyConfig string `json:"ohttp_key_config,omitempty"`
+		OHTTPKeyConfig json.RawMessage `json:"ohttp_key_config,omitempty"`
 	}
-	if _, err := Object(data, &keys, "model"); err != nil {
+	if _, err := Object(data, &keys, "model", "ohttp_key_config"); err != nil {
 		return err
 	}
-	*m = Model{Fields: fields, unknown: unknown, ohttpKeyConfig: keys.OHTTPKeyConfig}
+	ohttp := string(bytes.TrimSpace(keys.OHTTPKeyConfig))
+	if ohttp == "null" {
+		ohttp = ""
+	}
+	*m = Model{Fields: fields, unknown: unknown, ohttpKeyConfig: ohttp}
 	return nil
 }
 
@@ -188,6 +193,9 @@ func (m Models) checkInstances(idx []int) error {
 			return errors.New("duplicate entry: entries of one model need distinct instance ids")
 		}
 		seen[id] = true
+		if err := checkInstanceID(entry); err != nil {
+			return err
+		}
 		if !equalHex(entry.Fields.SigningPublicKey, first.Fields.SigningPublicKey) ||
 			!equalHex(entry.Fields.SigningAddress, first.Fields.SigningAddress) ||
 			!equalText(entry.Fields.SigningAlgo, first.Fields.SigningAlgo) {
@@ -196,6 +204,42 @@ func (m Models) checkInstances(idx []int) error {
 		if !equalText(entry.ohttpKeyConfig, first.ohttpKeyConfig) {
 			return errors.New("instances hold different OHTTP key configurations")
 		}
+	}
+	return nil
+}
+
+// maxInstanceIDBytes bounds a decoded instance id. A dstack instance id is
+// 20 bytes.
+const maxInstanceIDBytes = 32
+
+// checkInstanceID requires info.instance_id to be hex of at most
+// maxInstanceIDBytes bytes and equal to the payload of the entry's one
+// RTMR3 dstack runtime "instance-id" event. The event log replay of the
+// event_log_integrity factor recomputes that event's digest from its
+// payload, so an instance that passes the factor has a quote-bound id.
+func checkInstanceID(m *Model) error {
+	id := m.Fields.Info.Info.InstanceID
+	raw, err := hex.DecodeString(id)
+	if err != nil || len(raw) == 0 || len(raw) > maxInstanceIDBytes {
+		return fmt.Errorf("instance id must be hex of 1 to %d bytes", maxInstanceIDBytes)
+	}
+	var event []byte
+	for _, e := range m.Fields.EventLog.Values() {
+		if e.IMR != 3 || e.Event != "instance-id" || e.EventType != attestation.DstackRuntimeEventType {
+			continue
+		}
+		if event != nil {
+			return errors.New("multiple instance-id events in the event log")
+		}
+		if event, err = hex.DecodeString(e.EventPayload); err != nil || len(event) == 0 {
+			return errors.New("instance-id event payload is not hex")
+		}
+	}
+	if event == nil {
+		return errors.New("event log has no instance-id event")
+	}
+	if subtle.ConstantTimeCompare(raw, event) != 1 {
+		return errors.New("instance id differs from the instance-id event of the event log")
 	}
 	return nil
 }
