@@ -1005,6 +1005,8 @@ func (s *Server) verifyReplicas(ctx context.Context, prov *provider.Provider, up
 	for _, replica := range raw.Replicas {
 		other, otherAdmission, err := s.verifyAttestation(ctx, prov, upstreamModel, replica, nonce, failure)
 		if err != nil {
+			// verifyAttestation reports its failure through the callback,
+			// for a replica as for the first instance.
 			return nil, attestation.AdmissionTime{}, err
 		}
 		if err := report.MergeReplica(replica.ModelInstanceID, other); err != nil {
@@ -1041,7 +1043,7 @@ func (s *Server) verifyAttestation(ctx context.Context, prov *provider.Provider,
 		"provider", prov.Name,
 		"model", upstreamModel,
 		"instance", raw.ModelInstanceID,
-		"total", fmtDur(totalDur),
+		"instance_total", fmtDur(totalDur),
 		"tdx", fmtDur(tdxDur),
 		"sev", fmtDur(sevDur),
 		"nvidia", fmtDur(nvidiaDur),

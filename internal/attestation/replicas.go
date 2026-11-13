@@ -28,7 +28,7 @@ func (r *VerificationReport) MergeReplica(instanceID string, other *Verification
 		}
 		if statusRank(o.Status) > statusRank(f.Status) {
 			f.Status, f.Deferred = o.Status, o.Deferred
-			f.Detail = "instance " + instanceID + ": " + o.Detail
+			f.Detail = labelDetail(instanceID, o.Detail)
 		}
 	}
 	r.recomputeCounters()
@@ -42,7 +42,7 @@ func (r *VerificationReport) LabelInstance(instanceID string) {
 	for i := range r.Factors {
 		f := &r.Factors[i]
 		if f.Status == Fail || f.Status == Skip {
-			f.Detail = "instance " + instanceID + ": " + f.Detail
+			f.Detail = labelDetail(instanceID, f.Detail)
 		}
 	}
 }
@@ -53,6 +53,11 @@ func (r *VerificationReport) SetInstances(ids []string) {
 		r.Metadata = make(map[string]string)
 	}
 	r.Metadata["instances"] = fmt.Sprintf("%d (%s)", len(ids), strings.Join(ids, ", "))
+}
+
+// labelDetail names the instance in the detail of a factor.
+func labelDetail(instanceID, detail string) string {
+	return "instance " + instanceID + ": " + detail
 }
 
 // statusRank orders statuses from best to worst for MergeReplica.

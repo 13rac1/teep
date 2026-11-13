@@ -26,13 +26,17 @@ the request only if every instance passes:
   most 32 bytes, equal to the payload of the entry's one RTMR3 dstack
   runtime `instance-id` event. The event log replay of
   `event_log_integrity` recomputes that event's digest from its payload, so
-  the id of an instance that passes the factor is bound to its quote. Two
+  the id of an instance that passes the factor is bound to its quote. When
+  `event_log_integrity` is in `allow_fail`, a failure of that factor does not
+  block, and the id is not bound to the quote. Two
   entries with the same instance id, an entry without one, or an id that
   differs from the event fail.
 - All entries of the name must hold the same signing key, signing
   algorithm and `ohttp_key_config`. Different keys fail, because teep
   cannot tell which instance holds the key it encrypts to.
-- A name with more than 8 entries fails.
+- A name with more than 8 entries fails. Each entry costs one quote, NVIDIA
+  NRAS and Proof of Cloud check, one check of the gateway evidence, and one
+  Sigstore and Rekor lookup for each image digest.
 - Teep runs the full model verification on each instance against the same
   gateway evidence. A factor passes only if it passes for every instance.
   Each failed or skipped factor names an instance that did not pass it.
