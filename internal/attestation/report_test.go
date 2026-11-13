@@ -501,6 +501,37 @@ func TestEvalNonceMatch_WithNonceSource(t *testing.T) {
 	}
 }
 
+// A nonce that only an unverified body of the Chutes evidence states fails,
+// although it equals the client nonce. The other nonce sources compare the
+// nonce as before, and a format that copies nonce_source from the response
+// cannot choose the attested-body result.
+func TestEvalNonceMatch_AttestedBody(t *testing.T) {
+	nonce := NewNonce()
+	sigKey := validSigningKey(t)
+	for _, tc := range []struct {
+		name   string
+		format BackendFormat
+		source string
+		want   Status
+	}{
+		{"attested_body", FormatChutes, NonceSourceAttestedBody, Fail},
+		{"attested_body_dstack", FormatDstack, NonceSourceAttestedBody, Pass},
+		{"client", FormatDstack, "client", Pass},
+		{"server", FormatDstack, "server", Pass},
+		{"aci_session", FormatDstack, "aci_session", Pass},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := buildMinimalRaw(nonce, sigKey)
+			raw.BackendFormat = tc.format
+			raw.NonceSource = tc.source
+			f := assertSingleFactor(t, evalNonceMatch(&ReportInput{Raw: raw, Nonce: nonce}), tc.want)
+			if tc.want == Fail && f.Detail != "nonce stated in an unverified body; no quote binds it" {
+				t.Errorf("detail = %q", f.Detail)
+			}
+		})
+	}
+}
+
 func TestEvalTDXQuotePresent(t *testing.T) {
 	nonce := NewNonce()
 	sigKey := validSigningKey(t)

@@ -1428,7 +1428,17 @@ const NonceSourceNotEchoed = "not_echoed"
 // noEchoDetail is the detail of nonce_match for NonceSourceNotEchoed.
 const noEchoDetail = "no echoed nonce; freshness rests on tee_reportdata_binding"
 
+// NonceSourceAttestedBody is the NonceSource of a nonce that only a body
+// signed under an unpublished key states, and that no quote binds (the
+// Chutes evidence that NanoGPT relays). nonce_match fails for it.
+const NonceSourceAttestedBody = "attested_body"
+
 func evalNonceMatch(in *ReportInput) []FactorResult {
+	// Only the Chutes parser sets NonceSourceAttestedBody; some formats copy
+	// nonce_source from the response, so the format decides.
+	if in.Raw.BackendFormat == FormatChutes && in.Raw.NonceSource == NonceSourceAttestedBody {
+		return factor(TierCore, FactorNonceMatch, Fail, "nonce stated in an unverified body; no quote binds it")
+	}
 	if in.Raw.Nonce == "" {
 		if in.Raw.ACIGatewayVariant || in.Raw.ACICanonicalReport {
 			return factor(TierCore, FactorNonceMatch, Fail, aciNoEchoDetail)

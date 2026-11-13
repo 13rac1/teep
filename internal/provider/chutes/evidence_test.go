@@ -36,6 +36,9 @@ func TestParseEvidence(t *testing.T) {
 	if raw.Nonce != "" || raw.BackendFormat != attestation.FormatChutes {
 		t.Errorf("Nonce = %q, BackendFormat = %q; want no nonce, chutes", raw.Nonce, raw.BackendFormat)
 	}
+	if raw.NonceSource != attestation.NonceSourceAttestedBody {
+		t.Errorf("NonceSource = %q, want %q", raw.NonceSource, attestation.NonceSourceAttestedBody)
+	}
 	if len(raw.UnknownFields) != 0 || len(raw.MissingFields) != 0 {
 		t.Errorf("UnknownFields = %q, MissingFields = %q, want none", raw.UnknownFields, raw.MissingFields)
 	}
@@ -157,5 +160,20 @@ func TestParseEvidence_MaxEntries(t *testing.T) {
 	_, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, doc), nonce, 1)
 	if err == nil || !strings.Contains(err.Error(), "evidence has 2 entries, max 1") {
 		t.Fatalf("2 entries, max 1: err = %v, want the entry bound", err)
+	}
+}
+
+// The attested-session path keeps its nonce source: there the REPORTDATA
+// binding checks the nonce with the key of the channel binding.
+func TestParseInstanceAttestation_NonceSource(t *testing.T) {
+	nonce := attestation.NewNonce()
+	instances := [][]byte{[]byte(`{"instances":[{"instance_id":"inst-a","e2e_pubkey":"a2V5","nonces":[]}],"nonce_expires_in":0,"nonce_expires_at":0}`)}
+	raw, err := chutes.ParseInstanceAttestation(context.Background(), instances,
+		chutestest.Marshal(t, chutestest.Evidence(t, nonce, "inst-a")), "inst-a", nonce)
+	if err != nil {
+		t.Fatalf("ParseInstanceAttestation: %v", err)
+	}
+	if raw.NonceSource != attestation.NonceSourceNotEchoed {
+		t.Errorf("NonceSource = %q, want %q", raw.NonceSource, attestation.NonceSourceNotEchoed)
 	}
 }

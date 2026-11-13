@@ -379,7 +379,8 @@ func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evi
 // the response. The response names no E2EE public key, so the result has no
 // SigningKey and no quote in it can be shown to bind nonce; nothing names
 // the instance that serves a request either. nonce is the nonce of the
-// evidence request. Unknown and missing
+// evidence request; the result marks it NonceSourceAttestedBody, because
+// only the unverified attested_body states it. Unknown and missing
 // members are returned in UnknownFields and MissingFields without logging;
 // the caller decides.
 //
@@ -416,6 +417,7 @@ func ParseEvidence(ctx context.Context, evidenceBody []byte, nonce attestation.N
 		return nil, err
 	}
 	raw.SigningAlgo = "" // no E2EE key is named
+	raw.NonceSource = attestation.NonceSourceAttestedBody
 	raw.CandidatesAvail = len(ar.Evidence)
 	raw.CandidatesEval = 1
 	raw.UnknownFields = unknown

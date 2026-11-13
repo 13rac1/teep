@@ -38,7 +38,8 @@ var factorRegistry = []factorInfo{
 			"echoes no nonce, so this factor fails; its freshness rests on " +
 			"gateway_tee_reportdata_binding. The Chutes evidence response " +
 			"echoes no nonce either; its freshness rests on " +
-			"tee_reportdata_binding.",
+			"tee_reportdata_binding. A nonce that only an unverified body " +
+			"states, and that no quote binds, also fails.",
 	},
 	{
 		Name:    attestation.FactorTEEQuotePresent,

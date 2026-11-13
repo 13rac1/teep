@@ -58,6 +58,63 @@ func TestParseChutesEvidence_RealBody(t *testing.T) {
 	}
 }
 
+// The report of the relayed evidence: nonce_match fails because only the
+// unverified attested_body states the nonce, and is allowed for NanoGPT.
+// The block comes from signing_key_present and e2ee_capable.
+func TestParseChutesEvidence_Report(t *testing.T) {
+	body, err := os.ReadFile("testdata/chutes_evidence_qwen3.6-27b_2026-11-12.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, err := attestation.ParseNonce(realEvidenceNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := nanogpt.ParseAttestationResponse(context.Background(), body, nonce)
+	if err != nil {
+		t.Fatalf("ParseAttestationResponse: %v", err)
+	}
+	report := attestation.BuildReport(&attestation.ReportInput{
+		Provider:  "nanogpt",
+		Model:     "TEE/qwen3.6-27b",
+		Raw:       raw,
+		Nonce:     nonce,
+		AllowFail: attestation.NanoGPTDefaultAllowFail,
+	})
+	if !report.Blocked() {
+		t.Error("report is not blocked")
+	}
+	for _, tc := range []struct {
+		name     string
+		enforced bool
+		detail   string
+	}{
+		{"nonce_match", false, "nonce stated in an unverified body; no quote binds it"},
+		{"signing_key_present", true, ""},
+		{"e2ee_capable", true, ""},
+	} {
+		f := findFactor(t, report, tc.name)
+		t.Logf("%s: %s %q enforced=%v", tc.name, f.Status, f.Detail, f.Enforced)
+		if f.Status != attestation.Fail || f.Enforced != tc.enforced {
+			t.Errorf("%s: status=%s enforced=%v, want Fail enforced=%v", tc.name, f.Status, f.Enforced, tc.enforced)
+		}
+		if tc.detail != "" && f.Detail != tc.detail {
+			t.Errorf("%s detail = %q, want %q", tc.name, f.Detail, tc.detail)
+		}
+	}
+}
+
+func findFactor(t *testing.T, report *attestation.VerificationReport, name string) attestation.FactorResult {
+	t.Helper()
+	for _, f := range report.Factors {
+		if f.Name == name {
+			return f
+		}
+	}
+	t.Fatalf("no factor %s in the report", name)
+	return attestation.FactorResult{}
+}
+
 func evidenceIDs(n int) []string {
 	ids := make([]string, n)
 	for i := range ids {
