@@ -9,7 +9,33 @@ select a valid subset of a malformed response.
 | Provider | Required envelope |
 | --- | --- |
 | NearDirect | A complete flat model report and `all_attestations` containing exactly one copy of that report. Both reports must name a model and agree in every supported field. |
-| NearCloud | `gateway_attestation` and a nonempty `model_attestations` array. Every entry must be structurally valid, and model names must be unique. Teep selects the entry with the requested name; else the one entry whose name contains, or is contained in, the requested name; else the only entry of the array. Any other array fails. Flat model fields and `all_attestations` are forbidden. |
+| NearCloud | `gateway_attestation` and a nonempty `model_attestations` array. Every entry must be structurally valid and name a model. Teep selects the entries with the requested name; else the entries of the one name that contains, or is contained in, the requested name; else the entries of the only name in the array. Any other array fails. Flat model fields and `all_attestations` are forbidden. Several entries of one name are [instances of one model](#nearcloud-model-instances). |
+
+### NearCloud model instances
+
+The gateway can list one model on several instances, one entry for each.
+On 2026-11-13 it listed `z-ai/glm-5.3-flash` on three instances and each
+`DeepSeek-V4.1-Flash-1017` model on two. The instances of one model hold
+the same signing key, so the request that teep encrypts to that key can be
+decrypted by every instance. The gateway, not teep, selects the instance.
+
+Teep therefore verifies every instance of the requested model and allows
+the request only if every instance passes:
+
+- Each entry of the name must have its own `info.instance_id`. Two entries
+  with the same instance id, or an entry without one, fail.
+- All entries of the name must hold the same signing key, signing
+  algorithm and `ohttp_key_config`. Different keys fail, because teep
+  cannot tell which instance holds the key it encrypts to.
+- A name with more than 8 entries fails.
+- Teep runs the full model verification on each instance against the same
+  gateway evidence. A factor passes only if it passes for every instance;
+  a failure names the instance that failed it. The report lists the
+  verified instance ids under `instances`.
+- The NRAS time window of the authorization is the intersection of the
+  windows of all instances.
+
+NearDirect reports one instance for each endpoint and does not change.
 
 The attested model name is the provider's assertion. Teep verifies model
 identity only through `measured_model_weights`, which NEAR does not

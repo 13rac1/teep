@@ -123,7 +123,6 @@ type verificationOutcome struct {
 
 func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRoute) (out verificationOutcome, retErr error) {
 	var report *attestation.VerificationReport
-	cfg := opts.Config
 
 	attester, err := newAttester(opts.ProviderName, opts.Provider, opts.Offline)
 	if err != nil {
@@ -173,15 +172,86 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		return verificationOutcome{}, fmt.Errorf("fetch attestation: %w", err)
 	}
 
-	tdxResult := verifyTDX(ctx, raw, nonce, opts.ProviderName, verifier)
-	sevResult := verifySEV(ctx, raw, nonce, opts.ProviderName, sevVerifier)
-	gatewaySEVResult := verifyGatewaySEV(ctx, raw, nonce, opts.ProviderName, sevVerifier)
-	nv := opts.NVIDIAVerifier
+	ev := evidenceVerifier{opts: opts, nonce: nonce, client: client, tdx: verifier, sev: sevVerifier}
+	report, nrasResult, err := ev.report(ctx, raw, func() *attestation.E2EETestResult {
+		e2eeResult = evidenceE2EEOutcome(ctx, opts, raw)
+		if e2eeResult != nil && e2eeResult.KeyType == "" {
+			e2eeResult.KeyType = raw.E2EEKeyType()
+		}
+		return e2eeResult
+	})
+	if err != nil {
+		return verificationOutcome{}, err
+	}
+	admission := attestation.NVIDIAAdmission(nrasResult)
+	report, admission, err = ev.mergeReplicas(ctx, raw, report, admission, e2eeResult)
+	if err != nil {
+		return verificationOutcome{}, err
+	}
+
+	if providerUsesTLSBinding(opts.ProviderName) && !report.Blocked() {
+		admissionNow := opts.VerificationTime
+		if admissionNow.IsZero() {
+			admissionNow = time.Now()
+		}
+		if err := admission.Check(admissionNow); err != nil {
+			slog.WarnContext(ctx, "attestation admission failed", "provider", opts.ProviderName, "model", opts.ModelName, "err", err)
+			return verificationOutcome{}, err
+		}
+	}
+	return verificationOutcome{report: report, raw: raw, e2ee: e2eeResult}, nil
+}
+
+// evidenceVerifier verifies the evidence of one model instance.
+type evidenceVerifier struct {
+	opts   *Options
+	nonce  attestation.Nonce
+	client *http.Client
+	tdx    attestation.TDXVerifier
+	sev    attestation.SEVVerifier
+}
+
+// mergeReplicas verifies every other instance of the model in raw and merges
+// each report into report, so that a factor passes only if it passes for
+// every instance. The instances share the signing key, so the E2EE result of
+// the first instance applies to each.
+func (ev *evidenceVerifier) mergeReplicas(ctx context.Context, raw *attestation.RawAttestation, report *attestation.VerificationReport,
+	admission attestation.AdmissionTime, e2eeResult *attestation.E2EETestResult,
+) (*attestation.VerificationReport, attestation.AdmissionTime, error) {
+	if len(raw.Replicas) == 0 {
+		return report, admission, nil
+	}
+	ids := []string{raw.ModelInstanceID}
+	for _, replica := range raw.Replicas {
+		other, nrasResult, err := ev.report(ctx, replica, func() *attestation.E2EETestResult { return e2eeResult })
+		if err != nil {
+			return nil, attestation.AdmissionTime{}, err
+		}
+		if err := report.MergeReplica(replica.ModelInstanceID, other); err != nil {
+			return nil, attestation.AdmissionTime{}, fmt.Errorf("instance reports differ: %w", err)
+		}
+		admission = admission.Intersect(attestation.NVIDIAAdmission(nrasResult))
+		ids = append(ids, replica.ModelInstanceID)
+	}
+	report.SetInstances(ids)
+	return report, admission, nil
+}
+
+// report verifies the evidence of one instance and builds its report. It
+// calls e2eeProbe for the E2EE result after the supply chain checks, so the
+// probe request follows the supply chain requests in a capture.
+func (ev *evidenceVerifier) report(ctx context.Context, raw *attestation.RawAttestation,
+	e2eeProbe func() *attestation.E2EETestResult,
+) (*attestation.VerificationReport, *attestation.NvidiaVerifyResult, error) {
+	tdxResult := verifyTDX(ctx, raw, ev.nonce, ev.opts.ProviderName, ev.tdx)
+	sevResult := verifySEV(ctx, raw, ev.nonce, ev.opts.ProviderName, ev.sev)
+	gatewaySEVResult := verifyGatewaySEV(ctx, raw, ev.nonce, ev.opts.ProviderName, ev.sev)
+	nv := ev.opts.NVIDIAVerifier
 	if nv == nil {
 		nv = attestation.DefaultNVIDIAVerifier()
 	}
-	nvidiaResult, nrasResult := verifyNVIDIA(ctx, raw, nonce, client, opts.Offline, nv, nrasJWTParserOptions(opts.VerificationTime)...)
-	pocResult := checkPoC(ctx, raw.IntelQuote, client, opts.Offline, opts.VerificationTime)
+	nvidiaResult, nrasResult := verifyNVIDIA(ctx, raw, ev.nonce, ev.client, ev.opts.Offline, nv, nrasJWTParserOptions(ev.opts.VerificationTime)...)
+	pocResult := checkPoC(ctx, raw.IntelQuote, ev.client, ev.opts.Offline, ev.opts.VerificationTime)
 
 	// Model compose evidence (requires a parsed TDX quote).
 	var composeResult *attestation.ComposeBindingResult
@@ -198,45 +268,41 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 	}
 
 	// Gateway verification for providers that populate GatewayIntelQuote.
-	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyGatewayTDX(ctx, raw, nonce, client, opts.Offline, verifier,
-		newGatewayReportDataVerifier(opts.ProviderName), opts.VerificationTime)
+	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyGatewayTDX(ctx, raw, ev.nonce, ev.client, ev.opts.Offline, ev.tdx,
+		newGatewayReportDataVerifier(ev.opts.ProviderName), ev.opts.VerificationTime)
 	var gatewayCD attestation.ComposeDigests
 	if gatewayCompose != nil && gatewayCompose.Err == nil {
 		gatewayCD = attestation.ExtractComposeDigests(raw.GatewayAppCompose)
 	}
 
 	allDigests, digestToRepo := attestation.MergeComposeDigests(modelCD, gatewayCD)
-	scPolicy, err := supplyChainPolicy(opts.ProviderName)
+	scPolicy, err := supplyChainPolicy(ev.opts.ProviderName)
 	if err != nil {
-		return verificationOutcome{}, fmt.Errorf("supply chain policy: %w", err)
+		return nil, nil, fmt.Errorf("supply chain policy: %w", err)
 	}
 	// SYNC: proxy.fromConfig validates the same way at config load, so a
 	// malformed policy fails before evaluation on both entry points.
 	if err := scPolicy.Validate(); err != nil {
-		return verificationOutcome{}, fmt.Errorf("supply chain policy: %w", err)
+		return nil, nil, fmt.Errorf("supply chain policy: %w", err)
 	}
-	sigstoreResults, rekorResults := checkSigstore(ctx, allDigests, digestToRepo, scPolicy, client, opts.Offline)
+	sigstoreResults, rekorResults := checkSigstore(ctx, allDigests, digestToRepo, scPolicy, ev.client, ev.opts.Offline)
 
-	e2eeResult = evidenceE2EEOutcome(ctx, opts, raw)
+	e2eeResult := e2eeProbe()
 
-	if e2eeResult != nil && e2eeResult.KeyType == "" {
-		e2eeResult.KeyType = raw.E2EEKeyType()
-	}
-
-	mDefaults, gwDefaults := defaults.MeasurementDefaults(opts.ProviderName)
-	mergedPolicy := config.MergedMeasurementPolicy(opts.ProviderName, cfg, mDefaults)
-	mergedGWPolicy := config.MergedGatewayMeasurementPolicy(opts.ProviderName, cfg, gwDefaults)
+	mDefaults, gwDefaults := defaults.MeasurementDefaults(ev.opts.ProviderName)
+	mergedPolicy := config.MergedMeasurementPolicy(ev.opts.ProviderName, ev.opts.Config, mDefaults)
+	mergedGWPolicy := config.MergedGatewayMeasurementPolicy(ev.opts.ProviderName, ev.opts.Config, gwDefaults)
 
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
-	tinfoilSC := verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, opts.ProviderName, opts.ModelName, mergedPolicy, opts.Offline, client)
-	aciSessions := auditACISessions(ctx, opts.ProviderName, raw, phalacloud.SessionAuditor{TDX: verifier, Offline: opts.Offline})
+	tinfoilSC := verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, ev.opts.ProviderName, ev.opts.ModelName, mergedPolicy, ev.opts.Offline, ev.client)
+	aciSessions := auditACISessions(ctx, ev.opts.ProviderName, raw, phalacloud.SessionAuditor{TDX: ev.tdx, Offline: ev.opts.Offline})
 
-	report = attestation.BuildReport(&attestation.ReportInput{
-		Provider:               opts.ProviderName,
-		Model:                  opts.ModelName,
+	report := attestation.BuildReport(&attestation.ReportInput{
+		Provider:               ev.opts.ProviderName,
+		Model:                  ev.opts.ModelName,
 		Raw:                    raw,
-		Nonce:                  nonce,
-		AllowFail:              config.MergedAllowFail(opts.ProviderName, raw.BackendFormat, cfg, opts.Offline),
+		Nonce:                  ev.nonce,
+		AllowFail:              config.MergedAllowFail(ev.opts.ProviderName, raw.BackendFormat, ev.opts.Config, ev.opts.Offline),
 		Policy:                 mergedPolicy,
 		GatewayPolicy:          mergedGWPolicy,
 		SupplyChainPolicy:      scPolicy,
@@ -255,30 +321,20 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		GatewaySEV:             gatewaySEVResult,
 		GatewayPoC:             gatewayPoCResult,
 		GatewayNonceHex:        raw.GatewayNonceHex,
-		GatewayNonce:           nonce,
+		GatewayNonce:           ev.nonce,
 		GatewayCompose:         gatewayCompose,
 		GatewayEventLog:        raw.GatewayEventLog,
 		TinfoilSC:              tinfoilSC,
-		ACIKeyset:              aci.VerifyKeyset(raw, opts.VerificationTime, aci.GatewayPins()),
+		ACIKeyset:              aci.VerifyKeyset(raw, ev.opts.VerificationTime, aci.GatewayPins()),
 		ACISessions:            aciSessions,
 		E2EETest:               e2eeResult,
-		E2EEConfigured:         providerUsesTLSBinding(opts.ProviderName) && opts.Provider.E2EE,
-		Inapplicable:           inapplicableFactors(opts.ProviderName),
-		ProviderUsesTLSBinding: providerUsesTLSBinding(opts.ProviderName),
-		E2EEKeyBoundByGateway:  provider.GatewayBindsE2EEKey(opts.ProviderName, raw.BackendFormat),
+		E2EEConfigured:         providerUsesTLSBinding(ev.opts.ProviderName) && ev.opts.Provider.E2EE,
+		Inapplicable:           inapplicableFactors(ev.opts.ProviderName),
+		ProviderUsesTLSBinding: providerUsesTLSBinding(ev.opts.ProviderName),
+		E2EEKeyBoundByGateway:  provider.GatewayBindsE2EEKey(ev.opts.ProviderName, raw.BackendFormat),
 	})
 
-	if providerUsesTLSBinding(opts.ProviderName) && !report.Blocked() {
-		admissionNow := opts.VerificationTime
-		if admissionNow.IsZero() {
-			admissionNow = time.Now()
-		}
-		if err := attestation.NVIDIAAdmission(nrasResult).Check(admissionNow); err != nil {
-			slog.WarnContext(ctx, "attestation admission failed", "provider", opts.ProviderName, "model", opts.ModelName, "err", err)
-			return verificationOutcome{}, err
-		}
-	}
-	return verificationOutcome{report: report, raw: raw, e2ee: e2eeResult}, nil
+	return report, nrasResult, nil
 }
 
 // auditACISessions audits the attested sessions of a canonical ACI/1 report
@@ -545,6 +601,7 @@ var metadataDisplayOrder = []struct {
 	{"ppid", "PPID"},
 	{"nonce_source", "Nonce source"},
 	{"candidates", "Candidates"},
+	{"instances", "Instances"},
 	{"event_log", "Event log"},
 	{"gateway_downstream_tls", "Gateway downstream TLS"},
 	// Self-check metadata

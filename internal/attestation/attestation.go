@@ -183,6 +183,13 @@ type RawAttestation struct {
 	CandidatesAvail int             // node pool size
 	CandidatesEval  int             // nodes evaluated
 
+	// ModelInstanceID is the instance id of a NEAR cloud model entry.
+	// Replicas holds the other instances of the same model, which share the
+	// signing key. The gateway selects the instance for each request, so
+	// every replica must pass the same verification as this attestation.
+	ModelInstanceID string            `json:"-"`
+	Replicas        []*RawAttestation `json:"-"`
+
 	// E2EE instance metadata — populated by providers that use instance-level
 	// key exchange (Chutes). Carried through to the Session for header injection.
 	InstanceID string `json:"-"` // selected instance for E2EE

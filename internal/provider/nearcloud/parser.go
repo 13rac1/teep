@@ -107,9 +107,18 @@ func ParseGatewayResponse(_ context.Context, body []byte, model string) (*Gatewa
 	unknown = append(unknown, envelope.unknown...)
 	unknown = append(unknown, gateway.unknown...)
 	unknown = append(unknown, envelope.OHTTPAttestation.UnknownFields("nearcloud")...)
-	raw := selected.Raw(body)
+	raw := selected[0].Raw(body)
 	raw.UnknownFields = unknown
 	raw.ModelNameMatch = string(match)
+	if len(selected) > 1 {
+		raw.ModelInstanceID = selected[0].Fields.Info.Info.InstanceID
+		for i := 1; i < len(selected); i++ {
+			replica := selected[i].Raw(body)
+			replica.ModelNameMatch = raw.ModelNameMatch
+			replica.ModelInstanceID = selected[i].Fields.Info.Info.InstanceID
+			raw.Replicas = append(raw.Replicas, replica)
+		}
+	}
 	gw := &GatewayRaw{NonceHex: gateway.RequestNonce, SigningAddress: gateway.SigningAddress, IntelQuote: gateway.IntelQuote,
 		AppCompose: gateway.Info.Info.TCBInfo.AppCompose, TLSCertFingerprint: gateway.TLSCertFingerprint, EventLog: gateway.EventLog.Log.Values()}
 	return gw, raw, nil

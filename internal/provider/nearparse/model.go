@@ -31,6 +31,9 @@ type ModelFields struct {
 type Model struct {
 	Fields  ModelFields
 	unknown []string
+	// ohttpKeyConfig is the entry's ohttp_key_config. Teep does not verify
+	// it; Select compares it across the instances of one model.
+	ohttpKeyConfig string
 }
 
 // UnmarshalJSON validates the report and its typed nested evidence.
@@ -40,7 +43,13 @@ func (m *Model) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	*m = Model{Fields: fields, unknown: unknown}
+	var keys struct {
+		OHTTPKeyConfig string `json:"ohttp_key_config,omitempty"`
+	}
+	if _, err := Object(data, &keys, "model"); err != nil {
+		return err
+	}
+	*m = Model{Fields: fields, unknown: unknown, ohttpKeyConfig: keys.OHTTPKeyConfig}
 	return nil
 }
 
@@ -82,48 +91,113 @@ func (m *Models) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Select rejects duplicate or empty model identities after complete
-// decoding, and selects the entry of the requested model: the entry with
-// the exact name; else the one entry whose name contains, or is contained
-// in, the requested name; else the only entry of the array. Any other
-// array has no entry that teep can attribute to the request, and fails.
-func (m Models) Select(requested, path string) (Model, ModelNameMatch, []string, error) {
+// MaxModelInstances bounds the entries of one model name: teep verifies
+// every entry, and each entry costs a quote, GPU and supply chain check.
+const MaxModelInstances = 8
+
+// Select rejects empty model names and duplicate entries after complete
+// decoding, and selects the entries of the requested model: the entries
+// with the exact name; else the entries of the one name that contains, or
+// is contained in, the requested name; else the entries of the only name
+// in the array. Any other array has no entry that teep can attribute to
+// the request, and fails.
+//
+// Several entries of one name are instances of one model behind the
+// gateway. Each must have its own instance id, and all must hold the same
+// signing key and OHTTP key configuration: the gateway selects the
+// instance, so a client key must be valid for every instance. The caller
+// verifies every returned entry.
+func (m Models) Select(requested, path string) ([]Model, ModelNameMatch, []string, error) {
 	if requested == "" {
-		return Model{}, "", nil, errors.New("requested model name is empty")
+		return nil, "", nil, errors.New("requested model name is empty")
 	}
-	seen := make(map[string]bool, len(m))
 	var unknown []string
-	exact, contains := -1, []int(nil)
+	var names []string
+	byName := make(map[string][]int, len(m))
 	for i := range m {
 		entry := &m[i]
 		unknown = append(unknown, entry.UnknownFields(fmt.Sprintf("%s[%d]", path, i))...)
 		name := entry.Fields.ModelName
-		if name == "" || seen[name] {
-			return Model{}, "", unknown, errors.New("empty or duplicate attestation model")
+		if name == "" {
+			return nil, "", unknown, errors.New("empty attestation model")
 		}
-		seen[name] = true
+		if _, ok := byName[name]; !ok {
+			names = append(names, name)
+		}
+		byName[name] = append(byName[name], i)
+	}
+	for _, name := range names {
+		if err := m.checkInstances(byName[name]); err != nil {
+			return nil, "", unknown, fmt.Errorf("attestation model %q: %w", name, err)
+		}
+	}
+	chosen, match, err := selectName(requested, names)
+	if err != nil {
+		return nil, "", unknown, err
+	}
+	out := make([]Model, 0, len(byName[chosen]))
+	for _, i := range byName[chosen] {
+		out = append(out, m[i])
+	}
+	return out, match, unknown, nil
+}
+
+// selectName applies the name rules of Select to the distinct names.
+func selectName(requested string, names []string) (string, ModelNameMatch, error) {
+	exact, contains := "", []string(nil)
+	for _, name := range names {
 		match, err := MatchModelName(requested, name)
 		if err != nil {
-			return Model{}, "", unknown, err
+			return "", "", err
 		}
 		switch match {
 		case ModelNameExact:
-			exact = i
+			exact = name
 		case ModelNameContains:
-			contains = append(contains, i)
+			contains = append(contains, name)
 		case ModelNameDiffers:
 		}
 	}
 	switch {
-	case exact >= 0:
-		return m[exact], ModelNameExact, unknown, nil
+	case exact != "":
+		return exact, ModelNameExact, nil
 	case len(contains) == 1:
-		return m[contains[0]], ModelNameContains, unknown, nil
-	case len(contains) == 0 && len(m) == 1:
-		return m[0], ModelNameDiffers, unknown, nil
+		return contains[0], ModelNameContains, nil
+	case len(contains) == 0 && len(names) == 1:
+		return names[0], ModelNameDiffers, nil
 	default:
-		return Model{}, "", unknown, errors.New("no attestation entry can be attributed to the requested model")
+		return "", "", errors.New("no attestation entry can be attributed to the requested model")
 	}
+}
+
+// checkInstances accepts several entries of one name only as distinct
+// instances that share the signing key and the OHTTP key configuration.
+func (m Models) checkInstances(idx []int) error {
+	if len(idx) == 1 {
+		return nil
+	}
+	if len(idx) > MaxModelInstances {
+		return fmt.Errorf("%d entries, more than %d", len(idx), MaxModelInstances)
+	}
+	first := &m[idx[0]]
+	seen := make(map[string]bool, len(idx))
+	for _, i := range idx {
+		entry := &m[i]
+		id := entry.Fields.Info.Info.InstanceID
+		if id == "" || seen[id] {
+			return errors.New("duplicate entry: entries of one model need distinct instance ids")
+		}
+		seen[id] = true
+		if !equalHex(entry.Fields.SigningPublicKey, first.Fields.SigningPublicKey) ||
+			!equalHex(entry.Fields.SigningAddress, first.Fields.SigningAddress) ||
+			!equalText(entry.Fields.SigningAlgo, first.Fields.SigningAlgo) {
+			return errors.New("instances hold different signing keys")
+		}
+		if !equalText(entry.ohttpKeyConfig, first.ohttpKeyConfig) {
+			return errors.New("instances hold different OHTTP key configurations")
+		}
+	}
+	return nil
 }
 
 // Raw builds verification inputs only from supported validated fields.
