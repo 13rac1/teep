@@ -1236,6 +1236,11 @@ func reassembleNonStream(body io.Reader, session Decryptor, endpoint EndpointTyp
 	for k, b := range fields {
 		msg[k] = b.String()
 	}
+	// An OpenAI chat message always has a content key; it is null when the
+	// model sent no text, for example in a response with only tool calls.
+	if _, ok := msg["content"]; !ok {
+		msg["content"] = nil
+	}
 	if len(toolCalls) > 0 {
 		msg["tool_calls"] = sortedToolCalls(toolCalls)
 	}
