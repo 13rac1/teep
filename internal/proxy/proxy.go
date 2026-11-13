@@ -973,11 +973,12 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	fetchDur := time.Since(fetchStart)
 	slog.DebugContext(ctx, "attestation fetch complete", "provider", prov.Name, "elapsed", fetchDur)
 
-	report, admission, err := s.verifyAttestation(ctx, prov, upstreamModel, raw, nonce, failure)
+	shared := &instanceShared{supplyChain: attestation.NewSupplyChainMemo()}
+	report, admission, err := s.verifyAttestation(ctx, prov, upstreamModel, raw, nonce, shared, failure)
 	if err != nil {
 		return nil, nil, attestation.AdmissionTime{}, err
 	}
-	report, admission, err = s.verifyReplicas(ctx, prov, upstreamModel, raw, nonce, report, admission, failure)
+	report, admission, err = s.verifyReplicas(ctx, prov, upstreamModel, raw, nonce, shared, report, admission, failure)
 	if err != nil {
 		return nil, nil, attestation.AdmissionTime{}, err
 	}
@@ -994,7 +995,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 // passes for every instance. The gateway selects the instance for each
 // request, and every instance holds the attested signing key.
 func (s *Server) verifyReplicas(ctx context.Context, prov *provider.Provider, upstreamModel string,
-	raw *attestation.RawAttestation, nonce attestation.Nonce, report *attestation.VerificationReport,
+	raw *attestation.RawAttestation, nonce attestation.Nonce, shared *instanceShared, report *attestation.VerificationReport,
 	admission attestation.AdmissionTime, failure func(string, error),
 ) (*attestation.VerificationReport, attestation.AdmissionTime, error) {
 	if len(raw.Replicas) == 0 {
@@ -1003,7 +1004,7 @@ func (s *Server) verifyReplicas(ctx context.Context, prov *provider.Provider, up
 	report.LabelInstance(raw.ModelInstanceID)
 	ids := []string{raw.ModelInstanceID}
 	for _, replica := range raw.Replicas {
-		other, otherAdmission, err := s.verifyAttestation(ctx, prov, upstreamModel, replica, nonce, failure)
+		other, otherAdmission, err := s.verifyAttestation(ctx, prov, upstreamModel, replica, nonce, shared, failure)
 		if err != nil {
 			// verifyAttestation reports its failure through the callback,
 			// for a replica as for the first instance.
@@ -1021,20 +1022,43 @@ func (s *Server) verifyReplicas(ctx context.Context, prov *provider.Provider, up
 	return report, admission, nil
 }
 
+// instanceShared holds the results that the instances of one model share
+// in one verification: the gateway evidence, which is the same for every
+// instance, and the Sigstore and Rekor results by image digest. It keeps the
+// requests to external services at one set for the gateway and one for each
+// digest, whatever the number of instances.
+type instanceShared struct {
+	gateway     attestation.GatewayMemo[gatewayResults]
+	supplyChain *attestation.SupplyChainMemo
+}
+
+// gatewayResults are the results of the gateway TDX checks of one
+// verification.
+type gatewayResults struct {
+	tdx     *attestation.TDXVerifyResult
+	compose *attestation.ComposeBindingResult
+	poc     *attestation.PoCResult
+}
+
 // verifyAttestation verifies the evidence of one model instance and builds
 // its report.
 func (s *Server) verifyAttestation(ctx context.Context, prov *provider.Provider, upstreamModel string,
-	raw *attestation.RawAttestation, nonce attestation.Nonce, failure func(string, error),
+	raw *attestation.RawAttestation, nonce attestation.Nonce, shared *instanceShared, failure func(string, error),
 ) (*attestation.VerificationReport, attestation.AdmissionTime, error) {
 	totalStart := time.Now()
 	tdxResult, tdxDur := s.verifyTDX(ctx, raw, nonce, prov)
 	sevResult, sevDur := s.verifySEV(ctx, raw, nonce, prov)
 	gatewaySEVResult := s.verifyGatewaySEV(ctx, raw, nonce, prov)
-	gatewayTDXResult, gatewayComposeResult, gatewayPoCResult := s.verifyGatewayTDX(ctx, raw, nonce, prov)
+	gw := shared.gateway.Get(raw, func() gatewayResults {
+		var g gatewayResults
+		g.tdx, g.compose, g.poc = s.verifyGatewayTDX(ctx, raw, nonce, prov)
+		return g
+	})
+	gatewayTDXResult, gatewayComposeResult, gatewayPoCResult := gw.tdx, gw.compose, gw.poc
 	nvidiaResult, nvidiaDur := verifyNVIDIA(ctx, raw, nonce, prov.Name)
 	nrasResult, nrasDur := s.verifyNVIDIAOnline(ctx, raw, nonce, prov.Name)
 	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)
-	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, gatewayComposeResult, prov.SupplyChainPolicy)
+	sc, composeDur := s.verifySupplyChain(ctx, raw, tdxResult, gatewayComposeResult, prov.SupplyChainPolicy, shared.supplyChain)
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
 	tinfoilSC, tinfoilSCDur := s.verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, prov, upstreamModel)
 
@@ -1349,6 +1373,7 @@ func (s *Server) verifySupplyChain(
 	tdxResult *attestation.TDXVerifyResult,
 	gatewayCompose *attestation.ComposeBindingResult,
 	scPolicy *attestation.SupplyChainPolicy,
+	memo *attestation.SupplyChainMemo,
 ) (supplyChainResult, time.Duration) {
 	if scPolicy == nil {
 		panic("verifySupplyChain: nil SupplyChainPolicy; provider must supply a real policy or attestation.NoSupplyChainPolicy()")
@@ -1393,7 +1418,7 @@ func (s *Server) verifySupplyChain(
 	allDigests, digestToRepo := attestation.MergeComposeDigests(modelCD, gatewayCD)
 	sc.DigestToRepo = digestToRepo
 	if !s.cfg.Offline {
-		sc.Sigstore = s.rekorClient.CheckSigstoreDigests(ctx, allDigests)
+		sc.Sigstore = memo.CheckSigstoreDigests(ctx, s.rekorClient, allDigests)
 	}
 
 	if len(sc.Sigstore) > 0 && !s.cfg.Offline {
@@ -1403,7 +1428,7 @@ func (s *Server) verifySupplyChain(
 				okDigests = append(okDigests, sr.Digest)
 			}
 		}
-		sc.Rekor = s.rekorClient.FetchRekorProvenancesForPolicy(ctx, okDigests, sc.DigestToRepo, scPolicy)
+		sc.Rekor = memo.FetchRekorProvenancesForPolicy(ctx, s.rekorClient, okDigests, sc.DigestToRepo, scPolicy)
 	}
 
 	return sc, time.Since(start)

@@ -172,7 +172,8 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		return verificationOutcome{}, fmt.Errorf("fetch attestation: %w", err)
 	}
 
-	ev := evidenceVerifier{opts: opts, nonce: nonce, client: client, tdx: verifier, sev: sevVerifier}
+	ev := evidenceVerifier{opts: opts, nonce: nonce, client: client, tdx: verifier, sev: sevVerifier,
+		supplyChain: attestation.NewSupplyChainMemo()}
 	report, nrasResult, err := ev.report(ctx, raw, func() *attestation.E2EETestResult {
 		e2eeResult = evidenceE2EEOutcome(ctx, opts, raw)
 		if e2eeResult != nil && e2eeResult.KeyType == "" {
@@ -202,13 +203,25 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 	return verificationOutcome{report: report, raw: raw, e2ee: e2eeResult}, nil
 }
 
-// evidenceVerifier verifies the evidence of one model instance.
+// evidenceVerifier verifies the evidence of the instances of one model. The
+// instances share the gateway evidence and the image digests, so the gateway
+// checks run once and each digest is looked up once.
 type evidenceVerifier struct {
-	opts   *Options
-	nonce  attestation.Nonce
-	client *http.Client
-	tdx    attestation.TDXVerifier
-	sev    attestation.SEVVerifier
+	opts        *Options
+	nonce       attestation.Nonce
+	client      *http.Client
+	tdx         attestation.TDXVerifier
+	sev         attestation.SEVVerifier
+	gateway     attestation.GatewayMemo[gatewayResults]
+	supplyChain *attestation.SupplyChainMemo
+}
+
+// gatewayResults are the results of the gateway TDX checks of one
+// verification.
+type gatewayResults struct {
+	tdx     *attestation.TDXVerifyResult
+	compose *attestation.ComposeBindingResult
+	poc     *attestation.PoCResult
 }
 
 // mergeReplicas verifies every other instance of the model in raw and merges
@@ -269,8 +282,13 @@ func (ev *evidenceVerifier) report(ctx context.Context, raw *attestation.RawAtte
 	}
 
 	// Gateway verification for providers that populate GatewayIntelQuote.
-	gatewayTDX, gatewayCompose, gatewayPoCResult := verifyGatewayTDX(ctx, raw, ev.nonce, ev.client, ev.opts.Offline, ev.tdx,
-		newGatewayReportDataVerifier(ev.opts.ProviderName), ev.opts.VerificationTime)
+	gw := ev.gateway.Get(raw, func() gatewayResults {
+		var g gatewayResults
+		g.tdx, g.compose, g.poc = verifyGatewayTDX(ctx, raw, ev.nonce, ev.client, ev.opts.Offline, ev.tdx,
+			newGatewayReportDataVerifier(ev.opts.ProviderName), ev.opts.VerificationTime)
+		return g
+	})
+	gatewayTDX, gatewayCompose, gatewayPoCResult := gw.tdx, gw.compose, gw.poc
 	var gatewayCD attestation.ComposeDigests
 	if gatewayCompose != nil && gatewayCompose.Err == nil {
 		gatewayCD = attestation.ExtractComposeDigests(raw.GatewayAppCompose)
@@ -286,7 +304,7 @@ func (ev *evidenceVerifier) report(ctx context.Context, raw *attestation.RawAtte
 	if err := scPolicy.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("supply chain policy: %w", err)
 	}
-	sigstoreResults, rekorResults := checkSigstore(ctx, allDigests, digestToRepo, scPolicy, ev.client, ev.opts.Offline)
+	sigstoreResults, rekorResults := checkSigstore(ctx, allDigests, digestToRepo, scPolicy, ev.client, ev.opts.Offline, ev.supplyChain)
 
 	e2eeResult := e2eeProbe()
 

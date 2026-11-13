@@ -38,7 +38,9 @@ the request only if every instance passes:
   NRAS and Proof of Cloud check, one check of the gateway evidence, and one
   Sigstore and Rekor lookup for each image digest.
 - Teep runs the full model verification on each instance against the same
-  gateway evidence. A factor passes only if it passes for every instance.
+  gateway evidence. It checks that gateway evidence once, and looks up each
+  image digest in Sigstore and Rekor once, for all instances of the model.
+  A factor passes only if it passes for every instance.
   Each failed or skipped factor names an instance that did not pass it.
   The report lists the instance ids under `instances`; the other metadata,
   such as the compose hash, is the metadata of the first instance.
