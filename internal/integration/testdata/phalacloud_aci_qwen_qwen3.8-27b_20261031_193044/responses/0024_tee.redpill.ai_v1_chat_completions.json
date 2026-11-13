@@ -1,0 +1,52 @@
+{
+  "method": "POST",
+  "url": "https://tee.redpill.ai/v1/chat/completions",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEtw62upxjyLzO90/zkCssb4lvGmfI6x3ioZH/QTbWfISyFpfrs19JJpgMyg6ZbEzlgBjTYOr+MrCjJOdROHsMSw==",
+  "headers": {
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Access-Control-Expose-Headers": [
+      "*"
+    ],
+    "Cache-Control": [
+      "no-cache"
+    ],
+    "Content-Type": [
+      "text/event-stream"
+    ],
+    "Date": [
+      "Sat, 31 Oct 2026 19:30:43 GMT"
+    ],
+    "Vary": [
+      "origin, access-control-request-method, access-control-request-headers"
+    ],
+    "X-Accel-Buffering": [
+      "no"
+    ],
+    "X-Aci-Keyset-Digest": [
+      "sha256:df2a7cd6c1c6b697879f64f758c2dc378d6c60cde8aa272e9c536858466383f5"
+    ],
+    "X-Aci-Version": [
+      "aci/1"
+    ],
+    "X-E2ee-Algo": [
+      "secp256k1-aes-256-gcm-hkdf-sha256"
+    ],
+    "X-E2ee-Applied": [
+      "true"
+    ],
+    "X-E2ee-Version": [
+      "2"
+    ],
+    "X-Receipt-Id": [
+      "rcpt-1a1821cbb5781e7e7532bf27"
+    ]
+  },
+  "req_body_base64": "eyJtYXhfdG9rZW5zIjo2NCwibWVzc2FnZXMiOlt7ImNvbnRlbnQiOiIwNDRhMDYxZTNjYWU0M2Q4ZjJjMjI1OGE2NjVmZTVkMmIzYjhmNjJjNTRjNzhjMmU5ZDhiODBjYTAzYjNiNWVhMDhkMDE2NDYzYThmMGY2NmNiMWFjMThhNGJkMjI2ZDBlMzUwMjBiYzk4OTAwNjk2OGQ0MDE4NWIzMDFmY2UzODhiYWRkZWZmMDhiZGU3NDk3YTkxNTU1ZjY5Nzk5ZmRhNGIwY2M4ZWQ3ZTU2MWExMGU1ZmY1N2YxYTllMzNhZGI3ZGQ0Yjk1ZWU0ZjMiLCJyb2xlIjoidXNlciJ9XSwibW9kZWwiOiJxd2VuL3F3ZW4zLjgtMjdiIiwic3RyZWFtIjp0cnVlfQ==",
+  "duration_ms": 420
+}

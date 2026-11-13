@@ -1,25 +1,17 @@
 // Package phalacloud implements the Attester and RequestPreparer interfaces for
-// Phala Cloud's TEE attestation API (RedPill gateway).
+// Phala Cloud, which serves its TEE models through the dstack
+// private-ai-gateway.
 //
-// RedPill is a multi-backend gateway that returns attestation in different
-// formats depending on the backend model. Supported formats:
+// teep verifies the gateway's ACI/1 report, whose quote binds the whole
+// workload keyset (ACI/1 §3.2):
 //
-//   - chutes:  "attestation_type" key present → provider.ParseChutesFormat
-//   - dstack:  "intel_quote" key present → delegates to nanogpt.ParseAttestationResponse
-//   - tinfoil: "format" key present → not yet supported
-//   - gateway: "gateway_attestation" key present → not yet supported
-//
-// Phala Cloud attestation endpoint:
-//
-//	GET {base_url}/v1/attestation/report?model={model}&nonce={nonce}
+//	GET {base_url}/v1/aci/attestation?nonce={nonce}
 //	Authorization: Bearer {api_key}
 package phalacloud
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
@@ -30,13 +22,12 @@ import (
 	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/aci"
-	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
 const (
-	// attestationPath is the Phala Cloud API path for TEE attestation reports.
-	attestationPath = "/v1/attestation/report"
+	// attestationPath is the ACI/1 report route that teep verifies.
+	attestationPath = aci.CanonicalPath
 
 	// attestationTimeout is longer than the default because Phala Cloud's
 	// multi-instance attestation endpoint is slow (typically 30-60s).
@@ -71,10 +62,11 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 // SetClient replaces the HTTP client used for attestation fetches.
 func (a *Attester) SetClient(c *http.Client) { a.client = c }
 
-// FetchAttestation fetches TEE attestation from Phala Cloud. The nonce is sent
-// as a query parameter. Format detection is performed on the response body to
-// delegate to the correct backend parser.
-func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+// FetchAttestation fetches the ACI/1 report of the private-ai-gateway from
+// /v1/aci/attestation with the client nonce. The report is service-scoped
+// (ACI/1 §4), so the model is not sent; the sessions behind a model describe
+// its upstreams.
+func (a *Attester) FetchAttestation(ctx context.Context, _ string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	ctx, cancel := context.WithTimeout(ctx, attestationTimeout)
 	defer cancel()
 
@@ -83,37 +75,39 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 		return nil, fmt.Errorf("phalacloud: parse endpoint URL %q: %w", a.baseURL+attestationPath, err)
 	}
 	q := endpoint.Query()
-	q.Set("model", model)
 	q.Set("nonce", nonce.Hex())
 	endpoint.RawQuery = q.Encode()
 
-	body, err := provider.FetchAttestationJSON(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
+	body, peerSPKI, err := provider.FetchAttestationWithTLS(ctx, a.client, endpoint.String(), a.apiKey, 2<<20)
 	if err != nil {
 		return nil, fmt.Errorf("phalacloud: %w", err)
 	}
-	return ParseAttestationResponse(ctx, body)
+	raw, err := ParseAttestationResponse(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+	// The report binds the keyset, and the keyset lists the TLS key of the
+	// host; the connection that carried the report must use that key.
+	spki, err := aci.TLSKeyForDomain(raw, endpoint.Hostname())
+	if err != nil {
+		return nil, fmt.Errorf("phalacloud: %w", err)
+	}
+	if err := tlsct.CompareSPKIFingerprints(peerSPKI, spki); err != nil {
+		return nil, fmt.Errorf("phalacloud: attestation TLS binding: %w", err)
+	}
+	raw.TransportTLSFingerprint = spki
+	raw.TransportTLSAuthority = endpoint.Host
+	return raw, nil
 }
 
-// ParseAttestationResponse detects the attestation format from the JSON body
-// and delegates to the appropriate backend parser.
+// ParseAttestationResponse parses the ACI/1 report of /v1/aci/attestation.
+// Any other format fails: ACI/1 verifiers use the /v1/aci/* routes, and only
+// that report binds the whole workload keyset in the gateway quote.
 func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.RawAttestation, error) {
-	format := formatdetect.Detect(body)
-	slog.DebugContext(ctx, "phalacloud format detected", "format", format)
-
-	switch format {
-	case attestation.FormatChutes:
-		return provider.ParseChutesFormat(ctx, body, "phalacloud")
-	case attestation.FormatDstack:
-		return nanogpt.ParseAttestationResponse(ctx, body)
-	case attestation.FormatACI1:
-		return aci.Parse(ctx, body, "phalacloud")
-	case attestation.FormatTinfoil:
-		return nil, errors.New("phalacloud: tinfoil attestation format not yet supported")
-	case attestation.FormatGateway:
-		return nil, errors.New("phalacloud: gateway attestation format not yet supported")
-	default:
-		return nil, errors.New("phalacloud: unrecognized attestation format (no known format keys found)")
+	if format := formatdetect.Detect(body); format != attestation.FormatACI1 {
+		return nil, fmt.Errorf("phalacloud: the report of %s must be ACI/1, got format %q", aci.CanonicalPath, format)
 	}
+	return aci.ParseCanonical(ctx, body, "phalacloud")
 }
 
 // Preparer injects the Phala Cloud Authorization header into outgoing requests.

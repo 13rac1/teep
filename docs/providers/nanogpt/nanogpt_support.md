@@ -56,9 +56,10 @@ For an ACI/1 response:
   measurement policy shared with Venice and Phala Cloud
   (`aci.GatewayMeasurementPolicy`); its REPORTDATA binds the gateway signing
   key and the client nonce (`gateway_tee_reportdata_binding`, enforced).
-- `nonce_match` and `gateway_nonce_match` evaluate the client nonce where the
-  evidence binds it: the verified gateway REPORTDATA, and the relayed GPU
-  evidence.
+- The gateway variant echoes no nonce: `nonce_match` and
+  `gateway_nonce_match` fail and are allowed (`NanoGPTACIDefaultAllowFail`).
+  Freshness rests on `gateway_tee_reportdata_binding`, and the GPU evidence
+  nonce on `nvidia_nonce_client_bound`, both enforced.
 - `aci_key_custody` verifies the workload keyset digest and the dstack-KMS
   custody chain to the KMS root and gateway app id that Venice and Phala
   Cloud share (`aci.GatewayPins`).
@@ -95,8 +96,8 @@ compose-pinned: the quote's MRConfigID measures the compose manifest.
 
 ## Factor enforcement
 
-An ACI/1 response selects `ACIDefaultAllowFail`, the list shared with Venice
-and Phala Cloud. Other formats keep `NanoGPTDefaultAllowFail`.
+An ACI/1 response selects `NanoGPTACIDefaultAllowFail`: the list shared with
+Venice (`ACIDefaultAllowFail`) and the two nonce factors. Other formats keep `NanoGPTDefaultAllowFail`.
 
 ## Known limitations
 
@@ -104,6 +105,9 @@ and Phala Cloud. Other formats keep `NanoGPTDefaultAllowFail`.
   NanoGPT is an unattested hop in front of the gateway. With E2EE it sees
   the message content and generated content only as ciphertext, but it sees
   the top-level `model`, `messages[].name`, `stop`, `tool_choice` and the top-level `function_call` (which name a function), and the other request parameters, including provider-specific prompt fields, which pass in plaintext.
+- teep does not check `X-ACI-Keyset-Digest` on NanoGPT responses: the
+  gateway variant binds the signing key, not the keyset digest, so teep
+  has no hardware-bound digest to compare with.
 - NanoGPT can forge, drop, reorder or repeat response content: E2EE v2
   responses are not authenticated against it.
 - E2EE v2 defines field paths only for message content. teep refuses a

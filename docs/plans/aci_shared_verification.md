@@ -114,8 +114,8 @@ not committed.
 4. **Unnamed model:** a new factor, allowed to fail by default, that states
    that the attestation names no backend for the requested model.
 5. **Host SPKI binding to the keyset TLS key:** recorded here and in the gap
-   document as a gap. It closes in the authorization-store migration, not in
-   this plan; no second pin path is added.
+   document as a gap until phase 7c, which moves Phala Cloud to the
+   authorization store; no second pin path is added.
 6. **E2EE for Phala Cloud and NanoGPT:** the final phase. A protocol check of
    the gateway's E2EE version against the Venice encryptor, made by reading
    the gateway source at the deployed commit, precedes it, and its result is
@@ -305,9 +305,14 @@ evidence: `nvidia_signature`, `nvidia_nonce_client_bound` and the other GPU
 factors fail for Phala Cloud ACI/1 and are allowed to fail by default.
 
 **7b. Replicas.** Replicas can share a keyset (the KMS derives keys from
-the app id), so a keyset digest identifies the keyset, not one machine. A
-served `X-ACI-Keyset-Digest` that differs from the verified keyset fails
-the verification, and the next request verifies again (§9.1).
+the app id), so a keyset digest identifies the keyset, not one machine. An
+inference response without `X-ACI-Keyset-Digest` fails: §5.2 requires it
+on every response. A response that serves another digest is not failed:
+§5.2 says that a changed digest "gates new sends until the client
+re-verifies according to §3.1; responses already in flight continue
+unaffected". teep relays it and ends the cached report, so that the next
+send verifies again; a member of the same renewal family keeps continuity,
+and another family becomes a new authorization (§3.1).
 
 **7c. TLS key pin.** Compare the live certificate key of `tee.redpill.ai`
 with the hardware-bound keyset entry for that host before any request

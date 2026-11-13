@@ -9,10 +9,10 @@ import (
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 )
 
-// Phala Cloud answers with the ACI/1 gateway variant of the private-ai-gateway;
-// ParseAttestationResponse parses it with the shared ACI/1 parser.
+// Phala Cloud verifies the canonical ACI/1 report of /v1/aci/attestation;
+// ParseAttestationResponse parses it with the canonical parser.
 func TestParseAttestationResponseACI(t *testing.T) {
-	body, err := os.ReadFile("../aci/testdata/gateway_variant.json")
+	body, err := os.ReadFile("../aci/testdata/canonical_report.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,8 +20,8 @@ func TestParseAttestationResponseACI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseAttestationResponse: %v", err)
 	}
-	if raw.BackendFormat != attestation.FormatACI1 || !raw.ACIGatewayVariant || raw.GatewayIntelQuote == "" {
-		t.Fatalf("format=%q gateway variant=%v gateway quote=%d", raw.BackendFormat, raw.ACIGatewayVariant, len(raw.GatewayIntelQuote))
+	if raw.BackendFormat != attestation.FormatACI1 || !raw.ACICanonicalReport || raw.GatewayIntelQuote == "" {
+		t.Fatalf("format=%q canonical=%v gateway quote=%d", raw.BackendFormat, raw.ACICanonicalReport, len(raw.GatewayIntelQuote))
 	}
 }
 

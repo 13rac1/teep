@@ -12,8 +12,10 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -27,8 +29,13 @@ func standaloneAttesterForRoute(ctx context.Context, opts *Options, attester pro
 			*route, err = resolver.ResolveRoute(ctx, opts.ModelName)
 		} else {
 			origin, repo := opts.Provider.BaseURL, tinfoil.RouterRepo
-			if opts.ProviderName == "nearcloud" {
+			switch opts.ProviderName {
+			case "nearcloud":
 				origin, repo = "https://"+nearcloud.GatewayHost(), ""
+			case "phalacloud":
+				// The base URL host serves the canonical report and the
+				// inference requests; the keyset lists its TLS key.
+				origin, repo = opts.Provider.BaseURL, ""
 			}
 			*route, err = provider.NewResolvedRoute(origin, repo)
 		}
@@ -44,7 +51,7 @@ func standaloneAttesterForRoute(ctx context.Context, opts *Options, attester pro
 	if scoped, ok := attester.(provider.RouteAttester); ok {
 		return provider.AttesterForRoute(scoped, *route)
 	}
-	if opts.ProviderName != "tinfoil_v3_cloud" && opts.ProviderName != "nearcloud" {
+	if opts.ProviderName != "tinfoil_v3_cloud" && opts.ProviderName != "nearcloud" && opts.ProviderName != "phalacloud" {
 		return nil, errors.New("dynamic provider has no route attester")
 	}
 	return attester, nil
@@ -175,19 +182,34 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 		prov.Encryptor, prov.Preparer = neardirect.NewE2EE(), neardirect.NewPreparer(opts.Provider.APIKey)
 	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
 		prov.Encryptor, prov.Preparer = tinfoil.NewE2EE(), tinfoil.NewPreparer(opts.Provider.APIKey)
+	case "phalacloud":
+		prov.Encryptor, prov.Preparer = aci.NewE2EE(), phalacloud.NewPreparer(opts.Provider.APIKey)
 	default:
 		return nil, false, errors.New("unsupported TLS-binding inference provider")
 	}
-	body, err := json.Marshal(map[string]any{"model": opts.ModelName, "messages": []map[string]string{{"role": "user", "content": "Say hello"}}, "stream": true})
+	request := map[string]any{"model": opts.ModelName, "messages": []map[string]string{{"role": "user", "content": "Say hello"}}, "stream": true}
+	if opts.ProviderName == "phalacloud" {
+		// As in testE2EEACIv2: max_tokens bounds the run time of a reasoning
+		// model and the cost of the probe to the provider.
+		request["max_tokens"] = aciv2ProbeMaxTokens
+	}
+	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, false, err
 	}
 	phase := &tlsct.InferenceAttempt{}
-	req, encrypted, err := provider.PrepareInference(phase.Context(ctx), prov, route, &provider.InferenceInput{Body: body, SigningKey: raw.SigningKey, ModelKey: modelKey, Path: "/v1/chat/completions", ContentType: "application/json", Stream: true, Endpoint: e2ee.EndpointChat})
+	req, encrypted, err := provider.PrepareInference(phase.Context(ctx), prov, route, &provider.InferenceInput{Body: body, SigningKey: raw.SigningKey, BackendFormat: raw.BackendFormat, ModelKey: modelKey, Path: "/v1/chat/completions", ContentType: "application/json", Stream: true, Endpoint: e2ee.EndpointChat})
 	if err != nil {
 		return nil, false, err
 	}
 	defer e2ee.ZeroSessions(encrypted.Session, encrypted.Chutes, encrypted.EHBP)
+	if opts.capture != nil {
+		// Record the exchange around the pinned transport, which still
+		// checks the attested SPKI before it sends the request.
+		recorded := *client
+		recorded.Transport = opts.capture.recordE2EE(client.Transport)
+		client = &recorded
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, phase.RetryConnectionFailure(ctx, err), err
@@ -211,6 +233,9 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 	}
 	if encrypted.EHBP != nil {
 		return &standaloneProbe{e2ee: verifyEHBPStreamResponse(resp, encrypted.EHBP)}, false, nil
+	}
+	if v2, ok := encrypted.Session.(*e2ee.ACIv2Session); ok {
+		return &standaloneProbe{e2ee: verifyACIv2StreamResponse(resp, v2, raw)}, false, nil
 	}
 	return &standaloneProbe{e2ee: verifyE2EEStreamResponse(resp, encrypted.Session, opts.ProviderName)}, false, nil
 }

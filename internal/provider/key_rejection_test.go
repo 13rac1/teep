@@ -17,6 +17,7 @@ func TestKeyRejection(t *testing.T) {
 	}{
 		{"unknown", 200, "application/json", `{}`, false, true},
 		{"unknown", 400, "application/json", `{}`, false, true},
+		{"phalacloud", 400, "application/json", `{"error":{"type":"invalid_request_error","message":"Decryption failed"}}`, false, false},
 		{"tinfoil_v3_cloud", 422, "application/problem+json", `{"type":"urn:ietf:params:ehbp:error:key-config"}`, true, false},
 		{"tinfoil_v3_direct", 422, "application/problem+json", `{"type":"other","title":"key-config"}`, false, false},
 		{"tinfoil_v3_cloud", 422, "application/json", `{"type":"urn:ietf:params:ehbp:error:key-config"}`, false, false},

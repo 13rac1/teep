@@ -82,7 +82,15 @@ does not trigger renewal. Do not maintain independent pin or key caches with
 different lifetimes. This policy applies to TLS-binding providers in both normal
 and `--offline` operation.
 
-Venice, Chutes, NanoGPT, and Phala Cloud do not use the authorization store.
+Phala Cloud uses the authorization store: the canonical ACI/1 report binds
+the TLS key of the base URL host, and its pool is keyed by that key. Each
+request also uses a fresh E2EE v2 session to the authorized gateway key.
+A successful response without `X-ACI-Keyset-Digest` fails and ends the
+authorization generation; a response of another digest is relayed and
+ends the generation (ACI/1 §5.2). See the
+[Phala Cloud provider document](../providers/phalacloud/phalacloud_support.md).
+
+Venice, Chutes, and NanoGPT do not use the authorization store.
 They keep a separate report cache and signing-key cache, each with an
 expiration time. On a report cache miss, concurrent requests for the same
 provider and model join one verification. As in the store, the server owns

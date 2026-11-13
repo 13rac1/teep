@@ -15,8 +15,9 @@ import (
 // Callers must authenticate the key before preparing an attempt.
 type InferenceInput struct {
 	Body              []byte
-	SigningKey        string            // Non-NEAR protocol key.
-	ModelKey          e2ee.NearModelKey // NEAR key from the acquired authorization.
+	SigningKey        string                    // Non-NEAR protocol key.
+	BackendFormat     attestation.BackendFormat // Format of the attestation that authorized SigningKey.
+	ModelKey          e2ee.NearModelKey         // NEAR key from the acquired authorization.
 	Path, ContentType string
 	Stream            bool
 	Endpoint          e2ee.EndpointType
@@ -82,7 +83,7 @@ func encryptInference(prov *Provider, input *InferenceInput) (e2ee.EncryptResult
 		}
 		return encryptor.EncryptRequestWithModelKey(input.Body, input.ModelKey, input.Endpoint)
 	}
-	return prov.Encryptor.EncryptRequest(input.Body, &attestation.RawAttestation{SigningKey: input.SigningKey}, input.Endpoint)
+	return prov.Encryptor.EncryptRequest(input.Body, &attestation.RawAttestation{SigningKey: input.SigningKey, BackendFormat: input.BackendFormat}, input.Endpoint)
 }
 
 // SetEHBPHeaders sets EHBP headers on the upstream request.

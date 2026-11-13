@@ -310,7 +310,7 @@ Venice only exposes chat completions. No other endpoints are available.
 
 **E2EE protocol:** E2EE v2 of the private-ai-gateway with the secp256k1 suite (`secp256k1-aes-256-gcm-hkdf-sha256`): per-field secp256k1 ECDH + HKDF-SHA256 + AES-256-GCM, encrypted to the gateway E2EE key that the gateway quote binds. The associated data of each field binds its field path, the request model, a 32-byte request nonce and the request timestamp, and for a response field the response id, so a ciphertext that the gateway or teep made does not decrypt in another field, request or model. E2EE is enabled by default.
 
-**Connection model:** Standard TLS. Streaming is forced; a non-streaming client request receives the reassembled response. The stream must end with `[DONE]`.
+**Connection model:** Phala Cloud: attestation-bound pooled connections to `tee.redpill.ai` (the gateway negotiated HTTP/1.1 on 2026-10-31), pinned to the TLS key that the attested keyset lists for that host; the `tls_key_binding` factor is enforced. NanoGPT: standard TLS. Streaming is forced; a non-streaming client request receives the reassembled response. The stream must end with `[DONE]`.
 
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|
@@ -337,7 +337,7 @@ Venice only exposes chat completions. No other endpoints are available.
 
 **Not encrypted:** the top-level `model`, `messages[].name`, `stop`, `tool_choice` and the top-level `function_call` (which name a function), and the other request parameters, including provider-specific prompt fields, which pass in plaintext. NanoGPT and the gateway see them.
 
-**Authentication:** E2EE v2 makes the content confidential against a relay, not authenticated against it. The gateway encrypts each response field to teep's public key with a fresh ephemeral key, and the associated data is public, so a relay (NanoGPT, or a party that holds a certificate for `tee.redpill.ai`) can encrypt fields of its own, drop, reorder or repeat chunks, append `[DONE]`, and set the role, `finish_reason`, usage, id and other clear fields; teep then decrypts the forged fields and reports `e2ee_usable` passed. The specification authenticates the response through the signed ACI receipt (e2ee-v2 §3.2 and §7, ACI/1 §7), which teep does not verify yet. teep pins the response id of a stream and requires `[DONE]`; these checks detect only an honest error, not a relay.
+**Authentication:** E2EE v2 makes the content confidential against a relay, not authenticated against it. The gateway encrypts each response field to teep's public key with a fresh ephemeral key, and the associated data is public, so a relay (NanoGPT, or a party on the TLS path) can encrypt fields of its own, drop, reorder or repeat chunks, append `[DONE]`, and set the role, `finish_reason`, usage, id and other clear fields; teep then decrypts the forged fields and reports `e2ee_usable` passed. The specification authenticates the response through the signed ACI receipt (e2ee-v2 §3.2 and §7, ACI/1 §7), which teep does not verify yet. teep pins the response id of a stream and requires `[DONE]`; these checks detect only an honest error, not a relay.
 
 **Other attestation formats:** E2EE v2 encrypts only to a key from an ACI/1 attestation. A Phala Cloud or NanoGPT model that answers with the dstack or Chutes format fails closed when E2EE is enabled.
 

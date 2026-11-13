@@ -11,7 +11,6 @@ import (
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
-	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/verify"
 )
 
@@ -19,13 +18,14 @@ import (
 // gateway variant, one for each provider that forwards it, with the base URL
 // of the capture and the provider's response parser. The base URL is stated
 // because NanoGPT's carries a path, which the first request URL does not
-// show apart from the attestation path.
+// show apart from the attestation path. Phala Cloud verifies the canonical
+// report of /v1/aci/attestation instead; its replay test uses its own
+// capture.
 var gatewayACIFixtures = []struct {
 	prefix  string
 	baseURL string
 	parse   func(context.Context, []byte) (*attestation.RawAttestation, error)
 }{
-	{"phalacloud_aci", "https://tee.redpill.ai", phalacloud.ParseAttestationResponse},
 	{"nanogpt_aci", "https://nano-gpt.com/api", nanogpt.ParseAttestationResponse},
 }
 
@@ -39,12 +39,12 @@ func gatewayACIBaseURL(t *testing.T, env *fixtureEnv, baseURL string) string {
 	return baseURL
 }
 
-// TestVerifyRun_GatewayACI_Fixtures replays the Phala Cloud and NanoGPT
-// captures of the ACI/1 gateway variant through verify.Run with the
-// production policy. The gateway evidence, the key custody chain to the
-// shared gateway pins and the evidence-bound client nonce must pass; the
-// factors that describe the inference host and the unnamed backend are
-// allowed failures.
+// TestVerifyRun_GatewayACI_Fixtures replays the NanoGPT capture of the ACI/1
+// gateway variant through verify.Run with the production policy. The gateway
+// evidence, its REPORTDATA binding of the client nonce, the key custody chain
+// to the shared gateway pins and the GPU evidence nonce must pass; the nonce
+// factors (no echoed nonce) and the factors that describe the inference host
+// and the unnamed backend are allowed failures.
 func TestVerifyRun_GatewayACI_Fixtures(t *testing.T) {
 	for _, fx := range gatewayACIFixtures {
 		t.Run(fx.prefix, func(t *testing.T) {
@@ -80,14 +80,19 @@ func TestVerifyRun_GatewayACI_Fixtures(t *testing.T) {
 				"gateway_compose_binding",
 				"gateway_event_log_integrity",
 			})
-			for _, name := range []string{"tee_quote_present", "tee_reportdata_binding", "aci_backend_named"} {
+			for _, name := range []string{"tee_quote_present", "tee_reportdata_binding", "aci_backend_named", "nonce_match", "gateway_nonce_match"} {
 				f := findFactor(t, report, name)
 				if f.Status != attestation.Fail || f.Enforced {
 					t.Errorf("%s: status=%s enforced=%v, want an allowed Fail", name, f.Status, f.Enforced)
 				}
 			}
 			if f := findFactor(t, report, "nonce_match"); !strings.Contains(f.Detail, "no echoed nonce") {
-				t.Errorf("nonce_match detail = %q, want the evidence-bound nonce", f.Detail)
+				t.Errorf("nonce_match detail = %q, want the no-echo failure", f.Detail)
+			}
+			// The compatibility route binds the signing key, not the keyset digest:
+			// the report carries no digest, so responses are not checked against one.
+			if report.ACIKeysetDigest != "" {
+				t.Errorf("compatibility-route report carries keyset digest %q", report.ACIKeysetDigest)
 			}
 		})
 	}
@@ -126,7 +131,7 @@ func TestGatewayACI_PinsDecideCustody(t *testing.T) {
 	}
 }
 
-// Concurrent verification of the Venice, Phala Cloud and NanoGPT ACI/1
+// Concurrent verification of the Venice and NanoGPT ACI/1
 // fixtures keeps each provider's policy: all reach the same gateway with the
 // shared pins, and each binds its E2EE key through the gateway REPORTDATA
 // factor.
@@ -194,7 +199,7 @@ func TestVerifyRun_ConcurrentACIProviders(t *testing.T) {
 			t.Errorf("%s: BackendFormat = %q", got.provider, got.report.BackendFormat)
 		}
 	}
-	for _, p := range []string{"venice", "phalacloud", "nanogpt"} {
+	for _, p := range []string{"venice", "nanogpt"} {
 		if seen[p] != 2 {
 			t.Errorf("%s: %d reports, want 2", p, seen[p])
 		}

@@ -13,7 +13,12 @@ import (
 
 // KeyRejection inspects only a documented pre-inference rejection envelope.
 // It restores the bounded body for ordinary error handling and never logs it.
+// Phala Cloud has no rejection envelope: the ACI/1 gateway reports a changed
+// keyset with X-ACI-Keyset-Digest, which the caller checks.
 func KeyRejection(resp *http.Response, name, path string) (bool, error) {
+	if name == "phalacloud" {
+		return false, nil
+	}
 	if name != "nearcloud" && name != "neardirect" && name != "tinfoil_v3_cloud" && name != "tinfoil_v3_direct" {
 		return false, errors.New("unsupported key rejection provider")
 	}

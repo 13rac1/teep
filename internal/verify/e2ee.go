@@ -79,6 +79,9 @@ func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName
 	}
 }
 
+// aciv2ProbeMaxTokens is the max_tokens of an E2EE v2 test request.
+const aciv2ProbeMaxTokens = 64
+
 // testE2EEACIv2 tests E2EE v2 of the private-ai-gateway (secp256k1 suite)
 // with the production encryptor. A response that is not an ACI/1
 // attestation fails: E2EE v2 encrypts only to the gateway key.
@@ -89,7 +92,7 @@ func testE2EEACIv2(ctx context.Context, raw *attestation.RawAttestation, provide
 		"model":      model,
 		"messages":   []map[string]string{{"role": "user", "content": "Say hello"}},
 		"stream":     true,
-		"max_tokens": 64,
+		"max_tokens": aciv2ProbeMaxTokens,
 	})
 	if err != nil {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("marshal body: %w", err)}
@@ -124,15 +127,28 @@ func testE2EEACIv2(ctx context.Context, raw *attestation.RawAttestation, provide
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 	}()
-	return verifyACIv2StreamResponse(resp, session)
+	return verifyACIv2StreamResponse(resp, session, raw)
 }
 
 // verifyACIv2StreamResponse decrypts every chunk of an E2EE v2 SSE response
 // with the relay's chunk decryption. Any unencrypted or undecryptable content
 // field, a missing [DONE] or a response without an encrypted field fails.
-func verifyACIv2StreamResponse(resp *http.Response, session *e2ee.ACIv2Session) *attestation.E2EETestResult {
+func verifyACIv2StreamResponse(resp *http.Response, session *e2ee.ACIv2Session, raw *attestation.RawAttestation) *attestation.E2EETestResult {
 	if resp.StatusCode != http.StatusOK {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP %d", resp.StatusCode)}
+	}
+	keysetNote := ""
+	if raw.ACICanonicalReport {
+		verified := &attestation.VerificationReport{ACIKeysetDigest: raw.ACIWorkloadKeysetDigest}
+		differs, err := attestation.CheckServedKeysetDigest(resp.Header, verified)
+		if err != nil {
+			return &attestation.E2EETestResult{Attempted: true, Err: err}
+		}
+		if differs {
+			// ACI/1 §5.2: the response in flight continues; a new send
+			// needs a verification of the served keyset.
+			keysetNote = "; the response served another keyset digest, so a new send verifies again (ACI/1 §5.2)"
+		}
 	}
 	// teep sends stream=true; any other response type is not the answer to
 	// the encrypted request.
@@ -175,7 +191,7 @@ func verifyACIv2StreamResponse(resp *http.Response, session *e2ee.ACIv2Session) 
 	}
 	return &attestation.E2EETestResult{
 		Attempted: true,
-		Detail:    fmt.Sprintf("E2EE v2 secp256k1: %d encrypted fields decrypted across %d chunks", session.DecryptedFields(), chunks),
+		Detail:    fmt.Sprintf("E2EE v2 secp256k1: %d encrypted fields decrypted across %d chunks%s", session.DecryptedFields(), chunks, keysetNote),
 	}
 }
 

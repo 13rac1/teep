@@ -82,6 +82,15 @@ func validateAuthorizationKey(name, key string) (e2ee.NearModelKey, error) {
 		}
 		session.Zero()
 		return e2ee.NearModelKey{}, nil
+	case "phalacloud":
+		// Open a production E2EE v2 session to reject a key that is not an
+		// uncompressed secp256k1 point.
+		session, err := e2ee.NewACIv2Session(key, "model", time.Now())
+		if err != nil {
+			return e2ee.NearModelKey{}, err
+		}
+		session.Zero()
+		return e2ee.NearModelKey{}, nil
 	default:
 		return e2ee.NearModelKey{}, errors.New("unsupported TLS-binding authorization provider")
 	}

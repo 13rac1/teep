@@ -2,16 +2,21 @@ package phalacloud_test
 
 import (
 	"context"
-	"encoding/base64"
+	"crypto/sha256"
 	"encoding/hex"
-	"github.com/13rac1/teep/internal/provider"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
+	"github.com/13rac1/teep/internal/tlsct"
+	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
 
 func makeServer(t *testing.T, status int, body string) *httptest.Server {
@@ -23,194 +28,142 @@ func makeServer(t *testing.T, status int, body string) *httptest.Server {
 	}))
 }
 
-// fakeQuoteBase64 returns a minimal base64-encoded TDX quote for tests.
-func fakeQuoteBase64() string {
-	return base64.StdEncoding.EncodeToString([]byte("fake-tdx-quote-bytes"))
+func canonicalReport(t *testing.T) []byte {
+	t.Helper()
+	body, err := os.ReadFile("../aci/testdata/canonical_report.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }
 
-// fakeQuoteHex returns the hex encoding of the same fake quote bytes.
-func fakeQuoteHex() string {
-	return hex.EncodeToString([]byte("fake-tdx-quote-bytes"))
+// fixtureTLSKey is the SPKI fingerprint that the canonical report fixture
+// lists for tee.redpill.ai, in the keyset and in downstream_tls_binding.
+const fixtureTLSKey = "951885459fbd27cad038c40a198e6a1fb63f4d18dd5d5a24d408d5d951488ffe"
+
+// The attester requests the canonical ACI/1 report with the client nonce
+// and no model over TLS, and pins the TLS key that the keyset lists for the
+// host. The connection that carried the report must use that key.
+func TestAttester_FetchesCanonicalReport(t *testing.T) {
+	testAttesterTLSBinding(t, "matching", true)
 }
 
-func TestAttester_FetchAttestation_ChutesFormat(t *testing.T) {
-	quote := fakeQuoteBase64()
-	body := `{
-		"attestation_type": "chutes",
-		"nonce": "aabb000000000000000000000000000000000000000000000000000000000000",
-		"all_attestations": [
-			{
-				"instance_id": "inst-001",
-				"nonce": "aabb000000000000000000000000000000000000000000000000000000000000",
-				"e2e_pubkey": "dGVzdC1wdWJrZXk=",
-				"intel_quote": "` + quote + `",
-				"gpu_evidence": [
-					{"certificate": "cert1", "evidence": "ev1", "arch": "HOPPER"}
-				]
+func TestAttester_TLSBindingFailures(t *testing.T) {
+	for _, mode := range []string{"other_peer_key", "downstream_differs", "no_entry_for_host", "duplicate_entry"} {
+		t.Run(mode, func(t *testing.T) { testAttesterTLSBinding(t, mode, false) })
+	}
+}
+
+// tlsBindingErrors names the failure that each mode must cause.
+var tlsBindingErrors = map[string]string{
+	"other_peer_key":     "attestation TLS binding",
+	"downstream_differs": "downstream_tls_binding",
+	"no_entry_for_host":  "lists no TLS key for tee.redpill.ai",
+	"duplicate_entry":    "more than one TLS key for tee.redpill.ai",
+}
+
+func testAttesterTLSBinding(t *testing.T, mode string, wantSuccess bool) {
+	t.Helper()
+	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
+		t.Helper()
+		fixture := string(canonicalReport(t))
+		nonce := attestation.NewNonce()
+		var fingerprint, path, query, auth string
+		ts := authority.NewTLSServerForHost(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path, query, auth = r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")
+			body := fixture
+			switch mode {
+			case "matching":
+				body = strings.ReplaceAll(body, fixtureTLSKey, fingerprint)
+			case "downstream_differs":
+				// The keyset entry matches the peer; the binding does not.
+				body = strings.Replace(body, fixtureTLSKey, fingerprint, 1)
+			case "no_entry_for_host":
+				body = strings.ReplaceAll(body, fixtureTLSKey, fingerprint)
+				body = strings.Replace(body, `"domain":"tee.redpill.ai"`, `"domain":"other.example"`, 1)
+			case "duplicate_entry":
+				body = strings.ReplaceAll(body, fixtureTLSKey, fingerprint)
+				body = strings.Replace(body, `"domain":"inference.phala.com"`, `"domain":"tee.redpill.ai"`, 1)
 			}
-		]
-	}`
-	srv := makeServer(t, http.StatusOK, body)
-	defer srv.Close()
-
-	a := phalacloud.NewAttester(srv.URL, "test-key")
-	nonce := attestation.NewNonce()
-
-	raw, err := a.FetchAttestation(context.Background(), "phala/test-model", nonce)
-	if err != nil {
-		t.Fatalf("FetchAttestation: %v", err)
-	}
-	if raw.BackendFormat != attestation.FormatChutes {
-		t.Errorf("BackendFormat = %q, want %q", raw.BackendFormat, attestation.FormatChutes)
-	}
-	if raw.IntelQuote != fakeQuoteHex() {
-		t.Errorf("IntelQuote = %q, want hex-decoded base64 = %q", raw.IntelQuote, fakeQuoteHex())
-	}
-	if raw.SigningKey != "dGVzdC1wdWJrZXk=" {
-		t.Errorf("SigningKey = %q, want e2e_pubkey value", raw.SigningKey)
-	}
-	if raw.Nonce != "aabb000000000000000000000000000000000000000000000000000000000000" {
-		t.Errorf("Nonce = %q, want server nonce", raw.Nonce)
-	}
-	if raw.TEEProvider != "TDX+NVIDIA" {
-		t.Errorf("TEEProvider = %q, want TDX+NVIDIA", raw.TEEProvider)
-	}
-	if raw.TEEHardware != "intel-tdx" {
-		t.Errorf("TEEHardware = %q, want intel-tdx", raw.TEEHardware)
-	}
-	if raw.NonceSource != "server" {
-		t.Errorf("NonceSource = %q, want server", raw.NonceSource)
-	}
-}
-
-func TestParseAttestationResponse_DstackFormat(t *testing.T) {
-	// A dstack-format response (like Venice/NanoGPT backends return).
-	body := []byte(`{
-		"signing_public_key": "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-		"signing_address": "0xdeadbeef",
-		"signing_algo": "ecdsa",
-		"intel_quote": "deadbeef",
-		"nvidia_payload": "",
-		"event_log": [],
-		"info": {
-			"app_cert": "",
-			"app_id": "",
-			"app_name": "test-app",
-			"compose_hash": "abc123",
-			"device_id": "dev1",
-			"instance_id": "",
-			"key_provider_info": "",
-			"mr_aggregated": "",
-			"os_image_hash": "os123",
-			"tcb_info": {
-				"app_compose": "{}",
-				"compose_hash": "",
-				"device_id": "",
-				"event_log": [],
-				"mrtd": "",
-				"os_image_hash": "",
-				"rtmr0": "",
-				"rtmr1": "",
-				"rtmr2": "",
-				"rtmr3": ""
-			},
-			"vm_config": ""
-		},
-		"request_nonce": "aabb",
-		"quote": "",
-		"vm_config": ""
-	}`)
-
-	raw, err := phalacloud.ParseAttestationResponse(context.Background(), body)
-	if err != nil {
-		t.Fatalf("ParseAttestationResponse: %v", err)
-	}
-	if raw.BackendFormat != attestation.FormatDstack {
-		t.Errorf("BackendFormat = %q, want %q", raw.BackendFormat, attestation.FormatDstack)
-	}
-	if raw.AppName != "test-app" {
-		t.Errorf("AppName = %q, want %q", raw.AppName, "test-app")
-	}
-}
-
-func TestParseAttestationResponse_UnsupportedTinfoil(t *testing.T) {
-	body := []byte(`{"format":"tinfoil","data":"stuff"}`)
-	_, err := phalacloud.ParseAttestationResponse(context.Background(), body)
-	if err == nil {
-		t.Fatal("expected error for tinfoil format")
-	}
-	if !strings.Contains(err.Error(), "tinfoil") {
-		t.Errorf("error should mention tinfoil, got: %v", err)
-	}
-}
-
-func TestParseAttestationResponse_UnrecognizedFormat(t *testing.T) {
-	body := []byte(`{"unknown_key":"value"}`)
-	_, err := phalacloud.ParseAttestationResponse(context.Background(), body)
-	if err == nil {
-		t.Fatal("expected error for unrecognized format")
-	}
-	if !strings.Contains(err.Error(), "unrecognized") {
-		t.Errorf("error should mention unrecognized, got: %v", err)
-	}
-}
-
-func TestAttester_FetchAttestation_MultipleAttestations(t *testing.T) {
-	quote1 := base64.StdEncoding.EncodeToString([]byte("quote-one"))
-	quote2 := base64.StdEncoding.EncodeToString([]byte("quote-two"))
-	body := `{
-		"attestation_type": "chutes",
-		"nonce": "ccdd000000000000000000000000000000000000000000000000000000000000",
-		"all_attestations": [
-			{
-				"instance_id": "inst-001",
-				"nonce": "ccdd000000000000000000000000000000000000000000000000000000000000",
-				"e2e_pubkey": "key1",
-				"intel_quote": "` + quote1 + `",
-				"gpu_evidence": []
-			},
-			{
-				"instance_id": "inst-002",
-				"nonce": "ccdd000000000000000000000000000000000000000000000000000000000000",
-				"e2e_pubkey": "key2",
-				"intel_quote": "` + quote2 + `",
-				"gpu_evidence": []
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		}), "tee.redpill.ai")
+		fp := sha256.Sum256(ts.Certificate().RawSubjectPublicKeyInfo)
+		fingerprint = hex.EncodeToString(fp[:])
+		base := tlsct.NewPooledTransport()
+		base.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, network, ts.Listener.Addr().String())
+		}
+		client := tlsct.NewHTTPClientWithTransport(5*time.Second, base, false)
+		defer client.CloseIdleConnections()
+		// The test certificate has no public-log SCTs. The attester selects
+		// offline CT policy to test the attestation TLS binding.
+		a := phalacloud.NewAttester("https://tee.redpill.ai", "sk-test-key-123", true)
+		a.SetClient(client)
+		raw, err := a.FetchAttestation(context.Background(), "phala/test-model", nonce)
+		if !wantSuccess {
+			if err == nil || raw != nil {
+				t.Fatal("invalid TLS binding returned usable attestation")
 			}
-		]
-	}`
-	srv := makeServer(t, http.StatusOK, body)
-	defer srv.Close()
+			if !strings.Contains(err.Error(), tlsBindingErrors[mode]) {
+				t.Fatalf("error %q, want %q", err, tlsBindingErrors[mode])
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("FetchAttestation: %v", err)
+		}
+		if path != "/v1/aci/attestation" || query != "nonce="+nonce.Hex() {
+			t.Errorf("request %s?%s, want /v1/aci/attestation?nonce=<nonce>", path, query)
+		}
+		if auth != "Bearer sk-test-key-123" {
+			t.Errorf("Authorization = %q", auth)
+		}
+		if !raw.ACICanonicalReport || raw.BackendFormat != attestation.FormatACI1 {
+			t.Errorf("canonical=%v format=%q", raw.ACICanonicalReport, raw.BackendFormat)
+		}
+		if raw.TransportTLSAuthority != "tee.redpill.ai" || !tlsct.SPKIFingerprintsEqual(raw.TransportTLSFingerprint, fingerprint) {
+			t.Errorf("transport identity %q %q, want tee.redpill.ai and the server key", raw.TransportTLSAuthority, raw.TransportTLSFingerprint)
+		}
+	})
+}
 
-	a := phalacloud.NewAttester(srv.URL, "test-key")
-	raw, err := a.FetchAttestation(context.Background(), "phala/test", attestation.NewNonce())
-	if err != nil {
-		t.Fatalf("FetchAttestation: %v", err)
-	}
-	wantHex := hex.EncodeToString([]byte("quote-one"))
-	if raw.IntelQuote != wantHex {
-		t.Errorf("IntelQuote = %q, want first entry hex = %q", raw.IntelQuote, wantHex)
-	}
-	if raw.CandidatesAvail != 2 {
-		t.Errorf("CandidatesAvail = %d, want 2", raw.CandidatesAvail)
+// The attester refuses a report that arrives over plain HTTP: the
+// connection has no TLS key to compare with the keyset.
+func TestAttester_RefusesPlainHTTP(t *testing.T) {
+	body := canonicalReport(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	raw, err := phalacloud.NewAttester(srv.URL, "sk-test-key-123").FetchAttestation(context.Background(), "phala/test-model", attestation.NewNonce())
+	if err == nil || raw != nil {
+		t.Fatal("plain HTTP report returned usable attestation")
 	}
 }
 
-func TestAttester_FetchAttestation_EmptyAttestations(t *testing.T) {
-	body := `{
-		"attestation_type": "chutes",
-		"nonce": "0000000000000000000000000000000000000000000000000000000000000000",
-		"all_attestations": []
-	}`
-	srv := makeServer(t, http.StatusOK, body)
-	defer srv.Close()
-
-	a := phalacloud.NewAttester(srv.URL, "test-key")
-	_, err := a.FetchAttestation(context.Background(), "phala/test", attestation.NewNonce())
-	if err == nil {
-		t.Fatal("expected error for empty all_attestations")
+// A body in any other format fails: Phala Cloud verifies only the
+// canonical report.
+func TestParseAttestationResponse_RefusesOtherFormats(t *testing.T) {
+	gateway, err := os.ReadFile("../aci/testdata/gateway_variant.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "empty") {
-		t.Errorf("error should mention empty, got: %v", err)
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"chutes", `{"attestation_type":"chutes","nonce":"00","all_attestations":[]}`},
+		{"dstack", `{"intel_quote":"00","signing_address":"0x00","nonce":"00"}`},
+		{"unrecognized", `{"foo":"bar"}`},
+		{"gateway variant", string(gateway)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := phalacloud.ParseAttestationResponse(context.Background(), []byte(tc.body)); err == nil {
+				t.Fatal("ParseAttestationResponse succeeded")
+			}
+		})
 	}
 }
 
@@ -228,76 +181,6 @@ func TestAttester_FetchAttestation_HTTP500(t *testing.T) {
 	}
 }
 
-func TestAttester_FetchAttestation_InvalidBase64Quote(t *testing.T) {
-	body := `{
-		"attestation_type": "chutes",
-		"nonce": "0000000000000000000000000000000000000000000000000000000000000000",
-		"all_attestations": [
-			{
-				"instance_id": "inst-001",
-				"nonce": "0000000000000000000000000000000000000000000000000000000000000000",
-				"e2e_pubkey": "key1",
-				"intel_quote": "!!!not-valid-base64!!!",
-				"gpu_evidence": []
-			}
-		]
-	}`
-	srv := makeServer(t, http.StatusOK, body)
-	defer srv.Close()
-
-	a := phalacloud.NewAttester(srv.URL, "test-key")
-	_, err := a.FetchAttestation(context.Background(), "phala/test", attestation.NewNonce())
-	if err == nil {
-		t.Fatal("expected error for invalid base64 intel_quote")
-	}
-	if !strings.Contains(err.Error(), "base64") {
-		t.Errorf("error should mention base64, got: %v", err)
-	}
-}
-
-func TestAttester_SendsCorrectQueryParams(t *testing.T) {
-	var requestURL string
-	var authHeader string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestURL = r.URL.String()
-		authHeader = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		quote := fakeQuoteBase64()
-		_, _ = w.Write([]byte(`{
-			"attestation_type": "chutes",
-			"nonce": "0000000000000000000000000000000000000000000000000000000000000000",
-			"all_attestations": [{
-				"instance_id": "i",
-				"nonce": "0000000000000000000000000000000000000000000000000000000000000000",
-				"e2e_pubkey": "k",
-				"intel_quote": "` + quote + `",
-				"gpu_evidence": []
-			}]
-		}`))
-	}))
-	defer srv.Close()
-
-	a := phalacloud.NewAttester(srv.URL, "sk-test-key-123")
-	nonce := attestation.NewNonce()
-
-	_, err := a.FetchAttestation(context.Background(), "phala/test-model", nonce)
-	if err != nil {
-		t.Fatalf("FetchAttestation: %v", err)
-	}
-
-	if !strings.Contains(requestURL, "model=phala%2Ftest-model") &&
-		!strings.Contains(requestURL, "model=phala/test-model") {
-		t.Errorf("request URL should contain model param, got: %s", requestURL)
-	}
-	if !strings.Contains(requestURL, "nonce="+nonce.Hex()) {
-		t.Errorf("request URL should contain nonce param, got: %s", requestURL)
-	}
-	if authHeader != "Bearer sk-test-key-123" {
-		t.Errorf("Authorization header = %q, want %q", authHeader, "Bearer sk-test-key-123")
-	}
-}
-
 func TestParseAttestationResponse_InvalidJSON(t *testing.T) {
 	_, err := phalacloud.ParseAttestationResponse(context.Background(), []byte(`not json`))
 	if err == nil {
@@ -305,15 +188,17 @@ func TestParseAttestationResponse_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestPreparer_SetsAuthHeader(t *testing.T) {
+func TestPreparer_SetsAuthAndE2EEHeaders(t *testing.T) {
 	p := phalacloud.NewPreparer("sk-test-123")
-	req, _ := http.NewRequest(http.MethodPost, "https://api.redpill.ai/v1/chat/completions", http.NoBody)
+	req, _ := http.NewRequest(http.MethodPost, "https://tee.redpill.ai/v1/chat/completions", http.NoBody)
+	e2eeHeaders := http.Header{}
+	e2eeHeaders.Set("X-E2ee-Version", "2")
 
-	if err := p.PrepareRequest(req, nil, nil, false, "", provider.PreparationData{}); err != nil {
+	if err := p.PrepareRequest(req, e2eeHeaders, nil, false, "", provider.PreparationData{}); err != nil {
 		t.Fatalf("PrepareRequest: %v", err)
 	}
-	if req.Header.Get("Authorization") != "Bearer sk-test-123" {
-		t.Errorf("Authorization = %q, want %q", req.Header.Get("Authorization"), "Bearer sk-test-123")
+	if req.Header.Get("Authorization") != "Bearer sk-test-123" || req.Header.Get("X-E2ee-Version") != "2" {
+		t.Errorf("headers = %v", req.Header)
 	}
 }
 

@@ -227,6 +227,10 @@ type RawAttestation struct {
 	// ACIGatewayVariant is true for the gateway variant of an ACI/1 response:
 	// it carries all_attestations and defines no echoed nonce or model.
 	ACIGatewayVariant bool `json:"-"`
+	// ACICanonicalReport is true for the ACI/1 report of /v1/aci/attestation:
+	// it defines no echoed nonce or model, and its quote binds the workload
+	// keyset digest through the ACI/1 §3.2 statement.
+	ACICanonicalReport bool `json:"-"`
 	// ACIWorkloadKeyset and ACIKeyCustody hold the parsed ACI/1 structs of
 	// the aci package (opaque `any` here because concrete types would create
 	// an attestation → aci import cycle; aci.VerifyKeyset type-asserts them

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -173,6 +174,34 @@ type VerificationReport struct {
 	// defined for one format refuses a key of another. Internal; excluded
 	// from report JSON.
 	BackendFormat BackendFormat `json:"-"`
+
+	// ACIKeysetDigest is the workload keyset digest that the gateway quote
+	// binds, set only for the canonical ACI/1 report (Raw.ACICanonicalReport).
+	// An inference response must serve the same X-ACI-Keyset-Digest
+	// (SEE: CheckServedKeysetDigest). Internal; excluded from report JSON.
+	ACIKeysetDigest string `json:"-"`
+}
+
+// CheckServedKeysetDigest compares the X-ACI-Keyset-Digest header of an
+// inference response with the keyset digest that the verified canonical
+// ACI/1 report binds. Reports without a canonical keyset digest are not
+// checked.
+//
+// The header is sent on every response (ACI/1 §5.2), so a missing header is
+// an error. A different digest is not: §5.2 says that a changed digest
+// "gates new sends until the client re-verifies according to §3.1; responses
+// already in flight continue unaffected", and §3.1 lets replicas serve
+// members of one renewal family with different not_after. differs reports
+// it, and the caller makes the next send verify again.
+func CheckServedKeysetDigest(header http.Header, report *VerificationReport) (differs bool, err error) {
+	if report == nil || report.ACIKeysetDigest == "" {
+		return false, nil
+	}
+	served := header.Get("X-Aci-Keyset-Digest")
+	if served == "" {
+		return false, errors.New("inference response carries no X-ACI-Keyset-Digest")
+	}
+	return subtle.ConstantTimeCompare([]byte(served), []byte(report.ACIKeysetDigest)) != 1, nil
 }
 
 // Blocked returns true if any enforced factor has failed. When Blocked is true,
@@ -679,12 +708,20 @@ var ACIDefaultAllowFail = []string{
 	FactorACIBackendNamed,
 }
 
-// PhalaCloudACIDefaultAllowFail is the default allow_fail list for the
-// gateway variant of the ACI/1 response that Phala Cloud serves. The
-// variant echoes no nonce, so nonce_match and gateway_nonce_match fail and
-// are allowed; freshness rests on the enforced
-// gateway_tee_reportdata_binding.
-var PhalaCloudACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
+// PhalaCloudACIDefaultAllowFail is the default allow_fail list for the ACI/1
+// report of Phala Cloud. Phala Cloud verifies the report of
+// /v1/aci/attestation, which describes only the gateway and carries no GPU
+// evidence, so the GPU signature and nonce factors that ACIDefaultAllowFail
+// enforces fail here and are allowed to fail. The upstream GPU evidence that
+// exists is in the attested sessions, a snapshot that the client nonce does
+// not reach. The report echoes no nonce, so nonce_match and
+// gateway_nonce_match fail and are allowed; freshness rests on the enforced
+// gateway_tee_reportdata_binding. The keyset lists the TLS key of the host,
+// and the attester pins it, so tls_key_binding is enforced.
+var PhalaCloudACIDefaultAllowFail = append(
+	slices.DeleteFunc(slices.Clone(ACIDefaultAllowFail), func(f string) bool { return f == FactorTLSKeyBinding }),
+	FactorNvidiaSignature,
+	FactorNvidiaClientNonce,
 	FactorNonceMatch,
 	FactorGWNonceMatch,
 )
@@ -1088,12 +1125,16 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	tlsKeyFP, tlsAuthority := "", ""
 	attestedModel, attestedMatch := "", ""
 	var format BackendFormat
+	aciKeysetDigest := ""
 	if in.Raw != nil {
 		tlsKeyFP = in.Raw.TransportTLSFingerprint
 		tlsAuthority = in.Raw.TransportTLSAuthority
 		format = in.Raw.BackendFormat
 		if in.Raw.ModelNameMatch != "" {
 			attestedModel, attestedMatch = in.Raw.Model, in.Raw.ModelNameMatch
+		}
+		if in.Raw.ACICanonicalReport {
+			aciKeysetDigest = in.Raw.ACIWorkloadKeysetDigest
 		}
 	}
 
@@ -1115,6 +1156,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		TLSAuthority:       tlsAuthority,
 		E2EEBindingFactor:  e2eeBindingFactor(in),
 		BackendFormat:      format,
+		ACIKeysetDigest:    aciKeysetDigest,
 	}
 }
 
@@ -1258,7 +1300,7 @@ const noEchoDetail = "no echoed nonce; freshness rests on tee_reportdata_binding
 
 func evalNonceMatch(in *ReportInput) []FactorResult {
 	if in.Raw.Nonce == "" {
-		if in.Raw.ACIGatewayVariant {
+		if in.Raw.ACIGatewayVariant || in.Raw.ACICanonicalReport {
 			return factor(TierCore, FactorNonceMatch, Fail, aciNoEchoDetail)
 		}
 		// Only the Chutes parser sets NonceSourceNotEchoed; some formats
@@ -3005,7 +3047,7 @@ func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 
 func evalGatewayNonceMatch(in *ReportInput) []FactorResult {
 	switch {
-	case in.GatewayNonceHex == "" && in.Raw.ACIGatewayVariant:
+	case in.GatewayNonceHex == "" && (in.Raw.ACIGatewayVariant || in.Raw.ACICanonicalReport):
 		return factor(TierGateway, FactorGWNonceMatch, Fail, aciNoEchoDetail)
 	case in.GatewayNonceHex == "":
 		return factor(TierGateway, FactorGWNonceMatch, Fail, "gateway request_nonce absent")

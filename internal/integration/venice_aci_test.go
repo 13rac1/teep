@@ -48,6 +48,11 @@ func TestVerifyRun_VeniceACI_Fixture(t *testing.T) {
 	}
 	logReportScore(t, report)
 	assertNoEnforcedFailures(t, report)
+	// The compatibility route binds the signing key, not the keyset digest:
+	// the report carries no digest, so responses are not checked against one.
+	if report.ACIKeysetDigest != "" {
+		t.Errorf("compatibility-route report carries keyset digest %q", report.ACIKeysetDigest)
+	}
 
 	assertMustPass(t, report, []string{
 		"nonce_match",

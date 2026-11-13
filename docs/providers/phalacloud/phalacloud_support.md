@@ -6,7 +6,7 @@ inference service. teep verifies the gateway's ACI/1 attestation; it has no
 attestation of the machine that runs the model. The shared gateway analysis
 is in [ACI/1 Gateway: Attested Gateway, Unattested Inference Host](../../attestation_gaps/aci_gateway.md),
 and the limits of the ACI/1 specification are in
-[ACI/1 Specification: Gaps That No Deployment Can Close](../../attestation_gaps/aci_specification.md).
+[ACI/1 Specification: Assurance Limits and Deployment Requirements](../../attestation_gaps/aci_specification.md).
 
 ## Configuration
 
@@ -32,32 +32,48 @@ Observed on 2026-10-29 with an API key: both TEE-only hosts list the
 same 22 models at `/v1/models`, a subset of the 65 models of
 `api.redpill.ai`, and answer `/v1/attestation/report` with the same gateway
 keyset. The gateway terminates TLS for every host in the gateway CVM and
-selects the response's `downstream_tls_binding` by the requested host:
+selects the report's `downstream_tls_binding` by the requested host:
 `tee.redpill.ai`, `inference.phala.com` and `api.redpill.ai` each receive the
 keyset TLS entry for their own hostname (ACI/1 §4.2).
 
 ## Attestation evidence and binding
 
-`GET /v1/attestation/report?model=<model>&nonce=<client nonce>` returns the
-gateway variant of the ACI/1 format: no echoed nonce or model, and an
-`all_attestations` list with one copy of the attestation. teep parses it
-with the shared ACI/1 parser (`internal/provider/aci`), which requires that
-copy to equal the top-level fields.
+`GET /v1/aci/attestation?nonce=<client nonce>` returns the ACI/1 report of
+the gateway (ACI/1 §4.1), the route that ACI/1 verifiers use. The report is
+service-scoped: teep does not send the model. teep parses it with
+`aci.ParseCanonical`, which requires exactly the members of §4.1 at every
+depth; any other format, also the variants of the compatibility route
+`/v1/attestation/report`, fails.
 
-- The gateway TDX quote is verified in the gateway tier; its REPORTDATA binds
-  the gateway signing key and the client nonce
-  (`gateway_tee_reportdata_binding`, enforced).
-- `nonce_match` and `gateway_nonce_match` evaluate the client nonce where the
-  evidence binds it: the verified gateway REPORTDATA, and the relayed GPU
-  evidence, which carries the client nonce.
-- `aci_key_custody` verifies the workload keyset digest and the dstack-KMS
-  custody chain to the KMS root and gateway app id that Venice and NanoGPT
-  share (`aci.GatewayPins`).
-- `aci_backend_named` fails: the attestation binds no backend for the
-  requested model.
-
-Phala Cloud responses in other formats (dstack, Chutes) still parse with
-their own parsers.
+- The gateway TDX quote is verified in the gateway tier. Its REPORTDATA is
+  sha256 of the ACI/1 §3.2 statement over the workload keyset digest and the
+  client nonce, followed by 32 zero bytes (`aci.StatementReportDataVerifier`,
+  `gateway_tee_reportdata_binding`, enforced). teep recomputes the keyset
+  digest from the keyset, so the quote binds every keyset field: the E2EE,
+  receipt and TLS keys and `not_after`.
+- The E2EE key is the single keyset entry of the E2EE v2 secp256k1 suite.
+- The report echoes no nonce: `nonce_match` and `gateway_nonce_match` fail
+  and are allowed. Freshness rests on `gateway_tee_reportdata_binding`.
+- `aci_key_custody` verifies the dstack-KMS custody chain of the E2EE key to
+  the KMS root and gateway app id that Venice and NanoGPT share
+  (`aci.GatewayPins`).
+- The report carries no GPU evidence. The GPU factors (`nvidia_signature`,
+  `nvidia_nonce_client_bound` and the others) fail and are allowed.
+- `aci_backend_named` fails: the report binds no backend for the requested
+  model.
+- `tls_key_binding` (enforced): the keyset must list exactly one TLS key
+  for the base URL host, `downstream_tls_binding` must name the same host
+  and key, and the certificate key of the connection that carried the
+  report must equal it (`aci.TLSKeyForDomain`). A report fetched over a
+  connection of another key, or over plain HTTP, fails.
+- Every successful inference response must carry `X-ACI-Keyset-Digest`
+  (ACI/1 §5.2); a response without it fails and ends the authorization.
+  A response that serves another digest is relayed, because a response in
+  flight continues (§5.2), and the authorization ends so that the next
+  request verifies again: replicas can serve another member of the same
+  renewal family, which keeps continuity, or another keyset, which becomes
+  a new authorization (§3.1). An error response is relayed without this
+  check.
 
 ## TLS and E2EE
 
@@ -70,14 +86,17 @@ A model that answers with another attestation format, and the embeddings
 endpoint, fail closed while E2EE is enabled.
 
 Requests go over TLS 1.3 to the base URL host, with WebPKI and Certificate
-Transparency enforced. teep does not compare the live certificate key of
-`tee.redpill.ai` with the keyset TLS key for that host; this binding closes
-in the authorization-store migration. With E2EE, a party that holds a
-certificate for the host sees the message content only as ciphertext, but
-it can forge, drop, reorder or repeat response content: E2EE v2 responses
-are confidential, not authenticated, until teep verifies the signed ACI
-receipt. Phala Cloud requests use the user's API key, so teep can fetch
-their receipts (ACI/1 §7.6).
+Transparency enforced. Phala Cloud is a TLS-binding provider: the
+authorization holds the report, the gateway E2EE key and the transport
+identity (the base URL host and its keyset TLS key) together, and
+inference connections are pinned to that key before any request bytes are
+sent, with the pool rules of the
+[transport reference](../../transport/README.md). The report is
+service-scoped, so one authorization identity serves every model of the
+host. E2EE v2 responses are confidential, not authenticated, until teep
+verifies the signed ACI receipt; the TLS pin keeps a party that holds only
+another certificate for the host off the path. Phala Cloud requests use the
+operator's API key, so teep can fetch their receipts (ACI/1 §7.6).
 
 ## Supply chain
 
@@ -88,13 +107,16 @@ image, so a dstack-format response fails `component_recognition`.
 
 ## Factor enforcement
 
-An ACI/1 response selects `ACIDefaultAllowFail`, the list shared with Venice
-and NanoGPT. Other formats keep `PhalaCloudDefaultAllowFail`.
+The ACI/1 report selects `PhalaCloudACIDefaultAllowFail`: the list shared with
+Venice and NanoGPT (`ACIDefaultAllowFail`) without `tls_key_binding`, which
+is enforced, and with the GPU signature and nonce factors, because the
+report carries no GPU evidence, and `nonce_match` and
+`gateway_nonce_match`, because the report echoes no nonce.
 
 ## Known limitations
 
-- The machine that runs the model is not attested.
-- The live TLS key of the base URL host is not bound to the keyset.
+- The machine that runs the model is not attested to the client.
+- The report carries no GPU evidence that answers the client nonce.
 - E2EE v2 defines field paths only for message content. teep refuses a
   request that carries `messages[].tool_calls`, `messages[].function_call`, `messages[].refusal`, `messages[].audio`, `prediction`, `tools`, `functions` and `response_format.json_schema`, and a response with tool calls.
   Not encrypted: the top-level `model`, `messages[].name`, `stop`, `tool_choice` and the top-level `function_call` (which name a function), and the other request parameters, including provider-specific prompt fields, which pass in plaintext.
@@ -103,15 +125,38 @@ and NanoGPT. Other formats keep `PhalaCloudDefaultAllowFail`.
 
 ## Test coverage
 
-- `TestVerifyRun_GatewayACI_Fixtures`, `TestGatewayACI_PinsDecideCustody`
-  and `TestVerifyRun_ConcurrentACIProviders` in
-  [gateway ACI/1 replay tests](../../../internal/integration/gateway_aci_test.go)
-  replay a live capture of 2026-10-29 from `tee.redpill.ai`.
+- `TestParseCanonical`, `TestParseCanonicalRefusesMalformedReports`,
+  `TestStatementReportDataVerifier`, `TestBuildReportCanonicalBody` and
+  `TestCheckServedKeysetDigest` in
+  [canonical report tests](../../../internal/provider/aci/canonical_test.go)
+  use the live report of 2026-10-30 from `tee.redpill.ai`.
+- `TestAttester_FetchesCanonicalReport`, `TestAttester_TLSBindingFailures`,
+  `TestAttester_RefusesPlainHTTP` and
+  `TestParseAttestationResponse_RefusesOtherFormats` in
+  [Phala Cloud tests](../../../internal/provider/phalacloud/phalacloud_test.go)
+  check the TLS key binding of the attestation connection.
+- `TestAuthorizedPhalaCloudACIv2` in
+  [pinned Phala Cloud tests](../../../internal/proxy/authorized_phalacloud_test.go),
+  `TestCheckAuthorizedKeyset` in
+  [pinned keyset tests](../../../internal/proxy/authorized_keyset_test.go) and
+  `TestAuthorizationValidatesPhalaCloudKey` in
+  [authorization tests](../../../internal/proxy/authorization_internal_test.go)
+  check E2EE v2 over the pinned pool and the keyset digest of its responses.
+- `TestStandalonePhalaCloudProbe` in
+  [standalone probe tests](../../../internal/verify/tls_probe_phalacloud_test.go)
+  checks the pinned `teep verify` inference and its capture.
+- `TestTestE2EE_ACIv2ServedKeysetDigest` in
+  [verify keyset digest tests](../../../internal/verify/e2ee_keyset_digest_test.go).
 - `TestFromConfigGatewayACIProviders` in
   [proxy gateway ACI/1 tests](../../../internal/proxy/gateway_aci_test.go)
   checks the gateway verifier and image policy of `teep serve`.
 - `TestParseAttestationResponseACI` and `TestSupplyChainPolicyGatewayImages`
   in [Phala Cloud ACI/1 tests](../../../internal/provider/phalacloud/aci_test.go).
+- `TestVerifyRun_PhalaCloudCanonical_Fixture` and
+  `TestPhalaCloudCanonical_PinsDecideCustody` in
+  [canonical report replay tests](../../../internal/integration/phalacloud_canonical_test.go)
+  replay a live capture of 2026-10-31 from `tee.redpill.ai`, with the E2EE
+  v2 test exchange and its `X-ACI-Keyset-Digest` and `X-Receipt-Id`.
 - `TestE2EERoundTrip`, `TestE2EEResponseOfAnotherRequestFails` and
   `TestE2EERejectsRequest` in
   [E2EE v2 encryptor tests](../../../internal/provider/aci/e2ee_test.go)

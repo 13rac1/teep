@@ -1,0 +1,12 @@
+{
+  "provider": "phalacloud",
+  "model": "qwen/qwen3.8-27b",
+  "nonce_hex": "b806aaff30d8c83bad81b8e5ab4dfbdd7a24f8dfc95b0732b73c6fc7f9700550",
+  "captured_at": "2026-10-31T19:30:44.495263994Z",
+  "duration_ms": 8171,
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE v2 secp256k1: 9 encrypted fields decrypted across 12 chunks",
+    "key_type": "ecdsa"
+  }
+}

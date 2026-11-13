@@ -20,6 +20,7 @@ package proxy
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -814,10 +815,20 @@ func fromConfig(
 				attestation.FormatDstack: venice.ReportDataVerifier{},
 			},
 		}
-		// The ACI/1 gateway quote binds the same REPORTDATA as Venice's.
+		// The report of /v1/aci/attestation binds the keyset digest and the
+		// client nonce through the ACI/1 §3.2 statement.
 		// SYNC: verify.newGatewayReportDataVerifier.
-		p.GatewayReportDataVerifier = venice.ReportDataVerifier{}
+		p.GatewayReportDataVerifier = aci.StatementReportDataVerifier{}
 		p.SupplyChainPolicy = phalacloud.SupplyChainPolicy()
+		// The keyset lists the TLS key of the base URL host, and the quote
+		// binds the keyset: requests use the SPKI-pinned pool of that key.
+		p.UsesTLSBinding = true
+		p.BaseURL = u.Scheme + "://" + u.Host
+		route, err := provider.NewResolvedRoute(p.BaseURL, "")
+		if err != nil {
+			return nil, err
+		}
+		p.StaticRoute = route
 	case "chutes":
 		p.BaseURL = chutesProvider.DefaultLLMBaseURL
 		p.ChatPath = "/v1/chat/completions"
@@ -1910,9 +1921,7 @@ func (s *Server) relayWithRetry(
 		resp := ur.Resp
 		session := ur.Session
 		meta := ur.Meta
-		if meta != nil && meta.ChuteID != "" {
-			lastChuteID = meta.ChuteID
-		}
+		lastChuteID = cmp.Or(chuteIDOf(meta), lastChuteID)
 
 		// cleanupAttempt drains and closes the response body and zeros crypto.
 		cleanupAttempt := func() {
@@ -2156,6 +2165,14 @@ func (s *Server) handleE2EEDecryptionFailure(
 		"detail", "E2EE decryption failed (see server logs, req="+reqid.FromContext(ctx)+")",
 		"err", relayErr)
 	return "e2ee_decrypt_failed"
+}
+
+// chuteIDOf returns the chute of Chutes E2EE metadata, or "" without it.
+func chuteIDOf(meta *e2ee.ChutesE2EE) string {
+	if meta == nil {
+		return ""
+	}
+	return meta.ChuteID
 }
 
 // attestResult holds the outcome of attestAndCache on success. Publication is

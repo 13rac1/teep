@@ -90,16 +90,16 @@ Chutes runs multiple confidential compute instances per model. The proxy uses a 
 
 Nonces are managed by a pool per instance to avoid repeated evidence fetches on every request. Failed instances are tracked for failover across the multi-instance deployment.
 
-### Phala Cloud (Format-Agnostic Gateway)
+### Phala Cloud (ACI/1 Gateway)
 
-Phala Cloud's RedPill gateway accepts traffic destined for multiple underlying TEE backends. The proxy:
+Phala Cloud serves its TEE models through the dstack private-ai-gateway. The proxy:
 
-1. Sends a request to `tee.redpill.ai/v1`, a TEE-only domain of the private-ai-gateway, which routes only to verified TEE upstreams.
-2. Receives an attestation response and inspects the JSON keys to determine the format: ACI/1 (`api_version`), Chutes (`attestation_type`) or dStack (`intel_quote`). The gateway answers with ACI/1, which attests the gateway itself.
-3. Delegates parsing and verification to the matching handler; ACI/1 uses the shared `internal/provider/aci` package.
-4. Uses a 120-second timeout to accommodate multi-instance attestation latency.
+1. Sends requests to `tee.redpill.ai`, a TEE-only domain of the gateway, which routes only to verified TEE upstreams.
+2. Fetches the gateway's ACI/1 report from `/v1/aci/attestation` with the client nonce and parses it strictly; any other format fails. The certificate key of the connection must equal the keyset TLS key for the host, and inference connections are pinned to that key.
+3. Verifies the gateway TDX quote, event log and compose binding, and the ACI/1 §3.2 REPORTDATA: sha256 of a statement over the workload keyset digest and the client nonce. The quote therefore binds every keyset field.
+4. Requires each successful inference response to carry `X-ACI-Keyset-Digest`; when it differs from the verified digest, relays the response and verifies again before the next request (ACI/1 §5.2, §3.1).
 
-For ACI/1 responses, teep encrypts the message content with E2EE v2 of the gateway to the gateway key that the gateway quote binds. Other formats fail closed while E2EE is enabled. See [Phala Cloud provider support](docs/providers/phalacloud/phalacloud_support.md).
+teep encrypts the message content with E2EE v2 of the gateway to the keyset E2EE key that the gateway quote binds. The report carries no GPU evidence; the GPU factors are allowed to fail. See [Phala Cloud provider support](docs/providers/phalacloud/phalacloud_support.md).
 
 ### Tinfoil Cloud (EHBP via Router)
 
@@ -137,7 +137,7 @@ This provides true end-to-end encryption: the shared secret is derived between t
 | NEAR AI Cloud | TDX + NVIDIA | TLS pinning (gateway) | `sha256(signing_address ‖ tls_fingerprint)` + nonce |
 | NanoGPT | TDX (dStack), or ACI/1 gateway TDX + NVIDIA | ACI/1: E2EE v2 (secp256k1 ECDH + AES-256-GCM) to the gateway | None (dStack format); ACI/1: `keccak256(gateway key)` + nonce in the gateway quote |
 | Chutes | TDX + GPU evidence | E2EE (ML-KEM-768 + ChaCha20-Poly1305) | `sha256(nonce_hex + e2e_pubkey_base64)` |
-| Phala Cloud | ACI/1 gateway TDX + NVIDIA | E2EE v2 (secp256k1 ECDH + AES-256-GCM) to the gateway | `keccak256(gateway key)` + nonce in the gateway quote |
+| Phala Cloud | ACI/1 gateway TDX | E2EE v2 (secp256k1 ECDH + AES-256-GCM) to the gateway | `sha256` of the ACI/1 statement over the keyset digest and the nonce, in the gateway quote |
 | Tinfoil Cloud | SEV-SNP | E2EE (HPKE X25519 + AES-256-GCM) | `sha256(nonce ‖ hpke_key ‖ tls_fp ‖ gpu_hash)` in REPORTDATA |
 | Tinfoil Direct | SEV-SNP | E2EE (HPKE X25519 + AES-256-GCM) | `sha256(nonce ‖ hpke_key ‖ tls_fp ‖ gpu_hash)` in REPORTDATA |
 

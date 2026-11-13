@@ -144,6 +144,9 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	if err == nil {
 		err = s.refuseUncheckedSuccess(ctx, input, value, ur.Resp.StatusCode)
 	}
+	if err == nil && ur.Resp.StatusCode == http.StatusOK {
+		err = s.checkAuthorizedKeyset(ctx, input, value, ur.Resp.Header)
+	}
 	if err != nil {
 		cleanupAuthorized(ur)
 		result.upstream = nil
@@ -172,9 +175,31 @@ func isUncheckedSuccess(status int) bool {
 	return status >= http.StatusOK && status < http.StatusMultipleChoices && status != http.StatusOK
 }
 
+// checkAuthorizedKeyset checks the X-ACI-Keyset-Digest of a successful
+// response against the keyset that the authorization's canonical ACI/1
+// report binds; an error response is relayed as on the unpinned path. A
+// response without the header fails, and the authorization generation ends.
+// A response of another digest is relayed (ACI/1 §5.2: responses in flight
+// continue), and the generation ends so that the next send verifies again;
+// a member of the same renewal family keeps continuity, another family
+// becomes a new authorization (§3.1).
+func (s *Server) checkAuthorizedKeyset(ctx context.Context, input *authorizedRequest, value *authorization, header http.Header) error {
+	differs, err := attestation.CheckServedKeysetDigest(header, value.report)
+	if !differs && err == nil {
+		return nil
+	}
+	removed := s.authorizations.deleteGeneration(input.key, value.generation)
+	if err != nil {
+		s.logAuthorizationRejection(ctx, input, value, "keyset_digest_missing", removed, false)
+		return err
+	}
+	s.logAuthorizationRejection(ctx, input, value, "keyset_digest_changed", removed, false)
+	return nil
+}
+
 func (s *Server) prepareAuthorizedRequest(ctx context.Context, input *authorizedRequest, value *authorization) (*upstreamResult, error) {
 	req, encrypted, err := provider.PrepareInference(ctx, input.provider, input.route, &provider.InferenceInput{
-		Body: input.body, SigningKey: value.signingKey, ModelKey: value.modelKey, Path: input.path, ContentType: input.contentType, Stream: input.stream, Endpoint: input.endpoint,
+		Body: input.body, SigningKey: value.signingKey, BackendFormat: value.report.BackendFormat, ModelKey: value.modelKey, Path: input.path, ContentType: input.contentType, Stream: input.stream, Endpoint: input.endpoint,
 	})
 	if err != nil {
 		return nil, err

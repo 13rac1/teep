@@ -6,6 +6,7 @@ import (
 
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
@@ -147,7 +148,7 @@ func TestNewGatewayReportDataVerifier(t *testing.T) {
 		want     provider.ReportDataVerifier
 	}{
 		{"venice", venice.ReportDataVerifier{}},
-		{"phalacloud", venice.ReportDataVerifier{}},
+		{"phalacloud", aci.StatementReportDataVerifier{}},
 		{"nearcloud", nearcloud.GatewayReportDataVerifier{}},
 		{"neardirect", nil},
 		{"nanogpt", venice.ReportDataVerifier{}},
