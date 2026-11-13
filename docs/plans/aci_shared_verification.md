@@ -338,6 +338,10 @@ in the Phala Cloud provider document. The design as built:
   for the Phala model CVM the compose binding and the event-log replay.
   The Phala model CVM REPORTDATA is the NEAR-direct layout with an ecdsa
   address, not the ed25519 one, so it has its own verifier.
+- `aci_receipt_verified` (enforced) is the receipt check of the `teep verify`
+  probe, apart from the transient failures that `e2ee_usable` reports; it is
+  a deferred skip without a probe receipt (in `teep serve`, without an API
+  key, and in a replay).
 - `aci_session_verified` (enforced) passes when one session passes; every
   request pins the passed sessions in `provider.aci_session_ids`, and a
   refusal (`session_not_accepted`) ends the authorization generation.

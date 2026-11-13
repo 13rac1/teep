@@ -199,9 +199,11 @@ A stream is relayed to the client before its receipt is checked: teep
 checks the receipt after the stream ends. A failure is reported after the
 client has the content: it is logged at error level (`response receipt
 check failed`), and a failure of the service's statements ends the
-authorization generation, so the next request verifies again. In `teep verify`, a probe
-whose receipt does not verify fails `e2ee_usable`, and the factor detail
-states whether the request hash was checked.
+authorization generation, so the next request verifies again. In `teep verify`, the
+receipt of the probe is the factor `aci_receipt_verified`: a missing,
+malformed or failed receipt fails it, and its detail states whether the
+request hash was checked. A probe that fails before its receipt is checked,
+including a receipt that the gateway does not serve, fails `e2ee_usable`.
 
 A receipt whose signature, keyset, response hash, cited session or
 `served_at` does not verify, a malformed receipt, and a response without
@@ -307,7 +309,11 @@ Venice and NanoGPT (`ACIDefaultAllowFail`) without `tls_key_binding`, which
 is enforced, and with the GPU signature and nonce factors, because the
 report carries no GPU evidence, and `nonce_match` and
 `gateway_nonce_match`, because the report echoes no nonce.
-`aci_session_verified` is enforced.
+`aci_session_verified` and `aci_receipt_verified` are enforced.
+`aci_receipt_verified` is a deferred skip, which does not block, when there
+is no probe receipt to check: in `teep serve`, which checks the receipt of
+every response instead, in `teep verify` without an API key, after a probe
+that failed earlier, and in `teep verify --reverify`.
 
 ## Known limitations
 
@@ -334,7 +340,8 @@ report carries no GPU evidence, and `nonce_match` and
 - teep does not check the request hash of a request with a value that
   serde_json can write in another form (see [Receipts](#receipts)).
 - `teep verify --reverify` reuses the recorded result of the probe; it does
-  not check the recorded receipt again yet.
+  not check the recorded receipt again yet, so `aci_receipt_verified` is a
+  deferred skip in a replay.
 
 ## Test coverage
 

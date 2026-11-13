@@ -184,6 +184,7 @@ Is the encryption bound to the hardware? These checks verify the encryption key 
 | 23 | `aci_key_custody` | ACI/1: workload keyset digest recomputed, signing key is a keyset E2EE key, the dstack-KMS custody chain verifies to an accepted KMS root, and the keyset expires within 365 days |
 | 24 | `aci_backend_named` | ACI/1: attested evidence binds a backend for the requested model; no ACI/1 evidence does today, so it fails, allowed by default, and names any provider-asserted model and upstream model |
 | 25 | `aci_session_verified` | Phala Cloud ACI/1: at least one attested session of the model passed the audit of its evidence (quote, MRTD/MRSEAM, REPORTDATA with the session nonce, channel binding, GPU evidence, and for the Phala model CVM compose binding and event-log replay); each request pins the verified sessions |
+| 26 | `aci_receipt_verified` | Phala Cloud ACI/1: `teep verify` checks the signed receipt of its probe response (signature, keyset, request and response hashes, pinned session); skipped without a probe (in `teep serve`, which checks every response, or without an API key) |
 
 </details>
 
@@ -196,16 +197,16 @@ Is the software what it claims to be? These checks verify container provenance, 
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 26 | `tls_key_binding` | TLS certificate key matches attestation document |
-| 27 | `cpu_gpu_chain` | CPU attestation cryptographically binds GPU attestation |
-| 28 | `nvswitch_binding` | NVSwitch fabric evidence hash verified in REPORTDATA (multi-GPU NVLink nodes) |
-| 29 | `measured_model_weights` | Attestation proves specific model weights by hash |
-| 30 | `build_transparency_log` | Runtime measurements match an immutable transparency log |
-| 31 | `cpu_id_registry` | CPU ID verified against a known-good hardware registry |
-| 32 | `compose_binding` | `sha256(app_compose)` matches TDX MRConfigID, binding docker-compose manifest to hardware attestation |
-| 33 | `sigstore_verification` | Container image digests found in Sigstore transparency log, proving verifiable CI/CD provenance |
-| 34 | `sigstore_code_verified` | Sigstore DSSE bundle code measurements match live enclave (Tinfoil-specific) |
-| 35 | `event_log_integrity` | Event log replayed against TDX RTMRs — proves log is authentic and complete |
+| 27 | `tls_key_binding` | TLS certificate key matches attestation document |
+| 28 | `cpu_gpu_chain` | CPU attestation cryptographically binds GPU attestation |
+| 29 | `nvswitch_binding` | NVSwitch fabric evidence hash verified in REPORTDATA (multi-GPU NVLink nodes) |
+| 30 | `measured_model_weights` | Attestation proves specific model weights by hash |
+| 31 | `build_transparency_log` | Runtime measurements match an immutable transparency log |
+| 32 | `cpu_id_registry` | CPU ID verified against a known-good hardware registry |
+| 33 | `compose_binding` | `sha256(app_compose)` matches TDX MRConfigID, binding docker-compose manifest to hardware attestation |
+| 34 | `sigstore_verification` | Container image digests found in Sigstore transparency log, proving verifiable CI/CD provenance |
+| 35 | `sigstore_code_verified` | Sigstore DSSE bundle code measurements match live enclave (Tinfoil-specific) |
+| 36 | `event_log_integrity` | Event log replayed against TDX RTMRs — proves log is authentic and complete |
 
 </details>
 
@@ -224,21 +225,21 @@ serving inference exposes none, and the core tee_* factors state that. See
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 36 | `gateway_nonce_match` | Gateway request nonce matches the client nonce; a gateway-variant ACI/1 response echoes no nonce, so it fails, and freshness rests on `gateway_tee_reportdata_binding` |
-| 37 | `gateway_tee_quote_present` | Gateway quote or report is present |
-| 38 | `gateway_tee_quote_structure` | Gateway quote parses as valid QuoteV4 or SEV-SNP report |
-| 39 | `gateway_tee_cert_chain` | Gateway cert chain verifies against Intel or AMD root CA |
-| 40 | `gateway_tee_quote_signature` | Gateway quote signature valid |
-| 41 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave) |
-| 42 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists |
-| 43 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches hardware config allowlist |
-| 44 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match boot config allowlists; not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot |
-| 45 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified |
-| 46 | `gateway_compose_binding` | Gateway sha256(app_compose) matches TDX MRConfigID |
-| 47 | `gateway_cpu_id_registry` | Gateway CPU PPID verified in Proof of Cloud registry |
-| 48 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match quote |
-| 49 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP) |
-| 50 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP) |
+| 37 | `gateway_nonce_match` | Gateway request nonce matches the client nonce; a gateway-variant ACI/1 response echoes no nonce, so it fails, and freshness rests on `gateway_tee_reportdata_binding` |
+| 38 | `gateway_tee_quote_present` | Gateway quote or report is present |
+| 39 | `gateway_tee_quote_structure` | Gateway quote parses as valid QuoteV4 or SEV-SNP report |
+| 40 | `gateway_tee_cert_chain` | Gateway cert chain verifies against Intel or AMD root CA |
+| 41 | `gateway_tee_quote_signature` | Gateway quote signature valid |
+| 42 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave) |
+| 43 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists |
+| 44 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches hardware config allowlist |
+| 45 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match boot config allowlists; not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot |
+| 46 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified |
+| 47 | `gateway_compose_binding` | Gateway sha256(app_compose) matches TDX MRConfigID |
+| 48 | `gateway_cpu_id_registry` | Gateway CPU PPID verified in Proof of Cloud registry |
+| 49 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match quote |
+| 50 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP) |
+| 51 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP) |
 
 </details>
 

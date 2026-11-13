@@ -161,8 +161,11 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 			if err != nil || got == nil || got.e2ee == nil || got.e2ee.Err != nil {
 				t.Fatalf("probe = %+v, %v", got, err)
 			}
-			if !strings.Contains(got.e2ee.Detail, "E2EE v2 secp256k1: 2 encrypted fields") || !strings.Contains(got.e2ee.Detail, "receipt verified, including the request hash") {
+			if !strings.Contains(got.e2ee.Detail, "E2EE v2 secp256k1: 2 encrypted fields") {
 				t.Errorf("detail = %q", got.e2ee.Detail)
+			}
+			if r := got.e2ee.Receipt; r == nil || r.Err != nil || r.Detail != "receipt verified, including the request hash" {
+				t.Errorf("receipt = %+v", r)
 			}
 			entries := capture.entries()
 			if len(entries) != 2 || string(entries[0].Body) != gw.stream || entries[0].Headers.Get("X-Aci-Keyset-Digest") != gw.digest || string(entries[1].Body) != gw.signed {
@@ -176,27 +179,30 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 		})
 
 		otherResponse := func(r *aciv2test.Receipt) { r.Response = []byte("other") }
+		// A receipt that is missing or fails the check fails
+		// aci_receipt_verified (e2ee.Receipt); a receipt that cannot be
+		// fetched, and a response of another keyset, fail the probe
+		// (e2ee_usable).
 		for _, tc := range []struct {
-			name string
-			set  func(*probeGateway)
-			want string
+			name      string
+			set       func(*probeGateway)
+			want      string
+			inReceipt bool
 		}{
-			{"receipt of other response", func(p *probeGateway) { p.receipt = otherResponse }, "response.returned"},
-			{"receipt of other request", func(p *probeGateway) { p.receipt = func(r *aciv2test.Receipt) { r.Request = []byte("{}") } }, "request.received"},
+			{"receipt of other response", func(p *probeGateway) { p.receipt = otherResponse }, "response.returned", true},
+			{"receipt of other request", func(p *probeGateway) { p.receipt = func(r *aciv2test.Receipt) { r.Request = []byte("{}") } }, "request.received", true},
 			{"served after the session", func(p *probeGateway) {
 				p.receipt = func(r *aciv2test.Receipt) { r.ServedAt = probeSessionExpires + 1 }
-			}, "outside the period"},
-			{"no receipt id", func(p *probeGateway) { p.noReceiptID = true }, "X-Receipt-Id"},
-			{"receipt not served", func(p *probeGateway) { p.receiptMissing = true }, "HTTP 404 after 3 attempts"},
-			{"other keyset", func(p *probeGateway) { p.served = "sha256:" + strings.Repeat("bb", 32) }, "another keyset digest"},
+			}, "outside the period", true},
+			{"no receipt id", func(p *probeGateway) { p.noReceiptID = true }, "X-Receipt-Id", true},
+			{"receipt not served", func(p *probeGateway) { p.receiptMissing = true }, "HTTP 404 after 3 attempts", false},
+			{"other keyset", func(p *probeGateway) { p.served = "sha256:" + strings.Repeat("bb", 32) }, "another keyset digest", false},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				gw.served, gw.receipt, gw.noReceiptID, gw.receiptMissing = "", nil, false, false
 				tc.set(gw)
 				got, _, err := probe(t, attested)
-				if err != nil || got == nil || got.e2ee == nil || got.e2ee.Err == nil || !strings.Contains(got.e2ee.Err.Error(), tc.want) {
-					t.Fatalf("probe = %+v, %v; want an E2EE error with %q", got, err, tc.want)
-				}
+				checkProbeFailure(t, got, err, tc.want, tc.inReceipt)
 			})
 		}
 
@@ -218,6 +224,24 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 			}
 		})
 	})
+}
+
+// checkProbeFailure requires the probe to fail with want: in the receipt
+// result when inReceipt, else in the E2EE result.
+func checkProbeFailure(t *testing.T, got *standaloneProbe, err error, want string, inReceipt bool) {
+	t.Helper()
+	if err != nil || got == nil || got.e2ee == nil {
+		t.Fatalf("probe = %+v, %v", got, err)
+	}
+	if inReceipt {
+		if got.e2ee.Err != nil || got.e2ee.Receipt == nil || got.e2ee.Receipt.Err == nil || !strings.Contains(got.e2ee.Receipt.Err.Error(), want) {
+			t.Fatalf("e2ee err %v, receipt %+v; want a receipt error with %q", got.e2ee.Err, got.e2ee.Receipt, want)
+		}
+		return
+	}
+	if got.e2ee.Err == nil || !strings.Contains(got.e2ee.Err.Error(), want) {
+		t.Fatalf("e2ee err %v; want an E2EE error with %q", got.e2ee.Err, want)
+	}
 }
 
 // checkSessionsRefused requires a refusal of the pinned sessions to make the

@@ -91,6 +91,7 @@ const (
 	FactorE2EEUsable           = "e2ee_usable"
 	FactorACIKeyCustody        = "aci_key_custody"
 	FactorACISessionVerified   = "aci_session_verified"
+	FactorACIReceiptVerified   = "aci_receipt_verified"
 	FactorACIBackendNamed      = "aci_backend_named"
 	FactorTLSKeyBinding        = "tls_key_binding"
 	FactorCPUGPUChain          = "cpu_gpu_chain"
@@ -766,7 +767,7 @@ var KnownFactors = []string{
 	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
 	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaSignature, FactorNvidiaClaims,
 	FactorNvidiaClientNonce, FactorNvidiaNRAS, FactorE2EECapable, FactorE2EEUsable,
-	FactorACIKeyCustody, FactorACIBackendNamed, FactorACISessionVerified,
+	FactorACIKeyCustody, FactorACIBackendNamed, FactorACISessionVerified, FactorACIReceiptVerified,
 	FactorTLSKeyBinding, FactorCPUGPUChain, FactorNVSwitchBinding,
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
@@ -861,6 +862,23 @@ type E2EETestResult struct {
 	// KeyType is the canonical E2EE key type derived from the attestation
 	// (e.g. "ecdsa", "ed25519", "ml-kem-768").
 	KeyType string
+	// Receipt is the result of the ACI/1 receipt check of the probe
+	// response (aci_receipt_verified). Nil when the probe did not reach the
+	// receipt check.
+	Receipt *ACIReceiptResult
+}
+
+// ACIReceiptResult is the result of the cryptographic check of the ACI/1
+// receipt of a response: its presence, signature, keyset, session and
+// hashes (ACI/1 §9.3).
+type ACIReceiptResult struct {
+	// Err is set when the receipt is missing, malformed, forged or cites a
+	// session that teep did not pin.
+	Err error
+	// Detail describes a verified receipt.
+	Detail string
+	// Unknown holds the receipt members that teep does not define.
+	Unknown []string
 }
 
 // knownSigningAlgos is the allowlist of canonical algorithm names that may
@@ -1316,6 +1334,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalACIKeyCustody,
 		evalACIBackendNamed,
 		evalACISessionVerified,
+		evalACIReceiptVerified,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -2130,6 +2149,38 @@ func evalACISessionVerified(in *ReportInput) []FactorResult {
 	}
 	return factor(TierBinding, FactorACISessionVerified, Pass,
 		fmt.Sprintf("%d attested sessions pinned: genuine TDX and GPU with allowed MRTD/MRSEAM, workload policy not checked (%d refused%s)", len(s.Pinned), len(s.Refused), refusalSummary(s.Refused)))
+}
+
+// evalACIReceiptVerified states whether the receipt of the teep verify
+// probe passed the cryptographic receipt check. teep serve checks the
+// receipt of every response and fails the response otherwise; its report
+// has no probe, so the factor is a deferred Skip there, as it is without an
+// API key or when the probe failed before the receipt check (e2ee_usable
+// reports that failure). NotApplicable for every format other than the
+// canonical ACI/1 report; enforced for it.
+func evalACIReceiptVerified(in *ReportInput) []FactorResult {
+	if in.Raw == nil || !in.Raw.ACICanonicalReport {
+		return factor(TierBinding, FactorACIReceiptVerified, NotApplicable, "not the canonical ACI/1 report")
+	}
+	deferred := func(detail string) []FactorResult {
+		return []FactorResult{{Tier: TierBinding, Name: FactorACIReceiptVerified, Status: Skip, Detail: detail, Deferred: true}}
+	}
+	t := in.E2EETest
+	switch {
+	case t == nil:
+		return deferred("no probe: teep serve checks the receipt of every response")
+	case t.NoAPIKey:
+		return deferred("no probe: an API key is required")
+	case t.Receipt == nil:
+		return deferred("no receipt check of the probe: the probe failed before it (SEE: e2ee_usable), or a replay reused the recorded probe")
+	case t.Receipt.Err != nil:
+		return factor(TierBinding, FactorACIReceiptVerified, Fail, fmt.Sprintf("receipt: %v", t.Receipt.Err))
+	}
+	detail := t.Receipt.Detail
+	if len(t.Receipt.Unknown) > 0 {
+		detail += fmt.Sprintf("; members not checked: %q", t.Receipt.Unknown)
+	}
+	return factor(TierBinding, FactorACIReceiptVerified, Pass, detail)
 }
 
 // refusalSummary names the reason of the first refused session.

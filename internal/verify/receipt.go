@@ -2,6 +2,7 @@ package verify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,13 +24,11 @@ type probeReceipt struct {
 
 // verifyPhalaProbe checks the E2EE v2 stream of a Phala Cloud probe, then
 // fetches its receipt over the pinned client and verifies it (ACI/1 §9.3),
-// as teep serve does for every response. A probe passes only when the
-// receipt verifies.
+// as teep serve does for every response. The stream and a failure to fetch
+// the receipt go to e2ee_usable; a receipt that is missing, malformed or
+// fails the check goes to aci_receipt_verified (result.Receipt).
 func verifyPhalaProbe(ctx context.Context, opts *Options, raw *attestation.RawAttestation, resp *http.Response, session *e2ee.ACIv2Session, pr *probeReceipt) *attestation.E2EETestResult {
-	id, err := aci.ReceiptID(resp.Header)
-	if err != nil {
-		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("receipt: %w", err)}
-	}
+	id, idErr := aci.ReceiptID(resp.Header)
 	wire := aci.NewResponseHash(resp.Body)
 	resp.Body = struct {
 		io.Reader
@@ -39,40 +38,55 @@ func verifyPhalaProbe(ctx context.Context, opts *Options, raw *attestation.RawAt
 	if result.Err != nil {
 		return result
 	}
-	detail, err := verifyProbeReceipt(ctx, opts, raw, id, wire, pr)
-	if err != nil {
-		result.Err = fmt.Errorf("receipt: %w", err)
+	if idErr != nil {
+		result.Receipt = &attestation.ACIReceiptResult{Err: idErr}
 		return result
 	}
-	result.Detail += detail
+	receipt, err := verifyProbeReceipt(ctx, opts, raw, id, wire, pr)
+	if err != nil && receipt == nil {
+		// The receipt could not be fetched: a transport or HTTP failure of
+		// the probe, not a statement of the service.
+		result.Err = fmt.Errorf("receipt fetch: %w", err)
+		return result
+	}
+	result.Receipt = receipt
 	return result
 }
 
-func verifyProbeReceipt(ctx context.Context, opts *Options, raw *attestation.RawAttestation, id string, wire *aci.ResponseHash, pr *probeReceipt) (string, error) {
+// verifyProbeReceipt fetches the receipt id and checks it. It returns a
+// nil result with an error when the response or the receipt could not be
+// read, and a result (with Err set when the check fails) otherwise.
+func verifyProbeReceipt(ctx context.Context, opts *Options, raw *attestation.RawAttestation, id string, wire *aci.ResponseHash, pr *probeReceipt) (*attestation.ACIReceiptResult, error) {
 	responseHash, err := wire.Finish()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	receipt, err := aci.FetchReceipt(ctx, pr.client, pr.route.BaseURL(), opts.Provider.APIKey, id)
+	if errors.Is(err, aci.ErrMalformedReceipt) {
+		return &attestation.ACIReceiptResult{Err: err}, nil
+	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	check := &aci.ReceiptCheck{
 		Keys: raw.ACIReceiptKeys, KeysetDigest: raw.ACIWorkloadKeysetDigest, NotAfter: raw.ACIKeysetNotAfter,
 		Endpoint: "/v1/chat/completions", Method: http.MethodPost, Model: opts.ModelName,
 		ResponseHash: responseHash, RequestHash: pr.requestHash, Sessions: pr.pinned,
 	}
-	if err := aci.VerifyReceipt(receipt, check); err != nil {
-		return "", err
+	result := &attestation.ACIReceiptResult{Unknown: receipt.Unknown}
+	switch err := aci.VerifyReceipt(receipt, check); {
+	case err != nil:
+		result.Err = err
+	case pr.requestHash == nil:
+		result.Detail = "receipt verified, request hash not checked: the request has a value that the gateway can write in another form"
+	default:
+		result.Detail = "receipt verified, including the request hash"
 	}
 	// The signature covers these members; log them only for a receipt
 	// that verified.
-	if len(receipt.Unknown) > 0 {
+	if result.Err == nil && len(receipt.Unknown) > 0 {
 		slog.WarnContext(ctx, "ACI receipt has members that teep does not define; they are not checked",
 			"provider", opts.ProviderName, "receipt_id", receipt.ID, "members", receipt.Unknown)
 	}
-	if pr.requestHash == nil {
-		return "; receipt verified, request hash not checked: the request has a value that the gateway can write in another form", nil
-	}
-	return "; receipt verified, including the request hash", nil
+	return result, nil
 }

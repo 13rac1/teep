@@ -128,8 +128,8 @@ func TestBuildReportFactorCount(t *testing.T) {
 	raw := buildMinimalRaw(nonce, validSigningKey(t))
 	report := BuildReport(&ReportInput{Provider: "venice", Model: "test-model", Raw: raw, Nonce: nonce, AllowFail: DefaultAllowFail})
 
-	if len(report.Factors) != 38 {
-		t.Errorf("factor count: got %d, want 38", len(report.Factors))
+	if len(report.Factors) != 39 {
+		t.Errorf("factor count: got %d, want 39", len(report.Factors))
 	}
 }
 
@@ -203,8 +203,8 @@ func TestBuildReportInapplicableOverride(t *testing.T) {
 
 	// NotApplicable factors must not appear in the score denominator.
 	scoreDenom := report.Passed + report.Failed + report.Skipped
-	if report.NotApplicableCount != 11 {
-		t.Errorf("NotApplicableCount: got %d, want 11", report.NotApplicableCount)
+	if report.NotApplicableCount != 12 {
+		t.Errorf("NotApplicableCount: got %d, want 12", report.NotApplicableCount)
 	}
 	if scoreDenom+report.NotApplicableCount != len(report.Factors) {
 		t.Errorf("score denominator (%d) + N/A (%d) != total factors (%d)",
@@ -2677,8 +2677,8 @@ func TestBuildReportGatewayFactorCount(t *testing.T) {
 	// gateway_tee_boot_config, gateway_tee_reportdata_binding,
 	// gateway_compose_binding, gateway_cpu_id_registry, gateway_event_log_integrity,
 	// gateway_tee_tcb_current, gateway_tee_tcb_not_revoked
-	if len(report.Factors) != 53 {
-		t.Errorf("factor count with gateway: got %d, want 53", len(report.Factors))
+	if len(report.Factors) != 54 {
+		t.Errorf("factor count with gateway: got %d, want 54", len(report.Factors))
 		for _, f := range report.Factors {
 			t.Logf("  [%s] %s: %s", f.Status, f.Name, f.Detail)
 		}

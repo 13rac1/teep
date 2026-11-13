@@ -307,6 +307,22 @@ var factorRegistry = []factorInfo{
 			"gateway forwards it only through one of them. Fails when no " +
 			"session passes. Enforced. Not applicable for other formats.",
 	},
+	{
+		Name:    attestation.FactorACIReceiptVerified,
+		Tier:    2,
+		Summary: "The receipt of the verify probe did not pass the receipt check",
+		Description: "Phala Cloud ACI/1 specific: teep verify fetches the " +
+			"signed receipt of its probe response and checks it (ACI/1 " +
+			"§9.3): the signature under a keyset receipt key, the keyset " +
+			"digest, the endpoint, model and served time, the request and " +
+			"response hashes, and that the upstream session it cites is one " +
+			"that teep pinned. Fails on a missing, malformed or failed " +
+			"receipt. Skipped, and not blocking, when there is no probe: in " +
+			"teep serve, which checks the receipt of every response, without " +
+			"an API key, or when the probe failed before the receipt check " +
+			"(e2ee_usable reports that failure). Enforced. Not applicable " +
+			"for other formats.",
+	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
 		Name:    attestation.FactorTLSKeyBinding,
