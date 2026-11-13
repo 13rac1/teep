@@ -108,8 +108,18 @@ nonce and multiple nonce headers. After key-rejection handling, a non-2xx
 EHBP response without a nonce retains its upstream status and body, limited
 to 10 MiB, as TLS-authenticated
 diagnostics. It does not establish E2EE success, trigger retry, or invalidate
-authorization. Every 2xx response and every response with a nonce must pass
-EHBP authentication. Redirects remain subject to the separate redirect policy.
+authorization. Every HTTP 200 response and every response with a nonce must
+pass EHBP authentication. Redirects remain subject to the separate redirect policy.
+
+With E2EE, teep decrypts and authenticates a response body only for HTTP 200,
+and a client takes any 2xx status for success. So for every E2EE provider, a
+2xx response other than 200 is refused before anything is relayed: the request
+fails, the event is logged with the reason `unexpected_success_status`, and
+the request is not sent again. For a TLS-binding provider the authorization
+generation ends and a failure cooldown is recorded, as for a response that
+fails authentication; for a report-cache provider the publication ends as for
+a decryption failure. Without E2EE no response body is decrypted, and such a
+response is relayed as an upstream failure, as before.
 
 Unknown provider names return an error from rejection parsing. Provider-wide
 TLS/E2EE flags do not establish an endpoint-specific rejection contract.

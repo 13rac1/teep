@@ -1908,6 +1908,12 @@ func (s *Server) relayWithRetry(
 			e2ee.ZeroSessions(session, meta, nil)
 		}
 
+		if err := refuseUncheckedRelaySuccess(ctx, ar, prov.Name, upstreamModel, resp.StatusCode); err != nil {
+			cleanupAttempt()
+			relayErr = err
+			break
+		}
+
 		if resp.StatusCode != http.StatusOK {
 			// Non-200 upstream: for Chutes, this may be instance-level.
 			// doUpstreamRoundtrip already handles retryable HTTP codes, so
@@ -1998,14 +2004,44 @@ func (s *Server) relayWithRetry(
 	// decryption failures (allowing the retry loop to attempt new instances).
 	// Write the error response here after all retries are exhausted.
 	if result.status != "" && !ri.headerSent {
-		if errors.Is(relayErr, e2ee.ErrDecryptionFailed) {
-			http.Error(riWriter, "response decryption failed", http.StatusBadGateway)
-		} else {
-			http.Error(riWriter, "relay failed", http.StatusBadGateway)
-		}
+		writeRelayFailure(riWriter, relayErr)
 	}
 	return result
 }
+
+// refuseUncheckedRelaySuccess refuses an E2EE response with a 2xx status
+// other than 200. teep decrypts a response only for 200, and a client takes
+// any 2xx for success, so such a response would reach the client unchecked.
+// The returned error wraps errUncheckedSuccess, and so ends the publication
+// as a decryption failure does.
+func refuseUncheckedRelaySuccess(ctx context.Context, ar *attestResult, provName, upstreamModel string, status int) error {
+	if !ar.E2EEActive || !isUncheckedSuccess(status) {
+		return nil
+	}
+	slog.WarnContext(ctx, "response authorization rejected",
+		"provider", provName, "model", upstreamModel,
+		"reason", "unexpected_success_status", "upstream_status_code", status)
+	return fmt.Errorf("%w: upstream answered HTTP %d; an encrypted response must be HTTP 200 to be checked",
+		errUncheckedSuccess, status)
+}
+
+// writeRelayFailure writes the error response of a relay that failed before
+// the response headers were sent.
+func writeRelayFailure(w http.ResponseWriter, relayErr error) {
+	switch {
+	case errors.Is(relayErr, errUncheckedSuccess):
+		http.Error(w, "upstream answered an unexpected success status", http.StatusBadGateway)
+	case errors.Is(relayErr, e2ee.ErrDecryptionFailed):
+		http.Error(w, "response decryption failed", http.StatusBadGateway)
+	default:
+		http.Error(w, "relay failed", http.StatusBadGateway)
+	}
+}
+
+// errUncheckedSuccess marks an E2EE response with a 2xx status other than
+// 200. It wraps e2ee.ErrDecryptionFailed, so the response ends the
+// publication as a decryption failure does.
+var errUncheckedSuccess = fmt.Errorf("unexpected success status: %w", e2ee.ErrDecryptionFailed)
 
 // classifyRelayOutcome handles post-loop relay errors, returning the status
 // string (empty on success).
@@ -2024,7 +2060,11 @@ func (s *Server) classifyRelayOutcome(
 	}
 	// Post-relay enforcement: handle decryption failures that could not be retried.
 	if errors.Is(relayErr, e2ee.ErrDecryptionFailed) && ar.E2EEActive {
-		return s.handleE2EEDecryptionFailure(ctx, prov, upstreamModel, ar.Publication, ms, chutesE2EE, lastChuteID, relayErr)
+		status := s.handleE2EEDecryptionFailure(ctx, prov, upstreamModel, ar.Publication, ms, chutesE2EE, lastChuteID, relayErr)
+		if errors.Is(relayErr, errUncheckedSuccess) {
+			return "unexpected_success_status"
+		}
+		return status
 	}
 	// Non-decryption relay errors (e.g. streaming unsupported, empty
 	// upstream, read failures): the error response has already been written

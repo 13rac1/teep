@@ -141,12 +141,35 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 			return result, input.provider.E2EE, errors.New("upstream rejected the attested model key")
 		}
 	}
+	if err == nil {
+		err = s.refuseUncheckedSuccess(ctx, input, value, ur.Resp.StatusCode)
+	}
 	if err != nil {
 		cleanupAuthorized(ur)
 		result.upstream = nil
 		return result, false, err
 	}
 	return result, false, nil
+}
+
+// refuseUncheckedSuccess refuses an E2EE response with a 2xx status other
+// than 200. teep decrypts and authenticates a response body only for 200, and
+// a client takes any 2xx for success, so such a response would reach the
+// client unchecked. It is refused before anything is relayed, and the
+// generation ends with a failure cooldown, as for a response that fails
+// authentication.
+func (s *Server) refuseUncheckedSuccess(ctx context.Context, input *authorizedRequest, value *authorization, status int) error {
+	if !input.provider.E2EE || !isUncheckedSuccess(status) {
+		return nil
+	}
+	removed := s.rejectResponseAuthorization(input.key, value.generation)
+	s.logAuthorizationRejection(ctx, input, value, "unexpected_success_status", removed, removed)
+	return fmt.Errorf("upstream answered HTTP %d; an encrypted response must be HTTP 200 to be checked", status)
+}
+
+// isUncheckedSuccess reports whether status is a 2xx status other than 200.
+func isUncheckedSuccess(status int) bool {
+	return status >= http.StatusOK && status < http.StatusMultipleChoices && status != http.StatusOK
 }
 
 func (s *Server) prepareAuthorizedRequest(ctx context.Context, input *authorizedRequest, value *authorization) (*upstreamResult, error) {
