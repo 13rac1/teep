@@ -115,14 +115,6 @@ func verifyNVIDIA(
 		eat = attestation.VerifyNVIDIAPayload(ctx, raw.NvidiaPayload, nonce)
 		slog.DebugContext(ctx, "NVIDIA verification complete", "elapsed", time.Since(nvidiaStart))
 	} else if len(raw.GPUEvidence) > 0 {
-		serverNonce, err := attestation.ParseNonce(raw.Nonce)
-		if err != nil {
-			slog.Error("parse server nonce for GPU verification", "err", err)
-			eat = &attestation.NvidiaVerifyResult{
-				SignatureErr: fmt.Errorf("parse server nonce: %w", err),
-			}
-			return eat, nil
-		}
 		requesterNonce, err := chutes.GPURequesterNonce(nonce, raw.SigningKey)
 		if err != nil {
 			eat = &attestation.NvidiaVerifyResult{SignatureErr: fmt.Errorf("GPU requester nonce: %w", err)}
@@ -130,7 +122,7 @@ func verifyNVIDIA(
 		}
 		slog.DebugContext(ctx, "NVIDIA GPU direct verification starting", "gpus", len(raw.GPUEvidence))
 		nvidiaStart := time.Now()
-		eat = attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce, requesterNonce)
+		eat = attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, nonce, requesterNonce)
 		slog.DebugContext(ctx, "NVIDIA GPU direct verification complete", "elapsed", time.Since(nvidiaStart))
 	}
 	if !offline && raw.NvidiaPayload != "" && raw.NvidiaPayload[0] == '{' {

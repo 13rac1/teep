@@ -119,6 +119,12 @@ Verified using the client-generated nonce and the ML-KEM-768 public key from the
 
 **Status:** Enforced.
 
+### Nonce echo
+
+The evidence response echoes no nonce. `nonce_match` fails with "no echoed nonce; freshness rests on tee_reportdata_binding" and is allowed (`ChutesDefaultAllowFail`). Freshness rests on the enforced `tee_reportdata_binding`, which checks `SHA256(client_nonce_hex + e2e_pubkey)`. The GPU evidence is bound by the SPDM requester nonce derived from the same values (`chutes.GPURequesterNonce`), which the enforced `nvidia_nonce_client_bound` checks.
+
+**Status:** Allowed to fail; the client nonce is checked by two enforced factors.
+
 ### Other enforced factors
 
 - **`tee_debug_disabled`** — debug attribute bit check
@@ -211,6 +217,8 @@ Teep correctly returns `Skip` for factors where the sek8s architecture does not 
 - **`event_log_integrity`**: "chutes performs RTMR verification validator-side against a reference baseline; event log not exposed to clients"
 
 Teep returns `Fail` for `measured_model_weights` with detail "no model weight hashes" because neither weight verification mechanism exposes verifiable data to clients.
+
+Teep returns `Fail` for `nonce_match`, allowed, with detail "no echoed nonce; freshness rests on tee_reportdata_binding": the evidence response states no nonce (see [Nonce echo](#nonce-echo)).
 
 ---
 

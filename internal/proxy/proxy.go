@@ -1155,12 +1155,6 @@ func verifyNVIDIA(
 	}
 	if len(raw.GPUEvidence) > 0 {
 		slog.DebugContext(ctx, "NVIDIA GPU direct verification starting", "provider", provName, "gpus", len(raw.GPUEvidence))
-		serverNonce, err := attestation.ParseNonce(raw.Nonce)
-		if err != nil {
-			return &attestation.NvidiaVerifyResult{
-				SignatureErr: fmt.Errorf("parse server nonce: %w", err),
-			}, 0
-		}
 		requesterNonce, err := chutesProvider.GPURequesterNonce(nonce, raw.SigningKey)
 		if err != nil {
 			return &attestation.NvidiaVerifyResult{
@@ -1168,7 +1162,7 @@ func verifyNVIDIA(
 			}, 0
 		}
 		start := time.Now()
-		result := attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, serverNonce, requesterNonce)
+		result := attestation.VerifyNVIDIAGPUDirect(ctx, raw.GPUEvidence, nonce, requesterNonce)
 		dur := time.Since(start)
 		slog.DebugContext(ctx, "NVIDIA GPU direct verification complete", "provider", provName, "elapsed", dur)
 		return result, dur

@@ -689,6 +689,7 @@ The audit MUST evaluate whether additional factors should be enforced by default
 > **Known divergence**: Venice uses the global `DefaultAllowFail` (less strict than `NearcloudDefaultAllowFail`), has no gateway factors, and does not enforce `tee_measurement` or `build_transparency_log` by default. Venice should have its own allowlist in the future.
 
 > **Known divergence: Chutes/Sek8s.** Chutes uses its own `ChutesDefaultAllowFail` list (defined in `internal/attestation/report.go`), which reflects the sek8s attestation model’s structural limitations. The chutes-specific allowed-to-fail factors include:
+> - `nonce_match` — the evidence response echoes no nonce; freshness rests on `tee_reportdata_binding` and `nvidia_nonce_client_bound`,
 > - `nvidia_signature` — GPU cert validation (sek8s doesn’t validate NVIDIA root the same way as dstack),
 > - `nvidia_nras_verified` — NRAS EAT not required,
 > - `tls_key_binding` — TLS cert fingerprint not included in REPORTDATA,
@@ -701,7 +702,7 @@ The audit MUST evaluate whether additional factors should be enforced by default
 > - `event_log_integrity` — not applicable (returns `Skip`; event log not exposed to clients),
 > Note: `e2ee_usable` is enforced for chutes (not in `ChutesDefaultAllowFail`). The Deferred factor mechanism allows it to start as Skip without blocking requests (see §4.16).
 >
-> Factors that remain **enforced** for chutes include: `nonce_match`, `tee_quote_present`, `tee_quote_structure`, `tee_cert_chain`, `tee_quote_signature`, `tee_debug_disabled`, `tee_measurement`, `tee_reportdata_binding`, `intel_pcs_collateral`, `tee_tcb_current`, `tee_tcb_not_revoked`, `e2ee_capable`, `signing_key_present`.
+> Factors that remain **enforced** for chutes include: `tee_quote_present`, `tee_quote_structure`, `tee_cert_chain`, `tee_quote_signature`, `tee_debug_disabled`, `tee_measurement`, `tee_reportdata_binding`, `intel_pcs_collateral`, `tee_tcb_current`, `tee_tcb_not_revoked`, `e2ee_capable`, `signing_key_present`.
 >
 > The audit for chutes MUST verify: (a) that Skip results for compose_binding, sigstore_verification, event_log_integrity, and build_transparency_log are correctly returned with explanatory messages, (b) that these Skip factors are in `ChutesDefaultAllowFail` and do not block traffic, (c) that the enforced factors provide adequate security despite the absence of compose/event-log/supply-chain checks, (d) that no `gateway_*` factors exist (the Chutes gateway is unattested).
 

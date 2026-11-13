@@ -9,8 +9,8 @@ import (
 )
 
 // teep verify checks the GPU evidence of each Chutes capture against the
-// requester nonce derived from the client nonce, and reports the
-// attestation nonce.
+// requester nonce derived from the client nonce, and reports the client
+// nonce.
 func TestVerifyNVIDIAChutesGPUEvidence(t *testing.T) {
 	for _, c := range chutestest.Captures(t, "../integration/testdata") {
 		t.Run(c.Name, func(t *testing.T) {
@@ -21,7 +21,7 @@ func TestVerifyNVIDIAChutesGPUEvidence(t *testing.T) {
 			if eat.SignatureErr != nil {
 				t.Errorf("SignatureErr = %v, want nil", eat.SignatureErr)
 			}
-			if got, want := eat.Nonce, c.Raw.Nonce; got != want {
+			if got, want := eat.Nonce, c.Nonce.Hex(); got != want {
 				t.Errorf("reported nonce = %s, want %s", got, want)
 			}
 			if nras != nil {

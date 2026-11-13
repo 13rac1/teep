@@ -477,6 +477,10 @@ var PhalaCloudDefaultAllowFail = []string{
 // factors remain allowed-to-fail until the sek8s platform exposes the
 // necessary evidence.
 var ChutesDefaultAllowFail = []string{
+	// The Chutes evidence response echoes no nonce, so nonce_match fails on
+	// every instance. The client nonce is checked by tee_reportdata_binding
+	// and nvidia_nonce_client_bound, which stay enforced.
+	FactorNonceMatch,
 	FactorTEEHardwareConfig,
 	FactorTEEBootConfig,
 	FactorNvidiaSignature,
@@ -1213,10 +1217,24 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 // evidence, by nvidia_nonce_client_bound.
 const aciNoEchoDetail = "no echoed nonce; freshness rests on gateway_tee_reportdata_binding"
 
+// NonceSourceNotEchoed is the NonceSource that the Chutes parser sets for
+// the Chutes evidence response, which echoes no nonce. nonce_match fails for
+// it with noEchoDetail; the client nonce is checked by tee_reportdata_binding and,
+// in GPU evidence, by nvidia_nonce_client_bound.
+const NonceSourceNotEchoed = "not_echoed"
+
+// noEchoDetail is the detail of nonce_match for NonceSourceNotEchoed.
+const noEchoDetail = "no echoed nonce; freshness rests on tee_reportdata_binding"
+
 func evalNonceMatch(in *ReportInput) []FactorResult {
 	if in.Raw.Nonce == "" {
 		if in.Raw.ACIGatewayVariant {
 			return factor(TierCore, FactorNonceMatch, Fail, aciNoEchoDetail)
+		}
+		// Only the Chutes parser sets NonceSourceNotEchoed; some formats
+		// copy nonce_source from the response, so the format decides.
+		if in.Raw.BackendFormat == FormatChutes && in.Raw.NonceSource == NonceSourceNotEchoed {
+			return factor(TierCore, FactorNonceMatch, Fail, noEchoDetail)
 		}
 		return factor(TierCore, FactorNonceMatch, Fail, "nonce field absent from attestation response")
 	}
