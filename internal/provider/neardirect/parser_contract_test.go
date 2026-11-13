@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/13rac1/teep/internal/jsonstrict/aliastest"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
@@ -112,13 +113,12 @@ func TestDirectUnknownFieldsAndEquivalentEncoding(t *testing.T) {
 	repeated["signing_public_key"] = strings.ToUpper(repeated["signing_public_key"].(string))
 	info := repeated["info"].(map[string]any)
 	info["unverified_addition"] = "ignored"
-	info["APP_NAME"] = "must not override app_name"
 	info["tcb_info"] = `{"app_compose":"services: {}","extra":true}`
 	raw, err := neardirect.ParseAttestationResponse(t.Context(), encodeDirectFixture(t, body), "model")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(raw.UnknownFields) != 3 {
+	if len(raw.UnknownFields) != 2 {
 		t.Fatalf("unknown fields: %v", raw.UnknownFields)
 	}
 	if raw.AppName != "app" || raw.AppCompose != "services: {}" {
@@ -129,6 +129,16 @@ func TestDirectUnknownFieldsAndEquivalentEncoding(t *testing.T) {
 			t.Fatalf("missing field path: %s", field)
 		}
 	}
+}
+
+// A member that differs from a defined one only in letter case is refused,
+// not removed as unknown: encoding/json would let it set the defined field.
+func TestDirectRefusesFoldedAlias(t *testing.T) {
+	body := directFixture(t)
+	info := body["all_attestations"].([]any)[0].(map[string]any)["info"].(map[string]any)
+	info["APP_NAME"] = "must not override app_name"
+	_, err := neardirect.ParseAttestationResponse(t.Context(), encodeDirectFixture(t, body), "model")
+	aliastest.Refused(t, err)
 }
 
 func TestDirectCompleteInfoAgreement(t *testing.T) {

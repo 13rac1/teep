@@ -3,10 +3,13 @@ package jsonstrict
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
 	"strings"
+
+	strict "github.com/13rac1/jsonstrict"
 )
 
 // UnmarshalObject decodes exact supported field names and returns unknown paths.
@@ -20,6 +23,13 @@ func UnmarshalObject(data []byte, target any, path string, nullable ...string) (
 		return nil, fmt.Errorf("%s: expected JSON object", path)
 	}
 	if err := ValidateUniqueFields(data); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	// Unknown members are removed before the typed decode below, which would
+	// hide a member that matches a supported field only by letter case. Such
+	// a document is ambiguous: the library's check over the whole document
+	// refuses it.
+	if err := refuseCaseFoldedAliases(data, target); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	var fields map[string]json.RawMessage
@@ -63,4 +73,17 @@ func UnmarshalObject(data []byte, target any, path string, nullable ...string) (
 		return unknown, fmt.Errorf("%s: missing required fields: %s", path, strings.Join(missing, ", "))
 	}
 	return unknown, nil
+}
+
+// refuseCaseFoldedAliases decodes data with the library into a new value of
+// target's type and returns its *CaseFoldError, wrapped, if data has a member
+// that matches a defined field only by letter case. Other results of that
+// decode are discarded: UnmarshalObject decodes the supported members itself.
+func refuseCaseFoldedAliases(data []byte, target any) error {
+	probe := reflect.New(reflect.TypeOf(target).Elem()).Interface()
+	_, err := strict.Unmarshal(data, probe)
+	if _, ok := errors.AsType[*strict.CaseFoldError](err); ok {
+		return fmt.Errorf("ambiguous JSON document: %w", err)
+	}
+	return nil
 }

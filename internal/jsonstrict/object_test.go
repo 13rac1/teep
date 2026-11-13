@@ -13,7 +13,7 @@ func TestUnmarshalObjectBoundaries(t *testing.T) {
 		unknown int
 	}{
 		{`{"name":"valid"}`, true, 0},
-		{`{"name":"valid","NAME":"overwrite"}`, true, 1},
+		{`{"name":"valid","NAME":"overwrite"}`, false, 0}, // a case-folded alias is refused
 		{`{"name":"valid","extra":{"x":1}}`, true, 1},
 		{`{"name":"valid","extra":{"x":1,"x":2}}`, false, 0},
 		{`{"name":"valid","\u006eame":"duplicate"}`, false, 0},

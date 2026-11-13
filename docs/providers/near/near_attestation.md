@@ -42,9 +42,11 @@ of an array. Duplicate-member checks also apply inside those decoded strings.
 Additional encoding layers are rejected.
 
 Unknown fields are returned with their paths for the caller's `response_schema`
-policy. Low-level parsers do not log or deduplicate these diagnostics. Unknown
-members are excluded before typed decoding, so a differently cased unknown
-name cannot overwrite a supported member. An explicit schema allowance can
+policy. Low-level parsers do not log or deduplicate these diagnostics. A
+member whose name differs from a supported member only in letter case is
+refused: encoding/json would let it set the supported field, so the document
+is ambiguous. Other unknown members are excluded before typed decoding. An
+explicit schema allowance can
 permit additions; it does not make them authenticated verification inputs.
 
 Direct-report comparison includes the model identifier, signing algorithm,
