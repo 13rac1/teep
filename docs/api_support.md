@@ -237,7 +237,10 @@ With `base_url = "https://completions.near.ai"` (the default), or
 `/endpoints`. Set `[providers.neardirect].base_url` to an explicit HTTPS backend
 origin to disable endpoint discovery in both commands. That origin is used for
 attestation and inference for every requested model; all attestation, TLS, and
-E2EE checks still apply. The `/v1/models` catalog remains gateway-provided.
+E2EE checks still apply. The `/v1/models` catalog remains gateway-provided:
+it lists the models that `cloud-api.near.ai/v1/models` returns with `owned_by` `"nearai"`.
+It also lists `z-ai/glm-5.3-flash-long`, which that catalog does not list,
+while `/endpoints` serves it; with an explicit backend origin it does not.
 
 **E2EE protocol:** Ed25519/X25519 ECDH + XChaCha20-Poly1305 (field-level encryption).
 
