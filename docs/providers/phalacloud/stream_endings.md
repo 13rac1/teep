@@ -9,7 +9,7 @@ the reference for the receipt rules in
 `teep verify` probe follow at the end.
 
 "Content" means at least one upstream line other than a blank separator was relayed to the client: a data chunk (`Chunks`) or a comment, `event:`, `id:` or `retry:` line (`Forwarded`).
-"Full" means teep read the rest of the response from the gateway (`finishWithin`, its own 30 s bound, body closed at the bound); the receipt fetch then has its own 30 s bound. The upstream request runs 30 s past teep's attempt deadline, which bounds the relay and the writes, so a full read works after that deadline too. A stream must end within those 30 s and within 1 MiB after the relay stopped; a longer one is the gateway's failure, also when honest.
+"Full" means teep read the rest of the response from the gateway (`finishWithin`, its own 30 s bound, body closed at the bound); the receipt fetch then has its own 30 s bound. The upstream request of a Phala stream runs 2 minutes (the drain bound) past teep's attempt deadline, which bounds the relay and the writes, so a full read works after that deadline too. teep checks the attempt deadline before each read from the gateway, not during one: a read that waits at the deadline runs on until the upstream request ends. The wait for the response headers and the authorization run within the upstream deadline too, so they can also pass the attempt deadline by up to 2 minutes. A stream must end within those 30 s and within 1 MiB after the relay stopped; a longer one is the gateway's failure, also when honest.
 "Read" means the bytes read before a read error (`Received`).
 "Client-ended" means positive evidence only (`endedByClient`): the relay error is the downstream write error, or the error of the incoming request's own context, which has ended.
 
@@ -35,7 +35,7 @@ the reference for the receipt rules in
 | 13 | Content, then a chunk that does not decrypt | gateway | yes | full | yes (response_decryption ends it as before) |
 | 13a | [DONE], then an open connection with comment lines | gateway | as rows 1-6 once the gateway closes (FinishSSE reads to EOF before teep writes [DONE] downstream, so the client does not see [DONE] until then); if the client gives up first, row 14 | full | as rows 1-6 |
 | 14 | Content, then the gateway stops sending until the client gives up | gateway or a slow backend | yes, after the client left (drain) | read until the drain bound (2 min, 16 MiB from the client's end) | yes, unless the gateway ends and its receipt verifies within the bound |
-| 15 | Content, then the gateway stops sending until teep's own attempt deadline (30 min), client still connected | gateway | yes | full if the gateway ends within 30 s after it, else read | no if the gateway signed what it sent and ended in time; yes otherwise |
+| 15 | Content, then the gateway stops sending until teep's own attempt deadline (30 min), client still connected | gateway | yes | full if the gateway ends before the upstream request ends (about 2 minutes after the attempt deadline: the waiting read is not cut at the deadline), else read | no if the gateway signed what it sent and ended in time; yes otherwise |
 | 15a | A write to the client fails on the write deadline (teep's attempt deadline), client still connected (a slow reader, or an honest stream still sending at the 30-minute mark) | client's reading or the stream's length, not a client end | yes | full: on HTTP/2 the tail read (the upstream request runs 30 s longer); on HTTP/1.1 net/http ends the request context when the write fails, so the stream is drained as row 17 | no if the gateway signed what it sent and ended within the bound; yes otherwise |
 | 16 | Client hangs up before any content | client | no | n/a | no |
 | 17 | Client hangs up after content, before the read from the gateway ended | client | yes, after teep reads the rest (drain) | full within the drain bound | only on a failure the gateway causes (a stall past the bound, a receipt not served or not verified). An honest stream that is still sending when the bound passes counts as the gateway's failure too |
@@ -60,3 +60,8 @@ the reference for the receipt rules in
 | Any other outcome without a verified receipt: missing id, reset, no [DONE], chunk that does not decrypt, receipt not served or failed, receipt request failed | enforced Fail (receipt over the full response where readable, else the bytes read) |
 | Receipt verifies, stream failed after it | Pass; e2ee_usable fails |
 | No API key, --offline, report blocks inference, --reverify of a recorded pass | deferred Skip with the reason |
+
+After a stream that failed, the `teep verify` probe fetches the receipt with
+the 3 attempts of `aci.FetchReceipt`, while `teep serve` waits for it for up
+to 30 seconds (`aci.FetchReceiptUntil`). A receipt that the gateway
+publishes late can therefore fail the probe and pass in `teep serve`.

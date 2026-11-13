@@ -1909,9 +1909,10 @@ func TestMergedAllowFail_VeniceFormatLayer(t *testing.T) {
 		t.Errorf("venice/dstack: got %v, want VeniceDefaultAllowFail", dstack)
 	}
 
-	// Phala Cloud and NanoGPT answer with the gateway variant of the ACI/1
-	// format, which echoes no nonce, and select their ACI/1 lists; their
-	// other formats keep the provider list.
+	// The ACI/1 format selects the ACI/1 list of Phala Cloud (the canonical
+	// report, which echoes no nonce and carries no GPU evidence) and of
+	// NanoGPT (the gateway variant, which echoes no nonce); their other
+	// formats keep the provider list.
 	phalaACI := MergedAllowFail("phalacloud", attestation.FormatACI1, cfg, false)
 	if !reflect.DeepEqual(phalaACI, attestation.PhalaCloudACIDefaultAllowFail) {
 		t.Errorf("phalacloud/aci1: got %v, want PhalaCloudACIDefaultAllowFail", phalaACI)
