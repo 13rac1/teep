@@ -20,9 +20,10 @@ exposure 11).
 
 The three providers reach the gateway in different ways. Phala Cloud's
 clients connect to the gateway directly. Venice's and NanoGPT's clients
-connect to the provider, which then calls the gateway. teep encrypts the
-message content of each request to a key that only the gateway holds, so
-the provider's servers relay that content as ciphertext.
+connect to the provider, which then calls the gateway. For Venice, teep
+encrypts the message content of each request to a key that only the
+gateway holds, so the provider's servers relay that content as ciphertext.
+For NanoGPT, E2EE is off by default, so NanoGPT's servers read the request.
 
 ## Impact
 
@@ -322,8 +323,9 @@ date.
    key to the authorization.
 9. **NanoGPT is an unattested hop.** NanoGPT's servers receive the request
    over TLS to `nano-gpt.com`, which no attestation covers, and forward it
-   to the gateway. With E2EE they relay the message content and the
-   generated content as ciphertext, but they see the other request fields
+   to the gateway. E2EE is off by default for NanoGPT, so they read the
+   whole request. With `e2ee = true` they would relay the message content
+   and the generated content as ciphertext, but they see the other request fields
    and choose the gateway hostname, and they can forge, drop, reorder or
    repeat response content (residual exposure 10).
    In the 2026-10-29 capture, NanoGPT fetched the attestation report

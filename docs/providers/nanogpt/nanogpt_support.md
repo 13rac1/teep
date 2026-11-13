@@ -18,7 +18,13 @@ base_url = "https://nano-gpt.com/api"
 api_key_env = "NANOGPT_API_KEY"
 ```
 
-`NANOGPT_API_KEY` alone creates the provider with the base URL above.
+`NANOGPT_API_KEY` alone creates the provider with the base URL above and
+E2EE off, as the configuration above does without `e2ee = true`. The
+request then goes in plaintext over TLS to NanoGPT's servers, an
+unattested hop (see [TLS and E2EE](#tls-and-e2ee)). E2EE on would serve no
+NanoGPT model today: E2EE v2 cannot encrypt to a dstack-format model, and
+NanoGPT does not forward E2EE v2 for ACI/1 models (observed 2026-10-30). A
+user who wants to try it sets `e2ee = true` in `[providers.nanogpt]`.
 
 ## Routing
 
@@ -67,10 +73,17 @@ For an ACI/1 response:
 
 ## TLS and E2EE
 
-teep encrypts NanoGPT chat requests for ACI/1 models with E2EE v2 of the
-gateway, the secp256k1 suite, to the gateway E2EE key that the gateway quote
-binds. E2EE is enabled by default. The field coverage and the fail-closed
-rules are in
+E2EE is off by default for NanoGPT. Without it, teep sends the whole
+request in plaintext over TLS to `nano-gpt.com`: NanoGPT's servers, which no
+attestation covers, read the prompt, and so does whatever NanoGPT forwards
+it to (the attested dstack host of a dstack-format model, or, for an ACI/1
+model, the gateway, which decrypts by design, and the inference host
+behind it).
+
+With `e2ee = true`, teep encrypts NanoGPT chat requests for ACI/1 models
+with E2EE v2 of the gateway, the secp256k1 suite, to the gateway E2EE key
+that the gateway quote binds. The field coverage and the fail-closed rules
+are in
 [API support](../../api_support.md#phala-cloud-and-nanogpt-e2ee-v2-of-the-private-ai-gateway).
 NanoGPT must forward the E2EE v2 headers, the encrypted fields and the
 model name to the gateway unchanged: the gateway decrypts a request field
@@ -108,9 +121,10 @@ and Phala Cloud. Other formats keep `NanoGPTDefaultAllowFail`.
   responses are not authenticated against it.
 - E2EE v2 defines field paths only for message content. teep refuses a
   request that carries `messages[].tool_calls`, `messages[].function_call`, `messages[].refusal`, `messages[].audio`, `prediction`, `tools`, `functions` and `response_format.json_schema`, and a response with tool calls.
-- E2EE is enabled by default for NanoGPT and provides confidentiality only:
-  NanoGPT relays the content as ciphertext but can forge responses, and teep
-  cannot fetch NanoGPT's receipts.
+- E2EE is off by default for NanoGPT, so NanoGPT's servers read the
+  prompt. With `e2ee = true` it provides confidentiality only: NanoGPT
+  relays the content as ciphertext but can forge responses, and teep cannot
+  fetch NanoGPT's receipts.
 - NanoGPT does not forward E2EE v2: a live E2EE v2 request on 2026-10-30 (`TEE/gemma-4-26b-a4b-uncensored`) received an SSE stream whose second chunk carried `choices.0.delta.content` in plaintext. teep refused the response (`e2ee_usable` failed: "expected encrypted string but not recognised"). The request content left teep as ciphertext. The gateway did not encrypt the response: this is consistent with NanoGPT not forwarding the E2EE v2 headers, or not forwarding the request to the gateway; a changed model would have made the gateway refuse the request instead. Until NanoGPT forwards E2EE v2, a NanoGPT ACI/1 model does not serve while E2EE is enabled.
 - The TLS key of `nano-gpt.com` is not bound to any attestation.
 - NanoGPT fetched the observed gateway attestation through `api.redpill.ai`,
