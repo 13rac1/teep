@@ -128,8 +128,8 @@ func TestGatewayACI_PinsDecideCustody(t *testing.T) {
 
 // Concurrent verification of the Venice, Phala Cloud and NanoGPT ACI/1
 // fixtures keeps each provider's policy: all reach the same gateway with the
-// shared pins, and only Venice binds its E2EE key through the gateway
-// REPORTDATA factor.
+// shared pins, and each binds its E2EE key through the gateway REPORTDATA
+// factor.
 func TestVerifyRun_ConcurrentACIProviders(t *testing.T) {
 	venice := loadFixture(t, "venice_aci")
 	envs := make([]fixtureEnv, 0, 1+len(gatewayACIFixtures))
@@ -185,10 +185,13 @@ func TestVerifyRun_ConcurrentACIProviders(t *testing.T) {
 		if f := findFactor(t, got.report, "aci_key_custody"); f.Status != attestation.Pass {
 			t.Errorf("%s: aci_key_custody = %v %q", got.provider, f.Status, f.Detail)
 		}
-		// Only Venice encrypts to the gateway key; Phala Cloud and NanoGPT
-		// have no E2EE.
-		if gatewayBound := got.report.E2EEBindingFactor == attestation.FactorGWReportData; gatewayBound != (got.provider == "venice") {
+		// Each provider encrypts to the gateway key that the gateway quote
+		// binds.
+		if got.report.E2EEBindingFactor != attestation.FactorGWReportData {
 			t.Errorf("%s: E2EEBindingFactor = %q", got.provider, got.report.E2EEBindingFactor)
+		}
+		if got.report.BackendFormat != attestation.FormatACI1 {
+			t.Errorf("%s: BackendFormat = %q", got.provider, got.report.BackendFormat)
 		}
 	}
 	for _, p := range []string{"venice", "phalacloud", "nanogpt"} {

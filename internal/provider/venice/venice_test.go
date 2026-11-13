@@ -508,7 +508,7 @@ func TestParseACI1_NoModelComposeFields(t *testing.T) {
 func TestParseACI1_EmptyQuoteRejected(t *testing.T) {
 	// A response with an empty attestation.evidence.quote would build no
 	// gateway tier and leave the waived core factors unopposed. The parser
-	// must reject it. SEE: docs/attestation_gaps/venice_aci_gateway.md.
+	// must reject it. SEE: docs/attestation_gaps/aci_gateway.md.
 	body := strings.Replace(validACI1JSON, `"quote": "dGVzdHF1b3Rl",`, `"quote": "",`, 1)
 	_, err := venice.ParseAttestationResponse(context.Background(), []byte(body))
 	if err == nil {

@@ -230,7 +230,8 @@ func TestE2EEEnabledByDefault(t *testing.T) {
 		{"neardirect", true},
 		{"tinfoil_v3_cloud", true},
 		{"tinfoil_v3_direct", true},
-		{"nanogpt", false},
+		{"nanogpt", true},
+		{"phalacloud", true},
 		{"unknown", false},
 	}
 	for _, tc := range tests {

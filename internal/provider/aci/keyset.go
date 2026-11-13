@@ -19,6 +19,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"golang.org/x/crypto/sha3"
@@ -75,7 +76,7 @@ type Pins struct {
 // and therefore which key-releasing authority — teep accepts for every
 // ACI/1 model. Corroborate against the dstack KmsAuth registry (Phala
 // publishes the KMS root on-chain) before extending it.
-// SEE: docs/attestation_gaps/venice_aci_gateway.md.
+// SEE: docs/attestation_gaps/aci_gateway.md.
 var gatewayKMSRootAllow = []string{
 	"0334c76e0c3f52ec64cbf9bbf5c910c272330166fd656c0a86bb330963e46910e1",
 	// Observed on 2026-11-12 on the Phala Cloud, NanoGPT and Venice ACI/1
@@ -103,7 +104,7 @@ var gatewayKMSRootAllow = []string{
 // adds an app id here makes teep accept that dstack app as the gateway. The
 // gateway runs a dev-channel image, so the app id can change on redeploy — a
 // mismatch fails aci_key_custody closed, which is correct; refresh the pin
-// from a new capture. SEE: docs/attestation_gaps/venice_aci_gateway.md.
+// from a new capture. SEE: docs/attestation_gaps/aci_gateway.md.
 var gatewayAppIDAllow = []string{
 	"fdb7a14e5a6675f752e2cb69c9067a98ca402918",
 	// Observed on 2026-11-12 on the Phala Cloud, NanoGPT and Venice ACI/1
@@ -514,7 +515,7 @@ const maxKeysetLifetime = 365 * 24 * time.Hour
 // the E2EE signing key and nonce (SEE: venice.ReportDataVerifier), not the
 // keyset digest, so this is a rotation bound that holds against an honest
 // gateway, not a hardware-enforced expiry.
-// SEE: docs/attestation_gaps/venice_aci_gateway.md residual exposure 7.
+// SEE: docs/attestation_gaps/aci_gateway.md residual exposure 7.
 func keysetNotExpired(notAfter string, now time.Time) (ok bool, detail string) {
 	na, err := notAfterCanonical(notAfter)
 	if err != nil {
@@ -552,15 +553,19 @@ func verifyKeysetSubject(subject *string, appID []byte) error {
 }
 
 // keysetContainsE2EEKey reports whether signingKeyHex decodes to the same
-// bytes as one of the keyset e2ee_public_keys. An entry that does not decode
-// as hex cannot match; an empty or undecodable signing key matches nothing,
-// so the caller's factor fails closed.
+// bytes as one of the keyset e2ee_public_keys whose algo is the E2EE v2
+// secp256k1 suite, the suite that teep encrypts with. An entry that does not
+// decode as hex cannot match; an empty or undecodable signing key matches
+// nothing, so the caller's factor fails closed.
 func keysetContainsE2EEKey(keyset *aciWorkloadKeyset, signingKeyHex string) bool {
 	signingKey, err := hex.DecodeString(signingKeyHex)
 	if err != nil || len(signingKey) == 0 {
 		return false
 	}
 	for i := range keyset.E2EEPublicKeys {
+		if keyset.E2EEPublicKeys[i].Algo != e2ee.ACIv2Algo {
+			continue
+		}
 		endorsed, err := hex.DecodeString(keyset.E2EEPublicKeys[i].PublicKey)
 		if err != nil || len(endorsed) != len(signingKey) {
 			continue

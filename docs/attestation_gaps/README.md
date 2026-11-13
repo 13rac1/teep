@@ -17,7 +17,7 @@ New reports should follow [TEMPLATE.md](TEMPLATE.md).
 - [Model Weight Authentication](model_weights.md)
 - [Proof of Cloud Registry: JWT Validation Failure](poc_jwt_validation.md)
 - [Chutes/sek8s Integrity Chain](sek8s_integrity.md)
-- [Venice ACI/1: Attested Gateway, Unattested Inference Host](venice_aci_gateway.md)
+- [ACI/1 Gateway: Attested Gateway, Unattested Inference Host](aci_gateway.md)
 
 NearCloud sends an authenticated model-key routing hint, but gateway behavior
 can ignore it and non-chat backend affinity is not established. Generic image

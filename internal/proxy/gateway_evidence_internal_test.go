@@ -170,13 +170,17 @@ func TestGatewayBindsE2EEKey(t *testing.T) {
 	}{
 		{"tinfoil cloud", "tinfoil_v3_cloud", attestation.FormatTinfoil, true},
 		{"venice aci/1", "venice", attestation.FormatACI1, true},
+		{"phalacloud aci/1", "phalacloud", attestation.FormatACI1, true},
+		{"nanogpt aci/1", "nanogpt", attestation.FormatACI1, true},
+		{"nanogpt dstack", "nanogpt", attestation.FormatDstack, false},
 		{"venice dstack", "venice", attestation.FormatDstack, false},
 		{"tinfoil direct", "tinfoil_v3_direct", attestation.FormatTinfoil, false},
 		{"nearcloud", "nearcloud", attestation.FormatGateway, false},
-		// The format alone must not decide this: only Venice serves ACI/1, and a
-		// misdetected or future ACI/1 body from another provider must keep the
-		// core reportdata factor rather than accept the gateway factor.
-		{"other provider aci/1", "nanogpt", attestation.FormatACI1, false},
+		// The format alone must not decide this: a misdetected or future ACI/1
+		// body from a provider that does not forward the private-ai-gateway
+		// must keep the core reportdata factor rather than accept the gateway
+		// factor.
+		{"other provider aci/1", "chutes", attestation.FormatACI1, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

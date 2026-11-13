@@ -128,9 +128,9 @@ Yes. Teep is open source under AGPL-3.0. Dual licensing is available for commerc
 | [Venice AI](https://venice.ai) | End-to-end encryption (ECDH + AES-256-GCM) |
 | [NEAR AI Direct](https://near.ai) | Attested HTTP/2 pools to model-specific TEE nodes |
 | [NEAR AI Cloud](https://near.ai) | Attested HTTP/2 pools through a TEE-attested gateway |
-| [NanoGPT](https://nano-gpt.com) | TEE attestation with Intel TDX + NVIDIA GPU |
+| [NanoGPT](https://nano-gpt.com) | TEE attestation with Intel TDX + NVIDIA GPU; no end-to-end encryption by default (plaintext over TLS to NanoGPT); `e2ee = true` encrypts to the attested gateway for ACI/1 models, which NanoGPT did not forward on 2026-10-30 |
 | [Chutes](https://chutes.ai) | End-to-end encryption (ML-KEM-768 + ChaCha20-Poly1305) with multi-instance failover |
-| [Phala Cloud](https://phala.network) | Format-agnostic gateway supporting Chutes and dStack attestation backends |
+| [Phala Cloud](https://phala.network) | End-to-end encryption (ECDH + AES-256-GCM) to the attested private-ai-gateway |
 | [Tinfoil](https://tinfoil.sh) (Cloud) | End-to-end encryption (HPKE X25519 + AES-256-GCM) via Tinfoil's model router |
 | [Tinfoil](https://tinfoil.sh) (Direct) | Disabled: Tinfoil's enclave hosts do not answer attestation requests (observed 2026-11-12). Use Tinfoil (Cloud). |
 
@@ -212,10 +212,11 @@ Is the software what it claims to be? These checks verify container provenance, 
 
 Available only for providers that route traffic through an independently-attested
 TEE gateway: `nearcloud` (Intel TDX), `tinfoil_v3_cloud` (AMD SEV-SNP), and
-Venice ACI/1 models (Intel TDX). These factors verify the gateway itself. For
-tinfoil_v3_cloud and Venice ACI/1 this tier carries the only CPU attestation
-there is — the machine serving inference exposes none, and the core tee_*
-factors state that.
+the ACI/1 models of Venice, Phala Cloud and NanoGPT (Intel TDX, one shared
+gateway). These factors verify the gateway itself. For tinfoil_v3_cloud and
+ACI/1 this tier carries the only CPU attestation there is — the machine
+serving inference exposes none, and the core tee_* factors state that. See
+[ACI/1 Gateway](docs/attestation_gaps/aci_gateway.md).
 
 <details>
 <summary>15 factors</summary>

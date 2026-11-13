@@ -630,6 +630,9 @@ func evidenceE2EEOutcome(ctx context.Context, opts *Options, raw *attestation.Ra
 		return opts.CapturedE2EE
 	}
 	if !nearTLSOnly(opts) && (!providerUsesTLSBinding(opts.ProviderName) || opts.Offline || opts.Provider.APIKey == "") {
+		if opts.capture != nil {
+			ctx = withE2EERecorder(ctx, opts.capture.recordE2EE)
+		}
 		return testE2EE(ctx, raw, opts.ProviderName, opts.Provider, opts.ModelName, opts.Offline)
 	}
 	return nil

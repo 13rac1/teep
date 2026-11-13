@@ -22,7 +22,7 @@ func GatewayMeasurementPolicy() attestation.MeasurementPolicy {
 // ghcr.io/edgelesssys/privatemode/privatemode-proxy is the Edgeless
 // Privatemode proxy that the gateway runs as an upstream client. It is
 // compose-pinned like the other images; its own attestation is not part of
-// the gateway's evidence (SEE: docs/attestation_gaps/venice_aci_gateway.md).
+// the gateway's evidence (SEE: docs/attestation_gaps/aci_gateway.md).
 //
 // The list matches the gateway compose deployed on 2026-10-27, observed in
 // live Venice, Phala Cloud and NanoGPT attestations. The earlier

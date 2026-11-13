@@ -643,10 +643,14 @@ func applyEnvOverrides(cfg *Config) {
 	applyAPIKeyEnv(cfg, "venice", "VENICE_API_KEY", "https://api.venice.ai", true)
 	applyAPIKeyEnv(cfg, "neardirect", "NEARAI_API_KEY", "https://completions.near.ai", true)
 	applyAPIKeyEnv(cfg, "nearcloud", "NEARAI_API_KEY", "https://cloud-api.near.ai", true)
+	// NanoGPT does not forward E2EE v2 (observed 2026-10-30), and E2EE v2
+	// cannot encrypt to a dstack-format model, so E2EE on would serve no
+	// NanoGPT model. Without E2EE the request goes in plaintext over TLS to
+	// NanoGPT's servers. SEE: docs/providers/nanogpt/nanogpt_support.md.
 	applyAPIKeyEnv(cfg, "nanogpt", "NANOGPT_API_KEY", "https://nano-gpt.com/api", false)
 	// tee.redpill.ai is a TEE-only domain of the private-ai-gateway: the
 	// gateway routes its requests only to verified TEE upstreams.
-	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://tee.redpill.ai", false)
+	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://tee.redpill.ai", true)
 	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai", true)
 	applyAPIKeyEnv(cfg, "tinfoil_v3_cloud", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", true)
 	// tinfoil_v3_direct is disabled (tinfoil.DirectDisabledMessage), so
@@ -655,7 +659,8 @@ func applyEnvOverrides(cfg *Config) {
 
 // applyAPIKeyEnv sets or updates the API key for the named provider from the
 // given environment variable. If the provider does not yet exist in cfg and the
-// env var is set, a minimal provider entry is created with the given defaults.
+// env var is set, a minimal provider entry is created with the given base URL
+// and E2EE setting.
 func applyAPIKeyEnv(cfg *Config, name, envVar, defaultBaseURL string, defaultE2EE bool) {
 	key := os.Getenv(envVar)
 	if key == "" {

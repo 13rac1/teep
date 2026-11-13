@@ -713,6 +713,38 @@ func TestEnvPhalaCloudDefaultsToTEEOnlyDomain(t *testing.T) {
 	if phala.BaseURL != "https://tee.redpill.ai" {
 		t.Errorf("phalacloud BaseURL default: got %q, want %q", phala.BaseURL, "https://tee.redpill.ai")
 	}
+	if !phala.E2EE {
+		t.Error("phalacloud from PHALA_API_KEY: E2EE = false, want E2EE v2 by default")
+	}
+}
+
+// NANOGPT_API_KEY creates NanoGPT without E2EE: NanoGPT does not forward
+// E2EE v2, and E2EE v2 cannot encrypt to its dstack-format models, so E2EE
+// on would serve no NanoGPT model. Phala Cloud, created in the same load,
+// keeps E2EE v2.
+func TestEnvNanoGPTDefaultsToPlaintext(t *testing.T) {
+	clearProviderEnv(t)
+	setenv(t, "NANOGPT_API_KEY", "nano-key")
+	setenv(t, "PHALA_API_KEY", "phala-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	nano, ok := cfg.Providers["nanogpt"]
+	if !ok {
+		t.Fatal("nanogpt provider not created from NANOGPT_API_KEY env var")
+	}
+	if nano.E2EE || nano.BaseURL != "https://nano-gpt.com/api" {
+		t.Errorf("nanogpt defaults: E2EE=%v BaseURL=%q, want E2EE false", nano.E2EE, nano.BaseURL)
+	}
+	phala, ok := cfg.Providers["phalacloud"]
+	if !ok {
+		t.Fatal("phalacloud provider not created from PHALA_API_KEY env var")
+	}
+	if !phala.E2EE {
+		t.Error("phalacloud from PHALA_API_KEY: E2EE = false, want E2EE v2 by default")
+	}
 }
 
 func TestEnvAPIKeyOverridesToml(t *testing.T) {

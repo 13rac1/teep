@@ -4,7 +4,7 @@ Phala Cloud (RedPill) serves its TEE models through the dstack
 private-ai-gateway, a TDX CVM that forwards each request to an upstream
 inference service. teep verifies the gateway's ACI/1 attestation; it has no
 attestation of the machine that runs the model. The shared gateway analysis
-is in [Venice ACI/1: Attested Gateway, Unattested Inference Host](../../attestation_gaps/venice_aci_gateway.md),
+is in [ACI/1 Gateway: Attested Gateway, Unattested Inference Host](../../attestation_gaps/aci_gateway.md),
 and the limits of the ACI/1 specification are in
 [ACI/1 Specification: Gaps That No Deployment Can Close](../../attestation_gaps/aci_specification.md).
 
@@ -61,10 +61,23 @@ their own parsers.
 
 ## TLS and E2EE
 
-teep has no E2EE for Phala Cloud. Requests go over TLS 1.3 to the base URL
-host, with WebPKI and Certificate Transparency enforced. teep does not
-compare the live certificate key of `tee.redpill.ai` with the keyset TLS key
-for that host; this binding closes in the authorization-store migration.
+teep encrypts Phala Cloud chat requests with E2EE v2 of the gateway, the
+secp256k1 suite, to the gateway E2EE key that the gateway quote binds
+(`gateway_tee_reportdata_binding`, `aci_key_custody`). E2EE is enabled by
+default. The field coverage and the fail-closed rules are in
+[API support](../../api_support.md#phala-cloud-and-nanogpt-e2ee-v2-of-the-private-ai-gateway).
+A model that answers with another attestation format, and the embeddings
+endpoint, fail closed while E2EE is enabled.
+
+Requests go over TLS 1.3 to the base URL host, with WebPKI and Certificate
+Transparency enforced. teep does not compare the live certificate key of
+`tee.redpill.ai` with the keyset TLS key for that host; this binding closes
+in the authorization-store migration. With E2EE, a party that holds a
+certificate for the host sees the message content only as ciphertext, but
+it can forge, drop, reorder or repeat response content: E2EE v2 responses
+are confidential, not authenticated, until teep verifies the signed ACI
+receipt. Phala Cloud requests use the user's API key, so teep can fetch
+their receipts (ACI/1 §7.6).
 
 ## Supply chain
 
@@ -82,8 +95,11 @@ and NanoGPT. Other formats keep `PhalaCloudDefaultAllowFail`.
 
 - The machine that runs the model is not attested.
 - The live TLS key of the base URL host is not bound to the keyset.
-- `tls_key_binding` reports "provider uses E2EE key exchange", although
-  Phala Cloud has no E2EE in teep.
+- E2EE v2 defines field paths only for message content. teep refuses a
+  request that carries `messages[].tool_calls`, `messages[].function_call`, `messages[].refusal`, `messages[].audio`, `prediction`, `tools`, `functions` and `response_format.json_schema`, and a response with tool calls.
+  Not encrypted: the top-level `model`, `messages[].name`, `stop`, `tool_choice` and the top-level `function_call` (which name a function), and the other request parameters, including provider-specific prompt fields, which pass in plaintext.
+- E2EE v2 responses are not authenticated against a party on the TLS path;
+  teep does not verify ACI receipts yet.
 
 ## Test coverage
 
@@ -96,3 +112,17 @@ and NanoGPT. Other formats keep `PhalaCloudDefaultAllowFail`.
   checks the gateway verifier and image policy of `teep serve`.
 - `TestParseAttestationResponseACI` and `TestSupplyChainPolicyGatewayImages`
   in [Phala Cloud ACI/1 tests](../../../internal/provider/phalacloud/aci_test.go).
+- `TestE2EERoundTrip`, `TestE2EEResponseOfAnotherRequestFails` and
+  `TestE2EERejectsRequest` in
+  [E2EE v2 encryptor tests](../../../internal/provider/aci/e2ee_test.go)
+  check the request against a separate gateway implementation
+  ([`aciv2test`](../../../internal/e2ee/aciv2test/gateway.go)).
+- `TestACIv2DecryptChunkFailsClosed` and `TestACIv2AADTestVectors` in
+  [E2EE v2 session tests](../../../internal/e2ee/aciv2_test.go), the AAD
+  against the gateway's byte-exact test vectors.
+- `TestTestE2EE_ACIv2` in
+  [verify E2EE v2 tests](../../../internal/verify/e2ee_aciv2_test.go) and
+  `TestBuildUpstreamBodyACIv2RefusesOtherFormat` in
+  [proxy E2EE v2 tests](../../../internal/proxy/aciv2_cache_test.go).
+- A live E2EE v2 request on 2026-10-30 (`qwen/qwen3.8-27b`) passed
+  `e2ee_usable`: 8 encrypted fields decrypted across 11 chunks.

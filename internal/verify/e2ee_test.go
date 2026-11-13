@@ -57,9 +57,22 @@ func TestSafePrefix(t *testing.T) {
 func TestTestE2EE_SkipNonE2EEProvider(t *testing.T) {
 	raw := &attestation.RawAttestation{SigningKey: "04aabb"}
 	cp := &config.Provider{APIKey: "key"}
-	got := testE2EE(context.Background(), raw, "nanogpt", cp, "model", false)
+	got := testE2EE(context.Background(), raw, "unknown", cp, "model", false)
 	if got != nil {
-		t.Errorf("testE2EE for nanogpt should return nil, got %+v", got)
+		t.Errorf("testE2EE for a provider without E2EE should return nil, got %+v", got)
+	}
+}
+
+// E2EE v2 encrypts only to the ACI/1 gateway key: a dstack response of
+// Phala Cloud or NanoGPT fails the E2EE test before any request is sent.
+func TestTestE2EE_ACIv2RequiresACI1(t *testing.T) {
+	raw := &attestation.RawAttestation{BackendFormat: attestation.FormatDstack, SigningKey: "04" + strings.Repeat("ab", 64)}
+	cp := &config.Provider{APIKey: "key", BaseURL: "https://invalid.example"}
+	for _, name := range []string{"phalacloud", "nanogpt"} {
+		got := testE2EE(context.Background(), raw, name, cp, "model", false)
+		if got == nil || !got.Attempted || got.Err == nil || !strings.Contains(got.Err.Error(), "requires an ACI/1 attestation") {
+			t.Errorf("%s: testE2EE = %+v, want an ACI/1 requirement failure", name, got)
+		}
 	}
 }
 

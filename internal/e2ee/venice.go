@@ -190,16 +190,23 @@ func IsEncryptedChunkVenice(s string) bool {
 }
 
 // deriveKeyVenice performs ECDH and derives a 32-byte AES key via HKDF-SHA256.
-// The ECDH shared secret is the x-coordinate of the shared point.
 // HKDF uses no salt and info="ecdsa_encryption" per the Venice protocol.
 func deriveKeyVenice(priv *secp256k1.PrivateKey, pub *secp256k1.PublicKey) []byte {
+	return deriveKeySecp256k1(priv, pub, hkdfInfoVenice)
+}
+
+// deriveKeySecp256k1 performs secp256k1 ECDH and derives a 32-byte AES key
+// via HKDF-SHA256 with no salt and the given info string. The ECDH shared
+// secret is the x-coordinate of the shared point.
+func deriveKeySecp256k1(priv *secp256k1.PrivateKey, pub *secp256k1.PublicKey, info string) []byte {
 	var point, pubJacobian secp256k1.JacobianPoint
 	pub.AsJacobian(&pubJacobian)
 	secp256k1.ScalarMultNonConst(&priv.Key, &pubJacobian, &point)
 	point.ToAffine()
 	sharedSecret := point.X.Bytes()
+	defer clear(sharedSecret[:])
 
-	r := hkdf.New(sha256.New, sharedSecret[:], nil, []byte(hkdfInfoVenice))
+	r := hkdf.New(sha256.New, sharedSecret[:], nil, []byte(info))
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(r, key); err != nil {
 		panic(fmt.Sprintf("BUG: hkdf expand: %v", err))
@@ -209,6 +216,11 @@ func deriveKeyVenice(priv *secp256k1.PrivateKey, pub *secp256k1.PublicKey) []byt
 
 // aesgcmSeal encrypts plaintext with AES-256-GCM using the given key and nonce.
 func aesgcmSeal(key, nonce, plaintext []byte) []byte {
+	return aesgcmSealAAD(key, nonce, plaintext, nil)
+}
+
+// aesgcmSealAAD encrypts plaintext with AES-256-GCM and authenticates aad.
+func aesgcmSealAAD(key, nonce, plaintext, aad []byte) []byte {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		panic(fmt.Sprintf("BUG: aes.NewCipher: %v", err))
@@ -217,11 +229,17 @@ func aesgcmSeal(key, nonce, plaintext []byte) []byte {
 	if err != nil {
 		panic(fmt.Sprintf("BUG: cipher.NewGCM: %v", err))
 	}
-	return gcm.Seal(nil, nonce, plaintext, nil)
+	return gcm.Seal(nil, nonce, plaintext, aad)
 }
 
 // aesgcmOpen decrypts ciphertext (with appended tag) using AES-256-GCM.
 func aesgcmOpen(key, nonce, ciphertext []byte) ([]byte, error) {
+	return aesgcmOpenAAD(key, nonce, ciphertext, nil)
+}
+
+// aesgcmOpenAAD decrypts ciphertext (with appended tag) using AES-256-GCM and
+// checks that the tag authenticates aad.
+func aesgcmOpenAAD(key, nonce, ciphertext, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		panic(fmt.Sprintf("BUG: aes.NewCipher: %v", err))
@@ -230,7 +248,7 @@ func aesgcmOpen(key, nonce, ciphertext []byte) ([]byte, error) {
 	if err != nil {
 		panic(fmt.Sprintf("BUG: cipher.NewGCM: %v", err))
 	}
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
 		return nil, errors.New("authentication failed")
 	}

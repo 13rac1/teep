@@ -219,7 +219,7 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 		out.summary = append(out.summary, result.relayDiagnostics...)
 		return out, err
 	}
-	if input.provider.E2EE {
+	if input.provider.E2EE && e2eeConfirmed(result.upstream.Session) {
 		value.report.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
 		s.authorizations.promote(input.key, value.generation, "E2EE roundtrip succeeded via proxy")
 	}

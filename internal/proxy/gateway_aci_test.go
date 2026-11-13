@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
@@ -29,6 +30,9 @@ func TestFromConfigGatewayACIProviders(t *testing.T) {
 			}
 			if prov.SupplyChainPolicy == nil || !prov.SupplyChainPolicy.AllowedInGateway("ghcr.io/dstack-tee/dstack-ingress") {
 				t.Fatal("SupplyChainPolicy does not list the gateway images")
+			}
+			if _, ok := prov.Encryptor.(*aci.E2EE); !ok || prov.Preparer == nil {
+				t.Fatalf("Encryptor = %T, Preparer = %T; want the E2EE v2 encryptor and a preparer", prov.Encryptor, prov.Preparer)
 			}
 		})
 	}
