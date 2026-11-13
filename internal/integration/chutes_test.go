@@ -40,7 +40,7 @@ func extractChuteID(t *testing.T, entries []capture.RecordedEntry) string {
 
 func TestIntegration_Chutes_Fixture(t *testing.T) {
 	ctx := context.Background()
-	env := loadFixture(t, "chutes")
+	env := loadFixture(t, "chutes_chutes")
 
 	// Extract chute UUID from captured request to bypass model resolution.
 	chuteID := extractChuteID(t, env.entries)

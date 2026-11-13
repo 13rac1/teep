@@ -8,7 +8,7 @@ import (
 )
 
 func TestIntegration_Tinfoil_Fixture(t *testing.T) {
-	env := loadFixture(t, "tinfoil_v3_cloud")
+	env := loadFixture(t, "tinfoil_v3_cloud_tinfoil")
 	baseURL := extractBaseURL(t, env.entries)
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, baseURL)
 
@@ -44,7 +44,7 @@ func TestIntegration_Tinfoil_Fixture(t *testing.T) {
 }
 
 func TestIntegration_TinfoilDirect_Fixture(t *testing.T) {
-	env := loadFixture(t, "tinfoil_v3_direct")
+	env := loadFixture(t, "tinfoil_v3_direct_tinfoil")
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, "https://inference.tinfoil.sh")
 
 	report, err := verify.Run(context.Background(), &verify.Options{

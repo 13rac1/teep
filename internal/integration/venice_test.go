@@ -14,7 +14,7 @@ import (
 
 func TestIntegration_Venice_Fixture(t *testing.T) {
 	ctx := context.Background()
-	env := loadFixture(t, "venice")
+	env := loadFixture(t, "venice_dstack")
 
 	// Fetch attestation through replay.
 	attester := venice.NewAttester("https://api.venice.ai", "", true)

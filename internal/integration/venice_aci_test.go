@@ -137,30 +137,25 @@ type aciFixtureRaw struct {
 	raw   *attestation.RawAttestation
 }
 
-// loadAllACIRaws parses the attestation response body of every venice_aci
-// fixture in testdata.
+// loadAllACIRaws parses the attestation response body of the two current
+// Venice ACI/1 fixtures, two models behind the same gateway.
 func loadAllACIRaws(t *testing.T) []aciFixtureRaw {
 	t.Helper()
-	entries, err := os.ReadDir("testdata")
-	if err != nil {
-		t.Fatalf("read testdata: %v", err)
-	}
-	var raws []aciFixtureRaw
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), "venice_aci_") {
-			continue
-		}
-		body, err := os.ReadFile(filepath.Join("testdata", e.Name(),
+	names := []string{"venice_aci", "venice_aci_2"}
+	raws := make([]aciFixtureRaw, 0, len(names))
+	for _, name := range names {
+		dir := findFixtureDir(t, name)
+		body, err := os.ReadFile(filepath.Join(dir,
 			"responses", "0001_api.venice.ai_api_v1_tee_attestation.body"))
 		if err != nil {
 			t.Fatalf("read fixture attestation body: %v", err)
 		}
 		raw, err := venice.ParseAttestationResponse(context.Background(), body)
 		if err != nil {
-			t.Fatalf("parse %s: %v", e.Name(), err)
+			t.Fatalf("parse %s: %v", name, err)
 		}
 		if raw.BackendFormat != attestation.FormatACI1 {
-			t.Fatalf("%s parsed as %q, want aci/1", e.Name(), raw.BackendFormat)
+			t.Fatalf("%s parsed as %q, want aci/1", name, raw.BackendFormat)
 		}
 		raws = append(raws, aciFixtureRaw{model: raw.Model, raw: raw})
 	}

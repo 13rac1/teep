@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,12 +21,12 @@ type fixtureEnv struct {
 	nonce    attestation.Nonce
 }
 
-// loadFixture finds the latest fixture for the given provider prefix,
+// loadFixture finds the current fixture of the given name (findFixtureDir),
 // loads it, parses the nonce, sets up a replay HTTP client, and swaps
 // in the TDX collateral getter.
-func loadFixture(t *testing.T, prefix string) fixtureEnv {
+func loadFixture(t *testing.T, name string) fixtureEnv {
 	t.Helper()
-	fdir := findFixtureDir(t, prefix)
+	fdir := findFixtureDir(t, name)
 
 	manifest, entries, err := capture.Load(fdir)
 	if err != nil {
@@ -62,41 +61,24 @@ func fixtureVerificationTime(env *fixtureEnv) time.Time {
 	return env.manifest.CapturedAt.Add(time.Duration(env.manifest.DurationMS) * time.Millisecond)
 }
 
-// findFixtureDir returns the newest captured testdata directory matching the
-// given provider prefix (e.g. "venice", "neardirect", "nearcloud").
-func findFixtureDir(t *testing.T, prefix string) string {
+// findFixtureDir returns the fixture directory testdata/current/<name>.
+// Each provider and attestation format has one current fixture, named
+// <provider>_<format> (e.g. "venice_dstack", "nearcloud_gateway"); its
+// capture date is in its manifest. A missing fixture skips the test.
+func findFixtureDir(t *testing.T, name string) string {
 	t.Helper()
-	entries, err := os.ReadDir("testdata")
+	dir := filepath.Join("testdata", "current", name)
+	info, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skipf("no %s fixture in testdata/current/; capture one with teep verify --capture and copy it there", name)
+	}
 	if err != nil {
-		t.Fatalf("read testdata: %v", err)
+		t.Fatalf("fixture %s: %v", dir, err)
 	}
-	var latest string
-	var latestCapturedAt time.Time
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix+"_") {
-			continue
-		}
-		// An "<provider>_aci_" fixture series shares the provider's name
-		// prefix with its other fixtures. Exclude it from a bare provider
-		// scan so a newer ACI capture cannot select itself into the tests of
-		// the provider's other formats.
-		if !strings.HasSuffix(prefix, "_aci") && strings.HasPrefix(e.Name(), prefix+"_aci_") {
-			continue
-		}
-		dir := filepath.Join("testdata", e.Name())
-		manifest, _, err := capture.Load(dir)
-		if err != nil {
-			t.Fatalf("load fixture manifest %s: %v", dir, err)
-		}
-		if latest == "" || manifest.CapturedAt.After(latestCapturedAt) {
-			latest = e.Name()
-			latestCapturedAt = manifest.CapturedAt
-		}
+	if !info.IsDir() {
+		t.Fatalf("fixture %s is not a directory", dir)
 	}
-	if latest == "" {
-		t.Skipf("no %s fixture in testdata/; run: teep verify %s --capture testdata/", prefix, prefix)
-	}
-	return filepath.Join("testdata", latest)
+	return dir
 }
 
 func serveAllowFail(providerName string, format attestation.BackendFormat) []string {

@@ -17,7 +17,7 @@ import (
 
 // The live capture of 2026-11-01 whose pinned E2EE test exchange the
 // receipt of testdata/receipt_20261101.json covers.
-const receiptCapture = "../../integration/testdata/phalacloud_aci_qwen_qwen3.8-27b_20261101_034705"
+const receiptCapture = "../../integration/testdata/current/phalacloud_aci"
 
 // receiptFixture returns the receipt and the check of its exchange.
 func receiptFixture(t *testing.T) (*Receipt, *ReceiptCheck) {

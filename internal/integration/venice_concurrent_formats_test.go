@@ -14,7 +14,7 @@ import (
 // Different models of one provider must select policy and key binding from
 // their own evidence, even when verification shares the provider configuration.
 func TestVerifyRun_ConcurrentVeniceFormats(t *testing.T) {
-	dstack := loadFixture(t, "venice")
+	dstack := loadFixture(t, "venice_dstack")
 	aci := loadFixture(t, "venice_aci")
 	baseURL := extractBaseURL(t, dstack.entries)
 	if extractBaseURL(t, aci.entries) != baseURL {

@@ -32,7 +32,7 @@ func extractBaseURL(t *testing.T, entries []capture.RecordedEntry) string {
 
 func TestIntegration_NearDirect_Fixture(t *testing.T) {
 	ctx := context.Background()
-	env := loadFixture(t, "neardirect")
+	env := loadFixture(t, "neardirect_near")
 
 	// This test verifies signed evidence at its recorded route; replay tests validate selection metadata.
 	baseURL := "https://" + env.manifest.NearRoute.Authority

@@ -15,7 +15,7 @@ import (
 
 func TestIntegration_NearCloud_Fixture(t *testing.T) {
 	ctx := context.Background()
-	env := loadFixture(t, "nearcloud")
+	env := loadFixture(t, "nearcloud_gateway")
 
 	// Fetch attestation through replay.
 	attester := nearcloud.NewAttester("", true)

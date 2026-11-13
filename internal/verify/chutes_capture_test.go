@@ -14,7 +14,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 )
 
-const chutesFixture = "../integration/testdata/chutes_zai-org_glm-5-tee_20260629_020725"
+const chutesFixture = "../integration/testdata/current/chutes_chutes"
 
 // noDialContext returns a context whose HTTP requests fail the test and
 // cancel the context when a real transport starts to get a connection. The
