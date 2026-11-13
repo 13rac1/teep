@@ -113,8 +113,8 @@ not committed.
 4. **Unnamed model:** a new factor, allowed to fail by default, that states
    that the attestation names no backend for the requested model.
 5. **Host SPKI binding to the keyset TLS key:** recorded here and in the gap
-   document as a gap. It closes in the authorization-store migration, not in
-   this plan; no second pin path is added.
+   document as a gap until phase 7c, which moves Phala Cloud to the
+   authorization store; no second pin path is added.
 6. **E2EE for Phala Cloud and NanoGPT:** the final phase. A protocol check of
    the gateway's E2EE version against the Venice encryptor, made by reading
    the gateway source at the deployed commit, precedes it, and its result is
@@ -179,8 +179,11 @@ names fail both variants. Rules for the gateway variant:
 - A present `all_attestations`, also a literal null, selects the gateway
   variant. It must hold exactly one entry, and that entry must equal the
   top-level attestation fields; any other content fails the parse.
-- A field that the gateway variant does not define fails the parse, also a
-  case-folded alias of a defined field.
+- A field that the gateway variant does not define is reported in
+  `response_schema` and read by no check. A member whose name differs from a
+  defined field only in letter case makes the document ambiguous and fails
+  the parse: encoding/json would let it set the defined field. Duplicate,
+  absent and malformed members fail the parse.
 - `nonce_match` and `gateway_nonce_match` of a gateway-variant response fail
   with the detail "no echoed nonce; freshness rests on
   gateway_tee_reportdata_binding". A Venice-variant response without its
@@ -247,6 +250,168 @@ exits 0. The key material scan runs before staging. Fixtures are named
    `measurement_allowlists.md`, provider documents, testing references.
 6. E2EE for Phala Cloud and NanoGPT, after the protocol check of decision 6
    is reported.
+7. Canonical report, sessions and receipts (below).
+
+## Phase 7: canonical report, sessions and receipts
+
+Status: designed on 2026-10-31 with the changes below. Principle: check
+everything that teep can check, and allow to fail what the provider cannot
+pass, so that the provider stays usable.
+
+### Problem
+
+An E2EE v2 response is confidential but not authenticated (aci_gateway.md
+residual exposure 10). The signed ACI receipt authenticates it, but only if
+teep trusts the receipt key. On the route that teep uses,
+`/v1/attestation/report` (the gateway's dstack-vllm-proxy compatibility
+route), the quote binds only keccak256(signing key) and the nonce, so the
+keyset, and with it `receipt_signing_keys`, is self-asserted (residual
+exposure 7). The key custody chain cannot fill the gap: the chain of
+`aci.receipt.ed25519.v1` signs the secp256k1 key of the released scalar
+(`kms_counterpart_public_key_hex`, gateway `src/dstack.rs:215-219`), not
+the ed25519 public key that the keyset lists.
+
+### Live observations
+
+**Canonical report (2026-10-30).** `GET /v1/aci/attestation?nonce=<fresh>`
+on `tee.redpill.ai` returned the ACI/1 §4.1 shape (`api_version`,
+`workload_keyset_digest`, `service_capabilities`, `attestation` with
+`tee_type`, `workload_keyset`, `report_data`, `source_provenance` and
+`evidence`) for the same keyset as the legacy route. The quote's REPORTDATA
+is sha256 of the §3.2 statement over the keyset digest and the client
+nonce, followed by 32 zero bytes. It carries no GPU evidence.
+
+**Sessions (2026-10-31).** `GET /v1/aci/sessions?model=qwen/qwen3.8-27b`
+listed 15 sessions: one `phala-266` upstream
+(`private-ai-verifier/phala-direct/v1`, endpoint
+`https://qwen3-8-27b.use1-9b.phala.com`, a `tls_spki_sha256` channel
+binding) and 14 `chutes` upstreams (`private-ai-verifier/chutes/v1`). Each
+session lasts 3600 s. The full phala-266 session hashes to its id under
+JCS (§8); its `evidence.data` is a `data:application/json;base64` URI whose
+decoded bytes hash to `evidence.digest`. The decoded evidence is the dstack
+report of the model CVM in the NEAR-direct layout: REPORTDATA is
+sha256(signing_address ‖ tls_cert_fingerprint) ‖ request_nonce, the
+`nvidia_payload` nonce is the same `request_nonce` (the gateway's
+challenge), and `tls_cert_fingerprint` equals the session's channel SPKI.
+The evidence format of the Chutes sessions is not observed.
+
+### Design
+
+**7a. Canonical report.** Phala Cloud fetches
+`/v1/aci/attestation?nonce=<client nonce>`, the route that ACI/1 requires
+verifiers to use, and no longer the legacy route. teep verifies the TDX
+quote, event log and compose binding as today and the §3.2 binding:
+recompute the keyset digest, build the statement with the client nonce,
+require REPORTDATA = sha256(statement) ‖ 32 zero bytes. Every keyset field
+is then hardware-bound (E2EE, receipt and TLS keys, `not_after`); this
+closes residual exposure 7 for Phala Cloud. The report has no GPU
+evidence: `nvidia_signature`, `nvidia_nonce_client_bound` and the other GPU
+factors fail for Phala Cloud ACI/1 and are allowed to fail by default.
+
+**7b. Replicas.** Replicas can share a keyset (the KMS derives keys from
+the app id), so a keyset digest identifies the keyset, not one machine. An
+inference response without `X-ACI-Keyset-Digest` fails: §5.2 requires it
+on every response. A response that serves another digest is not failed:
+§5.2 says that a changed digest "gates new sends until the client
+re-verifies according to §3.1; responses already in flight continue
+unaffected". teep relays it and ends the cached report, so that the next
+send verifies again; a member of the same renewal family keeps continuity,
+and another family becomes a new authorization (§3.1).
+
+**7c. TLS key pin.** Compare the live certificate key of `tee.redpill.ai`
+with the hardware-bound keyset entry for that host before any request
+bytes are sent (residual exposure 8). Phala Cloud becomes a TLS-binding
+provider in addition to E2EE, with the SPKI pool rules of the transport
+reference. Own commit.
+
+**7d. Sessions.** Implemented; the maintained description is
+[Attested sessions](../providers/phalacloud/phalacloud_support.md#attested-sessions)
+in the Phala Cloud provider document. The design as built:
+
+- At each full verification, list the sessions of the model and fetch a
+  bounded set (decision of 2026-11-01): every bundle of the Phala
+  model CVM, then Chutes bundles by session count, largest first, within a
+  constant 8 MiB of fetched Chutes records. One GET per bundle; the other
+  sessions of a bundle are rebuilt and their ids recomputed.
+- Audit each session (decision of 2026-11-01, all enforced): the
+  TDX quote and TCB, MRTD and MRSEAM, REPORTDATA with the session nonce,
+  the channel binding and identity, the GPU evidence verified locally, and
+  for the Phala model CVM the compose binding and the event-log replay.
+  The Phala model CVM REPORTDATA is the NEAR-direct layout with an ecdsa
+  address, not the ed25519 one, so it has its own verifier.
+- `aci_receipt_verified` (enforced) is the receipt check of the `teep verify`
+  probe, apart from the transient failures that `e2ee_usable` reports; it is
+  a deferred skip without a probe receipt (in `teep serve`, without an API
+  key, and in a replay).
+- `aci_session_verified` (enforced) passes when one session passes; every
+  request pins the passed sessions in `provider.aci_session_ids`, and a
+  refusal (`session_not_accepted`) ends the authorization generation.
+  Sessions stay pinned until the authorization ends; no session expiry
+  applies to requests.
+
+**7e. Receipts.** Over the same pinned pool: hash the raw SSE bytes, fetch
+`GET /v1/aci/receipts/{X-Receipt-Id}` with the request's key, at most 3
+attempts 200 ms apart on HTTP 404, and check the ed25519 signature over the
+JCS form without `signature`, `workload_keyset_digest`, `model`,
+`endpoint`, `method`, `response.returned.body_hash`, `upstream.verified`
+with `result: "verified"`, `required: true` and a `session_id` that teep
+pinned and whose period holds `served_at` (§9.3 step 6), and `served_at`
+within the keyset lifetime. A non-stream request is buffered and answered
+after the check; a stream is checked after it ends. A receipt that does not
+verify invalidates the authorization generation that the request used and
+logs at error level. A receipt that is not served fails the request and
+keeps the generation, because its absence is not evidence against the
+attestation. A response of a changed `X-ACI-Keyset-Digest` fails: its
+receipt is signed under a keyset that teep has not verified. The in-flight
+rule of §5.2 describes the gateway; teep verifies the new keyset before the
+next send. `--capture` records the receipt and the raw SSE
+bytes, and `--reverify` checks them. The request hash is checked only when
+teep reproduces the gateway's serde_json form (preserve_order, serde string
+escaping, f64 number output); otherwise `teep verify` states that it is not
+checked. The receipt GET per request is a point of discussion:
+[the provider document](../providers/phalacloud/phalacloud_support.md#point-of-discussion-one-receipt-get-per-request).
+
+**Later.** VerifyReceipt does not require a `request.forwarded` event and
+does not compare `chat_id` or the `model_id` of `upstream.verified` with the
+request or the pinned session.
+
+**Scope.** Phala Cloud only. Venice relays neither `X-Receipt-Id` nor the
+ACI headers (2026-10-30) and stays confidentiality-only, as does NanoGPT.
+
+### Resolved: Chutes sessions
+
+The Chutes session evidence (observed 2026-11-01) is a multipart bundle of
+the Chutes API responses for the gateway's evidence request. teep verifies
+it with its Chutes verifiers. The pin needs Chutes sessions: on 2026-11-01
+the gateway refused a pin of the Phala model CVM session alone (HTTP 412
+`session_not_accepted`; its error named the Chutes model id
+`Qwen/Qwen3.8-27B-TEE`), and served
+a pin with two Chutes sessions once the October 2026 Chutes measurements
+were allowed.
+
+### Point of discussion: the bounded set of sessions
+
+The bounded set narrows routing to the verified upstreams to limit the
+load on the gateway. Measured: a Phala model CVM session is 276 KB, a
+Chutes bundle 3.9 MB on 2026-10-31 and 4.2 MB on 2026-11-01, and the 14
+Chutes sessions of 2026-10-31 shared 10 bundles, so verifying every session
+would fetch about 39 MB per full verification. Under the 8 MiB limit the
+growth from 3.9 to 4.2 MB leaves room for one Chutes bundle instead of
+two. Each session adds Intel PCS requests: 16 for the 4 quotes of one
+verification on 2026-11-01. Alternatives: every session, or the Phala
+model CVM sessions only (the gateway refused that pin). Details:
+[the provider document](../providers/phalacloud/phalacloud_support.md#point-of-discussion-the-bounded-set-of-sessions).
+
+### Commits
+
+1. 7a and 7b: canonical report and the served keyset digest check, with a
+   new capture and replay tests.
+2. 7c: TLS key pin.
+3. 7d: session verification and pinning.
+4. 7e: receipt verification in the proxy, then in `teep verify` and the
+   capture.
+5. Documentation: aci_gateway.md residual exposures 7, 8 and 10, the
+   provider document and api_support.md.
 
 ## Tests
 

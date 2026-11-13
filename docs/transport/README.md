@@ -82,7 +82,18 @@ does not trigger renewal. Do not maintain independent pin or key caches with
 different lifetimes. This policy applies to TLS-binding providers in both normal
 and `--offline` operation.
 
-Venice, Chutes, NanoGPT, and Phala Cloud do not use the authorization store.
+Phala Cloud uses the authorization store: the canonical ACI/1 report binds
+the TLS key of the base URL host, and its pool is keyed by that key. Each
+request also uses a fresh E2EE v2 session to the authorized gateway key and
+pins the attested sessions that the authorization verified; a refusal of
+the pinned sessions (`session_not_accepted`) ends the generation.
+A successful response without `X-ACI-Keyset-Digest`, or of another digest,
+fails before it is relayed and ends the authorization generation: a
+response of another keyset has a receipt that teep cannot verify. Every
+successful response must have a receipt that verifies. See the
+[Phala Cloud provider document](../providers/phalacloud/phalacloud_support.md).
+
+Venice, Chutes, and NanoGPT do not use the authorization store.
 They keep a separate report cache and signing-key cache, each with an
 expiration time. On a report cache miss, concurrent requests for the same
 provider and model join one verification. As in the store, the server owns
@@ -251,6 +262,18 @@ require full attestation. Each new TLS connection must pass the handshake
 checks against the currently authorized identity. Ordinary network errors,
 client cancellation, and local connection-capacity rejection retain valid
 authorization. See the retry contract for error classification.
+
+The upstream attempt does not run on the client's request context. It has
+teep's own deadline, and the caller's deadline when the caller sets one;
+teep serve sets none on an incoming request. The end of the client's
+request before any content reached it cancels the attempt, as before. A
+Phala Cloud stream that the client leaves after content reached it is read
+to its end within a drain bound (2 minutes and 16 MiB from the client's
+end), and its receipt is checked. After a Phala Cloud stream fails for a
+reason that is not the client's, teep claims the attempt for a bounded read
+of the rest of the stream before it checks the receipt, and a client that
+leaves after that claim does not stop the read. Other providers' streams
+are not read to their end.
 
 ### Approval withdrawal
 

@@ -319,6 +319,18 @@ func (s *Server) publishReport(ctx context.Context, prov *provider.Provider, ups
 		return 0, errReportInvalidated
 	}
 	passed := !report.Blocked() || s.cfg.Force
+	// ACI/1 §3.1: nothing is sent under a keyset from its not_after on. The
+	// leader request encrypts to this verification's key without a cache
+	// lookup, so a passing report is checked here, as in the authorization
+	// store. A blocked report authorizes nothing and is stored as before.
+	if passed && report.ACIKeysetExpired(s.authorizations.now()) {
+		slog.WarnContext(ctx, "ACI/1 keyset is not usable at publication; result not published", "provider", prov.Name, "model", upstreamModel,
+			"keyset_not_after", report.ACIKeysetNotAfter)
+		if report.ACIKeysetNotAfter <= 0 {
+			return 0, errors.New("the ACI/1 keyset has no valid not_after")
+		}
+		return 0, fmt.Errorf("the ACI/1 keyset not_after %d passed before publication", report.ACIKeysetNotAfter)
+	}
 	if passed && report.ReportDataBindingPassed() && raw.SigningKey != "" {
 		if prev, ok := s.signingKeyCache.Get(key.provider, key.model); ok && subtle.ConstantTimeCompare([]byte(prev), []byte(raw.SigningKey)) == 0 {
 			slog.WarnContext(ctx, "signing key rotated (VM restart?)", "provider", prov.Name, "model", upstreamModel)

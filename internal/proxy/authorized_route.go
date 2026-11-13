@@ -127,9 +127,16 @@ func (s *authorizationStore) snapshots() []*authorization {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	values := make([]*authorization, 0, len(s.entries))
+	now := s.now()
 	for key, record := range s.entries {
 		if s.closed {
 			delete(s.entries, key)
+			continue
+		}
+		// An authorization past its ACI/1 keyset not_after is not shown.
+		// The next acquire removes it (lookupLocked); a snapshot does not
+		// change the store.
+		if record.value.report.ACIKeysetExpired(now) {
 			continue
 		}
 		if len(record.models) != 0 {
@@ -164,11 +171,13 @@ func (s *Server) cachedReportSnapshots() []cachedReportSnapshot {
 
 // reportSnapshot reads diagnostic state without acquiring authorization or
 // changing cache recency and the set of models observed during inference.
+// An authorization past its ACI/1 keyset not_after is absent, as for an
+// acquire.
 func (s *authorizationStore) reportSnapshot(key provider.AuthorizationKey) (*attestation.VerificationReport, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.entries[key.EvidenceScope()]
-	if s.closed || !ok {
+	if s.closed || !ok || record.value.report.ACIKeysetExpired(s.now()) {
 		return nil, false
 	}
 	return authorizationForModel(record.value, key, record.models[key]).report, true

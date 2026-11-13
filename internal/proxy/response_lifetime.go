@@ -15,6 +15,9 @@ type responseLifetime struct {
 	contextErr      func() error
 	err             error
 	failedOperation string
+	// onFirstWrite runs once, before the first body bytes are written to
+	// the client; nil for none.
+	onFirstWrite func()
 }
 
 func newResponseLifetime(ctx context.Context, w http.ResponseWriter) (*responseLifetime, error) {
@@ -39,6 +42,13 @@ func (w *responseLifetime) WriteHeader(status int) {
 func (w *responseLifetime) Write(body []byte) (int, error) {
 	if err := w.check(); err != nil {
 		return 0, err
+	}
+	// Mark content before the write: a client that closes while it reads
+	// these bytes must find the stream marked. If the write fails, the
+	// stream is still read to its end and checked.
+	if len(body) > 0 && w.onFirstWrite != nil {
+		w.onFirstWrite()
+		w.onFirstWrite = nil
 	}
 	n, err := w.ResponseWriter.Write(body)
 	w.err = err

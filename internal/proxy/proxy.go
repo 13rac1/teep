@@ -20,6 +20,7 @@ package proxy
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -435,8 +436,18 @@ type Server struct {
 	sevVerifier        attestation.SEVVerifier // constructed from cfg.Offline + AMD KDS getter
 	upstreamClient     *http.Client            // for chat completions forwards
 	pinnedUpstreams    *pinnedUpstreamPools    // provider+authority SPKI-pinned pools
-	sseConns           atomic.Int64            // active SSE /events connections
-	e2eeFailed         sync.Map                // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
+	// tailClaimHook runs before a Phala Cloud stream's tail read is
+	// claimed. It is nil outside tests, which set it to force the order of
+	// the client's end and the claim.
+	tailClaimHook func()
+	// drainBounds replaces streamDrainTimeout and streamDrainBytes when
+	// set; zero keeps them.
+	drainBounds drainBounds
+	// attemptTimeouts replaces upstreamStreamTimeout and
+	// upstreamNonStreamTimeout when set; zero keeps them.
+	attemptTimeouts    attemptTimeouts
+	sseConns           atomic.Int64 // active SSE /events connections
+	e2eeFailed         sync.Map     // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
 	reasoningStripLogs hourlyLogLimiter
 	stats              stats
 	modelsMu           sync.RWMutex      // protects modelsCache and modelsCachedAt
@@ -814,10 +825,20 @@ func fromConfig(
 				attestation.FormatDstack: venice.ReportDataVerifier{},
 			},
 		}
-		// The ACI/1 gateway quote binds the same REPORTDATA as Venice's.
+		// The report of /v1/aci/attestation binds the keyset digest and the
+		// client nonce through the ACI/1 §3.2 statement.
 		// SYNC: verify.newGatewayReportDataVerifier.
-		p.GatewayReportDataVerifier = venice.ReportDataVerifier{}
+		p.GatewayReportDataVerifier = aci.StatementReportDataVerifier{}
 		p.SupplyChainPolicy = phalacloud.SupplyChainPolicy()
+		// The keyset lists the TLS key of the base URL host, and the quote
+		// binds the keyset: requests use the SPKI-pinned pool of that key.
+		p.UsesTLSBinding = true
+		p.BaseURL = u.Scheme + "://" + u.Host
+		route, err := provider.NewResolvedRoute(p.BaseURL, "")
+		if err != nil {
+			return nil, err
+		}
+		p.StaticRoute = route
 	case "chutes":
 		p.BaseURL = chutesProvider.DefaultLLMBaseURL
 		p.ChatPath = "/v1/chat/completions"
@@ -1009,6 +1030,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		Rekor:                  sc.Rekor,
 		TinfoilSC:              tinfoilSC,
 		ACIKeyset:              aci.VerifyKeyset(raw, time.Time{}, aci.GatewayPins()),
+		ACISessions:            s.auditACISessions(ctx, prov, raw),
 		E2EEConfigured:         prov.E2EE,
 		Inapplicable:           inapplicableForProvider(prov.Name),
 		ProviderUsesTLSBinding: prov.UsesTLSBinding,
@@ -1020,6 +1042,16 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		return nil, nil, attestation.AdmissionTime{}, tlsct.ErrConnectionCapacity
 	}
 	return report, raw, attestation.NVIDIAAdmission(nrasResult), nil
+}
+
+// auditACISessions audits the attested sessions of a canonical ACI/1 report
+// of Phala Cloud with the server's quote verifier. It returns nil for every
+// other provider and format.
+func (s *Server) auditACISessions(ctx context.Context, prov *provider.Provider, raw *attestation.RawAttestation) *attestation.ACISessionResult {
+	if prov.Name != "phalacloud" || !raw.ACICanonicalReport {
+		return nil
+	}
+	return phalacloud.AuditSessions(ctx, phalacloud.SessionAuditor{TDX: s.verifyQuote, Offline: s.cfg.Offline}, raw)
 }
 
 // verifyTDX runs TDX quote verification and REPORTDATA binding.
@@ -1762,7 +1794,7 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 			if contentType == "" {
 				contentType = r.Header.Get("Content-Type")
 			}
-			outcome := s.handleAuthorizedEndpoint(ctx, w, &authorizedRequest{provider: prov, route: route, key: key, body: body, stream: stream, path: endpointPath, endpoint: ep.endpointType, contentType: contentType})
+			outcome := s.handleAuthorizedEndpoint(ctx, w, &authorizedRequest{provider: prov, route: route, key: key, body: body, model: upstreamModel, stream: stream, path: endpointPath, endpoint: ep.endpointType, contentType: contentType})
 			if observe != nil {
 				observe(outcome.report, prov.E2EE)
 			}
@@ -1910,9 +1942,7 @@ func (s *Server) relayWithRetry(
 		resp := ur.Resp
 		session := ur.Session
 		meta := ur.Meta
-		if meta != nil && meta.ChuteID != "" {
-			lastChuteID = meta.ChuteID
-		}
+		lastChuteID = cmp.Or(chuteIDOf(meta), lastChuteID)
 
 		// cleanupAttempt drains and closes the response body and zeros crypto.
 		cleanupAttempt := func() {
@@ -2156,6 +2186,14 @@ func (s *Server) handleE2EEDecryptionFailure(
 		"detail", "E2EE decryption failed (see server logs, req="+reqid.FromContext(ctx)+")",
 		"err", relayErr)
 	return "e2ee_decrypt_failed"
+}
+
+// chuteIDOf returns the chute of Chutes E2EE metadata, or "" without it.
+func chuteIDOf(meta *e2ee.ChutesE2EE) string {
+	if meta == nil {
+		return ""
+	}
+	return meta.ChuteID
 }
 
 // attestResult holds the outcome of attestAndCache on success. Publication is
@@ -2598,12 +2636,35 @@ func (e *httpError) Unwrap() error { return e.err }
 // upstreamResult holds the outcome of doUpstreamRoundtrip. Always returned
 // (even on error) so callers can extract partial timing for metrics.
 type upstreamResult struct {
-	Request     *http.Request
-	Resp        *http.Response
-	Session     e2ee.Decryptor
-	Meta        *e2ee.ChutesE2EE
-	EHBP        *e2ee.EHBPSession
+	Request *http.Request
+	Resp    *http.Response
+	Session e2ee.Decryptor
+	Meta    *e2ee.ChutesE2EE
+	EHBP    *e2ee.EHBPSession
+	// RequestHash is the request hash that a receipt must state, or nil
+	// when teep cannot reproduce it (SEE: provider.ReceiptRequestHash).
+	RequestHash *[32]byte
 	Cancel      context.CancelFunc
+	// RelayDeadline bounds the relay and the downstream writes. The
+	// upstream request may run later than it, by the receipt check's
+	// tail read (SEE: authorizedRoundtrip). Zero means the request's own
+	// deadline.
+	RelayDeadline time.Time
+	// MarkContent records that content reached the client; nil when the
+	// attempt is not read to its end after the client leaves. Draining
+	// reports whether the client left after content, so that teep reads
+	// the rest of the stream for the receipt check.
+	MarkContent func()
+	Draining    func() bool
+	// ClientEnded moves a drainable attempt to the drain when the handler
+	// sees the client's end before the hold's watch does, and reports
+	// whether teep drains. Nil when the attempt is not drained.
+	ClientEnded func() bool
+	// EnterTail moves the attempt to the tail read after a relay failure
+	// that is not the client's, so that the client's end no longer stops
+	// it. It reports false when the client's end came first. Nil when the
+	// attempt has no such hold.
+	EnterTail   func() bool
 	E2EEDur     time.Duration
 	UpstreamDur time.Duration
 	// Report and Publication are the fields of the same name of the

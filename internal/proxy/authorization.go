@@ -82,6 +82,15 @@ func validateAuthorizationKey(name, key string) (e2ee.NearModelKey, error) {
 		}
 		session.Zero()
 		return e2ee.NearModelKey{}, nil
+	case "phalacloud":
+		// Open a production E2EE v2 session to reject a key that is not an
+		// uncompressed secp256k1 point.
+		session, err := e2ee.NewACIv2Session(key, "model", time.Now())
+		if err != nil {
+			return e2ee.NearModelKey{}, err
+		}
+		session.Zero()
+		return e2ee.NearModelKey{}, nil
 	default:
 		return e2ee.NearModelKey{}, errors.New("unsupported TLS-binding authorization provider")
 	}
@@ -183,14 +192,17 @@ func (r *authorizationRecord) observeModel(key provider.AuthorizationKey, limit 
 	r.models[key] = ""
 }
 
-// lookup returns immutable published material. Callers must clone its report.
-func (s *authorizationStore) lookup(key provider.AuthorizationKey) (*authorization, bool) {
+// has reports whether a usable authorization is published for key.
+func (s *authorizationStore) has(key provider.AuthorizationKey) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, ok := s.lookupLocked(key)
-	return record.value, ok
+	_, ok := s.lookupLocked(key)
+	return ok
 }
 
+// lookupLocked returns the record for key and marks it used. A record past
+// its ACI/1 keyset not_after is not returned: lookupLocked deletes it and
+// logs that the authorization ended. s.mu must be held.
 func (s *authorizationStore) lookupLocked(key provider.AuthorizationKey) (authorizationRecord, bool) {
 	key = key.EvidenceScope()
 	if s.closed {
@@ -201,6 +213,17 @@ func (s *authorizationStore) lookupLocked(key provider.AuthorizationKey) (author
 		return authorizationRecord{}, false
 	}
 	now := s.now()
+	if record.value.report.ACIKeysetExpired(now) {
+		// ACI/1 §3.1: a client sends nothing new under a keyset after its
+		// not_after. The authorization ends, and the next load verifies
+		// again. Attempts that already acquired it continue.
+		delete(s.entries, key)
+		s.log().Info("authorization ended at the ACI/1 keyset not_after",
+			slog.String("provider", key.ProviderName()), slog.String("model", key.Model()),
+			slog.String("authority", key.Authority()), slog.Uint64("authorization_generation", uint64(record.value.generation)),
+			slog.Int64("keyset_not_after", record.value.report.ACIKeysetNotAfter))
+		return authorizationRecord{}, false
+	}
 	record.lastUsed = now
 	s.entries[key] = record
 	return record, true
@@ -271,7 +294,7 @@ func (s *authorizationStore) verifyShared(key provider.AuthorizationKey, negativ
 			shared, err = authorizationVerification{}, fmt.Errorf("authorization verification panicked: %v", r)
 		}
 	}()
-	if _, ok := s.lookup(key); ok {
+	if s.has(key) {
 		return authorizationVerification{}, nil
 	}
 	if negative != nil {
@@ -359,6 +382,12 @@ func (s *authorizationStore) publishValue(key provider.AuthorizationKey, op *aut
 	}
 	if err := admission.Check(s.now()); err != nil {
 		return nil, err
+	}
+	if candidate.report.ACIKeysetExpired(s.now()) {
+		if candidate.report.ACIKeysetNotAfter <= 0 {
+			return nil, errors.New("the ACI/1 keyset has no valid not_after")
+		}
+		return nil, fmt.Errorf("the ACI/1 keyset not_after %d passed before publication", candidate.report.ACIKeysetNotAfter)
 	}
 	if s.nextGeneration == ^authorizationGeneration(0) {
 		panic("authorization generation exhausted")

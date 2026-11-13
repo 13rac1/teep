@@ -57,10 +57,10 @@ func TestReassemblyResponseLimit(t *testing.T) {
 			}
 			overhead := len(result) - 1
 			for _, extra := range []int{0, 1} {
-				stream, session := reassemblyEncryptedStream(t, maxNonStreamResponseBytes-overhead+extra, tools)
+				stream, session := reassemblyEncryptedStream(t, MaxNonStreamResponseBytes-overhead+extra, tools)
 				result, _, err := ReassembleNonStream(strings.NewReader(stream), session, EndpointChat)
 				if extra == 0 {
-					if err != nil || len(result) != maxNonStreamResponseBytes {
+					if err != nil || len(result) != MaxNonStreamResponseBytes {
 						t.Fatalf("exact limit: bytes=%d error=%v", len(result), err)
 					}
 				} else if err == nil || result != nil || errors.Is(err, ErrDecryptionFailed) {

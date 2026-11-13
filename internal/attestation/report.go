@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -89,6 +90,8 @@ const (
 	FactorE2EECapable          = "e2ee_capable"
 	FactorE2EEUsable           = "e2ee_usable"
 	FactorACIKeyCustody        = "aci_key_custody"
+	FactorACISessionVerified   = "aci_session_verified"
+	FactorACIReceiptVerified   = "aci_receipt_verified"
 	FactorACIBackendNamed      = "aci_backend_named"
 	FactorTLSKeyBinding        = "tls_key_binding"
 	FactorCPUGPUChain          = "cpu_gpu_chain"
@@ -173,6 +176,63 @@ type VerificationReport struct {
 	// defined for one format refuses a key of another. Internal; excluded
 	// from report JSON.
 	BackendFormat BackendFormat `json:"-"`
+
+	// ACIKeysetDigest is the workload keyset digest that the gateway quote
+	// binds, set only for the canonical ACI/1 report (Raw.ACICanonicalReport).
+	// An inference response must serve the same X-ACI-Keyset-Digest
+	// (SEE: CheckServedKeysetDigest). Internal; excluded from report JSON.
+	ACIKeysetDigest string `json:"-"`
+
+	// ACISessionIDs lists the attested sessions that passed the audit; each
+	// request pins them (aci_session_ids, ACI/1 §5.3). Set only for the
+	// canonical ACI/1 report.
+	ACISessionIDs []string `json:"aci_session_ids,omitempty"`
+
+	// ACIPinnedSessions holds the same sessions with their periods, for
+	// receipt verification. Internal; excluded from report JSON.
+	ACIPinnedSessions []ACIPinnedSession `json:"-"`
+
+	// ACIReceiptKeys are the receipt keys of the verified keyset, for
+	// receipt verification; set only for the canonical ACI/1 report.
+	// ACIKeysetNotAfter is the keyset not_after (unix seconds) of every
+	// ACI/1 report (ACIKeysetExpired). Internal; excluded from report JSON.
+	ACIReceiptKeys    []ACIReceiptKey `json:"-"`
+	ACIKeysetNotAfter int64           `json:"-"`
+}
+
+// ACIKeysetExpired reports whether r is an ACI/1 report whose workload
+// keyset may no longer be used at now: its not_after is not after now, or
+// it has no valid not_after. An ACI/1 keyset not_after is the lifetime of
+// its keys, not an expiry of the evidence: no new request is sent under the
+// keyset from its not_after on. Always false for other formats.
+func (r *VerificationReport) ACIKeysetExpired(now time.Time) bool {
+	if r == nil || r.BackendFormat != FormatACI1 {
+		return false
+	}
+	return r.ACIKeysetNotAfter <= 0 || now.Unix() >= r.ACIKeysetNotAfter
+}
+
+// CheckServedKeysetDigest compares the X-ACI-Keyset-Digest header of an
+// inference response with the keyset digest that the verified canonical
+// ACI/1 report binds. Reports without a canonical keyset digest are not
+// checked.
+//
+// The header is sent on every response (ACI/1 §5.2), so a missing header is
+// an error. A different digest is not: §5.2 says that a changed digest
+// "gates new sends until the client re-verifies according to §3.1; responses
+// already in flight continue unaffected", and §3.1 lets replicas serve
+// members of one renewal family with different not_after. differs reports
+// it. The callers fail that response, because its receipt is signed under a
+// keyset that teep has not verified, and make the next send verify again.
+func CheckServedKeysetDigest(header http.Header, report *VerificationReport) (differs bool, err error) {
+	if report == nil || report.ACIKeysetDigest == "" {
+		return false, nil
+	}
+	served := header.Get("X-Aci-Keyset-Digest")
+	if served == "" {
+		return false, errors.New("inference response carries no X-ACI-Keyset-Digest")
+	}
+	return subtle.ConstantTimeCompare([]byte(served), []byte(report.ACIKeysetDigest)) != 1, nil
 }
 
 // Blocked returns true if any enforced factor has failed. When Blocked is true,
@@ -201,6 +261,9 @@ func (r *VerificationReport) Clone() *VerificationReport {
 		dst.Metadata = make(map[string]string, len(r.Metadata))
 		maps.Copy(dst.Metadata, r.Metadata)
 	}
+	dst.ACISessionIDs = slices.Clone(r.ACISessionIDs)
+	dst.ACIPinnedSessions = slices.Clone(r.ACIPinnedSessions)
+	dst.ACIReceiptKeys = slices.Clone(r.ACIReceiptKeys)
 	return &dst
 }
 
@@ -280,6 +343,28 @@ func (r *VerificationReport) MarkE2EEFailed(detail string) {
 			}
 			return
 		}
+	}
+}
+
+// MarkACIReceipt sets aci_receipt_verified from the probe t that ran after
+// the report was built, or, for a nil t, to a deferred Skip that states
+// noProbe. It changes the factor only while it is a deferred Skip, so a
+// recorded Pass or Fail is never replaced. The factor keeps its
+// enforcement, and the counters are recomputed. A report without the
+// factor is not changed.
+func (r *VerificationReport) MarkACIReceipt(t *E2EETestResult, noProbe string) {
+	for i := range r.Factors {
+		f := &r.Factors[i]
+		if f.Name != FactorACIReceiptVerified {
+			continue
+		}
+		if f.Status != Skip || !f.Deferred {
+			return
+		}
+		next := aciReceiptFactor(t, noProbe)
+		f.Status, f.Detail, f.Deferred = next.Status, next.Detail, next.Deferred
+		r.recomputeCounters()
+		return
 	}
 }
 
@@ -679,12 +764,20 @@ var ACIDefaultAllowFail = []string{
 	FactorACIBackendNamed,
 }
 
-// PhalaCloudACIDefaultAllowFail is the default allow_fail list for the
-// gateway variant of the ACI/1 response that Phala Cloud serves. The
-// variant echoes no nonce, so nonce_match and gateway_nonce_match fail and
-// are allowed; freshness rests on the enforced
-// gateway_tee_reportdata_binding.
-var PhalaCloudACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
+// PhalaCloudACIDefaultAllowFail is the default allow_fail list for the ACI/1
+// report of Phala Cloud. Phala Cloud verifies the report of
+// /v1/aci/attestation, which describes only the gateway and carries no GPU
+// evidence, so the GPU signature and nonce factors that ACIDefaultAllowFail
+// enforces fail here and are allowed to fail. The upstream GPU evidence that
+// exists is in the attested sessions, a snapshot that the client nonce does
+// not reach. The report echoes no nonce, so nonce_match and
+// gateway_nonce_match fail and are allowed; freshness rests on the enforced
+// gateway_tee_reportdata_binding. The keyset lists the TLS key of the host,
+// and the attester pins it, so tls_key_binding is enforced.
+var PhalaCloudACIDefaultAllowFail = append(
+	slices.DeleteFunc(slices.Clone(ACIDefaultAllowFail), func(f string) bool { return f == FactorTLSKeyBinding }),
+	FactorNvidiaSignature,
+	FactorNvidiaClientNonce,
 	FactorNonceMatch,
 	FactorGWNonceMatch,
 )
@@ -709,7 +802,7 @@ var KnownFactors = []string{
 	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
 	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaSignature, FactorNvidiaClaims,
 	FactorNvidiaClientNonce, FactorNvidiaNRAS, FactorE2EECapable, FactorE2EEUsable,
-	FactorACIKeyCustody, FactorACIBackendNamed,
+	FactorACIKeyCustody, FactorACIBackendNamed, FactorACISessionVerified, FactorACIReceiptVerified,
 	FactorTLSKeyBinding, FactorCPUGPUChain, FactorNVSwitchBinding,
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
@@ -804,6 +897,26 @@ type E2EETestResult struct {
 	// KeyType is the canonical E2EE key type derived from the attestation
 	// (e.g. "ecdsa", "ed25519", "ml-kem-768").
 	KeyType string
+	// Receipt is the result of the ACI/1 receipt check of the probe
+	// response (aci_receipt_verified). Nil when the probe did not reach the
+	// receipt check.
+	Receipt *ACIReceiptResult
+	// NoReceiptCheck, when set, says why a probe that ran did not check
+	// the receipt (aci_receipt_verified stays a deferred Skip with it).
+	NoReceiptCheck string
+}
+
+// ACIReceiptResult is the result of the cryptographic check of the ACI/1
+// receipt of a response: its presence, signature, keyset, session and
+// hashes (ACI/1 §9.3).
+type ACIReceiptResult struct {
+	// Err is set when the receipt is missing, malformed, forged or cites a
+	// session that teep did not pin.
+	Err error
+	// Detail describes a verified receipt.
+	Detail string
+	// Unknown holds the receipt members that teep does not define.
+	Unknown []string
 }
 
 // knownSigningAlgos is the allowlist of canonical algorithm names that may
@@ -853,6 +966,36 @@ type ACIKeysetResult struct {
 	KeysetNotExpired     bool   // the keyset not_after is in the future at verification time
 	Err                  error  // non-nil if verification could not complete (malformed input, bad hex, etc.)
 	Detail               string // summary of the above
+}
+
+// ACISessionResult holds the audit of the attested sessions behind the
+// requested model (ACI/1 §9.2). Pinned lists the ids of the sessions that
+// passed every check, which each request pins (aci_session_ids, §5.3).
+type ACISessionResult struct {
+	Pinned  []ACIPinnedSession
+	Refused []ACISessionRefusal
+	// Err is set when the sessions could not be fetched or selected.
+	Err error
+	// UnknownFields holds the paths of the members of the session list,
+	// the session records and their evidence that teep does not define.
+	// response_schema reports them; no check reads them.
+	UnknownFields []string
+}
+
+// ACIPinnedSession is an attested session that passed the audit, with the
+// period of its record (ACI/1 §8.2). A receipt that cites the session must
+// have a served_at in this period (§9.3).
+type ACIPinnedSession struct {
+	ID            string
+	EstablishedAt int64
+	ExpiresAt     int64
+}
+
+// ACISessionRefusal names a session that teep did not pin, and why.
+type ACISessionRefusal struct {
+	ID         string
+	VerifierID string
+	Reason     string
 }
 
 // TinfoilComponentResult holds per-component Tinfoil Sigstore verification.
@@ -962,6 +1105,10 @@ type ReportInput struct {
 	// ACIKeyset holds the result of Venice ACI/1 workload keyset
 	// verification. Nil for non-ACI/1 providers/formats.
 	ACIKeyset *ACIKeysetResult
+
+	// ACISessions holds the audit of the attested sessions for the
+	// canonical ACI/1 report. Nil for other formats.
+	ACISessions *ACISessionResult
 
 	// TinfoilSC holds Tinfoil-specific Sigstore supply chain results.
 	// Nil for non-Tinfoil providers.
@@ -1088,12 +1235,30 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	tlsKeyFP, tlsAuthority := "", ""
 	attestedModel, attestedMatch := "", ""
 	var format BackendFormat
+	aciKeysetDigest := ""
+	var aciSessionIDs []string
+	var aciPinned []ACIPinnedSession
+	var aciReceiptKeys []ACIReceiptKey
+	var aciNotAfter int64
 	if in.Raw != nil {
 		tlsKeyFP = in.Raw.TransportTLSFingerprint
 		tlsAuthority = in.Raw.TransportTLSAuthority
 		format = in.Raw.BackendFormat
 		if in.Raw.ModelNameMatch != "" {
 			attestedModel, attestedMatch = in.Raw.Model, in.Raw.ModelNameMatch
+		}
+		if format == FormatACI1 {
+			aciNotAfter = in.Raw.ACIKeysetNotAfter
+		}
+		if in.Raw.ACICanonicalReport {
+			aciKeysetDigest = in.Raw.ACIWorkloadKeysetDigest
+			aciReceiptKeys = slices.Clone(in.Raw.ACIReceiptKeys)
+			if in.ACISessions != nil && in.ACISessions.Err == nil {
+				aciPinned = slices.Clone(in.ACISessions.Pinned)
+				for _, s := range aciPinned {
+					aciSessionIDs = append(aciSessionIDs, s.ID)
+				}
+			}
 		}
 	}
 
@@ -1115,6 +1280,11 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		TLSAuthority:       tlsAuthority,
 		E2EEBindingFactor:  e2eeBindingFactor(in),
 		BackendFormat:      format,
+		ACIKeysetDigest:    aciKeysetDigest,
+		ACISessionIDs:      aciSessionIDs,
+		ACIPinnedSessions:  aciPinned,
+		ACIReceiptKeys:     aciReceiptKeys,
+		ACIKeysetNotAfter:  aciNotAfter,
 	}
 }
 
@@ -1203,6 +1373,8 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalE2EEUsable,
 		evalACIKeyCustody,
 		evalACIBackendNamed,
+		evalACISessionVerified,
+		evalACIReceiptVerified,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -1258,7 +1430,7 @@ const noEchoDetail = "no echoed nonce; freshness rests on tee_reportdata_binding
 
 func evalNonceMatch(in *ReportInput) []FactorResult {
 	if in.Raw.Nonce == "" {
-		if in.Raw.ACIGatewayVariant {
+		if in.Raw.ACIGatewayVariant || in.Raw.ACICanonicalReport {
 			return factor(TierCore, FactorNonceMatch, Fail, aciNoEchoDetail)
 		}
 		// Only the Chutes parser sets NonceSourceNotEchoed; some formats
@@ -1566,6 +1738,9 @@ func evalSigningKeyPresent(in *ReportInput) []FactorResult {
 
 func evalResponseSchema(in *ReportInput) []FactorResult {
 	unknown := in.Raw.UnknownFields
+	if in.ACISessions != nil && len(in.ACISessions.UnknownFields) > 0 {
+		unknown = append(slices.Clone(unknown), in.ACISessions.UnknownFields...)
+	}
 	missing := in.Raw.MissingFields
 	if len(unknown) == 0 && len(missing) == 0 {
 		return factor(TierCore, FactorResponseSchema, Pass,
@@ -1988,6 +2163,84 @@ func evalACIKeyCustody(in *ReportInput) []FactorResult {
 		return factor(TierBinding, FactorACIKeyCustody, Fail, in.ACIKeyset.Detail)
 	}
 	return factor(TierBinding, FactorACIKeyCustody, Pass, in.ACIKeyset.Detail)
+}
+
+// evalACISessionVerified states whether at least one attested session of the
+// requested model passed every check of the session audit. The gateway
+// forwards a pinned request only through a pinned session, so the sessions
+// are the verified upstreams of the request. NotApplicable for every format
+// other than the canonical ACI/1 report; enforced for it.
+func evalACISessionVerified(in *ReportInput) []FactorResult {
+	if in.Raw == nil || !in.Raw.ACICanonicalReport {
+		return factor(TierBinding, FactorACISessionVerified, NotApplicable,
+			"not the canonical ACI/1 report")
+	}
+	s := in.ACISessions
+	switch {
+	case s == nil:
+		return factor(TierBinding, FactorACISessionVerified, Fail,
+			"the attested sessions were not audited")
+	case s.Err != nil:
+		return factor(TierBinding, FactorACISessionVerified, Fail,
+			fmt.Sprintf("attested sessions: %v", s.Err))
+	case len(s.Pinned) == 0:
+		return factor(TierBinding, FactorACISessionVerified, Fail,
+			fmt.Sprintf("no attested session passed the audit (%d refused%s)", len(s.Refused), refusalSummary(s.Refused)))
+	}
+	return factor(TierBinding, FactorACISessionVerified, Pass,
+		fmt.Sprintf("%d attested sessions pinned: genuine TDX and GPU with allowed MRTD/MRSEAM, workload policy not checked (%d refused%s)", len(s.Pinned), len(s.Refused), refusalSummary(s.Refused)))
+}
+
+// evalACIReceiptVerified states whether the receipt of the teep verify
+// probe passed the cryptographic receipt check. teep serve checks the
+// receipt of every response and fails the response otherwise; its report
+// has no probe, so the factor is a deferred Skip there, as it is without an
+// API key or when the probe failed before the receipt check (e2ee_usable
+// reports that failure). NotApplicable for every format other than the
+// canonical ACI/1 report; enforced for it.
+func evalACIReceiptVerified(in *ReportInput) []FactorResult {
+	if in.Raw == nil || !in.Raw.ACICanonicalReport {
+		return factor(TierBinding, FactorACIReceiptVerified, NotApplicable, "not the canonical ACI/1 report")
+	}
+	if in.E2EETest == nil {
+		// teep verify runs the probe after BuildReport and then sets the
+		// factor with MarkACIReceipt.
+		return []FactorResult{aciReceiptFactor(nil, "no probe: teep serve checks the receipt of every response")}
+	}
+	return []FactorResult{aciReceiptFactor(in.E2EETest, "")}
+}
+
+// aciReceiptFactor states the receipt check of probe t. A nil t is a
+// deferred Skip with noProbe as its detail.
+func aciReceiptFactor(t *E2EETestResult, noProbe string) FactorResult {
+	deferred := func(detail string) FactorResult {
+		return FactorResult{Tier: TierBinding, Name: FactorACIReceiptVerified, Status: Skip, Detail: detail, Deferred: true}
+	}
+	switch {
+	case t == nil:
+		return deferred(noProbe)
+	case t.NoAPIKey:
+		return deferred("no probe: an API key is required")
+	case t.Receipt == nil && t.NoReceiptCheck != "":
+		return deferred(t.NoReceiptCheck)
+	case t.Receipt == nil:
+		return deferred("no receipt check of the probe: the probe stream failed (SEE: e2ee_usable), or a replayed capture holds no receipt result")
+	case t.Receipt.Err != nil:
+		return FactorResult{Tier: TierBinding, Name: FactorACIReceiptVerified, Status: Fail, Detail: fmt.Sprintf("receipt: %v", t.Receipt.Err)}
+	}
+	detail := t.Receipt.Detail
+	if len(t.Receipt.Unknown) > 0 {
+		detail += fmt.Sprintf("; members not checked: %q", t.Receipt.Unknown)
+	}
+	return FactorResult{Tier: TierBinding, Name: FactorACIReceiptVerified, Status: Pass, Detail: detail}
+}
+
+// refusalSummary names the reason of the first refused session.
+func refusalSummary(refused []ACISessionRefusal) string {
+	if len(refused) == 0 {
+		return ""
+	}
+	return "; first: " + refused[0].Reason
 }
 
 // evalACIBackendNamed states whether attested evidence of an ACI/1 response
@@ -3005,7 +3258,7 @@ func evalEventLogIntegrity(in *ReportInput) []FactorResult {
 
 func evalGatewayNonceMatch(in *ReportInput) []FactorResult {
 	switch {
-	case in.GatewayNonceHex == "" && in.Raw.ACIGatewayVariant:
+	case in.GatewayNonceHex == "" && (in.Raw.ACIGatewayVariant || in.Raw.ACICanonicalReport):
 		return factor(TierGateway, FactorGWNonceMatch, Fail, aciNoEchoDetail)
 	case in.GatewayNonceHex == "":
 		return factor(TierGateway, FactorGWNonceMatch, Fail, "gateway request_nonce absent")

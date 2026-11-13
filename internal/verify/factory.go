@@ -11,6 +11,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/multi"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
@@ -123,10 +124,15 @@ func newGatewayReportDataVerifier(name string) provider.ReportDataVerifier {
 	switch name {
 	case "nearcloud":
 		return nearcloud.GatewayReportDataVerifier{}
-	case "venice", "phalacloud", "nanogpt":
-		// The ACI/1 gateway quote binds the same keccak256(signing key)+nonce
-		// REPORTDATA as the dstack model quote, so the verifier is shared.
+	case "venice", "nanogpt":
+		// The gateway quote of the compatibility route binds the same
+		// keccak256(signing key)+nonce REPORTDATA as the dstack model quote,
+		// so the verifier is shared.
 		return venice.ReportDataVerifier{}
+	case "phalacloud":
+		// The report of /v1/aci/attestation binds the keyset digest and the
+		// client nonce through the ACI/1 §3.2 statement.
+		return aci.StatementReportDataVerifier{}
 	default:
 		return nil
 	}
@@ -178,7 +184,7 @@ func inapplicableFactors(providerName string) attestation.InapplicableFactors {
 // peer SPKI; other providers use E2EE signing-key binding or pinned TLS.
 func providerUsesTLSBinding(providerName string) bool {
 	switch providerName {
-	case "tinfoil_v3_cloud", "tinfoil_v3_direct", "nearcloud", "neardirect":
+	case "tinfoil_v3_cloud", "tinfoil_v3_direct", "nearcloud", "neardirect", "phalacloud":
 		return true
 	default:
 		return false

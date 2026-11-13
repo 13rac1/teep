@@ -12,8 +12,10 @@ import (
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -27,8 +29,13 @@ func standaloneAttesterForRoute(ctx context.Context, opts *Options, attester pro
 			*route, err = resolver.ResolveRoute(ctx, opts.ModelName)
 		} else {
 			origin, repo := opts.Provider.BaseURL, tinfoil.RouterRepo
-			if opts.ProviderName == "nearcloud" {
+			switch opts.ProviderName {
+			case "nearcloud":
 				origin, repo = "https://"+nearcloud.GatewayHost(), ""
+			case "phalacloud":
+				// The base URL host serves the canonical report and the
+				// inference requests; the keyset lists its TLS key.
+				origin, repo = opts.Provider.BaseURL, ""
 			}
 			*route, err = provider.NewResolvedRoute(origin, repo)
 		}
@@ -44,7 +51,7 @@ func standaloneAttesterForRoute(ctx context.Context, opts *Options, attester pro
 	if scoped, ok := attester.(provider.RouteAttester); ok {
 		return provider.AttesterForRoute(scoped, *route)
 	}
-	if opts.ProviderName != "tinfoil_v3_cloud" && opts.ProviderName != "nearcloud" {
+	if opts.ProviderName != "tinfoil_v3_cloud" && opts.ProviderName != "nearcloud" && opts.ProviderName != "phalacloud" {
 		return nil, errors.New("dynamic provider has no route attester")
 	}
 	return attester, nil
@@ -68,6 +75,9 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 		return current, nil
 	}
 
+	if err == nil {
+		markBlockedProbe(current.report)
+	}
 	if err != nil || opts.Offline || opts.replay || opts.CapturedE2EE != nil || opts.Provider.APIKey == "" || current.report.Blocked() {
 		return current, err
 	}
@@ -109,7 +119,7 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 			identity = selected
 		}
 		var retry bool
-		probe, canRetry, probeErr := testStandaloneInference(attemptCtx, opts, *route, current.raw, current.modelKey, client)
+		probe, canRetry, probeErr := testStandaloneInference(attemptCtx, opts, *route, current.raw, current.modelKey, current.report.ACIPinnedSessions, client)
 		retry, err = canRetry, probeErr
 		if probe != nil {
 			current.e2ee = probe.e2ee
@@ -139,6 +149,15 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 	return result, err
 }
 
+// markBlockedProbe states in aci_receipt_verified that teep sends no probe:
+// the probe is an inference request, which a blocked report does not
+// authorize.
+func markBlockedProbe(report *attestation.VerificationReport) {
+	if report != nil && report.Blocked() {
+		report.MarkACIReceipt(nil, "no probe: the report blocks inference requests")
+	}
+}
+
 // completeTLSInference stores the same final outcome in the report and capture,
 // including failures before an encrypted response is available.
 func completeTLSInference(result *verificationOutcome, err error) {
@@ -157,6 +176,11 @@ func completeTLSInference(result *verificationOutcome, err error) {
 	} else if result.e2ee != nil && result.e2ee.Attempted {
 		result.report.MarkE2EEUsable(result.e2ee.Detail)
 	}
+	// BuildReport ran before the probe, so the receipt check of the probe
+	// sets aci_receipt_verified here.
+	if result.e2ee != nil {
+		result.report.MarkACIReceipt(result.e2ee, "")
+	}
 }
 
 // testStandaloneInference uses the same encryption, headers, framing, and
@@ -166,7 +190,7 @@ type standaloneProbe struct {
 	tlsInference *attestation.TLSInferenceResult
 }
 
-func testStandaloneInference(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, modelKey e2ee.NearModelKey, client *http.Client) (*standaloneProbe, bool, error) {
+func testStandaloneInference(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, modelKey e2ee.NearModelKey, pinned []attestation.ACIPinnedSession, client *http.Client) (*standaloneProbe, bool, error) {
 	prov := &provider.Provider{Name: opts.ProviderName, E2EE: !nearTLSOnly(opts)}
 	switch opts.ProviderName {
 	case "nearcloud":
@@ -175,19 +199,38 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 		prov.Encryptor, prov.Preparer = neardirect.NewE2EE(), neardirect.NewPreparer(opts.Provider.APIKey)
 	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
 		prov.Encryptor, prov.Preparer = tinfoil.NewE2EE(), tinfoil.NewPreparer(opts.Provider.APIKey)
+	case "phalacloud":
+		prov.Encryptor, prov.Preparer = aci.NewE2EE(), phalacloud.NewPreparer(opts.Provider.APIKey)
 	default:
 		return nil, false, errors.New("unsupported TLS-binding inference provider")
 	}
-	body, err := json.Marshal(map[string]any{"model": opts.ModelName, "messages": []map[string]string{{"role": "user", "content": "Say hello"}}, "stream": true})
+	request := map[string]any{"model": opts.ModelName, "messages": []map[string]string{{"role": "user", "content": "Say hello"}}, "stream": true}
+	if opts.ProviderName == "phalacloud" {
+		// As in testE2EEACIv2: max_tokens bounds the run time of a reasoning
+		// model and the cost of the probe to the provider.
+		request["max_tokens"] = aciv2ProbeMaxTokens
+	}
+	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, false, err
 	}
+	sessionIDs := make([]string, 0, len(pinned))
+	for _, s := range pinned {
+		sessionIDs = append(sessionIDs, s.ID)
+	}
 	phase := &tlsct.InferenceAttempt{}
-	req, encrypted, err := provider.PrepareInference(phase.Context(ctx), prov, route, &provider.InferenceInput{Body: body, SigningKey: raw.SigningKey, ModelKey: modelKey, Path: "/v1/chat/completions", ContentType: "application/json", Stream: true, Endpoint: e2ee.EndpointChat})
+	req, encrypted, err := provider.PrepareInference(phase.Context(ctx), prov, route, &provider.InferenceInput{Body: body, SigningKey: raw.SigningKey, BackendFormat: raw.BackendFormat, ACISessionIDs: sessionIDs, ModelKey: modelKey, Path: "/v1/chat/completions", ContentType: "application/json", Stream: true, Endpoint: e2ee.EndpointChat})
 	if err != nil {
 		return nil, false, err
 	}
 	defer e2ee.ZeroSessions(encrypted.Session, encrypted.Chutes, encrypted.EHBP)
+	if opts.capture != nil {
+		// Record the exchange around the pinned transport, which still
+		// checks the attested SPKI before it sends the request.
+		recorded := *client
+		recorded.Transport = opts.capture.recordE2EE(client.Transport)
+		client = &recorded
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, phase.RetryConnectionFailure(ctx, err), err
@@ -198,7 +241,7 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 		return nil, false, err
 	}
 	if rejected {
-		return nil, prov.E2EE, &standaloneKeyRejectionError{}
+		return nil, prov.E2EE, &standaloneKeyRejectionError{sessions: opts.ProviderName == "phalacloud"}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, false, standaloneInferenceError(resp, encrypted.EHBP)
@@ -211,6 +254,10 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 	}
 	if encrypted.EHBP != nil {
 		return &standaloneProbe{e2ee: verifyEHBPStreamResponse(resp, encrypted.EHBP)}, false, nil
+	}
+	if v2, ok := encrypted.Session.(*e2ee.ACIv2Session); ok && opts.ProviderName == "phalacloud" {
+		pr := &probeReceipt{client: client, route: route, pinned: pinned, requestHash: provider.ReceiptRequestHash(encrypted)}
+		return &standaloneProbe{e2ee: verifyPhalaProbe(ctx, opts, raw, resp, v2, pr)}, false, nil
 	}
 	return &standaloneProbe{e2ee: verifyE2EEStreamResponse(resp, encrypted.Session, opts.ProviderName)}, false, nil
 }
@@ -231,9 +278,17 @@ func standaloneInferenceError(resp *http.Response, session *e2ee.EHBPSession) er
 	return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
 }
 
-type standaloneKeyRejectionError struct{}
+// standaloneKeyRejectionError is a refusal that ends the authorization and
+// makes the probe verify again. For Phala Cloud it is session_not_accepted:
+// the gateway refused the pinned attested sessions, not a key.
+type standaloneKeyRejectionError struct {
+	sessions bool
+}
 
-func (*standaloneKeyRejectionError) Error() string {
+func (e *standaloneKeyRejectionError) Error() string {
+	if e.sessions {
+		return "upstream refused the pinned attested sessions (session_not_accepted)"
+	}
 	return "upstream rejected attested encryption key"
 }
 

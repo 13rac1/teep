@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,10 +18,13 @@ import (
 )
 
 type authorizedRequest struct {
-	provider    *provider.Provider
-	route       provider.ResolvedRoute
-	key         provider.AuthorizationKey
-	body        []byte
+	provider *provider.Provider
+	route    provider.ResolvedRoute
+	key      provider.AuthorizationKey
+	body     []byte
+	// model is the upstream model that teep resolved and wrote into body
+	// (rewriteModelInBody); the receipt check compares it.
+	model       string
 	stream      bool
 	path        string
 	contentType string
@@ -45,14 +49,96 @@ type authorizedResponse struct {
 	retryReason      string
 }
 
-func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedRequest) (authorizedResponse, error) {
-	timeout := upstreamNonStreamTimeout
-	if input.stream {
-		timeout = upstreamStreamTimeout
+// A Phala Cloud stream that the client leaves after content reached it is
+// read to its end for the receipt check, within these bounds from the
+// client's end (SEE: tailHold).
+const (
+	streamDrainTimeout = 2 * time.Minute
+	streamDrainBytes   = 16 << 20
+)
+
+// drainBounds replaces streamDrainTimeout and streamDrainBytes when set.
+type drainBounds struct {
+	timeout time.Duration
+	bytes   int64
+}
+
+func (s *Server) drainTimeout() time.Duration {
+	if s.drainBounds.timeout > 0 {
+		return s.drainBounds.timeout
 	}
-	logical, cancel := context.WithTimeout(ctx, timeout)
-	deadline, _ := logical.Deadline()
-	budget := max(0, time.Until(deadline))
+	return streamDrainTimeout
+}
+
+func (s *Server) drainBytes() int64 {
+	if s.drainBounds.bytes > 0 {
+		return s.drainBounds.bytes
+	}
+	return streamDrainBytes
+}
+
+// attemptTimeouts are the attempt deadlines for stream and non-stream
+// requests.
+type attemptTimeouts struct {
+	stream, nonStream time.Duration
+}
+
+// attemptTimeout returns the attempt timeout for a stream or a non-stream
+// request.
+func (s *Server) attemptTimeout(stream bool) time.Duration {
+	switch {
+	case stream && s.attemptTimeouts.stream > 0:
+		return s.attemptTimeouts.stream
+	case stream:
+		return upstreamStreamTimeout
+	case s.attemptTimeouts.nonStream > 0:
+		return s.attemptTimeouts.nonStream
+	default:
+		return upstreamNonStreamTimeout
+	}
+}
+
+func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedRequest) (authorizedResponse, error) {
+	// The upstream attempt does not run on the client's context: hold
+	// stops it when the client's request ends while teep relays, as
+	// before, but not during the bounded tail read after a gateway failure
+	// (SEE: tailHold).
+	//
+	// teep's own attempt deadline bounds the relay and the downstream
+	// writes (RelayDeadline). The upstream request runs receiptCheckTimeout
+	// longer, so that a stream that teep's deadline cut can still be read
+	// to its end for the receipt check. A deadline that the caller set
+	// bounds both: teep serve sets none on the incoming request. With a
+	// caller deadline, logical and the client's context expire on separate
+	// timers at the same instant, so an ending at that deadline can be
+	// classified as either side's; serve does not reach this.
+	//
+	// A Phala Cloud stream is read to its end after the client leaves
+	// (drainable), so its upstream request also outlives a caller deadline,
+	// by the drain bound.
+	drainable := input.provider.Name == "phalacloud" && input.stream
+	attemptDeadline := time.Now().Add(s.attemptTimeout(input.stream))
+	callerBound := false
+	if clientDeadline, ok := ctx.Deadline(); ok && clientDeadline.Before(attemptDeadline) {
+		attemptDeadline, callerBound = clientDeadline, true
+	}
+	upstreamDeadline := attemptDeadline.Add(receiptCheckTimeout)
+	switch {
+	case drainable:
+		upstreamDeadline = attemptDeadline.Add(max(receiptCheckTimeout, s.drainTimeout()))
+	case callerBound:
+		upstreamDeadline = attemptDeadline
+	}
+	logical, cancel := context.WithDeadline(context.WithoutCancel(ctx), upstreamDeadline)
+	hold := newTailHold(ctx, func() {
+		// Without a drain, logical has the caller's deadline already and
+		// expires with the same error; only a cancellation needs passing
+		// on.
+		if drainable || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			cancel()
+		}
+	}, drainTimer(s.drainTimeout(), cancel))
+	budget := max(0, time.Until(attemptDeadline))
 	var attestDur, e2eeDur, upstreamDur time.Duration
 	attempts := 0
 	lastRetry := ""
@@ -74,10 +160,18 @@ func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedReque
 		result.outcome.summary = append(result.outcome.summary, slog.String("retry_reason", lastRetry))
 	}
 	if result.upstream == nil {
+		hold.release()
 		cancel()
 	} else {
 		attemptCancel := result.upstream.Cancel
-		result.upstream.Cancel = func() { attemptCancel(); cancel() }
+		result.upstream.Cancel = func() { hold.release(); attemptCancel(); cancel() }
+		result.upstream.EnterTail = hold.enterTail
+		if drainable {
+			result.upstream.MarkContent = hold.markContent
+			result.upstream.Draining = hold.draining
+			result.upstream.ClientEnded = hold.clientEnded
+		}
+		result.upstream.RelayDeadline = attemptDeadline
 	}
 	return result, err
 }
@@ -126,23 +220,33 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	result.outcome.summary = append(result.outcome.summary, slog.Int("upstream_status_code", ur.Resp.StatusCode))
 	if tlsct.IsRedirectStatus(ur.Resp.StatusCode) {
 		err = errors.New("upstream returned an unexpected redirect")
-	} else if ur.Session != nil || ur.EHBP != nil || (input.provider.Name == "nearcloud" && input.path == "/v1/chat/completions" && ur.Resp.StatusCode == http.StatusMisdirectedRequest) {
+	} else if ur.Session != nil || ur.EHBP != nil || input.provider.Name == "phalacloud" || (input.provider.Name == "nearcloud" && input.path == "/v1/chat/completions" && ur.Resp.StatusCode == http.StatusMisdirectedRequest) {
 		var rejected bool
 		rejected, err = provider.KeyRejection(ur.Resp, input.provider.Name, input.path)
 		if rejected {
+			reason := "model_key_rejected"
+			if input.provider.Name == "phalacloud" {
+				reason = "session_not_accepted"
+			}
 			removed := s.authorizations.deleteGeneration(input.key, value.generation)
-			s.logAuthorizationRejection(ctx, input, value, "model_key_rejected", removed, false)
-			result.retryReason = "model_key_rejected"
+			s.logAuthorizationRejection(ctx, input, value, reason, removed, false)
+			result.retryReason = reason
 			if !input.provider.E2EE {
 				return result, false, nil
 			}
 			cleanupAuthorized(ur)
 			result.upstream = nil
-			return result, input.provider.E2EE, errors.New("upstream rejected the attested model key")
+			if input.provider.Name == "phalacloud" {
+				return result, true, errors.New("upstream refused the pinned attested sessions")
+			}
+			return result, true, errors.New("upstream rejected the attested model key")
 		}
 	}
 	if err == nil {
 		err = s.refuseUncheckedSuccess(ctx, input, value, ur.Resp.StatusCode)
+	}
+	if err == nil && ur.Resp.StatusCode == http.StatusOK {
+		err = s.checkAuthorizedKeyset(ctx, input, value, ur.Resp.Header)
 	}
 	if err != nil {
 		cleanupAuthorized(ur)
@@ -152,19 +256,27 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	return result, false, nil
 }
 
-// refuseUncheckedSuccess refuses an E2EE response with a 2xx status other
-// than 200. teep decrypts and authenticates a response body only for 200, and
-// a client takes any 2xx for success, so such a response would reach the
-// client unchecked. It is refused before anything is relayed, and the
-// generation ends with a failure cooldown, as for a response that fails
-// authentication.
+// refuseUncheckedSuccess refuses a response with a 2xx status other than 200
+// from an E2EE provider or from Phala Cloud. teep decrypts and authenticates
+// an E2EE response body, and checks the Phala Cloud keyset digest and
+// receipt, only for 200, and a client takes any 2xx for success, so such a
+// response would reach the client unchecked. It is refused before anything
+// is relayed, and the generation ends with the failure cooldown, as for a
+// response that fails authentication.
 func (s *Server) refuseUncheckedSuccess(ctx context.Context, input *authorizedRequest, value *authorization, status int) error {
-	if !input.provider.E2EE || !isUncheckedSuccess(status) {
+	if !refusesUncheckedSuccess(input.provider, status) {
 		return nil
 	}
 	removed := s.rejectResponseAuthorization(input.key, value.generation)
 	s.logAuthorizationRejection(ctx, input, value, "unexpected_success_status", removed, removed)
-	return fmt.Errorf("upstream answered HTTP %d; an encrypted response must be HTTP 200 to be checked", status)
+	return fmt.Errorf("upstream answered HTTP %d; the response must be HTTP 200 to be checked", status)
+}
+
+// refusesUncheckedSuccess reports whether teep refuses status from p: a 2xx
+// status other than 200 from an E2EE provider or from Phala Cloud, with or
+// without E2EE.
+func refusesUncheckedSuccess(p *provider.Provider, status int) bool {
+	return (p.E2EE || p.Name == "phalacloud") && isUncheckedSuccess(status)
 }
 
 // isUncheckedSuccess reports whether status is a 2xx status other than 200.
@@ -172,14 +284,37 @@ func isUncheckedSuccess(status int) bool {
 	return status >= http.StatusOK && status < http.StatusMultipleChoices && status != http.StatusOK
 }
 
+// checkAuthorizedKeyset checks the X-ACI-Keyset-Digest of a successful
+// response against the keyset that the authorization's canonical ACI/1
+// report binds; an error response is relayed as on the unpinned path. A
+// response without the header, or of another digest, fails before teep
+// relays it, and the authorization generation ends. ACI/1 §5.2 lets the
+// gateway finish a response in flight under a new keyset, but its receipt
+// is signed under keys that teep has not verified. The next send verifies
+// again: a member of the same renewal family keeps continuity, another
+// family becomes a new authorization (§3.1).
+func (s *Server) checkAuthorizedKeyset(ctx context.Context, input *authorizedRequest, value *authorization, header http.Header) error {
+	differs, err := attestation.CheckServedKeysetDigest(header, value.report)
+	if !differs && err == nil {
+		return nil
+	}
+	removed := s.authorizations.deleteGeneration(input.key, value.generation)
+	if err != nil {
+		s.logAuthorizationRejection(ctx, input, value, "keyset_digest_missing", removed, false)
+		return err
+	}
+	s.logAuthorizationRejection(ctx, input, value, "keyset_digest_changed", removed, false)
+	return errors.New("the response served another keyset digest; its receipt is signed under a keyset that teep has not verified")
+}
+
 func (s *Server) prepareAuthorizedRequest(ctx context.Context, input *authorizedRequest, value *authorization) (*upstreamResult, error) {
 	req, encrypted, err := provider.PrepareInference(ctx, input.provider, input.route, &provider.InferenceInput{
-		Body: input.body, SigningKey: value.signingKey, ModelKey: value.modelKey, Path: input.path, ContentType: input.contentType, Stream: input.stream, Endpoint: input.endpoint,
+		Body: input.body, SigningKey: value.signingKey, BackendFormat: value.report.BackendFormat, ACISessionIDs: value.report.ACISessionIDs, ModelKey: value.modelKey, Path: input.path, ContentType: input.contentType, Stream: input.stream, Endpoint: input.endpoint,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &upstreamResult{Request: req, Session: encrypted.Session, Meta: encrypted.Chutes, EHBP: encrypted.EHBP}, nil
+	return &upstreamResult{Request: req, Session: encrypted.Session, Meta: encrypted.Chutes, EHBP: encrypted.EHBP, RequestHash: provider.ReceiptRequestHash(encrypted)}, nil
 }
 
 func cleanupAuthorized(ur *upstreamResult) {
@@ -215,7 +350,18 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	out.report = value.report
 	started := time.Now()
 	defer func() { out.upstreamDur += time.Since(started) }()
-	if err := s.relayAuthorized(result.upstream.Request.Context(), w, input, &result); err != nil { //nolint:contextcheck // The request retains the attempt context derived from ctx with the caller deadline.
+	// The relay and the downstream writes stop at teep's attempt deadline
+	// and when the client's request ends; the upstream request may run
+	// longer (SEE: authorizedRoundtrip).
+	relayCtx, cancelRelay := context.WithCancel(result.upstream.Request.Context())
+	defer cancelRelay()
+	if !result.upstream.RelayDeadline.IsZero() {
+		var cancelDeadline context.CancelFunc
+		relayCtx, cancelDeadline = context.WithDeadline(relayCtx, result.upstream.RelayDeadline)
+		defer cancelDeadline()
+	}
+	defer context.AfterFunc(ctx, cancelRelay)()
+	if err := s.relayAuthorized(ctx, relayCtx, w, input, &result); err != nil {
 		out.summary = append(out.summary, result.relayDiagnostics...)
 		return out, err
 	}
@@ -228,10 +374,24 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	return out, nil
 }
 
-func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result *authorizedResponse) (retErr error) {
+// relayAuthorized relays the response of one attempt. ctx is the attempt
+// context, which teep's own stream deadline bounds; clientCtx is the context
+// of the client's request, the only signal that the client side ended.
+func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result *authorizedResponse) (retErr error) {
 	writer, err := newResponseLifetime(ctx, w)
 	if err != nil {
 		return err
+	}
+	// ctx learns of the client's end through a goroutine (context.AfterFunc
+	// in inferAuthorized); the writer reads the client's context itself, so
+	// that no byte goes to a client after its request ended, whichever
+	// goroutine runs first.
+	relayErr := writer.contextErr
+	writer.contextErr = func() error {
+		if err := clientCtx.Err(); err != nil {
+			return err
+		}
+		return relayErr()
 	}
 	defer func() {
 		for _, err := range []error{writer.err, writer.contextErr()} {
@@ -242,8 +402,8 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	}()
 	w = writer
 	ur := result.upstream
+	writer.onFirstWrite = ur.MarkContent
 	resp := ur.Resp
-	copyAuthorizedHeaders(w.Header(), resp.Header)
 	var body io.Reader = resp.Body
 	invalidate := func(reason string) {
 		removed := s.rejectResponseAuthorization(input.key, result.authorization.generation)
@@ -266,9 +426,22 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 		defer plain.Close()
 		body = plain
 	}
+	var receipt *receiptRelay
+	if input.key.ProviderName() == "phalacloud" && resp.StatusCode == http.StatusOK {
+		// Every successful Phala Cloud response must have a receipt that
+		// verifies; a non-stream response is held until it does.
+		receipt, err = newReceiptRelay(resp.Header, body)
+		if err != nil {
+			return s.receiptFailed(ctx, input, result, "receipt_id_invalid", err, true)
+		}
+		body = receipt.wire
+	}
+	// The upstream headers go to the client only for a response that
+	// passed the checks above; a refused response sends none of them.
 	progress := &responseReadProgress{Reader: body}
 	body = responseLifetimeReader{Reader: progress, check: writer.check}
 	if resp.StatusCode != http.StatusOK {
+		copyAuthorizedHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		_, err := io.Copy(w, io.LimitReader(body, 10<<20))
 		if errors.Is(err, e2ee.ErrDecryptionFailed) {
@@ -278,7 +451,29 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 		return errors.Join(fmt.Errorf("upstream returned HTTP %d", resp.StatusCode), err)
 	}
 	started := time.Now()
-	streamStats, err := relayResponse(ctx, w, body, ur.Session, ur.Meta, input.stream, input.endpoint)
+	// The relay of a 200 response writes a 2xx status only for upstream
+	// content; any other status is teep's own error (a stream whose first
+	// read fails), which carries none of the upstream headers.
+	w = newUpstreamHeaderWriter(w, resp.Header)
+	target := w
+	var held *heldResponse
+	if receipt != nil && !input.stream {
+		held = &heldResponse{header: w.Header()}
+		target = held
+	}
+	streamStats, err := relayResponse(ctx, target, body, ur.Session, ur.Meta, input.stream, input.endpoint)
+	switch {
+	case receipt == nil:
+	case err == nil:
+		err = s.checkReceipt(ctx, input, result, receipt)
+		if err == nil && held != nil {
+			err = held.release(w)
+		}
+	case input.stream && (streamStats.Chunks > 0 || streamStats.Forwarded > 0):
+		// The stream failed after content reached the client: the check
+		// must still run, or the gateway could skip it.
+		s.checkReceiptAfterRelayFailure(clientCtx, input, result, receipt, relayEnding{err: err, downstream: writer.err, upstreamBody: resp.Body, enterTail: ur.EnterTail, draining: ur.Draining, clientEnded: ur.ClientEnded})
+	}
 	if err != nil || writer.check() != nil {
 		if input.stream {
 			result.relayDiagnostics = streamFailureDiagnostics(started, streamStats, progress, writer)
@@ -330,6 +525,9 @@ func (s *Server) handleAuthorizedEndpoint(ctx context.Context, w http.ResponseWr
 		s.stats.errors.Add(1)
 		s.stats.getModelStats(input.key.ProviderName(), input.key.Model()+"@"+input.key.Authority()).errors.Add(1)
 		if !ri.headerSent {
+			// The upstream headers were copied before the relay; teep's own
+			// error response carries none of them.
+			clear(writer.Header())
 			code := http.StatusBadGateway
 			if _, ok := errors.AsType[*verificationOverloadError](err); ok || errors.Is(err, tlsct.ErrConnectionCapacity) {
 				code = http.StatusServiceUnavailable
@@ -411,3 +609,60 @@ func (s *Server) logAuthorizedRetry(ctx context.Context, input *authorizedReques
 	}
 	s.authorizations.log().LogAttrs(ctx, slog.LevelWarn, "authorized inference retry scheduled", attrs...)
 }
+
+// upstreamHeaderWriter puts the upstream response headers on the client
+// response before the relay, so that the relay sets its own headers over
+// them and keeps an upstream header that it sets only when absent (the media
+// type of a speech response). When the first status written is not a 2xx
+// status, the response is teep's own error: the upstream headers that still
+// have their upstream values are removed before it is written.
+type upstreamHeaderWriter struct {
+	http.ResponseWriter
+	copied  http.Header
+	written bool
+}
+
+func newUpstreamHeaderWriter(w http.ResponseWriter, src http.Header) *upstreamHeaderWriter {
+	copied := http.Header{}
+	copyAuthorizedHeaders(copied, src)
+	dst := w.Header()
+	for name, values := range copied {
+		dst[name] = slices.Clone(values)
+	}
+	return &upstreamHeaderWriter{ResponseWriter: w, copied: copied}
+}
+
+func (w *upstreamHeaderWriter) WriteHeader(code int) {
+	if !w.written {
+		w.written = true
+		if code < http.StatusOK || code >= http.StatusMultipleChoices {
+			dst := w.Header()
+			for name, values := range w.copied {
+				if slices.Equal(dst[name], values) {
+					delete(dst, name)
+				}
+			}
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *upstreamHeaderWriter) Write(p []byte) (int, error) {
+	if !w.written {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+// Flush commits the headers as a 200 status when none was written, as the
+// writer below would.
+func (w *upstreamHeaderWriter) Flush() {
+	if !w.written {
+		w.WriteHeader(http.StatusOK)
+	}
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *upstreamHeaderWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

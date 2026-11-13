@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee/aciv2test"
 	"github.com/13rac1/teep/internal/provider"
 )
 
@@ -313,6 +314,20 @@ func TestAuthorizationConstructorRejectsIncompleteMaterial(t *testing.T) {
 				t.Fatal("incomplete authorization accepted")
 			}
 		})
+	}
+}
+
+// A Phala Cloud authorization requires the gateway E2EE key to be an
+// uncompressed secp256k1 point.
+func TestAuthorizationValidatesPhalaCloudKey(t *testing.T) {
+	gw := aciv2test.New(t)
+	if _, err := validateAuthorizationKey("phalacloud", gw.PubKeyHex()); err != nil {
+		t.Fatalf("gateway key refused: %v", err)
+	}
+	for _, bad := range []string{"", strings.Repeat("ab", 32), "04" + strings.Repeat("00", 64), "zz"} {
+		if _, err := validateAuthorizationKey("phalacloud", bad); err == nil {
+			t.Errorf("key %q accepted", bad)
+		}
 	}
 }
 

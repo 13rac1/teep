@@ -20,6 +20,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/aci"
+	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -228,6 +229,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
 	tinfoilSC := verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, opts.ProviderName, opts.ModelName, mergedPolicy, opts.Offline, client)
+	aciSessions := auditACISessions(ctx, opts.ProviderName, raw, phalacloud.SessionAuditor{TDX: verifier, Offline: opts.Offline})
 
 	report = attestation.BuildReport(&attestation.ReportInput{
 		Provider:               opts.ProviderName,
@@ -258,6 +260,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		GatewayEventLog:        raw.GatewayEventLog,
 		TinfoilSC:              tinfoilSC,
 		ACIKeyset:              aci.VerifyKeyset(raw, opts.VerificationTime, aci.GatewayPins()),
+		ACISessions:            aciSessions,
 		E2EETest:               e2eeResult,
 		E2EEConfigured:         providerUsesTLSBinding(opts.ProviderName) && opts.Provider.E2EE,
 		Inapplicable:           inapplicableFactors(opts.ProviderName),
@@ -276,6 +279,15 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		}
 	}
 	return verificationOutcome{report: report, raw: raw, e2ee: e2eeResult}, nil
+}
+
+// auditACISessions audits the attested sessions of a canonical ACI/1 report
+// of Phala Cloud. It returns nil for every other provider and format.
+func auditACISessions(ctx context.Context, providerName string, raw *attestation.RawAttestation, auditor phalacloud.SessionAuditor) *attestation.ACISessionResult {
+	if providerName != "phalacloud" || !raw.ACICanonicalReport {
+		return nil
+	}
+	return phalacloud.AuditSessions(ctx, auditor, raw)
 }
 
 // Replay loads a capture directory, replays all HTTP traffic, and returns the
@@ -603,11 +615,39 @@ func nonceIsZero(nonce attestation.Nonce) bool {
 	return subtle.ConstantTimeCompare(nonce[:], zero[:]) == 1
 }
 
+// sessionClientFactory returns the session clients of a Phala Cloud
+// verification. A live client is pinned to the report's TLS key before it
+// sends, and a capture records its exchanges. A run that replays a capture
+// (as runTLSVerification decides: replay, or a captured E2EE outcome)
+// answers from the capture through client, and the attester checks the
+// recorded TLS key of each response.
+func sessionClientFactory(opts *Options, client *http.Client) func(tlsct.TransportIdentity) (*http.Client, error) {
+	return func(identity tlsct.TransportIdentity) (*http.Client, error) {
+		if opts.replay || opts.CapturedE2EE != nil {
+			return client, nil
+		}
+		pinned, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(config.AttestationTimeout, tlsct.NewPooledTransport(), identity, !opts.Offline)
+		if err != nil {
+			return nil, err
+		}
+		if opts.capture != nil {
+			pinned.Transport = opts.capture.recordSessions(pinned.Transport)
+		}
+		return pinned, nil
+	}
+}
+
 func configureAttestationClient(attester provider.Attester, opts *Options, client *http.Client) error {
 	// Inject shared client into attester for capture/replay.
 	type clientSetter interface{ SetClient(*http.Client) }
 	if cs, ok := attester.(clientSetter); ok {
 		cs.SetClient(client)
+	}
+
+	if setter, ok := attester.(interface {
+		SetSessionClientFactory(func(tlsct.TransportIdentity) (*http.Client, error))
+	}); ok {
+		setter.SetSessionClientFactory(sessionClientFactory(opts, client))
 	}
 
 	if setter, ok := attester.(interface{ SetClientFactory(func() *http.Client) }); ok {
@@ -633,7 +673,12 @@ func evidenceE2EEOutcome(ctx context.Context, opts *Options, raw *attestation.Ra
 		if opts.capture != nil {
 			ctx = withE2EERecorder(ctx, opts.capture.recordE2EE)
 		}
-		return testE2EE(ctx, raw, opts.ProviderName, opts.Provider, opts.ModelName, opts.Offline)
+		result := testE2EE(ctx, raw, opts.ProviderName, opts.Provider, opts.ModelName, opts.Offline)
+		// testE2EE sends no probe offline, so there is no receipt to check.
+		if opts.Offline && raw != nil && raw.ACICanonicalReport && result != nil && result.Receipt == nil {
+			result.NoReceiptCheck = "not checked: teep verify --offline sends no probe"
+		}
+		return result
 	}
 	return nil
 }

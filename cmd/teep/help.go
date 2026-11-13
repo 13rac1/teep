@@ -293,6 +293,43 @@ var factorRegistry = []factorInfo{
 			"for ACI/1, so every ACI/1 report states the gap. Not applicable " +
 			"for other formats.",
 	},
+	{
+		Name:    attestation.FactorACISessionVerified,
+		Tier:    2,
+		Summary: "No attested session of the model passed the audit",
+		Description: "Phala Cloud ACI/1 specific: teep lists the attested " +
+			"sessions behind the requested model, fetches a bounded set of " +
+			"them, and audits the evidence of each: the TDX quote and its " +
+			"TCB, MRTD and MRSEAM, the REPORTDATA binding to the session's " +
+			"nonce, the channel binding, the GPU evidence, and for the Phala " +
+			"model CVM the compose binding and the event-log replay. Each " +
+			"request pins the sessions that pass (aci_session_ids), and the " +
+			"gateway forwards it only through one of them. Fails when no " +
+			"session passes. Enforced. Not applicable for other formats.",
+	},
+	{
+		Name:    attestation.FactorACIReceiptVerified,
+		Tier:    2,
+		Summary: "The receipt of the verify probe did not pass the receipt check",
+		Description: "Phala Cloud ACI/1 specific: teep verify fetches the " +
+			"signed receipt of its probe response and checks it (ACI/1 " +
+			"§9.3): the signature under a keyset receipt key, the keyset " +
+			"digest, the endpoint, model and served time, the request and " +
+			"response hashes, and that the upstream session it cites is one " +
+			"that teep pinned. Once the probe stream verified, fails on " +
+			"every failure to obtain a verified receipt: a missing or " +
+			"malformed receipt id or receipt, a receipt that the gateway " +
+			"does not serve, a failed check, and a failed receipt request " +
+			"(a network fault can cause that one too; its detail says to " +
+			"run again). Skipped, and not blocking, when there is no " +
+			"receipt to check: in teep serve, which checks the receipt of " +
+			"every response, when the report blocks inference requests, " +
+			"without an API key, with --offline, or when the probe stream " +
+			"failed (e2ee_usable reports that failure). A replay keeps a " +
+			"recorded failure and shows a recorded pass as a deferred skip: " +
+			"it does not check the receipt again. Enforced. Not applicable " +
+			"for other formats.",
+	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
 		Name:    attestation.FactorTLSKeyBinding,

@@ -90,16 +90,18 @@ Chutes runs multiple confidential compute instances per model. The proxy uses a 
 
 Nonces are managed by a pool per instance to avoid repeated evidence fetches on every request. Failed instances are tracked for failover across the multi-instance deployment.
 
-### Phala Cloud (Format-Agnostic Gateway)
+### Phala Cloud (ACI/1 Gateway)
 
-Phala Cloud's RedPill gateway accepts traffic destined for multiple underlying TEE backends. The proxy:
+Phala Cloud serves its TEE models through the dstack private-ai-gateway. The proxy:
 
-1. Sends a request to `tee.redpill.ai/v1`, a TEE-only domain of the private-ai-gateway, which routes only to verified TEE upstreams.
-2. Receives an attestation response and inspects the JSON keys to determine the format: ACI/1 (`api_version`), Chutes (`attestation_type`) or dStack (`intel_quote`). The gateway answers with ACI/1, which attests the gateway itself.
-3. Delegates parsing and verification to the matching handler; ACI/1 uses the shared `internal/provider/aci` package.
-4. Uses a 120-second timeout to accommodate multi-instance attestation latency.
+1. Sends requests to `tee.redpill.ai`, a TEE-only domain of the gateway, which routes only to verified TEE upstreams.
+2. Fetches the gateway's ACI/1 report from `/v1/aci/attestation` with the client nonce and parses it strictly; any other format fails. The certificate key of the connection must equal the keyset TLS key for the host, and inference connections are pinned to that key.
+3. Verifies the gateway TDX quote, event log and compose binding, and the ACI/1 §3.2 REPORTDATA: sha256 of a statement over the workload keyset digest and the client nonce. The quote therefore binds every keyset field.
+4. Lists the attested sessions of the model's upstreams (ACI/1 §8), audits a bounded set of them (TDX quote, MRTD/MRSEAM, REPORTDATA, channel binding, GPU evidence, and for the Phala model CVM the compose binding and event log), and pins the sessions that pass on every request (`provider.aci_session_ids`, §5.3); the gateway serves the request only through one of them.
+5. Requires each successful inference response to carry the verified `X-ACI-Keyset-Digest`; a response of another digest fails, and the next request verifies again (ACI/1 §5.2, §3.1).
+6. Fetches the signed ACI receipt of each successful response over the pinned connection and verifies its signature, keyset, request and response hashes, and the pinned session it cites (ACI/1 §7, §9.3). A non-stream response reaches the client only after the receipt verifies.
 
-For ACI/1 responses, teep encrypts the message content with E2EE v2 of the gateway to the gateway key that the gateway quote binds. Other formats fail closed while E2EE is enabled. See [Phala Cloud provider support](docs/providers/phalacloud/phalacloud_support.md).
+teep encrypts the message content with E2EE v2 of the gateway to the keyset E2EE key that the gateway quote binds. The report carries no GPU evidence; the GPU factors are allowed to fail. See [Phala Cloud provider support](docs/providers/phalacloud/phalacloud_support.md).
 
 ### Tinfoil Cloud (EHBP via Router)
 
@@ -137,7 +139,7 @@ This provides true end-to-end encryption: the shared secret is derived between t
 | NEAR AI Cloud | TDX + NVIDIA | TLS pinning (gateway) | `sha256(signing_address ‖ tls_fingerprint)` + nonce |
 | NanoGPT | TDX (dStack), or ACI/1 gateway TDX + NVIDIA | None by default (plaintext over TLS to NanoGPT); with `e2ee = true`, ACI/1: E2EE v2 (secp256k1 ECDH + AES-256-GCM) to the gateway | None (dStack format); ACI/1: `keccak256(gateway key)` + nonce in the gateway quote |
 | Chutes | TDX + GPU evidence | E2EE (ML-KEM-768 + ChaCha20-Poly1305) | `sha256(nonce_hex + e2e_pubkey_base64)` |
-| Phala Cloud | ACI/1 gateway TDX + NVIDIA | E2EE v2 (secp256k1 ECDH + AES-256-GCM) to the gateway | `keccak256(gateway key)` + nonce in the gateway quote |
+| Phala Cloud | ACI/1 gateway TDX | E2EE v2 (secp256k1 ECDH + AES-256-GCM) to the gateway | `sha256` of the ACI/1 statement over the keyset digest and the nonce, in the gateway quote |
 | Tinfoil Cloud | SEV-SNP | E2EE (HPKE X25519 + AES-256-GCM) | `sha256(nonce ‖ hpke_key ‖ tls_fp ‖ gpu_hash)` in REPORTDATA |
 | Tinfoil Direct | SEV-SNP | E2EE (HPKE X25519 + AES-256-GCM) | `sha256(nonce ‖ hpke_key ‖ tls_fp ‖ gpu_hash)` in REPORTDATA |
 
@@ -177,21 +179,23 @@ Each factor produces PASS, FAIL, or SKIP. Factors marked `[ENFORCED]` cause the 
 | 21 | `e2ee_capable` | Enclave public key is a valid secp256k1 uncompressed point suitable for ECDH key exchange. |
 | 22 | `e2ee_usable` | E2EE round-trip succeeded with the verified enclave key. Deferred until after the first live request. |
 | 23 | `aci_key_custody` | Venice ACI/1 specific: the workload keyset digest recomputes (SHA-256 over the JCS-canonicalized keyset), the signing key is a member of the keyset E2EE keys, and the dstack-KMS custody chain verifies from an accepted KMS root over the app id measured into the quote's RTMR3. Together with `gateway_tee_reportdata_binding`, proves the E2EE key is the gateway's KMS-issued, hardware-bound key. |
+| 24 | `aci_session_verified` | Phala Cloud ACI/1 specific: teep fetches a bounded set of the attested sessions behind the model (ACI/1 §8) and audits the evidence of each: the TDX quote and its TCB, MRTD and MRSEAM, the REPORTDATA binding to the session nonce, the channel binding, the GPU evidence verified locally, and for the Phala model CVM the compose binding and the event-log replay. Each request pins the sessions that pass (`provider.aci_session_ids`, ACI/1 §5.3); the gateway refuses a request that none of them can serve (`session_not_accepted`), and teep then verifies again. |
+| 25 | `aci_receipt_verified` | Phala Cloud ACI/1 specific: `teep verify` fetches the signed receipt of its probe response and checks it (ACI/1 §9.3): the signature under a keyset receipt key, the keyset digest, the endpoint, model and served time, the request and response hashes, and that the upstream session it cites is one that teep pinned. Once the probe stream verified, fails on every failure to obtain a verified receipt: a missing or malformed receipt id or receipt, a receipt that the gateway does not serve, a failed check, and a failed receipt request (a network fault can cause that one too; its detail says to run again). A deferred skip, which does not block, when there is no receipt to check: in `teep serve`, which checks the receipt of every response and fails the response otherwise, when the report blocks inference requests, without an API key, with `--offline`, or when the probe stream failed (`e2ee_usable` reports that failure). A replay keeps a recorded failure and shows a recorded pass as a deferred skip: it does not check the receipt again. |
 
 ### Tier 3: Supply Chain & Channel Integrity
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 24 | `tls_key_binding` | TLS certificate public key matches attestation document. Without this, a MITM at the provider's load balancer can intercept traffic. |
-| 25 | `cpu_gpu_chain` | CPU (TDX) and GPU (NVIDIA) attestations are cryptographically bound. Without this, attestations could come from different machines. |
-| 26 | `nvswitch_binding` | NVSwitch fabric evidence hash verified in REPORTDATA. On multi-GPU NVLink nodes, authenticates the inter-GPU communication fabric. Skips when topology does not use NVSwitch. |
-| 27 | `measured_model_weights` | Attestation includes hashes of model weight files. Without this, a compromised provider could load a backdoored model. |
-| 28 | `build_transparency_log` | Checks retrieved component provenance and transparency evidence under provider policy. A pass does not establish a source audit or coverage of every image; see [teep publisher-verification defect](docs/providers/near/near_attestation.md#teep-publisher-verification-defect). |
-| 29 | `cpu_id_registry` | CPU PPID verified against the Proof of Cloud registry — a vendor-neutral, append-only log of hardware identities verified by alliance members. Uses threshold multisig across Secret Labs, Nillion, and iEx.ec. |
-| 30 | `compose_binding` | `sha256(app_compose)` matches TDX MRConfigID (encoded as `0x01 + sha256`). Binds the docker-compose deployment manifest to hardware attestation. `app_compose` must be a JSON object without a duplicate member or a member that differs from a defined one only in letter case, so that teep reads the `docker_compose_file` that dstack runs. |
-| 31 | `sigstore_verification` | Checks whether compose-listed image digests occur in the transparency log, with policy exceptions. Presence alone does not verify a publisher signature. teep's NEAR policy allows this factor to fail for the two DeepSeek models; the exception also covers other models and gateway images. See [affected models and prior GLM evidence](docs/attestation_gaps/near_image_provenance.md#scope-and-evidence). The default policy for Venice dstack models allows the same failure, for the same launcher image. |
-| 32 | `sigstore_code_verified` | Tinfoil-specific: Sigstore DSSE bundle code measurements match live enclave's SEV-SNP MEASUREMENT or TDX RTMRs. Skipped for non-Tinfoil providers. |
-| 33 | `event_log_integrity` | TDX event log replayed: `RTMR_new = SHA384(RTMR_old ‖ digest)` starting from 48 zero bytes. All 4 replayed RTMRs match quote. Proves the log is authentic and complete. |
+| 26 | `tls_key_binding` | TLS certificate public key matches attestation document. Without this, a MITM at the provider's load balancer can intercept traffic. |
+| 27 | `cpu_gpu_chain` | CPU (TDX) and GPU (NVIDIA) attestations are cryptographically bound. Without this, attestations could come from different machines. |
+| 28 | `nvswitch_binding` | NVSwitch fabric evidence hash verified in REPORTDATA. On multi-GPU NVLink nodes, authenticates the inter-GPU communication fabric. Skips when topology does not use NVSwitch. |
+| 29 | `measured_model_weights` | Attestation includes hashes of model weight files. Without this, a compromised provider could load a backdoored model. |
+| 30 | `build_transparency_log` | Checks retrieved component provenance and transparency evidence under provider policy. A pass does not establish a source audit or coverage of every image; see [teep publisher-verification defect](docs/providers/near/near_attestation.md#teep-publisher-verification-defect). |
+| 31 | `cpu_id_registry` | CPU PPID verified against the Proof of Cloud registry — a vendor-neutral, append-only log of hardware identities verified by alliance members. Uses threshold multisig across Secret Labs, Nillion, and iEx.ec. |
+| 32 | `compose_binding` | `sha256(app_compose)` matches TDX MRConfigID (encoded as `0x01 + sha256`). Binds the docker-compose deployment manifest to hardware attestation. `app_compose` must be a JSON object without a duplicate member or a member that differs from a defined one only in letter case, so that teep reads the `docker_compose_file` that dstack runs. |
+| 33 | `sigstore_verification` | Checks whether compose-listed image digests occur in the transparency log, with policy exceptions. Presence alone does not verify a publisher signature. teep's NEAR policy allows this factor to fail for the two DeepSeek models; the exception also covers other models and gateway images. See [affected models and prior GLM evidence](docs/attestation_gaps/near_image_provenance.md#scope-and-evidence). The default policy for Venice dstack models allows the same failure, for the same launcher image. |
+| 34 | `sigstore_code_verified` | Tinfoil-specific: Sigstore DSSE bundle code measurements match live enclave's SEV-SNP MEASUREMENT or TDX RTMRs. Skipped for non-Tinfoil providers. |
+| 35 | `event_log_integrity` | TDX event log replayed: `RTMR_new = SHA384(RTMR_old ‖ digest)` starting from 48 zero bytes. All 4 replayed RTMRs match quote. Proves the log is authentic and complete. |
 
 ### Tier 4: Gateway Attestation
 
@@ -204,21 +208,21 @@ exposes none, and the core `tee_*` factors state that.
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 34 | `gateway_nonce_match` | Gateway nonce matches the client nonce. Prevents replay attacks against the gateway. |
-| 35 | `gateway_tee_quote_present` | Gateway quote or report is present in the attestation response. |
-| 36 | `gateway_tee_quote_structure` | Gateway quote parses as valid QuoteV4 or SEV-SNP report. |
-| 37 | `gateway_tee_cert_chain` | Gateway certificate chain verifies against the Intel or AMD root CA. |
-| 38 | `gateway_tee_quote_signature` | Signature over the gateway quote body is valid. |
-| 39 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave). |
-| 40 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and for the ACI/1 routes of Venice, Phala Cloud and NanoGPT: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
-| 41 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
-| 42 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. Not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot. |
-| 43 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified: nearcloud binds `sha256(signing_address ‖ tls_fingerprint)`; Venice ACI/1 binds `keccak256(signing key)` + nonce; Tinfoil binds the HPKE key and endorsed section hashes. |
-| 44 | `gateway_compose_binding` | Gateway `sha256(app_compose)` matches TDX MRConfigID, with the `app_compose` rules of `compose_binding`. Enforced for Venice ACI/1 — the gateway publishes its manifest with digest-pinned images. |
-| 45 | `gateway_cpu_id_registry` | Gateway CPU PPID verified against the Proof of Cloud registry. |
-| 46 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match the gateway TDX quote. |
-| 47 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP; TDX defers to Intel PCS collateral). |
-| 48 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP; TDX defers to Intel PCS collateral). |
+| 36 | `gateway_nonce_match` | Gateway nonce matches the client nonce. Prevents replay attacks against the gateway. |
+| 37 | `gateway_tee_quote_present` | Gateway quote or report is present in the attestation response. |
+| 38 | `gateway_tee_quote_structure` | Gateway quote parses as valid QuoteV4 or SEV-SNP report. |
+| 39 | `gateway_tee_cert_chain` | Gateway certificate chain verifies against the Intel or AMD root CA. |
+| 40 | `gateway_tee_quote_signature` | Signature over the gateway quote body is valid. |
+| 41 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave). |
+| 42 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and for the ACI/1 routes of Venice, Phala Cloud and NanoGPT: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
+| 43 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
+| 44 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. Not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot. |
+| 45 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified: nearcloud binds `sha256(signing_address ‖ tls_fingerprint)`; Venice ACI/1 binds `keccak256(signing key)` + nonce; Tinfoil binds the HPKE key and endorsed section hashes. |
+| 46 | `gateway_compose_binding` | Gateway `sha256(app_compose)` matches TDX MRConfigID, with the `app_compose` rules of `compose_binding`. Enforced for Venice ACI/1 — the gateway publishes its manifest with digest-pinned images. |
+| 47 | `gateway_cpu_id_registry` | Gateway CPU PPID verified against the Proof of Cloud registry. |
+| 48 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match the gateway TDX quote. |
+| 49 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP; TDX defers to Intel PCS collateral). |
+| 50 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP; TDX defers to Intel PCS collateral). |
 
 ## TOML Configuration
 

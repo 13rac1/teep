@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"path"
 	"slices"
+	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -121,9 +124,66 @@ type ServerVerification struct {
 // aciServiceCaps holds service capability declarations. Serving is
 // "aggregator" when the service forwards to upstream inference hosts and
 // "direct" when inference runs inside the attested workload.
+//
+// SupportedMultipartConstraintEndpoints lists the paths that accept the
+// ACI/1 §5.3 serving constraints of a multipart request in the
+// X-ACI-Provider header (ACI/1 §4.1). Absent or empty means no path does.
+// teep sends no multipart request through the gateway and pins sessions only
+// in a JSON request body (PinSessions), so it does not use the list; it
+// checks only its shape.
 type aciServiceCaps struct {
-	SupportedE2EEVersions []string `json:"supported_e2ee_versions"`
-	Serving               string   `json:"serving"`
+	SupportedE2EEVersions                 []string `json:"supported_e2ee_versions"`
+	SupportedMultipartConstraintEndpoints []string `json:"supported_multipart_constraint_endpoints,omitempty"`
+	Serving                               string   `json:"serving"`
+}
+
+// servedKeyset returns attestation.workload_keyset of body as a generic
+// object: duplicate members fail, and numbers must be integers, which the
+// JCS form writes exactly. Members are looked up by their exact names, as
+// the typed decoding does, so both views read the same object. The maps
+// here keep one copy of a duplicate member; Parse has already refused
+// duplicates in the whole body (ValidateUniqueFields) before it calls this.
+func servedKeyset(body []byte) (map[string]any, error) {
+	var top, attestationObject map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return nil, fmt.Errorf("attestation response: %w", err)
+	}
+	if err := json.Unmarshal(top["attestation"], &attestationObject); err != nil || attestationObject == nil {
+		return nil, errors.New("attestation is not an object")
+	}
+	keyset, ok := attestationObject["workload_keyset"]
+	if !ok {
+		return nil, errors.New("attestation.workload_keyset is absent")
+	}
+	value, err := sessionValue(keyset)
+	if err != nil {
+		return nil, fmt.Errorf("attestation.workload_keyset: %w", err)
+	}
+	return value, nil
+}
+
+// maxMultipartConstraintEndpoints bounds the multipart constraint endpoint
+// list. ACI/1 defines one multipart endpoint.
+const maxMultipartConstraintEndpoints = 16
+
+// checkMultipartConstraintEndpoints checks the shape of the multipart
+// constraint endpoint list: at most maxMultipartConstraintEndpoints distinct
+// absolute URL paths, without a query or fragment.
+func checkMultipartConstraintEndpoints(paths []string) error {
+	if len(paths) > maxMultipartConstraintEndpoints {
+		return fmt.Errorf("service_capabilities.supported_multipart_constraint_endpoints has %d entries, more than %d", len(paths), maxMultipartConstraintEndpoints)
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if !strings.HasPrefix(p, "/") || len(p) > 256 || strings.ContainsAny(p, "?# \t\r\n") || path.Clean(p) != p {
+			return fmt.Errorf("service_capabilities.supported_multipart_constraint_endpoints entry %q is not a clean URL path", p)
+		}
+		if seen[p] {
+			return fmt.Errorf("service_capabilities.supported_multipart_constraint_endpoints lists %q twice", p)
+		}
+		seen[p] = true
+	}
+	return nil
 }
 
 // aciAttestation holds the nested "attestation" object in ACI/1 responses.
@@ -145,6 +205,13 @@ type aciWorkloadKeyset struct {
 	ReceiptSigningKeys []aciKey        `json:"receipt_signing_keys"`
 	E2EEPublicKeys     []aciKey        `json:"e2ee_public_keys"`
 	TLSPublicKeys      []aciTLSBinding `json:"tls_public_keys"`
+
+	// served is the keyset object as the service published it, members
+	// that teep does not define included. The ACI/1 §3.1 digest is over
+	// its JCS form (digestValue). A nil served has no digest; servedErr
+	// only says why, when the parser could not read it.
+	served    map[string]any
+	servedErr error
 }
 
 // aciKey holds a named cryptographic key entry.
@@ -223,9 +290,8 @@ type aciEvidence struct {
 // gateway variant omits them, fails the parse when it carries one, and adds
 // all_attestations, which must hold
 // exactly one entry equal to the top-level fields; any other content fails
-// the parse. A field that neither variant defines is reported as unknown in a
-// Venice variant response, and fails the parse of a gateway variant response,
-// because the entry does not carry it.
+// the parse. A field that neither variant defines is reported as unknown
+// (RawAttestation.UnknownFields) and used for nothing.
 func Parse(ctx context.Context, body []byte, provider string) (*attestation.RawAttestation, error) {
 	// Duplicate member names, also differently escaped ones, make the
 	// decoded value depend on which copy a reader takes.
@@ -239,12 +305,11 @@ func Parse(ctx context.Context, body []byte, provider string) (*attestation.RawA
 	}
 	gatewayVariant := ar.AllAttestations != nil
 	if gatewayVariant {
-		// The gateway variant defines every field it carries. An unknown
-		// field, also a case-folded alias of a defined one (encoding/json
-		// matches names without case), is not part of the variant.
-		if len(unknown) > 0 {
-			return nil, fmt.Errorf("%s aci/1: gateway variant has undefined fields %q", provider, unknown)
-		}
+		// A member that teep does not define is reported in UnknownFields
+		// (response_schema) and read by no check. A member whose name
+		// differs from a defined one only in letter case failed
+		// jsonstrict.Unmarshal above (CaseFoldError): encoding/json would let
+		// it set the defined field.
 		// The gateway variant defines no echo field: a response that carries
 		// one is not the gateway variant.
 		var echoed []string
@@ -376,14 +441,26 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 	if ar.Attestation.Evidence.Quote == "" {
 		return nil, fmt.Errorf("%s aci/1: attestation.evidence.quote is empty", provider)
 	}
+	if err := checkMultipartConstraintEndpoints(ar.ServiceCapabilities.SupportedMultipartConstraintEndpoints); err != nil {
+		return nil, fmt.Errorf("%s aci/1: %w", provider, err)
+	}
 	var eventLog []attestation.EventLogEntry
 	if ar.Attestation.Evidence.EventLog != "" {
-		if err := json.Unmarshal([]byte(ar.Attestation.Evidence.EventLog), &eventLog); err != nil {
+		var err error
+		eventLog, err = decodeEventLog(ar.Attestation.Evidence.EventLog)
+		if err != nil {
 			return nil, fmt.Errorf("%s aci/1: decode evidence.event_log: %w", provider, err)
 		}
 	}
+	// A keyset that cannot be read as served (a number that is not an
+	// integer, for example) fails the keyset digest, and so the
+	// key-custody factor, not the parse.
+	ar.Attestation.WorkloadKeyset.served, ar.Attestation.WorkloadKeyset.servedErr = servedKeyset(body)
+	// A not_after outside the int64 range stays 0, and the report counts
+	// as expired (VerificationReport.ACIKeysetExpired).
+	notAfter, _ := ar.Attestation.WorkloadKeyset.NotAfter.Int64()
 	LogEventLog(ctx, eventLog, provider)
-	if ar.IntelQuote != "" && ar.IntelQuote != ar.Attestation.Evidence.Quote {
+	if ar.IntelQuote != "" && subtle.ConstantTimeCompare([]byte(ar.IntelQuote), []byte(ar.Attestation.Evidence.Quote)) != 1 {
 		// The top-level intel_quote is documented as an echo of
 		// attestation.evidence.quote. A divergence means the response is not
 		// what the format promises; the nested field is the attested source.
@@ -421,6 +498,7 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 		ACISourceRepoURL:        ar.Attestation.SourceProvenance.RepoURL,
 		ACIWorkloadKeysetDigest: ar.WorkloadKeysetDigest,
 		ACIWorkloadKeyset:       &ar.Attestation.WorkloadKeyset,
+		ACIKeysetNotAfter:       notAfter,
 		ACIKeyCustody:           &ar.Attestation.Evidence.KeyCustody,
 		ACIDownstreamTLSDomain:  ar.Attestation.Evidence.DownstreamTLSBinding.Domain,
 		ACIDownstreamTLSSPKI:    ar.Attestation.Evidence.DownstreamTLSBinding.SPKISHA256,
@@ -429,4 +507,22 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 		MissingFields: missing,
 		RawBody:       body,
 	}, nil
+}
+
+// decodeEventLog decodes the JSON array of a gateway event log. Members that
+// teep does not define are ignored, as before; a duplicate member, or one
+// whose name differs from a defined member only in letter case, fails,
+// because either would change the decoded entry.
+func decodeEventLog(log string) ([]attestation.EventLogEntry, error) {
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(log), &raw); err != nil {
+		return nil, err
+	}
+	entries := make([]attestation.EventLogEntry, len(raw))
+	for i, e := range raw {
+		if _, _, err := jsonstrict.Unmarshal(e, &entries[i]); err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+	}
+	return entries, nil
 }

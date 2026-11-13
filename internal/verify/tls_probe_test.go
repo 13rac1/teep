@@ -68,7 +68,7 @@ func TestStandaloneTLSOnlyChatProbe(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer client.CloseIdleConnections()
-				probe, retry, err := testStandaloneInference(t.Context(), &Options{ProviderName: name, Provider: &config.Provider{BaseURL: upstream.URL, APIKey: "test", E2EE: false}, ModelName: "model"}, route, &attestation.RawAttestation{SigningKey: model.ClientEd25519PubHex()}, standaloneTestModelKey(t, model.ClientEd25519PubHex()), client)
+				probe, retry, err := testStandaloneInference(t.Context(), &Options{ProviderName: name, Provider: &config.Provider{BaseURL: upstream.URL, APIKey: "test", E2EE: false}, ModelName: "model"}, route, &attestation.RawAttestation{SigningKey: model.ClientEd25519PubHex()}, standaloneTestModelKey(t, model.ClientEd25519PubHex()), nil, client)
 				if retry || calls != 1 {
 					t.Fatal("TLS-only probe replayed")
 				}

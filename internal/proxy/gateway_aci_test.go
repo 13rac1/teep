@@ -4,17 +4,23 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
 // Phala Cloud and NanoGPT forward the private-ai-gateway's ACI/1
-// attestation: the proxy verifies its gateway quote with the gateway
-// REPORTDATA verifier and checks the gateway images, as teep verify does.
+// attestation: the proxy verifies the gateway quote with the REPORTDATA
+// verifier of the route (the §3.2 statement for Phala Cloud's canonical
+// report, keccak256 of the signing key for NanoGPT's compatibility route)
+// and checks the gateway images, as teep verify does.
 func TestFromConfigGatewayACIProviders(t *testing.T) {
-	for _, tc := range []struct{ name, baseURL string }{
-		{"phalacloud", "https://tee.redpill.ai"},
-		{"nanogpt", "https://nano-gpt.com/api"},
+	for _, tc := range []struct {
+		name, baseURL string
+		gateway       provider.ReportDataVerifier
+	}{
+		{"phalacloud", "https://tee.redpill.ai", aci.StatementReportDataVerifier{}},
+		{"nanogpt", "https://nano-gpt.com/api", venice.ReportDataVerifier{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server, err := New(&config.Config{Offline: true, Providers: map[string]*config.Provider{
@@ -25,8 +31,8 @@ func TestFromConfigGatewayACIProviders(t *testing.T) {
 			}
 			defer server.Close()
 			prov := server.providers[tc.name]
-			if _, ok := prov.GatewayReportDataVerifier.(venice.ReportDataVerifier); !ok {
-				t.Fatalf("GatewayReportDataVerifier = %#v, want venice.ReportDataVerifier", prov.GatewayReportDataVerifier)
+			if prov.GatewayReportDataVerifier != tc.gateway {
+				t.Fatalf("GatewayReportDataVerifier = %#v, want %#v", prov.GatewayReportDataVerifier, tc.gateway)
 			}
 			if prov.SupplyChainPolicy == nil || !prov.SupplyChainPolicy.AllowedInGateway("ghcr.io/dstack-tee/dstack-ingress") {
 				t.Fatal("SupplyChainPolicy does not list the gateway images")

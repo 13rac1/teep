@@ -15,6 +15,9 @@ type verificationCapture struct {
 	discovery            *capture.RecordingTransport
 	evidence             *capture.RecordingTransport
 	freshEvidence        *capture.RecordingTransport
+	// sessions records the attested-session requests of Phala Cloud, which
+	// go over their own client pinned to the report's TLS key.
+	sessions *capture.RecordingTransport
 	// e2ee records the live E2EE test exchange. Replay does not send it
 	// again: the outcome comes from the manifest.
 	e2ee *capture.RecordingTransport
@@ -22,6 +25,7 @@ type verificationCapture struct {
 
 func (c *verificationCapture) beginEvidence(client *http.Client) {
 	c.freshEvidence = nil
+	c.sessions = nil
 	c.evidence = capture.WrapRecording(c.attestation)
 	client.Transport = c.evidence
 }
@@ -41,6 +45,9 @@ func (c *verificationCapture) entries() []capture.RecordedEntry {
 	if c.freshEvidence != nil {
 		entries = append(entries, c.freshEvidence.Snapshot()...)
 	}
+	if c.sessions != nil {
+		entries = append(entries, c.sessions.Snapshot()...)
+	}
 	if c.e2ee != nil {
 		entries = append(entries, c.e2ee.Snapshot()...)
 	}
@@ -52,6 +59,13 @@ func (c *verificationCapture) entries() []capture.RecordedEntry {
 func (c *verificationCapture) recordE2EE(base http.RoundTripper) http.RoundTripper {
 	c.e2ee = capture.WrapRecording(base)
 	return c.e2ee
+}
+
+// recordSessions wraps the transport of the session client of one evidence
+// round; a later round replaces the recording.
+func (c *verificationCapture) recordSessions(base http.RoundTripper) http.RoundTripper {
+	c.sessions = capture.WrapRecording(base)
+	return c.sessions
 }
 
 func (c *verificationCapture) recordFreshEvidence(base http.RoundTripper) http.RoundTripper {

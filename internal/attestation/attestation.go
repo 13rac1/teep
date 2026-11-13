@@ -106,6 +106,13 @@ func LogModelNameMatch(ctx context.Context, provider, requested string, raw *Raw
 	}
 }
 
+// ACIReceiptKey is a receipt_signing_keys entry of an ACI/1 workload keyset.
+type ACIReceiptKey struct {
+	KeyID     string
+	Algo      string
+	PublicKey string // lowercase hex
+}
+
 // RawAttestation holds the parsed fields from a TEE provider's attestation
 // endpoint response (Venice /tee/attestation, NEAR /attestation/report, etc.).
 // All fields are raw strings exactly as returned by the provider; higher layers
@@ -227,12 +234,27 @@ type RawAttestation struct {
 	// ACIGatewayVariant is true for the gateway variant of an ACI/1 response:
 	// it carries all_attestations and defines no echoed nonce or model.
 	ACIGatewayVariant bool `json:"-"`
+	// ACICanonicalReport is true for the ACI/1 report of /v1/aci/attestation:
+	// it defines no echoed nonce or model, and its quote binds the workload
+	// keyset digest through the ACI/1 §3.2 statement.
+	ACICanonicalReport bool `json:"-"`
 	// ACIWorkloadKeyset and ACIKeyCustody hold the parsed ACI/1 structs of
 	// the aci package (opaque `any` here because concrete types would create
 	// an attestation → aci import cycle; aci.VerifyKeyset type-asserts them
 	// back). Nil for non-ACI/1 formats.
 	ACIWorkloadKeyset any `json:"-"`
 	ACIKeyCustody     any `json:"-"`
+	// ACIReceiptKeys and ACIKeysetNotAfter are the receipt signing keys and
+	// the not_after of the workload keyset of a canonical ACI/1 report.
+	// The quote binds them through the §3.2 statement once
+	// gateway_tee_reportdata_binding passes.
+	ACIReceiptKeys    []ACIReceiptKey `json:"-"`
+	ACIKeysetNotAfter int64           `json:"-"`
+	// ACISessions holds the attested sessions that the attester fetched
+	// for the requested model, as the phalacloud package defines them
+	// (opaque here for the same reason). The proxy and teep verify audit
+	// them (phalacloud.AuditSessions). Nil when no sessions were fetched.
+	ACISessions any `json:"-"`
 
 	// Gateway fields — populated by providers with TEE-attested API gateways.
 	// Empty for providers without a gateway (e.g. Venice, NEAR AI direct).
@@ -285,6 +307,7 @@ type Cache struct {
 	ttl           time.Duration
 	lastEvictWarn time.Time
 	published     uint64 // last publication number that Put assigned
+	now           func() time.Time
 }
 
 // NewCache returns a Cache with the specified TTL.
@@ -292,6 +315,7 @@ func NewCache(ttl time.Duration) *Cache {
 	return &Cache{
 		entries: make(map[cacheKey]*cacheEntry),
 		ttl:     ttl,
+		now:     time.Now,
 	}
 }
 
@@ -309,7 +333,10 @@ func (c *Cache) GetPublication(provider, model string) (*VerificationReport, uin
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.entries[cacheKey{provider, model}]
-	if !ok || time.Since(e.fetchedAt) > c.ttl {
+	now := c.now()
+	if !ok || now.Sub(e.fetchedAt) > c.ttl || e.report.ACIKeysetExpired(now) {
+		// An ACI/1 report ends at its keyset not_after even within the
+		// TTL; the signing key pairs only with a cached report.
 		return nil, 0, false
 	}
 	return e.report, e.publication, true
@@ -364,7 +391,7 @@ func (c *Cache) Put(provider, model string, report *VerificationReport) uint64 {
 	c.entries[key] = &cacheEntry{
 		report:      report,
 		publication: c.published,
-		fetchedAt:   time.Now(),
+		fetchedAt:   c.now(),
 	}
 	return c.published
 }

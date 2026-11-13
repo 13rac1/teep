@@ -119,6 +119,7 @@ Failing closed is a FEATURE, not a BUG. It is more important to protect confiden
 - An attestation cache miss MUST initiate or join full re-attestation; never pass through unverified.
 - Publish the report, authenticated encryption key, transport identity as one authorization. Do not maintain an independent pin cache with a different lifetime.
 - For TLS-binding providers, fully verify an uncached authorization. Reuse it while its attested identity and required encryption keys remain usable, until explicit invalidation, eviction, or process exit. Evidence expiration and loss of all connections alone do not trigger renewal. Normal and `--offline` reuse follow the same rule; preserve their distinct admission checks.
+- An ACI/1 workload keyset `not_after` is the lifetime of its keys, not an expiry of the evidence: send no new request under the keyset from its `not_after` on, and verify again for the next request.
 - Recheck successfully verified NRAS time eligibility immediately before initial publication. Do not retain evidence deadlines in cached authorization or apply them to requests. Caller deadlines still bound connection waiting, response processing, and downstream writes.
 - Approval withdrawal requires delivery of an updated package or admission policy and restart of every affected instance, as described in the [transport reference](docs/transport/README.md#approval-withdrawal).
 - Re-attestation does not itself authorize replay. Follow the [retry contracts](docs/transport/retries.md) for retry eligibility and authorization invalidation.

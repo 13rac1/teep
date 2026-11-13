@@ -9,8 +9,33 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
+
+// A Phala Cloud response with a 2xx status other than 200 is refused also
+// without E2EE: teep checks its keyset digest and receipt only for 200.
+func TestRefusesUncheckedSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		p      provider.Provider
+		status int
+		want   bool
+	}{
+		{"phalacloud without E2EE, 201", provider.Provider{Name: "phalacloud"}, http.StatusCreated, true},
+		{"phalacloud with E2EE, 203", provider.Provider{Name: "phalacloud", E2EE: true}, http.StatusNonAuthoritativeInfo, true},
+		{"phalacloud, 200", provider.Provider{Name: "phalacloud"}, http.StatusOK, false},
+		{"phalacloud, 500", provider.Provider{Name: "phalacloud"}, http.StatusInternalServerError, false},
+		{"other E2EE provider, 204", provider.Provider{Name: "venice", E2EE: true}, http.StatusNoContent, true},
+		{"other provider without E2EE, 201", provider.Provider{Name: "neardirect"}, http.StatusCreated, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := refusesUncheckedSuccess(&tc.p, tc.status); got != tc.want {
+				t.Errorf("refusesUncheckedSuccess = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
 
 // uncheckedPlaintext is the content an upstream sends in plaintext with a
 // 2xx status other than 200. It must never reach the client of an E2EE

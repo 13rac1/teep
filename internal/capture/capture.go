@@ -53,7 +53,22 @@ type RecordedEntry struct {
 	// request: the text can carry the time of the failure, so replay
 	// cannot rebuild it.
 	Err string `json:"error,omitempty"`
+
+	// BodyErr is the error text of a response body that stopped with a
+	// read error (a reset or a cut stream). Body holds the bytes that
+	// arrived. Replay returns them and then this error, so the verifier
+	// sees the same failure.
+	BodyErr string `json:"body_error,omitempty"`
 }
+
+// errorAfter returns body and then err.
+func errorAfter(body []byte, err error) io.ReadCloser {
+	return io.NopCloser(io.MultiReader(bytes.NewReader(body), bodyErrReader{err}))
+}
+
+type bodyErrReader struct{ err error }
+
+func (r bodyErrReader) Read([]byte) (int, error) { return 0, r.err }
 
 // E2EEOutcome records the result of a live E2EE test for capture/replay.
 // This is a serializable mirror of attestation.E2EETestResult (which contains
@@ -66,6 +81,21 @@ type E2EEOutcome struct {
 	ErrMsg    string `json:"error,omitempty"`
 	Detail    string `json:"detail,omitempty"`
 	KeyType   string `json:"key_type,omitempty"`
+	// Receipt is the ACI/1 receipt check of the probe, so that a replay
+	// states the live verdict of aci_receipt_verified. Nil when the probe
+	// did not reach the receipt check.
+	Receipt *ReceiptOutcome `json:"receipt,omitempty"`
+	// NoReceiptCheck says why a probe that ran did not check the receipt.
+	NoReceiptCheck string `json:"no_receipt_check,omitempty"`
+}
+
+// ReceiptOutcome records the result of the ACI/1 receipt check of a probe.
+// A replay restores it; it does not check the recorded receipt again.
+type ReceiptOutcome struct {
+	Failed  bool     `json:"failed,omitempty"`
+	ErrMsg  string   `json:"error,omitempty"`
+	Detail  string   `json:"detail,omitempty"`
+	Unknown []string `json:"unknown,omitempty"`
 }
 
 // TLSInferenceOutcome records a TLS-only probe independently of E2EE.
@@ -176,14 +206,20 @@ func (t *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 		return nil, err
 	}
 
-	// Read response body for recording, then replace with a new reader.
+	// Read response body for recording, then replace with a new reader. A
+	// body that stops with a read error keeps the bytes that arrived and
+	// gives the caller the same error after them, as the live body would.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRecordBody))
 	resp.Body.Close()
+	var bodyErr string
 	if err != nil {
-		return nil, err
+		bodyErr = err.Error()
+		resp.Body = errorAfter(body, err)
+		resp.ContentLength = -1
+	} else {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
 	}
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-	resp.ContentLength = int64(len(body))
 
 	entry := RecordedEntry{
 		Method:   req.Method,
@@ -193,6 +229,7 @@ func (t *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 		Headers:  resp.Header.Clone(),
 		ReqBody:  reqBody,
 		Body:     body,
+		BodyErr:  bodyErr,
 		Duration: elapsed,
 	}
 	if resp.TLS != nil {
@@ -296,6 +333,10 @@ func (t *replayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			Header:        e.Headers.Clone(),
 			Body:          io.NopCloser(bytes.NewReader(e.Body)),
 			ContentLength: int64(len(e.Body)),
+		}
+		if e.BodyErr != "" {
+			resp.Body = errorAfter(e.Body, errors.New(e.BodyErr))
+			resp.ContentLength = -1
 		}
 		// Reconstruct resp.TLS so TLS-channel-binding verification (e.g.
 		// tinfoil's peer SPKI check) works under replay. We synthesize a
