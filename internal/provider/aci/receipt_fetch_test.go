@@ -152,3 +152,20 @@ func TestReceiptID(t *testing.T) {
 		})
 	}
 }
+
+// FetchReceiptUntil retries HTTP 404 past the three attempts of
+// FetchReceipt, until its context ends; a receipt that is never served is
+// ErrReceiptNotServed at that bound.
+func TestFetchReceiptUntil(t *testing.T) {
+	srv, calls := receiptServer(t, 5, http.StatusOK)
+	r, err := FetchReceiptUntil(t.Context(), srv.Client(), srv.URL, "key", liveReceiptID)
+	if err != nil || r == nil || r.ID != liveReceiptID || calls.Load() != 6 {
+		t.Fatalf("FetchReceiptUntil = %v, %v after %d requests, want the receipt after 6", r, err, calls.Load())
+	}
+	never, _ := receiptServer(t, 1<<30, http.StatusOK)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err := FetchReceiptUntil(ctx, never.Client(), never.URL, "key", liveReceiptID); !errors.Is(err, ErrReceiptNotServed) {
+		t.Fatalf("err = %v, want ErrReceiptNotServed at the bound", err)
+	}
+}

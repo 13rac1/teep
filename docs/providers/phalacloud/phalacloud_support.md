@@ -207,25 +207,53 @@ result.
 When the relay of a stream fails after content went out, teep names the
 client only from positive evidence:
 
-- The relay error is the error of the write to the client, or of the
-  client's own request context, which has ended (the client hung up;
-  a client timeout shows as a hang-up, because teep serve sets no deadline
-  on the incoming request), and the read from the gateway had not reached its
-  end: the generation stays, so that one client cannot force a new
-  verification for every client, and teep logs at error level that content
-  was relayed without a completed receipt check.
+- The relay error is the error of the write to the client (except a write
+  that failed on teep's own write deadline while the client was still
+  connected), or of the client's own request context, which has ended (the
+  client hung up; a client timeout shows as a hang-up, because teep serve
+  sets no deadline on the incoming request). teep stops writing to the
+  client, keeps the upstream request, and reads the rest of the stream to
+  its end within a drain bound of 2 minutes and 16 MiB from the client's
+  end, then checks the receipt over the whole response. teep did not cancel
+  the upstream request, so the gateway sees a complete stream and must
+  publish its receipt. A stream that does not end within the bound, and a
+  receipt that is not served or does not verify, are the gateway's failure
+  and end the generation; an honest gateway keeps it, so that one client
+  cannot force a new verification for every client. An abandoned stream is
+  read to its end within the bound, which uses upstream tokens, bandwidth
+  and a connection.
 - Every other relay error is the gateway's: a reset, also after `[DONE]`,
   a cut, a stream that does not parse (an error event, an error object,
   data that is not JSON, a line over 1 MiB, data after `[DONE]`), and
-  teep's own deadline for the attempt. teep reads the rest of the response
-  under the bounded server context, so a gateway that ended its stream
-  badly but signed what it sent still verifies, and checks the receipt
-  against every byte read from the gateway. The receipt covers the whole
+  teep's own deadline for the attempt, also when a write to the client
+  fails on it. teep reads the rest of the response under its own bound of
+  30 seconds, so a gateway that ended its stream badly but signed what it
+  sent still verifies, and checks the receipt against every byte read from
+  the gateway; the receipt fetch then has its own bound of 30 seconds. The
+  upstream request runs 30 seconds longer than teep's attempt deadline,
+  which bounds the relay and the writes, so this read works after teep's
+  own deadline too. A stream must end within those 30 seconds after teep's
+  attempt deadline (30 minutes for a stream), and within 1 MiB after the
+  relay stopped; a longer one is the gateway's failure, also when it is
+  honest. The upstream attempt does not
+  run on the client's context: teep claims it for this read first, so a
+  client that closes when it reads teep's error event does not cut the
+  read. A client that left before teep claimed it is the previous item. The receipt covers the whole
   response, so a stream cut before its end does not verify, also when the
   network cut it; that costs one new verification.
 - A gateway that sends content and then stops until the client gives up
-  ends as a client hang-up; its receipt is not checked. Reading the rest
-  of such a stream after the client left is not built.
+  runs into the drain bound after the client left: the read ends, the
+  receipt does not cover a stream cut before its end, and the generation
+  ends.
+- A client that leaves before any content reached it cancels the upstream
+  request; nothing reached the client, and no receipt is checked.
+
+After a stream that failed or that the client left, the gateway can delay
+its receipt until its backend reaches its end, so teep retries an HTTP 404
+from the receipt route until the fetch's 30-second bound, with a delay that
+starts at 200 ms and doubles up to 2 seconds. After a stream that ended
+cleanly, the gateway publishes the receipt with the end of the stream, and
+teep makes 3 attempts 200 ms apart.
 
 A failure is logged at error level (`response receipt check failed`, and
 `content was relayed before the receipt check failed` for a stream whose

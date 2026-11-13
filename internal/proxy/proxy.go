@@ -436,8 +436,18 @@ type Server struct {
 	sevVerifier        attestation.SEVVerifier // constructed from cfg.Offline + AMD KDS getter
 	upstreamClient     *http.Client            // for chat completions forwards
 	pinnedUpstreams    *pinnedUpstreamPools    // provider+authority SPKI-pinned pools
-	sseConns           atomic.Int64            // active SSE /events connections
-	e2eeFailed         sync.Map                // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
+	// tailClaimHook runs before a Phala Cloud stream's tail read is
+	// claimed. It is nil outside tests, which set it to force the order of
+	// the client's end and the claim.
+	tailClaimHook func()
+	// drainBounds replaces streamDrainTimeout and streamDrainBytes when
+	// set; zero keeps them.
+	drainBounds drainBounds
+	// attemptTimeouts replaces upstreamStreamTimeout and
+	// upstreamNonStreamTimeout when set; zero keeps them.
+	attemptTimeouts    attemptTimeouts
+	sseConns           atomic.Int64 // active SSE /events connections
+	e2eeFailed         sync.Map     // cacheKey → true; tracks provider+model pairs with E2EE decryption failures
 	reasoningStripLogs hourlyLogLimiter
 	stats              stats
 	modelsMu           sync.RWMutex      // protects modelsCache and modelsCachedAt
@@ -1784,7 +1794,7 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 			if contentType == "" {
 				contentType = r.Header.Get("Content-Type")
 			}
-			outcome := s.handleAuthorizedEndpoint(ctx, w, &authorizedRequest{provider: prov, route: route, key: key, body: body, stream: stream, path: endpointPath, endpoint: ep.endpointType, contentType: contentType})
+			outcome := s.handleAuthorizedEndpoint(ctx, w, &authorizedRequest{provider: prov, route: route, key: key, body: body, model: upstreamModel, stream: stream, path: endpointPath, endpoint: ep.endpointType, contentType: contentType})
 			if observe != nil {
 				observe(outcome.report, prov.E2EE)
 			}
@@ -2635,6 +2645,22 @@ type upstreamResult struct {
 	// when teep cannot reproduce it (SEE: provider.ReceiptRequestHash).
 	RequestHash *[32]byte
 	Cancel      context.CancelFunc
+	// RelayDeadline bounds the relay and the downstream writes. The
+	// upstream request may run later than it, by the receipt check's
+	// tail read (SEE: authorizedRoundtrip). Zero means the request's own
+	// deadline.
+	RelayDeadline time.Time
+	// MarkContent records that content reached the client; nil when the
+	// attempt is not read to its end after the client leaves. Draining
+	// reports whether the client left after content, so that teep reads
+	// the rest of the stream for the receipt check.
+	MarkContent func()
+	Draining    func() bool
+	// EnterTail moves the attempt to the tail read after a relay failure
+	// that is not the client's, so that the client's end no longer stops
+	// it. It reports false when the client's end came first. Nil when the
+	// attempt has no such hold.
+	EnterTail   func() bool
 	E2EEDur     time.Duration
 	UpstreamDur time.Duration
 	// Report and Publication are the fields of the same name of the

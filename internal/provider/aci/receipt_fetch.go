@@ -58,6 +58,33 @@ func notReceiptIDChar(r rune) bool {
 // must be the client pinned to the attested TLS key of the gateway. The
 // caller's ctx bounds every attempt and every wait.
 func FetchReceipt(ctx context.Context, client *http.Client, baseURL, apiKey, id string) (*Receipt, error) {
+	return fetchReceipt(ctx, client, baseURL, apiKey, id, ReceiptAttempts, func(int) time.Duration { return ReceiptRetryDelay })
+}
+
+// MaxReceiptRetryDelay bounds the delay between receipt GETs of
+// FetchReceiptUntil. After a stream that failed or that the client left,
+// the gateway can delay publication until its backend reaches its end, so
+// that fetch retries HTTP 404 until the caller's ctx ends, with a delay
+// that starts at ReceiptRetryDelay and doubles up to this.
+const MaxReceiptRetryDelay = 2 * time.Second
+
+// FetchReceiptUntil is FetchReceipt that retries HTTP 404 until ctx ends.
+func FetchReceiptUntil(ctx context.Context, client *http.Client, baseURL, apiKey, id string) (*Receipt, error) {
+	return fetchReceipt(ctx, client, baseURL, apiKey, id, 0, func(attempt int) time.Duration {
+		delay := ReceiptRetryDelay
+		for range attempt - 1 {
+			delay *= 2
+			if delay >= MaxReceiptRetryDelay {
+				return MaxReceiptRetryDelay
+			}
+		}
+		return delay
+	})
+}
+
+// fetchReceipt sends up to attempts GETs (0: until ctx ends), the delay
+// before each next one given by wait.
+func fetchReceipt(ctx context.Context, client *http.Client, baseURL, apiKey, id string, attempts int, wait func(attempt int) time.Duration) (*Receipt, error) {
 	if apiKey == "" {
 		return nil, errors.New("receipt fetch needs the API key of the request")
 	}
@@ -77,13 +104,18 @@ func FetchReceipt(ctx context.Context, client *http.Client, baseURL, apiKey, id 
 			return r, nil
 		case status != http.StatusNotFound:
 			return nil, fmt.Errorf("%w: receipt %s: HTTP %d", ErrReceiptNotServed, id, status)
-		case attempt == ReceiptAttempts:
+		case attempt == attempts:
 			return nil, fmt.Errorf("%w: receipt %s: HTTP 404 after %d attempts %s apart", ErrReceiptNotServed, id, ReceiptAttempts, ReceiptRetryDelay)
 		}
-		timer := time.NewTimer(ReceiptRetryDelay)
+		timer := time.NewTimer(wait(attempt))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			if attempts == 0 {
+				// The gateway answered 404 until the bound: it did not
+				// serve the receipt.
+				return nil, fmt.Errorf("%w: receipt %s: HTTP 404 until the fetch bound (%w)", ErrReceiptNotServed, id, ctx.Err())
+			}
 			return nil, fmt.Errorf("receipt %s: %w", id, ctx.Err())
 		case <-timer.C:
 		}

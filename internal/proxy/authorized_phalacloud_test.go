@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -60,6 +61,13 @@ type phalaCase struct {
 	tailAfterFirst string
 	// signTail signs the receipt over the bytes served with the tail.
 	signTail bool
+	// laterTail is sent 300 ms after the tail, and is part of the signed
+	// response when signTail is set.
+	laterTail string
+	// hangUpBeforeLaterTail ends the client's request just before the
+	// gateway sends laterTail, while teep reads the rest of the stream.
+	hangUpBeforeLaterTail bool
+	hangUp                *atomic.Pointer[context.CancelFunc]
 	// commentThenReset sends one SSE comment line and then resets the
 	// stream, before any data line.
 	commentThenReset bool
@@ -68,8 +76,31 @@ type phalaCase struct {
 	downstreamFailOn string
 	// status answers with this 2xx status and a plaintext body instead of
 	// the encrypted stream.
-	status  int
-	wantErr bool
+	status int
+	// modelNumber sends the request with a model that is not a string.
+	modelNumber bool
+	// duplicateMember sends a request body with a duplicate member in a
+	// member that teep does not read.
+	duplicateMember bool
+	// attemptTimeout replaces teep's stream attempt deadline.
+	attemptTimeout time.Duration
+	// slowReader stops reading after the first content chunk: every later
+	// write blocks until the write deadline and fails on it.
+	slowReader bool
+	// hangUpBeforeTailClaim ends the client's request just before teep
+	// claims the tail read, and waits until that end abandoned the attempt.
+	hangUpBeforeTailClaim bool
+	// wantNoReceiptGET requires that no receipt GET was sent.
+	wantNoReceiptGET bool
+	// receiptDelay answers HTTP 404 to the receipt GET until this long
+	// after the chat request started.
+	receiptDelay time.Duration
+	// drainTimeout and drainBytes replace teep's drain bounds;
+	// maxElapsed bounds how long the request may take.
+	drainTimeout time.Duration
+	drainBytes   int64
+	maxElapsed   time.Duration
+	wantErr      bool
 	// wantReceiptGET requires at least one receipt GET.
 	wantReceiptGET bool
 	wantRelayed    bool
@@ -129,6 +160,9 @@ func TestAuthorizedPhalaCloudACIv2(t *testing.T) {
 			// before its end does not match the receipt, which covers the
 			// whole response, and the generation ends.
 			{name: "stream reset after [DONE]", served: testKeysetA, resetAfterDone: true, wantErr: true, wantRelayed: true, wantReceiptGET: true},
+			// After a stream that failed, the gateway can publish its
+			// receipt late; teep waits for it within the fetch bound.
+			{name: "stream reset after [DONE], receipt published late", served: testKeysetA, resetAfterDone: true, receiptDelay: time.Second, wantErr: true, wantRelayed: true, wantReceiptGET: true},
 			{name: "stream reset after the first chunk", served: testKeysetA, resetAfterFirst: true, wantErr: true, wantRelayed: true, wantReceiptGET: true, ended: true},
 			// A stream that the relay cannot parse after content went out is
 			// the gateway's failure, also while the connection stays open:
@@ -145,14 +179,49 @@ func TestAuthorizedPhalaCloudACIv2(t *testing.T) {
 			// A comment line reaches the client as it is, so the stream
 			// counts as delivered although no data line came.
 			{name: "comment then reset, no data", served: testKeysetA, commentThenReset: true, wantErr: true, wantReceiptGET: true, ended: true},
+			// The client hangs up when it reads teep's error event, while
+			// teep still reads the rest of the stream that the gateway
+			// signed. The honest receipt must still decide.
+			{name: "client hangs up before teep claims the tail read", served: testKeysetA, tailAfterFirst: "event: error\n\n", laterTail: "data: [DONE]\n\n", signTail: true, hangUpBeforeTailClaim: true, wantErr: true, wantRelayed: true, wantNoReceiptGET: true},
+			// The relay error comes first, so teep claims the attempt for the
+			// tail read; the client's end after that does not stop the
+			// upstream read, and the receipt over the whole stream verifies.
+			{name: "client hangs up after teep entered the tail read", served: testKeysetA, tailAfterFirst: "event: error\n\n", laterTail: "data: [DONE]\n\n", signTail: true, hangUpBeforeLaterTail: true, wantErr: true, wantRelayed: true, wantReceiptGET: true},
+			// The request body is the client's: a body without a string
+			// model fails before anything is sent, so the receipt check
+			// (receipt_request_model) never sees one, and the generation
+			// stays.
+			{name: "request model not a string, stream", served: testKeysetA, modelNumber: true, wantErr: true},
+			// teep's own attempt deadline bounds the relay and the writes,
+			// and the upstream request runs longer, so the tail read after
+			// that deadline reads the rest: a client that stops reading,
+			// and an honest stream still sending at teep's deadline, verify
+			// over what the gateway sent, and the generation stays.
+			{name: "slow reader at teep's deadline", served: testKeysetA, attemptTimeout: 300 * time.Millisecond, slowReader: true, wantErr: true, wantReceiptGET: true},
+			{name: "honest stream cut by teep's deadline", served: testKeysetA, attemptTimeout: 300 * time.Millisecond, pauseAfterFirst: true, wantErr: true, wantRelayed: true, wantReceiptGET: true},
+			// A request body with a duplicate member, also in a member that
+			// teep does not read, is refused before it is sent (the session
+			// pin decodes it strictly), so no content goes out unchecked; the
+			// generation stays.
+			{name: "request body with a duplicate member", served: testKeysetA, duplicateMember: true, wantErr: true},
 			{name: "downstream write fails after the first chunk", served: testKeysetA, downstreamFailOn: "Hel", wantErr: true},
 			// A client that hangs up, or whose deadline passes, must not end
 			// the authorization that every client shares.
-			{name: "client hangs up after the first chunk", served: testKeysetA, clientCancelOn: "Hel", wantErr: true},
+			// A client that leaves after content: teep stops writing, reads
+			// the rest of the stream within the drain bound, and checks the
+			// receipt over the whole response. An honest gateway verifies;
+			// one that stalls past the drain bound, or sends more than its
+			// byte bound, ends the generation. The handler returns within
+			// the bound, so its connection slot is free again.
+			{name: "client hangs up after the first chunk", served: testKeysetA, clientCancelOn: "Hel", wantErr: true, wantReceiptGET: true},
+			{name: "client leaves, the gateway finishes later", served: testKeysetA, clientCancelOn: "Hel", pauseAfterFirst: true, wantErr: true, wantReceiptGET: true},
+			{name: "client leaves, the gateway stalls past the drain bound", served: testKeysetA, clientCancelOn: "Hel", pauseAfterFirst: true, drainTimeout: 300 * time.Millisecond, maxElapsed: 1500 * time.Millisecond, wantErr: true, ended: true},
+			{name: "client leaves, the gateway exceeds the drain byte bound", served: testKeysetA, clientCancelOn: "Hel", tailAfterFirst: ": x\n\n", laterTail: largeSignedTail, signTail: true, drainBytes: 64 << 10, wantErr: true, ended: true},
+			{name: "client leaves, a large honest tail within the drain bound", served: testKeysetA, clientCancelOn: "Hel", tailAfterFirst: ": x\n\n", laterTail: largeSignedTail, signTail: true, wantErr: true, wantReceiptGET: true},
 			// After [DONE] upstream reached its end, so the receipt is still
 			// checked, under the server's context, and verifies.
 			{name: "client hangs up after [DONE]", served: testKeysetA, clientCancelOn: "[DONE]", wantErr: true, wantRelayed: true, wantReceiptGET: true},
-			{name: "caller deadline during the stream", served: testKeysetA, pauseAfterFirst: true, callerDeadline: 300 * time.Millisecond, wantErr: true, wantRelayed: true},
+			{name: "caller deadline during the stream", served: testKeysetA, pauseAfterFirst: true, callerDeadline: 300 * time.Millisecond, wantErr: true, wantRelayed: true, wantReceiptGET: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				testAuthorizedPhalaCloud(t, authority, &tc)
@@ -184,11 +253,16 @@ var (
 // follows it.
 func phalaTestGateway(t *testing.T, gw *aciv2test.Gateway, tc *phalaCase, receipt *atomic.Pointer[[]byte], receiptGETs *atomic.Int32) http.HandlerFunc {
 	t.Helper()
+	var started atomic.Int64
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == aci.ReceiptsPath+"/rcpt-1" {
 			receiptGETs.Add(1)
 			if r.Header.Get("Authorization") != "Bearer test" {
 				t.Errorf("receipt GET Authorization %q", r.Header.Get("Authorization"))
+			}
+			if tc.receiptDelay > 0 && time.Since(time.Unix(0, started.Load())) < tc.receiptDelay {
+				http.NotFound(w, r)
+				return
 			}
 			if tc.receiptMissing || receipt.Load() == nil {
 				http.NotFound(w, r)
@@ -197,6 +271,7 @@ func phalaTestGateway(t *testing.T, gw *aciv2test.Gateway, tc *phalaCase, receip
 			_, _ = w.Write(*receipt.Load())
 			return
 		}
+		started.Store(time.Now().UnixNano())
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
 			t.Error(err)
@@ -254,7 +329,7 @@ func phalaTestGateway(t *testing.T, gw *aciv2test.Gateway, tc *phalaCase, receip
 		signedResponse := stream
 		if tc.signTail {
 			parts := strings.SplitAfter(stream, "\n\n")
-			signedResponse = parts[0] + parts[1] + tc.tailAfterFirst
+			signedResponse = parts[0] + parts[1] + tc.tailAfterFirst + tc.laterTail
 		}
 		fields := &aciv2test.Receipt{ID: "rcpt-1", Model: "model", KeysetDigest: served, SessionID: authorizedSessionID, Request: []byte(restored), Response: []byte(signedResponse), ServedAt: authorizedSessionExpires - 10}
 		if tc.receipt != nil {
@@ -268,43 +343,91 @@ func phalaTestGateway(t *testing.T, gw *aciv2test.Gateway, tc *phalaCase, receip
 		if !tc.noReceiptID {
 			w.Header().Set("X-Receipt-Id", "rcpt-1")
 		}
+		w.Header().Set("X-Gateway-Header", "1")
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-		switch {
-		case tc.commentThenReset:
-			_, _ = io.WriteString(w, ": keep-alive\n\n")
-			http.NewResponseController(w).Flush()
-			panic(http.ErrAbortHandler)
-		case tc.tailAfterFirst != "":
-			parts := strings.SplitAfter(stream, "\n\n")
-			_, _ = io.WriteString(w, parts[0]+parts[1]+tc.tailAfterFirst)
-			http.NewResponseController(w).Flush()
-			select {
-			case <-r.Context().Done():
-			case <-time.After(500 * time.Millisecond):
-			}
-		case tc.pauseAfterFirst:
-			parts := strings.SplitAfter(stream, "\n\n")
-			_, _ = io.WriteString(w, parts[0]+parts[1])
-			http.NewResponseController(w).Flush()
+		writePhalaStream(w, r, tc, stream)
+	}
+}
+
+// writePhalaStream writes the stream of one phalaCase: whole, cut, reset,
+// held, or with a tail.
+func writePhalaStream(w http.ResponseWriter, r *http.Request, tc *phalaCase, stream string) {
+	switch {
+	case tc.commentThenReset:
+		_, _ = io.WriteString(w, ": keep-alive\n\n")
+		http.NewResponseController(w).Flush()
+		panic(http.ErrAbortHandler)
+	case tc.tailAfterFirst != "":
+		parts := strings.SplitAfter(stream, "\n\n")
+		_, _ = io.WriteString(w, parts[0]+parts[1]+tc.tailAfterFirst)
+		http.NewResponseController(w).Flush()
+		if tc.laterTail != "" {
 			select {
 			case <-r.Context().Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(300 * time.Millisecond):
 			}
-			_, _ = io.WriteString(w, strings.Join(parts[2:], ""))
-		case tc.resetAfterFirst:
-			// The role chunk, then the first content chunk.
-			parts := strings.SplitAfter(stream, "\n\n")
-			_, _ = io.WriteString(w, parts[0]+parts[1])
+			if tc.hangUpBeforeLaterTail {
+				if hangUp := tc.hangUp.Load(); hangUp != nil {
+					(*hangUp)()
+				}
+			}
+			_, _ = io.WriteString(w, tc.laterTail)
 			http.NewResponseController(w).Flush()
-			panic(http.ErrAbortHandler)
-		case tc.resetAfterDone:
-			_, _ = io.WriteString(w, stream)
-			http.NewResponseController(w).Flush()
-			panic(http.ErrAbortHandler)
-		default:
-			_, _ = io.WriteString(w, stream)
 		}
+		select {
+		case <-r.Context().Done():
+		case <-time.After(500 * time.Millisecond):
+		}
+	case tc.pauseAfterFirst:
+		parts := strings.SplitAfter(stream, "\n\n")
+		_, _ = io.WriteString(w, parts[0]+parts[1])
+		http.NewResponseController(w).Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		_, _ = io.WriteString(w, strings.Join(parts[2:], ""))
+	case tc.resetAfterFirst:
+		// The role chunk, then the first content chunk.
+		parts := strings.SplitAfter(stream, "\n\n")
+		_, _ = io.WriteString(w, parts[0]+parts[1])
+		http.NewResponseController(w).Flush()
+		panic(http.ErrAbortHandler)
+	case tc.resetAfterDone:
+		_, _ = io.WriteString(w, stream)
+		http.NewResponseController(w).Flush()
+		panic(http.ErrAbortHandler)
+	default:
+		_, _ = io.WriteString(w, stream)
+	}
+}
+
+// checkPhalaResponse checks what reached the client and how many receipt
+// GETs teep sent for one phalaCase.
+func checkPhalaResponse(t *testing.T, tc *phalaCase, rec *inferenceRecorder, receiptGETs int32) {
+	t.Helper()
+	if relayed := strings.Contains(rec.Body.String(), "Hel") && strings.Contains(rec.Body.String(), "lo"); relayed != tc.wantRelayed {
+		t.Errorf("decrypted content relayed = %v, want %v", relayed, tc.wantRelayed)
+	}
+	if strings.Contains(rec.Body.String(), "plaintext-answer") {
+		t.Error("a plaintext answer reached the client")
+	}
+	if tc.plain && !tc.wantRelayed && rec.Body.Len() > 0 {
+		t.Errorf("non-stream response written before its receipt verified: %d %q", rec.Code, rec.Body.String())
+	}
+	if want := int32(aci.ReceiptAttempts); tc.receiptMissing && receiptGETs != want {
+		t.Errorf("%d receipt GETs, want %d", receiptGETs, want)
+	}
+	if tc.wantNoReceiptGET && receiptGETs != 0 {
+		t.Errorf("%d receipt GETs, want none", receiptGETs)
+	}
+	if tc.noReceiptID && rec.Header().Get("X-Gateway-Header") != "" {
+		t.Error("a refused response sent a gateway header to the client")
+	}
+	if tc.wantReceiptGET && receiptGETs == 0 {
+		t.Error("the stream failed after content went out, and its receipt was not checked")
 	}
 }
 
@@ -324,6 +447,22 @@ func (h *hangUpRecorder) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// slowRecorder is a client that stops reading once the body written to it
+// contains after: a later write blocks until the write deadline and fails
+// on it, as a write to a connection whose receive window is full does.
+type slowRecorder struct {
+	*inferenceRecorder
+	after string
+}
+
+func (s *slowRecorder) Write(p []byte) (int, error) {
+	if strings.Contains(s.Body.String(), s.after) && !s.deadline.IsZero() {
+		time.Sleep(time.Until(s.deadline))
+		return 0, os.ErrDeadlineExceeded
+	}
+	return s.inferenceRecorder.Write(p)
+}
+
 // failingRecorder fails every write after the body written to it contains
 // on, as a client connection that broke does.
 type failingRecorder struct {
@@ -338,11 +477,18 @@ func (f *failingRecorder) Write(p []byte) (int, error) {
 	return f.inferenceRecorder.Write(p)
 }
 
+// largeSignedTail is a tail of about 200 KiB of SSE comments and [DONE],
+// larger than one read of the relay.
+var largeSignedTail = strings.Repeat(": "+strings.Repeat("a", 98)+"\n\n", 2000) + "data: [DONE]\n\n"
+
 // authorizedSessionExpires is the expires_at of the authorized session.
 const authorizedSessionExpires = 1893456000
 
 func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, tc *phalaCase) {
 	t.Helper()
+	if tc.hangUpBeforeLaterTail || tc.hangUpBeforeTailClaim {
+		tc.hangUp = &atomic.Pointer[context.CancelFunc]{}
+	}
 	gw := aciv2test.New(t)
 	var receipt atomic.Pointer[[]byte]
 	var receiptGETs atomic.Int32
@@ -356,6 +502,17 @@ func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, tc *ph
 	fingerprint := sha256.Sum256(upstream.Certificate().RawSubjectPublicKeyInfo)
 	server := newTLSBindingTestServerHandle()
 	server.authorizations = newAuthorizationStore(10, 2, time.Second)
+	server.attemptTimeouts.stream = tc.attemptTimeout
+	server.drainBounds = drainBounds{timeout: tc.drainTimeout, bytes: tc.drainBytes}
+	if tc.hangUpBeforeTailClaim {
+		server.tailClaimHook = func() {
+			if hangUp := tc.hangUp.Load(); hangUp != nil {
+				(*hangUp)()
+			}
+			// The watch of the client's context runs in its own goroutine.
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
 	defer server.Close()
 	route, err := provider.NewResolvedRoute(upstream.URL, "")
 	if err != nil {
@@ -381,16 +538,25 @@ func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, tc *ph
 	}
 	value := loadTestAuthorization(t, server.authorizations, key, candidate)
 	body := `{"model":"model","stream":true,"messages":[{"role":"user","content":"test"}]}`
+	if tc.duplicateMember {
+		body = `{"model":"model","stream":true,"metadata":{"k":1,"k":2},"messages":[{"role":"user","content":"test"}]}`
+	}
+	if tc.modelNumber {
+		body = `{"model":7,"stream":true,"messages":[{"role":"user","content":"test"}]}`
+	}
 	if tc.plain {
 		body = `{"model":"model","messages":[{"role":"user","content":"test"}]}`
 	}
-	input := &authorizedRequest{provider: prov, route: route, key: key, body: []byte(body), stream: !tc.plain, path: "/v1/chat/completions", contentType: "application/json", endpoint: e2ee.EndpointChat}
+	input := &authorizedRequest{provider: prov, route: route, key: key, body: []byte(body), model: "model", stream: !tc.plain, path: "/v1/chat/completions", contentType: "application/json", endpoint: e2ee.EndpointChat}
 	timeout := 10 * time.Second
 	if tc.callerDeadline > 0 {
 		timeout = tc.callerDeadline
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	defer cancel()
+	if tc.hangUp != nil {
+		tc.hangUp.Store(&cancel)
+	}
 	rec := newInferenceRecorder()
 	var w http.ResponseWriter = rec
 	if tc.clientCancelOn != "" {
@@ -399,25 +565,18 @@ func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, tc *ph
 	if tc.downstreamFailOn != "" {
 		w = &failingRecorder{inferenceRecorder: rec, on: tc.downstreamFailOn}
 	}
+	if tc.slowReader {
+		w = &slowRecorder{inferenceRecorder: rec, after: "Hel"}
+	}
+	started := time.Now()
 	_, err = server.inferAuthorized(ctx, w, input)
+	if elapsed := time.Since(started); tc.maxElapsed > 0 && elapsed > tc.maxElapsed {
+		t.Errorf("the request took %s, want at most %s: the drain held the handler past its bound", elapsed, tc.maxElapsed)
+	}
 	if (err != nil) != tc.wantErr {
 		t.Fatalf("err = %v, want error %v", err, tc.wantErr)
 	}
-	if relayed := strings.Contains(rec.Body.String(), "Hel") && strings.Contains(rec.Body.String(), "lo"); relayed != tc.wantRelayed {
-		t.Errorf("decrypted content relayed = %v, want %v", relayed, tc.wantRelayed)
-	}
-	if strings.Contains(rec.Body.String(), "plaintext-answer") {
-		t.Error("a plaintext answer reached the client")
-	}
-	if tc.plain && !tc.wantRelayed && rec.Body.Len() > 0 {
-		t.Errorf("non-stream response written before its receipt verified: %d %q", rec.Code, rec.Body.String())
-	}
-	if want := int32(aci.ReceiptAttempts); tc.receiptMissing && receiptGETs.Load() != want {
-		t.Errorf("%d receipt GETs, want %d", receiptGETs.Load(), want)
-	}
-	if tc.wantReceiptGET && receiptGETs.Load() == 0 {
-		t.Error("the stream failed after content went out, and its receipt was not checked")
-	}
+	checkPhalaResponse(t, tc, rec, receiptGETs.Load())
 	current, ok := server.authorizations.acquire(key)
 	if gotEnded := !ok || current.generation != value.generation; gotEnded != tc.ended {
 		t.Errorf("generation ended = %v, want %v", gotEnded, tc.ended)

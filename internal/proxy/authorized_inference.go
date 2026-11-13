@@ -17,10 +17,13 @@ import (
 )
 
 type authorizedRequest struct {
-	provider    *provider.Provider
-	route       provider.ResolvedRoute
-	key         provider.AuthorizationKey
-	body        []byte
+	provider *provider.Provider
+	route    provider.ResolvedRoute
+	key      provider.AuthorizationKey
+	body     []byte
+	// model is the upstream model that teep resolved and wrote into body
+	// (rewriteModelInBody); the receipt check compares it.
+	model       string
 	stream      bool
 	path        string
 	contentType string
@@ -45,14 +48,96 @@ type authorizedResponse struct {
 	retryReason      string
 }
 
-func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedRequest) (authorizedResponse, error) {
-	timeout := upstreamNonStreamTimeout
-	if input.stream {
-		timeout = upstreamStreamTimeout
+// A Phala Cloud stream that the client leaves after content reached it is
+// read to its end for the receipt check, within these bounds from the
+// client's end (SEE: tailHold).
+const (
+	streamDrainTimeout = 2 * time.Minute
+	streamDrainBytes   = 16 << 20
+)
+
+// drainBounds replaces streamDrainTimeout and streamDrainBytes when set.
+type drainBounds struct {
+	timeout time.Duration
+	bytes   int64
+}
+
+func (s *Server) drainTimeout() time.Duration {
+	if s.drainBounds.timeout > 0 {
+		return s.drainBounds.timeout
 	}
-	logical, cancel := context.WithTimeout(ctx, timeout)
-	deadline, _ := logical.Deadline()
-	budget := max(0, time.Until(deadline))
+	return streamDrainTimeout
+}
+
+func (s *Server) drainBytes() int64 {
+	if s.drainBounds.bytes > 0 {
+		return s.drainBounds.bytes
+	}
+	return streamDrainBytes
+}
+
+// attemptTimeouts are the attempt deadlines for stream and non-stream
+// requests.
+type attemptTimeouts struct {
+	stream, nonStream time.Duration
+}
+
+// attemptTimeout returns the attempt timeout for a stream or a non-stream
+// request.
+func (s *Server) attemptTimeout(stream bool) time.Duration {
+	switch {
+	case stream && s.attemptTimeouts.stream > 0:
+		return s.attemptTimeouts.stream
+	case stream:
+		return upstreamStreamTimeout
+	case s.attemptTimeouts.nonStream > 0:
+		return s.attemptTimeouts.nonStream
+	default:
+		return upstreamNonStreamTimeout
+	}
+}
+
+func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedRequest) (authorizedResponse, error) {
+	// The upstream attempt does not run on the client's context: hold
+	// stops it when the client's request ends while teep relays, as
+	// before, but not during the bounded tail read after a gateway failure
+	// (SEE: tailHold).
+	//
+	// teep's own attempt deadline bounds the relay and the downstream
+	// writes (RelayDeadline). The upstream request runs receiptCheckTimeout
+	// longer, so that a stream that teep's deadline cut can still be read
+	// to its end for the receipt check. A deadline that the caller set
+	// bounds both: teep serve sets none on the incoming request. With a
+	// caller deadline, logical and the client's context expire on separate
+	// timers at the same instant, so an ending at that deadline can be
+	// classified as either side's; serve does not reach this.
+	//
+	// A Phala Cloud stream is read to its end after the client leaves
+	// (drainable), so its upstream request also outlives a caller deadline,
+	// by the drain bound.
+	drainable := input.provider.Name == "phalacloud" && input.stream
+	attemptDeadline := time.Now().Add(s.attemptTimeout(input.stream))
+	callerBound := false
+	if clientDeadline, ok := ctx.Deadline(); ok && clientDeadline.Before(attemptDeadline) {
+		attemptDeadline, callerBound = clientDeadline, true
+	}
+	upstreamDeadline := attemptDeadline.Add(receiptCheckTimeout)
+	switch {
+	case drainable:
+		upstreamDeadline = attemptDeadline.Add(max(receiptCheckTimeout, s.drainTimeout()))
+	case callerBound:
+		upstreamDeadline = attemptDeadline
+	}
+	logical, cancel := context.WithDeadline(context.WithoutCancel(ctx), upstreamDeadline)
+	hold := newTailHold(ctx, func() {
+		// Without a drain, logical has the caller's deadline already and
+		// expires with the same error; only a cancellation needs passing
+		// on.
+		if drainable || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			cancel()
+		}
+	}, drainTimer(s.drainTimeout(), cancel))
+	budget := max(0, time.Until(attemptDeadline))
 	var attestDur, e2eeDur, upstreamDur time.Duration
 	attempts := 0
 	lastRetry := ""
@@ -74,10 +159,17 @@ func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedReque
 		result.outcome.summary = append(result.outcome.summary, slog.String("retry_reason", lastRetry))
 	}
 	if result.upstream == nil {
+		hold.release()
 		cancel()
 	} else {
 		attemptCancel := result.upstream.Cancel
-		result.upstream.Cancel = func() { attemptCancel(); cancel() }
+		result.upstream.Cancel = func() { hold.release(); attemptCancel(); cancel() }
+		result.upstream.EnterTail = hold.enterTail
+		if drainable {
+			result.upstream.MarkContent = hold.markContent
+			result.upstream.Draining = hold.draining
+		}
+		result.upstream.RelayDeadline = attemptDeadline
 	}
 	return result, err
 }
@@ -256,7 +348,18 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	out.report = value.report
 	started := time.Now()
 	defer func() { out.upstreamDur += time.Since(started) }()
-	if err := s.relayAuthorized(ctx, result.upstream.Request.Context(), w, input, &result); err != nil {
+	// The relay and the downstream writes stop at teep's attempt deadline
+	// and when the client's request ends; the upstream request may run
+	// longer (SEE: authorizedRoundtrip).
+	relayCtx, cancelRelay := context.WithCancel(result.upstream.Request.Context())
+	defer cancelRelay()
+	if !result.upstream.RelayDeadline.IsZero() {
+		var cancelDeadline context.CancelFunc
+		relayCtx, cancelDeadline = context.WithDeadline(relayCtx, result.upstream.RelayDeadline)
+		defer cancelDeadline()
+	}
+	defer context.AfterFunc(ctx, cancelRelay)()
+	if err := s.relayAuthorized(ctx, relayCtx, w, input, &result); err != nil {
 		out.summary = append(out.summary, result.relayDiagnostics...)
 		return out, err
 	}
@@ -286,8 +389,8 @@ func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.Response
 	}()
 	w = writer
 	ur := result.upstream
+	writer.onFirstWrite = ur.MarkContent
 	resp := ur.Resp
-	copyAuthorizedHeaders(w.Header(), resp.Header)
 	var body io.Reader = resp.Body
 	invalidate := func(reason string) {
 		removed := s.rejectResponseAuthorization(input.key, result.authorization.generation)
@@ -320,6 +423,9 @@ func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.Response
 		}
 		body = receipt.wire
 	}
+	// The upstream headers go to the client only for a response that
+	// passed the checks above; a refused response sends none of them.
+	copyAuthorizedHeaders(w.Header(), resp.Header)
 	progress := &responseReadProgress{Reader: body}
 	body = responseLifetimeReader{Reader: progress, check: writer.check}
 	if resp.StatusCode != http.StatusOK {
@@ -349,7 +455,7 @@ func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.Response
 	case input.stream && (streamStats.Chunks > 0 || streamStats.Forwarded > 0):
 		// The stream failed after content reached the client: the check
 		// must still run, or the gateway could skip it.
-		s.checkReceiptAfterRelayFailure(clientCtx, input, result, receipt, relayEnding{err: err, downstream: writer.err, upstreamBody: resp.Body})
+		s.checkReceiptAfterRelayFailure(clientCtx, input, result, receipt, relayEnding{err: err, downstream: writer.err, upstreamBody: resp.Body, enterTail: ur.EnterTail, draining: ur.Draining})
 	}
 	if err != nil || writer.check() != nil {
 		if input.stream {

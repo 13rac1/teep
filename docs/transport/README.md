@@ -263,6 +263,18 @@ checks against the currently authorized identity. Ordinary network errors,
 client cancellation, and local connection-capacity rejection retain valid
 authorization. See the retry contract for error classification.
 
+The upstream attempt does not run on the client's request context. It has
+teep's own deadline, and the caller's deadline when the caller sets one;
+teep serve sets none on an incoming request. The end of the client's
+request before any content reached it cancels the attempt, as before. A
+Phala Cloud stream that the client leaves after content reached it is read
+to its end within a drain bound (2 minutes and 16 MiB from the client's
+end), and its receipt is checked. After a Phala Cloud stream fails for a
+reason that is not the client's, teep claims the attempt for a bounded read
+of the rest of the stream before it checks the receipt, and a client that
+leaves after that claim does not stop the read. Other providers' streams
+are not read to their end.
+
 ### Approval withdrawal
 
 Cached authorization records approval at admission. Later vendor revocation or

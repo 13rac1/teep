@@ -39,12 +39,18 @@ func (h *ResponseHash) Received() [32]byte {
 // Finish reads the bytes that the reader left, up to MaxResponseTail, and
 // returns the sha256 of the whole body.
 func (h *ResponseHash) Finish() ([32]byte, error) {
-	n, err := io.Copy(io.Discard, io.LimitReader(h.wire, MaxResponseTail+1))
+	return h.FinishLimit(MaxResponseTail)
+}
+
+// FinishLimit reads the bytes that the reader left, up to limit, and
+// returns the sha256 of the whole body.
+func (h *ResponseHash) FinishLimit(limit int64) ([32]byte, error) {
+	n, err := io.Copy(io.Discard, io.LimitReader(h.wire, limit+1))
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("read the end of the response: %w", err)
 	}
-	if n > MaxResponseTail {
-		return [32]byte{}, fmt.Errorf("response continues for more than %d bytes after the reader stopped", MaxResponseTail)
+	if n > limit {
+		return [32]byte{}, fmt.Errorf("response continues for more than %d bytes after the reader stopped", limit)
 	}
 	var out [32]byte
 	copy(out[:], h.sum.Sum(nil))

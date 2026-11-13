@@ -16,12 +16,14 @@ the provider did not process inference.
 | Exact supported key rejection before inference, E2EE attempt | At most once | Conditionally remove the generation used; acquire authorization again |
 | Phala Cloud ACI/1 `session_not_accepted` (HTTP 412): the gateway refused the pinned attested sessions and did not forward the request | At most once, E2EE attempt | Conditionally remove the generation used; the next acquisition verifies the sessions again |
 | Phala Cloud ACI/1 receipt whose signature, keyset, response hash, cited session or `served_at` fails, a malformed receipt, or a successful response without one `X-Receipt-Id` | No | Conditionally remove the generation used |
-| Phala Cloud ACI/1 response with a 2xx status other than 200 | No | Refuse before relaying anything; conditionally remove the generation used |
+| Phala Cloud ACI/1 response with a 2xx status other than 200 | No | Refuse before relaying anything; conditionally remove the generation used, with the failure cooldown |
 | Phala Cloud ACI/1 receipt whose request hash differs from the request sent, after the service's own statements verified | No | Retain; the statement depends on one client's request |
+| Phala Cloud ACI/1 receipt check that cannot read a string `model` from the request body (a request without one fails before it is sent) | No | Retain; the body is one client's request |
 | Phala Cloud ACI/1 receipt whose endpoint, method or model differs from the request sent, after the service's own statements verified | No | Stream: conditionally remove the generation used. Non-stream: retain |
-| Phala Cloud ACI/1 receipt not served: HTTP 404 on 3 attempts 200 ms apart, another HTTP status, or a connection failure | No | Non-stream: retain. Stream: conditionally remove the generation used |
-| Phala Cloud ACI/1 stream whose relay fails after content was relayed, for any reason but the client side (a reset, a cut, a stream that does not parse, teep's own deadline) | No | Read the rest of the response under a server-owned context, check the receipt against every byte read from the gateway; on a failure that the gateway causes, conditionally remove the generation used |
-| Phala Cloud ACI/1 stream whose relay error is the downstream write error or the error of the client's ended request context, before the read from the gateway ended | No | Retain; log that content was relayed without a completed receipt check |
+| Phala Cloud ACI/1 receipt not served: HTTP 404 on 3 attempts 200 ms apart (after a stream that failed or that the client left: HTTP 404 until the 30 s fetch bound, delays doubling from 200 ms to 2 s), another HTTP status, or a connection failure | No | Non-stream: retain. Stream: conditionally remove the generation used |
+| Phala Cloud ACI/1 stream whose relay fails after content was relayed, for any reason but the client side (a reset, a cut, a stream that does not parse, teep's own deadline, a downstream write that failed on teep's write deadline with the client still connected) | No | Read the rest of the response for up to 30 s (the upstream request runs 30 s past the attempt deadline), then fetch and check the receipt under its own 30 s; on a failure that the gateway causes, conditionally remove the generation used |
+| Phala Cloud ACI/1 stream whose relay error is the downstream write error (not on teep's write deadline) or the error of the client's ended request context, after content reached the client | No | Read the rest of the stream within the drain bound (2 min, 16 MiB from the client's end), then check the receipt; on a failure (a stall past the bound, a receipt not served or not verified), conditionally remove the generation used; an honest gateway retains it |
+| Phala Cloud ACI/1 stream that the client leaves before any content reached it | No | Cancel the upstream request; retain |
 | Exact NearCloud chat 421 stale-key rejection, TLS-only attempt | No | Conditionally remove the generation used; the next request acquires authorization |
 | Origin TLS WebPKI, CT, or SPKI authentication failure | No | Conditionally remove the generation used |
 | HTTPS forward-proxy handshake failure | No | Retain origin authorization, including replacement generations |
@@ -36,6 +38,11 @@ decryption, or encryption-policy failure uses the decryption-failure
 classification. Re-attestation cannot repair an ordinary response schema
 error. NEAR non-streaming SSE reassembly decrypts each delta once and uses
 that same result for content and tool-call metadata.
+
+Phala Cloud receipt failures, keyset changes and refused sessions end the
+generation without a cooldown: a network cut of an honest stream also fails
+the receipt, and a cooldown would block every client for its whole length;
+for a keyset change or a refused session, verifying again is the remedy.
 
 Response authentication failures record the configured negative-cache cooldown
 atomically with generation removal. Concurrent failures of that generation do
