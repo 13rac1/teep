@@ -1,0 +1,7 @@
+{
+  "provider": "phalacloud",
+  "model": "qwen/qwen3.8-27b",
+  "nonce_hex": "4d4e6614416872dce54bca6c3fa89b2223b430a8984f3f04d60f7bfb71b22c56",
+  "captured_at": "2026-10-29T00:37:29.587032416Z",
+  "duration_ms": 53170
+}

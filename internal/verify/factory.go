@@ -123,7 +123,7 @@ func newGatewayReportDataVerifier(name string) provider.ReportDataVerifier {
 	switch name {
 	case "nearcloud":
 		return nearcloud.GatewayReportDataVerifier{}
-	case "venice":
+	case "venice", "phalacloud", "nanogpt":
 		// The ACI/1 gateway quote binds the same keccak256(signing key)+nonce
 		// REPORTDATA as the dstack model quote, so the verifier is shared.
 		return venice.ReportDataVerifier{}
@@ -147,9 +147,7 @@ func supplyChainPolicy(name string) (*attestation.SupplyChainPolicy, error) {
 	case "nanogpt":
 		return nanogpt.SupplyChainPolicy(), nil
 	case "phalacloud":
-		// TODO: author a real phalacloud policy (GH #118); the sentinel
-		// keeps teep verify reporting NotApplicable until then.
-		return attestation.NoSupplyChainPolicy(), nil
+		return phalacloud.SupplyChainPolicy(), nil
 	case "chutes":
 		return attestation.NoSupplyChainPolicy(), nil // cosign+IMA model, no docker-compose surface
 	case "tinfoil_v3_cloud":

@@ -696,6 +696,25 @@ func TestEnvNearDirectAPIKey(t *testing.T) {
 	}
 }
 
+// Phala Cloud's default base URL is a TEE-only domain of the private-ai-gateway,
+// which routes requests only to verified TEE upstreams.
+func TestEnvPhalaCloudDefaultsToTEEOnlyDomain(t *testing.T) {
+	clearProviderEnv(t)
+	setenv(t, "PHALA_API_KEY", "phala-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	phala, ok := cfg.Providers["phalacloud"]
+	if !ok {
+		t.Fatal("phalacloud provider not created from PHALA_API_KEY env var")
+	}
+	if phala.BaseURL != "https://tee.redpill.ai" {
+		t.Errorf("phalacloud BaseURL default: got %q, want %q", phala.BaseURL, "https://tee.redpill.ai")
+	}
+}
+
 func TestEnvAPIKeyOverridesToml(t *testing.T) {
 	// VENICE_API_KEY env var must override the API key from TOML.
 	toml := `
@@ -1869,6 +1888,26 @@ func TestMergedAllowFail_VeniceFormatLayer(t *testing.T) {
 		t.Errorf("venice/dstack: got %v, want VeniceDefaultAllowFail", dstack)
 	}
 
+	// Phala Cloud and NanoGPT answer with the gateway variant of the ACI/1
+	// format, which echoes no nonce, and select their ACI/1 lists; their
+	// other formats keep the provider list.
+	phalaACI := MergedAllowFail("phalacloud", attestation.FormatACI1, cfg, false)
+	if !reflect.DeepEqual(phalaACI, attestation.PhalaCloudACIDefaultAllowFail) {
+		t.Errorf("phalacloud/aci1: got %v, want PhalaCloudACIDefaultAllowFail", phalaACI)
+	}
+	phalaDstack := MergedAllowFail("phalacloud", attestation.FormatDstack, cfg, false)
+	if !reflect.DeepEqual(phalaDstack, attestation.PhalaCloudDefaultAllowFail) {
+		t.Errorf("phalacloud/dstack: got %v, want PhalaCloudDefaultAllowFail", phalaDstack)
+	}
+	nanoACI := MergedAllowFail("nanogpt", attestation.FormatACI1, cfg, false)
+	if !reflect.DeepEqual(nanoACI, attestation.NanoGPTACIDefaultAllowFail) {
+		t.Errorf("nanogpt/aci1: got %v, want NanoGPTACIDefaultAllowFail", nanoACI)
+	}
+	nanoDstack := MergedAllowFail("nanogpt", attestation.FormatDstack, cfg, false)
+	if !reflect.DeepEqual(nanoDstack, attestation.NanoGPTDefaultAllowFail) {
+		t.Errorf("nanogpt/dstack: got %v, want NanoGPTDefaultAllowFail", nanoDstack)
+	}
+
 	noFormat := MergedAllowFail("venice", "", cfg, false)
 	if !reflect.DeepEqual(noFormat, attestation.VeniceDefaultAllowFail) {
 		t.Errorf("venice/<none>: got %v, want VeniceDefaultAllowFail", noFormat)
@@ -1929,6 +1968,17 @@ func TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced(t *testing.T) {
 		}
 		if !slices.Contains(attestation.VeniceACIDefaultAllowFail, name) {
 			t.Errorf("VeniceACIDefaultAllowFail does not allow %s to fail", name)
+		}
+	}
+}
+
+// The gateway MRTD allowance of the ACI/1 list reaches every provider that
+// routes ACI/1 responses through the private-ai-gateway.
+func TestMergedAllowFail_ACIGatewayMeasurement(t *testing.T) {
+	for _, name := range []string{"venice", "phalacloud", "nanogpt"} {
+		got := MergedAllowFail(name, attestation.FormatACI1, &Config{}, false)
+		if !slices.Contains(got, attestation.FactorGWMeasurement) {
+			t.Errorf("%s ACI/1 default allow_fail does not allow %s to fail", name, attestation.FactorGWMeasurement)
 		}
 	}
 }

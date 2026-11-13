@@ -67,15 +67,15 @@ The gateway hint does not independently prove backend selection. See [NEAR routi
 
 The gateway adds 13 additional verification factors (Tier 4) covering gateway nonce, TDX quote, cert chain, debug mode, measurement allowlists, REPORTDATA binding, compose binding, CPU registry, and event log integrity.
 
-### NanoGPT (TLS, dStack Format)
+### NanoGPT (TLS, dStack or ACI/1 Format)
 
-NanoGPT runs inference nodes using the dStack TEE framework. The proxy:
+NanoGPT runs inference nodes using the dStack TEE framework, and forwards other models to the private-ai-gateway. The proxy:
 
-1. Fetches attestation in dStack format. NanoGPT uses `signing_public_key` (not `signing_key`) and allows the event log to be either a JSON array or a JSON-encoded string (`eventLogFlexible`).
-2. Verifies the TDX quote and event log against the dStack measurement policy.
-3. Forwards the request over a standard TLS connection.
+1. Fetches attestation and inspects the JSON keys to determine the format. In dStack format, NanoGPT uses `signing_public_key` (not `signing_key`) and allows the event log to be either a JSON array or a JSON-encoded string (`eventLogFlexible`). An ACI/1 response (`api_version`) attests the private-ai-gateway and is parsed with the shared `internal/provider/aci` package.
+2. Verifies the TDX quote and event log against the dStack measurement policy, or, for ACI/1, the gateway quote against the gateway policy shared with Venice and Phala Cloud.
+3. Forwards the request over a standard TLS connection to `nano-gpt.com`.
 
-There is no E2EE and no explicit REPORTDATA binding for the TLS key — channel security relies on TLS alone.
+There is no E2EE and no explicit REPORTDATA binding for the TLS key — channel security relies on TLS alone. For ACI/1 models, `nano-gpt.com` is not in the attested keyset: NanoGPT is an unattested hop in front of the gateway.
 
 ### Chutes (E2EE, Multi-Instance, ML-KEM-768)
 
@@ -92,14 +92,14 @@ Nonces are managed by a pool per instance to avoid repeated evidence fetches on 
 
 ### Phala Cloud (Format-Agnostic Gateway)
 
-Phala Cloud's RedPill gateway accepts traffic destined for multiple underlying TEE backends and returns attestation in the backend's native format. The proxy:
+Phala Cloud's RedPill gateway accepts traffic destined for multiple underlying TEE backends. The proxy:
 
-1. Sends a request to `api.redpill.ai/v1`.
-2. Receives an attestation response and inspects the JSON keys to determine the backend format: Chutes (`attestation_type`) or dStack (`intel_quote`).
-3. Delegates parsing and verification to the appropriate backend handler.
+1. Sends a request to `tee.redpill.ai/v1`, a TEE-only domain of the private-ai-gateway, which routes only to verified TEE upstreams.
+2. Receives an attestation response and inspects the JSON keys to determine the format: ACI/1 (`api_version`), Chutes (`attestation_type`) or dStack (`intel_quote`). The gateway answers with ACI/1, which attests the gateway itself.
+3. Delegates parsing and verification to the matching handler; ACI/1 uses the shared `internal/provider/aci` package.
 4. Uses a 120-second timeout to accommodate multi-instance attestation latency.
 
-Channel security depends on the detected backend. Chutes backends use ML-KEM-768 E2EE; dStack backends use TLS only.
+Channel security depends on the detected format. ACI/1 and dStack responses use TLS only; Chutes backends use ML-KEM-768 E2EE. See [Phala Cloud provider support](docs/providers/phalacloud/phalacloud_support.md).
 
 ### Tinfoil Cloud (EHBP via Router)
 
@@ -135,7 +135,7 @@ This provides true end-to-end encryption: the shared secret is derived between t
 | Venice AI | TDX + NVIDIA | E2EE (secp256k1 ECDH + AES-256-GCM) | `keccak256(enclave_pubkey)` + nonce |
 | NEAR AI Direct | TDX + NVIDIA | TLS pinning (model subdomain) | `sha256(signing_address ‖ tls_fingerprint)` + nonce |
 | NEAR AI Cloud | TDX + NVIDIA | TLS pinning (gateway) | `sha256(signing_address ‖ tls_fingerprint)` + nonce |
-| NanoGPT | TDX (dStack) | TLS only | None (dStack format) |
+| NanoGPT | TDX (dStack), or ACI/1 gateway TDX + NVIDIA | TLS only | None (dStack format); ACI/1: `keccak256(gateway key)` + nonce in the gateway quote |
 | Chutes | TDX + GPU evidence | E2EE (ML-KEM-768 + ChaCha20-Poly1305) | `sha256(nonce_hex + e2e_pubkey_base64)` |
 | Phala Cloud | Backend-dependent | Backend-dependent | Backend-dependent |
 | Tinfoil Cloud | SEV-SNP | E2EE (HPKE X25519 + AES-256-GCM) | `sha256(nonce ‖ hpke_key ‖ tls_fp ‖ gpu_hash)` in REPORTDATA |
@@ -210,7 +210,7 @@ exposes none, and the core `tee_*` factors state that.
 | 37 | `gateway_tee_cert_chain` | Gateway certificate chain verifies against the Intel or AMD root CA. |
 | 38 | `gateway_tee_quote_signature` | Signature over the gateway quote body is valid. |
 | 39 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave). |
-| 40 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and Venice ACI/1: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
+| 40 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and for the ACI/1 routes of Venice, Phala Cloud and NanoGPT: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
 | 41 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
 | 42 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. Not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot. |
 | 43 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified: nearcloud binds `sha256(signing_address ‖ tls_fingerprint)`; Venice ACI/1 binds `keccak256(signing key)` + nonce; Tinfoil binds the HPKE key and endorsed section hashes. |

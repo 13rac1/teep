@@ -64,7 +64,7 @@ func integrationPhalaCloudConfig(t *testing.T) *config.Config {
 		Providers: map[string]*config.Provider{
 			"phalacloud": {
 				Name:    "phalacloud",
-				BaseURL: "https://api.redpill.ai",
+				BaseURL: "https://tee.redpill.ai",
 				APIKey:  os.Getenv("PHALA_API_KEY"),
 				E2EE:    false,
 			},

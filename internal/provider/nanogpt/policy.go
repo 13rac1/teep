@@ -1,6 +1,9 @@
 package nanogpt
 
-import "github.com/13rac1/teep/internal/attestation"
+import (
+	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider/aci"
+)
 
 // DefaultMeasurementPolicy returns the default TDX measurement allowlists for
 // NanoGPT. NanoGPT runs on varied dstack configurations (0.5.4.1 and 0.5.5)
@@ -31,10 +34,13 @@ func DefaultMeasurementPolicy() attestation.MeasurementPolicy {
 }
 
 // SupplyChainPolicy returns the supply chain policy for NanoGPT.
-// All images use tag-based references (no @sha256: pinning), so security
-// relies on the compose manifest being bound to MRConfigID via compose_binding.
+// The model-tier images of the dstack backends use tag-based references (no
+// @sha256: pinning), so security relies on the compose manifest being bound
+// to MRConfigID via compose_binding. The gateway tier lists the images of the
+// private-ai-gateway, which answers the ACI/1 attestation (SEE:
+// aci.GatewayImages).
 func SupplyChainPolicy() *attestation.SupplyChainPolicy {
-	return &attestation.SupplyChainPolicy{Images: []attestation.ImageProvenance{
+	return &attestation.SupplyChainPolicy{Images: append([]attestation.ImageProvenance{
 		{Repo: "alpine", ModelTier: true, Provenance: attestation.ComposeBindingOnly},
 		{Repo: "dstacktee/dstack-ingress", ModelTier: true, Provenance: attestation.ComposeBindingOnly},
 		{Repo: "dstacktee/vllm-proxy", ModelTier: true, Provenance: attestation.ComposeBindingOnly},
@@ -45,5 +51,5 @@ func SupplyChainPolicy() *attestation.SupplyChainPolicy {
 		{Repo: "python", ModelTier: true, Provenance: attestation.ComposeBindingOnly},
 		{Repo: "redis", ModelTier: true, Provenance: attestation.ComposeBindingOnly},
 		{Repo: "vllm/vllm-openai", ModelTier: true, Provenance: attestation.ComposeBindingOnly},
-	}}
+	}, aci.GatewayImages()...)}
 }

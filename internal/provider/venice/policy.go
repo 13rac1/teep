@@ -2,6 +2,7 @@ package venice
 
 import (
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
 
@@ -23,36 +24,18 @@ func DefaultMeasurementPolicy() attestation.MeasurementPolicy {
 }
 
 // DefaultGatewayMeasurementPolicy returns the default TDX measurement
-// allowlists for the Venice ACI/1 private-ai-gateway CVM. The gateway runs a
-// dstack image, so MRTD/MRSEAM come from the shared dstack base list; the
-// gateway_tee_measurement factor checks those and is allowed to fail by
-// default. RTMR allowlists are
-// filled from captured gateway values as they are observed —
-// gateway_tee_hardware_config and gateway_tee_boot_config are waived by
-// default (SEE: attestation.ACIDefaultAllowFail) because the
-// private-ai-gateway-dev channel redeploys often and its RTMRs churn with
-// each image.
+// allowlists for the ACI/1 private-ai-gateway CVM (SEE:
+// aci.GatewayMeasurementPolicy).
 func DefaultGatewayMeasurementPolicy() attestation.MeasurementPolicy {
-	return attestation.DstackBaseMeasurementPolicy()
+	return aci.GatewayMeasurementPolicy()
 }
 
 // SupplyChainPolicy returns the supply chain policy for Venice. The model
 // tier uses the same container images as neardirect (dstack models). The
-// gateway tier lists the images from the ACI/1 private-ai-gateway compose
-// manifest; the manifest pins each by sha256 digest and the quote's
-// MRConfigID measures the manifest, so ComposeBindingOnly is the evidence
-// level the platform provides.
+// gateway tier lists the images of the ACI/1 private-ai-gateway compose
+// manifest (SEE: aci.GatewayImages).
 func SupplyChainPolicy() *attestation.SupplyChainPolicy {
 	p := neardirect.SupplyChainPolicy()
-	p.Images = append(p.Images,
-		attestation.ImageProvenance{Repo: "dstacktee/dstack-ingress", GatewayTier: true,
-			Provenance: attestation.ComposeBindingOnly},
-		attestation.ImageProvenance{Repo: "ghcr.io/redpill-ai/private-ai-launcher", GatewayTier: true,
-			Provenance: attestation.ComposeBindingOnly},
-		attestation.ImageProvenance{Repo: "dstacktee/dstack-verifier", GatewayTier: true,
-			Provenance: attestation.ComposeBindingOnly},
-		attestation.ImageProvenance{Repo: "prom/node-exporter", GatewayTier: true,
-			Provenance: attestation.ComposeBindingOnly},
-	)
+	p.Images = append(p.Images, aci.GatewayImages()...)
 	return p
 }

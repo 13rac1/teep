@@ -659,8 +659,9 @@ var ACIDefaultAllowFail = []string{
 	FactorGWBootConfig,
 	FactorGWCPUIDRegistry,
 
-	// The Venice ACI/1 gateway runs an MRTD (7fe60787…) that is not in the
-	// gateway measurement allowlist of teep. The allowlist changes only
+	// The private-ai-gateway, which Venice, Phala Cloud and NanoGPT reach,
+	// runs an MRTD (7fe60787…) that is not in the gateway measurement
+	// allowlist of teep. The allowlist changes only
 	// with a teep release, so a gateway release makes this factor fail
 	// for every request. The failure is reported and does not block
 	// requests until teep verifies an allowlist update without a release.
@@ -671,6 +672,26 @@ var ACIDefaultAllowFail = []string{
 	// variant names one only as the provider's assertion.
 	FactorACIBackendNamed,
 }
+
+// PhalaCloudACIDefaultAllowFail is the default allow_fail list for the
+// gateway variant of the ACI/1 response that Phala Cloud serves. The
+// variant echoes no nonce, so nonce_match and gateway_nonce_match fail and
+// are allowed; freshness rests on the enforced
+// gateway_tee_reportdata_binding.
+var PhalaCloudACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
+	FactorNonceMatch,
+	FactorGWNonceMatch,
+)
+
+// NanoGPTACIDefaultAllowFail is the default allow_fail list for the gateway
+// variant of the ACI/1 response that NanoGPT relays. The variant echoes no
+// nonce, so nonce_match and gateway_nonce_match fail and are allowed;
+// freshness rests on the enforced gateway_tee_reportdata_binding, and the GPU
+// evidence nonce on the enforced nvidia_nonce_client_bound.
+var NanoGPTACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
+	FactorNonceMatch,
+	FactorGWNonceMatch,
+)
 
 // KnownFactors is the complete set of factor names produced by BuildReport.
 // Used by config validation to reject typos in the allow_fail list.
