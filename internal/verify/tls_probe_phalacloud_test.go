@@ -60,6 +60,17 @@ type probeGateway struct {
 	receiptHangup  bool
 	receiptShort   bool
 	receiptStall   bool
+	// streamResetAfterDone and streamResetAfterFirst reset the probe
+	// stream after [DONE] or after its first content chunk.
+	streamResetAfterDone  bool
+	streamResetAfterFirst bool
+	// streamNoDone ends the stream cleanly without [DONE]; streamBadTail
+	// adds a chunk whose content is not ciphertext before [DONE]. The
+	// receipt covers the stream the gateway built, unless signServed signs
+	// it over the bytes served.
+	streamNoDone  bool
+	streamBadTail bool
+	signServed    bool
 	// refuse answers the chat request with session_not_accepted.
 	refuse bool
 	stream string
@@ -129,7 +140,19 @@ func (p *probeGateway) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	r := p.gw.ReadRequest(req.Header, body)
-	p.stream = p.gw.Stream(r, "chatcmpl-1", []string{"Hel", "lo"}, true)
+	built := p.gw.Stream(r, "chatcmpl-1", []string{"Hel", "lo"}, true)
+	p.stream = built
+	switch {
+	case p.streamNoDone:
+		p.stream = strings.TrimSuffix(built, "data: [DONE]\n\n")
+	case p.streamBadTail:
+		p.stream = strings.TrimSuffix(built, "data: [DONE]\n\n") +
+			`data: {"choices":[{"delta":{"content":"not ciphertext"},"index":0}]}` + "\n\ndata: [DONE]\n\n"
+	}
+	signed := built
+	if p.signServed {
+		signed = p.stream
+	}
 	served := p.digest
 	if p.served != "" {
 		served = p.served
@@ -137,7 +160,7 @@ func (p *probeGateway) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// The gateway hashes the request with the plaintext restored in place
 	// of the ciphertext (E2EE v2 §8).
 	restored := strings.Replace(string(body), `"`+b.Messages[0].Content+`"`, `"Say hello"`, 1)
-	fields := &aciv2test.Receipt{ID: "rcpt-1", Model: "qwen/model", KeysetDigest: served, SessionID: pinnedSessionID, Request: []byte(restored), Response: []byte(p.stream), ServedAt: probeSessionExpires - 10}
+	fields := &aciv2test.Receipt{ID: "rcpt-1", Model: "qwen/model", KeysetDigest: served, SessionID: pinnedSessionID, Request: []byte(restored), Response: []byte(signed), ServedAt: probeSessionExpires - 10}
 	if p.receipt != nil {
 		p.receipt(fields)
 	}
@@ -147,7 +170,19 @@ func (p *probeGateway) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if !p.noReceiptID {
 		w.Header().Set("X-Receipt-Id", "rcpt-1")
 	}
-	_, _ = io.WriteString(w, p.stream)
+	switch {
+	case p.streamResetAfterFirst:
+		parts := strings.SplitAfter(p.stream, "\n\n")
+		_, _ = io.WriteString(w, parts[0]+parts[1])
+		http.NewResponseController(w).Flush()
+		panic(http.ErrAbortHandler)
+	case p.streamResetAfterDone:
+		_, _ = io.WriteString(w, p.stream)
+		http.NewResponseController(w).Flush()
+		panic(http.ErrAbortHandler)
+	default:
+		_, _ = io.WriteString(w, p.stream)
+	}
 }
 
 // The standalone Phala Cloud probe sends an E2EE v2 request over the
@@ -258,6 +293,12 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 			})
 		}
 
+		testProbeStreamResets(t, gw, func(t *testing.T) (*standaloneProbe, error) {
+			t.Helper()
+			got, _, err := probe(t, attested)
+			return got, err
+		})
+
 		t.Run("sessions refused", func(t *testing.T) {
 			gw.configure(func(p *probeGateway) { p.refuse = true })
 			defer gw.configure(nil)
@@ -278,12 +319,76 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 	})
 }
 
+// testProbeStreamResets runs the probe against a gateway that resets the
+// probe stream.
+func testProbeStreamResets(t *testing.T, gw *probeGateway, probe func(*testing.T) (*standaloneProbe, error)) {
+	t.Helper()
+	// A probe stream that stops with a read error still has its receipt
+	// checked, against the bytes that arrived. After [DONE] every byte
+	// arrived and the receipt verifies; e2ee_usable states the failed
+	// stream. A stream cut after its first chunk does not match the
+	// receipt, which covers the whole response, and the factor fails.
+	t.Run("stream reset after [DONE]", func(t *testing.T) {
+		gw.configure(func(p *probeGateway) { p.streamResetAfterDone = true })
+		got, err := probe(t)
+		if got == nil || got.e2ee == nil || got.e2ee.Err == nil {
+			t.Fatalf("probe = %+v, %v; want the stream failure in e2ee_usable", got, err)
+		}
+		if r := got.e2ee.Receipt; r == nil || r.Err != nil {
+			t.Fatalf("receipt = %+v, want it checked and verified", r)
+		}
+		if f := completedReceiptFactor(t, got, err); f.Status != attestation.Pass {
+			t.Errorf("aci_receipt_verified = %+v, want Pass", f)
+		}
+	})
+	// Once the response is an event stream, every outcome except a verified
+	// receipt fails the factor: a reset without a receipt id, a stream that
+	// ends without [DONE], and a chunk that does not decrypt. A receipt over
+	// the bytes served still verifies; e2ee_usable states the bad chunk.
+	for _, tc := range []struct {
+		name string
+		set  func(*probeGateway)
+		want attestation.Status
+	}{
+		{"reset without a receipt id", func(p *probeGateway) { p.streamResetAfterFirst, p.noReceiptID = true, true }, attestation.Fail},
+		{"no [DONE]", func(p *probeGateway) { p.streamNoDone = true }, attestation.Fail},
+		{"chunk that does not decrypt", func(p *probeGateway) { p.streamBadTail = true }, attestation.Fail},
+		{"chunk that does not decrypt, receipt over it", func(p *probeGateway) { p.streamBadTail, p.signServed = true, true }, attestation.Pass},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw.configure(tc.set)
+			got, err := probe(t)
+			if got == nil || got.e2ee == nil || got.e2ee.Err == nil {
+				t.Fatalf("probe = %+v, %v; want the stream failure in e2ee_usable", got, err)
+			}
+			if f := completedReceiptFactor(t, got, err); f.Status != tc.want || !f.Enforced {
+				t.Errorf("aci_receipt_verified = %+v, want enforced %s", f, tc.want)
+			}
+		})
+	}
+	t.Run("stream reset after the first chunk", func(t *testing.T) {
+		gw.configure(func(p *probeGateway) { p.streamResetAfterFirst = true })
+		got, err := probe(t)
+		if got == nil || got.e2ee == nil || got.e2ee.Err == nil {
+			t.Fatalf("probe = %+v, %v; want the stream failure in e2ee_usable", got, err)
+		}
+		if r := got.e2ee.Receipt; r == nil || r.Err == nil || !strings.Contains(r.Err.Error(), "response.returned") {
+			t.Fatalf("receipt = %+v, want a response hash failure", r)
+		}
+		if f := completedReceiptFactor(t, got, err); f.Status != attestation.Fail || !f.Enforced {
+			t.Errorf("aci_receipt_verified = %+v, want an enforced Fail", f)
+		}
+	})
+}
+
 // configure resets the case and applies set (nil for none).
 func (p *probeGateway) configure(set func(*probeGateway)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.served, p.receipt, p.noReceiptID, p.receiptMissing, p.receiptStatus, p.refuse = "", nil, false, false, 0, false
 	p.receiptHangup, p.receiptShort, p.receiptStall = false, false, false
+	p.streamResetAfterDone, p.streamResetAfterFirst = false, false
+	p.streamNoDone, p.streamBadTail, p.signServed = false, false, false
 	if set != nil {
 		set(p)
 	}

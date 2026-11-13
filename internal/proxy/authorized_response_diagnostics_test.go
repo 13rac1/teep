@@ -36,7 +36,7 @@ func TestAuthorizedHTTPFailurePreservesBodyReadError(t *testing.T) {
 				StatusCode: http.StatusServiceUnavailable, Header: make(http.Header), Body: io.NopCloser(body),
 			}}}
 			writer := newInferenceRecorder()
-			err := server.relayAuthorized(t.Context(), writer, input, &result)
+			err := server.relayAuthorized(t.Context(), t.Context(), writer, input, &result)
 			if err == nil || !strings.Contains(err.Error(), "upstream returned HTTP 503") || writer.Code != http.StatusServiceUnavailable {
 				t.Fatalf("HTTP failure lost: status=%d error=%v", writer.Code, err)
 			}
@@ -72,7 +72,7 @@ func TestAuthorizedNonStreamFailureDiagnostics(t *testing.T) {
 				result := authorizedResponse{authorization: value, upstream: &upstreamResult{Resp: &http.Response{
 					StatusCode: status, Header: make(http.Header), Body: io.NopCloser(body),
 				}}}
-				err := server.relayAuthorized(t.Context(), writer, input, &result)
+				err := server.relayAuthorized(t.Context(), t.Context(), writer, input, &result)
 				if !errors.Is(err, wantErr) {
 					t.Fatalf("lost response failure: %v", err)
 				}

@@ -248,7 +248,7 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	out.report = value.report
 	started := time.Now()
 	defer func() { out.upstreamDur += time.Since(started) }()
-	if err := s.relayAuthorized(result.upstream.Request.Context(), w, input, &result); err != nil { //nolint:contextcheck // The request retains the attempt context derived from ctx with the caller deadline.
+	if err := s.relayAuthorized(ctx, result.upstream.Request.Context(), w, input, &result); err != nil {
 		out.summary = append(out.summary, result.relayDiagnostics...)
 		return out, err
 	}
@@ -261,7 +261,10 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	return out, nil
 }
 
-func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result *authorizedResponse) (retErr error) {
+// relayAuthorized relays the response of one attempt. ctx is the attempt
+// context, which teep's own stream deadline bounds; clientCtx is the context
+// of the client's request, the only signal that the client side ended.
+func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.ResponseWriter, input *authorizedRequest, result *authorizedResponse) (retErr error) {
 	writer, err := newResponseLifetime(ctx, w)
 	if err != nil {
 		return err
@@ -328,11 +331,17 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 		target = held
 	}
 	streamStats, err := relayResponse(ctx, target, body, ur.Session, ur.Meta, input.stream, input.endpoint)
-	if err == nil && receipt != nil {
+	switch {
+	case receipt == nil:
+	case err == nil:
 		err = s.checkReceipt(ctx, input, result, receipt)
 		if err == nil && held != nil {
 			err = held.release(w)
 		}
+	case input.stream && streamStats.Chunks > 0:
+		// The stream failed after content reached the client: the check
+		// must still run, or the gateway could skip it.
+		s.checkReceiptAfterRelayFailure(clientCtx, input, result, receipt, relayEnding{err: err, downstream: writer.err, upstreamBody: resp.Body})
 	}
 	if err != nil || writer.check() != nil {
 		if input.stream {

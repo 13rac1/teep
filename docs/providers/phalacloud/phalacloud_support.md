@@ -196,33 +196,77 @@ apart. Then `aci.VerifyReceipt` checks:
 
 A non-stream response reaches the client only after its receipt verifies.
 A stream is relayed to the client before its receipt is checked: teep
-checks the receipt after the stream ends. A failure is reported after the
-client has the content: it is logged at error level (`response receipt
-check failed`), and a failure of the service's statements ends the
-authorization generation, so the next request verifies again. In `teep verify`, the
-receipt of the probe is the factor `aci_receipt_verified`. Once the probe
-stream verified, every failure to obtain a verified receipt fails it: a
-missing or malformed receipt id or receipt, a receipt that the gateway does
-not serve, a failed check, and a failed receipt request. Once the probe
-stream verified, the gateway under test cannot choose a failure that does
-not block. Before that, a stream that the gateway resets, also after
-`[DONE]`, fails `e2ee_usable`, which is allowed for Phala Cloud. A network
-fault can also fail the receipt request; the detail then says to run
-again. The detail of a verified receipt states whether the request hash
-was checked. A probe whose stream fails fails `e2ee_usable`.
+checks the receipt after the stream ends. The property is: every response
+that delivered content has its receipt checked, and a failure of that check
+that the gateway causes ends the authorization generation, so the next
+request verifies again. Content that was already streamed cannot be
+recalled. The receipt fetch and check run under a context that teep owns,
+bounded to 30 seconds, so a client that hangs up does not decide their
+result.
+
+When the relay of a stream fails after content went out, teep names the
+client only from positive evidence:
+
+- The relay error is the error of the write to the client, or of the
+  client's own request context, which has ended (the client hung up or
+  its deadline passed), and the read from the gateway had not reached its
+  end: the generation stays, so that one client cannot force a new
+  verification for every client, and teep logs at error level that content
+  was relayed without a completed receipt check.
+- Every other relay error is the gateway's: a reset, also after `[DONE]`,
+  a cut, a stream that does not parse (an error event, an error object,
+  data that is not JSON, a line over 1 MiB, data after `[DONE]`), and
+  teep's own deadline for the attempt. teep reads the rest of the response
+  under the bounded server context, so a gateway that ended its stream
+  badly but signed what it sent still verifies, and checks the receipt
+  against every byte read from the gateway. The receipt covers the whole
+  response, so a stream cut before its end does not verify, also when the
+  network cut it; that costs one new verification.
+- A gateway that sends content and then stops until the client gives up
+  ends as a client hang-up; its receipt is not checked. Reading the rest
+  of such a stream after the client left is not built.
+
+A failure is logged at error level (`response receipt check failed`, and
+`content was relayed before the receipt check failed` for a stream whose
+relay failed).
+
+In `teep verify`, the receipt of the probe is the factor
+`aci_receipt_verified`. Once the probe response is HTTP 200 with the
+verified keyset digest and an event stream, every outcome except a
+verified receipt fails it: a missing or malformed receipt id or receipt, a
+receipt that the gateway does not serve, a failed check, a failed receipt
+request, a reset, a stream without `[DONE]`, and content that does not
+decrypt. The receipt is checked over the whole response where teep can
+read it, and over the bytes that arrived where it cannot. The gateway
+under test cannot choose a failure that skips the check. A network fault
+can also fail the receipt request; the detail then says to run again. The
+detail of a verified receipt states whether the request hash was checked.
+A response that is not HTTP 200, serves another keyset digest or is not an
+event stream fails `e2ee_usable`, and the receipt factor is a deferred
+skip.
 
 A receipt whose signature, keyset, response hash, cited session or
 `served_at` does not verify, a malformed receipt, and a response without
 one `X-Receipt-Id` end the authorization generation that the request used.
-Two failures fail the request and keep the generation, because neither is
-evidence against the attestation that every client shares:
+For a stream, a receipt that the gateway does not serve (HTTP 404 on 3
+attempts, another HTTP status, or a connection failure) ends the
+generation too, because the content already went out. For a non-stream
+response, which teep holds until its receipt verifies and which the client
+does not get otherwise, it fails the request and keeps the generation.
 
-- a receipt that the gateway does not serve (HTTP 404 on 3 attempts,
-  another HTTP status, or a connection failure);
-- a receipt whose statements about the request (endpoint, method, model,
-  request hash) differ from the request that teep sent. These depend on
-  the client's request, and one client must not end the authorization of
-  the others.
+teep checks the service's own statements (signature, keyset,
+`served_at`, response hash, cited session) before the statements about the
+request, so a receipt for another request cannot stop the check early.
+Then:
+
+- A receipt that names another endpoint, method or model ends the
+  generation for a stream, whose content went out, and fails a non-stream
+  request. The gateway writes them from the request it received, and the
+  `model` of the receipt from the `model` that the client sent.
+- A receipt whose request hash differs from the request that teep sent
+  fails the request and keeps the generation, for a stream too. teep
+  builds the gateway's form of the request from the client's request, and
+  one client must not end the authorization of the others.
 
 A response of another keyset (a changed `X-ACI-Keyset-Digest`) fails before
 teep relays it, and the generation ends. ACI/1 §5.2 lets the gateway finish a response in
@@ -341,10 +385,9 @@ stream failed.
 - E2EE v2 defines field paths only for message content. teep refuses a
   request that carries `messages[].tool_calls`, `messages[].function_call`, `messages[].refusal`, `messages[].audio`, `prediction`, `tools`, `functions` and `response_format.json_schema`, and a response with tool calls.
   Not encrypted: the top-level `model`, `messages[].name`, `stop`, `tool_choice` and the top-level `function_call` (which name a function), and the other request parameters, including provider-specific prompt fields, which pass in plaintext.
-- A stream is relayed before teep checks its receipt. A failed check is
-  reported after delivery: it is logged, and a failure of the service's
-  statements ends the authorization generation. It does not withdraw the
-  content that the client has.
+- A stream is relayed before teep checks its receipt. A failed or missing
+  check is reported after delivery: it is logged and ends the authorization
+  generation. It does not withdraw the content that the client has.
 - teep does not check the request hash of a request with a value that
   serde_json can write in another form (see [Receipts](#receipts)).
 - `teep verify --reverify` does not check the recorded receipt again. A
@@ -416,9 +459,17 @@ stream failed.
   `TestReceiptID` in
   [receipt fetch tests](../../../internal/provider/aci/receipt_fetch_test.go).
 - The receipt cases of `TestAuthorizedPhalaCloudACIv2` check the proxy:
-  a non-stream response held until its receipt verifies, and which
-  failures end the generation. `TestStandalonePhalaCloudProbe` checks the
-  receipt of the `teep verify` probe and its capture, and
+  a non-stream response held until its receipt verifies, which failures
+  end the generation, a stream reset after `[DONE]` or after its first
+  chunk, five endings that do not parse, a receipt for another model or
+  another request, and a client that hangs up, whose deadline passes or
+  whose connection breaks (the generation stays). `TestEndedByClient`
+  checks who a relay failure names, teep's own deadline included, and
+  `TestVerifyReceiptChecksServiceStatementsFirst` the order of the receipt
+  check. `TestStandalonePhalaCloudProbe` checks the receipt of the
+  `teep verify` probe and its capture, the same two resets, a reset
+  without a receipt id, a stream without `[DONE]` and a chunk that does
+  not decrypt included, and
   `TestTestE2EE_ACIv2ServedKeysetDigest` the failure of a response of
   another keyset. `TestResponseHash` is in
   [response hash tests](../../../internal/provider/aci/response_hash_test.go).

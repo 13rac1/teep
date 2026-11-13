@@ -52,7 +52,7 @@ func TestAuthorizedDownstreamFailureSurvivesCancellation(t *testing.T) {
 				StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)),
 			}}}
 			writer := cancelFailedResponseWriter{newInferenceRecorder(), cancel, flush}
-			err := server.relayAuthorized(ctx, writer, input, &result)
+			err := server.relayAuthorized(ctx, ctx, writer, input, &result)
 			if !errors.Is(err, context.Canceled) || !errors.Is(err, io.ErrClosedPipe) {
 				t.Fatalf("lost downstream failure or cancellation: %v", err)
 			}

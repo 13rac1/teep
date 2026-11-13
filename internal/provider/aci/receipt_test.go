@@ -158,11 +158,43 @@ func TestVerifyReceiptRefuses(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
-			// Only the statements about the request mark the failure as
-			// one that keeps the shared authorization.
-			request := tc.name == "other model" || tc.name == "other endpoint" || tc.name == "other request"
-			if errors.Is(err, ErrReceiptRequestMismatch) != request {
-				t.Errorf("request mismatch = %v, want %v", errors.Is(err, ErrReceiptRequestMismatch), request)
+			// Only the request hash marks a failure that keeps the shared
+			// authorization; endpoint, method and model are a route
+			// mismatch.
+			if want := tc.name == "other request"; errors.Is(err, ErrReceiptRequestMismatch) != want {
+				t.Errorf("request mismatch = %v, want %v", errors.Is(err, ErrReceiptRequestMismatch), want)
+			}
+			if want := tc.name == "other model" || tc.name == "other endpoint"; errors.Is(err, ErrReceiptRouteMismatch) != want {
+				t.Errorf("route mismatch = %v, want %v", errors.Is(err, ErrReceiptRouteMismatch), want)
+			}
+		})
+	}
+}
+
+// A receipt for another request does not stop the check before the
+// service's own statements: with another model and another response, or
+// another model and a session that the request did not pin, the response or
+// session failure is returned, which ends the authorization, not the route
+// mismatch.
+func TestVerifyReceiptChecksServiceStatementsFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*Receipt, *ReceiptCheck)
+		want   string
+	}{
+		{"other model and other response", func(_ *Receipt, c *ReceiptCheck) { c.Model, c.ResponseHash[0] = "other", c.ResponseHash[0]^1 }, "response.returned"},
+		{"other model and session not pinned", func(_ *Receipt, c *ReceiptCheck) { c.Model, c.Sessions = "other", withoutCited(c.Sessions) }, "no required, verified"},
+		{"other request and other response", func(_ *Receipt, c *ReceiptCheck) { c.RequestHash[0] ^= 1; c.ResponseHash[0] ^= 1 }, "response.returned"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, c := receiptFixture(t)
+			tc.change(r, c)
+			err := VerifyReceipt(r, c)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			if errors.Is(err, ErrReceiptRouteMismatch) || errors.Is(err, ErrReceiptRequestMismatch) {
+				t.Errorf("err = %v is a request statement mismatch", err)
 			}
 		})
 	}

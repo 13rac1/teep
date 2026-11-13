@@ -28,6 +28,14 @@ func NewResponseHash(body io.Reader) *ResponseHash {
 
 func (h *ResponseHash) Read(p []byte) (int, error) { return h.wire.Read(p) }
 
+// Received returns the sha256 of the bytes read so far, without reading
+// more. After a failed read it is the hash of what arrived.
+func (h *ResponseHash) Received() [32]byte {
+	var out [32]byte
+	copy(out[:], h.sum.Sum(nil))
+	return out
+}
+
 // Finish reads the bytes that the reader left, up to MaxResponseTail, and
 // returns the sha256 of the whole body.
 func (h *ResponseHash) Finish() ([32]byte, error) {

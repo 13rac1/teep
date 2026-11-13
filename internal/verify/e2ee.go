@@ -134,27 +134,42 @@ func testE2EEACIv2(ctx context.Context, raw *attestation.RawAttestation, provide
 // with the relay's chunk decryption. Any unencrypted or undecryptable content
 // field, a missing [DONE] or a response without an encrypted field fails.
 func verifyACIv2StreamResponse(resp *http.Response, session *e2ee.ACIv2Session, raw *attestation.RawAttestation) *attestation.E2EETestResult {
+	if err := checkACIv2Response(resp, raw); err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: err}
+	}
+	return readACIv2Stream(resp, session)
+}
+
+// checkACIv2Response checks an E2EE v2 response before its body is read:
+// HTTP 200, the verified keyset digest, and an event stream.
+func checkACIv2Response(resp *http.Response, raw *attestation.RawAttestation) error {
 	if resp.StatusCode != http.StatusOK {
-		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP %d", resp.StatusCode)}
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	if raw.ACICanonicalReport {
 		verified := &attestation.VerificationReport{ACIKeysetDigest: raw.ACIWorkloadKeysetDigest}
 		differs, err := attestation.CheckServedKeysetDigest(resp.Header, verified)
 		if err != nil {
-			return &attestation.E2EETestResult{Attempted: true, Err: err}
+			return err
 		}
 		if differs {
 			// ACI/1 §5.2 lets the gateway finish a response in flight
 			// under the new keyset. Its receipt is signed under keys that
 			// teep has not verified, so the response is not authenticated.
-			return &attestation.E2EETestResult{Attempted: true, Err: errors.New("the response served another keyset digest; its receipt is signed under a keyset that teep has not verified")}
+			return errors.New("the response served another keyset digest; its receipt is signed under a keyset that teep has not verified")
 		}
 	}
 	// teep sends stream=true; any other response type is not the answer to
 	// the encrypted request.
 	if mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type")); err != nil || mediaType != "text/event-stream" {
-		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("E2EE v2 response Content-Type %q is not text/event-stream", resp.Header.Get("Content-Type"))}
+		return fmt.Errorf("E2EE v2 response Content-Type %q is not text/event-stream", resp.Header.Get("Content-Type"))
 	}
+	return nil
+}
+
+// readACIv2Stream reads and decrypts an E2EE v2 event stream that passed
+// checkACIv2Response.
+func readACIv2Stream(resp *http.Response, session *e2ee.ACIv2Session) *attestation.E2EETestResult {
 	scanner, cleanup := e2ee.NewSSEScanner(resp.Body)
 	defer cleanup()
 	chunks := 0

@@ -281,13 +281,20 @@ func decodeEvent(e json.RawMessage, v any, other []string) ([]string, error) {
 	return unknown, nil
 }
 
-// ErrReceiptRequestMismatch marks a receipt whose statement about the
-// request (endpoint, method, model or request hash) differs from the
-// request that teep sent. Those statements depend on the client's request,
-// so the caller fails the request without ending the authorization that
-// other clients share; a failure of the service's own statements
-// (signature, keyset, response hash, session, served_at) ends it.
-var ErrReceiptRequestMismatch = errors.New("receipt does not describe the request that teep sent")
+// ErrReceiptRequestMismatch marks a receipt whose request.received hash
+// differs from the request that teep sent, after every statement of the
+// service itself verified. teep reproduces the gateway's form of the
+// request from the client's request, so the caller fails the request
+// without ending the authorization that other clients share.
+var ErrReceiptRequestMismatch = errors.New("receipt does not hash the request that teep sent")
+
+// ErrReceiptRouteMismatch marks a receipt whose endpoint, method or model
+// differs from the request that teep sent, after every statement of the
+// service itself verified. The gateway writes them from the request it
+// received, so for a response that already reached the client the caller
+// ends the authorization; for a response that teep holds it fails the
+// request.
+var ErrReceiptRouteMismatch = errors.New("receipt does not name the endpoint, method or model that teep sent")
 
 // ReceiptCheck is what a receipt must state for one request.
 type ReceiptCheck struct {
@@ -311,10 +318,14 @@ type ReceiptCheck struct {
 
 // VerifyReceipt checks r for one request (ACI/1 §9.3): the ed25519
 // signature over the JCS form without signature under the keyset key that
-// key_id names, the keyset digest, endpoint, method, model, the response
-// hash, the request hash when teep has it, and a verified upstream event
-// that is required and cites a pinned session whose period holds served_at.
-// served_at must be earlier than the keyset's not_after, which must be set.
+// key_id names, the keyset digest, served_at earlier than the keyset's
+// not_after (which must be set), the response hash, a verified upstream
+// event that is required and cites a pinned session whose period holds
+// served_at, then endpoint, method and model, and the request hash when
+// teep has it. The service's own statements come first, so a receipt for
+// another request cannot stop the check before the response hash and the
+// session: only a receipt that passes them returns ErrReceiptRouteMismatch
+// or ErrReceiptRequestMismatch.
 func VerifyReceipt(r *Receipt, c *ReceiptCheck) error {
 	if err := verifyReceiptSignature(r, c.Keys); err != nil {
 		return err
@@ -322,10 +333,6 @@ func VerifyReceipt(r *Receipt, c *ReceiptCheck) error {
 	switch {
 	case subtle.ConstantTimeCompare([]byte(r.KeysetDigest), []byte(c.KeysetDigest)) != 1:
 		return errors.New("receipt names another workload keyset")
-	case r.Endpoint != c.Endpoint || r.Method != c.Method:
-		return fmt.Errorf("%w: receipt is for %s %s, not %s %s", ErrReceiptRequestMismatch, r.Method, r.Endpoint, c.Method, c.Endpoint)
-	case r.Model != c.Model:
-		return fmt.Errorf("%w: receipt model is %q, not %q", ErrReceiptRequestMismatch, r.Model, c.Model)
 	case c.NotAfter <= 0:
 		return errors.New("receipt check has no keyset not_after")
 	case r.ServedAt >= c.NotAfter:
@@ -336,10 +343,18 @@ func VerifyReceipt(r *Receipt, c *ReceiptCheck) error {
 	if !hashEquals(r.ResponseReturned, c.ResponseHash) {
 		return errors.New("response.returned does not hash the response that teep received")
 	}
-	if c.RequestHash != nil && !hashEquals(r.RequestReceived, *c.RequestHash) {
+	if err := checkUpstreamVerified(r.Upstream, c.Sessions, r.ServedAt); err != nil {
+		return err
+	}
+	switch {
+	case r.Endpoint != c.Endpoint || r.Method != c.Method:
+		return fmt.Errorf("%w: receipt is for %s %s, not %s %s", ErrReceiptRouteMismatch, r.Method, r.Endpoint, c.Method, c.Endpoint)
+	case r.Model != c.Model:
+		return fmt.Errorf("%w: receipt model is %q, not %q", ErrReceiptRouteMismatch, r.Model, c.Model)
+	case c.RequestHash != nil && !hashEquals(r.RequestReceived, *c.RequestHash):
 		return fmt.Errorf("%w: request.received does not hash it", ErrReceiptRequestMismatch)
 	}
-	return checkUpstreamVerified(r.Upstream, c.Sessions, r.ServedAt)
+	return nil
 }
 
 func verifyReceiptSignature(r *Receipt, keys []attestation.ACIReceiptKey) error {

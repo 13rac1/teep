@@ -9,16 +9,23 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider/aci"
 )
 
+// receiptCheckTimeout bounds the receipt fetch and check of one response.
+// The check runs under a context that the server owns, so a client that
+// hangs up does not decide its result.
+const receiptCheckTimeout = 30 * time.Second
+
 // receiptRelay hashes the wire bytes of one Phala Cloud response for the
-// receipt check (ACI/1 §9.3).
+// receipt check (ACI/1 §9.3), and records how reading from upstream ended.
 type receiptRelay struct {
-	id   string
-	wire *aci.ResponseHash
+	id       string
+	wire     *aci.ResponseHash
+	upstream *upstreamRead
 }
 
 func newReceiptRelay(header http.Header, body io.Reader) (*receiptRelay, error) {
@@ -26,38 +33,143 @@ func newReceiptRelay(header http.Header, body io.Reader) (*receiptRelay, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &receiptRelay{id: id, wire: aci.NewResponseHash(body)}, nil
+	upstream := &upstreamRead{r: body}
+	return &receiptRelay{id: id, wire: aci.NewResponseHash(upstream), upstream: upstream}, nil
+}
+
+// upstreamRead records whether the read of the upstream body reached EOF.
+type upstreamRead struct {
+	r   io.Reader
+	eof bool
+}
+
+func (u *upstreamRead) Read(p []byte) (int, error) {
+	n, err := u.r.Read(p)
+	if errors.Is(err, io.EOF) {
+		u.eof = true
+	}
+	return n, err
+}
+
+// relayEnding is how the relay of a stream failed: its error, the error of
+// the downstream write or flush (nil when there was none), and the upstream
+// body, which teep closes when reading the rest of it takes too long.
+type relayEnding struct {
+	err          error
+	downstream   error
+	upstreamBody io.Closer
+}
+
+// endedByClient reports whether the relay failed because the client side
+// ended, from positive evidence only: the relay error is the error of the
+// downstream write or flush, or the error of the client's own request
+// context, which has ended. teep's own deadline for the attempt is not the
+// client's, and every other relay error (a reset, a cut, a stream that does
+// not parse) is the gateway's.
+func endedByClient(clientCtx context.Context, ending relayEnding) bool {
+	if ending.downstream != nil && errors.Is(ending.err, ending.downstream) {
+		return true
+	}
+	clientErr := clientCtx.Err()
+	return clientErr != nil && errors.Is(ending.err, clientErr)
+}
+
+// finishWithin reads the rest of the upstream body into the response hash,
+// and closes the body when ctx ends first. It returns the hash of every
+// byte read, also when the read fails.
+func (rr *receiptRelay) finishWithin(ctx context.Context, body io.Closer) [32]byte {
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = body.Close()
+		case <-done:
+		}
+	}()
+	if sum, err := rr.wire.Finish(); err == nil {
+		return sum
+	}
+	return rr.wire.Received()
+}
+
+// serverContext returns a context for the receipt check that the client's
+// cancellation does not end, bounded by receiptCheckTimeout.
+func serverContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), receiptCheckTimeout)
 }
 
 // checkReceipt fetches the receipt of a relayed Phala Cloud response over the
 // pinned client and verifies it against the authorization that the request
 // used. A receipt whose signature, keyset, response hash, session or
-// served_at does not verify ends that authorization generation. A receipt
-// that cannot be fetched, or whose statements about the request differ from
-// it, fails the request and keeps the generation: neither is evidence
-// against the attestation that other clients share.
+// served_at does not verify ends that authorization generation. For a
+// stream, which reached the client before its check, every failure ends the
+// generation. For a non-stream response, which teep holds until the check
+// passes, a receipt that cannot be fetched or whose statements about the
+// request differ from it fails the request and keeps the generation:
+// neither is evidence against the attestation that other clients share.
 func (s *Server) checkReceipt(ctx context.Context, input *authorizedRequest, result *authorizedResponse, rr *receiptRelay) error {
-	value := result.authorization
+	ctx, cancel := serverContext(ctx)
+	defer cancel()
+	// A stream reached the client before its check, so for a stream every
+	// failure of the check that the gateway causes ends the generation.
+	delivered := input.stream
 	responseHash, err := rr.wire.Finish()
 	if err != nil {
-		return s.receiptFailed(ctx, input, result, "receipt_response_incomplete", err, false)
+		return s.receiptFailed(ctx, input, result, "receipt_response_incomplete", err, delivered)
 	}
+	return s.verifyResponseReceipt(ctx, input, result, rr, responseHash, delivered)
+}
+
+// checkReceiptAfterRelayFailure handles a stream whose relay failed after
+// teep relayed content to the client:
+//   - the client side ended it (endedByClient) before the read from
+//     upstream reached its end: one client must not end the authorization
+//     that every client shares, so the generation stays, and the error log
+//     says that content went out without a completed check.
+//   - otherwise the failure is the gateway's. teep reads the rest of the
+//     upstream body under the server's bounded context, so that a gateway
+//     that ended its stream badly but signed what it sent can still verify,
+//     and checks the receipt against the hash of every byte read from
+//     upstream. Every failure that the gateway causes ends the generation;
+//     a stream cut before its end does not verify, also when the network
+//     cut it.
+//
+// The relayed content cannot be recalled.
+func (s *Server) checkReceiptAfterRelayFailure(clientCtx context.Context, input *authorizedRequest, result *authorizedResponse, rr *receiptRelay, ending relayEnding) {
+	ctx, cancel := serverContext(clientCtx)
+	defer cancel()
+	attrs := []slog.Attr{slog.String("provider", input.provider.Name), slog.String("model", input.key.Model()), slog.String("receipt_id", rr.id)}
+	if !rr.upstream.eof && endedByClient(clientCtx, ending) {
+		s.authorizations.log().LogAttrs(ctx, slog.LevelError, "content was relayed without a completed receipt check: the client side ended the response", attrs...)
+		return
+	}
+	if err := s.verifyResponseReceipt(ctx, input, result, rr, rr.finishWithin(ctx, ending.upstreamBody), true); err != nil {
+		s.authorizations.log().LogAttrs(ctx, slog.LevelError, "content was relayed before the receipt check failed", attrs...)
+	}
+}
+
+// verifyResponseReceipt fetches the receipt of rr and verifies it with
+// responseHash. With delivered (content already reached the client), every
+// failure ends the generation.
+func (s *Server) verifyResponseReceipt(ctx context.Context, input *authorizedRequest, result *authorizedResponse, rr *receiptRelay, responseHash [32]byte, delivered bool) error {
+	value := result.authorization
 	var body struct {
 		Model string `json:"model"`
 	}
 	if err := json.Unmarshal(input.body, &body); err != nil || body.Model == "" {
-		return s.receiptFailed(ctx, input, result, "receipt_request_model", errors.New("request body has no string model"), false)
+		return s.receiptFailed(ctx, input, result, "receipt_request_model", errors.New("request body has no string model"), delivered)
 	}
 	client, err := s.pinnedClientForIdentity(input.provider.Name, value.identity)
 	if err != nil {
-		return s.receiptFailed(ctx, input, result, "receipt_fetch_failed", err, false)
+		return s.receiptFailed(ctx, input, result, "receipt_fetch_failed", err, delivered)
 	}
 	receipt, err := aci.FetchReceipt(ctx, client, input.route.BaseURL(), input.provider.APIKey, rr.id)
 	if err != nil {
 		if errors.Is(err, aci.ErrMalformedReceipt) {
 			return s.receiptFailed(ctx, input, result, "receipt_malformed", err, true)
 		}
-		return s.receiptFailed(ctx, input, result, "receipt_fetch_failed", err, false)
+		return s.receiptFailed(ctx, input, result, "receipt_fetch_failed", err, delivered)
 	}
 	check := &aci.ReceiptCheck{
 		Keys: value.report.ACIReceiptKeys, KeysetDigest: value.report.ACIKeysetDigest, NotAfter: value.report.ACIKeysetNotAfter,
@@ -65,9 +177,15 @@ func (s *Server) checkReceipt(ctx context.Context, input *authorizedRequest, res
 		ResponseHash: responseHash, RequestHash: result.upstream.RequestHash, Sessions: value.report.ACIPinnedSessions,
 	}
 	if err := aci.VerifyReceipt(receipt, check); err != nil {
+		if errors.Is(err, aci.ErrReceiptRouteMismatch) {
+			// The gateway names the endpoint, method and model of the
+			// request it received. For content that already went out,
+			// another name ends the generation.
+			return s.receiptFailed(ctx, input, result, "receipt_route_mismatch", err, delivered)
+		}
 		if errors.Is(err, aci.ErrReceiptRequestMismatch) {
 			// One client's request must not end the authorization that
-			// every client shares.
+			// every client shares; the client chooses its request.
 			return s.receiptFailed(ctx, input, result, "receipt_request_mismatch", err, false)
 		}
 		return s.receiptFailed(ctx, input, result, "receipt_rejected", err, true)
