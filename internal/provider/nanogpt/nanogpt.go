@@ -171,10 +171,10 @@ func ParseAttestationResponse(ctx context.Context, body []byte, nonce attestatio
 	case attestation.FormatDstack:
 		return parseDstack(ctx, body)
 	case attestation.FormatChutes:
-		if isChutesEvidence(body) {
-			return parseChutesEvidence(ctx, body, nonce)
+		if !isChutesEvidence(body) {
+			return nil, errors.New("nanogpt: Chutes evidence with an attestation_type member is not supported")
 		}
-		return provider.ParseChutesFormat(ctx, body, "nanogpt")
+		return parseChutesEvidence(ctx, body, nonce)
 	case attestation.FormatACI1:
 		return aci.Parse(ctx, body, "nanogpt")
 	case attestation.FormatTinfoil:

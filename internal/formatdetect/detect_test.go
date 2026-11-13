@@ -19,9 +19,9 @@ func TestDetect(t *testing.T) {
 			want: attestation.FormatTinfoil,
 		},
 		{
-			name: "chutes attestation_type",
+			name: "attestation_type is not a format key",
 			body: `{"attestation_type":"chutes","nonce":"abc","all_attestations":[]}`,
-			want: attestation.FormatChutes,
+			want: "",
 		},
 		{
 			name: "gateway with gateway_attestation",
@@ -39,9 +39,9 @@ func TestDetect(t *testing.T) {
 			want: attestation.FormatTinfoil,
 		},
 		{
-			name: "chutes takes priority over intel_quote",
+			name: "attestation_type does not change an intel_quote body",
 			body: `{"attestation_type":"chutes","intel_quote":"deadbeef"}`,
-			want: attestation.FormatChutes,
+			want: attestation.FormatDstack,
 		},
 		{
 			name: "chutes evidence list",

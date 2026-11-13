@@ -5,7 +5,6 @@
 // Detection is based on top-level JSON keys in the attestation response:
 //
 //	"format"              → tinfoil
-//	"attestation_type"    → chutes
 //	"gateway_attestation" → gateway (NEAR cloud)
 //	"api_version"=="aci/1"→ ACI/1 (Venice)
 //	"intel_quote"         → dstack (Venice/NEAR direct)
@@ -35,7 +34,6 @@ import (
 // present at all is what identifies the dstack response structure.
 type probe struct {
 	Format             string          `json:"format"`
-	AttestationType    string          `json:"attestation_type"`
 	GatewayAttestation json.RawMessage `json:"gateway_attestation"`
 	APIVersion         string          `json:"api_version"`
 	IntelQuote         json.RawMessage `json:"intel_quote"`
@@ -78,8 +76,6 @@ func Detect(body []byte) attestation.BackendFormat {
 	switch {
 	case p.Format != "":
 		return attestation.FormatTinfoil
-	case p.AttestationType != "":
-		return attestation.FormatChutes
 	case hasJSONValue(p.GatewayAttestation):
 		return attestation.FormatGateway
 	case p.APIVersion == string(attestation.FormatACI1):

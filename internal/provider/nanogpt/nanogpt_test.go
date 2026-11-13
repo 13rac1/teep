@@ -422,31 +422,6 @@ func TestAttester_FetchAttestation_EventLogAsArray(t *testing.T) {
 	}
 }
 
-func TestParseAttestationResponse_ChutesFormatDelegation(t *testing.T) {
-	// Verify that a chutes-format response is correctly delegated.
-	body := `{
-		"attestation_type": "chutes",
-		"nonce": "aabb000000000000000000000000000000000000000000000000000000000000",
-		"all_attestations": [{
-			"instance_id": "i",
-			"nonce": "aabb000000000000000000000000000000000000000000000000000000000000",
-			"e2e_pubkey": "test-key",
-			"intel_quote": "` + "dGVzdA==" + `",
-			"gpu_evidence": []
-		}]
-	}`
-	raw, err := nanogpt.ParseAttestationResponse(context.Background(), []byte(body), attestation.NewNonce())
-	if err != nil {
-		t.Fatalf("ParseAttestationResponse: %v", err)
-	}
-	if raw.BackendFormat != attestation.FormatChutes {
-		t.Errorf("BackendFormat = %q, want %q", raw.BackendFormat, attestation.FormatChutes)
-	}
-	if raw.SigningKey != "test-key" {
-		t.Errorf("SigningKey = %q, want %q", raw.SigningKey, "test-key")
-	}
-}
-
 func TestSupplyChainPolicy(t *testing.T) {
 	p := nanogpt.SupplyChainPolicy()
 	if p == nil {

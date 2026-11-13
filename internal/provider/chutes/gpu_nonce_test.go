@@ -2,12 +2,9 @@ package chutes_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
-	"github.com/13rac1/teep/internal/capture"
-	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/chutes/chutestest"
 )
@@ -34,44 +31,6 @@ func TestGPURequesterNonce(t *testing.T) {
 				t.Error("GPU evidence verified against the client nonce itself")
 			}
 		})
-	}
-}
-
-// The chutes format that a gateway relays carries the gateway's own nonce,
-// and its GPU evidence answers that nonce, not the client's: with the client
-// nonce the evidence fails. Phala Cloud capture of 2026-06-10.
-func TestGPURequesterNonceGatewayChutesFormat(t *testing.T) {
-	dir := "../../integration/testdata/phalacloud_phala_deepseek-v3.2_20260610_014917"
-	manifest, entries, err := capture.Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientNonce, err := attestation.ParseNonce(manifest.NonceHex)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var report []byte
-	for _, e := range entries {
-		if strings.Contains(e.URL, "/v1/attestation/report") {
-			report = e.Body
-		}
-	}
-	if report == nil {
-		t.Fatal("no attestation report in the capture")
-	}
-	raw, err := provider.ParseChutesFormat(context.Background(), report, "phalacloud")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if raw.Nonce == clientNonce.Hex() {
-		t.Fatal("the capture echoes the client nonce; the test needs the server nonce")
-	}
-	requester, err := chutes.GPURequesterNonce(clientNonce, raw.SigningKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r := attestation.VerifyNVIDIAGPUDirect(context.Background(), raw.GPUEvidence, clientNonce, requester); r.SignatureErr == nil {
-		t.Error("GPU evidence of the server nonce verified against the client nonce")
 	}
 }
 

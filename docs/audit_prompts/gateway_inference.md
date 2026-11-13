@@ -136,7 +136,7 @@ Client → teep proxy → api.chutes.ai (unattested gateway) → sek8s TDX insta
 ```
 Client → teep proxy → NanoGPT gateway → chutes sek8s TDX instance (model)
                           ↑ NanoGPT gateway attestation may or may not be present
-                          ↑ chutes evidence in gateway-wrapped format
+                          ↑ the Chutes evidence response, relayed
 ```
 
 The attestation flow is two-step:
