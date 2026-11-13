@@ -34,6 +34,9 @@ type sessionSet struct {
 	sessions []*aci.Session
 	refused  []attestation.ACISessionRefusal
 	err      error
+	// listUnknown holds the members of the session list outside its entries
+	// that teep does not define.
+	listUnknown []string
 }
 
 // fetchSessions lists the attested sessions behind model and fetches a
@@ -64,11 +67,11 @@ func (a *Attester) fetchSessions(ctx context.Context, model string, identity tls
 	if err != nil {
 		return &sessionSet{err: fmt.Errorf("session list: %w", err)}
 	}
-	entries, err := aci.ParseSessionList(body)
+	entries, listUnknown, err := aci.ParseSessionList(body)
 	if err != nil {
 		return &sessionSet{err: err}
 	}
-	set := &sessionSet{}
+	set := &sessionSet{listUnknown: listUnknown}
 	budget, largest := int64(maxSessionEvidenceBytes), int64(0)
 	modelCVM := 0
 	for _, bundle := range selectBundles(entries, set) {
@@ -213,8 +216,15 @@ func AuditSessions(ctx context.Context, auditor SessionAuditor, raw *attestation
 		return &attestation.ACISessionResult{Err: set.err}
 	}
 	result := &attestation.ACISessionResult{Refused: slices.Clone(set.refused)}
+	for _, path := range set.listUnknown {
+		result.UnknownFields = append(result.UnknownFields, "aci_sessions."+path)
+	}
 	for _, s := range set.sessions {
-		if err := auditor.Audit(ctx, s); err != nil {
+		err := auditor.Audit(ctx, s)
+		for _, path := range s.Unknown {
+			result.UnknownFields = append(result.UnknownFields, fmt.Sprintf("aci_sessions[%s].%s", s.ID[:min(len(s.ID), 12)], path))
+		}
+		if err != nil {
 			result.Refused = append(result.Refused, attestation.ACISessionRefusal{ID: s.ID, VerifierID: s.VerifierID, Reason: err.Error()})
 			continue
 		}

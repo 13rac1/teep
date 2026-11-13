@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/13rac1/teep/internal/jsonstrict/aliastest"
 )
 
 // gatewayVariantBody reads the gateway variant attestation body of a live
@@ -148,17 +150,23 @@ func TestParseAllAttestationsEncodingIndependent(t *testing.T) {
 	}
 }
 
-// A field that the gateway variant does not define fails its parse, also when
-// the all_attestations entry carries the same field, and also when the field
-// is a case-folded alias of a defined one: encoding/json matches member names
-// without case, so the alias would set the struct field that a
-// case-sensitive reader of the body takes from the original member.
-func TestParseGatewayVariantUndefinedField(t *testing.T) {
+// A field that the gateway variant does not define is reported in
+// UnknownFields and does not stop the parse, also when the all_attestations
+// entry carries the same field. A case-folded alias of a defined field is
+// refused: encoding/json matches member names without case, so the alias
+// would set the decoded value, and jsonstrict refuses the document
+// (CaseFoldError).
+func TestParseGatewayVariantReportsUndefinedField(t *testing.T) {
+	want, err := Parse(context.Background(), gatewayVariantBody(t), "phalacloud")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
-		name, field, value, want string
+		name, field, value string
+		refused            bool
 	}{
-		{"undefined field", "undefined_field", `true`, "gateway variant has undefined fields"},
-		{"case-folded alias", "Signing_Public_Key", `"04aa"`, "only by letter case"},
+		{"undefined field", "undefined_field", `true`, false},
+		{"case-folded alias", "Signing_Public_Key", `"04aa"`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := mutateBody(t, gatewayVariantBody(t), func(top, entry map[string]json.RawMessage) []json.RawMessage {
@@ -166,9 +174,19 @@ func TestParseGatewayVariantUndefinedField(t *testing.T) {
 				entry[tc.field] = json.RawMessage(tc.value)
 				return nil
 			})
-			_, err := Parse(context.Background(), body, "phalacloud")
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("err = %v, want %q for %s", err, tc.want, tc.field)
+			raw, err := Parse(context.Background(), body, "phalacloud")
+			if tc.refused {
+				aliastest.Refused(t, err)
+				return
+			}
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if !slices.Contains(raw.UnknownFields, tc.field) {
+				t.Errorf("UnknownFields = %v, want %s", raw.UnknownFields, tc.field)
+			}
+			if raw.SigningKey != want.SigningKey {
+				t.Errorf("signing key %q, want %q: an undefined field changed a decoded value", raw.SigningKey, want.SigningKey)
 			}
 		})
 	}

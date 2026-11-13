@@ -76,8 +76,6 @@ func TestParseChutesInstanceIsStrict(t *testing.T) {
 		change func(map[string]any)
 		want   string
 	}{
-		{"undefined member", func(d map[string]any) { d["note"] = "x" }, "undefined members"},
-		{"undefined entry member", func(d map[string]any) { bound(d)["note"] = "x" }, "undefined members"},
 		{"no excluded_instance_ids", func(d map[string]any) { delete(d, "excluded_instance_ids") }, "excluded_instance_ids"},
 		{"other tee_type", func(d map[string]any) { bound(d)["tee_type"] = "sev-snp" }, "tee_type"},
 		{"no signature", func(d map[string]any) { delete(bound(d), "signature") }, "signature"},

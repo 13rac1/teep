@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -29,9 +30,43 @@ type aciCanonicalReport struct {
 	ServiceCapabilities  aciServiceCaps `json:"service_capabilities"`
 }
 
+// otherVariantMembers holds the top-level members that the attestation
+// response variants define (aciResponse) and the canonical report does not
+// (aciCanonicalReport).
+var otherVariantMembers = func() map[string]bool {
+	canonical := map[string]bool{}
+	for _, name := range jsonMemberNames(reflect.TypeFor[aciCanonicalReport]()) {
+		canonical[name] = true
+	}
+	other := map[string]bool{}
+	for _, name := range jsonMemberNames(reflect.TypeFor[aciResponse]()) {
+		if !canonical[name] {
+			other[name] = true
+		}
+	}
+	return other
+}()
+
+// jsonMemberNames returns the JSON member names of the exported fields of t.
+func jsonMemberNames(t reflect.Type) []string {
+	var names []string
+	for f := range t.Fields() {
+		if !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // ParseCanonical parses the ACI/1 report of /v1/aci/attestation. At every
-// depth, every member must be one that §4.1 defines and none may be absent;
-// duplicate member names fail (jsonstrict checks all three at every depth).
+// depth, a member that §4.1 defines must be present, and duplicate member
+// names fail. A member that teep does not define is returned in
+// UnknownFields (response_schema) and read by no check; inside
+// workload_keyset it stays in the keyset digest (digestValue).
 // The E2EE key that teep encrypts to is the single keyset entry of the E2EE
 // v2 secp256k1 suite. provider names the provider in errors.
 func ParseCanonical(ctx context.Context, body []byte, provider string) (*attestation.RawAttestation, error) {
@@ -40,11 +75,20 @@ func ParseCanonical(ctx context.Context, body []byte, provider string) (*attesta
 	if err != nil {
 		return nil, fmt.Errorf("%s aci/1: unmarshal attestation report: %w", provider, err)
 	}
-	if len(unknown) > 0 {
-		return nil, fmt.Errorf("%s aci/1: attestation report has undefined fields %q", provider, unknown)
-	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s aci/1: attestation report lacks fields %q", provider, missing)
+	}
+	// A member of the Venice or the gateway variant of the attestation
+	// response is not unknown: it marks that document, which is not the
+	// canonical report.
+	var other []string
+	for _, name := range unknown {
+		if otherVariantMembers[name] {
+			other = append(other, name)
+		}
+	}
+	if len(other) > 0 {
+		return nil, fmt.Errorf("%s aci/1: the document carries %q of the attestation response variants; it is not the report of %s", provider, other, CanonicalPath)
 	}
 	if report.APIVersion != "aci/1" {
 		return nil, fmt.Errorf("%s aci/1: attestation report api_version is %q, want aci/1", provider, report.APIVersion)
@@ -59,7 +103,7 @@ func ParseCanonical(ctx context.Context, body []byte, provider string) (*attesta
 		Attestation:          report.Attestation,
 		ServiceCapabilities:  report.ServiceCapabilities,
 		SigningKey:           key,
-	}, nil, nil, body, provider)
+	}, unknown, nil, body, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +155,7 @@ func (StatementReportDataVerifier) VerifyReportData(reportData [64]byte, raw *at
 	if !ok || keyset == nil {
 		return "", errors.New("ACI/1 workload keyset not available")
 	}
-	value, err := keyset.toCanonicalValue()
+	value, err := keyset.digestValue()
 	if err != nil {
 		return "", fmt.Errorf("canonicalize workload keyset: %w", err)
 	}

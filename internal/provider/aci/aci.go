@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -136,6 +137,29 @@ type aciServiceCaps struct {
 	Serving                               string   `json:"serving"`
 }
 
+// servedKeyset returns attestation.workload_keyset of body as a generic
+// object: duplicate members fail, and numbers must be integers, which the
+// JCS form writes exactly. Members are looked up by their exact names, as
+// the typed decoding does, so both views read the same object.
+func servedKeyset(body []byte) (map[string]any, error) {
+	var top, attestationObject map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return nil, fmt.Errorf("attestation response: %w", err)
+	}
+	if err := json.Unmarshal(top["attestation"], &attestationObject); err != nil || attestationObject == nil {
+		return nil, errors.New("attestation is not an object")
+	}
+	keyset, ok := attestationObject["workload_keyset"]
+	if !ok {
+		return nil, errors.New("attestation.workload_keyset is absent")
+	}
+	value, err := sessionValue(keyset)
+	if err != nil {
+		return nil, fmt.Errorf("attestation.workload_keyset: %w", err)
+	}
+	return value, nil
+}
+
 // maxMultipartConstraintEndpoints bounds the multipart constraint endpoint
 // list. ACI/1 defines one multipart endpoint.
 const maxMultipartConstraintEndpoints = 16
@@ -179,6 +203,11 @@ type aciWorkloadKeyset struct {
 	ReceiptSigningKeys []aciKey        `json:"receipt_signing_keys"`
 	E2EEPublicKeys     []aciKey        `json:"e2ee_public_keys"`
 	TLSPublicKeys      []aciTLSBinding `json:"tls_public_keys"`
+
+	// served is the keyset object as the service published it, members
+	// that teep does not define included. The ACI/1 §3.1 digest is over
+	// its JCS form (digestValue).
+	served map[string]any
 }
 
 // aciKey holds a named cryptographic key entry.
@@ -257,9 +286,8 @@ type aciEvidence struct {
 // gateway variant omits them, fails the parse when it carries one, and adds
 // all_attestations, which must hold
 // exactly one entry equal to the top-level fields; any other content fails
-// the parse. A field that neither variant defines is reported as unknown in a
-// Venice variant response, and fails the parse of a gateway variant response,
-// because the entry does not carry it.
+// the parse. A field that neither variant defines is reported as unknown
+// (RawAttestation.UnknownFields) and used for nothing.
 func Parse(ctx context.Context, body []byte, provider string) (*attestation.RawAttestation, error) {
 	// Duplicate member names, also differently escaped ones, make the
 	// decoded value depend on which copy a reader takes.
@@ -273,12 +301,9 @@ func Parse(ctx context.Context, body []byte, provider string) (*attestation.RawA
 	}
 	gatewayVariant := ar.AllAttestations != nil
 	if gatewayVariant {
-		// The gateway variant defines every field it carries. An unknown
-		// field, also a case-folded alias of a defined one (encoding/json
-		// matches names without case), is not part of the variant.
-		if len(unknown) > 0 {
-			return nil, fmt.Errorf("%s aci/1: gateway variant has undefined fields %q", provider, unknown)
-		}
+		// A member that teep does not define, also a case-folded alias of a
+		// defined one, is reported in UnknownFields (response_schema) and
+		// read by no check: jsonstrict leaves it out of the typed decoding.
 		// The gateway variant defines no echo field: a response that carries
 		// one is not the gateway variant.
 		var echoed []string
@@ -419,6 +444,11 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 			return nil, fmt.Errorf("%s aci/1: decode evidence.event_log: %w", provider, err)
 		}
 	}
+	served, err := servedKeyset(body)
+	if err != nil {
+		return nil, fmt.Errorf("%s aci/1: %w", provider, err)
+	}
+	ar.Attestation.WorkloadKeyset.served = served
 	LogEventLog(ctx, eventLog, provider)
 	if ar.IntelQuote != "" && ar.IntelQuote != ar.Attestation.Evidence.Quote {
 		// The top-level intel_quote is documented as an echo of

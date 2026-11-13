@@ -85,6 +85,10 @@ type Session struct {
 	// Evidence is the decoded evidence.data of a full record: the exact
 	// bytes the gateway's verifier consumed. Nil for a list entry.
 	Evidence *SessionEvidence
+	// Unknown holds the paths of the members that teep does not define, in
+	// the record and, after the audit parses it, in its evidence. They are
+	// reported (response_schema) and read by no check.
+	Unknown []string
 
 	// value is the parsed record in the ACI canonical value space, without
 	// session_id, for RebuildSession.
@@ -206,13 +210,15 @@ func ParseSession(body []byte, id string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("session record: %w", err)
 	}
-	if err := checkSessionMembers(&record, "", unknown, missing, true); err != nil {
+	reported, err := checkSessionMembers(&record, "", unknown, missing, true)
+	if err != nil {
 		return nil, fmt.Errorf("session record: %w", err)
 	}
 	s, err := sessionFromJSON(&record, true)
 	if err != nil {
 		return nil, fmt.Errorf("session %s: %w", id, err)
 	}
+	s.Unknown = reported
 	s.ID = computed
 	s.value = value
 	return s, nil
@@ -222,10 +228,12 @@ func ParseSession(body []byte, id string) (*Session, error) {
 // Each entry has the members of a session record with session_id added and
 // evidence.data removed; an entry does not hash to its id, so only a full
 // record or RebuildSession confirms it. Callers bound body to
-// MaxSessionListBytes.
-func ParseSessionList(body []byte) ([]*Session, error) {
+// MaxSessionListBytes. The second result holds the paths of the members of
+// the list outside its entries that teep does not define; each entry holds
+// its own in Session.Unknown.
+func ParseSessionList(body []byte) ([]*Session, []string, error) {
 	if len(body) > MaxSessionListBytes {
-		return nil, fmt.Errorf("session list exceeds %d bytes", MaxSessionListBytes)
+		return nil, nil, fmt.Errorf("session list exceeds %d bytes", MaxSessionListBytes)
 	}
 	var list struct {
 		APIVersion string        `json:"api_version"`
@@ -233,44 +241,45 @@ func ParseSessionList(body []byte) ([]*Session, error) {
 	}
 	unknown, missing, err := jsonstrict.Unmarshal(body, &list)
 	if err != nil {
-		return nil, fmt.Errorf("session list: %w", err)
+		return nil, nil, fmt.Errorf("session list: %w", err)
 	}
 	if list.APIVersion != "aci/1" {
-		return nil, fmt.Errorf("session list api_version is %q, want aci/1", list.APIVersion)
+		return nil, nil, fmt.Errorf("session list api_version is %q, want aci/1", list.APIVersion)
 	}
 	if list.Sessions == nil || len(list.Sessions) > maxSessionsInList {
-		return nil, fmt.Errorf("session list: expected a list of at most %d sessions", maxSessionsInList)
+		return nil, nil, fmt.Errorf("session list: expected a list of at most %d sessions", maxSessionsInList)
 	}
-	if err := checkListMembers(len(list.Sessions), unknown, missing); err != nil {
-		return nil, fmt.Errorf("session list: %w", err)
+	listUnknown, err := checkListMembers(len(list.Sessions), unknown, missing)
+	if err != nil {
+		return nil, nil, fmt.Errorf("session list: %w", err)
 	}
 	listValue, err := sessionValue(body)
 	if err != nil {
-		return nil, fmt.Errorf("session list: %w", err)
+		return nil, nil, fmt.Errorf("session list: %w", err)
 	}
 	values, ok := listValue["sessions"].([]any)
 	if !ok || len(values) != len(list.Sessions) {
-		return nil, errors.New("session list: sessions is not a list")
+		return nil, nil, errors.New("session list: sessions is not a list")
 	}
 	out := make([]*Session, 0, len(list.Sessions))
 	seen := map[string]bool{}
 	for i := range list.Sessions {
 		s, err := listEntry(&list.Sessions[i], values[i], fmt.Sprintf("sessions[%d].", i), unknown, missing)
 		if err != nil {
-			return nil, fmt.Errorf("session list entry %d: %w", i, err)
+			return nil, nil, fmt.Errorf("session list entry %d: %w", i, err)
 		}
 		if seen[s.ID] {
-			return nil, fmt.Errorf("session list lists session %s twice", s.ID)
+			return nil, nil, fmt.Errorf("session list lists session %s twice", s.ID)
 		}
 		seen[s.ID] = true
 		out = append(out, s)
 	}
-	return out, nil
+	return out, listUnknown, nil
 }
 
-// checkListMembers fails on an undefined or absent member outside the
-// session entries; checkSessionMembers checks each entry.
-func checkListMembers(n int, unknown, missing []string) error {
+// checkListMembers returns the undefined members outside the session
+// entries and fails on an absent one; checkSessionMembers checks each entry.
+func checkListMembers(n int, unknown, missing []string) ([]string, error) {
 	inEntry := func(path string) bool {
 		for i := range n {
 			if strings.HasPrefix(path, fmt.Sprintf("sessions[%d].", i)) {
@@ -279,17 +288,18 @@ func checkListMembers(n int, unknown, missing []string) error {
 		}
 		return false
 	}
+	var reported []string
 	for _, path := range unknown {
 		if !inEntry(path) {
-			return fmt.Errorf("undefined member %s", path)
+			reported = append(reported, path)
 		}
 	}
 	for _, path := range missing {
 		if !inEntry(path) {
-			return fmt.Errorf("missing member %s", path)
+			return nil, fmt.Errorf("missing member %s", path)
 		}
 	}
-	return nil
+	return reported, nil
 }
 
 func listEntry(entry *sessionJSON, value any, prefix string, unknown, missing []string) (*Session, error) {
@@ -297,7 +307,8 @@ func listEntry(entry *sessionJSON, value any, prefix string, unknown, missing []
 	if !ok {
 		return nil, errors.New("expected an object")
 	}
-	if err := checkSessionMembers(entry, prefix, unknown, missing, false); err != nil {
+	reported, err := checkSessionMembers(entry, prefix, unknown, missing, false)
+	if err != nil {
 		return nil, err
 	}
 	if !isLowerHex64(entry.SessionID) {
@@ -307,6 +318,7 @@ func listEntry(entry *sessionJSON, value any, prefix string, unknown, missing []
 	if err != nil {
 		return nil, fmt.Errorf("session %s: %w", entry.SessionID, err)
 	}
+	s.Unknown = reported
 	object = maps.Clone(object)
 	delete(object, "session_id")
 	s.ID = entry.SessionID
@@ -316,17 +328,26 @@ func listEntry(entry *sessionJSON, value any, prefix string, unknown, missing []
 
 // checkSessionMembers applies the member rules of §8.1 and §8.2 to the
 // undefined and absent members that jsonstrict reported for the record at
-// prefix. Undefined members fail. An absent member fails unless the rules
+// prefix. Undefined members are returned, relative to prefix, for the
+// caller to report; no check reads them. An absent member fails unless the rules
 // allow it: identity may be absent; a full record has evidence.data and no
 // session_id, a list entry the reverse; each channel binding has exactly
 // the members of its type; a claim has source and reason exactly when its
 // status is not unknown (§8.3).
-func checkSessionMembers(r *sessionJSON, prefix string, unknown, missing []string, full bool) error {
+func checkSessionMembers(r *sessionJSON, prefix string, unknown, missing []string, full bool) ([]string, error) {
+	var reported []string
 	for _, path := range unknown {
 		if rest, ok := strings.CutPrefix(path, prefix); ok {
-			return fmt.Errorf("undefined member %s", rest)
+			reported = append(reported, rest)
 		}
 	}
+	err := checkSessionAbsent(r, prefix, missing, full)
+	return reported, err
+}
+
+// checkSessionAbsent applies the rules for absent members of
+// checkSessionMembers.
+func checkSessionAbsent(r *sessionJSON, prefix string, missing []string, full bool) error {
 	absent := map[string]bool{}
 	for _, path := range missing {
 		if rest, ok := strings.CutPrefix(path, prefix); ok {

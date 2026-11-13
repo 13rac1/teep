@@ -44,6 +44,9 @@ func (a SessionAuditor) Audit(ctx context.Context, s *aci.Session) error {
 	if err != nil {
 		return err
 	}
+	for _, path := range ev.unknown {
+		s.Unknown = append(s.Unknown, "evidence."+path)
+	}
 	return a.auditEvidence(ctx, s, ev)
 }
 

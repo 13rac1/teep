@@ -178,8 +178,9 @@ names fail both variants. Rules for the gateway variant:
 - A present `all_attestations`, also a literal null, selects the gateway
   variant. It must hold exactly one entry, and that entry must equal the
   top-level attestation fields; any other content fails the parse.
-- A field that the gateway variant does not define fails the parse, also a
-  case-folded alias of a defined field.
+- A field that the gateway variant does not define, also a case-folded alias
+  of a defined field, is reported in `response_schema` and read by no check.
+  Duplicate, absent and malformed members fail the parse.
 - `nonce_match` and `gateway_nonce_match` of a gateway-variant response fail
   with the detail "no echoed nonce; freshness rests on
   gateway_tee_reportdata_binding". A Venice-variant response without its

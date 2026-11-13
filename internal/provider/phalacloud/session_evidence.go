@@ -34,6 +34,9 @@ type sessionEvidence struct {
 	raw        *attestation.RawAttestation
 	nonce      attestation.Nonce
 	reportData provider.ReportDataVerifier
+	// unknown holds the paths of the evidence members that teep does not
+	// define; the audit reports them with the session.
+	unknown []string
 }
 
 // sessionEvidenceOf parses the evidence of s and checks that the session's
@@ -116,15 +119,20 @@ func phalaDirectEvidence(s *aci.Session) (*sessionEvidence, error) {
 	}
 	data := s.Evidence.Data
 	var report phalaDirectReport
-	if err := strictDecode(data, &report); err != nil {
+	unknown, err := strictDecode(data, &report)
+	if err != nil {
 		return nil, fmt.Errorf("phala-direct evidence: %w", err)
 	}
 	if err := checkSingleAttestation(&report); err != nil {
 		return nil, fmt.Errorf("phala-direct evidence: %w", err)
 	}
 	info, tcb := &report.Info, &report.Info.TCBInfo
-	if err := checkPhalaDirectConsistency(&report, info, tcb); err != nil {
+	eventLogUnknown, err := checkPhalaDirectConsistency(&report, info, tcb)
+	if err != nil {
 		return nil, fmt.Errorf("phala-direct evidence: %w", err)
+	}
+	for _, path := range eventLogUnknown {
+		unknown = append(unknown, "event_log"+path)
 	}
 	nonce, err := attestation.ParseNonce(report.RequestNonce)
 	if err != nil {
@@ -152,7 +160,7 @@ func phalaDirectEvidence(s *aci.Session) (*sessionEvidence, error) {
 		EventLogCount:  len(tcb.EventLog),
 		RawBody:        data,
 	}
-	return &sessionEvidence{raw: raw, nonce: nonce, reportData: phalaDirectReportData{}}, nil
+	return &sessionEvidence{raw: raw, nonce: nonce, reportData: phalaDirectReportData{}, unknown: unknown}, nil
 }
 
 // checkSingleAttestation requires all_attestations to hold exactly the
@@ -173,29 +181,30 @@ func checkSingleAttestation(r *phalaDirectReport) error {
 // derives from the event and its payload, empty. tcb_info.event_log
 // carries every value, and a value that the top-level copy states must be
 // the same.
-func checkPhalaDirectConsistency(r *phalaDirectReport, info *phalaDirectInfo, tcb *phalaDirectTCBInfo) error {
+func checkPhalaDirectConsistency(r *phalaDirectReport, info *phalaDirectInfo, tcb *phalaDirectTCBInfo) ([]string, error) {
 	if r.Quote != r.IntelQuote || r.IntelQuote == "" {
-		return errors.New("quote and intel_quote differ or are empty")
+		return nil, errors.New("quote and intel_quote differ or are empty")
 	}
 	if r.VMConfig != info.VMConfig || info.ComposeHash != tcb.ComposeHash || info.DeviceID != tcb.DeviceID ||
 		info.OSImageHash != tcb.OSImageHash || info.MRAggregated != tcb.MRAggregated {
-		return errors.New("info and tcb_info differ")
+		return nil, errors.New("info and tcb_info differ")
 	}
 	var top []attestation.EventLogEntry
-	if err := strictDecodeList([]byte(r.EventLog), &top); err != nil {
-		return fmt.Errorf("event_log: %w", err)
+	unknown, err := strictDecodeList([]byte(r.EventLog), &top)
+	if err != nil {
+		return nil, fmt.Errorf("event_log: %w", err)
 	}
 	if len(top) != len(tcb.EventLog) {
-		return fmt.Errorf("event_log has %d events, tcb_info.event_log %d", len(top), len(tcb.EventLog))
+		return nil, fmt.Errorf("event_log has %d events, tcb_info.event_log %d", len(top), len(tcb.EventLog))
 	}
 	for i := range top {
 		a, b := top[i], tcb.EventLog[i]
 		if a.IMR != b.IMR || a.EventType != b.EventType || a.Event != b.Event ||
 			(a.Digest != "" && a.Digest != b.Digest) || (a.EventPayload != "" && a.EventPayload != b.EventPayload) {
-			return fmt.Errorf("event_log[%d] differs from tcb_info.event_log[%d]", i, i)
+			return nil, fmt.Errorf("event_log[%d] differs from tcb_info.event_log[%d]", i, i)
 		}
 	}
-	return nil
+	return unknown, nil
 }
 
 // checkPhalaDirectBinding requires the session's TLS binding to name the
@@ -285,20 +294,21 @@ func chutesSessionEvidence(ctx context.Context, s *aci.Session) (*sessionEvidenc
 	// The Chutes evidence response echoes no nonce, and the parser marks it
 	// so (NonceSource not_echoed): the REPORTDATA preimage and the GPU
 	// requester nonce bind the session nonce.
-	return &sessionEvidence{raw: raw, nonce: nonce, reportData: chutes.ReportDataVerifier{}}, nil
+	return &sessionEvidence{raw: raw, nonce: nonce, reportData: chutes.ReportDataVerifier{}, unknown: raw.UnknownFields}, nil
 }
 
 // parseChutesInstance parses the attestation of the bound instance from the
 // parts of a Chutes evidence bundle. Like the Phala model CVM evidence, the
-// parts must have exactly the members that teep reads, including the newer
-// members of the evidence response (chutes.ParseInstanceAttestation).
+// parts must have every member that teep reads, including the newer members
+// of the evidence response (chutes.ParseInstanceAttestation); members that
+// teep does not define stay in UnknownFields for the audit to report.
 func parseChutesInstance(ctx context.Context, instances [][]byte, evidence []byte, keyID string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	raw, err := chutes.ParseInstanceAttestation(ctx, instances, evidence, keyID, nonce)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw.UnknownFields) > 0 || len(raw.MissingFields) > 0 {
-		return nil, fmt.Errorf("chutes session evidence: undefined members %q, missing members %q", raw.UnknownFields, raw.MissingFields)
+	if len(raw.MissingFields) > 0 {
+		return nil, fmt.Errorf("chutes session evidence: missing members %q", raw.MissingFields)
 	}
 	return raw, nil
 }
@@ -317,30 +327,37 @@ func chutesEvidenceNonce(location string) (attestation.Nonce, error) {
 	return attestation.ParseNonce(values.Get("nonce"))
 }
 
-// strictDecode decodes data into v and fails on a duplicate, an unknown or a
-// missing member at any depth.
-func strictDecode(data []byte, v any) error {
+// strictDecode decodes data into v and fails on a duplicate or a missing
+// member at any depth. It returns the paths of the members that teep does
+// not define, for the caller to report; no check reads them.
+func strictDecode(data []byte, v any) ([]string, error) {
 	unknown, missing, err := jsonstrict.Unmarshal(data, v)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(unknown) > 0 || len(missing) > 0 {
-		return fmt.Errorf("undefined members %q, missing members %q", unknown, missing)
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing members %q", missing)
 	}
-	return nil
+	return unknown, nil
 }
 
-// strictDecodeList decodes a JSON list of objects, each strictly.
-func strictDecodeList(data []byte, out *[]attestation.EventLogEntry) error {
+// strictDecodeList decodes a JSON list of objects, each strictly, and
+// returns the paths of the members that teep does not define.
+func strictDecodeList(data []byte, out *[]attestation.EventLogEntry) ([]string, error) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(data, &items); err != nil || items == nil {
-		return errors.New("expected a list")
+		return nil, errors.New("expected a list")
 	}
 	*out = make([]attestation.EventLogEntry, len(items))
+	var reported []string
 	for i, item := range items {
-		if err := strictDecode(item, &(*out)[i]); err != nil {
-			return fmt.Errorf("[%d]: %w", i, err)
+		unknown, err := strictDecode(item, &(*out)[i])
+		if err != nil {
+			return nil, fmt.Errorf("[%d]: %w", i, err)
+		}
+		for _, path := range unknown {
+			reported = append(reported, fmt.Sprintf("[%d].%s", i, path))
 		}
 	}
-	return nil
+	return reported, nil
 }

@@ -70,7 +70,7 @@ func receiptFixture(t *testing.T) (*Receipt, *ReceiptCheck) {
 		t.Fatal(err)
 	}
 	pinned = b.Provider.ACISessionIDs
-	listed, err := ParseSessionList(list)
+	listed, _, err := ParseSessionList(list)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,6 @@ func TestParseReceiptRefusesMalformed(t *testing.T) {
 		name   string
 		change func(map[string]any)
 	}{
-		{"undefined member", func(d map[string]any) { d["note"] = "x" }},
 		{"no signature", func(d map[string]any) { delete(d, "signature") }},
 		{"other api_version", func(d map[string]any) { d["api_version"] = "aci/2" }},
 		{"first event not request.received", func(d map[string]any) {
@@ -212,9 +211,6 @@ func TestParseReceiptRefusesMalformed(t *testing.T) {
 		{"no response.returned", func(d map[string]any) {
 			events := d["event_log"].([]any)
 			d["event_log"] = events[:len(events)-1]
-		}},
-		{"body hash with undefined member", func(d map[string]any) {
-			d["event_log"].([]any)[0].(map[string]any)["note"] = "x"
 		}},
 		{"verified upstream without session", func(d map[string]any) {
 			delete(upstreamEvent(d), "session_id")

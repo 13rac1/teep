@@ -65,21 +65,16 @@ func keysetMap(top map[string]any) map[string]any {
 	return attestationMap(top)["workload_keyset"].(map[string]any)
 }
 
-// Every member that §4.1 does not define, every absent member, and every
-// keyset without exactly one secp256k1 E2EE v2 key fails the parse.
+// Every absent member and every keyset without exactly one secp256k1 E2EE
+// v2 key fails the parse.
 func TestParseCanonicalRefusesMalformedReports(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		change func(top map[string]any)
 		want   string
 	}{
-		{"undefined top-level field", func(top map[string]any) { top["nonce"] = "00" }, "undefined fields"},
-		{"undefined nested field", func(top map[string]any) { attestationMap(top)["extra"] = 1 }, "undefined fields"},
 		{"absent report_data", func(top map[string]any) { delete(attestationMap(top), "report_data") }, "lacks fields"},
 		{"absent service_capabilities", func(top map[string]any) { delete(top, "service_capabilities") }, "lacks fields"},
-		{"undefined member of a keyset entry", func(top map[string]any) {
-			keysetMap(top)["e2ee_public_keys"].([]any)[0].(map[string]any)["note"] = "x"
-		}, "undefined fields"},
 		{"absent member of a keyset entry", func(top map[string]any) {
 			delete(keysetMap(top)["e2ee_public_keys"].([]any)[0].(map[string]any), "algo")
 		}, "lacks fields"},

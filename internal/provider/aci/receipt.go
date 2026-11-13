@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -36,6 +37,10 @@ type Receipt struct {
 	ResponseReturned string
 	// Upstream lists the upstream.verified events in order.
 	Upstream []UpstreamVerified
+	// Unknown holds the paths of the members that teep does not define, in
+	// the document and in its events. They stay in the signed form; the
+	// caller reports them, and no check reads them.
+	Unknown []string
 
 	// signed is the canonical form of the document without signature.
 	signed []byte
@@ -77,8 +82,8 @@ func ParseReceipt(body []byte) (*Receipt, error) {
 	if err != nil {
 		return nil, fmt.Errorf("receipt: %w", err)
 	}
-	if len(unknown) > 0 || len(missing) > 0 {
-		return nil, fmt.Errorf("receipt: undefined members %q, missing members %q", unknown, missing)
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("receipt: missing members %q", missing)
 	}
 	if doc.APIVersion != "aci/1" {
 		return nil, fmt.Errorf("receipt api_version is %q, want aci/1", doc.APIVersion)
@@ -89,6 +94,7 @@ func ParseReceipt(body []byte) (*Receipt, error) {
 	r := &Receipt{
 		ID: doc.ReceiptID, KeysetDigest: doc.WorkloadKeysetDigest, Endpoint: doc.Endpoint,
 		Method: doc.Method, ServedAt: doc.ServedAt, KeyID: doc.KeyID, Signature: doc.Signature,
+		Unknown: unknown,
 	}
 	if doc.ChatID != nil {
 		r.ChatID = *doc.ChatID
@@ -128,18 +134,20 @@ func (r *Receipt) parseEvents(events []json.RawMessage) error {
 		}
 		switch head.Type {
 		case "request.received", "request.forwarded", "response.returned":
-			hash, err := eventBodyHash(e, head.Type)
+			hash, unknown, err := eventBodyHash(e, head.Type)
 			if err != nil {
 				return fmt.Errorf("receipt event %d: %w", i, err)
 			}
+			r.addEventUnknown(i, unknown)
 			if err := r.setBodyHash(head.Type, hash); err != nil {
 				return fmt.Errorf("receipt event %d: %w", i, err)
 			}
 		case "upstream.verified":
-			u, err := parseUpstreamVerified(e)
+			u, unknown, err := parseUpstreamVerified(e)
 			if err != nil {
 				return fmt.Errorf("receipt event %d: %w", i, err)
 			}
+			r.addEventUnknown(i, unknown)
 			r.Upstream = append(r.Upstream, u)
 		}
 	}
@@ -147,6 +155,12 @@ func (r *Receipt) parseEvents(events []json.RawMessage) error {
 		return errors.New("receipt has no response.returned event")
 	}
 	return nil
+}
+
+func (r *Receipt) addEventUnknown(i int, paths []string) {
+	for _, path := range paths {
+		r.Unknown = append(r.Unknown, fmt.Sprintf("event_log[%d].%s", i, path))
+	}
 }
 
 func (r *Receipt) setBodyHash(kind, hash string) error {
@@ -168,18 +182,19 @@ func (r *Receipt) setBodyHash(kind, hash string) error {
 	return nil
 }
 
-func eventBodyHash(e json.RawMessage, kind string) (string, error) {
+func eventBodyHash(e json.RawMessage, kind string) (hash string, unknown []string, err error) {
 	var ev struct {
 		Type     string `json:"type"`
 		BodyHash string `json:"body_hash"`
 	}
-	if err := decodeExact(e, &ev); err != nil {
-		return "", fmt.Errorf("%s: %w", kind, err)
+	unknown, err = decodeEvent(e, &ev, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("%s: %w", kind, err)
 	}
 	if !isSHA256Digest(ev.BodyHash) {
-		return "", fmt.Errorf("%s: body_hash is not sha256:<64 lowercase hex>", kind)
+		return "", nil, fmt.Errorf("%s: body_hash is not sha256:<64 lowercase hex>", kind)
 	}
-	return ev.BodyHash, nil
+	return ev.BodyHash, unknown, nil
 }
 
 // verifiedEvent and failedEvent are the two forms of upstream.verified
@@ -203,52 +218,62 @@ type failedEvent struct {
 
 // parseUpstreamVerified parses one upstream.verified event in the form of
 // its result: a verified event has a session_id, a failed event a reason
-// and an optional upstream_name, and no other member.
-func parseUpstreamVerified(e json.RawMessage) (UpstreamVerified, error) {
+// and an optional upstream_name. A member of the other form fails the
+// event; a member that neither form defines is returned.
+func parseUpstreamVerified(e json.RawMessage) (UpstreamVerified, []string, error) {
 	var head struct {
 		Result string `json:"result"`
 	}
 	if _, _, err := jsonstrict.Unmarshal(e, &head); err != nil {
-		return UpstreamVerified{}, fmt.Errorf("upstream.verified: %w", err)
+		return UpstreamVerified{}, nil, fmt.Errorf("upstream.verified: %w", err)
 	}
 	switch head.Result {
 	case "verified":
 		var v verifiedEvent
-		if err := decodeExact(e, &v); err != nil {
-			return UpstreamVerified{}, fmt.Errorf("upstream.verified: %w", err)
+		unknown, err := decodeEvent(e, &v, []string{"reason", "upstream_name"})
+		if err != nil {
+			return UpstreamVerified{}, nil, fmt.Errorf("upstream.verified: %w", err)
 		}
 		if v.Required == nil {
-			return UpstreamVerified{}, errors.New("upstream.verified: required is null")
+			return UpstreamVerified{}, nil, errors.New("upstream.verified: required is null")
 		}
 		if !isLowerHex64(v.SessionID) {
-			return UpstreamVerified{}, errors.New("upstream.verified: session_id is not 64 lowercase hex characters")
+			return UpstreamVerified{}, nil, errors.New("upstream.verified: session_id is not 64 lowercase hex characters")
 		}
-		return UpstreamVerified{Result: v.Result, Required: *v.Required, ModelID: v.ModelID, SessionID: v.SessionID}, nil
+		return UpstreamVerified{Result: v.Result, Required: *v.Required, ModelID: v.ModelID, SessionID: v.SessionID}, unknown, nil
 	case "failed":
 		var f failedEvent
-		if err := decodeExact(e, &f); err != nil {
-			return UpstreamVerified{}, fmt.Errorf("upstream.verified: %w", err)
+		unknown, err := decodeEvent(e, &f, []string{"session_id"})
+		if err != nil {
+			return UpstreamVerified{}, nil, fmt.Errorf("upstream.verified: %w", err)
 		}
 		if f.Required == nil {
-			return UpstreamVerified{}, errors.New("upstream.verified: required is null")
+			return UpstreamVerified{}, nil, errors.New("upstream.verified: required is null")
 		}
-		return UpstreamVerified{Result: f.Result, Required: *f.Required, ModelID: f.ModelID, Reason: f.Reason}, nil
+		return UpstreamVerified{Result: f.Result, Required: *f.Required, ModelID: f.ModelID, Reason: f.Reason}, unknown, nil
 	default:
-		return UpstreamVerified{}, fmt.Errorf("upstream.verified: result %q is not verified or failed", head.Result)
+		return UpstreamVerified{}, nil, fmt.Errorf("upstream.verified: result %q is not verified or failed", head.Result)
 	}
 }
 
-// decodeExact decodes e into v and requires exactly the members of v; a
-// member tagged omitempty may be absent.
-func decodeExact(e json.RawMessage, v any) error {
+// decodeEvent decodes e into v and requires every member of v; a member
+// tagged omitempty may be absent. A member in other, which another form of
+// the event defines, fails. It returns the members that teep does not
+// define.
+func decodeEvent(e json.RawMessage, v any, other []string) ([]string, error) {
 	unknown, missing, err := jsonstrict.Unmarshal(e, v)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(unknown) > 0 || len(missing) > 0 {
-		return fmt.Errorf("undefined members %q, missing members %q", unknown, missing)
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing members %q", missing)
 	}
-	return nil
+	for _, name := range unknown {
+		if slices.Contains(other, name) {
+			return nil, fmt.Errorf("member %s belongs to the other form of the event", name)
+		}
+	}
+	return unknown, nil
 }
 
 // ErrReceiptRequestMismatch marks a receipt whose statement about the

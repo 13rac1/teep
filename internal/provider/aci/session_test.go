@@ -79,7 +79,7 @@ func TestParseSessionChecksID(t *testing.T) {
 }
 
 func TestParseSessionList(t *testing.T) {
-	sessions, err := ParseSessionList(readTestdata(t, "session_list.json"))
+	sessions, _, err := ParseSessionList(readTestdata(t, "session_list.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestParseSessionList(t *testing.T) {
 // One full record confirms every list entry of its evidence bundle: the
 // rebuilt records hash to their ids. An entry of another bundle fails.
 func TestRebuildSession(t *testing.T) {
-	sessions, err := ParseSessionList(readTestdata(t, "session_list.json"))
+	sessions, _, err := ParseSessionList(readTestdata(t, "session_list.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,6 @@ func TestParseSessionRejectsMalformedRecords(t *testing.T) {
 		name   string
 		change func(map[string]any)
 	}{
-		{"undefined member", func(v map[string]any) { v["note"] = "x" }},
 		{"no endpoint", func(v map[string]any) { delete(v, "endpoint") }},
 		{"empty endpoint", func(v map[string]any) { v["endpoint"] = "" }},
 		{"other api_version", func(v map[string]any) { v["api_version"] = "aci/2" }},
@@ -187,10 +186,6 @@ func TestParseSessionRejectsMalformedRecords(t *testing.T) {
 		{"no channel binding", func(v map[string]any) { v["channel_binding"] = []any{} }},
 		{"other binding type", func(v map[string]any) {
 			v["channel_binding"] = []any{map[string]any{"type": "dns_name", "origin": "https://a.example"}}
-		}},
-		{"binding with undefined member", func(v map[string]any) {
-			b := v["channel_binding"].([]any)[0].(map[string]any)
-			b["note"] = "x"
 		}},
 		{"TLS binding with an E2EE member", func(v map[string]any) {
 			b := v["channel_binding"].([]any)[0].(map[string]any)
@@ -207,7 +202,6 @@ func TestParseSessionRejectsMalformedRecords(t *testing.T) {
 			b := v["channel_binding"].([]any)[0].(map[string]any)
 			b["spki_sha256"] = strings.ToUpper(b["spki_sha256"].(string))
 		}},
-		{"undefined claim", func(v map[string]any) { claims(v)["fast"] = map[string]any{"status": "unknown"} }},
 		{"missing claim", func(v map[string]any) { delete(claims(v), "gpu_attested") }},
 		{"no extra", func(v map[string]any) { delete(claims(v), "extra") }},
 		{"unknown claim with source", func(v map[string]any) {
@@ -321,13 +315,11 @@ func TestParseSessionListRejectsMalformedEntries(t *testing.T) {
 		"evidence with data": func() { first["evidence"].(map[string]any)["data"] = "data:application/json;base64,e30=" },
 		"listed twice":       func() { list["sessions"] = append(sessions, sessions[0]) },
 		"other api_version":  func() { list["api_version"] = "aci/2" },
-		"undefined member":   func() { list["next"] = "x" },
 		"entry without id":   func() { delete(first, "session_id") },
-		"entry member":       func() { first["note"] = "x" },
 	} {
 		saved := encode(list)
 		change()
-		if _, err := ParseSessionList(encode(list)); err == nil {
+		if _, _, err := ParseSessionList(encode(list)); err == nil {
 			t.Errorf("%s accepted", name)
 		}
 		if err := json.Unmarshal(saved, &list); err != nil {

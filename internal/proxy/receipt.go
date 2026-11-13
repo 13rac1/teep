@@ -59,6 +59,10 @@ func (s *Server) checkReceipt(ctx context.Context, input *authorizedRequest, res
 		}
 		return s.receiptFailed(ctx, input, result, "receipt_fetch_failed", err, false)
 	}
+	if len(receipt.Unknown) > 0 {
+		slog.WarnContext(ctx, "ACI receipt has members that teep does not define; they are not checked",
+			"provider", input.provider.Name, "receipt_id", receipt.ID, "members", receipt.Unknown)
+	}
 	check := &aci.ReceiptCheck{
 		Keys: value.report.ACIReceiptKeys, KeysetDigest: value.report.ACIKeysetDigest, NotAfter: value.report.ACIKeysetNotAfter,
 		Endpoint: input.path, Method: http.MethodPost, Model: body.Model,

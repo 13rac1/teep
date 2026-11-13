@@ -920,6 +920,10 @@ type ACISessionResult struct {
 	Refused []ACISessionRefusal
 	// Err is set when the sessions could not be fetched or selected.
 	Err error
+	// UnknownFields holds the paths of the members of the session list,
+	// the session records and their evidence that teep does not define.
+	// response_schema reports them; no check reads them.
+	UnknownFields []string
 }
 
 // ACIPinnedSession is an attested session that passed the audit, with the
@@ -1675,6 +1679,9 @@ func evalSigningKeyPresent(in *ReportInput) []FactorResult {
 
 func evalResponseSchema(in *ReportInput) []FactorResult {
 	unknown := in.Raw.UnknownFields
+	if in.ACISessions != nil && len(in.ACISessions.UnknownFields) > 0 {
+		unknown = append(slices.Clone(unknown), in.ACISessions.UnknownFields...)
+	}
 	missing := in.Raw.MissingFields
 	if len(unknown) == 0 && len(missing) == 0 {
 		return factor(TierCore, FactorResponseSchema, Pass,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -55,6 +56,10 @@ func verifyProbeReceipt(ctx context.Context, opts *Options, raw *attestation.Raw
 	receipt, err := aci.FetchReceipt(ctx, pr.client, pr.route.BaseURL(), opts.Provider.APIKey, id)
 	if err != nil {
 		return "", err
+	}
+	if len(receipt.Unknown) > 0 {
+		slog.WarnContext(ctx, "ACI receipt has members that teep does not define; they are not checked",
+			"provider", opts.ProviderName, "receipt_id", receipt.ID, "members", receipt.Unknown)
 	}
 	check := &aci.ReceiptCheck{
 		Keys: raw.ACIReceiptKeys, KeysetDigest: raw.ACIWorkloadKeysetDigest, NotAfter: raw.ACIKeysetNotAfter,

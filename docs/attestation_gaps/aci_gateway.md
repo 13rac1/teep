@@ -77,6 +77,9 @@ paths that accept §5.3 serving constraints of a multipart request in the
 list. Teep checks only its shape: at most 16 distinct clean URL paths.
 Teep sends Phala Cloud only chat and embeddings requests, and pins attested
 sessions only in their JSON body, so it does not use the list.
+A member that teep does not define is reported in the allowed
+`response_schema` factor and read by no check. Inside `workload_keyset` it
+stays in the keyset digest, which teep computes over the keyset as served.
 The specification and its limits are in
 [ACI/1 Specification: Assurance Limits and Deployment Requirements](aci_specification.md).
 

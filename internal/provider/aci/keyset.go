@@ -152,6 +152,75 @@ func (t *aciTLSBinding) toCanonicalValue() map[string]any {
 	return m
 }
 
+// digestValue returns the value that the ACI/1 §3.1 keyset digest covers:
+// the keyset object as served, members that teep does not define included,
+// so that such a member does not change the digest. teep decides only on
+// the typed members, so the served object must hold every typed member
+// with the same value (servedHolds); otherwise the digest would cover
+// values other than the ones teep checked. Without a served object (a
+// keyset built in a test) the typed members are the whole keyset.
+func (ks *aciWorkloadKeyset) digestValue() (any, error) {
+	typed, err := ks.toCanonicalValue()
+	if err != nil {
+		return nil, err
+	}
+	if ks.served == nil {
+		return typed, nil
+	}
+	if err := servedHolds(typed, ks.served, "workload_keyset"); err != nil {
+		return nil, err
+	}
+	return ks.served, nil
+}
+
+// servedHolds requires served to hold every member of typed with the same
+// canonical value: objects member by member, lists entry by entry with the
+// same length, other values by their JCS bytes. served may have more
+// members than typed.
+func servedHolds(typed, served any, at string) error {
+	switch t := typed.(type) {
+	case map[string]any:
+		s, ok := served.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s: the served value is not an object", at)
+		}
+		for name, tv := range t {
+			sv, ok := s[name]
+			if !ok {
+				return fmt.Errorf("%s.%s: not in the served object", at, name)
+			}
+			if err := servedHolds(tv, sv, at+"."+name); err != nil {
+				return err
+			}
+		}
+		return nil
+	case []any:
+		s, ok := served.([]any)
+		if !ok || len(s) != len(t) {
+			return fmt.Errorf("%s: the served list differs in length", at)
+		}
+		for i := range t {
+			if err := servedHolds(t[i], s[i], fmt.Sprintf("%s[%d]", at, i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		tb, err := canonicalize(typed)
+		if err != nil {
+			return fmt.Errorf("%s: %w", at, err)
+		}
+		sb, err := canonicalize(served)
+		if err != nil {
+			return fmt.Errorf("%s: %w", at, err)
+		}
+		if subtle.ConstantTimeCompare(tb, sb) != 1 {
+			return fmt.Errorf("%s: the served value differs from the decoded value", at)
+		}
+		return nil
+	}
+}
+
 // notAfterCanonical parses the not_after JSON number as uint64.
 func notAfterCanonical(n string) (uint64, error) {
 	// not_after is u64 in the ACI/1 protocol. json.Number preserves the
@@ -444,7 +513,7 @@ func verifyKeyset(
 	appIDAllow []string,
 ) *attestation.ACIKeysetResult {
 	// Check 1: keyset digest recompute.
-	keysetValue, err := keyset.toCanonicalValue()
+	keysetValue, err := keyset.digestValue()
 	if err != nil {
 		return &attestation.ACIKeysetResult{Err: fmt.Errorf("build keyset canonical value: %w", err)}
 	}

@@ -164,9 +164,6 @@ func TestPhalaDirectEvidenceRefusesMalformedReports(t *testing.T) {
 		name   string
 		change func(top map[string]any)
 	}{
-		{"undefined nested member", func(top map[string]any) {
-			top["info"].(map[string]any)["tcb_info"].(map[string]any)["note"] = "x"
-		}},
 		{"absent nested member", func(top map[string]any) {
 			delete(top["info"].(map[string]any)["tcb_info"].(map[string]any), "mrtd")
 		}},
