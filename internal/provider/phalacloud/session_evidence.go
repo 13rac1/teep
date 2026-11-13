@@ -270,7 +270,7 @@ func chutesSessionEvidence(ctx context.Context, s *aci.Session) (*sessionEvidenc
 	if err != nil {
 		return nil, err
 	}
-	raw, err := chutes.ParseInstanceAttestation(ctx, instances, evidence.Body, b.KeyID, nonce)
+	raw, err := parseChutesInstance(ctx, instances, evidence.Body, b.KeyID, nonce)
 	if err != nil {
 		return nil, err
 	}
@@ -286,6 +286,21 @@ func chutesSessionEvidence(ctx context.Context, s *aci.Session) (*sessionEvidenc
 	// so (NonceSource not_echoed): the REPORTDATA preimage and the GPU
 	// requester nonce bind the session nonce.
 	return &sessionEvidence{raw: raw, nonce: nonce, reportData: chutes.ReportDataVerifier{}}, nil
+}
+
+// parseChutesInstance parses the attestation of the bound instance from the
+// parts of a Chutes evidence bundle. Like the Phala model CVM evidence, the
+// parts must have exactly the members that teep reads, including the newer
+// members of the evidence response (chutes.ParseInstanceAttestation).
+func parseChutesInstance(ctx context.Context, instances [][]byte, evidence []byte, keyID string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	raw, err := chutes.ParseInstanceAttestation(ctx, instances, evidence, keyID, nonce)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw.UnknownFields) > 0 || len(raw.MissingFields) > 0 {
+		return nil, fmt.Errorf("chutes session evidence: undefined members %q, missing members %q", raw.UnknownFields, raw.MissingFields)
+	}
+	return raw, nil
 }
 
 // chutesEvidenceNonce returns the nonce of the evidence request that the

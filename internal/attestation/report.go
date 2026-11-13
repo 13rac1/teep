@@ -186,6 +186,16 @@ type VerificationReport struct {
 	// request pins them (aci_session_ids, ACI/1 §5.3). Set only for the
 	// canonical ACI/1 report.
 	ACISessionIDs []string `json:"aci_session_ids,omitempty"`
+
+	// ACIPinnedSessions holds the same sessions with their periods, for
+	// receipt verification. Internal; excluded from report JSON.
+	ACIPinnedSessions []ACIPinnedSession `json:"-"`
+
+	// ACIReceiptKeys and ACIKeysetNotAfter are the receipt keys and the
+	// not_after of the verified keyset, for receipt verification. Set only
+	// for the canonical ACI/1 report. Internal; excluded from report JSON.
+	ACIReceiptKeys    []ACIReceiptKey `json:"-"`
+	ACIKeysetNotAfter int64           `json:"-"`
 }
 
 // CheckServedKeysetDigest compares the X-ACI-Keyset-Digest header of an
@@ -198,7 +208,8 @@ type VerificationReport struct {
 // "gates new sends until the client re-verifies according to §3.1; responses
 // already in flight continue unaffected", and §3.1 lets replicas serve
 // members of one renewal family with different not_after. differs reports
-// it, and the caller makes the next send verify again.
+// it. The callers fail that response, because its receipt is signed under a
+// keyset that teep has not verified, and make the next send verify again.
 func CheckServedKeysetDigest(header http.Header, report *VerificationReport) (differs bool, err error) {
 	if report == nil || report.ACIKeysetDigest == "" {
 		return false, nil
@@ -237,6 +248,8 @@ func (r *VerificationReport) Clone() *VerificationReport {
 		maps.Copy(dst.Metadata, r.Metadata)
 	}
 	dst.ACISessionIDs = slices.Clone(r.ACISessionIDs)
+	dst.ACIPinnedSessions = slices.Clone(r.ACIPinnedSessions)
+	dst.ACIReceiptKeys = slices.Clone(r.ACIReceiptKeys)
 	return &dst
 }
 
@@ -903,10 +916,19 @@ type ACIKeysetResult struct {
 // requested model (ACI/1 §9.2). Pinned lists the ids of the sessions that
 // passed every check, which each request pins (aci_session_ids, §5.3).
 type ACISessionResult struct {
-	Pinned  []string
+	Pinned  []ACIPinnedSession
 	Refused []ACISessionRefusal
 	// Err is set when the sessions could not be fetched or selected.
 	Err error
+}
+
+// ACIPinnedSession is an attested session that passed the audit, with the
+// period of its record (ACI/1 §8.2). A receipt that cites the session must
+// have a served_at in this period (§9.3).
+type ACIPinnedSession struct {
+	ID            string
+	EstablishedAt int64
+	ExpiresAt     int64
 }
 
 // ACISessionRefusal names a session that teep did not pin, and why.
@@ -1155,6 +1177,9 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	var format BackendFormat
 	aciKeysetDigest := ""
 	var aciSessionIDs []string
+	var aciPinned []ACIPinnedSession
+	var aciReceiptKeys []ACIReceiptKey
+	var aciNotAfter int64
 	if in.Raw != nil {
 		tlsKeyFP = in.Raw.TransportTLSFingerprint
 		tlsAuthority = in.Raw.TransportTLSAuthority
@@ -1164,8 +1189,13 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		}
 		if in.Raw.ACICanonicalReport {
 			aciKeysetDigest = in.Raw.ACIWorkloadKeysetDigest
+			aciReceiptKeys = slices.Clone(in.Raw.ACIReceiptKeys)
+			aciNotAfter = in.Raw.ACIKeysetNotAfter
 			if in.ACISessions != nil && in.ACISessions.Err == nil {
-				aciSessionIDs = slices.Clone(in.ACISessions.Pinned)
+				aciPinned = slices.Clone(in.ACISessions.Pinned)
+				for _, s := range aciPinned {
+					aciSessionIDs = append(aciSessionIDs, s.ID)
+				}
 			}
 		}
 	}
@@ -1190,6 +1220,9 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		BackendFormat:      format,
 		ACIKeysetDigest:    aciKeysetDigest,
 		ACISessionIDs:      aciSessionIDs,
+		ACIPinnedSessions:  aciPinned,
+		ACIReceiptKeys:     aciReceiptKeys,
+		ACIKeysetNotAfter:  aciNotAfter,
 	}
 }
 
@@ -2089,7 +2122,7 @@ func evalACISessionVerified(in *ReportInput) []FactorResult {
 			fmt.Sprintf("no attested session passed the audit (%d refused%s)", len(s.Refused), refusalSummary(s.Refused)))
 	}
 	return factor(TierBinding, FactorACISessionVerified, Pass,
-		fmt.Sprintf("%d attested sessions verified and pinned (%d refused%s)", len(s.Pinned), len(s.Refused), refusalSummary(s.Refused)))
+		fmt.Sprintf("%d attested sessions pinned: genuine TDX and GPU with allowed MRTD/MRSEAM, workload policy not checked (%d refused%s)", len(s.Pinned), len(s.Refused), refusalSummary(s.Refused)))
 }
 
 // refusalSummary names the reason of the first refused session.

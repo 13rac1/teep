@@ -87,9 +87,10 @@ the TLS key of the base URL host, and its pool is keyed by that key. Each
 request also uses a fresh E2EE v2 session to the authorized gateway key and
 pins the attested sessions that the authorization verified; a refusal of
 the pinned sessions (`session_not_accepted`) ends the generation.
-A successful response without `X-ACI-Keyset-Digest` fails and ends the
-authorization generation; a response of another digest is relayed and
-ends the generation (ACI/1 §5.2). See the
+A successful response without `X-ACI-Keyset-Digest`, or of another digest,
+fails before it is relayed and ends the authorization generation: a
+response of another keyset has a receipt that teep cannot verify. Every
+successful response must have a receipt that verifies. See the
 [Phala Cloud provider document](../providers/phalacloud/phalacloud_support.md).
 
 Venice, Chutes, and NanoGPT do not use the authorization store.

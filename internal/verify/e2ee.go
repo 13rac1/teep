@@ -137,7 +137,6 @@ func verifyACIv2StreamResponse(resp *http.Response, session *e2ee.ACIv2Session, 
 	if resp.StatusCode != http.StatusOK {
 		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP %d", resp.StatusCode)}
 	}
-	keysetNote := ""
 	if raw.ACICanonicalReport {
 		verified := &attestation.VerificationReport{ACIKeysetDigest: raw.ACIWorkloadKeysetDigest}
 		differs, err := attestation.CheckServedKeysetDigest(resp.Header, verified)
@@ -145,9 +144,10 @@ func verifyACIv2StreamResponse(resp *http.Response, session *e2ee.ACIv2Session, 
 			return &attestation.E2EETestResult{Attempted: true, Err: err}
 		}
 		if differs {
-			// ACI/1 §5.2: the response in flight continues; a new send
-			// needs a verification of the served keyset.
-			keysetNote = "; the response served another keyset digest, so a new send verifies again (ACI/1 §5.2)"
+			// ACI/1 §5.2 lets the gateway finish a response in flight
+			// under the new keyset. Its receipt is signed under keys that
+			// teep has not verified, so the response is not authenticated.
+			return &attestation.E2EETestResult{Attempted: true, Err: errors.New("the response served another keyset digest; its receipt is signed under a keyset that teep has not verified")}
 		}
 	}
 	// teep sends stream=true; any other response type is not the answer to
@@ -191,7 +191,7 @@ func verifyACIv2StreamResponse(resp *http.Response, session *e2ee.ACIv2Session, 
 	}
 	return &attestation.E2EETestResult{
 		Attempted: true,
-		Detail:    fmt.Sprintf("E2EE v2 secp256k1: %d encrypted fields decrypted across %d chunks%s", session.DecryptedFields(), chunks, keysetNote),
+		Detail:    fmt.Sprintf("E2EE v2 secp256k1: %d encrypted fields decrypted across %d chunks", session.DecryptedFields(), chunks),
 	}
 }
 

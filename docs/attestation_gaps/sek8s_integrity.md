@@ -131,6 +131,16 @@ The evidence response echoes no nonce. `nonce_match` fails with "no echoed nonce
 - **`intel_pcs_collateral`** — DCAP certificate chain and collateral verification
 - **`tee_tcb_current`** — TCB level freshness
 
+### Chutes' signed evidence entries
+
+The Chutes evidence response now gives each entry `tee_type`, a
+`signature` and the `attested_body` that it signs (base64 JSON with the TDX
+quote and the request nonce). Chutes publishes no key for the signature,
+so teep does not verify it. In the attested sessions of Phala Cloud, teep
+requires that `attested_body` carries the entry's quote and the nonce of
+the evidence request; the quote itself is verified as above. The direct
+Chutes path accepts these members without a check.
+
 ### Server-side-only security mechanisms
 
 Chutes implements several strong server-side controls that are **not client-verifiable** but form part of the provider's security story:

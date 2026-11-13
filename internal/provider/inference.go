@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"net/http"
@@ -84,6 +85,22 @@ func prepareInferenceRequest(ctx context.Context, prov *Provider, route Resolved
 		return nil, err
 	}
 	return req, nil
+}
+
+// ReceiptRequestHash returns the sha256 that request.received of an ACI/1
+// receipt must state for a prepared request: for E2EE v2, the restored
+// request that the session recorded; for a request without encryption, the
+// wire body, which the gateway hashes as received. It returns nil when teep
+// cannot reproduce the gateway's form, or for another encryption protocol.
+func ReceiptRequestHash(encrypted e2ee.EncryptResult) *[32]byte {
+	if s, ok := encrypted.Session.(*e2ee.ACIv2Session); ok {
+		return s.RestoredRequestHash()
+	}
+	if encrypted.Session != nil || encrypted.Chutes != nil || encrypted.EHBP != nil || encrypted.BodyReader != nil {
+		return nil
+	}
+	sum := sha256.Sum256(encrypted.Body)
+	return &sum
 }
 
 // encryptInference keeps NEAR requests on the validated-key interface. Missing

@@ -401,6 +401,16 @@ func RebuildSession(entry, full *Session) (*Session, error) {
 	return ParseSession(record, entry.ID)
 }
 
+// ReleaseRecord drops the parsed record and the served data URI, which only
+// RebuildSession reads; the decoded evidence stays. The caller rebuilds the
+// other sessions of the bundle first.
+func (s *Session) ReleaseRecord() {
+	s.value = nil
+	if s.Evidence != nil {
+		s.Evidence.uri = ""
+	}
+}
+
 func sessionFromJSON(r *sessionJSON, full bool) (*Session, error) {
 	if r.APIVersion != "aci/1" {
 		return nil, fmt.Errorf("api_version is %q, want aci/1", r.APIVersion)

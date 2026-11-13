@@ -40,6 +40,9 @@ type Attester struct {
 	baseURL string
 	apiKey  string
 	client  *http.Client
+	// sessionClient returns the client of the session requests, pinned to
+	// the TLS key that the report binds (SEE: SetSessionClientFactory).
+	sessionClient func(tlsct.TransportIdentity) (*http.Client, error)
 }
 
 // NewAttester returns a Phala Cloud Attester configured with the given base URL
@@ -56,11 +59,26 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		client:  client,
+		sessionClient: func(identity tlsct.TransportIdentity) (*http.Client, error) {
+			pinned, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(attestationTimeout, tlsct.NewPooledTransport(), identity, ctEnabled)
+			if err != nil {
+				return nil, err
+			}
+			pinned.Transport = tlsct.WrapLogging(pinned.Transport)
+			return pinned, nil
+		},
 	}
 }
 
 // SetClient replaces the HTTP client used for attestation fetches.
 func (a *Attester) SetClient(c *http.Client) { a.client = c }
+
+// SetSessionClientFactory replaces the factory of the session client. A
+// live client must be pinned to the identity before it sends; a replay
+// client returns the recorded responses, whose TLS key fetchSessions checks.
+func (a *Attester) SetSessionClientFactory(f func(tlsct.TransportIdentity) (*http.Client, error)) {
+	a.sessionClient = f
+}
 
 // FetchAttestation fetches the ACI/1 report of the private-ai-gateway from
 // /v1/aci/attestation with the client nonce, and the attested sessions
@@ -99,7 +117,11 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	}
 	raw.TransportTLSFingerprint = spki
 	raw.TransportTLSAuthority = endpoint.Host
-	raw.ACISessions = a.fetchSessions(ctx, model)
+	identity, err := tlsct.NewTransportIdentity(endpoint.Host, spki)
+	if err != nil {
+		return nil, fmt.Errorf("phalacloud: %w", err)
+	}
+	raw.ACISessions = a.fetchSessions(ctx, model, identity)
 	return raw, nil
 }
 

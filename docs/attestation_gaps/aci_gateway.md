@@ -286,7 +286,11 @@ date.
    the RTMR values, compose content and images of the Phala model CVM, and
    allows RTMR0 of a Chutes instance to fail; it sends no Sigstore, Proof of
    Cloud or NRAS request for a session; and the bounded set narrows routing
-   to the pinned upstreams. See the
+   to the pinned upstreams. On 2026-11-03, for `qwen/qwen-2.5-7b-instruct`
+   (one of four models that list only Phala), the gateway replaced the
+   session at each re-verification and refused the pin with HTTP 412
+   `session_not_accepted`, so teep fails closed for that model; the other
+   three were not sent a request. See the
    [Phala Cloud provider document](../providers/phalacloud/phalacloud_support.md#attested-sessions).
 2. **The KMS root and gateway app id are trust on first use.** The accepted
    dstack-KMS root and gateway app id in `internal/provider/aci/keyset.go`
@@ -357,7 +361,7 @@ date.
    through `api.redpill.ai`, which is not TEE-only; the hostname of its
    inference requests is not observed. NanoGPT does not forward E2EE v2:
    a live E2EE v2 request on 2026-10-30 (`TEE/gemma-4-26b-a4b-uncensored`) received an SSE stream whose second chunk carried `choices.0.delta.content` in plaintext. teep refused the response (`e2ee_usable` failed: "expected encrypted string but not recognised"). The request content left teep as ciphertext. The gateway did not encrypt the response: this is consistent with NanoGPT not forwarding the E2EE v2 headers, or not forwarding the request to the gateway; a changed model would have made the gateway refuse the request instead. Until NanoGPT forwards E2EE v2, a NanoGPT ACI/1 model does not serve while E2EE is enabled.
-10. **E2EE v2 responses are not authenticated.** E2EE v2 makes the content confidential against a relay, not authenticated against it. The gateway encrypts each response field to teep's public key with a fresh ephemeral key, and the associated data is public, so a relay (NanoGPT, or a party on the TLS path) can encrypt fields of its own, drop, reorder or repeat chunks, append `[DONE]`, and set the role, `finish_reason`, usage, id and other clear fields; teep then decrypts the forged fields and reports `e2ee_usable` passed. The specification authenticates the response through the signed ACI receipt (e2ee-v2 §3.2 and §7, ACI/1 §7), which teep does not verify yet. teep pins the response id of a stream and requires `[DONE]`; these checks detect only an honest error, not a relay.
+10. **E2EE v2 responses are not authenticated.** E2EE v2 makes the content confidential against a relay, not authenticated against it. The gateway encrypts each response field to teep's public key with a fresh ephemeral key, and the associated data is public, so a relay (NanoGPT, or a party on the TLS path) can encrypt fields of its own, drop, reorder or repeat chunks, append `[DONE]`, and set the role, `finish_reason`, usage, id and other clear fields; teep then decrypts the forged fields and reports `e2ee_usable` passed. The specification authenticates the response through the signed ACI receipt (e2ee-v2 §3.2 and §7, ACI/1 §7). For Phala Cloud, `teep serve` verifies the receipt of every successful response and `teep verify` the receipt of its probe ([Receipts](../providers/phalacloud/phalacloud_support.md#receipts)); a stream reaches the client before the check. teep pins the response id of a stream and requires `[DONE]`; these checks detect only an honest error, not a relay.
     Under ACI/1 §7.6 a receipt is fetched with the API key that made the
     request. For Phala Cloud, teep holds that key and can fetch the
     receipt; for NanoGPT, NanoGPT made the gateway request with its own key,
@@ -482,8 +486,8 @@ signing key to be the keyset entry of that suite. The field coverage is in
 [API support](../api_support.md#phala-cloud-and-nanogpt-e2ee-v2-of-the-private-ai-gateway).
 
 **Pending:** the live TLS key binding for Phala Cloud (residual exposure
-8) in the authorization-store migration, receipt verification for E2EE v2
-responses (residual exposure 10), and NanoGPT forwarding E2EE v2, which
+8) in the authorization-store migration, receipt verification on `teep
+verify --reverify` (residual exposure 10), and NanoGPT forwarding E2EE v2, which
 it did not do on 2026-10-30 (residual exposure 9). If a provider passes on
 attested sessions, teep should verify them and move the core factors out of
 the allow-fail list for the models they cover.

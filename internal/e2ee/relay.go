@@ -1126,7 +1126,8 @@ func decryptResponseScoreData(dataRaw json.RawMessage, session Decryptor, endpoi
 }
 
 const (
-	maxNonStreamResponseBytes = 10 << 20
+	// MaxNonStreamResponseBytes bounds a reassembled non-stream response.
+	MaxNonStreamResponseBytes = 10 << 20
 	// NEAR hex encoding and SSE framing require more space than the final JSON.
 	maxReassemblyInputBytes = 32 << 20
 )
@@ -1146,7 +1147,7 @@ func ReassembleNonStream(body io.Reader, session Decryptor, endpoint EndpointTyp
 	if err != nil {
 		return nil, stats, err
 	}
-	if len(result) > maxNonStreamResponseBytes {
+	if len(result) > MaxNonStreamResponseBytes {
 		return nil, stats, errors.New("reassembled response exceeds 10 MiB")
 	}
 	return result, stats, nil
@@ -1473,13 +1474,13 @@ func RelayReassembledNonStream(ctx context.Context, w http.ResponseWriter, body 
 // (chat, embeddings, images, etc.); actual provider paths are documented
 // in DecryptNonStreamResponseForEndpoint.
 func RelayNonStreamForEndpoint(ctx context.Context, w http.ResponseWriter, body io.Reader, session Decryptor, endpoint EndpointType) (StreamStats, error) {
-	responseBody, err := io.ReadAll(io.LimitReader(body, maxNonStreamResponseBytes+1))
+	responseBody, err := io.ReadAll(io.LimitReader(body, MaxNonStreamResponseBytes+1))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return StreamStats{}, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 
-	if len(responseBody) > maxNonStreamResponseBytes {
+	if len(responseBody) > MaxNonStreamResponseBytes {
 		http.Error(w, "upstream response exceeds size limit", http.StatusBadGateway)
 		return StreamStats{}, fmt.Errorf("%w: upstream response exceeds 10 MiB", ErrRelayFailed)
 	}

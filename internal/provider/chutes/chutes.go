@@ -79,9 +79,13 @@ type e2eInstance struct {
 }
 
 // attestationResponse is the JSON response from GET /chutes/{chute}/evidence.
+// ExcludedInstanceIDs and the TEEType, AttestedBody and Signature members of
+// an entry are newer members of the response; older responses lack them, so
+// they are optional here and the session path requires them.
 type attestationResponse struct {
-	Evidence          []instanceEvidence `json:"evidence"`
-	FailedInstanceIDs []string           `json:"failed_instance_ids"`
+	Evidence            []instanceEvidence `json:"evidence"`
+	FailedInstanceIDs   []string           `json:"failed_instance_ids"`
+	ExcludedInstanceIDs *[]string          `json:"excluded_instance_ids,omitempty"`
 }
 
 // instanceEvidence is one instance's attestation evidence.
@@ -90,6 +94,23 @@ type instanceEvidence struct {
 	GPUEvidence []attestation.GPUEvidence `json:"gpu_evidence"`
 	InstanceID  string                    `json:"instance_id"`
 	Certificate string                    `json:"certificate"` // base64 DER TLS cert
+	TEEType     string                    `json:"tee_type,omitempty"`
+	// AttestedBody is base64 JSON of the evidence that Chutes signed;
+	// Signature is that signature. Chutes publishes no key for it, so teep
+	// does not verify Signature (SEE: checkAttestedBody).
+	AttestedBody string `json:"attested_body,omitempty"`
+	Signature    string `json:"signature,omitempty"`
+}
+
+// attestedBody is the decoded AttestedBody of an evidence entry. The quote
+// is under tdx_quote or, in other entries of the same response, quote.
+type attestedBody struct {
+	Evidence struct {
+		TDXQuote        *string `json:"tdx_quote,omitempty"`
+		Quote           *string `json:"quote,omitempty"`
+		NvtrustEvidence string  `json:"nvtrust_evidence"`
+	} `json:"evidence"`
+	Nonce string `json:"nonce"`
 }
 
 // Attester fetches attestation data from the Chutes direct API.
@@ -279,12 +300,14 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 // them. Every instance list that names the instance must give it the same
 // E2EE public key. nonce is the nonce of the evidence request. The result
 // carries no E2EE request nonce: the attestation is not used to encrypt.
+// Undefined and absent members of the bodies are returned in UnknownFields
+// and MissingFields without logging; the caller decides.
 func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evidenceBody []byte, instanceID string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	var pubKey string
 	var unknown, missing []string
 	for i, body := range instancesBodies {
 		instances := &e2eInstancesResponse{}
-		u, m, err := jsonstrict.UnmarshalWarn(body, instances, "chutes instances")
+		u, m, err := jsonstrict.Unmarshal(body, instances)
 		if err != nil {
 			return nil, fmt.Errorf("chutes: unmarshal instance list %d: %w", i, err)
 		}
@@ -310,7 +333,7 @@ func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evi
 		return nil, fmt.Errorf("chutes: no instance list names instance %s", instanceID)
 	}
 	ar := &attestationResponse{}
-	u, m, err := jsonstrict.UnmarshalWarn(evidenceBody, ar, "chutes evidence")
+	u, m, err := jsonstrict.Unmarshal(evidenceBody, ar)
 	if err != nil {
 		return nil, fmt.Errorf("chutes: unmarshal evidence response: %w", err)
 	}
@@ -330,6 +353,12 @@ func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evi
 	if matched == nil {
 		return nil, fmt.Errorf("chutes: evidence has no entry for instance %s", instanceID)
 	}
+	if ar.ExcludedInstanceIDs == nil {
+		return nil, errors.New("chutes: evidence has no excluded_instance_ids")
+	}
+	if err := checkAttestedBody(matched, nonce); err != nil {
+		return nil, fmt.Errorf("chutes: instance %s: %w", instanceID, err)
+	}
 	raw, err := instanceRaw(ctx, matched, pubKey)
 	if err != nil {
 		return nil, err
@@ -340,6 +369,47 @@ func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evi
 	raw.MissingFields = slices.Concat(missing, m)
 	raw.RawBody = evidenceBody
 	return raw, nil
+}
+
+// checkAttestedBody checks the newer members of an evidence entry: tee_type
+// is tdx, and attested_body is base64 JSON with exactly the members of
+// attestedBody whose quote is the entry's quote and whose nonce is the nonce
+// of the evidence request. teep does not verify Signature, which Chutes
+// signs under a key that it does not publish, and does not use
+// nvtrust_evidence; the quote and the GPU evidence are verified on their own.
+func checkAttestedBody(e *instanceEvidence, nonce attestation.Nonce) error {
+	if e.TEEType != "tdx" {
+		return fmt.Errorf("tee_type is %q, want tdx", e.TEEType)
+	}
+	if e.Signature == "" {
+		return errors.New("evidence entry has no signature")
+	}
+	data, err := base64.StdEncoding.DecodeString(e.AttestedBody)
+	if err != nil || len(data) == 0 {
+		return errors.New("attested_body is not base64")
+	}
+	var body attestedBody
+	unknown, missing, err := jsonstrict.Unmarshal(data, &body)
+	if err != nil {
+		return fmt.Errorf("attested_body: %w", err)
+	}
+	if len(unknown) > 0 || len(missing) > 0 {
+		return fmt.Errorf("attested_body: undefined members %q, missing members %q", unknown, missing)
+	}
+	quote := body.Evidence.TDXQuote
+	if (quote == nil) == (body.Evidence.Quote == nil) {
+		return errors.New("attested_body needs exactly one of evidence.tdx_quote and evidence.quote")
+	}
+	if quote == nil {
+		quote = body.Evidence.Quote
+	}
+	if subtle.ConstantTimeCompare([]byte(*quote), []byte(e.Quote)) != 1 {
+		return errors.New("attested_body quote is not the quote of the entry")
+	}
+	if subtle.ConstantTimeCompare([]byte(body.Nonce), []byte(nonce.Hex())) != 1 {
+		return errors.New("attested_body nonce is not the nonce of the evidence request")
+	}
+	return nil
 }
 
 func checkInstances(instances *e2eInstancesResponse) error {

@@ -321,7 +321,7 @@ Venice only exposes chat completions. No other endpoints are available.
 
 | Field | Encrypted |
 |---|---|
-| `messages[].content` | Yes (text string, or the compact JSON of a structured content array) |
+| `messages[].content` | Yes (text string, or the compact JSON of a structured content array; a string whose text is a JSON array is sent as one text part, `[{"type":"text","text":…}]`, because the gateway restores every plaintext that parses as an array as structured content) |
 
 **E2EE response fields encrypted:**
 
@@ -337,7 +337,7 @@ Venice only exposes chat completions. No other endpoints are available.
 
 **Not encrypted:** the top-level `model`, `messages[].name`, `stop`, `tool_choice` and the top-level `function_call` (which name a function), and the other request parameters, including provider-specific prompt fields, which pass in plaintext. NanoGPT and the gateway see them.
 
-**Authentication:** E2EE v2 makes the content confidential against a relay, not authenticated against it. The gateway encrypts each response field to teep's public key with a fresh ephemeral key, and the associated data is public, so a relay (NanoGPT, or a party on the TLS path) can encrypt fields of its own, drop, reorder or repeat chunks, append `[DONE]`, and set the role, `finish_reason`, usage, id and other clear fields; teep then decrypts the forged fields and reports `e2ee_usable` passed. The specification authenticates the response through the signed ACI receipt (e2ee-v2 §3.2 and §7, ACI/1 §7), which teep does not verify yet. teep pins the response id of a stream and requires `[DONE]`; these checks detect only an honest error, not a relay.
+**Authentication:** E2EE v2 makes the content confidential against a relay, not authenticated against it. The gateway encrypts each response field to teep's public key with a fresh ephemeral key, and the associated data is public, so a relay (NanoGPT, or a party on the TLS path) can encrypt fields of its own, drop, reorder or repeat chunks, append `[DONE]`, and set the role, `finish_reason`, usage, id and other clear fields; teep then decrypts the forged fields and reports `e2ee_usable` passed. The specification authenticates the response through the signed ACI receipt (e2ee-v2 §3.2 and §7, ACI/1 §7). For Phala Cloud, `teep serve` verifies the receipt of every successful response, and `teep verify` the receipt of its probe: a non-stream response reaches the client after the check, a stream before it ([Receipts](providers/phalacloud/phalacloud_support.md#receipts)). teep also pins the response id of a stream and requires `[DONE]`; without a receipt, as for NanoGPT, these checks detect only an honest error, not a relay.
 
 **Other attestation formats:** E2EE v2 encrypts only to a key from an ACI/1 attestation. A Phala Cloud or NanoGPT model that answers with the dstack or Chutes format fails closed when E2EE is enabled.
 

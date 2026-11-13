@@ -106,6 +106,13 @@ func LogModelNameMatch(ctx context.Context, provider, requested string, raw *Raw
 	}
 }
 
+// ACIReceiptKey is a receipt_signing_keys entry of an ACI/1 workload keyset.
+type ACIReceiptKey struct {
+	KeyID     string
+	Algo      string
+	PublicKey string // lowercase hex
+}
+
 // RawAttestation holds the parsed fields from a TEE provider's attestation
 // endpoint response (Venice /tee/attestation, NEAR /attestation/report, etc.).
 // All fields are raw strings exactly as returned by the provider; higher layers
@@ -237,6 +244,12 @@ type RawAttestation struct {
 	// back). Nil for non-ACI/1 formats.
 	ACIWorkloadKeyset any `json:"-"`
 	ACIKeyCustody     any `json:"-"`
+	// ACIReceiptKeys and ACIKeysetNotAfter are the receipt signing keys and
+	// the not_after of the workload keyset of a canonical ACI/1 report.
+	// The quote binds them through the §3.2 statement once
+	// gateway_tee_reportdata_binding passes.
+	ACIReceiptKeys    []ACIReceiptKey `json:"-"`
+	ACIKeysetNotAfter int64           `json:"-"`
 	// ACISessions holds the attested sessions that the attester fetched
 	// for the requested model, as the phalacloud package defines them
 	// (opaque here for the same reason). The proxy and teep verify audit

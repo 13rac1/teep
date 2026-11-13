@@ -7,6 +7,7 @@ package aciv2test
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -30,8 +31,9 @@ const (
 
 // Gateway holds the attested service E2EE key.
 type Gateway struct {
-	t   testing.TB
-	key *secp256k1.PrivateKey
+	t          testing.TB
+	key        *secp256k1.PrivateKey
+	receiptKey ed25519.PrivateKey
 }
 
 // New returns a gateway with a fresh service key.
@@ -41,7 +43,11 @@ func New(tb testing.TB) *Gateway {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	return &Gateway{t: tb, key: key}
+	_, receiptKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return &Gateway{t: tb, key: key, receiptKey: receiptKey}
 }
 
 // PubKeyHex returns the uncompressed service public key as hex.
@@ -130,6 +136,22 @@ func gcmKey(priv *secp256k1.PrivateKey, pub *secp256k1.PublicKey) cipher.AEAD {
 		panic(err)
 	}
 	return aead
+}
+
+// RestoreContent returns the content that the gateway restores from a
+// decrypted whole-content plaintext (spec §5): a plaintext that parses as
+// a JSON array is restored as structured content, any other plaintext as a
+// string.
+func RestoreContent(plaintext string) json.RawMessage {
+	var parts []any
+	if err := json.Unmarshal([]byte(plaintext), &parts); err == nil {
+		return json.RawMessage(plaintext)
+	}
+	s, err := json.Marshal(plaintext)
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 // DecryptRequestField decrypts one request field under its field path.

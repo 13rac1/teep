@@ -116,7 +116,7 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 			identity = selected
 		}
 		var retry bool
-		probe, canRetry, probeErr := testStandaloneInference(attemptCtx, opts, *route, current.raw, current.modelKey, current.report.ACISessionIDs, client)
+		probe, canRetry, probeErr := testStandaloneInference(attemptCtx, opts, *route, current.raw, current.modelKey, current.report.ACIPinnedSessions, client)
 		retry, err = canRetry, probeErr
 		if probe != nil {
 			current.e2ee = probe.e2ee
@@ -173,7 +173,7 @@ type standaloneProbe struct {
 	tlsInference *attestation.TLSInferenceResult
 }
 
-func testStandaloneInference(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, modelKey e2ee.NearModelKey, sessionIDs []string, client *http.Client) (*standaloneProbe, bool, error) {
+func testStandaloneInference(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, modelKey e2ee.NearModelKey, pinned []attestation.ACIPinnedSession, client *http.Client) (*standaloneProbe, bool, error) {
 	prov := &provider.Provider{Name: opts.ProviderName, E2EE: !nearTLSOnly(opts)}
 	switch opts.ProviderName {
 	case "nearcloud":
@@ -196,6 +196,10 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, false, err
+	}
+	sessionIDs := make([]string, 0, len(pinned))
+	for _, s := range pinned {
+		sessionIDs = append(sessionIDs, s.ID)
 	}
 	phase := &tlsct.InferenceAttempt{}
 	req, encrypted, err := provider.PrepareInference(phase.Context(ctx), prov, route, &provider.InferenceInput{Body: body, SigningKey: raw.SigningKey, BackendFormat: raw.BackendFormat, ACISessionIDs: sessionIDs, ModelKey: modelKey, Path: "/v1/chat/completions", ContentType: "application/json", Stream: true, Endpoint: e2ee.EndpointChat})
@@ -220,7 +224,7 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 		return nil, false, err
 	}
 	if rejected {
-		return nil, prov.E2EE, &standaloneKeyRejectionError{}
+		return nil, prov.E2EE, &standaloneKeyRejectionError{sessions: opts.ProviderName == "phalacloud"}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, false, standaloneInferenceError(resp, encrypted.EHBP)
@@ -234,8 +238,9 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 	if encrypted.EHBP != nil {
 		return &standaloneProbe{e2ee: verifyEHBPStreamResponse(resp, encrypted.EHBP)}, false, nil
 	}
-	if v2, ok := encrypted.Session.(*e2ee.ACIv2Session); ok {
-		return &standaloneProbe{e2ee: verifyACIv2StreamResponse(resp, v2, raw)}, false, nil
+	if v2, ok := encrypted.Session.(*e2ee.ACIv2Session); ok && opts.ProviderName == "phalacloud" {
+		pr := &probeReceipt{client: client, route: route, pinned: pinned, requestHash: provider.ReceiptRequestHash(encrypted)}
+		return &standaloneProbe{e2ee: verifyPhalaProbe(ctx, opts, raw, resp, v2, pr)}, false, nil
 	}
 	return &standaloneProbe{e2ee: verifyE2EEStreamResponse(resp, encrypted.Session, opts.ProviderName)}, false, nil
 }
@@ -256,9 +261,17 @@ func standaloneInferenceError(resp *http.Response, session *e2ee.EHBPSession) er
 	return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
 }
 
-type standaloneKeyRejectionError struct{}
+// standaloneKeyRejectionError is a refusal that ends the authorization and
+// makes the probe verify again. For Phala Cloud it is session_not_accepted:
+// the gateway refused the pinned attested sessions, not a key.
+type standaloneKeyRejectionError struct {
+	sessions bool
+}
 
-func (*standaloneKeyRejectionError) Error() string {
+func (e *standaloneKeyRejectionError) Error() string {
+	if e.sessions {
+		return "upstream refused the pinned attested sessions (session_not_accepted)"
+	}
 	return "upstream rejected attested encryption key"
 }
 

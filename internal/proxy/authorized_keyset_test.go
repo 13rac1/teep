@@ -8,10 +8,10 @@ import (
 	"github.com/13rac1/teep/internal/provider"
 )
 
-// On the pinned path, a response without a keyset digest fails and ends the
-// authorization generation that the request used. A response of another
-// keyset digest is relayed, and the generation ends so that the next request
-// verifies again (ACI/1 §5.2). A replacement generation stays.
+// On the pinned path, a response without a keyset digest, or of another
+// keyset digest, fails and ends the authorization generation that the
+// request used, so that the next request verifies again. A replacement
+// generation stays.
 func TestCheckAuthorizedKeyset(t *testing.T) {
 	server := &Server{authorizations: newAuthorizationStore(10, 2, time.Second)}
 	defer server.authorizations.close()
@@ -31,7 +31,7 @@ func TestCheckAuthorizedKeyset(t *testing.T) {
 		ended        bool
 	}{
 		{"verified digest", "sha256:aa", false, false},
-		{"other digest", "sha256:bb", false, true},
+		{"other digest", "sha256:bb", true, true},
 		{"no digest", "", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,8 +51,8 @@ func TestCheckAuthorizedKeyset(t *testing.T) {
 	old := loadTestAuthorization(t, server.authorizations, key, candidate)
 	server.authorizations.invalidate(key)
 	replacement := loadTestAuthorization(t, server.authorizations, key, candidate)
-	if err := server.checkAuthorizedKeyset(t.Context(), input, old, header("sha256:bb")); err != nil {
-		t.Fatal(err)
+	if err := server.checkAuthorizedKeyset(t.Context(), input, old, header("sha256:bb")); err == nil {
+		t.Fatal("a response of another keyset digest passed")
 	}
 	if current, ok := server.authorizations.acquire(key); !ok || current.generation != replacement.generation {
 		t.Error("a response of an earlier generation ended the replacement")

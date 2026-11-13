@@ -64,6 +64,15 @@ func ParseCanonical(ctx context.Context, body []byte, provider string) (*attesta
 		return nil, err
 	}
 	raw.ACICanonicalReport = true
+	ks := &report.Attestation.WorkloadKeyset
+	for _, k := range ks.ReceiptSigningKeys {
+		raw.ACIReceiptKeys = append(raw.ACIReceiptKeys, attestation.ACIReceiptKey{KeyID: k.KeyID, Algo: k.Algo, PublicKey: strings.ToLower(k.PublicKey)})
+	}
+	notAfter, err := ks.NotAfter.Int64()
+	if err != nil {
+		return nil, fmt.Errorf("%s aci/1: keyset not_after: %w", provider, err)
+	}
+	raw.ACIKeysetNotAfter = notAfter
 	return raw, nil
 }
 

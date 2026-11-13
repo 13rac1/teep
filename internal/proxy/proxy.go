@@ -2626,11 +2626,14 @@ func (e *httpError) Unwrap() error { return e.err }
 // upstreamResult holds the outcome of doUpstreamRoundtrip. Always returned
 // (even on error) so callers can extract partial timing for metrics.
 type upstreamResult struct {
-	Request     *http.Request
-	Resp        *http.Response
-	Session     e2ee.Decryptor
-	Meta        *e2ee.ChutesE2EE
-	EHBP        *e2ee.EHBPSession
+	Request *http.Request
+	Resp    *http.Response
+	Session e2ee.Decryptor
+	Meta    *e2ee.ChutesE2EE
+	EHBP    *e2ee.EHBPSession
+	// RequestHash is the request hash that a receipt must state, or nil
+	// when teep cannot reproduce it (SEE: provider.ReceiptRequestHash).
+	RequestHash *[32]byte
 	Cancel      context.CancelFunc
 	E2EEDur     time.Duration
 	UpstreamDur time.Duration

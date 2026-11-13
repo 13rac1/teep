@@ -615,11 +615,39 @@ func nonceIsZero(nonce attestation.Nonce) bool {
 	return subtle.ConstantTimeCompare(nonce[:], zero[:]) == 1
 }
 
+// sessionClientFactory returns the session clients of a Phala Cloud
+// verification. A live client is pinned to the report's TLS key before it
+// sends, and a capture records its exchanges. A run that replays a capture
+// (as runTLSVerification decides: replay, or a captured E2EE outcome)
+// answers from the capture through client, and the attester checks the
+// recorded TLS key of each response.
+func sessionClientFactory(opts *Options, client *http.Client) func(tlsct.TransportIdentity) (*http.Client, error) {
+	return func(identity tlsct.TransportIdentity) (*http.Client, error) {
+		if opts.replay || opts.CapturedE2EE != nil {
+			return client, nil
+		}
+		pinned, err := tlsct.NewSPKIPinnedHTTPClientWithTransport(config.AttestationTimeout, tlsct.NewPooledTransport(), identity, !opts.Offline)
+		if err != nil {
+			return nil, err
+		}
+		if opts.capture != nil {
+			pinned.Transport = opts.capture.recordSessions(pinned.Transport)
+		}
+		return pinned, nil
+	}
+}
+
 func configureAttestationClient(attester provider.Attester, opts *Options, client *http.Client) error {
 	// Inject shared client into attester for capture/replay.
 	type clientSetter interface{ SetClient(*http.Client) }
 	if cs, ok := attester.(clientSetter); ok {
 		cs.SetClient(client)
+	}
+
+	if setter, ok := attester.(interface {
+		SetSessionClientFactory(func(tlsct.TransportIdentity) (*http.Client, error))
+	}); ok {
+		setter.SetSessionClientFactory(sessionClientFactory(opts, client))
 	}
 
 	if setter, ok := attester.(interface{ SetClientFactory(func() *http.Client) }); ok {

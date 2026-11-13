@@ -342,19 +342,30 @@ in the Phala Cloud provider document. The design as built:
   applies to requests.
 
 **7e. Receipts.** Over the same pinned pool: hash the raw SSE bytes, fetch
-`GET /v1/aci/receipts/{X-Receipt-Id or response id}` with the request's
-key, with a short bounded retry on `not_found`, and check the ed25519
-signature over the JCS form without `signature`, `workload_keyset_digest`,
-`model`, `endpoint`, `method`, `response.returned.body_hash`,
-`upstream.verified` with `result: "verified"`, `required: true` and a
-`session_id` that teep pinned, and `served_at` within the keyset lifetime.
-A non-stream request is buffered and answered after the check; a stream is
-checked after `[DONE]`, and a failure invalidates the authorization
-generation that the request used and logs at error level. `--capture`
-records the receipt and the raw SSE bytes, and `--reverify` checks them.
-The request hash is checked only when teep reproduces the gateway's
-serde_json form (preserve_order, serde string escaping, f64 number
-output); otherwise `teep verify` states that it is not checked.
+`GET /v1/aci/receipts/{X-Receipt-Id}` with the request's key, at most 3
+attempts 200 ms apart on HTTP 404, and check the ed25519 signature over the
+JCS form without `signature`, `workload_keyset_digest`, `model`,
+`endpoint`, `method`, `response.returned.body_hash`, `upstream.verified`
+with `result: "verified"`, `required: true` and a `session_id` that teep
+pinned and whose period holds `served_at` (§9.3 step 6), and `served_at`
+within the keyset lifetime. A non-stream request is buffered and answered
+after the check; a stream is checked after it ends. A receipt that does not
+verify invalidates the authorization generation that the request used and
+logs at error level. A receipt that is not served fails the request and
+keeps the generation, because its absence is not evidence against the
+attestation. A response of a changed `X-ACI-Keyset-Digest` fails: its
+receipt is signed under a keyset that teep has not verified. The in-flight
+rule of §5.2 describes the gateway; teep verifies the new keyset before the
+next send. `--capture` records the receipt and the raw SSE
+bytes, and `--reverify` checks them. The request hash is checked only when
+teep reproduces the gateway's serde_json form (preserve_order, serde string
+escaping, f64 number output); otherwise `teep verify` states that it is not
+checked. The receipt GET per request is a point of discussion:
+[the provider document](../providers/phalacloud/phalacloud_support.md#point-of-discussion-one-receipt-get-per-request).
+
+**Later.** VerifyReceipt does not require a `request.forwarded` event and
+does not compare `chat_id` or the `model_id` of `upstream.verified` with the
+request or the pinned session.
 
 **Scope.** Phala Cloud only. Venice relays neither `X-Receipt-Id` nor the
 ACI headers (2026-10-30) and stays confidentiality-only, as does NanoGPT.

@@ -49,6 +49,10 @@ type ACIv2Session struct {
 	// responseID is the id of the first chunk with a choice; every later
 	// chunk with a choice must carry the same id.
 	responseID *string
+	// requestHash is the sha256 of the restored request that an ACI/1
+	// receipt states in request.received, or nil when teep cannot
+	// reproduce the gateway's form of it.
+	requestHash *[32]byte
 }
 
 // NewACIv2Session creates a session for one request to model, encrypted to
@@ -108,6 +112,13 @@ func (s *ACIv2Session) Headers() map[string]string {
 		"X-E2EE-Timestamp": strconv.FormatInt(s.timestamp, 10),
 	}
 }
+
+// SetRestoredRequestHash records the sha256 of the restored request; nil
+// states that the receipt check does not cover the request.
+func (s *ACIv2Session) SetRestoredRequestHash(h *[32]byte) { s.requestHash = h }
+
+// RestoredRequestHash returns the hash that SetRestoredRequestHash recorded.
+func (s *ACIv2Session) RestoredRequestHash() *[32]byte { return s.requestHash }
 
 // DecryptedFields returns the number of response fields that the session
 // decrypted.

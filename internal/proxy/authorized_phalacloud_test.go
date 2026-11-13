@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,30 +27,62 @@ import (
 // authorization pinned.
 const authorizedSessionID = "4d849e211f7078bd8d27a748a7ac0ddfe164d2ef5c0e29e6e30292a371276320"
 
+// phalaCase is one exchange of TestAuthorizedPhalaCloudACIv2.
+type phalaCase struct {
+	name   string
+	served string // X-ACI-Keyset-Digest; "" for none
+	refuse bool   // answer session_not_accepted
+	plain  bool   // the client asks for a non-stream response
+	// receipt changes the receipt that the gateway signs; noReceiptID
+	// leaves out X-Receipt-Id, and receiptMissing answers HTTP 404 on
+	// every receipt GET.
+	receipt        func(*aciv2test.Receipt)
+	noReceiptID    bool
+	receiptMissing bool
+	wantErr        bool
+	wantRelayed    bool
+	ended          bool
+}
+
 // A Phala Cloud request on the pinned path is encrypted with E2EE v2 to the
 // authorized gateway key, pins the authorized attested sessions, goes to the
 // attested TLS key, and its response decrypts. The keyset digest of the
 // response decides whether the authorization generation stays: the verified
-// digest keeps it, another digest relays the response and ends it, and no
-// digest fails the request and ends it. A refusal of the pinned sessions
-// (session_not_accepted) fails the attempt and ends the generation, so the
-// next attempt verifies the sessions again.
+// digest keeps it; another digest or no digest fails the request before
+// teep relays it, and ends the generation. A refusal of the pinned sessions (session_not_accepted) fails
+// the attempt and ends the generation, so the next attempt verifies the
+// sessions again.
+//
+// Every successful response must have a receipt that verifies (ACI/1
+// §9.3). A non-stream response reaches the client only after its receipt
+// verifies; a stream reaches the client as it arrives. A receipt whose
+// service statements do not verify fails the request and ends the
+// generation. A receipt that the gateway does not serve, or whose
+// statements about the request differ from it, fails the request and keeps
+// the generation: one client's request must not end the authorization that
+// every client shares.
 func TestAuthorizedPhalaCloudACIv2(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		for _, tc := range []struct {
-			name, served string
-			refuse       bool
-			wantErr      bool
-			ended        bool
-		}{
-			{"verified digest", "sha256:aa", false, false, false},
-			{"other digest", "sha256:bb", false, false, true},
-			{"no digest", "", false, true, true},
-			{"sessions refused", "sha256:aa", true, true, true},
+		otherResponse := func(r *aciv2test.Receipt) { r.Response = []byte("other") }
+		for _, tc := range []phalaCase{
+			{name: "verified digest", served: testKeysetA, wantRelayed: true},
+			{name: "verified digest, non-stream", served: testKeysetA, plain: true, wantRelayed: true},
+			{name: "other digest", served: testKeysetB, wantErr: true, ended: true},
+			{name: "no digest", wantErr: true, ended: true},
+			{name: "sessions refused", served: testKeysetA, refuse: true, wantErr: true, ended: true},
+			{name: "no receipt id", served: testKeysetA, noReceiptID: true, wantErr: true, ended: true},
+			{name: "receipt not served", served: testKeysetA, receiptMissing: true, wantErr: true, wantRelayed: true},
+			{name: "receipt not served, non-stream", served: testKeysetA, plain: true, receiptMissing: true, wantErr: true},
+			{name: "receipt of other response", served: testKeysetA, receipt: otherResponse, wantErr: true, wantRelayed: true, ended: true},
+			{name: "receipt of other response, non-stream", served: testKeysetA, plain: true, receipt: otherResponse, wantErr: true, ended: true},
+			{name: "receipt of other request", served: testKeysetA, plain: true, receipt: func(r *aciv2test.Receipt) { r.Request = []byte("{}") }, wantErr: true},
+			{name: "receipt of other model", served: testKeysetA, plain: true, receipt: func(r *aciv2test.Receipt) { r.Model = "other" }, wantErr: true},
+			{name: "receipt cites other session", served: testKeysetA, plain: true, receipt: func(r *aciv2test.Receipt) { r.SessionID = strings.Repeat("cd", 32) }, wantErr: true, ended: true},
+			{name: "served after the session", served: testKeysetA, plain: true, receipt: func(r *aciv2test.Receipt) { r.ServedAt = authorizedSessionExpires + 1 }, wantErr: true, ended: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				testAuthorizedPhalaCloud(t, authority, tc.served, tc.refuse, tc.wantErr, tc.ended)
+				testAuthorizedPhalaCloud(t, authority, &tc)
 			})
 		}
 	})
@@ -68,10 +101,29 @@ func TestAuthorizedPhalaCloudRequiresPinnedSessions(t *testing.T) {
 	}
 }
 
-func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, served string, refuse, wantErr, ended bool) {
+// testKeysetA is the verified keyset digest, testKeysetB another one.
+var (
+	testKeysetA = "sha256:" + strings.Repeat("aa", 32)
+	testKeysetB = "sha256:" + strings.Repeat("bb", 32)
+)
+
+// phalaTestGateway answers the chat request of tc and the receipt GET that
+// follows it.
+func phalaTestGateway(t *testing.T, gw *aciv2test.Gateway, tc *phalaCase, receipt *atomic.Pointer[[]byte], receiptGETs *atomic.Int32) http.HandlerFunc {
 	t.Helper()
-	gw := aciv2test.New(t)
-	upstream := authority.NewTLSServerWithConfig(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == aci.ReceiptsPath+"/rcpt-1" {
+			receiptGETs.Add(1)
+			if r.Header.Get("Authorization") != "Bearer test" {
+				t.Errorf("receipt GET Authorization %q", r.Header.Get("Authorization"))
+			}
+			if tc.receiptMissing || receipt.Load() == nil {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write(*receipt.Load())
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
 			t.Error(err)
@@ -96,7 +148,7 @@ func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, served
 		if len(b.Provider.ACISessionIDs) != 1 || b.Provider.ACISessionIDs[0] != authorizedSessionID {
 			t.Errorf("provider.aci_session_ids = %q, want the authorized session", b.Provider.ACISessionIDs)
 		}
-		if refuse {
+		if tc.refuse {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusPreconditionFailed)
 			_, _ = io.WriteString(w, `{"error":{"message":"none of the pinned sessions can serve this request","type":"session_not_accepted","code":null,"param":null}}`)
@@ -105,12 +157,40 @@ func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, served
 		if got, err := gw.DecryptRequestField(req, "messages.0.content", b.Messages[0].Content); err != nil || got != "test" {
 			t.Errorf("messages.0.content = %q, %v", got, err)
 		}
-		if served != "" {
-			w.Header().Set("X-Aci-Keyset-Digest", served)
+		stream := gw.Stream(req, "chatcmpl-1", []string{"Hel", "lo"}, true)
+		// The gateway hashes the request with the plaintext restored in
+		// place of the ciphertext (E2EE v2 §8).
+		restored := strings.Replace(string(body), `"`+b.Messages[0].Content+`"`, `"test"`, 1)
+		served := tc.served
+		if served == "" {
+			served = testKeysetA
+		}
+		fields := &aciv2test.Receipt{ID: "rcpt-1", Model: "model", KeysetDigest: served, SessionID: authorizedSessionID, Request: []byte(restored), Response: []byte(stream), ServedAt: authorizedSessionExpires - 10}
+		if tc.receipt != nil {
+			tc.receipt(fields)
+		}
+		signed := gw.SignReceipt(fields)
+		receipt.Store(&signed)
+		if tc.served != "" {
+			w.Header().Set("X-Aci-Keyset-Digest", tc.served)
+		}
+		if !tc.noReceiptID {
+			w.Header().Set("X-Receipt-Id", "rcpt-1")
 		}
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-		_, _ = io.WriteString(w, gw.Stream(req, "chatcmpl-1", []string{"Hel", "lo"}, true))
-	}), func(ts *httptest.Server) {
+		_, _ = io.WriteString(w, stream)
+	}
+}
+
+// authorizedSessionExpires is the expires_at of the authorized session.
+const authorizedSessionExpires = 1893456000
+
+func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, tc *phalaCase) {
+	t.Helper()
+	gw := aciv2test.New(t)
+	var receipt atomic.Pointer[[]byte]
+	var receiptGETs atomic.Int32
+	upstream := authority.NewTLSServerWithConfig(t, phalaTestGateway(t, gw, tc, &receipt, &receiptGETs), func(ts *httptest.Server) {
 		ts.Config.TLSConfig = ts.TLS
 		if err := http2.ConfigureServer(ts.Config, &http2.Server{}); err != nil {
 			t.Fatal(err)
@@ -125,15 +205,18 @@ func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, served
 	if err != nil {
 		t.Fatal(err)
 	}
-	prov := &provider.Provider{Name: "phalacloud", BaseURL: upstream.URL, StaticRoute: route, UsesTLSBinding: true, E2EE: true, Encryptor: aci.NewE2EE(), Preparer: phalacloud.NewPreparer("test")}
+	prov := &provider.Provider{Name: "phalacloud", BaseURL: upstream.URL, APIKey: "test", StaticRoute: route, UsesTLSBinding: true, E2EE: true, Encryptor: aci.NewE2EE(), Preparer: phalacloud.NewPreparer("test")}
 	key, err := route.AuthorizationKey(prov.Name, "model")
 	if err != nil {
 		t.Fatal(err)
 	}
 	report := &attestation.VerificationReport{
-		Provider: prov.Name, Model: "model", BackendFormat: attestation.FormatACI1, ACIKeysetDigest: "sha256:aa",
-		ACISessionIDs: []string{authorizedSessionID},
-		TLSAuthority:  route.Authority(), TLSKeyFP: hex.EncodeToString(fingerprint[:]),
+		Provider: prov.Name, Model: "model", BackendFormat: attestation.FormatACI1, ACIKeysetDigest: testKeysetA,
+		ACISessionIDs:     []string{authorizedSessionID},
+		ACIPinnedSessions: []attestation.ACIPinnedSession{{ID: authorizedSessionID, EstablishedAt: authorizedSessionExpires - 3600, ExpiresAt: authorizedSessionExpires}},
+		ACIReceiptKeys:    []attestation.ACIReceiptKey{{KeyID: aciv2test.ReceiptKeyID, Algo: "ed25519", PublicKey: gw.ReceiptPublicKeyHex()}},
+		ACIKeysetNotAfter: authorizedSessionExpires + 3600,
+		TLSAuthority:      route.Authority(), TLSKeyFP: hex.EncodeToString(fingerprint[:]),
 		Factors: []attestation.FactorResult{{Name: attestation.FactorTEEReportData, Status: attestation.Pass}, {Name: attestation.FactorE2EEUsable, Status: attestation.Skip}},
 	}
 	candidate, err := newAuthorization(key, report, gw.PubKeyHex(), true, false)
@@ -141,19 +224,29 @@ func testAuthorizedPhalaCloud(t *testing.T, authority *testtls.Authority, served
 		t.Fatal(err)
 	}
 	value := loadTestAuthorization(t, server.authorizations, key, candidate)
-	input := &authorizedRequest{provider: prov, route: route, key: key, body: []byte(`{"model":"model","stream":true,"messages":[{"role":"user","content":"test"}]}`), stream: true, path: "/v1/chat/completions", contentType: "application/json", endpoint: e2ee.EndpointChat}
+	body := `{"model":"model","stream":true,"messages":[{"role":"user","content":"test"}]}`
+	if tc.plain {
+		body = `{"model":"model","messages":[{"role":"user","content":"test"}]}`
+	}
+	input := &authorizedRequest{provider: prov, route: route, key: key, body: []byte(body), stream: !tc.plain, path: "/v1/chat/completions", contentType: "application/json", endpoint: e2ee.EndpointChat}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	rec := newInferenceRecorder()
 	_, err = server.inferAuthorized(ctx, rec, input)
-	if (err != nil) != wantErr {
-		t.Fatalf("err = %v, want error %v", err, wantErr)
+	if (err != nil) != tc.wantErr {
+		t.Fatalf("err = %v, want error %v", err, tc.wantErr)
 	}
-	if relayed := strings.Contains(rec.Body.String(), "Hel") && strings.Contains(rec.Body.String(), "lo"); relayed == wantErr {
-		t.Errorf("decrypted content relayed = %v, want %v", relayed, !wantErr)
+	if relayed := strings.Contains(rec.Body.String(), "Hel") && strings.Contains(rec.Body.String(), "lo"); relayed != tc.wantRelayed {
+		t.Errorf("decrypted content relayed = %v, want %v", relayed, tc.wantRelayed)
+	}
+	if tc.plain && !tc.wantRelayed && rec.Body.Len() > 0 {
+		t.Errorf("non-stream response written before its receipt verified: %d %q", rec.Code, rec.Body.String())
+	}
+	if want := int32(aci.ReceiptAttempts); tc.receiptMissing && receiptGETs.Load() != want {
+		t.Errorf("%d receipt GETs, want %d", receiptGETs.Load(), want)
 	}
 	current, ok := server.authorizations.acquire(key)
-	if gotEnded := !ok || current.generation != value.generation; gotEnded != ended {
-		t.Errorf("generation ended = %v, want %v", gotEnded, ended)
+	if gotEnded := !ok || current.generation != value.generation; gotEnded != tc.ended {
+		t.Errorf("generation ended = %v, want %v", gotEnded, tc.ended)
 	}
 }

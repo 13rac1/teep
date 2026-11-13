@@ -98,7 +98,8 @@ Phala Cloud serves its TEE models through the dstack private-ai-gateway. The pro
 2. Fetches the gateway's ACI/1 report from `/v1/aci/attestation` with the client nonce and parses it strictly; any other format fails. The certificate key of the connection must equal the keyset TLS key for the host, and inference connections are pinned to that key.
 3. Verifies the gateway TDX quote, event log and compose binding, and the ACI/1 §3.2 REPORTDATA: sha256 of a statement over the workload keyset digest and the client nonce. The quote therefore binds every keyset field.
 4. Lists the attested sessions of the model's upstreams (ACI/1 §8), audits a bounded set of them (TDX quote, MRTD/MRSEAM, REPORTDATA, channel binding, GPU evidence, and for the Phala model CVM the compose binding and event log), and pins the sessions that pass on every request (`provider.aci_session_ids`, §5.3); the gateway serves the request only through one of them.
-5. Requires each successful inference response to carry `X-ACI-Keyset-Digest`; when it differs from the verified digest, relays the response and verifies again before the next request (ACI/1 §5.2, §3.1).
+5. Requires each successful inference response to carry the verified `X-ACI-Keyset-Digest`; a response of another digest fails, and the next request verifies again (ACI/1 §5.2, §3.1).
+6. Fetches the signed ACI receipt of each successful response over the pinned connection and verifies its signature, keyset, request and response hashes, and the pinned session it cites (ACI/1 §7, §9.3). A non-stream response reaches the client only after the receipt verifies.
 
 teep encrypts the message content with E2EE v2 of the gateway to the keyset E2EE key that the gateway quote binds. The report carries no GPU evidence; the GPU factors are allowed to fail. See [Phala Cloud provider support](docs/providers/phalacloud/phalacloud_support.md).
 

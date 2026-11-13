@@ -185,11 +185,12 @@ func isUncheckedSuccess(status int) bool {
 // checkAuthorizedKeyset checks the X-ACI-Keyset-Digest of a successful
 // response against the keyset that the authorization's canonical ACI/1
 // report binds; an error response is relayed as on the unpinned path. A
-// response without the header fails, and the authorization generation ends.
-// A response of another digest is relayed (ACI/1 §5.2: responses in flight
-// continue), and the generation ends so that the next send verifies again;
-// a member of the same renewal family keeps continuity, another family
-// becomes a new authorization (§3.1).
+// response without the header, or of another digest, fails before teep
+// relays it, and the authorization generation ends. ACI/1 §5.2 lets the
+// gateway finish a response in flight under a new keyset, but its receipt
+// is signed under keys that teep has not verified. The next send verifies
+// again: a member of the same renewal family keeps continuity, another
+// family becomes a new authorization (§3.1).
 func (s *Server) checkAuthorizedKeyset(ctx context.Context, input *authorizedRequest, value *authorization, header http.Header) error {
 	differs, err := attestation.CheckServedKeysetDigest(header, value.report)
 	if !differs && err == nil {
@@ -201,7 +202,7 @@ func (s *Server) checkAuthorizedKeyset(ctx context.Context, input *authorizedReq
 		return err
 	}
 	s.logAuthorizationRejection(ctx, input, value, "keyset_digest_changed", removed, false)
-	return nil
+	return errors.New("the response served another keyset digest; its receipt is signed under a keyset that teep has not verified")
 }
 
 func (s *Server) prepareAuthorizedRequest(ctx context.Context, input *authorizedRequest, value *authorization) (*upstreamResult, error) {
@@ -211,7 +212,7 @@ func (s *Server) prepareAuthorizedRequest(ctx context.Context, input *authorized
 	if err != nil {
 		return nil, err
 	}
-	return &upstreamResult{Request: req, Session: encrypted.Session, Meta: encrypted.Chutes, EHBP: encrypted.EHBP}, nil
+	return &upstreamResult{Request: req, Session: encrypted.Session, Meta: encrypted.Chutes, EHBP: encrypted.EHBP, RequestHash: provider.ReceiptRequestHash(encrypted)}, nil
 }
 
 func cleanupAuthorized(ur *upstreamResult) {
@@ -298,6 +299,16 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 		defer plain.Close()
 		body = plain
 	}
+	var receipt *receiptRelay
+	if input.key.ProviderName() == "phalacloud" && resp.StatusCode == http.StatusOK {
+		// Every successful Phala Cloud response must have a receipt that
+		// verifies; a non-stream response is held until it does.
+		receipt, err = newReceiptRelay(resp.Header, body)
+		if err != nil {
+			return s.receiptFailed(ctx, input, result, "receipt_id_invalid", err, true)
+		}
+		body = receipt.wire
+	}
 	progress := &responseReadProgress{Reader: body}
 	body = responseLifetimeReader{Reader: progress, check: writer.check}
 	if resp.StatusCode != http.StatusOK {
@@ -310,7 +321,19 @@ func (s *Server) relayAuthorized(ctx context.Context, w http.ResponseWriter, inp
 		return errors.Join(fmt.Errorf("upstream returned HTTP %d", resp.StatusCode), err)
 	}
 	started := time.Now()
-	streamStats, err := relayResponse(ctx, w, body, ur.Session, ur.Meta, input.stream, input.endpoint)
+	target := w
+	var held *heldResponse
+	if receipt != nil && !input.stream {
+		held = &heldResponse{header: w.Header()}
+		target = held
+	}
+	streamStats, err := relayResponse(ctx, target, body, ur.Session, ur.Meta, input.stream, input.endpoint)
+	if err == nil && receipt != nil {
+		err = s.checkReceipt(ctx, input, result, receipt)
+		if err == nil && held != nil {
+			err = held.release(w)
+		}
+	}
 	if err != nil || writer.check() != nil {
 		if input.stream {
 			result.relayDiagnostics = streamFailureDiagnostics(started, streamStats, progress, writer)

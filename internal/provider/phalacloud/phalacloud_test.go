@@ -103,6 +103,15 @@ func testAttesterTLSBinding(t *testing.T, mode string, wantSuccess bool) {
 		// offline CT policy to test the attestation TLS binding.
 		a := phalacloud.NewAttester("https://tee.redpill.ai", "sk-test-key-123", true)
 		a.SetClient(client)
+		// The session requests go to the same test server, over a client
+		// pinned to the identity that the report binds.
+		var sessionIdentity tlsct.TransportIdentity
+		a.SetSessionClientFactory(func(identity tlsct.TransportIdentity) (*http.Client, error) {
+			sessionIdentity = identity
+			pinnedBase := tlsct.NewPooledTransport()
+			pinnedBase.DialContext = base.DialContext
+			return tlsct.NewSPKIPinnedHTTPClientWithTransport(5*time.Second, pinnedBase, identity, false)
+		})
 		raw, err := a.FetchAttestation(context.Background(), "phala/test-model", nonce)
 		if !wantSuccess {
 			if err == nil || raw != nil {
@@ -127,6 +136,9 @@ func testAttesterTLSBinding(t *testing.T, mode string, wantSuccess bool) {
 		}
 		if raw.TransportTLSAuthority != "tee.redpill.ai" || !tlsct.SPKIFingerprintsEqual(raw.TransportTLSFingerprint, fingerprint) {
 			t.Errorf("transport identity %q %q, want tee.redpill.ai and the server key", raw.TransportTLSAuthority, raw.TransportTLSFingerprint)
+		}
+		if sessionIdentity.Authority() != "tee.redpill.ai" || !tlsct.SPKIFingerprintsEqual(sessionIdentity.Fingerprint(), fingerprint) {
+			t.Errorf("session client identity %q %q, want the report's TLS key", sessionIdentity.Authority(), sessionIdentity.Fingerprint())
 		}
 	})
 }

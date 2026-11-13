@@ -14,8 +14,9 @@ import (
 )
 
 // With a canonical ACI/1 report, the E2EE test fails a response without
-// X-ACI-Keyset-Digest, and notes a different digest: the response in flight
-// continues and a new send verifies again (ACI/1 §5.2).
+// X-ACI-Keyset-Digest, and a response of another digest: ACI/1 §5.2 lets the
+// gateway finish it under the new keyset, but its receipt is signed under
+// keys that teep has not verified.
 func TestTestE2EE_ACIv2ServedKeysetDigest(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
@@ -26,7 +27,7 @@ func TestTestE2EE_ACIv2ServedKeysetDigest(t *testing.T) {
 			wantErr string
 		}{
 			{"verified digest", verified, ""},
-			{"other digest", "sha256:cd", ""},
+			{"other digest", "sha256:cd", "another keyset digest"},
 			{"no digest", "", "carries no X-ACI-Keyset-Digest"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -58,9 +59,6 @@ func TestTestE2EE_ACIv2ServedKeysetDigest(t *testing.T) {
 				if tc.wantErr == "" {
 					if got.Err != nil {
 						t.Fatalf("err = %v", got.Err)
-					}
-					if differs := tc.served != verified; differs != strings.Contains(got.Detail, "verifies again") {
-						t.Errorf("detail = %q", got.Detail)
 					}
 					return
 				}
