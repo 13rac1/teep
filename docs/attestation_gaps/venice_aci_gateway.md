@@ -14,9 +14,11 @@ exposure.
 A user who sends a prompt to a Venice ACI/1 model gets a hardware-backed
 guarantee about the proxy that forwards the prompt, not about the machine
 that processes it. The gateway decrypts the user's traffic and forwards it
-over its own TLS connection to a downstream inference API. The GPUs that
-answer are real and prove their identity fresh for each request, but
-nothing proves which host they are in or what software drives them.
+over its own TLS connection to a downstream inference API. Until
+2026-11-12 the GPUs that answer proved their identity fresh for each
+request, though nothing proved which host they are in or what software
+drives them; since then the response carries no GPU evidence at all
+(residual exposure 8).
 
 ## Impact
 
@@ -132,10 +134,12 @@ are self-asserted, and it is the origin of residual exposure 7.
   (`dstacktee/dstack-ingress`, `ghcr.io/redpill-ai/private-ai-launcher`,
   `dstacktee/dstack-verifier`, `prom/node-exporter`); three of the four
   digests are present in the Sigstore transparency log.
-- The relayed NVIDIA evidence: per-GPU cert chains and SPDM signatures
-  verify, and the EAT nonce matches the client nonce (fresh, not replayed).
+- The relayed NVIDIA evidence, when the response carries it: per-GPU cert
+  chains and SPDM signatures verify, and the EAT nonce matches the client
+  nonce (fresh, not replayed). Since 2026-11-12 the Venice response carries
+  none (residual exposure 8).
 
-### Failed and waived (`ACIDefaultAllowFail`)
+### Failed and waived (`VeniceACIDefaultAllowFail`)
 
 Every core factor that describes the inference host: the twelve `tee_*`
 factors, `measured_model_weights`, `event_log_integrity`,
@@ -147,7 +151,10 @@ the requested model: the gateway variant of the response names no model,
 and the Venice variant names one only as the provider's assertion, which the
 detail repeats. `gateway_tee_measurement` is in the list too: teep checks
 the gateway MRTD/MRSEAM against the dstack base allowlist, and a gateway
-MRTD that is not in it fails the factor without blocking. These render
+MRTD that is not in it fails the factor without blocking.
+`nvidia_signature` and `nvidia_nonce_client_bound` are in the Venice list,
+not in the shared ACI/1 list, because the Venice response carries no GPU
+evidence (residual exposure 8). These render
 as failed-but-allowed so the gap stays visible in every report; removing an
 entry from the list blocks every ACI/1 model.
 
@@ -246,6 +253,32 @@ openai/gpt-oss-120b); asserted continuously by
    uses the dstack REPORTDATA layout. A third party without a TLS position
    cannot reach it.
 
+8. **The Venice response carries no GPU evidence.**
+
+   *Problem.* The attackers are the operator of the downstream inference
+   host and Venice, which builds the response. Since 2026-11-12 the Venice
+   response leaves out the GPU evidence, so a prompt can be served on any
+   machine, with or without confidential GPUs, and nothing in the evidence
+   shows it. The user keeps the guarantee about the gateway and the key
+   that teep encrypts to, and loses the proof that real GPUs answered the
+   request.
+
+   *Impact.*
+   - **Who:** the operator of the downstream inference host, or Venice.
+   - **What they do:** serve the model from machines without confidential
+     GPUs, or from any host, and leave the GPU evidence out.
+   - **What they get:** prompts and answers handled outside any GPU
+     confidential mode, with no record that shows it.
+   - **What stops it today:** nothing; teep reports the missing evidence on
+     every Venice ACI/1 report and does not block.
+
+   The live response of 2026-11-12 names a member `gpu_evidence_omitted`
+   and has no `nvidia_payload`. `nvidia_signature` and
+   `nvidia_nonce_client_bound` fail and are allowed to fail for Venice
+   ACI/1 (`VeniceACIDefaultAllowFail`). They return to enforced when the
+   response carries GPU evidence again. Phala Cloud and NanoGPT are not
+   affected by this allowance.
+
 ## Remediation
 
 ### Implementation Options
@@ -329,9 +362,10 @@ which no `allow_fail` entry can suppress.
 **Host evidence:** The twelve core `tee_*` factors,
 `measured_model_weights`, `event_log_integrity`, `cpu_id_registry`,
 `cpu_gpu_chain` and the model-tier supply-chain factors are in
-`ACIDefaultAllowFail`. They render as failed-but-allowed rather than
-skipped, so every report states the gap. Removing an entry blocks every
-ACI/1 model.
+`ACIDefaultAllowFail`, and the Venice list adds `nvidia_signature` and
+`nvidia_nonce_client_bound` (residual exposure 8). They render as
+failed-but-allowed rather than skipped, so every report states the gap.
+Removing an entry blocks every ACI/1 model.
 
 **E2EE:** `provider.GatewayBindsE2EEKey` returns true for Venice ACI/1 and
 false for Venice dstack, so E2EE authorization reads the gateway REPORTDATA

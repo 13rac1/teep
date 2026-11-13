@@ -169,10 +169,10 @@ Each factor produces PASS, FAIL, or SKIP. Factors marked `[ENFORCED]` cause the 
 | 13 | `intel_pcs_collateral` | Intel PCS collateral (TCB info, CRLs) fetched for TCB currency check. Skipped in `--offline` mode. |
 | 14 | `tee_tcb_current` | TCB SVN meets minimum threshold. Passes for `UpToDate` and `SWHardeningNeeded`. Fails for `OutOfDate` or `Revoked`. Reports Intel Security Advisory IDs when applicable. |
 | 15 | `tee_tcb_not_revoked` | TCB SVN is not in the revoked set per Intel PCS. Skipped in `--offline` mode. |
-| 16 | `nvidia_payload_present` | NVIDIA GPU attestation payload (EAT or JWT) is present. Proves inference runs on genuine NVIDIA GPU with confidential computing enabled. |
-| 17 | `nvidia_signature` | NVIDIA EAT SPDM ECDSA P-384 signatures verified on each GPU cert chain. For JWTs, verifies against NVIDIA JWKS. |
-| 18 | `nvidia_claims` | NVIDIA EAT claims valid — architecture, GPU count, driver version, confidential computing mode. |
-| 19 | `nvidia_nonce_client_bound` | Nonce in NVIDIA EAT payload matches submitted nonce. Proves GPU attestation is fresh. |
+| 16 | `nvidia_payload_present` | The attestation response has an NVIDIA payload or GPU evidence. Nothing is verified here. |
+| 17 | `nvidia_signature` | Each GPU's certificate chain verifies to the pinned NVIDIA root and its SPDM ECDSA P-384 signature covers the expected requester nonce (EAT payload or direct SPDM evidence). Allowed to fail by default for Venice ACI/1, whose response carries no GPU evidence. |
+| 18 | `nvidia_claims` | NVIDIA EAT: the top-level nonce matches the client nonce and the evidence verified; fails otherwise; not applicable to direct SPDM evidence, which carries no claims. Architecture, GPU count, driver version and confidential computing mode are not checked. |
+| 19 | `nvidia_nonce_client_bound` | Nonce in NVIDIA EAT payload matches submitted nonce. Proves GPU attestation is fresh. Allowed to fail by default for Venice ACI/1, whose response carries no GPU evidence. |
 | 20 | `nvidia_nras_verified` | NVIDIA NRAS RIM measurement comparison passed. Complements local SPDM verification by checking firmware hashes against NVIDIA's Reference Integrity Manifest. Skipped in `--offline` mode. |
 | 21 | `e2ee_capable` | Enclave public key is a valid secp256k1 uncompressed point suitable for ECDH key exchange. |
 | 22 | `e2ee_usable` | E2EE round-trip succeeded with the verified enclave key. Deferred until after the first live request. |

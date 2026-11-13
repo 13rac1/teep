@@ -37,7 +37,7 @@ Map each factor to its enforcement status:
 |--------|-----------------|-------------|
 | `nvidia_payload_present` | No | NVIDIA payload field exists in attestation response |
 | `nvidia_signature` | **Yes** | Local SPDM ECDSA P-384 cert chain + signature verification |
-| `nvidia_claims` | No | EAT claims (arch, GPU count, nonce) are valid |
+| `nvidia_claims` | No | NVIDIA EAT: the top-level nonce matches the client nonce and the evidence verified; fails otherwise; not applicable to direct SPDM evidence, which carries no claims |
 | `nvidia_nonce_client_bound` | **Yes** | Nonce in NVIDIA payload matches client-submitted nonce |
 | `nvidia_nras_verified` | No | Remote NRAS JWT verification passed |
 

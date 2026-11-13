@@ -38,8 +38,9 @@ const (
 )
 
 // NvidiaVerifyResult holds the structured outcome of NVIDIA payload verification.
-// Fields are populated even on partial failure. Supports both EAT (local SPDM
-// verification) and JWT (NRAS cloud verification) formats.
+// Fields are populated even on partial failure. Supports EAT (local SPDM
+// verification of a payload), SPDM (local verification of per-GPU evidence,
+// VerifyNVIDIAGPUDirect) and JWT (NRAS cloud verification) formats.
 type NvidiaVerifyResult struct {
 	// admission contains verified JWT time claims for initial publication only.
 	admission AdmissionTime
@@ -53,8 +54,13 @@ type NvidiaVerifyResult struct {
 	// For JWT: expired, wrong issuer, etc.
 	ClaimsErr error
 
-	// Format is "EAT" or "JWT" depending on the payload type.
+	// Format is "EAT", "SPDM" or "JWT" depending on the payload type.
 	Format string
+
+	// SignaturesVerified is true only after the certificate chain and the
+	// SPDM signature of every GPU verified (EAT and SPDM). nvidia_signature
+	// passes only when it is set.
+	SignaturesVerified bool
 
 	// Algorithm is the signature algorithm (e.g. "RS256" for JWT, "ECDSA-P384" for EAT).
 	Algorithm string

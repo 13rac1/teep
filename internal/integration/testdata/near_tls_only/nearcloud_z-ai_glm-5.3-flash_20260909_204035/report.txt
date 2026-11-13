@@ -29,7 +29,7 @@ Tier 2: Binding & Crypto
   ✓ tee_tcb_not_revoked               TCB status UpToDate is not Revoked  [ENFORCED]
   ✓ nvidia_payload_present            NVIDIA payload present (98222 chars)  [ENFORCED]
   ✓ nvidia_signature                  EAT: 8 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: HOPPER)  [ENFORCED]
-  ✓ nvidia_claims                     EAT: arch=HOPPER, 8 GPUs, nonce verified  [ENFORCED]
+  ✓ nvidia_claims                     EAT: top-level nonce matches the client nonce (arch reported: HOPPER, 8 GPUs)  [ENFORCED]
   ✓ nvidia_nonce_client_bound         EAT nonce matches client nonce (8 GPUs)  [ENFORCED]
   ✓ nvidia_nras_verified              NRAS: true (JWT verified)  [ENFORCED]
   ✓ e2ee_capable                      enclave ed25519 public key valid; E2EE key exchange possible (ed25519)  [ENFORCED]

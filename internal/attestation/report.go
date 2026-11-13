@@ -379,7 +379,7 @@ var NearcloudDefaultAllowFail = []string{
 
 // VeniceDefaultAllowFail is the venice-specific default allow_fail list for
 // the dstack attestation format. It is the global DefaultAllowFail and one
-// more factor. The ACI/1 models of Venice use ACIDefaultAllowFail.
+// more factor. The ACI/1 models of Venice use VeniceACIDefaultAllowFail.
 var VeniceDefaultAllowFail = append(slices.Clone(DefaultAllowFail),
 	// The Venice dstack composes pin the platform manifest of
 	// nearaidev/compose-manager-launcher (079a14b4…). The attestation that
@@ -566,6 +566,20 @@ var TinfoilDirectDefaultAllowFail = []string{
 	FactorNVSwitchBinding,
 	FactorComponentRecognition,
 }
+
+// VeniceACIDefaultAllowFail is the default allow_fail list for the ACI/1
+// models of Venice: ACIDefaultAllowFail and the two NVIDIA factors that need
+// GPU evidence. Other providers that derive their ACI/1 lists from
+// ACIDefaultAllowFail keep these factors enforced.
+var VeniceACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
+	// The Venice ACI/1 response carries gpu_evidence_omitted and no
+	// nvidia_payload (observed 2026-11-12), so the GPU signature and its
+	// client nonce cannot be checked. The failure is reported and does
+	// not block requests until the response carries GPU evidence again.
+	// SEE: docs/attestation_gaps/venice_aci_gateway.md.
+	FactorNvidiaSignature,
+	FactorNvidiaClientNonce,
+)
 
 // ACIDefaultAllowFail is the default allow_fail list for models that return
 // the ACI/1 attestation format of the private-ai-gateway. Selected per
@@ -1685,10 +1699,24 @@ func evalNvidiaSignature(in *ReportInput) []FactorResult {
 		}
 		return factor(TierBinding, FactorNvidiaSignature, Fail, "NVIDIA verification was not attempted")
 	}
-	if in.Nvidia.SignatureErr != nil {
-		return factor(TierBinding, FactorNvidiaSignature, Fail, fmt.Sprintf("signature invalid: %v", in.Nvidia.SignatureErr))
+	if !in.Nvidia.SignaturesVerified || in.Nvidia.SignatureErr != nil {
+		return factor(TierBinding, FactorNvidiaSignature, Fail, "NVIDIA evidence was not verified: "+nvidiaFailureCause(in.Nvidia))
 	}
 	return factor(TierBinding, FactorNvidiaSignature, Pass, nvidiaSignatureDetail(in.Nvidia))
+}
+
+// nvidiaFailureCause names why NVIDIA evidence did not verify: the signature
+// error, else the error that stopped the verification before the
+// signatures, else that no signature was checked.
+func nvidiaFailureCause(r *NvidiaVerifyResult) string {
+	switch {
+	case r.SignatureErr != nil:
+		return r.SignatureErr.Error()
+	case r.ClaimsErr != nil:
+		return r.ClaimsErr.Error() + "; no signature was checked"
+	default:
+		return "no signature was checked"
+	}
 }
 func evalNvidiaClaims(in *ReportInput) []FactorResult {
 	if in.Nvidia == nil {
@@ -1700,6 +1728,18 @@ func evalNvidiaClaims(in *ReportInput) []FactorResult {
 	if in.Nvidia.ClaimsErr != nil {
 		return factor(TierBinding, FactorNvidiaClaims, Fail, fmt.Sprintf("claims invalid: %v", in.Nvidia.ClaimsErr))
 	}
+	if !in.Nvidia.SignaturesVerified || in.Nvidia.SignatureErr != nil {
+		// Claims of evidence that did not verify prove nothing.
+		return factor(TierBinding, FactorNvidiaClaims, Fail, "NVIDIA evidence was not verified; claims not checked")
+	}
+	if in.Nvidia.Format == "SPDM" {
+		// SPDM evidence carries no claims to check: VerifyNVIDIAGPUDirect
+		// checks the certificate chain, the signature and the requester
+		// nonce of each GPU (nvidia_signature, nvidia_nonce_client_bound),
+		// and only NRAS compares measurements (nvidia_nras_verified).
+		return factor(TierBinding, FactorNvidiaClaims, NotApplicable,
+			"SPDM evidence carries no claims; the measurements are compared by NRAS (nvidia_nras_verified)")
+	}
 	return factor(TierBinding, FactorNvidiaClaims, Pass, nvidiaClaimsDetail(in.Nvidia))
 }
 func evalNvidiaClientNonceBound(in *ReportInput) []FactorResult {
@@ -1709,7 +1749,7 @@ func evalNvidiaClientNonceBound(in *ReportInput) []FactorResult {
 		}
 		return factor(TierBinding, FactorNvidiaClientNonce, Skip, "NVIDIA verification not attempted")
 	}
-	if in.Nvidia.SignatureErr != nil {
+	if !in.Nvidia.SignaturesVerified || in.Nvidia.SignatureErr != nil {
 		return factor(TierBinding, FactorNvidiaClientNonce, Fail,
 			"the NVIDIA evidence did not verify, so it proves no nonce binding")
 	}
@@ -3554,12 +3594,12 @@ func tdxQuoteVersion(r *TDXVerifyResult) string {
 }
 
 // nvidiaSignatureDetail returns the detail string for the nvidia_signature factor.
+// The NVIDIA result of a report is the local verification of an EAT payload
+// or of SPDM evidence; NRAS JWT results go to nvidia_nras_verified only.
 func nvidiaSignatureDetail(r *NvidiaVerifyResult) string {
 	switch r.Format {
 	case "EAT":
 		return fmt.Sprintf("EAT: %d GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: %s)", r.GPUCount, r.Arch)
-	case "JWT":
-		return fmt.Sprintf("JWT signature valid (%s)", r.Algorithm)
 	case "SPDM":
 		return fmt.Sprintf("SPDM: %d GPU cert chains and ECDSA P-384 signatures verified (arch: %s)", r.GPUCount, r.Arch)
 	default:
@@ -3571,9 +3611,9 @@ func nvidiaSignatureDetail(r *NvidiaVerifyResult) string {
 func nvidiaClaimsDetail(r *NvidiaVerifyResult) string {
 	switch r.Format {
 	case "EAT":
-		return fmt.Sprintf("EAT: arch=%s, %d GPUs, nonce verified", r.Arch, r.GPUCount)
-	case "JWT":
-		return fmt.Sprintf("JWT claims valid (overall result: %t)", r.OverallResult)
+		// The arch and GPU count are reported by the payload; no factor
+		// checks them.
+		return fmt.Sprintf("EAT: top-level nonce matches the client nonce (arch reported: %s, %d GPUs)", r.Arch, r.GPUCount)
 	default:
 		return "claims valid"
 	}
