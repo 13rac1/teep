@@ -808,10 +808,10 @@ func fromConfig(
 				attestation.FormatDstack: venice.ReportDataVerifier{},
 			},
 		}
-		// TODO: author a real phalacloud policy (GH #118) — it can route to
-		// a dstack backend that exposes compose data. The sentinel reports
-		// NotApplicable until then.
-		p.SupplyChainPolicy = attestation.NoSupplyChainPolicy()
+		// The ACI/1 gateway quote binds the same REPORTDATA as Venice's.
+		// SYNC: verify.newGatewayReportDataVerifier.
+		p.GatewayReportDataVerifier = venice.ReportDataVerifier{}
+		p.SupplyChainPolicy = phalacloud.SupplyChainPolicy()
 	case "chutes":
 		p.BaseURL = chutesProvider.DefaultLLMBaseURL
 		p.ChatPath = "/v1/chat/completions"

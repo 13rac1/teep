@@ -1,0 +1,39 @@
+{
+  "method": "GET",
+  "url": "https://nras.attestation.nvidia.com/.well-known/jwks.json",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAskZ1fC2/vvZXWJwhx3TK/fdQyin4FguvpXnRG2tYQWD9wGfdsjzAN/To7Y43lsk2hv7YyD4OoYVqDWxjXpGyaPAVPqbzuKBsETwAti5HjP54NsxVfbcFw5x+C2+MUoxm63CG6+dLcZS5XUh7cBrfoAuV88GTyHuu0Fsg8GgKCyU1M+UXoFKmMx+oU5CqabyO+TkrV8G7tBITsxQ7ACPAujGZeJ9i4hgWhIVl4Dxca7F8e1xF82xlOTIVaMeAwRldv/heiXEN403qWkIqj2ZMhgsu+L+B2ISdV01HlrLIOlIe/6a508jfi/ErzW6/MnAfQwfml7aTzsgx71yjZQSgsQIDAQAB",
+  "headers": {
+    "Alt-Svc": [
+      "h3=\":443\"; ma=2592000"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Thu, 29 Oct 2026 00:36:52 GMT"
+    ],
+    "Server": [
+      "envoy"
+    ],
+    "Set-Cookie": [
+      "JSESSIONID=6BE072EA478EEF34605DFF87DA243DFD; Path=/; Secure; HttpOnly"
+    ],
+    "Vary": [
+      "Origin,Access-Control-Request-Method,Access-Control-Request-Headers"
+    ],
+    "Via": [
+      "1.1 google"
+    ],
+    "X-Envoy-Upstream-Service-Time": [
+      "122"
+    ],
+    "X-Request-Id": [
+      "00a1e654-16f6-48b3-b3f6-184a9c7eb88f"
+    ]
+  },
+  "duration_ms": 169
+}

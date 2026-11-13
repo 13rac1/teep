@@ -130,10 +130,15 @@ are self-asserted, and it is the origin of residual exposure 7.
   `nvidia_nonce_client_bound`.
 - `gateway_compose_binding` (enforced): the gateway publishes its
   `app_compose` and `sha256(app_compose)` matches the quote's MRConfigID.
-  The manifest pins its four images by sha256 digest
-  (`dstacktee/dstack-ingress`, `ghcr.io/redpill-ai/private-ai-launcher`,
-  `dstacktee/dstack-verifier`, `prom/node-exporter`); three of the four
-  digests are present in the Sigstore transparency log.
+  The manifest pins each image by sha256 digest. The policy
+  (`aci.GatewayImages`) lists the images of the compose deployed on
+  2026-10-27: `ghcr.io/dstack-tee/dstack-ingress`,
+  `ghcr.io/redpill-ai/private-ai-launcher`,
+  `ghcr.io/dstack-tee/dstack-verifier`,
+  `ghcr.io/edgelesssys/privatemode/privatemode-proxy` and
+  `prom/node-exporter`, all compose-pinned. The Privatemode proxy is
+  Edgeless Systems' client for an upstream; teep verifies only its digest
+  pin in the measured compose, not an attestation of its own.
 - The relayed NVIDIA evidence, when the response carries it: per-GPU cert
   chains and SPDM signatures verify, and the EAT nonce matches the client
   nonce (fresh, not replayed). Since 2026-11-12 the Venice response carries

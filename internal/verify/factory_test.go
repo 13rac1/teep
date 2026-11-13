@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
@@ -138,6 +139,26 @@ func TestNewReportDataVerifier(t *testing.T) {
 	}
 }
 
+// Providers whose responses carry a gateway quote have a gateway REPORTDATA
+// verifier; Phala Cloud's ACI/1 gateway quote uses the Venice binding scheme.
+func TestNewGatewayReportDataVerifier(t *testing.T) {
+	for _, tc := range []struct {
+		provider string
+		want     provider.ReportDataVerifier
+	}{
+		{"venice", venice.ReportDataVerifier{}},
+		{"phalacloud", venice.ReportDataVerifier{}},
+		{"nearcloud", nearcloud.GatewayReportDataVerifier{}},
+		{"neardirect", nil},
+		{"nanogpt", nil},
+		{"chutes", nil},
+	} {
+		if got := newGatewayReportDataVerifier(tc.provider); got != tc.want {
+			t.Errorf("newGatewayReportDataVerifier(%q) = %#v, want %#v", tc.provider, got, tc.want)
+		}
+	}
+}
+
 func TestSupplyChainPolicy(t *testing.T) {
 	tests := []struct {
 		provider     string
@@ -148,7 +169,7 @@ func TestSupplyChainPolicy(t *testing.T) {
 		{provider: "neardirect"},
 		{provider: "nearcloud"},
 		{provider: "nanogpt"},
-		{provider: "phalacloud", wantSentinel: true},
+		{provider: "phalacloud"},
 		{provider: "chutes", wantSentinel: true},
 		{provider: "tinfoil_v3_cloud"},
 		{provider: "tinfoil_v3_direct"},

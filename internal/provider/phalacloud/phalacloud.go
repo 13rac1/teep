@@ -28,6 +28,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/formatdetect"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -103,6 +104,8 @@ func ParseAttestationResponse(ctx context.Context, body []byte) (*attestation.Ra
 		return provider.ParseChutesFormat(ctx, body, "phalacloud")
 	case attestation.FormatDstack:
 		return nanogpt.ParseAttestationResponse(ctx, body)
+	case attestation.FormatACI1:
+		return aci.Parse(ctx, body, "phalacloud")
 	case attestation.FormatTinfoil:
 		return nil, errors.New("phalacloud: tinfoil attestation format not yet supported")
 	case attestation.FormatGateway:

@@ -696,6 +696,25 @@ func TestEnvNearDirectAPIKey(t *testing.T) {
 	}
 }
 
+// Phala Cloud's default base URL is a TEE-only domain of the private-ai-gateway,
+// which routes requests only to verified TEE upstreams.
+func TestEnvPhalaCloudDefaultsToTEEOnlyDomain(t *testing.T) {
+	clearProviderEnv(t)
+	setenv(t, "PHALA_API_KEY", "phala-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	phala, ok := cfg.Providers["phalacloud"]
+	if !ok {
+		t.Fatal("phalacloud provider not created from PHALA_API_KEY env var")
+	}
+	if phala.BaseURL != "https://tee.redpill.ai" {
+		t.Errorf("phalacloud BaseURL default: got %q, want %q", phala.BaseURL, "https://tee.redpill.ai")
+	}
+}
+
 func TestEnvAPIKeyOverridesToml(t *testing.T) {
 	// VENICE_API_KEY env var must override the API key from TOML.
 	toml := `
@@ -1867,6 +1886,17 @@ func TestMergedAllowFail_VeniceFormatLayer(t *testing.T) {
 	dstack := MergedAllowFail("venice", attestation.FormatDstack, cfg, false)
 	if !reflect.DeepEqual(dstack, attestation.VeniceDefaultAllowFail) {
 		t.Errorf("venice/dstack: got %v, want VeniceDefaultAllowFail", dstack)
+	}
+
+	// Phala Cloud answers with the same gateway's ACI/1 format and selects the
+	// same list; its other formats keep the provider list.
+	phalaACI := MergedAllowFail("phalacloud", attestation.FormatACI1, cfg, false)
+	if !reflect.DeepEqual(phalaACI, attestation.ACIDefaultAllowFail) {
+		t.Errorf("phalacloud/aci1: got %v, want ACIDefaultAllowFail", phalaACI)
+	}
+	phalaDstack := MergedAllowFail("phalacloud", attestation.FormatDstack, cfg, false)
+	if !reflect.DeepEqual(phalaDstack, attestation.PhalaCloudDefaultAllowFail) {
+		t.Errorf("phalacloud/dstack: got %v, want PhalaCloudDefaultAllowFail", phalaDstack)
 	}
 
 	noFormat := MergedAllowFail("venice", "", cfg, false)

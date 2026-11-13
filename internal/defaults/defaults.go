@@ -5,6 +5,7 @@ package defaults
 
 import (
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/chutes"
 	"github.com/13rac1/teep/internal/provider/nanogpt"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
@@ -25,6 +26,9 @@ var registry = map[string]providerDefaults{
 	},
 	"neardirect": {
 		model: neardirect.DefaultMeasurementPolicy(),
+	},
+	"phalacloud": {
+		gateway: aci.GatewayMeasurementPolicy(),
 	},
 	"nearcloud": {
 		model:   nearcloud.DefaultMeasurementPolicy(),

@@ -79,6 +79,9 @@ var providerFormatDefaultAllowFail = map[string]map[attestation.BackendFormat][]
 	"venice": {
 		attestation.FormatACI1: attestation.VeniceACIDefaultAllowFail,
 	},
+	"phalacloud": {
+		attestation.FormatACI1: attestation.ACIDefaultAllowFail,
+	},
 }
 
 // ProviderDefaultAllowFail returns a defensive copy of the provider-specific
@@ -638,7 +641,9 @@ func applyEnvOverrides(cfg *Config) {
 	applyAPIKeyEnv(cfg, "neardirect", "NEARAI_API_KEY", "https://completions.near.ai", true)
 	applyAPIKeyEnv(cfg, "nearcloud", "NEARAI_API_KEY", "https://cloud-api.near.ai", true)
 	applyAPIKeyEnv(cfg, "nanogpt", "NANOGPT_API_KEY", "https://nano-gpt.com/api", false)
-	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://api.redpill.ai", false)
+	// tee.redpill.ai is a TEE-only domain of the private-ai-gateway: the
+	// gateway routes its requests only to verified TEE upstreams.
+	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://tee.redpill.ai", false)
 	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai", true)
 	applyAPIKeyEnv(cfg, "tinfoil_v3_cloud", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", true)
 	// tinfoil_v3_direct is disabled (tinfoil.DirectDisabledMessage), so

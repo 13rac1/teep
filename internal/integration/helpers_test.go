@@ -76,10 +76,11 @@ func findFixtureDir(t *testing.T, prefix string) string {
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix+"_") {
 			continue
 		}
-		// The "venice_aci_" fixture series shares the "venice" name prefix
-		// with the dstack fixtures. Exclude it from a bare "venice" scan so
-		// a newer ACI capture cannot select itself into the dstack tests.
-		if prefix == "venice" && strings.HasPrefix(e.Name(), "venice_aci_") {
+		// An "<provider>_aci_" fixture series shares the provider's name
+		// prefix with its other fixtures. Exclude it from a bare provider
+		// scan so a newer ACI capture cannot select itself into the tests of
+		// the provider's other formats.
+		if !strings.HasSuffix(prefix, "_aci") && strings.HasPrefix(e.Name(), prefix+"_aci_") {
 			continue
 		}
 		dir := filepath.Join("testdata", e.Name())

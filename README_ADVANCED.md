@@ -92,14 +92,14 @@ Nonces are managed by a pool per instance to avoid repeated evidence fetches on 
 
 ### Phala Cloud (Format-Agnostic Gateway)
 
-Phala Cloud's RedPill gateway accepts traffic destined for multiple underlying TEE backends and returns attestation in the backend's native format. The proxy:
+Phala Cloud's RedPill gateway accepts traffic destined for multiple underlying TEE backends. The proxy:
 
-1. Sends a request to `api.redpill.ai/v1`.
-2. Receives an attestation response and inspects the JSON keys to determine the backend format: Chutes (`attestation_type`) or dStack (`intel_quote`).
-3. Delegates parsing and verification to the appropriate backend handler.
+1. Sends a request to `tee.redpill.ai/v1`, a TEE-only domain of the private-ai-gateway, which routes only to verified TEE upstreams.
+2. Receives an attestation response and inspects the JSON keys to determine the format: ACI/1 (`api_version`), Chutes (`attestation_type`) or dStack (`intel_quote`). The gateway answers with ACI/1, which attests the gateway itself.
+3. Delegates parsing and verification to the matching handler; ACI/1 uses the shared `internal/provider/aci` package.
 4. Uses a 120-second timeout to accommodate multi-instance attestation latency.
 
-Channel security depends on the detected backend. Chutes backends use ML-KEM-768 E2EE; dStack backends use TLS only.
+Channel security depends on the detected format. ACI/1 and dStack responses use TLS only; Chutes backends use ML-KEM-768 E2EE. See [Phala Cloud provider support](docs/providers/phalacloud/phalacloud_support.md).
 
 ### Tinfoil Cloud (EHBP via Router)
 
