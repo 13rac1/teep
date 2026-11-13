@@ -117,7 +117,12 @@ factor enforcement; a provider-side attestation failure fails the test.
 Run `make check` before committing. Transport and concurrency changes also
 require `make integration`; major changes require `make reports`. Captured
 fixtures provide deterministic provider verification, while live suites check
-the deployed protocol. Live tests require their configured opt-in or API keys.
+the deployed protocol. Each provider and attestation format has one current
+fixture, `internal/integration/testdata/current/<provider>_<format>`, with the
+capture date in its manifest; tests select it by that name. A refresh replaces
+it with a new capture. A behaviour
+that only an older capture shows is tested with the smallest input that shows
+it, built in the test where the input is not signed material. Live tests require their configured opt-in or API keys.
 Live Makefile targets use `go test -count=1` so each invocation contacts the
 provider; cached Go test successes must not stand in for live validation. Use
 `-count=1` for direct live `go test` invocations too.

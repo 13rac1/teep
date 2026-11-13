@@ -2430,8 +2430,8 @@ Full API-key-based integration tests cover both `tinfoil_v3_cloud` and
   coverage for both `tinfoil_v3_cloud` and `tinfoil_v3_direct`
 - `internal/integration/tinfoil_test.go` — captured/offline verification
   coverage
-- `internal/integration/testdata/tinfoil_v3_cloud_*` — captured Tinfoil
-  attestation fixtures
+- `internal/integration/testdata/current/tinfoil_v3_cloud_tinfoil` — the
+  current captured Tinfoil attestation fixture
 
 **Tests for `tinfoil_v3_cloud`** (require `TINFOIL_API_KEY`):
 
