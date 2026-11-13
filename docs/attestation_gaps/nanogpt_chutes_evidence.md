@@ -115,19 +115,25 @@ collected, and instances left out of the evidence.
 
 ### teep factor behavior
 
-A re-verification of the TEE/qwen3.6-27b response, without network
-access, gives:
+A re-verification of the TEE/qwen3.6-27b response observed on 2026-11-12,
+without network access, gave:
 
 - `tee_quote_signature`, `tee_cert_chain` and `tee_debug_disabled` pass
-  for the first instance, and `nvidia_payload_present` and
-  `nvidia_claims` pass.
+  for the first instance. `nvidia_payload_present` passes: the response
+  holds GPU evidence.
 - `signing_key_present` fails ("signing_key field absent from attestation
-  response") and `e2ee_capable` fails ("enclave public key absent"). Both
-  are enforced, so teep blocks requests.
+  response"), `e2ee_capable` fails ("enclave public key absent") and
+  `nvidia_claims` fails ("NVIDIA evidence was not verified; claims not
+  checked"). All three are enforced, so teep blocks requests.
+- `nonce_match` fails ("nonce stated in an unverified body; no quote binds
+  it"), and is allowed.
 - `tee_reportdata_binding` fails ("enclave public key absent; REPORTDATA
-  binding cannot be verified"), and `nvidia_signature` fails because the
-  requester nonce needs `e2e_pubkey`.
-- The report header shows `Candidates: 1/6 evaluated`.
+  binding cannot be verified"). `nvidia_signature` fails ("NVIDIA
+  evidence was not verified: GPU requester nonce: e2e_pubkey absent from
+  attestation response"), and `nvidia_nonce_client_bound` fails because
+  the GPU evidence did not verify. All three are allowed.
+- The report header showed `Candidates: 1/6 evaluated`: the response
+  listed 6 instances.
 
 ---
 
@@ -166,9 +172,13 @@ Two changes close the gaps. Each one alone leaves the other gap open.
   reports the first instance, with no signing key.
 - A non-empty `failed_instance_ids` or `excluded_instance_ids` is logged
   at warn level and is not refused.
-- NanoGPT reads at most 8 MiB and accepts at most 64 instances.
-- `signing_key_present` and `e2ee_capable` stay enforced, and NanoGPT
-  Chutes-evidence models stay blocked.
+- NanoGPT reads at most 8 MiB of any attestation response and accepts at
+  most 64 instances.
+- `nonce_match` fails for this format, because only the unverified
+  `attested_body` states the nonce.
+- `nvidia_claims` fails, because the GPU evidence is not verified.
+- `signing_key_present`, `e2ee_capable` and `nvidia_claims` stay enforced,
+  and NanoGPT Chutes-evidence models stay blocked.
 - When the instance list is relayed, teep can check the nonce binding of
   each instance with `chutes.ReportDataVerifier`. When the serving
   instance is named and requests can be encrypted to it, teep can bind

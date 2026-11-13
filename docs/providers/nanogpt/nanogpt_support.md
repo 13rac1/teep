@@ -90,13 +90,18 @@ client nonce, and nothing names the instance that serves the request. SEE:
   names: Chutes does not document it.
 - teep reports the first instance, with no signing key, and the number of
   listed instances (`Candidates: 1/n evaluated`).
+- `nonce_match` fails: only the unverified `attested_body` states the
+  nonce, and no quote binds it. The factor is allowed for NanoGPT.
+- `nvidia_claims` fails: the GPU evidence is not verified, because its
+  requester nonce needs the `e2e_pubkey`.
 - Members that teep does not know go to `response_schema`.
-- The response body is bounded at 8 MiB and the evidence at 64 instances.
-  On 2026-11-12 the largest body was 2,956,002 bytes and the most instances
-  were 43.
+- The evidence is bounded at 64 instances. The 8 MiB read limit applies to
+  every NanoGPT attestation response, because teep reads the body before
+  it detects the format. The largest body observed on 2026-11-12 was
+  2,956,002 bytes, and the most instances observed were 43.
 
-`signing_key_present` and `e2ee_capable` fail and are enforced, so a model
-that answers with this format is blocked.
+`signing_key_present`, `e2ee_capable` and `nvidia_claims` fail and are
+enforced, so a model that answers with this format is blocked.
 
 For an ACI/1 response:
 
@@ -138,7 +143,10 @@ and repeat chunks, and teep cannot detect it until it verifies the signed
 ACI receipt. Under ACI/1 §7.6 a receipt is fetched with the API key that
 made the request, which is NanoGPT's key, so teep cannot fetch the receipts
 of NanoGPT requests. A model that answers with the dstack or Chutes
-format fails closed while E2EE is enabled.
+format fails closed while E2EE is enabled: `teep serve` refuses the request
+with "E2EE v2 requires an ACI/1 attestation". This includes the
+`attestation_type` Chutes form, although its quote can pass
+`tee_reportdata_binding`.
 
 Requests go over TLS 1.3 to `nano-gpt.com`, with WebPKI and Certificate
 Transparency enforced. No attestation binds the TLS key of `nano-gpt.com`.
