@@ -124,7 +124,9 @@ one is not pinned:
 4. The channel binding names the TLS key of the Phala model CVM or the
    ML-KEM key of one Chutes instance in the evidence; the identity of the
    Phala model CVM names its signing address.
-5. The GPU evidence, verified locally with the session nonce, without NRAS.
+5. The GPU evidence, verified locally with the session nonce, without NRAS:
+   the certificate chain and SPDM signature of every GPU must verify, as for
+   `nvidia_signature`.
 6. For the Phala model CVM, the compose binding (MRConfigID) and the
    event-log replay of RTMR0-3.
 

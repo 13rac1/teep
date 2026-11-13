@@ -135,14 +135,23 @@ func checkSessionGPU(ctx context.Context, ev *sessionEvidence) error {
 	default:
 		return errors.New("session has no GPU evidence")
 	}
+	return checkSessionGPUResult(result, ev.nonce)
+}
+
+// checkSessionGPUResult requires a GPU result whose signatures verified, as
+// nvidia_signature does, whose claims verified, that lists a GPU, and that
+// answers the session nonce.
+func checkSessionGPUResult(result *attestation.NvidiaVerifyResult, nonce attestation.Nonce) error {
 	switch {
 	case result.SignatureErr != nil:
 		return fmt.Errorf("GPU evidence: %w", result.SignatureErr)
+	case !result.SignaturesVerified:
+		return errors.New("GPU evidence signatures were not verified")
 	case result.ClaimsErr != nil:
 		return fmt.Errorf("GPU evidence claims: %w", result.ClaimsErr)
 	case result.GPUCount == 0:
 		return errors.New("GPU evidence lists no GPU")
-	case subtle.ConstantTimeCompare([]byte(result.Nonce), []byte(ev.nonce.Hex())) != 1:
+	case subtle.ConstantTimeCompare([]byte(result.Nonce), []byte(nonce.Hex())) != 1:
 		return errors.New("GPU evidence does not answer the session nonce")
 	}
 	return nil

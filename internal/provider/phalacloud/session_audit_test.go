@@ -100,3 +100,19 @@ func TestSessionGPUChecksNonce(t *testing.T) {
 		}
 	}
 }
+
+// A GPU result that states the session nonce fails unless its signatures
+// verified, whatever produced it: nvidia_signature requires the same.
+func TestCheckSessionGPUResultRequiresVerifiedSignatures(t *testing.T) {
+	nonce := attestation.NewNonce()
+	verified := attestation.NvidiaVerifyResult{SignaturesVerified: true, GPUCount: 1, Nonce: nonce.Hex()}
+	if err := checkSessionGPUResult(&verified, nonce); err != nil {
+		t.Fatalf("verified result: %v", err)
+	}
+	unverified := verified
+	unverified.SignaturesVerified = false
+	err := checkSessionGPUResult(&unverified, nonce)
+	if err == nil || !strings.Contains(err.Error(), "signatures were not verified") {
+		t.Fatalf("err = %v, want the unverified signatures refused", err)
+	}
+}
