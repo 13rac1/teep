@@ -157,15 +157,17 @@ func (t *aciTLSBinding) toCanonicalValue() map[string]any {
 // so that such a member does not change the digest. teep decides only on
 // the typed members, so the served object must hold every typed member
 // with the same value (servedHolds); otherwise the digest would cover
-// values other than the ones teep checked. Without a served object (a
-// keyset built in a test) the typed members are the whole keyset.
+// values other than the ones teep checked.
 func (ks *aciWorkloadKeyset) digestValue() (any, error) {
+	if ks.servedErr != nil {
+		return nil, fmt.Errorf("served keyset: %w", ks.servedErr)
+	}
+	if ks.served == nil {
+		return nil, errors.New("the served keyset was not recorded")
+	}
 	typed, err := ks.toCanonicalValue()
 	if err != nil {
 		return nil, err
-	}
-	if ks.served == nil {
-		return typed, nil
 	}
 	if err := servedHolds(typed, ks.served, "workload_keyset"); err != nil {
 		return nil, err

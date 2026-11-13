@@ -675,7 +675,12 @@ func sessionValue(data []byte) (map[string]any, error) {
 func integerValues(v any) (any, error) {
 	switch val := v.(type) {
 	case json.Number:
-		n, err := strconv.ParseInt(val.String(), 10, 64)
+		if n, err := strconv.ParseInt(val.String(), 10, 64); err == nil {
+			return n, nil
+		}
+		// A non-negative integer above the int64 range, such as a u64
+		// keyset not_after.
+		n, err := strconv.ParseUint(val.String(), 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("number %s is not an integer", val)
 		}

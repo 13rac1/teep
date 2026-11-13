@@ -346,6 +346,7 @@ func keysetFixture(t *testing.T) aciTestFixture {
 		E2EEPublicKeys:     []aciKey{{KeyID: "dstack-kms-e2ee-v1", Algo: "secp256k1-aes-256-gcm-hkdf-sha256", PublicKey: signingKeyHex}},
 		TLSPublicKeys:      []aciTLSBinding{{Domain: "test.example.com", SPKISHA256: "aabbccdd"}},
 	}
+	setServed(t, keyset)
 	cv, err := keyset.toCanonicalValue()
 	if err != nil {
 		t.Fatal(err)
@@ -417,6 +418,7 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 	t.Run("signing key not in keyset", func(t *testing.T) {
 		fx := keysetFixture(t)
 		fx.keyset.E2EEPublicKeys = []aciKey{{KeyID: "other", Algo: "x", PublicKey: "04aabb"}}
+		setServed(t, fx.keyset)
 		cv, err := fx.keyset.toCanonicalValue()
 		if err != nil {
 			t.Fatal(err)
@@ -468,6 +470,7 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 		fx := keysetFixture(t)
 		other := "app-id:0xdeadbeef"
 		fx.keyset.Subject = &other
+		setServed(t, fx.keyset)
 		cv, err := fx.keyset.toCanonicalValue()
 		if err != nil {
 			t.Fatal(err)
@@ -485,6 +488,7 @@ func TestVerifyKeyset_Failures(t *testing.T) {
 	t.Run("expired keyset", func(t *testing.T) {
 		fx := keysetFixture(t)
 		fx.keyset.NotAfter = json.Number("1000")
+		setServed(t, fx.keyset)
 		cv, err := fx.keyset.toCanonicalValue()
 		if err != nil {
 			t.Fatal(err)
@@ -619,6 +623,7 @@ func TestVerifyKeysetRaw_LiveSample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fx.WorkloadKeyset.served, fx.WorkloadKeyset.servedErr = servedKeyset(append(append([]byte(`{"attestation":{"workload_keyset":`), mustRawMember(t, data, "workload_keyset")...), `}}`...))
 
 	result := verifyKeyset(&fx.WorkloadKeyset, &fx.KeyCustody, fx.WorkloadKeysetDigest,
 		fx.SigningPublicKey, appID, fixtureNow, gatewayKMSRootAllow, gatewayAppIDAllow)
@@ -664,4 +669,29 @@ func TestAppIDFromEventLog(t *testing.T) {
 			t.Errorf("got %x err %v, want nil,nil", got, err)
 		}
 	})
+}
+
+// setServed records the typed members of ks as its served keyset, as the
+// parsers record the served object for a keyset that they decode.
+func setServed(t *testing.T, ks *aciWorkloadKeyset) {
+	t.Helper()
+	cv, err := ks.toCanonicalValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks.served, ks.servedErr = cv, nil
+}
+
+// mustRawMember returns the raw value of the top-level member name of data.
+func mustRawMember(t *testing.T, data []byte, name string) []byte {
+	t.Helper()
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := top[name]
+	if !ok {
+		t.Fatalf("no member %s", name)
+	}
+	return raw
 }

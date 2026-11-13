@@ -57,10 +57,6 @@ func verifyProbeReceipt(ctx context.Context, opts *Options, raw *attestation.Raw
 	if err != nil {
 		return "", err
 	}
-	if len(receipt.Unknown) > 0 {
-		slog.WarnContext(ctx, "ACI receipt has members that teep does not define; they are not checked",
-			"provider", opts.ProviderName, "receipt_id", receipt.ID, "members", receipt.Unknown)
-	}
 	check := &aci.ReceiptCheck{
 		Keys: raw.ACIReceiptKeys, KeysetDigest: raw.ACIWorkloadKeysetDigest, NotAfter: raw.ACIKeysetNotAfter,
 		Endpoint: "/v1/chat/completions", Method: http.MethodPost, Model: opts.ModelName,
@@ -68,6 +64,12 @@ func verifyProbeReceipt(ctx context.Context, opts *Options, raw *attestation.Raw
 	}
 	if err := aci.VerifyReceipt(receipt, check); err != nil {
 		return "", err
+	}
+	// The signature covers these members; log them only for a receipt
+	// that verified.
+	if len(receipt.Unknown) > 0 {
+		slog.WarnContext(ctx, "ACI receipt has members that teep does not define; they are not checked",
+			"provider", opts.ProviderName, "receipt_id", receipt.ID, "members", receipt.Unknown)
 	}
 	if pr.requestHash == nil {
 		return "; receipt verified, request hash not checked: the request has a value that the gateway can write in another form", nil

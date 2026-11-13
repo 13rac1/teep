@@ -206,8 +206,10 @@ type aciWorkloadKeyset struct {
 
 	// served is the keyset object as the service published it, members
 	// that teep does not define included. The ACI/1 §3.1 digest is over
-	// its JCS form (digestValue).
-	served map[string]any
+	// its JCS form (digestValue). The parsers always set served or
+	// servedErr; a keyset with neither has no digest.
+	served    map[string]any
+	servedErr error
 }
 
 // aciKey holds a named cryptographic key entry.
@@ -448,11 +450,10 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 			return nil, fmt.Errorf("%s aci/1: decode evidence.event_log: %w", provider, err)
 		}
 	}
-	served, err := servedKeyset(body)
-	if err != nil {
-		return nil, fmt.Errorf("%s aci/1: %w", provider, err)
-	}
-	ar.Attestation.WorkloadKeyset.served = served
+	// A keyset that cannot be read as served (a number that is not an
+	// integer, for example) fails the keyset digest, and so the
+	// key-custody factor, not the parse.
+	ar.Attestation.WorkloadKeyset.served, ar.Attestation.WorkloadKeyset.servedErr = servedKeyset(body)
 	LogEventLog(ctx, eventLog, provider)
 	if ar.IntelQuote != "" && subtle.ConstantTimeCompare([]byte(ar.IntelQuote), []byte(ar.Attestation.Evidence.Quote)) != 1 {
 		// The top-level intel_quote is documented as an echo of
