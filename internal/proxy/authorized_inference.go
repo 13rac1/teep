@@ -382,6 +382,17 @@ func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.Response
 	if err != nil {
 		return err
 	}
+	// ctx learns of the client's end through a goroutine (context.AfterFunc
+	// in inferAuthorized); the writer reads the client's context itself, so
+	// that no byte goes to a client after its request ended, whichever
+	// goroutine runs first.
+	relayErr := writer.contextErr
+	writer.contextErr = func() error {
+		if err := clientCtx.Err(); err != nil {
+			return err
+		}
+		return relayErr()
+	}
 	defer func() {
 		for _, err := range []error{writer.err, writer.contextErr()} {
 			if err != nil && !errors.Is(retErr, err) {
