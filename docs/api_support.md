@@ -195,6 +195,40 @@ NearDirect and NearCloud both use the NearAI field-encryption protocol: Ed25519/
 | `results[].document.text` | Yes | Reranking; other object metadata remains plaintext |
 | `data[].score` | No | Score response is currently plaintext from upstream (known upstream NearAI limitation) |
 
+#### Tool calls under E2EE
+
+Tool calls work with E2EE on for NearDirect. teep encrypts the tool fields
+that the request table above lists. It sends the request with
+`stream: true`. It decrypts each tool-call `name` and `arguments` before it
+writes the response to the client:
+
+- **Streaming client:** teep writes each upstream chunk with its tool-call
+  fields decrypted. It adds no field and removes no field.
+- **Non-streaming client:** teep joins the tool-call deltas by `index` into
+  `choices[0].message.tool_calls`, with `id`, `type`, `function.name` and the
+  complete `function.arguments`. The message has `"content": null` when the
+  model sends no text.
+
+NearAI tool-call chunks differ from the OpenAI form. After the first
+tool-call chunk, each `delta` has `"role": null` and `"content": null`. Each
+entry of `delta.tool_calls` has `"id": null` and `"function": {"name": null,
+...}`. OpenAI leaves these keys out. The plaintext NearAI stream (E2EE off)
+has the same null values, so E2EE does not cause them. A client whose schema
+accepts a missing key but refuses `null` fails on these chunks, with E2EE on
+or off.
+
+Observed on 2026-11-13 with NearDirect `z-ai/glm-5.3-flash`, one tool
+definition and `tool_choice: "auto"`:
+
+| E2EE | Client `stream` | Result |
+|---|---|---|
+| On | true | HTTP 200; the tool call and its arguments arrive decrypted in the stream; `finish_reason` is `tool_calls` |
+| Off (`e2ee = false`, `e2ee_usable` in `allow_fail`) | true | HTTP 200; the same chunk form, with the same null values |
+| On | false | HTTP 200; `message.tool_calls` holds one call whose `arguments` parse as JSON; `finish_reason` is `tool_calls` |
+
+With E2EE off and the default policy, teep blocks the request, because
+`e2ee_usable` is enforced for NearDirect.
+
 ### NearDirect
 
 **Upstream:** Model TEE inference-proxy instances at `*.completions.near.ai`.
