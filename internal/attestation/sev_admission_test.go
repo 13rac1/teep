@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	sevabi "github.com/google/go-sev-guest/abi"
@@ -30,11 +33,13 @@ func milanVCEKURL(t *testing.T) string {
 }
 
 // failingSEVGetter returns the configured error for one URL and delegates
-// every other URL.
+// every other URL. called records that the failing URL was requested, so a
+// test cannot pass on go-sev-guest's process-wide product chain cache alone.
 type failingSEVGetter struct {
-	base trust.HTTPSGetter
-	url  string
-	err  error
+	base   trust.HTTPSGetter
+	url    string
+	err    error
+	called atomic.Bool
 }
 
 func (g *failingSEVGetter) Get(target string) ([]byte, error) {
@@ -43,6 +48,7 @@ func (g *failingSEVGetter) Get(target string) ([]byte, error) {
 
 func (g *failingSEVGetter) GetContext(ctx context.Context, target string) ([]byte, error) {
 	if target == g.url {
+		g.called.Store(true)
 		return nil, g.err
 	}
 	return trust.GetWith(ctx, g.base, target)
@@ -62,16 +68,16 @@ func (tr *kdsRedirectTransport) RoundTrip(req *http.Request) (*http.Response, er
 	return tr.base.RoundTrip(clone)
 }
 
-// vcekNotFoundGetter serves the Milan chain and answers HTTP 404 for every
-// other KDS request, through the production client getter.
-func vcekNotFoundGetter(t *testing.T) trust.HTTPSGetter {
+// vcekStatusGetter serves the Milan chain and answers the given HTTP status
+// for every other KDS request, through the production client getter.
+func vcekStatusGetter(t *testing.T, status int) trust.HTTPSGetter {
 	t.Helper()
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/vcek/v1/Milan/cert_chain" {
 			_, _ = w.Write(trust.AskArkMilanVcekBytes)
 			return
 		}
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(status)
 	}))
 	t.Cleanup(server.Close)
 	local, err := url.Parse(server.URL)
@@ -130,17 +136,25 @@ func TestSEVOnlineRequiresAuthenticatedEvidence(t *testing.T) {
 	vcekURL := milanVCEKURL(t)
 	fetchFailed := errors.New("dial tcp: i/o timeout")
 	for _, tc := range []struct {
-		mode string
-		want sevOutcome
+		mode   string
+		want   sevOutcome
+		status int // HTTP status of the VCEK response; 0 when not served over HTTP.
 	}{
-		{"valid", sevVerified},
-		{"vcek_fetch_error", sevRetrievalFailed},
-		{"vcek_http_404", sevRetrievalFailed},
-		{"chain_fetch_error", sevRetrievalFailed},
-		{"malformed_vcek", sevRejected},
-		{"certificate_signature", sevRejected},
-		{"report_signature", sevRejected},
-		{"malformed_report", sevRejected},
+		{"valid", sevVerified, 0},
+		{"vcek_fetch_error", sevRetrievalFailed, 0},
+		// The VCEK URL contains report fields the provider controls, so a
+		// 4xx answer rejects the evidence. 408, 429 and 5xx answers do not
+		// depend on the request content and stay retrieval failures.
+		{"vcek_http_404", sevRejected, http.StatusNotFound},
+		{"vcek_http_400", sevRejected, http.StatusBadRequest},
+		{"vcek_http_429", sevRetrievalFailed, http.StatusTooManyRequests},
+		{"vcek_http_500", sevRetrievalFailed, http.StatusInternalServerError},
+		{"vcek_http_503", sevRetrievalFailed, http.StatusServiceUnavailable},
+		{"chain_fetch_error", sevRetrievalFailed, 0},
+		{"malformed_vcek", sevRejected, 0},
+		{"certificate_signature", sevRejected, 0},
+		{"report_signature", sevRejected, 0},
+		{"malformed_report", sevRejected, 0},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			raw, certificate := slices.Clone(testdata.AttestationBytes), slices.Clone(testdata.VcekBytes)
@@ -162,13 +176,18 @@ func TestSEVOnlineRequiresAuthenticatedEvidence(t *testing.T) {
 				milanChainURL: trust.AskArkMilanVcekBytes,
 				vcekURL:       certificate,
 			})
+			var failing *failingSEVGetter
 			switch tc.mode {
 			case "vcek_fetch_error":
-				getter = &failingSEVGetter{base: getter, url: vcekURL, err: fetchFailed}
+				failing = &failingSEVGetter{base: getter, url: vcekURL, err: fetchFailed}
 			case "chain_fetch_error":
-				getter = &failingSEVGetter{base: getter, url: "https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain", err: fetchFailed}
-			case "vcek_http_404":
-				getter = vcekNotFoundGetter(t)
+				failing = &failingSEVGetter{base: getter, url: "https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain", err: fetchFailed}
+			}
+			if failing != nil {
+				getter = failing
+			}
+			if tc.status != 0 {
+				getter = vcekStatusGetter(t, tc.status)
 			}
 			var wg sync.WaitGroup
 			for range 8 {
@@ -181,12 +200,18 @@ func TestSEVOnlineRequiresAuthenticatedEvidence(t *testing.T) {
 						return
 					}
 					checkSEVOutcome(t, result, tc.want)
-					if tc.mode == "vcek_fetch_error" && !errors.Is(result.FetchErr, fetchFailed) {
-						t.Errorf("retrieval cause lost: %v", result.FetchErr)
+					if failing != nil {
+						checkSEVFetchCause(t, result.FetchErr, fetchFailed)
+					}
+					if tc.status != 0 {
+						checkSEVStatusCause(t, result, tc.status)
 					}
 				})
 			}
 			wg.Wait()
+			if failing != nil && !failing.called.Load() {
+				t.Errorf("getter never requested %s; the result did not come from the getter", failing.url)
+			}
 		})
 	}
 }
@@ -210,4 +235,61 @@ func TestSEVOnlineFetchFailureIsPerCall(t *testing.T) {
 		})
 	}
 	wg.Wait()
+	if !failing.called.Load() {
+		t.Error("failing getter never called")
+	}
+}
+
+// checkSEVFetchCause asserts that the retrieval error keeps its cause for
+// errors.Is and shows the cause text once.
+func checkSEVFetchCause(t *testing.T, fetchErr, cause error) {
+	t.Helper()
+	if !errors.Is(fetchErr, cause) {
+		t.Errorf("retrieval cause lost: %v", fetchErr)
+		return
+	}
+	if n := strings.Count(fetchErr.Error(), cause.Error()); n != 1 {
+		t.Errorf("error %q shows the cause %d times; want 1", fetchErr, n)
+	}
+}
+
+// checkSEVStatusCause asserts that the error set for an HTTP status answer
+// keeps the typed status error and shows it once.
+func checkSEVStatusCause(t *testing.T, result *SEVVerifyResult, status int) {
+	t.Helper()
+	err := result.FetchErr
+	if err == nil {
+		err = result.CertChainErr
+	}
+	var statusErr *SEVCertStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != status {
+		t.Errorf("error %v does not carry HTTP status %d", err, status)
+		return
+	}
+	if n := strings.Count(err.Error(), statusErr.Error()); n != 1 {
+		t.Errorf("error %q shows the status error %d times; want 1", err, n)
+	}
+}
+
+// verifySEVEvidence classifies a recorded getter error as a retrieval
+// failure. That is correct only while every getter call aborts verification.
+// CheckRevocations adds CRL downloads whose errors go-sev-guest can ignore,
+// and other options can add getter calls of the same kind. This test fails if
+// the options set anything other than the getter.
+func TestSEVVerifyOptionsAbortOnGetterError(t *testing.T) {
+	getter := sevtest.SimpleGetter(nil)
+	opts := sevVerifyOptions(getter)
+	if opts.CheckRevocations {
+		t.Fatal("CheckRevocations is on; a failed CRL download would not abort verification")
+	}
+	if opts.Getter != getter {
+		t.Error("options do not use the given getter")
+	}
+	v := reflect.ValueOf(opts).Elem()
+	for i := range v.NumField() {
+		name := v.Type().Field(i).Name
+		if name != "Getter" && !v.Field(i).IsZero() {
+			t.Errorf("option %s is set; confirm every getter call still aborts verification before changing this test", name)
+		}
+	}
 }

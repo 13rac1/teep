@@ -1108,7 +1108,7 @@ func TestEvalSEVParseDependent_FetchErr(t *testing.T) {
 		want   string
 		reject []string
 	}{
-		{"fetch_err", &SEVVerifyResult{FetchErr: kdsDown}, Fail, "retrieval failed", []string{"invalid", "offline mode"}},
+		{"fetch_err", &SEVVerifyResult{FetchErr: kdsDown}, Fail, "SEV-SNP certificate retrieval failed", []string{"invalid", "offline mode", "AMD KDS"}},
 		{"cert_chain_err", &SEVVerifyResult{CertChainErr: errors.New("bad cert"), SignatureErr: errors.New("bad cert")}, Fail, "", []string{"retrieval"}},
 		{"offline", &SEVVerifyResult{}, Skip, "offline mode", []string{"retrieval"}},
 	} {

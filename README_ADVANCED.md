@@ -163,6 +163,8 @@ Each factor produces PASS, FAIL, or SKIP. Factors marked `[ENFORCED]` cause the 
 | 10 | `signing_key_present` | Enclave ECDH public key present in response. Required for E2EE key exchange. |
 | 11 | `response_schema` | Attestation response JSON matches expected schema (no unknown or missing fields). |
 
+On AMD SEV-SNP, a failed retrieval of the VCEK certificate or its AMD signing chain (a network or TLS error, a 5xx, 408 or 429 response, or a capacity limit) fails `tee_cert_chain` and `tee_quote_signature` (and their `gateway_` pair) with a detail that starts "SEV-SNP certificate retrieval failed". A retrieved certificate or report that does not verify, or a 4xx response to a certificate URL that the verifier builds from report fields, is a rejection: it fails the same factors with the verification error.
+
 ### Tier 2: Binding & Crypto
 
 | # | Factor | Description |

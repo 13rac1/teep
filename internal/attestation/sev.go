@@ -42,7 +42,7 @@ func (g *sevClientHTTPSGetter) GetContext(ctx context.Context, url string) ([]by
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("failed to retrieve %s, status code received %d", url, resp.StatusCode)
+		return nil, &SEVCertStatusError{URL: url, StatusCode: resp.StatusCode}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCertResponseSize+1))
 	if err != nil {
@@ -52,6 +52,32 @@ func (g *sevClientHTTPSGetter) GetContext(ctx context.Context, url string) ([]by
 		return nil, fmt.Errorf("KDS response body exceeds %d bytes", maxCertResponseSize)
 	}
 	return body, nil
+}
+
+// SEVCertStatusError reports a certificate server response with a status code
+// that is not 2xx. Certificate getters return it for AMD KDS and for the
+// Tinfoil KDS proxy.
+type SEVCertStatusError struct {
+	URL        string
+	StatusCode int
+}
+
+func (e *SEVCertStatusError) Error() string {
+	return fmt.Sprintf("failed to retrieve %s, status code received %d", e.URL, e.StatusCode)
+}
+
+// rejectsRequest reports whether the server refused the certificate request
+// itself. The VCEK URL contains the chip ID, reported TCB and product line
+// from the report, which the provider controls. A 4xx for that URL is a
+// rejection of the evidence, not a retrieval failure. 408 and 429 report
+// server load or timing, not the request content, so they stay retrieval
+// failures.
+func (e *SEVCertStatusError) rejectsRequest() bool {
+	switch e.StatusCode {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return false
+	}
+	return e.StatusCode >= 400 && e.StatusCode < 500
 }
 
 // maxCertResponseSize is the maximum body size accepted from any
@@ -86,8 +112,11 @@ type SEVVerifyResult struct {
 	CertChainErr error
 
 	// FetchErr is non-nil if the certificate getter failed to retrieve the
-	// VCEK certificate or its ASK/ARK chain. The certificate chain and report
-	// signature are then not verified, and CertChainErr and SignatureErr are nil.
+	// VCEK certificate or its ASK/ARK chain because of a transport error, a
+	// 5xx response, a refused TLS connection or a capacity limit. The
+	// certificate chain and report signature are then not verified, and
+	// CertChainErr and SignatureErr are nil. A 4xx response is a rejection
+	// and sets CertChainErr and SignatureErr instead.
 	FetchErr error
 
 	// DebugEnabled is true if the guest policy debug bit is set.
@@ -322,6 +351,27 @@ type sevEvidenceOutcome struct {
 	verifyErr error
 }
 
+// sevGetterError is a go-sev-guest error caused by a certificate getter
+// error. go-sev-guest already includes the getter error text in its own
+// message, so Error shows that message once. Unwrap keeps the getter error
+// for errors.Is and errors.As.
+type sevGetterError struct {
+	verify error
+	getter error
+}
+
+func (e *sevGetterError) Error() string   { return e.verify.Error() }
+func (e *sevGetterError) Unwrap() []error { return []error{e.verify, e.getter} }
+
+// sevVerifyOptions returns the go-sev-guest options for online verification.
+// verifySEVEvidence classifies getter errors as retrieval failures, which is
+// only correct while every getter call aborts verification. Do not enable
+// CheckRevocations or other options that make a getter call whose error
+// verification can ignore. TestSEVVerifyOptionsAbortOnGetterError checks this.
+func sevVerifyOptions(getter trust.HTTPSGetter) *sevverify.Options {
+	return &sevverify.Options{Getter: getter}
+}
+
 // verifySEVEvidence verifies the certificate chain and report signature.
 func verifySEVEvidence(ctx context.Context, raw []byte, getter trust.HTTPSGetter) sevEvidenceOutcome {
 	report, err := sevabi.ReportToProto(raw)
@@ -334,8 +384,14 @@ func verifySEVEvidence(ctx context.Context, raw []byte, getter trust.HTTPSGetter
 	// go-sev-guest converts certificate fetch errors to text and uses the same
 	// error type for fetch and parse failures. The getter errors recorded here
 	// are the only exact retrieval signal. Each verification owns its record.
+	//
+	// A recorded getter error counts as a retrieval failure only while every
+	// getter call aborts verification and CheckRevocations stays off. With
+	// CheckRevocations, go-sev-guest ignores a failed CRL download when
+	// another distribution point succeeds, so a recorded error would not
+	// explain the final result.
 	observed := &sevEvidenceGetter{base: getter}
-	opts := &sevverify.Options{Getter: observed}
+	opts := sevVerifyOptions(observed)
 	evidence, err := sevverify.GetAttestationFromReportContext(ctx, report, opts)
 	if err == nil {
 		err = sevverify.SnpAttestationContext(ctx, evidence, opts)
@@ -343,8 +399,13 @@ func verifySEVEvidence(ctx context.Context, raw []byte, getter trust.HTTPSGetter
 	if err == nil {
 		return sevEvidenceOutcome{}
 	}
-	if fetchErr := observed.failure(); fetchErr != nil {
-		return sevEvidenceOutcome{fetchErr: errors.Join(err, fetchErr)}
+	getterErr := observed.failure()
+	if getterErr == nil {
+		return sevEvidenceOutcome{verifyErr: err}
 	}
-	return sevEvidenceOutcome{verifyErr: err}
+	wrapped := &sevGetterError{verify: err, getter: getterErr}
+	if status := (*SEVCertStatusError)(nil); errors.As(getterErr, &status) && status.rejectsRequest() {
+		return sevEvidenceOutcome{verifyErr: wrapped}
+	}
+	return sevEvidenceOutcome{fetchErr: wrapped}
 }
