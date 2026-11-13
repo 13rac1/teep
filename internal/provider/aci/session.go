@@ -672,6 +672,10 @@ func sessionValue(data []byte) (map[string]any, error) {
 	return object, nil
 }
 
+// integerValues replaces each json.Number in v with an int64, or with a
+// uint64 above the int64 range. The values go only to the canonical form
+// (writeCanonicalValue) and to servedHolds, which compares canonical forms;
+// both accept the two types. No reader type-switches on int64 alone.
 func integerValues(v any) (any, error) {
 	switch val := v.(type) {
 	case json.Number:

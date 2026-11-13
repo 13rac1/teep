@@ -43,7 +43,7 @@ func verifyPhalaProbe(ctx context.Context, opts *Options, raw *attestation.RawAt
 		return result
 	}
 	receipt, err := verifyProbeReceipt(ctx, opts, raw, id, wire, pr)
-	if err != nil && receipt == nil {
+	if err != nil {
 		// The receipt could not be fetched: a transport or HTTP failure of
 		// the probe, not a statement of the service.
 		result.Err = fmt.Errorf("receipt fetch: %w", err)

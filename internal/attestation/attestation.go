@@ -307,6 +307,7 @@ type Cache struct {
 	ttl           time.Duration
 	lastEvictWarn time.Time
 	published     uint64 // last publication number that Put assigned
+	now           func() time.Time
 }
 
 // NewCache returns a Cache with the specified TTL.
@@ -314,6 +315,7 @@ func NewCache(ttl time.Duration) *Cache {
 	return &Cache{
 		entries: make(map[cacheKey]*cacheEntry),
 		ttl:     ttl,
+		now:     time.Now,
 	}
 }
 
@@ -331,7 +333,10 @@ func (c *Cache) GetPublication(provider, model string) (*VerificationReport, uin
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.entries[cacheKey{provider, model}]
-	if !ok || time.Since(e.fetchedAt) > c.ttl {
+	now := c.now()
+	if !ok || now.Sub(e.fetchedAt) > c.ttl || e.report.ACIKeysetExpired(now) {
+		// An ACI/1 report ends at its keyset not_after even within the
+		// TTL; the signing key pairs only with a cached report.
 		return nil, 0, false
 	}
 	return e.report, e.publication, true
@@ -386,7 +391,7 @@ func (c *Cache) Put(provider, model string, report *VerificationReport) uint64 {
 	c.entries[key] = &cacheEntry{
 		report:      report,
 		publication: c.published,
-		fetchedAt:   time.Now(),
+		fetchedAt:   c.now(),
 	}
 	return c.published
 }

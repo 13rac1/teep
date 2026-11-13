@@ -159,11 +159,11 @@ func (t *aciTLSBinding) toCanonicalValue() map[string]any {
 // with the same value (servedHolds); otherwise the digest would cover
 // values other than the ones teep checked.
 func (ks *aciWorkloadKeyset) digestValue() (any, error) {
-	if ks.servedErr != nil {
-		return nil, fmt.Errorf("served keyset: %w", ks.servedErr)
-	}
 	if ks.served == nil {
-		return nil, errors.New("the served keyset was not recorded")
+		if ks.servedErr != nil {
+			return nil, fmt.Errorf("served keyset: %w", ks.servedErr)
+		}
+		return nil, errors.New("served keyset: not recorded")
 	}
 	typed, err := ks.toCanonicalValue()
 	if err != nil {

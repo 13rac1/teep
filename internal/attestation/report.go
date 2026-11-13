@@ -192,11 +192,24 @@ type VerificationReport struct {
 	// receipt verification. Internal; excluded from report JSON.
 	ACIPinnedSessions []ACIPinnedSession `json:"-"`
 
-	// ACIReceiptKeys and ACIKeysetNotAfter are the receipt keys and the
-	// not_after of the verified keyset, for receipt verification. Set only
-	// for the canonical ACI/1 report. Internal; excluded from report JSON.
+	// ACIReceiptKeys are the receipt keys of the verified keyset, for
+	// receipt verification; set only for the canonical ACI/1 report.
+	// ACIKeysetNotAfter is the keyset not_after (unix seconds) of every
+	// ACI/1 report (ACIKeysetExpired). Internal; excluded from report JSON.
 	ACIReceiptKeys    []ACIReceiptKey `json:"-"`
 	ACIKeysetNotAfter int64           `json:"-"`
+}
+
+// ACIKeysetExpired reports whether r is an ACI/1 report whose workload
+// keyset may no longer be used at now: its not_after is not after now, or
+// it has no valid not_after. An ACI/1 keyset not_after is the lifetime of
+// its keys, not an expiry of the evidence: no new request is sent under the
+// keyset from its not_after on. Always false for other formats.
+func (r *VerificationReport) ACIKeysetExpired(now time.Time) bool {
+	if r == nil || r.BackendFormat != FormatACI1 {
+		return false
+	}
+	return r.ACIKeysetNotAfter <= 0 || now.Unix() >= r.ACIKeysetNotAfter
 }
 
 // CheckServedKeysetDigest compares the X-ACI-Keyset-Digest header of an
@@ -1209,10 +1222,12 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		if in.Raw.ModelNameMatch != "" {
 			attestedModel, attestedMatch = in.Raw.Model, in.Raw.ModelNameMatch
 		}
+		if format == FormatACI1 {
+			aciNotAfter = in.Raw.ACIKeysetNotAfter
+		}
 		if in.Raw.ACICanonicalReport {
 			aciKeysetDigest = in.Raw.ACIWorkloadKeysetDigest
 			aciReceiptKeys = slices.Clone(in.Raw.ACIReceiptKeys)
-			aciNotAfter = in.Raw.ACIKeysetNotAfter
 			if in.ACISessions != nil && in.ACISessions.Err == nil {
 				aciPinned = slices.Clone(in.ACISessions.Pinned)
 				for _, s := range aciPinned {

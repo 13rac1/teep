@@ -78,10 +78,14 @@ list. Teep checks only its shape: at most 16 distinct clean URL paths.
 Teep sends Phala Cloud only chat and embeddings requests, and pins attested
 sessions only in their JSON body, so it does not use the list.
 A member that teep does not define is reported in the allowed
-`response_schema` factor and read by no check. A member whose name differs
-from a defined member only in letter case is refused: encoding/json would
-let it set the defined field, so the document is ambiguous, not extended. Inside `workload_keyset` it
-stays in the keyset digest, which teep computes over the keyset as served.
+`response_schema` factor and read by no check. Inside `workload_keyset`
+such a member stays in the keyset digest, which teep computes over the
+keyset as served. A member whose name differs from a defined member only
+in letter case is refused: encoding/json would let it set the defined
+field, so the document is ambiguous, not extended. The Chutes evidence
+inside a Phala Cloud session does not have this check yet. There, a
+different reading of `e2e_pubkey` fails, because the key must hash to the
+channel binding that REPORTDATA binds.
 The specification and its limits are in
 [ACI/1 Specification: Assurance Limits and Deployment Requirements](aci_specification.md).
 
@@ -356,8 +360,10 @@ date.
    against an honest gateway. Phala Cloud verifies the ACI/1 route, whose
    REPORTDATA binds the whole keyset; for Venice and NanoGPT, closing it
    requires the provider to relay that route. `teep serve` sends no request
-   under a keyset from its `not_after` on: the cached authorization ends,
-   and the next request verifies again.
+   under a keyset from its `not_after` on: the cached authorization of
+   Phala Cloud, and the cached report of Venice and NanoGPT, end at it, and
+   the next request verifies again. A keyset without a valid `not_after`
+   counts as expired.
 8. **The TLS key binds only the hosts that teep connects to.** For Phala
    Cloud, teep compares the certificate key of `tee.redpill.ai` with the
    hardware-bound keyset entry for that host and pins inference connections

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
@@ -33,6 +34,10 @@ func publishFormatReport(t *testing.T, s *Server, prov string, format attestatio
 	t.Helper()
 	report := bindingReport()
 	report.BackendFormat = format
+	if format == attestation.FormatACI1 {
+		// An ACI/1 report is usable only before its keyset not_after.
+		report.ACIKeysetNotAfter = time.Now().Add(time.Hour).Unix()
+	}
 	key := providerModelKey{prov, "model"}
 	s.reportMu.Lock()
 	s.storeReportLocked(key, report)

@@ -140,7 +140,9 @@ type aciServiceCaps struct {
 // servedKeyset returns attestation.workload_keyset of body as a generic
 // object: duplicate members fail, and numbers must be integers, which the
 // JCS form writes exactly. Members are looked up by their exact names, as
-// the typed decoding does, so both views read the same object.
+// the typed decoding does, so both views read the same object. The maps
+// here keep one copy of a duplicate member; Parse has already refused
+// duplicates in the whole body (ValidateUniqueFields) before it calls this.
 func servedKeyset(body []byte) (map[string]any, error) {
 	var top, attestationObject map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {
@@ -206,8 +208,8 @@ type aciWorkloadKeyset struct {
 
 	// served is the keyset object as the service published it, members
 	// that teep does not define included. The ACI/1 §3.1 digest is over
-	// its JCS form (digestValue). The parsers always set served or
-	// servedErr; a keyset with neither has no digest.
+	// its JCS form (digestValue). A nil served has no digest; servedErr
+	// only says why, when the parser could not read it.
 	served    map[string]any
 	servedErr error
 }
@@ -454,6 +456,9 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 	// integer, for example) fails the keyset digest, and so the
 	// key-custody factor, not the parse.
 	ar.Attestation.WorkloadKeyset.served, ar.Attestation.WorkloadKeyset.servedErr = servedKeyset(body)
+	// A not_after outside the int64 range stays 0, and the report counts
+	// as expired (VerificationReport.ACIKeysetExpired).
+	notAfter, _ := ar.Attestation.WorkloadKeyset.NotAfter.Int64()
 	LogEventLog(ctx, eventLog, provider)
 	if ar.IntelQuote != "" && subtle.ConstantTimeCompare([]byte(ar.IntelQuote), []byte(ar.Attestation.Evidence.Quote)) != 1 {
 		// The top-level intel_quote is documented as an echo of
@@ -493,6 +498,7 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 		ACISourceRepoURL:        ar.Attestation.SourceProvenance.RepoURL,
 		ACIWorkloadKeysetDigest: ar.WorkloadKeysetDigest,
 		ACIWorkloadKeyset:       &ar.Attestation.WorkloadKeyset,
+		ACIKeysetNotAfter:       notAfter,
 		ACIKeyCustody:           &ar.Attestation.Evidence.KeyCustody,
 		ACIDownstreamTLSDomain:  ar.Attestation.Evidence.DownstreamTLSBinding.Domain,
 		ACIDownstreamTLSSPKI:    ar.Attestation.Evidence.DownstreamTLSBinding.SPKISHA256,
