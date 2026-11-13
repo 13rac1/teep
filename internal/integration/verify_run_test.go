@@ -23,7 +23,7 @@ func buildVerifyRunConfig(providerName, baseURL string) (*config.Config, *config
 }
 
 func TestVerifyRun_Venice_Fixture(t *testing.T) {
-	env := loadFixture(t, "venice")
+	env := loadFixture(t, "venice_dstack")
 	baseURL := extractBaseURL(t, env.entries)
 	t.Logf("base URL: %s", baseURL)
 
@@ -56,11 +56,11 @@ func TestVerifyRun_Venice_Fixture(t *testing.T) {
 }
 
 func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
-	env := loadFixture(t, "neardirect")
+	env := loadFixture(t, "neardirect_near")
 
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, env.manifest.NearConfig.Origin)
 	cp.E2EE = env.manifest.NearConfig.E2EE
-	report, _, err := verify.Replay(context.Background(), findFixtureDir(t, "neardirect"), func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil })
+	report, _, err := verify.Replay(context.Background(), findFixtureDir(t, "neardirect_near"), func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil })
 
 	if err != nil {
 		t.Fatalf("verify.Run: %v", err)
@@ -76,7 +76,7 @@ func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
 }
 
 func TestVerifyReplay_Venice_Fixture(t *testing.T) {
-	fdir := findFixtureDir(t, "venice")
+	fdir := findFixtureDir(t, "venice_dstack")
 
 	_, entries, err := capture.Load(fdir)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestVerifyReplay_Venice_Fixture(t *testing.T) {
 }
 
 func TestVerifyRun_WithCapture_Venice(t *testing.T) {
-	env := loadFixture(t, "venice")
+	env := loadFixture(t, "venice_dstack")
 	baseURL := extractBaseURL(t, env.entries)
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, baseURL)
 
@@ -146,7 +146,7 @@ func TestVerifyRun_WithCapture_Venice(t *testing.T) {
 }
 
 func TestVerifyRun_Tinfoil_Fixture(t *testing.T) {
-	env := loadFixture(t, "tinfoil_v3_cloud")
+	env := loadFixture(t, "tinfoil_v3_cloud_tinfoil")
 	baseURL := extractBaseURL(t, env.entries)
 	t.Logf("base URL: %s", baseURL)
 
@@ -198,7 +198,7 @@ func TestVerifyRun_Tinfoil_Fixture(t *testing.T) {
 }
 
 func TestVerifyRun_TinfoilDirect_Fixture(t *testing.T) {
-	env := loadFixture(t, "tinfoil_v3_direct")
+	env := loadFixture(t, "tinfoil_v3_direct_tinfoil")
 
 	// Direct mode uses the proxy discovery endpoint on inference.tinfoil.sh
 	// to resolve model → backend enclave domain, then fetches attestation

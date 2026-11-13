@@ -20,13 +20,13 @@ func TestKeysetNotAfterNumbers(t *testing.T) {
 		t.Fatal(err)
 	}
 	with := func(value string) []byte {
-		out := bytes.ReplaceAll(body, []byte(`"not_after":1795221116`), []byte(`"not_after":`+value))
+		out := bytes.ReplaceAll(body, []byte(`"not_after":1796530946`), []byte(`"not_after":`+value))
 		if bytes.Equal(out, body) {
 			t.Fatal("fixture changed shape")
 		}
 		return out
 	}
-	now := time.Unix(1795221116-3600, 0)
+	now := time.Unix(1796530946-3600, 0)
 
 	raw, err := Parse(context.Background(), with("18446744073709551615"), "phalacloud")
 	if err != nil {
@@ -40,7 +40,7 @@ func TestKeysetNotAfterNumbers(t *testing.T) {
 		t.Errorf("keysetNotExpired = %v, %q; want the lifetime bound to fail", ok, detail)
 	}
 
-	raw, err = Parse(context.Background(), with("1795221116.5"), "phalacloud")
+	raw, err = Parse(context.Background(), with("1796530946.5"), "phalacloud")
 	if err != nil {
 		t.Fatalf("Parse with a fractional not_after: %v", err)
 	}

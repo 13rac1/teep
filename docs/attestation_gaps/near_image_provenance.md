@@ -128,12 +128,14 @@ compose-manager-launcher:
   image: nearaidev/compose-manager-launcher@sha256:91fdff3cfa3543d72656b2368c7d8a0a83d95a0f1087378c897aa1537acdba56
 ```
 
-This excerpt is from the NearDirect capture in
-[NEAR signed TLS-only captures](../../internal/integration/testdata/near_tls_only/);
-the NearCloud capture pins the same digest. A pin in this form can be searched
-in Rekor directly, because the pinned digest is the subject digest of NEAR's
-records. `TestNearGLMIndexPinPassesEnforcedSigstore` replays both provider
-captures through the production verifier with this factor enforced.
+This excerpt is from the NearDirect capture of `z-ai/glm-5.3-flash` on
+2026-09-09; the NearCloud capture of the same day pinned the same digest. A pin
+in this form can be searched in Rekor directly, because the pinned digest is
+the subject digest of NEAR's records.
+[`TestNearIndexPinnedComposePassesEnforcedSigstore`](../../internal/attestation/sigstore_index_pin_test.go)
+checks that a compose with this pin passes the Rekor lookup, so
+`sigstore_verification` passes with the factor enforced; the Rekor answer is
+built in the test.
 
 The DeepSeek deployments observed on 2026-11-11 pin a different digest of the
 same build: the `linux/amd64` child manifest of that index.
@@ -190,10 +192,13 @@ Rekor record format. The reported affected models are:
 
 The [model investigation](https://github.com/13rac1/teep/issues/189#issuecomment-6807723408)
 and [PR #191](https://github.com/13rac1/teep/pull/191) record the DeepSeek
-observations. The retained signed GLM captures establish the earlier index
-pin; `TestNearGLMIndexPinPassesEnforcedSigstore` replays both providers
-through the production verifier with this factor enforced. This comparison
-establishes lookup behavior for the two image-reference forms.
+observations. The GLM captures of 2026-09-09 established the earlier index
+pin; `TestNearIndexPinnedComposePassesEnforcedSigstore` checks the lookup of that pin with the factor
+enforced. The NearDirect and NearCloud captures of `qwen/qwen3.8-27b` on
+2026-11-13, and the Venice dstack capture of the same day, pin the platform
+manifest `079a14b4…`: `sigstore_verification` fails for them and is allowed
+by default. This comparison establishes lookup behavior for the two
+image-reference forms.
 
 These observations describe specific deployments and dates, not the whole
 NEAR fleet or the present state of every backend. The GLM captures establish
@@ -318,7 +323,7 @@ separate [dstack boot-measurement gap](dstack_integrity.md).
 - **Provider behavior:** [NEAR provider reference](../providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest), [Docker Hub tags](https://hub.docker.com/v2/repositories/nearaidev/compose-manager-launcher/tags?page_size=100), [build workflow](https://github.com/nearai/compose-manager/blob/bf97be3eb430e78898622c765a37e22fd40b2d22/.github/workflows/build.yml), [promotion workflow](https://github.com/nearai/compose-manager/blob/bf97be3eb430e78898622c765a37e22fd40b2d22/.github/workflows/promote.yml), [rollback workflow](https://github.com/nearai/compose-manager/blob/bf97be3eb430e78898622c765a37e22fd40b2d22/.github/workflows/rollback.yml).
 - **Formats and tools:** [OCI distribution definitions](https://github.com/opencontainers/distribution-spec/blob/97274622c11112caa21efb8c52acca3c6b8fa7f1/spec.md#definitions), [Skopeo copy options](https://github.com/containers/skopeo/blob/8360e9e41548eee4bd1e41d231955ba85529e303/docs/skopeo-copy.1.md#options).
 - **Client implementation:** [NEAR policy](../../internal/provider/neardirect/policy.go), [Rekor client](../../internal/attestation/rekor.go), [factor evaluation](../../internal/attestation/report.go), [verify retrieval](../../internal/verify/attest.go), [proxy retrieval](../../internal/proxy/proxy.go).
-- **Captured evidence:** [NEAR signed TLS-only captures](../../internal/integration/testdata/near_tls_only/) and [capture replay tests](../../internal/verify/near_capture_test.go).
+- **Tests:** [index pin lookup](../../internal/attestation/sigstore_index_pin_test.go), [current NEAR fixtures](../../internal/integration/testdata/current/) and [capture replay tests](../../internal/verify/near_capture_test.go).
 - **Related gap:** [Dstack integrity](dstack_integrity.md).
 
 ---

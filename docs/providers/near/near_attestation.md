@@ -73,7 +73,7 @@ the [direct parser](../../../internal/provider/neardirect/parser.go), and the
 [gateway parser](../../../internal/provider/nearcloud/parser.go). Protocol evidence
 includes the pinned upstream response definitions referenced by the
 [NEAR backend-selection design](../../plans/near_backend_selection.md#investigation-and-evidence)
-and the signed NEAR captures in [integration testdata](../../../internal/integration/testdata/).
+and the current NEAR captures in [integration testdata](../../../internal/integration/testdata/current/).
 Captures describe the provider at capture time; replay cannot establish the
 current deployed schema or a current TLS handshake.
 
@@ -133,9 +133,9 @@ Example, checked on 2026-11-11:
   `deepseek-ai/DeepSeek-V4.1-Flash-1017-abliterated` reported this platform
   manifest pin on NearDirect. PR #191 also reports it in NearCloud model
   evidence. This does not establish a changed gateway image format.
-- The retained `z-ai/glm-5.3-flash` captures instead pin index `91fdff3c…`
-  directly. `TestNearGLMIndexPinPassesEnforcedSigstore` verifies that both
-  provider captures pass with `sigstore_verification` enforced.
+- The `z-ai/glm-5.3-flash` captures of 2026-09-09 instead pinned index
+  `91fdff3c…` directly. `TestNearIndexPinnedComposePassesEnforcedSigstore` verifies that a compose with
+  this pin passes with `sigstore_verification` enforced.
 
 The index, its manifest, and the Rekor entries of each digest:
 

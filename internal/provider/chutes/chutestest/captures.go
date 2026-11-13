@@ -22,10 +22,10 @@ type Capture struct {
 	Raw   *attestation.RawAttestation
 }
 
-// Captures loads every chutes_* capture under testdata.
+// Captures loads every current Chutes capture under testdata/current.
 func Captures(tb testing.TB, testdata string) []Capture {
 	tb.Helper()
-	dirs, err := filepath.Glob(filepath.Join(testdata, "chutes_*"))
+	dirs, err := filepath.Glob(filepath.Join(testdata, "current", "chutes_*"))
 	if err != nil || len(dirs) == 0 {
 		tb.Fatalf("no Chutes captures in %s: %v", testdata, err)
 	}

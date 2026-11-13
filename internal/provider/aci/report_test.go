@@ -12,11 +12,11 @@ import (
 	"github.com/13rac1/teep/internal/provider/venice"
 )
 
-// The gateway variant test vector is the attestation body of a live Phala
-// Cloud capture: its client nonce and capture time.
+// The gateway variant test vector is the attestation body of a live
+// NanoGPT capture: its client nonce and capture time.
 const (
-	gatewayVariantNonce = "389ff5f5e132277769e358d0d117e6be703c996b03b55875b5e8700b80013d58"
-	gatewayVariantTime  = "2026-10-27T00:08:37Z"
+	gatewayVariantNonce = "68bdb48205fa8fd17a2ddc65d88f72e8681a2951e751285b19fced9fb9823f06"
+	gatewayVariantTime  = "2026-11-13T07:50:51Z"
 )
 
 // A full report of the gateway variant body, built from the production

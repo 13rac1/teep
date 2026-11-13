@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"os"
@@ -15,11 +19,11 @@ import (
 
 func TestReverifyRejectsMissingCapturedTLSPeer(t *testing.T) {
 	for name, fixture := range map[string]string{
-		"nearcloud":  "nearcloud_z-ai_glm-5.3-flash_20260910_153519",
-		"neardirect": "neardirect_z-ai_glm-5.3-flash_20260909_201111",
+		"nearcloud":  "nearcloud_gateway",
+		"neardirect": "neardirect_near",
 	} {
 		t.Run(name, func(t *testing.T) {
-			manifest, entries, err := capture.Load(filepath.Join("..", "..", "internal", "integration", "testdata", fixture))
+			manifest, entries, err := capture.Load(filepath.Join("..", "..", "internal", "integration", "testdata", "current", fixture))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,8 +48,36 @@ func TestReverifyRejectsMissingCapturedTLSPeer(t *testing.T) {
 	}
 }
 
+// A capture whose recorded gateway TLS key is not the key that the gateway
+// attestation binds is refused: the recorded peer key of the attestation
+// request is replaced with another key.
 func TestReverifyRejectsCapturedGatewaySPKIMismatch(t *testing.T) {
-	const fixture = "../../internal/integration/testdata/nearcloud_z-ai_glm-5.3-flash_20260909_204025"
+	manifest, entries, err := capture.Load(filepath.Join("..", "..", "internal", "integration", "testdata", "current", "nearcloud_gateway"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSPKI, err := x509.MarshalPKIXPublicKey(&other.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := false
+	for i := range entries {
+		if strings.Contains(entries[i].URL, "cloud-api.near.ai/v1/attestation/report") {
+			entries[i].PeerSPKIDER = otherSPKI
+			changed = true
+		}
+	}
+	if !changed {
+		t.Fatal("capture has no gateway attestation request")
+	}
+	fixture, err := capture.Save(t.TempDir(), &manifest, "", entries)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := filepath.Join(t.TempDir(), "teep.toml")
 	if err := os.WriteFile(cfg, []byte("[providers.nearcloud]\napi_key = \"test-key\"\ne2ee = true\n"), 0o600); err != nil {
 		t.Fatal(err)

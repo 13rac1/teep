@@ -584,7 +584,7 @@ func TestRunReverify_MissingDir(t *testing.T) {
 // (the replayed nvidia_nras_verified factor differs). That specific failure is
 // accepted only when the JWT is confirmed expired. Any other error fails the test.
 func TestRunReverify_Venice_Fixture(t *testing.T) {
-	fdir := "../../internal/integration/testdata/venice_e2ee-qwen3-5-122b-a10b_20260424_015841"
+	fdir := "../../internal/integration/testdata/current/venice_dstack"
 
 	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
 	cfgContent := "[providers.venice]\nbase_url = \"https://api.venice.ai\"\napi_key = \"test-key\"\n"
@@ -641,7 +641,7 @@ func nrasJWTExpired(t *testing.T, fixtureDir string) bool {
 }
 
 func TestRunReverify_NearCloud_Fixture(t *testing.T) {
-	fdir := "../../internal/integration/testdata/nearcloud_z-ai_glm-5.3-flash_20260910_153519"
+	fdir := "../../internal/integration/testdata/current/nearcloud_gateway"
 
 	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
 	cfgContent := "[providers.nearcloud]\nbase_url = \"https://cloud-api.near.ai\"\napi_key = \"test-key\"\ne2ee = true\n"
@@ -663,7 +663,7 @@ func TestRunReverify_NearCloud_Fixture(t *testing.T) {
 }
 
 func TestRunReverify_NearDirect_Fixture(t *testing.T) {
-	fdir := "../../internal/integration/testdata/neardirect_z-ai_glm-5.3-flash_20260909_201111"
+	fdir := "../../internal/integration/testdata/current/neardirect_near"
 
 	cfgFile := filepath.Join(t.TempDir(), "teep.toml")
 	cfgContent := "[providers.neardirect]\nbase_url = \"https://completions.near.ai\"\napi_key = \"test-key\"\ne2ee = true\n"
@@ -687,7 +687,7 @@ func TestRunReverify_NearDirect_Fixture(t *testing.T) {
 func TestRunReverify_MissingReport(t *testing.T) {
 	// Build a capture dir with manifest.json + responses/ but no report.txt.
 	// verify.Replay should succeed, then capture.LoadReport should fail.
-	srcDir := "../../internal/integration/testdata/venice_e2ee-qwen3-5-122b-a10b_20260424_015841"
+	srcDir := "../../internal/integration/testdata/current/venice_dstack"
 	srcAbs, err := filepath.Abs(srcDir)
 	if err != nil {
 		t.Fatalf("abs path: %v", err)

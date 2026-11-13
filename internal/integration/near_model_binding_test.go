@@ -24,7 +24,7 @@ func TestNearSignedModelKeySubstitution(t *testing.T) {
 func testNearSignedModelKeySubstitution(t *testing.T, name string) {
 	t.Helper()
 	ctx := context.Background()
-	env := loadFixture(t, name)
+	env := loadFixture(t, map[string]string{"neardirect": "neardirect_near", "nearcloud": "nearcloud_gateway"}[name])
 	var raw *attestation.RawAttestation
 	var err error
 	if name == "neardirect" {

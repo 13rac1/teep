@@ -1,0 +1,75 @@
+{
+  "method": "GET",
+  "url": "https://kds-proxy.tinfoil.sh/vcek/v1/Genoa/1af1aa6c1f56037a05849a59b8815cf909583f9ba9ef2f053218c437f33ba183e4e415b039b37f8205250ad15f8b88a0a3add9f4c081c0779a48ed2214378e44?blSPL=10\u0026teeSPL=0\u0026snpSPL=23\u0026ucodeSPL=84",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEA4mWoWDYMKXohEyXGsSJ+nmjr8WhSVxP1/AGPQHcOnDCCb9Vu1WtfpHvHqjDRzNjsiQ+T/nFmNi2Nrr2ySWt1Q==",
+  "headers": {
+    "Accept-Ranges": [
+      "bytes"
+    ],
+    "Access-Control-Allow-Headers": [
+      "*"
+    ],
+    "Access-Control-Allow-Methods": [
+      "GET, OPTIONS"
+    ],
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Age": [
+      "1739"
+    ],
+    "Cache-Control": [
+      "public, max-age=14400"
+    ],
+    "Cf-Cache-Status": [
+      "HIT"
+    ],
+    "Cf-Ray": [
+      "a59c3d9e9bf664b6-SJC"
+    ],
+    "Content-Disposition": [
+      "attachment; filename=vcek.crt"
+    ],
+    "Content-Length": [
+      "1347"
+    ],
+    "Content-Type": [
+      "application/octet-stream"
+    ],
+    "Date": [
+      "Fri, 13 Nov 2026 08:00:04 GMT"
+    ],
+    "Expires": [
+      "Fri, 13 Nov 2026 12:00:04 GMT"
+    ],
+    "Last-Modified": [
+      "Fri, 13 Nov 2026 07:31:04 GMT"
+    ],
+    "Server": [
+      "cloudflare"
+    ],
+    "X-Collateral-Sha256": [
+      "3c0d43f9abb25c6109f7fc8b36cf434fbbf047d2941de4d5f9a33b0e212c88e6"
+    ],
+    "X-Collateral-Stored-At": [
+      "2026-08-25T18:17:42.429Z"
+    ],
+    "X-Collateral-Validation": [
+      "verified"
+    ],
+    "X-Collateral-Verified": [
+      "pkijs-3.4.0"
+    ],
+    "X-Kds-Cache-Version": [
+      "kv-first-v1"
+    ],
+    "X-Kds-Source": [
+      "cloudflare-kv-last-known-good"
+    ]
+  },
+  "duration_ms": 65
+}

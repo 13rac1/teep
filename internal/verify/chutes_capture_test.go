@@ -14,7 +14,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 )
 
-const chutesFixture = "../integration/testdata/chutes_zai-org_glm-5-tee_20260629_020725"
+const chutesFixture = "../integration/testdata/current/chutes_chutes"
 
 // noDialContext returns a context whose HTTP requests fail the test and
 // cancel the context when a real transport starts to get a connection. The
@@ -63,7 +63,20 @@ func copyChutesCapture(t *testing.T, withModels bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if withModels {
+	const modelsURL = "https://llm.chutes.ai/v1/models"
+	recorded := false
+	kept := entries[:0]
+	for i := range entries {
+		if entries[i].URL == modelsURL {
+			recorded = true
+			if !withModels {
+				continue
+			}
+		}
+		kept = append(kept, entries[i])
+	}
+	entries = kept
+	if withModels && !recorded {
 		entries = append(entries, capture.RecordedEntry{
 			Method:  http.MethodGet,
 			URL:     "https://llm.chutes.ai/v1/models",
@@ -97,8 +110,9 @@ func TestChutesReplayResolvesModelFromCapture(t *testing.T) {
 	}
 }
 
-// A capture made before the fix has no /v1/models exchange. Replay fails and
-// names the missing exchange; it sends no live request.
+// A capture without the /v1/models exchange (the fixture with that exchange
+// removed) fails replay and names the missing exchange; it sends no live
+// request.
 func TestChutesReplayWithoutModelListFails(t *testing.T) {
 	dir := copyChutesCapture(t, false)
 	ctx, dials := noDialContext(t)

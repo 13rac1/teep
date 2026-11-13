@@ -16,7 +16,7 @@ import (
 // capture fixture.
 func fixtureBody(t *testing.T) []byte {
 	t.Helper()
-	matches, err := filepath.Glob("../../integration/testdata/venice_aci_*/responses/0001_api.venice.ai_api_v1_tee_attestation.body")
+	matches, err := filepath.Glob("../../integration/testdata/current/venice_aci*/responses/0001_api.venice.ai_api_v1_tee_attestation.body")
 	if err != nil || len(matches) == 0 {
 		t.Fatalf("no Venice ACI/1 fixture body (err %v)", err)
 	}

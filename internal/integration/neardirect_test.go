@@ -32,7 +32,7 @@ func extractBaseURL(t *testing.T, entries []capture.RecordedEntry) string {
 
 func TestIntegration_NearDirect_Fixture(t *testing.T) {
 	ctx := context.Background()
-	env := loadFixture(t, "neardirect")
+	env := loadFixture(t, "neardirect_near")
 
 	// This test verifies signed evidence at its recorded route; replay tests validate selection metadata.
 	baseURL := "https://" + env.manifest.NearRoute.Authority
@@ -161,10 +161,10 @@ func assertNeardirectReport(t *testing.T, report *attestation.VerificationReport
 		"nvidia_nonce_client_bound",
 		"tls_key_binding",
 		"compose_binding",
-		"sigstore_verification",
 		"build_transparency_log",
 		"event_log_integrity",
 	})
+	assertAllowedFail(t, report, []string{"sigstore_verification"}, "one image digest of the 2026-11-13 deployment is not in the Rekor log; the factor is allowed to fail by default for this provider")
 
 	commonModelAssertions(t, report)
 

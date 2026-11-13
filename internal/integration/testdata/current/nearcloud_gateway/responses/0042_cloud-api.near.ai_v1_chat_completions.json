@@ -1,0 +1,49 @@
+{
+  "method": "POST",
+  "url": "https://cloud-api.near.ai/v1/chat/completions",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEcXM1kA+zrDRRa0TFz7mhDUvj2szITG+PmnWWw1L9aNwVRVlWmgWbLJ2FCDZFh139KPPtV5T/mqxKIf6goiCLfA==",
+  "headers": {
+    "Access-Control-Expose-Headers": [
+      "*"
+    ],
+    "Alt-Svc": [
+      "h3=\":8443\"; ma=86400"
+    ],
+    "Cache-Control": [
+      "no-store"
+    ],
+    "Content-Type": [
+      "text/event-stream"
+    ],
+    "Date": [
+      "Fri, 13 Nov 2026 08:23:59 GMT"
+    ],
+    "Inference-Id": [
+      "a83c6ba2-fd2c-5471-a169-5b3c3d67b1ab"
+    ],
+    "Server": [
+      "nginx"
+    ],
+    "Strict-Transport-Security": [
+      "max-age=31536000; includeSubDomains"
+    ],
+    "Vary": [
+      "origin, access-control-request-headers"
+    ],
+    "X-Content-Type-Options": [
+      "nosniff"
+    ],
+    "X-Request-Id": [
+      "8e33ff9a-a664-4b6d-a067-52a397e6d4ba"
+    ],
+    "X-Serving-Provider": [
+      "near"
+    ]
+  },
+  "req_body_base64": "eyJtZXNzYWdlcyI6W3siY29udGVudCI6ImNmNWI2OWExMTE0MzU2YTg0NDJhNzg0ZjZhMzdhOTNmYTljYWM4M2I1NmFjZTUyODE1NGQwMzhiNzYxOTE1MGMzMThlMmQzM2ZiMGZiNjM5ZjliOTQ3Y2U0MTZiY2Y4YjdiODQ5MmYyZGJjY2M5NTFiZTgwMDYzMmFiNmE3ODQyOTc2MjU0MTM4YWRmZDNmYjljZmEzYTBjMWI5MDg2YjlmYiIsInJvbGUiOiJ1c2VyIn1dLCJtb2RlbCI6IlF3ZW4vUXdlbjMuOC0yN0IiLCJzdHJlYW0iOnRydWV9",
+  "duration_ms": 367
+}

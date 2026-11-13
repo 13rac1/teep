@@ -228,8 +228,10 @@ After phases 3 and 4, each model is recaptured with the new build and
 `--capture` into `<dir>`.
 A capture becomes a fixture only if teep exits 0, or the report is blocked
 with the expected enforced failures only, and `teep verify --reverify`
-exits 0. The key material scan runs before staging. Fixtures are named
-`phalacloud_aci_<slug>_<ts>` and `nanogpt_aci_<slug>_<ts>`.
+exits 0. The key material scan runs before staging. The fixtures are
+`internal/integration/testdata/current/phalacloud_aci` and
+`internal/integration/testdata/current/nanogpt_aci`; the capture date is in
+the manifest.
 
 ## Phases (one commit each, make check passes, >85% coverage of new code)
 

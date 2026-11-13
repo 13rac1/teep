@@ -76,7 +76,7 @@ func TestVerificationCaptureKeepsFinalEvidence(t *testing.T) {
 func TestVerificationCaptureFinalOutcomeReplay(t *testing.T) {
 	// Use real signed evidence and normal factor enforcement for the saved
 	// attempt. Poison a prior attempt so retaining it makes self-check fail.
-	manifest, entries, err := capture.Load("../integration/testdata/tinfoil_v3_cloud_glm-5-2_20260817_003424")
+	manifest, entries, err := capture.Load("../integration/testdata/current/tinfoil_v3_cloud_tinfoil")
 	if err != nil {
 		t.Fatal(err)
 	}

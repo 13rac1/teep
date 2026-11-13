@@ -1,0 +1,72 @@
+{
+  "method": "GET",
+  "url": "https://nano-gpt.com/api/v1/tee/attestation?model=TEE%2Fgemma-4-26b-a4b-uncensored\u0026nonce=68bdb48205fa8fd17a2ddc65d88f72e8681a2951e751285b19fced9fb9823f06",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtmrE9AdSJImahCyc7xOlzZOvolNGmE/2DoNUaX9nuxCIDwU6p7NnHaqNxmGpUssqyn7NQGIxTF7Gj7TYwxIgXP4b3NgM6KicCfGlmxcJvP68rQL5OvwCbdo/rLWQbeIyffRNjYkw73+o+2M2iF+z4x4/LfDr7pc511N2YzWfS78dkLQeG6Dti00VyIAdBqHEcrmqgkQE5zbT8yb3AOchD9xzP7KS5Lj2JVTeMhR5I4MuySTXIcUgxdyRCHN1kQ+T8qNmL6cUl7q79pQu+i/xUwY//AYJXGez5fw65Nc/a6o/GImJTzvbRzjAKRvKGxXeQEFKC8tanknMCbAZyev1SwIDAQAB",
+  "headers": {
+    "Access-Control-Allow-Headers": [
+      "Content-Type, Content-Encoding, Authorization, x-api-key, X-Require-No-Logging, Idempotency-Key, x-request-id, x-client, x-app, x-billing-mode, x-nanogpt-billing-mode, x-payment, x-x402, x-x402-payment-id, x-provider, X-Title, x-title, Referer, referer, http-referer, X-Requested-With, anthropic-beta, anthropic-version, x-use-byok, x-byok-provider, x-byok-disable-fallbacks, x-byok-fallback-to-credits, x-prompt-caching-cut-after, x-prompt-caching-sticky-provider, x-anthropic-cache-depth, x-cache-depth, x-nanogpt-legacy-reasoning, x-nanogpt-single-tool-call, X-NanoGPT-Coalesce-Tool-Calls, X-NanoGPT-TEE-Response, x-team-id, x-whitelabel, redaction, piiredaction, redacted, piiredacted, x-nanogpt-redaction-source, X-TEE-Verification-Route"
+    ],
+    "Access-Control-Allow-Methods": [
+      "GET, POST, DELETE, OPTIONS"
+    ],
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Access-Control-Expose-Headers": [
+      "X-PAYMENT-REQUIRED, X-PAYMENT-RESPONSE, Retry-After, Location, WWW-Authenticate, X-Request-ID, X-TypeSafe-Request-ID, x-nanogpt-byok-fallback, x-nanogpt-byok-attempt-provider, x-nanogpt-failure-classification, X-TEE-Verification-Route, X-TEE-Provider, X-TEE-Completion-ID, X-TEE-Signature-ID, X-TEE-Signature-Available, X-Receipt-Id, X-Aci-Version, X-Aci-Keyset-Digest, X-Aci-Identity, X-NanoGPT-TEE-Response, X-Requested-Model"
+    ],
+    "Access-Control-Max-Age": [
+      "86400"
+    ],
+    "Cache-Control": [
+      "public, max-age=0, must-revalidate"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Fri, 13 Nov 2026 07:50:36 GMT"
+    ],
+    "Origin-Agent-Cluster": [
+      "?1"
+    ],
+    "Referrer-Policy": [
+      "strict-origin-when-cross-origin"
+    ],
+    "Server": [
+      "Vercel"
+    ],
+    "Strict-Transport-Security": [
+      "max-age=63072000; includeSubDomains"
+    ],
+    "X-Content-Type-Options": [
+      "nosniff"
+    ],
+    "X-Frame-Options": [
+      "DENY"
+    ],
+    "X-Matched-Path": [
+      "/api/v1/tee/attestation"
+    ],
+    "X-Robots-Tag": [
+      "noindex, nofollow"
+    ],
+    "X-Tee-Provider": [
+      "redpill"
+    ],
+    "X-Vercel-Cache": [
+      "BYPASS"
+    ],
+    "X-Vercel-Id": [
+      "sfo1::fra1::twxjv-1794556234243-3274319ce4fa"
+    ],
+    "X-Xss-Protection": [
+      "1; mode=block"
+    ]
+  },
+  "duration_ms": 2623
+}

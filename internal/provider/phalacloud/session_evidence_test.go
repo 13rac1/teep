@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	phalaDirectSessionID = "4d849e211f7078bd8d27a748a7ac0ddfe164d2ef5c0e29e6e30292a371276320"
-	chutesSessionID      = "299f127652dcdb0edddda771afc55c80b31de39de1c38e26b7b57fd777ef68a1"
+	phalaDirectSessionID = "f82e2a6b603a3d0b1abe395f979440f0da44a425b238cfcb5354f20906f43cc7"
+	chutesSessionID      = "18aa6d5d8b108534e293deb250cb7b2f99b5790b10a500d4d5066647bee1dcf4"
 )
 
 func loadSession(t *testing.T, name, id string) *aci.Session {
@@ -53,7 +53,7 @@ func TestSessionEvidencePhalaDirect(t *testing.T) {
 	if ev.raw.TLSFingerprint != s.ChannelBindings[0].SPKISHA256 || ev.raw.NvidiaPayload == "" || len(ev.raw.EventLog) != 30 {
 		t.Errorf("raw: tls %s, nvidia %d bytes, events %d", ev.raw.TLSFingerprint, len(ev.raw.NvidiaPayload), len(ev.raw.EventLog))
 	}
-	if ev.nonce.Hex() != "cf6d46747de337983bdec6b0e17bd908ce47050466750fc6215f7578301f103a" {
+	if ev.nonce.Hex() != "a91ca002e0eb40605ad4ecd9b050f4b9326c80ecacd7e741b0fdddf4334df3bd" {
 		t.Errorf("nonce = %s", ev.nonce.Hex())
 	}
 	if _, err := ev.reportData.VerifyReportData(reportDataOf(t, s, ev.raw.IntelQuote), ev.raw, ev.nonce); err != nil {
@@ -73,10 +73,10 @@ func TestSessionEvidenceChutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ev.raw.InstanceID != "fa2cbed2-284e-4ace-9de0-b003a928c000" || len(ev.raw.GPUEvidence) == 0 {
+	if ev.raw.InstanceID != "5616c527-26bc-4bd4-9660-16ccae26994c" || len(ev.raw.GPUEvidence) == 0 {
 		t.Errorf("raw: instance %s, GPUs %d", ev.raw.InstanceID, len(ev.raw.GPUEvidence))
 	}
-	if !strings.HasPrefix(ev.nonce.Hex(), "34ad5b0ef1a3fa06") {
+	if !strings.HasPrefix(ev.nonce.Hex(), "640862de9dcfde45") {
 		t.Errorf("nonce = %s", ev.nonce.Hex())
 	}
 	if _, err := ev.reportData.VerifyReportData(reportDataOf(t, s, ev.raw.IntelQuote), ev.raw, ev.nonce); err != nil {

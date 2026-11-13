@@ -75,11 +75,11 @@ func TestVerifyRun_GatewayACI_Fixtures(t *testing.T) {
 				"gateway_tee_cert_chain",
 				"gateway_tee_quote_signature",
 				"gateway_tee_debug_disabled",
-				"gateway_tee_measurement",
 				"gateway_tee_reportdata_binding",
 				"gateway_compose_binding",
 				"gateway_event_log_integrity",
 			})
+			assertAllowedFail(t, report, []string{"gateway_tee_measurement"}, "The gateway deployment of 2026-11-12 has an MRTD that is not in the dstack base allowlist; the factor is allowed to fail by default.")
 			for _, name := range []string{"tee_quote_present", "tee_reportdata_binding", "aci_backend_named", "nonce_match", "gateway_nonce_match"} {
 				f := findFactor(t, report, name)
 				if f.Status != attestation.Fail || f.Enforced {

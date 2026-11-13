@@ -1,0 +1,22 @@
+{
+  "near_config": {
+    "origin": "https://completions.near.ai",
+    "e2ee": true
+  },
+  "near_route": {
+    "canonical": "qwen3-8-27b.completions.near.ai",
+    "index": 0,
+    "authority": "qwen3-8-27b-i0.completions.near.ai",
+    "mode": "discovered"
+  },
+  "provider": "neardirect",
+  "model": "Qwen/Qwen3.8-27B",
+  "nonce_hex": "d1f0c6da7578adb98af5c2aa48754ced21f6291ed08d601dca1a751dab0a824f",
+  "captured_at": "2026-11-13T07:12:37.90513693Z",
+  "duration_ms": 3741,
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE neardirect: 17 encrypted fields decrypted across 20 chunks",
+    "key_type": "ed25519"
+  }
+}

@@ -18,7 +18,7 @@ func TestParseSetsKeysetNotAfter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if raw.ACIKeysetNotAfter != 1795221116 {
-		t.Fatalf("ACIKeysetNotAfter = %d, want 1795221116", raw.ACIKeysetNotAfter)
+	if raw.ACIKeysetNotAfter != 1796530946 {
+		t.Fatalf("ACIKeysetNotAfter = %d, want 1796530946", raw.ACIKeysetNotAfter)
 	}
 }

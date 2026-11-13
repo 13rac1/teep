@@ -14,7 +14,7 @@ import (
 
 func TestIntegration_Venice_Fixture(t *testing.T) {
 	ctx := context.Background()
-	env := loadFixture(t, "venice")
+	env := loadFixture(t, "venice_dstack")
 
 	// Fetch attestation through replay.
 	attester := venice.NewAttester("https://api.venice.ai", "", true)
@@ -131,10 +131,10 @@ func assertVeniceReport(t *testing.T, report *attestation.VerificationReport) {
 		"nvidia_nonce_client_bound",
 		"e2ee_capable",
 		"compose_binding",
-		"sigstore_verification",
 		"build_transparency_log",
 		"event_log_integrity",
 	})
+	assertAllowedFail(t, report, []string{"sigstore_verification"}, "one image digest of the 2026-11-13 deployment is not in the Rekor log; the factor is allowed to fail by default for this provider")
 
 	// Venice uses E2EE, not TLS binding.
 	assertFactorStatus(t, report, "tls_key_binding", attestation.Skip)

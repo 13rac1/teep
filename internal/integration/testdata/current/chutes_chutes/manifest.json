@@ -1,0 +1,12 @@
+{
+  "provider": "chutes",
+  "model": "Qwen/Qwen3.6-27B-TEE",
+  "nonce_hex": "c4b41464ea69bc420991a40d716bc38934dbc271c934780d455fe1204c00a252",
+  "captured_at": "2026-11-13T07:43:02.814233662Z",
+  "duration_ms": 9181,
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE chutes ML-KEM-768: 288 encrypted chunks decrypted; non-standard response headers: Alt-Svc: clear; Via: 1.1 google; X-Chutes-Quota-Remaining: 0; X-Chutes-Quota-Total: 0; X-Chutes-Quota-Used: 0; X-Chutes-Rl-User: 60",
+    "key_type": "ml-kem-768"
+  }
+}

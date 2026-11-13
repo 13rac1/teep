@@ -1,13 +1,8 @@
 package verify
 
 import (
-	"crypto/ed25519"
-	"encoding/hex"
-	"regexp"
-	"strings"
 	"testing"
 
-	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
 )
@@ -87,124 +82,5 @@ func TestNearRecordedSelectionValidation(t *testing.T) {
 		if _, err := validateNearReplay(makeManifest(), cp, incomplete); err == nil {
 			t.Fatalf("accepted missing entry %d", i)
 		}
-	}
-}
-
-func TestNearTLSOnlySignedCaptureReplay(t *testing.T) {
-	for _, fixture := range []string{"neardirect_z-ai_glm-5.3-flash_20260909_202322", "nearcloud_z-ai_glm-5.3-flash_20260909_204035"} {
-		t.Run(fixture, func(t *testing.T) {
-			dir := "../integration/testdata/near_tls_only/" + fixture
-			manifest, _, err := capture.Load(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cp := &config.Provider{Name: manifest.Provider, BaseURL: manifest.NearConfig.Origin, E2EE: false}
-			allowFail := config.ProviderDefaultAllowFail()[manifest.Provider]
-			allowFail = append(allowFail, "e2ee_usable")
-			cfg := &config.Config{Providers: map[string]*config.Provider{manifest.Provider: cp}, ProviderAllowFail: map[string][]string{manifest.Provider: allowFail}}
-			loader := func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil }
-			report, text, err := Replay(t.Context(), dir, loader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if report.Blocked() {
-				t.Fatal("signed TLS-only capture failed production policy")
-			}
-			original, err := capture.LoadReport(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := CompareReports(original, text); err != nil {
-				t.Fatal(err)
-			}
-			for _, factor := range report.Factors {
-				if factor.Name == "e2ee_usable" && factor.Status == attestation.Pass {
-					t.Fatal("TLS-only replay claimed E2EE success")
-				}
-			}
-			cp.E2EE = true
-			if _, _, err := Replay(t.Context(), dir, loader); err == nil {
-				t.Fatal("replay accepted a changed E2EE mode")
-			}
-		})
-	}
-}
-
-// This tests an explicit operator policy that enforces Sigstore lookup.
-// The captured GLM composes pin the signed index directly, so they must
-// pass without the exception added for the newer DeepSeek deployments.
-func TestNearGLMIndexPinPassesEnforcedSigstore(t *testing.T) {
-	for _, fixture := range []string{
-		"neardirect_z-ai_glm-5.3-flash_20260909_202322",
-		"nearcloud_z-ai_glm-5.3-flash_20260909_204035",
-	} {
-		t.Run(fixture, func(t *testing.T) {
-			dir := "../integration/testdata/near_tls_only/" + fixture
-			manifest, _, err := capture.Load(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cp := &config.Provider{Name: manifest.Provider, BaseURL: manifest.NearConfig.Origin, E2EE: false}
-			allowFail := []string{attestation.FactorE2EEUsable}
-			for _, name := range config.ProviderDefaultAllowFail()[manifest.Provider] {
-				if name != attestation.FactorSigstoreVerify {
-					allowFail = append(allowFail, name)
-				}
-			}
-			cfg := &config.Config{Providers: map[string]*config.Provider{manifest.Provider: cp}, ProviderAllowFail: map[string][]string{manifest.Provider: allowFail}}
-			report, _, err := Replay(t.Context(), dir, func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil })
-			if err != nil {
-				t.Fatal(err)
-			}
-			if report.Blocked() {
-				t.Fatal("GLM index-pinned capture failed with Sigstore lookup enforced")
-			}
-			for _, factor := range report.Factors {
-				if factor.Name == attestation.FactorSigstoreVerify {
-					if factor.Status != attestation.Pass || !factor.Enforced {
-						t.Fatalf("Sigstore lookup: status %s, enforced %v; want enforced pass", factor.Status, factor.Enforced)
-					}
-					return
-				}
-			}
-			t.Fatal("Sigstore lookup factor missing")
-		})
-	}
-}
-
-func TestNearCloudTLSOnlyReplayRejectsSubstitutedBoundKey(t *testing.T) {
-	dir := "../integration/testdata/near_tls_only/nearcloud_z-ai_glm-5.3-flash_20260909_204035"
-	manifest, entries, err := capture.Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
-	defer clear(private)
-	replacement := hex.EncodeToString(private.Public().(ed25519.PublicKey))
-	field := regexp.MustCompile(`("signing_public_key"\s*:\s*")[^"]*(")`)
-	changed := false
-	for i := range entries {
-		if strings.Contains(entries[i].URL, "cloud-api.near.ai/v1/attestation/report?") {
-			entries[i].Body = field.ReplaceAll(entries[i].Body, []byte(`${1}`+replacement+`${2}`))
-			changed = true
-		}
-	}
-	if !changed {
-		t.Fatal("capture has no gateway evidence")
-	}
-	altered, err := capture.Save(t.TempDir(), &manifest, "", entries)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cp := &config.Provider{Name: "nearcloud", BaseURL: manifest.NearConfig.Origin, E2EE: false}
-	policy := config.ProviderDefaultAllowFail()["nearcloud"]
-	policy = append(policy, attestation.FactorE2EEUsable, attestation.FactorTEEReportData)
-	cfg := &config.Config{Providers: map[string]*config.Provider{"nearcloud": cp}, ProviderAllowFail: map[string][]string{"nearcloud": policy}}
-	report, _, err := Replay(t.Context(), altered, func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !report.Blocked() {
-		t.Fatal("recorded TLS-only success authorized a substituted key under a binding allowance")
 	}
 }

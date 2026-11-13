@@ -1,0 +1,68 @@
+{
+  "method": "GET",
+  "url": "https://api.venice.ai/api/v1/tee/attestation?model=e2ee-glm-5-2-p\u0026nonce=103782602df32c09d375816d0733975ae475f778cd9bc3ebd69462e3f358ca73",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXAoLvybW8UygNAGY20XaSDezuSeQ8gOv3LboLWr08Pi3U4/VZjN0t4sZ6XfNPeiAewRCG1W9FGJKZjXk+5jm2w==",
+  "headers": {
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Access-Control-Expose-Headers": [
+      "*"
+    ],
+    "Cf-Cache-Status": [
+      "DYNAMIC"
+    ],
+    "Cf-Ray": [
+      "a59be5586fe35ae1-SJC"
+    ],
+    "Content-Security-Policy": [
+      "default-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests"
+    ],
+    "Content-Type": [
+      "application/json; charset=utf-8"
+    ],
+    "Date": [
+      "Fri, 13 Nov 2026 06:59:49 GMT"
+    ],
+    "Etag": [
+      "W/\"113c4-t2ZNAm7Z1rKY361ln6jmu0xKTj8\""
+    ],
+    "Permissions-Policy": [
+      "geolocation=(), camera=()"
+    ],
+    "Referrer-Policy": [
+      "strict-origin"
+    ],
+    "Server": [
+      "cloudflare"
+    ],
+    "Server-Timing": [
+      "cfCacheStatus;desc=\"DYNAMIC\"",
+      "cfEdge;dur=3,cfOrigin;dur=555"
+    ],
+    "Set-Cookie": [
+      "__cf_bm=mWmC6H7IWWBK0SbIcZyHt7AiVDqMN._p9vqEcTh9m3U-1794553189.1884074-1.0.1.1-UNO2uDKb_Fi3W1LU8u.GTMscUs1i4BWTRJrKfumt6kDGZ3fLldmDNEFnc3iO3WUMw8A0fXk2z3hXRysIUOvOcYwKNrWHiQ40TNGySRBB8AJjAxOWy9DLuXlQKRLSJ5Ps; HttpOnly; SameSite=None; Partitioned; Secure; Path=/; Domain=venice.ai; Expires=Fri, 13 Nov 2026 07:29:49 GMT",
+      "_cfuvid=1G7bulK0bs2aurwyEyoyAJyeSvXCoFQwSO4KIQoCjyI-1794553189.1884074-1.0.1.1-kuIx3ZfXzrkkEkCctTiy4Rmd0CJS1eAk39T3sNigm20; HttpOnly; SameSite=None; Secure; Path=/; Domain=venice.ai"
+    ],
+    "Speculation-Rules": [
+      "\"/cdn-cgi/speculation\""
+    ],
+    "Strict-Transport-Security": [
+      "max-age=31536000; includeSubDomains; preload"
+    ],
+    "Vary": [
+      "Accept-Encoding"
+    ],
+    "X-Content-Type-Options": [
+      "nosniff"
+    ],
+    "X-Frame-Options": [
+      "SAMEORIGIN"
+    ]
+  },
+  "duration_ms": 675
+}

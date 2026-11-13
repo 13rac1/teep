@@ -1,0 +1,43 @@
+{
+  "method": "GET",
+  "url": "https://cloud-api.near.ai/v1/attestation/report?include_tls_fingerprint=true\u0026model=Qwen%2FQwen3.8-27B\u0026nonce=884c0f40079b3dcde28a1f97fa7c0d02395cfea4e167c9757179653080c6024b\u0026provider=near\u0026signing_algo=ed25519",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEcXM1kA+zrDRRa0TFz7mhDUvj2szITG+PmnWWw1L9aNwVRVlWmgWbLJ2FCDZFh139KPPtV5T/mqxKIf6goiCLfA==",
+  "headers": {
+    "Access-Control-Expose-Headers": [
+      "*"
+    ],
+    "Alt-Svc": [
+      "h3=\":8443\"; ma=86400"
+    ],
+    "Cache-Control": [
+      "no-store"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "Date": [
+      "Fri, 13 Nov 2026 08:23:54 GMT"
+    ],
+    "Server": [
+      "nginx"
+    ],
+    "Strict-Transport-Security": [
+      "max-age=31536000; includeSubDomains"
+    ],
+    "Vary": [
+      "origin, access-control-request-headers",
+      "accept-encoding"
+    ],
+    "X-Content-Type-Options": [
+      "nosniff"
+    ],
+    "X-Request-Id": [
+      "746f4728-b3c3-4445-aef4-111079c3294f"
+    ]
+  },
+  "duration_ms": 471
+}

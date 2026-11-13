@@ -1,7 +1,0 @@
-{
-  "provider": "nanogpt",
-  "model": "TEE/gemma-3-27b-it",
-  "nonce_hex": "9a796732359e9324a45576a730e5a9c47bff518b8ee8bcb882d00b5b1ff6f39a",
-  "captured_at": "2026-06-10T01:49:05.321529Z",
-  "duration_ms": 11126
-}

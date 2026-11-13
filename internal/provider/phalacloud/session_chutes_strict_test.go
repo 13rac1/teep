@@ -34,7 +34,7 @@ func chutesParts(t *testing.T) (evidence []byte, instances [][]byte, nonce attes
 }
 
 // chutesBoundInstance is the instance that the Chutes session binds.
-const chutesBoundInstance = "fa2cbed2-284e-4ace-9de0-b003a928c000"
+const chutesBoundInstance = "5616c527-26bc-4bd4-9660-16ccae26994c"
 
 // The session path requires exactly the members of the Chutes evidence,
 // with the newer members typed: tee_type tdx, an attested_body whose quote

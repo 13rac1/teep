@@ -15,7 +15,7 @@ import (
 
 func TestIntegration_NearCloud_Fixture(t *testing.T) {
 	ctx := context.Background()
-	env := loadFixture(t, "nearcloud")
+	env := loadFixture(t, "nearcloud_gateway")
 
 	// Fetch attestation through replay.
 	attester := nearcloud.NewAttester("", true)
@@ -183,11 +183,11 @@ func assertNearcloudReport(t *testing.T, report *attestation.VerificationReport)
 		"nvidia_nonce_client_bound",
 		"e2ee_capable",
 		"compose_binding",
-		"sigstore_verification",
 		"build_transparency_log",
 		"event_log_integrity",
 		"tls_key_binding",
 	})
+	assertAllowedFail(t, report, []string{"sigstore_verification"}, "one image digest of the 2026-11-13 deployment is not in the Rekor log; the factor is allowed to fail by default for this provider")
 
 	// A successful report must provide a usable strict transport identity.
 	if _, err := report.TransportIdentity(); err != nil {
@@ -202,10 +202,11 @@ func assertNearcloudReport(t *testing.T, report *attestation.VerificationReport)
 		"gateway_tee_cert_chain",
 		"gateway_tee_quote_signature",
 		"gateway_tee_debug_disabled",
-		"gateway_tee_measurement",
 		"gateway_compose_binding",
 		"gateway_event_log_integrity",
 	})
+
+	assertAllowedFail(t, report, []string{"gateway_tee_measurement"}, "the gateway deployment of 2026-11-12 has an MRTD that is not in the dstack base allowlist; the factor is allowed to fail by default")
 
 	commonModelAssertions(t, report)
 

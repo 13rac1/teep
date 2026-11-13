@@ -1,0 +1,73 @@
+Attestation Report: venice / e2ee-gpt-oss-120b-p
+════════════════════════════════════════════════
+
+  Upstream:      openai/gpt-oss-120b
+  Nonce source:  client
+  Candidates:    1/1 evaluated
+  Gateway downstream TLS: api.redpill.ai spki 08ef73dce9d18eeec450dc0e5dabe1a3da2b1d8f06be83e9f8329574fe507e59
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✗ tee_quote_present                 no TEE attestation evidence (no intel_quote or sev_report)  [ALLOWED]
+  ✗ tee_quote_structure               no TEE quote/report available to parse  [ALLOWED]
+  ✗ tee_cert_chain                    no TEE quote/report available; cannot verify cert chain  [ALLOWED]
+  ✗ tee_quote_signature               no TEE quote/report available; cannot verify signature  [ALLOWED]
+  ✗ tee_debug_disabled                no TEE quote/report available; cannot check debug flag  [ALLOWED]
+  - tee_measurement                   no parseable TEE quote/report; cannot check measurements  [ALLOWED]
+  - tee_hardware_config               no parseable TEE quote/report; cannot check hardware config  [ALLOWED]
+  - tee_boot_config                   no parseable TEE quote/report; cannot check boot config  [ALLOWED]
+  ✓ signing_key_present               enclave pubkey present (04c4201704...)  [ENFORCED]
+  ✗ response_schema                   unknown fields: ["gpu_evidence_omitted"]; missing fields: ["nvidia_payload" "server_verification.nvidia" "server_verification.nvidiaNonceBinding"]  [ALLOWED]
+
+Tier 2: Binding & Crypto
+  ✗ tee_reportdata_binding            no parseable TEE quote/report; REPORTDATA binding cannot be verified  [ALLOWED]
+  - intel_pcs_collateral              no parseable TEE quote/report  [ALLOWED]
+  - tee_tcb_current                   no parseable TEE quote/report; TCB not extracted  [ALLOWED]
+  - tee_tcb_not_revoked               no parseable TEE quote/report  [ALLOWED]
+  ✗ nvidia_payload_present            nvidia_payload field is absent from attestation response  [ALLOWED]
+  - nvidia_signature                  no NVIDIA payload to verify  [ALLOWED]
+  - nvidia_claims                     no NVIDIA payload to check  [ALLOWED]
+  - nvidia_nonce_client_bound         no NVIDIA payload; nonce not checked  [ALLOWED]
+  - nvidia_nras_verified              no EAT payload; NRAS not applicable  [ALLOWED]
+  ✓ e2ee_capable                      enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible (ecdsa)  [ALLOWED]
+  ✓ e2ee_usable                       E2EE venice: 36 encrypted fields decrypted across 40 chunks  [ALLOWED]
+  ✓ aci_key_custody                   keyset digest matches; signing key is a keyset e2ee key; e2ee key custody chain verified to accepted KMS root (02a335aea3df11d4...) for app 89c51ab856bee41e...  [ENFORCED]
+  ✗ aci_backend_named                 the attestation binds no backend for the requested model; the response names model "e2ee-gpt-oss-120b-p" / upstream "openai/gpt-oss-120b", provider-asserted  [ALLOWED]
+  — aci_session_verified              not the canonical ACI/1 report
+  — aci_receipt_verified              not the canonical ACI/1 report
+
+Tier 3: Supply Chain & Channel Integrity
+  - tls_key_binding                   provider uses E2EE key exchange; TLS binding not applicable  [ALLOWED]
+  ✗ cpu_gpu_chain                     CPU-GPU attestation not bound  [ALLOWED]
+  — nvswitch_binding                  NVSwitch fabric verification is Tinfoil-specific
+  ✗ measured_model_weights            no model weight hashes  [ALLOWED]
+  — build_transparency_log            3 compose-binding-only component(s); no transparency log required
+  ✗ component_recognition             no attested model component repositories extracted from compose  [ALLOWED]
+  — provider_signer_recognition       no signed components present in attested compose
+  — component_signature_recognition   no signed components present in attested compose
+  ✗ cpu_id_registry                   no CPU ID registry check  [ALLOWED]
+  ✗ compose_binding                   ACI/1 publishes no compose manifest for the inference host; workload composition is not verifiable  [ALLOWED]
+  ✓ sigstore_verification             3 component digest(s) found in Sigstore transparency log; 2 not Sigstore-signed (compose-pinned)  [ALLOWED]
+  — sigstore_code_verified            Sigstore code verification is Tinfoil-specific
+  - event_log_integrity               no event log entries in attestation response  [ALLOWED]
+
+Tier 4: Gateway Attestation
+  ✓ gateway_nonce_match               gateway nonce matches (64 hex chars)  [ENFORCED]
+  ✓ gateway_tee_quote_present         gateway TDX quote present (10012 hex chars)  [ENFORCED]
+  ✓ gateway_tee_quote_structure       valid QuoteV4, MRTD: 7fe60787222bd394...  [ENFORCED]
+  ✓ gateway_tee_cert_chain            gateway certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ gateway_tee_quote_signature       gateway quote signature verified  [ENFORCED]
+  ✓ gateway_tee_debug_disabled        gateway debug bit is 0 (production enclave)  [ENFORCED]
+  ✗ gateway_tee_measurement           gateway MRTD not in policy allowlist: 7fe60787222bd394...  [ALLOWED]
+  - gateway_tee_hardware_config       no gateway RTMR0 measurement policy configured  [ALLOWED]
+  - gateway_tee_boot_config           no gateway RTMR1/RTMR2 measurement policy configured  [ALLOWED]
+  ✓ gateway_tee_reportdata_binding    REPORTDATA binds enclave key (0x4d308a959c1ba1989fcf6953293d5820bc74e40a) and nonce  [ENFORCED]
+  ✓ gateway_compose_binding           gateway sha256(app_compose) matches MRConfigID  [ENFORCED]
+  - gateway_cpu_id_registry           gateway Proof of Cloud query failed: stage 1 POST to https://trust-server.scrtlabs.com: Post "https://trust-server.scrtlabs.com/get_jwt": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-11-13T07:01:15Z is after 2026-09-07T23:59:59Z  [ALLOWED]
+  ✓ gateway_event_log_integrity       gateway event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
+  — gateway_tee_tcb_current           TCB minimums for a TDX gateway are checked by the Intel PCS collateral
+  — gateway_tee_tcb_not_revoked       TDX revocation is checked by the Intel PCS collateral
+
+Score: 15/45 passed, 15 skipped, 15 failed (0 enforced, 15 allowed), 9 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

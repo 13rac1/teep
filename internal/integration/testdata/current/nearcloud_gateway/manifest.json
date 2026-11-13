@@ -1,0 +1,16 @@
+{
+  "near_config": {
+    "origin": "https://cloud-api.near.ai",
+    "e2ee": true
+  },
+  "provider": "nearcloud",
+  "model": "Qwen/Qwen3.8-27B",
+  "nonce_hex": "884c0f40079b3dcde28a1f97fa7c0d02395cfea4e167c9757179653080c6024b",
+  "captured_at": "2026-11-13T08:23:59.715407831Z",
+  "duration_ms": 6703,
+  "e2ee": {
+    "attempted": true,
+    "detail": "E2EE nearcloud: 21 encrypted fields decrypted across 24 chunks",
+    "key_type": "ed25519"
+  }
+}
