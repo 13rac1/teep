@@ -246,6 +246,126 @@ exits 0. The key material scan runs before staging. Fixtures are named
    `measurement_allowlists.md`, provider documents, testing references.
 6. E2EE for Phala Cloud and NanoGPT, after the protocol check of decision 6
    is reported.
+7. Canonical report, sessions and receipts (below).
+
+## Phase 7: canonical report, sessions and receipts
+
+Status: designed on 2026-10-31 with the changes below. Principle: check
+everything that teep can check, and allow to fail what the provider cannot
+pass, so that the provider stays usable.
+
+### Problem
+
+An E2EE v2 response is confidential but not authenticated (aci_gateway.md
+residual exposure 10). The signed ACI receipt authenticates it, but only if
+teep trusts the receipt key. On the route that teep uses,
+`/v1/attestation/report` (the gateway's dstack-vllm-proxy compatibility
+route), the quote binds only keccak256(signing key) and the nonce, so the
+keyset, and with it `receipt_signing_keys`, is self-asserted (residual
+exposure 7). The key custody chain cannot fill the gap: the chain of
+`aci.receipt.ed25519.v1` signs the secp256k1 key of the released scalar
+(`kms_counterpart_public_key_hex`, gateway `src/dstack.rs:215-219`), not
+the ed25519 public key that the keyset lists.
+
+### Live observations
+
+**Canonical report (2026-10-30).** `GET /v1/aci/attestation?nonce=<fresh>`
+on `tee.redpill.ai` returned the ACI/1 §4.1 shape (`api_version`,
+`workload_keyset_digest`, `service_capabilities`, `attestation` with
+`tee_type`, `workload_keyset`, `report_data`, `source_provenance` and
+`evidence`) for the same keyset as the legacy route. The quote's REPORTDATA
+is sha256 of the §3.2 statement over the keyset digest and the client
+nonce, followed by 32 zero bytes. It carries no GPU evidence.
+
+**Sessions (2026-10-31).** `GET /v1/aci/sessions?model=qwen/qwen3.8-27b`
+listed 15 sessions: one `phala-266` upstream
+(`private-ai-verifier/phala-direct/v1`, endpoint
+`https://qwen3-8-27b.use1-9b.phala.com`, a `tls_spki_sha256` channel
+binding) and 14 `chutes` upstreams (`private-ai-verifier/chutes/v1`). Each
+session lasts 3600 s. The full phala-266 session hashes to its id under
+JCS (§8); its `evidence.data` is a `data:application/json;base64` URI whose
+decoded bytes hash to `evidence.digest`. The decoded evidence is the dstack
+report of the model CVM in the NEAR-direct layout: REPORTDATA is
+sha256(signing_address ‖ tls_cert_fingerprint) ‖ request_nonce, the
+`nvidia_payload` nonce is the same `request_nonce` (the gateway's
+challenge), and `tls_cert_fingerprint` equals the session's channel SPKI.
+The evidence format of the Chutes sessions is not observed.
+
+### Design
+
+**7a. Canonical report.** Phala Cloud fetches
+`/v1/aci/attestation?nonce=<client nonce>`, the route that ACI/1 requires
+verifiers to use, and no longer the legacy route. teep verifies the TDX
+quote, event log and compose binding as today and the §3.2 binding:
+recompute the keyset digest, build the statement with the client nonce,
+require REPORTDATA = sha256(statement) ‖ 32 zero bytes. Every keyset field
+is then hardware-bound (E2EE, receipt and TLS keys, `not_after`); this
+closes residual exposure 7 for Phala Cloud. The report has no GPU
+evidence: `nvidia_signature`, `nvidia_nonce_client_bound` and the other GPU
+factors fail for Phala Cloud ACI/1 and are allowed to fail by default.
+
+**7b. Replicas.** Replicas can share a keyset (the KMS derives keys from
+the app id), so a keyset digest identifies the keyset, not one machine. A
+served `X-ACI-Keyset-Digest` that differs from the verified keyset fails
+the verification, and the next request verifies again (§9.1).
+
+**7c. TLS key pin.** Compare the live certificate key of `tee.redpill.ai`
+with the hardware-bound keyset entry for that host before any request
+bytes are sent (residual exposure 8). Phala Cloud becomes a TLS-binding
+provider in addition to E2EE, with the SPKI pool rules of the transport
+reference. Own commit.
+
+**7d. Sessions.** After 7a and 7c: list the sessions behind the requested
+model (`GET /v1/aci/sessions?model=`, §8.1), fetch each full session, and
+check its id (sha256 of its JCS form) and its evidence digest (§9.2 steps
+1-2). Verify each session's upstream evidence with the matching teep
+verifier: the phala-direct dstack report with the dstack parser, the TDX
+verifier, the NEAR-direct REPORTDATA layout, the NVIDIA verifier against
+the session's `request_nonce`, and the channel SPKI. A session whose
+format teep does not verify is refused. teep pins the accepted sessions
+with `aci_session_ids` on every request (§5.3); with no accepted session,
+teep refuses the request. The session evidence is a snapshot
+(`established_at` is not collection time, §8): the GPU nonce factor stays
+allowed to fail, and its detail states whether the session carries the
+gateway's challenge nonce and whether the upstream evidence binds it.
+A measurement policy for the upstream CVM is needed; items without a
+policy fail and are allowed to fail.
+
+**7e. Receipts.** Over the same pinned pool: hash the raw SSE bytes, fetch
+`GET /v1/aci/receipts/{X-Receipt-Id or response id}` with the request's
+key, with a short bounded retry on `not_found`, and check the ed25519
+signature over the JCS form without `signature`, `workload_keyset_digest`,
+`model`, `endpoint`, `method`, `response.returned.body_hash`,
+`upstream.verified` with `result: "verified"`, `required: true` and a
+`session_id` that teep pinned, and `served_at` within the keyset lifetime.
+A non-stream request is buffered and answered after the check; a stream is
+checked after `[DONE]`, and a failure invalidates the authorization
+generation that the request used and logs at error level. `--capture`
+records the receipt and the raw SSE bytes, and `--reverify` checks them.
+The request hash is checked only when teep reproduces the gateway's
+serde_json form (preserve_order, serde string escaping, f64 number
+output); otherwise `teep verify` states that it is not checked.
+
+**Scope.** Phala Cloud only. Venice relays neither `X-Receipt-Id` nor the
+ACI headers (2026-10-30) and stays confidentiality-only, as does NanoGPT.
+
+### Open question
+
+**Chutes sessions.** 14 of the 15 sessions are Chutes upstreams whose
+evidence format is not observed. If teep cannot verify it, teep pins only
+the phala-direct sessions, and Phala Cloud requests depend on those
+upstreams.
+
+### Commits
+
+1. 7a and 7b: canonical report and the served keyset digest check, with a
+   new capture and replay tests.
+2. 7c: TLS key pin.
+3. 7d: session verification and pinning.
+4. 7e: receipt verification in the proxy, then in `teep verify` and the
+   capture.
+5. Documentation: aci_gateway.md residual exposures 7, 8 and 10, the
+   provider document and api_support.md.
 
 ## Tests
 
