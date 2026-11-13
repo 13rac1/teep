@@ -659,8 +659,9 @@ var ACIDefaultAllowFail = []string{
 	FactorGWBootConfig,
 	FactorGWCPUIDRegistry,
 
-	// The Venice ACI/1 gateway runs an MRTD (7fe60787…) that is not in the
-	// gateway measurement allowlist of teep. The allowlist changes only
+	// The private-ai-gateway, which Venice, Phala Cloud and NanoGPT reach,
+	// runs an MRTD (7fe60787…) that is not in the gateway measurement
+	// allowlist of teep. The allowlist changes only
 	// with a teep release, so a gateway release makes this factor fail
 	// for every request. The failure is reported and does not block
 	// requests until teep verifies an allowlist update without a release.

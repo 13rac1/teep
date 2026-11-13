@@ -4,8 +4,9 @@ import "github.com/13rac1/teep/internal/attestation"
 
 // GatewayMeasurementPolicy returns the default TDX measurement allowlists for
 // the private-ai-gateway CVM. The gateway runs a dstack image, so MRTD and
-// MRSEAM come from the shared dstack base list; the enforced
-// gateway_tee_measurement factor checks those. gateway_tee_hardware_config
+// MRSEAM come from the shared dstack base list; gateway_tee_measurement
+// checks those and is allowed to fail by default, because the list changes
+// only with a teep release. gateway_tee_hardware_config
 // and gateway_tee_boot_config are waived by default (SEE:
 // attestation.ACIDefaultAllowFail) because the dev-channel gateway image
 // redeploys often and its RTMRs change with each image.

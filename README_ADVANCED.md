@@ -210,7 +210,7 @@ exposes none, and the core `tee_*` factors state that.
 | 37 | `gateway_tee_cert_chain` | Gateway certificate chain verifies against the Intel or AMD root CA. |
 | 38 | `gateway_tee_quote_signature` | Signature over the gateway quote body is valid. |
 | 39 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave). |
-| 40 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and Venice ACI/1: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
+| 40 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and for the ACI/1 routes of Venice, Phala Cloud and NanoGPT: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
 | 41 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
 | 42 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. Not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot. |
 | 43 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified: nearcloud binds `sha256(signing_address ‖ tls_fingerprint)`; Venice ACI/1 binds `keccak256(signing key)` + nonce; Tinfoil binds the HPKE key and endorsed section hashes. |

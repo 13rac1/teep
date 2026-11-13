@@ -1970,3 +1970,14 @@ func TestVeniceACIAllowFail_KeyBindingFactorsStayEnforced(t *testing.T) {
 		}
 	}
 }
+
+// The gateway MRTD allowance of the ACI/1 list reaches every provider that
+// routes ACI/1 responses through the private-ai-gateway.
+func TestMergedAllowFail_ACIGatewayMeasurement(t *testing.T) {
+	for _, name := range []string{"venice", "phalacloud", "nanogpt"} {
+		got := MergedAllowFail(name, attestation.FormatACI1, &Config{}, false)
+		if !slices.Contains(got, attestation.FactorGWMeasurement) {
+			t.Errorf("%s ACI/1 default allow_fail does not allow %s to fail", name, attestation.FactorGWMeasurement)
+		}
+	}
+}
