@@ -78,6 +78,16 @@ type Pins struct {
 // SEE: docs/attestation_gaps/venice_aci_gateway.md.
 var gatewayKMSRootAllow = []string{
 	"0334c76e0c3f52ec64cbf9bbf5c910c272330166fd656c0a86bb330963e46910e1",
+	// Observed on 2026-11-12 on the Phala Cloud, NanoGPT and Venice ACI/1
+	// routes, with the gateway MRTD 7fe60787. The KMS CA key in the RTMR3
+	// key-provider event of the gateway quote equals caPubkey in kmsInfo()
+	// of Phala's Base KMS contract 0x2f83172A49584C017F2B256F0FB2Dca14126Ba9C
+	// (address from docs.phala.com/phala-cloud/key-management/
+	// cloud-vs-onchain-kms) at block 56,649,485; kmsInfo() pairs it with the
+	// root 02a335ae..., and registeredApps() returns true for the app id
+	// 89c51ab8.... Phala administers the contract. Not checked: the KMS's own
+	// quote in kmsInfo(), and the contract's owner and upgrade history.
+	"02a335aea3df11d46ae0a373d3f26fbd1d208572ecc87e630e618dac693b7af721",
 }
 
 // gatewayAppIDAllow lists accepted dstack app ids for the same deployment.
@@ -96,6 +106,16 @@ var gatewayKMSRootAllow = []string{
 // from a new capture. SEE: docs/attestation_gaps/venice_aci_gateway.md.
 var gatewayAppIDAllow = []string{
 	"fdb7a14e5a6675f752e2cb69c9067a98ca402918",
+	// Observed on 2026-11-12 on the Phala Cloud, NanoGPT and Venice ACI/1
+	// routes, with the gateway MRTD 7fe60787. The KMS CA key in the RTMR3
+	// key-provider event of the gateway quote equals caPubkey in kmsInfo()
+	// of Phala's Base KMS contract 0x2f83172A49584C017F2B256F0FB2Dca14126Ba9C
+	// (address from docs.phala.com/phala-cloud/key-management/
+	// cloud-vs-onchain-kms) at block 56,649,485; kmsInfo() pairs it with the
+	// root 02a335ae..., and registeredApps() returns true for the app id
+	// 89c51ab8.... Phala administers the contract. Not checked: the KMS's own
+	// quote in kmsInfo(), and the contract's owner and upgrade history.
+	"89c51ab856bee41efe78c40309a4deb277a02a0f",
 }
 
 // GatewayPins returns a copy of the pins of the Phala private-ai-gateway
