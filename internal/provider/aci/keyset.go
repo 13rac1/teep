@@ -19,6 +19,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"golang.org/x/crypto/sha3"
@@ -552,15 +553,19 @@ func verifyKeysetSubject(subject *string, appID []byte) error {
 }
 
 // keysetContainsE2EEKey reports whether signingKeyHex decodes to the same
-// bytes as one of the keyset e2ee_public_keys. An entry that does not decode
-// as hex cannot match; an empty or undecodable signing key matches nothing,
-// so the caller's factor fails closed.
+// bytes as one of the keyset e2ee_public_keys whose algo is the E2EE v2
+// secp256k1 suite, the suite that teep encrypts with. An entry that does not
+// decode as hex cannot match; an empty or undecodable signing key matches
+// nothing, so the caller's factor fails closed.
 func keysetContainsE2EEKey(keyset *aciWorkloadKeyset, signingKeyHex string) bool {
 	signingKey, err := hex.DecodeString(signingKeyHex)
 	if err != nil || len(signingKey) == 0 {
 		return false
 	}
 	for i := range keyset.E2EEPublicKeys {
+		if keyset.E2EEPublicKeys[i].Algo != e2ee.ACIv2Algo {
+			continue
+		}
 		endorsed, err := hex.DecodeString(keyset.E2EEPublicKeys[i].PublicKey)
 		if err != nil || len(endorsed) != len(signingKey) {
 			continue

@@ -599,6 +599,10 @@ func DecryptSSEChunk(data string, session Decryptor, endpoint EndpointType) (str
 		return "", errors.New("upstream SSE error event")
 	}
 
+	if v2, ok := session.(*ACIv2Session); ok {
+		return decryptACIv2Chunk(full, v2, endpoint)
+	}
+
 	choicesRaw, ok := full["choices"]
 	if !ok {
 		return data, nil
@@ -650,6 +654,61 @@ func DecryptSSEChunk(data string, session Decryptor, endpoint EndpointType) (str
 	return string(out), nil
 }
 
+// decryptACIv2Chunk decrypts one chat SSE chunk with an E2EE v2 session and
+// returns it with plaintext substituted.
+func decryptACIv2Chunk(full map[string]json.RawMessage, session *ACIv2Session, endpoint EndpointType) (string, error) {
+	if endpoint != EndpointChat {
+		return "", fmt.Errorf("%w: E2EE v2 is defined only for chat completions", ErrDecryptionFailed)
+	}
+	if err := session.DecryptChunk(full); err != nil {
+		return "", err
+	}
+	out, err := json.Marshal(full)
+	if err != nil {
+		return "", fmt.Errorf("marshal decrypted SSE chunk: %w", err)
+	}
+	return string(out), nil
+}
+
+// plaintextChunkContent returns the string fields and the metadata of the
+// first choice's delta of a chunk that an E2EE v2 session already decrypted.
+func plaintextChunkContent(full map[string]json.RawMessage) (map[string]string, chunkMeta, error) {
+	result := map[string]string{}
+	var meta chunkMeta
+	var choices []map[string]json.RawMessage
+	if raw, ok := full["choices"]; ok && !IsJSONNull(raw) {
+		if err := json.Unmarshal(raw, &choices); err != nil {
+			return nil, meta, fmt.Errorf("parse choices array: %w", err)
+		}
+	}
+	if len(choices) == 0 {
+		return result, meta, nil
+	}
+	if raw, ok := choices[0]["finish_reason"]; ok {
+		if err := json.Unmarshal(raw, &meta.FinishReason); err != nil {
+			return nil, meta, fmt.Errorf("parse finish reason: %w", err)
+		}
+	}
+	deltaRaw, ok := choices[0]["delta"]
+	if !ok || IsJSONNull(deltaRaw) {
+		return result, meta, nil
+	}
+	var delta map[string]json.RawMessage
+	if err := json.Unmarshal(deltaRaw, &delta); err != nil {
+		return nil, meta, fmt.Errorf("parse delta object: %w", err)
+	}
+	for key, raw := range delta {
+		if IsNonEncryptedField(key) {
+			continue
+		}
+		var v string
+		if json.Unmarshal(raw, &v) == nil && v != "" {
+			result[key] = v
+		}
+	}
+	return result, meta, nil
+}
+
 // collectOriginalStringFields snapshots all non-metadata, non-empty string
 // fields from delta before decryption. The snapshot is used after
 // decryptChatObject to classify fields as originally-encrypted vs plaintext
@@ -682,6 +741,16 @@ func decryptSSEChunkContent(data string, session Decryptor, endpoint EndpointTyp
 
 	if _, failed := full["error"]; failed {
 		return nil, chunkMeta{}, errors.New("upstream SSE error event")
+	}
+
+	if v2, ok := session.(*ACIv2Session); ok {
+		if endpoint != EndpointChat {
+			return nil, chunkMeta{}, fmt.Errorf("%w: E2EE v2 is defined only for chat completions", ErrDecryptionFailed)
+		}
+		if err := v2.DecryptChunk(full); err != nil {
+			return nil, chunkMeta{}, err
+		}
+		return plaintextChunkContent(full)
 	}
 
 	choicesRaw, ok := full["choices"]
@@ -757,6 +826,11 @@ func decryptSSEChunkContent(data string, session Decryptor, endpoint EndpointTyp
 func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoint EndpointType) ([]byte, error) {
 	if endpoint == "" {
 		return nil, errors.New("decrypt non-stream response: endpoint type is required")
+	}
+	if _, ok := session.(*ACIv2Session); ok {
+		// teep sends every E2EE v2 request with stream=true; a JSON body is
+		// not a response to that request.
+		return nil, fmt.Errorf("%w: E2EE v2 response is not an SSE stream", ErrDecryptionFailed)
 	}
 
 	var full map[string]json.RawMessage

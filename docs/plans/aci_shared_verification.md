@@ -130,6 +130,16 @@ not committed.
    configuration (`tee.redpill.ai` or `inference.phala.com`). The first live
    call with the key confirms that Phala's models are reachable there; the
    provider document records the change.
+9. **Free text without an E2EE v2 field path (2026-10-30):** while E2EE v2
+   is enabled, a request that carries `messages[].tool_calls`,
+   `function_call`, `refusal` or `audio`, `prediction`, `tools`,
+   `functions` or `response_format.json_schema` is refused before it is sent, with an
+   error that names the field. `model`, `messages[].name` and `stop` pass in
+   plaintext and are documented.
+10. **Receipts (2026-10-30):** receipt verification is phase 7, for Phala
+    Cloud and Venice ACI/1. NanoGPT keeps E2EE enabled by default,
+    documented as confidentiality only: its receipts are bound to
+    NanoGPT's API key.
 
 ## Design
 

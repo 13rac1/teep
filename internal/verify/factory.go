@@ -189,7 +189,7 @@ func providerUsesTLSBinding(providerName string) bool {
 // by default in config.go's applyAPIKeyEnv.
 func e2eeEnabledByDefault(name string) bool {
 	switch name {
-	case "venice", "nearcloud", "neardirect", "chutes", "tinfoil_v3_cloud", "tinfoil_v3_direct":
+	case "venice", "nearcloud", "neardirect", "chutes", "tinfoil_v3_cloud", "tinfoil_v3_direct", "phalacloud", "nanogpt":
 		return true
 	default:
 		return false
@@ -201,7 +201,7 @@ func chatPathForProvider(name string) string {
 	switch name {
 	case "venice":
 		return "/api/v1/chat/completions"
-	case "nearcloud", "neardirect", "nanogpt":
+	case "nearcloud", "neardirect", "nanogpt", "phalacloud":
 		return "/v1/chat/completions"
 	case "chutes":
 		return "/v1/chat/completions"

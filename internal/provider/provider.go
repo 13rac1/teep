@@ -92,7 +92,13 @@ type ReportDataVerifier interface {
 // the gateway's endorsed E2EE key, SEE: aci.Parse). Shared by
 // proxy and verify so the two report paths cannot diverge.
 func GatewayBindsE2EEKey(name string, format attestation.BackendFormat) bool {
-	return name == "tinfoil_v3_cloud" || (name == "venice" && format == attestation.FormatACI1)
+	if format == attestation.FormatACI1 {
+		switch name {
+		case "venice", "phalacloud", "nanogpt":
+			return true
+		}
+	}
+	return name == "tinfoil_v3_cloud"
 }
 
 // Provider is a fully constructed TEE-capable AI backend. It combines the data from

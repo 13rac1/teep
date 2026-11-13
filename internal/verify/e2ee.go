@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/jsonstrict"
+	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -48,8 +50,110 @@ func testE2EE(ctx context.Context, raw *attestation.RawAttestation, providerName
 		return testE2EEVenice(ctx, raw, cp, model)
 	case "chutes":
 		return testE2EEChutes(ctx, raw, cp, model)
+	case "phalacloud", "nanogpt":
+		return testE2EEACIv2(ctx, raw, providerName, cp, model)
 	default:
 		return nil
+	}
+}
+
+// testE2EEACIv2 tests E2EE v2 of the private-ai-gateway (secp256k1 suite)
+// with the production encryptor. A response that is not an ACI/1
+// attestation fails: E2EE v2 encrypts only to the gateway key.
+func testE2EEACIv2(ctx context.Context, raw *attestation.RawAttestation, providerName string, cp *config.Provider, model string) *attestation.E2EETestResult {
+	// max_tokens bounds the run time of a reasoning model inside the client
+	// timeout.
+	body, err := json.Marshal(map[string]any{
+		"model":      model,
+		"messages":   []map[string]string{{"role": "user", "content": "Say hello"}},
+		"stream":     true,
+		"max_tokens": 64,
+	})
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("marshal body: %w", err)}
+	}
+	encrypted, err := aci.NewE2EE().EncryptRequest(body, raw, chatCompletionsEndpoint)
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("encrypt: %w", err)}
+	}
+	session, ok := encrypted.Session.(*e2ee.ACIv2Session)
+	if !ok {
+		return &attestation.E2EETestResult{Attempted: true, Err: errors.New("encrypt: no E2EE v2 session")}
+	}
+	defer session.Zero()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cp.BaseURL+chatPathForProvider(providerName), bytes.NewReader(encrypted.Body))
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("build request: %w", err)}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for name, value := range session.Headers() {
+		req.Header.Set(name, value)
+	}
+	req.Header.Set("Authorization", "Bearer "+cp.APIKey)
+	tlsct.SetUserAgent(req)
+
+	client := tlsct.NewHTTPClient(60 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP request: %w", err)}
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+	}()
+	return verifyACIv2StreamResponse(resp, session)
+}
+
+// verifyACIv2StreamResponse decrypts every chunk of an E2EE v2 SSE response
+// with the relay's chunk decryption. Any unencrypted or undecryptable content
+// field, a missing [DONE] or a response without an encrypted field fails.
+func verifyACIv2StreamResponse(resp *http.Response, session *e2ee.ACIv2Session) *attestation.E2EETestResult {
+	if resp.StatusCode != http.StatusOK {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("HTTP %d", resp.StatusCode)}
+	}
+	// teep sends stream=true; any other response type is not the answer to
+	// the encrypted request.
+	if mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type")); err != nil || mediaType != "text/event-stream" {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("E2EE v2 response Content-Type %q is not text/event-stream", resp.Header.Get("Content-Type"))}
+	}
+	scanner, cleanup := e2ee.NewSSEScanner(resp.Body)
+	defer cleanup()
+	chunks := 0
+	seenDone := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if err := e2ee.CheckSSEEvent(line); err != nil {
+			return &attestation.E2EETestResult{Attempted: true, Err: err}
+		}
+		data, isData := e2ee.SSEData(line)
+		if !isData {
+			continue
+		}
+		if data == "[DONE]" {
+			if err := e2ee.FinishSSE(scanner); err != nil {
+				return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("SSE completion: %w", err)}
+			}
+			seenDone = true
+			break
+		}
+		chunks++
+		if _, err := e2ee.DecryptSSEChunk(data, session, chatCompletionsEndpoint); err != nil {
+			return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("SSE chunk %d: %w", chunks, err)}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("read SSE stream after %d chunks (%d fields decrypted): %w", chunks, session.DecryptedFields(), err)}
+	}
+	if err := e2ee.CheckSSEEndMarker(session, chatCompletionsEndpoint, seenDone); err != nil {
+		return &attestation.E2EETestResult{Attempted: true, Err: err}
+	}
+	if session.DecryptedFields() == 0 {
+		return &attestation.E2EETestResult{Attempted: true, Err: fmt.Errorf("no encrypted content fields received in %d chunks", chunks)}
+	}
+	return &attestation.E2EETestResult{
+		Attempted: true,
+		Detail:    fmt.Sprintf("E2EE v2 secp256k1: %d encrypted fields decrypted across %d chunks", session.DecryptedFields(), chunks),
 	}
 }
 

@@ -640,23 +640,24 @@ func applyEnvOverrides(cfg *Config) {
 		}
 	}
 
-	applyAPIKeyEnv(cfg, "venice", "VENICE_API_KEY", "https://api.venice.ai", true)
-	applyAPIKeyEnv(cfg, "neardirect", "NEARAI_API_KEY", "https://completions.near.ai", true)
-	applyAPIKeyEnv(cfg, "nearcloud", "NEARAI_API_KEY", "https://cloud-api.near.ai", true)
-	applyAPIKeyEnv(cfg, "nanogpt", "NANOGPT_API_KEY", "https://nano-gpt.com/api", false)
+	applyAPIKeyEnv(cfg, "venice", "VENICE_API_KEY", "https://api.venice.ai")
+	applyAPIKeyEnv(cfg, "neardirect", "NEARAI_API_KEY", "https://completions.near.ai")
+	applyAPIKeyEnv(cfg, "nearcloud", "NEARAI_API_KEY", "https://cloud-api.near.ai")
+	applyAPIKeyEnv(cfg, "nanogpt", "NANOGPT_API_KEY", "https://nano-gpt.com/api")
 	// tee.redpill.ai is a TEE-only domain of the private-ai-gateway: the
 	// gateway routes its requests only to verified TEE upstreams.
-	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://tee.redpill.ai", false)
-	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai", true)
-	applyAPIKeyEnv(cfg, "tinfoil_v3_cloud", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", true)
+	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://tee.redpill.ai")
+	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai")
+	applyAPIKeyEnv(cfg, "tinfoil_v3_cloud", "TINFOIL_API_KEY", "https://inference.tinfoil.sh")
 	// tinfoil_v3_direct is disabled (tinfoil.DirectDisabledMessage), so
 	// TINFOIL_API_KEY does not add it: proxy.New refuses it at startup.
 }
 
 // applyAPIKeyEnv sets or updates the API key for the named provider from the
 // given environment variable. If the provider does not yet exist in cfg and the
-// env var is set, a minimal provider entry is created with the given defaults.
-func applyAPIKeyEnv(cfg *Config, name, envVar, defaultBaseURL string, defaultE2EE bool) {
+// env var is set, a minimal provider entry is created with the given base URL
+// and E2EE enabled: every provider encrypts by default.
+func applyAPIKeyEnv(cfg *Config, name, envVar, defaultBaseURL string) {
 	key := os.Getenv(envVar)
 	if key == "" {
 		return
@@ -667,7 +668,7 @@ func applyAPIKeyEnv(cfg *Config, name, envVar, defaultBaseURL string, defaultE2E
 		p = &Provider{
 			Name:    name,
 			BaseURL: defaultBaseURL,
-			E2EE:    defaultE2EE,
+			E2EE:    true,
 		}
 		cfg.Providers[name] = p
 	}

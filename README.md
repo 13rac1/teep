@@ -128,9 +128,9 @@ Yes. Teep is open source under AGPL-3.0. Dual licensing is available for commerc
 | [Venice AI](https://venice.ai) | End-to-end encryption (ECDH + AES-256-GCM) |
 | [NEAR AI Direct](https://near.ai) | Attested HTTP/2 pools to model-specific TEE nodes |
 | [NEAR AI Cloud](https://near.ai) | Attested HTTP/2 pools through a TEE-attested gateway |
-| [NanoGPT](https://nano-gpt.com) | TEE attestation with Intel TDX + NVIDIA GPU |
+| [NanoGPT](https://nano-gpt.com) | TEE attestation with Intel TDX + NVIDIA GPU; end-to-end encryption (ECDH + AES-256-GCM) to the attested gateway for ACI/1 models |
 | [Chutes](https://chutes.ai) | End-to-end encryption (ML-KEM-768 + ChaCha20-Poly1305) with multi-instance failover |
-| [Phala Cloud](https://phala.network) | Format-agnostic gateway supporting Chutes and dStack attestation backends |
+| [Phala Cloud](https://phala.network) | End-to-end encryption (ECDH + AES-256-GCM) to the attested private-ai-gateway |
 | [Tinfoil](https://tinfoil.sh) (Cloud) | End-to-end encryption (HPKE X25519 + AES-256-GCM) via Tinfoil's model router |
 | [Tinfoil](https://tinfoil.sh) (Direct) | Disabled: Tinfoil's enclave hosts do not answer attestation requests (observed 2026-11-12). Use Tinfoil (Cloud). |
 

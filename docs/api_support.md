@@ -88,37 +88,37 @@ These diagnostics and repairs are request-normalization behavior. They do not we
 
 This matrix applies to OpenAI-compatible inference endpoints.
 
-| Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud | Tinfoil Cloud | Tinfoil Direct |
-|---|---|---|---|---|---|---|---|
-| Chat completions | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Responses | — | — | — | — | — | Yes | Yes |
-| Embeddings | Yes | Yes | Yes | — | Yes | Yes | Yes |
-| Audio transcriptions | Yes | — | — | — | — | Yes | Yes |
-| Text-to-speech | — | — | — | — | — | Yes | Yes |
-| Image generation | Yes | Yes | — | — | — | — | — |
-| Reranking | Yes | Yes | — | — | — | — | — |
-| Score | Yes | Yes | — | — | — | — | — |
+| Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud | NanoGPT | Tinfoil Cloud | Tinfoil Direct |
+|---|---|---|---|---|---|---|---|---|
+| Chat completions | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Responses | — | — | — | — | — | — | Yes | Yes |
+| Embeddings | Yes | Yes | Yes | — | Yes | — | Yes | Yes |
+| Audio transcriptions | Yes | — | — | — | — | — | Yes | Yes |
+| Text-to-speech | — | — | — | — | — | — | Yes | Yes |
+| Image generation | Yes | Yes | — | — | — | — | — | — |
+| Reranking | Yes | Yes | — | — | — | — | — | — |
+| Score | Yes | Yes | — | — | — | — | — | — |
 
 **—** = Not implemented. Provider returns HTTP 400.
 
 ## E2EE Support Matrix
 
-| Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud | Tinfoil Cloud | Tinfoil Direct |
-|---|---|---|---|---|---|---|---|
-| Chat completions | Encrypted | Encrypted | Encrypted | Encrypted | No E2EE | Encrypted | Encrypted |
-| Responses | — | — | — | — | — | Encrypted | Encrypted |
-| Embeddings | Encrypted | Encrypted | Encrypted | — | No E2EE | Encrypted | Encrypted |
-| Audio transcriptions | Plaintext (pinned) | — | — | — | — | Fail closed when E2EE is enabled; plaintext when disabled | Fail closed when E2EE is enabled; plaintext when disabled |
-| Text-to-speech | — | — | — | — | — | Encrypted | Encrypted |
-| Image generation | Encrypted | Encrypted | — | — | — | — | — |
-| Reranking | Encrypted | Encrypted | — | — | — | — | — |
-| Score | Request encrypted; response plaintext (pinned) | Request encrypted; response plaintext (pinned) | — | — | — | — | — |
+| Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud | NanoGPT | Tinfoil Cloud | Tinfoil Direct |
+|---|---|---|---|---|---|---|---|---|
+| Chat completions | Encrypted | Encrypted | Encrypted | Encrypted | Encrypted (ACI/1 models) | Encrypted (ACI/1 models) | Encrypted | Encrypted |
+| Responses | — | — | — | — | — | — | Encrypted | Encrypted |
+| Embeddings | Encrypted | Encrypted | Encrypted | — | Fail closed when E2EE is enabled; plaintext when disabled | — | Encrypted | Encrypted |
+| Audio transcriptions | Plaintext (pinned) | — | — | — | — | — | Fail closed when E2EE is enabled; plaintext when disabled | Fail closed when E2EE is enabled; plaintext when disabled |
+| Text-to-speech | — | — | — | — | — | — | Encrypted | Encrypted |
+| Image generation | Encrypted | Encrypted | — | — | — | — | — | — |
+| Reranking | Encrypted | Encrypted | — | — | — | — | — | — |
+| Score | Request encrypted; response plaintext (pinned) | Request encrypted; response plaintext (pinned) | — | — | — | — | — | — |
 
 **Encrypted** = E2EE is applied to request and response fields.
 **Fail closed** = Proxy rejects the request with an error because E2EE is not supported for this endpoint in the end-to-end path, either because the proxy does not implement E2EE field dispatch for that request type or because the upstream TEE cannot decrypt it.
 **Plaintext (pinned)** = Request and response transit in plaintext, but the connection is TLS-pinned to the attested TEE (no E2EE field encryption).
 **Request encrypted; response plaintext (pinned)** = Request fields are encrypted end-to-end, but upstream currently returns plaintext response fields for this endpoint. This is a known upstream NearAI limitation (inference-proxy/cloud-api score response path), not a teep policy preference. Responses still transit on pinned TLS to attested TEEs.
-**No E2EE** = Provider does not support E2EE. Requests transit in plaintext over TLS to the attested TEE.
+**Encrypted (ACI/1 models)** = E2EE v2 of the private-ai-gateway encrypts the request and response content fields when the model answers with the gateway's ACI/1 attestation. A model that answers with another attestation format fails closed when E2EE is enabled.
 **—** = Endpoint not available for this provider.
 
 ## Provider Details
@@ -304,29 +304,42 @@ Venice only exposes chat completions. No other endpoints are available.
 
 ---
 
-### Phala Cloud
+### Phala Cloud and NanoGPT (E2EE v2 of the private-ai-gateway)
 
-**Upstream:** Phala Cloud (RedPill) gateway. Multi-backend — routes to different TEE backends depending on the model.
+**Upstream:** Phala Cloud's TEE-only gateway host `tee.redpill.ai`, and NanoGPT at `nano-gpt.com`, which forwards its ACI/1 models to the same private-ai-gateway. See [Phala Cloud provider support](providers/phalacloud/phalacloud_support.md) and [NanoGPT provider support](providers/nanogpt/nanogpt_support.md).
 
-**E2EE protocol:** None. Phala Cloud does not currently support E2EE through teep.
+**E2EE protocol:** E2EE v2 of the private-ai-gateway with the secp256k1 suite (`secp256k1-aes-256-gcm-hkdf-sha256`): per-field secp256k1 ECDH + HKDF-SHA256 + AES-256-GCM, encrypted to the gateway E2EE key that the gateway quote binds. The associated data of each field binds its field path, the request model, a 32-byte request nonce and the request timestamp, and for a response field the response id, so a ciphertext that the gateway or teep made does not decrypt in another field, request or model. E2EE is enabled by default.
 
-**Connection model:** Standard TLS to the Phala gateway, which forwards to backend model instances.
+**Connection model:** Standard TLS. Streaming is forced; a non-streaming client request receives the reassembled response. The stream must end with `[DONE]`.
 
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|
-| Chat completions | `/chat/completions` | No | Plaintext over TLS |
-| Embeddings | `/embeddings` | No | Plaintext over TLS |
+| Chat completions | `/v1/chat/completions` | Yes (ACI/1 models) | `stream=true` forced; response decrypted from SSE chunks |
+| Embeddings (Phala Cloud) | `/v1/embeddings` | — | Fails closed when E2EE is enabled |
 
-**Backend format detection:** Phala Cloud is a multi-backend gateway that serves different attestation formats depending on the backend model:
+**E2EE request fields encrypted:**
 
-| Backend | Attestation Format | E2EE |
+| Field | Encrypted |
+|---|---|
+| `messages[].content` | Yes (text string, or the compact JSON of a structured content array) |
+
+**E2EE response fields encrypted:**
+
+| Field | Encrypted | Notes |
 |---|---|---|
-| Chutes | `attestation_type` key present | Not yet implemented |
-| dstack | `intel_quote` key present | No E2EE |
-| Tinfoil | `format` key present | Not yet implemented |
-| Gateway | `gateway_attestation` key present | Not yet supported |
+| `choices[].delta.content` | Yes | |
+| `choices[].delta.reasoning` | Yes | |
+| `choices[].delta.reasoning_content` | Yes | |
 
-When a Chutes-format backend is detected, the attestation is parsed using the Chutes protocol, but E2EE is not yet implemented through the Phala proxy layer.
+**Fail closed:** teep rejects a response chunk that carries a non-empty content field that is not encrypted or does not decrypt, or that carries content E2EE v2 does not encrypt: tool calls, function calls, refusals, audio, logprobs, a non-streaming `message` or `text`, more than one choice, or a response id that differs from the first chunk's. A request with `n` other than 1 is refused. A response that NanoGPT returns in plaintext, for example because it did not forward the E2EE headers, fails.
+
+**Refused request fields:** while E2EE is enabled, teep refuses a request that carries free text in a field E2EE v2 cannot encrypt, before anything is sent: `messages[].tool_calls`, `messages[].function_call`, `messages[].refusal`, `messages[].audio`, `prediction`, `tools`, `functions` and `response_format.json_schema`. The error names the field and states that E2EE v2 of the gateway defines no field path for it. Unlike NEAR's `X-Encrypt-All-Fields`, the specification has no mode that encrypts every field, so tool use is not available with E2EE v2.
+
+**Not encrypted:** the top-level `model`, `messages[].name`, `stop`, `tool_choice` and the top-level `function_call` (which name a function), and the other request parameters, including provider-specific prompt fields, which pass in plaintext. NanoGPT and the gateway see them.
+
+**Authentication:** E2EE v2 makes the content confidential against a relay, not authenticated against it. The gateway encrypts each response field to teep's public key with a fresh ephemeral key, and the associated data is public, so a relay (NanoGPT, or a party that holds a certificate for `tee.redpill.ai`) can encrypt fields of its own, drop, reorder or repeat chunks, append `[DONE]`, and set the role, `finish_reason`, usage, id and other clear fields; teep then decrypts the forged fields and reports `e2ee_usable` passed. The specification authenticates the response through the signed ACI receipt (e2ee-v2 §3.2 and §7, ACI/1 §7), which teep does not verify yet. teep pins the response id of a stream and requires `[DONE]`; these checks detect only an honest error, not a relay.
+
+**Other attestation formats:** E2EE v2 encrypts only to a key from an ACI/1 attestation. A Phala Cloud or NanoGPT model that answers with the dstack or Chutes format fails closed when E2EE is enabled.
 
 ### Tinfoil Cloud (`tinfoil_v3_cloud`)
 

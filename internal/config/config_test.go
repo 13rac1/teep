@@ -713,6 +713,27 @@ func TestEnvPhalaCloudDefaultsToTEEOnlyDomain(t *testing.T) {
 	if phala.BaseURL != "https://tee.redpill.ai" {
 		t.Errorf("phalacloud BaseURL default: got %q, want %q", phala.BaseURL, "https://tee.redpill.ai")
 	}
+	if !phala.E2EE {
+		t.Error("phalacloud from PHALA_API_KEY: E2EE = false, want E2EE v2 by default")
+	}
+}
+
+// NANOGPT_API_KEY alone creates NanoGPT with E2EE v2 required.
+func TestEnvNanoGPTDefaultsToE2EE(t *testing.T) {
+	clearProviderEnv(t)
+	setenv(t, "NANOGPT_API_KEY", "nano-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	nano, ok := cfg.Providers["nanogpt"]
+	if !ok {
+		t.Fatal("nanogpt provider not created from NANOGPT_API_KEY env var")
+	}
+	if !nano.E2EE || nano.BaseURL != "https://nano-gpt.com/api" {
+		t.Errorf("nanogpt defaults: E2EE=%v BaseURL=%q", nano.E2EE, nano.BaseURL)
+	}
 }
 
 func TestEnvAPIKeyOverridesToml(t *testing.T) {

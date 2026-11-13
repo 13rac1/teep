@@ -167,6 +167,12 @@ type VerificationReport struct {
 	// model endpoint's key for a provider that attests both.
 	// SEE: ReportInput.E2EEKeyBoundByGateway.
 	E2EEBindingFactor string `json:"-"`
+
+	// BackendFormat is the attestation format of the verified response. The
+	// proxy passes it with a cached signing key, so an encryptor that is
+	// defined for one format refuses a key of another. Internal; excluded
+	// from report JSON.
+	BackendFormat BackendFormat `json:"-"`
 }
 
 // Blocked returns true if any enforced factor has failed. When Blocked is true,
@@ -580,7 +586,7 @@ var VeniceACIDefaultAllowFail = append(slices.Clone(ACIDefaultAllowFail),
 	// nvidia_payload (observed 2026-11-12), so the GPU signature and its
 	// client nonce cannot be checked. The failure is reported and does
 	// not block requests until the response carries GPU evidence again.
-	// SEE: docs/attestation_gaps/aci_gateway.md, residual exposure 10.
+	// SEE: docs/attestation_gaps/aci_gateway.md, residual exposure 11.
 	FactorNvidiaSignature,
 	FactorNvidiaClientNonce,
 )
@@ -1081,9 +1087,11 @@ func BuildReport(in *ReportInput) *VerificationReport {
 
 	tlsKeyFP, tlsAuthority := "", ""
 	attestedModel, attestedMatch := "", ""
+	var format BackendFormat
 	if in.Raw != nil {
 		tlsKeyFP = in.Raw.TransportTLSFingerprint
 		tlsAuthority = in.Raw.TransportTLSAuthority
+		format = in.Raw.BackendFormat
 		if in.Raw.ModelNameMatch != "" {
 			attestedModel, attestedMatch = in.Raw.Model, in.Raw.ModelNameMatch
 		}
@@ -1106,6 +1114,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		TLSKeyFP:           tlsKeyFP,
 		TLSAuthority:       tlsAuthority,
 		E2EEBindingFactor:  e2eeBindingFactor(in),
+		BackendFormat:      format,
 	}
 }
 

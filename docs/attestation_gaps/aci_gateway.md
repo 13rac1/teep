@@ -16,13 +16,13 @@ over its own connection to an inference service. The GPUs that answer
 prove their identity fresh for each request, but nothing given to the
 client proves which host they are in or what software drives them. Since
 2026-11-12 the Venice response carries no GPU evidence at all (residual
-exposure 10).
+exposure 11).
 
-The three providers reach the gateway in different ways. Venice encrypts
-each request to a key that only the gateway holds. Phala Cloud's clients
-connect to the gateway directly. NanoGPT's clients connect to NanoGPT,
-which then calls the gateway, so NanoGPT's own servers also see the
-request.
+The three providers reach the gateway in different ways. Phala Cloud's
+clients connect to the gateway directly. Venice's and NanoGPT's clients
+connect to the provider, which then calls the gateway. teep encrypts the
+message content of each request to a key that only the gateway holds, so
+the provider's servers relay that content as ciphertext.
 
 ## Impact
 
@@ -46,11 +46,12 @@ For each provider, the remaining exposure is:
 
 - **Venice:** the inference host operator, and Venice as the party that
   composes the attestation response. Venice's servers relay the encrypted
-  request but cannot read it.
+  content but cannot read it.
 - **Phala Cloud:** the inference host operator. The client's TLS connection
-  ends inside the gateway CVM.
-- **NanoGPT:** the inference host operator and NanoGPT, whose servers
-  receive the request in plaintext before they forward it to the gateway.
+  ends inside the gateway CVM, and the content is encrypted to the gateway.
+- **NanoGPT:** the inference host operator. NanoGPT's servers relay the
+  encrypted content, but they see the model name, the tool definitions and
+  the request parameters.
 
 A provider can also choose the response format for each request, so a
 model that today attests its own inference host can be answered with a
@@ -171,7 +172,7 @@ self-asserted (residual exposure 7).
 - The relayed NVIDIA evidence, when the response carries it: per-GPU cert
   chains and SPDM signatures verify, and the EAT nonce matches the client
   nonce. Since 2026-11-12 the Venice response carries none (residual
-  exposure 10).
+  exposure 11).
 
 ### Failed and allowed (`ACIDefaultAllowFail`)
 
@@ -189,7 +190,7 @@ gateway MRTD/MRSEAM against the dstack base allowlist
 gateway MRTD that is not in it fails the factor without blocking.
 `nvidia_signature` and `nvidia_nonce_client_bound` are in the Venice list
 (`VeniceACIDefaultAllowFail`), not in the shared ACI/1 list, because the
-Venice response carries no GPU evidence (residual exposure 10). These
+Venice response carries no GPU evidence (residual exposure 11). These
 render as failed but allowed, so the gap stays visible in
 every report; removing an entry from the list blocks every ACI/1 model of
 the three providers.
@@ -215,6 +216,9 @@ the three providers.
   `TestVerifyRun_ConcurrentACIProviders`
   ([gateway ACI/1 replay tests](../../internal/integration/gateway_aci_test.go))
   verifies the three providers' captures against the one pin set.
+- **Venice, 2026-10-30:** the ACI/1 response for `e2ee-gpt-oss-120b-p`
+  carried no NVIDIA payload, so `nvidia_signature` and
+  `nvidia_nonce_client_bound` (enforced) failed and teep blocked the model.
 - In every capture the attested VM reports `num_gpus: 0` while the response
   carries GPU attestation entries (relayed evidence),
   `service_capabilities.serving` is `"aggregator"`, and
@@ -307,16 +311,31 @@ date.
    Certificate Transparency, but it does not compare the live certificate
    key with the keyset's `tee.redpill.ai` entry. An attacker who holds a
    certificate for that hostname that passes WebPKI and Certificate
-   Transparency, and a network position, can therefore read the request. The keyset entry is also self-asserted
-   (residual exposure 7). This closes in the authorization-store migration,
-   which binds the live TLS key to the authorization.
+   Transparency, and a network position, can therefore read the request
+   fields that E2EE does not encrypt (the model name, tool definitions and
+   parameters); the message content stays encrypted to the gateway key.
+   The attacker can also forge, drop, reorder or repeat response content,
+   because E2EE v2 responses are confidential but not authenticated
+   (residual exposure 10).
+   The keyset entry is also self-asserted (residual exposure 7). This
+   closes in the authorization-store migration, which binds the live TLS
+   key to the authorization.
 9. **NanoGPT is an unattested hop.** NanoGPT's servers receive the request
    over TLS to `nano-gpt.com`, which no attestation covers, and forward it
-   to the gateway. They see the plaintext and choose the gateway hostname.
+   to the gateway. With E2EE they relay the message content and the
+   generated content as ciphertext, but they see the other request fields
+   and choose the gateway hostname, and they can forge, drop, reorder or
+   repeat response content (residual exposure 10).
    In the 2026-10-29 capture, NanoGPT fetched the attestation report
    through `api.redpill.ai`, which is not TEE-only; the hostname of its
-   inference requests is not observed.
-10. **The Venice response carries no GPU evidence.** The attackers are the
+   inference requests is not observed. NanoGPT does not forward E2EE v2:
+   a live E2EE v2 request on 2026-10-30 (`TEE/gemma-4-26b-a4b-uncensored`) received an SSE stream whose second chunk carried `choices.0.delta.content` in plaintext. teep refused the response (`e2ee_usable` failed: "expected encrypted string but not recognised"). The request content left teep as ciphertext. The gateway did not encrypt the response: this is consistent with NanoGPT not forwarding the E2EE v2 headers, or not forwarding the request to the gateway; a changed model would have made the gateway refuse the request instead. Until NanoGPT forwards E2EE v2, a NanoGPT ACI/1 model does not serve while E2EE is enabled.
+10. **E2EE v2 responses are not authenticated.** E2EE v2 makes the content confidential against a relay, not authenticated against it. The gateway encrypts each response field to teep's public key with a fresh ephemeral key, and the associated data is public, so a relay (NanoGPT, or a party that holds a certificate for `tee.redpill.ai`) can encrypt fields of its own, drop, reorder or repeat chunks, append `[DONE]`, and set the role, `finish_reason`, usage, id and other clear fields; teep then decrypts the forged fields and reports `e2ee_usable` passed. The specification authenticates the response through the signed ACI receipt (e2ee-v2 §3.2 and §7, ACI/1 §7), which teep does not verify yet. teep pins the response id of a stream and requires `[DONE]`; these checks detect only an honest error, not a relay.
+    Under ACI/1 §7.6 a receipt is fetched with the API key that made the
+    request. For Phala Cloud, teep holds that key and can fetch the
+    receipt; for NanoGPT, NanoGPT made the gateway request with its own key,
+    so teep cannot fetch it.
+11. **The Venice response carries no GPU evidence.** The attackers are the
     operator of the downstream inference host and Venice, which builds the
     response. Since 2026-11-12 the Venice response leaves out the GPU
     evidence, so a prompt can be served on any machine, with or without
@@ -356,10 +375,13 @@ not close it.
 closes residual exposure 7 and makes the keyset TLS key in residual
 exposure 8 hardware-anchored.
 
-**Provider-side: Venice-style E2EE for NanoGPT users.** If NanoGPT relays
-an E2EE request to the gateway key unchanged, its servers no longer see the
-plaintext (residual exposure 9). This depends on the gateway's E2EE
-protocol and on NanoGPT.
+**Verifier-side: verify ACI receipts.** Fetch the signed receipt of each
+E2EE v2 response and check its signature under a `receipt_signing_keys`
+entry of the verified keyset and its hash of the exact response bytes
+(ACI/1 §7, §9.3). This authenticates the response content, order and end
+against a relay (residual exposure 10) for Phala Cloud. It cannot cover
+NanoGPT: the receipt is fetched with the API key that made the gateway
+request, which NanoGPT holds (ACI/1 §7.6).
 
 **Verifier-side: bind the live TLS key for Phala Cloud.** Compare the live
 certificate key of `tee.redpill.ai` with the keyset entry for that hostname
@@ -425,17 +447,25 @@ which no `allow_fail` entry can suppress.
 `cpu_gpu_chain`, `aci_backend_named` and the model-tier supply-chain factors
 are in `ACIDefaultAllowFail`, which an ACI/1 response selects for Venice,
 Phala Cloud and NanoGPT; the Venice list adds `nvidia_signature` and
-`nvidia_nonce_client_bound` (residual exposure 10). Their other formats
+`nvidia_nonce_client_bound` (residual exposure 11). Their other formats
 keep their own lists.
 
-**E2EE:** `provider.GatewayBindsE2EEKey` returns true for Venice ACI/1 and
-false for Venice dstack, so Venice's E2EE authorization reads the gateway
-REPORTDATA factor for ACI/1 and the core factor for dstack. Phala Cloud
-and NanoGPT have no E2EE in teep; their `tls_key_binding` detail reads
-"provider uses E2EE key exchange", which does not describe them.
+**E2EE:** `provider.GatewayBindsE2EEKey` returns true for an ACI/1
+response of Venice, Phala Cloud and NanoGPT, so their E2EE authorization
+reads the gateway REPORTDATA factor; it returns false for their other
+formats. Venice uses its own protocol. Phala Cloud and NanoGPT use E2EE v2
+of the gateway with the secp256k1 suite (`aci.E2EE`, `e2ee.ACIv2Session`),
+which binds each field to its path, the request model, nonce and timestamp,
+and fails closed on an unencrypted content field and on content that E2EE
+v2 does not encrypt, such as tool calls. A request that carries free text
+in a field without an E2EE v2 field path (tool calls, tools, functions,
+prediction, a JSON schema) is refused before it is sent. `aci_key_custody` requires the
+signing key to be the keyset entry of that suite. The field coverage is in
+[API support](../api_support.md#phala-cloud-and-nanogpt-e2ee-v2-of-the-private-ai-gateway).
 
 **Pending:** the live TLS key binding for Phala Cloud (residual exposure
-8) in the authorization-store migration; E2EE for Phala Cloud and NanoGPT
-after a check of the gateway's E2EE protocol. If a provider passes on
+8) in the authorization-store migration, receipt verification for E2EE v2
+responses (residual exposure 10), and NanoGPT forwarding E2EE v2, which
+it did not do on 2026-10-30 (residual exposure 9). If a provider passes on
 attested sessions, teep should verify them and move the core factors out of
 the allow-fail list for the models they cover.

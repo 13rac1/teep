@@ -67,9 +67,25 @@ For an ACI/1 response:
 
 ## TLS and E2EE
 
-teep has no E2EE for NanoGPT. Requests go over TLS 1.3 to `nano-gpt.com`,
-with WebPKI and Certificate Transparency enforced. No attestation binds the
-TLS key of `nano-gpt.com`.
+teep encrypts NanoGPT chat requests for ACI/1 models with E2EE v2 of the
+gateway, the secp256k1 suite, to the gateway E2EE key that the gateway quote
+binds. E2EE is enabled by default. The field coverage and the fail-closed
+rules are in
+[API support](../../api_support.md#phala-cloud-and-nanogpt-e2ee-v2-of-the-private-ai-gateway).
+NanoGPT must forward the E2EE v2 headers, the encrypted fields and the
+model name to the gateway unchanged: the gateway decrypts a request field
+only under the model and request context that teep encrypted it with, and a
+plaintext response fails. E2EE v2 keeps the content confidential against
+NanoGPT but does not authenticate the response against it: NanoGPT can
+encrypt response fields of its own to teep's public key, or drop, reorder
+and repeat chunks, and teep cannot detect it until it verifies the signed
+ACI receipt. Under ACI/1 §7.6 a receipt is fetched with the API key that
+made the request, which is NanoGPT's key, so teep cannot fetch the receipts
+of NanoGPT requests. A model that answers with the dstack or Chutes
+format fails closed while E2EE is enabled.
+
+Requests go over TLS 1.3 to `nano-gpt.com`, with WebPKI and Certificate
+Transparency enforced. No attestation binds the TLS key of `nano-gpt.com`.
 
 ## Supply chain
 
@@ -85,13 +101,20 @@ and Phala Cloud. Other formats keep `NanoGPTDefaultAllowFail`.
 ## Known limitations
 
 - For an ACI/1 model, the machine that runs the model is not attested, and
-  NanoGPT is an unattested hop in front of the gateway: it sees the request
-  and response in plaintext.
+  NanoGPT is an unattested hop in front of the gateway. With E2EE it sees
+  the message content and generated content only as ciphertext, but it sees
+  the top-level `model`, `messages[].name`, `stop`, `tool_choice` and the top-level `function_call` (which name a function), and the other request parameters, including provider-specific prompt fields, which pass in plaintext.
+- NanoGPT can forge, drop, reorder or repeat response content: E2EE v2
+  responses are not authenticated against it.
+- E2EE v2 defines field paths only for message content. teep refuses a
+  request that carries `messages[].tool_calls`, `messages[].function_call`, `messages[].refusal`, `messages[].audio`, `prediction`, `tools`, `functions` and `response_format.json_schema`, and a response with tool calls.
+- E2EE is enabled by default for NanoGPT and provides confidentiality only:
+  NanoGPT relays the content as ciphertext but can forge responses, and teep
+  cannot fetch NanoGPT's receipts.
+- NanoGPT does not forward E2EE v2: a live E2EE v2 request on 2026-10-30 (`TEE/gemma-4-26b-a4b-uncensored`) received an SSE stream whose second chunk carried `choices.0.delta.content` in plaintext. teep refused the response (`e2ee_usable` failed: "expected encrypted string but not recognised"). The request content left teep as ciphertext. The gateway did not encrypt the response: this is consistent with NanoGPT not forwarding the E2EE v2 headers, or not forwarding the request to the gateway; a changed model would have made the gateway refuse the request instead. Until NanoGPT forwards E2EE v2, a NanoGPT ACI/1 model does not serve while E2EE is enabled.
 - The TLS key of `nano-gpt.com` is not bound to any attestation.
 - NanoGPT fetched the observed gateway attestation through `api.redpill.ai`,
   which is not TEE-only.
-- `tls_key_binding` reports "provider uses E2EE key exchange", although
-  NanoGPT has no E2EE in teep.
 
 ## Test coverage
 
@@ -103,3 +126,15 @@ and Phala Cloud. Other formats keep `NanoGPTDefaultAllowFail`.
   [proxy gateway ACI/1 tests](../../../internal/proxy/gateway_aci_test.go).
 - `TestParseAttestationResponseACI` and `TestSupplyChainPolicyGatewayImages`
   in [NanoGPT ACI/1 tests](../../../internal/provider/nanogpt/aci_test.go).
+- `TestE2EERoundTrip`, `TestE2EEResponseOfAnotherRequestFails` and
+  `TestE2EERejectsRequest` in
+  [E2EE v2 encryptor tests](../../../internal/provider/aci/e2ee_test.go)
+  check the request against a separate gateway implementation
+  ([`aciv2test`](../../../internal/e2ee/aciv2test/gateway.go)).
+- `TestACIv2DecryptChunkFailsClosed` and `TestACIv2AADTestVectors` in
+  [E2EE v2 session tests](../../../internal/e2ee/aciv2_test.go), the AAD
+  against the gateway's byte-exact test vectors.
+- `TestTestE2EE_ACIv2` in
+  [verify E2EE v2 tests](../../../internal/verify/e2ee_aciv2_test.go) and
+  `TestBuildUpstreamBodyACIv2RefusesOtherFormat` in
+  [proxy E2EE v2 tests](../../../internal/proxy/aciv2_cache_test.go).

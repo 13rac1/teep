@@ -118,6 +118,11 @@ func PrepareInferenceHeaders(req *http.Request, prov *Provider, session e2ee.Dec
 		e2eeHeaders.Set("X-Venice-Tee-Client-Pub-Key", s.ClientPubKeyHex())
 		e2eeHeaders.Set("X-Venice-Tee-Model-Pub-Key", s.ModelKeyHex())
 		e2eeHeaders.Set("X-Venice-Tee-Signing-Algo", "ecdsa")
+	case *e2ee.ACIv2Session:
+		e2eeHeaders = make(http.Header)
+		for name, value := range s.Headers() {
+			e2eeHeaders.Set(name, value)
+		}
 	case *e2ee.NearCloudSession:
 		e2eeHeaders = make(http.Header)
 		e2eeHeaders.Set("X-Signing-Algo", "ed25519")

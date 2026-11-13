@@ -776,6 +776,9 @@ func fromConfig(
 		p.ChatPath = "/v1/chat/completions"
 		p.Attester = nanogpt.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.ModelLister = nanogpt.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline))
+		p.Preparer = nanogpt.NewPreparer(cp.APIKey)
+		// E2EE v2 to the ACI/1 gateway key; it refuses other formats.
+		p.Encryptor = aci.NewE2EE()
 		p.ReportDataVerifier = multi.Verifier{
 			Verifiers: map[attestation.BackendFormat]provider.ReportDataVerifier{
 				attestation.FormatDstack: venice.ReportDataVerifier{},
@@ -800,6 +803,8 @@ func fromConfig(
 		p.EmbeddingsPath = "/v1/embeddings"
 		p.Attester = phalacloud.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Preparer = phalacloud.NewPreparer(cp.APIKey)
+		// E2EE v2 to the ACI/1 gateway key; it refuses other formats.
+		p.Encryptor = aci.NewE2EE()
 		p.ModelLister = provider.NewValidatingModelLister(
 			provider.NewModelLister(cp.BaseURL, cp.APIKey, config.NewAttestationClient(offline)),
 			provider.ValidatePhalaEntry,
@@ -1807,7 +1812,7 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 			return
 		}
 
-		if ar.E2EEActive {
+		if ar.E2EEActive && !rr.e2eeUnconfirmed {
 			s.markReportE2EEUsable(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}, ar.Publication, ar.Report)
 		}
 		s.stats.lastSuccessAt.Store(time.Now().UnixNano())
@@ -1820,6 +1825,20 @@ type relayResult struct {
 	status      string        // non-empty on terminal failure
 	e2eeDur     time.Duration // accumulated E2EE key-exchange time
 	upstreamDur time.Duration // accumulated upstream + relay time
+	// e2eeUnconfirmed is true when the relay succeeded but decrypted no
+	// field that proves E2EE (SEE: e2eeConfirmed).
+	e2eeUnconfirmed bool
+}
+
+// e2eeConfirmed reports whether a relayed response shows that E2EE worked.
+// An E2EE v2 response proves it only by a decrypted field: a stream with
+// no content field carries no ciphertext at all. Other sessions fail their
+// relay when a required field is not encrypted.
+func e2eeConfirmed(session e2ee.Decryptor) bool {
+	if v2, ok := session.(*e2ee.ACIv2Session); ok {
+		return v2.DecryptedFields() > 0
+	}
+	return true
 }
 
 // relayWithRetry performs the upstream roundtrip and E2EE relay, retrying on
@@ -1965,6 +1984,7 @@ func (s *Server) relayWithRetry(
 
 		if relayErr == nil {
 			// Relay succeeded.
+			result.e2eeUnconfirmed = !e2eeConfirmed(session)
 			break
 		}
 
@@ -2843,7 +2863,7 @@ func (s *Server) buildUpstreamBody(
 		} else if !prov.SkipSigningKeyCache {
 			if current, ok := s.currentSigningKey(providerModelKey{prov.Name, cacheModelFor(ctx, upstreamModel)}); ok {
 				slog.DebugContext(ctx, "E2EE key exchange: using cached signing key", "provider", prov.Name, "model", upstreamModel)
-				raw = &attestation.RawAttestation{SigningKey: current.signingKey}
+				raw = current.raw()
 				used = current
 			}
 		}

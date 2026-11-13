@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"time"
@@ -125,9 +126,11 @@ func NewPreparer(apiKey string) *Preparer {
 	return &Preparer{apiKey: apiKey}
 }
 
-// PrepareRequest injects the Authorization header into req.
-func (p *Preparer) PrepareRequest(req *http.Request, _ http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string, _ provider.PreparationData) error {
+// PrepareRequest injects the Authorization header and the E2EE v2 headers
+// into req.
+func (p *Preparer) PrepareRequest(req *http.Request, e2eeHeaders http.Header, _ *e2ee.ChutesE2EE, _ bool, _ string, _ provider.PreparationData) error {
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	maps.Copy(req.Header, e2eeHeaders)
 	return nil
 }
 

@@ -246,7 +246,13 @@ func (s *Server) loadSigningKey(ctx context.Context, prov *provider.Provider, up
 			"provider", prov.Name, "model", upstreamModel)
 		return nil, keyPublication{}, errors.New("verified E2EE material went to another request")
 	}
-	return &attestation.RawAttestation{SigningKey: current.signingKey}, current, nil
+	return current.raw(), current, nil
+}
+
+// raw returns the attestation material of a cached signing key: the key and
+// the attestation format of the report that published it.
+func (k keyPublication) raw() *attestation.RawAttestation {
+	return &attestation.RawAttestation{SigningKey: k.signingKey, BackendFormat: k.report.BackendFormat}
 }
 
 // reportEpoch returns the number of invalidations of the cached report for a
