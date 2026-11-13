@@ -373,7 +373,9 @@ func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evi
 
 // ParseEvidence returns the attestation of the first entry of an evidence
 // response that is relayed without an instance list, as NanoGPT relays it.
-// The response may have at most maxEntries entries. Every entry must pass
+// The response may have at most maxEntries entries, and its
+// failed_instance_ids and excluded_instance_ids together at most maxEntries
+// ids. Every entry must pass
 // the attested-body checks of the session path (checkAttestedBody), and the
 // instance ids must pass checkInstanceIDs, so one malformed entry refuses
 // the response. The response names no E2EE public key, so the result has no
@@ -399,6 +401,12 @@ func ParseEvidence(ctx context.Context, evidenceBody []byte, nonce attestation.N
 	}
 	if len(ar.Evidence) > maxEntries {
 		return nil, fmt.Errorf("chutes: evidence has %d entries, max %d", len(ar.Evidence), maxEntries)
+	}
+	// A listed instance id names an instance of the same chute without
+	// evidence, so the two lists together have the same bound as the
+	// entries. checkInstanceIDs sizes a map from their lengths.
+	if n := len(ar.FailedInstanceIDs) + listLen(ar.ExcludedInstanceIDs); n > maxEntries {
+		return nil, fmt.Errorf("chutes: failed_instance_ids and excluded_instance_ids list %d instances, max %d", n, maxEntries)
 	}
 	if err := checkInstanceIDs(ar); err != nil {
 		return nil, err
@@ -468,6 +476,14 @@ func checkInstanceIDs(ar *attestationResponse) error {
 		}
 	}
 	return nil
+}
+
+// listLen returns the length of a list member that may be absent.
+func listLen(ids *[]string) int {
+	if ids == nil {
+		return 0
+	}
+	return len(*ids)
 }
 
 // checkAttestedBody checks the newer members of an evidence entry: tee_type

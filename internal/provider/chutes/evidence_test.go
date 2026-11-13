@@ -163,6 +163,27 @@ func TestParseEvidence_MaxEntries(t *testing.T) {
 	}
 }
 
+// The instance id lists together are bounded by the same number as the
+// entries, before their ids are checked.
+func TestParseEvidence_MaxListedInstances(t *testing.T) {
+	nonce := attestation.NewNonce()
+	doc := chutestest.Evidence(t, nonce, "inst-a")
+	doc["failed_instance_ids"] = []any{"inst-b"}
+	doc["excluded_instance_ids"] = []any{"inst-c"}
+	if _, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, doc), nonce, 2); err != nil {
+		t.Fatalf("2 listed instances, max 2: %v", err)
+	}
+	ids := make([]any, 3)
+	for i := range ids {
+		ids[i] = "" // empty ids, which checkInstanceIDs would refuse
+	}
+	doc["failed_instance_ids"] = ids
+	_, err := chutes.ParseEvidence(context.Background(), chutestest.Marshal(t, doc), nonce, 2)
+	if err == nil || !strings.Contains(err.Error(), "list 4 instances, max 2") {
+		t.Fatalf("4 listed instances, max 2: err = %v, want the list bound", err)
+	}
+}
+
 // The attested-session path keeps its nonce source: there the REPORTDATA
 // binding checks the nonce with the key of the channel binding.
 func TestParseInstanceAttestation_NonceSource(t *testing.T) {
