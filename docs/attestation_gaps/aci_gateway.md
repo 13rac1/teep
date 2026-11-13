@@ -70,6 +70,13 @@ genuine gateway attestation (residual exposure 3).
 `workload_keyset` with its `workload_keyset_digest`, a `source_provenance`
 block naming the source repository, and a `service_capabilities` block
 whose `serving` field distinguishes an aggregator from a model endpoint.
+Since [`673efd09`](https://github.com/Dstack-TEE/private-ai-gateway/commit/673efd09)
+the block can also list `supported_multipart_constraint_endpoints`, the
+paths that accept §5.3 serving constraints of a multipart request in the
+`X-ACI-Provider` header (§4.1). The hardware quote does not commit this
+list. Teep checks only its shape: at most 16 distinct clean URL paths.
+Teep sends Phala Cloud only chat and embeddings requests, and pins attested
+sessions only in their JSON body, so it does not use the list.
 The specification and its limits are in
 [ACI/1 Specification: Assurance Limits and Deployment Requirements](aci_specification.md).
 

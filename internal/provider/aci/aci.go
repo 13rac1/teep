@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path"
 	"slices"
+	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -121,9 +123,41 @@ type ServerVerification struct {
 // aciServiceCaps holds service capability declarations. Serving is
 // "aggregator" when the service forwards to upstream inference hosts and
 // "direct" when inference runs inside the attested workload.
+//
+// SupportedMultipartConstraintEndpoints lists the paths that accept the
+// ACI/1 §5.3 serving constraints of a multipart request in the
+// X-ACI-Provider header (ACI/1 §4.1). Absent or empty means no path does.
+// teep sends no multipart request through the gateway and pins sessions only
+// in a JSON request body (PinSessions), so it does not use the list; it
+// checks only its shape.
 type aciServiceCaps struct {
-	SupportedE2EEVersions []string `json:"supported_e2ee_versions"`
-	Serving               string   `json:"serving"`
+	SupportedE2EEVersions                 []string `json:"supported_e2ee_versions"`
+	SupportedMultipartConstraintEndpoints []string `json:"supported_multipart_constraint_endpoints,omitempty"`
+	Serving                               string   `json:"serving"`
+}
+
+// maxMultipartConstraintEndpoints bounds the multipart constraint endpoint
+// list. ACI/1 defines one multipart endpoint.
+const maxMultipartConstraintEndpoints = 16
+
+// checkMultipartConstraintEndpoints checks the shape of the multipart
+// constraint endpoint list: at most maxMultipartConstraintEndpoints distinct
+// absolute URL paths, without a query or fragment.
+func checkMultipartConstraintEndpoints(paths []string) error {
+	if len(paths) > maxMultipartConstraintEndpoints {
+		return fmt.Errorf("service_capabilities.supported_multipart_constraint_endpoints has %d entries, more than %d", len(paths), maxMultipartConstraintEndpoints)
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if !strings.HasPrefix(p, "/") || len(p) > 256 || strings.ContainsAny(p, "?# \t\r\n") || path.Clean(p) != p {
+			return fmt.Errorf("service_capabilities.supported_multipart_constraint_endpoints entry %q is not a clean URL path", p)
+		}
+		if seen[p] {
+			return fmt.Errorf("service_capabilities.supported_multipart_constraint_endpoints lists %q twice", p)
+		}
+		seen[p] = true
+	}
+	return nil
 }
 
 // aciAttestation holds the nested "attestation" object in ACI/1 responses.
@@ -375,6 +409,9 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 	// depth: unverifiedEvidence also fails a nil GatewayTDX for ACI/1).
 	if ar.Attestation.Evidence.Quote == "" {
 		return nil, fmt.Errorf("%s aci/1: attestation.evidence.quote is empty", provider)
+	}
+	if err := checkMultipartConstraintEndpoints(ar.ServiceCapabilities.SupportedMultipartConstraintEndpoints); err != nil {
+		return nil, fmt.Errorf("%s aci/1: %w", provider, err)
 	}
 	var eventLog []attestation.EventLogEntry
 	if ar.Attestation.Evidence.EventLog != "" {
