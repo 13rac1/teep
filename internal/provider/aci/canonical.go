@@ -64,9 +64,10 @@ func jsonMemberNames(t reflect.Type) []string {
 
 // ParseCanonical parses the ACI/1 report of /v1/aci/attestation. At every
 // depth, a member that §4.1 defines must be present, and duplicate member
-// names fail. A member that teep does not define is returned in
-// UnknownFields (response_schema) and read by no check; inside
-// workload_keyset it stays in the keyset digest (digestValue).
+// names fail, and so does a member whose name differs from a defined one
+// only in letter case (an ambiguous document). A member that teep does not
+// define is returned in UnknownFields (response_schema) and read by no
+// check; inside workload_keyset it stays in the keyset digest (digestValue).
 // The E2EE key that teep encrypts to is the single keyset entry of the E2EE
 // v2 secp256k1 suite. provider names the provider in errors.
 func ParseCanonical(ctx context.Context, body []byte, provider string) (*attestation.RawAttestation, error) {

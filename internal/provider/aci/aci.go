@@ -301,9 +301,11 @@ func Parse(ctx context.Context, body []byte, provider string) (*attestation.RawA
 	}
 	gatewayVariant := ar.AllAttestations != nil
 	if gatewayVariant {
-		// A member that teep does not define, also a case-folded alias of a
-		// defined one, is reported in UnknownFields (response_schema) and
-		// read by no check: jsonstrict leaves it out of the typed decoding.
+		// A member that teep does not define is reported in UnknownFields
+		// (response_schema) and read by no check. A member whose name
+		// differs from a defined one only in letter case failed
+		// jsonstrict.Unmarshal above (CaseFoldError): encoding/json would let
+		// it set the defined field.
 		// The gateway variant defines no echo field: a response that carries
 		// one is not the gateway variant.
 		var echoed []string
@@ -440,7 +442,9 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 	}
 	var eventLog []attestation.EventLogEntry
 	if ar.Attestation.Evidence.EventLog != "" {
-		if err := json.Unmarshal([]byte(ar.Attestation.Evidence.EventLog), &eventLog); err != nil {
+		var err error
+		eventLog, err = decodeEventLog(ar.Attestation.Evidence.EventLog)
+		if err != nil {
 			return nil, fmt.Errorf("%s aci/1: decode evidence.event_log: %w", provider, err)
 		}
 	}
@@ -496,4 +500,22 @@ func aciToRaw(ctx context.Context, ar *aciResponse, unknown, missing []string, b
 		MissingFields: missing,
 		RawBody:       body,
 	}, nil
+}
+
+// decodeEventLog decodes the JSON array of a gateway event log. Members that
+// teep does not define are ignored, as before; a duplicate member, or one
+// whose name differs from a defined member only in letter case, fails,
+// because either would change the decoded entry.
+func decodeEventLog(log string) ([]attestation.EventLogEntry, error) {
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(log), &raw); err != nil {
+		return nil, err
+	}
+	entries := make([]attestation.EventLogEntry, len(raw))
+	for i, e := range raw {
+		if _, _, err := jsonstrict.Unmarshal(e, &entries[i]); err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+	}
+	return entries, nil
 }

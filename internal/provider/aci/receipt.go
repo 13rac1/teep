@@ -70,9 +70,11 @@ type receiptJSON struct {
 }
 
 // ParseReceipt parses a receipt document. The document must have every
-// member of §7.3 and no other; events are objects, the first one is
-// request.received, and the events of §7.4 and §7.5 must have exactly
-// their defined members. Events of other types are ignored (§7.4).
+// member of §7.3; events are objects, the first one is request.received,
+// and the events of §7.4 and §7.5 must have every defined member and none
+// of the other form of the event. Members that teep does not define are
+// returned in Receipt.Unknown; a member whose name differs from a defined
+// one only in letter case fails. Events of other types are ignored (§7.4).
 func ParseReceipt(body []byte) (*Receipt, error) {
 	if len(body) > MaxReceiptBytes {
 		return nil, fmt.Errorf("receipt exceeds %d bytes", MaxReceiptBytes)
@@ -126,7 +128,10 @@ func (r *Receipt) parseEvents(events []json.RawMessage) error {
 		var head struct {
 			Type string `json:"type"`
 		}
-		if _, _, err := jsonstrict.Unmarshal(e, &head); err != nil || head.Type == "" {
+		if _, _, err := jsonstrict.Unmarshal(e, &head); err != nil {
+			return fmt.Errorf("receipt event %d: not an object with a string type: %w", i, err)
+		}
+		if head.Type == "" {
 			return fmt.Errorf("receipt event %d: not an object with a string type", i)
 		}
 		if i == 0 && head.Type != "request.received" {

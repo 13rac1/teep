@@ -106,8 +106,9 @@ type SessionEvidence struct {
 
 // sessionJSON is a session record (§8.2) or a session list entry (§8.1).
 // jsonstrict reports every undefined and every absent member at every
-// depth; checkSessionMembers then decides which absent members the record's
-// kind and content allow.
+// depth; checkSessionMembers returns the undefined ones for the caller to
+// report and decides which absent members the record's kind and content
+// allow.
 type sessionJSON struct {
 	APIVersion     string               `json:"api_version"`
 	UpstreamName   string               `json:"upstream_name"`
@@ -124,7 +125,7 @@ type sessionJSON struct {
 }
 
 // channelBindingJSON has the members of both binding types of §8.2; each
-// entry must have exactly the members of its own type.
+// entry must have the members of its own type and none of the other type.
 type channelBindingJSON struct {
 	Type            string `json:"type"`
 	Origin          string `json:"origin"`
@@ -183,8 +184,10 @@ type sessionEvidenceJSON struct {
 // bare-hex session id that a session list or a receipt cites (ACI/1 §9.2
 // steps 1 and 2): id must equal hex(sha256(JCS(record))), api_version must
 // be aci/1, and evidence.data must decode and hash to evidence.digest. The
-// record must have every member of §8.2, at every depth, and no other;
-// only identity may be absent. Callers bound body to MaxSessionBytes.
+// record must have every member of §8.2, at every depth; only identity may
+// be absent. Members that teep does not define are returned in
+// Session.Unknown; a member whose name differs from a defined one only in
+// letter case fails. Callers bound body to MaxSessionBytes.
 func ParseSession(body []byte, id string) (*Session, error) {
 	if len(body) > MaxSessionBytes {
 		return nil, fmt.Errorf("session record exceeds %d bytes", MaxSessionBytes)

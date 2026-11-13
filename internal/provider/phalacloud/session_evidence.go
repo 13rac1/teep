@@ -332,7 +332,8 @@ func chutesEvidenceNonce(location string) (attestation.Nonce, error) {
 func equalCT(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
 
 // strictDecode decodes data into v and fails on a duplicate or a missing
-// member at any depth. It returns the paths of the members that teep does
+// member at any depth, and on a member whose name differs from a defined
+// one only in letter case. It returns the paths of the members that teep does
 // not define, for the caller to report; no check reads them.
 func strictDecode(data []byte, v any) ([]string, error) {
 	unknown, missing, err := jsonstrict.Unmarshal(data, v)
