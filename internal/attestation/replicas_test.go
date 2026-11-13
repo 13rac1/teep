@@ -64,6 +64,18 @@ func TestMergeReplicaRefusesDifferentFactors(t *testing.T) {
 	}
 }
 
+// Only the factors that did not pass carry the instance id.
+func TestLabelInstance(t *testing.T) {
+	r := replicaReport(Pass, Fail, Skip, NotApplicable)
+	r.LabelInstance("19ae")
+	want := []string{"d", "instance 19ae: d", "instance 19ae: d", "d"}
+	for i, f := range r.Factors {
+		if f.Detail != want[i] {
+			t.Errorf("factor %s detail = %q, want %q", f.Name, f.Detail, want[i])
+		}
+	}
+}
+
 func TestSetInstances(t *testing.T) {
 	r := replicaReport(Pass)
 	r.SetInstances([]string{"19ae", "a8a2", "cc79"})

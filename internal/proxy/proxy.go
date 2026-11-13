@@ -1000,6 +1000,7 @@ func (s *Server) verifyReplicas(ctx context.Context, prov *provider.Provider, up
 	if len(raw.Replicas) == 0 {
 		return report, admission, nil
 	}
+	report.LabelInstance(raw.ModelInstanceID)
 	ids := []string{raw.ModelInstanceID}
 	for _, replica := range raw.Replicas {
 		other, otherAdmission, err := s.verifyAttestation(ctx, prov, upstreamModel, replica, nonce, failure)

@@ -221,6 +221,7 @@ func (ev *evidenceVerifier) mergeReplicas(ctx context.Context, raw *attestation.
 	if len(raw.Replicas) == 0 {
 		return report, admission, nil
 	}
+	report.LabelInstance(raw.ModelInstanceID)
 	ids := []string{raw.ModelInstanceID}
 	for _, replica := range raw.Replicas {
 		other, nrasResult, err := ev.report(ctx, replica, func() *attestation.E2EETestResult { return e2eeResult })

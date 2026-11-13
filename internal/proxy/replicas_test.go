@@ -47,6 +47,9 @@ func TestFetchVerifiedReplicaFailure(t *testing.T) {
 	}
 	var replicaFailures int
 	for i, f := range merged.Factors {
+		if (f.Status == attestation.Fail || f.Status == attestation.Skip) && !strings.HasPrefix(f.Detail, "instance ") {
+			t.Errorf("factor %s does not name an instance: %q", f.Name, f.Detail)
+		}
 		if f.Status != attestation.Fail || !strings.HasPrefix(f.Detail, "instance cc79: ") {
 			continue
 		}

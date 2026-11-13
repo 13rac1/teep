@@ -35,6 +35,18 @@ func (r *VerificationReport) MergeReplica(instanceID string, other *Verification
 	return nil
 }
 
+// LabelInstance prefixes the instance id to the detail of each factor that
+// did not pass, before the reports of the other instances are merged in, so
+// every failure of a report of several instances names its instance.
+func (r *VerificationReport) LabelInstance(instanceID string) {
+	for i := range r.Factors {
+		f := &r.Factors[i]
+		if f.Status == Fail || f.Status == Skip {
+			f.Detail = "instance " + instanceID + ": " + f.Detail
+		}
+	}
+}
+
 // SetInstances records the instance ids that the report covers.
 func (r *VerificationReport) SetInstances(ids []string) {
 	if r.Metadata == nil {
