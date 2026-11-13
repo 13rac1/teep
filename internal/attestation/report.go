@@ -606,9 +606,13 @@ var ChutesDefaultAllowFail = []string{
 // cpu_id_registry is allowed to fail because Tinfoil does not participate in
 // Proof of Cloud. intel_pcs_collateral is allowed because SEV-SNP uses AMD
 // KDS instead of Intel PCS. SEV-SNP certificate-chain and quote-signature
-// checks require a request to kdsintf.amd.com, which is often unavailable or
-// returns errors for tinfoil_v3_cloud; the gateway pair carries that fetch
-// now that the router reports there, so both pairs are listed.
+// checks require a VCEK request, which Tinfoil's getter sends to
+// kds-proxy.tinfoil.sh, not to kdsintf.amd.com. That request is often
+// unavailable or returns errors for tinfoil_v3_cloud; the gateway pair carries
+// that fetch now that the router reports there, so both pairs are listed.
+// allow_fail applies to the factor, not to the cause: it lets both a
+// retrieval failure (FetchErr) and a rejection (CertChainErr, SignatureErr,
+// including a 4xx for the VCEK URL) through. Both still appear in the report.
 // NVIDIA GPU and CPU-GPU/NVSwitch binding factors are
 // reported but currently allowed to fail by default, due to the hashing
 // issue documented in docs/attestation_gaps/tinfoil_nvidia_json.md
@@ -624,10 +628,12 @@ var TinfoilCloudDefaultAllowFail = []string{
 	FactorNVSwitchBinding,
 	FactorComponentRecognition,
 
-	// DANGER: these two run the AMD KDS fetch for the router. The core pair
-	// below covered it while the router reported in the core tier; moving the
-	// router to the gateway tier made the fetch enforced and a KDS outage
-	// blocking. SEE: TestTinfoilCloud_KDSOutageDoesNotBlock.
+	// DANGER: these two run the VCEK fetch through kds-proxy.tinfoil.sh for the
+	// router. The core pair below covered it while the router reported in the
+	// core tier; moving the router to the gateway tier made the fetch enforced
+	// and a KDS outage blocking. Allowing them also lets a rejected certificate
+	// or report signature through, not only a retrieval failure.
+	// SEE: TestTinfoilCloud_KDSOutageDoesNotBlock.
 	FactorGWCertChain,
 	FactorGWQuoteSignature,
 
