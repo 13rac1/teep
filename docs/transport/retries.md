@@ -14,6 +14,7 @@ the provider did not process inference.
 | --- | --- | --- |
 | Typed DNS error marked temporary or timed out, or a dial error, before any `GotConn` | At most once, if the context remains valid | Retain; acquire valid authorization again |
 | Exact supported key rejection before inference, E2EE attempt | At most once | Conditionally remove the generation used; acquire authorization again |
+| Phala Cloud ACI/1 `session_not_accepted` (HTTP 412): the gateway refused the pinned attested sessions and did not forward the request | At most once, E2EE attempt | Conditionally remove the generation used; the next acquisition verifies the sessions again |
 | Exact NearCloud chat 421 stale-key rejection, TLS-only attempt | No | Conditionally remove the generation used; the next request acquires authorization |
 | Origin TLS WebPKI, CT, or SPKI authentication failure | No | Conditionally remove the generation used |
 | HTTPS forward-proxy handshake failure | No | Retain origin authorization, including replacement generations |

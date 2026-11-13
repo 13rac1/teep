@@ -63,10 +63,12 @@ func NewAttester(baseURL, apiKey string, offline ...bool) *Attester {
 func (a *Attester) SetClient(c *http.Client) { a.client = c }
 
 // FetchAttestation fetches the ACI/1 report of the private-ai-gateway from
-// /v1/aci/attestation with the client nonce. The report is service-scoped
-// (ACI/1 §4), so the model is not sent; the sessions behind a model describe
-// its upstreams.
-func (a *Attester) FetchAttestation(ctx context.Context, _ string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+// /v1/aci/attestation with the client nonce, and the attested sessions
+// behind model (fetchSessions). The report is service-scoped (ACI/1 §4), so
+// its request does not send the model; the sessions describe the upstreams
+// that serve the model, and the proxy and teep verify audit them
+// (AuditSessions).
+func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
 	ctx, cancel := context.WithTimeout(ctx, attestationTimeout)
 	defer cancel()
 
@@ -97,6 +99,7 @@ func (a *Attester) FetchAttestation(ctx context.Context, _ string, nonce attesta
 	}
 	raw.TransportTLSFingerprint = spki
 	raw.TransportTLSAuthority = endpoint.Host
+	raw.ACISessions = a.fetchSessions(ctx, model)
 	return raw, nil
 }
 

@@ -19,9 +19,13 @@ import (
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
 
+// pinnedSessionID stands for an attested session that the audit pinned.
+const pinnedSessionID = "4d849e211f7078bd8d27a748a7ac0ddfe164d2ef5c0e29e6e30292a371276320"
+
 // The standalone Phala Cloud probe sends an E2EE v2 request over the
 // connection pinned to the attested TLS key, decrypts the response and
-// checks its keyset digest. A capturing run records the exchange without the
+// checks its keyset digest; the request pins the verified sessions. A
+// capturing run records the exchange without the
 // API key. A connection of another TLS key sends no request, also when the
 // run captures.
 func TestStandalonePhalaCloudProbe(t *testing.T) {
@@ -42,9 +46,15 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 			}
 			var b struct {
 				MaxTokens int `json:"max_tokens"`
+				Provider  struct {
+					ACISessionIDs []string `json:"aci_session_ids"`
+				} `json:"provider"`
 			}
 			if err := json.Unmarshal(body, &b); err != nil || b.MaxTokens != aciv2ProbeMaxTokens {
 				t.Errorf("max_tokens = %d, %v", b.MaxTokens, err)
+			}
+			if len(b.Provider.ACISessionIDs) != 1 || b.Provider.ACISessionIDs[0] != pinnedSessionID {
+				t.Errorf("provider.aci_session_ids = %q, want the pinned session", b.Provider.ACISessionIDs)
 			}
 			r := gw.ReadRequest(req.Header, body)
 			stream = gw.Stream(r, "chatcmpl-1", []string{"Hel", "lo"}, true)
@@ -71,7 +81,7 @@ func TestStandalonePhalaCloudProbe(t *testing.T) {
 			t.Cleanup(client.CloseIdleConnections)
 			capture := &verificationCapture{}
 			opts := &Options{ProviderName: "phalacloud", Provider: &config.Provider{BaseURL: upstream.URL, APIKey: "secret-api-key", E2EE: true}, ModelName: "qwen/model", capture: capture}
-			got, _, err := testStandaloneInference(t.Context(), opts, route, raw, e2ee.NearModelKey{}, client)
+			got, _, err := testStandaloneInference(t.Context(), opts, route, raw, e2ee.NearModelKey{}, []string{pinnedSessionID}, client)
 			return got, capture, err
 		}
 

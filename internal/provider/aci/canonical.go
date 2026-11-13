@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -32,16 +31,10 @@ type aciCanonicalReport struct {
 
 // ParseCanonical parses the ACI/1 report of /v1/aci/attestation. At every
 // depth, every member must be one that §4.1 defines and none may be absent;
-// duplicate member names fail. The E2EE key that teep encrypts to is the single keyset
-// entry of the E2EE v2 secp256k1 suite. provider names the provider in
-// errors.
+// duplicate member names fail (jsonstrict checks all three at every depth).
+// The E2EE key that teep encrypts to is the single keyset entry of the E2EE
+// v2 secp256k1 suite. provider names the provider in errors.
 func ParseCanonical(ctx context.Context, body []byte, provider string) (*attestation.RawAttestation, error) {
-	if err := jsonstrict.ValidateUniqueFields(body); err != nil {
-		return nil, fmt.Errorf("%s aci/1: attestation report: %w", provider, err)
-	}
-	if err := checkShape(body, reflect.TypeFor[aciCanonicalReport](), "report"); err != nil {
-		return nil, fmt.Errorf("%s aci/1: attestation report has %w", provider, err)
-	}
 	var report aciCanonicalReport
 	unknown, missing, err := jsonstrict.Unmarshal(body, &report)
 	if err != nil {

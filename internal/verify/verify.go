@@ -20,6 +20,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/aci"
+	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct"
 )
@@ -228,6 +229,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
 	tinfoilSC := verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, opts.ProviderName, opts.ModelName, mergedPolicy, opts.Offline, client)
+	aciSessions := auditACISessions(ctx, opts.ProviderName, raw, phalacloud.SessionAuditor{TDX: verifier, Offline: opts.Offline})
 
 	report = attestation.BuildReport(&attestation.ReportInput{
 		Provider:               opts.ProviderName,
@@ -258,6 +260,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		GatewayEventLog:        raw.GatewayEventLog,
 		TinfoilSC:              tinfoilSC,
 		ACIKeyset:              aci.VerifyKeyset(raw, opts.VerificationTime, aci.GatewayPins()),
+		ACISessions:            aciSessions,
 		E2EETest:               e2eeResult,
 		E2EEConfigured:         providerUsesTLSBinding(opts.ProviderName) && opts.Provider.E2EE,
 		Inapplicable:           inapplicableFactors(opts.ProviderName),
@@ -276,6 +279,15 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		}
 	}
 	return verificationOutcome{report: report, raw: raw, e2ee: e2eeResult}, nil
+}
+
+// auditACISessions audits the attested sessions of a canonical ACI/1 report
+// of Phala Cloud. It returns nil for every other provider and format.
+func auditACISessions(ctx context.Context, providerName string, raw *attestation.RawAttestation, auditor phalacloud.SessionAuditor) *attestation.ACISessionResult {
+	if providerName != "phalacloud" || !raw.ACICanonicalReport {
+		return nil
+	}
+	return phalacloud.AuditSessions(ctx, auditor, raw)
 }
 
 // Replay loads a capture directory, replays all HTTP traffic, and returns the

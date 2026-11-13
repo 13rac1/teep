@@ -116,7 +116,7 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 			identity = selected
 		}
 		var retry bool
-		probe, canRetry, probeErr := testStandaloneInference(attemptCtx, opts, *route, current.raw, current.modelKey, client)
+		probe, canRetry, probeErr := testStandaloneInference(attemptCtx, opts, *route, current.raw, current.modelKey, current.report.ACISessionIDs, client)
 		retry, err = canRetry, probeErr
 		if probe != nil {
 			current.e2ee = probe.e2ee
@@ -173,7 +173,7 @@ type standaloneProbe struct {
 	tlsInference *attestation.TLSInferenceResult
 }
 
-func testStandaloneInference(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, modelKey e2ee.NearModelKey, client *http.Client) (*standaloneProbe, bool, error) {
+func testStandaloneInference(ctx context.Context, opts *Options, route provider.ResolvedRoute, raw *attestation.RawAttestation, modelKey e2ee.NearModelKey, sessionIDs []string, client *http.Client) (*standaloneProbe, bool, error) {
 	prov := &provider.Provider{Name: opts.ProviderName, E2EE: !nearTLSOnly(opts)}
 	switch opts.ProviderName {
 	case "nearcloud":
@@ -198,7 +198,7 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 		return nil, false, err
 	}
 	phase := &tlsct.InferenceAttempt{}
-	req, encrypted, err := provider.PrepareInference(phase.Context(ctx), prov, route, &provider.InferenceInput{Body: body, SigningKey: raw.SigningKey, BackendFormat: raw.BackendFormat, ModelKey: modelKey, Path: "/v1/chat/completions", ContentType: "application/json", Stream: true, Endpoint: e2ee.EndpointChat})
+	req, encrypted, err := provider.PrepareInference(phase.Context(ctx), prov, route, &provider.InferenceInput{Body: body, SigningKey: raw.SigningKey, BackendFormat: raw.BackendFormat, ACISessionIDs: sessionIDs, ModelKey: modelKey, Path: "/v1/chat/completions", ContentType: "application/json", Stream: true, Endpoint: e2ee.EndpointChat})
 	if err != nil {
 		return nil, false, err
 	}

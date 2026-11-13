@@ -2,21 +2,26 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/verify"
 )
 
 // TestVerifyRun_PhalaCloudCanonical_Fixture replays a live Phala Cloud
-// capture of the canonical ACI/1 report (/v1/aci/attestation) through
-// verify.Run with the production policy. The gateway evidence, the ACI/1
-// §3.2 statement binding of the client nonce, the key custody and the TLS
-// key binding pass and are enforced; the nonce factors (no echoed nonce) and the GPU factors (no
-// GPU evidence) fail and are allowed.
+// capture of 2026-11-01 of the canonical ACI/1 report (/v1/aci/attestation),
+// the attested sessions of the model, and the pinned E2EE test exchange
+// through verify.Run with the production policy. The gateway evidence, the
+// ACI/1 §3.2 statement binding of the client nonce, the key custody, the TLS
+// key binding and the session audit pass and are enforced; the nonce
+// factors (no echoed nonce) and the GPU factors of the report (no GPU
+// evidence) fail and are allowed.
 func TestVerifyRun_PhalaCloudCanonical_Fixture(t *testing.T) {
 	env := loadFixture(t, "phalacloud_aci")
 	if !strings.HasPrefix(env.entries[0].URL, "https://tee.redpill.ai"+aci.CanonicalPath+"?nonce=") {
@@ -75,6 +80,51 @@ func TestVerifyRun_PhalaCloudCanonical_Fixture(t *testing.T) {
 	// and an E2EE key that a passed REPORTDATA binding authenticates.
 	if _, err := report.TransportIdentity(); err != nil || !report.ReportDataBindingPassed() {
 		t.Errorf("authorization material: identity err=%v, key bound=%v", err, report.ReportDataBindingPassed())
+	}
+	assertPinnedSessions(t, &env, report)
+}
+
+// The capture's attested sessions: the Phala model CVM session and the two
+// Chutes sessions of the one Chutes bundle that the evidence limit allowed.
+var fixtureSessionIDs = []string{
+	"7113a6cf738c71e78d4ce1b1f298b51678ac2885f6130f645e960481edd44e7b",
+	"1cfeac2cc0b0517914c6b4b41a6e39701280d6cc780678341174493be2f15147",
+	"e1495083e1aa6a98630a75824f35a843a8b976a0c31354324fbcef751e8db75d",
+}
+
+// assertPinnedSessions requires the audit to pin exactly the sessions of the
+// capture, and the captured E2EE test request to pin the same sessions. The
+// gateway served that request through them (HTTP 200).
+func assertPinnedSessions(t *testing.T, env *fixtureEnv, report *attestation.VerificationReport) {
+	t.Helper()
+	if f := findFactor(t, report, "aci_session_verified"); f.Status != attestation.Pass || !f.Enforced {
+		t.Errorf("aci_session_verified: status %s, enforced %v; want an enforced pass", f.Status, f.Enforced)
+	}
+	if got, want := strings.Join(report.ACISessionIDs, ","), strings.Join(fixtureSessionIDs, ","); got != want {
+		t.Errorf("pinned sessions %s, want %s", got, want)
+	}
+	var chat *capture.RecordedEntry
+	for i := range env.entries {
+		if strings.HasSuffix(env.entries[i].URL, "/v1/chat/completions") {
+			chat = &env.entries[i]
+		}
+	}
+	if chat == nil {
+		t.Fatal("the capture has no E2EE test request")
+	}
+	if chat.Status != http.StatusOK {
+		t.Errorf("E2EE test request status %d, want 200", chat.Status)
+	}
+	var body struct {
+		Provider struct {
+			ACISessionIDs []string `json:"aci_session_ids"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(chat.ReqBody, &body); err != nil {
+		t.Fatalf("E2EE test request body: %v", err)
+	}
+	if got, want := strings.Join(body.Provider.ACISessionIDs, ","), strings.Join(fixtureSessionIDs, ","); got != want {
+		t.Errorf("request pinned %s, want %s", got, want)
 	}
 }
 

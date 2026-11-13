@@ -320,21 +320,26 @@ bytes are sent (residual exposure 8). Phala Cloud becomes a TLS-binding
 provider in addition to E2EE, with the SPKI pool rules of the transport
 reference. Own commit.
 
-**7d. Sessions.** After 7a and 7c: list the sessions behind the requested
-model (`GET /v1/aci/sessions?model=`, §8.1), fetch each full session, and
-check its id (sha256 of its JCS form) and its evidence digest (§9.2 steps
-1-2). Verify each session's upstream evidence with the matching teep
-verifier: the phala-direct dstack report with the dstack parser, the TDX
-verifier, the NEAR-direct REPORTDATA layout, the NVIDIA verifier against
-the session's `request_nonce`, and the channel SPKI. A session whose
-format teep does not verify is refused. teep pins the accepted sessions
-with `aci_session_ids` on every request (§5.3); with no accepted session,
-teep refuses the request. The session evidence is a snapshot
-(`established_at` is not collection time, §8): the GPU nonce factor stays
-allowed to fail, and its detail states whether the session carries the
-gateway's challenge nonce and whether the upstream evidence binds it.
-A measurement policy for the upstream CVM is needed; items without a
-policy fail and are allowed to fail.
+**7d. Sessions.** Implemented; the maintained description is
+[Attested sessions](../providers/phalacloud/phalacloud_support.md#attested-sessions)
+in the Phala Cloud provider document. The design as built:
+
+- At each full verification, list the sessions of the model and fetch a
+  bounded set (decision of 2026-11-01): every bundle of the Phala
+  model CVM, then Chutes bundles by session count, largest first, within a
+  constant 8 MiB of fetched Chutes records. One GET per bundle; the other
+  sessions of a bundle are rebuilt and their ids recomputed.
+- Audit each session (decision of 2026-11-01, all enforced): the
+  TDX quote and TCB, MRTD and MRSEAM, REPORTDATA with the session nonce,
+  the channel binding and identity, the GPU evidence verified locally, and
+  for the Phala model CVM the compose binding and the event-log replay.
+  The Phala model CVM REPORTDATA is the NEAR-direct layout with an ecdsa
+  address, not the ed25519 one, so it has its own verifier.
+- `aci_session_verified` (enforced) passes when one session passes; every
+  request pins the passed sessions in `provider.aci_session_ids`, and a
+  refusal (`session_not_accepted`) ends the authorization generation.
+  Sessions stay pinned until the authorization ends; no session expiry
+  applies to requests.
 
 **7e. Receipts.** Over the same pinned pool: hash the raw SSE bytes, fetch
 `GET /v1/aci/receipts/{X-Receipt-Id or response id}` with the request's
@@ -354,12 +359,29 @@ output); otherwise `teep verify` states that it is not checked.
 **Scope.** Phala Cloud only. Venice relays neither `X-Receipt-Id` nor the
 ACI headers (2026-10-30) and stays confidentiality-only, as does NanoGPT.
 
-### Open question
+### Resolved: Chutes sessions
 
-**Chutes sessions.** 14 of the 15 sessions are Chutes upstreams whose
-evidence format is not observed. If teep cannot verify it, teep pins only
-the phala-direct sessions, and Phala Cloud requests depend on those
-upstreams.
+The Chutes session evidence (observed 2026-11-01) is a multipart bundle of
+the Chutes API responses for the gateway's evidence request. teep verifies
+it with its Chutes verifiers. The pin needs Chutes sessions: on 2026-11-01
+the gateway refused a pin of the Phala model CVM session alone (HTTP 412
+`session_not_accepted`; its error named the Chutes model id
+`Qwen/Qwen3.8-27B-TEE`), and served
+a pin with two Chutes sessions once the October 2026 Chutes measurements
+were allowed.
+
+### Point of discussion: the bounded set of sessions
+
+The bounded set narrows routing to the verified upstreams to limit the
+load on the gateway. Measured: a Phala model CVM session is 276 KB, a
+Chutes bundle 3.9 MB on 2026-10-31 and 4.2 MB on 2026-11-01, and the 14
+Chutes sessions of 2026-10-31 shared 10 bundles, so verifying every session
+would fetch about 39 MB per full verification. Under the 8 MiB limit the
+growth from 3.9 to 4.2 MB leaves room for one Chutes bundle instead of
+two. Each session adds Intel PCS requests: 16 for the 4 quotes of one
+verification on 2026-11-01. Alternatives: every session, or the Phala
+model CVM sessions only (the gateway refused that pin). Details:
+[the provider document](../providers/phalacloud/phalacloud_support.md#point-of-discussion-the-bounded-set-of-sessions).
 
 ### Commits
 

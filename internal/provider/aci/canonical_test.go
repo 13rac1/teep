@@ -77,6 +77,15 @@ func TestParseCanonicalRefusesMalformedReports(t *testing.T) {
 		{"undefined nested field", func(top map[string]any) { attestationMap(top)["extra"] = 1 }, "undefined fields"},
 		{"absent report_data", func(top map[string]any) { delete(attestationMap(top), "report_data") }, "lacks fields"},
 		{"absent service_capabilities", func(top map[string]any) { delete(top, "service_capabilities") }, "lacks fields"},
+		{"undefined member of a keyset entry", func(top map[string]any) {
+			keysetMap(top)["e2ee_public_keys"].([]any)[0].(map[string]any)["note"] = "x"
+		}, "undefined fields"},
+		{"absent member of a keyset entry", func(top map[string]any) {
+			delete(keysetMap(top)["e2ee_public_keys"].([]any)[0].(map[string]any), "algo")
+		}, "lacks fields"},
+		{"absent evidence member", func(top map[string]any) {
+			delete(attestationMap(top)["evidence"].(map[string]any), "downstream_tls_binding")
+		}, "lacks fields"},
 		{"other api_version", func(top map[string]any) { top["api_version"] = "aci/2" }, "api_version"},
 		{"no secp256k1 key", func(top map[string]any) {
 			keys := keysetMap(top)["e2ee_public_keys"].([]any)

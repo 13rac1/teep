@@ -1020,6 +1020,7 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		Rekor:                  sc.Rekor,
 		TinfoilSC:              tinfoilSC,
 		ACIKeyset:              aci.VerifyKeyset(raw, time.Time{}, aci.GatewayPins()),
+		ACISessions:            s.auditACISessions(ctx, prov, raw),
 		E2EEConfigured:         prov.E2EE,
 		Inapplicable:           inapplicableForProvider(prov.Name),
 		ProviderUsesTLSBinding: prov.UsesTLSBinding,
@@ -1031,6 +1032,16 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		return nil, nil, attestation.AdmissionTime{}, tlsct.ErrConnectionCapacity
 	}
 	return report, raw, attestation.NVIDIAAdmission(nrasResult), nil
+}
+
+// auditACISessions audits the attested sessions of a canonical ACI/1 report
+// of Phala Cloud with the server's quote verifier. It returns nil for every
+// other provider and format.
+func (s *Server) auditACISessions(ctx context.Context, prov *provider.Provider, raw *attestation.RawAttestation) *attestation.ACISessionResult {
+	if prov.Name != "phalacloud" || !raw.ACICanonicalReport {
+		return nil
+	}
+	return phalacloud.AuditSessions(ctx, phalacloud.SessionAuditor{TDX: s.verifyQuote, Offline: s.cfg.Offline}, raw)
 }
 
 // verifyTDX runs TDX quote verification and REPORTDATA binding.

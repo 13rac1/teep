@@ -126,19 +126,26 @@ func (s *Server) authorizedAttempt(ctx context.Context, input *authorizedRequest
 	result.outcome.summary = append(result.outcome.summary, slog.Int("upstream_status_code", ur.Resp.StatusCode))
 	if tlsct.IsRedirectStatus(ur.Resp.StatusCode) {
 		err = errors.New("upstream returned an unexpected redirect")
-	} else if ur.Session != nil || ur.EHBP != nil || (input.provider.Name == "nearcloud" && input.path == "/v1/chat/completions" && ur.Resp.StatusCode == http.StatusMisdirectedRequest) {
+	} else if ur.Session != nil || ur.EHBP != nil || input.provider.Name == "phalacloud" || (input.provider.Name == "nearcloud" && input.path == "/v1/chat/completions" && ur.Resp.StatusCode == http.StatusMisdirectedRequest) {
 		var rejected bool
 		rejected, err = provider.KeyRejection(ur.Resp, input.provider.Name, input.path)
 		if rejected {
+			reason := "model_key_rejected"
+			if input.provider.Name == "phalacloud" {
+				reason = "session_not_accepted"
+			}
 			removed := s.authorizations.deleteGeneration(input.key, value.generation)
-			s.logAuthorizationRejection(ctx, input, value, "model_key_rejected", removed, false)
-			result.retryReason = "model_key_rejected"
+			s.logAuthorizationRejection(ctx, input, value, reason, removed, false)
+			result.retryReason = reason
 			if !input.provider.E2EE {
 				return result, false, nil
 			}
 			cleanupAuthorized(ur)
 			result.upstream = nil
-			return result, input.provider.E2EE, errors.New("upstream rejected the attested model key")
+			if input.provider.Name == "phalacloud" {
+				return result, true, errors.New("upstream refused the pinned attested sessions")
+			}
+			return result, true, errors.New("upstream rejected the attested model key")
 		}
 	}
 	if err == nil {
@@ -199,7 +206,7 @@ func (s *Server) checkAuthorizedKeyset(ctx context.Context, input *authorizedReq
 
 func (s *Server) prepareAuthorizedRequest(ctx context.Context, input *authorizedRequest, value *authorization) (*upstreamResult, error) {
 	req, encrypted, err := provider.PrepareInference(ctx, input.provider, input.route, &provider.InferenceInput{
-		Body: input.body, SigningKey: value.signingKey, BackendFormat: value.report.BackendFormat, ModelKey: value.modelKey, Path: input.path, ContentType: input.contentType, Stream: input.stream, Endpoint: input.endpoint,
+		Body: input.body, SigningKey: value.signingKey, BackendFormat: value.report.BackendFormat, ACISessionIDs: value.report.ACISessionIDs, ModelKey: value.modelKey, Path: input.path, ContentType: input.contentType, Stream: input.stream, Endpoint: input.endpoint,
 	})
 	if err != nil {
 		return nil, err

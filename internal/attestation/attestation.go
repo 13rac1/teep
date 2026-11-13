@@ -237,6 +237,11 @@ type RawAttestation struct {
 	// back). Nil for non-ACI/1 formats.
 	ACIWorkloadKeyset any `json:"-"`
 	ACIKeyCustody     any `json:"-"`
+	// ACISessions holds the attested sessions that the attester fetched
+	// for the requested model, as the phalacloud package defines them
+	// (opaque here for the same reason). The proxy and teep verify audit
+	// them (phalacloud.AuditSessions). Nil when no sessions were fetched.
+	ACISessions any `json:"-"`
 
 	// Gateway fields — populated by providers with TEE-attested API gateways.
 	// Empty for providers without a gateway (e.g. Venice, NEAR AI direct).

@@ -70,7 +70,10 @@ func testAttesterTLSBinding(t *testing.T, mode string, wantSuccess bool) {
 		nonce := attestation.NewNonce()
 		var fingerprint, path, query, auth string
 		ts := authority.NewTLSServerForHost(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			path, query, auth = r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")
+			if path == "" {
+				// The first request is the report; the session list follows.
+				path, query, auth = r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")
+			}
 			body := fixture
 			switch mode {
 			case "matching":

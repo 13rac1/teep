@@ -9,15 +9,19 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
+	"github.com/13rac1/teep/internal/provider/aci"
 )
 
 // InferenceInput contains request data and the key from an acquired authorization.
 // Callers must authenticate the key before preparing an attempt.
 type InferenceInput struct {
-	Body              []byte
-	SigningKey        string                    // Non-NEAR protocol key.
-	BackendFormat     attestation.BackendFormat // Format of the attestation that authorized SigningKey.
-	ModelKey          e2ee.NearModelKey         // NEAR key from the acquired authorization.
+	Body          []byte
+	SigningKey    string                    // Non-NEAR protocol key.
+	BackendFormat attestation.BackendFormat // Format of the attestation that authorized SigningKey.
+	ModelKey      e2ee.NearModelKey         // NEAR key from the acquired authorization.
+	// ACISessionIDs are the attested sessions of the acquired authorization;
+	// a Phala Cloud request pins them (aci.PinSessions).
+	ACISessionIDs     []string
 	Path, ContentType string
 	Stream            bool
 	Endpoint          e2ee.EndpointType
@@ -31,6 +35,17 @@ func PrepareInference(ctx context.Context, prov *Provider, route ResolvedRoute, 
 	}
 	if route.Authority() == "" {
 		return nil, e2ee.EncryptResult{}, errors.New("inference requires a resolved route")
+	}
+	if prov.Name == "phalacloud" {
+		// Every Phala Cloud request is served only through a verified
+		// attested session; without one the request fails here.
+		pinned, err := aci.PinSessions(input.Body, input.ACISessionIDs)
+		if err != nil {
+			return nil, e2ee.EncryptResult{}, err
+		}
+		in := *input
+		in.Body = pinned
+		input = &in
 	}
 	encrypted := e2ee.EncryptResult{Body: input.Body}
 	if prov.E2EE {

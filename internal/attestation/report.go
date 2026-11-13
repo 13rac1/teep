@@ -90,6 +90,7 @@ const (
 	FactorE2EECapable          = "e2ee_capable"
 	FactorE2EEUsable           = "e2ee_usable"
 	FactorACIKeyCustody        = "aci_key_custody"
+	FactorACISessionVerified   = "aci_session_verified"
 	FactorACIBackendNamed      = "aci_backend_named"
 	FactorTLSKeyBinding        = "tls_key_binding"
 	FactorCPUGPUChain          = "cpu_gpu_chain"
@@ -180,6 +181,11 @@ type VerificationReport struct {
 	// An inference response must serve the same X-ACI-Keyset-Digest
 	// (SEE: CheckServedKeysetDigest). Internal; excluded from report JSON.
 	ACIKeysetDigest string `json:"-"`
+
+	// ACISessionIDs lists the attested sessions that passed the audit; each
+	// request pins them (aci_session_ids, ACI/1 §5.3). Set only for the
+	// canonical ACI/1 report.
+	ACISessionIDs []string `json:"aci_session_ids,omitempty"`
 }
 
 // CheckServedKeysetDigest compares the X-ACI-Keyset-Digest header of an
@@ -230,6 +236,7 @@ func (r *VerificationReport) Clone() *VerificationReport {
 		dst.Metadata = make(map[string]string, len(r.Metadata))
 		maps.Copy(dst.Metadata, r.Metadata)
 	}
+	dst.ACISessionIDs = slices.Clone(r.ACISessionIDs)
 	return &dst
 }
 
@@ -746,7 +753,7 @@ var KnownFactors = []string{
 	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
 	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaSignature, FactorNvidiaClaims,
 	FactorNvidiaClientNonce, FactorNvidiaNRAS, FactorE2EECapable, FactorE2EEUsable,
-	FactorACIKeyCustody, FactorACIBackendNamed,
+	FactorACIKeyCustody, FactorACIBackendNamed, FactorACISessionVerified,
 	FactorTLSKeyBinding, FactorCPUGPUChain, FactorNVSwitchBinding,
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
@@ -892,6 +899,23 @@ type ACIKeysetResult struct {
 	Detail               string // summary of the above
 }
 
+// ACISessionResult holds the audit of the attested sessions behind the
+// requested model (ACI/1 §9.2). Pinned lists the ids of the sessions that
+// passed every check, which each request pins (aci_session_ids, §5.3).
+type ACISessionResult struct {
+	Pinned  []string
+	Refused []ACISessionRefusal
+	// Err is set when the sessions could not be fetched or selected.
+	Err error
+}
+
+// ACISessionRefusal names a session that teep did not pin, and why.
+type ACISessionRefusal struct {
+	ID         string
+	VerifierID string
+	Reason     string
+}
+
 // TinfoilComponentResult holds per-component Tinfoil Sigstore verification.
 type TinfoilComponentResult struct {
 	Repo             string
@@ -999,6 +1023,10 @@ type ReportInput struct {
 	// ACIKeyset holds the result of Venice ACI/1 workload keyset
 	// verification. Nil for non-ACI/1 providers/formats.
 	ACIKeyset *ACIKeysetResult
+
+	// ACISessions holds the audit of the attested sessions for the
+	// canonical ACI/1 report. Nil for other formats.
+	ACISessions *ACISessionResult
 
 	// TinfoilSC holds Tinfoil-specific Sigstore supply chain results.
 	// Nil for non-Tinfoil providers.
@@ -1126,6 +1154,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 	attestedModel, attestedMatch := "", ""
 	var format BackendFormat
 	aciKeysetDigest := ""
+	var aciSessionIDs []string
 	if in.Raw != nil {
 		tlsKeyFP = in.Raw.TransportTLSFingerprint
 		tlsAuthority = in.Raw.TransportTLSAuthority
@@ -1135,6 +1164,9 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		}
 		if in.Raw.ACICanonicalReport {
 			aciKeysetDigest = in.Raw.ACIWorkloadKeysetDigest
+			if in.ACISessions != nil && in.ACISessions.Err == nil {
+				aciSessionIDs = slices.Clone(in.ACISessions.Pinned)
+			}
 		}
 	}
 
@@ -1157,6 +1189,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 		E2EEBindingFactor:  e2eeBindingFactor(in),
 		BackendFormat:      format,
 		ACIKeysetDigest:    aciKeysetDigest,
+		ACISessionIDs:      aciSessionIDs,
 	}
 }
 
@@ -1245,6 +1278,7 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalE2EEUsable,
 		evalACIKeyCustody,
 		evalACIBackendNamed,
+		evalACISessionVerified,
 		// Tier 3: Supply Chain & Channel Integrity
 		evalTLSKeyBinding,
 		evalCPUGPUChain,
@@ -2030,6 +2064,40 @@ func evalACIKeyCustody(in *ReportInput) []FactorResult {
 		return factor(TierBinding, FactorACIKeyCustody, Fail, in.ACIKeyset.Detail)
 	}
 	return factor(TierBinding, FactorACIKeyCustody, Pass, in.ACIKeyset.Detail)
+}
+
+// evalACISessionVerified states whether at least one attested session of the
+// requested model passed every check of the session audit. The gateway
+// forwards a pinned request only through a pinned session, so the sessions
+// are the verified upstreams of the request. NotApplicable for every format
+// other than the canonical ACI/1 report; enforced for it.
+func evalACISessionVerified(in *ReportInput) []FactorResult {
+	if in.Raw == nil || !in.Raw.ACICanonicalReport {
+		return factor(TierBinding, FactorACISessionVerified, NotApplicable,
+			"not the canonical ACI/1 report")
+	}
+	s := in.ACISessions
+	switch {
+	case s == nil:
+		return factor(TierBinding, FactorACISessionVerified, Fail,
+			"the attested sessions were not audited")
+	case s.Err != nil:
+		return factor(TierBinding, FactorACISessionVerified, Fail,
+			fmt.Sprintf("attested sessions: %v", s.Err))
+	case len(s.Pinned) == 0:
+		return factor(TierBinding, FactorACISessionVerified, Fail,
+			fmt.Sprintf("no attested session passed the audit (%d refused%s)", len(s.Refused), refusalSummary(s.Refused)))
+	}
+	return factor(TierBinding, FactorACISessionVerified, Pass,
+		fmt.Sprintf("%d attested sessions verified and pinned (%d refused%s)", len(s.Pinned), len(s.Refused), refusalSummary(s.Refused)))
+}
+
+// refusalSummary names the reason of the first refused session.
+func refusalSummary(refused []ACISessionRefusal) string {
+	if len(refused) == 0 {
+		return ""
+	}
+	return "; first: " + refused[0].Reason
 }
 
 // evalACIBackendNamed states whether attested evidence of an ACI/1 response

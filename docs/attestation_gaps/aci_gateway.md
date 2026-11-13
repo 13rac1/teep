@@ -47,9 +47,11 @@ For each provider, the remaining exposure is:
 - **Venice:** the inference host operator, and Venice as the party that
   composes the attestation response. Venice's servers relay the encrypted
   content but cannot read it.
-- **Phala Cloud:** the inference host operator. The client's TLS connection
-  ends inside the gateway CVM at the TLS key that the attested keyset lists
-  for the host, and the content is encrypted to the gateway.
+- **Phala Cloud:** the upstreams that teep verified and pinned: Phala's
+  model CVM and Chutes instances, whose attested sessions teep audits
+  (residual exposure 1). The client's TLS connection ends inside the gateway
+  CVM at the TLS key that the attested keyset lists for the host, and the
+  content is encrypted to the gateway.
 - **NanoGPT:** the inference host operator. NanoGPT's servers relay the
   encrypted content, but they see the model name, the tool definitions and
   the request parameters.
@@ -275,8 +277,17 @@ date.
    gap that the allowed core factors state on every report. On a TEE-only
    hostname the measured gateway code verifies the upstream before it
    forwards; on `api.redpill.ai` it may forward to an upstream with no TEE.
-   teep fetches no attested sessions, so it receives no upstream evidence
-   on either kind of hostname.
+   For Venice and NanoGPT, teep receives no upstream evidence. For Phala
+   Cloud, teep audits a bounded set of the attested sessions of the model
+   and pins the sessions that pass on every request, so the gateway serves
+   the request only through a verified upstream. What remains: the client
+   nonce does not reach the upstream (a session is a snapshot of the
+   gateway's verification, with the gateway's nonce); teep has no policy for
+   the RTMR values, compose content and images of the Phala model CVM, and
+   allows RTMR0 of a Chutes instance to fail; it sends no Sigstore, Proof of
+   Cloud or NRAS request for a session; and the bounded set narrows routing
+   to the pinned upstreams. See the
+   [Phala Cloud provider document](../providers/phalacloud/phalacloud_support.md#attested-sessions).
 2. **The KMS root and gateway app id are trust on first use.** The accepted
    dstack-KMS root and gateway app id in `internal/provider/aci/keyset.go`
    were recovered from live attestations. Whoever controls those lists
@@ -373,11 +384,11 @@ date.
 ### Implementation Options
 
 **Provider-side: give the client the upstream evidence.** The only option
-that closes residual exposure 1. The gateway records an attested session
-for each verified upstream and can serve it (ACI/1 §8); a client can verify
-the sessions before it sends and pin them with `aci_session_ids` (ACI/1
-§5.3). Venice and NanoGPT must pass these sessions and the receipts on to
-their own users for this to apply to them.
+that narrows residual exposure 1. The gateway records an attested session
+for each verified upstream and can serve it (ACI/1 §8); teep verifies the
+sessions before it sends and pins them with `aci_session_ids` (ACI/1 §5.3)
+for Phala Cloud. Venice and NanoGPT must pass these sessions and the
+receipts on to their own users for this to apply to them.
 
 **Provider-side: use a TEE-only hostname.** Venice and NanoGPT can call the
 gateway through `tee.redpill.ai` or `inference.phala.com`, or set

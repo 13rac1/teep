@@ -13,11 +13,14 @@ import (
 
 // KeyRejection inspects only a documented pre-inference rejection envelope.
 // It restores the bounded body for ordinary error handling and never logs it.
-// Phala Cloud has no rejection envelope: the ACI/1 gateway reports a changed
-// keyset with X-ACI-Keyset-Digest, which the caller checks.
+// For Phala Cloud the envelope is the ACI/1 refusal of pinned sessions
+// (session_not_accepted, HTTP 412): none of the sessions that the
+// authorization pinned can serve the request, and the gateway did not
+// forward it (ACI/1 §5.3, §10). A changed keyset is reported by
+// X-ACI-Keyset-Digest, which the caller checks.
 func KeyRejection(resp *http.Response, name, path string) (bool, error) {
 	if name == "phalacloud" {
-		return false, nil
+		return sessionRejection(resp)
 	}
 	if name != "nearcloud" && name != "neardirect" && name != "tinfoil_v3_cloud" && name != "tinfoil_v3_direct" {
 		return false, errors.New("unsupported key rejection provider")
@@ -61,6 +64,43 @@ func KeyRejection(resp *http.Response, name, path string) (bool, error) {
 		return nearStaleKeyRejection(body)
 	}
 	return nearKeyRejection(body, nearType)
+}
+
+// sessionRejection reports whether resp is the ACI/1 session_not_accepted
+// refusal. The body must be the OpenAI-compatible error object of ACI/1 §10.
+func sessionRejection(resp *http.Response) (bool, error) {
+	if resp == nil || resp.StatusCode != http.StatusPreconditionFailed {
+		return false, nil
+	}
+	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil {
+		return false, errors.New("invalid rejection content type")
+	}
+	if media != "application/json" {
+		return false, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return false, errors.New("read session rejection response")
+	}
+	if len(body) > 64<<10 {
+		return false, errors.New("session rejection response exceeds limit")
+	}
+	var envelope struct {
+		Error struct {
+			Message *string `json:"message"`
+			Type    *string `json:"type"`
+			Code    any     `json:"code"`
+			Param   any     `json:"param"`
+		} `json:"error"`
+	}
+	unknown, missing, err := jsonstrict.Unmarshal(body, &envelope)
+	if err != nil || len(unknown) > 0 || len(missing) > 0 || envelope.Error.Type == nil || envelope.Error.Message == nil {
+		return false, errors.New("malformed ACI/1 error response")
+	}
+	return *envelope.Error.Type == "session_not_accepted", nil
 }
 
 func ehbpKeyRejection(body []byte) (bool, error) {

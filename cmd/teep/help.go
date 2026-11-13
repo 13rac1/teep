@@ -293,6 +293,20 @@ var factorRegistry = []factorInfo{
 			"for ACI/1, so every ACI/1 report states the gap. Not applicable " +
 			"for other formats.",
 	},
+	{
+		Name:    attestation.FactorACISessionVerified,
+		Tier:    2,
+		Summary: "No attested session of the model passed the audit",
+		Description: "Phala Cloud ACI/1 specific: teep lists the attested " +
+			"sessions behind the requested model, fetches a bounded set of " +
+			"them, and audits the evidence of each: the TDX quote and its " +
+			"TCB, MRTD and MRSEAM, the REPORTDATA binding to the session's " +
+			"nonce, the channel binding, the GPU evidence, and for the Phala " +
+			"model CVM the compose binding and the event-log replay. Each " +
+			"request pins the sessions that pass (aci_session_ids), and the " +
+			"gateway forwards it only through one of them. Fails when no " +
+			"session passes. Enforced. Not applicable for other formats.",
+	},
 	// Tier 3: Supply Chain & Channel Integrity
 	{
 		Name:    attestation.FactorTLSKeyBinding,

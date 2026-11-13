@@ -75,6 +75,92 @@ depth; any other format, also the variants of the compatibility route
   a new authorization (§3.1). An error response is relayed without this
   check.
 
+## Attested sessions
+
+The gateway forwards a request to an upstream that serves the model and
+records each upstream that it verified in an attested session (ACI/1 §8).
+For qwen/qwen3.8-27b these were Phala's own model CVM (the gateway's
+verifier label is `private-ai-verifier/phala-direct/v1`) and Chutes
+instances. teep verifies a bounded set of the sessions and pins them on
+every request; the gateway then serves the request only through a pinned
+session (ACI/1 §5.3, §9.2).
+
+At each full verification of an authorization, the attester lists the
+sessions of the model (`GET /v1/aci/sessions?model=`) and fetches session
+records (`GET /v1/aci/sessions/{id}`):
+
+- Every bundle of the Phala model CVM, then Chutes bundles by the number of
+  sessions they cover, largest first, while the fetched Chutes records stay
+  within 8 MiB (a constant). Sessions that the gateway established from one
+  evidence fetch share their evidence; one GET per bundle gives every
+  session of the bundle, whose records teep rebuilds and checks against
+  their ids (`aci.RebuildSession`).
+- A Chutes GET starts only while the rest of the limit holds the largest
+  Chutes record fetched so far, because the gateway sends a whole record
+  even when teep stops reading.
+- Sessions of another verifier are not fetched: teep does not verify their
+  evidence.
+
+teep checks each record: its id is `hex(sha256(JCS(record)))`, its
+`evidence.data` hashes to `evidence.digest`, and it has every member of
+§8.2 at every depth (`aci.ParseSession`). Then `phalacloud.SessionAuditor`
+verifies the evidence; every check is enforced, and a session that fails
+one is not pinned:
+
+1. The TDX quote: structure, Intel certificate chain, signature, debug off,
+   and online a TCB that is UpToDate.
+2. MRTD and MRSEAM: the Phala model CVM against the dstack base list, a
+   Chutes instance against the Chutes list.
+3. REPORTDATA with the session's own nonce: for the Phala model CVM
+   sha256(signing_address ‖ tls_cert_fingerprint) and the gateway's request
+   nonce, with an ecdsa address that binds the signing key; for Chutes
+   sha256(nonce_hex + e2e_pubkey).
+4. The channel binding names the TLS key of the Phala model CVM or the
+   ML-KEM key of one Chutes instance in the evidence; the identity of the
+   Phala model CVM names its signing address.
+5. The GPU evidence, verified locally with the session nonce, without NRAS.
+6. For the Phala model CVM, the compose binding (MRConfigID) and the
+   event-log replay of RTMR0-3.
+
+`aci_session_verified` (enforced) passes when at least one session passes.
+The report and the authorization carry the ids of the passed sessions, and
+every Phala Cloud request carries them in `provider.aci_session_ids`; a
+request without a verified session is not sent, and a client's own `aci_`
+constraint fails. Sessions stay pinned until the authorization is
+invalidated or evicted; teep applies no session expiry to requests. A
+refusal of the pinned sessions (`session_not_accepted`, HTTP 412) ends the
+authorization generation, and teep sends the request at most once more
+after a new verification (see
+[retry contracts](../../transport/retries.md)).
+
+Observed on 2026-11-01: the gateway served a request pinned to the Phala
+model CVM session and two Chutes sessions. Before the October 2026 Chutes
+measurements were allowed, only the Phala model CVM session passed, and the
+gateway refused a pin with it alone (HTTP 412 `session_not_accepted`); its
+error named the Chutes model id `Qwen/Qwen3.8-27B-TEE`.
+
+## Point of discussion: the bounded set of sessions
+
+teep verifies a bounded set of sessions, and the pin narrows routing to
+the upstreams of that set. The bound limits the load on the gateway:
+
+- A Phala model CVM session is 276 KB; a Chutes bundle was 3.9 MB on
+  2026-10-31 and 4.2 MB on 2026-11-01. On 2026-10-31 the 14 Chutes sessions
+  of qwen/qwen3.8-27b shared 10 bundles, so verifying every session would
+  fetch about 39 MB for each full verification.
+- Under the 8 MiB limit, two 3.9 MB bundles fitted; at 4.2 MB, one bundle
+  fits. On 2026-11-01 teep pinned the Phala model CVM session and the two
+  Chutes sessions of one bundle.
+- Each verified session adds a TDX quote whose Intel PCS collateral teep
+  fetches: one full verification on 2026-11-01 made 16 PCS requests for its
+  4 quotes.
+
+The alternatives are to verify every session (about 39 MB per full
+verification, and the most upstreams to route through) or only the Phala
+model CVM sessions (276 KB, but the gateway refused that pin with HTTP 412
+`session_not_accepted`, its error naming the Chutes model id, so requests
+fail).
+
 ## TLS and E2EE
 
 teep encrypts Phala Cloud chat requests with E2EE v2 of the gateway, the
@@ -112,11 +198,20 @@ Venice and NanoGPT (`ACIDefaultAllowFail`) without `tls_key_binding`, which
 is enforced, and with the GPU signature and nonce factors, because the
 report carries no GPU evidence, and `nonce_match` and
 `gateway_nonce_match`, because the report echoes no nonce.
+`aci_session_verified` is enforced.
 
 ## Known limitations
 
-- The machine that runs the model is not attested to the client.
-- The report carries no GPU evidence that answers the client nonce.
+- The client nonce does not reach the upstream: a session is a snapshot of
+  the gateway's verification at `established_at`, with the gateway's own
+  nonce. teep pins sessions that a verification passed until the
+  authorization ends.
+- teep has no policy for the RTMR values, the compose content and the images
+  of the Phala model CVM, and checks only MRTD, MRSEAM, RTMR1 and RTMR2 of a
+  Chutes instance. It sends no Sigstore, Proof of Cloud or NRAS request for a
+  session.
+- The bounded set narrows routing to the pinned upstreams (see the point of
+  discussion).
 - E2EE v2 defines field paths only for message content. teep refuses a
   request that carries `messages[].tool_calls`, `messages[].function_call`, `messages[].refusal`, `messages[].audio`, `prediction`, `tools`, `functions` and `response_format.json_schema`, and a response with tool calls.
   Not encrypted: the top-level `model`, `messages[].name`, `stop`, `tool_choice` and the top-level `function_call` (which name a function), and the other request parameters, including provider-specific prompt fields, which pass in plaintext.
@@ -155,8 +250,22 @@ report carries no GPU evidence, and `nonce_match` and
 - `TestVerifyRun_PhalaCloudCanonical_Fixture` and
   `TestPhalaCloudCanonical_PinsDecideCustody` in
   [canonical report replay tests](../../../internal/integration/phalacloud_canonical_test.go)
-  replay a live capture of 2026-10-31 from `tee.redpill.ai`, with the E2EE
-  v2 test exchange and its `X-ACI-Keyset-Digest` and `X-Receipt-Id`.
+  replay a live capture of 2026-11-01 from `tee.redpill.ai` (4.8 MB): the
+  report, the sessions, and the pinned E2EE v2 test exchange with its
+  `X-ACI-Keyset-Digest` and `X-Receipt-Id`.
+- `TestParseSessionFixtures`, `TestRebuildSession`,
+  `TestParseSessionRejectsMalformedRecords` and
+  `TestEvidencePartsRejectsMalformedBundles` in
+  [session tests](../../../internal/provider/aci/session_test.go), and
+  `TestPinSessions` and `TestPinSessionsRefuses` in
+  [pin tests](../../../internal/provider/aci/pin_test.go).
+- `TestSessionAuditPhalaModelCVM`, `TestSessionAuditChutes` and
+  `TestSessionAuditRefuses` in
+  [session audit tests](../../../internal/provider/phalacloud/session_audit_test.go);
+  `TestFetchSessionsSelectsBoundedBundles` and `TestSelectBundles` in
+  [session fetch tests](../../../internal/provider/phalacloud/sessions_test.go).
+- `TestAuthorizedPhalaCloudRequiresPinnedSessions`, and the
+  `sessions refused` case of `TestAuthorizedPhalaCloudACIv2`.
 - `TestE2EERoundTrip`, `TestE2EEResponseOfAnotherRequestFails` and
   `TestE2EERejectsRequest` in
   [E2EE v2 encryptor tests](../../../internal/provider/aci/e2ee_test.go)

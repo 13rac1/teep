@@ -310,7 +310,7 @@ Venice only exposes chat completions. No other endpoints are available.
 
 **E2EE protocol:** E2EE v2 of the private-ai-gateway with the secp256k1 suite (`secp256k1-aes-256-gcm-hkdf-sha256`): per-field secp256k1 ECDH + HKDF-SHA256 + AES-256-GCM, encrypted to the gateway E2EE key that the gateway quote binds. The associated data of each field binds its field path, the request model, a 32-byte request nonce and the request timestamp, and for a response field the response id, so a ciphertext that the gateway or teep made does not decrypt in another field, request or model. E2EE is enabled by default.
 
-**Connection model:** Phala Cloud: attestation-bound pooled connections to `tee.redpill.ai` (the gateway negotiated HTTP/1.1 on 2026-10-31), pinned to the TLS key that the attested keyset lists for that host; the `tls_key_binding` factor is enforced. NanoGPT: standard TLS. Streaming is forced; a non-streaming client request receives the reassembled response. The stream must end with `[DONE]`.
+**Connection model:** Phala Cloud: attestation-bound pooled connections to `tee.redpill.ai` (the gateway negotiated HTTP/1.1 on 2026-10-31), pinned to the TLS key that the attested keyset lists for that host; the `tls_key_binding` factor is enforced. Each Phala Cloud request carries `provider.aci_session_ids` with the attested sessions that teep verified; teep refuses a client request that sets an `aci_` member of `provider`. NanoGPT: standard TLS. Streaming is forced; a non-streaming client request receives the reassembled response. The stream must end with `[DONE]`.
 
 | Endpoint | Upstream Path | E2EE | Notes |
 |---|---|---|---|

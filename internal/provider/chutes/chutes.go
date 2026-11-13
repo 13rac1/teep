@@ -16,6 +16,7 @@ package chutes
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -23,6 +24,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -190,30 +192,21 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 // where an evidence entry may reference an instance that joined or left the
 // fleet in between.
 func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody []byte, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
-	var instances e2eInstancesResponse
-	unknownInst, missingInst, err := jsonstrict.UnmarshalWarn(instancesBody, &instances, "chutes instances")
+	instances := &e2eInstancesResponse{}
+	unknownInst, missingInst, err := jsonstrict.UnmarshalWarn(instancesBody, instances, "chutes instances")
 	if err != nil {
 		return nil, fmt.Errorf("chutes: unmarshal instances response: %w", err)
 	}
-	if len(instances.Instances) == 0 {
-		return nil, errors.New("chutes: no instances available")
+	if err := checkInstances(instances); err != nil {
+		return nil, err
 	}
-	if len(instances.Instances) > maxInstances {
-		return nil, fmt.Errorf("chutes: instances has %d entries, max %d",
-			len(instances.Instances), maxInstances)
-	}
-
-	var ar attestationResponse
-	unknownEvid, missingEvid, err := jsonstrict.UnmarshalWarn(evidenceBody, &ar, "chutes evidence")
+	ar := &attestationResponse{}
+	unknownEvid, missingEvid, err := jsonstrict.UnmarshalWarn(evidenceBody, ar, "chutes evidence")
 	if err != nil {
 		return nil, fmt.Errorf("chutes: unmarshal evidence response: %w", err)
 	}
-	if len(ar.Evidence) == 0 {
-		return nil, errors.New("chutes: no evidence entries returned")
-	}
-	if len(ar.Evidence) > maxEvidence {
-		return nil, fmt.Errorf("chutes: evidence has %d entries, max %d",
-			len(ar.Evidence), maxEvidence)
+	if err := checkEvidence(ar); err != nil {
+		return nil, err
 	}
 
 	// Build instance lookup map for O(1) matching. Keyed by instance ID.
@@ -267,6 +260,112 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 			"skipped", skipped, "used_instance", matched.InstanceID)
 	}
 
+	raw, err := instanceRaw(ctx, matched, matchedInst.E2EPubKey)
+	if err != nil {
+		return nil, err
+	}
+	raw.CandidatesAvail = len(ar.Evidence)
+	raw.CandidatesEval = skipped + 1
+	raw.E2ENonce = matchedInst.Nonces[0]
+	raw.UnknownFields = slices.Concat(unknownInst, unknownEvid)
+	raw.MissingFields = slices.Concat(missingInst, missingEvid)
+	raw.RawBody = evidenceBody
+	return raw, nil
+}
+
+// ParseInstanceAttestation returns the attestation of the instance
+// instanceID from an evidence response and one or more instance lists, as
+// the evidence of an attested session of the private-ai-gateway records
+// them. Every instance list that names the instance must give it the same
+// E2EE public key. nonce is the nonce of the evidence request. The result
+// carries no E2EE request nonce: the attestation is not used to encrypt.
+func ParseInstanceAttestation(ctx context.Context, instancesBodies [][]byte, evidenceBody []byte, instanceID string, nonce attestation.Nonce) (*attestation.RawAttestation, error) {
+	var pubKey string
+	var unknown, missing []string
+	for i, body := range instancesBodies {
+		instances := &e2eInstancesResponse{}
+		u, m, err := jsonstrict.UnmarshalWarn(body, instances, "chutes instances")
+		if err != nil {
+			return nil, fmt.Errorf("chutes: unmarshal instance list %d: %w", i, err)
+		}
+		if err := checkInstances(instances); err != nil {
+			return nil, fmt.Errorf("instance list %d: %w", i, err)
+		}
+		unknown, missing = append(unknown, u...), append(missing, m...)
+		for j := range instances.Instances {
+			inst := &instances.Instances[j]
+			if inst.InstanceID != instanceID {
+				continue
+			}
+			if inst.E2EPubKey == "" {
+				return nil, fmt.Errorf("chutes: instance %s has no e2e_pubkey", instanceID)
+			}
+			if pubKey != "" && subtle.ConstantTimeCompare([]byte(pubKey), []byte(inst.E2EPubKey)) != 1 {
+				return nil, fmt.Errorf("chutes: instance lists give instance %s different e2e_pubkey values", instanceID)
+			}
+			pubKey = inst.E2EPubKey
+		}
+	}
+	if pubKey == "" {
+		return nil, fmt.Errorf("chutes: no instance list names instance %s", instanceID)
+	}
+	ar := &attestationResponse{}
+	u, m, err := jsonstrict.UnmarshalWarn(evidenceBody, ar, "chutes evidence")
+	if err != nil {
+		return nil, fmt.Errorf("chutes: unmarshal evidence response: %w", err)
+	}
+	if err := checkEvidence(ar); err != nil {
+		return nil, err
+	}
+	var matched *instanceEvidence
+	for i := range ar.Evidence {
+		if ar.Evidence[i].InstanceID != instanceID {
+			continue
+		}
+		if matched != nil {
+			return nil, fmt.Errorf("chutes: evidence lists instance %s twice", instanceID)
+		}
+		matched = &ar.Evidence[i]
+	}
+	if matched == nil {
+		return nil, fmt.Errorf("chutes: evidence has no entry for instance %s", instanceID)
+	}
+	raw, err := instanceRaw(ctx, matched, pubKey)
+	if err != nil {
+		return nil, err
+	}
+	raw.CandidatesAvail = len(ar.Evidence)
+	raw.CandidatesEval = 1
+	raw.UnknownFields = slices.Concat(unknown, u)
+	raw.MissingFields = slices.Concat(missing, m)
+	raw.RawBody = evidenceBody
+	return raw, nil
+}
+
+func checkInstances(instances *e2eInstancesResponse) error {
+	if len(instances.Instances) == 0 {
+		return errors.New("chutes: no instances available")
+	}
+	if len(instances.Instances) > maxInstances {
+		return fmt.Errorf("chutes: instances has %d entries, max %d",
+			len(instances.Instances), maxInstances)
+	}
+	return nil
+}
+
+func checkEvidence(ar *attestationResponse) error {
+	if len(ar.Evidence) == 0 {
+		return errors.New("chutes: no evidence entries returned")
+	}
+	if len(ar.Evidence) > maxEvidence {
+		return fmt.Errorf("chutes: evidence has %d entries, max %d",
+			len(ar.Evidence), maxEvidence)
+	}
+	return nil
+}
+
+// instanceRaw converts the evidence of one instance and its E2EE public key.
+func instanceRaw(ctx context.Context, matched *instanceEvidence, pubKey string) (*attestation.RawAttestation, error) {
 	if len(matched.GPUEvidence) > maxGPUEvidence {
 		return nil, fmt.Errorf("chutes: instance %s has %d GPU evidence entries, max %d",
 			matched.InstanceID, len(matched.GPUEvidence), maxGPUEvidence)
@@ -286,7 +385,7 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 		"instance_id", matched.InstanceID,
 		"gpus", len(matched.GPUEvidence),
 		"has_quote", matched.Quote != "",
-		"has_e2e_pubkey", matchedInst.E2EPubKey != "",
+		"has_e2e_pubkey", pubKey != "",
 	)
 
 	// The evidence response echoes no nonce: Nonce stays empty, and the
@@ -295,7 +394,7 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 	return &attestation.RawAttestation{
 		BackendFormat: attestation.FormatChutes,
 		TEEProvider:   "TDX+NVIDIA",
-		SigningKey:    matchedInst.E2EPubKey,
+		SigningKey:    pubKey,
 		SigningAlgo:   "ml-kem-768",
 		IntelQuote:    intelQuoteHex,
 		GPUEvidence:   matched.GPUEvidence,
@@ -303,15 +402,7 @@ func ParseAttestationResponse(ctx context.Context, instancesBody, evidenceBody [
 		TEEHardware: "intel-tdx",
 		NonceSource: attestation.NonceSourceNotEchoed,
 
-		CandidatesAvail: len(ar.Evidence),
-		CandidatesEval:  skipped + 1,
-
 		InstanceID: matched.InstanceID,
-		E2ENonce:   matchedInst.Nonces[0],
-
-		UnknownFields: append(unknownInst, unknownEvid...),
-		MissingFields: append(missingInst, missingEvid...),
-		RawBody:       evidenceBody,
 	}, nil
 }
 
