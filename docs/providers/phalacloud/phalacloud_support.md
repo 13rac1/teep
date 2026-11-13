@@ -171,6 +171,9 @@ served. The other three models were not sent a request.
 
 ## Receipts
 
+[Phala Cloud stream endings](stream_endings.md) lists every way a streamed
+response can end, with what teep checks and when the authorization ends.
+
 `teep serve` requires a signed ACI receipt that verifies for every
 successful Phala Cloud response (ACI/1 §7, §9.3), and `teep verify` requires
 one for its probe response. teep hashes the response
