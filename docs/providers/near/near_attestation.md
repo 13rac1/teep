@@ -35,8 +35,8 @@ the request only if every instance passes:
   algorithm and `ohttp_key_config`. Different keys fail, because teep
   cannot tell which instance holds the key it encrypts to.
 - A name with more than 8 entries fails. Each entry costs one quote, NVIDIA
-  NRAS and Proof of Cloud check, one check of the gateway evidence, and one
-  Sigstore and Rekor lookup for each image digest.
+  NRAS and Proof of Cloud check; the gateway evidence and each image digest
+  are checked once for all entries.
 - Teep runs the full model verification on each instance against the same
   gateway evidence. It checks that gateway evidence once, and looks up each
   image digest in Sigstore and Rekor once, for all instances of the model.

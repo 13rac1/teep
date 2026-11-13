@@ -212,16 +212,8 @@ type evidenceVerifier struct {
 	client      *http.Client
 	tdx         attestation.TDXVerifier
 	sev         attestation.SEVVerifier
-	gateway     attestation.GatewayMemo[gatewayResults]
+	gateway     attestation.GatewayMemo
 	supplyChain *attestation.SupplyChainMemo
-}
-
-// gatewayResults are the results of the gateway TDX checks of one
-// verification.
-type gatewayResults struct {
-	tdx     *attestation.TDXVerifyResult
-	compose *attestation.ComposeBindingResult
-	poc     *attestation.PoCResult
 }
 
 // mergeReplicas verifies every other instance of the model in raw and merges
@@ -282,13 +274,13 @@ func (ev *evidenceVerifier) report(ctx context.Context, raw *attestation.RawAtte
 	}
 
 	// Gateway verification for providers that populate GatewayIntelQuote.
-	gw := ev.gateway.Get(raw, func() gatewayResults {
-		var g gatewayResults
-		g.tdx, g.compose, g.poc = verifyGatewayTDX(ctx, raw, ev.nonce, ev.client, ev.opts.Offline, ev.tdx,
+	gw := ev.gateway.Get(raw, func() attestation.GatewayResults {
+		var g attestation.GatewayResults
+		g.TDX, g.Compose, g.PoC = verifyGatewayTDX(ctx, raw, ev.nonce, ev.client, ev.opts.Offline, ev.tdx,
 			newGatewayReportDataVerifier(ev.opts.ProviderName), ev.opts.VerificationTime)
 		return g
 	})
-	gatewayTDX, gatewayCompose, gatewayPoCResult := gw.tdx, gw.compose, gw.poc
+	gatewayTDX, gatewayCompose, gatewayPoCResult := gw.TDX, gw.Compose, gw.PoC
 	var gatewayCD attestation.ComposeDigests
 	if gatewayCompose != nil && gatewayCompose.Err == nil {
 		gatewayCD = attestation.ExtractComposeDigests(raw.GatewayAppCompose)

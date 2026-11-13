@@ -1028,16 +1028,8 @@ func (s *Server) verifyReplicas(ctx context.Context, prov *provider.Provider, up
 // requests to external services at one set for the gateway and one for each
 // digest, whatever the number of instances.
 type instanceShared struct {
-	gateway     attestation.GatewayMemo[gatewayResults]
+	gateway     attestation.GatewayMemo
 	supplyChain *attestation.SupplyChainMemo
-}
-
-// gatewayResults are the results of the gateway TDX checks of one
-// verification.
-type gatewayResults struct {
-	tdx     *attestation.TDXVerifyResult
-	compose *attestation.ComposeBindingResult
-	poc     *attestation.PoCResult
 }
 
 // verifyAttestation verifies the evidence of one model instance and builds
@@ -1049,12 +1041,12 @@ func (s *Server) verifyAttestation(ctx context.Context, prov *provider.Provider,
 	tdxResult, tdxDur := s.verifyTDX(ctx, raw, nonce, prov)
 	sevResult, sevDur := s.verifySEV(ctx, raw, nonce, prov)
 	gatewaySEVResult := s.verifyGatewaySEV(ctx, raw, nonce, prov)
-	gw := shared.gateway.Get(raw, func() gatewayResults {
-		var g gatewayResults
-		g.tdx, g.compose, g.poc = s.verifyGatewayTDX(ctx, raw, nonce, prov)
+	gw := shared.gateway.Get(raw, func() attestation.GatewayResults {
+		var g attestation.GatewayResults
+		g.TDX, g.Compose, g.PoC = s.verifyGatewayTDX(ctx, raw, nonce, prov)
 		return g
 	})
-	gatewayTDXResult, gatewayComposeResult, gatewayPoCResult := gw.tdx, gw.compose, gw.poc
+	gatewayTDXResult, gatewayComposeResult, gatewayPoCResult := gw.TDX, gw.Compose, gw.PoC
 	nvidiaResult, nvidiaDur := verifyNVIDIA(ctx, raw, nonce, prov.Name)
 	nrasResult, nrasDur := s.verifyNVIDIAOnline(ctx, raw, nonce, prov.Name)
 	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)

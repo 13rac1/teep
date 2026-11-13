@@ -87,15 +87,16 @@ func TestSupplyChainMemoNil(t *testing.T) {
 }
 
 // The gateway checks run once for gateway evidence that every instance
-// shares, and again when the evidence differs.
+// shares, and again when any field that a gateway check or a gateway
+// REPORTDATA verifier reads differs.
 func TestGatewayMemo(t *testing.T) {
-	var memo GatewayMemo[int]
+	var memo GatewayMemo
 	calls := 0
-	verify := func() int { calls++; return calls }
+	verify := func() GatewayResults { calls++; return GatewayResults{PoC: &PoCResult{}} }
 	raw := &RawAttestation{GatewayIntelQuote: "q", GatewayAppCompose: "c", GatewayNonceHex: "n"}
 	same := *raw
-	if a, b := memo.Get(raw, verify), memo.Get(&same, verify); a != 1 || b != 1 || calls != 1 {
-		t.Fatalf("same evidence: results %d, %d after %d calls", a, b, calls)
+	if a, b := memo.Get(raw, verify), memo.Get(&same, verify); a.PoC != b.PoC || calls != 1 {
+		t.Fatalf("same evidence: %d calls, shared result %v", calls, a.PoC == b.PoC)
 	}
 	for _, change := range []func(*RawAttestation){
 		func(r *RawAttestation) { r.GatewayIntelQuote = "q2" },
@@ -103,6 +104,12 @@ func TestGatewayMemo(t *testing.T) {
 		func(r *RawAttestation) { r.GatewayNonceHex = "n2" },
 		func(r *RawAttestation) { r.GatewaySigningAddress = "s2" },
 		func(r *RawAttestation) { r.GatewayTLSFingerprint = "f2" },
+		func(r *RawAttestation) { r.SigningKey = "k2" },
+		func(r *RawAttestation) { r.SigningAddress = "a2" },
+		func(r *RawAttestation) { r.ACICanonicalReport = true },
+		func(r *RawAttestation) { r.ACIWorkloadKeysetDigest = "d2" },
+		func(r *RawAttestation) { r.ACIWorkloadKeyset = map[string]string{"keys": "k2"} },
+		func(r *RawAttestation) { r.GatewayEventLog = []EventLogEntry{{IMR: 3, Event: "app-id"}} },
 	} {
 		other := *raw
 		change(&other)

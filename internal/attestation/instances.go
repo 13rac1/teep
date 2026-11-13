@@ -2,41 +2,90 @@ package attestation
 
 import (
 	"context"
-	"crypto/subtle"
+	"encoding/json"
 	"slices"
 )
 
-// GatewayMemo holds the gateway verification result of one verification of
-// several instances of a model. Every instance carries the same gateway
-// evidence, so the gateway quote, compose and Proof of Cloud checks run once.
+// GatewayResults are the results of the gateway TDX checks of one
+// verification: the gateway quote with its REPORTDATA binding, the gateway
+// compose binding, and the Proof of Cloud check of the gateway quote.
+type GatewayResults struct {
+	TDX     *TDXVerifyResult
+	Compose *ComposeBindingResult
+	PoC     *PoCResult
+}
+
+// GatewayMemo holds the gateway results of one verification of several
+// instances of a model. Every instance of a NEAR cloud model carries the same
+// gateway evidence, so the gateway checks run once.
+//
+// A result is reused only for an instance whose key fields are equal, so a
+// failure of the first instance's gateway checks (a transient collateral or
+// Proof of Cloud error, or a cancelled context) is reused for the others too.
+// The verdict stays the same for every instance, and no request repeats.
+//
 // It is not safe for concurrent use: one verification uses it in sequence.
-type GatewayMemo[T any] struct {
-	key   string
-	value T
+type GatewayMemo struct {
+	key   gatewayMemoKey
+	value GatewayResults
 	set   bool
 }
 
-// Get returns the result for the gateway evidence of raw. It calls verify
-// for the first instance and again for any instance whose gateway evidence
-// differs from the stored one.
-func (m *GatewayMemo[T]) Get(raw *RawAttestation, verify func() T) T {
-	key := gatewayMemoKey(raw)
-	if m.set && subtle.ConstantTimeCompare([]byte(m.key), []byte(key)) == 1 {
+// Get returns the gateway results for raw. It calls verify for the first
+// instance and again for any instance whose key fields differ.
+func (m *GatewayMemo) Get(raw *RawAttestation, verify func() GatewayResults) GatewayResults {
+	key := newGatewayMemoKey(raw)
+	if m.set && key == m.key {
 		return m.value
 	}
 	m.key, m.value, m.set = key, verify(), true
 	return m.value
 }
 
-// gatewayMemoKey joins the gateway evidence that the gateway checks read.
-// The gateway event log is bound to the quote by the RTMR replay.
-func gatewayMemoKey(raw *RawAttestation) string {
-	return raw.GatewayIntelQuote + "\x00" + raw.GatewayAppCompose + "\x00" + raw.GatewayNonceHex + "\x00" +
-		raw.GatewaySigningAddress + "\x00" + raw.GatewayTLSFingerprint
+// gatewayMemoKey holds every field of RawAttestation that a gateway check
+// or a gateway REPORTDATA verifier reads. The key is public evidence, so the
+// comparison need not be constant time.
+//
+// The gateway checks read GatewayIntelQuote, GatewayAppCompose, and, in
+// the REPORTDATA verifiers: GatewayNonceHex, GatewaySigningAddress and
+// GatewayTLSFingerprint (nearcloud); SigningKey and SigningAddress
+// (venice); SigningKey, ACICanonicalReport and the ACI workload keyset
+// (aci). The memoised function does not read GatewayEventLog: the report
+// builder replays it for each instance from that instance's attestation.
+// The key holds it too, so equal keys mean equal gateway evidence. A field
+// that a gateway check starts to read must be added here.
+type gatewayMemoKey struct {
+	quote, compose, nonce, gatewayAddress, gatewayTLS string
+	signingKey, signingAddress                        string
+	aciCanonical                                      bool
+	aciKeysetDigest, aciKeyset, eventLog              string
+}
+
+func newGatewayMemoKey(raw *RawAttestation) gatewayMemoKey {
+	return gatewayMemoKey{
+		quote: raw.GatewayIntelQuote, compose: raw.GatewayAppCompose, nonce: raw.GatewayNonceHex,
+		gatewayAddress: raw.GatewaySigningAddress, gatewayTLS: raw.GatewayTLSFingerprint,
+		signingKey: raw.SigningKey, signingAddress: raw.SigningAddress,
+		aciCanonical: raw.ACICanonicalReport, aciKeysetDigest: raw.ACIWorkloadKeysetDigest,
+		aciKeyset: memoJSON(raw.ACIWorkloadKeyset), eventLog: memoJSON(raw.GatewayEventLog),
+	}
+}
+
+// memoJSON encodes v for a memo key. A value that does not encode gets a
+// key that matches no other, so its result is never reused.
+func memoJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "unencodable:" + NewNonce().Hex()
+	}
+	return string(b)
 }
 
 // SupplyChainMemo holds the Sigstore and Rekor results of one verification
 // of several instances of a model, so each image digest is looked up once.
+// A failed lookup (a transient Rekor error or a cancelled context) is reused
+// for the other instances too: the verdict stays the same for every
+// instance, and no request repeats.
 // A result depends only on the digest and, for provenance, on its
 // repository and the supply chain policy, which one verification does not
 // change. It is not safe for concurrent use: one verification uses it in
