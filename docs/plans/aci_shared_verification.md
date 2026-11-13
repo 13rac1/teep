@@ -1,7 +1,7 @@
 # Plan: Shared ACI/1 Verification for Venice, Phala Cloud and NanoGPT
 
-Status: approved with the operator decisions below; implementation in
-progress, one commit per phase.
+Status: designed with the decisions below; implementation in progress, one
+commit per phase.
 
 ## Problem
 
@@ -18,10 +18,9 @@ list.
 ## Findings from the live attestations
 
 Captured on 2026-10-27 with teep 95231cf plus the Chutes evidence bound
-change (the ACI/1 code is that of main), with the operator's keys. Each
+change (the ACI/1 code is that of main), with provider API keys. Each
 capture failed at parsing and was saved on error; it holds one response,
-the attestation body. The captures are in
-`/home/agent/Projects/hm/teep-live-tests/aci-shared-2026-10-27/captures/`:
+the attestation body. The captures are not committed:
 
 | Provider | Model | Capture directory | captured_at (UTC) | Client nonce (prefix) |
 |---|---|---|---|---|
@@ -99,16 +98,16 @@ not committed.
    `api.redpill.ai` is not TEE-only, so the gateway may route its requests to
    upstreams without a TEE.
 
-## Operator decisions
+## Decisions
 
 1. **Pins:** one shared pin list for the gateway deployment (accepted KMS
    root, gateway app id), used by Venice, Phala Cloud and NanoGPT.
 2. **Nonce:** `nonce_match` and `gateway_nonce_match` check the echoed nonce
    only. A gateway-variant response echoes none, so both fail visibly; its
    freshness rests on `gateway_tee_reportdata_binding`, and the GPU evidence
-   nonce on `nvidia_nonce_client_bound` (revised 2026-10-31: the earlier
-   rule passed both factors on the REPORTDATA binding, a second pass of an
-   enforced factor).
+   nonce on `nvidia_nonce_client_bound`. The two factors do not pass on the
+   REPORTDATA binding, because that would pass an enforced factor a second
+   time.
 3. **`all_attestations`:** exactly one entry, equal to the top-level fields;
    any other content fails the parse.
 4. **Unnamed model:** a new factor, allowed to fail by default, that states
@@ -211,7 +210,7 @@ specification gaps in `aci_specification.md`.
 
 The two captures above are pin provenance only: they were saved on error.
 After phases 3 and 4, each model is recaptured with the new build and
-`--capture` into `/home/agent/Projects/hm/teep-live-tests/<branch>-<date>/`.
+`--capture` into `<dir>`.
 A capture becomes a fixture only if teep exits 0, or the report is blocked
 with the expected enforced failures only, and `teep verify --reverify`
 exits 0. The key material scan runs before staging. Fixtures are named
