@@ -53,7 +53,22 @@ type RecordedEntry struct {
 	// request: the text can carry the time of the failure, so replay
 	// cannot rebuild it.
 	Err string `json:"error,omitempty"`
+
+	// BodyErr is the error text of a response body that stopped with a
+	// read error (a reset or a cut stream). Body holds the bytes that
+	// arrived. Replay returns them and then this error, so the verifier
+	// sees the same failure.
+	BodyErr string `json:"body_error,omitempty"`
 }
+
+// errorAfter returns body and then err.
+func errorAfter(body []byte, err error) io.ReadCloser {
+	return io.NopCloser(io.MultiReader(bytes.NewReader(body), bodyErrReader{err}))
+}
+
+type bodyErrReader struct{ err error }
+
+func (r bodyErrReader) Read([]byte) (int, error) { return 0, r.err }
 
 // E2EEOutcome records the result of a live E2EE test for capture/replay.
 // This is a serializable mirror of attestation.E2EETestResult (which contains
@@ -191,14 +206,20 @@ func (t *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 		return nil, err
 	}
 
-	// Read response body for recording, then replace with a new reader.
+	// Read response body for recording, then replace with a new reader. A
+	// body that stops with a read error keeps the bytes that arrived and
+	// gives the caller the same error after them, as the live body would.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRecordBody))
 	resp.Body.Close()
+	var bodyErr string
 	if err != nil {
-		return nil, err
+		bodyErr = err.Error()
+		resp.Body = errorAfter(body, err)
+		resp.ContentLength = -1
+	} else {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
 	}
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-	resp.ContentLength = int64(len(body))
 
 	entry := RecordedEntry{
 		Method:   req.Method,
@@ -208,6 +229,7 @@ func (t *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 		Headers:  resp.Header.Clone(),
 		ReqBody:  reqBody,
 		Body:     body,
+		BodyErr:  bodyErr,
 		Duration: elapsed,
 	}
 	if resp.TLS != nil {
@@ -311,6 +333,10 @@ func (t *replayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			Header:        e.Headers.Clone(),
 			Body:          io.NopCloser(bytes.NewReader(e.Body)),
 			ContentLength: int64(len(e.Body)),
+		}
+		if e.BodyErr != "" {
+			resp.Body = errorAfter(e.Body, errors.New(e.BodyErr))
+			resp.ContentLength = -1
 		}
 		// Reconstruct resp.TLS so TLS-channel-binding verification (e.g.
 		// tinfoil's peer SPKI check) works under replay. We synthesize a

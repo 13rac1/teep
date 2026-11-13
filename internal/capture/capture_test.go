@@ -864,12 +864,16 @@ type errReader struct{ err error }
 
 func (e errReader) Read(_ []byte) (int, error) { return 0, e.err }
 
+// A response body that stops with a read error is recorded with the bytes
+// that arrived and the error. The caller reads the same bytes and then the
+// error, live and in replay, so a reset stream is not turned into a request
+// that failed before its response.
 func TestRecordingTransport_ResponseBodyReadError(t *testing.T) {
-	t.Logf("testing RecordingTransport where reading the response body fails")
 	base := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(errReader{err: errors.New("read error")}),
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body:       io.NopCloser(io.MultiReader(strings.NewReader("data: 1\n\n"), errReader{err: errors.New("stream reset")})),
 		}, nil
 	})
 
@@ -879,12 +883,28 @@ func TestRecordingTransport_ResponseBodyReadError(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, err := rec.RoundTrip(req)
-	if resp != nil {
-		resp.Body.Close()
+	if err != nil {
+		t.Fatalf("RoundTrip: %v; want the response and the error in its body", err)
 	}
-	t.Logf("body read error result: resp=%v err=%v", resp, err)
-	if err == nil {
-		t.Fatal("expected error from body read failure, got nil")
+	got, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(got) != "data: 1\n\n" || readErr == nil || readErr.Error() != "stream reset" {
+		t.Fatalf("live body = %q, %v; want the bytes that arrived, then the error", got, readErr)
+	}
+	entries := rec.Snapshot()
+	if len(entries) != 1 || string(entries[0].Body) != "data: 1\n\n" || entries[0].BodyErr != "stream reset" {
+		t.Fatalf("recorded %+v", entries)
+	}
+
+	replay := NewReplayTransport(entries)
+	resp, err = replay.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("replay RoundTrip: %v", err)
+	}
+	got, readErr = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(got) != "data: 1\n\n" || readErr == nil || readErr.Error() != "stream reset" {
+		t.Fatalf("replay body = %q, %v; want the recorded bytes, then the error", got, readErr)
 	}
 }
 
