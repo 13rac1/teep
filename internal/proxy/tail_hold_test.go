@@ -132,3 +132,59 @@ func TestTailHoldDrain(t *testing.T) {
 		}
 	})
 }
+
+// The handler that sees the client's end before the hold's watch runs makes
+// the drain transition itself: it arms the drain bound once, and the watch
+// that runs later changes nothing.
+func TestTailHoldClientEnded(t *testing.T) {
+	t.Run("after content, before the watch", func(t *testing.T) {
+		var armed atomic.Int32
+		onDrain := func() func() bool { armed.Add(1); return func() bool { return true } }
+		ctx, cancel := context.WithCancel(t.Context())
+		h := newTailHold(ctx, func() { t.Error("onAbandon after content") }, onDrain)
+		defer h.release()
+		h.markContent()
+		if !h.clientEnded() {
+			t.Fatal("clientEnded after content did not drain")
+		}
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+		if !h.draining() || armed.Load() != 1 {
+			t.Fatalf("draining=%v armed=%d, want true and 1", h.draining(), armed.Load())
+		}
+		if h.enterTail() {
+			t.Fatal("the tail read was claimed during the drain")
+		}
+	})
+	t.Run("after the tail claim", func(t *testing.T) {
+		var armed atomic.Int32
+		onDrain := func() func() bool { armed.Add(1); return func() bool { return true } }
+		h := newTailHold(t.Context(), func() {}, onDrain)
+		defer h.release()
+		h.markContent()
+		if !h.enterTail() {
+			t.Fatal("the tail read was not claimed")
+		}
+		if h.clientEnded() || armed.Load() != 0 {
+			t.Fatal("clientEnded after the tail claim started a drain")
+		}
+	})
+	t.Run("before content", func(t *testing.T) {
+		h := newTailHold(t.Context(), func() {}, func() func() bool { return func() bool { return true } })
+		defer h.release()
+		if h.clientEnded() {
+			t.Fatal("clientEnded before content started a drain")
+		}
+	})
+	t.Run("released", func(t *testing.T) {
+		var armed atomic.Int32
+		onDrain := func() func() bool { armed.Add(1); return func() bool { return true } }
+		h := newTailHold(t.Context(), func() {}, onDrain)
+		h.markContent()
+		h.release()
+		h.clientEnded()
+		if armed.Load() != 0 {
+			t.Fatal("a released hold armed the drain bound")
+		}
+	})
+}

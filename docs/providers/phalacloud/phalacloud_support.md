@@ -503,7 +503,9 @@ stream failed.
   another request, a 2xx status other than 200, a comment line then a
   reset, and a client that hangs up, whose deadline passes or
   whose connection breaks (the generation stays). `TestEndedByClient`
-  checks who a relay failure names, teep's own deadline included, and
+  checks who a relay failure names, teep's own deadline included,
+  `TestTailHoldClientEnded` that a client end the handler sees first is
+  drained as one the hold's watch sees first, and
   `TestVerifyReceiptChecksServiceStatementsFirst` the order of the receipt
   check. `TestStandalonePhalaCloudProbe` checks the receipt of the
   `teep verify` probe and its capture, the same two resets, a reset

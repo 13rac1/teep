@@ -25,7 +25,10 @@ const (
 //     abandoned (onAbandon stops it), as before.
 //   - The client leaves after content reached it (markContent): teep stops
 //     writing downstream but keeps the attempt, and onDrain arms the drain
-//     bound; the handler reads the rest of the stream (draining).
+//     bound; the handler reads the rest of the stream (draining). When the
+//     handler sees the client's end first (a downstream write error, or
+//     the client's context), clientEnded makes the same transition, so
+//     goroutine scheduling does not decide between the drain and no check.
 //   - The relay failed for a reason that is not the client's: the handler
 //     claims the tail read first (enterTail); a later client end does not
 //     touch the attempt.
@@ -49,14 +52,31 @@ func newTailHold(clientCtx context.Context, onAbandon func(), onDrain func() (st
 		case h.state.CompareAndSwap(holdRelaying, holdAbandoned):
 			onAbandon()
 		case h.state.CompareAndSwap(holdContent, holdDraining):
-			h.mu.Lock()
-			if h.onDrain != nil {
-				h.drain = h.onDrain()
-			}
-			h.mu.Unlock()
+			h.armDrain()
 		}
 	})
 	return h
+}
+
+// armDrain arms the drain bound once, unless release came first.
+func (h *tailHold) armDrain() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.onDrain != nil {
+		h.drain = h.onDrain()
+		h.onDrain = nil
+	}
+}
+
+// clientEnded records that the handler saw the client's end after content,
+// before the watch of the client's context ran: the hold moves to the drain
+// and arms its bound, as the watch would. It reports whether teep drains,
+// which is false only when the handler claimed the tail read first.
+func (h *tailHold) clientEnded() bool {
+	if h.state.CompareAndSwap(holdContent, holdDraining) {
+		h.armDrain()
+	}
+	return h.state.Load() == holdDraining
 }
 
 // markContent records that content reached the client.

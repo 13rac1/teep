@@ -168,6 +168,7 @@ func (s *Server) authorizedRoundtrip(ctx context.Context, input *authorizedReque
 		if drainable {
 			result.upstream.MarkContent = hold.markContent
 			result.upstream.Draining = hold.draining
+			result.upstream.ClientEnded = hold.clientEnded
 		}
 		result.upstream.RelayDeadline = attemptDeadline
 	}
@@ -455,7 +456,7 @@ func (s *Server) relayAuthorized(clientCtx, ctx context.Context, w http.Response
 	case input.stream && (streamStats.Chunks > 0 || streamStats.Forwarded > 0):
 		// The stream failed after content reached the client: the check
 		// must still run, or the gateway could skip it.
-		s.checkReceiptAfterRelayFailure(clientCtx, input, result, receipt, relayEnding{err: err, downstream: writer.err, upstreamBody: resp.Body, enterTail: ur.EnterTail, draining: ur.Draining})
+		s.checkReceiptAfterRelayFailure(clientCtx, input, result, receipt, relayEnding{err: err, downstream: writer.err, upstreamBody: resp.Body, enterTail: ur.EnterTail, draining: ur.Draining, clientEnded: ur.ClientEnded})
 	}
 	if err != nil || writer.check() != nil {
 		if input.stream {

@@ -179,10 +179,10 @@ func TestAuthorizedPhalaCloudACIv2(t *testing.T) {
 			// A comment line reaches the client as it is, so the stream
 			// counts as delivered although no data line came.
 			{name: "comment then reset, no data", served: testKeysetA, commentThenReset: true, wantErr: true, wantReceiptGET: true, ended: true},
-			// The client hangs up when it reads teep's error event, while
-			// teep still reads the rest of the stream that the gateway
-			// signed. The honest receipt must still decide.
-			{name: "client hangs up before teep claims the tail read", served: testKeysetA, tailAfterFirst: "event: error\n\n", laterTail: "data: [DONE]\n\n", signTail: true, hangUpBeforeTailClaim: true, wantErr: true, wantRelayed: true, wantNoReceiptGET: true},
+			// The client hangs up when it reads teep's error event, before
+			// teep claims the tail read: the stream is drained, and the
+			// receipt over the whole stream decides.
+			{name: "client hangs up before teep claims the tail read", served: testKeysetA, tailAfterFirst: "event: error\n\n", laterTail: "data: [DONE]\n\n", signTail: true, hangUpBeforeTailClaim: true, wantErr: true, wantRelayed: true, wantReceiptGET: true},
 			// The relay error comes first, so teep claims the attempt for the
 			// tail read; the client's end after that does not stop the
 			// upstream read, and the receipt over the whole stream verifies.
@@ -204,7 +204,7 @@ func TestAuthorizedPhalaCloudACIv2(t *testing.T) {
 			// pin decodes it strictly), so no content goes out unchecked; the
 			// generation stays.
 			{name: "request body with a duplicate member", served: testKeysetA, duplicateMember: true, wantErr: true},
-			{name: "downstream write fails after the first chunk", served: testKeysetA, downstreamFailOn: "Hel", wantErr: true},
+			{name: "downstream write fails after the first chunk", served: testKeysetA, downstreamFailOn: "Hel", wantErr: true, wantReceiptGET: true},
 			// A client that hangs up, or whose deadline passes, must not end
 			// the authorization that every client shares.
 			// A client that leaves after content: teep stops writing, reads

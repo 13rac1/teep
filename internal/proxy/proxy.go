@@ -2656,6 +2656,10 @@ type upstreamResult struct {
 	// the rest of the stream for the receipt check.
 	MarkContent func()
 	Draining    func() bool
+	// ClientEnded moves a drainable attempt to the drain when the handler
+	// sees the client's end before the hold's watch does, and reports
+	// whether teep drains. Nil when the attempt is not drained.
+	ClientEnded func() bool
 	// EnterTail moves the attempt to the tail read after a relay failure
 	// that is not the client's, so that the client's end no longer stops
 	// it. It reports false when the client's end came first. Nil when the

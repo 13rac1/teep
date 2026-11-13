@@ -65,6 +65,10 @@ type relayEnding struct {
 	// teep reads the rest of the stream (upstreamResult.Draining); nil when
 	// the attempt is not drained.
 	draining func() bool
+	// clientEnded moves the attempt to the drain when the handler sees the
+	// client's end first (upstreamResult.ClientEnded); nil when the attempt
+	// is not drained.
+	clientEnded func() bool
 }
 
 // drainAndCheckReceipt reads the rest of a stream that the client left
@@ -157,9 +161,12 @@ func (s *Server) checkReceipt(ctx context.Context, input *authorizedRequest, res
 // checkReceiptAfterRelayFailure handles a stream whose relay failed after
 // teep relayed content to the client:
 //   - the client side ended it (endedByClient) before the read from
-//     upstream reached its end: one client must not end the authorization
-//     that every client shares, so the generation stays, and the error log
-//     says that content went out without a completed check.
+//     upstream reached its end: a drainable stream is drained and checked
+//     (drainAndCheckReceipt), whichever of the handler and the hold's
+//     watch saw the end first. Otherwise one client must not end the
+//     authorization that every client shares, so the generation stays,
+//     and the error log says that content went out without a completed
+//     check.
 //   - otherwise the failure is the gateway's. teep reads the rest of the
 //     upstream body under the server's bounded context, so that a gateway
 //     that ended its stream badly but signed what it sent can still verify,
@@ -177,13 +184,24 @@ func (s *Server) checkReceiptAfterRelayFailure(clientCtx context.Context, input 
 		return
 	}
 	clientEnded := !rr.upstream.eof && endedByClient(clientCtx, ending)
+	// The client's end reached the handler before the hold's watch ran:
+	// a drainable stream is drained, as when the watch runs first.
+	if clientEnded && ending.clientEnded != nil && ending.clientEnded() {
+		s.drainAndCheckReceipt(clientCtx, input, result, rr, attrs)
+		return
+	}
 	if s.tailClaimHook != nil {
 		s.tailClaimHook()
 	}
 	// The relay failed for a reason that is not the client's. If the
-	// client's end abandoned the attempt before teep claimed it for the
-	// tail read, the client side ended the response after all.
+	// client's end came before teep claimed the attempt for the tail read,
+	// a drainable stream is drained; otherwise the client side ended the
+	// response after all.
 	if !clientEnded && !rr.upstream.eof && ending.enterTail != nil && !ending.enterTail() {
+		if ending.draining != nil && ending.draining() {
+			s.drainAndCheckReceipt(clientCtx, input, result, rr, attrs)
+			return
+		}
 		clientEnded = true
 	}
 	if clientEnded {
