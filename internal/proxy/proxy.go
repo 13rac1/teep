@@ -755,10 +755,10 @@ func fromConfig(
 		p.Preparer = neardirect.NewPreparer(cp.APIKey)
 		p.ReportDataVerifier = rdVerifier
 		p.SupplyChainPolicy = neardirect.SupplyChainPolicy()
-		p.ModelLister = neardirect.NewModelLister(provider.NewOwnedByModelLister(
+		p.ModelLister = provider.NewOwnedByModelLister(
 			"https://"+nearcloud.GatewayHost(), cp.APIKey,
 			config.NewAttestationClient(offline), "nearai",
-		), attester)
+		)
 	case "nearcloud":
 		p.ChatPath = "/v1/chat/completions"
 		p.ImagesPath = "/v1/images/generations"
