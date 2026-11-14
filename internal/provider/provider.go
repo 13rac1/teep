@@ -139,6 +139,10 @@ type Provider struct {
 	// (e.g. "/v1/score"). Empty means unsupported.
 	ScorePath string
 
+	// CompletionsPath is the upstream API path for text completions
+	// (e.g. "/v1/completions"). Empty means unsupported.
+	CompletionsPath string
+
 	// ResponsesPath is the upstream API path for responses
 	// (e.g. "/v1/responses"). Empty means unsupported.
 	ResponsesPath string

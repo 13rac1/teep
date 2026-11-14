@@ -64,7 +64,7 @@ func CheckSSEEvent(line string) error {
 // CheckSSEEndMarker requires the NEAR chat completion marker. Other protocols
 // retain their own completion rules, including EHBP frame authentication.
 func CheckSSEEndMarker(session Decryptor, endpoint EndpointType, seen bool) error {
-	if _, near := session.(*NearCloudSession); near && endpoint == EndpointChat && !seen {
+	if _, near := session.(*NearCloudSession); near && (endpoint == EndpointChat || endpoint == EndpointCompletions) && !seen {
 		return errors.New("NEAR SSE stream ended without [DONE]")
 	}
 	// E2EE v2 requires the [DONE] marker. The marker is not authenticated:

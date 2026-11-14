@@ -49,6 +49,8 @@ func (n *E2EE) EncryptRequestWithModelKey(body []byte, modelKey e2ee.NearModelKe
 		encrypt = e2ee.EncryptRerankNearCloud
 	case e2ee.EndpointScore:
 		encrypt = e2ee.EncryptScoreNearCloud
+	case e2ee.EndpointCompletions:
+		encrypt = e2ee.EncryptCompletionsNearCloud
 	default:
 		return e2ee.EncryptResult{}, fmt.Errorf("NearAI E2EE not supported for endpoint %q", endpoint)
 	}

@@ -586,10 +586,51 @@ func applyDecryptedJSON(plaintext []byte) json.RawMessage {
 	return b
 }
 
+// decryptCompletionsChunk decrypts choices[].text of a /v1/completions SSE
+// chunk, which is required to be encrypted, and re-serializes the chunk.
+func decryptCompletionsChunk(full map[string]json.RawMessage, choices []map[string]json.RawMessage, session Decryptor) (string, error) {
+	for i := range choices {
+		if _, err := decryptCompletionChoice(choices[i], session, i); err != nil {
+			return "", err
+		}
+	}
+	choicesOut, _ := json.Marshal(choices) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	full["choices"] = choicesOut
+	out, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	return string(out), nil
+}
+
+// completionChoiceKeys are the plaintext keys a completions choice may hold
+// besides text: structural metadata only.
+var completionChoiceKeys = map[string]bool{"index": true, "finish_reason": true, "stop_reason": true, "matched_stop": true}
+
+// completionChoiceNullKeys may appear in a completions choice only as null:
+// a value would carry prompt or completion content outside choices[].text.
+var completionChoiceNullKeys = map[string]bool{"logprobs": true, "prompt_logprobs": true, "token_ids": true, "prompt_token_ids": true}
+
+// decryptCompletionChoice decrypts choices[i].text of a completions response,
+// which must be present and encrypted. Any key other than text and the
+// structural metadata fails closed, and so does a non-null content key.
+func decryptCompletionChoice(choice map[string]json.RawMessage, session Decryptor, i int) (bool, error) {
+	if _, ok := choice["text"]; !ok {
+		return false, fmt.Errorf("%w: choice[%d] has no text", ErrDecryptionFailed, i)
+	}
+	for key, raw := range choice {
+		switch {
+		case key == "text" || completionChoiceKeys[key]:
+		case completionChoiceNullKeys[key] && IsJSONNull(raw):
+		default:
+			return false, fmt.Errorf("%w: choice[%d].%s is not covered by E2EE", ErrDecryptionFailed, i, key)
+		}
+	}
+	return decryptMaybeEncryptedStringField(choice, "text", session, fmt.Sprintf("choice[%d]", i), EncFieldCompletionText, EndpointCompletions)
+}
+
 // DecryptSSEChunk parses one SSE data JSON payload, decrypts all encrypted
-// fields in the delta object, and returns the JSON with plaintext substituted.
-// The endpoint parameter identifies the proxy route kind; currently only EndpointChat is supported.
-// Actual provider paths: /v1/chat/completions (NearCloud) or /api/v1/chat/completions (Venice).
+// fields in the delta object (choices[].text for EndpointCompletions), and
+// returns the JSON with plaintext substituted.
+// Actual provider paths: /v1/chat/completions and /v1/completions (NEAR) or
+// /api/v1/chat/completions (Venice).
 func DecryptSSEChunk(data string, session Decryptor, endpoint EndpointType) (string, error) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(data), &full); err != nil {
@@ -615,6 +656,10 @@ func DecryptSSEChunk(data string, session Decryptor, endpoint EndpointType) (str
 	}
 	if len(choices) == 0 {
 		return data, nil
+	}
+
+	if endpoint == EndpointCompletions {
+		return decryptCompletionsChunk(full, choices, session)
 	}
 
 	deltaRaw, ok := choices[0]["delta"]
@@ -857,7 +902,7 @@ func DecryptNonStreamResponseForEndpoint(body []byte, session Decryptor, endpoin
 	// the allowlist and dispatch are co-located rather than split across two
 	// separate guards.
 	switch endpoint {
-	case EndpointChat:
+	case EndpointChat, EndpointCompletions:
 		// choices[] already handled above; no data[] to decrypt.
 	case EndpointImages:
 		// Image generation endpoint path: /v1/images/generations.
@@ -940,6 +985,13 @@ func decryptResponseChoices(choicesRaw json.RawMessage, session Decryptor, endpo
 
 	changed := false
 	for i, choice := range choices {
+		if endpoint == EndpointCompletions {
+			c, err := decryptCompletionChoice(choice, session, i)
+			if err := setChanged(&changed, c, err); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		msgRaw, ok := choice["message"]
 		if !ok {
 			continue

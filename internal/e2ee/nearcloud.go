@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -151,7 +152,7 @@ func (s *NearCloudSession) IsResponseFieldEncrypted(fieldPath string, endpoint E
 		EncFieldLogprobsContentToken, EncFieldLogprobsContentBytes,
 		EncFieldLogprobsRefusalToken, EncFieldLogprobsRefusalBytes,
 		EncFieldB64JSON, EncFieldRevisedPrompt,
-		EncFieldEmbedding, EncFieldRerankDocumentText:
+		EncFieldEmbedding, EncFieldRerankDocumentText, EncFieldCompletionText:
 		return true
 	}
 
@@ -748,6 +749,101 @@ func EncryptEmbeddingsNearCloud(body []byte, modelKey NearModelKey) ([]byte, *Ne
 	}
 
 	out, _ := json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	return out, session, nil
+}
+
+// ErrCompletionsShape marks a completions request that NEAR's E2EE cannot
+// carry; the request is not sent.
+var ErrCompletionsShape = errors.New("completions request shape not supported with E2EE")
+
+// completionsAllowedFields are the completions request fields that carry no
+// user text and make no response field carry prompt or completion content.
+// Any other field fails with ErrCompletionsShape, so a new upstream field
+// fails closed.
+var completionsAllowedFields = map[string]bool{
+	"model": true, "prompt": true, "max_tokens": true, "min_tokens": true, "temperature": true,
+	"top_p": true, "top_k": true, "min_p": true, "n": true, "best_of": true, "stream": true,
+	"stream_options": true, "stop": true, "seed": true, "presence_penalty": true,
+	"frequency_penalty": true, "repetition_penalty": true, "logit_bias": true, "user": true,
+}
+
+// completionsOffFields are request fields that would send user text in
+// plaintext, or make the response carry prompt or completion tokens outside
+// choices[].text. They are accepted only with the listed "off" values: an
+// integer 0 still turns logprobs on.
+var completionsOffFields = map[string][]string{
+	"suffix":           {"null"},
+	"logprobs":         {"null"},
+	"prompt_logprobs":  {"null"},
+	"echo":             {"null", "false"},
+	"return_token_ids": {"null", "false"},
+}
+
+// EncryptCompletionsNearCloud creates a NearCloud E2EE session and encrypts
+// the "prompt" field of a completions request, a JSON string or an array of
+// JSON strings. The model key must come from verified attestation. A prompt
+// of token ids, an empty prompt array, a field outside
+// completionsAllowedFields, and a field of completionsOffFields with a value
+// that is not "off", fail with ErrCompletionsShape.
+func EncryptCompletionsNearCloud(body []byte, modelKey NearModelKey) (out []byte, _ *NearCloudSession, err error) {
+	session, full, err := newNearCloudSessionAndBody(body, modelKey, "completions")
+	if err != nil {
+		return nil, nil, err
+	}
+	// Every error return below zeroes the session; the returns set the
+	// named results to nil, so the local session is the one zeroed.
+	defer func() {
+		if err != nil {
+			session.Zero()
+		}
+	}()
+	for key, raw := range full {
+		if completionsAllowedFields[key] {
+			continue
+		}
+		off, known := completionsOffFields[key]
+		if !known || !slices.Contains(off, string(bytes.TrimSpace(raw))) {
+			return nil, nil, fmt.Errorf("%w: %s", ErrCompletionsShape, key)
+		}
+	}
+	promptRaw, ok := full["prompt"]
+	if !ok || IsJSONNull(promptRaw) {
+		return nil, nil, fmt.Errorf("%w: missing prompt", ErrCompletionsShape)
+	}
+	encrypt := func(item json.RawMessage, what string) (json.RawMessage, error) {
+		var s string
+		if err := json.Unmarshal(item, &s); err != nil {
+			return nil, fmt.Errorf("%w: %s is not a string", ErrCompletionsShape, what)
+		}
+		ct, err := EncryptXChaCha20([]byte(s), session.ModelX25519Pub())
+		if err != nil {
+			return nil, fmt.Errorf("encrypt %s: %w", what, err)
+		}
+		enc, _ := json.Marshal(ct) //nolint:errchkjson // strings always marshal
+		return enc, nil
+	}
+	if trimmed := bytes.TrimSpace(promptRaw); len(trimmed) > 0 && trimmed[0] == '[' {
+		var arr []json.RawMessage
+		if err := json.Unmarshal(promptRaw, &arr); err != nil {
+			return nil, nil, fmt.Errorf("parse prompt array: %w", err)
+		}
+		if len(arr) == 0 {
+			return nil, nil, fmt.Errorf("%w: empty prompt array", ErrCompletionsShape)
+		}
+		for i := range arr {
+			if arr[i], err = encrypt(arr[i], fmt.Sprintf("prompt[%d]", i)); err != nil {
+				return nil, nil, err
+			}
+		}
+		full["prompt"], _ = json.Marshal(arr) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
+	} else {
+		enc, err := encrypt(promptRaw, "prompt")
+		if err != nil {
+			return nil, nil, err
+		}
+		full["prompt"] = enc
+	}
+	out, _ = json.Marshal(full) //nolint:errchkjson // re-marshaling previously-unmarshaled JSON
 	return out, session, nil
 }
 
