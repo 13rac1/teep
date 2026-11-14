@@ -410,8 +410,12 @@ func TestCheckTLSState_TiledLogSCT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate other key: %v", err)
 	}
-	if err := check(tiledOnly, signedHandshakeSCT(t, otherKey, logID, cert)); err == nil {
+	// The log is found, so the failure must come from the signature check.
+	err = check(tiledOnly, signedHandshakeSCT(t, otherKey, logID, cert))
+	if err == nil {
 		t.Error("SCT with the tiled log's ID but another key passed")
+	} else if !strings.Contains(err.Error(), "no valid SCTs") || strings.Contains(err.Error(), "not found in trusted log list") {
+		t.Errorf("SCT with another key: %v, want a signature failure of a found log", err)
 	}
 	if err := check(emptyLogList(t), signedHandshakeSCT(t, logKey, logID, cert)); err == nil ||
 		!strings.Contains(err.Error(), "SCT log ID not found in trusted log list") {
