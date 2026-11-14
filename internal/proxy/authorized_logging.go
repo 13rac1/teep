@@ -30,11 +30,26 @@ func classifyAuthorizedFailure(ctx context.Context, err error, out *authorizedOu
 		return true
 	}
 	out.summary = append(out.summary, slog.String("cancellation_source", source))
-	if tlsct.IsTrustFailure(err) || errors.Is(err, e2ee.ErrDecryptionFailed) || hasIndependentFailure(err) {
+	if hasOtherFailure(err) {
 		return true
 	}
 	out.status = status
 	return out.status != "canceled" || source != "caller"
+}
+
+// callerCanceledOnly reports whether err is the caller's cancellation and
+// nothing else: the caller's context is canceled, and err holds no trust,
+// decryption or independent failure. It applies the tests of
+// classifyAuthorizedFailure for status "canceled" with source "caller".
+func callerCanceledOnly(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled) && !hasOtherFailure(err)
+}
+
+// hasOtherFailure reports whether err holds a failure beside a cancellation
+// or a deadline: a trust failure, a decryption failure, or an independent
+// failure.
+func hasOtherFailure(err error) bool {
+	return tlsct.IsTrustFailure(err) || errors.Is(err, e2ee.ErrDecryptionFailed) || hasIndependentFailure(err)
 }
 
 // hasIndependentFailure checks every cause so a joined cancellation cannot hide

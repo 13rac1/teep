@@ -1942,6 +1942,20 @@ func e2eeConfirmed(session e2ee.Decryptor) bool {
 	return true
 }
 
+// decryptedFields returns the number of response fields that session
+// authenticated and decrypted, for the sessions that count them, and 0 for
+// any other session.
+func decryptedFields(session e2ee.Decryptor) int64 {
+	switch s := session.(type) {
+	case *e2ee.NearCloudSession:
+		return s.DecryptedFields()
+	case *e2ee.ACIv2Session:
+		return int64(s.DecryptedFields())
+	default:
+		return 0
+	}
+}
+
 // relayWithRetry performs the upstream roundtrip and E2EE relay, retrying on
 // Chutes instance-level decryption failures. For non-Chutes providers the
 // loop executes exactly once.

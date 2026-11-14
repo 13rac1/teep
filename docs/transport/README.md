@@ -154,7 +154,12 @@ cache is empty. A decryption failure on a report that expired without a
 replacement still invalidates. A successful E2EE round trip records the
 `e2ee_usable` result in a copy of the cached report only if the cache still
 holds that publication. The copy keeps the publication number and the fetch
-time, so the success does not extend the report's lifetime.
+time, so the success does not extend the report's lifetime. A request that
+the caller cancels also records it when the cancellation is its only failure
+and the response session authenticated and decrypted at least one field: a
+client that closes after it has the answer, before teep reads the end of the
+upstream stream, does not make that decryption less proven. The request keeps
+`status=canceled`.
 
 Fresh client nonce binding and all enforced verification factors remain admission
 requirements. TDX uses the pinned upstream `github.com/google/go-tdx-guest` module.

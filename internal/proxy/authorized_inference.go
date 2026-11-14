@@ -363,6 +363,13 @@ func (s *Server) inferAuthorized(ctx context.Context, w http.ResponseWriter, inp
 	defer context.AfterFunc(ctx, cancelRelay)()
 	if err := s.relayAuthorized(ctx, relayCtx, w, input, &result); err != nil {
 		out.summary = append(out.summary, result.relayDiagnostics...)
+		// A client that ends the request after it has the answer, but
+		// before teep reads the end of the upstream stream, does not
+		// make the decryption it received less proven.
+		if input.provider.E2EE && callerCanceledOnly(ctx, err) && decryptedFields(result.upstream.Session) > 0 {
+			value.report.MarkE2EEUsable("E2EE roundtrip succeeded via proxy")
+			s.authorizations.promote(input.key, value.generation, "E2EE roundtrip succeeded via proxy")
+		}
 		return out, err
 	}
 	if input.provider.E2EE && e2eeConfirmed(result.upstream.Session) {

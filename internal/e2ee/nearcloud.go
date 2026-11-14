@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 
 	"filippo.io/edwards25519"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -30,6 +31,9 @@ type NearCloudSession struct {
 	// x25519Priv is the client's X25519 private key (derived from Ed25519
 	// seed) used for decrypting incoming response chunks.
 	x25519Priv *ecdh.PrivateKey
+	// decrypted counts the response fields that Decrypt authenticated and
+	// decrypted.
+	decrypted atomic.Int64
 }
 
 // NewNearCloudSession generates a fresh Ed25519 key pair and derives the X25519
@@ -84,8 +88,16 @@ func (s *NearCloudSession) IsEncryptedChunk(val string) bool {
 
 // Decrypt decrypts a hex-encoded NearCloud ciphertext using the session's X25519 key.
 func (s *NearCloudSession) Decrypt(ciphertextHex string) ([]byte, error) {
-	return DecryptXChaCha20(ciphertextHex, s.x25519Priv)
+	plaintext, err := DecryptXChaCha20(ciphertextHex, s.x25519Priv)
+	if err == nil {
+		s.decrypted.Add(1)
+	}
+	return plaintext, err
 }
+
+// DecryptedFields returns the number of response fields that the session
+// authenticated and decrypted.
+func (s *NearCloudSession) DecryptedFields() int64 { return s.decrypted.Load() }
 
 // Zero nils key references so the GC can collect the key material.
 // Unlike VeniceSession, crypto/ecdh does not expose a method to overwrite
