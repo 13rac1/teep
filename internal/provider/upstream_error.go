@@ -25,6 +25,8 @@ func UpstreamErrorMessage(body []byte) string {
 		} `json:"error"`
 	}
 	var text string
+	// The unknown and missing member lists are not used: the body is a
+	// diagnostic, and a body without error.message falls back to its text.
 	if _, _, err := jsonstrict.Unmarshal(body, &parsed); err == nil && parsed.Error.Message != "" {
 		text = parsed.Error.Message
 	} else {
@@ -36,19 +38,31 @@ func UpstreamErrorMessage(body []byte) string {
 	}
 	var b strings.Builder
 	n := 0
+	space := false
 	for _, r := range text {
 		if n == maxUpstreamMessage {
 			break
 		}
-		if r == utf8.RuneError || !unicode.IsPrint(r) {
-			if r == '\n' || r == '\t' || r == '\r' {
-				r = ' '
-			} else {
-				continue
-			}
+		switch {
+		case unicode.IsSpace(r):
+			// Every space, line break or tab becomes one space.
+			space = true
+			continue
+		case r == utf8.RuneError || !unicode.IsPrint(r):
+			// Invalid bytes (and U+FFFD itself), control and format
+			// characters are dropped.
+			continue
 		}
+		if space && b.Len() > 0 {
+			if n+1 == maxUpstreamMessage {
+				break
+			}
+			b.WriteByte(' ')
+			n++
+		}
+		space = false
 		b.WriteRune(r)
 		n++
 	}
-	return strings.TrimSpace(b.String())
+	return b.String()
 }

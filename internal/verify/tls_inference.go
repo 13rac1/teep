@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/13rac1/teep/internal/attestation"
+	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/aci"
@@ -244,7 +246,7 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 		return nil, prov.E2EE, &standaloneKeyRejectionError{sessions: opts.ProviderName == "phalacloud"}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, false, standaloneInferenceError(resp, encrypted.EHBP)
+		return nil, false, standaloneInferenceError(resp, encrypted.EHBP, opts.Provider.APIKey)
 	}
 	if !prov.E2EE {
 		if err := verifyTLSOnlyStream(resp); err != nil {
@@ -262,7 +264,7 @@ func testStandaloneInference(ctx context.Context, opts *Options, route provider.
 	return &standaloneProbe{e2ee: verifyE2EEStreamResponse(resp, encrypted.Session, opts.ProviderName)}, false, nil
 }
 
-func standaloneInferenceError(resp *http.Response, session *e2ee.EHBPSession) error {
+func standaloneInferenceError(resp *http.Response, session *e2ee.EHBPSession, apiKey string) error {
 	var body io.Reader = resp.Body
 	if nonce := resp.Header.Get("Ehbp-Response-Nonce"); session != nil && len(resp.Header.Values("Ehbp-Response-Nonce")) != 0 {
 		plain, err := session.DecryptResponse(body, nonce)
@@ -277,8 +279,12 @@ func standaloneInferenceError(resp *http.Response, session *e2ee.EHBPSession) er
 		return err
 	}
 	// The probe request is teep's own text, so the provider's message can
-	// name the cause (an account permission, a rate limit) in the report.
+	// name the cause (an account permission, a rate limit) in the report. A
+	// provider that quotes the API key in its error gets it redacted.
 	if message := provider.UpstreamErrorMessage(data); message != "" {
+		if apiKey != "" {
+			message = strings.ReplaceAll(message, apiKey, config.RedactKey(apiKey))
+		}
 		return fmt.Errorf("upstream returned HTTP %d: %s", resp.StatusCode, message)
 	}
 	return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)

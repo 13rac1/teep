@@ -1378,10 +1378,13 @@ func TestStandaloneInferenceErrorMessage(t *testing.T) {
 		{"JSON message", `{"error":{"message":"This API key's organization is not allowed to use this endpoint.","type":"forbidden"}}`,
 			"upstream returned HTTP 403: This API key's organization is not allowed to use this endpoint."},
 		{"empty body", "", "upstream returned HTTP 403"},
+		{"quoted API key", `{"error":{"message":"Incorrect API key provided: sk-probe-test-key-0123456789"}}`,
+			"upstream returned HTTP 403: Incorrect API key provided: " + config.RedactKey("sk-probe-test-key-0123456789")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := &http.Response{StatusCode: http.StatusForbidden, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(tc.body))}
-			if err := standaloneInferenceError(resp, nil); err == nil || err.Error() != tc.want {
+			err := standaloneInferenceError(resp, nil, "sk-probe-test-key-0123456789")
+			if err == nil || err.Error() != tc.want {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
@@ -1407,7 +1410,7 @@ func TestStandaloneEncryptedErrorAuthentication(t *testing.T) {
 	if rejected || err != nil {
 		t.Fatalf("encrypted error classified as plaintext rejection: %v", err)
 	}
-	if err := standaloneInferenceError(resp, session); !errors.Is(err, e2ee.ErrDecryptionFailed) {
+	if err := standaloneInferenceError(resp, session, ""); !errors.Is(err, e2ee.ErrDecryptionFailed) {
 		t.Fatalf("authentication failure=%v", err)
 	}
 }

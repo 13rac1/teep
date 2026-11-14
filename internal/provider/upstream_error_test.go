@@ -17,7 +17,8 @@ func TestUpstreamErrorMessage(t *testing.T) {
 			"This API key's organization is not allowed to use this endpoint."},
 		{"text body", "upstream connect error", "upstream connect error"},
 		{"JSON without a message", `{"detail":"Not Found"}`, `{"detail":"Not Found"}`},
-		{"control characters", "\x1b[31mforbidden\x1b[0m\x00 now\r\nretry", "[31mforbidden[0m now  retry"},
+		{"control characters", "\x1b[31mforbidden\x1b[0m\x00 now\r\nretry", "[31mforbidden[0m now retry"},
+		{"other spaces", "  a\u00a0b\u2003\tc  ", "a b c"},
 		{"control characters in the JSON message", `{"error":{"message":"bad\u001b]0;title\u0007 key"}}`, "bad]0;title key"},
 		{"invalid UTF-8", "ok\xff\xfeend", "okend"},
 		{"empty body", "", ""},
@@ -46,6 +47,9 @@ func TestUpstreamErrorMessageBounded(t *testing.T) {
 		}
 		if !utf8.ValidString(got) {
 			t.Errorf("message is not valid UTF-8: %q", got)
+		}
+		if strings.TrimSpace(got) != got {
+			t.Errorf("message has leading or trailing space: %q", got)
 		}
 	}
 }
