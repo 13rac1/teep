@@ -1942,6 +1942,20 @@ func e2eeConfirmed(session e2ee.Decryptor) bool {
 	return true
 }
 
+// decryptedFields returns the number of response fields that a NEAR session
+// decrypted, and 0 for any other session. A request that the caller cancels
+// confirms E2EE only with a count above 0, so the sessions of other providers
+// never confirm it on a cancel. ACI/1 E2EE v2 is excluded although it counts
+// its fields: its success path also requires a receipt check, which a
+// canceled request may not complete. After a complete relay, e2eeConfirmed
+// decides instead.
+func decryptedFields(session e2ee.Decryptor) int64 {
+	if s, ok := session.(*e2ee.NearCloudSession); ok {
+		return s.DecryptedFields()
+	}
+	return 0
+}
+
 // relayWithRetry performs the upstream roundtrip and E2EE relay, retrying on
 // Chutes instance-level decryption failures. For non-Chutes providers the
 // loop executes exactly once.
