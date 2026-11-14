@@ -329,6 +329,24 @@ func (r *VerificationReport) MarkE2EEUsable(detail string) {
 	}
 }
 
+// MarkE2EENotProbed sets the detail of the deferred e2ee_usable factor, for
+// a model whose endpoint the verify probe does not cover. The factor stays a
+// deferred, enforced Skip: teep did not check it, and the report counts it
+// as skipped. It changes only a deferred Skip, so a recorded Pass or Fail is
+// never replaced. It changes r in place; call Clone first on a report that
+// other readers share.
+func (r *VerificationReport) MarkE2EENotProbed(detail string) {
+	for i := range r.Factors {
+		f := &r.Factors[i]
+		if f.Name == FactorE2EEUsable {
+			if f.Status == Skip && f.Deferred {
+				f.Detail = detail
+			}
+			return
+		}
+	}
+}
+
 // MarkE2EEFailed demotes the e2ee_usable factor to Fail after a post-relay
 // decryption failure. This is the counterpart to MarkE2EEUsable and keeps
 // the report consistent with the e2eeFailed blocking state. Counters are

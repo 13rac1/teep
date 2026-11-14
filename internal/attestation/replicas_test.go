@@ -101,3 +101,39 @@ func TestAdmissionIntersect(t *testing.T) {
 		t.Errorf("intersect with no NRAS window = %+v, want %+v", got, a)
 	}
 }
+
+// MarkE2EENotProbed sets the detail of a deferred e2ee_usable Skip and
+// keeps it a deferred Skip; it never replaces a recorded Pass or Fail, and
+// a report without the factor does not change.
+func TestMarkE2EENotProbed(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     Status
+		deferred   bool
+		wantDetail string
+	}{
+		{"deferred skip", Skip, true, "not probed"},
+		{"skip that is not deferred", Skip, false, "d"},
+		{"pass", Pass, true, "d"},
+		{"fail", Fail, true, "d"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &VerificationReport{Factors: []FactorResult{{Name: FactorE2EEUsable, Status: tc.status, Deferred: tc.deferred, Enforced: true, Detail: "d"}}}
+			r.recomputeCounters()
+			before := *r
+			r.MarkE2EENotProbed("not probed")
+			f := r.Factors[0]
+			if f.Status != tc.status || f.Deferred != tc.deferred || !f.Enforced || f.Detail != tc.wantDetail {
+				t.Errorf("factor = %+v", f)
+			}
+			if r.Passed != before.Passed || r.Failed != before.Failed || r.Skipped != before.Skipped || r.Blocked() != before.Blocked() {
+				t.Errorf("counters changed")
+			}
+		})
+	}
+	r := &VerificationReport{Factors: []FactorResult{{Name: FactorTEEReportData, Status: Pass}}}
+	r.MarkE2EENotProbed("not probed")
+	if r.Factors[0].Detail != "" || len(r.Factors) != 1 {
+		t.Errorf("report without e2ee_usable changed: %+v", r.Factors)
+	}
+}

@@ -342,7 +342,8 @@ not fetch metadata or update selection recency.
 
 The standalone verifier probes streaming chat only. It does not validate image,
 embedding, rerank, score, or audio inference. A failed chat probe remains a failed
-verification outcome, including for a model that supports only another endpoint.
+verification outcome, including for a model that supports only another endpoint,
+except for the models in [models the probe does not cover](#models-the-probe-does-not-cover).
 NEAR probes use the configured E2EE mode. Live proxy tests use online admission
 in both modes; TLS-only tests add only the documented `e2ee_usable` allowance. As in `serve`, TLS-only configuration
 requires `e2ee = false` and an explicit allowlist containing `e2ee_usable` in
@@ -376,6 +377,40 @@ usage-only chunks with an empty choices array, and provider extensions. Only
 exactly named supported fields contribute to probe success; case-variant
 extensions cannot overwrite supported values. An explicit
 standalone attestation client factory is retained when the collateral client is omitted.
+
+### Models the probe does not cover
+
+The chat probe is a malformed request for a model that serves another endpoint,
+and NEAR refuses it. On 2026-11-14 NEAR answered the chat probe of these models
+with HTTP 400 (NearCloud) or 404 (NearDirect), and FLUX.2 with 502 or 500. For
+each of them, with E2EE on, `teep verify` sends no probe and logs a warning.
+`e2ee_usable` stays skipped, enforced and not probed, with the detail "not
+probed: the model serves <kind>; the verify probe sends a chat completion":
+
+| Model | Kind |
+| --- | --- |
+| `black-forest-labs/FLUX.2-klein-4B` | image generation |
+| `Qwen/Qwen3-Embedding-0.6B` | embeddings |
+| `Qwen/Qwen3-Reranker-0.6B` | reranking |
+| `openai/whisper-large-v3` | audio transcription |
+| `openai/privacy-filter` | an endpoint other than chat completions (unknown) |
+
+The skipped factor states that teep did not check it. It keeps its enforced
+mark and counts as skipped in the score, and it does not block, as for a run
+without a probe (offline or without an API key). Every other factor still
+applies. The report and the dashboard show encryption as available, not as
+used. A replay of a capture that holds a probe outcome keeps that outcome.
+
+In `serve`, a real embeddings, reranking or image request confirms
+`e2ee_usable` for the first three models, as for any other model. Nothing
+confirms it for the other two: `serve` refuses audio transcription while E2EE
+is on (NearCloud has no audio route), and NEAR documents no endpoint for
+`openai/privacy-filter`. A model that is not in the list gets the chat
+probe, so a new model of another kind fails `e2ee_usable` and is reported. The
+list is `unprobedKinds` in
+[`internal/provider/nearroute/kinds.go`](../../../internal/provider/nearroute/kinds.go).
+The gap is recorded in
+[NEAR Model Endpoints: No Endpoint in the Model List](../../attestation_gaps/near_model_endpoints.md).
 
 ## NearCloud model routing
 
