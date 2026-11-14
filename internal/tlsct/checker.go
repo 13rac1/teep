@@ -3,6 +3,7 @@ package tlsct
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -259,12 +260,12 @@ func (c *Checker) checkTLSState(
 
 	var verifyErrs []string
 	for _, candidate := range scts {
-		log := logList.FindLogByKeyHash(candidate.sct.LogID.KeyID)
-		if log == nil {
+		logKey := findLogKey(logList, candidate.sct.LogID.KeyID)
+		if logKey == nil {
 			verifyErrs = append(verifyErrs, "SCT log ID not found in trusted log list")
 			continue
 		}
-		pub, pkErr := ctx509.ParsePKIXPublicKey(log.Key)
+		pub, pkErr := ctx509.ParsePKIXPublicKey(logKey)
 		if pkErr != nil {
 			verifyErrs = append(verifyErrs, "parse log public key: "+pkErr.Error())
 			continue
@@ -282,6 +283,25 @@ func (c *Checker) checkTLSState(
 		return errors.New("no verifiable SCTs")
 	}
 	return fmt.Errorf("no valid SCTs: %s", strings.Join(verifyErrs, "; "))
+}
+
+// findLogKey returns the public key of the log in ll whose ID is logID, or
+// nil. It searches the RFC 6962 logs and the Static CT API (tiled) logs:
+// loglist3's FindLogByKeyHash searches only the RFC 6962 logs, and a
+// certificate can carry SCTs from tiled logs only. An SCT of a tiled log has
+// the same signature form, so the caller verifies both kinds the same way.
+func findLogKey(ll *loglist3.LogList, logID [sha256.Size]byte) []byte {
+	if log := ll.FindLogByKeyHash(logID); log != nil {
+		return log.Key
+	}
+	for _, op := range ll.Operators {
+		for _, log := range op.TiledLogs {
+			if subtle.ConstantTimeCompare(log.LogID, logID[:]) == 1 {
+				return log.Key
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Checker) addCacheEntry(key string) {
