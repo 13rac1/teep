@@ -3304,13 +3304,14 @@ func (s *Server) fetchModels() []json.RawMessage {
 				slog.WarnContext(ctx, "model listing failed", "provider", prov.Name, "err", err)
 				return
 			}
+			teep := modelTeepMember(prov)
 			for _, raw := range models {
-				prefixed, err := prefixModelID(name, raw)
+				annotated, err := annotateModel(name, teep, raw)
 				if err != nil {
-					slog.WarnContext(ctx, "model ID prefix failed", "provider", name, "err", err)
+					slog.WarnContext(ctx, "model entry rewrite failed", "provider", name, "err", err)
 					continue
 				}
-				results[i] = append(results[i], prefixed)
+				results[i] = append(results[i], annotated)
 			}
 		}(i, name, prov)
 	}
@@ -3328,7 +3329,8 @@ func (s *Server) fetchModels() []json.RawMessage {
 // handleModels returns available models from all configured providers in
 // deterministic (sorted) provider order. Each model's "id" field is rewritten
 // to "provider:upstreamID" so clients can route requests back to the correct
-// provider. All other upstream model fields are preserved semantically.
+// provider, and a "teep" member states the provider's E2EE coverage. All
+// other upstream model fields are preserved semantically.
 // Partial-success: a provider that fails listing is logged and skipped.
 // Results are cached for modelsCacheTTL to avoid redundant upstream fetches.
 // Concurrent requests coalesce via singleflight to prevent thundering herd.
@@ -3351,10 +3353,38 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	writeModelsResponse(ctx, w, models)
 }
 
-// prefixModelID rewrites the "id" field of a JSON model object to
-// "providerName:originalID", preserving all other fields. Returns an error if
-// the object cannot be parsed or the "id" field is missing or not a string.
-func prefixModelID(providerName string, raw json.RawMessage) (json.RawMessage, error) {
+// teepModelInfo is the "teep" member of each /v1/models entry: whether E2EE
+// is enabled for the entry's provider, and the endpoints that its E2EE covers
+// and does not cover, from the same declarations as the dashboard. Both
+// lists are empty when E2EE is off, because then teep refuses no endpoint for
+// coverage. The coverage is the provider's: it does not state that each
+// listed model serves every covered endpoint.
+type teepModelInfo struct {
+	E2EEEnabled      bool     `json:"e2ee_enabled"`
+	E2EECovers       []string `json:"e2ee_covers"`
+	E2EEDoesNotCover []string `json:"e2ee_does_not_cover"`
+}
+
+// modelTeepMember returns the encoded "teep" member for prov's models.
+func modelTeepMember(prov *provider.Provider) json.RawMessage {
+	covered, notCovered := e2eeCoverage(prov)
+	// Empty, not nil, slices: the lists encode as [] and never as null.
+	info := teepModelInfo{E2EEEnabled: prov.E2EE, E2EECovers: []string{}, E2EEDoesNotCover: []string{}}
+	info.E2EECovers = append(info.E2EECovers, covered...)
+	info.E2EEDoesNotCover = append(info.E2EEDoesNotCover, notCovered...)
+	b, err := json.Marshal(info)
+	if err != nil {
+		panic("encode teep model member: " + err.Error()) // a struct of a bool and strings always encodes
+	}
+	return b
+}
+
+// annotateModel rewrites the "id" field of a JSON model object to
+// "providerName:originalID" and sets its "teep" member to teep, replacing any
+// "teep" member from the upstream, so only teep states the coverage. It
+// preserves all other fields. Returns an error if the object cannot be parsed
+// or the "id" field is missing or not a string.
+func annotateModel(providerName string, teep, raw json.RawMessage) (json.RawMessage, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, err
@@ -3372,6 +3402,7 @@ func prefixModelID(providerName string, raw json.RawMessage) (json.RawMessage, e
 		return nil, err
 	}
 	obj["id"] = prefixed
+	obj["teep"] = teep
 	return json.Marshal(obj)
 }
 
