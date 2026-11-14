@@ -57,8 +57,9 @@ func TestEncryptCompletionsNearCloud(t *testing.T) {
 }
 
 // A request shape that NEAR's E2EE cannot carry fails with
-// ErrCompletionsShape before it is sent: a field outside the allowlist, or a
-// content field with a value that is not "off". An integer 0 still turns
+// ErrCompletionsShape before it is sent: a field outside the allowlist, a
+// content field with a value that is not "off", or a duplicate member at any
+// depth, which a map would collapse to its last value. An integer 0 still turns
 // logprobs on, so only null is off for logprobs.
 func TestEncryptCompletionsNearCloudRefuses(t *testing.T) {
 	pubHex, _ := ed25519KeyPairHex(t)
@@ -80,6 +81,10 @@ func TestEncryptCompletionsNearCloudRefuses(t *testing.T) {
 		`{"model":"m","prompt":"hello","echo":0}`,
 		`{"model":"m","prompt":"hello","some_new_field":1}`,
 		`{"model":"m","prompt":[]}`,
+		`{"model":"m","prompt":"hello","logprobs":5,"logprobs":null}`,
+		`{"model":"m","prompt":"hello","prompt":"other"}`,
+		`{"model":"m","prompt":"hello","stream_options":{"include_usage":true,"include_usage":false}}`,
+		`{"model":"m","prompt":"hello","echo":true,"\u0065cho":false}`,
 	} {
 		_, session, err := EncryptCompletionsNearCloud([]byte(body), testNearModelKey(t, pubHex))
 		if !errors.Is(err, ErrCompletionsShape) || session != nil {

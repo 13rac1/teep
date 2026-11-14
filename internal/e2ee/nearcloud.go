@@ -19,6 +19,8 @@ import (
 	"filippo.io/edwards25519"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
+
+	"github.com/13rac1/teep/internal/jsonstrict"
 )
 
 // NearCloudSession holds ephemeral Ed25519/X25519 key material for one
@@ -786,6 +788,12 @@ var completionsOffFields = map[string][]string{
 // completionsAllowedFields, and a field of completionsOffFields with a value
 // that is not "off", fail with ErrCompletionsShape.
 func EncryptCompletionsNearCloud(body []byte, modelKey NearModelKey) (out []byte, _ *NearCloudSession, err error) {
+	// A map keeps only the last of duplicate members, and the upstream can
+	// read another one: "logprobs":5,"logprobs":null would pass the check
+	// below as null. Duplicates at any depth are refused.
+	if err := jsonstrict.ValidateUniqueFields(body); err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrCompletionsShape, err)
+	}
 	session, full, err := newNearCloudSessionAndBody(body, modelKey, "completions")
 	if err != nil {
 		return nil, nil, err
