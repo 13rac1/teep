@@ -19,12 +19,9 @@ var unprobedKinds = map[string]string{
 	"openai/privacy-filter": "an endpoint other than chat completions (unknown)",
 }
 
-// UnprobedDetail returns the e2ee_usable detail for a NEAR model whose
-// endpoint the verify probe does not cover, and false for any other model.
-func UnprobedDetail(model string) (string, bool) {
+// UnprobedKind returns the endpoint kind of a NEAR model that serves an
+// endpoint other than chat completions, and false for any other model.
+func UnprobedKind(model string) (string, bool) {
 	kind, ok := unprobedKinds[model]
-	if !ok {
-		return "", false
-	}
-	return "not probed: the model serves " + kind + "; the verify probe sends a chat completion", true
+	return kind, ok
 }

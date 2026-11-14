@@ -18,6 +18,8 @@ New reports should follow [TEMPLATE.md](TEMPLATE.md).
 - [Model Weight Authentication](model_weights.md)
 - [Proof of Cloud Registry: JWT Validation Failure](poc_jwt_validation.md)
 - [Chutes/sek8s Integrity Chain](sek8s_integrity.md)
+- [Tinfoil Model Endpoints: Verify Probe Covers Chat Only](tinfoil_model_endpoints.md)
+- [Phala Cloud Model Endpoints: No Endpoint Field in the Model List](phalacloud_model_endpoints.md)
 - [ACI/1 Gateway: Attested Gateway, Unattested Inference Host](aci_gateway.md)
 - [NanoGPT Chutes Evidence: No Nonce Binding, No Serving Instance](nanogpt_chutes_evidence.md)
 

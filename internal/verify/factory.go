@@ -171,6 +171,22 @@ func supplyChainPolicy(name string) (*attestation.SupplyChainPolicy, error) {
 	}
 }
 
+// unprobedModels returns the provider's table of models that serve an
+// endpoint the chat probe of teep verify does not cover, or nil for a
+// provider without one. The table maps a model id to its endpoint kind.
+func unprobedModels(name string) func(model string) (string, bool) {
+	switch name {
+	case "neardirect", "nearcloud":
+		return nearroute.UnprobedKind
+	case "tinfoil_v3_cloud", "tinfoil_v3_direct":
+		return tinfoil.UnprobedKind
+	case "phalacloud":
+		return phalacloud.UnprobedKind
+	default:
+		return nil
+	}
+}
+
 func inapplicableFactors(providerName string) attestation.InapplicableFactors {
 	switch providerName {
 	case "venice", "neardirect", "nearcloud", "nanogpt", "phalacloud":
