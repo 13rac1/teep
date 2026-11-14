@@ -9,7 +9,46 @@ select a valid subset of a malformed response.
 | Provider | Required envelope |
 | --- | --- |
 | NearDirect | A complete flat model report and `all_attestations` containing exactly one copy of that report. Both reports must name a model and agree in every supported field. |
-| NearCloud | `gateway_attestation` and a nonempty `model_attestations` array. Every entry must be structurally valid, and model names must be unique. Teep selects the entry with the requested name; else the one entry whose name contains, or is contained in, the requested name; else the only entry of the array. Any other array fails. Flat model fields and `all_attestations` are forbidden. |
+| NearCloud | `gateway_attestation` and a nonempty `model_attestations` array. Every entry must be structurally valid and name a model. Teep selects the entries with the requested name; else the entries of the one name that contains, or is contained in, the requested name; else the entries of the only name in the array. Any other array fails. Flat model fields and `all_attestations` are forbidden. Several entries of one name are [instances of one model](#nearcloud-model-instances). |
+
+### NearCloud model instances
+
+The gateway can list one model on several instances, one entry for each.
+On 2026-11-13 it listed `z-ai/glm-5.3-flash` on three instances and each
+`DeepSeek-V4.1-Flash-1017` model on two. The instances of one model hold
+the same signing key, so the request that teep encrypts to that key can be
+decrypted by every instance. The gateway, not teep, selects the instance.
+
+Teep therefore verifies every instance of the requested model and allows
+the request only if every instance passes:
+
+- Each entry of the name must have its own `info.instance_id`: hex of at
+  most 32 bytes, equal to the payload of the entry's one RTMR3 dstack
+  runtime `instance-id` event. The event log replay of
+  `event_log_integrity` recomputes that event's digest from its payload, so
+  the id of an instance that passes the factor is bound to its quote. When
+  `event_log_integrity` is in `allow_fail`, a failure of that factor does not
+  block, and the id is not bound to the quote. Two
+  entries with the same instance id, an entry without one, or an id that
+  differs from the event fail.
+- All entries of the name must hold the same signing key, signing
+  algorithm and `ohttp_key_config`. Different keys fail, because teep
+  cannot tell which instance holds the key it encrypts to.
+- A name with more than 8 entries fails. Each entry costs one quote, NVIDIA
+  NRAS and Proof of Cloud check, one check of the gateway evidence, and one
+  Sigstore and Rekor lookup for each image digest.
+- Teep runs the full model verification on each instance against the same
+  gateway evidence. A factor passes only if it passes for every instance.
+  Each failed or skipped factor names an instance that did not pass it.
+  The report lists the instance ids under `instances`; the other metadata,
+  such as the compose hash, is the metadata of the first instance.
+- The NRAS time window of the authorization is the intersection of the
+  windows of all instances.
+
+Teep verifies every entry that the gateway lists. It cannot see a holder
+of the shared signing key that the gateway does not list.
+
+NearDirect reports one instance for each endpoint and does not change.
 
 The attested model name is the provider's assertion. Teep verifies model
 identity only through `measured_model_weights`, which NEAR does not

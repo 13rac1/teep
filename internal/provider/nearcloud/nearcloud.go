@@ -89,6 +89,16 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	if err := tlsct.CompareSPKIFingerprints(peerSPKI, gwRaw.TLSCertFingerprint); err != nil {
 		return nil, fmt.Errorf("nearcloud: gateway attestation TLS binding: %w", err)
 	}
+	setGateway(raw, gwRaw)
+	for _, replica := range raw.Replicas {
+		setGateway(replica, gwRaw)
+	}
+	return raw, nil
+}
+
+// setGateway copies the gateway evidence and transport identity to the
+// attestation of one model instance.
+func setGateway(raw *attestation.RawAttestation, gwRaw *GatewayRaw) {
 	raw.TransportTLSFingerprint = gwRaw.TLSCertFingerprint
 	raw.TransportTLSAuthority = gatewayHost
 	raw.GatewayIntelQuote = gwRaw.IntelQuote
@@ -97,7 +107,6 @@ func (a *Attester) FetchAttestation(ctx context.Context, model string, nonce att
 	raw.GatewayEventLog = gwRaw.EventLog
 	raw.GatewaySigningAddress = gwRaw.SigningAddress
 	raw.GatewayTLSFingerprint = gwRaw.TLSCertFingerprint
-	return raw, nil
 }
 
 // CloseIdleConnections releases idle connections owned by this component.

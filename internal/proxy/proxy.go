@@ -973,6 +973,60 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	fetchDur := time.Since(fetchStart)
 	slog.DebugContext(ctx, "attestation fetch complete", "provider", prov.Name, "elapsed", fetchDur)
 
+	report, admission, err := s.verifyAttestation(ctx, prov, upstreamModel, raw, nonce, failure)
+	if err != nil {
+		return nil, nil, attestation.AdmissionTime{}, err
+	}
+	report, admission, err = s.verifyReplicas(ctx, prov, upstreamModel, raw, nonce, report, admission, failure)
+	if err != nil {
+		return nil, nil, attestation.AdmissionTime{}, err
+	}
+	totalDur := time.Since(totalStart)
+	slog.InfoContext(ctx, "attestation complete", "provider", prov.Name, "model", upstreamModel,
+		"total", fmtDur(totalDur), "fetch", fmtDur(fetchDur), "instances", 1+len(raw.Replicas))
+	ms := s.stats.getModelStats(prov.Name, cacheModelFor(ctx, upstreamModel))
+	ms.lastVerifyMs.Store(totalDur.Milliseconds())
+	return report, raw, admission, nil
+}
+
+// verifyReplicas verifies every other instance of the model in raw and
+// merges each report into report, so that a factor passes only if it
+// passes for every instance. The gateway selects the instance for each
+// request, and every instance holds the attested signing key.
+func (s *Server) verifyReplicas(ctx context.Context, prov *provider.Provider, upstreamModel string,
+	raw *attestation.RawAttestation, nonce attestation.Nonce, report *attestation.VerificationReport,
+	admission attestation.AdmissionTime, failure func(string, error),
+) (*attestation.VerificationReport, attestation.AdmissionTime, error) {
+	if len(raw.Replicas) == 0 {
+		return report, admission, nil
+	}
+	report.LabelInstance(raw.ModelInstanceID)
+	ids := []string{raw.ModelInstanceID}
+	for _, replica := range raw.Replicas {
+		other, otherAdmission, err := s.verifyAttestation(ctx, prov, upstreamModel, replica, nonce, failure)
+		if err != nil {
+			// verifyAttestation reports its failure through the callback,
+			// for a replica as for the first instance.
+			return nil, attestation.AdmissionTime{}, err
+		}
+		if err := report.MergeReplica(replica.ModelInstanceID, other); err != nil {
+			slog.ErrorContext(ctx, "instance reports differ", "provider", prov.Name, "model", upstreamModel, "err", err)
+			failure("instance_report_mismatch", err)
+			return nil, attestation.AdmissionTime{}, err
+		}
+		admission = admission.Intersect(otherAdmission)
+		ids = append(ids, replica.ModelInstanceID)
+	}
+	report.SetInstances(ids)
+	return report, admission, nil
+}
+
+// verifyAttestation verifies the evidence of one model instance and builds
+// its report.
+func (s *Server) verifyAttestation(ctx context.Context, prov *provider.Provider, upstreamModel string,
+	raw *attestation.RawAttestation, nonce attestation.Nonce, failure func(string, error),
+) (*attestation.VerificationReport, attestation.AdmissionTime, error) {
+	totalStart := time.Now()
 	tdxResult, tdxDur := s.verifyTDX(ctx, raw, nonce, prov)
 	sevResult, sevDur := s.verifySEV(ctx, raw, nonce, prov)
 	gatewaySEVResult := s.verifyGatewaySEV(ctx, raw, nonce, prov)
@@ -988,8 +1042,8 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	slog.InfoContext(ctx, "verification complete",
 		"provider", prov.Name,
 		"model", upstreamModel,
-		"total", fmtDur(totalDur),
-		"fetch", fmtDur(fetchDur),
+		"instance", raw.ModelInstanceID,
+		"instance_total", fmtDur(totalDur),
 		"tdx", fmtDur(tdxDur),
 		"sev", fmtDur(sevDur),
 		"nvidia", fmtDur(nvidiaDur),
@@ -998,9 +1052,6 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 		"compose", fmtDur(composeDur),
 		"tinfoil_sc", fmtDur(tinfoilSCDur),
 	)
-
-	ms := s.stats.getModelStats(prov.Name, cacheModelFor(ctx, upstreamModel))
-	ms.lastVerifyMs.Store(totalDur.Milliseconds())
 
 	input := &attestation.ReportInput{
 		Provider:               prov.Name,
@@ -1040,9 +1091,9 @@ func (s *Server) fetchVerified(ctx context.Context, prov *provider.Provider, ups
 	report := attestation.BuildReport(input)
 	if report.Blocked() && !s.cfg.Force && errors.Is(input.VerificationErrors(), tlsct.ErrConnectionCapacity) {
 		failure("attestation_capacity", tlsct.ErrConnectionCapacity)
-		return nil, nil, attestation.AdmissionTime{}, tlsct.ErrConnectionCapacity
+		return nil, attestation.AdmissionTime{}, tlsct.ErrConnectionCapacity
 	}
-	return report, raw, attestation.NVIDIAAdmission(nrasResult), nil
+	return report, attestation.NVIDIAAdmission(nrasResult), nil
 }
 
 // auditACISessions audits the attested sessions of a canonical ACI/1 report
