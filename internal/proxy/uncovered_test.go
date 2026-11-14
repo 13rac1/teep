@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -12,9 +13,15 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/aci"
+	"github.com/13rac1/teep/internal/provider/chutes"
+	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/tinfoil"
+	"github.com/13rac1/teep/internal/provider/venice"
 	"github.com/13rac1/teep/internal/tlsct/testtls"
 )
 
@@ -212,5 +219,34 @@ func TestNotCoveredStatsConcurrent(t *testing.T) {
 		if got := st.get(name); got != perName {
 			t.Errorf("%s: count = %d, want %d", name, got, perName)
 		}
+	}
+}
+
+// Each production encryptor refuses, before it reads the key or the body,
+// every endpoint outside its declared coverage, so the declaration and the
+// encryption cannot disagree.
+func TestEncryptorsRefuseUncoveredEndpoints(t *testing.T) {
+	encryptors := map[string]provider.RequestEncryptor{
+		"aci":        aci.NewE2EE(),
+		"chutes":     chutes.NewE2EE(),
+		"neardirect": neardirect.NewE2EE(),
+		"tinfoil":    tinfoil.NewE2EE(),
+		"venice":     venice.NewE2EE(),
+	}
+	endpoints := []e2ee.EndpointType{
+		e2ee.EndpointChat, e2ee.EndpointEmbeddings, e2ee.EndpointImages, e2ee.EndpointRerank,
+		e2ee.EndpointScore, e2ee.EndpointAudio, e2ee.EndpointResponses, e2ee.EndpointSpeech,
+		e2ee.EndpointCompletions, e2ee.EndpointPrivacy, e2ee.EndpointImagesEdits,
+	}
+	for name, enc := range encryptors {
+		t.Run(name, func(t *testing.T) {
+			for _, ep := range endpoints {
+				_, err := enc.EncryptRequest([]byte(`{}`), &attestation.RawAttestation{}, ep)
+				notCovered := errors.Is(err, e2ee.ErrEndpointNotCovered)
+				if enc.CoversE2EE(ep) == notCovered {
+					t.Errorf("%s: CoversE2EE = %v, EncryptRequest error = %v", ep, enc.CoversE2EE(ep), err)
+				}
+			}
+		})
 	}
 }

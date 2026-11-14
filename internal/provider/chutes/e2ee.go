@@ -2,6 +2,7 @@ package chutes
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/e2ee"
@@ -20,8 +21,11 @@ func NewE2EE() *E2EE {
 // (ML-KEM-768 + ChaCha20-Poly1305).
 // Returns ChutesE2EE for the Preparer to inject headers.
 // Requires raw.InstanceID, raw.E2ENonce, and raw.ChuteID from attestation.
-// The endpoint parameter is not used; Chutes uses full-body encryption for all endpoints.
-func (c *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ e2ee.EndpointType) (e2ee.EncryptResult, error) {
+// An endpoint outside CoversE2EE fails with e2ee.ErrEndpointNotCovered.
+func (c *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error) {
+	if !c.CoversE2EE(endpoint) {
+		return e2ee.EncryptResult{}, fmt.Errorf("chutes E2EE: endpoint %q: %w", endpoint, e2ee.ErrEndpointNotCovered)
+	}
 	encPayload, session, err := e2ee.EncryptChatRequestChutes(body, raw.SigningKey)
 	if err != nil {
 		return e2ee.EncryptResult{}, err
@@ -46,7 +50,8 @@ func (c *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ e2
 	return e2ee.EncryptResult{Body: encPayload, Chutes: meta}, nil
 }
 
-// CoversE2EE reports whether this E2EE covers endpoint. Chutes E2EE encrypts the whole body of chat and embeddings requests.
+// CoversE2EE reports whether this E2EE covers endpoint. Chutes E2EE
+// encrypts the whole body of chat and embeddings requests.
 func (c *E2EE) CoversE2EE(endpoint e2ee.EndpointType) bool {
 	switch endpoint {
 	case e2ee.EndpointChat, e2ee.EndpointEmbeddings:

@@ -3,6 +3,7 @@ package venice_test
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -149,8 +150,8 @@ func TestVeniceE2EE_EncryptRequest_UnsupportedEndpoint(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported endpoint")
 	}
-	if got := err.Error(); got != "venice E2EE unsupported endpoint \"embeddings\"" {
-		t.Fatalf("error = %q, want %q", got, "venice E2EE unsupported endpoint \"embeddings\"")
+	if !errors.Is(err, e2ee.ErrEndpointNotCovered) {
+		t.Fatalf("error = %v, want e2ee.ErrEndpointNotCovered", err)
 	}
 }
 
