@@ -104,3 +104,35 @@ func TestSupplyChainPolicyTrustsAlpineSigner(t *testing.T) {
 		t.Fatal("alpine signer should be trusted provider-wide")
 	}
 }
+
+// NEAR AI model CVMs served these values in live quotes from 2026-11-04 on
+// (os_image_hash 91fd5d69...).
+func TestDefaultMeasurementPolicyAcceptsNEARAIModelOS2026_11(t *testing.T) {
+	p := nearcloud.DefaultMeasurementPolicy()
+	for i, v := range map[int]string{
+		1: "4ae609807c765916a31d724786ed74bcb97e168a9d937b04936aeef2015c907eba5ac352c6bcd749c246fd62ffb659ec",
+		2: "bd67ab7554dc27ab03a077bc1447a1a67d0624ff547c4c809a8626f12d6a89712f8ec60e781e99b98208574065d21a71",
+	} {
+		if _, ok := p.RTMRAllow[i][v]; !ok {
+			t.Errorf("RTMRAllow[%d] lacks %s...", i, v[:16])
+		}
+	}
+}
+
+// The NEAR AI cloud gateway served these values in live quotes from 2026-11-04 on
+// (os_image_hash 8db40cb2...).
+func TestDefaultGatewayMeasurementPolicyAcceptsNEARAIGatewayOS2026_11(t *testing.T) {
+	p := nearcloud.DefaultGatewayMeasurementPolicy()
+	if _, ok := p.MRTDAllow["7fe60787222bd394cb516abca2435f22f035ab2cc9c0a4b4b3b148e46297f3d931a237b72f359052c6e657d8c1409173"]; !ok {
+		t.Error("gateway MRTDAllow lacks 7fe60787...")
+	}
+	for i, v := range map[int]string{
+		0: "d090162bff4b1d1dc74dc59dc548838efc4b811b173da8536efa8e2a9c045da70ee092301293ad90afebee448bcd0211",
+		1: "4ae609807c765916a31d724786ed74bcb97e168a9d937b04936aeef2015c907eba5ac352c6bcd749c246fd62ffb659ec",
+		2: "764489f277a8540189761e72b4238ba36d4d647e11bd958d8ab5522af2a4867b0ff63e06b0c4967f1857236244040a5d",
+	} {
+		if _, ok := p.RTMRAllow[i][v]; !ok {
+			t.Errorf("gateway RTMRAllow[%d] lacks %s...", i, v[:16])
+		}
+	}
+}
