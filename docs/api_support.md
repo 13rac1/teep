@@ -37,6 +37,15 @@ These are the OpenAI-style endpoints that clients use for inference:
 
 `/v1/models` is a proxy-aggregated endpoint that returns the combined model list from all configured providers. Each model's `id` field is rewritten to `provider:upstreamID` (e.g. `venice:e2ee-qwen3-5-122b-a10b`, `neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct`) so clients can route requests to the correct provider. NanoGPT lists only its TEE models, whose IDs start with `TEE/`; its other models serve no attestation. It is not included in the per-provider matrices below because it is handled entirely by the proxy, does not forward requests to individual providers, and is not E2EE-encrypted (GET request, no sensitive data).
 
+Teep adds a `teep` member to each model and replaces any `teep` member that the provider sends. It holds the E2EE setting of the model's provider in the running config (`e2ee_enabled`), and the endpoints that the provider's E2EE covers and does not cover (`e2ee_covers`, `e2ee_does_not_cover`). These are the same lists that the dashboard shows. The coverage is the provider's: it does not state that each model serves every covered endpoint. With E2EE enabled, teep refuses an endpoint in `e2ee_does_not_cover` (see [Why teep refused my request](#why-teep-refused-my-request)). With E2EE off, both lists are empty, because teep then refuses no endpoint for E2EE coverage. Teep sends no request to the provider to build the member. For NearDirect with E2EE enabled:
+
+```json
+{"id": "neardirect:z-ai/glm-5.3-flash", "object": "model", "...": "...",
+ "teep": {"e2ee_enabled": true,
+   "e2ee_covers": ["/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/rerank", "/v1/score"],
+   "e2ee_does_not_cover": ["/v1/responses", "/v1/images/edits", "/v1/audio/transcriptions", "/v1/privacy/classify", "/v1/privacy/redact"]}}
+```
+
 ### Operational Status, Monitoring, and Teep-Specific Endpoints
 
 These are teep runtime/observability endpoints, not OpenAI-compatible inference APIs:

@@ -1280,6 +1280,11 @@ func TestHandleModels(t *testing.T) {
 		Object  string `json:"object"`
 		OwnedBy string `json:"owned_by"`
 		Type    string `json:"type"`
+		Teep    struct {
+			E2EEEnabled      *bool    `json:"e2ee_enabled"`
+			E2EECovers       []string `json:"e2ee_covers"`
+			E2EEDoesNotCover []string `json:"e2ee_does_not_cover"`
+		} `json:"teep"`
 	}
 	ids := map[string]bool{}
 	for _, raw := range result.Data {
@@ -1297,6 +1302,11 @@ func TestHandleModels(t *testing.T) {
 		}
 		if m.Created != 1727966436 {
 			t.Errorf("model %q: created = %d, want 1727966436", m.ID, m.Created)
+		}
+		// The test config has E2EE off: teep refuses no endpoint for coverage.
+		if m.Teep.E2EEEnabled == nil || *m.Teep.E2EEEnabled || m.Teep.E2EECovers == nil || len(m.Teep.E2EECovers) != 0 ||
+			m.Teep.E2EEDoesNotCover == nil || len(m.Teep.E2EEDoesNotCover) != 0 {
+			t.Errorf("model %q: teep = %+v, want E2EE off and two empty lists", m.ID, m.Teep)
 		}
 	}
 	if !ids["venice:e2ee-test-model"] {

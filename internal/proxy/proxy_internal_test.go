@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -198,10 +199,11 @@ func TestVerifyTinfoilSupplyChain_NonTinfoilFormat(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// prefixModelID
+// annotateModel
 // --------------------------------------------------------------------------
 
-func TestPrefixModelID(t *testing.T) {
+func TestAnnotateModel(t *testing.T) {
+	teep := json.RawMessage(`{"e2ee_enabled":false,"e2ee_covers":[],"e2ee_does_not_cover":[]}`)
 	tests := []struct {
 		provName string
 		model    json.RawMessage
@@ -209,40 +211,66 @@ func TestPrefixModelID(t *testing.T) {
 	}{
 		{"venice", json.RawMessage(`{"id":"qwen3-32b","object":"model"}`), "venice:qwen3-32b"},
 		{"tinfoil_v3_cloud", json.RawMessage(`{"id":"llama3-3-70b"}`), "tinfoil_v3_cloud:llama3-3-70b"},
+		// An upstream "teep" member is replaced: only teep states the coverage.
+		{"venice", json.RawMessage(`{"id":"m","teep":{"e2ee_enabled":true}}`), "venice:m"},
 	}
 	for _, tc := range tests {
-		result, err := prefixModelID(tc.provName, tc.model)
+		result, err := annotateModel(tc.provName, teep, tc.model)
 		if err != nil {
-			t.Errorf("prefixModelID(%q, %s): %v", tc.provName, tc.model, err)
+			t.Errorf("annotateModel(%q, %s): %v", tc.provName, tc.model, err)
 			continue
 		}
-		var obj map[string]json.RawMessage
+		var obj struct {
+			ID   string          `json:"id"`
+			Teep json.RawMessage `json:"teep"`
+		}
 		if err := json.Unmarshal(result, &obj); err != nil {
 			t.Errorf("unmarshal result: %v", err)
 			continue
 		}
-		var got string
-		if err := json.Unmarshal(obj["id"], &got); err != nil {
-			t.Errorf("unmarshal id: %v", err)
-			continue
-		}
-		if got != tc.wantID {
-			t.Errorf("prefixModelID(%q, %s) id = %q, want %q", tc.provName, tc.model, got, tc.wantID)
+		if obj.ID != tc.wantID || string(obj.Teep) != string(teep) {
+			t.Errorf("annotateModel(%q, %s) = id %q teep %s, want %q %s", tc.provName, tc.model, obj.ID, obj.Teep, tc.wantID, teep)
 		}
 	}
 }
 
-func TestPrefixModelID_MissingID(t *testing.T) {
-	_, err := prefixModelID("test", json.RawMessage(`{"object":"model"}`))
+func TestAnnotateModel_MissingID(t *testing.T) {
+	_, err := annotateModel("test", json.RawMessage(`{}`), json.RawMessage(`{"object":"model"}`))
 	if err == nil {
 		t.Error("expected error for missing id field")
 	}
 }
 
-func TestPrefixModelID_InvalidJSON(t *testing.T) {
-	_, err := prefixModelID("test", json.RawMessage(`not json`))
+func TestAnnotateModel_InvalidJSON(t *testing.T) {
+	_, err := annotateModel("test", json.RawMessage(`{}`), json.RawMessage(`not json`))
 	if err == nil {
 		t.Error("expected error for invalid JSON")
+	}
+}
+
+// The "teep" member holds the provider's E2EE setting and the same coverage
+// lists as the dashboard; with E2EE off both lists are empty arrays.
+func TestModelTeepMember(t *testing.T) {
+	s := newCoverageServer(t, "neardirect")
+	prov := s.providers["neardirect"]
+	var on teepModelInfo
+	if err := json.Unmarshal(modelTeepMember(prov), &on); err != nil {
+		t.Fatal(err)
+	}
+	dash := s.buildDashboardData().Providers["neardirect"]
+	if !on.E2EEEnabled {
+		t.Error("E2EE on: e2ee_enabled is false")
+	}
+	if len(on.E2EECovers) == 0 || !slices.Equal(on.E2EECovers, dash.E2EECovers) {
+		t.Errorf("E2EE on: e2ee_covers = %v, dashboard = %v", on.E2EECovers, dash.E2EECovers)
+	}
+	if len(on.E2EEDoesNotCover) == 0 || !slices.Equal(on.E2EEDoesNotCover, dash.E2EEDoesNotCover) {
+		t.Errorf("E2EE on: e2ee_does_not_cover = %v, dashboard = %v", on.E2EEDoesNotCover, dash.E2EEDoesNotCover)
+	}
+	off := *prov
+	off.E2EE = false
+	if got := string(modelTeepMember(&off)); got != `{"e2ee_enabled":false,"e2ee_covers":[],"e2ee_does_not_cover":[]}` {
+		t.Errorf("E2EE off: teep = %s", got)
 	}
 }
 
