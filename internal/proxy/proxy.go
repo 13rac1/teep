@@ -565,6 +565,7 @@ func New(cfg *config.Config) (*Server, error) {
 	s.mux.HandleFunc("POST /v1/images/generations", s.handleEndpoint(&imagesEndpoint))
 	s.mux.HandleFunc("POST /v1/rerank", s.handleEndpoint(&rerankEndpoint))
 	s.mux.HandleFunc("POST /v1/score", s.handleEndpoint(&scoreEndpoint))
+	s.mux.HandleFunc("POST /v1/completions", s.handleEndpoint(&completionsEndpoint))
 	s.mux.HandleFunc("POST /v1/responses", s.handleEndpoint(&responsesEndpoint))
 	s.mux.HandleFunc("POST /v1/audio/speech", s.handleEndpoint(&speechEndpoint))
 	s.mux.HandleFunc("GET /v1/{$}", handleV1Help)
@@ -746,6 +747,9 @@ func fromConfig(
 		p.ImagesPath = "/v1/images/generations"
 		p.RerankPath = "/v1/rerank"
 		p.ScorePath = "/v1/score"
+		// NEAR model hosts encrypt completions; NEAR's gateway does not, so
+		// nearcloud has no completions route.
+		p.CompletionsPath = "/v1/completions"
 		rdVerifier := neardirect.ReportDataVerifier{}
 		attester := neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Attester = attester
@@ -1686,6 +1690,14 @@ var (
 			}
 			return "", false
 		},
+	}
+	completionsEndpoint = endpointConfig{
+		name:         "completions",
+		endpointType: e2ee.EndpointCompletions,
+		endpointPath: func(p *provider.Provider) string { return p.CompletionsPath },
+		unsupported:  "completions",
+		parseRequest: parseChatRequest, // reads only model and stream
+		contentType:  "application/json",
 	}
 	responsesEndpoint = endpointConfig{
 		name:         "responses",

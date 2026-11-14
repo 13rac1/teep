@@ -32,6 +32,8 @@ const (
 	EndpointResponses EndpointType = "responses"
 	// EndpointSpeech is /v1/audio/speech.
 	EndpointSpeech EndpointType = "speech"
+	// EndpointCompletions is /v1/completions.
+	EndpointCompletions EndpointType = "completions"
 )
 
 // EncField* constants identify the dot-notation sub-field paths within inference
@@ -60,7 +62,12 @@ const (
 	EncFieldRevisedPrompt        = "revised_prompt"
 	EncFieldEmbedding            = "embedding"
 	EncFieldRerankDocumentText   = "results[].document.text"
-	EncFieldScore                = "score"
+	// EncFieldCompletionText is choices[].text of /v1/completions. The NEAR
+	// policy requires it encrypted on every endpoint; no other endpoint uses
+	// "text" as a policy path (chat uses content[].text, rerank
+	// results[].document.text).
+	EncFieldCompletionText = "text"
+	EncFieldScore          = "score"
 )
 
 // Decryptor is implemented by field-level E2EE sessions used by relay

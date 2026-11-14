@@ -22,6 +22,7 @@ These are the OpenAI-style endpoints that clients use for inference:
 | Endpoint | Method | Description |
 |---|---|---|
 | `/v1/chat/completions` | POST | Chat completions (streaming and non-streaming) |
+| `/v1/completions` | POST | Text completions (NearDirect) |
 | `/v1/responses` | POST | Responses API (streaming and non-streaming) |
 | `/v1/embeddings` | POST | Text embeddings |
 | `/v1/audio/transcriptions` | POST | Audio transcription (multipart) |
@@ -98,6 +99,7 @@ This matrix applies to OpenAI-compatible inference endpoints.
 | Image generation | Yes | Yes | — | — | — | — | — | — |
 | Reranking | Yes | Yes | — | — | — | — | — | — |
 | Score | Yes | Yes | — | — | — | — | — | — |
+| Completions | Yes | — | — | — | — | — | — | — |
 
 **—** = Not implemented. Provider returns HTTP 400.
 
@@ -113,6 +115,7 @@ This matrix applies to OpenAI-compatible inference endpoints.
 | Image generation | Encrypted | Encrypted | — | — | — | — | — | — |
 | Reranking | Encrypted | Encrypted | — | — | — | — | — | — |
 | Score | Request encrypted; response plaintext (pinned) | Request encrypted; response plaintext (pinned) | — | — | — | — | — | — |
+| Completions | Encrypted | — | — | — | — | — | — | — |
 
 **Encrypted** = E2EE is applied to request and response fields.
 **Fail closed** = Proxy rejects the request with an error because E2EE is not supported for this endpoint in the end-to-end path, either because the proxy does not implement E2EE field dispatch for that request type or because the upstream TEE cannot decrypt it.
@@ -158,6 +161,7 @@ NearDirect and NearCloud both use the NearAI field-encryption protocol: Ed25519/
 | Image generation | `prompt` |
 | Reranking | `query`; `documents[]` when each document is a JSON string; `documents[].text` when documents are JSON objects. Other document object metadata remains plaintext |
 | Score | `text_1`, `text_2` |
+| Completions (NearDirect) | `prompt` as a string or an array of strings. Every other field that teep accepts passes in plaintext: the sampling and limit fields (`max_tokens`, `temperature`, `top_p`, `n`, `stream`, `seed` and similar), `stop` (the stop sequences, which can hold text) and `user` (an end-user identifier). Teep accepts `logprobs`, `prompt_logprobs` and `suffix` only as `null`, and `echo` and `return_token_ids` only as `null` or `false`. Any other field, a duplicate member, a prompt of token ids and an empty prompt array are rejected in E2EE mode, because their content would travel or return unencrypted |
 
 **E2EE response fields encrypted (NearDirect and NearCloud):**
 
@@ -194,6 +198,7 @@ NearDirect and NearCloud both use the NearAI field-encryption protocol: Ed25519/
 | `data[].embedding` | Yes | Embeddings |
 | `results[].document.text` | Yes | Reranking; other object metadata remains plaintext |
 | `data[].score` | No | Score response is currently plaintext from upstream (known upstream NearAI limitation) |
+| `choices[].text` | Yes | Completions (NearDirect), JSON and streaming. Each choice must carry `text`; besides it only `index`, `finish_reason`, `stop_reason` and `matched_stop`, and `logprobs`, `prompt_logprobs`, `token_ids` and `prompt_token_ids` only as `null`. A NEAR completions stream must end with `[DONE]` |
 
 #### Tool calls under E2EE
 
@@ -253,6 +258,7 @@ another endpoint; see [models the probe does not cover](providers/near/near_atte
 | Image generation | `/v1/images/generations` | Yes | Sensitive fields encrypted; `prompt`, `b64_json`, and `revised_prompt` encrypted |
 | Reranking | `/v1/rerank` | Yes | Sensitive fields encrypted; `query` and `documents[]` encrypted |
 | Score | `/v1/score` | Request only | Request fields (`text_1`, `text_2`) encrypted; response `data[].score` currently plaintext (known upstream NearAI limitation) |
+| Completions | `/v1/completions` | Yes | `prompt` encrypted; `choices[].text` decrypted. NEAR's gateway refuses E2EE on this endpoint ("End-to-end encryption is not supported on /v1/completions", 2026-11-14), so NearCloud has no completions route |
 
 ---
 
