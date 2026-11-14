@@ -1369,6 +1369,25 @@ func TestDoE2EEChutesStreamTest_DecryptChunkFail(t *testing.T) {
 	}
 }
 
+// A probe refused with a provider error names the provider's message in the
+// e2ee_usable detail.
+func TestStandaloneInferenceErrorMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"JSON message", `{"error":{"message":"This API key's organization is not allowed to use this endpoint.","type":"forbidden"}}`,
+			"upstream returned HTTP 403: This API key's organization is not allowed to use this endpoint."},
+		{"empty body", "", "upstream returned HTTP 403"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: http.StatusForbidden, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(tc.body))}
+			if err := standaloneInferenceError(resp, nil); err == nil || err.Error() != tc.want {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestStandaloneEncryptedErrorAuthentication(t *testing.T) {
 	private, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {

@@ -272,8 +272,14 @@ func standaloneInferenceError(resp *http.Response, session *e2ee.EHBPSession) er
 		defer plain.Close()
 		body = plain
 	}
-	if _, err := io.Copy(io.Discard, io.LimitReader(body, 64<<10)); err != nil {
+	data, err := io.ReadAll(io.LimitReader(body, 64<<10))
+	if err != nil {
 		return err
+	}
+	// The probe request is teep's own text, so the provider's message can
+	// name the cause (an account permission, a rate limit) in the report.
+	if message := provider.UpstreamErrorMessage(data); message != "" {
+		return fmt.Errorf("upstream returned HTTP %d: %s", resp.StatusCode, message)
 	}
 	return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
 }
