@@ -18,7 +18,6 @@ import (
 	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
-	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct"
@@ -165,22 +164,37 @@ func markBlockedProbe(report *attestation.VerificationReport) {
 	}
 }
 
-// markUnprobedModel states in the deferred e2ee_usable Skip why no probe
-// runs, and reports true, for a NEAR model that serves an endpoint the chat
-// probe does not cover. A blocked report keeps its result: no probe runs for
-// it either way. A replay with a captured probe outcome keeps that outcome.
+// unprobedDetail is the e2ee_usable detail for a model that serves an
+// endpoint of the given kind, which the chat probe does not cover.
+func unprobedDetail(kind string) string {
+	return "not probed: the model serves " + kind + "; the verify probe sends a chat completion"
+}
+
+// markUnprobedModel states in the deferred e2ee_usable Skip, and in the
+// deferred aci_receipt_verified Skip, why no probe runs, and reports true, for a model that the provider's unprobed-model
+// table lists: a model that serves an endpoint the chat probe does not cover.
+// A blocked report keeps its result: no probe runs for it either way. With
+// E2EE off, and in a replay with a captured probe outcome, the path does not
+// change.
 func markUnprobedModel(opts *Options, report *attestation.VerificationReport) bool {
-	if report == nil || report.Blocked() || nearTLSOnly(opts) || opts.CapturedE2EE != nil ||
-		(opts.ProviderName != "neardirect" && opts.ProviderName != "nearcloud") {
+	if report == nil || report.Blocked() || !opts.Provider.E2EE || opts.CapturedE2EE != nil {
 		return false
 	}
-	detail, ok := nearroute.UnprobedDetail(opts.ModelName)
+	kindOf := unprobedModels(opts.ProviderName)
+	if kindOf == nil {
+		return false
+	}
+	kind, ok := kindOf(opts.ModelName)
 	if !ok {
 		return false
 	}
+	detail := unprobedDetail(kind)
 	slog.Warn("E2EE probe skipped: the model serves an endpoint the chat probe does not cover",
 		"provider", opts.ProviderName, "model", opts.ModelName, "detail", detail)
 	report.MarkE2EENotProbed(detail)
+	// The receipt factor of an ACI/1 report checks the probe's receipt; no
+	// probe means no receipt. A report without the factor does not change.
+	report.MarkACIReceipt(nil, "no probe: the model serves "+kind+"; the verify probe sends a chat completion")
 	return true
 }
 

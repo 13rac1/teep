@@ -414,11 +414,23 @@ report carries no GPU evidence, and `nonce_match` and
 is no probe receipt to check: in `teep serve`, which checks the receipt of
 every response instead, in `teep verify` when the report blocks inference
 requests (teep sends no probe then), without an API key, with `--offline`
-(an offline run sends no probe), and after a probe whose
+(an offline run sends no probe), for a model that the probe does not cover
+(see [Known limitations](#known-limitations)), and after a probe whose
 stream failed.
 
 ## Known limitations
 
+- `teep verify` tests E2EE with one chat completion, called the probe. It
+  sends no probe to the four Phala Cloud models whose output modality is not
+  text, and it logs a warning. Those models are
+  `black-forest-labs/flux.2-klein-4b`, `openai/whisper-large-v3`,
+  `mistralai/voxtral-small-24b-2507` and `jaredpalmer/kev-4b`, listed in
+  `unprobedKinds` in
+  [`internal/provider/phalacloud/kinds.go`](../../../internal/provider/phalacloud/kinds.go).
+  `e2ee_usable` (allowed to fail) and `aci_receipt_verified` (enforced) stay
+  skipped and do not block. A model that is not in that table gets the
+  probe. `teep serve` has no path for the endpoints of these models. See
+  [Phala Cloud Model Endpoints: No Endpoint Field in the Model List](../../attestation_gaps/phalacloud_model_endpoints.md).
 - For a model whose gateway session is replaced at each re-verification,
   the pin is refused and teep serves no request (observed on 2026-11-03;
   see [Attested sessions](#attested-sessions)).

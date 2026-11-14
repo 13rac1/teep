@@ -169,6 +169,24 @@ as a single AEAD stream. There are **no field-level gaps** for those encrypted
 exchanges. Bodyless endpoints (for example `GET /v1/models`) are plaintext at
 the HTTP-body layer by design.
 
+### Models the probe does not cover
+
+`teep verify` tests E2EE with one streaming chat completion, the probe. Ten
+models in Tinfoil's model list of 2026-11-14 serve no `/v1/chat/completions`:
+`nomic-embed-text`, `pii-filter`, `doc-upload`, `whisper-large-v3-turbo`,
+`qwen3-tts`, `voxtral-tts`, `voxtral-mini-4b-realtime`, and
+`decision-large`, `-medium` and `-small`. On 2026-11-14, the six of them that
+got the probe answered it with HTTP 404. `teep verify` sends these ten models
+no probe and logs a warning. `e2ee_usable` stays enforced with the status
+Skip and the detail "not probed: the model serves <endpoint>; the verify
+probe sends a chat completion", and does not block. A model that is not in
+the table gets the probe, so a new model without chat completions fails
+`e2ee_usable` and is reported. The table is `unprobedKinds` in
+[`internal/provider/tinfoil/kinds.go`](../../../internal/provider/tinfoil/kinds.go),
+copied from the `endpoints` field of Tinfoil's model list of 2026-11-14. The
+gap is recorded in
+[Tinfoil Model Endpoints: Verify Probe Covers Chat Only](../../attestation_gaps/tinfoil_model_endpoints.md).
+
 ### Endpoint Routing and Request-Shape Mechanics
 
 To produce a compatible implementation without depending on upstream source
