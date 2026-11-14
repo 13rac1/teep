@@ -161,7 +161,7 @@ NearDirect and NearCloud both use the NearAI field-encryption protocol: Ed25519/
 | Image generation | `prompt` |
 | Reranking | `query`; `documents[]` when each document is a JSON string; `documents[].text` when documents are JSON objects. Other document object metadata remains plaintext |
 | Score | `text_1`, `text_2` |
-| Completions (NearDirect) | `prompt` as a string or an array of strings. Teep accepts only sampling and limit fields besides it (`max_tokens`, `temperature`, `top_p`, `stop`, `n`, `stream`, `seed` and similar); `logprobs`, `prompt_logprobs` and `suffix` only as `null`, and `echo` and `return_token_ids` only as `null` or `false`. Any other field, a prompt of token ids and an empty prompt array are rejected in E2EE mode, because their content would travel or return unencrypted |
+| Completions (NearDirect) | `prompt` as a string or an array of strings. Every other field that teep accepts passes in plaintext: the sampling and limit fields (`max_tokens`, `temperature`, `top_p`, `n`, `stream`, `seed` and similar), `stop` (the stop sequences, which can hold text) and `user` (an end-user identifier). Teep accepts `logprobs`, `prompt_logprobs` and `suffix` only as `null`, and `echo` and `return_token_ids` only as `null` or `false`. Any other field, a duplicate member, a prompt of token ids and an empty prompt array are rejected in E2EE mode, because their content would travel or return unencrypted |
 
 **E2EE response fields encrypted (NearDirect and NearCloud):**
 
