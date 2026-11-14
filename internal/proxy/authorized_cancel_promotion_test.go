@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,9 +92,14 @@ func TestAuthorizedNearCallerCancelPromotion(t *testing.T) {
 					rec := &signalRecorder{inferenceRecorder: newInferenceRecorder(), want: want, written: make(chan struct{})}
 					ctx, cancel := context.WithCancel(t.Context())
 					go func() {
-						<-sent
-						<-rec.written
-						cancel()
+						defer cancel()
+						for _, ch := range []chan struct{}{sent, rec.written} {
+							select {
+							case <-ch:
+							case <-ctx.Done():
+								return
+							}
+						}
 					}()
 					out, err := server.inferAuthorized(ctx, rec, &request)
 					if err == nil {
@@ -122,4 +128,84 @@ func TestAuthorizedNearCallerCancelPromotion(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Only a NEAR session can confirm E2EE on a cancel, and only after a
+// successful decryption.
+func TestDecryptedFields(t *testing.T) {
+	near, err := e2ee.NewNearCloudSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decryptedFields(near); got != 0 {
+		t.Fatalf("new NEAR session: %d", got)
+	}
+	recipient, err := e2ee.Ed25519PubToX25519(mustHex(t, near.ClientEd25519PubHex()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := e2ee.EncryptXChaCha20([]byte("answer"), recipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := "0"
+	if strings.HasSuffix(encrypted, "0") {
+		last = "1"
+	}
+	if _, err := near.Decrypt(encrypted[:len(encrypted)-1] + last); err == nil {
+		t.Fatal("changed ciphertext decrypted")
+	}
+	if got := decryptedFields(near); got != 0 {
+		t.Fatalf("failed decryption counted: %d", got)
+	}
+	if _, err := near.Decrypt(encrypted); err != nil {
+		t.Fatal(err)
+	}
+	if got := decryptedFields(near); got != 1 {
+		t.Fatalf("decrypted fields = %d, want 1", got)
+	}
+	if got := decryptedFields(nil); got != 0 {
+		t.Fatalf("nil session: %d", got)
+	}
+	// An ACI/1 E2EE v2 session confirms E2EE only after its receipt check,
+	// so a canceled request never confirms it from a decrypted field.
+	if got := decryptedFields(&e2ee.ACIv2Session{}); got != 0 {
+		t.Fatalf("ACI/1 E2EE v2 session: %d", got)
+	}
+}
+
+// A cancellation joined with a decryption failure is not the caller's
+// cancellation alone.
+func TestCallerCanceledOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		callerCanceled bool
+		err            error
+		want           bool
+	}{
+		{"caller cancel", true, context.Canceled, true},
+		{"operation cancel", false, context.Canceled, false},
+		{"cancel and decryption failure", true, errors.Join(context.Canceled, e2ee.ErrDecryptionFailed), false},
+		{"deadline", true, context.DeadlineExceeded, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.callerCanceled {
+				cancel()
+			}
+			if got := callerCanceledOnly(ctx, tc.err); got != tc.want {
+				t.Errorf("callerCanceledOnly = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func mustHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
