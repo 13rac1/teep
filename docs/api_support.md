@@ -237,10 +237,7 @@ With `base_url = "https://completions.near.ai"` (the default), or
 `/endpoints`. Set `[providers.neardirect].base_url` to an explicit HTTPS backend
 origin to disable endpoint discovery in both commands. That origin is used for
 attestation and inference for every requested model; all attestation, TLS, and
-E2EE checks still apply. The `/v1/models` catalog remains gateway-provided:
-it lists the models that `cloud-api.near.ai/v1/models` returns with `owned_by` `"nearai"`.
-It also lists `z-ai/glm-5.3-flash-long`, which that catalog does not list,
-while `/endpoints` serves it; with an explicit backend origin it does not.
+E2EE checks still apply. The `/v1/models` catalog remains gateway-provided.
 `teep verify` does not send its chat probe to the five NEAR models that serve
 another endpoint; see [models the probe does not cover](providers/near/near_attestation.md#models-the-probe-does-not-cover).
 
