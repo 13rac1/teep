@@ -60,3 +60,13 @@ func (n *E2EE) EncryptRequestWithModelKey(body []byte, modelKey e2ee.NearModelKe
 	}
 	return e2ee.EncryptResult{Body: encBody, Session: session}, nil
 }
+
+// CoversE2EE reports whether this E2EE covers endpoint. NEAR E2EE covers chat, completions, embeddings, image generation, rerank, and score (request fields only).
+func (n *E2EE) CoversE2EE(endpoint e2ee.EndpointType) bool {
+	switch endpoint {
+	case e2ee.EndpointChat, e2ee.EndpointCompletions, e2ee.EndpointEmbeddings, e2ee.EndpointImages, e2ee.EndpointRerank, e2ee.EndpointScore:
+		return true
+	default:
+		return false
+	}
+}

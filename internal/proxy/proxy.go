@@ -129,6 +129,33 @@ type stats struct {
 
 	modelsMu sync.RWMutex
 	models   map[string]*modelStats
+
+	// notCovered counts the requests refused because the provider's E2EE
+	// does not cover their endpoint.
+	notCovered notCoveredStats
+}
+
+// notCoveredStats counts, per provider, the requests that teep refused
+// because E2EE is enabled and the provider's E2EE does not cover the
+// endpoint.
+type notCoveredStats struct {
+	mu     sync.Mutex
+	counts map[string]int64
+}
+
+func (n *notCoveredStats) add(name string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.counts == nil {
+		n.counts = make(map[string]int64)
+	}
+	n.counts[name]++
+}
+
+func (n *notCoveredStats) get(name string) int64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.counts[name]
 }
 
 // modelStats holds per-model counters.
@@ -566,6 +593,9 @@ func New(cfg *config.Config) (*Server, error) {
 	s.mux.HandleFunc("POST /v1/rerank", s.handleEndpoint(&rerankEndpoint))
 	s.mux.HandleFunc("POST /v1/score", s.handleEndpoint(&scoreEndpoint))
 	s.mux.HandleFunc("POST /v1/completions", s.handleEndpoint(&completionsEndpoint))
+	s.mux.HandleFunc("POST /v1/privacy/classify", s.handleEndpoint(&privacyClassifyEndpoint))
+	s.mux.HandleFunc("POST /v1/privacy/redact", s.handleEndpoint(&privacyRedactEndpoint))
+	s.mux.HandleFunc("POST /v1/images/edits", s.handleEndpoint(&imagesEditsEndpoint))
 	s.mux.HandleFunc("POST /v1/responses", s.handleEndpoint(&responsesEndpoint))
 	s.mux.HandleFunc("POST /v1/audio/speech", s.handleEndpoint(&speechEndpoint))
 	s.mux.HandleFunc("GET /v1/{$}", handleV1Help)
@@ -750,6 +780,10 @@ func fromConfig(
 		// NEAR model hosts encrypt completions; NEAR's gateway does not, so
 		// nearcloud has no completions route.
 		p.CompletionsPath = "/v1/completions"
+		p.PrivacyClassifyPath = "/v1/privacy/classify"
+		p.PrivacyRedactPath = "/v1/privacy/redact"
+		p.ImagesEditsPath = "/v1/images/edits"
+		p.ResponsesPath = "/v1/responses"
 		rdVerifier := neardirect.ReportDataVerifier{}
 		attester := neardirect.NewAttester(cp.BaseURL, cp.APIKey, offline)
 		p.Attester = attester
@@ -769,6 +803,11 @@ func fromConfig(
 		p.EmbeddingsPath = "/v1/embeddings"
 		p.RerankPath = "/v1/rerank"
 		p.ScorePath = "/v1/score"
+		p.AudioPath = "/v1/audio/transcriptions"
+		p.PrivacyClassifyPath = "/v1/privacy/classify"
+		p.PrivacyRedactPath = "/v1/privacy/redact"
+		p.ImagesEditsPath = "/v1/images/edits"
+		p.ResponsesPath = "/v1/responses"
 		p.Encryptor = neardirect.NewE2EE()
 		rdVerifier := neardirect.ReportDataVerifier{}
 		p.Attester = nearcloud.NewAttester(cp.APIKey, offline)
@@ -1594,11 +1633,92 @@ type endpointConfig struct {
 	// contentType is the default Content-Type for upstream requests.
 	// If empty, the original request's Content-Type is preserved.
 	contentType string
+}
 
-	// preRouteGuard is an optional check run after model resolution but before
-	// routing. Returns an error message and true to block the request.
-	// Nil means no guard.
-	preRouteGuard func(prov *provider.Provider) (errMsg string, block bool)
+// routedEndpoints lists every endpoint that teep routes, in display order.
+func routedEndpoints() []*endpointConfig {
+	return []*endpointConfig{&chatEndpoint, &completionsEndpoint, &responsesEndpoint, &embeddingsEndpoint, &imagesEndpoint, &imagesEditsEndpoint,
+		&rerankEndpoint, &scoreEndpoint, &audioEndpoint, &speechEndpoint, &privacyClassifyEndpoint, &privacyRedactEndpoint}
+}
+
+// e2eeCoverage splits the endpoints that prov serves into those its E2EE
+// covers and those it does not. Both are nil when E2EE is off.
+func e2eeCoverage(prov *provider.Provider) (covered, notCovered []string) {
+	if !prov.E2EE {
+		return nil, nil
+	}
+	for _, ep := range routedEndpoints() {
+		path := ep.endpointPath(prov)
+		if path == "" {
+			continue
+		}
+		if endpointCovered(prov, ep) {
+			covered = append(covered, path)
+		} else {
+			notCovered = append(notCovered, path)
+		}
+	}
+	return covered, notCovered
+}
+
+// endpointCovered reports whether prov sends ep: E2EE is off, or its
+// encryptor covers the endpoint. With E2EE on, a provider without an
+// encryptor covers no endpoint.
+func endpointCovered(prov *provider.Provider, ep *endpointConfig) bool {
+	if !prov.E2EE {
+		return true
+	}
+	return prov.Encryptor != nil && prov.Encryptor.CoversE2EE(ep.endpointType)
+}
+
+// notCoveredMessage is the refusal message for an endpoint outside the
+// provider's E2EE coverage. It states the transport that the request uses
+// without E2EE: attested TLS only for a provider that uses TLS binding.
+func notCoveredMessage(prov *provider.Provider, path string) string {
+	transport := " The request then goes over a TLS connection that attestation does not bind."
+	if prov.UsesTLSBinding {
+		transport = " The request then goes over the attested TLS connection."
+	}
+	return "teep did not send this request. E2EE is enabled for provider " + prov.Name +
+		", and its end-to-end encryption does not cover " + path +
+		". Nothing is wrong with teep or with the provider: you asked for end-to-end encryption, and this endpoint cannot be encrypted end to end." +
+		" To send it without E2EE, set e2ee = false for the provider in your teep config, and add e2ee_usable to its allow_fail list if its policy enforces that factor." +
+		transport
+}
+
+// refuseUncoveredEndpoint refuses, with HTTP 403, a request whose endpoint
+// the provider's E2EE does not cover while E2EE is enabled, and reports
+// whether it did. The request is not sent. The log holds no request content.
+func (s *Server) refuseUncoveredEndpoint(ctx context.Context, w http.ResponseWriter, path string, ep *endpointConfig, prov *provider.Provider, upstreamModel string) bool {
+	if endpointCovered(prov, ep) {
+		return false
+	}
+	s.stats.notCovered.add(prov.Name)
+	s.logInferenceBlock(ctx, "e2ee_not_covered", path, prov.Name, upstreamModel, http.StatusForbidden,
+		errors.New("E2EE enabled, endpoint not covered by the provider's E2EE, not sent"))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	if err := json.NewEncoder(w).Encode(notCoveredError{Error: notCoveredDetail{
+		Message:  notCoveredMessage(prov, path),
+		Type:     "e2ee_not_covered",
+		Provider: prov.Name,
+		Endpoint: path,
+	}}); err != nil {
+		slog.ErrorContext(ctx, "e2ee_not_covered response encode", "err", err)
+	}
+	return true
+}
+
+// notCoveredError is the JSON body of an e2ee_not_covered refusal.
+type notCoveredError struct {
+	Error notCoveredDetail `json:"error"`
+}
+
+type notCoveredDetail struct {
+	Message  string `json:"message"`
+	Type     string `json:"type"`
+	Provider string `json:"provider"`
+	Endpoint string `json:"endpoint"`
 }
 
 // parseChatRequest extracts model and stream flag from a chat completions JSON body.
@@ -1681,15 +1801,29 @@ var (
 		endpointPath: func(p *provider.Provider) string { return p.AudioPath },
 		unsupported:  "audio transcription",
 		parseRequest: parseAudioModelRequest,
-		preRouteGuard: func(prov *provider.Provider) (string, bool) {
-			// Non-pinned E2EE providers (Chutes, nearcloud) require body encryption,
-			// which doesn't support multipart. Fail closed to prevent silently
-			// sending plaintext.
-			if prov.E2EE {
-				return "audio transcription requires TLS-level E2EE (pinned provider)", true
-			}
-			return "", false
-		},
+	}
+	privacyClassifyEndpoint = endpointConfig{
+		name:         "privacy_classify",
+		endpointType: e2ee.EndpointPrivacy,
+		endpointPath: func(p *provider.Provider) string { return p.PrivacyClassifyPath },
+		unsupported:  "privacy classification",
+		parseRequest: parseJSONModelRequest,
+		contentType:  "application/json",
+	}
+	privacyRedactEndpoint = endpointConfig{
+		name:         "privacy_redact",
+		endpointType: e2ee.EndpointPrivacy,
+		endpointPath: func(p *provider.Provider) string { return p.PrivacyRedactPath },
+		unsupported:  "privacy redaction",
+		parseRequest: parseJSONModelRequest,
+		contentType:  "application/json",
+	}
+	imagesEditsEndpoint = endpointConfig{
+		name:         "images_edits",
+		endpointType: e2ee.EndpointImagesEdits,
+		endpointPath: func(p *provider.Provider) string { return p.ImagesEditsPath },
+		unsupported:  "image edits",
+		parseRequest: parseAudioModelRequest, // multipart with a model field, as audio
 	}
 	completionsEndpoint = endpointConfig{
 		name:         "completions",
@@ -1809,12 +1943,8 @@ func (s *Server) endpointHandler(ep *endpointConfig, observe func(*attestation.V
 			logChatRequestStats(ctx, &s.reasoningStripLogs, model, prov.Name, upstreamModel, r.URL.Path, body, reasoningStats, reasoningRepair)
 		}
 
-		if ep.preRouteGuard != nil {
-			if errMsg, block := ep.preRouteGuard(prov); block {
-				s.logInferenceBlock(ctx, "pre_route_guard", ep.name, prov.Name, upstreamModel, http.StatusBadRequest, errors.New(errMsg))
-				http.Error(w, errMsg, http.StatusBadRequest)
-				return
-			}
+		if s.refuseUncoveredEndpoint(ctx, w, r.URL.Path, ep, prov, upstreamModel) {
+			return
 		}
 
 		var attestDur, e2eeDur, upstreamDur time.Duration

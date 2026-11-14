@@ -2149,3 +2149,6 @@ func TestVerifySupplyChain_GatewayDigestsRequireVerifiedBinding(t *testing.T) {
 		})
 	}
 }
+
+// CoversE2EE covers every endpoint, so the test reaches EncryptRequest.
+func (*mockRequestEncryptor) CoversE2EE(e2ee.EndpointType) bool { return true }

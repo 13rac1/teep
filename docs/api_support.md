@@ -30,6 +30,9 @@ These are the OpenAI-style endpoints that clients use for inference:
 | `/v1/images/generations` | POST | Image generation |
 | `/v1/rerank` | POST | Document reranking |
 | `/v1/score` | POST | Text similarity scoring |
+| `/v1/images/edits` | POST | Image edits (multipart) |
+| `/v1/privacy/classify` | POST | PII span classification |
+| `/v1/privacy/redact` | POST | PII redaction |
 | `/v1/models` | GET | List available models |
 
 `/v1/models` is a proxy-aggregated endpoint that returns the combined model list from all configured providers. Each model's `id` field is rewritten to `provider:upstreamID` (e.g. `venice:e2ee-qwen3-5-122b-a10b`, `neardirect:Qwen/Qwen3-VL-30B-A3B-Instruct`) so clients can route requests to the correct provider. NanoGPT lists only its TEE models, whose IDs start with `TEE/`; its other models serve no attestation. It is not included in the per-provider matrices below because it is handled entirely by the proxy, does not forward requests to individual providers, and is not E2EE-encrypted (GET request, no sensitive data).
@@ -92,25 +95,31 @@ This matrix applies to OpenAI-compatible inference endpoints.
 | Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud | NanoGPT | Tinfoil Cloud | Tinfoil Direct |
 |---|---|---|---|---|---|---|---|---|
 | Chat completions | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Responses | — | — | — | — | — | — | Yes | Yes |
+| Responses | Yes | Yes | — | — | — | — | Yes | Yes |
 | Embeddings | Yes | Yes | Yes | — | Yes | — | Yes | Yes |
-| Audio transcriptions | Yes | — | — | — | — | — | Yes | Yes |
+| Audio transcriptions | Yes | Yes | — | — | — | — | Yes | Yes |
 | Text-to-speech | — | — | — | — | — | — | Yes | Yes |
 | Image generation | Yes | Yes | — | — | — | — | — | — |
 | Reranking | Yes | Yes | — | — | — | — | — | — |
 | Score | Yes | Yes | — | — | — | — | — | — |
 | Completions | Yes | — | — | — | — | — | — | — |
+| Image edits | Yes | Yes | — | — | — | — | — | — |
+| Privacy classify and redact | Yes | Yes | — | — | — | — | — | — |
 
 **—** = Not implemented. Provider returns HTTP 400.
+
+With E2EE enabled, an endpoint outside the provider's E2EE coverage is refused. See the E2EE support matrix and [why teep refused my request](#why-teep-refused-my-request).
 
 ## E2EE Support Matrix
 
 | Endpoint | NearDirect | NearCloud | Chutes | Venice | Phala Cloud | NanoGPT | Tinfoil Cloud | Tinfoil Direct |
 |---|---|---|---|---|---|---|---|---|
 | Chat completions | Encrypted | Encrypted | Encrypted | Encrypted | Encrypted (ACI/1 models) | Encrypted (ACI/1 models) | Encrypted | Encrypted |
-| Responses | — | — | — | — | — | — | Encrypted | Encrypted |
+| Responses | Refused when E2EE is enabled | Refused when E2EE is enabled | — | — | — | — | Encrypted | Encrypted |
 | Embeddings | Encrypted | Encrypted | Encrypted | — | Fail closed when E2EE is enabled; plaintext when disabled | — | Encrypted | Encrypted |
-| Audio transcriptions | Plaintext (pinned) | — | — | — | — | — | Fail closed when E2EE is enabled; plaintext when disabled | Fail closed when E2EE is enabled; plaintext when disabled |
+| Audio transcriptions | Refused when E2EE is enabled | Refused when E2EE is enabled | — | — | — | — | Refused when E2EE is enabled | Refused when E2EE is enabled |
+| Image edits | Refused when E2EE is enabled | Refused when E2EE is enabled | — | — | — | — | — | — |
+| Privacy classify and redact | Refused when E2EE is enabled | Refused when E2EE is enabled | — | — | — | — | — | — |
 | Text-to-speech | — | — | — | — | — | — | Encrypted | Encrypted |
 | Image generation | Encrypted | Encrypted | — | — | — | — | — | — |
 | Reranking | Encrypted | Encrypted | — | — | — | — | — | — |
@@ -118,11 +127,33 @@ This matrix applies to OpenAI-compatible inference endpoints.
 | Completions | Encrypted | — | — | — | — | — | — | — |
 
 **Encrypted** = E2EE is applied to request and response fields.
+**Refused when E2EE is enabled** = the provider's E2EE does not cover the endpoint, so with E2EE enabled teep refuses it with HTTP 403 and sends nothing. With `e2ee = false` for the provider, teep sends it over the attested, pinned TLS connection.
 **Fail closed** = Proxy rejects the request with an error because E2EE is not supported for this endpoint in the end-to-end path, either because the proxy does not implement E2EE field dispatch for that request type or because the upstream TEE cannot decrypt it.
 **Plaintext (pinned)** = Request and response transit in plaintext, but the connection is TLS-pinned to the attested TEE (no E2EE field encryption).
 **Request encrypted; response plaintext (pinned)** = Request fields are encrypted end-to-end, but upstream currently returns plaintext response fields for this endpoint. This is a known upstream NearAI limitation (inference-proxy/cloud-api score response path), not a teep policy preference. Responses still transit on pinned TLS to attested TEEs.
 **Encrypted (ACI/1 models)** = E2EE v2 of the private-ai-gateway encrypts the request and response content fields when the model answers with the gateway's ACI/1 attestation. A model that answers with another attestation format fails closed when E2EE is enabled.
 **—** = Endpoint not available for this provider.
+
+## Why teep refused my request
+
+With E2EE enabled, an endpoint outside the provider's E2EE coverage is refused.
+Teep sends nothing and answers HTTP 403 with an error of type
+`e2ee_not_covered` that names the provider and the endpoint:
+
+```json
+{"error": {"type": "e2ee_not_covered", "provider": "<name>", "endpoint": "/v1/audio/transcriptions",
+  "message": "teep did not send this request. E2EE is enabled for provider <name>, and its end-to-end encryption does not cover /v1/audio/transcriptions. ..."}}
+```
+
+Nothing is wrong with teep or with the provider: you asked for end-to-end
+encryption, and this endpoint cannot be encrypted end to end. To send it
+without E2EE, set `e2ee = false` for the provider in your teep config. If the
+provider's policy enforces `e2ee_usable`, also add `e2ee_usable` to its
+`allow_fail` list. The request then uses TLS, which attestation binds only for
+a provider that uses TLS binding (NearDirect, NearCloud, Phala Cloud and
+Tinfoil); for Venice, NanoGPT and Chutes it is WebPKI TLS only. Each refusal logs one warning with the provider and the
+endpoint, and the dashboard counts the refusals for each provider and lists the
+endpoints that its E2EE covers and does not.
 
 ## Provider Details
 
@@ -257,7 +288,10 @@ another endpoint; see [models the probe does not cover](providers/near/near_atte
 |---|---|---|---|
 | Chat completions | `/v1/chat/completions` | Yes | Sensitive fields encrypted; streaming forced when E2EE active |
 | Embeddings | `/v1/embeddings` | Yes | Sensitive fields encrypted; supports string and array input formats |
-| Audio transcriptions | `/v1/audio/transcriptions` | Requires E2EE disabled | Multipart requests use attested TLS to the model TEE. The proxy rejects this endpoint when field-level E2EE is enabled |
+| Audio transcriptions | `/v1/audio/transcriptions` | Refused when E2EE is enabled | Multipart requests use attested TLS to the model TEE when E2EE is disabled |
+| Image edits | `/v1/images/edits` | Refused when E2EE is enabled | Multipart; attested TLS to the model TEE when E2EE is disabled |
+| Privacy classify and redact | `/v1/privacy/classify`, `/v1/privacy/redact` | Refused when E2EE is enabled | NEAR does not decrypt an encrypted `input` on these endpoints (2026-11-14). Attested TLS to the model TEE when E2EE is disabled |
+| Responses | `/v1/responses` | Refused when E2EE is enabled | NEAR model hosts answer 404 (2026-11-14); with E2EE disabled teep relays NEAR's answer |
 | Image generation | `/v1/images/generations` | Yes | Sensitive fields encrypted; `prompt`, `b64_json`, and `revised_prompt` encrypted |
 | Reranking | `/v1/rerank` | Yes | Sensitive fields encrypted; `query` and `documents[]` encrypted |
 | Score | `/v1/score` | Request only | Request fields (`text_1`, `text_2`) encrypted; response `data[].score` currently plaintext (known upstream NearAI limitation) |
@@ -277,7 +311,10 @@ another endpoint; see [models the probe does not cover](providers/near/near_atte
 |---|---|---|---|
 | Chat completions | `/v1/chat/completions` | Yes | Gateway forwards E2EE headers to model TEE |
 | Embeddings | `/v1/embeddings` | Yes | Gateway forwards E2EE headers to model TEE |
-| Audio transcriptions | Not configured | Not supported | The proxy has no NearCloud audio route |
+| Audio transcriptions | `/v1/audio/transcriptions` | Refused when E2EE is enabled | With E2EE disabled, attested TLS to the gateway TEE, which reads the request |
+| Image edits | `/v1/images/edits` | Refused when E2EE is enabled | With E2EE disabled, attested TLS to the gateway TEE |
+| Privacy classify and redact | `/v1/privacy/classify`, `/v1/privacy/redact` | Refused when E2EE is enabled | With E2EE disabled, attested TLS to the gateway TEE |
+| Responses | `/v1/responses` | Refused when E2EE is enabled | The gateway implements this stateful API itself and stores responses; with E2EE it fails for NEAR's own models (2026-11-14). With E2EE disabled, attested TLS to the gateway TEE |
 | Image generation | `/v1/images/generations` | Yes | Gateway forwards E2EE headers to model TEE |
 | Reranking | `/v1/rerank` | Yes | Gateway forwards E2EE headers to model TEE |
 | Score | `/v1/score` | Request only | Request fields (`text_1`, `text_2`) encrypted; response `data[].score` currently plaintext (known upstream NearAI limitation) |
@@ -399,7 +436,7 @@ Venice only exposes chat completions. No other endpoints are available.
 | Chat completions | `/v1/chat/completions` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Responses | `/v1/responses` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Embeddings | `/v1/embeddings` | Yes | Full-body EHBP encryption |
-| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but the proxy rejects Tinfoil multipart requests when E2EE is enabled. With E2EE disabled, it forwards over attested, SPKI-pinned TLS |
+| Audio transcriptions | `/v1/audio/transcriptions` | Refused when E2EE is enabled | Tinfoil's E2EE (EHBP) in teep does not cover this multipart endpoint, so teep refuses it with HTTP 403 when E2EE is enabled. With E2EE disabled, it forwards over attested, SPKI-pinned TLS |
 | Text-to-speech | `/v1/audio/speech` | Yes | Full-body EHBP encryption |
 
 **E2EE field coverage:** EHBP encrypts the entire HTTP request and response body. There are **no field-level encryption gaps** — all request fields (messages, tools, parameters) and all response fields (content, tool_calls, usage) are encrypted by construction. Adding new OpenAI API fields requires zero changes to the encryption layer.
@@ -425,7 +462,7 @@ Venice only exposes chat completions. No other endpoints are available.
 | Chat completions | `/v1/chat/completions` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Responses | `/v1/responses` | Yes | Full-body EHBP encryption; streaming and non-streaming supported |
 | Embeddings | `/v1/embeddings` | Yes | Full-body EHBP encryption |
-| Audio transcriptions | `/v1/audio/transcriptions` | No when E2EE is enabled | Multipart route is implemented, but the proxy rejects Tinfoil multipart requests when E2EE is enabled. With E2EE disabled, it forwards over attested, SPKI-pinned TLS |
+| Audio transcriptions | `/v1/audio/transcriptions` | Refused when E2EE is enabled | Tinfoil's E2EE (EHBP) in teep does not cover this multipart endpoint, so teep refuses it with HTTP 403 when E2EE is enabled. With E2EE disabled, it forwards over attested, SPKI-pinned TLS |
 | Text-to-speech | `/v1/audio/speech` | Yes | Full-body EHBP encryption |
 
 **E2EE field coverage:** Identical to Tinfoil Cloud — full-body EHBP, no field-level gaps.

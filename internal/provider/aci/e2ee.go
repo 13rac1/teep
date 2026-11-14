@@ -226,3 +226,13 @@ func parsesAsJSONArray(s string) bool {
 	t := strings.TrimLeft(s, " \t\r\n")
 	return strings.HasPrefix(t, "[") && json.Valid([]byte(t))
 }
+
+// CoversE2EE reports whether this E2EE covers endpoint. E2EE v2 is defined for chat completions only.
+func (a *E2EE) CoversE2EE(endpoint e2ee.EndpointType) bool {
+	switch endpoint {
+	case e2ee.EndpointChat:
+		return true
+	default:
+		return false
+	}
+}

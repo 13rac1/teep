@@ -86,6 +86,9 @@ func (e *recordingEncryptor) EncryptRequest(_ []byte, raw *attestation.RawAttest
 	return e2ee.EncryptResult{Body: []byte("encrypted")}, nil
 }
 
+// CoversE2EE covers every endpoint, so the test reaches EncryptRequest.
+func (*recordingEncryptor) CoversE2EE(e2ee.EndpointType) bool { return true }
+
 func (e *recordingEncryptor) encrypted() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()

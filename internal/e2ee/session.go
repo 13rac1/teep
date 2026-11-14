@@ -34,6 +34,10 @@ const (
 	EndpointSpeech EndpointType = "speech"
 	// EndpointCompletions is /v1/completions.
 	EndpointCompletions EndpointType = "completions"
+	// EndpointPrivacy is /v1/privacy/classify and /v1/privacy/redact.
+	EndpointPrivacy EndpointType = "privacy"
+	// EndpointImagesEdits is /v1/images/edits (multipart).
+	EndpointImagesEdits EndpointType = "images_edits"
 )
 
 // EncField* constants identify the dot-notation sub-field paths within inference

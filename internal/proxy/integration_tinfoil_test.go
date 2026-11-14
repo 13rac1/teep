@@ -733,11 +733,11 @@ func assertAudioE2EEFailClosed(t *testing.T, resp *http.Response) {
 	if err != nil {
 		t.Fatalf("read audio E2EE body: %v", err)
 	}
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", resp.StatusCode, body)
 	}
-	if !strings.Contains(string(body), "audio transcription requires TLS-level E2EE") {
-		t.Fatalf("body = %q, want fail-closed E2EE diagnostic", diagnosticBodySnippet(body))
+	if !strings.Contains(string(body), `"type":"e2ee_not_covered"`) || !strings.Contains(string(body), "does not cover /v1/audio/transcriptions") {
+		t.Fatalf("body = %q, want the e2ee_not_covered refusal", diagnosticBodySnippet(body))
 	}
 }
 

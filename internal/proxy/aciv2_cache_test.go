@@ -132,3 +132,6 @@ func TestE2EEConfirmedRequiresDecryptedField(t *testing.T) {
 		t.Error("sessions whose relay enforces encrypted fields must be confirmed")
 	}
 }
+
+// CoversE2EE covers every endpoint, so the test reaches EncryptRequest.
+func (*formatRecordingEncryptor) CoversE2EE(e2ee.EndpointType) bool { return true }

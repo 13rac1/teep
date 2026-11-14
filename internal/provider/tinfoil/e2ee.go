@@ -39,3 +39,13 @@ func (t *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ e2
 	reader := session.EncryptRequest(bytes.NewReader(body))
 	return e2ee.EncryptResult{BodyReader: reader, EHBP: session}, nil
 }
+
+// CoversE2EE reports whether this E2EE covers endpoint. EHBP encrypts the whole body of chat, embeddings, responses and speech requests; teep sends no multipart audio body with EHBP.
+func (t *E2EE) CoversE2EE(endpoint e2ee.EndpointType) bool {
+	switch endpoint {
+	case e2ee.EndpointChat, e2ee.EndpointEmbeddings, e2ee.EndpointResponses, e2ee.EndpointSpeech:
+		return true
+	default:
+		return false
+	}
+}

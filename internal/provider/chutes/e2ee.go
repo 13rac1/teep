@@ -45,3 +45,13 @@ func (c *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, _ e2
 	}
 	return e2ee.EncryptResult{Body: encPayload, Chutes: meta}, nil
 }
+
+// CoversE2EE reports whether this E2EE covers endpoint. Chutes E2EE encrypts the whole body of chat and embeddings requests.
+func (c *E2EE) CoversE2EE(endpoint e2ee.EndpointType) bool {
+	switch endpoint {
+	case e2ee.EndpointChat, e2ee.EndpointEmbeddings:
+		return true
+	default:
+		return false
+	}
+}

@@ -97,8 +97,15 @@ func dashFactorStatus(s attestation.Status) string {
 type dashboardProvider struct {
 	Upstream string `json:"upstream"`
 	E2EE     string `json:"e2ee"`
-	Requests int64  `json:"requests"`
-	Errors   int64  `json:"errors"`
+	// E2EECovers and E2EEDoesNotCover list the endpoint paths that the
+	// provider's E2EE covers and does not; empty when E2EE is off.
+	E2EECovers       []string `json:"e2ee_covers,omitempty"`
+	E2EEDoesNotCover []string `json:"e2ee_does_not_cover,omitempty"`
+	// RefusedNotCovered counts the requests refused because E2EE is enabled
+	// and the provider's E2EE does not cover their endpoint.
+	RefusedNotCovered int64 `json:"refused_not_covered"`
+	Requests          int64 `json:"requests"`
+	Errors            int64 `json:"errors"`
 }
 
 type dashboardRequests struct {
@@ -207,9 +214,13 @@ func (s *Server) buildDashboardData() dashboardData {
 		if p.E2EE {
 			e2eeStatus = "enabled"
 		}
+		covered, notCovered := e2eeCoverage(p)
 		providers[name] = dashboardProvider{
-			Upstream: p.BaseURL,
-			E2EE:     e2eeStatus,
+			Upstream:          p.BaseURL,
+			E2EE:              e2eeStatus,
+			E2EECovers:        covered,
+			E2EEDoesNotCover:  notCovered,
+			RefusedNotCovered: s.stats.notCovered.get(name),
 		}
 	}
 

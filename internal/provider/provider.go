@@ -67,6 +67,9 @@ type RequestPreparer interface {
 //   - Tinfoil/EHBP: EHBP (full-body state, decrypted before relay)
 type RequestEncryptor interface {
 	EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error)
+	// CoversE2EE reports whether the provider's E2EE covers endpoint. With
+	// E2EE enabled, teep refuses an endpoint that it does not cover.
+	CoversE2EE(endpoint e2ee.EndpointType) bool
 }
 
 // ModelLister fetches the list of available models from a provider.
@@ -142,6 +145,15 @@ type Provider struct {
 	// CompletionsPath is the upstream API path for text completions
 	// (e.g. "/v1/completions"). Empty means unsupported.
 	CompletionsPath string
+	// PrivacyClassifyPath and PrivacyRedactPath are the upstream API paths
+	// of privacy classification and redaction (e.g. "/v1/privacy/classify").
+	// Empty means unsupported.
+	PrivacyClassifyPath string
+	PrivacyRedactPath   string
+
+	// ImagesEditsPath is the upstream API path for image edits
+	// (e.g. "/v1/images/edits", multipart). Empty means unsupported.
+	ImagesEditsPath string
 
 	// ResponsesPath is the upstream API path for responses
 	// (e.g. "/v1/responses"). Empty means unsupported.

@@ -127,3 +127,13 @@ func veniceContentPlaintext(raw json.RawMessage, idx int) ([]byte, error) {
 	}
 	return nil, fmt.Errorf("message %d: unsupported content type (starts with %q)", idx, raw[0])
 }
+
+// CoversE2EE reports whether this E2EE covers endpoint. Venice E2EE covers chat only.
+func (v *E2EE) CoversE2EE(endpoint e2ee.EndpointType) bool {
+	switch endpoint {
+	case e2ee.EndpointChat:
+		return true
+	default:
+		return false
+	}
+}

@@ -548,6 +548,8 @@ function renderProviders(d) {
     var errCls = (p.errors || 0) > 0 ? ' class="bad"' : '';
     h += '<tr><td class="mono">' + esc(names[i]) + '</td><td class="mono" style="color:var(--dim)">' +
       esc(p.upstream) + '</td><td class="' + cls + '">' + esc(p.e2ee) +
+      ((p.e2ee_does_not_cover || []).length ? '<div style="font-size:11px">not covered by E2EE (refused): ' +
+        esc(p.e2ee_does_not_cover.join(", ")) + (p.refused_not_covered ? ' · refused: ' + esc(p.refused_not_covered) : '') + '</div>' : '') +
       '</td><td>' + esc(p.requests || 0) + '</td><td' + errCls + '>' + esc(p.errors || 0) + '</td></tr>';
   }
   el("prov-rows").innerHTML = h;
