@@ -12,6 +12,7 @@ New reports should follow [TEMPLATE.md](TEMPLATE.md).
 
 - [Dstack Integrity Chain: In-Band Discovery Gap](dstack_integrity.md)
 - [NEAR DeepSeek Image Provenance: Platform Digest Discovery Gap](near_image_provenance.md)
+- [NEAR Model Endpoints: No Endpoint in the Model List](near_model_endpoints.md)
 - [NearCloud E2EE: Gateway Header-Forwarding Gaps](e2ee_plaintext_gaps.md)
 - [Hardware Attestation Binding Issues and Mitigations](gpu_cpu_binding.md)
 - [Model Weight Authentication](model_weights.md)

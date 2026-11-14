@@ -241,6 +241,8 @@ E2EE checks still apply. The `/v1/models` catalog remains gateway-provided:
 it lists the models that `cloud-api.near.ai/v1/models` returns with `owned_by` `"nearai"`.
 It also lists `z-ai/glm-5.3-flash-long`, which that catalog does not list,
 while `/endpoints` serves it; with an explicit backend origin it does not.
+`teep verify` does not send its chat probe to the five NEAR models that serve
+another endpoint; see [models the probe does not cover](providers/near/near_attestation.md#models-the-probe-does-not-cover).
 
 **E2EE protocol:** Ed25519/X25519 ECDH + XChaCha20-Poly1305 (field-level encryption).
 

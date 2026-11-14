@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/13rac1/teep/internal/provider/aci"
 	"github.com/13rac1/teep/internal/provider/nearcloud"
 	"github.com/13rac1/teep/internal/provider/neardirect"
+	"github.com/13rac1/teep/internal/provider/nearroute"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct"
@@ -79,6 +81,9 @@ func runTLSVerification(ctx context.Context, opts *Options, route *provider.Reso
 
 	if err == nil {
 		markBlockedProbe(current.report)
+		if markUnprobedModel(opts, current.report) {
+			return current, nil
+		}
 	}
 	if err != nil || opts.Offline || opts.replay || opts.CapturedE2EE != nil || opts.Provider.APIKey == "" || current.report.Blocked() {
 		return current, err
@@ -158,6 +163,25 @@ func markBlockedProbe(report *attestation.VerificationReport) {
 	if report != nil && report.Blocked() {
 		report.MarkACIReceipt(nil, "no probe: the report blocks inference requests")
 	}
+}
+
+// markUnprobedModel states in the deferred e2ee_usable Skip why no probe
+// runs, and reports true, for a NEAR model that serves an endpoint the chat
+// probe does not cover. A blocked report keeps its result: no probe runs for
+// it either way. A replay with a captured probe outcome keeps that outcome.
+func markUnprobedModel(opts *Options, report *attestation.VerificationReport) bool {
+	if report == nil || report.Blocked() || nearTLSOnly(opts) || opts.CapturedE2EE != nil ||
+		(opts.ProviderName != "neardirect" && opts.ProviderName != "nearcloud") {
+		return false
+	}
+	detail, ok := nearroute.UnprobedDetail(opts.ModelName)
+	if !ok {
+		return false
+	}
+	slog.Warn("E2EE probe skipped: the model serves an endpoint the chat probe does not cover",
+		"provider", opts.ProviderName, "model", opts.ModelName, "detail", detail)
+	report.MarkE2EENotProbed(detail)
+	return true
 }
 
 // completeTLSInference stores the same final outcome in the report and capture,
