@@ -14,7 +14,7 @@ func (in *ReportInput) VerificationErrors() error {
 	}
 	for _, result := range []*SEVVerifyResult{in.SEV, in.GatewaySEV} {
 		if result != nil {
-			errs = append(errs, result.ParseErr, result.CertChainErr, result.SignatureErr, result.PolicyErr, result.TCBErr, result.ReportDataBindingErr)
+			errs = append(errs, result.ParseErr, result.FetchErr, result.CertChainErr, result.SignatureErr, result.PolicyErr, result.TCBErr, result.ReportDataBindingErr)
 		}
 	}
 	for _, result := range []*NvidiaVerifyResult{in.Nvidia, in.NvidiaNRAS} {

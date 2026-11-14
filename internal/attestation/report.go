@@ -624,9 +624,13 @@ var ChutesDefaultAllowFail = []string{
 // cpu_id_registry is allowed to fail because Tinfoil does not participate in
 // Proof of Cloud. intel_pcs_collateral is allowed because SEV-SNP uses AMD
 // KDS instead of Intel PCS. SEV-SNP certificate-chain and quote-signature
-// checks require a request to kdsintf.amd.com, which is often unavailable or
-// returns errors for tinfoil_v3_cloud; the gateway pair carries that fetch
-// now that the router reports there, so both pairs are listed.
+// checks require a VCEK request, which Tinfoil's getter sends to
+// kds-proxy.tinfoil.sh, not to kdsintf.amd.com. That request is often
+// unavailable or returns errors for tinfoil_v3_cloud; the gateway pair carries
+// that fetch now that the router reports there, so both pairs are listed.
+// allow_fail applies to the factor, not to the cause: it lets both a
+// retrieval failure (FetchErr) and a rejection (CertChainErr, SignatureErr,
+// including a 4xx for the VCEK URL) through. Both still appear in the report.
 // NVIDIA GPU and CPU-GPU/NVSwitch binding factors are
 // reported but currently allowed to fail by default, due to the hashing
 // issue documented in docs/attestation_gaps/tinfoil_nvidia_json.md
@@ -642,10 +646,12 @@ var TinfoilCloudDefaultAllowFail = []string{
 	FactorNVSwitchBinding,
 	FactorComponentRecognition,
 
-	// DANGER: these two run the AMD KDS fetch for the router. The core pair
-	// below covered it while the router reported in the core tier; moving the
-	// router to the gateway tier made the fetch enforced and a KDS outage
-	// blocking. SEE: TestTinfoilCloud_KDSOutageDoesNotBlock.
+	// DANGER: these two run the VCEK fetch through kds-proxy.tinfoil.sh for the
+	// router. The core pair below covered it while the router reported in the
+	// core tier; moving the router to the gateway tier made the fetch enforced
+	// and a KDS outage blocking. Allowing them also lets a rejected certificate
+	// or report signature through, not only a retrieval failure.
+	// SEE: TestTinfoilCloud_KDSOutageDoesNotBlock.
 	FactorGWCertChain,
 	FactorGWQuoteSignature,
 
@@ -1551,7 +1557,11 @@ func evalSEVParseDependent(in *ReportInput) []FactorResult {
 			Detail: fmt.Sprintf("valid SEV-SNP report, measurement: %s...", prefixHex(measHex))},
 	}
 
+	// Check FetchErr first: CertChainErr and SignatureErr are nil when retrieval failed.
 	switch {
+	case in.SEV.FetchErr != nil:
+		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Fail,
+			Detail: fmt.Sprintf("SEV-SNP certificate retrieval failed; VCEK cert chain not verified: %v", in.SEV.FetchErr)})
 	case in.SEV.CertChainErr != nil:
 		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEECertChain, Status: Fail,
 			Detail: fmt.Sprintf("VCEK cert chain verification failed: %v", in.SEV.CertChainErr)})
@@ -1563,7 +1573,11 @@ func evalSEVParseDependent(in *ReportInput) []FactorResult {
 			Detail: "offline mode; VCEK cert chain not verified (requires AMD KDS)"})
 	}
 
+	// Check FetchErr first: CertChainErr and SignatureErr are nil when retrieval failed.
 	switch {
+	case in.SEV.FetchErr != nil:
+		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Fail,
+			Detail: fmt.Sprintf("SEV-SNP certificate retrieval failed; SEV-SNP report signature not verified: %v", in.SEV.FetchErr)})
 	case in.SEV.SignatureErr != nil:
 		results = append(results, FactorResult{Tier: TierCore, Name: FactorTEEQuoteSignature, Status: Fail,
 			Detail: fmt.Sprintf("SEV-SNP report signature invalid: %v", in.SEV.SignatureErr)})
@@ -4116,7 +4130,11 @@ func evalGatewaySEVParseDependent(in *ReportInput) []FactorResult {
 			prefixHex(hex.EncodeToString(in.GatewaySEV.Measurement))),
 	}}
 
+	// Check FetchErr first: CertChainErr and SignatureErr are nil when retrieval failed.
 	switch {
+	case in.GatewaySEV.FetchErr != nil:
+		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWCertChain, Status: Fail,
+			Detail: fmt.Sprintf("SEV-SNP certificate retrieval failed; gateway VCEK cert chain not verified: %v", in.GatewaySEV.FetchErr)})
 	case in.GatewaySEV.CertChainErr != nil:
 		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWCertChain, Status: Fail,
 			Detail: fmt.Sprintf("gateway VCEK cert chain verification failed: %v", in.GatewaySEV.CertChainErr)})
@@ -4128,7 +4146,11 @@ func evalGatewaySEVParseDependent(in *ReportInput) []FactorResult {
 			Detail: "offline mode; gateway VCEK cert chain not verified (requires AMD KDS)"})
 	}
 
+	// Check FetchErr first: CertChainErr and SignatureErr are nil when retrieval failed.
 	switch {
+	case in.GatewaySEV.FetchErr != nil:
+		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWQuoteSignature, Status: Fail,
+			Detail: fmt.Sprintf("SEV-SNP certificate retrieval failed; gateway report signature not verified: %v", in.GatewaySEV.FetchErr)})
 	case in.GatewaySEV.SignatureErr != nil:
 		results = append(results, FactorResult{Tier: TierGateway, Name: FactorGWQuoteSignature, Status: Fail,
 			Detail: fmt.Sprintf("gateway report signature invalid: %v", in.GatewaySEV.SignatureErr)})

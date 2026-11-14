@@ -60,5 +60,8 @@ func (g *sevCertGetter) GetContext(ctx context.Context, target string) ([]byte, 
 		return nil, err
 	}
 	u.Host = kdsProxyHost
+	// Return the error unchanged. A proxy answer that is not 2xx is an
+	// *attestation.SEVCertStatusError, which verification uses to classify a
+	// 4xx as a rejection and other failures as retrieval failures.
 	return trust.GetWith(ctx, g.remote, u.String())
 }
