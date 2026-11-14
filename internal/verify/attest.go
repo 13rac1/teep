@@ -213,12 +213,13 @@ func checkSigstore(
 	scPolicy *attestation.SupplyChainPolicy,
 	client *http.Client,
 	offline bool,
+	memo *attestation.SupplyChainMemo,
 ) ([]attestation.SigstoreResult, []attestation.RekorProvenance) {
 	if len(digests) == 0 || offline {
 		return nil, nil
 	}
 	rc := attestation.NewRekorClient(client)
-	sigstoreResults := rc.CheckSigstoreDigests(ctx, digests)
+	sigstoreResults := memo.CheckSigstoreDigests(ctx, rc, digests)
 	for _, r := range sigstoreResults {
 		switch {
 		case r.OK:
@@ -239,7 +240,7 @@ func checkSigstore(
 	if len(okDigests) == 0 {
 		return sigstoreResults, nil
 	}
-	rekorResults := rc.FetchRekorProvenancesForPolicy(ctx, okDigests, digestToRepo, scPolicy)
+	rekorResults := memo.FetchRekorProvenancesForPolicy(ctx, rc, okDigests, digestToRepo, scPolicy)
 	for i := range rekorResults {
 		prov := &rekorResults[i]
 		d := okDigests[i]

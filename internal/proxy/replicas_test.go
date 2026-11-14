@@ -10,6 +10,35 @@ import (
 	"github.com/13rac1/teep/internal/provider"
 )
 
+// The instances of one model share the gateway evidence: the gateway quote
+// is verified once, and each instance's own quote once.
+func TestFetchVerifiedGatewayOnce(t *testing.T) {
+	s := newMinimalServer()
+	defer s.Close()
+	s.cfg.Offline = true
+	calls := make(map[string]int)
+	s.verifyQuote = func(_ context.Context, quote string) *attestation.TDXVerifyResult {
+		calls[quote]++
+		return &attestation.TDXVerifyResult{}
+	}
+	instance := func(quote, id string) *attestation.RawAttestation {
+		return &attestation.RawAttestation{IntelQuote: quote, ModelInstanceID: id,
+			GatewayIntelQuote: "gateway-quote", GatewayNonceHex: "n", GatewayAppCompose: "c"}
+	}
+	raw := instance("quote-a", "19ae")
+	raw.Replicas = []*attestation.RawAttestation{instance("quote-b", "a8a2"), instance("quote-c", "cc79")}
+	prov := &provider.Provider{Name: "nearcloud", SupplyChainPolicy: attestation.NoSupplyChainPolicy(),
+		Attester: &mockAttesterWithRaw{raw: raw}}
+	if _, _, _, err := s.fetchVerified(t.Context(), prov, "m", func(string, error) {}); err != nil {
+		t.Fatal(err)
+	}
+	for quote, want := range map[string]int{"gateway-quote": 1, "quote-a": 1, "quote-b": 1, "quote-c": 1} {
+		if calls[quote] != want {
+			t.Errorf("%s verified %d times, want %d", quote, calls[quote], want)
+		}
+	}
+}
+
 // Every instance of a NEAR cloud model is verified: a quote that fails on
 // one replica fails the factor in the published report and names the
 // replica, although the first instance passes.

@@ -1004,7 +1004,7 @@ func TestVerifySupplyChain_NilPolicyPanics(t *testing.T) {
 			t.Errorf("panic value = %v, want message mentioning nil SupplyChainPolicy", r)
 		}
 	}()
-	s.verifySupplyChain(context.Background(), raw, nil, nil, nil)
+	s.verifySupplyChain(context.Background(), raw, nil, nil, nil, attestation.NewSupplyChainMemo())
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,7 +1014,7 @@ func TestVerifySupplyChain_NilPolicyPanics(t *testing.T) {
 func TestVerifySupplyChain_EmptyAppCompose(t *testing.T) {
 	s := newMinimalServer()
 	raw := &attestation.RawAttestation{} // AppCompose == ""
-	sc, dur := s.verifySupplyChain(context.Background(), raw, nil, nil, attestation.NoSupplyChainPolicy())
+	sc, dur := s.verifySupplyChain(context.Background(), raw, nil, nil, attestation.NoSupplyChainPolicy(), attestation.NewSupplyChainMemo())
 	t.Logf("verifySupplyChain(empty AppCompose): compose=%v dur=%v", sc.Compose, dur)
 	if sc.Compose != nil {
 		t.Error("expected empty supplyChainResult for empty AppCompose")
@@ -1028,7 +1028,7 @@ func TestVerifySupplyChain_TDXParseErr(t *testing.T) {
 	s := newMinimalServer()
 	raw := &attestation.RawAttestation{AppCompose: "version: '3'\nservices:\n  app:\n    image: ubuntu:latest\n"}
 	tdxResult := &attestation.TDXVerifyResult{ParseErr: errors.New("parse failed")}
-	sc, _ := s.verifySupplyChain(context.Background(), raw, tdxResult, nil, attestation.NoSupplyChainPolicy())
+	sc, _ := s.verifySupplyChain(context.Background(), raw, tdxResult, nil, attestation.NoSupplyChainPolicy(), attestation.NewSupplyChainMemo())
 	t.Logf("verifySupplyChain(TDX ParseErr): compose=%v", sc.Compose)
 	if sc.Compose != nil {
 		t.Error("expected empty result when TDX ParseErr is set")
@@ -1040,7 +1040,7 @@ func TestVerifySupplyChain_WithAppCompose(t *testing.T) {
 	raw := &attestation.RawAttestation{AppCompose: `{"docker_compose_file":"version: '3'\n"}`}
 	// TDXVerifyResult with no ParseErr but empty MRConfigID — VerifyComposeBinding returns error.
 	tdxResult := &attestation.TDXVerifyResult{}
-	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, nil, attestation.NoSupplyChainPolicy())
+	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, nil, attestation.NoSupplyChainPolicy(), attestation.NewSupplyChainMemo())
 	t.Logf("verifySupplyChain(AppCompose): compose=%v dur=%v", sc.Compose, dur)
 	if sc.Compose == nil {
 		t.Error("expected non-nil Compose result when AppCompose is set")
@@ -1391,7 +1391,7 @@ func TestVerifySupplyChain_SuccessPath(t *testing.T) {
 	raw := &attestation.RawAttestation{AppCompose: appCompose}
 	tdxResult := &attestation.TDXVerifyResult{MRConfigID: mrConfigID}
 
-	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, nil, attestation.NoSupplyChainPolicy())
+	sc, dur := s.verifySupplyChain(context.Background(), raw, tdxResult, nil, attestation.NoSupplyChainPolicy(), attestation.NewSupplyChainMemo())
 	t.Logf("verifySupplyChain(success): compose=%+v dur=%v", sc.Compose, dur)
 	if sc.Compose == nil {
 		t.Fatal("expected non-nil Compose result")
@@ -1473,6 +1473,7 @@ func TestVerifySupplyChain_UsesPolicyAwareRekorSelection(t *testing.T) {
 		&attestation.TDXVerifyResult{MRConfigID: mrConfigIDForAppCompose(appCompose)},
 		nil,
 		policy,
+		attestation.NewSupplyChainMemo(),
 	)
 	if len(sc.Rekor) != 1 {
 		t.Fatalf("len(Rekor) = %d, want 1", len(sc.Rekor))
@@ -2100,6 +2101,7 @@ func TestVerifySupplyChain_GatewayDigestsMerged(t *testing.T) {
 		&attestation.TDXVerifyResult{MRConfigID: mrConfigIDForAppCompose(modelCompose)},
 		&attestation.ComposeBindingResult{Checked: true},
 		attestation.NoSupplyChainPolicy(),
+		attestation.NewSupplyChainMemo(),
 	)
 
 	if len(sc.ImageRepos) != 1 || sc.ImageRepos[0] != "modelrepo/app" {
@@ -2140,7 +2142,7 @@ func TestVerifySupplyChain_GatewayDigestsRequireVerifiedBinding(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sc, _ := s.verifySupplyChain(context.Background(), raw, nil, tt.compose, attestation.NoSupplyChainPolicy())
+			sc, _ := s.verifySupplyChain(context.Background(), raw, nil, tt.compose, attestation.NoSupplyChainPolicy(), attestation.NewSupplyChainMemo())
 			if len(sc.GatewayImageRepos) != 0 || len(sc.DigestToRepo) != 0 {
 				t.Errorf("unverified gateway compose contributed digests: %+v", sc)
 			}
