@@ -259,12 +259,12 @@ func (c *Checker) checkTLSState(
 
 	var verifyErrs []string
 	for _, candidate := range scts {
-		log := logList.FindLogByKeyHash(candidate.sct.LogID.KeyID)
-		if log == nil {
+		key, found := ctLogKey(logList, candidate.sct.LogID.KeyID)
+		if !found {
 			verifyErrs = append(verifyErrs, "SCT log ID not found in trusted log list")
 			continue
 		}
-		pub, pkErr := ctx509.ParsePKIXPublicKey(log.Key)
+		pub, pkErr := ctx509.ParsePKIXPublicKey(key)
 		if pkErr != nil {
 			verifyErrs = append(verifyErrs, "parse log public key: "+pkErr.Error())
 			continue
@@ -282,6 +282,17 @@ func (c *Checker) checkTLSState(
 		return errors.New("no verifiable SCTs")
 	}
 	return fmt.Errorf("no valid SCTs: %s", strings.Join(verifyErrs, "; "))
+}
+
+// ctLogKey finds the SCT verification key in either CT log collection.
+func ctLogKey(list *loglist3.LogList, id [sha256.Size]byte) ([]byte, bool) {
+	if log := list.FindLogByKeyHash(id); log != nil {
+		return log.Key, true
+	}
+	if log := list.FindTiledLogByKeyHash(id); log != nil {
+		return log.Key, true
+	}
+	return nil, false
 }
 
 func (c *Checker) addCacheEntry(key string) {

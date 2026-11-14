@@ -41,6 +41,12 @@ the response is too late to protect request data. SPKI comparisons use
 constant-time operations. TLS-SPKI pools disable session resumption to ensure
 that each handshake checks the attested peer identity.
 
+CT verification obtains log public keys from Google's
+[all-logs list](https://www.gstatic.com/ct/log_list/v3/all_logs_list.json),
+cached in memory for 24 hours. SCT log IDs can identify either RFC 6962 logs
+or Static CT API logs (`tiled_logs`). Both use SCT signature verification;
+an unknown log ID or invalid signature does not authenticate an SCT.
+
 For E2EE routes, every logical request must acquire a valid authorization that
 binds the backend encryption key through attestation, including requests that
 reuse relay TLS connections. A cached authorization satisfies this requirement;
