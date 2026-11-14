@@ -65,6 +65,10 @@ Flag any code that:
 - Accepts unknown, ambiguous, or semantically invalid configuration that should have been rejected at startup.
 - Uses special cases to handle the tests or test environment, including bypassing factor validation.
 - Adds exemptions to teeplint for new code.
+- Sends a request to an endpoint that the provider's E2EE protocol does not
+  support while E2EE is enabled, instead of refusing it.
+- Compares a provider's name outside provider construction, instead of reading
+  a field that every provider sets.
 
 Error paths MUST fail closed. They may also log, clean up, zero key material,
 invalidate caches, and record metrics, but must never silently continue or
