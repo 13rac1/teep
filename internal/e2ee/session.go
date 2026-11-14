@@ -8,7 +8,10 @@
 // Dependency flow: attestation → e2ee → provider → proxy → cmd
 package e2ee
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 // EndpointType identifies the canonical OpenAI-compatible endpoint for field
 // encryption policy routing. These types are independent of provider-specific
@@ -34,7 +37,16 @@ const (
 	EndpointSpeech EndpointType = "speech"
 	// EndpointCompletions is /v1/completions.
 	EndpointCompletions EndpointType = "completions"
+	// EndpointPrivacy is /v1/privacy/classify and /v1/privacy/redact.
+	EndpointPrivacy EndpointType = "privacy"
+	// EndpointImagesEdits is /v1/images/edits (multipart).
+	EndpointImagesEdits EndpointType = "images_edits"
 )
+
+// ErrEndpointNotCovered is returned by an encryptor for an endpoint that its
+// E2EE protocol does not support. The encryptor returns it before it reads
+// the key or the body.
+var ErrEndpointNotCovered = errors.New("E2EE does not support this endpoint")
 
 // EncField* constants identify the dot-notation sub-field paths within inference
 // API JSON structures that are subject to field-level encryption. Each constant

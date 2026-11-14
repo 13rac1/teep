@@ -30,8 +30,8 @@ func NewE2EE() *E2EE { return &E2EE{now: time.Now} }
 // v2 encrypts to. The body's top-level model is bound into every field's
 // associated data, so a party that changes it makes the request fail.
 func (a *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error) {
-	if endpoint != e2ee.EndpointChat {
-		return e2ee.EncryptResult{}, fmt.Errorf("E2EE v2 unsupported endpoint %q", endpoint)
+	if !a.CoversE2EE(endpoint) {
+		return e2ee.EncryptResult{}, fmt.Errorf("E2EE v2: endpoint %q: %w", endpoint, e2ee.ErrEndpointNotCovered)
 	}
 	if raw.BackendFormat != attestation.FormatACI1 {
 		return e2ee.EncryptResult{}, fmt.Errorf("E2EE v2 requires an ACI/1 attestation, got format %q", raw.BackendFormat)
@@ -225,4 +225,14 @@ type textPart struct {
 func parsesAsJSONArray(s string) bool {
 	t := strings.TrimLeft(s, " \t\r\n")
 	return strings.HasPrefix(t, "[") && json.Valid([]byte(t))
+}
+
+// CoversE2EE reports whether this E2EE covers endpoint. E2EE v2 is defined for chat completions only.
+func (a *E2EE) CoversE2EE(endpoint e2ee.EndpointType) bool {
+	switch endpoint {
+	case e2ee.EndpointChat:
+		return true
+	default:
+		return false
+	}
 }

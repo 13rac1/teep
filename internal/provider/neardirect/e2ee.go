@@ -27,6 +27,9 @@ func NewE2EE() *E2EE { return &E2EE{} }
 //
 // Unsupported endpoints fail closed.
 func (n *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error) {
+	if !n.CoversE2EE(endpoint) {
+		return e2ee.EncryptResult{}, fmt.Errorf("NearAI E2EE: endpoint %q: %w", endpoint, e2ee.ErrEndpointNotCovered)
+	}
 	modelKey, err := e2ee.ParseNearModelKey(raw.SigningKey)
 	if err != nil {
 		return e2ee.EncryptResult{}, err
@@ -52,11 +55,23 @@ func (n *E2EE) EncryptRequestWithModelKey(body []byte, modelKey e2ee.NearModelKe
 	case e2ee.EndpointCompletions:
 		encrypt = e2ee.EncryptCompletionsNearCloud
 	default:
-		return e2ee.EncryptResult{}, fmt.Errorf("NearAI E2EE not supported for endpoint %q", endpoint)
+		return e2ee.EncryptResult{}, fmt.Errorf("NearAI E2EE: endpoint %q: %w", endpoint, e2ee.ErrEndpointNotCovered)
 	}
 	encBody, session, err := encrypt(body, modelKey)
 	if err != nil {
 		return e2ee.EncryptResult{}, err
 	}
 	return e2ee.EncryptResult{Body: encBody, Session: session}, nil
+}
+
+// CoversE2EE reports whether this E2EE covers endpoint. NEAR E2EE covers
+// chat, completions, embeddings, image generation, rerank, and score (request
+// fields only).
+func (n *E2EE) CoversE2EE(endpoint e2ee.EndpointType) bool {
+	switch endpoint {
+	case e2ee.EndpointChat, e2ee.EndpointCompletions, e2ee.EndpointEmbeddings, e2ee.EndpointImages, e2ee.EndpointRerank, e2ee.EndpointScore:
+		return true
+	default:
+		return false
+	}
 }

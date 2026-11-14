@@ -22,8 +22,8 @@ func NewE2EE() *E2EE { return &E2EE{} }
 // The endpoint must be EndpointChat; Venice E2EE is only defined for
 // /api/v1/chat/completions.
 func (v *E2EE) EncryptRequest(body []byte, raw *attestation.RawAttestation, endpoint e2ee.EndpointType) (e2ee.EncryptResult, error) {
-	if endpoint != e2ee.EndpointChat {
-		return e2ee.EncryptResult{}, fmt.Errorf("venice E2EE unsupported endpoint %q", endpoint)
+	if !v.CoversE2EE(endpoint) {
+		return e2ee.EncryptResult{}, fmt.Errorf("venice E2EE: endpoint %q: %w", endpoint, e2ee.ErrEndpointNotCovered)
 	}
 
 	session, err := e2ee.NewVeniceSession()
@@ -126,4 +126,14 @@ func veniceContentPlaintext(raw json.RawMessage, idx int) ([]byte, error) {
 		return []byte(raw), nil
 	}
 	return nil, fmt.Errorf("message %d: unsupported content type (starts with %q)", idx, raw[0])
+}
+
+// CoversE2EE reports whether this E2EE covers endpoint. Venice E2EE covers chat only.
+func (v *E2EE) CoversE2EE(endpoint e2ee.EndpointType) bool {
+	switch endpoint {
+	case e2ee.EndpointChat:
+		return true
+	default:
+		return false
+	}
 }
