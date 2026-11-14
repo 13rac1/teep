@@ -64,3 +64,17 @@ func TestSupplyChainPolicyDoesNotIncludeAlpine(t *testing.T) {
 		t.Fatalf("neardirect should not include alpine, got %+v", *img)
 	}
 }
+
+// NEAR AI model CVMs served these values in live quotes from 2026-11-04 on
+// (os_image_hash 91fd5d69...).
+func TestDefaultMeasurementPolicyAcceptsNEARAIModelOS2026_11(t *testing.T) {
+	p := neardirect.DefaultMeasurementPolicy()
+	for i, v := range map[int]string{
+		1: "4ae609807c765916a31d724786ed74bcb97e168a9d937b04936aeef2015c907eba5ac352c6bcd749c246fd62ffb659ec",
+		2: "bd67ab7554dc27ab03a077bc1447a1a67d0624ff547c4c809a8626f12d6a89712f8ec60e781e99b98208574065d21a71",
+	} {
+		if _, ok := p.RTMRAllow[i][v]; !ok {
+			t.Errorf("RTMRAllow[%d] lacks %s...", i, v[:16])
+		}
+	}
+}
