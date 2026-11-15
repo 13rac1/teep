@@ -271,16 +271,24 @@ of Cloud registry via a multi-peer quorum protocol:
    side).  Requires quorum (currently 3 peers).
 2. **Stage 2:** Chains opaque partial signatures through peers sequentially
    to produce a signed JWT confirming registration status.
-3. **Verification:** Validates the JWT (EdDSA signature + claims when a
-   signing key is configured; claims-only otherwise) and reports `Pass` if
-   the PPID is found in the registry, `Fail` if explicitly not found, `Skip`
-   if the registry query was attempted but failed (or in equivalent
-   skip-classified cases such as offline mode with a PPID / a device ID with
-   no registry), and `Fail` when no PoC result and no PPID/device ID exist,
-   i.e. no CPU ID registry check is available/configured.
+3. **Verification:** Validates the JWT claims: the quote hash, the
+   timestamp, the expiry when present, and the machine ID reported by the
+   stage-1 peers. teep does not verify the JWT signature.
+   `cpu_id_registry` reports:
+   - `Pass` when the quorum returns a JWT.
+   - `Fail` when a peer answers HTTP 403 (not registered).
+   - `Skip` when the query fails, when teep is offline and has a PPID, or
+     when the evidence has a device ID but no registry.
+   - `Fail` when the evidence has no PPID and no device ID.
+
+   `gateway_cpu_id_registry` follows the same rules, but reports `Skip` in
+   the last case. It is not applicable to a SEV-SNP gateway.
 
 ##### Limitations
 
+- **Unverified JWT signature:**  teep does not verify the JWT signature.
+  The last peer in the chain can therefore return a registered answer that
+  the other peers did not sign, and teep reports `Pass`.
 - **Registry freshness:**  Point-in-time verification.  Hardware could be
   physically moved after the last verification.  Level 3 (continuous
   monitoring) mitigates this but is not universally deployed.
@@ -304,7 +312,14 @@ of Cloud registry via a multi-peer quorum protocol:
 ##### Deployment status
 
 Deployed in teep today.  `cpu_id_registry` is evaluated for inference CVM
-attestation; `gateway_cpu_id_registry` for gateway CVM attestation.
+attestation; `gateway_cpu_id_registry` for gateway CVM attestation.  On
+2026-11-14 neither factor passed for any model of any provider. In 50
+`cpu_id_registry` results, the trust-server.nillion.network peer answered
+HTTP 403 "Machine is not whitelisted", which teep reports as not
+registered; in the other 50, the evidence carried no PPID to query. In 36
+`gateway_cpu_id_registry` results, the trust-server.scrtlabs.com peer
+served a TLS certificate that expired on 2026-09-07, so the 3-of-3 quorum
+could not complete and the factor reported `Skip`.
 
 #### Option 2 — GPU Evidence Hash in TDX REPORTDATA (Software-Only)
 
@@ -368,7 +383,7 @@ with a Gap 1 mitigation (Option 1, 3, 4, or 5).
 2. **Reconstruct the expected REPORTDATA** using the same derivation formula.
 3. **Compare** the reconstructed REPORTDATA against the TDX quote's REPORTDATA
    field using constant-time comparison.
-4. **Promote `cpu_gpu_chain`** from hardcoded `Fail` to a computed factor:
+4. **Promote `cpu_gpu_chain`** from its current `Fail` to a computed factor:
    - `Pass` if the REPORTDATA includes and matches the GPU evidence hash.
    - `Fail` if the GPU evidence hash does not match.
    - `Skip` if the provider does not implement this scheme.
@@ -377,8 +392,8 @@ with a Gap 1 mitigation (Option 1, 3, 4, or 5).
 
 - **Backwards compatibility:**  Providers that have not adopted the new
   REPORTDATA scheme will continue to produce attestations where `cpu_gpu_chain`
-  is `Skip` or `Fail`.  The factor should remain outside `DefaultEnforced`
-  initially and be promoted once providers adopt the scheme.
+  is `Skip` or `Fail`.  The factor should stay in the default `allow_fail`
+  lists until providers adopt the scheme, and then be enforced.
 
 - **Ordering constraint:**  GPU evidence must be collected before the TDX
   report is generated.  This is already the natural order in most attestation
@@ -392,24 +407,26 @@ with a Gap 1 mitigation (Option 1, 3, 4, or 5).
 - **No hardware changes required.**  This can be implemented entirely in the
   CVM application layer and the client verifier.
 
-##### Tinfoil V3: Existing implementation of Option 2
+##### Tinfoil V3: Option 2 in Tinfoil's format, not yet verified by teep
 
-Tinfoil's V3 attestation format is the first concrete implementation of Option 2. V3 extends the basic approach to include both GPU and NVSwitch evidence hashes in REPORTDATA:
+Tinfoil's V3 attestation format binds device evidence into REPORTDATA. The current format carries the evidence in endorsed sections (`crypto_material`, `device_evidence`) and derives:
 
 ```
-REPORTDATA[0:32] = SHA-256(tls_key_fp || hpke_key || nonce || gpu_evidence_hash || nvswitch_evidence_hash)
-REPORTDATA[32:64] = zeros
+crypto_material_hash = SHA-256(crypto_material section bytes)
+device_evidence_hash = SHA-256(device_evidence section bytes)
+REPORTDATA[0:32]     = SHA-256(algorithm URI || nonce || crypto_material_hash || device_evidence_hash)
+REPORTDATA[32:64]    = zeros
 ```
 
-Where `gpu_evidence_hash = SHA-256(raw_gpu_spdm_json)` and `nvswitch_evidence_hash = SHA-256(raw_nvswitch_spdm_json)`. The CPU hardware signs REPORTDATA as part of the TDX or SEV-SNP quote, so both hashes are hardware-authenticated.
+`crypto_material` holds the TLS key fingerprint and the HPKE key, so REPORTDATA binds both keys, the client nonce and the device evidence.
 
-The V3 attestation endpoint (`GET /.well-known/tinfoil-attestation?nonce=<64hex>`) collects fresh SPDM evidence from all GPUs and NVSwitches via NVML APIs with the client-supplied nonce passed through to the GPU hardware. Evidence is returned in the response as `gpu` and `nvswitch` JSON fields. For 8-GPU HGX systems, PCIe topology validation (8 GPUs + 4 NVSwitches mesh integrity) is enforced at boot time.
+The CPU hardware signs REPORTDATA as part of the TDX or SEV-SNP report, so the device evidence hash is hardware-authenticated.
 
-GPU attestation is boot-time fail-closed: if `nvattest` local verification fails, the CVM aborts boot. This is enforced by CVM code that is itself verified via Sigstore supply chain attestation.
+teep does not read device evidence yet. It refuses a document whose `device_evidence` section carries items, which blocks the provider. Its verifier reports `gpu_bound=false`, so `cpu_gpu_chain` does not pass for Tinfoil. teep attests only the Tinfoil router: on 2026-11-14 the router served an empty `device_evidence` item list in all 14 `tinfoil_v3_cloud` runs, and `cpu_gpu_chain` failed, allowed by default.
 
-Teep verifies the binding by extracting `gpu` and `nvswitch` as `json.RawMessage` (preserving raw bytes — re-serialization would break the hash), recomputing the evidence hashes, reconstructing expected REPORTDATA, and constant-time comparing against the verified CPU quote. When the binding verifies, `cpu_gpu_chain` is promoted to `Pass`.
+Tinfoil states that its enclaves check the PCIe topology of 8-GPU HGX systems and abort boot when `nvattest` local verification fails. teep does not verify this.
 
-Tinfoil V3's residual risks are the same as Option 2 in general: it does **not** address Gap 1 (TEE.fail). The GPU evidence relay attack described in [Stage 2 analysis](#gpu-evidence-relay-attack-stage-2-residual-risk) applies. Tinfoil does not currently implement Proof of Cloud (Option 1), DCEA (Option 3), or TDX Connect (Option 5).
+When teep verifies Tinfoil's device evidence, Tinfoil V3 will have the residual risks of Option 2: it does **not** address Gap 1 (TEE.fail), and the GPU evidence relay attack described in [Stage 2 analysis](#gpu-evidence-relay-attack-stage-2-residual-risk) applies. Until then, Gap 2 stays open for Tinfoil. Tinfoil does not currently implement Proof of Cloud (Option 1), DCEA (Option 3), or TDX Connect (Option 5).
 
 #### Option 3 — vTPM / DCEA Platform-Mediated Binding (CPU Identity + GPU)
 
@@ -923,7 +940,7 @@ infrastructure changes.
 
 Gap 2 is independently exploitable *without* TEE.fail — any attacker
 controlling two legitimate machines can splice GPU evidence from one into the
-attestation response of the other.  Option 1 closes this gap at the
+attestation response of the other.  Option 2 closes this gap at the
 application layer, which has standalone value.
 
 **Security posture after Stage 2:**  Gaps 1 and 2 are each mitigated by
@@ -1002,7 +1019,7 @@ The GPU device identity is genuine and matches the registry.
 **Options:** 1 + 2 + 3 &nbsp; **Effort:** vTPM + CVM agent + verifier &nbsp; **Gap 1:** Full ✅ &nbsp; **Gap 2:** Full ✅
 
 Prioritize Option 3 ([DCEA](https://arxiv.org/html/2510.12469v1) protocol).
-NearAI / dstack / tinfoil should:
+NearAI / dstack (and other TDX providers) should:
 - Expose a vTPM to TD guests.
 - Extend GPU SPDM device identity into vTPM PCRs.
 - Include the AK public key hash in TDX report_data.
@@ -1063,9 +1080,10 @@ Authority already supports
 [Azure vTPM + TDX](https://docs.trustauthority.intel.com/main/articles/tutorial-azure-vtpm.html)
 attestation, so Azure support is plausible but unvalidated for DCEA.
 
-For teep's current providers (NearAI, dstack), neither runs on a major cloud
-provider's managed vTPM infrastructure — they would need to provision vTPM
-support themselves regardless of cloud platform.  This is the primary
+Of teep's current TDX providers, none runs on a major cloud provider's
+managed vTPM infrastructure; they would need to provision vTPM support
+themselves regardless of cloud platform.  teep attests only Tinfoil's
+SEV-SNP router, to which DCEA does not apply.  This is the primary
 deployment cost of Stage 3.
 
 Option 4 ([CCxTrust](https://arxiv.org/html/2412.03842v2) / CNCF) provides
@@ -1249,21 +1267,22 @@ CPU identity binding:
 
 CPU-to-GPU binding:
 
-- **`cpu_gpu_chain`** — hardcoded `Fail` in
-  [`report.go` `evalCPUGPUChain`](../../internal/attestation/report.go#L1024-L1032)
-
-GPU nonce binding:
-
-- **`nvidia_nonce_client_bound`** — spurious failures on nearcloud
+- **`cpu_gpu_chain`** — `Fail` for every provider in
+  [`report.go` `evalCPUGPUChain`](../../internal/attestation/report.go#L2355-L2361);
+  its `Pass` branch needs a Tinfoil GPU hash binding, which teep does not
+  verify yet
 
 ### Current behavior
 
 `cpu_id_registry` and `gateway_cpu_id_registry` are evaluated via the Proof of
-Cloud multi-peer quorum protocol (Option 1, deployed).  `cpu_gpu_chain` is
-hardcoded to `Fail` because no provider currently implements CPU-to-GPU
-binding (Options 2–5).
+Cloud multi-peer quorum protocol (Option 1, deployed).  `cpu_gpu_chain`
+fails for every provider.  Tinfoil binds a device evidence section into
+REPORTDATA, but the router that teep attests carries no GPU evidence, and
+teep does not read device evidence yet.  No other provider binds GPU
+evidence to the CPU quote (Options 2–5).
 
 Once providers adopt Option 2 (GPU evidence hash in REPORTDATA), teep will
-promote `cpu_gpu_chain` from hardcoded `Fail` to a computed factor.  The
-factor should remain outside `DefaultEnforced` initially and be promoted to
-enforced once providers deploy the scheme.
+verify the binding in `cpu_gpu_chain`.  The factor is in the default
+`allow_fail` list of every provider except `tinfoil_v3_direct`, which
+enforces it and is disabled.  It should stay allowed until providers deploy
+the scheme, and then be enforced.
