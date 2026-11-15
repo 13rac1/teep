@@ -419,19 +419,19 @@ func TestCheckTLSState_TiledLogSCT(t *testing.T) {
 	cert := selfSignedCert(t)
 	now := time.Now()
 
-	if err := checkSCT(t, tiledOnly, cert, signedTiledHandshakeSCT(t, log.key, log.id, cert, now)); err != nil {
+	if err := checkSCT(t, tiledOnly, cert, signedTestSCT(t, log.key, log.id, cert, now)); err != nil {
 		t.Errorf("SCT of a tiled log: %v", err)
 	}
 
 	// The log is found, so the failure must come from the signature check.
 	other := newTestLog(t)
-	err := checkSCT(t, tiledOnly, cert, signedTiledHandshakeSCT(t, other.key, log.id, cert, now))
+	err := checkSCT(t, tiledOnly, cert, signedTestSCT(t, other.key, log.id, cert, now))
 	if err == nil {
 		t.Error("SCT with the tiled log's ID but another key passed")
 	} else if !strings.Contains(err.Error(), "no valid SCTs") || strings.Contains(err.Error(), "not found") {
 		t.Errorf("SCT with another key: %v, want a signature failure of a found log", err)
 	}
-	if err := checkSCT(t, emptyLogList(t), cert, signedTiledHandshakeSCT(t, log.key, log.id, cert, now)); err == nil ||
+	if err := checkSCT(t, emptyLogList(t), cert, signedTestSCT(t, log.key, log.id, cert, now)); err == nil ||
 		!strings.Contains(err.Error(), "SCT log ID not found in the CT log list") {
 		t.Errorf("SCT of an unlisted log: %v", err)
 	}
@@ -467,6 +467,13 @@ func TestCheckTLSState_LogState(t *testing.T) {
 			&loglist3.TemporalInterval{StartInclusive: past.Add(-time.Hour), EndExclusive: past}, "temporal interval"},
 		{"expiry before the interval", &loglist3.LogStates{Usable: at(past)},
 			&loglist3.TemporalInterval{StartInclusive: now.Add(2 * time.Hour), EndExclusive: now.Add(3 * time.Hour)}, "temporal interval"},
+		// Boundaries: the SCT carries now in milliseconds.
+		{"read-only at the SCT time", &loglist3.LogStates{ReadOnly: &loglist3.ReadOnlyLogState{LogState: *at(time.UnixMilli(now.UnixMilli()))}}, nil, "read-only"},
+		{"retired at the SCT time", &loglist3.LogStates{Retired: at(time.UnixMilli(now.UnixMilli()))}, nil, "retired"},
+		{"expiry at the interval start", &loglist3.LogStates{Usable: at(past)},
+			&loglist3.TemporalInterval{StartInclusive: cert.NotAfter, EndExclusive: cert.NotAfter.Add(time.Hour)}, ""},
+		{"expiry at the interval end", &loglist3.LogStates{Usable: at(past)},
+			&loglist3.TemporalInterval{StartInclusive: past, EndExclusive: cert.NotAfter}, "temporal interval"},
 	}
 	for _, kind := range []string{"rfc6962", "tiled"} {
 		for _, tc := range tests {
@@ -478,7 +485,7 @@ func TestCheckTLSState_LogState(t *testing.T) {
 				} else {
 					op.Logs = []*loglist3.Log{{LogID: log.id[:], Key: log.pubDER, State: tc.state, TemporalInterval: tc.interval}}
 				}
-				err := checkSCT(t, &loglist3.LogList{Operators: []*loglist3.Operator{op}}, cert, signedTiledHandshakeSCT(t, log.key, log.id, cert, now))
+				err := checkSCT(t, &loglist3.LogList{Operators: []*loglist3.Operator{op}}, cert, signedTestSCT(t, log.key, log.id, cert, now))
 				switch {
 				case tc.wantErr == "" && err != nil:
 					t.Errorf("SCT refused: %v", err)
@@ -490,10 +497,10 @@ func TestCheckTLSState_LogState(t *testing.T) {
 	}
 }
 
-// signedTiledHandshakeSCT returns a TLS-marshalled SCT for cert, signed by key
+// signedTestSCT returns a TLS-marshalled SCT for cert, signed by key
 // under logID at ts, with the leaf_index extension that a Static CT API log
 // adds.
-func signedTiledHandshakeSCT(t *testing.T, key *ecdsa.PrivateKey, logID [32]byte, cert *x509.Certificate, ts time.Time) []byte {
+func signedTestSCT(t *testing.T, key *ecdsa.PrivateKey, logID [32]byte, cert *x509.Certificate, ts time.Time) []byte {
 	t.Helper()
 	sct := ct.SignedCertificateTimestamp{
 		SCTVersion: ct.V1,
@@ -842,4 +849,81 @@ func TestLiveCheckTLSState(t *testing.T) {
 		t.Fatalf("CheckTLSState (cached): %v", err)
 	}
 	t.Log("second call: cache hit")
+}
+
+// An SCT dated more than a day before the certificate's NotBefore, or in the
+// future, does not count, whatever the state of its log.
+func TestCheckTLSState_SCTTime(t *testing.T) {
+	log := newTestLog(t)
+	ll := &loglist3.LogList{Operators: []*loglist3.Operator{{
+		Name: "test operator",
+		Logs: []*loglist3.Log{{LogID: log.id[:], Key: log.pubDER, State: &loglist3.LogStates{
+			Retired: &loglist3.LogState{Timestamp: time.Now().Add(24 * time.Hour)},
+		}}},
+	}}}
+	cert := selfSignedCert(t) // NotBefore one hour ago
+	tests := []struct {
+		name    string
+		ts      time.Time
+		wantErr string
+	}{
+		{"shortly before NotBefore", cert.NotBefore.Add(-time.Hour), ""},
+		{"backdated before a retirement", cert.NotBefore.Add(-48 * time.Hour), "before the certificate's NotBefore"},
+		{"in the future", time.Now().Add(2 * time.Hour), "in the future"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkSCT(t, ll, cert, signedTestSCT(t, log.key, log.id, cert, tc.ts))
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Errorf("SCT refused: %v", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Errorf("err = %v, want one that names %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// A log ID that the list holds twice does not count, so the state of one
+// entry cannot hide the state of the other.
+func TestCheckTLSState_DuplicateLogID(t *testing.T) {
+	log := newTestLog(t)
+	usable := &loglist3.LogStates{Usable: &loglist3.LogState{Timestamp: time.Now().Add(-time.Hour)}}
+	rejected := &loglist3.LogStates{Rejected: &loglist3.LogState{Timestamp: time.Now().Add(-time.Hour)}}
+	ll := &loglist3.LogList{Operators: []*loglist3.Operator{{
+		Name:      "test operator",
+		Logs:      []*loglist3.Log{{LogID: log.id[:], Key: log.pubDER, State: usable}},
+		TiledLogs: []*loglist3.TiledLog{{LogID: log.id[:], Key: log.pubDER, State: rejected}},
+	}}}
+	cert := selfSignedCert(t)
+	err := checkSCT(t, ll, cert, signedTestSCT(t, log.key, log.id, cert, time.Now()))
+	if err == nil || !strings.Contains(err.Error(), "listed more than once") {
+		t.Errorf("err = %v, want a refusal of the duplicate log ID", err)
+	}
+}
+
+// A log entry whose ID is not the hash of its key, or that sets more than one
+// state, does not count.
+func TestCheckTLSState_MalformedLogEntry(t *testing.T) {
+	log := newTestLog(t)
+	other := newTestLog(t)
+	cert := selfSignedCert(t)
+	usable := &loglist3.LogState{Timestamp: time.Now().Add(-time.Hour)}
+	tests := []struct {
+		name    string
+		entry   *loglist3.Log
+		wantErr string
+	}{
+		{"ID of another key", &loglist3.Log{LogID: log.id[:], Key: other.pubDER, State: &loglist3.LogStates{Usable: usable}}, "does not match the hash of its key"},
+		{"usable and rejected", &loglist3.Log{LogID: log.id[:], Key: log.pubDER, State: &loglist3.LogStates{Usable: usable, Rejected: usable}}, "more than one state"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ll := &loglist3.LogList{Operators: []*loglist3.Operator{{Name: "test operator", Logs: []*loglist3.Log{tc.entry}}}}
+			err := checkSCT(t, ll, cert, signedTestSCT(t, log.key, log.id, cert, time.Now()))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("err = %v, want one that names %q", err, tc.wantErr)
+			}
+		})
+	}
 }

@@ -49,7 +49,11 @@ an unknown log ID or invalid signature does not authenticate an SCT. The list
 holds every known log, so an SCT counts only when its log is `usable` or
 `qualified`, or `readonly` or `retired` with the SCT issued before that state
 began. A pending, rejected or stateless log does not count. When the log has
-a `temporal_interval`, the certificate must expire inside it.
+a `temporal_interval`, the certificate must expire inside it. An SCT dated more
+than a day before the certificate's `NotBefore`, or more than an hour in the
+future, does not count, and a log ID that the list holds more than once, that is not
+the hash of its key, or whose entry sets more than one state does not count. The list holds each log's current state only, so an SCT of a log
+that is rejected now does not count, whenever it was issued.
 
 For E2EE routes, every logical request must acquire a valid authorization that
 binds the backend encryption key through attestation, including requests that

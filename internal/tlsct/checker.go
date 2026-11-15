@@ -3,6 +3,7 @@ package tlsct
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -259,16 +260,21 @@ func (c *Checker) checkTLSState(
 
 	var verifyErrs []string
 	for _, candidate := range scts {
-		log, found := findLog(logList, candidate.sct.LogID.KeyID)
-		if !found {
-			verifyErrs = append(verifyErrs, "SCT log ID not found in the CT log list")
-			continue
-		}
-		if err := log.acceptsSCT(time.UnixMilli(int64(candidate.sct.Timestamp)), leaf.NotAfter); err != nil { //nolint:gosec // SCT timestamps are milliseconds since 1970 and fit in int64
+		listed, err := findLog(logList, candidate.sct.LogID.KeyID)
+		if err != nil {
 			verifyErrs = append(verifyErrs, err.Error())
 			continue
 		}
-		pub, pkErr := ctx509.ParsePKIXPublicKey(log.key)
+		sctTime := time.UnixMilli(int64(candidate.sct.Timestamp)) //nolint:gosec // SCT timestamps are milliseconds since 1970 and fit in int64
+		if err := checkSCTTime(sctTime, leaf.NotBefore, time.Now()); err != nil {
+			verifyErrs = append(verifyErrs, err.Error())
+			continue
+		}
+		if err := listed.acceptsSCT(sctTime, leaf.NotAfter); err != nil {
+			verifyErrs = append(verifyErrs, err.Error())
+			continue
+		}
+		pub, pkErr := ctx509.ParsePKIXPublicKey(listed.key)
 		if pkErr != nil {
 			verifyErrs = append(verifyErrs, "parse log public key: "+pkErr.Error())
 			continue
@@ -295,15 +301,74 @@ type listedLog struct {
 	interval *loglist3.TemporalInterval
 }
 
-// findLog returns the log in either CT log collection whose ID is id.
-func findLog(list *loglist3.LogList, id [sha256.Size]byte) (listedLog, bool) {
-	if log := list.FindLogByKeyHash(id); log != nil {
-		return listedLog{key: log.Key, state: log.State, interval: log.TemporalInterval}, true
+// findLog returns the log in either CT log collection whose ID is id. A log
+// ID that is not listed, or that is listed more than once, is an error: with
+// two entries, the state and interval of one could hide those of the other.
+func findLog(list *loglist3.LogList, id [sha256.Size]byte) (listedLog, error) {
+	var found []listedLog
+	for _, op := range list.Operators {
+		for _, log := range op.Logs {
+			if subtle.ConstantTimeCompare(log.LogID, id[:]) == 1 {
+				found = append(found, listedLog{key: log.Key, state: log.State, interval: log.TemporalInterval})
+			}
+		}
+		for _, log := range op.TiledLogs {
+			if subtle.ConstantTimeCompare(log.LogID, id[:]) == 1 {
+				found = append(found, listedLog{key: log.Key, state: log.State, interval: log.TemporalInterval})
+			}
+		}
 	}
-	if log := list.FindTiledLogByKeyHash(id); log != nil {
-		return listedLog{key: log.Key, state: log.State, interval: log.TemporalInterval}, true
+	// The SCT signature does not cover the log ID, so a listed key must hash
+	// to its ID; otherwise one key could appear under a second, trusted ID.
+	for _, l := range found {
+		keyHash := sha256.Sum256(l.key)
+		if subtle.ConstantTimeCompare(keyHash[:], id[:]) != 1 {
+			return listedLog{}, errors.New("SCT log ID does not match the hash of its key in the CT log list")
+		}
 	}
-	return listedLog{}, false
+	switch len(found) {
+	case 0:
+		return listedLog{}, errors.New("SCT log ID not found in the CT log list")
+	case 1:
+		return found[0], nil
+	default:
+		return listedLog{}, errors.New("SCT log ID listed more than once in the CT log list")
+	}
+}
+
+// stateCount returns the number of states set in ls. The list should set one;
+// LogStatus picks the first one set, which could hide a rejected state.
+func stateCount(ls *loglist3.LogStates) int {
+	n := 0
+	for _, set := range []bool{ls.Pending != nil, ls.Qualified != nil, ls.Usable != nil, ls.ReadOnly != nil, ls.Retired != nil, ls.Rejected != nil} {
+		if set {
+			n++
+		}
+	}
+	return n
+}
+
+// sctBeforeNotBefore and sctFutureSkew bound the SCT timestamp. A log issues
+// the SCT for a certificate shortly before the CA signs it, and CAs date
+// NotBefore at or before signing, so an honest SCT is not more than a day
+// older than NotBefore. An SCT dated in the future is refused, with an
+// allowance for clock skew.
+const (
+	sctBeforeNotBefore = 24 * time.Hour
+	sctFutureSkew      = time.Hour
+)
+
+// checkSCTTime refuses an SCT dated long before the certificate's NotBefore
+// or in the future. Without it, the holder of a retired or read-only log's
+// key could date an SCT before the state change.
+func checkSCTTime(sctTime, notBefore, now time.Time) error {
+	if sctTime.Before(notBefore.Add(-sctBeforeNotBefore)) {
+		return errors.New("SCT timestamp is more than a day before the certificate's NotBefore")
+	}
+	if sctTime.After(now.Add(sctFutureSkew)) {
+		return errors.New("SCT timestamp is in the future")
+	}
+	return nil
 }
 
 // acceptsSCT reports, as an error, why an SCT that the log issued at sctTime
@@ -313,6 +378,9 @@ func findLog(list *loglist3.LogList, id [sha256.Size]byte) (listedLog, bool) {
 // an SCT issued before that state began. When the log has a temporal
 // interval, notAfter must fall inside it.
 func (l listedLog) acceptsSCT(sctTime, notAfter time.Time) error {
+	if l.state != nil && stateCount(l.state) > 1 {
+		return errors.New("SCT log has more than one state in the CT log list")
+	}
 	switch l.state.LogStatus() {
 	case loglist3.UsableLogStatus, loglist3.QualifiedLogStatus:
 	case loglist3.ReadOnlyLogStatus:
