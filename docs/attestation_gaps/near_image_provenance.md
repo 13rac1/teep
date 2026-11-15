@@ -1,7 +1,9 @@
 # NEAR DeepSeek Image Provenance: Platform Digest Discovery Gap
 
-NEAR's DeepSeek-V4.1-Flash-1017 deployments do not provide a reliable way to
-find NEAR's signed build records for a deployed Docker image. Clients must
+NEAR's model deployments do not provide a reliable way to find NEAR's signed
+build records for the deployed launcher image. On 2026-11-14 every captured
+NEAR model had this problem, and so did every captured Venice model that runs
+the same launcher. Clients must
 either block requests when those records cannot be found or accept the image
 without verifying that NEAR's approved build process produced it. Accepting an
 unverified image can expose customer data to unapproved container code.
@@ -15,7 +17,7 @@ authentication and encrypted connections can protect the connection to that
 code without establishing that NEAR's approved GitHub Actions workflow built it.
 
 NEAR publishes signed build records for its launcher image in Sigstore, but
-these DeepSeek deployments identify the launcher using a different Docker
+these deployments identify the launcher using a different Docker
 digest from the one that NEAR signed and logged. A client cannot find the
 signed record by looking up the digest in the deployed Docker Compose file.
 It must first find a Docker image index that contains the deployed image and
@@ -137,12 +139,13 @@ checks that a compose with this pin passes the Rekor lookup, so
 `sigstore_verification` passes with the factor enforced; the Rekor answer is
 built in the test.
 
-The DeepSeek deployments observed on 2026-11-11 pin a different digest of the
-same build: the `linux/amd64` child manifest of that index.
+The deployments captured on 2026-11-14 (and the DeepSeek deployments first
+observed on 2026-11-11) pin a different digest of the same build: the
+`linux/amd64` child manifest of that index.
 
 ```text
 nearaidev/compose-manager-launcher@sha256:91fdff3c…   OCI image index; NEAR's CI signs and logs this digest
-├── sha256:079a14b4…   linux/amd64 manifest; the DeepSeek compose pins this digest
+├── sha256:079a14b4…   linux/amd64 manifest; the 2026-11-14 composes pin this digest
 └── sha256:c3e4bbb1…   unknown/unknown build-attestation manifest
 ```
 
@@ -179,10 +182,15 @@ workflows move them.
 
 The lookup failure starts in the compose's launcher image reference. This
 report does not describe a change in the attestation response schema or the
-Rekor record format. The reported affected models are:
+Rekor record format. The first reported affected models were:
 
 - `deepseek-ai/DeepSeek-V4.1-Flash-1017`
 - `deepseek-ai/DeepSeek-V4.1-Flash-1017-abliterated`
+
+On 2026-11-14 all 12 NearCloud and all 12 NearDirect model composes,
+including `z-ai/glm-5.3-flash`, pinned the same launcher manifest
+`compose-manager-launcher@sha256:079a14b4…`. Rekor returned no entries for
+that digest (teep's report shows this as "HTTP 404").
 
 | Evidence | Launcher digest named by compose | Rekor lookup for the pinned digest |
 | --- | --- | --- |
@@ -200,10 +208,10 @@ manifest `079a14b4…`: `sigstore_verification` fails for them and is allowed
 by default. This comparison establishes lookup behavior for the two
 image-reference forms.
 
-These observations describe specific deployments and dates, not the whole
-NEAR fleet or the present state of every backend. The GLM captures establish
-the prior format; they do not prove that a live GLM backend still supplies
-the same compose today.
+These observations describe the backends that answered on the dates given,
+not every backend in the NEAR or Venice fleets. The GLM captures of
+2026-09-09 establish the prior index pin; the GLM captures of 2026-11-14 pin
+the platform manifest.
 
 ### Finding the containing index through registry tags
 
@@ -291,9 +299,9 @@ signature check.
 
 ### Publish signed records for the digest in Docker Compose
 
-For the affected DeepSeek deployments, NEAR can sign the platform manifest
-that the compose pins, or pin the signed index in the measured compose again.
-Either choice removes reverse discovery.
+NEAR can sign the platform manifest that its composes pin, or pin the
+signed index in the measured compose again. Venice can pin the signed index
+in its dstack composes. Either choice removes reverse discovery.
 Alternatively, publish a stable parent-index hint with the deployment evidence
 and retain the index by digest. The hint need not be trusted if the client
 checks the index hash, exact child membership and the index digest named in
@@ -330,19 +338,18 @@ separate [dstack boot-measurement gap](dstack_integrity.md).
 
 ## Teep Status
 
-The platform-manifest lookup failure is reported for the two DeepSeek
-models listed in [Scope and evidence](#scope-and-evidence). The older signed
-GLM captures pass that lookup, which checks only that a Rekor entry exists,
-with enforcement enabled. Teep currently reports
-`sigstore_verification` failures as allowed for both NEAR providers; the
-exception therefore affects models that did not require it too. The
-parent-index resolver described above is not implemented.
+The platform-manifest lookup failure is reported for every NEAR model
+observed on 2026-11-14 (see [Scope and evidence](#scope-and-evidence)): all
+24 NEAR reports showed `sigstore_verification` failed, allowed, for
+`sha256:079a14b4…`. The 5 Venice dstack reports pin the same digest, and all 5
+failed the factor the same way. Teep reports `sigstore_verification`
+failures as allowed for both NEAR providers and for Venice. The parent-index
+resolver described above is not implemented.
 
 ### Temporary teep policy
 
-Both NEAR defaults allow `sigstore_verification` to fail to accommodate the
-reported DeepSeek deployments. The older GLM captures pass without this
-exception, but the default policy also relaxes their enforcement. This permits
+The NEAR defaults and the Venice dstack default allow `sigstore_verification`
+to fail to accommodate this launcher manifest. This permits
 absent entries and lookup errors for every model image, plus gateway images for
 NearCloud. The exception is not restricted to the affected launcher digest.
 Restoring default enforcement is a separate policy change and requires live
