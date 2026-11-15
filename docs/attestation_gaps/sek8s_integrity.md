@@ -121,9 +121,9 @@ Verified using the client-generated nonce and the ML-KEM-768 public key from the
 
 ### Nonce echo
 
-The evidence response echoes no nonce. `nonce_match` fails with "no echoed nonce; freshness rests on tee_reportdata_binding" and is allowed (`ChutesDefaultAllowFail`). Freshness rests on the enforced `tee_reportdata_binding`, which checks `SHA256(client_nonce_hex + e2e_pubkey)`. The GPU evidence is bound by the SPDM requester nonce derived from the same values (`chutes.GPURequesterNonce`), which the enforced `nvidia_nonce_client_bound` checks.
+No verified member of the evidence response states the nonce. Only `attested_body` states it, under a signature whose key Chutes does not publish. On the direct Chutes path and in Phala Cloud sessions, `nonce_match` fails with "no echoed nonce; freshness rests on tee_reportdata_binding" and is allowed (`ChutesDefaultAllowFail`). Freshness rests on the enforced `tee_reportdata_binding`, which checks `SHA256(client_nonce_hex + e2e_pubkey)`. The GPU evidence is bound by the SPDM requester nonce derived from the same values (`chutes.GPURequesterNonce`), which the enforced `nvidia_nonce_client_bound` checks.
 
-**Status:** Allowed to fail; the client nonce is checked by two enforced factors.
+**Status:** Allowed to fail. On the direct path and in Phala Cloud sessions, two enforced factors check the client nonce.
 
 ### Other enforced factors
 
@@ -133,13 +133,17 @@ The evidence response echoes no nonce. `nonce_match` fails with "no echoed nonce
 
 ### Chutes' signed evidence entries
 
-The Chutes evidence response now gives each entry `tee_type`, a
-`signature` and the `attested_body` that it signs (base64 JSON with the TDX
-quote and the request nonce). Chutes publishes no key for the signature,
-so teep does not verify it. In the attested sessions of Phala Cloud, teep
-requires that `attested_body` carries the entry's quote and the nonce of
-the evidence request; the quote itself is verified as above. The direct
-Chutes path accepts these members without a check.
+Each entry of the Chutes evidence response has a `tee_type`, a `signature`
+and the `attested_body` that it signs (base64 JSON with the TDX quote, the GPU
+evidence and the request nonce). Chutes publishes no key for the signature,
+so teep does not verify it. In the attested sessions of Phala Cloud and in
+NanoGPT's relay of Chutes evidence, teep requires that `attested_body`
+carries the entry's quote and the nonce of the evidence request; the quote
+itself is verified as above. This check does not show that the evidence is
+fresh, because the signature is not verified. The direct Chutes path accepts
+these members without a check. NanoGPT's relay names no instance key, so the
+nonce checks above fail for it and teep blocks its requests (see
+[nanogpt_chutes_evidence.md](nanogpt_chutes_evidence.md)).
 
 ### Server-side-only security mechanisms
 
@@ -197,7 +201,7 @@ The event log and runtime IMA measurements are not exposed in the client-facing 
 
 ### Gap 5: GPU-to-measurement binding not independently verifiable
 
-Chutes' `TeeMeasurementConfig` includes `expected_gpus` and `gpu_count` fields, allowing the validator to reject a VM whose GPU inventory does not match the expected deployment class. Remote verifiers can verify GPU evidence independently via NVIDIA EAT tokens, but cannot verify that the Chutes validator applied the GPU-to-measurement binding correctly.
+Chutes' `TeeMeasurementConfig` includes `expected_gpus` and `gpu_count` fields, allowing the validator to reject a VM whose GPU inventory does not match the expected deployment class. Remote verifiers can verify the SPDM evidence of each GPU on their own (`nvidia_signature`: certificate chain and signature) and through NVIDIA's NRAS service (`nvidia_nras_verified`), but cannot verify that the Chutes validator applied the GPU-to-measurement binding correctly.
 
 ### Gap 6: IMA manifest not exposed despite documentation claims
 
@@ -219,16 +223,16 @@ The sek8s attestation model requires trusting Chutes to correctly implement seve
 
 ### Teep Factor Behavior
 
-Teep correctly returns `Skip` for factors where the sek8s architecture does not expose verifiable data:
+Teep reports these factors as not applicable (`N/A`), because the sek8s architecture exposes no data to verify them:
 
-- **`build_transparency_log`**: "chutes attestation does not include container image metadata; supply chain verification is validator-side only"
-- **`compose_binding`**: "chutes uses cosign image admission + IMA, not docker-compose; compose binding not applicable"
-- **`sigstore_verification`**: "chutes attestation does not include container image digests; cosign verification is validator-side only"
-- **`event_log_integrity`**: "chutes performs RTMR verification validator-side against a reference baseline; event log not exposed to clients"
+- **`build_transparency_log`**, **`component_recognition`**, **`provider_signer_recognition`** and **`component_signature_recognition`**: "Chutes supply chain verification is validator-side only"
+- **`compose_binding`**: "Chutes uses cosign image admission + IMA, not docker-compose"
+- **`sigstore_verification`**: "Chutes cosign verification is validator-side only"
+- **`event_log_integrity`**: "Chutes RTMR verification is validator-side; event log not exposed"
 
 Teep returns `Fail` for `measured_model_weights` with detail "no model weight hashes" because neither weight verification mechanism exposes verifiable data to clients.
 
-Teep returns `Fail` for `nonce_match`, allowed, with detail "no echoed nonce; freshness rests on tee_reportdata_binding": the evidence response states no nonce (see [Nonce echo](#nonce-echo)).
+Teep returns `Fail` for `nonce_match`, allowed, with detail "no echoed nonce; freshness rests on tee_reportdata_binding": no verified member of the evidence response states the nonce (see [Nonce echo](#nonce-echo)).
 
 ---
 
@@ -237,7 +241,7 @@ Teep returns `Fail` for `nonce_match`, allowed, with detail "no echoed nonce; fr
 ### Short-term: Pin observed measurements (done)
 
 Sek8s measurement defaults have been captured and coded in `internal/provider/chutes/policy.go`:
-- MRTD, RTMR0, RTMR1, RTMR2 pinned from captured Chutes quotes and from NEAR's reviewed mirror of Chutes' unsigned measurement feed (sek8s 1.3.1, 1.4.0 and 1.4.1; RTMR0 rows for the 8×H200, 8×B200, 8×B300 and 8×RTX PRO 6000 classes)
+- MRTD, RTMR0, RTMR1, RTMR2 pinned from captured Chutes quotes and from NEAR's reviewed mirror of Chutes' unsigned measurement feed (sek8s 1.3.0, 1.4.0 and 1.4.1, and MRTD also for 1.3.1; RTMR0 rows for the 8×H200, 8×B200, 8×B300 and 8×RTX PRO 6000 classes)
 - MRSEAM allowlist extended for sek8s fleet TDX module versions (1.5.06, 1.5.28, 1.5.34)
 - Registered in `internal/defaults/defaults.go`
 
@@ -296,7 +300,9 @@ This would eliminate residual trust assumption 3 (reference measurement correctn
 
 **Hardware measurement enforcement:** Partially enforced by default. MRTD and MRSEAM are pinned in `internal/provider/chutes/policy.go` and enforced fail-closed via `tee_measurement`. RTMR0, RTMR1, and RTMR2 are also pinned and registered in Teep defaults, but their corresponding checks (`tee_hardware_config` / `tee_boot_config`) are allow-fail by default for Chutes. REPORTDATA binding is enforced via `ReportDataVerifier` in `internal/provider/chutes/reportdata.go`.
 
-**Supply chain factors:** Correctly return `Skip` for `build_transparency_log`, `compose_binding`, `sigstore_verification`, and `event_log_integrity` because the sek8s architecture does not expose the required evidence to clients.
+**Fleet results (2026-11-14, 11 models):** `tee_boot_config` failed on 8 of 11 models, all on the same RTMR2 value (`e1de99043052f3e1…`). `tee_hardware_config` failed on 2 of 11 models. Both factors are allowed to fail, so teep reported these hosts and did not block them. All 11 report MRTD `261ce538…`, which sek8s 1.3.1, 1.4.0 and 1.4.1 share; the pins hold no 1.3.1 RTMR rows.
+
+**Supply chain factors:** Not applicable (`N/A`) for `build_transparency_log`, `component_recognition`, `provider_signer_recognition`, `component_signature_recognition`, `compose_binding`, `sigstore_verification`, and `event_log_integrity` because the sek8s architecture does not expose the required evidence to clients.
 
 **Model weights:** Returns `Fail` for `measured_model_weights`. This is the correct behavior — neither Chutes weight verification mechanism exposes verifiable data to clients.
 
