@@ -1,10 +1,11 @@
 # NEAR Model Endpoints: No Endpoint in the Model List
 
-NEAR's model list does not state which endpoint each model serves. A client
-that checks end-to-end encryption with a test request cannot choose the right
-request for a model that does not serve chat, so the encryption of five NEAR
-models is not tested by teep's verifier today. The models still pass every
-other check, and a real request confirms their encryption.
+NEAR's model list does not state which endpoint each model serves. Teep's
+verifier tests end-to-end encryption with a chat request, so it does not test
+five NEAR models that serve other endpoints. A real request confirms the
+encryption of three of them. The other two serve endpoints that NEAR does not
+encrypt end to end, and teep refuses those endpoints while encryption is on.
+No enforced check fails for any of the five.
 
 ## The Problem
 
@@ -26,10 +27,10 @@ that NEAR does not document.
   test.
 - **What stops it today:** for the embeddings, reranking and image models,
   the first real request in `teep serve` checks the encryption, and a
-  decryption failure blocks the model. For the audio model with encryption on
-  and for `openai/privacy-filter`, `teep serve` refuses or has no route, so no
-  request is sent unencrypted, but nothing confirms the encryption. In
-  `teep verify`, nothing: the factor stays skipped.
+  decryption failure blocks the model. NEAR does not encrypt audio
+  transcription or the privacy endpoints end to end; while encryption is on,
+  `teep serve` refuses them and sends nothing. In `teep verify`, nothing:
+  the factor stays skipped.
 
 ## Technical Background
 
@@ -65,8 +66,10 @@ set them apart, which is not a contract.
 
 - **NEAR:** add the served endpoint (or endpoints) to each entry of the model
   list, and document the endpoint of `openai/privacy-filter`.
-- **teep:** test each model on the endpoint it serves, with the encryption
-  that teep already applies to embeddings, images and reranking.
+- **teep:** test the embeddings, reranking and image models on the endpoint
+  each serves, with the encryption that teep already applies to those
+  endpoints. Teep has nothing to test for the audio model and
+  `openai/privacy-filter` until NEAR encrypts their endpoints.
 
 ## References
 
@@ -80,10 +83,11 @@ set them apart, which is not a contract.
 warning. `e2ee_usable` stays skipped, enforced and not probed, with the detail
 "not probed: the model serves <kind>; the verify probe sends a chat
 completion". It counts as skipped and does not block. A model that is not in
-the list gets the chat test request, so a new model of another kind fails the
-factor and is reported.
+the list gets the chat test request. A new model of another kind therefore
+fails `e2ee_usable`, which is enforced, and teep blocks that model.
 
-`teep serve` does not change. A real embeddings, reranking or image request
-confirms the encryption of those three models, as for any other model. `teep
-serve` refuses audio transcription while encryption is on, and has no route
-for `openai/privacy-filter`, so nothing confirms the encryption of those two.
+In `teep serve`, a real embeddings, reranking or image request confirms the
+encryption of those three models, as for any other model. NEAR does not
+encrypt audio transcription or the privacy endpoints end to end; while
+encryption is on, `teep serve` refuses them, so the other two models cannot
+be used with encryption.
