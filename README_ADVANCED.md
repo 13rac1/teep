@@ -134,14 +134,14 @@ This provides true end-to-end encryption: the shared secret is derived between t
 
 | Provider | Attestation | Channel Security | REPORTDATA Binding |
 |----------|-------------|------------------|--------------------|
-| Venice AI | TDX + NVIDIA | E2EE (secp256k1 ECDH + AES-256-GCM) | `keccak256(enclave_pubkey)` + nonce |
+| Venice AI | dstack: TDX + NVIDIA; ACI/1: gateway TDX, plus relayed upstream GPU evidence (absent from some responses) | E2EE (secp256k1 ECDH + AES-256-GCM): dstack to the model enclave; ACI/1 to the gateway | dstack: `keccak256(enclave_pubkey)` + nonce; ACI/1: `keccak256(gateway signing key)` + nonce in the gateway quote |
 | NEAR AI Direct | TDX + NVIDIA | TLS pinning (model subdomain) | `sha256(signing_address ‖ tls_fingerprint)` + nonce |
 | NEAR AI Cloud | TDX + NVIDIA | TLS pinning (gateway) | `sha256(signing_address ‖ tls_fingerprint)` + nonce |
-| NanoGPT | TDX (dStack), or ACI/1 gateway TDX + NVIDIA | None by default (plaintext over TLS to NanoGPT); with `e2ee = true`, ACI/1: E2EE v2 (secp256k1 ECDH + AES-256-GCM) to the gateway | None (dStack format); ACI/1: `keccak256(gateway key)` + nonce in the gateway quote |
+| NanoGPT | Chutes evidence relayed by NanoGPT: TDX + GPU evidence; dstack: TDX + NVIDIA; ACI/1: gateway TDX, plus relayed upstream GPU evidence | None (plaintext over TLS to NanoGPT). With `e2ee = true`, ACI/1 requires E2EE v2 (secp256k1 ECDH + AES-256-GCM) to the gateway; NanoGPT does not forward it, so no model is served | Chutes evidence: not verifiable (the relayed response carries no `e2e_pubkey`); dstack: `keccak256(signing key)` + nonce; ACI/1: `keccak256(gateway signing key)` + nonce in the gateway quote |
 | Chutes | TDX + GPU evidence | E2EE (ML-KEM-768 + ChaCha20-Poly1305) | `sha256(nonce_hex + e2e_pubkey_base64)` |
 | Phala Cloud | ACI/1 gateway TDX | E2EE v2 (secp256k1 ECDH + AES-256-GCM) to the gateway | `sha256` of the ACI/1 statement over the keyset digest and the nonce, in the gateway quote |
-| Tinfoil Cloud | SEV-SNP | E2EE (HPKE X25519 + AES-256-GCM) | `sha256(nonce ‖ hpke_key ‖ tls_fp ‖ gpu_hash)` in REPORTDATA |
-| Tinfoil Direct | SEV-SNP | E2EE (HPKE X25519 + AES-256-GCM) | `sha256(nonce ‖ hpke_key ‖ tls_fp ‖ gpu_hash)` in REPORTDATA |
+| Tinfoil Cloud | SEV-SNP | E2EE (HPKE X25519 + AES-256-GCM) | `sha256(algorithm URI ‖ nonce ‖ sha256(crypto_material) ‖ sha256(device_evidence))` in REPORTDATA[0:32], zeros in [32:64]; `crypto_material` holds the HPKE key and the TLS key fingerprint |
+| Tinfoil Direct (disabled since 2026-11-12) | SEV-SNP | E2EE (HPKE X25519 + AES-256-GCM) | `sha256(algorithm URI ‖ nonce ‖ sha256(crypto_material) ‖ sha256(device_evidence))` in REPORTDATA[0:32], zeros in [32:64]; `crypto_material` holds the HPKE key and the TLS key fingerprint |
 
 ## Verification Factor Reference
 
@@ -215,14 +215,14 @@ exposes none, and the core `tee_*` factors state that.
 | 40 | `gateway_tee_quote_signature` | Signature over the gateway quote body is valid. |
 | 41 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave). |
 | 42 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and for the ACI/1 routes of Venice, Phala Cloud and NanoGPT: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
-| 43 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
+| 43 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. For an SEV-SNP gateway, the guest policy forbids debug, the migration agent and single-socket mode, allows SMT, and the firmware build and version meet the minimums. |
 | 44 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. Not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot. |
 | 45 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified: nearcloud binds `sha256(signing_address ‖ tls_fingerprint)`; Venice ACI/1 binds `keccak256(signing key)` + nonce; Tinfoil binds the HPKE key and endorsed section hashes. |
 | 46 | `gateway_compose_binding` | Gateway `sha256(app_compose)` matches TDX MRConfigID, with the `app_compose` rules of `compose_binding`. Enforced for Venice ACI/1 — the gateway publishes its manifest with digest-pinned images. |
 | 47 | `gateway_cpu_id_registry` | Gateway CPU PPID verified against the Proof of Cloud registry. |
 | 48 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match the gateway TDX quote. |
 | 49 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP; TDX defers to Intel PCS collateral). |
-| 50 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP; TDX defers to Intel PCS collateral). |
+| 50 | `gateway_tee_tcb_not_revoked` | Same check as `gateway_tee_tcb_current` for an SEV-SNP gateway; teep does not read the AMD CRL, so this factor does not test revocation. TDX defers to Intel PCS collateral. |
 
 ## TOML Configuration
 
