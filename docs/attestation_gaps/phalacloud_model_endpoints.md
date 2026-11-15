@@ -28,9 +28,13 @@ a chat request with an error.
   test. They read no request through teep: teep sends these models no request
   that they serve.
 - **What stops it today:** `teep serve` has no Phala Cloud path for these
-  endpoints. It sends these models only chat completions, encrypted when E2EE
-  is on, and the gateway refuses them. Nothing confirms their encryption. In
-  `teep verify`, nothing: the factor stays skipped.
+  endpoints. For Phala Cloud it routes only chat completions and embeddings,
+  and it refuses embeddings while E2EE is on. On 2026-11-14 the gateway
+  answered a chat completion for `jaredpalmer/kev-4b` with HTTP 404, and
+  teep blocked the reports of `black-forest-labs/flux.2-klein-4b` and
+  `openai/whisper-large-v3`, so it sent them no request. Nothing confirms
+  the encryption of the four models. In `teep verify`, nothing: no probe
+  runs.
 
 ## Technical Background
 
@@ -53,14 +57,15 @@ is not text:
 | `mistralai/voxtral-small-24b-2507` | audio → transcription | audio transcription |
 | `jaredpalmer/kev-4b` | text → decisions | `/v1/systemone` (named in the description) |
 
-On 2026-11-14, `jaredpalmer/kev-4b` got the chat probe, and the gateway
-answered "upstream returned HTTP 404: no route available for model
-jaredpalmer/kev-4b". `e2ee_usable`, which Phala Cloud's policy allows to
-fail, failed, and the report did not block. The reports of
-`black-forest-labs/flux.2-klein-4b` and `openai/whisper-large-v3` were
-blocked by `aci_session_verified`, because teep does not verify the evidence
-of their gateway session, so they got no probe. The run of 2026-11-14 made
-no report for `mistralai/voxtral-small-24b-2507`.
+Two runs of `teep verify` on 2026-11-14 tested these models. In the first,
+made before teep skipped the probe for them, `jaredpalmer/kev-4b` got the
+chat probe, and the gateway answered "upstream returned HTTP 404: no route
+available for model jaredpalmer/kev-4b". In both runs,
+`aci_session_verified` blocked the reports of
+`black-forest-labs/flux.2-klein-4b` and `openai/whisper-large-v3`, because
+teep does not verify the evidence of their gateway session; a blocked report
+gets no probe. Neither run made a report for
+`mistralai/voxtral-small-24b-2507`.
 
 ## Remediation
 
@@ -78,14 +83,18 @@ no report for `mistralai/voxtral-small-24b-2507`.
 
 ## Teep Status
 
-`teep verify` sends no chat probe to the four models above and logs a
-warning. `e2ee_usable`, which the policy allows to fail, stays skipped with
+`teep verify` sends no chat probe to the four models above while E2EE is
+on, the default. When the report does not block, teep logs a warning and two
+factors stay skipped: `e2ee_usable`, which the policy allows to fail, gets
 the detail "not probed: the model serves <kind>; the verify probe sends a
-chat completion". `aci_receipt_verified`, which is enforced, stays skipped
-with the detail "no probe: the model serves <kind>; …". Neither blocks.
-Because `e2ee_usable` is allowed to fail, a failed probe did not block
-either: the skip changes the detail in the report, not whether the report
-blocks. A model that is not in the table gets the chat probe, so a new model
+chat completion", and `aci_receipt_verified`, which is enforced, gets the
+detail "no probe: the model serves <kind>; …". Neither blocks. A blocked
+report gets no probe either and keeps its own details: `e2ee_usable` reads
+"E2EE configured; pending live test" and `aci_receipt_verified` reads "no
+probe: the report blocks inference requests". On 2026-11-14 the reports of
+`black-forest-labs/flux.2-klein-4b` and `openai/whisper-large-v3` blocked,
+so only `jaredpalmer/kev-4b` got the "not probed" details. Because
+`e2ee_usable` is allowed to fail, a failed probe would not block either. A model that is not in the table gets the chat probe, so a new model
 without chat completions fails the factor and is reported.
 
 `teep serve` has no Phala Cloud path for these endpoints, so no request
