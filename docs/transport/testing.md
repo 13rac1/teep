@@ -12,6 +12,7 @@ tests.
 | Behavior to preserve | Representative coverage |
 | --- | --- |
 | RFC 6962 and tiled CT logs verify signed SCTs during concurrent checks; unknown log IDs, invalid keys, and invalid signatures fail closed | `TestCheckTLSState_LogCollections` in [CT log tests](../../internal/tlsct/tiled_logs_test.go) |
+| An SCT counts only from a log in a trusted state, within its temporal interval, for RFC 6962 and tiled logs alike | `TestCheckTLSState_LogState` and `TestCheckTLSState_TiledLogSCT` in [CT checker tests](../../internal/tlsct/checker_test.go) |
 | Concurrent KDS retrieval uses TLS 1.3/HTTP2 and verifies signed evidence; retrieval failures are terminal | `TestTinfoilKDS`, `TestTinfoilKDSEmbeddedChains` in [Tinfoil KDS tests](../../internal/provider/tinfoil/kds_test.go) |
 | Canceled discovery and capture collection do not race | `TestCanceledDiscoveryCapture` in [capture cancellation tests](../../internal/verify/capture_cancellation_test.go) |
 | Standalone EHBP rejects encrypted provider error events and malformed data without exposing response content | `TestStandaloneEHBPStreamCompletion` in [EHBP completion tests](../../internal/verify/ehbp_completion_test.go) |

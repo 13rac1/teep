@@ -259,12 +259,16 @@ func (c *Checker) checkTLSState(
 
 	var verifyErrs []string
 	for _, candidate := range scts {
-		key, found := ctLogKey(logList, candidate.sct.LogID.KeyID)
+		log, found := findLog(logList, candidate.sct.LogID.KeyID)
 		if !found {
-			verifyErrs = append(verifyErrs, "SCT log ID not found in trusted log list")
+			verifyErrs = append(verifyErrs, "SCT log ID not found in the CT log list")
 			continue
 		}
-		pub, pkErr := ctx509.ParsePKIXPublicKey(key)
+		if err := log.acceptsSCT(time.UnixMilli(int64(candidate.sct.Timestamp)), leaf.NotAfter); err != nil { //nolint:gosec // SCT timestamps are milliseconds since 1970 and fit in int64
+			verifyErrs = append(verifyErrs, err.Error())
+			continue
+		}
+		pub, pkErr := ctx509.ParsePKIXPublicKey(log.key)
 		if pkErr != nil {
 			verifyErrs = append(verifyErrs, "parse log public key: "+pkErr.Error())
 			continue
@@ -284,15 +288,52 @@ func (c *Checker) checkTLSState(
 	return fmt.Errorf("no valid SCTs: %s", strings.Join(verifyErrs, "; "))
 }
 
-// ctLogKey finds the SCT verification key in either CT log collection.
-func ctLogKey(list *loglist3.LogList, id [sha256.Size]byte) ([]byte, bool) {
+// listedLog holds what the SCT check needs of a log in the CT log list.
+type listedLog struct {
+	key      []byte
+	state    *loglist3.LogStates
+	interval *loglist3.TemporalInterval
+}
+
+// findLog returns the log in either CT log collection whose ID is id.
+func findLog(list *loglist3.LogList, id [sha256.Size]byte) (listedLog, bool) {
 	if log := list.FindLogByKeyHash(id); log != nil {
-		return log.Key, true
+		return listedLog{key: log.Key, state: log.State, interval: log.TemporalInterval}, true
 	}
 	if log := list.FindTiledLogByKeyHash(id); log != nil {
-		return log.Key, true
+		return listedLog{key: log.Key, state: log.State, interval: log.TemporalInterval}, true
 	}
-	return nil, false
+	return listedLog{}, false
+}
+
+// acceptsSCT reports, as an error, why an SCT that the log issued at sctTime
+// for a certificate that expires at notAfter cannot count. The list holds
+// every known log, including test, pending and rejected logs, so only a log
+// in a trusted state counts: usable or qualified, or read-only or retired for
+// an SCT issued before that state began. When the log has a temporal
+// interval, notAfter must fall inside it.
+func (l listedLog) acceptsSCT(sctTime, notAfter time.Time) error {
+	switch l.state.LogStatus() {
+	case loglist3.UsableLogStatus, loglist3.QualifiedLogStatus:
+	case loglist3.ReadOnlyLogStatus:
+		if !sctTime.Before(l.state.ReadOnly.Timestamp) {
+			return errors.New("SCT issued after its log became read-only")
+		}
+	case loglist3.RetiredLogStatus:
+		if !sctTime.Before(l.state.Retired.Timestamp) {
+			return errors.New("SCT issued after its log was retired")
+		}
+	case loglist3.PendingLogStatus:
+		return errors.New("SCT log is pending, not trusted yet")
+	case loglist3.RejectedLogStatus:
+		return errors.New("SCT log is rejected")
+	default:
+		return errors.New("SCT log has no state in the CT log list")
+	}
+	if l.interval != nil && (notAfter.Before(l.interval.StartInclusive) || !notAfter.Before(l.interval.EndExclusive)) {
+		return errors.New("certificate expiry is outside the temporal interval of the SCT log")
+	}
+	return nil
 }
 
 func (c *Checker) addCacheEntry(key string) {

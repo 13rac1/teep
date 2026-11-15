@@ -375,62 +375,130 @@ func TestCheckTLSState_SCTLogNotFound(t *testing.T) {
 	t.Logf("SCT not found error: %v", err)
 }
 
+// testLog is a CT log key for the SCT tests, with its ID and public key.
+type testLog struct {
+	key    *ecdsa.PrivateKey
+	id     [32]byte
+	pubDER []byte
+}
+
+func newTestLog(t *testing.T) testLog {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate log key: %v", err)
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal log key: %v", err)
+	}
+	return testLog{key: key, id: sha256.Sum256(pubDER), pubDER: pubDER}
+}
+
+// checkSCT runs the CT check of cert with one handshake SCT against ll.
+func checkSCT(t *testing.T, ll *loglist3.LogList, cert *x509.Certificate, sct []byte) error {
+	t.Helper()
+	c := tlsct.NewChecker()
+	c.InjectLogList(ll)
+	return c.CheckTLSState(context.Background(), "example.com", &tls.ConnectionState{
+		PeerCertificates:            []*x509.Certificate{cert},
+		SignedCertificateTimestamps: [][]byte{sct},
+	})
+}
+
 // An SCT from a Static CT API (tiled) log verifies with the tiled log's key:
 // a certificate whose SCTs all come from tiled logs passes. An SCT that the
 // tiled log did not sign, or one from a log that is not listed, fails.
 func TestCheckTLSState_TiledLogSCT(t *testing.T) {
-	logKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate log key: %v", err)
-	}
-	pubDER, err := x509.MarshalPKIXPublicKey(&logKey.PublicKey)
-	if err != nil {
-		t.Fatalf("marshal log key: %v", err)
-	}
-	logID := sha256.Sum256(pubDER)
+	log := newTestLog(t)
+	usable := &loglist3.LogStates{Usable: &loglist3.LogState{Timestamp: time.Now().Add(-24 * time.Hour)}}
 	tiledOnly := &loglist3.LogList{Operators: []*loglist3.Operator{{
 		Name:      "test operator",
-		TiledLogs: []*loglist3.TiledLog{{Description: "test tiled log", LogID: logID[:], Key: pubDER}},
+		TiledLogs: []*loglist3.TiledLog{{Description: "test tiled log", LogID: log.id[:], Key: log.pubDER, State: usable}},
 	}}}
 	cert := selfSignedCert(t)
+	now := time.Now()
 
-	check := func(ll *loglist3.LogList, sct []byte) error {
-		c := tlsct.NewChecker()
-		c.InjectLogList(ll)
-		return c.CheckTLSState(context.Background(), "example.com", &tls.ConnectionState{
-			PeerCertificates:            []*x509.Certificate{cert},
-			SignedCertificateTimestamps: [][]byte{sct},
-		})
-	}
-	if err := check(tiledOnly, signedTiledHandshakeSCT(t, logKey, logID, cert)); err != nil {
+	if err := checkSCT(t, tiledOnly, cert, signedTiledHandshakeSCT(t, log.key, log.id, cert, now)); err != nil {
 		t.Errorf("SCT of a tiled log: %v", err)
 	}
 
-	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate other key: %v", err)
-	}
 	// The log is found, so the failure must come from the signature check.
-	err = check(tiledOnly, signedTiledHandshakeSCT(t, otherKey, logID, cert))
+	other := newTestLog(t)
+	err := checkSCT(t, tiledOnly, cert, signedTiledHandshakeSCT(t, other.key, log.id, cert, now))
 	if err == nil {
 		t.Error("SCT with the tiled log's ID but another key passed")
-	} else if !strings.Contains(err.Error(), "no valid SCTs") || strings.Contains(err.Error(), "not found in trusted log list") {
+	} else if !strings.Contains(err.Error(), "no valid SCTs") || strings.Contains(err.Error(), "not found") {
 		t.Errorf("SCT with another key: %v, want a signature failure of a found log", err)
 	}
-	if err := check(emptyLogList(t), signedTiledHandshakeSCT(t, logKey, logID, cert)); err == nil ||
-		!strings.Contains(err.Error(), "SCT log ID not found in trusted log list") {
+	if err := checkSCT(t, emptyLogList(t), cert, signedTiledHandshakeSCT(t, log.key, log.id, cert, now)); err == nil ||
+		!strings.Contains(err.Error(), "SCT log ID not found in the CT log list") {
 		t.Errorf("SCT of an unlisted log: %v", err)
 	}
 }
 
+// Only an SCT of a log in a trusted state counts, for RFC 6962 logs and
+// tiled logs alike: usable or qualified, read-only or retired only for an
+// SCT issued before that state began, and a certificate expiry inside the
+// log's temporal interval. Pending, rejected and stateless logs fail.
+func TestCheckTLSState_LogState(t *testing.T) {
+	now := time.Now()
+	past, future := now.Add(-time.Hour), now.Add(time.Hour)
+	at := func(ts time.Time) *loglist3.LogState { return &loglist3.LogState{Timestamp: ts} }
+	cert := selfSignedCert(t) // expires in one hour
+	tests := []struct {
+		name     string
+		state    *loglist3.LogStates
+		interval *loglist3.TemporalInterval
+		wantErr  string // empty: the SCT counts
+	}{
+		{"usable", &loglist3.LogStates{Usable: at(past)}, nil, ""},
+		{"qualified", &loglist3.LogStates{Qualified: at(past)}, nil, ""},
+		{"read-only after the SCT", &loglist3.LogStates{ReadOnly: &loglist3.ReadOnlyLogState{LogState: *at(future)}}, nil, ""},
+		{"read-only before the SCT", &loglist3.LogStates{ReadOnly: &loglist3.ReadOnlyLogState{LogState: *at(past)}}, nil, "read-only"},
+		{"retired after the SCT", &loglist3.LogStates{Retired: at(future)}, nil, ""},
+		{"retired before the SCT", &loglist3.LogStates{Retired: at(past)}, nil, "retired"},
+		{"pending", &loglist3.LogStates{Pending: at(past)}, nil, "pending"},
+		{"rejected", &loglist3.LogStates{Rejected: at(past)}, nil, "rejected"},
+		{"no state", nil, nil, "no state"},
+		{"expiry inside the interval", &loglist3.LogStates{Usable: at(past)},
+			&loglist3.TemporalInterval{StartInclusive: past, EndExclusive: now.Add(2 * time.Hour)}, ""},
+		{"expiry after the interval", &loglist3.LogStates{Usable: at(past)},
+			&loglist3.TemporalInterval{StartInclusive: past.Add(-time.Hour), EndExclusive: past}, "temporal interval"},
+		{"expiry before the interval", &loglist3.LogStates{Usable: at(past)},
+			&loglist3.TemporalInterval{StartInclusive: now.Add(2 * time.Hour), EndExclusive: now.Add(3 * time.Hour)}, "temporal interval"},
+	}
+	for _, kind := range []string{"rfc6962", "tiled"} {
+		for _, tc := range tests {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				log := newTestLog(t)
+				op := &loglist3.Operator{Name: "test operator"}
+				if kind == "tiled" {
+					op.TiledLogs = []*loglist3.TiledLog{{LogID: log.id[:], Key: log.pubDER, State: tc.state, TemporalInterval: tc.interval}}
+				} else {
+					op.Logs = []*loglist3.Log{{LogID: log.id[:], Key: log.pubDER, State: tc.state, TemporalInterval: tc.interval}}
+				}
+				err := checkSCT(t, &loglist3.LogList{Operators: []*loglist3.Operator{op}}, cert, signedTiledHandshakeSCT(t, log.key, log.id, cert, now))
+				switch {
+				case tc.wantErr == "" && err != nil:
+					t.Errorf("SCT refused: %v", err)
+				case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+					t.Errorf("err = %v, want one that names %q", err, tc.wantErr)
+				}
+			})
+		}
+	}
+}
+
 // signedTiledHandshakeSCT returns a TLS-marshalled SCT for cert, signed by key
-// under logID, with the leaf_index extension that a Static CT API log adds.
-func signedTiledHandshakeSCT(t *testing.T, key *ecdsa.PrivateKey, logID [32]byte, cert *x509.Certificate) []byte {
+// under logID at ts, with the leaf_index extension that a Static CT API log
+// adds.
+func signedTiledHandshakeSCT(t *testing.T, key *ecdsa.PrivateKey, logID [32]byte, cert *x509.Certificate, ts time.Time) []byte {
 	t.Helper()
 	sct := ct.SignedCertificateTimestamp{
 		SCTVersion: ct.V1,
 		LogID:      ct.LogID{KeyID: logID},
-		Timestamp:  uint64(time.Now().UnixMilli()),
+		Timestamp:  uint64(ts.UnixMilli()),
 		Extensions: ct.CTExtensions{0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x2a},
 	}
 	leaf := ct.MerkleTreeLeaf{

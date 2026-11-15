@@ -45,11 +45,12 @@ func TestCheckTLSState_LogCollections(t *testing.T) {
 					case "invalid key":
 						logKey = []byte("invalid public key")
 					}
+					usable := &loglist3.LogStates{Usable: &loglist3.LogState{Timestamp: time.Now().Add(-time.Hour)}}
 					op := &loglist3.Operator{}
 					if tiled {
-						op.TiledLogs = []*loglist3.TiledLog{{LogID: logID[:], Key: logKey}}
+						op.TiledLogs = []*loglist3.TiledLog{{LogID: logID[:], Key: logKey, State: usable}}
 					} else {
-						op.Logs = []*loglist3.Log{{LogID: logID[:], Key: logKey}}
+						op.Logs = []*loglist3.Log{{LogID: logID[:], Key: logKey, State: usable}}
 					}
 					checker := tlsct.NewChecker()
 					checker.InjectLogList(&loglist3.LogList{Operators: []*loglist3.Operator{op}})
