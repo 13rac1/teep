@@ -99,6 +99,12 @@ evidence response. For each of the 10:
   `failed_instance_ids` was empty in 9 and held 2 ids in one response; the
   2 ids had no entry in `evidence`.
 
+On 2026-11-14, in the last of three capture runs that day, the same 10
+models answered in this format. No response carried an `e2e_pubkey`. The
+responses listed 5 to 41 instances, and the bodies were 609,673 to
+2,463,332 bytes. `failed_instance_ids` and `excluded_instance_ids` were
+empty in all 10.
+
 The meaning of `failed_instance_ids` and `excluded_instance_ids` is not
 documented. Their names suggest instances whose evidence could not be
 collected, and instances left out of the evidence.
@@ -134,6 +140,8 @@ without network access, gave:
   the GPU evidence did not verify. All three are allowed.
 - The report header showed `Candidates: 1/6 evaluated`: the response
   listed 6 instances.
+- The 2026-11-14 report of the same model gave the same factor results,
+  with `Candidates: 1/13 evaluated`.
 
 ---
 

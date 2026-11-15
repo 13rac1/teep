@@ -10,9 +10,13 @@ bytes. Because the NVSwitch evidence hash is part of the REPORTDATA
 preimage, this mismatch prevents the entire REPORTDATA hash from being
 verified — meaning the TLS SPKI, HPKE key, nonce, and GPU evidence hash
 cannot be authenticated via the hardware-signed attestation report.
-Teep implements a workaround that injects the reported hash value into
-the preimage, restoring REPORTDATA authentication for all components
-except NVSwitch evidence binding.
+
+This document describes Tinfoil's superseded attestation format. teep
+refuses a document in that format. The current format hashes the
+base64-decoded bytes of each endorsed section, so this re-encoding
+mismatch cannot occur in it. The teep workaround that this document
+described was removed when teep moved to the current format. The
+[Teep Status](#teep-status) section gives the current results.
 
 ## The Problem
 
@@ -55,8 +59,9 @@ from another would not be detected by the REPORTDATA check.
 
 ## Impact
 
-**Security impact:** Without the REPORTDATA workaround, the NVSwitch
-hash mismatch prevents hardware-signed authentication of the TLS SPKI,
+**Security impact (superseded format):** For a verifier without a
+workaround, the NVSwitch hash mismatch prevented hardware-signed
+authentication of the TLS SPKI,
 HPKE key, nonce, and GPU evidence hash for all 8-GPU Hopper Tinfoil
 inference enclaves. While each component is independently verified by
 separate factor checks (TLS SPKI by `tls_key_binding`, HPKE key by
@@ -68,13 +73,10 @@ key, and GPU evidence. Without it, a relay attack that substitutes
 keys or evidence from a different enclave would not be detected by the
 hardware binding check.
 
-With the workaround, the TLS SPKI, HPKE key, nonce, and GPU evidence
-hash are authenticated via the hardware-signed REPORTDATA. Only the
-NVSwitch evidence hash binding remains unverified — an attacker who
-could substitute NVSwitch evidence in transit would not be detected by
-the REPORTDATA hash check. However, the NVSwitch evidence itself (SPDM
-reports, certificate chains) is still present and independently
-verifiable, and the `nvswitch_binding` factor fails closed.
+A verifier that used the reported hash in the preimage, as teep did
+before it moved to the current format, authenticated the TLS SPKI, HPKE
+key, nonce, and GPU evidence hash via the hardware-signed REPORTDATA.
+Only the NVSwitch evidence hash binding remained unverified.
 
 The GPU evidence hash (for the `gpu` field) is NOT affected by this
 bug — GPU evidence is collected via `json.Marshal` in Go, which
@@ -82,20 +84,18 @@ produces compact JSON from the start, so the hash matches the response
 bytes. Only NVSwitch evidence, collected via the external `nvattest`
 CLI, is affected.
 
-**Operational impact:** All 8-GPU Hopper Tinfoil inference enclaves
-(e.g. `glm-5-2`) have the `nvswitch_binding` factor fail closed,
-blocking requests to these enclaves. Single-GPU enclaves
-(e.g. `gemma4-31b`) are unaffected because they do not serve NVSwitch
-evidence.
+**Operational impact:** none in the current format, which hashes the
+bytes that the enclave sends.
 
 ---
 
 ## Technical Background
 
-### V3 Attestation Document Structure
+### V3 Attestation Document Structure (superseded format)
 
-The Tinfoil V3 attestation response is a JSON document with the
-following structure:
+The superseded Tinfoil V3 attestation response was a JSON document with
+the following structure. teep refuses a document that carries any of
+the `report_data`, `certificate`, `signature` or `cpu` members:
 
 ```json
 {
@@ -185,9 +185,10 @@ data due to:
 
 ### Server Source Code Analysis
 
-The bug is in
-[`CollectNVSwitchEvidence`](https://github.com/tinfoilsh/confidential-cvmimage/blob/main/tinfoil/internal/attestation/gpu.go)
-in the `cvmimage` repository:
+The bug was in `CollectNVSwitchEvidence`
+(`tinfoil/internal/attestation/gpu.go`) in the
+[`tinfoilsh/cvmimage`](https://github.com/tinfoilsh/cvmimage) repository,
+in the version that served the superseded format:
 
 ```go
 func CollectNVSwitchEvidence(nonce [32]byte) (json.RawMessage, error) {
@@ -224,13 +225,16 @@ without normalizing it. This raw output is then:
 The GPU evidence path does not have this issue because
 `CollectGPUEvidence` returns a Go struct (`*GPUEvidenceCollection`),
 which is marshaled with `json.Marshal(gpuEvidence)` at the call site
-(line 335 of `api.go`), producing compact Go-native JSON. The same
+in `api.go`, producing compact Go-native JSON. The same
 compact bytes are used for both the hash and the response.
 
 ### Empirical Verification
 
-Two attestation responses were fetched from
+Two attestation responses in the superseded format were fetched from
 `glm-5-2.tinfoil.containers.tinfoil.dev` (8-GPU Hopper TDX enclave).
+These results were not reproduced on 2026-11-15: teep refuses the
+superseded format, and `tinfoil_v3_direct` has been disabled since
+2026-11-12.
 For each response, the NVSwitch JSON bytes were extracted from the raw
 HTTP response body and hashed with SHA-256. The computed hash was
 compared against the `report_data.nvswitch_evidence_hash` field.
@@ -251,29 +255,10 @@ collection path.
 
 ### Teep Report Factor Behavior
 
-Teep implements a workaround that preserves REPORTDATA authentication
-for all components except NVSwitch:
+teep no longer evaluates the superseded format. The current results are
+in [Teep Status](#teep-status).
 
-1. `tee_reportdata_binding` → **Pass**: When `verifyNVSwitchEvidenceHash`
-   fails, `VerifyReportData` does not return an error immediately.
-   Instead, it proceeds to verify the REPORTDATA hash using the
-   **reported** `nvswitch_evidence_hash` from `report_data` (which is
-   what the server bound into REPORTDATA). If the REPORTDATA hash
-   matches, the TLS SPKI, HPKE key, nonce, and GPU evidence hash are
-   all authenticated by the hardware signature. The detail string
-   includes `nvswitch_bound=false` to indicate the NVSwitch hash
-   binding is broken.
-
-2. `cpu_gpu_chain` → **Pass**: Because `GPUHashBound` is true (the GPU
-   evidence hash was verified and the REPORTDATA hash matches),
-   `evalCPUGPUChain` returns Pass.
-
-3. `nvswitch_binding` → **Fail**: Because `NVSwitchExpected` is true
-   (8-GPU Hopper topology) and `NVSwitchHashBound` is false,
-   `evalNVSwitchBinding` returns Fail with "NVSwitch evidence hash
-   mismatch (server-side JSON re-encoding bug)".
-
-### Why the Workaround Is Necessary
+### Why the Workaround Was Necessary (superseded format)
 
 The REPORTDATA hash authenticates ALL of these components as a group:
 
@@ -311,12 +296,15 @@ safe because:
 
 The only component that is NOT authenticated is the NVSwitch evidence
 hash binding — we cannot confirm that the NVSwitch evidence in the
-response matches what the server hashed. The `nvswitch_binding` factor
-correctly fails closed for this.
+response matches what the server hashed.
 
 ---
 
 ## Remediation
+
+The current format resolves this mismatch: each endorsed section is
+hashed over the bytes that the enclave sends. The fix below applied to
+the superseded format.
 
 ### Server-Side Fix (Required)
 
@@ -370,44 +358,27 @@ return json.RawMessage(compacted), nil
 This guarantees the hash is computed over Go-native JSON bytes that
 `json.Marshal` will reproduce exactly in the response.
 
-### Client-Side Workaround (Implemented)
+### Client-Side Workaround (removed)
 
-Teep implements a workaround that preserves REPORTDATA authentication
-for all components except NVSwitch. When `verifyNVSwitchEvidenceHash`
-fails (the computed hash doesn't match the reported hash), teep does
-NOT fail `VerifyReportData` immediately. Instead, it proceeds to verify
-the REPORTDATA hash using the **reported** `nvswitch_evidence_hash`
-from `report_data`. If the REPORTDATA hash matches, the TLS SPKI, HPKE
-key, nonce, and GPU evidence hash are all authenticated by the hardware
-signature.
-
-The `nvswitch_binding` factor still fails closed, but `tee_reportdata_binding`
-and `cpu_gpu_chain` pass. This is a significant security improvement over
-failing all three factors, which would leave the TLS SPKI, HPKE key, and
-GPU evidence unauthenticated via REPORTDATA.
-
-This workaround does NOT attempt to reproduce the server's hash
-computation (which would require re-implementing the `nvattest` CLI's
-C++ `nlohmann/json` serialization in Go). Instead, it trusts the
-reported hash value for the REPORTDATA preimage, which is safe because
-the REPORTDATA hash itself is hardware-signed and the other components
-are independently verified.
+teep removed the workaround, which used the reported
+`nvswitch_evidence_hash` in the REPORTDATA preimage, when it moved to
+the current format. teep refuses the superseded format.
 
 ### Deployment Priority
 
-1. **Server-side fix** (required, blocks NVSwitch binding for all 8-GPU Hopper enclaves)
-2. **Client-side workaround** (implemented — preserves REPORTDATA authentication for all components except NVSwitch)
+1. **Server-side fix** (the current format, which hashes the
+   base64-decoded section bytes, does not have this mismatch)
+2. **teep:** read GPU and NVSwitch evidence in the current format
 
 ---
 
 ## References
 
-- **Server source code:**
-  [`CollectNVSwitchEvidence`](https://github.com/tinfoilsh/confidential-cvmimage/blob/main/tinfoil/internal/attestation/gpu.go)
-  in `tinfoilsh/confidential-cvmimage`
-- **Server attestation builder:**
-  [`BuildAttestation`](https://github.com/tinfoilsh/confidential-cvmimage/blob/main/tinfoil/internal/attestation/attestation.go)
-  in `tinfoilsh/confidential-cvmimage`
+- **Server source code:** `CollectNVSwitchEvidence`
+  (`tinfoil/internal/attestation/gpu.go`) and `BuildAttestation`
+  (`tinfoil/internal/attestation/attestation.go`) in
+  [`tinfoilsh/cvmimage`](https://github.com/tinfoilsh/cvmimage), in the
+  version that served the superseded format (not pinned to a commit)
 - **nvattest CLI:** Built from
   [NVIDIA/attestation-sdk](https://github.com/NVIDIA/attestation-sdk)
   using `nlohmann/json` for serialization
@@ -419,27 +390,20 @@ are independently verified.
 
 ## Teep Status
 
-**Affected factors (with workaround):**
-- `tee_reportdata_binding` — **Pass** (REPORTDATA hash verified using
-  reported NVSwitch hash; TLS SPKI, HPKE key, nonce, and GPU evidence
-  hash all authenticated by hardware signature)
-- `cpu_gpu_chain` — **Pass** (GPUHashBound=true; GPU evidence hash
-  verified and REPORTDATA hash matches)
-- `nvswitch_binding` — **Fail** (NVSwitchExpected=true but
-  NVSwitchHashBound=false; NVSwitch evidence hash does not match raw
-  JSON bytes due to server-side JSON re-encoding bug)
+teep refuses the superseded format described above, and the workaround
+is removed. On 2026-11-14, every `tinfoil_v3_cloud` model (14 of 14)
+gave:
 
-**Teep behavior:** When the NVSwitch evidence hash doesn't match the
-raw JSON bytes, teep logs a warning and proceeds to verify the
-REPORTDATA hash using the reported `nvswitch_evidence_hash`. This
-preserves hardware-signed authentication of the TLS SPKI, HPKE key,
-nonce, and GPU evidence hash. The `nvswitch_binding` factor fails
-closed with a clear message indicating the server-side bug.
+- `tee_reportdata_binding` — **Fail**, allowed: the router answer carries
+  no backend TEE quote or report.
+- `cpu_gpu_chain` — **Fail**, allowed: the router, the only attested
+  machine, serves an empty device evidence section, so no GPU is bound to
+  the CPU report.
+- `nvswitch_binding` — **Skip**, allowed: no GPU evidence.
+- `gateway_tee_reportdata_binding` — **Pass**, enforced:
+  `v3: reportdata_hash verified, nonce_bound=true, gpu_bound=false`.
 
-**Post-fix enforcement:** Once the server-side fix is deployed, teep
-will automatically verify the NVSwitch evidence hash correctly (the
-`verifyNVSwitchEvidenceHash` check will pass, setting
-`nvswitch_bound=true` in the detail string). The `nvswitch_binding`
-factor will pass for 8-GPU Hopper enclaves. No teep code changes are
-required — the workaround automatically detects when the hash matches
-and sets `nvswitch_bound=true`.
+`nvswitch_binding` is in the default allow_fail lists of both Tinfoil
+providers. teep does not yet read GPU or NVSwitch evidence in the
+current format, and refuses an enclave that serves device evidence.
+`tinfoil_v3_direct` has been disabled since 2026-11-12.

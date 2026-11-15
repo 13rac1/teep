@@ -151,6 +151,10 @@ Intel publishes MRSEAM hashes directly in their official TDX module release note
 | `685f891ea5c20e8f...` | **2.0.02** | Granite Rapids | (not yet observed) |
 | `d0d80c085166ba78...` | **1.5.20** | Sapphire/Emerald Rapids | tinfoil_v3_direct (glm-5-2 on B200) |
 | `5b38e33a64879589...` | **1.5.05** | Sapphire/Emerald Rapids | (Phala docs, older) |
+| `489e585f1c54bc5a...` | **1.5.24** | Sapphire/Emerald Rapids | NEAR model CVMs (2026-11-14) |
+| `2d2de102461684f1...` | **2.0.18** | Granite Rapids / Clearwater Forest | nearcloud gateway (2026-11-14) |
+
+The "Observed In" column records the capture that first showed each value. On 2026-11-14 the NEAR and Venice dstack model CVMs showed `489e585f` (1.5.24) and `7bf06328` (1.5.16), the private-ai-gateway `7bf06328`, and the nearcloud gateway `2d2de102` (2.0.18); no capture showed `49b66faa` (1.5.08).
 
 The complete list of MRSEAM-to-version mappings is available from Intel's release pages. Tinfoil (`tinfoilsh/tinfoil-python`) also maintains a curated list of accepted MRSEAM values with version labels.
 
@@ -158,7 +162,7 @@ The complete list of MRSEAM-to-version mappings is available from Intel's releas
 
 #### MRTD: Deterministic Per Dstack Image Version
 
-All captured attestation data across neardirect, venice, and nanogpt (nearcloud) share a single MRTD value:
+The captures before 2026-11-14 across neardirect, venice, and nanogpt (nearcloud) shared a single MRTD value:
 
 ```
 b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217
@@ -168,11 +172,15 @@ This value appears in 34 GitHub repositories, including dstack's own verifier fi
 
 MRTD is deterministic for a given dstack OS image version because it measures only the virtual firmware (OVMF) binary — it does not vary with CPU count, memory, or GPU configuration.
 
-**Implication:** MRTD can be computed from the reproducibly-built dstack image using the `dstack-mr` tool from the dstack repository. The current value can also be pinned by observation since it is consistent across all providers sharing the same dstack version. When the dstack image is updated, the new MRTD can be re-derived.
+On 2026-11-14 no capture had this value: the NEAR and Venice dstack model CVMs had `df4d77c8…` (dstack-nvidia-0.5.11 and 0.5.12), and the gateways had `7fe60787…`, which is in no teep allowlist. The NanoGPT model backends ran sek8s, not dstack (MRTD `261ce538…`).
+
+**Implication:** MRTD can be computed from the reproducibly-built dstack image using the `dstack-mr` tool from the dstack repository. Because all providers that run the same dstack version have the same MRTD, an operator can also pin the served value by observation. When the dstack image is updated, the new MRTD can be re-derived.
 
 #### RTMR0: Per-Deployment-Class (CPU/RAM/GPU Configuration)
 
-RTMR0 measures the virtual hardware configuration (vCPU count, memory size, PCI hole, GPU count, NVSwitch count, hotplug, QEMU version). Three distinct values were observed across all captures:
+The RTMR0–RTMR2 tables below record the captures before 2026-11-14. On 2026-11-14 every NEAR and Venice dstack model CVM had the same three values: RTMR0 `bc122d14…`, RTMR1 `4ae60980…` and RTMR2 `bd67ab75…`.
+
+RTMR0 measures the virtual hardware configuration (vCPU count, memory size, PCI hole, GPU count, NVSwitch count, hotplug, QEMU version). The captures before 2026-11-14 showed three values:
 
 | RTMR0 | Observed In |
 |-------|-------------|
@@ -186,7 +194,7 @@ The Atlas `BOOTCHAIN-VERIFICATION.md` explains that RTMR0 varies with hardware c
 
 #### RTMR1: Per Kernel Version (2-3 Variants)
 
-RTMR1 measures the Linux kernel binary. Three distinct values were observed:
+RTMR1 measures the Linux kernel binary. The captures before 2026-11-14 showed three values:
 
 | RTMR1 | Observed In |
 |-------|-------------|
@@ -200,7 +208,7 @@ The multiple values suggest either different dstack image builds or different ke
 
 #### RTMR2: Per Image Metadata (5 Variants)
 
-RTMR2 measures the kernel command line, initrd, and rootfs. Five distinct values were observed, making it the most variable register. This variation likely reflects different rootfs configurations for different model deployments.
+RTMR2 measures the kernel command line, initrd, and rootfs. The captures before 2026-11-14 showed five values, making it the most variable register. This variation likely reflects different rootfs configurations for different model deployments.
 
 **Implication:** Like RTMR0, the variation means RTMR2 values must be either provider-published or observed and pinned per deployment class.
 
@@ -346,10 +354,17 @@ When a provider supplies a quote, event log, and compose manifest, teep can chec
 
 - verify the TDX quote structure and PCS collateral
 - verify caller binding through `REPORTDATA` where the provider-specific protocol supports it
-- enforce `MRSEAM` and `MRTD` allowlists when configured (pinnable from Intel and dstack sources respectively)
-- enforce `RTMR0`–`RTMR2` allowlists when configured (pinnable from observed reports via `--update-config`)
-- verify `MRCONFIGID` against the published compose manifest
-- replay the event log and check `RTMR3` consistency
+- check `MRSEAM` and `MRTD` against allowlists under `tee_measurement`
+- check `RTMR0` under `tee_hardware_config` and `RTMR1`–`RTMR2` under `tee_boot_config`
+- verify `MRCONFIGID` against the published compose manifest (`compose_binding`)
+- replay the event log and check `RTMR3` consistency (`event_log_integrity`)
+- check the gateway's `MRSEAM` and `MRTD` under `gateway_tee_measurement`, and its `RTMR0`–`RTMR2` under `gateway_tee_hardware_config` and `gateway_tee_boot_config` (NEAR Cloud and the ACI/1 providers)
+
+teep ships default allowlists: `MRSEAM` and `MRTD` in `internal/attestation/dstack_defaults.go`, and `RTMR0`–`RTMR2` per provider in `internal/provider/{neardirect,nearcloud,venice,nanogpt}/policy.go`. Whether a failure blocks comes from each provider's default `allow_fail` list:
+
+- `tee_measurement`, `compose_binding` and `event_log_integrity` are enforced for neardirect, nearcloud and venice (dstack), and allowed for nanogpt and phalacloud.
+- `tee_hardware_config` and `tee_boot_config` are allowed for every dstack provider. On 2026-11-14 they failed without blocking: `tee_boot_config` on every NEAR and Venice dstack report, and `tee_hardware_config` on every Venice dstack report.
+- `gateway_tee_measurement` is allowed for nearcloud and for the ACI/1 providers.
 
 Boot-chain checks depend on the effective measurement policy. Verification of
 the bound compose does not establish approval of its application images; that
@@ -357,38 +372,24 @@ requires separate publisher evidence.
 
 Because providers do not publish authenticated measurement baselines in-band, teep operators must either derive values from source (feasible for `MRSEAM` and `MRTD`, difficult for `RTMR0`–`RTMR2` without hardware specs) or bootstrap them from observation (`teep verify --update-config`). Either way, the operator bears the burden of detecting and responding to legitimate infrastructure changes, with no automated mechanism to distinguish a routine dstack upgrade from a compromised lower stack.
 
-### Recommended Policy Configuration
+### Policy Configuration
 
-Based on the research findings, teep can immediately configure the following without provider cooperation:
+teep ships the default allowlists named above. A list configured in `[providers.<name>.policy]` replaces the default for that provider and field; it is not added to it. A list in `[policy]` replaces the default of every provider, Chutes included. A configured list must therefore hold every value that the provider serves, or the factor fails. neardirect, nearcloud and venice enforce `tee_measurement`. On 2026-11-14 they served MRTD `df4d77c8…`. A configured `mrtd_allow` without that value blocks every request to them. The configuration format is TOML:
 
-**mrseam_allow** — The set of Intel-published MRSEAM values for non-deprecated TDX module versions:
-```
-mrseam_allow:
-  - "49b66faa451d19ebbdbe89371b8daf2b65aa3984ec90110343e9e2eec116af08850fa20e3b1aa9a874d77a65380ee7e6"  # TDX 1.5.08
-  - "7bf063280e94fb051f5dd7b1fc59ce9aac42bb961df8d44b709c9b0ff87a7b4df648657ba6d1189589feab1d5a3c9a9d"  # TDX 1.5.16
-  - "476a2997c62bccc78370913d0a80b956e3721b24272bc66c4d6307ced4be2865c40e26afac75f12df3425b03eb59ea7c"  # TDX 2.0.08
-  - "685f891ea5c20e8fa27b151bf34bf3b50fbaf7143cc53662727cbdb167c0ad8385f1f6f3571539a91e104a1c96d75e04"  # TDX 2.0.02
+```toml
+[providers.neardirect.policy]
+mrtd_allow = [
+  "df4d77c857de652bd0fafa343a2026b51071ee03773d076d283abf1a7d36ff91ffa279ee4a617ac664f7e2a2c8d5891b",  # dstack-nvidia-0.5.11 and 0.5.12
+]
 ```
 
-**mrtd_allow** — The MRTD for the current dstack image version, derivable from reproducible build or observed:
-```
-mrtd_allow:
-  - "b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217"  # dstack-nvidia-0.5.4.1
-```
+`teep verify --update-config` writes only the values of the reports it reads; it does not copy the default list. For neardirect, `mrseam_allow` and `mrtd_allow` then hold only the observed values. On 2026-11-14 neardirect served two MRSEAM values (`489e585f` and `7bf06328`), so a list made from one report blocks the instances that have the other value.
 
-**rtmr1_allow** — Observed kernel measurements (stopgap until derivable):
-```
-rtmr1_allow:
-  - "c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc"
-  - "6e1afb7464ed0b941e8f5bf5b725cf1df9425e8105e3348dca52502f27c453f3018a28b90749cf05199d5a17820101a7"
-  - "920eb831509b58bf83a554b5377dd5ce26d3f5182f14d33622ac24c1d343a0fa3c7bde746e55098ca30baf784dfd2556"
-```
+`rtmr0_allow`–`rtmr2_allow` must be populated per deployment class; pin observed values as a drift-detection measure until providers publish.
 
-**rtmr0_allow** and **rtmr2_allow** — Must be populated per deployment class; pin observed values as a drift-detection measure until providers publish.
+### Measurement Values in Reports
 
-### Diagnostic Change
-
-The `buildMetadata` function in `report.go` now includes full hex values for `mrseam`, `mrtd`, and `rtmr0`-`rtmr3` in every verification report's metadata section. This makes it straightforward to extract the values needed for policy configuration from any teep verification run.
+`buildMetadata` in `report.go` stores the full hex values of `mrseam`, `mrtd` and `rtmr0`–`rtmr3` in the report metadata. `teep serve` returns them in the JSON report at `GET /v1/tee/report`. The text report of `teep verify` does not show them; `teep verify --update-config` writes them to the configuration file.
 
 ### With Published Manifests
 
@@ -405,4 +406,4 @@ With authenticated measurement manifests in place, teep could:
 
 That is the end state teep needs: fail-closed verification of both the **boot image** and the **application payload**, with measurement baselines that update reliably when providers roll out infrastructure changes.
 
-For the Tinfoil V3 model specifically, the `sigstore_code_verified` factor covers the entire boot chain through a single verification step, replacing manual `mrseam_allow`, `mrtd_allow`, and `rtmr0_allow`–`rtmr2_allow` configuration. Dstack providers that adopt a similar Sigstore-based publication model would close the same gap.
+For Tinfoil V3 on TDX, teep still checks `MRSEAM` against the dstack list, and checks `MRTD` and `RTMR0` under `tee_boot_config` against Tinfoil's hardware-measurements registry; `sigstore_code_verified` covers the code measurements. Dstack providers that adopt a similar Sigstore-based publication model would close the same gap.

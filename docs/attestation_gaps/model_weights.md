@@ -1,6 +1,6 @@
 # Model Weight Authentication: Runtime Weights Not Covered by TEE Measurements
 
-TEE attestation proves the correctness of an inference provider's software stack — firmware, kernel, and application code — but does not prove which model weights the inference engine loaded. A provider could pass all hardware attestation checks while serving inference from a cheaper, quantized, or backdoored model. No compensating controls that are independently verifiable by external clients currently exist across the industry, except for Tinfoil's dm-verity attested model volumes.
+TEE attestation proves the correctness of an inference provider's software stack — firmware, kernel, and application code — but does not prove which model weights the inference engine loaded. A provider could pass all hardware attestation checks while serving inference from a cheaper, quantized, or backdoored model. No compensating controls that are independently verifiable by external clients currently exist across the industry. Tinfoil's dm-verity attested model volumes would close the gap, but teep can check them only through `tinfoil_v3_direct`, which has been disabled since 2026-11-12.
 
 ## The Problem
 
@@ -8,7 +8,7 @@ A TEE attestation proves the *software stack* is correct (firmware, kernel, appl
 
 This creates a gap that undermines the trust model: a compromised or dishonest provider could boot the correct software stack (passing all TEE attestation), then load a cheaper, quantized, or backdoored model. The TEE measurements would still verify, but the inference output would come from the wrong model. Users and downstream applications relying on a specific model's capabilities, safety alignment, or licensing terms have no way to independently verify which model is actually generating their responses.
 
-This is an industry-wide limitation of the current TEE attestation technology stack, not a failure of any individual provider. No current provider — across any TEE framework — exposes model weight hashes or per-token output binding to external clients in a way that enables independent verification. The one exception is Tinfoil, which closes this gap by design using dm-verity attested model volumes.
+This is an industry-wide limitation of the current TEE attestation technology stack, not a failure of any individual provider. No current provider — across any TEE framework — exposes model weight hashes or per-token output binding to external clients in a way that enables independent verification. Tinfoil closes this gap by design using dm-verity attested model volumes; a client can check them only with a quote from the enclave that runs the model, not through Tinfoil's router.
 
 ## Impact
 
@@ -60,7 +60,7 @@ The gap manifests differently across provider architectures:
 
 ### Dstack providers: compose binding does not cover model data
 
-For dstack-based providers, the attestation chain from TDX hardware through compose binding to Sigstore-verified container images is complete and independently verifiable. However, this chain proves which *container image* is deployed — not which model weights the inference engine loaded. The inference engine downloads weights from HuggingFace (or another source) at runtime, inside the already-measured container. No current dstack provider includes a model-specific image or model identity in the Docker Compose manifest.
+For dstack-based providers, teep checks the chain from TDX hardware through compose binding to Sigstore-logged container images; two of its links (the RTMR1–2 allowlist and the Rekor lookup) are allowed to fail by default. However, this chain proves which *container image* is deployed — not which model weights the inference engine loaded. The inference engine downloads weights from HuggingFace (or another source) at runtime, inside the already-measured container. No current dstack provider includes a model-specific image or model identity in the Docker Compose manifest.
 
 ### Chutes: existing verification mechanisms exclude TEE instances
 
@@ -147,20 +147,23 @@ For TEE instances, cllmv failures are logged but not enforced. TEE chutes rely o
 
 **Could cllmv ever be useful to external clients?** In theory, if Chutes published the cllmv hash algorithm specification (or open-sourced the native libraries), the session key or a client-derivable equivalent, and the salt/sub construction from publicly available data, then external clients could add a verification factor that validates per-token proofs. This would provide post-attestation runtime verification — proof that the inference engine is actually using the claimed model, not just that the correct software was booted. However, this would require Chutes to change their TEE trust model to include cllmv enforcement for TEE instances.
 
-### Tinfoil: gap closed by design
+### Tinfoil: gap closed by design, verifiable only in direct mode
 
-Tinfoil closes the model weight gap using dm-verity attested model volumes (see [dm-verity attested model volumes (Tinfoil V3)](#dm-verity-attested-model-volumes-tinfoil-v3) in Remediation). Model weights are transitively authenticated through the Sigstore → code measurements → RTMR2 → kernel cmdline → config hash → dm-verity root hash chain.
+Tinfoil closes the model weight gap using dm-verity attested model volumes (see [dm-verity attested model volumes (Tinfoil V3)](#dm-verity-attested-model-volumes-tinfoil-v3) in Remediation). The chain is Sigstore → code measurements → RTMR2 → kernel cmdline → config hash → dm-verity root hash. A client can follow it only with a quote from the enclave that runs the model; the `tinfoil_v3_cloud` router does not carry that quote.
 
 ### Summary of per-provider model weight evidence
 
 | Provider | Weight auth mechanism | Available to external clients? |
 |----------|----------------------|-------------------------------|
-| Venice (dstack) | None | N/A |
+| Venice (dstack and ACI/1) | None | N/A |
 | Nearcloud (dstack) | None | N/A |
 | Neardirect (dstack) | None | N/A |
 | Chutes (sek8s) — watchtower | SHA256 weight file probing, random byte range spot-checks | No (server-side only, TEE-excluded) |
 | Chutes (sek8s) — cllmv | Per-token HMAC binding model+revision | No (closed-source, TEE-exempt) |
-| Tinfoil | dm-verity root hash in attested config → Sigstore bundle | Yes (transitive via Sigstore verification) |
+| Phala Cloud | None | N/A |
+| NanoGPT | None | N/A |
+| Tinfoil (`tinfoil_v3_cloud`) | dm-verity root hash in attested config → Sigstore bundle | No: the router carries no quote of the enclave that runs the model |
+| Tinfoil (`tinfoil_v3_direct`) | dm-verity root hash in attested config → Sigstore bundle | Yes, with that quote; disabled since 2026-11-12 |
 
 ---
 
@@ -170,7 +173,7 @@ Three approaches are viable paths to model weight authentication with current or
 
 1. **[IMA manifest verification](#ima-manifest-verification-requires-provider-api-enrichment)** provides per-file runtime hash verification of model weight files anchored to TDX hardware, but requires providers to enable IMA in their CVM kernels and expose the measurement log through their attestation evidence API.
 
-2. **[Compose-attested model image identity](#compose-attested-model-image-identity-dstack-attestation-chain)** is the fastest path for dstack. It requires only that providers include Sigstore-signed model weight images in the Docker Compose manifest — infrastructure that teep already fully verifies today. Tinfoil's [`modelwrap`](https://github.com/tinfoilsh/modelwrap) tool can create such images. No kernel changes, no new APIs, no new attestation endpoints. The missing piece is provider adoption.
+2. **[Compose-attested model image identity](#compose-attested-model-image-identity-dstack-attestation-chain)** is the fastest path for dstack. It requires only that providers include Sigstore-signed model weight images in the Docker Compose manifest — infrastructure that teep already checks today. Tinfoil's [`modelwrap`](https://github.com/tinfoilsh/modelwrap) tool can create such images. No kernel changes, no new APIs, no new attestation endpoints. The missing piece is provider adoption.
 
 3. **[dm-verity attested model volumes (Tinfoil V3)](#dm-verity-attested-model-volumes-tinfoil-v3)** is the strongest approach. It provides block-level runtime integrity enforcement via dm-verity, with root hashes pinned in a measured configuration and authenticated through Sigstore. Already implemented by Tinfoil; the pattern is reusable by dstack providers.
 
@@ -253,30 +256,30 @@ Intel TDX Hardware
   ├── RTMR1 ← Linux kernel measurement
   ├── RTMR2 ← Kernel cmdline + initrd + rootfs hash
   │
-  └── RTMR3 → Event log (replayable)
-        │
-        └── MRCONFIGID = 0x01 || SHA256(app_compose)
+  ├── RTMR3 → Event log (replayable)
+  │
+  └── MRCONFIGID = 0x01 || SHA256(app_compose)
+          │
+          └── app_compose contains Docker Compose manifest
                 │
-                └── app_compose contains Docker Compose manifest
+                ├── image: registry/inference-engine@sha256:<digest>
+                │     │
+                │     └── Sigstore/Rekor verification:
+                │           ├── Rekor transparency log entry exists
+                │           ├── DSSE signature verifies against Fulcio cert
+                │           ├── SET verifies against Rekor public key
+                │           ├── Merkle inclusion proof verifies
+                │           └── Fulcio OIDC provenance (source repo, commit, builder)
+                │
+                └── image: registry/model-weights@sha256:<digest>
                       │
-                      ├── image: registry/inference-engine@sha256:<digest>
-                      │     │
-                      │     └── Sigstore/Rekor verification:
-                      │           ├── Rekor transparency log entry exists
-                      │           ├── DSSE signature verifies against Fulcio cert
-                      │           ├── SET verifies against Rekor public key
-                      │           ├── Merkle inclusion proof verifies
-                      │           └── Fulcio OIDC provenance (source repo, commit, builder)
-                      │
-                      └── image: registry/model-weights@sha256:<digest>
-                            │
-                            └── Same Sigstore/Rekor chain as above
+                      └── Same Sigstore/Rekor chain as above
 ```
 
-Each link in this chain is already verified by teep:
+Teep checks each link in this chain. Two checks are allowed to fail by default: the RTMR0–2 allowlists (`tee_hardware_config`, `tee_boot_config`) and the Rekor lookup of image digests (`sigstore_verification`). See the table below:
 
 1. **TDX quote verification**: The quote signature is verified against Intel PCS collateral, proving it was generated by genuine TDX hardware.
-2. **Base image authentication**: `MRTD` is deterministic for a given dstack OS image version and can be derived from the [reproducible build](https://github.com/Dstack-TEE/meta-dstack) using the [`dstack-mr` tool](https://github.com/Dstack-TEE/dstack/tree/master/dstack-mr). This proves the virtual firmware is the expected open-source dstack firmware. `RTMR1` and `RTMR2` prove the kernel and rootfs match the expected dstack image. See the [dstack attestation guide](https://github.com/Dstack-TEE/dstack/blob/master/attestation.md) for the full measurement derivation process.
+2. **Base image authentication**: `MRTD` is deterministic for a given dstack OS image version and can be derived from the [reproducible build](https://github.com/Dstack-TEE/meta-dstack) using the [`dstack-mr` tool](https://github.com/Dstack-TEE/dstack/tree/master/dstack-mr). This proves the virtual firmware is the expected open-source dstack firmware. `RTMR1` and `RTMR2` would prove the kernel and rootfs match the expected dstack image; on 2026-11-14 they did not match the teep allowlist for any Nearcloud, Neardirect or Venice dstack model. See the [dstack attestation guide](https://github.com/Dstack-TEE/dstack/blob/master/attestation.md) for the full measurement derivation process.
 3. **Compose binding**: `MRCONFIGID` is compared (using `subtle.ConstantTimeCompare`) against `0x01 || SHA256(app_compose)`, proving the Docker Compose manifest running in the CVM is exactly the one declared in the attestation evidence.
 4. **Image digest verification**: Image digests (`@sha256:...`) are extracted from the compose manifest and looked up in the [Rekor transparency log](https://docs.sigstore.dev/logging/overview/). Each entry is verified: DSSE signature against the Fulcio certificate, Signed Entry Timestamp (SET) against the Rekor public key, and Merkle inclusion proof against the append-only log. [Fulcio](https://docs.sigstore.dev/certificate_authority/overview/) OIDC provenance metadata (source repository, commit SHA, CI/CD builder identity) is extracted where available.
 
@@ -342,9 +345,9 @@ For this approach to work, providers must:
 | Verification step | Status |
 |------------------|--------|
 | TDX quote authenticity | **Verified today** |
-| Base image measurements (MRTD, RTMR0–2) | **Verified today** (with allowlists) |
+| Base image measurements (MRTD, RTMR0–2) | **Checked today**: MRTD under `tee_measurement`; RTMR0–2 under `tee_hardware_config` and `tee_boot_config`, allowed to fail by default. On 2026-11-14 `tee_boot_config` failed on every Nearcloud, Neardirect and Venice dstack model |
 | Compose binding (MRCONFIGID) | **Verified today** |
-| Image digests in Sigstore/Rekor | **Verified today** |
+| Image digests in Sigstore/Rekor | **Checked today**; `sigstore_verification` is allowed to fail by default for every dstack provider. On 2026-11-14 it failed on every Nearcloud, Neardirect and Venice dstack model |
 | DSSE signature + SET + inclusion proof | **Verified today** |
 | Fulcio OIDC provenance extraction | **Verified today** |
 | **Model weights image in compose** | **Not yet available** — no provider currently includes a model-specific image or model identity in the compose manifest |
@@ -358,7 +361,7 @@ Tinfoil's V3 attestation uses [`modelwrap`](https://github.com/tinfoilsh/modelwr
 
 At runtime, the CVM mounts the model volume read-only with dm-verity enabled. The kernel validates every block read against the Merkle tree root hash. A tampered block causes an I/O error and inference fails. All disks are mounted read-only with ramdisk for ephemeral data, so runtime weight substitution is not possible.
 
-The full authentication chain is: Sigstore bundle → code measurements → RTMR2 → kernel cmdline → config hash → dm-verity root hash → model weight volume. Teep verifies the Sigstore bundle and compares attestation registers against it; when `sigstore_code_verified` passes, the model weights are transitively authenticated, and `measured_model_weights` can be set to `Pass`.
+The full authentication chain is: Sigstore bundle → code measurements → RTMR2 → kernel cmdline → config hash → dm-verity root hash → model weight volume. Teep verifies the Sigstore bundle and compares attestation registers against it. `measured_model_weights` passes when three things verify: a quote from the enclave that runs the model (the backend quote), the Sigstore bundle, and the code measurements. Only `tinfoil_v3_direct` gets a backend quote, and that provider has been disabled since 2026-11-12. The `tinfoil_v3_cloud` router carries no backend quote, so the factor fails there and is allowed to fail by default.
 
 This approach is strictly stronger than compose-attested images because it provides block-level runtime integrity enforcement — not just proof that an image was deployed, but cryptographic verification of every block of model data as it is read. The `modelwrap` tool and dm-verity volume scheme are not Tinfoil-specific; dstack providers could adopt the same pattern by building dm-verity model volumes, pinning their root hashes in the compose manifest or a measured configuration file, and mounting them read-only inside the CVM.
 
@@ -446,7 +449,7 @@ Key capabilities and limitations:
 
 Despite the promise, several fundamental obstacles prevent teep from implementing reproducible inference verification today:
 
-1. **Providers do not enable deterministic mode**. No current teep provider (Venice, Nearcloud, Neardirect, Chutes) is known to launch its inference engine with `--enable-deterministic-inference` (SGLang) or `VLLM_BATCH_INVARIANT=1` (vLLM). Without these flags, the `seed` parameter only controls the sampling random state — the forward pass itself remains non-deterministic due to varying batch sizes, making cross-instance output comparison unreliable.
+1. **Providers do not enable deterministic mode**. No current teep provider is known to launch its inference engine with `--enable-deterministic-inference` (SGLang) or `VLLM_BATCH_INVARIANT=1` (vLLM). Without these flags, the `seed` parameter only controls the sampling random state — the forward pass itself remains non-deterministic due to varying batch sizes, making cross-instance output comparison unreliable.
 
 2. **Same-hardware requirement**. Both SGLang and vLLM only guarantee determinism on identical hardware (same GPU model, same driver version, same CUDA version) and the same engine version. Teep's known-good reference and the target provider must run on the same GPU SKU. If Venice runs vLLM on H100s and teep's reference was generated on an A100, the outputs will differ even with deterministic mode enabled and the same model. This means teep would need to maintain per-hardware-configuration, per-engine-version reference baselines — a combinatorial explosion.
 
@@ -482,7 +485,7 @@ Even without complete provider support, teep could implement a partial verificat
 | 2 (strongest) | dm-verity attested model volumes | Moderate — build dm-verity volumes, pin root hash | Block-level runtime enforcement | Implemented by Tinfoil; pattern reusable |
 | 3 (most impactful) | IMA manifest verification | Significant — enable IMA, expose log, coordinate RTMR | Per-file runtime hashes, hardware-anchored | Kernel infrastructure exists; needs provider enablement + API |
 
-For dstack and sek8s providers, `measured_model_weights` will remain `Fail` until one of the viable approaches is adopted:
+For every provider except `tinfoil_v3_direct`, `measured_model_weights` will remain `Fail` until one of the viable approaches is adopted:
 
 1. **[Compose-attested model image identity](#compose-attested-model-image-identity-dstack-attestation-chain)** (fastest path for dstack): Include Sigstore-signed model weight images in the Docker Compose manifest (Tinfoil's [`modelwrap`](https://github.com/tinfoilsh/modelwrap) can create such images). Teep's existing verification chain already covers every link from TDX hardware to image identity. The only missing piece is provider adoption.
 
@@ -539,13 +542,16 @@ The remaining approaches documented above (HuggingFace baselines, per-token outp
 
 ## Teep Status
 
-Teep currently returns `Fail` for `measured_model_weights` with detail "no model weight hashes" for all providers except Tinfoil. No provider currently exposes model weight hashes or per-token output binding to clients in a way that teep can independently verify.
+Teep returns `Fail` for `measured_model_weights`, with detail "no model weight hashes", for every provider that teep can use today. On 2026-11-14 the factor failed, allowed by default, on all 100 models that returned a report, across seven providers; five more models returned an attestation error and no report. No provider currently exposes model weight hashes or per-token output binding to clients in a way that teep can independently verify.
 
 | Provider | Weight auth mechanism | Available to teep? | Status |
 |----------|----------------------|-------------------|--------|
-| Venice (dstack) | None | N/A | `Fail`: "no model weight hashes" |
+| Venice (dstack and ACI/1) | None | N/A | `Fail`: "no model weight hashes" |
 | Nearcloud (dstack) | None | N/A | `Fail`: "no model weight hashes" |
 | Neardirect (dstack) | None | N/A | `Fail`: "no model weight hashes" |
 | Chutes (sek8s) — watchtower | SHA256 weight file probing, random byte range spot-checks | No (server-side only, TEE-excluded) | `Fail`: "no model weight hashes" |
 | Chutes (sek8s) — cllmv | Per-token HMAC binding model+revision | No (closed-source, TEE-exempt) | `Fail`: "no model weight hashes" |
-| Tinfoil | dm-verity root hash in attested config → Sigstore bundle | Yes (transitive via `sigstore_code_verified`) | `Pass`: model weights authenticated via dm-verity + Sigstore chain |
+| Phala Cloud | None | N/A | `Fail`: "no model weight hashes" |
+| NanoGPT | None | N/A | `Fail`: "no model weight hashes" |
+| Tinfoil (`tinfoil_v3_cloud`) | dm-verity root hash in attested config → Sigstore bundle | No: the router carries no backend quote | `Fail`: "no model weight hashes" |
+| Tinfoil (`tinfoil_v3_direct`) | dm-verity root hash in attested config → Sigstore bundle | Yes, with a backend quote | Disabled since 2026-11-12. When enabled, the factor is enforced and passes only when the backend quote, the Sigstore bundle and the code measurements all verify |

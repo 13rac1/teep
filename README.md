@@ -230,16 +230,16 @@ serving inference exposes none, and the core tee_* factors state that. See
 | 39 | `gateway_tee_quote_structure` | Gateway quote parses as valid QuoteV4 or SEV-SNP report |
 | 40 | `gateway_tee_cert_chain` | Gateway cert chain verifies against Intel or AMD root CA |
 | 41 | `gateway_tee_quote_signature` | Gateway quote signature valid |
-| 42 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave) |
+| 42 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (TDX TD_ATTRIBUTES or SEV-SNP guest policy) |
 | 43 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists |
-| 44 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches hardware config allowlist |
+| 44 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches hardware config allowlist; for an SEV-SNP gateway, the guest policy forbids debug, the migration agent and single-socket mode, allows SMT, and the firmware build and version meet the minimums |
 | 45 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match boot config allowlists; not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot |
 | 46 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified |
-| 47 | `gateway_compose_binding` | Gateway sha256(app_compose) matches TDX MRConfigID |
-| 48 | `gateway_cpu_id_registry` | Gateway CPU PPID verified in Proof of Cloud registry |
-| 49 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match quote |
-| 50 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP) |
-| 51 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP) |
+| 47 | `gateway_compose_binding` | Gateway sha256(app_compose) matches TDX MRConfigID; not applicable to an SEV-SNP gateway |
+| 48 | `gateway_cpu_id_registry` | Gateway CPU PPID verified in Proof of Cloud registry; not applicable to an SEV-SNP gateway |
+| 49 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match quote; not applicable to an SEV-SNP gateway, which exposes no event log |
+| 50 | `gateway_tee_tcb_current` | Gateway TCB SVNs (bootloader, TEE, SNP, microcode) meet the minimum thresholds (SEV-SNP) |
+| 51 | `gateway_tee_tcb_not_revoked` | Same check as `gateway_tee_tcb_current` (SEV-SNP); teep does not read the AMD CRL, so this factor does not test revocation |
 
 </details>
 
