@@ -13,10 +13,9 @@ A user who sends a prompt to one of these models gets a hardware-backed
 guarantee about the gateway that forwards the prompt, not about the machine
 that processes it. The gateway receives the user's traffic and forwards it
 over its own connection to an inference service. The GPUs that answer
-prove their identity fresh for each request, but nothing given to the
-client proves which host they are in or what software drives them. Since
-2026-11-12 the Venice response carries no GPU evidence at all (residual
-exposure 11).
+can prove their identity fresh for each request, but nothing given to the
+client proves which host they are in or what software drives them. For some
+models the provider sends no GPU evidence at all (residual exposure 11).
 
 The three providers reach the gateway in different ways. Phala Cloud's
 clients connect to the gateway directly. Venice's and NanoGPT's clients
@@ -87,14 +86,15 @@ field, so the document is ambiguous, not extended. The Chutes evidence
 inside a Phala Cloud session does not have this check yet. There, a
 different reading of `e2e_pubkey` fails, because the key must hash to the
 channel binding that REPORTDATA binds.
-The specification and its limits are in
-[ACI/1 Specification: Assurance Limits and Deployment Requirements](aci_specification.md).
 
-**Two response variants.** Venice relays the attestation with its own echo
-fields (`nonce`, `model`, `upstream_model`, `verified` and others). Phala
-Cloud and NanoGPT return the gateway's own form: no echo fields, and an
-`all_attestations` list with one copy of the attestation. teep accepts that
-list only when it holds exactly one entry equal to the top-level fields.
+**Three response variants.** Venice relays the attestation with its own echo
+fields (`nonce`, `model`, `upstream_model`, `verified` and others). NanoGPT
+returns the gateway's own form: no echo fields, and an `all_attestations`
+list with one copy of the attestation. teep accepts that list only when it
+holds exactly one entry equal to the top-level fields. Phala Cloud returns
+the canonical report of `/v1/aci/attestation`: `api_version`, `attestation`,
+`service_capabilities` and `workload_keyset_digest`, with no echo fields and
+no GPU evidence.
 
 **Host-selected TLS binding.** The gateway terminates TLS for each of its
 public hostnames inside the gateway CVM. Its keyset lists one TLS key for
@@ -149,7 +149,13 @@ NanoGPT relay the compatibility route.
 ### Enforced and verified
 
 - The gateway TDX quote: structure, Intel cert chain, signature, debug bit,
-  event log replay against all four RTMRs, Proof of Cloud registration.
+  event log replay against all four RTMRs. Proof of Cloud registration
+  (`gateway_cpu_id_registry`) is checked and allowed to fail; see below.
+- For Phala Cloud, `aci_session_verified` and `aci_receipt_verified` are
+  enforced. teep sends a request only through attested sessions that passed
+  its audit, and `teep serve` checks the receipt of every successful
+  response. A stream reaches the client before that check (residual
+  exposure 12).
 - `gateway_tee_reportdata_binding`: for Venice and NanoGPT the quote's
   REPORTDATA binds the gateway's signing key (keccak256 address scheme) and
   the client nonce; for Phala Cloud it is sha256 of the §3.2 statement over
@@ -193,20 +199,24 @@ NanoGPT relay the compatibility route.
   `dstacktee/dstack-ingress`. That image is not in the policy, so their
   replay reports it as unrecognized in `provider_signer_recognition` and
   `component_signature_recognition`, which are allowed failures.
-- The relayed NVIDIA evidence of NanoGPT, and of Venice when the response
-  carries it: per-GPU cert chains and SPDM signatures verify, and the EAT
-  nonce matches the client nonce. Since 2026-11-12 the Venice response
-  carries none (residual exposure 11). The Phala Cloud report has none; its
-  GPU factors fail and are allowed (`PhalaCloudACIDefaultAllowFail`).
+- The relayed NVIDIA evidence of NanoGPT: per-GPU cert chains and SPDM
+  signatures verify, and the EAT nonce matches the client nonce. On
+  2026-11-14, 2 of 7 NanoGPT ACI/1 models (TEE/gemma-4-31b-it,
+  TEE/gpt-oss-120b) carried an empty EAT `evidence_list`; their enforced
+  `nvidia_signature` and `nvidia_nonce_client_bound` failed, and teep blocked
+  them. Venice evidence gets the same checks, but these two factors are
+  allowed to fail for Venice (residual exposure 11). The Phala Cloud report
+  carries no GPU evidence; its GPU factors are allowed to fail
+  (`PhalaCloudACIDefaultAllowFail`).
 - For Phala Cloud, `tls_key_binding`: the certificate key of
   `tee.redpill.ai` on the connection that carries the report must equal the
   keyset entry for that host, and `downstream_tls_binding` must name the
   same entry. Inference requests use connections pinned to that key; a
   connection of another key sends no request bytes.
-- For Phala Cloud, every inference response must carry
-  `X-ACI-Keyset-Digest`; a response without it fails. A response of another
-  keyset digest is relayed (ACI/1 §5.2) and the cached report ends, so the
-  next request verifies the served keyset again (§3.1).
+- For Phala Cloud, every successful inference response must carry
+  `X-ACI-Keyset-Digest`. A response without it, or with another keyset
+  digest, fails before teep relays it. The authorization ends, so the next
+  request verifies the served keyset again (§3.1).
 - Venice and NanoGPT: teep does not check `X-ACI-Keyset-Digest`. On the
   compatibility route the gateway quote binds the signing key, not the
   keyset digest (residual exposure 7), so the report has no hardware-bound
@@ -216,9 +226,15 @@ NanoGPT relay the compatibility route.
 
 ### Failed and allowed (`ACIDefaultAllowFail`)
 
-Every core factor that describes the inference host: the twelve `tee_*`
-factors, `measured_model_weights`, `event_log_integrity`,
-`cpu_id_registry`, and the model-tier supply-chain factors. `cpu_gpu_chain`
+Every core factor that describes the inference host fails or is skipped, and
+is allowed: the eleven `tee_*` factors and `intel_pcs_collateral`,
+`measured_model_weights`, `event_log_integrity`, `cpu_id_registry`, and the
+model-tier supply-chain factors. On 2026-11-14, of the supply-chain factors
+only `compose_binding` and `component_recognition` failed; the others passed
+or did not apply. `gateway_cpu_id_registry` is in the list too: a Proof of
+Cloud outage must not block the gateway. On 2026-11-14 a Proof of Cloud peer
+served an expired certificate, so the factor was skipped on every ACI/1
+report. `cpu_gpu_chain`
 fails because the GPUs cannot be bound to any attested CPU: the only
 attested CPU is the gateway's, and the GPUs are not in it.
 `aci_backend_named` fails because no attested evidence binds a backend for
@@ -229,8 +245,8 @@ gateway MRTD/MRSEAM against the dstack base allowlist
 (`aci.GatewayMeasurementPolicy`, shared by the three providers), and a
 gateway MRTD that is not in it fails the factor without blocking.
 `nvidia_signature` and `nvidia_nonce_client_bound` are in the Venice list
-(`VeniceACIDefaultAllowFail`), not in the shared ACI/1 list, because the
-Venice response carries no GPU evidence (residual exposure 11). These
+(`VeniceACIDefaultAllowFail`), not in the shared ACI/1 list, because some
+Venice responses carry no GPU evidence (residual exposure 11). These
 render as failed but allowed, so the gap stays visible in
 every report; removing an entry from the list blocks every ACI/1 model of
 the three providers.
@@ -256,9 +272,6 @@ the three providers.
   `TestVerifyRun_ConcurrentACIProviders`
   ([gateway ACI/1 replay tests](../../internal/integration/gateway_aci_test.go))
   verifies the three providers' captures against the one pin set.
-- **Venice, 2026-10-30:** the ACI/1 response for `e2ee-gpt-oss-120b-p`
-  carried no NVIDIA payload, so `nvidia_signature` and
-  `nvidia_nonce_client_bound` (enforced) failed and teep blocked the model.
 - In every capture the attested VM reports `num_gpus: 0` while the response
   carries GPU attestation entries (relayed evidence),
   `service_capabilities.serving` is `"aggregator"`, and
@@ -305,9 +318,15 @@ date.
    Cloud or NRAS request for a session; and the bounded set narrows routing
    to the pinned upstreams. On 2026-11-03, for `qwen/qwen-2.5-7b-instruct`
    (one of four models that list only Phala), the gateway replaced the
-   session at each re-verification and refused the pin with HTTP 412
-   `session_not_accepted`, so teep fails closed for that model; the other
-   three were not sent a request. See the
+   session at each re-verification and refused the pin with HTTP 412; on
+   2026-11-14 that model passed `aci_session_verified` and
+   `aci_receipt_verified`. On 2026-11-14, 9 of 23 Phala Cloud models failed
+   the enforced `aci_session_verified` and were blocked. For 4, the sessions
+   came from `private-ai-verifier/near-ai-gateway/v1`, and for 2 from
+   `private-ai-verifier/tinfoil/v1`; teep does not verify the evidence of
+   either verifier. 1 had an MRTD that is not allowed. 2 had a
+   `proxy_image_sha256` channel binding, which is not a channel binding of
+   ACI/1. See the
    [Phala Cloud provider document](../providers/phalacloud/phalacloud_support.md#attested-sessions).
 2. **The KMS root and gateway app id are trust on first use.** The accepted
    dstack-KMS root and gateway app id in `internal/provider/aci/keyset.go`
@@ -331,8 +350,10 @@ date.
    report it gateway-only. A third party cannot do this: passing the ACI/1
    list requires the real gateway's quote with the client nonce. Closing it
    needs a per-model expected-format pin.
-4. **Gateway measurements change with each redeploy.** The gateway image is
-   a dev channel (`dstack-dev-*`); RTMR0-2 change with each redeploy, so
+4. **Gateway measurements change with each redeploy.** On 2026-11-14 the
+   gateway's `vm_config`, which teep does not verify, named the image
+   `dstack-0.5.12`. RTMR0-2 change when the gateway image or its VM
+   configuration changes, and teep has no published list of the values, so
    `gateway_tee_hardware_config` and `gateway_tee_boot_config` are allowed
    to fail. MRTD/MRSEAM come from the shared dstack base list, which
    changes only with a teep release; `gateway_tee_measurement` is allowed
@@ -388,16 +409,17 @@ date.
     request. For Phala Cloud, teep holds that key and can fetch the
     receipt; for NanoGPT, NanoGPT made the gateway request with its own key,
     so teep cannot fetch it.
-11. **The Venice response carries no GPU evidence.** The attackers are the
+11. **Some Venice responses carry no GPU evidence.** The attackers are the
     operator of the downstream inference host and Venice, which builds the
-    response. Since 2026-11-12 the Venice response leaves out the GPU
-    evidence, so a prompt can be served on any machine, with or without
+    response. Some Venice responses leave out the GPU evidence (2 of the 6
+    Venice ACI/1 models that answered on 2026-11-14: `e2ee-glm-5-2-p` and
+    `e2ee-gpt-oss-120b-p`), so a prompt to those models can be served on any machine, with or without
     confidential GPUs, and nothing in the evidence shows it. The user keeps
     the guarantee about the gateway and the key that teep encrypts to, and
     loses the proof that real GPUs answered the request. Nothing stops it
-    today: teep reports the missing evidence on every Venice ACI/1 report
-    and does not block. The live response of 2026-11-12 names a member
-    `gpu_evidence_omitted` and has no `nvidia_payload`. `nvidia_signature`
+    today: teep reports the missing evidence on those Venice ACI/1 reports
+    and does not block. On 2026-11-14 those two responses set
+    `gpu_evidence_omitted` to `true` and had no `nvidia_payload`. `nvidia_signature`
     and `nvidia_nonce_client_bound` fail and are allowed to fail for Venice
     ACI/1 (`VeniceACIDefaultAllowFail`). They return to enforced when the
     response carries GPU evidence again. Phala Cloud and NanoGPT are not
@@ -515,7 +537,6 @@ in `internal/provider/aci/policy.go`. Addresses residual exposure 6.
 ## References
 
 - **ACI/1 specification:** [`spec/aci.md` at `dd333b24`](https://github.com/Dstack-TEE/private-ai-gateway/blob/dd333b24324a96468bc19137fbcf6c45aeecc366/spec/aci.md); receipt timing (residual exposure 12): [`spec/aci.md`](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/aci.md) and [`spec/e2ee-v2.md`](https://github.com/Dstack-TEE/private-ai-gateway/blob/8d0018f81e8dbadfe7b733bb294a0350f82b338c/spec/e2ee-v2.md) at `8d0018f8`
-- **Specification limits:** [ACI/1 Specification: Assurance Limits and Deployment Requirements](aci_specification.md)
 - **Related teep assessment:** [dstack_integrity.md](dstack_integrity.md)
 - **Provider documents:** [Phala Cloud](../providers/phalacloud/phalacloud_support.md), [NanoGPT](../providers/nanogpt/nanogpt_support.md)
 - **ACI/1 parsing and custody verification:** `internal/provider/aci/aci.go`, `internal/provider/aci/keyset.go`
@@ -533,13 +554,18 @@ ACI/1 response with an empty `evidence.quote` is rejected at the parser,
 and a report with no verified gateway TDX result fails `evidence_verified`,
 which no `allow_fail` entry can suppress.
 
-**Host evidence:** The twelve core `tee_*` factors,
-`measured_model_weights`, `event_log_integrity`, `cpu_id_registry`,
-`cpu_gpu_chain`, `aci_backend_named` and the model-tier supply-chain factors
-are in `ACIDefaultAllowFail`, which an ACI/1 response selects for Venice,
+**Host evidence:** The eleven core `tee_*` factors and
+`intel_pcs_collateral`, `measured_model_weights`, `event_log_integrity`,
+`cpu_id_registry`, `cpu_gpu_chain`,
+`aci_backend_named` and the model-tier supply-chain factors (of which
+`compose_binding` and `component_recognition` failed on 2026-11-14) are in
+`ACIDefaultAllowFail`, which an ACI/1 response selects for Venice,
 Phala Cloud and NanoGPT; the Venice list adds `nvidia_signature` and
 `nvidia_nonce_client_bound` (residual exposure 11). Their other formats
-keep their own lists.
+keep their own lists. `gateway_cpu_id_registry` is in the same list, so a
+Proof of Cloud outage does not block the gateway. For Phala Cloud, `aci_session_verified` and
+`aci_receipt_verified` are not in `PhalaCloudACIDefaultAllowFail`, so they
+are enforced.
 
 **E2EE:** `provider.GatewayBindsE2EEKey` returns true for an ACI/1
 response of Venice, Phala Cloud and NanoGPT, so their E2EE authorization
@@ -554,8 +580,7 @@ prediction, a JSON schema) is refused before it is sent. `aci_key_custody` requi
 signing key to be the keyset entry of that suite. The field coverage is in
 [API support](../api_support.md#phala-cloud-and-nanogpt-e2ee-v2-of-the-private-ai-gateway).
 
-**Pending:** the live TLS key binding for Phala Cloud (residual exposure
-8) in the authorization-store migration, receipt verification on `teep
+**Pending:** receipt verification on `teep
 verify --reverify` (residual exposure 10), and NanoGPT forwarding E2EE v2, which
 it did not do on 2026-10-30 (residual exposure 9). If a provider passes on
 attested sessions, teep should verify them and move the core factors out of
