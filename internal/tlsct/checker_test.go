@@ -375,6 +375,94 @@ func TestCheckTLSState_SCTLogNotFound(t *testing.T) {
 	t.Logf("SCT not found error: %v", err)
 }
 
+// An SCT from a Static CT API (tiled) log verifies with the tiled log's key:
+// a certificate whose SCTs all come from tiled logs passes. An SCT that the
+// tiled log did not sign, or one from a log that is not listed, fails.
+func TestCheckTLSState_TiledLogSCT(t *testing.T) {
+	logKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate log key: %v", err)
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&logKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal log key: %v", err)
+	}
+	logID := sha256.Sum256(pubDER)
+	tiledOnly := &loglist3.LogList{Operators: []*loglist3.Operator{{
+		Name:      "test operator",
+		TiledLogs: []*loglist3.TiledLog{{Description: "test tiled log", LogID: logID[:], Key: pubDER}},
+	}}}
+	cert := selfSignedCert(t)
+
+	check := func(ll *loglist3.LogList, sct []byte) error {
+		c := tlsct.NewChecker()
+		c.InjectLogList(ll)
+		return c.CheckTLSState(context.Background(), "example.com", &tls.ConnectionState{
+			PeerCertificates:            []*x509.Certificate{cert},
+			SignedCertificateTimestamps: [][]byte{sct},
+		})
+	}
+	if err := check(tiledOnly, signedTiledHandshakeSCT(t, logKey, logID, cert)); err != nil {
+		t.Errorf("SCT of a tiled log: %v", err)
+	}
+
+	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate other key: %v", err)
+	}
+	// The log is found, so the failure must come from the signature check.
+	err = check(tiledOnly, signedTiledHandshakeSCT(t, otherKey, logID, cert))
+	if err == nil {
+		t.Error("SCT with the tiled log's ID but another key passed")
+	} else if !strings.Contains(err.Error(), "no valid SCTs") || strings.Contains(err.Error(), "not found in trusted log list") {
+		t.Errorf("SCT with another key: %v, want a signature failure of a found log", err)
+	}
+	if err := check(emptyLogList(t), signedTiledHandshakeSCT(t, logKey, logID, cert)); err == nil ||
+		!strings.Contains(err.Error(), "SCT log ID not found in trusted log list") {
+		t.Errorf("SCT of an unlisted log: %v", err)
+	}
+}
+
+// signedTiledHandshakeSCT returns a TLS-marshalled SCT for cert, signed by key
+// under logID, with the leaf_index extension that a Static CT API log adds.
+func signedTiledHandshakeSCT(t *testing.T, key *ecdsa.PrivateKey, logID [32]byte, cert *x509.Certificate) []byte {
+	t.Helper()
+	sct := ct.SignedCertificateTimestamp{
+		SCTVersion: ct.V1,
+		LogID:      ct.LogID{KeyID: logID},
+		Timestamp:  uint64(time.Now().UnixMilli()),
+		Extensions: ct.CTExtensions{0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x2a},
+	}
+	leaf := ct.MerkleTreeLeaf{
+		Version:  ct.V1,
+		LeafType: ct.TimestampedEntryLeafType,
+		TimestampedEntry: &ct.TimestampedEntry{
+			Timestamp:  sct.Timestamp,
+			EntryType:  ct.X509LogEntryType,
+			X509Entry:  &ct.ASN1Cert{Data: cert.Raw},
+			Extensions: sct.Extensions,
+		},
+	}
+	input, err := ct.SerializeSCTSignatureInput(sct, ct.LogEntry{Leaf: leaf})
+	if err != nil {
+		t.Fatalf("serialize SCT signature input: %v", err)
+	}
+	digest := sha256.Sum256(input)
+	sig, err := ecdsa.SignASN1(rand.Reader, key, digest[:])
+	if err != nil {
+		t.Fatalf("sign SCT: %v", err)
+	}
+	sct.Signature = ct.DigitallySigned{
+		Algorithm: cttls.SignatureAndHashAlgorithm{Hash: cttls.SHA256, Signature: cttls.ECDSA},
+		Signature: sig,
+	}
+	raw, err := cttls.Marshal(sct)
+	if err != nil {
+		t.Fatalf("marshal SCT: %v", err)
+	}
+	return raw
+}
+
 // fabricateHandshakeSCT creates a TLS-marshalled SCT with a random LogID.
 func fabricateHandshakeSCT(t *testing.T) []byte {
 	t.Helper()
