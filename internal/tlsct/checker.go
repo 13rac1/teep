@@ -3,6 +3,7 @@ package tlsct
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -259,12 +260,21 @@ func (c *Checker) checkTLSState(
 
 	var verifyErrs []string
 	for _, candidate := range scts {
-		key, found := ctLogKey(logList, candidate.sct.LogID.KeyID)
-		if !found {
-			verifyErrs = append(verifyErrs, "SCT log ID not found in trusted log list")
+		listed, err := findLog(logList, candidate.sct.LogID.KeyID)
+		if err != nil {
+			verifyErrs = append(verifyErrs, err.Error())
 			continue
 		}
-		pub, pkErr := ctx509.ParsePKIXPublicKey(key)
+		sctTime := time.UnixMilli(int64(candidate.sct.Timestamp)) //nolint:gosec // SCT timestamps are milliseconds since 1970 and fit in int64
+		if err := checkSCTTime(sctTime, leaf.NotBefore, time.Now()); err != nil {
+			verifyErrs = append(verifyErrs, err.Error())
+			continue
+		}
+		if err := listed.acceptsSCT(sctTime, leaf.NotAfter); err != nil {
+			verifyErrs = append(verifyErrs, err.Error())
+			continue
+		}
+		pub, pkErr := ctx509.ParsePKIXPublicKey(listed.key)
 		if pkErr != nil {
 			verifyErrs = append(verifyErrs, "parse log public key: "+pkErr.Error())
 			continue
@@ -284,15 +294,114 @@ func (c *Checker) checkTLSState(
 	return fmt.Errorf("no valid SCTs: %s", strings.Join(verifyErrs, "; "))
 }
 
-// ctLogKey finds the SCT verification key in either CT log collection.
-func ctLogKey(list *loglist3.LogList, id [sha256.Size]byte) ([]byte, bool) {
-	if log := list.FindLogByKeyHash(id); log != nil {
-		return log.Key, true
+// listedLog holds what the SCT check needs of a log in the CT log list.
+type listedLog struct {
+	key      []byte
+	state    *loglist3.LogStates
+	interval *loglist3.TemporalInterval
+}
+
+// findLog returns the log in either CT log collection whose ID is id. A log
+// ID that is not listed, or that is listed more than once, is an error: with
+// two entries, the state and interval of one could hide those of the other.
+func findLog(list *loglist3.LogList, id [sha256.Size]byte) (listedLog, error) {
+	var found []listedLog
+	for _, op := range list.Operators {
+		for _, log := range op.Logs {
+			if subtle.ConstantTimeCompare(log.LogID, id[:]) == 1 {
+				found = append(found, listedLog{key: log.Key, state: log.State, interval: log.TemporalInterval})
+			}
+		}
+		for _, log := range op.TiledLogs {
+			if subtle.ConstantTimeCompare(log.LogID, id[:]) == 1 {
+				found = append(found, listedLog{key: log.Key, state: log.State, interval: log.TemporalInterval})
+			}
+		}
 	}
-	if log := list.FindTiledLogByKeyHash(id); log != nil {
-		return log.Key, true
+	// The SCT signature does not cover the log ID, so a listed key must hash
+	// to its ID; otherwise one key could appear under a second, trusted ID.
+	for _, l := range found {
+		keyHash := sha256.Sum256(l.key)
+		if subtle.ConstantTimeCompare(keyHash[:], id[:]) != 1 {
+			return listedLog{}, errors.New("SCT log ID does not match the hash of its key in the CT log list")
+		}
 	}
-	return nil, false
+	switch len(found) {
+	case 0:
+		return listedLog{}, errors.New("SCT log ID not found in the CT log list")
+	case 1:
+		return found[0], nil
+	default:
+		return listedLog{}, errors.New("SCT log ID listed more than once in the CT log list")
+	}
+}
+
+// stateCount returns the number of states set in ls. The list should set one;
+// LogStatus picks the first one set, which could hide a rejected state.
+func stateCount(ls *loglist3.LogStates) int {
+	n := 0
+	for _, set := range []bool{ls.Pending != nil, ls.Qualified != nil, ls.Usable != nil, ls.ReadOnly != nil, ls.Retired != nil, ls.Rejected != nil} {
+		if set {
+			n++
+		}
+	}
+	return n
+}
+
+// sctBeforeNotBefore and sctFutureSkew bound the SCT timestamp. A log issues
+// the SCT for a certificate shortly before the CA signs it, and CAs date
+// NotBefore at or before signing, so an honest SCT is not more than a day
+// older than NotBefore. An SCT dated in the future is refused, with an
+// allowance for clock skew.
+const (
+	sctBeforeNotBefore = 24 * time.Hour
+	sctFutureSkew      = time.Hour
+)
+
+// checkSCTTime refuses an SCT dated long before the certificate's NotBefore
+// or in the future. Without it, the holder of a retired or read-only log's
+// key could date an SCT before the state change.
+func checkSCTTime(sctTime, notBefore, now time.Time) error {
+	if sctTime.Before(notBefore.Add(-sctBeforeNotBefore)) {
+		return errors.New("SCT timestamp is more than a day before the certificate's NotBefore")
+	}
+	if sctTime.After(now.Add(sctFutureSkew)) {
+		return errors.New("SCT timestamp is in the future")
+	}
+	return nil
+}
+
+// acceptsSCT reports, as an error, why an SCT that the log issued at sctTime
+// for a certificate that expires at notAfter cannot count. The list holds
+// every known log, including test, pending and rejected logs, so only a log
+// in a trusted state counts: usable or qualified, or read-only or retired for
+// an SCT issued before that state began. When the log has a temporal
+// interval, notAfter must fall inside it.
+func (l listedLog) acceptsSCT(sctTime, notAfter time.Time) error {
+	if l.state != nil && stateCount(l.state) > 1 {
+		return errors.New("SCT log has more than one state in the CT log list")
+	}
+	switch l.state.LogStatus() {
+	case loglist3.UsableLogStatus, loglist3.QualifiedLogStatus:
+	case loglist3.ReadOnlyLogStatus:
+		if !sctTime.Before(l.state.ReadOnly.Timestamp) {
+			return errors.New("SCT issued after its log became read-only")
+		}
+	case loglist3.RetiredLogStatus:
+		if !sctTime.Before(l.state.Retired.Timestamp) {
+			return errors.New("SCT issued after its log was retired")
+		}
+	case loglist3.PendingLogStatus:
+		return errors.New("SCT log is pending, not trusted yet")
+	case loglist3.RejectedLogStatus:
+		return errors.New("SCT log is rejected")
+	default:
+		return errors.New("SCT log has no state in the CT log list")
+	}
+	if l.interval != nil && (notAfter.Before(l.interval.StartInclusive) || !notAfter.Before(l.interval.EndExclusive)) {
+		return errors.New("certificate expiry is outside the temporal interval of the SCT log")
+	}
+	return nil
 }
 
 func (c *Checker) addCacheEntry(key string) {
