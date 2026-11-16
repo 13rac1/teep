@@ -12,8 +12,8 @@ func TestVerificationErrorsPreserveNetworkCauses(t *testing.T) {
 	for name, input := range map[string]*ReportInput{
 		"backend PCS": {TDX: &TDXVerifyResult{CollateralErr: wrapped}},
 		"gateway PCS": {GatewayTDX: &TDXVerifyResult{CollateralErr: wrapped}},
-		"backend KDS": {SEV: &SEVVerifyResult{CertChainErr: wrapped}},
-		"gateway KDS": {GatewaySEV: &SEVVerifyResult{CertChainErr: wrapped}},
+		"backend KDS": {SEV: &SEVVerifyResult{FetchErr: wrapped}},
+		"gateway KDS": {GatewaySEV: &SEVVerifyResult{FetchErr: wrapped}},
 		"NRAS":        {NvidiaNRAS: &NvidiaVerifyResult{SignatureErr: wrapped}},
 		"PoC":         {PoC: &PoCResult{Err: wrapped}},
 		"gateway PoC": {GatewayPoC: &PoCResult{Err: wrapped}},

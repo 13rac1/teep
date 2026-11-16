@@ -90,7 +90,7 @@ func TestAuthorizationCollateralCapacityRecovery(t *testing.T) {
 	s.sevVerifier = func(context.Context, []byte) *attestation.SEVVerifyResult {
 		calls.Add(1)
 		if exhausted.Load() {
-			return &attestation.SEVVerifyResult{CertChainErr: fmt.Errorf("fetch certificate: %w", tlsct.ErrConnectionCapacity)}
+			return &attestation.SEVVerifyResult{FetchErr: fmt.Errorf("fetch certificate: %w", tlsct.ErrConnectionCapacity)}
 		}
 		return &attestation.SEVVerifyResult{CertChainErr: errors.New("invalid certificate")}
 	}
@@ -140,7 +140,7 @@ func TestAllowedCollateralCapacityFailure(t *testing.T) {
 				s.cfg.AllowFail = append([]string(nil), attestation.KnownFactors...)
 			}
 			s.sevVerifier = func(context.Context, []byte) *attestation.SEVVerifyResult {
-				return &attestation.SEVVerifyResult{CertChainErr: tlsct.ErrConnectionCapacity}
+				return &attestation.SEVVerifyResult{FetchErr: tlsct.ErrConnectionCapacity}
 			}
 			prov := &provider.Provider{Name: "neardirect", SupplyChainPolicy: attestation.NoSupplyChainPolicy(),
 				Attester: &mockAttesterWithRaw{raw: &attestation.RawAttestation{SEVReportBytes: []byte("injected verifier input")}}}

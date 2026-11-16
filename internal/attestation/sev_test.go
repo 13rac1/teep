@@ -466,7 +466,7 @@ func (*sevNoopGetter) GetContext(_ context.Context, _ string) ([]byte, error) {
 }
 
 // TestNewSEVVerifierOnline verifies that NewSEVVerifier in online mode
-// calls the getter and reports cert/sig errors when the getter fails.
+// calls the getter and reports a retrieval error when the getter fails.
 func TestNewSEVVerifierOnline(t *testing.T) {
 	verifier := NewSEVVerifier(false, &sevNoopGetter{})
 	raw := makeSEVReport(t, nil)
@@ -475,14 +475,12 @@ func TestNewSEVVerifierOnline(t *testing.T) {
 	if result.ParseErr != nil {
 		t.Fatalf("unexpected ParseErr: %v", result.ParseErr)
 	}
-	// With a noop getter, cert fetching should fail.
-	if result.CertChainErr == nil {
-		t.Error("expected CertChainErr with noop getter, got nil")
+	if result.FetchErr == nil || result.OnlineVerified {
+		t.Errorf("fetch=%v verified=%v; want retrieval failure with noop getter", result.FetchErr, result.OnlineVerified)
 	}
-	if result.SignatureErr == nil {
-		t.Error("expected SignatureErr with noop getter, got nil")
+	if result.CertChainErr != nil || result.SignatureErr != nil {
+		t.Errorf("chain=%v signature=%v; a failed retrieval is not a rejection", result.CertChainErr, result.SignatureErr)
 	}
-	t.Logf("CertChainErr: %v", result.CertChainErr)
 }
 
 // ---------------------------------------------------------------------------

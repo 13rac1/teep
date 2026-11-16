@@ -54,8 +54,11 @@ func TestSEVVerificationPreservesCapacityCause(t *testing.T) {
 			// Parse a real signed report and execute the production certificate
 			// retrieval path. Capacity rejection prevents authenticating it.
 			result := VerifySEVReportOnline(ctx, testdata.AttestationBytes, getter)
-			if !errors.Is(result.CertChainErr, tlsct.ErrConnectionCapacity) || result.OnlineVerified {
-				t.Errorf("capacity cause lost or failed evidence authenticated: %v", result.CertChainErr)
+			if !errors.Is(result.FetchErr, tlsct.ErrConnectionCapacity) || result.OnlineVerified {
+				t.Errorf("capacity cause lost or failed evidence authenticated: %v", result.FetchErr)
+			}
+			if result.CertChainErr != nil || result.SignatureErr != nil {
+				t.Errorf("chain=%v signature=%v; a capacity rejection is not a verification failure", result.CertChainErr, result.SignatureErr)
 			}
 		})
 	}

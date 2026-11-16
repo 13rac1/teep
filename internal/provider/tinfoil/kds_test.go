@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -26,7 +27,7 @@ import (
 func TestTinfoilKDS(t *testing.T) {
 	testtls.RunWithFallbackRoot(t, func(t *testing.T, authority *testtls.Authority) {
 		t.Helper()
-		for _, mode := range []string{"valid", "report_signature", "certificate_signature", "unavailable", "redirect", "oversized", "tls12"} {
+		for _, mode := range []string{"valid", "report_signature", "certificate_signature", "not_found", "unavailable", "redirect", "oversized", "tls12"} {
 			t.Run(mode, func(t *testing.T) {
 				raw, cert := append([]byte(nil), testdata.AttestationBytes...), append([]byte(nil), testdata.VcekBytes...)
 				if mode == "report_signature" {
@@ -50,6 +51,8 @@ func TestTinfoilKDS(t *testing.T) {
 						t.Error("KDS changed the requested certificate")
 					}
 					switch mode {
+					case "not_found":
+						w.WriteHeader(http.StatusNotFound)
 					case "unavailable":
 						w.WriteHeader(http.StatusServiceUnavailable)
 					case "redirect":
@@ -78,13 +81,23 @@ func TestTinfoilKDS(t *testing.T) {
 				for range 8 {
 					wg.Go(func() {
 						result := attestation.VerifySEVReportOnline(t.Context(), raw, getter)
-						if mode == "valid" {
-							if !result.OnlineVerified || result.CertChainErr != nil || result.SignatureErr != nil {
-								t.Errorf("verified=%v chain=%v signature=%v", result.OnlineVerified, result.CertChainErr, result.SignatureErr)
+						switch mode {
+						case "valid":
+							if !result.OnlineVerified || result.FetchErr != nil || result.CertChainErr != nil || result.SignatureErr != nil {
+								t.Errorf("verified=%v fetch=%v chain=%v signature=%v", result.OnlineVerified, result.FetchErr, result.CertChainErr, result.SignatureErr)
 							}
-						} else if result.OnlineVerified || (result.CertChainErr == nil && result.SignatureErr == nil) {
-							t.Error("invalid evidence accepted")
+						case "report_signature", "certificate_signature", "not_found":
+							// A 4xx for a VCEK URL built from the report rejects the evidence.
+							if result.OnlineVerified || result.FetchErr != nil || result.CertChainErr == nil || result.SignatureErr == nil {
+								t.Errorf("invalid evidence: verified=%v fetch=%v chain=%v signature=%v", result.OnlineVerified, result.FetchErr, result.CertChainErr, result.SignatureErr)
+							}
+						default:
+							// The getter rejected the response, so no certificate was retrieved.
+							if result.OnlineVerified || result.FetchErr == nil || result.CertChainErr != nil || result.SignatureErr != nil {
+								t.Errorf("failed retrieval: verified=%v fetch=%v chain=%v signature=%v", result.OnlineVerified, result.FetchErr, result.CertChainErr, result.SignatureErr)
+							}
 						}
+						checkProxyStatus(t, mode, result)
 					})
 				}
 				wg.Wait()
@@ -155,5 +168,25 @@ func (tr *kdsTestTransport) RoundTrip(req *http.Request) (*http.Response, error)
 func (tr *kdsTestTransport) CloseIdleConnections() {
 	if c, ok := tr.base.(interface{ CloseIdleConnections() }); ok {
 		c.CloseIdleConnections()
+	}
+}
+
+// checkProxyStatus asserts that the Tinfoil getter returns the proxy's HTTP
+// status as the typed status error, so verification can classify it.
+func checkProxyStatus(t *testing.T, mode string, result *attestation.SEVVerifyResult) {
+	t.Helper()
+	var want int
+	err := result.CertChainErr
+	switch mode {
+	case "not_found":
+		want = http.StatusNotFound
+	case "unavailable":
+		want, err = http.StatusServiceUnavailable, result.FetchErr
+	default:
+		return
+	}
+	var statusErr *attestation.SEVCertStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != want {
+		t.Errorf("error %v does not carry proxy HTTP status %d", err, want)
 	}
 }
