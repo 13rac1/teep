@@ -47,6 +47,13 @@ Removing one costs the reader the link to a definition they can look up.
 
 - `handshake` — the TLS protocol exchange.
 - `magic bytes` — the leading bytes that identify a file format.
+- `checkpoint` — the signed statement of a transparency log's size and root hash
+  ([C2SP tlog-checkpoint](https://github.com/C2SP/C2SP/blob/main/tlog-checkpoint.md)).
+- `tile` — a fixed-size block of hashes from a transparency log's Merkle tree, served as a static file
+  ([C2SP tlog-tiles](https://github.com/C2SP/C2SP/blob/main/tlog-tiles.md)).
+- `shard` — one of the independent trees into which a transparency log is split over time.
+- `keyless signing` — Sigstore signing with a short-lived certificate that Fulcio issues to an
+  OIDC identity, with no long-lived signing key.
 
 ## Adding a term
 
