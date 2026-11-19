@@ -4,11 +4,13 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/13rac1/teep/internal/jsonstrict"
@@ -40,6 +42,12 @@ func VerifyComposeBinding(appCompose string, mrConfigID []byte) error {
 			hex.EncodeToString(mrConfigID),
 		)
 	}
+	return checkAppComposeObject(appCompose)
+}
+
+// checkAppComposeObject requires appCompose, whose hash the quote binds, to
+// be read the same way by teep and dstack.
+func checkAppComposeObject(appCompose string) error {
 	// The quote binds these bytes, but teep reads the images from the
 	// docker_compose_file member. An app_compose object that teep and
 	// dstack read differently (a duplicate member, or a member that
@@ -258,4 +266,104 @@ func MergeComposeDigests(model, gateway ComposeDigests) (allDigests []string, di
 		}
 	}
 	return allDigests, digestToRepo
+}
+
+// mrConfigV3 is the launch document that a dstack 0.6 VMM binds into a TDX
+// MR_CONFIG_ID of version 3 (MrConfigV3 in dstack-types mr_config.rs). The
+// members are in sorted order and every value is ASCII, so json.Marshal
+// writes the RFC 8785 form that dstack hashes.
+type mrConfigV3 struct {
+	AppID            string    `json:"app_id"`
+	ComposeHash      string    `json:"compose_hash"`
+	GPUPolicyHash    string    `json:"gpu_policy_hash,omitempty"`
+	InitScriptHashes *[]string `json:"init_script_hashes,omitempty"`
+	InstanceID       string    `json:"instance_id,omitempty"`
+	KeyProvider      string    `json:"key_provider"`
+	KeyProviderID    string    `json:"key_provider_id,omitempty"`
+	Version          int       `json:"version"`
+}
+
+// appComposeV3 holds the app_compose members that the VMM copies into the
+// MrConfigV3 document.
+type appComposeV3 struct {
+	KeyProvider     string   `json:"key_provider"`
+	KeyProviderID   string   `json:"key_provider_id,omitempty"`
+	ManifestVersion string   `json:"manifest_version"`
+	InitScript      []string `json:"init_script,omitempty"`
+}
+
+// VerifyComposeBindingV3 checks a TDX MRConfigID of version 3: 0x03, then
+// sha256("dstack-mr-config-v3:" || 0x00 || document), then 15 zero bytes.
+// The quote carries no document, so teep builds the one that the dstack
+// VMM builds (prepare_mr_config_v3 in dstack vmm/src/app/mr_config.rs):
+// compose_hash is sha256(appCompose); key_provider, key_provider_id and,
+// from manifest version 3, the sha256 of each init script come from
+// appCompose; app_id, instance_id and, for a launch with GPUs,
+// gpu_policy_hash come from the RTMR3 events. The caller must have checked
+// that events reproduce the RTMRs of the quote.
+func VerifyComposeBindingV3(appCompose string, events []EventLogEntry, gpu bool, mrConfigID []byte) error {
+	var ac appComposeV3
+	_, missing, err := jsonstrict.Unmarshal([]byte(appCompose), &ac)
+	if err != nil {
+		return fmt.Errorf("app_compose: %w", err)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("app_compose: missing members %q", missing)
+	}
+	manifest, err := strconv.Atoi(ac.ManifestVersion)
+	if err != nil {
+		return fmt.Errorf("app_compose manifest_version: %w", err)
+	}
+	composeHash := sha256.Sum256([]byte(appCompose))
+	doc := mrConfigV3{ComposeHash: hex.EncodeToString(composeHash[:]), KeyProvider: ac.KeyProvider, KeyProviderID: ac.KeyProviderID, Version: 3}
+	if manifest >= 3 {
+		hashes := make([]string, len(ac.InitScript))
+		for i, script := range ac.InitScript {
+			sum := sha256.Sum256([]byte(script))
+			hashes[i] = hex.EncodeToString(sum[:])
+		}
+		doc.InitScriptHashes = &hashes
+	}
+	if doc.AppID, err = runtimeEventPayload(events, "app-id"); err != nil {
+		return err
+	}
+	if doc.InstanceID, err = runtimeEventPayload(events, "instance-id"); err != nil {
+		return err
+	}
+	if gpu {
+		if doc.GPUPolicyHash, err = runtimeEventPayload(events, "gpu-policy-hash"); err != nil {
+			return err
+		}
+	}
+	document, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("MrConfigV3 document: %w", err)
+	}
+	digest := sha256.Sum256(append([]byte("dstack-mr-config-v3:\x00"), document...))
+	expected := make([]byte, 48)
+	expected[0] = 3
+	copy(expected[1:], digest[:])
+	if subtle.ConstantTimeCompare(mrConfigID, expected) != 1 {
+		return fmt.Errorf("MRConfigID %s does not bind the MrConfigV3 document %s", hex.EncodeToString(mrConfigID), document)
+	}
+	return checkAppComposeObject(appCompose)
+}
+
+// runtimeEventPayload returns the payload of the one RTMR3 dstack runtime
+// event with this name, as lowercase hex.
+func runtimeEventPayload(events []EventLogEntry, name string) (string, error) {
+	var found [][]byte
+	for _, e := range events {
+		if e.IMR == 3 && e.EventType == DstackRuntimeEventType && e.Event == name {
+			payload, err := hex.DecodeString(e.EventPayload)
+			if err != nil {
+				return "", fmt.Errorf("%s event payload: %w", name, err)
+			}
+			found = append(found, payload)
+		}
+	}
+	if len(found) != 1 {
+		return "", fmt.Errorf("event log has %d %s events, want 1", len(found), name)
+	}
+	return hex.EncodeToString(found[0]), nil
 }

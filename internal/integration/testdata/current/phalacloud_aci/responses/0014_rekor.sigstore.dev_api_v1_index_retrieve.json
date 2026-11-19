@@ -4,17 +4,20 @@
   "status": 200,
   "proto": "HTTP/2.0",
   "tls_version": "TLS 1.3",
-  "tls_cipher": "TLS_CHACHA20_POLY1305_SHA256",
-  "peer_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwsNPWiXVmyxg8g0/m05J+eK+FA9kmmzGijilpDIiDxk3lQbrJXrITHCKUjcNEBjQiJMoukVFascbILrP59Uivl2TXp/C1ZhTpGogZOG3Q8snK8DqTPLobjQr+fqnjwAmVX4iSI1LVxgjb0/+Tnl8+1YtfwZOPKvJyR9YBDppbcyYgaN9aSX96+spOFJX939mbHvFyCbUGYTe5DWysoqZ9RLV6c9axkbkFnJvGcEbsb166BHNIeQdk7WDHNeDtlxOg9EeM9WM5zoOQ6NElNzG3TyAtjy4QgGSSupnZFSosCWUGQQ8kq1/kbdSnSF2UejRRRx25mawEgPvjFbJfbsW7QIDAQAB",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAl3kgr8npxrDGgvYuarkaqdqeYZNBOingxt+pYsE4re4t+ZIFtdhYntwtlPn6FTo/muL5Yk9fqxIMkmhYjesJbZINxu514yYlsRPGOtxkcUWNAt47jJEak820RgMDbw2J6B+hqKYqxwxPXSrqE/Jmu9xMuvE9WlWpxRjUDHbFJ2IzrAs2CpNkQ/e79EjZeWO9sRzw+kYPxjRntDBlUgF+Qd3xQH4we8Dghesp2pSUMz1rDe+bABIDiA4NUKHYUL0WFhRp+RHQI3o1u8eo1GJa6zaos3NyxoZpnTwsa0j+XnD1DVWT1kE8Qgou/EffCsewSqSsn4uWdH3O+wjTTDIF3wIDAQAB",
   "headers": {
     "Alt-Svc": [
-      "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+      "h3=\":443\"; ma=2592000"
+    ],
+    "Content-Length": [
+      "85"
     ],
     "Content-Type": [
       "application/json"
     ],
     "Date": [
-      "Fri, 13 Nov 2026 07:32:46 GMT"
+      "Thu, 19 Nov 2026 20:08:49 GMT"
     ],
     "Vary": [
       "Origin"
@@ -23,6 +26,6 @@
       "1.1 google"
     ]
   },
-  "req_body_base64": "eyJoYXNoIjoic2hhMjU2OjQwMzJjNmQ1YmZkNzUyMzQyYzNlNjMxYzJmMWRlOTNiYTZiODZjNDFkYjZiMTY3YjlhMzUzNzJjMTM5ZTc3MDYifQ==",
-  "duration_ms": 62
+  "req_body_base64": "eyJoYXNoIjoic2hhMjU2OjIyYWViNjgwOGUzOGE1NjExNWY4NDNkNGQ2NmY0ODUyNDA3ZTcyZjYwODBkNWY4NzgxZmQ4MmQ5ZjgxOWRiNDEifQ==",
+  "duration_ms": 59
 }

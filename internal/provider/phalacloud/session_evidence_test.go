@@ -15,6 +15,10 @@ import (
 const (
 	phalaDirectSessionID = "f82e2a6b603a3d0b1abe395f979440f0da44a425b238cfcb5354f20906f43cc7"
 	chutesSessionID      = "18aa6d5d8b108534e293deb250cb7b2f99b5790b10a500d4d5066647bee1dcf4"
+	// phalaDirect063SessionID is the session of Phala's
+	// deepseek/deepseek-v4.1-flash-1017 model CVM on dstack-0.6.3 and TDX
+	// module 2.0.20, captured on 2026-11-19.
+	phalaDirect063SessionID = "1b1391cafe178d0b7e4628ce445e046a503477c5dda0c3d1ad4ead016beef861"
 )
 
 func loadSession(t *testing.T, name, id string) *aci.Session {
