@@ -24,10 +24,14 @@ var dstackMRSEAMAllow = map[string]struct{}{
 	"489e585f1c54bc5a02066c8c6ec21619ff0334ec6f21e07e2a35202c59183789c8057e7d97dd591bb08314b185819e72": {},
 	// TDX module 2.0.18 — Granite Rapids / Clearwater Forest (Intel, TDX Module Releases and Hashes)
 	"2d2de102461684f14c8d0984a09d895e3e9e15944ce020a03b977e1f114d5e1ed32ef666a47fd19a5851b3800eda3afa": {},
+	// TDX module 2.0.20 — Granite Rapids / Clearwater Forest: sha384 of the
+	// signed binary and the hash in its sigstruct (Intel, tdx-module.binaries
+	// 73b2a66e). Intel's hash table lists 57a1a66f... for 2.0.20.
+	"eddfa0c1750b39ba6c9b039c579a5039baea307f8290fc5e3636d70e6001749dc95a368b9d8a9c50c84d1c22b5642d3c": {},
 }
 
 // dstackMRTDAllow contains the TD virtual firmware measurement hashes for
-// known dstack-nvidia image versions.
+// known dstack and dstack-nvidia image versions.
 var dstackMRTDAllow = map[string]struct{}{
 	// dstack-nvidia-0.5.4.1 (os_image_hash 9b69bb...)
 	"b24d3b24e9e3c16012376b52362ca09856c4adecb709d5fac33addf1c47e193da075b125b6c364115771390a5461e217": {},
@@ -35,6 +39,10 @@ var dstackMRTDAllow = map[string]struct{}{
 	"f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077": {},
 	// dstack-nvidia-0.5.11 (os_image_hash a6eafc...); 0.5.12 has the same MRTD
 	"df4d77c857de652bd0fafa343a2026b51071ee03773d076d283abf1a7d36ff91ffa279ee4a617ac664f7e2a2c8d5891b": {},
+	// dstack-0.6.3, 0.6.4 and 0.6.5 (os_image_hash 38a6f9..., feff36...,
+	// 4771a2...): the TDX MRTD that the mkosi-os-v0.6.3, v0.6.4 and v0.6.5
+	// releases publish
+	"83baf004a06c83f6371d4d9e19c8bb1ead734ba7696e56d6b52271011394a6f24efecc27af3b5c1da41594dbfa706e97": {},
 }
 
 // DstackBaseMeasurementPolicy returns a MeasurementPolicy with the shared
