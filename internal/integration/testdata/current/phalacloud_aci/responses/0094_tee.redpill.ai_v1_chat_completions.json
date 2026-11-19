@@ -1,0 +1,52 @@
+{
+  "method": "POST",
+  "url": "https://tee.redpill.ai/v1/chat/completions",
+  "status": 200,
+  "proto": "HTTP/1.1",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdpt9LKMRVNJvB6g19TP5TKoxWef5Vt0+I4eTNJwgILGxrAGrypOHUQxXVy1cRhpKsFNwS3qGehd0tdpQOw3tVw==",
+  "headers": {
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Access-Control-Expose-Headers": [
+      "*"
+    ],
+    "Cache-Control": [
+      "no-cache"
+    ],
+    "Content-Type": [
+      "text/event-stream"
+    ],
+    "Date": [
+      "Thu, 19 Nov 2026 20:08:56 GMT"
+    ],
+    "Vary": [
+      "origin, access-control-request-method, access-control-request-headers"
+    ],
+    "X-Accel-Buffering": [
+      "no"
+    ],
+    "X-Aci-Keyset-Digest": [
+      "sha256:31bfd7f9a90aba90795f4c83aba9a245f3b20c97a23e21829b48273dc738a1b0"
+    ],
+    "X-Aci-Version": [
+      "aci/1"
+    ],
+    "X-E2ee-Algo": [
+      "secp256k1-aes-256-gcm-hkdf-sha256"
+    ],
+    "X-E2ee-Applied": [
+      "true"
+    ],
+    "X-E2ee-Version": [
+      "2"
+    ],
+    "X-Receipt-Id": [
+      "rcpt-1826460efe743d41ac2765c7"
+    ]
+  },
+  "req_body_base64": "eyJtYXhfdG9rZW5zIjo2NCwibWVzc2FnZXMiOlt7ImNvbnRlbnQiOiIwNGQ4ZjI4N2JmZjUzNjNhOGI1MmExZDFmNjgyMDFlNjRjOWQ2NGI0MWE5ZDgwNGE3MzI5NGM1OTY1NTdkYmVhOWY2NzFhODAyMWZhZjI3ZTliOWQ1YjRjNzU1MTE0ZWZmNDMxMjZkYTgwMjhkYzhmMjA0Nzk4OWNkODAxODgyNDJiM2UyZDQzMWM1YzJhNjIyZDViNDQzNDM3NmVlY2Y3NzVlYjg4OTcwNjQ4OGI5ZTQxZDdmY2VjNjI2ZWMwMTJlYzRlMmU1MjNkMTEiLCJyb2xlIjoidXNlciJ9XSwibW9kZWwiOiJxd2VuL3F3ZW4zLjgtMjdiIiwicHJvdmlkZXIiOnsiYWNpX3Nlc3Npb25faWRzIjpbIjJmZTExMTBhM2E2NWQxZWFkN2U2MTZiNmQxNTFkYmZjMWY3ZmExMjUzNDkyNTMxZjljYmFlZTU0M2QyMDU1ZDciLCIwODZhZDczMWQ4YTg1OWRlNDk2NWNhNTNmMWI0MmMyN2VmOGQ3MDk2ZmQ5ODllMTQ5NzVmMmY2ZjFiNmM4ZDQ5IiwiMGI5ODc5Yzc0NGNhMzdhNDA5NjQ0OThmNTY5ZmVmZTNmMDNjYTQ0OWM0ZDk3ZmE4M2M3MjA4MGFkNzA0MDY4MSIsImMxMzg0YzhkN2I4MjFiNWVkNWU1NmIwZDY4OGY5MGYwZGMwNmE3YTA5ZTcyN2JlNTM0MDU0OTk4YTAzYmRkMjIiLCJjYjg3OTRlZTNiOGUwODg0MTk2ODIwNGRlNTkyZGYzODEzZmU4YjNkMTJmNDg3MzdlMTE5MjA3MGNjMmQyNjYzIiwiZjQzNjVjNmZhMWYwM2Y0YjFlNzQ1MWY4NjMyMmE3NDk3MjQ1YzhjYjdjMDYzMGYwYjg2MzE4ZDRhNmM1NjQzOCIsImZkNTZkNDgzYzE2NjY2MDY4NDAyMTBhNjY0NWQ0NTA1YzkxOWQyMTJjMGE0MmJlMDI4YjJhYzIyZGU2NWIwYzIiLCI5MDIwMTRlMTczZTI4MDY3MTViNGUxMTEwMmNjZDVkM2ZjYWVjMzEwMzVkMGI2YTgxOThiM2QwNjhhZmU0MmNjIiwiYzEyODhlNGRiYzQ2ZDQ3MzliNTkzNGQ5ZWUyODE3NTQ3NDc0ODUzNjdiODg0Yjg1YTA5NTFmODAwY2ZhNjcyYyJdfSwic3RyZWFtIjp0cnVlfQ==",
+  "duration_ms": 609
+}

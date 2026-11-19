@@ -127,8 +127,17 @@ one is not pinned:
 5. The GPU evidence, verified locally with the session nonce, without NRAS:
    the certificate chain and SPDM signature of every GPU must verify, as for
    `nvidia_signature`.
-6. For the Phala model CVM, the compose binding (MRConfigID) and the
-   event-log replay of RTMR0-3.
+6. For the Phala model CVM, the event-log replay of RTMR0-3 and the
+   compose binding. An MRConfigID of version 1 (dstack 0.5) is 0x01 and
+   sha256(app_compose). One of version 3 (dstack 0.6) is 0x03 and the hash
+   of a launch document that the quote does not carry. teep builds the
+   document that the dstack VMM builds: compose_hash, key_provider,
+   key_provider_id and the init script hashes from app_compose; app_id,
+   instance_id and gpu_policy_hash from the RTMR3 events of the replayed
+   log (`attestation.VerifyComposeBindingV3`). app_compose must name
+   `key_provider` and give `manifest_version` as a string. dstack also
+   reads a compose without `key_provider` (from `kms_enabled`) or with a
+   numeric version; teep refuses those.
 
 The parts of a session's evidence must have exactly the members that teep
 reads. For a Chutes bundle these include the newer members of the Chutes
@@ -501,7 +510,8 @@ stream failed.
   [session tests](../../../internal/provider/aci/session_test.go), and
   `TestPinSessions` and `TestPinSessionsRefuses` in
   [pin tests](../../../internal/provider/aci/pin_test.go).
-- `TestSessionAuditPhalaModelCVM`, `TestSessionAuditChutes` and
+- `TestSessionAuditPhalaModelCVM`, `TestSessionAuditPhalaModelCVMDstack063`,
+  `TestComposeBindingV3Refuses`, `TestSessionAuditChutes` and
   `TestSessionAuditRefuses` in
   [session audit tests](../../../internal/provider/phalacloud/session_audit_test.go);
   `TestFetchSessionsSelectsBoundedBundles` and `TestSelectBundles` in
