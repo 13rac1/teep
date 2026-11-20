@@ -137,6 +137,11 @@ in the policy section of each provider that uses the gateway (or in the
 global policy), and refreshes them when the gateway redeploys.
 SEE: docs/attestation_gaps/aci_gateway.md.
 
+`gateway_compose_hash_allow` lists the sha256 of the gateway app_compose
+values the gateway may run (32 bytes of hex, not 48). When it is set,
+`gateway_compose_binding` fails unless the compose binds to MRConfigID and its
+hash is in the list. When it is absent, the compose is not pinned.
+
 ### Merge order
 
 Each allowlist field is resolved independently using:

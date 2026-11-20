@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -3522,14 +3523,25 @@ func evalGatewayComposeBinding(in *ReportInput) []FactorResult {
 		return factor(TierGateway, FactorGWComposeBinding, NotApplicable,
 			"compose binding is a dstack TDX concept; the gateway is SEV-SNP")
 	}
+	pinned := in.GatewayPolicy.HasComposeHashPolicy()
 	switch {
+	case (in.GatewayCompose == nil || !in.GatewayCompose.Checked) && pinned:
+		return factor(TierGateway, FactorGWComposeBinding, Fail, "no gateway app_compose in attestation response; gateway_compose_hash_allow is set")
 	case in.GatewayCompose == nil || !in.GatewayCompose.Checked:
 		return factor(TierGateway, FactorGWComposeBinding, Skip, "no gateway app_compose in attestation response")
 	case in.GatewayCompose.Err != nil:
 		return factor(TierGateway, FactorGWComposeBinding, Fail, fmt.Sprintf("gateway compose binding failed: %v", in.GatewayCompose.Err))
-	default:
+	case !pinned:
 		return factor(TierGateway, FactorGWComposeBinding, Pass, "gateway sha256(app_compose) matches MRConfigID")
 	}
+	sum := sha256.Sum256([]byte(in.Raw.GatewayAppCompose))
+	composeHash := hex.EncodeToString(sum[:])
+	if !containsAllowlist(in.GatewayPolicy.ComposeHashAllow, composeHash) {
+		return factor(TierGateway, FactorGWComposeBinding, Fail,
+			fmt.Sprintf("gateway compose hash %s not in gateway_compose_hash_allow", composeHash))
+	}
+	return factor(TierGateway, FactorGWComposeBinding, Pass,
+		fmt.Sprintf("gateway sha256(app_compose) matches MRConfigID; compose hash %s in gateway_compose_hash_allow", composeHash))
 }
 func evalGatewayCPUIDRegistry(in *ReportInput) []FactorResult {
 	if in.GatewaySEV != nil {
