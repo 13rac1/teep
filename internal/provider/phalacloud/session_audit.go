@@ -50,6 +50,29 @@ func (a SessionAuditor) Audit(ctx context.Context, s *aci.Session) error {
 	return a.auditEvidence(ctx, s, ev)
 }
 
+// Covers returns the report factors that Audit checks for s: the factors of
+// checks 1, 2, 3 and 5, the TCB factors only online, and those of check 6
+// only for the Phala model CVM. Every other factor that describes the
+// inference host, among them the RTMR policy, the client nonce and NRAS,
+// is not checked by the audit.
+func (a SessionAuditor) Covers(s *aci.Session) []string {
+	covered := []string{
+		attestation.FactorTEEQuotePresent, attestation.FactorTEEQuoteStructure,
+		attestation.FactorTEECertChain, attestation.FactorTEEQuoteSignature,
+		attestation.FactorTEEDebugDisabled, attestation.FactorTEEMeasurement,
+		attestation.FactorTEEReportData, attestation.FactorNvidiaPayloadPresent,
+		attestation.FactorNvidiaSignature, attestation.FactorNvidiaClaims,
+	}
+	if !a.Offline {
+		covered = append(covered, attestation.FactorIntelPCSCollateral,
+			attestation.FactorTEETCBCurrent, attestation.FactorTEETCBNotRevoked)
+	}
+	if s.VerifierID == verifierPhalaDirect {
+		covered = append(covered, attestation.FactorEventLogIntegrity, attestation.FactorComposeBinding)
+	}
+	return covered
+}
+
 func (a SessionAuditor) auditEvidence(ctx context.Context, s *aci.Session, ev *sessionEvidence) error {
 	tdx := a.TDX(ctx, ev.raw.IntelQuote)
 	if err := a.checkQuote(tdx); err != nil {

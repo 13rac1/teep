@@ -207,7 +207,9 @@ func TestBuildReportCanonicalBody(t *testing.T) {
 		{attestation.FactorGWNonceMatch, attestation.Fail, false, "no echoed nonce"},
 		{attestation.FactorGWReportData, attestation.Pass, true, "binds the keyset digest"},
 		{attestation.FactorACIKeyCustody, attestation.Pass, true, "e2ee key custody chain verified"},
-		{attestation.FactorNvidiaSignature, attestation.Fail, false, ""},
+		// No session was audited, so the GPU evidence that the session audit
+		// checks is not covered: an enforced failure.
+		{attestation.FactorNvidiaSignature, attestation.Fail, true, ""},
 	} {
 		var found bool
 		for _, f := range report.Factors {

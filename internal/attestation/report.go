@@ -785,20 +785,34 @@ var ACIDefaultAllowFail = []string{
 // PhalaCloudACIDefaultAllowFail is the default allow_fail list for the ACI/1
 // report of Phala Cloud. Phala Cloud verifies the report of
 // /v1/aci/attestation, which describes only the gateway and carries no GPU
-// evidence, so the GPU signature and nonce factors that ACIDefaultAllowFail
-// enforces fail here and are allowed to fail. The upstream GPU evidence that
-// exists is in the attested sessions, a snapshot that the client nonce does
-// not reach. The report echoes no nonce, so nonce_match and
+// evidence. The evidence of the inference host is in the attested sessions,
+// and the factors that the audit of every session checks are enforced and
+// pass with aci_session_verified (phalaCloudSessionFactors,
+// applyACISessionCoverage). event_log_integrity and compose_binding stay
+// allowed: the audit checks them only for the Phala model CVM, not for a
+// Chutes session. The sessions are a snapshot that the client nonce does not
+// reach, so nvidia_nonce_client_bound fails, and the audit sends no NRAS
+// request. The report echoes no nonce, so nonce_match and
 // gateway_nonce_match fail and are allowed; freshness rests on the enforced
 // gateway_tee_reportdata_binding. The keyset lists the TLS key of the host,
 // and the attester pins it, so tls_key_binding is enforced.
 var PhalaCloudACIDefaultAllowFail = append(
-	slices.DeleteFunc(slices.Clone(ACIDefaultAllowFail), func(f string) bool { return f == FactorTLSKeyBinding }),
-	FactorNvidiaSignature,
+	slices.DeleteFunc(slices.Clone(ACIDefaultAllowFail), func(f string) bool {
+		return f == FactorTLSKeyBinding || slices.Contains(phalaCloudSessionFactors, f)
+	}),
 	FactorNvidiaClientNonce,
 	FactorNonceMatch,
 	FactorGWNonceMatch,
 )
+
+// phalaCloudSessionFactors are the factors that the session audit checks for
+// every pinned session, online (phalacloud.SessionAuditor.Covers).
+var phalaCloudSessionFactors = []string{
+	FactorTEEQuotePresent, FactorTEEQuoteStructure, FactorTEECertChain,
+	FactorTEEQuoteSignature, FactorTEEDebugDisabled, FactorTEEMeasurement,
+	FactorTEEReportData, FactorIntelPCSCollateral, FactorTEETCBCurrent,
+	FactorTEETCBNotRevoked, FactorNvidiaPayloadPresent, FactorNvidiaClaims,
+}
 
 // NanoGPTACIDefaultAllowFail is the default allow_fail list for the gateway
 // variant of the ACI/1 response that NanoGPT relays. The variant echoes no
@@ -992,6 +1006,10 @@ type ACIKeysetResult struct {
 type ACISessionResult struct {
 	Pinned  []ACIPinnedSession
 	Refused []ACISessionRefusal
+	// Covered names the factors of the inference host that the audit of
+	// every pinned session checked. With no direct quote in the response,
+	// BuildReport reports these factors from the audit (applyACISessionCoverage).
+	Covered []string
 	// Err is set when the sessions could not be fetched or selected.
 	Err error
 	// UnknownFields holds the paths of the members of the session list,
@@ -1197,6 +1215,7 @@ func BuildReport(in *ReportInput) *VerificationReport {
 			factors = append(factors, f)
 		}
 	}
+	applyACISessionCoverage(in, factors)
 
 	// Override inapplicable factors before Skip→Fail promotion.
 	for i := range factors {
@@ -2217,6 +2236,27 @@ func evalACISessionVerified(in *ReportInput) []FactorResult {
 	}
 	return factor(TierBinding, FactorACISessionVerified, Pass,
 		fmt.Sprintf("%d attested sessions pinned: genuine TDX and GPU with allowed MRTD/MRSEAM, workload policy not checked (%d refused%s)", len(s.Pinned), len(s.Refused), refusalSummary(s.Refused)))
+}
+
+// applyACISessionCoverage is the ACI mode of the canonical ACI/1 report. Its
+// response carries no quote of the inference host: that evidence is in the
+// attested sessions, and the gateway forwards a pinned request only through a
+// pinned session. A factor that the audit of every pinned session checked
+// (ACISessionResult.Covered) passes with aci_session_verified. Every other
+// factor keeps its own result, so a check the audit does not make, and every
+// factor when no session was pinned, still fails.
+func applyACISessionCoverage(in *ReportInput, factors []FactorResult) {
+	s := in.ACISessions
+	if in.Raw == nil || !in.Raw.ACICanonicalReport || in.Raw.IntelQuote != "" || in.TDX != nil ||
+		s == nil || s.Err != nil || len(s.Pinned) == 0 {
+		return
+	}
+	for i := range factors {
+		if slices.Contains(s.Covered, factors[i].Name) {
+			factors[i].Status = Pass
+			factors[i].Detail = fmt.Sprintf("covered by aci_session_verified: the audit of each of the %d pinned sessions checked it", len(s.Pinned))
+		}
+	}
 }
 
 // evalACIReceiptVerified states whether the receipt of the teep verify

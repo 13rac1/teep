@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -244,4 +245,44 @@ func TestFetchSessionsBoundsModelCVMBundles(t *testing.T) {
 			t.Errorf("refused %d, %d by the limit; want %d and 2", len(set.refused), limited, maxModelCVMBundles+2)
 		}
 	})
+}
+
+// Covered holds the factors that the audit of every pinned session checked:
+// the Phala model CVM adds the event log and the compose binding, a Chutes
+// session does not, and offline the audit makes no TCB check. The factors
+// that every session covers online are the ones the Phala Cloud policy
+// enforces; the others stay allowed.
+func TestAuditSessionsCovered(t *testing.T) {
+	phala := loadSession(t, "session_phala_direct.json", phalaDirectSessionID)
+	chutesSession := loadSession(t, "session_chutes.json", chutesSessionID)
+	auditor := offlineAuditor(phala)
+	only := AuditSessions(context.Background(), auditor, &attestation.RawAttestation{ACISessions: &sessionSet{sessions: []*aci.Session{phala}}})
+	if len(only.Pinned) != 1 || !slices.Contains(only.Covered, attestation.FactorComposeBinding) || !slices.Contains(only.Covered, attestation.FactorEventLogIntegrity) {
+		t.Fatalf("Phala model CVM: %+v, want compose_binding and event_log_integrity covered", only)
+	}
+	mixed := AuditSessions(context.Background(), auditor, &attestation.RawAttestation{ACISessions: &sessionSet{sessions: []*aci.Session{phala, chutesSession}}})
+	if len(mixed.Pinned) != 2 {
+		t.Fatalf("pinned %d sessions, want 2: %+v", len(mixed.Pinned), mixed.Refused)
+	}
+	for _, f := range []string{attestation.FactorComposeBinding, attestation.FactorEventLogIntegrity, attestation.FactorTEETCBCurrent} {
+		if slices.Contains(mixed.Covered, f) {
+			t.Errorf("%s covered with a Chutes session pinned offline", f)
+		}
+	}
+	if !slices.Contains(mixed.Covered, attestation.FactorTEECertChain) {
+		t.Errorf("tee_cert_chain not covered: %v", mixed.Covered)
+	}
+
+	online := SessionAuditor{}
+	for _, f := range online.Covers(chutesSession) {
+		if slices.Contains(attestation.PhalaCloudACIDefaultAllowFail, f) {
+			t.Errorf("%s is checked for every session online but allowed to fail", f)
+		}
+	}
+	for _, f := range []string{attestation.FactorComposeBinding, attestation.FactorEventLogIntegrity, attestation.FactorTEEHardwareConfig,
+		attestation.FactorTEEBootConfig, attestation.FactorNvidiaClientNonce, attestation.FactorNvidiaNRAS, attestation.FactorCPUGPUChain} {
+		if !slices.Contains(attestation.PhalaCloudACIDefaultAllowFail, f) {
+			t.Errorf("%s is not checked for every session and must stay allowed", f)
+		}
+	}
 }

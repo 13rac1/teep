@@ -413,11 +413,30 @@ image, so a dstack-format response fails `component_recognition`.
 
 ## Factor enforcement
 
+The report of `/v1/aci/attestation` carries no quote of the inference host;
+that evidence is in the attested sessions. teep reports the factors of the
+inference host from the session audit (ACI mode): a factor that the audit of
+every pinned session checked passes with the detail "covered by
+aci_session_verified" (`SessionAuditor.Covers`, `applyACISessionCoverage`).
+These are the quote structure, certificate chain, signature and debug bit,
+`tee_measurement` (the dstack or Chutes MRTD and MRSEAM list, not
+`mrtd_allow`), `tee_reportdata_binding` (the session key and the gateway's
+evidence nonce), the NVIDIA payload, signature and claims, online
+`intel_pcs_collateral`, `tee_tcb_current` and `tee_tcb_not_revoked`, and,
+when every pinned session is a Phala model CVM, `event_log_integrity` and
+`compose_binding`. Every other factor keeps its own result. The audit
+checks no RTMR value (`tee_hardware_config`, `tee_boot_config`), no client
+nonce in the GPU evidence (`nvidia_nonce_client_bound`), no NRAS, and no
+CPU-GPU binding, weights or components, so those fail.
+
 The ACI/1 report selects `PhalaCloudACIDefaultAllowFail`: the list shared with
 Venice and NanoGPT (`ACIDefaultAllowFail`) without `tls_key_binding`, which
-is enforced, and with the GPU signature and nonce factors, because the
-report carries no GPU evidence, and `nonce_match` and
-`gateway_nonce_match`, because the report echoes no nonce.
+is enforced, and without the factors that the audit checks for every session
+online, which are enforced; with `nvidia_nonce_client_bound`, because the
+sessions are a snapshot that the client nonce does not reach, and
+`nonce_match` and `gateway_nonce_match`, because the report echoes no nonce.
+`event_log_integrity` and `compose_binding` stay allowed, because the audit
+does not check them for a Chutes session.
 `aci_session_verified` and `aci_receipt_verified` are enforced.
 `aci_receipt_verified` is a deferred skip, which does not block, when there
 is no probe receipt to check: in `teep serve`, which checks the receipt of

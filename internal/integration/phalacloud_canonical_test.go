@@ -19,9 +19,9 @@ import (
 // the attested sessions of the model, and the pinned E2EE test exchange
 // through verify.Run with the production policy. The gateway evidence, the
 // ACI/1 §3.2 statement binding of the client nonce, the key custody, the TLS
-// key binding and the session audit pass and are enforced; the nonce
-// factors (no echoed nonce) and the GPU factors of the report (no GPU
-// evidence) fail and are allowed.
+// key binding and the session audit pass and are enforced, and so do the
+// factors of the inference host that the audit checks; the nonce factors (no
+// echoed nonce) and the checks the audit does not make fail and are allowed.
 func TestVerifyRun_PhalaCloudCanonical_Fixture(t *testing.T) {
 	env := loadFixture(t, "phalacloud_aci")
 	if !strings.HasPrefix(env.entries[0].URL, "https://tee.redpill.ai"+aci.CanonicalPath+"?nonce=") {
@@ -68,7 +68,16 @@ func TestVerifyRun_PhalaCloudCanonical_Fixture(t *testing.T) {
 	if f := findFactor(t, report, "gateway_tee_reportdata_binding"); !strings.Contains(f.Detail, "binds the keyset digest") || !f.Enforced {
 		t.Errorf("gateway_tee_reportdata_binding = %q enforced=%v, want the §3.2 statement binding", f.Detail, f.Enforced)
 	}
-	for _, name := range []string{"nvidia_signature", "nvidia_nonce_client_bound", "tee_quote_present", "aci_backend_named", "nonce_match", "gateway_nonce_match"} {
+	// ACI mode: the factors of the inference host that the audit of every
+	// pinned session checked pass with aci_session_verified and are enforced.
+	// The capture pins Chutes sessions too, and the audit replays the event
+	// log and checks the compose binding only for the Phala model CVM.
+	for _, name := range []string{"tee_quote_present", "tee_quote_signature", "tee_reportdata_binding", "nvidia_signature"} {
+		if f := findFactor(t, report, name); f.Status != attestation.Pass || !f.Enforced || !strings.Contains(f.Detail, "covered by aci_session_verified") {
+			t.Errorf("%s: status=%s enforced=%v %q, want an enforced pass covered by aci_session_verified", name, f.Status, f.Enforced, f.Detail)
+		}
+	}
+	for _, name := range []string{"compose_binding", "event_log_integrity", "nvidia_nonce_client_bound", "aci_backend_named", "nonce_match", "gateway_nonce_match"} {
 		if f := findFactor(t, report, name); f.Status == attestation.Pass || f.Enforced {
 			t.Errorf("%s: status=%s enforced=%v, want an allowed failure", name, f.Status, f.Enforced)
 		}
