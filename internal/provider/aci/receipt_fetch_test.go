@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const liveReceiptID = "rcpt-a5e04d28999676749887ca5a"
+const liveReceiptID = "rcpt-1826460efe743d41ac2765c7"
 
 // receiptServer serves the live receipt after notFound answers of HTTP 404,
 // and counts the requests.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
@@ -3307,6 +3308,49 @@ func TestEvalGatewayComposeBinding_Pass(t *testing.T) {
 	}
 	if results[0].Status != Pass {
 		t.Errorf("status = %v, want Pass", results[0].Status)
+	}
+}
+
+func TestEvalGatewayComposeBinding_ComposeHashAllow(t *testing.T) {
+	compose := `{"manifest_version":"2"}`
+	sum := sha256.Sum256([]byte(compose))
+	match := hex.EncodeToString(sum[:])
+	other := strings.Repeat("ab", sha256.Size)
+	bound := &ComposeBindingResult{Checked: true}
+	tests := []struct {
+		name    string
+		allow   []string
+		binding *ComposeBindingResult
+		want    Status
+	}{
+		{"unset", nil, bound, Pass},
+		{"match", []string{other, match}, bound, Pass},
+		{"mismatch", []string{other}, bound, Fail},
+		{"no compose", []string{match}, nil, Fail},
+		{"binding failed", []string{match}, &ComposeBindingResult{Checked: true, Err: errors.New("bad")}, Fail},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var policy MeasurementPolicy
+			if tt.allow != nil {
+				policy.ComposeHashAllow = map[string]struct{}{}
+				for _, h := range tt.allow {
+					policy.ComposeHashAllow[h] = struct{}{}
+				}
+			}
+			in := &ReportInput{
+				Raw:            &RawAttestation{GatewayAppCompose: compose},
+				GatewayCompose: tt.binding,
+				GatewayPolicy:  policy,
+			}
+			got := evalGatewayComposeBinding(in)[0]
+			if got.Status != tt.want {
+				t.Errorf("status = %v, want %v (%s)", got.Status, tt.want, got.Detail)
+			}
+			if tt.name == "match" && !strings.Contains(got.Detail, "gateway_compose_hash_allow") {
+				t.Errorf("pass detail does not name the allowlist: %s", got.Detail)
+			}
+		})
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 	"github.com/13rac1/teep/internal/capture"
 )
 
-// The live capture of 2026-11-01 whose pinned E2EE test exchange the
+// The live capture of 2026-11-19 whose pinned E2EE test exchange the
 // receipt of testdata/receipt.json covers.
 const receiptCapture = "../../integration/testdata/current/phalacloud_aci"
 
@@ -101,7 +101,7 @@ func contentOf(t *testing.T, wire map[string]json.RawMessage) json.RawMessage {
 }
 
 // citedSession is the session that the live receipt cites.
-const citedSession = "f82e2a6b603a3d0b1abe395f979440f0da44a425b238cfcb5354f20906f43cc7"
+const citedSession = "2fe1110a3a65d1ead7e616b6d151dbfc1f7fa1253492531f9cbaee543d2055d7"
 
 func cited(c *ReceiptCheck) *attestation.ACIPinnedSession {
 	for i := range c.Sessions {

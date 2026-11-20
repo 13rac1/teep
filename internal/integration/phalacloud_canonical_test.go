@@ -15,13 +15,13 @@ import (
 )
 
 // TestVerifyRun_PhalaCloudCanonical_Fixture replays a live Phala Cloud
-// capture of 2026-11-01 of the canonical ACI/1 report (/v1/aci/attestation),
+// capture of 2026-11-19 of the canonical ACI/1 report (/v1/aci/attestation),
 // the attested sessions of the model, and the pinned E2EE test exchange
 // through verify.Run with the production policy. The gateway evidence, the
 // ACI/1 §3.2 statement binding of the client nonce, the key custody, the TLS
-// key binding and the session audit pass and are enforced; the nonce
-// factors (no echoed nonce) and the GPU factors of the report (no GPU
-// evidence) fail and are allowed.
+// key binding and the session audit pass and are enforced, and so do the
+// factors of the inference host that the audit checks; the nonce factors (no
+// echoed nonce) and the checks the audit does not make fail and are allowed.
 func TestVerifyRun_PhalaCloudCanonical_Fixture(t *testing.T) {
 	env := loadFixture(t, "phalacloud_aci")
 	if !strings.HasPrefix(env.entries[0].URL, "https://tee.redpill.ai"+aci.CanonicalPath+"?nonce=") {
@@ -68,7 +68,16 @@ func TestVerifyRun_PhalaCloudCanonical_Fixture(t *testing.T) {
 	if f := findFactor(t, report, "gateway_tee_reportdata_binding"); !strings.Contains(f.Detail, "binds the keyset digest") || !f.Enforced {
 		t.Errorf("gateway_tee_reportdata_binding = %q enforced=%v, want the §3.2 statement binding", f.Detail, f.Enforced)
 	}
-	for _, name := range []string{"nvidia_signature", "nvidia_nonce_client_bound", "tee_quote_present", "aci_backend_named", "nonce_match", "gateway_nonce_match"} {
+	// ACI mode: the factors of the inference host that the audit of every
+	// pinned session checked pass with aci_session_verified and are enforced.
+	// The capture pins Chutes sessions too, and the audit replays the event
+	// log and checks the compose binding only for the Phala model CVM.
+	for _, name := range []string{"tee_quote_present", "tee_quote_signature", "tee_reportdata_binding", "nvidia_signature"} {
+		if f := findFactor(t, report, name); f.Status != attestation.Pass || !f.Enforced || !strings.Contains(f.Detail, "covered by aci_session_verified") {
+			t.Errorf("%s: status=%s enforced=%v %q, want an enforced pass covered by aci_session_verified", name, f.Status, f.Enforced, f.Detail)
+		}
+	}
+	for _, name := range []string{"compose_binding", "event_log_integrity", "nvidia_nonce_client_bound", "aci_backend_named", "nonce_match", "gateway_nonce_match"} {
 		if f := findFactor(t, report, name); f.Status == attestation.Pass || f.Enforced {
 			t.Errorf("%s: status=%s enforced=%v, want an allowed failure", name, f.Status, f.Enforced)
 		}
@@ -84,13 +93,18 @@ func TestVerifyRun_PhalaCloudCanonical_Fixture(t *testing.T) {
 	assertPinnedSessions(t, &env, report)
 }
 
-// The capture's pinned sessions: one Phala model CVM session and the three
-// Chutes sessions of the one Chutes bundle that the evidence limit allowed.
+// The capture's pinned sessions: one Phala model CVM session and the Chutes
+// sessions of the two Chutes bundles that the evidence limit allowed.
 var fixtureSessionIDs = []string{
-	"f82e2a6b603a3d0b1abe395f979440f0da44a425b238cfcb5354f20906f43cc7",
-	"18aa6d5d8b108534e293deb250cb7b2f99b5790b10a500d4d5066647bee1dcf4",
-	"429596d33189b26631b7c88daaac1dae4ed05c3eff005662b21573cdd86b3551",
-	"68642a9de9504d777299fee0b759f5cc01a2080cce6a00d8fb63e8542f27031b",
+	"2fe1110a3a65d1ead7e616b6d151dbfc1f7fa1253492531f9cbaee543d2055d7",
+	"086ad731d8a859de4965ca53f1b42c27ef8d7096fd989e14975f2f6f1b6c8d49",
+	"0b9879c744ca37a40964498f569fefe3f03ca449c4d97fa83c72080ad7040681",
+	"c1384c8d7b821b5ed5e56b0d688f90f0dc06a7a09e727be534054998a03bdd22",
+	"cb8794ee3b8e08841968204de592df3813fe8b3d12f48737e1192070cc2d2663",
+	"f4365c6fa1f03f4b1e7451f86322a7497245c8cb7c0630f0b86318d4a6c56438",
+	"fd56d483c1666606840210a6645d4505c919d212c0a42be028b2ac22de65b0c2",
+	"902014e173e2806715b4e11102ccd5d3fcaec31035d0b6a8198b3d068afe42cc",
+	"c1288e4dbc46d4739b5934d9ee281754747485367b884b85a0951f800cfa672c",
 }
 
 // assertPinnedSessions requires the audit to pin exactly the sessions of the

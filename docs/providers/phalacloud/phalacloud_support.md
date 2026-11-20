@@ -127,8 +127,17 @@ one is not pinned:
 5. The GPU evidence, verified locally with the session nonce, without NRAS:
    the certificate chain and SPDM signature of every GPU must verify, as for
    `nvidia_signature`.
-6. For the Phala model CVM, the compose binding (MRConfigID) and the
-   event-log replay of RTMR0-3.
+6. For the Phala model CVM, the event-log replay of RTMR0-3 and the
+   compose binding. An MRConfigID of version 1 (dstack 0.5) is 0x01 and
+   sha256(app_compose). One of version 3 (dstack 0.6) is 0x03 and the hash
+   of a launch document that the quote does not carry. teep builds the
+   document that the dstack VMM builds: compose_hash, key_provider,
+   key_provider_id and the init script hashes from app_compose; app_id,
+   instance_id and gpu_policy_hash from the RTMR3 events of the replayed
+   log (`attestation.VerifyComposeBindingV3`). app_compose must name
+   `key_provider` and give `manifest_version` as a string. dstack also
+   reads a compose without `key_provider` (from `kms_enabled`) or with a
+   numeric version; teep refuses those.
 
 The parts of a session's evidence must have exactly the members that teep
 reads. For a Chutes bundle these include the newer members of the Chutes
@@ -404,11 +413,30 @@ image, so a dstack-format response fails `component_recognition`.
 
 ## Factor enforcement
 
+The report of `/v1/aci/attestation` carries no quote of the inference host;
+that evidence is in the attested sessions. teep reports the factors of the
+inference host from the session audit (ACI mode): a factor that the audit of
+every pinned session checked passes with the detail "covered by
+aci_session_verified" (`SessionAuditor.Covers`, `applyACISessionCoverage`).
+These are the quote structure, certificate chain, signature and debug bit,
+`tee_measurement` (the dstack or Chutes MRTD and MRSEAM list, not
+`mrtd_allow`), `tee_reportdata_binding` (the session key and the gateway's
+evidence nonce), the NVIDIA payload, signature and claims, online
+`intel_pcs_collateral`, `tee_tcb_current` and `tee_tcb_not_revoked`, and,
+when every pinned session is a Phala model CVM, `event_log_integrity` and
+`compose_binding`. Every other factor keeps its own result. The audit
+checks no RTMR value (`tee_hardware_config`, `tee_boot_config`), no client
+nonce in the GPU evidence (`nvidia_nonce_client_bound`), no NRAS, and no
+CPU-GPU binding, weights or components, so those fail.
+
 The ACI/1 report selects `PhalaCloudACIDefaultAllowFail`: the list shared with
 Venice and NanoGPT (`ACIDefaultAllowFail`) without `tls_key_binding`, which
-is enforced, and with the GPU signature and nonce factors, because the
-report carries no GPU evidence, and `nonce_match` and
-`gateway_nonce_match`, because the report echoes no nonce.
+is enforced, and without the factors that the audit checks for every session
+online, which are enforced; with `nvidia_nonce_client_bound`, because the
+sessions are a snapshot that the client nonce does not reach, and
+`nonce_match` and `gateway_nonce_match`, because the report echoes no nonce.
+`event_log_integrity` and `compose_binding` stay allowed, because the audit
+does not check them for a Chutes session.
 `aci_session_verified` and `aci_receipt_verified` are enforced.
 `aci_receipt_verified` is a deferred skip, which does not block, when there
 is no probe receipt to check: in `teep serve`, which checks the receipt of
@@ -501,7 +529,8 @@ stream failed.
   [session tests](../../../internal/provider/aci/session_test.go), and
   `TestPinSessions` and `TestPinSessionsRefuses` in
   [pin tests](../../../internal/provider/aci/pin_test.go).
-- `TestSessionAuditPhalaModelCVM`, `TestSessionAuditChutes` and
+- `TestSessionAuditPhalaModelCVM`, `TestSessionAuditPhalaModelCVMDstack063`,
+  `TestComposeBindingV3Refuses`, `TestSessionAuditChutes` and
   `TestSessionAuditRefuses` in
   [session audit tests](../../../internal/provider/phalacloud/session_audit_test.go);
   `TestFetchSessionsSelectsBoundedBundles` and `TestSelectBundles` in
