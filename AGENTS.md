@@ -181,6 +181,10 @@ Reference implementations to mirror when adding providers or verification logic:
 - **Attestation verification:** `internal/proxy/proxy.go:fetchVerified` and `internal/verify/verify.go:runEvidence`
 - **Proxy handler:** `internal/proxy/proxy.go:handleChat`
 
+### Provider-Independent Rules
+
+Only provider construction selects code by provider name. Outside it, no check compares a provider's name. When one provider needs a rule, add a field that every provider sets, such as `UsesTLSBinding`, and apply the rule to every provider that sets it.
+
 ### Follow Go Conventions
 
 - Follow Effective Go idioms and best practices.
@@ -228,6 +232,7 @@ The word "gate" refers only to a physical fence. Do not use it for checks, condi
 
 - NEVER weaken or bypass factor validation, unless it has been explicitly disabled via `--offline`, `--force`, or an `allow_fail` policy.
 - NEVER fall back to plaintext, accept or use empty keys, or perform unauthenticated cryptography.
+- NEVER send a request to an endpoint that the provider's E2EE protocol does not support while E2EE is enabled; refuse it. To use such an endpoint, the user sets `e2ee = false` and adds `e2ee_usable` to `allow_fail`. The request then uses TLS, which attestation binds only for a provider that uses TLS binding.
 - NEVER convert an error into successful or less strictly validated behavior through a fallback path.
 - NEVER add exemptions to teeplint for new code.
 - Tests MUST NOT special-case production code to bypass security behavior.
