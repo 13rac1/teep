@@ -1,0 +1,55 @@
+Attestation Report: tinfoil_v3_direct / deepseek-v4-1-flash
+═══════════════════════════════════════════════════════════
+
+  Hardware:      intel-tdx
+  PPID:          a3f1c21f6f3f85ab...
+  Nonce source:  client
+
+Tier 1: Core Attestation
+  ✓ nonce_match                       nonce matches (64 hex chars) (client-supplied)  [ENFORCED]
+  ✓ tee_quote_present                 TDX quote present (10494 hex chars)  [ENFORCED]
+  ✓ tee_quote_structure               valid QuoteV4, MRTD: 7357a10d2e2724df...  [ENFORCED]
+  ✓ tee_cert_chain                    certificate chain valid (Intel root CA)  [ENFORCED]
+  ✓ tee_quote_signature               quote signature verified  [ENFORCED]
+  ✓ tee_debug_disabled                debug bit is 0 (production enclave)  [ENFORCED]
+  ✓ tee_measurement                   TDX code measurements match tinfoilsh/confidential-deepseek-v4-1-flash@v0.0.10+b200 (RTMR1=758adac43a82a5f3..., RTMR2=6a56771eae41379f...)  [ENFORCED]
+  ✓ tee_hardware_config               Tinfoil TDX policy: TD_ATTRIBUTES, XFAM, MR_SEAM, MR registers, RTMR3, TEE_TCB_SVN all pass  [ENFORCED]
+  ✓ tee_boot_config                   hardware measurements matched entry "b200_32cpu_512gb_4gpu_4disk in tinfoilsh/cvmimage@platform-v0.1.15"  [ENFORCED]
+  ✓ signing_key_present               enclave pubkey present (b28673298d...)  [ENFORCED]
+  ✓ response_schema                   attestation response matches expected schema  [ENFORCED]
+
+Tier 2: Binding & Crypto
+  ✓ tee_reportdata_binding            v3: reportdata_hash verified, nonce_bound=true, gpu_bound=true  [ENFORCED]
+  ✓ intel_pcs_collateral              Intel PCS collateral fetched (TCB status: UpToDate)  [ALLOWED]
+  ✓ tee_tcb_current                   TCB is UpToDate per Intel PCS  [ENFORCED]
+  ✓ tee_tcb_not_revoked               TCB status UpToDate is not Revoked  [ENFORCED]
+  ✓ nvidia_payload_present            NVIDIA payload present (48565 chars)  [ENFORCED]
+  ✓ nvidia_signature                  EAT: 4 GPU cert chains and SPDM ECDSA P-384 signatures verified (arch: BLACKWELL)  [ENFORCED]
+  ✓ nvidia_claims                     EAT: top-level nonce matches the client nonce (arch reported: BLACKWELL, 4 GPUs)  [ENFORCED]
+  ✓ nvidia_nonce_client_bound         EAT nonce matches client nonce (4 GPUs)  [ENFORCED]
+  ✓ nvidia_nras_verified              NRAS: true (JWT verified)  [ENFORCED]
+  ✓ e2ee_capable                      X25519 HPKE public key valid (32 bytes); EHBP E2EE key exchange possible  [ENFORCED]
+  ✓ e2ee_usable                       EHBP X25519: 12 chunks decrypted  [ENFORCED]
+  — aci_key_custody                   not ACI/1 format
+  — aci_backend_named                 not ACI/1 format
+  — aci_session_verified              not the canonical ACI/1 report
+  — aci_receipt_verified              not the canonical ACI/1 report
+
+Tier 3: Supply Chain & Channel Integrity
+  ✓ tls_key_binding                   TLS transport SPKI bound to attestation  [ENFORCED]
+  ✓ cpu_gpu_chain                     GPU evidence hash verified in REPORTDATA  [ENFORCED]
+  ✗ nvswitch_binding                  the enclave serves no NVSwitch evidence; teep cannot check whether an NVSwitch fabric connects its GPUs  [ALLOWED]
+  ✓ measured_model_weights            model weights transitively authenticated via Sigstore + dm-verity code measurements  [ENFORCED]
+  ✓ build_transparency_log            Sigstore DSSE verified for tinfoilsh/confidential-deepseek-v4-1-flash@v0.0.10+b200, witnessed fresh (predicate: https://tinfoil.sh/predicate/snp-tdx-multiplatform/v1)  [ENFORCED]
+  ✓ component_recognition             2 Tinfoil component repo(s) recognized (tinfoilsh/confidential-deepseek-v4-1-flash, tinfoilsh/cvmimage)  [ALLOWED]
+  ✓ provider_signer_recognition       Tinfoil signer recognized for tinfoilsh/confidential-deepseek-v4-1-flash, tinfoilsh/cvmimage  [ENFORCED]
+  ✓ component_signature_recognition   Tinfoil component signature policy matched for tinfoilsh/confidential-deepseek-v4-1-flash, tinfoilsh/cvmimage  [ENFORCED]
+  ✗ cpu_id_registry                   hardware not found in Proof of Cloud registry; paste intel_quote from --capture at proofofcloud.org to verify  [ALLOWED]
+  — compose_binding                   Tinfoil has no compose; covered by sigstore_code_verified and tee_measurement (the quote matches a Sigstore-signed release)
+  — sigstore_verification             Tinfoil publishes no per-image cosign signatures; the release, which pins the image digest, is checked by sigstore_code_verified
+  ✓ sigstore_code_verified            Sigstore DSSE verified for tinfoilsh/confidential-deepseek-v4-1-flash@v0.0.10+b200, witnessed fresh (predicate: https://tinfoil.sh/predicate/snp-tdx-multiplatform/v1)  [ENFORCED]
+  — event_log_integrity               Tinfoil has no runtime event log (RTMR3 is zero, checked by tee_hardware_config); covered by sigstore_code_verified and tee_measurement
+
+Score: 30/32 passed, 0 skipped, 2 failed (0 enforced, 2 allowed), 7 n/a
+
+Run 'teep help tiers' for scoring or 'teep help factors' for details.

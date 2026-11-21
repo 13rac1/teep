@@ -3,7 +3,6 @@
 package verify
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -61,9 +60,6 @@ func HasProviderEnvVar(prov string) bool {
 }
 
 func newAttester(name string, cp *config.Provider, offline bool) (provider.Attester, error) {
-	if name == "tinfoil_v3_direct" {
-		return nil, errors.New(tinfoil.DirectDisabledMessage)
-	}
 	switch name {
 	case "venice":
 		return venice.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
@@ -84,9 +80,10 @@ func newAttester(name string, cp *config.Provider, offline bool) (provider.Attes
 		return tinfoil.NewAttester(cp.BaseURL, cp.APIKey, offline), nil
 	case "tinfoil_v3_direct":
 		resolver := tinfoil.NewDirectResolver(cp.APIKey, offline)
+		resolver.RestrictEnclaves(cp.Enclaves)
 		return tinfoil.NewDirectAttester(resolver, cp.APIKey, offline), nil
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct (disabled))", name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", name)
 	}
 }
 

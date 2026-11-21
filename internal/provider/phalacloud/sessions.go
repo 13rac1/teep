@@ -228,6 +228,11 @@ func AuditSessions(ctx context.Context, auditor SessionAuditor, raw *attestation
 			result.Refused = append(result.Refused, attestation.ACISessionRefusal{ID: s.ID, VerifierID: s.VerifierID, Reason: err.Error()})
 			continue
 		}
+		covers := auditor.Covers(s)
+		if len(result.Pinned) > 0 {
+			covers = slices.DeleteFunc(covers, func(f string) bool { return !slices.Contains(result.Covered, f) })
+		}
+		result.Covered = covers
 		result.Pinned = append(result.Pinned, attestation.ACIPinnedSession{ID: s.ID, EstablishedAt: s.EstablishedAt, ExpiresAt: s.ExpiresAt})
 	}
 	return result

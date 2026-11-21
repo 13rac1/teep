@@ -1,0 +1,81 @@
+{
+  "method": "GET",
+  "url": "https://kds-proxy.tinfoil.sh/vcek/v1/Genoa/f5ae5e21401c09392abba1422bac36f12fc115e78beb51f13693e9282e0c2847463f47b0f4996ac33608a9c0490dbea37579f4d55219bef5f624aeb9dc905b5c?blSPL=10\u0026teeSPL=0\u0026snpSPL=27\u0026ucodeSPL=88",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEA4mWoWDYMKXohEyXGsSJ+nmjr8WhSVxP1/AGPQHcOnDCCb9Vu1WtfpHvHqjDRzNjsiQ+T/nFmNi2Nrr2ySWt1Q==",
+  "headers": {
+    "Accept-Ranges": [
+      "bytes"
+    ],
+    "Access-Control-Allow-Headers": [
+      "*"
+    ],
+    "Access-Control-Allow-Methods": [
+      "GET, OPTIONS"
+    ],
+    "Access-Control-Allow-Origin": [
+      "*"
+    ],
+    "Age": [
+      "2432"
+    ],
+    "Cache-Control": [
+      "public, max-age=14400"
+    ],
+    "Cf-Cache-Status": [
+      "HIT"
+    ],
+    "Cf-Ray": [
+      "a5db8da88813c6f1-ORD"
+    ],
+    "Content-Disposition": [
+      "attachment; filename=vcek.crt"
+    ],
+    "Content-Length": [
+      "1366"
+    ],
+    "Content-Type": [
+      "application/octet-stream"
+    ],
+    "Date": [
+      "Sat, 21 Nov 2026 00:24:46 GMT"
+    ],
+    "Expires": [
+      "Sat, 21 Nov 2026 04:24:46 GMT"
+    ],
+    "Last-Modified": [
+      "Fri, 20 Nov 2026 23:44:13 GMT"
+    ],
+    "Server": [
+      "cloudflare"
+    ],
+    "X-Amd-Ark-Spki-Sha256": [
+      "429a69c9422aa258ee4d8db5fcda9c6470ef15f8cd5a9cebd6cbc7d90b863831"
+    ],
+    "X-Collateral-Sha256": [
+      "c17df9b234be477d88c30144c560cfb07b67f2276ff3a3201900cc2cbcc800c8"
+    ],
+    "X-Collateral-Stored-At": [
+      "2026-11-13T01:57:28.902Z"
+    ],
+    "X-Collateral-Validation": [
+      "verified"
+    ],
+    "X-Collateral-Verified": [
+      "pkijs-3.4.0"
+    ],
+    "X-Kds-Cache-Version": [
+      "kv-first-v1"
+    ],
+    "X-Kds-Source": [
+      "cloudflare-kv-last-known-good"
+    ],
+    "X-Vcek-Spki-Sha256": [
+      "d569a458f4ff6bab0d965ade23668d785a07245480dd407cdc1ed9ae83b0fc14"
+    ]
+  },
+  "duration_ms": 128
+}

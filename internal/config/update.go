@@ -90,6 +90,7 @@ type updateProvider struct {
 	BaseURL   string       `toml:"base_url,omitempty"`
 	E2EE      bool         `toml:"e2ee,omitempty"`
 	AllowFail []string     `toml:"allow_fail,omitempty"`
+	Enclaves  []string     `toml:"enclaves,omitempty"`
 	Policy    updatePolicy `toml:"policy,omitempty"`
 }
 
@@ -108,6 +109,8 @@ type updatePolicy struct {
 	GatewayRTMR1Allow  []string `toml:"gateway_rtmr1_allow,omitempty"`
 	GatewayRTMR2Allow  []string `toml:"gateway_rtmr2_allow,omitempty"`
 	GatewayRTMR3Allow  []string `toml:"gateway_rtmr3_allow,omitempty"`
+
+	GatewayComposeHashAllow []string `toml:"gateway_compose_hash_allow,omitempty"`
 }
 
 // mergeObserved adds observed values into the provider policy, deduplicating.

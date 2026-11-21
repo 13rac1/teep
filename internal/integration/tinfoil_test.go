@@ -46,6 +46,9 @@ func TestIntegration_Tinfoil_Fixture(t *testing.T) {
 func TestIntegration_TinfoilDirect_Fixture(t *testing.T) {
 	env := loadFixture(t, "tinfoil_v3_direct_tinfoil")
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, "https://inference.tinfoil.sh")
+	// The capture is of the TDX enclave inf16-0 (deepseek-v4-1-flash
+	// v0.0.10+b200, four Blackwell GPUs), selected with enclaves.
+	cp.Enclaves = []string{"deepseek-v4-1-flash-inf16-0.tinfoil.containers.tinfoil.dev"}
 
 	report, err := verify.Run(context.Background(), &verify.Options{
 		Config:           cfg,
@@ -68,8 +71,16 @@ func TestIntegration_TinfoilDirect_Fixture(t *testing.T) {
 	assertMustPass(t, report, []string{
 		"nonce_match",
 		"tee_quote_present",
+		"tee_quote_signature",
 		"tee_reportdata_binding",
+		"tee_measurement",
+		"tee_boot_config",
 		"signing_key_present",
+		"nvidia_signature",
+		"nvidia_nonce_client_bound",
+		"nvidia_nras_verified",
+		"cpu_gpu_chain",
+		"sigstore_code_verified",
 		"e2ee_capable",
 		"e2ee_usable",
 		"tls_key_binding",

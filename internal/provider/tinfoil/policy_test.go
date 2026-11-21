@@ -79,8 +79,8 @@ func TestOrgSignerExemptReposAreListed(t *testing.T) {
 		repo   string
 	}{
 		"cloud_router":    {CloudSupplyChainPolicy(), RouterRepo},
-		"cloud_hardware":  {CloudSupplyChainPolicy(), HardwareMeasurementsRepo},
-		"direct_hardware": {DirectSupplyChainPolicy(), HardwareMeasurementsRepo},
+		"cloud_hardware":  {CloudSupplyChainPolicy(), PlatformRepo},
+		"direct_hardware": {DirectSupplyChainPolicy(), PlatformRepo},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -1,0 +1,12 @@
+{
+  "provider": "tinfoil_v3_direct",
+  "model": "deepseek-v4-1-flash",
+  "nonce_hex": "b42892566f2c48232646bca952e9d65c051f2ee7fdef98f0c09f3f41ad768b0c",
+  "captured_at": "2026-11-21T00:24:55.364253323Z",
+  "duration_ms": 4346,
+  "e2ee": {
+    "attempted": true,
+    "detail": "EHBP X25519: 12 chunks decrypted",
+    "key_type": "x25519-hpke"
+  }
+}

@@ -6,6 +6,14 @@ type MeasurementPolicy struct {
 	MRTDAllow   map[string]struct{}
 	MRSeamAllow map[string]struct{}
 	RTMRAllow   [4]map[string]struct{}
+	// ComposeHashAllow lists sha256(app_compose) values; only the gateway
+	// policy sets it.
+	ComposeHashAllow map[string]struct{}
+}
+
+// HasComposeHashPolicy reports whether a compose hash allowlist is configured.
+func (p MeasurementPolicy) HasComposeHashPolicy() bool {
+	return len(p.ComposeHashAllow) > 0
 }
 
 // HasMRTDPolicy reports whether an MRTD allowlist is configured.

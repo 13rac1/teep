@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,8 +26,6 @@ import (
 
 // GitHub API response size limits.
 const (
-	maxReleaseResponseSize     = 1 << 20 // 1 MiB
-	maxHashFileSize            = 1 << 16 // 64 KiB
 	maxAttestationResponseSize = 4 << 20 // 4 MiB
 )
 
@@ -52,11 +51,6 @@ func WorkflowPattern(repo string) string {
 	return attestation.GitHubReleaseWorkflowPattern(repo)
 }
 
-// githubRelease is the minimal JSON structure from the GitHub releases API.
-type githubRelease struct {
-	TagName string `json:"tag_name"`
-}
-
 // githubAttestationResponse is the JSON response from the GitHub attestations API.
 type githubAttestationResponse struct {
 	Attestations []githubAttestation `json:"attestations"`
@@ -69,6 +63,11 @@ type githubAttestation struct {
 // SigstoreVerifier fetches and verifies Sigstore attestations from GitHub.
 type SigstoreVerifier struct {
 	client *http.Client
+
+	// trusted is the Sigstore trusted root, fetched on first use and kept
+	// for the verifier's life: one supply chain check verifies up to four
+	// bundles.
+	trusted root.TrustedMaterial
 }
 
 // NewSigstoreVerifier returns a SigstoreVerifier using the given HTTP client.
@@ -76,66 +75,90 @@ func NewSigstoreVerifier(client *http.Client) *SigstoreVerifier {
 	return &SigstoreVerifier{client: client}
 }
 
-// FetchAndVerify fetches the latest release of the given repo, retrieves the
-// tinfoil.hash digest, fetches the Sigstore attestation for that digest, and
-// verifies the DSSE bundle. Returns the verified in-toto predicate bytes and
-// the verified Fulcio signer identity (OIDC issuer + SAN), so callers can
-// compare the attested signer against their own supply chain policy.
-func (sv *SigstoreVerifier) FetchAndVerify(ctx context.Context, repo string) (predicateBytes []byte, predicateType string, signer SignerIdentity, err error) {
-	// Step 1: Fetch latest release tag.
-	tag, err := sv.fetchLatestTag(ctx, repo)
-	if err != nil {
-		return nil, "", SignerIdentity{}, fmt.Errorf("fetch latest release tag: %w", err)
-	}
+// FreshnessWitnessSAN is the Fulcio identity of Tinfoil's freshness witness,
+// the workflow that re-signs every release Tinfoil still serves.
+const FreshnessWitnessSAN = "https://github.com/tinfoilsh/freshness-witness/.github/workflows/freshness.yml@refs/heads/main"
 
-	// Step 2: Fetch tinfoil.hash from the release.
-	digest, err := sv.fetchTinfoilHash(ctx, repo, tag)
-	if err != nil {
-		return nil, "", SignerIdentity{}, fmt.Errorf("fetch tinfoil.hash: %w", err)
-	}
+// PredicateFreshnessWitness is the predicate type of a freshness witness.
+const PredicateFreshnessWitness = "https://tinfoil.sh/predicate/freshness-witness/v1"
 
-	// Step 3: Fetch and verify Sigstore attestation.
-	return sv.fetchAndVerifyAttestation(ctx, repo, digest)
+// FreshnessWindow is how long a freshness witness counts. Tinfoil's verifier
+// accepts a witness for up to seven days.
+const FreshnessWindow = 7 * 24 * time.Hour
+
+// freshnessPredicate is the predicate of a freshness witness.
+type freshnessPredicate struct {
+	Format   string `json:"format"`
+	Endorses struct {
+		Repo    string `json:"repo"`
+		Tag     string `json:"tag"`
+		Subject struct {
+			Digest string `json:"digest"`
+		} `json:"subject"`
+	} `json:"endorses"`
 }
 
-func (sv *SigstoreVerifier) fetchLatestTag(ctx context.Context, repo string) (string, error) {
-	url := githubProxyURL("/repos/%s/releases/latest", repo)
-	body, err := sv.fetchBounded(ctx, url, maxReleaseResponseSize)
+// VerifyRelease verifies the release an enclave names and returns the
+// verified in-toto predicate and the Fulcio signer identity.
+//
+// rel is an unauthenticated hint from the enclave's collateral; the caller
+// checks rel.Repo against its own expectation. teep fetches the bundle for
+// rel.Digest from GitHub itself and verifies it with the repo's release
+// workflow identity, so the digest is signed by that repo. The certificate's
+// SAN names the git ref the workflow ran for, which must be rel.Tag: that
+// binds the digest to the tag.
+//
+// Last, the release must be current. rel.Freshness is the freshness witness
+// the enclave serves: a bundle signed by Tinfoil's freshness-witness
+// workflow (FreshnessWitnessSAN) that endorses this repo, tag and digest. It
+// must verify and be signed within FreshnessWindow of now, so an enclave
+// cannot name a release Tinfoil stopped witnessing more than a window ago.
+func (sv *SigstoreVerifier) VerifyRelease(ctx context.Context, rel attestation.TinfoilRelease, now time.Time) (predicateBytes []byte, predicateType string, signer SignerIdentity, err error) {
+	predicateBytes, predicateType, signer, err = sv.fetchAndVerifyAttestation(ctx, rel.Repo, rel.Digest)
 	if err != nil {
-		return "", err
+		return nil, "", SignerIdentity{}, err
 	}
-
-	var release githubRelease
-	if err := json.Unmarshal(body, &release); err != nil {
-		return "", fmt.Errorf("unmarshal release response: %w", err)
+	if !strings.HasSuffix(signer.SAN, "@refs/tags/"+rel.Tag) {
+		return nil, "", SignerIdentity{}, fmt.Errorf("release %s@%s: digest %s was signed by %q, not for that tag",
+			rel.Repo, rel.Tag, rel.Digest, signer.SAN)
 	}
-	if release.TagName == "" {
-		return "", errors.New("release has empty tag_name")
+	if err := sv.checkFreshness(ctx, rel, now); err != nil {
+		return nil, "", SignerIdentity{}, fmt.Errorf("release %s@%s: %w", rel.Repo, rel.Tag, err)
 	}
-	return release.TagName, nil
+	return predicateBytes, predicateType, signer, nil
 }
 
-func (sv *SigstoreVerifier) fetchTinfoilHash(ctx context.Context, repo, tag string) (string, error) {
-	url := githubProxyURL("/%s/releases/download/%s/tinfoil.hash", repo, tag)
-	body, err := sv.fetchBounded(ctx, url, maxHashFileSize)
-	if err != nil {
-		return "", err
+// checkFreshness verifies the freshness witness of rel.
+func (sv *SigstoreVerifier) checkFreshness(ctx context.Context, rel attestation.TinfoilRelease, now time.Time) error {
+	if len(rel.Freshness) == 0 {
+		return errors.New("the enclave serves no freshness witness")
 	}
-
-	digest := strings.TrimSpace(string(body))
-	return validateTinfoilHash(digest)
+	predicateBytes, predicateType, _, signedAt, err := sv.verifyBundle(ctx, rel.Freshness, rel.Digest,
+		"^"+regexp.QuoteMeta(FreshnessWitnessSAN)+"$")
+	if err != nil {
+		return fmt.Errorf("freshness witness: %w", err)
+	}
+	if predicateType != PredicateFreshnessWitness {
+		return fmt.Errorf("freshness witness predicate type %q, want %q", predicateType, PredicateFreshnessWitness)
+	}
+	return checkWitness(predicateBytes, rel, signedAt, now)
 }
 
-// validateTinfoilHash validates that a tinfoil.hash digest is exactly 64 hex
-// characters.
-func validateTinfoilHash(digest string) (string, error) {
-	if len(digest) != 64 {
-		return "", fmt.Errorf("tinfoil.hash must be 64 hex chars, got %d", len(digest))
+// checkWitness checks a verified freshness witness's predicate and age.
+func checkWitness(predicateBytes []byte, rel attestation.TinfoilRelease, signedAt, now time.Time) error {
+	var pred freshnessPredicate
+	if err := json.Unmarshal(predicateBytes, &pred); err != nil {
+		return fmt.Errorf("unmarshal freshness witness: %w", err)
 	}
-	if _, err := hex.DecodeString(digest); err != nil {
-		return "", fmt.Errorf("tinfoil.hash is not valid hex: %w", err)
+	e := pred.Endorses
+	if pred.Format != PredicateFreshnessWitness || e.Repo != rel.Repo || e.Tag != rel.Tag || e.Subject.Digest != "sha256:"+rel.Digest {
+		return fmt.Errorf("freshness witness endorses %s@%s (%s), not this release", e.Repo, e.Tag, e.Subject.Digest)
 	}
-	return digest, nil
+	if age := now.Sub(signedAt); age > FreshnessWindow || age < -time.Hour {
+		return fmt.Errorf("freshness witness signed %s, outside %s of %s",
+			signedAt.UTC().Format(time.RFC3339), FreshnessWindow, now.UTC().Format(time.RFC3339))
+	}
+	return nil
 }
 
 func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo, digest string) (predicateBytes []byte, predicateType string, signer SignerIdentity, err error) {
@@ -153,19 +176,23 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 		return nil, "", SignerIdentity{}, fmt.Errorf("no attestations found for sha256:%s", digest)
 	}
 
-	// Parse the DSSE bundle from raw JSON bytes.
+	predicateBytes, predicateType, signer, _, err = sv.verifyBundle(ctx, resp.Attestations[0].Bundle, digest, WorkflowPattern(repo))
+	return predicateBytes, predicateType, signer, err
+}
+
+// verifyBundle verifies a Sigstore DSSE bundle over the artifact digest, signed
+// by a GitHub Actions Fulcio certificate whose SAN matches sanPattern. It
+// returns the in-toto predicate, the signer, and the earliest verified
+// signing timestamp.
+func (sv *SigstoreVerifier) verifyBundle(ctx context.Context, bundleJSON []byte, digest, sanPattern string) (predicateBytes []byte, predicateType string, signer SignerIdentity, signedAt time.Time, err error) {
 	var b bundle.Bundle
-	if err := b.UnmarshalJSON(resp.Attestations[0].Bundle); err != nil {
-		return nil, "", SignerIdentity{}, fmt.Errorf("parse DSSE bundle: %w", err)
+	if err := b.UnmarshalJSON(bundleJSON); err != nil {
+		return nil, "", SignerIdentity{}, time.Time{}, fmt.Errorf("parse DSSE bundle: %w", err)
 	}
 
-	// Get trusted root from Sigstore TUF.
-	rootClient := tlsct.NewHTTPClient(30 * time.Second)
-	defer rootClient.CloseIdleConnections()
-	rootFetcher := newTrustedRootFetcher(ctx, rootClient)
-	trustedRoot, err := root.FetchTrustedRootWithOptions(tuf.DefaultOptions().WithFetcher(rootFetcher))
+	trustedRoot, err := sv.trustedRoot(ctx)
 	if err != nil {
-		return nil, "", SignerIdentity{}, fmt.Errorf("fetch Sigstore trusted root: %w", err)
+		return nil, "", SignerIdentity{}, time.Time{}, err
 	}
 
 	// Build verification policy.
@@ -173,16 +200,16 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 		GithubActionsOIDCIssuer,
 		"", // issuerRegex
 		"", // sanValue
-		WorkflowPattern(repo),
+		sanPattern,
 	)
 	if err != nil {
-		return nil, "", SignerIdentity{}, fmt.Errorf("build cert identity: %w", err)
+		return nil, "", SignerIdentity{}, time.Time{}, fmt.Errorf("build cert identity: %w", err)
 	}
 
 	// Decode hex digest to bytes for WithArtifactDigest.
 	digestBytes, err := hex.DecodeString(digest)
 	if err != nil {
-		return nil, "", SignerIdentity{}, fmt.Errorf("decode digest hex: %w", err)
+		return nil, "", SignerIdentity{}, time.Time{}, fmt.Errorf("decode digest hex: %w", err)
 	}
 
 	// Configure verifier with SCT, transparency log, and observer timestamps.
@@ -193,7 +220,7 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 		verify.WithObserverTimestamps(1),
 	)
 	if err != nil {
-		return nil, "", SignerIdentity{}, fmt.Errorf("create signed entity verifier: %w", err)
+		return nil, "", SignerIdentity{}, time.Time{}, fmt.Errorf("create signed entity verifier: %w", err)
 	}
 
 	// Verify the bundle.
@@ -202,14 +229,14 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 		verify.WithCertificateIdentity(certID),
 	))
 	if err != nil {
-		return nil, "", SignerIdentity{}, fmt.Errorf("DSSE bundle verification failed: %w", err)
+		return nil, "", SignerIdentity{}, time.Time{}, fmt.Errorf("DSSE bundle verification failed: %w", err)
 	}
 
 	// verify.WithCertificateIdentity requires a Fulcio cert to succeed, so
 	// a nil certificate on a verified result is a library invariant
 	// violation, not a legitimate raw-key signature: fail closed.
 	if result.Signature == nil || result.Signature.Certificate == nil {
-		return nil, "", SignerIdentity{}, errors.New("verified bundle has no certificate identity")
+		return nil, "", SignerIdentity{}, time.Time{}, errors.New("verified bundle has no certificate identity")
 	}
 	signer = SignerIdentity{
 		OIDCIssuer: result.Signature.Certificate.Issuer,
@@ -218,26 +245,54 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 	slog.DebugContext(ctx, "Fulcio signer identity verified",
 		"oidc_issuer", signer.OIDCIssuer,
 		"san", signer.SAN,
-		"repo", repo,
+		"san_pattern", sanPattern,
 	)
 
 	// Extract the verified statement.
 	statement := result.Statement
 	if statement == nil {
-		return nil, "", SignerIdentity{}, errors.New("verified bundle has no in-toto statement")
+		return nil, "", SignerIdentity{}, time.Time{}, errors.New("verified bundle has no in-toto statement")
 	}
 
 	if statement.GetPredicate() == nil {
-		return nil, "", SignerIdentity{}, errors.New("verified statement has nil predicate")
+		return nil, "", SignerIdentity{}, time.Time{}, errors.New("verified statement has nil predicate")
 	}
 
 	// Marshal the protobuf Struct predicate to JSON bytes.
 	predicateJSON, err := protojson.Marshal(statement.GetPredicate())
 	if err != nil {
-		return nil, "", SignerIdentity{}, fmt.Errorf("marshal predicate to JSON: %w", err)
+		return nil, "", SignerIdentity{}, time.Time{}, fmt.Errorf("marshal predicate to JSON: %w", err)
 	}
 
-	return predicateJSON, statement.GetPredicateType(), signer, nil
+	if len(result.VerifiedTimestamps) == 0 {
+		return nil, "", SignerIdentity{}, time.Time{}, errors.New("verified bundle has no verified timestamp")
+	}
+	signedAt = result.VerifiedTimestamps[0].Timestamp
+	for _, ts := range result.VerifiedTimestamps[1:] {
+		if ts.Timestamp.Before(signedAt) {
+			signedAt = ts.Timestamp
+		}
+	}
+	return predicateJSON, statement.GetPredicateType(), signer, signedAt, nil
+}
+
+// trustedRoot returns the Sigstore trusted root, fetching it through TUF on
+// first use. The TUF client keeps no disk cache: teep runs on read-only
+// filesystems (a container with only /tmp writable), where the default cache
+// under $HOME/.sigstore cannot be created.
+func (sv *SigstoreVerifier) trustedRoot(ctx context.Context) (root.TrustedMaterial, error) {
+	if sv.trusted != nil {
+		return sv.trusted, nil
+	}
+	rootClient := tlsct.NewHTTPClient(30 * time.Second)
+	defer rootClient.CloseIdleConnections()
+	opts := tuf.DefaultOptions().WithFetcher(newTrustedRootFetcher(ctx, rootClient)).WithDisableLocalCache()
+	trusted, err := root.FetchTrustedRootWithOptions(opts)
+	if err != nil {
+		return nil, fmt.Errorf("fetch Sigstore trusted root: %w", err)
+	}
+	sv.trusted = trusted
+	return trusted, nil
 }
 
 func githubProxyURL(pathFormat string, args ...any) string {

@@ -426,3 +426,35 @@ func TestPromptCacheKeyFromContext(t *testing.T) {
 		t.Errorf("set context: got %q, want my-key", got)
 	}
 }
+
+// A configured enclave list keeps only the listed enclaves of a model and
+// fails a model that has none of them.
+func TestDirectResolver_RestrictEnclaves(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"models":{"m":{"repo":"tinfoilsh/confidential-m","enclaves":{`+
+			`"m-inf1.tinfoil.containers.tinfoil.dev":{},"m-inf2.tinfoil.containers.tinfoil.dev":{},"m-inf3.tinfoil.containers.tinfoil.dev":{}}}}}`)
+	}))
+	defer srv.Close()
+
+	r := newDirectResolverForTest(srv.URL)
+	r.RestrictEnclaves([]string{"m-inf3.tinfoil.containers.tinfoil.dev", "elsewhere.tinfoil.sh"})
+	for range 2 { // the second call reads the cache
+		m, err := r.ResolveMapping(context.Background(), "m")
+		if err != nil {
+			t.Fatalf("ResolveMapping: %v", err)
+		}
+		if m.Domain != "m-inf3.tinfoil.containers.tinfoil.dev" || len(m.Domains) != 1 {
+			t.Fatalf("mapping = %+v, want only m-inf3", m)
+		}
+		if got := m.SelectDomain("any-prompt-cache-key"); got != m.Domain {
+			t.Errorf("SelectDomain = %q, want %q", got, m.Domain)
+		}
+	}
+
+	r = newDirectResolverForTest(srv.URL)
+	r.RestrictEnclaves([]string{"elsewhere.tinfoil.sh"})
+	if _, err := r.ResolveMapping(context.Background(), "m"); err == nil ||
+		!strings.Contains(err.Error(), "none of the configured enclaves") {
+		t.Errorf("ResolveMapping err = %v, want the configured enclaves named", err)
+	}
+}

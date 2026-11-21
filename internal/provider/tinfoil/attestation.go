@@ -69,7 +69,69 @@ const (
 
 	roleEndorsement     = "endorsement"
 	roleReferenceValues = "reference-values"
+
+	collateralIDCode          = "code"
+	collateralIDPlatform      = "platform"
+	sigstoreCodeV1Format      = "https://tinfoil.sh/collateral/sigstore-code/v1"
+	sigstorePlatformV1Format  = "https://tinfoil.sh/collateral/sigstore-platform/v1"
+	sigstoreFreshnessV1Format = "https://tinfoil.sh/collateral/sigstore-freshness/v1"
 )
+
+// v3ReleaseCollateral is the data of a "code" or "platform" collateral entry.
+// teep reads only the release name; it fetches the Sigstore bundle itself.
+type v3ReleaseCollateral struct {
+	Repo           string          `json:"repo"`
+	Tag            string          `json:"tag"`
+	Digest         string          `json:"digest"`
+	SigstoreBundle json.RawMessage `json:"sigstore_bundle"`
+}
+
+// releaseTagRE bounds a release tag to the characters GitHub tags use here.
+var releaseTagRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
+
+// readReleases returns the code and platform releases the collateral names,
+// each with its freshness witness bundle. An absent entry leaves its field
+// empty; supply chain verification then fails with the reason.
+func readReleases(entries []v3Collateral) (code, platform attestation.TinfoilRelease, err error) {
+	for _, e := range entries {
+		if e.Format == sigstoreFreshnessV1Format && (e.ID == collateralIDCode+"-freshness" || e.ID == collateralIDPlatform+"-freshness") {
+			var c struct {
+				SigstoreBundle json.RawMessage `json:"sigstore_bundle"`
+			}
+			if err := json.Unmarshal(e.Data, &c); err != nil {
+				return code, platform, fmt.Errorf("tinfoil: collateral %q: %w", e.ID, err)
+			}
+			if e.ID == collateralIDCode+"-freshness" {
+				code.Freshness = c.SigstoreBundle
+			} else {
+				platform.Freshness = c.SigstoreBundle
+			}
+		}
+	}
+	for _, e := range entries {
+		var dst *attestation.TinfoilRelease
+		switch {
+		case e.ID == collateralIDCode && e.Format == sigstoreCodeV1Format:
+			dst = &code
+		case e.ID == collateralIDPlatform && e.Format == sigstorePlatformV1Format:
+			dst = &platform
+		default:
+			continue
+		}
+		var c v3ReleaseCollateral
+		if err := json.Unmarshal(e.Data, &c); err != nil {
+			return code, platform, fmt.Errorf("tinfoil: collateral %q: %w", e.ID, err)
+		}
+		if !isValidSigstoreRepo(c.Repo) || !releaseTagRE.MatchString(c.Tag) {
+			return code, platform, fmt.Errorf("tinfoil: collateral %q names an invalid release %q@%q", e.ID, c.Repo, c.Tag)
+		}
+		if err := checkLowerHex("collateral "+e.ID+" digest", c.Digest, hexFieldLen); err != nil {
+			return code, platform, err
+		}
+		dst.Repo, dst.Tag, dst.Digest = c.Repo, c.Tag, c.Digest
+	}
+	return code, platform, nil
+}
 
 // supersededMembers are top-level members of the attestation document teep
 // removed. The replacement document carries none of them, so any one of them
@@ -184,6 +246,10 @@ func parseV3Document(body []byte) (*attestation.RawAttestation, error) {
 	if err := checkCollateral(doc.Collateral); err != nil {
 		return nil, err
 	}
+	codeRelease, platformRelease, err := readReleases(doc.Collateral)
+	if err != nil {
+		return nil, err
+	}
 
 	crypto, err := parseCryptoMaterial(cryptoBytes)
 	if err != nil {
@@ -193,7 +259,8 @@ func parseV3Document(body []byte) (*attestation.RawAttestation, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkDeviceEvidence(deviceBytes); err != nil {
+	nvidiaPayload, err := readDeviceEvidence(deviceBytes, doc.Challenge.Nonce)
+	if err != nil {
 		return nil, err
 	}
 
@@ -207,6 +274,7 @@ func parseV3Document(body []byte) (*attestation.RawAttestation, error) {
 		UnknownFields:  unknown,
 		MissingFields:  missing,
 		RawBody:        body,
+		NvidiaPayload:  nvidiaPayload,
 
 		TinfoilTLSKeyFP:            tlsKeyFP,
 		TinfoilHPKEKey:             hpkeKey,
@@ -216,6 +284,8 @@ func parseV3Document(body []byte) (*attestation.RawAttestation, error) {
 		TinfoilEndorsedCryptoHash:  doc.CPUEvidence.Endorsed.CryptoMaterialHash,
 		TinfoilEndorsedDeviceHash:  doc.CPUEvidence.Endorsed.DeviceEvidenceHash,
 		TinfoilChallengeReportData: doc.Challenge.ReportData,
+		TinfoilCodeRelease:         codeRelease,
+		TinfoilPlatformRelease:     platformRelease,
 	}
 	if err := decodeCPUQuote(&doc, raw); err != nil {
 		return nil, err
@@ -395,40 +465,102 @@ func endorsedKey(section *v3CryptoMaterialSection, id, wantFormat string) (strin
 	return "", fmt.Errorf("tinfoil: crypto_material has no %q item", id)
 }
 
-// checkDeviceEvidence parses the endorsed device_evidence section and rejects
-// any device evidence teep does not yet read.
+// nvidiaGPUEvidence is the evidence of one NVIDIA GPU item: the SPDM
+// GET_MEASUREMENTS exchange, the device certificate chain, the GPU
+// architecture, and the nonce the enclave sent the GPU as the SPDM requester
+// nonce. The first three are the fields of one NVIDIA EAT evidence_list entry.
+type nvidiaGPUEvidence struct {
+	Arch        string `json:"arch"`
+	Certificate string `json:"certificate"`
+	Evidence    string `json:"evidence"`
+	Nonce       string `json:"nonce"`
+}
+
+// nvidiaEAT is the NVIDIA EAT envelope teep's NVIDIA verifier reads.
+type nvidiaEAT struct {
+	Arch         string           `json:"arch"`
+	Nonce        string           `json:"nonce"`
+	EvidenceList []nvidiaEATEntry `json:"evidence_list"`
+}
+
+type nvidiaEATEntry struct {
+	Arch        string `json:"arch"`
+	Certificate string `json:"certificate"`
+	Evidence    string `json:"evidence"`
+}
+
+// readDeviceEvidence parses the endorsed device_evidence section and returns
+// its GPU evidence as an NVIDIA EAT payload, or "" when the enclave reports no
+// device.
 //
-// The section is hash-bound into REPORT_DATA either way, so an enclave with
-// devices is authenticated. teep must not report GPU evidence it has not
-// verified, so it fails closed until it reads the items.
-func checkDeviceEvidence(sectionBytes []byte) error {
+// The section is hash-bound into REPORT_DATA, so once VerifyReportData passes
+// every item is the enclave's own claim. The EAT is built from the item fields
+// unchanged, with the challenge nonce as the EAT nonce. The NVIDIA verifier
+// then checks each GPU's certificate chain, its SPDM signature, and that the
+// SPDM requester nonce is the client nonce, and NRAS appraises the same EAT.
+//
+// An item teep does not read fails the document: teep must not report device
+// evidence it has not verified.
+func readDeviceEvidence(sectionBytes []byte, challengeNonce string) (string, error) {
 	var section v3DeviceEvidenceSection
 	unknown, missing, err := jsonstrict.UnmarshalWarn(sectionBytes, &section, "tinfoil device_evidence")
 	if err != nil {
-		return fmt.Errorf("tinfoil: unmarshal device_evidence: %w", err)
+		return "", fmt.Errorf("tinfoil: unmarshal device_evidence: %w", err)
 	}
 	if len(unknown) > 0 || len(missing) > 0 {
-		return fmt.Errorf("tinfoil: device_evidence schema mismatch: unexpected %v, absent %v",
+		return "", fmt.Errorf("tinfoil: device_evidence schema mismatch: unexpected %v, absent %v",
 			unknown, missing)
 	}
 	if section.Format != deviceEvidenceV1Format {
-		return fmt.Errorf("tinfoil: unsupported device_evidence format %q, want %q",
+		return "", fmt.Errorf("tinfoil: unsupported device_evidence format %q, want %q",
 			section.Format, deviceEvidenceV1Format)
 	}
 	if len(section.Items) > maxSectionItems {
-		return fmt.Errorf("tinfoil: device_evidence has %d items, limit is %d",
+		return "", fmt.Errorf("tinfoil: device_evidence has %d items, limit is %d",
 			len(section.Items), maxSectionItems)
 	}
 	if len(section.Items) == 0 {
-		return nil
+		return "", nil
 	}
-	formats := make([]string, 0, len(section.Items))
+	eat := nvidiaEAT{Nonce: challengeNonce, EvidenceList: make([]nvidiaEATEntry, 0, len(section.Items))}
+	seen := make(map[string]bool, len(section.Items))
 	for _, item := range section.Items {
-		formats = append(formats, item.Format)
+		if item.Format != NvidiaGPUEvidenceV1Format || item.Kind != "gpu" || item.Vendor != "nvidia" {
+			return "", fmt.Errorf("tinfoil: device_evidence item %q (kind %q, vendor %q, format %q) is not evidence teep reads",
+				item.ID, item.Kind, item.Vendor, item.Format)
+		}
+		if item.ID == "" || seen[item.ID] {
+			return "", fmt.Errorf("tinfoil: device_evidence item id %q is empty or repeated", item.ID)
+		}
+		seen[item.ID] = true
+		var gpu nvidiaGPUEvidence
+		unknown, missing, err := jsonstrict.UnmarshalWarn(item.Evidence, &gpu, "tinfoil nvidia-gpu-evidence")
+		if err != nil {
+			return "", fmt.Errorf("tinfoil: unmarshal GPU evidence %q: %w", item.ID, err)
+		}
+		if len(unknown) > 0 || len(missing) > 0 {
+			return "", fmt.Errorf("tinfoil: GPU evidence %q schema mismatch: unexpected %v, absent %v",
+				item.ID, unknown, missing)
+		}
+		if gpu.Nonce != challengeNonce {
+			return "", fmt.Errorf("tinfoil: GPU evidence %q nonce %q is not the challenge nonce",
+				item.ID, attestation.NoncePrefix(gpu.Nonce))
+		}
+		if eat.Arch == "" {
+			eat.Arch = gpu.Arch
+		}
+		if gpu.Arch == "" || gpu.Arch != eat.Arch {
+			return "", fmt.Errorf("tinfoil: GPU evidence %q arch %q differs from %q", item.ID, gpu.Arch, eat.Arch)
+		}
+		eat.EvidenceList = append(eat.EvidenceList, nvidiaEATEntry{
+			Arch: gpu.Arch, Certificate: gpu.Certificate, Evidence: gpu.Evidence,
+		})
 	}
-	slices.Sort(formats)
-	return fmt.Errorf("tinfoil: enclave reports %d device evidence items (formats %s) that teep does not read yet",
-		len(section.Items), strings.Join(slices.Compact(formats), ", "))
+	b, err := json.Marshal(eat)
+	if err != nil {
+		return "", fmt.Errorf("tinfoil: marshal GPU EAT: %w", err)
+	}
+	return string(b), nil
 }
 
 // decodeCPUQuote decodes the CPU quote and selects the TEE hardware from the

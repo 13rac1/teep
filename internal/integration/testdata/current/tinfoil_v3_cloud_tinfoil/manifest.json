@@ -1,9 +1,9 @@
 {
   "provider": "tinfoil_v3_cloud",
-  "model": "deepseek-v4-1-flash",
-  "nonce_hex": "acffef25e22b641dbac433e12c5d6d05245c35d0f705a6f31fe86928cb75d5c8",
-  "captured_at": "2026-11-13T08:00:06.173218624Z",
-  "duration_ms": 706,
+  "model": "llama3-3-70b",
+  "nonce_hex": "f00564229a36dbaa297701af5ea4c8d33c7f859180c9ac7f541a2c21f0d4e6a3",
+  "captured_at": "2026-11-21T00:24:47.912591672Z",
+  "duration_ms": 1163,
   "e2ee": {
     "attempted": true,
     "detail": "EHBP X25519: 11 chunks decrypted",

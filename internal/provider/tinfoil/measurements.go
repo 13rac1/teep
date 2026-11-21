@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,7 +14,7 @@ import (
 // Predicate type URIs for Tinfoil Sigstore attestations.
 const (
 	PredicateMultiPlatform        = "https://tinfoil.sh/predicate/snp-tdx-multiplatform/v1"
-	PredicateHardwareMeasurements = "https://tinfoil.sh/predicate/hardware-measurements/v1"
+	PredicatePlatformEndorsements = "https://tinfoil.sh/predicate/platform-endorsements/v1"
 )
 
 // RouterRepo is the Sigstore GitHub repo for the Tinfoil confidential model
@@ -21,10 +22,10 @@ const (
 // because it attests the router enclave, not per-model inference enclaves.
 const RouterRepo = "tinfoilsh/confidential-model-router"
 
-// HardwareMeasurementsRepo is the Sigstore GitHub repo for Tinfoil's
-// hardware measurement allowlist, verified alongside the router (cloud) or
-// the per-model enclave (direct) for TDX platforms.
-const HardwareMeasurementsRepo = "tinfoilsh/hardware-measurements"
+// PlatformRepo is the Sigstore GitHub repo of Tinfoil's platform endorsements:
+// the TDX MRTD and RTMR0 of each machine shape, in its "platform-*" releases.
+// A TDX enclave names the release in its "platform" collateral.
+const PlatformRepo = "tinfoilsh/cvmimage"
 
 // KnownRepos lists the known Tinfoil configuration repo mappings.
 var KnownRepos = []string{
@@ -48,13 +49,16 @@ type TDXMeasurement struct {
 	RTMR2 string `json:"rtmr2"`
 }
 
-// HardwareMeasurementsPredicate is the in-toto predicate for
-// hardware-measurements/v1. The predicate is a map of platform ID →
-// measurement entry, not an array under an "entries" key.
-type HardwareMeasurementsPredicate map[string]HardwareMeasurementEntry
+// platformEndorsementsPredicate is the part of the platform-endorsements/v1
+// predicate teep reads: the measurements of each machine shape, keyed by
+// shape name.
+type platformEndorsementsPredicate struct {
+	Format       string                              `json:"format"`
+	Measurements map[string]HardwareMeasurementEntry `json:"measurements"`
+}
 
-// HardwareMeasurementEntry is a single entry in the hardware measurements
-// predicate. The platform ID is the map key, not a field in the entry.
+// HardwareMeasurementEntry is the MRTD and RTMR0 of one machine shape. The
+// shape name is the map key, not a field in the entry.
 type HardwareMeasurementEntry struct {
 	MRTD  string `json:"mrtd"`
 	RTMR0 string `json:"rtmr0"`
@@ -136,14 +140,20 @@ func CompareMultiPlatformSEVSNP(code *CodeMeasurements, enclave *EnclaveMeasurem
 	return nil
 }
 
-// ParseHardwareMeasurements extracts hardware measurement entries from the
-// predicate. The predicate is a map of platform ID → {mrtd, rtmr0}.
-func ParseHardwareMeasurements(predicateBytes []byte) (map[string]HardwareMeasurementEntry, error) {
-	var pred HardwareMeasurementsPredicate
+// ParsePlatformMeasurements extracts the machine-shape measurements from a
+// platform-endorsements/v1 predicate.
+func ParsePlatformMeasurements(predicateBytes []byte) (map[string]HardwareMeasurementEntry, error) {
+	var pred platformEndorsementsPredicate
 	if err := json.Unmarshal(predicateBytes, &pred); err != nil {
-		return nil, fmt.Errorf("unmarshal hardware measurements predicate: %w", err)
+		return nil, fmt.Errorf("unmarshal platform endorsements predicate: %w", err)
 	}
-	return pred, nil
+	if pred.Format != PredicatePlatformEndorsements {
+		return nil, fmt.Errorf("platform endorsements format %q, want %q", pred.Format, PredicatePlatformEndorsements)
+	}
+	if len(pred.Measurements) == 0 {
+		return nil, errors.New("platform endorsements list no measurements")
+	}
+	return pred.Measurements, nil
 }
 
 // MatchHardwareMeasurements checks whether the enclave MRTD and RTMR0 match

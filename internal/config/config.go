@@ -11,6 +11,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -112,6 +113,7 @@ type ProviderConfig struct {
 	BaseURL   string       `toml:"base_url"`
 	E2EE      bool         `toml:"e2ee"`
 	AllowFail []string     `toml:"allow_fail"`
+	Enclaves  []string     `toml:"enclaves"`
 	Policy    PolicyConfig `toml:"policy"`
 }
 
@@ -132,6 +134,9 @@ type PolicyConfig struct {
 	GatewayRTMR1Allow  []string `toml:"gateway_rtmr1_allow"`
 	GatewayRTMR2Allow  []string `toml:"gateway_rtmr2_allow"`
 	GatewayRTMR3Allow  []string `toml:"gateway_rtmr3_allow"`
+	// GatewayComposeHashAllow lists sha256(app_compose) values the gateway
+	// may run, checked by gateway_compose_binding.
+	GatewayComposeHashAllow []string `toml:"gateway_compose_hash_allow"`
 }
 
 // tomlFile mirrors the top-level structure of the optional TOML config file.
@@ -149,6 +154,10 @@ type Provider struct {
 	BaseURL string
 	APIKey  string
 	E2EE    bool
+
+	// Enclaves, for tinfoil_v3_direct, restricts requests to these enclave
+	// domains of the model. Empty means every enclave Tinfoil lists.
+	Enclaves []string
 }
 
 // Config is the fully resolved runtime configuration for the teep proxy.
@@ -351,6 +360,9 @@ func loadTOML(cfg *Config, path string) error {
 		pc := f.Providers[name]
 		p := resolveProvider(name, &pc)
 		cfg.Providers[name] = p
+		if meta.IsDefined("providers", name, "enclaves") && name != "tinfoil_v3_direct" {
+			return fmt.Errorf("providers.%s.enclaves: only tinfoil_v3_direct selects enclaves", name)
+		}
 
 		// Parse per-provider allow_fail list.
 		// Use meta.IsDefined to distinguish "not set" from explicitly empty
@@ -454,6 +466,10 @@ func buildGatewayMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPoli
 			return out, err
 		}
 	}
+	out.ComposeHashAllow, err = normalizeHexAllowlist(p.GatewayComposeHashAllow, "policy.gateway_compose_hash_allow", sha256.Size)
+	if err != nil {
+		return out, err
+	}
 
 	return out, nil
 }
@@ -518,7 +534,7 @@ func MergedAllowFail(providerName string, format attestation.BackendFormat, cfg 
 func hasMeasurementPolicy(p attestation.MeasurementPolicy) bool {
 	return p.HasMRTDPolicy() || p.HasMRSeamPolicy() ||
 		p.HasRTMRPolicy(0) || p.HasRTMRPolicy(1) ||
-		p.HasRTMRPolicy(2) || p.HasRTMRPolicy(3)
+		p.HasRTMRPolicy(2) || p.HasRTMRPolicy(3) || p.HasComposeHashPolicy()
 }
 
 // MergedMeasurementPolicy returns a MeasurementPolicy that merges three layers:
@@ -564,6 +580,9 @@ func mergeAllowlists(base, overlay attestation.MeasurementPolicy) attestation.Me
 			base.RTMRAllow[i] = overlay.RTMRAllow[i]
 		}
 	}
+	if overlay.HasComposeHashPolicy() {
+		base.ComposeHashAllow = overlay.ComposeHashAllow
+	}
 	return base
 }
 
@@ -572,6 +591,10 @@ func mergeAllowlists(base, overlay attestation.MeasurementPolicy) attestation.Me
 const tdxMeasurementBytes = 48
 
 func normalizeAllowlist(values []string, field string) (map[string]struct{}, error) {
+	return normalizeHexAllowlist(values, field, tdxMeasurementBytes)
+}
+
+func normalizeHexAllowlist(values []string, field string, size int) (map[string]struct{}, error) {
 	if values == nil {
 		return map[string]struct{}{}, nil // field absent from TOML — no policy
 	}
@@ -585,8 +608,8 @@ func normalizeAllowlist(values []string, field string) (map[string]struct{}, err
 		if err != nil {
 			return nil, fmt.Errorf("%s contains invalid hex %q: %w", field, v, err)
 		}
-		if len(b) != tdxMeasurementBytes {
-			return nil, fmt.Errorf("%s entry %q decodes to %d bytes, want %d", field, v, len(b), tdxMeasurementBytes)
+		if len(b) != size {
+			return nil, fmt.Errorf("%s entry %q decodes to %d bytes, want %d", field, v, len(b), size)
 		}
 		norm[s] = struct{}{}
 	}
@@ -604,10 +627,11 @@ func resolveProvider(name string, pc *ProviderConfig) *Provider {
 	}
 
 	return &Provider{
-		Name:    name,
-		BaseURL: pc.BaseURL,
-		APIKey:  apiKey,
-		E2EE:    pc.E2EE,
+		Name:     name,
+		BaseURL:  pc.BaseURL,
+		APIKey:   apiKey,
+		E2EE:     pc.E2EE,
+		Enclaves: pc.Enclaves,
 	}
 }
 
@@ -653,8 +677,7 @@ func applyEnvOverrides(cfg *Config) {
 	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://tee.redpill.ai", true)
 	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai", true)
 	applyAPIKeyEnv(cfg, "tinfoil_v3_cloud", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", true)
-	// tinfoil_v3_direct is disabled (tinfoil.DirectDisabledMessage), so
-	// TINFOIL_API_KEY does not add it: proxy.New refuses it at startup.
+	applyAPIKeyEnv(cfg, "tinfoil_v3_direct", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", true)
 }
 
 // applyAPIKeyEnv sets or updates the API key for the named provider from the

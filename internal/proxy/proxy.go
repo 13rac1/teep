@@ -744,9 +744,6 @@ func fromConfig(
 	policy attestation.MeasurementPolicy,
 	gatewayPolicy attestation.MeasurementPolicy,
 ) (*provider.Provider, error) {
-	if cp.Name == "tinfoil_v3_direct" {
-		return nil, errors.New(tinfoil.DirectDisabledMessage)
-	}
 	p := &provider.Provider{
 		Name:                     cp.Name,
 		BaseURL:                  cp.BaseURL,
@@ -928,6 +925,7 @@ func fromConfig(
 
 	case "tinfoil_v3_direct":
 		resolver := tinfoil.NewDirectResolver(cp.APIKey, offline)
+		resolver.RestrictEnclaves(cp.Enclaves)
 		p.BaseURL = tinfoil.DefaultBaseURL // fallback for model discovery
 		p.ChatPath = "/v1/chat/completions"
 		p.EmbeddingsPath = "/v1/embeddings"
@@ -951,7 +949,7 @@ func fromConfig(
 		)
 
 	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct (disabled))", cp.Name)
+		return nil, fmt.Errorf("unknown provider %q (supported: venice, neardirect, nearcloud, nanogpt, phalacloud, chutes, tinfoil_v3_cloud, tinfoil_v3_direct)", cp.Name)
 	}
 
 	// Every provider sets a real SupplyChainPolicy or the
@@ -1490,108 +1488,7 @@ func (s *Server) verifyTinfoilSupplyChain(
 		}, 0
 	}
 	start := time.Now()
-	result := &attestation.TinfoilSupplyChainResult{}
-
-	// Check GPU hash bound from REPORTDATA verification detail.
-	bindingDetail := ""
-	if tdxResult != nil {
-		bindingDetail = tdxResult.ReportDataBindingDetail
-	} else if sevResult != nil {
-		bindingDetail = sevResult.ReportDataBindingDetail
-	}
-	result.GPUHashBound = strings.Contains(bindingDetail, "gpu_bound=true")
-	result.NVSwitchHashBound = strings.Contains(bindingDetail, "nvswitch_bound=true")
-	result.NVSwitchExpected = strings.Contains(bindingDetail, "nvswitch_bound=")
-
-	// TDX policy checks.
-	if tdxResult != nil && tdxResult.ParseErr == nil {
-		pol := tinfoil.CheckTDXPolicy(tdxResult, prov.MeasurementPolicy.MRSeamAllow)
-		result.TDXPolicyErr = pol.Err()
-		if result.TDXPolicyErr == nil {
-			result.TDXPolicyDetail = "Tinfoil TDX policy: TD_ATTRIBUTES, XFAM, MR_SEAM, MR registers, RTMR3, TEE_TCB_SVN all pass"
-		} else {
-			result.TDXPolicyDetail = fmt.Sprintf("Tinfoil TDX policy checks failed: %v", result.TDXPolicyErr)
-		}
-	}
-
-	// Sigstore DSSE bundle verification.
-	sv := tinfoil.NewSigstoreVerifier(s.attestClient)
-	predicateBytes, predicateType, signer, err := sv.FetchAndVerify(ctx, sigstoreRepo)
-	if err != nil {
-		result.SigstoreErr = err
-		result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: sigstoreRepo, SigstoreErr: err})
-		slog.WarnContext(ctx, "Tinfoil Sigstore verification failed",
-			"repo", sigstoreRepo, "err", err)
-		return result, time.Since(start)
-	}
-	result.SigstoreVerified = true
-	result.Components = append(result.Components, attestation.TinfoilComponentResult{
-		Repo: sigstoreRepo, SigstoreVerified: true,
-		OIDCIssuer: signer.OIDCIssuer, SAN: signer.SAN,
-	})
-	result.SigstoreDetail = fmt.Sprintf("Sigstore DSSE verified for %s (predicate: %s)", sigstoreRepo, predicateType)
-
-	// Parse code measurements from the verified predicate.
-	if predicateType != tinfoil.PredicateMultiPlatform {
-		result.CodeMatchErr = fmt.Errorf("unexpected predicate type %q, want %q", predicateType, tinfoil.PredicateMultiPlatform)
-		return result, time.Since(start)
-	}
-	codeMeasurements, err := tinfoil.ParseMultiPlatformPredicate(predicateBytes)
-	if err != nil {
-		result.CodeMatchErr = fmt.Errorf("parse multi-platform predicate: %w", err)
-		return result, time.Since(start)
-	}
-
-	// Build enclave measurements and compare.
-	switch {
-	case tdxResult != nil && tdxResult.ParseErr == nil:
-		enclave := tinfoil.EnclaveMeasurementsFromTDX(tdxResult)
-		if err := tinfoil.CompareMultiPlatformTDX(codeMeasurements, enclave); err != nil {
-			result.CodeMatchErr = err
-		} else {
-			result.CodeMatch = true
-			result.CodeMatchDetail = fmt.Sprintf("TDX code measurements match Sigstore predicate (RTMR1=%s..., RTMR2=%s...)",
-				truncTo(codeMeasurements.RTMR1, 16), truncTo(codeMeasurements.RTMR2, 16))
-		}
-
-		// Hardware measurement match (TDX only).
-		hwPredBytes, hwPredType, hwSigner, hwErr := sv.FetchAndVerify(ctx, tinfoil.HardwareMeasurementsRepo)
-		switch {
-		case hwErr != nil:
-			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: tinfoil.HardwareMeasurementsRepo, SigstoreErr: hwErr})
-			result.HWMatchErr = fmt.Errorf("fetch hardware measurements: %w", hwErr)
-		case hwPredType != tinfoil.PredicateHardwareMeasurements:
-			result.Components = append(result.Components, attestation.TinfoilComponentResult{Repo: tinfoil.HardwareMeasurementsRepo, SigstoreErr: fmt.Errorf("unexpected hardware predicate type %q", hwPredType)})
-			result.HWMatchErr = fmt.Errorf("unexpected hardware predicate type %q", hwPredType)
-		default:
-			result.Components = append(result.Components, attestation.TinfoilComponentResult{
-				Repo: tinfoil.HardwareMeasurementsRepo, SigstoreVerified: true,
-				OIDCIssuer: hwSigner.OIDCIssuer, SAN: hwSigner.SAN,
-			})
-			entries, parseErr := tinfoil.ParseHardwareMeasurements(hwPredBytes)
-			if parseErr != nil {
-				result.HWMatchErr = fmt.Errorf("parse hardware measurements: %w", parseErr)
-			} else if matchID, matchErr := tinfoil.MatchHardwareMeasurements(entries, enclave); matchErr != nil {
-				result.HWMatchErr = matchErr
-			} else {
-				result.HWMatch = matchID
-			}
-		}
-
-	case sevResult != nil && sevResult.ParseErr == nil:
-		enclave := tinfoil.EnclaveMeasurementsFromSEV(sevResult)
-		if err := tinfoil.CompareMultiPlatformSEVSNP(codeMeasurements, enclave); err != nil {
-			result.CodeMatchErr = err
-		} else {
-			result.CodeMatch = true
-			result.CodeMatchDetail = fmt.Sprintf("SEV-SNP code measurement matches Sigstore predicate (%s...)",
-				truncTo(codeMeasurements.SNPMeasurement, 16))
-		}
-
-	default:
-		result.CodeMatchErr = errors.New("no parseable TDX or SEV-SNP result for code measurement comparison")
-	}
-
+	result := tinfoil.VerifySupplyChain(ctx, s.attestClient, raw, sigstoreRepo, tdxResult, sevResult, prov.MeasurementPolicy.MRSeamAllow, time.Time{})
 	return result, time.Since(start)
 }
 

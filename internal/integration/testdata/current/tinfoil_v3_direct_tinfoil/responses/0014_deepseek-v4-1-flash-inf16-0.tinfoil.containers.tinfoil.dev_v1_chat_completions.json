@@ -1,0 +1,31 @@
+{
+  "method": "POST",
+  "url": "https://deepseek-v4-1-flash-inf16-0.tinfoil.containers.tinfoil.dev/v1/chat/completions",
+  "status": 200,
+  "proto": "HTTP/2.0",
+  "tls_version": "TLS 1.3",
+  "tls_cipher": "TLS_AES_128_GCM_SHA256",
+  "peer_spki_der_base64": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE3r2Xq/hm3J6d2C1z1kbY//aG/AfovrOPZWjsi1jGwP6FGuOSwwoK84m5NWuWnkL/YPGAQPAcTi6MOHaQqeFA8FMR6+B4pkHdUYm7YYhJUeJXt0+rOQEwn5HJb0kq/+Is",
+  "headers": {
+    "Content-Type": [
+      "text/event-stream; charset=utf-8"
+    ],
+    "Date": [
+      "Sat, 21 Nov 2026 00:27:18 GMT"
+    ],
+    "Ehbp-Response-Nonce": [
+      "fd553f89e7a2a2ff260c75fc716be05740ebce8d0dfdcdc75ae6707d817b545c"
+    ],
+    "Server": [
+      "uvicorn"
+    ],
+    "Tinfoil-Pt": [
+      "https://tinfoil.sh/predicate/tdx-guest/v2"
+    ],
+    "Vary": [
+      "Origin"
+    ]
+  },
+  "req_body_base64": "AAAAcEuTWYLNjOOzt1V/9vHGQvwO8+QvoKgjkWSOVj8SCizoMqEio+a7eTTIzkKDn6WouIMDbW9JUjMOsD/8aEu+Hj8b4y0j5coFfeeF5d1MHalv/Cz5o0DRiYy6RmlSHk7D1plwmvZtfpJ1DIceN5j/COg=",
+  "duration_ms": 603
+}

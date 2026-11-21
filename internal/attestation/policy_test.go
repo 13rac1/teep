@@ -481,7 +481,7 @@ func TestSupplyChainComponentRecognitionTinfoil(t *testing.T) {
 		SigstoreDetail:   "Sigstore DSSE verified for tinfoilsh/confidential-model-router",
 		Components: []attestation.TinfoilComponentResult{
 			tinfoilComponent(tinfoil.RouterRepo, "tinfoil-release-publish.yml", "v0.0.18"),
-			tinfoilComponent(tinfoil.HardwareMeasurementsRepo, "build.yml", "v0.0.35"),
+			tinfoilComponent(tinfoil.PlatformRepo, "build.yml", "v0.0.35"),
 		},
 	}
 	in := &attestation.ReportInput{TinfoilSC: sc, SupplyChainPolicy: tinfoil.CloudSupplyChainPolicy()}
@@ -501,7 +501,7 @@ func TestSupplyChainComponentRecognitionTinfoil_NewTagStillAllowed(t *testing.T)
 		SigstoreVerified: true,
 		Components: []attestation.TinfoilComponentResult{
 			tinfoilComponent(tinfoil.RouterRepo, "tinfoil-release-publish.yml", "v9.9.99-brand-new"),
-			tinfoilComponent(tinfoil.HardwareMeasurementsRepo, "build.yml", "v9.9.99-brand-new"),
+			tinfoilComponent(tinfoil.PlatformRepo, "build.yml", "v9.9.99-brand-new"),
 		},
 	}
 	in := &attestation.ReportInput{TinfoilSC: sc, SupplyChainPolicy: tinfoil.CloudSupplyChainPolicy()}
@@ -532,7 +532,7 @@ func TestSupplyChainComponentRecognitionTinfoilFailures(t *testing.T) {
 			TinfoilSC: &attestation.TinfoilSupplyChainResult{
 				Components: []attestation.TinfoilComponentResult{
 					tinfoilComponent(tinfoil.RouterRepo, "tinfoil-release-publish.yml", "v0.0.18"),
-					{Repo: tinfoil.HardwareMeasurementsRepo, SigstoreErr: errors.New("fetch failed")},
+					{Repo: tinfoil.PlatformRepo, SigstoreErr: errors.New("fetch failed")},
 				},
 			},
 			SupplyChainPolicy: tinfoil.CloudSupplyChainPolicy(),
@@ -553,7 +553,7 @@ func TestSupplyChainComponentRecognitionTinfoilFailures(t *testing.T) {
 						OIDCIssuer:       "https://attacker.example/oidc",
 						SAN:              "https://github.com/tinfoilsh/confidential-model-router/.github/workflows/tinfoil-release-publish.yml@refs/tags/v0.0.18",
 					},
-					tinfoilComponent(tinfoil.HardwareMeasurementsRepo, "build.yml", "v0.0.35"),
+					tinfoilComponent(tinfoil.PlatformRepo, "build.yml", "v0.0.35"),
 				},
 			},
 			SupplyChainPolicy: tinfoil.CloudSupplyChainPolicy(),
@@ -572,8 +572,8 @@ func TestSupplyChainComponentRecognitionTinfoilFailures(t *testing.T) {
 			TinfoilSC: &attestation.TinfoilSupplyChainResult{
 				SigstoreVerified: true,
 				Components: []attestation.TinfoilComponentResult{
-					tinfoilComponent(tinfoil.HardwareMeasurementsRepo, "tinfoil-release-publish.yml", "v0.0.18"),
-					tinfoilComponent(tinfoil.HardwareMeasurementsRepo, "build.yml", "v0.0.35"),
+					tinfoilComponent(tinfoil.PlatformRepo, "tinfoil-release-publish.yml", "v0.0.18"),
+					tinfoilComponent(tinfoil.PlatformRepo, "build.yml", "v0.0.35"),
 				},
 			},
 			SupplyChainPolicy: tinfoil.CloudSupplyChainPolicy(),
@@ -608,7 +608,7 @@ func TestSupplyChainComponentRecognitionTinfoilFailures(t *testing.T) {
 		// An unlisted org repo whose verified SAN belongs to a different
 		// tinfoilsh repo must fail: the SAN-to-repo binding holds for
 		// org-trusted repos too (SEE: orgImageFor).
-		component := tinfoilComponent(tinfoil.HardwareMeasurementsRepo, "tinfoil-release-publish.yml", "v0.0.1")
+		component := tinfoilComponent(tinfoil.PlatformRepo, "tinfoil-release-publish.yml", "v0.0.1")
 		component.Repo = "tinfoilsh/confidential-brand-new-model"
 		in := &attestation.ReportInput{
 			TinfoilSC: &attestation.TinfoilSupplyChainResult{
@@ -641,7 +641,7 @@ func TestSupplyChainComponentRecognitionTinfoilFailures(t *testing.T) {
 				SigstoreVerified: true,
 				Components: []attestation.TinfoilComponentResult{
 					tinfoilComponent("tinfoilsh/confidential-gemma4-31b", "tinfoil-release-publish.yml", "v0.0.42"),
-					tinfoilComponent(tinfoil.HardwareMeasurementsRepo, "build.yml", "v0.0.35"),
+					tinfoilComponent(tinfoil.PlatformRepo, "build.yml", "v0.0.35"),
 				},
 			},
 			SupplyChainPolicy: tinfoil.DirectSupplyChainPolicy(),
@@ -716,7 +716,7 @@ func TestSupplyChainComponentRecognitionTinfoilFailures(t *testing.T) {
 				SigstoreDetail:   "Sigstore DSSE verified for " + tinfoil.RouterRepo,
 				Components: []attestation.TinfoilComponentResult{
 					tinfoilComponent(tinfoil.RouterRepo, "tinfoil-release-publish.yml", "v0.0.18"),
-					{Repo: tinfoil.HardwareMeasurementsRepo, SigstoreErr: errors.New("fetch attestation: HTTP 500")},
+					{Repo: tinfoil.PlatformRepo, SigstoreErr: errors.New("fetch attestation: HTTP 500")},
 				},
 			},
 			SupplyChainPolicy: tinfoil.CloudSupplyChainPolicy(),

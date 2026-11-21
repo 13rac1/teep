@@ -18,10 +18,7 @@ The providers differ in their trust boundary:
   key bound in REPORTDATA is the router's key, not the inference enclave's key.
   This is architecturally analogous to the `nearcloud` provider in teep.
 
-- **`tinfoil_v3_direct`** (disabled): teep refuses this provider at startup,
-  because Tinfoil's enclave hosts do not answer attestation requests (observed
-  2026-11-12). Use `tinfoil_v3_cloud`. The description below applies when the
-  provider is enabled again. Connects directly to per-model inference enclaves
+- **`tinfoil_v3_direct`**: Connects directly to per-model inference enclaves
   resolved from the router's `/.well-known/tinfoil-proxy` discovery endpoint
   (for example, backend domains such as `gemma4-31b-1.inf10.tinfoil.sh`).
   Teep verifies the selected inference enclave directly. The HPKE key bound in
@@ -301,8 +298,8 @@ Both Tinfoil providers share these differences from all existing teep providers:
    this is the router's key; for `tinfoil_v3_direct` this is the inference
    enclave's own key.**
 6. **Hardware measurement verification**: TDX hardware platforms (MRTD, RTMR0)
-   matched against a separate Sigstore-attested hardware measurements registry
-   (`tinfoilsh/hardware-measurements`).
+   matched against the Sigstore-signed platform release the enclave names
+   (`tinfoilsh/cvmimage`, `platform-*` tags).
 7. **Multi-platform code measurements**: Code attestation uses a unified
    `snp-tdx-multiplatform/v1` predicate that cross-matches SEV-SNP and TDX
    measurements from a single Sigstore bundle.
@@ -1620,24 +1617,27 @@ GitHub attestations through `github-proxy.tinfoil.sh` instead of GitHub's
 public endpoints, avoiding direct GitHub 403/rate-limit failures while keeping
 the trust decision in local Sigstore verification.
 
-#### Step 1: Fetch Component Digest
+#### Step 1: Read the Release the Enclave Names
 
-For a given configuration repo (e.g. `tinfoilsh/confidential-model-router`):
+A model repo publishes one release line per hardware target, and each line
+runs on its own enclaves. On 2026-11-20 the six enclaves of
+`deepseek-v4-1-flash` ran three releases: `v0.0.10+b200` (TDX),
+`v0.0.10+b300` and `v0.0.10+b300-throughput` (SEV-SNP). The repo's latest
+release is one of them, so comparing every enclave with it fails the others.
 
-```
-GET https://github-proxy.tinfoil.sh/repos/{repo}/releases/latest
-```
+The enclave names its own releases in two collateral entries:
 
-Parse `tag_name` from the response. Then fetch the digest:
+| Entry | Format | Data |
+|---|---|---|
+| `code` | `https://tinfoil.sh/collateral/sigstore-code/v1` | `repo`, `tag`, `digest`, `sigstore_bundle` |
+| `platform` | `https://tinfoil.sh/collateral/sigstore-platform/v1` | the same, for the platform release |
+| `code-freshness`, `platform-freshness` | `https://tinfoil.sh/collateral/sigstore-freshness/v1` | `sigstore_bundle` of a freshness witness |
 
-```
-GET https://github-proxy.tinfoil.sh/{repo}/releases/download/{tag}/tinfoil.hash
-```
-
-Returns a plain-text SHA-256 hex digest.
-
-The digest must be exactly 64 lowercase or uppercase hexadecimal characters.
-Malformed, empty, oversized, or HTTP-error responses fail closed.
+These are hints. The code release's `repo` must equal the repo teep expects
+(the router repo, or the repo from proxy discovery), and the platform
+release's must be `tinfoilsh/cvmimage`. teep does not use the `code` or
+`platform` bundles the enclave serves: it fetches the bundle for the digest
+from GitHub in Step 2.
 
 #### Step 2: Fetch Sigstore DSSE Bundle
 
@@ -1663,6 +1663,22 @@ Verify the DSSE bundle using Sigstore's verification library:
 - **Artifact digest**: Must match the `sha256:{digest}` from Step 1.
 - **Require**: At least 1 signed certificate timestamp, 1 transparency log
   entry, 1 observer timestamp.
+- **Tag**: the certificate SAN must end in `@refs/tags/{tag}`, with the tag
+  from Step 1. This binds the digest to the release the enclave names.
+
+#### Step 3a: Check the Release Is Current
+
+A release signed long ago still verifies in Step 3, so the enclave could name
+an old one. Tinfoil's freshness witness, a workflow at
+`https://github.com/tinfoilsh/freshness-witness/.github/workflows/freshness.yml@refs/heads/main`,
+re-signs each release Tinfoil still serves. Its predicate,
+`https://tinfoil.sh/predicate/freshness-witness/v1`, endorses `repo`, `tag`
+and the subject digest. teep verifies the witness bundle the enclave serves
+with that exact SAN and the release digest, checks that it endorses the same
+repo, tag and digest, and requires its earliest verified timestamp to be
+within seven days, the window Tinfoil's verifier accepts. A release Tinfoil
+stopped witnessing fails after the window. teep does not list the repo's
+releases: the GitHub proxy serves no release list.
 
 The proxy is only the fetch transport. Teep verifies the DSSE bundle with the
 Sigstore trusted root and rejects branch refs, pull-request refs, repository
@@ -1703,7 +1719,7 @@ factors shared with compose-based providers:
   `tinfoil_v3_cloud` records `tinfoilsh/confidential-model-router`;
   `tinfoil_v3_direct` records the per-model repo returned by
   `RepoForProvider`; TDX hardware-measurement validation records
-  `tinfoilsh/hardware-measurements` when that registry is fetched. This factor
+  `tinfoilsh/cvmimage` when the platform release is fetched. This factor
   is in the default `allow_fail` set.
 - `provider_signer_recognition`: requires each signed component to be in the
   provider-wide trusted Tinfoil namespace (`tinfoilsh/*`) and to have a
@@ -1714,24 +1730,66 @@ factors shared with compose-based providers:
 
 The current recognized Tinfoil component set is
 `tinfoilsh/confidential-model-router`, any `tinfoilsh/confidential-*`
-per-model repo, and `tinfoilsh/hardware-measurements`.
+per-model repo, and `tinfoilsh/cvmimage`.
 
 ### Hardware Measurement Verification (TDX Only)
 
 For TDX enclaves, verify that the hardware platform (MRTD, RTMR0) matches a
 known trusted platform:
 
-1. Fetch latest hardware measurements from
-   `tinfoilsh/hardware-measurements` repo via GitHub Releases + Sigstore
-   (same flow as code measurements above).
+1. Verify the platform release the enclave names (`platform` collateral) with
+   Steps 1–3a. The repo is `tinfoilsh/cvmimage` and the tag a `platform-*`
+   release. `tinfoilsh/hardware-measurements` stopped at v0.0.47
+   (2026-10-29) and lists none of the B200 machine shapes.
 2. The predicate type is
-   `https://tinfoil.sh/predicate/hardware-measurements/v1`.
-3. The predicate is a JSON object mapping platform ID to `{ "mrtd": "...",
-   "rtmr0": "..." }`; the platform ID is the map key.
-4. Match the enclave's MRTD (register 0) and RTMR0 (register 1) against the
-   hardware measurement entries.
+   `https://tinfoil.sh/predicate/platform-endorsements/v1`.
+3. Its `measurements` member maps a machine shape name to `{ "mrtd": "...",
+   "rtmr0": "...", "shape": {...} }`. teep reads `mrtd` and `rtmr0`.
+4. Match the enclave's MRTD and RTMR0 against the entries.
 5. If no match is found, the hardware platform is unknown — record as a
    verification factor failure.
+
+The predicate also carries per-machine SEV-SNP and TDX policies (minimum
+TCB, guest policy). teep does not read them yet; see "SEV-SNP on Turin" below.
+
+### GPU Evidence (Direct)
+
+An inference enclave with GPUs lists one `device_evidence` item per GPU, of
+format `https://tinfoil.sh/format/nvidia-gpu-evidence/v1`, kind `gpu`, vendor
+`nvidia`. Each item's evidence has exactly `arch`, `certificate`, `evidence`
+and `nonce`. The section is hash-bound into REPORTDATA, so once the quote
+verifies every item is the enclave's claim.
+
+- Each item's `nonce` must equal the challenge nonce, and every item must
+  report the same `arch`. Any other item, or another field, fails the
+  document.
+- teep builds an NVIDIA EAT from the items unchanged (`arch`, `nonce` = the
+  client nonce, and `evidence_list` of `arch`, `certificate`, `evidence`).
+- `nvidia_signature` checks each GPU's certificate chain to the pinned NVIDIA
+  root and its SPDM signature. `nvidia_nonce_client_bound` passes because the
+  SPDM requester nonce is the client nonce: the enclave passes it to the GPU
+  unchanged. `nvidia_nras_verified` submits the same EAT to NVIDIA's NRAS.
+- `cpu_gpu_chain` passes because the device_evidence hash is in REPORTDATA
+  (`gpu_bound=true`).
+- No enclave serves NVSwitch evidence, so `nvswitch_binding` fails: teep
+  cannot tell whether an NVSwitch fabric connects the GPUs.
+
+Checked on 2026-11-20 against four Blackwell GPUs on each of
+`deepseek-v4-1-flash-inf16-0` (TDX), `-inf22-0` and `-inf19-throughput-0`
+(SEV-SNP): all three NVIDIA factors pass.
+
+### SEV-SNP on Turin
+
+The SEV-SNP enclaves of `deepseek-v4-1-flash` run on AMD Turin. teep's
+go-sev-guest v0.15.0 decodes their TCB with the Genoa layout, so it builds a
+VCEK URL with a 64-byte hardware ID and no `fmcSPL`, which
+`kds-proxy.tinfoil.sh` answers with 404, and it compares the misdecoded TCB
+with Genoa minimums. `tee_cert_chain`, `tee_quote_signature`,
+`tee_hardware_config`, `tee_tcb_current` and `tee_tcb_not_revoked` fail on
+these enclaves. The code release still matches (`tee_measurement`,
+`sigstore_code_verified`). The fix is a go-sev-guest with Turin TCB support
+and the Turin minimums from the platform predicate's `amd-turin-prod`
+policy.
 
 ### TLS Certificate Fingerprint Verification
 
@@ -2411,6 +2469,11 @@ attestation handling for cloud routes.
    # base_url is not used for tinfoil_v3_direct; model discovery is automatic
    api_key_env = "TINFOIL_API_KEY"
    e2ee = true
+   # Optional: send requests only to these enclave domains. Proxy discovery
+   # lists every enclave of a model, including ones that do not answer or run
+   # on a platform the operator does not accept. A model with none of them
+   # fails to resolve.
+   # enclaves = ["deepseek-v4-1-flash-inf16-0.tinfoil.containers.tinfoil.dev"]
    ```
 
 9. **Responses + TTS Endpoints**:
