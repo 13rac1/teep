@@ -71,7 +71,9 @@ func (ReportDataVerifier) VerifyReportData(reportData [64]byte, raw *attestation
 			raw.TinfoilChallengeReportData, expectedHex)
 	}
 
-	return "v3: reportdata_hash verified, nonce_bound=true, gpu_bound=false", nil
+	// The device_evidence hash is in REPORT_DATA, so GPU evidence, when the
+	// enclave reports any, is bound to this quote.
+	return fmt.Sprintf("v3: reportdata_hash verified, nonce_bound=true, gpu_bound=%t", raw.NvidiaPayload != ""), nil
 }
 
 // checkEndorsedSection recomputes the hash of one endorsed section and checks

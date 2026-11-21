@@ -257,6 +257,8 @@ e2ee = true
 [providers.tinfoil_v3_direct]
 api_key_env = "TINFOIL_API_KEY"
 e2ee = true
+# Optional: send requests only to these enclaves of the model.
+# enclaves = ["deepseek-v4-1-flash-inf16-0.tinfoil.containers.tinfoil.dev"]
 
 [policy]
 enforce = [

@@ -4760,9 +4760,9 @@ func TestEvalNVSwitchBinding(t *testing.T) {
 			GPUHashBound:      true,
 			NVSwitchHashBound: false,
 		})
-		f := assertSingleFactor(t, evalNVSwitchBinding(in), Pass)
-		if !strings.Contains(f.Detail, "not required") {
-			t.Errorf("detail %q should mention not required", f.Detail)
+		f := assertSingleFactor(t, evalNVSwitchBinding(in), Fail)
+		if !strings.Contains(f.Detail, "serves no NVSwitch evidence") {
+			t.Errorf("detail %q should say the enclave serves no NVSwitch evidence", f.Detail)
 		}
 	})
 }

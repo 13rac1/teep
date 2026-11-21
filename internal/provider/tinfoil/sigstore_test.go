@@ -7,36 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/13rac1/teep/internal/attestation"
 )
-
-func TestSigstoreVerifier_FetchLatestTag(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/releases/latest") {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-		}
-		resp := githubRelease{TagName: "v1.2.3"}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer ts.Close()
-
-	sv := &SigstoreVerifier{client: ts.Client()}
-
-	// Override URL by making the method testable — we test through the full path
-	// by constructing a custom server.
-	url := ts.URL + "/repos/tinfoilsh/test-repo/releases/latest"
-	body, err := sv.fetchBounded(context.Background(), url, maxReleaseResponseSize)
-	if err != nil {
-		t.Fatalf("fetchBounded failed: %v", err)
-	}
-
-	var release githubRelease
-	if err := json.Unmarshal(body, &release); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
-	}
-	if release.TagName != "v1.2.3" {
-		t.Errorf("TagName = %q, want v1.2.3", release.TagName)
-	}
-}
 
 func TestSigstoreVerifier_FetchBounded_ReturnsBody(t *testing.T) {
 	// This test exercises fetchBounded's HTTP plumbing only. It is NOT named
@@ -49,7 +23,7 @@ func TestSigstoreVerifier_FetchBounded_ReturnsBody(t *testing.T) {
 	defer ts.Close()
 
 	sv := &SigstoreVerifier{client: ts.Client()}
-	body, err := sv.fetchBounded(context.Background(), ts.URL+"/tinfoil.hash", maxHashFileSize)
+	body, err := sv.fetchBounded(context.Background(), ts.URL+"/tinfoil.hash", maxAttestationResponseSize)
 	if err != nil {
 		t.Fatalf("fetchBounded failed: %v", err)
 	}
@@ -85,7 +59,7 @@ func TestSigstoreVerifier_FetchBounded_HTTPError(t *testing.T) {
 	defer ts.Close()
 
 	sv := &SigstoreVerifier{client: ts.Client()}
-	_, err := sv.fetchBounded(context.Background(), ts.URL, maxReleaseResponseSize)
+	_, err := sv.fetchBounded(context.Background(), ts.URL, maxAttestationResponseSize)
 	if err == nil {
 		t.Fatal("expected error for HTTP 404")
 	}
@@ -186,107 +160,6 @@ func TestGithubProxyURL(t *testing.T) {
 	}
 }
 
-// testSigstoreServer creates a mock GitHub API server that routes requests
-// to the right handler based on path patterns.
-func testSigstoreServer(t *testing.T, handlers map[string]http.HandlerFunc) (*httptest.Server, *SigstoreVerifier) {
-	t.Helper()
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for pattern, h := range handlers {
-			if strings.Contains(r.URL.Path, pattern) {
-				h(w, r)
-				return
-			}
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(ts.Close)
-	return ts, &SigstoreVerifier{client: ts.Client()}
-}
-
-func TestFetchLatestTag_Success(t *testing.T) {
-	ts, sv := testSigstoreServer(t, map[string]http.HandlerFunc{
-		"releases/latest": func(w http.ResponseWriter, _ *http.Request) {
-			json.NewEncoder(w).Encode(githubRelease{TagName: "v2.0.0"})
-		},
-	})
-	body, err := sv.fetchBounded(context.Background(), ts.URL+"/repos/tinfoilsh/test/releases/latest", maxReleaseResponseSize)
-	if err != nil {
-		t.Fatalf("fetchBounded: %v", err)
-	}
-	var release githubRelease
-	if err := json.Unmarshal(body, &release); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if release.TagName != "v2.0.0" {
-		t.Errorf("TagName = %q, want v2.0.0", release.TagName)
-	}
-}
-
-func TestFetchLatestTag_EmptyTag(t *testing.T) {
-	ts, sv := testSigstoreServer(t, map[string]http.HandlerFunc{
-		"releases/latest": func(w http.ResponseWriter, _ *http.Request) {
-			json.NewEncoder(w).Encode(githubRelease{TagName: ""})
-		},
-	})
-	// Call fetchLatestTag by directly constructing the URL.
-	body, err := sv.fetchBounded(context.Background(), ts.URL+"/releases/latest", maxReleaseResponseSize)
-	if err != nil {
-		t.Fatalf("fetchBounded: %v", err)
-	}
-	var release githubRelease
-	if err := json.Unmarshal(body, &release); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if release.TagName != "" {
-		t.Errorf("expected empty tag_name, got %q", release.TagName)
-	}
-}
-
-func TestFetchTinfoilHash_Validation(t *testing.T) {
-	// Test the digest validation logic extracted into validateTinfoilHash.
-	// This directly exercises the 64-hex-char and hex-decode checks that
-	// fetchTinfoilHash applies, rather than only testing fetchBounded.
-	validHash := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-
-	t.Run("valid", func(t *testing.T) {
-		got, err := validateTinfoilHash(validHash)
-		if err != nil {
-			t.Fatalf("validateTinfoilHash: %v", err)
-		}
-		if got != validHash {
-			t.Errorf("digest = %q, want %q", got, validHash)
-		}
-	})
-
-	t.Run("wrong_length", func(t *testing.T) {
-		_, err := validateTinfoilHash("tooshort")
-		if err == nil {
-			t.Fatal("expected error for short digest")
-		}
-		if !strings.Contains(err.Error(), "64 hex chars") {
-			t.Errorf("error %q should mention 64 hex chars", err)
-		}
-	})
-
-	t.Run("invalid_hex", func(t *testing.T) {
-		invalidHex := "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
-		_, err := validateTinfoilHash(invalidHex)
-		if err == nil {
-			t.Fatal("expected error for non-hex digest")
-		}
-		if !strings.Contains(err.Error(), "not valid hex") {
-			t.Errorf("error %q should mention not valid hex", err)
-		}
-	})
-
-	t.Run("empty", func(t *testing.T) {
-		_, err := validateTinfoilHash("")
-		if err == nil {
-			t.Fatal("expected error for empty digest")
-		}
-	})
-}
-
 func TestFetchAndVerifyAttestation_EmptyResponseParsing(t *testing.T) {
 	// Test that parsing an empty attestations list is properly detected.
 	body := []byte(`{"attestations":[]}`)
@@ -308,5 +181,49 @@ func TestFetchAndVerifyAttestation_InvalidBundleParsing(t *testing.T) {
 	}
 	if len(resp.Attestations) != 1 {
 		t.Fatalf("expected 1 attestation, got %d", len(resp.Attestations))
+	}
+}
+
+// witnessPredicate is a freshness witness predicate endorsing repo@tag.
+func witnessPredicate(repo, tag, digest string) []byte {
+	return []byte(`{"format":"` + PredicateFreshnessWitness + `","endorses":{"repo":"` + repo +
+		`","tag":"` + tag + `","commit":"005539a0","subject":{"name":"tinfoil-deployment.json","digest":"sha256:` + digest + `"}}}`)
+}
+
+func TestCheckWitness(t *testing.T) {
+	digest := strings.Repeat("ab", 32)
+	rel := attestation.TinfoilRelease{Repo: "tinfoilsh/confidential-x", Tag: "v0.0.10+b300", Digest: digest}
+	now := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	ok := witnessPredicate(rel.Repo, rel.Tag, digest)
+
+	if err := checkWitness(ok, rel, now.Add(-6*24*time.Hour), now); err != nil {
+		t.Errorf("a six-day-old witness of this release: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		pred     []byte
+		signedAt time.Time
+		want     string
+	}{
+		"stale":        {ok, now.Add(-FreshnessWindow - time.Minute), "outside"},
+		"future":       {ok, now.Add(2 * time.Hour), "outside"},
+		"other tag":    {witnessPredicate(rel.Repo, "v0.0.9+b300", digest), now, "not this release"},
+		"other repo":   {witnessPredicate("tinfoilsh/confidential-y", rel.Tag, digest), now, "not this release"},
+		"other digest": {witnessPredicate(rel.Repo, rel.Tag, strings.Repeat("cd", 32)), now, "not this release"},
+		"not json":     {[]byte("x"), now, "unmarshal"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := checkWitness(tc.pred, rel, tc.signedAt, now)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("checkWitness err = %v, want one containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// An enclave that serves no witness for its release fails before any fetch.
+func TestCheckFreshness_NoWitness(t *testing.T) {
+	err := checkFreshness(context.Background(), attestation.TinfoilRelease{Repo: "tinfoilsh/x", Tag: "v1.0.0"}, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "no freshness witness") {
+		t.Errorf("checkFreshness err = %v", err)
 	}
 }

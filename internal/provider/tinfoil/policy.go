@@ -18,7 +18,7 @@ const GithubActionsOIDCIssuer = "https://token.actions.githubusercontent.com"
 // because attestation.orgImageFor builds the expected SAN from the attested
 // repo name itself. Before GH #118 this factor accepted only the
 // confidential- prefix and the two named repos. RouterRepo and
-// HardwareMeasurementsRepo are explicit Images entries, so Lookup resolves
+// PlatformRepo are explicit Images entries, so Lookup resolves
 // them before this rule applies. Guarded by TestOrgRepoPatternWidth.
 const orgRepoPattern = `^tinfoilsh/confidential-[a-z0-9][a-z0-9._-]*$`
 
@@ -54,7 +54,7 @@ func CloudSupplyChainPolicy() *attestation.SupplyChainPolicy {
 	return &attestation.SupplyChainPolicy{
 		Images: []attestation.ImageProvenance{
 			tinfoilImage(RouterRepo),
-			tinfoilImage(HardwareMeasurementsRepo),
+			tinfoilImage(PlatformRepo),
 		},
 		OrgSigner: orgSigner(),
 	}
@@ -62,7 +62,7 @@ func CloudSupplyChainPolicy() *attestation.SupplyChainPolicy {
 
 // directModelRepos are the Sigstore GitHub repos expected for the
 // tinfoil_v3_direct provider's per-model inference enclaves, in addition to
-// HardwareMeasurementsRepo. Tracking, not enforcement: the list feeds only
+// PlatformRepo. Tracking, not enforcement: the list feeds only
 // component_recognition, so a repo missing here is a persistent WARN while
 // the enforced signer factors are satisfied by the OrgSigner rule (SEE:
 // attestation.OrgSignerPolicy). Add a reviewed repo to silence its WARN.
@@ -84,6 +84,7 @@ var directModelRepos = func() []string {
 		add(repo)
 	}
 	for _, repo := range []string{
+		"tinfoilsh/confidential-deepseek-v4-1-flash",
 		"tinfoilsh/confidential-doc-upload",
 		"tinfoilsh/confidential-gemma4-31b",
 		"tinfoilsh/confidential-glm5-2",
@@ -110,6 +111,6 @@ func DirectSupplyChainPolicy() *attestation.SupplyChainPolicy {
 	for _, repo := range directModelRepos {
 		images = append(images, tinfoilImage(repo))
 	}
-	images = append(images, tinfoilImage(HardwareMeasurementsRepo))
+	images = append(images, tinfoilImage(PlatformRepo))
 	return &attestation.SupplyChainPolicy{Images: images, OrgSigner: orgSigner()}
 }

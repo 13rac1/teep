@@ -261,14 +261,16 @@ func TestInapplicableFactors(t *testing.T) {
 	if len(inapplicable) == 0 {
 		t.Fatal("InapplicableFactors returned empty map")
 	}
-	expected := []string{
-		"nvidia_nonce_client_bound", "nvidia_nras_verified",
-		"compose_binding",
-		"sigstore_verification", "event_log_integrity",
-	}
+	expected := []string{"compose_binding", "sigstore_verification", "event_log_integrity"}
 	for _, name := range expected {
 		if _, ok := inapplicable[name]; !ok {
 			t.Errorf("InapplicableFactors missing %q", name)
+		}
+	}
+	// Every NVIDIA factor applies: the GPUs answer the client nonce.
+	for _, name := range []string{"nvidia_nonce_client_bound", "nvidia_nras_verified"} {
+		if _, ok := inapplicable[name]; ok {
+			t.Errorf("%s should be applicable for Tinfoil", name)
 		}
 	}
 	// sigstore_code_verified should NOT be inapplicable for Tinfoil.

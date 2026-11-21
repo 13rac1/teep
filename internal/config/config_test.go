@@ -1306,25 +1306,6 @@ func TestMergedAllowFailNeardirectGoDefaults(t *testing.T) {
 	}
 }
 
-// TINFOIL_API_KEY configures tinfoil_v3_cloud only: tinfoil_v3_direct is
-// disabled, and proxy.New would refuse it at startup.
-func TestTinfoilAPIKeyDoesNotAddDisabledDirect(t *testing.T) {
-	unsetenv(t, "TEEP_CONFIG")
-	unsetenv(t, "TEEP_LISTEN_ADDR")
-	setenv(t, "TINFOIL_API_KEY", "test-key")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error: %v", err)
-	}
-	if cfg.Providers["tinfoil_v3_cloud"] == nil {
-		t.Error("TINFOIL_API_KEY did not configure tinfoil_v3_cloud")
-	}
-	if cfg.Providers["tinfoil_v3_direct"] != nil {
-		t.Error("TINFOIL_API_KEY configured the disabled tinfoil_v3_direct")
-	}
-}
-
 func TestMergedAllowFailTinfoilDirectAllowsNVSwitchByDefault(t *testing.T) {
 	unsetenv(t, "TEEP_CONFIG")
 	unsetenv(t, "TEEP_LISTEN_ADDR")
@@ -2047,5 +2028,36 @@ func TestMergedAllowFail_ACIGatewayMeasurement(t *testing.T) {
 		if !slices.Contains(got, attestation.FactorGWMeasurement) {
 			t.Errorf("%s ACI/1 default allow_fail does not allow %s to fail", name, attestation.FactorGWMeasurement)
 		}
+	}
+}
+
+// enclaves reaches tinfoil_v3_direct and is refused on any other provider.
+func TestLoadTOMLEnclaves(t *testing.T) {
+	unsetenv(t, "TEEP_LISTEN_ADDR")
+	unsetenv(t, "TINFOIL_API_KEY")
+	path := writeConfigFile(t, `
+[providers.tinfoil_v3_direct]
+api_key = "k"
+base_url = "https://inference.tinfoil.sh"
+enclaves = ["m-inf16-0.tinfoil.containers.tinfoil.dev"]
+`, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if got := cfg.Providers["tinfoil_v3_direct"].Enclaves; len(got) != 1 || got[0] != "m-inf16-0.tinfoil.containers.tinfoil.dev" {
+		t.Errorf("Enclaves = %v", got)
+	}
+
+	path = writeConfigFile(t, `
+[providers.tinfoil_v3_cloud]
+api_key = "k"
+base_url = "https://inference.tinfoil.sh"
+enclaves = ["m-inf16-0.tinfoil.containers.tinfoil.dev"]
+`, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "only tinfoil_v3_direct selects enclaves") {
+		t.Errorf("Load() err = %v, want enclaves refused for tinfoil_v3_cloud", err)
 	}
 }

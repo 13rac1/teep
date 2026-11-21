@@ -639,6 +639,8 @@ var TinfoilCloudDefaultAllowFail = []string{
 	FactorNvidiaPayloadPresent,
 	FactorNvidiaSignature,
 	FactorNvidiaClaims,
+	FactorNvidiaClientNonce,
+	FactorNvidiaNRAS,
 	FactorCPUGPUChain,
 	FactorNVSwitchBinding,
 	FactorComponentRecognition,
@@ -668,12 +670,12 @@ var TinfoilCloudDefaultAllowFail = []string{
 
 // TinfoilDirectDefaultAllowFail is the tinfoil_v3_direct default allow_fail
 // list. Direct inference attests per-model enclaves; NVSwitch binding is
-// reported but currently allowed to fail by default. response_schema is
-// enforced, for the reason given on the cloud list. tee_boot_config is
-// enforced here and not on the cloud list: a per-model enclave exposes the
-// hardware platform measurements (MRTD + RTMR0 for TDX) that must match the
-// Sigstore-attested tinfoilsh/hardware-measurements registry, and the cloud
-// router exposes none.
+// reported but allowed to fail by default, because no enclave serves NVSwitch
+// evidence. response_schema is enforced, for the reason given on the cloud
+// list. tee_boot_config is enforced here and not on the cloud list: a
+// per-model enclave exposes the hardware platform measurements (MRTD + RTMR0
+// for TDX) that must match the Sigstore-signed platform release in
+// tinfoilsh/cvmimage, and the cloud router exposes none.
 var TinfoilDirectDefaultAllowFail = []string{
 	FactorCPUIDRegistry,
 	FactorIntelPCSCollateral,
@@ -2422,11 +2424,10 @@ func evalNVSwitchBinding(in *ReportInput) []FactorResult {
 		return factor(TierSupplyChain, FactorNVSwitchBinding, Fail,
 			"NVSwitch evidence hash mismatch (server-side JSON re-encoding bug)")
 	}
-	// GPUHashBound but no NVSwitch — topology doesn't require it (< 8 GPUs
-	// or Blackwell-only). This is a successful verification outcome: the
-	// GPU topology was validated and NVSwitch is correctly absent.
-	return factor(TierSupplyChain, FactorNVSwitchBinding, Pass,
-		"NVSwitch not required for this GPU topology (verified absent)")
+	// GPUHashBound with no NVSwitch evidence. The document does not say
+	// whether an NVSwitch fabric connects the GPUs, so teep cannot check it.
+	return factor(TierSupplyChain, FactorNVSwitchBinding, Fail,
+		"the enclave serves no NVSwitch evidence; teep cannot check whether an NVSwitch fabric connects its GPUs")
 }
 func evalMeasuredModelWeights(in *ReportInput) []FactorResult {
 	// Tinfoil: dm-verity root hash is part of the Sigstore-verified code

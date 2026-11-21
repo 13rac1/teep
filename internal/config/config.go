@@ -113,6 +113,7 @@ type ProviderConfig struct {
 	BaseURL   string       `toml:"base_url"`
 	E2EE      bool         `toml:"e2ee"`
 	AllowFail []string     `toml:"allow_fail"`
+	Enclaves  []string     `toml:"enclaves"`
 	Policy    PolicyConfig `toml:"policy"`
 }
 
@@ -153,6 +154,10 @@ type Provider struct {
 	BaseURL string
 	APIKey  string
 	E2EE    bool
+
+	// Enclaves, for tinfoil_v3_direct, restricts requests to these enclave
+	// domains of the model. Empty means every enclave Tinfoil lists.
+	Enclaves []string
 }
 
 // Config is the fully resolved runtime configuration for the teep proxy.
@@ -355,6 +360,9 @@ func loadTOML(cfg *Config, path string) error {
 		pc := f.Providers[name]
 		p := resolveProvider(name, &pc)
 		cfg.Providers[name] = p
+		if meta.IsDefined("providers", name, "enclaves") && name != "tinfoil_v3_direct" {
+			return fmt.Errorf("providers.%s.enclaves: only tinfoil_v3_direct selects enclaves", name)
+		}
 
 		// Parse per-provider allow_fail list.
 		// Use meta.IsDefined to distinguish "not set" from explicitly empty
@@ -619,10 +627,11 @@ func resolveProvider(name string, pc *ProviderConfig) *Provider {
 	}
 
 	return &Provider{
-		Name:    name,
-		BaseURL: pc.BaseURL,
-		APIKey:  apiKey,
-		E2EE:    pc.E2EE,
+		Name:     name,
+		BaseURL:  pc.BaseURL,
+		APIKey:   apiKey,
+		E2EE:     pc.E2EE,
+		Enclaves: pc.Enclaves,
 	}
 }
 
@@ -668,8 +677,7 @@ func applyEnvOverrides(cfg *Config) {
 	applyAPIKeyEnv(cfg, "phalacloud", "PHALA_API_KEY", "https://tee.redpill.ai", true)
 	applyAPIKeyEnv(cfg, "chutes", "CHUTES_API_KEY", "https://api.chutes.ai", true)
 	applyAPIKeyEnv(cfg, "tinfoil_v3_cloud", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", true)
-	// tinfoil_v3_direct is disabled (tinfoil.DirectDisabledMessage), so
-	// TINFOIL_API_KEY does not add it: proxy.New refuses it at startup.
+	applyAPIKeyEnv(cfg, "tinfoil_v3_direct", "TINFOIL_API_KEY", "https://inference.tinfoil.sh", true)
 }
 
 // applyAPIKeyEnv sets or updates the API key for the named provider from the

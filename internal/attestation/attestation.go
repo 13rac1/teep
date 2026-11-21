@@ -82,6 +82,18 @@ type GPUEvidence struct {
 	Arch        string `json:"arch"`        // GPU architecture (e.g. "HOPPER")
 }
 
+// TinfoilRelease names one Sigstore-signed GitHub release: the repo, the
+// release tag, and the sha256 digest of the signed subject.
+type TinfoilRelease struct {
+	Repo   string
+	Tag    string
+	Digest string
+
+	// Freshness is the Sigstore bundle of the freshness witness the enclave
+	// serves for this release.
+	Freshness []byte
+}
+
 // EventLogEntry is one entry in the TDX event log — a RTMR extend event.
 // The JSON tags match both Venice and NEAR AI attestation response formats.
 type EventLogEntry struct {
@@ -228,6 +240,13 @@ type RawAttestation struct {
 	// Populated by the DirectAttester from the proxy discovery endpoint.
 	// Empty for the cloud provider (which always uses the router repo).
 	TinfoilRepo string `json:"-"`
+
+	// TinfoilCodeRelease and TinfoilPlatformRelease are the releases the
+	// enclave names in its "code" and "platform" collateral. They are
+	// unauthenticated hints: supply chain verification checks each against
+	// its Sigstore bundle and the repo's release list.
+	TinfoilCodeRelease     TinfoilRelease `json:"-"`
+	TinfoilPlatformRelease TinfoilRelease `json:"-"`
 
 	// ACI/1-specific fields — populated by the Venice ACI/1 parser
 	// (internal/provider/aci/aci.go). ACI/1 publishes no manifest for

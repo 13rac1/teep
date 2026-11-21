@@ -90,6 +90,7 @@ type updateProvider struct {
 	BaseURL   string       `toml:"base_url,omitempty"`
 	E2EE      bool         `toml:"e2ee,omitempty"`
 	AllowFail []string     `toml:"allow_fail,omitempty"`
+	Enclaves  []string     `toml:"enclaves,omitempty"`
 	Policy    updatePolicy `toml:"policy,omitempty"`
 }
 

@@ -3,22 +3,18 @@ package tinfoil
 import "github.com/13rac1/teep/internal/attestation"
 
 // InapplicableFactors returns the set of factors that don't apply to Tinfoil.
-// Tinfoil uses Sigstore DSSE instead of compose/Rekor, and binds GPU evidence
-// freshness through the REPORTDATA hash chain rather than a direct SPDM nonce.
+// Tinfoil uses Sigstore DSSE instead of compose/Rekor.
 //
-// The other NVIDIA factors stay applicable but are never emitted today: the v3
-// parser rejects a document carrying device evidence teep does not read yet, so
-// FetchAttestation returns an error and no report is built.
-// SEE: checkDeviceEvidence in attestation.go.
+// The NVIDIA factors all apply: an enclave with GPUs sends the client nonce as
+// each GPU's SPDM requester nonce, and teep submits the same evidence to NRAS.
+// SEE: readDeviceEvidence in attestation.go.
 func InapplicableFactors() attestation.InapplicableFactors {
 	return attestation.InapplicableFactors{
-		// NVIDIA: nonce freshness via REPORTDATA chain, NRAS is EAT-specific.
-		"nvidia_nonce_client_bound": "Tinfoil binds GPU nonce freshness via REPORTDATA hash chain, not direct SPDM nonce",
-		"nvidia_nras_verified":      "NRAS is an EAT-JWT cloud service; Tinfoil uses direct SPDM verification",
-
-		// Supply chain: Tinfoil uses Sigstore DSSE, not compose/Rekor model.
-		"compose_binding":       "Tinfoil uses Sigstore DSSE, not compose-based binding",
-		"sigstore_verification": "Tinfoil uses Sigstore DSSE, not per-image cosign verification",
-		"event_log_integrity":   "Tinfoil does not expose TDX event logs",
+		// Tinfoil names the software in a Sigstore-signed release, not a
+		// compose: the release's code measurements are RTMR1 and RTMR2 (TDX)
+		// or the launch measurement (SEV-SNP), and RTMR3 is zero.
+		"compose_binding":       "Tinfoil has no compose; covered by sigstore_code_verified and tee_measurement (the quote matches a Sigstore-signed release)",
+		"sigstore_verification": "Tinfoil publishes no per-image cosign signatures; the release, which pins the image digest, is checked by sigstore_code_verified",
+		"event_log_integrity":   "Tinfoil has no runtime event log (RTMR3 is zero, checked by tee_hardware_config); covered by sigstore_code_verified and tee_measurement",
 	}
 }

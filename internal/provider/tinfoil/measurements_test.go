@@ -159,37 +159,38 @@ func TestCompareMultiPlatformSEVSNP_Mismatch(t *testing.T) {
 	}
 }
 
-func TestParseHardwareMeasurements(t *testing.T) {
-	pred := HardwareMeasurementsPredicate{
-		"hw-1": {MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
-		"hw-2": {MRTD: makeHex48(0x03), RTMR0: makeHex48(0x04)},
-	}
-	data, err := json.Marshal(pred)
+// The platform-endorsements/v1 predicate lists each machine shape's MRTD and
+// RTMR0 under "measurements", beside fields teep does not read.
+func TestParsePlatformMeasurements(t *testing.T) {
+	data := []byte(`{"format":"` + PredicatePlatformEndorsements + `","measurements":{` +
+		`"hw-1":{"mrtd":"` + makeHex48(0x01) + `","rtmr0":"` + makeHex48(0x02) + `","shape":{"gpus":4}},` +
+		`"hw-2":{"mrtd":"` + makeHex48(0x03) + `","rtmr0":"` + makeHex48(0x04) + `"}},` +
+		`"machines":{},"policies":{}}`)
+	entries, err := ParsePlatformMeasurements(data)
 	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
+		t.Fatalf("ParsePlatformMeasurements: %v", err)
 	}
-
-	entries, err := ParseHardwareMeasurements(data)
-	if err != nil {
-		t.Fatalf("ParseHardwareMeasurements failed: %v", err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(entries))
-	}
-	if _, ok := entries["hw-1"]; !ok {
-		t.Errorf("entries should contain key hw-1, got %d entries", len(entries))
+	if len(entries) != 2 || entries["hw-1"].RTMR0 != makeHex48(0x02) {
+		t.Fatalf("entries = %v", entries)
 	}
 }
 
-func TestParseHardwareMeasurements_InvalidJSON(t *testing.T) {
-	_, err := ParseHardwareMeasurements([]byte(`not json`))
-	if err == nil {
-		t.Fatal("expected error for invalid JSON")
+func TestParsePlatformMeasurements_Rejects(t *testing.T) {
+	for name, data := range map[string]string{
+		"invalid json":    `not json`,
+		"other format":    `{"format":"https://tinfoil.sh/predicate/hardware-measurements/v1","measurements":{"a":{}}}`,
+		"no measurements": `{"format":"` + PredicatePlatformEndorsements + `","measurements":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParsePlatformMeasurements([]byte(data)); err == nil {
+				t.Fatal("ParsePlatformMeasurements succeeded")
+			}
+		})
 	}
 }
 
 func TestMatchHardwareMeasurements_Match(t *testing.T) {
-	entries := HardwareMeasurementsPredicate{
+	entries := map[string]HardwareMeasurementEntry{
 		"hw-1": {MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
 		"hw-2": {MRTD: makeHex48(0x03), RTMR0: makeHex48(0x04)},
 	}
@@ -208,7 +209,7 @@ func TestMatchHardwareMeasurements_Match(t *testing.T) {
 }
 
 func TestMatchHardwareMeasurements_NoMatch(t *testing.T) {
-	entries := HardwareMeasurementsPredicate{
+	entries := map[string]HardwareMeasurementEntry{
 		"hw-1": {MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
 	}
 	enclave := &EnclaveMeasurements{
@@ -224,7 +225,7 @@ func TestMatchHardwareMeasurements_NoMatch(t *testing.T) {
 
 func TestMatchHardwareMeasurements_PartialMatch(t *testing.T) {
 	// MRTD matches but RTMR0 does not.
-	entries := HardwareMeasurementsPredicate{
+	entries := map[string]HardwareMeasurementEntry{
 		"hw-1": {MRTD: makeHex48(0x01), RTMR0: makeHex48(0x02)},
 	}
 	enclave := &EnclaveMeasurements{

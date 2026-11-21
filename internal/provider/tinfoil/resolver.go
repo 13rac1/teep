@@ -104,6 +104,7 @@ type DirectResolver struct {
 	proxyURL string
 	apiKey   string
 	client   *http.Client
+	enclaves []string // configured enclave domains; empty admits all
 
 	mu        sync.RWMutex
 	mapping   map[string]ModelMapping // model → mapping
@@ -122,6 +123,12 @@ func NewDirectResolver(apiKey string, offline ...bool) *DirectResolver {
 		client:   tlsct.NewHTTPClient(30*time.Second, ctEnabled),
 		mapping:  make(map[string]ModelMapping),
 	}
+}
+
+// RestrictEnclaves limits every mapping to the given enclave domains. A model
+// none of whose enclaves is listed fails to resolve. Call before first use.
+func (r *DirectResolver) RestrictEnclaves(domains []string) {
+	r.enclaves = slices.Clone(domains)
 }
 
 // SetClient replaces the HTTP client used for model discovery. Safe for
@@ -162,7 +169,7 @@ func (r *DirectResolver) ResolveMapping(ctx context.Context, model string) (Mode
 
 	if ok && !stale {
 		m.Domains = slices.Clone(m.Domains)
-		return m, nil
+		return r.restrict(model, m)
 	}
 
 	// Collapse concurrent refreshes into a single HTTP call.
@@ -196,7 +203,7 @@ func (r *DirectResolver) ResolveMapping(ctx context.Context, model string) (Mode
 		return ModelMapping{}, fmt.Errorf("unknown model %q (not in tinfoil proxy discovery)", model)
 	}
 	m.Domains = slices.Clone(m.Domains)
-	return m, nil
+	return r.restrict(model, m)
 }
 
 // SelectDomain selects a backend enclave domain from the mapping
@@ -251,6 +258,26 @@ func (r *DirectResolver) CloseIdleConnections() {
 	client := r.client
 	r.mu.RUnlock()
 	client.CloseIdleConnections()
+}
+
+// restrict applies the configured enclave list to a mapping.
+func (r *DirectResolver) restrict(model string, m ModelMapping) (ModelMapping, error) {
+	if len(r.enclaves) == 0 {
+		return m, nil
+	}
+	var kept []string
+	for _, d := range m.Domains {
+		if slices.Contains(r.enclaves, d) {
+			kept = append(kept, d)
+		}
+	}
+	if len(kept) == 0 {
+		return ModelMapping{}, fmt.Errorf("none of the configured enclaves %v serves model %q (Tinfoil lists %v)",
+			r.enclaves, model, m.Domains)
+	}
+	m.Domains = kept
+	m.Domain = kept[0]
+	return m, nil
 }
 
 // refresh fetches the model-to-enclave mapping from the proxy discovery

@@ -44,6 +44,8 @@ e2ee = true
 # base_url is not used for tinfoil_v3_direct; model discovery is automatic
 api_key_env = "TINFOIL_API_KEY"
 e2ee = true
+# Optional: send requests only to these enclave domains of the model.
+# enclaves = ["deepseek-v4-1-flash-inf16-0.tinfoil.containers.tinfoil.dev"]
 
 # ---------------------------------------------------------------------------
 # Global Policy

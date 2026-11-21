@@ -2,6 +2,7 @@ package tinfoil
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -9,13 +10,21 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/13rac1/teep/internal/attestation"
 )
 
 // Captured documents. SEE: the file header comment in each for provenance.
 const (
 	fixtureCloudRouter = "testdata/v3_cloud_router.json"
 	fixtureDirectGPU   = "testdata/v3_direct_gpu.json"
-	fixtureSuperseded  = "testdata/superseded.json"
+
+	// deepseek-v4-1-flash enclaves, captured 2026-11-20 with a random nonce:
+	// inf16-0 (TDX, release v0.0.10+b200) and inf22-0 (SEV-SNP,
+	// v0.0.10+b300). Each serves four Blackwell GPUs.
+	fixtureDirectTDXB200 = "testdata/v3_direct_tdx_b200.json"
+	fixtureDirectSNPB300 = "testdata/v3_direct_snp_b300.json"
+	fixtureSuperseded    = "testdata/superseded.json"
 )
 
 // docBuilder builds a v3 attestation document the way an enclave does: it
@@ -191,14 +200,57 @@ func TestParseV3Document_RetainsHashedSectionBytes(t *testing.T) {
 	}
 }
 
-// A captured enclave that reports GPUs must fail closed until teep reads them.
-func TestParseV3Document_CapturedGPUEnclaveRejected(t *testing.T) {
-	_, err := parseV3Document(readFixture(t, fixtureDirectGPU))
-	if err == nil {
-		t.Fatal("parseV3Document accepted a document with device evidence teep does not read")
+// A captured GPU enclave's evidence becomes an NVIDIA EAT whose nonce is the
+// challenge nonce, and every GPU's certificate chain and SPDM signature
+// verifies against that nonce. The collateral names the code and platform
+// releases.
+func TestParseV3Document_CapturedGPUEnclaves(t *testing.T) {
+	tests := map[string]struct {
+		path, hardware, arch, codeRepo, codeTag string
+		gpus                                    int
+	}{
+		"hopper": {fixtureDirectGPU, HardwareAMDSEV, "HOPPER", "tinfoilsh/confidential-gemma4-31b", "v0.0.25", 1},
+		"tdx_b200": {fixtureDirectTDXB200, HardwareIntelTDX, "BLACKWELL",
+			"tinfoilsh/confidential-deepseek-v4-1-flash", "v0.0.10+b200", 4},
+		"snp_b300": {fixtureDirectSNPB300, HardwareAMDSEV, "BLACKWELL",
+			"tinfoilsh/confidential-deepseek-v4-1-flash", "v0.0.10+b300", 4},
 	}
-	if !strings.Contains(err.Error(), NvidiaGPUEvidenceV1Format) {
-		t.Errorf("error does not name the unread item format: %v", err)
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			raw, err := parseV3Document(readFixture(t, tc.path))
+			if err != nil {
+				t.Fatalf("parseV3Document: %v", err)
+			}
+			if raw.TEEHardware != tc.hardware {
+				t.Errorf("TEEHardware = %q, want %q", raw.TEEHardware, tc.hardware)
+			}
+			if raw.TinfoilCodeRelease.Repo != tc.codeRepo || raw.TinfoilCodeRelease.Tag != tc.codeTag {
+				t.Errorf("code release = %+v, want %s@%s", raw.TinfoilCodeRelease, tc.codeRepo, tc.codeTag)
+			}
+			if raw.TinfoilPlatformRelease.Repo == "" || len(raw.TinfoilPlatformRelease.Digest) != hexFieldLen {
+				t.Errorf("platform release = %+v", raw.TinfoilPlatformRelease)
+			}
+			nonceBytes, err := hex.DecodeString(raw.Nonce)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var nonce attestation.Nonce
+			copy(nonce[:], nonceBytes)
+			r := attestation.VerifyNVIDIAPayload(context.Background(), raw.NvidiaPayload, nonce)
+			if r.SignatureErr != nil || r.ClaimsErr != nil || !r.SignaturesVerified {
+				t.Fatalf("GPU evidence did not verify: sig=%v claims=%v", r.SignatureErr, r.ClaimsErr)
+			}
+			if r.GPUCount != tc.gpus || r.Arch != tc.arch || r.Nonce != raw.Nonce {
+				t.Errorf("verified %d %s GPUs with nonce %s, want %d %s with %s",
+					r.GPUCount, r.Arch, r.Nonce, tc.gpus, tc.arch, raw.Nonce)
+			}
+
+			var other attestation.Nonce
+			other[0] = nonce[0] ^ 1
+			if r := attestation.VerifyNVIDIAPayload(context.Background(), raw.NvidiaPayload, other); r.SignaturesVerified {
+				t.Error("GPU evidence verified against a nonce it does not carry")
+			}
+		})
 	}
 }
 
@@ -488,22 +540,119 @@ func rebuildWithCryptoItems(t *testing.T, edit func([]v3CryptoMaterialItem) []v3
 	})
 }
 
-func TestParseV3Document_RejectsUnreadDeviceEvidence(t *testing.T) {
-	b := newDocBuilder()
-	b.deviceItems = []v3DeviceEvidenceItem{{
-		ID:       "gpu0",
-		Kind:     "gpu",
-		Vendor:   "nvidia",
-		Format:   NvidiaGPUEvidenceV1Format,
-		Evidence: json.RawMessage(`{"arch":"HOPPER"}`),
-	}}
-	body, _ := b.build(t)
-	_, err := parseV3Document(body)
-	if err == nil {
-		t.Fatal("parseV3Document accepted device evidence teep does not read")
+// gpuItem is one GPU evidence item with the builder's nonce.
+func gpuItem(b *docBuilder, id string) v3DeviceEvidenceItem {
+	ev, err := json.Marshal(nvidiaGPUEvidence{
+		Arch: "BLACKWELL", Certificate: "Y2VydA==", Evidence: "ZXZpZGVuY2U=", Nonce: hex.EncodeToString(b.nonce[:]),
+	})
+	if err != nil {
+		panic(err)
 	}
-	if !strings.Contains(err.Error(), NvidiaGPUEvidenceV1Format) {
-		t.Errorf("error does not name the item format: %v", err)
+	return v3DeviceEvidenceItem{ID: id, Kind: "gpu", Vendor: "nvidia", Format: NvidiaGPUEvidenceV1Format, Evidence: ev}
+}
+
+func TestParseV3Document_ReadsGPUEvidence(t *testing.T) {
+	b := newDocBuilder()
+	b.deviceItems = []v3DeviceEvidenceItem{gpuItem(b, "gpu0"), gpuItem(b, "gpu1")}
+	body, _ := b.build(t)
+	raw, err := parseV3Document(body)
+	if err != nil {
+		t.Fatalf("parseV3Document: %v", err)
+	}
+	var eat nvidiaEAT
+	if err := json.Unmarshal([]byte(raw.NvidiaPayload), &eat); err != nil {
+		t.Fatalf("NvidiaPayload is not an EAT: %v", err)
+	}
+	if eat.Nonce != hex.EncodeToString(b.nonce[:]) || eat.Arch != "BLACKWELL" || len(eat.EvidenceList) != 2 ||
+		eat.EvidenceList[1].Evidence != "ZXZpZGVuY2U=" {
+		t.Errorf("EAT = %+v", eat)
+	}
+}
+
+// A document with no device evidence carries no NVIDIA payload.
+func TestParseV3Document_NoDevices(t *testing.T) {
+	body, _ := newDocBuilder().build(t)
+	raw, err := parseV3Document(body)
+	if err != nil {
+		t.Fatalf("parseV3Document: %v", err)
+	}
+	if raw.NvidiaPayload != "" {
+		t.Errorf("NvidiaPayload = %q, want empty", raw.NvidiaPayload)
+	}
+}
+
+func TestParseV3Document_RejectsDeviceEvidence(t *testing.T) {
+	tests := map[string]struct {
+		edit func(b *docBuilder, items []v3DeviceEvidenceItem)
+		want string
+	}{
+		"unknown format": {func(_ *docBuilder, it []v3DeviceEvidenceItem) { it[0].Format = "https://tinfoil.sh/format/nvswitch/v1" }, "not evidence teep reads"},
+		"other kind":     {func(_ *docBuilder, it []v3DeviceEvidenceItem) { it[0].Kind = "nvswitch" }, "not evidence teep reads"},
+		"other vendor":   {func(_ *docBuilder, it []v3DeviceEvidenceItem) { it[0].Vendor = "amd" }, "not evidence teep reads"},
+		"repeated id":    {func(_ *docBuilder, it []v3DeviceEvidenceItem) { it[1].ID = it[0].ID }, "empty or repeated"},
+		"other nonce": {func(b *docBuilder, it []v3DeviceEvidenceItem) {
+			it[1].Evidence = []byte(strings.Replace(string(it[1].Evidence), hex.EncodeToString(b.nonce[:]), strings.Repeat("ab", 32), 1))
+		}, "not the challenge nonce"},
+		"mixed arch": {func(_ *docBuilder, it []v3DeviceEvidenceItem) {
+			it[1].Evidence = []byte(strings.Replace(string(it[1].Evidence), "BLACKWELL", "HOPPER", 1))
+		}, "arch"},
+		"extra field": {func(_ *docBuilder, it []v3DeviceEvidenceItem) {
+			it[0].Evidence = []byte(strings.Replace(string(it[0].Evidence), "{", `{"nvswitch":"x",`, 1))
+		}, "schema mismatch"},
+		"absent field": {func(_ *docBuilder, it []v3DeviceEvidenceItem) {
+			it[0].Evidence = []byte(strings.Replace(string(it[0].Evidence), `"certificate":"Y2VydA==",`, "", 1))
+		}, "schema mismatch"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			b := newDocBuilder()
+			items := []v3DeviceEvidenceItem{gpuItem(b, "gpu0"), gpuItem(b, "gpu1")}
+			tc.edit(b, items)
+			b.deviceItems = items
+			body, _ := b.build(t)
+			_, err := parseV3Document(body)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("parseV3Document err = %v, want one containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadReleases(t *testing.T) {
+	digest := strings.Repeat("ab", 32)
+	entry := func(id, format, repo, tag, digest string) v3Collateral {
+		data, err := json.Marshal(v3ReleaseCollateral{Repo: repo, Tag: tag, Digest: digest, SigstoreBundle: json.RawMessage(`{}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v3Collateral{ID: id, Role: roleReferenceValues, Format: format, Data: data}
+	}
+	code, platform, err := readReleases([]v3Collateral{
+		entry("code", sigstoreCodeV1Format, "tinfoilsh/confidential-x", "v0.0.1+b200", digest),
+		entry("platform", sigstorePlatformV1Format, PlatformRepo, "platform-v0.1.15", digest),
+		{ID: "code-freshness", Role: roleReferenceValues, Format: sigstoreFreshnessV1Format, Data: json.RawMessage(`{"sigstore_bundle":{"b":1}}`)},
+		{ID: "platform-freshness", Role: roleReferenceValues, Format: sigstoreFreshnessV1Format, Data: json.RawMessage(`{"sigstore_bundle":{"b":2}}`)},
+	})
+	if err != nil {
+		t.Fatalf("readReleases: %v", err)
+	}
+	if code.Repo != "tinfoilsh/confidential-x" || code.Tag != "v0.0.1+b200" || platform.Tag != "platform-v0.1.15" {
+		t.Errorf("code = %+v, platform = %+v", code, platform)
+	}
+	if string(code.Freshness) != `{"b":1}` || string(platform.Freshness) != `{"b":2}` {
+		t.Errorf("freshness bundles = %s, %s", code.Freshness, platform.Freshness)
+	}
+
+	for name, e := range map[string]v3Collateral{
+		"bad repo":   entry("code", sigstoreCodeV1Format, "not a repo", "v1.0.0", digest),
+		"bad tag":    entry("code", sigstoreCodeV1Format, "tinfoilsh/x", "v1/../x", digest),
+		"bad digest": entry("platform", sigstorePlatformV1Format, PlatformRepo, "platform-v1.0.0", "ABCD"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := readReleases([]v3Collateral{e}); err == nil {
+				t.Error("readReleases accepted an invalid release")
+			}
+		})
 	}
 }
 

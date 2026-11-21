@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -246,6 +247,26 @@ func TestVerifyReportData_Valid(t *testing.T) {
 	}
 	if !strings.Contains(detail, "reportdata_hash verified") {
 		t.Errorf("detail = %q, want it to report a verified hash", detail)
+	}
+}
+
+// gpu_bound reports whether the REPORT_DATA-bound device_evidence section
+// carries GPU evidence. The supply chain step reads it for cpu_gpu_chain.
+func TestVerifyReportData_GPUBound(t *testing.T) {
+	for _, gpus := range []int{0, 2} {
+		b := newDocBuilder()
+		for i := range gpus {
+			b.deviceItems = append(b.deviceItems, gpuItem(b, fmt.Sprintf("gpu%d", i)))
+		}
+		raw, reportData := parsedDocument(t, b)
+		detail, err := ReportDataVerifier{}.VerifyReportData(reportData, raw, b.nonce)
+		if err != nil {
+			t.Fatalf("VerifyReportData: %v", err)
+		}
+		want := fmt.Sprintf("gpu_bound=%t", gpus > 0)
+		if !strings.Contains(detail, want) {
+			t.Errorf("%d GPUs: detail = %q, want %s", gpus, detail, want)
+		}
 	}
 }
 

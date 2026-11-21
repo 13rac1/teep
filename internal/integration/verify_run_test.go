@@ -202,8 +202,10 @@ func TestVerifyRun_TinfoilDirect_Fixture(t *testing.T) {
 
 	// Direct mode uses the proxy discovery endpoint on inference.tinfoil.sh
 	// to resolve model → backend enclave domain, then fetches attestation
-	// from the resolved enclave.
+	// from the resolved enclave. The capture is of inf16-0, selected with
+	// enclaves.
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, "https://inference.tinfoil.sh")
+	cp.Enclaves = []string{"deepseek-v4-1-flash-inf16-0.tinfoil.containers.tinfoil.dev"}
 
 	report, err := verify.Run(context.Background(), &verify.Options{
 		Config:                   cfg,
