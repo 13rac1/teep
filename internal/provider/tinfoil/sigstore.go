@@ -63,6 +63,11 @@ type githubAttestation struct {
 // SigstoreVerifier fetches and verifies Sigstore attestations from GitHub.
 type SigstoreVerifier struct {
 	client *http.Client
+
+	// trusted is the Sigstore trusted root, fetched on first use and kept
+	// for the verifier's life: one supply chain check verifies up to four
+	// bundles.
+	trusted root.TrustedMaterial
 }
 
 // NewSigstoreVerifier returns a SigstoreVerifier using the given HTTP client.
@@ -117,18 +122,18 @@ func (sv *SigstoreVerifier) VerifyRelease(ctx context.Context, rel attestation.T
 		return nil, "", SignerIdentity{}, fmt.Errorf("release %s@%s: digest %s was signed by %q, not for that tag",
 			rel.Repo, rel.Tag, rel.Digest, signer.SAN)
 	}
-	if err := checkFreshness(ctx, rel, now); err != nil {
+	if err := sv.checkFreshness(ctx, rel, now); err != nil {
 		return nil, "", SignerIdentity{}, fmt.Errorf("release %s@%s: %w", rel.Repo, rel.Tag, err)
 	}
 	return predicateBytes, predicateType, signer, nil
 }
 
 // checkFreshness verifies the freshness witness of rel.
-func checkFreshness(ctx context.Context, rel attestation.TinfoilRelease, now time.Time) error {
+func (sv *SigstoreVerifier) checkFreshness(ctx context.Context, rel attestation.TinfoilRelease, now time.Time) error {
 	if len(rel.Freshness) == 0 {
 		return errors.New("the enclave serves no freshness witness")
 	}
-	predicateBytes, predicateType, _, signedAt, err := verifyBundle(ctx, rel.Freshness, rel.Digest,
+	predicateBytes, predicateType, _, signedAt, err := sv.verifyBundle(ctx, rel.Freshness, rel.Digest,
 		"^"+regexp.QuoteMeta(FreshnessWitnessSAN)+"$")
 	if err != nil {
 		return fmt.Errorf("freshness witness: %w", err)
@@ -171,7 +176,7 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 		return nil, "", SignerIdentity{}, fmt.Errorf("no attestations found for sha256:%s", digest)
 	}
 
-	predicateBytes, predicateType, signer, _, err = verifyBundle(ctx, resp.Attestations[0].Bundle, digest, WorkflowPattern(repo))
+	predicateBytes, predicateType, signer, _, err = sv.verifyBundle(ctx, resp.Attestations[0].Bundle, digest, WorkflowPattern(repo))
 	return predicateBytes, predicateType, signer, err
 }
 
@@ -179,19 +184,15 @@ func (sv *SigstoreVerifier) fetchAndVerifyAttestation(ctx context.Context, repo,
 // by a GitHub Actions Fulcio certificate whose SAN matches sanPattern. It
 // returns the in-toto predicate, the signer, and the earliest verified
 // signing timestamp.
-func verifyBundle(ctx context.Context, bundleJSON []byte, digest, sanPattern string) (predicateBytes []byte, predicateType string, signer SignerIdentity, signedAt time.Time, err error) {
+func (sv *SigstoreVerifier) verifyBundle(ctx context.Context, bundleJSON []byte, digest, sanPattern string) (predicateBytes []byte, predicateType string, signer SignerIdentity, signedAt time.Time, err error) {
 	var b bundle.Bundle
 	if err := b.UnmarshalJSON(bundleJSON); err != nil {
 		return nil, "", SignerIdentity{}, time.Time{}, fmt.Errorf("parse DSSE bundle: %w", err)
 	}
 
-	// Get trusted root from Sigstore TUF.
-	rootClient := tlsct.NewHTTPClient(30 * time.Second)
-	defer rootClient.CloseIdleConnections()
-	rootFetcher := newTrustedRootFetcher(ctx, rootClient)
-	trustedRoot, err := root.FetchTrustedRootWithOptions(tuf.DefaultOptions().WithFetcher(rootFetcher))
+	trustedRoot, err := sv.trustedRoot(ctx)
 	if err != nil {
-		return nil, "", SignerIdentity{}, time.Time{}, fmt.Errorf("fetch Sigstore trusted root: %w", err)
+		return nil, "", SignerIdentity{}, time.Time{}, err
 	}
 
 	// Build verification policy.
@@ -273,6 +274,25 @@ func verifyBundle(ctx context.Context, bundleJSON []byte, digest, sanPattern str
 		}
 	}
 	return predicateJSON, statement.GetPredicateType(), signer, signedAt, nil
+}
+
+// trustedRoot returns the Sigstore trusted root, fetching it through TUF on
+// first use. The TUF client keeps no disk cache: teep runs on read-only
+// filesystems (a container with only /tmp writable), where the default cache
+// under $HOME/.sigstore cannot be created.
+func (sv *SigstoreVerifier) trustedRoot(ctx context.Context) (root.TrustedMaterial, error) {
+	if sv.trusted != nil {
+		return sv.trusted, nil
+	}
+	rootClient := tlsct.NewHTTPClient(30 * time.Second)
+	defer rootClient.CloseIdleConnections()
+	opts := tuf.DefaultOptions().WithFetcher(newTrustedRootFetcher(ctx, rootClient)).WithDisableLocalCache()
+	trusted, err := root.FetchTrustedRootWithOptions(opts)
+	if err != nil {
+		return nil, fmt.Errorf("fetch Sigstore trusted root: %w", err)
+	}
+	sv.trusted = trusted
+	return trusted, nil
 }
 
 func githubProxyURL(pathFormat string, args ...any) string {

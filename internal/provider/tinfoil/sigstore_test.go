@@ -222,8 +222,29 @@ func TestCheckWitness(t *testing.T) {
 
 // An enclave that serves no witness for its release fails before any fetch.
 func TestCheckFreshness_NoWitness(t *testing.T) {
-	err := checkFreshness(context.Background(), attestation.TinfoilRelease{Repo: "tinfoilsh/x", Tag: "v1.0.0"}, time.Now())
+	err := (&SigstoreVerifier{}).checkFreshness(context.Background(), attestation.TinfoilRelease{Repo: "tinfoilsh/x", Tag: "v1.0.0"}, time.Now())
 	if err == nil || !strings.Contains(err.Error(), "no freshness witness") {
 		t.Errorf("checkFreshness err = %v", err)
+	}
+}
+
+// The release an enclave names must be in the repo teep expects, and an
+// enclave that names none fails. Both return before any fetch.
+func TestVerifyNamedRelease_Rejects(t *testing.T) {
+	sv := &SigstoreVerifier{}
+	digest := strings.Repeat("ab", 32)
+	for name, tc := range map[string]struct {
+		rel  attestation.TinfoilRelease
+		want string
+	}{
+		"absent":     {attestation.TinfoilRelease{}, "names no code release"},
+		"other repo": {attestation.TinfoilRelease{Repo: "tinfoilsh/confidential-other", Tag: "v1.0.0", Digest: digest}, "want tinfoilsh/confidential-x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, _, err := verifyNamedRelease(context.Background(), sv, tc.rel, "code", "tinfoilsh/confidential-x", time.Now())
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("verifyNamedRelease err = %v, want one containing %q", err, tc.want)
+			}
+		})
 	}
 }
