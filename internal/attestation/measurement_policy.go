@@ -6,14 +6,28 @@ type MeasurementPolicy struct {
 	MRTDAllow   map[string]struct{}
 	MRSeamAllow map[string]struct{}
 	RTMRAllow   [4]map[string]struct{}
-	// ComposeHashAllow lists sha256(app_compose) values; only the gateway
-	// policy sets it.
-	ComposeHashAllow map[string]struct{}
+	// Compose is the gateway compose policy; only the gateway policy sets it.
+	Compose *GatewayComposePolicy
+}
+
+// GatewayComposePolicy lists what the gateway's app_compose may be: its
+// sha256 (HashAllow), or by rule its template and launcher image digest
+// (TemplateAllow, LauncherDigestAllow; SEE: ParseGatewayComposeTemplate).
+type GatewayComposePolicy struct {
+	HashAllow           map[string]struct{}
+	TemplateAllow       map[string]struct{}
+	LauncherDigestAllow map[string]struct{}
+}
+
+// HasComposeTemplatePolicy reports whether a compose template allowlist is
+// configured.
+func (p MeasurementPolicy) HasComposeTemplatePolicy() bool {
+	return p.Compose != nil && len(p.Compose.TemplateAllow) > 0
 }
 
 // HasComposeHashPolicy reports whether a compose hash allowlist is configured.
 func (p MeasurementPolicy) HasComposeHashPolicy() bool {
-	return len(p.ComposeHashAllow) > 0
+	return p.Compose != nil && len(p.Compose.HashAllow) > 0
 }
 
 // HasMRTDPolicy reports whether an MRTD allowlist is configured.

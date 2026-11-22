@@ -1614,8 +1614,44 @@ gateway_compose_hash_allow = ["` + strings.ToUpper(hash) + `"]
 		t.Fatalf("Load: %v", err)
 	}
 	merged := MergedGatewayMeasurementPolicy("phalacloud", cfg, attestation.MeasurementPolicy{})
-	if _, ok := merged.ComposeHashAllow[hash]; !ok || len(merged.ComposeHashAllow) != 1 {
-		t.Fatalf("ComposeHashAllow = %v, want only %s", merged.ComposeHashAllow, hash)
+	if _, ok := merged.Compose.HashAllow[hash]; !ok || len(merged.Compose.HashAllow) != 1 {
+		t.Fatalf("HashAllow = %v, want only %s", merged.Compose.HashAllow, hash)
+	}
+}
+
+func TestLoadTOMLGatewayComposeTemplate(t *testing.T) {
+	tmpl := strings.Repeat("ab", 32)
+	launcher := strings.Repeat("cd", 32)
+	toml := `
+[providers.phalacloud]
+base_url = "https://example.com"
+
+[providers.phalacloud.policy]
+gateway_compose_template_allow = ["` + tmpl + `"]
+gateway_launcher_digest_allow = ["` + launcher + `"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	merged := MergedGatewayMeasurementPolicy("phalacloud", cfg, attestation.MeasurementPolicy{})
+	if _, ok := merged.Compose.TemplateAllow[tmpl]; !ok || len(merged.Compose.TemplateAllow) != 1 {
+		t.Errorf("TemplateAllow = %v, want only %s", merged.Compose.TemplateAllow, tmpl)
+	}
+	if _, ok := merged.Compose.LauncherDigestAllow[launcher]; !ok || len(merged.Compose.LauncherDigestAllow) != 1 {
+		t.Errorf("LauncherDigestAllow = %v, want only %s", merged.Compose.LauncherDigestAllow, launcher)
+	}
+}
+
+func TestLoadTOMLGatewayComposeTemplateHalfSet(t *testing.T) {
+	for _, key := range []string{"gateway_compose_template_allow", "gateway_launcher_digest_allow"} {
+		path := writeConfigFile(t, "[policy]\n"+key+` = ["`+strings.Repeat("ab", 32)+`"]`+"\n", 0o600)
+		setenv(t, "TEEP_CONFIG", path)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "set together") {
+			t.Errorf("%s alone: want a set-together error, got %v", key, err)
+		}
 	}
 }
 

@@ -109,7 +109,9 @@ type updatePolicy struct {
 	GatewayRTMR2Allow  []string `toml:"gateway_rtmr2_allow,omitempty"`
 	GatewayRTMR3Allow  []string `toml:"gateway_rtmr3_allow,omitempty"`
 
-	GatewayComposeHashAllow []string `toml:"gateway_compose_hash_allow,omitempty"`
+	GatewayComposeHashAllow     []string `toml:"gateway_compose_hash_allow,omitempty"`
+	GatewayComposeTemplateAllow []string `toml:"gateway_compose_template_allow,omitempty"`
+	GatewayLauncherDigestAllow  []string `toml:"gateway_launcher_digest_allow,omitempty"`
 }
 
 // mergeObserved adds observed values into the provider policy, deduplicating.

@@ -1136,6 +1136,7 @@ type ReportInput struct {
 	GatewayNonceHex string // echoed request_nonce from gateway response
 	GatewayNonce    Nonce  // nonce we sent to the gateway
 	GatewayCompose  *ComposeBindingResult
+	GatewaySource   *GatewaySourceResult // nil unless the gateway policy sets a compose template
 	GatewayEventLog []EventLogEntry
 	GatewayPolicy   MeasurementPolicy // separate measurement allowlists for gateway CVM (GW-M-04)
 
@@ -3523,10 +3524,11 @@ func evalGatewayComposeBinding(in *ReportInput) []FactorResult {
 		return factor(TierGateway, FactorGWComposeBinding, NotApplicable,
 			"compose binding is a dstack TDX concept; the gateway is SEV-SNP")
 	}
-	pinned := in.GatewayPolicy.HasComposeHashPolicy()
+	gp := in.GatewayPolicy
+	pinned := gp.HasComposeHashPolicy() || gp.HasComposeTemplatePolicy()
 	switch {
 	case (in.GatewayCompose == nil || !in.GatewayCompose.Checked) && pinned:
-		return factor(TierGateway, FactorGWComposeBinding, Fail, "no gateway app_compose in attestation response; gateway_compose_hash_allow is set")
+		return factor(TierGateway, FactorGWComposeBinding, Fail, "no gateway app_compose in attestation response; a gateway compose policy is set")
 	case in.GatewayCompose == nil || !in.GatewayCompose.Checked:
 		return factor(TierGateway, FactorGWComposeBinding, Skip, "no gateway app_compose in attestation response")
 	case in.GatewayCompose.Err != nil:
@@ -3534,14 +3536,48 @@ func evalGatewayComposeBinding(in *ReportInput) []FactorResult {
 	case !pinned:
 		return factor(TierGateway, FactorGWComposeBinding, Pass, "gateway sha256(app_compose) matches MRConfigID")
 	}
-	sum := sha256.Sum256([]byte(in.Raw.GatewayAppCompose))
-	composeHash := hex.EncodeToString(sum[:])
-	if !containsAllowlist(in.GatewayPolicy.ComposeHashAllow, composeHash) {
-		return factor(TierGateway, FactorGWComposeBinding, Fail,
-			fmt.Sprintf("gateway compose hash %s not in gateway_compose_hash_allow", composeHash))
+	detail := "gateway sha256(app_compose) matches MRConfigID"
+	if gp.HasComposeHashPolicy() {
+		sum := sha256.Sum256([]byte(in.Raw.GatewayAppCompose))
+		composeHash := hex.EncodeToString(sum[:])
+		if !containsAllowlist(gp.Compose.HashAllow, composeHash) {
+			return factor(TierGateway, FactorGWComposeBinding, Fail,
+				fmt.Sprintf("gateway compose hash %s not in gateway_compose_hash_allow", composeHash))
+		}
+		detail += fmt.Sprintf("; compose hash %s in gateway_compose_hash_allow", composeHash)
 	}
-	return factor(TierGateway, FactorGWComposeBinding, Pass,
-		fmt.Sprintf("gateway sha256(app_compose) matches MRConfigID; compose hash %s in gateway_compose_hash_allow", composeHash))
+	if gp.HasComposeTemplatePolicy() {
+		d, err := gatewayComposeTemplateDetail(in)
+		if err != nil {
+			return factor(TierGateway, FactorGWComposeBinding, Fail, err.Error())
+		}
+		detail += "; " + d
+	}
+	return factor(TierGateway, FactorGWComposeBinding, Pass, detail)
+}
+
+// gatewayComposeTemplateDetail checks the gateway compose against the
+// template rule: its template and launcher are listed, and its source commit
+// is published.
+func gatewayComposeTemplateDetail(in *ReportInput) (string, error) {
+	t, err := ParseGatewayComposeTemplate(in.Raw.GatewayAppCompose)
+	if err != nil {
+		return "", err
+	}
+	if !containsAllowlist(in.GatewayPolicy.Compose.TemplateAllow, t.Hash) {
+		return "", fmt.Errorf("gateway compose template %s not in gateway_compose_template_allow", t.Hash)
+	}
+	if !containsAllowlist(in.GatewayPolicy.Compose.LauncherDigestAllow, t.LauncherDigest) {
+		return "", fmt.Errorf("gateway launcher sha256:%s not in gateway_launcher_digest_allow", t.LauncherDigest)
+	}
+	switch {
+	case in.GatewaySource == nil:
+		return "", errors.New("publication of the gateway commit not checked")
+	case in.GatewaySource.Err != nil:
+		return "", in.GatewaySource.Err
+	}
+	return fmt.Sprintf("template %s in gateway_compose_template_allow; launcher sha256:%s in gateway_launcher_digest_allow; commit %s on the default branch of github.com/%s",
+		t.Hash, t.LauncherDigest, t.Commit, t.Repo), nil
 }
 func evalGatewayCPUIDRegistry(in *ReportInput) []FactorResult {
 	if in.GatewaySEV != nil {

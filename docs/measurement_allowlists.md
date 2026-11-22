@@ -142,6 +142,35 @@ values the gateway may run (32 bytes of hex, not 48). When it is set,
 `gateway_compose_binding` fails unless the compose binds to MRConfigID and its
 hash is in the list. When it is absent, the compose is not pinned.
 
+`gateway_compose_template_allow` and `gateway_launcher_digest_allow` accept a
+private-ai-gateway release by rule instead of by hash, so a redeploy that
+changes only what the rule allows passes with no table change. With
+`gateway_compose_template_allow` set, `gateway_compose_binding` fails unless,
+besides the MRConfigID binding:
+
+- the compose's template is in `gateway_compose_template_allow`. The template
+  hash is the sha256 of the raw app_compose with each of these values replaced
+  by `{name}`: the gateway source commit (`commit`), the
+  `private-ai-gateway.config-rev` label (`config_rev`), and the image digests
+  of the launcher (`launcher`), dstack-verifier (`verifier`, tag and digest)
+  and privatemode-proxy (`privatemode`, and `privatemode_config` in the gateway
+  config, which must name the same digest). Each must occur exactly once.
+  Everything else, including the pre-launch script, `allowed_envs`, the set of
+  services and the dstack-ingress image, is fixed by the template.
+- the launcher digest is in `gateway_launcher_digest_allow` (32 bytes of hex).
+  The two keys must be set together.
+- the commit is on the default branch of the GitHub repository the compose
+  names, by GitHub's compare API (`HEAD...<commit>` is `behind` or
+  `identical`). A confirmed commit is not asked about again in the same
+  process. Offline, or with GitHub unreachable, an unconfirmed commit fails.
+
+RTMR0 depends on the VM's CPU count and memory, so it is left unpinned; the
+OS is checked by `gateway_mrtd_allow`, `gateway_rtmr1_allow` and
+`gateway_rtmr2_allow`, one entry per accepted dstack release.
+
+The three gateway compose keys merge as one: a layer that sets any of them
+replaces all three from the layers below.
+
 ### Merge order
 
 Each allowlist field is resolved independently using:

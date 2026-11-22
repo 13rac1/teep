@@ -3333,9 +3333,9 @@ func TestEvalGatewayComposeBinding_ComposeHashAllow(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var policy MeasurementPolicy
 			if tt.allow != nil {
-				policy.ComposeHashAllow = map[string]struct{}{}
+				policy.Compose = &GatewayComposePolicy{HashAllow: map[string]struct{}{}}
 				for _, h := range tt.allow {
-					policy.ComposeHashAllow[h] = struct{}{}
+					policy.Compose.HashAllow[h] = struct{}{}
 				}
 			}
 			in := &ReportInput{
