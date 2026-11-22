@@ -27,10 +27,10 @@ Tier 2: Binding & Crypto
   - nvidia_nonce_client_bound         no NVIDIA payload; nonce not checked  [ALLOWED]
   - nvidia_nras_verified              no EAT payload; NRAS not applicable  [ALLOWED]
   ✓ e2ee_capable                      enclave public key is valid secp256k1 uncompressed point; E2EE key exchange possible  [ALLOWED]
-  ✓ e2ee_usable                       E2EE v2 secp256k1: 8 encrypted fields decrypted across 11 chunks  [ALLOWED]
+  ✓ e2ee_usable                       E2EE v2 secp256k1: 14 encrypted fields decrypted across 17 chunks  [ALLOWED]
   ✓ aci_key_custody                   keyset digest matches; signing key is a keyset e2ee key; e2ee key custody chain verified to accepted KMS root (02a335aea3df11d4...) for app 89c51ab856bee41e...  [ENFORCED]
   ✗ aci_backend_named                 the attestation binds no backend for the requested model  [ALLOWED]
-  ✓ aci_session_verified              4 attested sessions pinned: genuine TDX and GPU with allowed MRTD/MRSEAM, workload policy not checked (14 refused; first: not fetched: the session evidence limit of one verification is reached)  [ENFORCED]
+  ✓ aci_session_verified              9 attested sessions pinned: genuine TDX and GPU with allowed MRTD/MRSEAM, workload policy not checked (7 refused; first: not fetched: the session evidence limit of one verification is reached)  [ENFORCED]
   ✓ aci_receipt_verified              receipt verified, including the request hash  [ENFORCED]
 
 Tier 3: Supply Chain & Channel Integrity
@@ -58,9 +58,9 @@ Tier 4: Gateway Attestation
   ✗ gateway_tee_measurement           gateway MRTD not in policy allowlist: 7fe60787222bd394...  [ALLOWED]
   - gateway_tee_hardware_config       no gateway RTMR0 measurement policy configured  [ALLOWED]
   - gateway_tee_boot_config           no gateway RTMR1/RTMR2 measurement policy configured  [ALLOWED]
-  ✓ gateway_tee_reportdata_binding    REPORTDATA binds the keyset digest sha256:338c049d02ba7545... and the client nonce (ACI/1 §3.2)  [ENFORCED]
+  ✓ gateway_tee_reportdata_binding    REPORTDATA binds the keyset digest sha256:31bfd7f9a90aba90... and the client nonce (ACI/1 §3.2)  [ENFORCED]
   ✓ gateway_compose_binding           gateway sha256(app_compose) matches MRConfigID  [ENFORCED]
-  - gateway_cpu_id_registry           gateway Proof of Cloud query failed: stage 1 POST to https://trust-server.scrtlabs.com: Post "https://trust-server.scrtlabs.com/get_jwt": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-11-13T07:32:46Z is after 2026-09-07T23:59:59Z  [ALLOWED]
+  - gateway_cpu_id_registry           gateway Proof of Cloud query failed: stage 1 POST to https://trust-server.scrtlabs.com: Post "https://trust-server.scrtlabs.com/get_jwt": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-11-19T14:08:49-06:00 is after 2026-09-07T23:59:59Z  [ALLOWED]
   ✓ gateway_event_log_integrity       gateway event log replayed (30 entries), all 4 RTMRs match quote  [ENFORCED]
   — gateway_tee_tcb_current           TCB minimums for a TDX gateway are checked by the Intel PCS collateral
   — gateway_tee_tcb_not_revoked       TDX revocation is checked by the Intel PCS collateral

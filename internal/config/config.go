@@ -11,6 +11,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -132,6 +133,14 @@ type PolicyConfig struct {
 	GatewayRTMR1Allow  []string `toml:"gateway_rtmr1_allow"`
 	GatewayRTMR2Allow  []string `toml:"gateway_rtmr2_allow"`
 	GatewayRTMR3Allow  []string `toml:"gateway_rtmr3_allow"`
+	// GatewayComposeHashAllow lists sha256(app_compose) values the gateway
+	// may run, checked by gateway_compose_binding.
+	GatewayComposeHashAllow []string `toml:"gateway_compose_hash_allow"`
+	// GatewayComposeTemplateAllow and GatewayLauncherDigestAllow are the ACI
+	// gateway compose rule, checked by gateway_compose_binding (SEE:
+	// attestation.ParseGatewayComposeTemplate).
+	GatewayComposeTemplateAllow []string `toml:"gateway_compose_template_allow"`
+	GatewayLauncherDigestAllow  []string `toml:"gateway_launcher_digest_allow"`
 }
 
 // tomlFile mirrors the top-level structure of the optional TOML config file.
@@ -454,6 +463,25 @@ func buildGatewayMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPoli
 			return out, err
 		}
 	}
+	var compose attestation.GatewayComposePolicy
+	compose.HashAllow, err = normalizeHexAllowlist(p.GatewayComposeHashAllow, "policy.gateway_compose_hash_allow", sha256.Size)
+	if err != nil {
+		return out, err
+	}
+	compose.TemplateAllow, err = normalizeHexAllowlist(p.GatewayComposeTemplateAllow, "policy.gateway_compose_template_allow", sha256.Size)
+	if err != nil {
+		return out, err
+	}
+	compose.LauncherDigestAllow, err = normalizeHexAllowlist(p.GatewayLauncherDigestAllow, "policy.gateway_launcher_digest_allow", sha256.Size)
+	if err != nil {
+		return out, err
+	}
+	if (len(compose.TemplateAllow) > 0) != (len(compose.LauncherDigestAllow) > 0) {
+		return out, errors.New("policy.gateway_compose_template_allow and policy.gateway_launcher_digest_allow must be set together")
+	}
+	if len(compose.HashAllow) > 0 || len(compose.TemplateAllow) > 0 {
+		out.Compose = &compose
+	}
 
 	return out, nil
 }
@@ -518,7 +546,7 @@ func MergedAllowFail(providerName string, format attestation.BackendFormat, cfg 
 func hasMeasurementPolicy(p attestation.MeasurementPolicy) bool {
 	return p.HasMRTDPolicy() || p.HasMRSeamPolicy() ||
 		p.HasRTMRPolicy(0) || p.HasRTMRPolicy(1) ||
-		p.HasRTMRPolicy(2) || p.HasRTMRPolicy(3)
+		p.HasRTMRPolicy(2) || p.HasRTMRPolicy(3) || p.Compose != nil
 }
 
 // MergedMeasurementPolicy returns a MeasurementPolicy that merges three layers:
@@ -564,6 +592,9 @@ func mergeAllowlists(base, overlay attestation.MeasurementPolicy) attestation.Me
 			base.RTMRAllow[i] = overlay.RTMRAllow[i]
 		}
 	}
+	if overlay.Compose != nil {
+		base.Compose = overlay.Compose
+	}
 	return base
 }
 
@@ -572,6 +603,10 @@ func mergeAllowlists(base, overlay attestation.MeasurementPolicy) attestation.Me
 const tdxMeasurementBytes = 48
 
 func normalizeAllowlist(values []string, field string) (map[string]struct{}, error) {
+	return normalizeHexAllowlist(values, field, tdxMeasurementBytes)
+}
+
+func normalizeHexAllowlist(values []string, field string, size int) (map[string]struct{}, error) {
 	if values == nil {
 		return map[string]struct{}{}, nil // field absent from TOML — no policy
 	}
@@ -585,8 +620,8 @@ func normalizeAllowlist(values []string, field string) (map[string]struct{}, err
 		if err != nil {
 			return nil, fmt.Errorf("%s contains invalid hex %q: %w", field, v, err)
 		}
-		if len(b) != tdxMeasurementBytes {
-			return nil, fmt.Errorf("%s entry %q decodes to %d bytes, want %d", field, v, len(b), tdxMeasurementBytes)
+		if len(b) != size {
+			return nil, fmt.Errorf("%s entry %q decodes to %d bytes, want %d", field, v, len(b), size)
 		}
 		norm[s] = struct{}{}
 	}

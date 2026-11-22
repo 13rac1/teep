@@ -25,8 +25,8 @@ import (
 //  4. the channel binding and, for the Phala model CVM, the identity name
 //     the key and the address of the evidence (sessionEvidenceOf);
 //  5. the GPU evidence, verified locally with the session's nonce;
-//  6. for the Phala model CVM, the compose binding (MRConfigID) and the
-//     event-log replay of the quote's RTMRs.
+//  6. for the Phala model CVM, the event-log replay of the quote's RTMRs
+//     and the compose binding (MRConfigID version 1 or 3).
 //
 // teep has no policy for the RTMR values, the compose content or the
 // images of the Phala model CVM, and sends no Sigstore, Proof of Cloud or
@@ -48,6 +48,29 @@ func (a SessionAuditor) Audit(ctx context.Context, s *aci.Session) error {
 		s.Unknown = append(s.Unknown, "evidence."+path)
 	}
 	return a.auditEvidence(ctx, s, ev)
+}
+
+// Covers returns the report factors that Audit checks for s: the factors of
+// checks 1, 2, 3 and 5, the TCB factors only online, and those of check 6
+// only for the Phala model CVM. Every other factor that describes the
+// inference host, among them the RTMR policy, the client nonce and NRAS,
+// is not checked by the audit.
+func (a SessionAuditor) Covers(s *aci.Session) []string {
+	covered := []string{
+		attestation.FactorTEEQuotePresent, attestation.FactorTEEQuoteStructure,
+		attestation.FactorTEECertChain, attestation.FactorTEEQuoteSignature,
+		attestation.FactorTEEDebugDisabled, attestation.FactorTEEMeasurement,
+		attestation.FactorTEEReportData, attestation.FactorNvidiaPayloadPresent,
+		attestation.FactorNvidiaSignature, attestation.FactorNvidiaClaims,
+	}
+	if !a.Offline {
+		covered = append(covered, attestation.FactorIntelPCSCollateral,
+			attestation.FactorTEETCBCurrent, attestation.FactorTEETCBNotRevoked)
+	}
+	if s.VerifierID == verifierPhalaDirect {
+		covered = append(covered, attestation.FactorEventLogIntegrity, attestation.FactorComposeBinding)
+	}
+	return covered
 }
 
 func (a SessionAuditor) auditEvidence(ctx context.Context, s *aci.Session, ev *sessionEvidence) error {
@@ -157,12 +180,12 @@ func checkSessionGPUResult(result *attestation.NvidiaVerifyResult, nonce attesta
 	return nil
 }
 
-// checkModelCVMIntegrity requires the quote's MRConfigID to bind the app
-// compose, and the event log to reproduce RTMR0-3 of the quote.
+// checkModelCVMIntegrity requires the event log to reproduce RTMR0-3 of the
+// quote, and the quote's MRConfigID to bind the app compose: version 1
+// (dstack 0.5) binds its hash, version 3 (dstack 0.6) a launch document
+// that holds its hash and values of the event log. The model CVM has GPUs:
+// checkSessionGPU has required its GPU evidence.
 func checkModelCVMIntegrity(raw *attestation.RawAttestation, tdx *attestation.TDXVerifyResult) error {
-	if err := attestation.VerifyComposeBinding(raw.AppCompose, tdx.MRConfigID); err != nil {
-		return fmt.Errorf("compose binding: %w", err)
-	}
 	rtmrs, err := attestation.ReplayEventLog(raw.EventLog)
 	if err != nil {
 		return fmt.Errorf("event log: %w", err)
@@ -171,6 +194,14 @@ func checkModelCVMIntegrity(raw *attestation.RawAttestation, tdx *attestation.TD
 		if subtle.ConstantTimeCompare(rtmrs[i][:], tdx.RTMRs[i][:]) != 1 {
 			return fmt.Errorf("event log does not reproduce RTMR%d of the quote", i)
 		}
+	}
+	if len(tdx.MRConfigID) > 0 && tdx.MRConfigID[0] == 3 {
+		err = attestation.VerifyComposeBindingV3(raw.AppCompose, raw.EventLog, true, tdx.MRConfigID)
+	} else {
+		err = attestation.VerifyComposeBinding(raw.AppCompose, tdx.MRConfigID)
+	}
+	if err != nil {
+		return fmt.Errorf("compose binding: %w", err)
 	}
 	return nil
 }

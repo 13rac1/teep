@@ -131,6 +131,32 @@ base_url = "https://api.venice.ai"
 	}
 }
 
+func TestUpdateConfigPreservesGatewayComposeHashAllow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "teep.toml")
+	hash := strings.Repeat("ab", 32)
+	os.WriteFile(path, []byte(`[providers.phalacloud.policy]
+gateway_compose_hash_allow = ["`+hash+`"]
+gateway_compose_template_allow = ["`+hash+`"]
+gateway_launcher_digest_allow = ["`+hash+`"]
+`), 0o600)
+
+	obs := ObservedMeasurements{GatewayMRTD: strings.Repeat("cd", 48)}
+	if err := UpdateConfig(path, "phalacloud", &obs); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	var f updateFile
+	toml.Decode(string(data), &f)
+	if got := f.Providers["phalacloud"].Policy.GatewayComposeHashAllow; len(got) != 1 || got[0] != hash {
+		t.Errorf("gateway_compose_hash_allow lost: %v", got)
+	}
+	p := f.Providers["phalacloud"].Policy
+	if len(p.GatewayComposeTemplateAllow) != 1 || len(p.GatewayLauncherDigestAllow) != 1 {
+		t.Errorf("gateway compose rule lost: %v %v", p.GatewayComposeTemplateAllow, p.GatewayLauncherDigestAllow)
+	}
+}
+
 func TestUpdateConfigMultipleProviders(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "teep.toml")

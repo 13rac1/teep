@@ -303,6 +303,10 @@ func (ev *evidenceVerifier) report(ctx context.Context, raw *attestation.RawAtte
 	mDefaults, gwDefaults := defaults.MeasurementDefaults(ev.opts.ProviderName)
 	mergedPolicy := config.MergedMeasurementPolicy(ev.opts.ProviderName, ev.opts.Config, mDefaults)
 	mergedGWPolicy := config.MergedGatewayMeasurementPolicy(ev.opts.ProviderName, ev.opts.Config, gwDefaults)
+	var gatewaySource *attestation.GatewaySourceResult
+	if gatewayCompose != nil && gatewayCompose.Err == nil {
+		gatewaySource = attestation.CheckGatewaySource(ctx, ev.client, raw.GatewayAppCompose, mergedGWPolicy, ev.opts.Offline)
+	}
 
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
 	tinfoilSC := verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, ev.opts.ProviderName, ev.opts.ModelName, mergedPolicy, ev.opts.Offline, ev.client)
@@ -334,6 +338,7 @@ func (ev *evidenceVerifier) report(ctx context.Context, raw *attestation.RawAtte
 		GatewayNonceHex:        raw.GatewayNonceHex,
 		GatewayNonce:           ev.nonce,
 		GatewayCompose:         gatewayCompose,
+		GatewaySource:          gatewaySource,
 		GatewayEventLog:        raw.GatewayEventLog,
 		TinfoilSC:              tinfoilSC,
 		ACIKeyset:              aci.VerifyKeyset(raw, ev.opts.VerificationTime, aci.GatewayPins()),

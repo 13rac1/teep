@@ -3,6 +3,7 @@ package phalacloud
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,64 @@ func TestSessionAuditPhalaModelCVM(t *testing.T) {
 	s := loadSession(t, "session_phala_direct.json", phalaDirectSessionID)
 	if err := offlineAuditor(s).Audit(context.Background(), s); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The session of a Phala model CVM on dstack-0.6.3 passes every check:
+// MRTD of dstack-0.6.3, MRSEAM of TDX module 2.0.20, and an MRConfigID of
+// version 3.
+func TestSessionAuditPhalaModelCVMDstack063(t *testing.T) {
+	s := loadSession(t, "session_phala_direct_0_6_3.json", phalaDirect063SessionID)
+	if err := offlineAuditor(s).Audit(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An MRConfigID of version 3 binds the document that the dstack VMM builds;
+// each change to its inputs, or a second event of one name, fails.
+func TestComposeBindingV3Refuses(t *testing.T) {
+	s := loadSession(t, "session_phala_direct_0_6_3.json", phalaDirect063SessionID)
+	ev, err := sessionEvidenceOf(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tdx := offlineAuditor(s).TDX(context.Background(), ev.raw.IntelQuote)
+	if err := attestation.VerifyComposeBindingV3(ev.raw.AppCompose, ev.raw.EventLog, true, tdx.MRConfigID); err != nil {
+		t.Fatal(err)
+	}
+	event := func(name string) int {
+		for i, e := range ev.raw.EventLog {
+			if e.IMR == 3 && e.Event == name {
+				return i
+			}
+		}
+		t.Fatalf("no %s event", name)
+		return 0
+	}
+	withEvent := func(name, payload string) []attestation.EventLogEntry {
+		events := slices.Clone(ev.raw.EventLog)
+		events[event(name)].EventPayload = payload
+		return events
+	}
+	for _, tc := range []struct {
+		name       string
+		appCompose string
+		events     []attestation.EventLogEntry
+		gpu        bool
+		want       string
+	}{
+		{"app compose", ev.raw.AppCompose + " ", ev.raw.EventLog, true, "does not bind"},
+		{"no GPU policy", ev.raw.AppCompose, ev.raw.EventLog, false, "does not bind"},
+		{"instance id", ev.raw.AppCompose, withEvent("instance-id", strings.Repeat("00", 20)), true, "does not bind"},
+		{"app id", ev.raw.AppCompose, withEvent("app-id", strings.Repeat("00", 20)), true, "does not bind"},
+		{"second app id", ev.raw.AppCompose, append(slices.Clone(ev.raw.EventLog), ev.raw.EventLog[event("app-id")]), true, "2 app-id events"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := attestation.VerifyComposeBindingV3(tc.appCompose, tc.events, tc.gpu, tdx.MRConfigID)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 

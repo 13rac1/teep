@@ -137,6 +137,40 @@ in the policy section of each provider that uses the gateway (or in the
 global policy), and refreshes them when the gateway redeploys.
 SEE: docs/attestation_gaps/aci_gateway.md.
 
+`gateway_compose_hash_allow` lists the sha256 of the gateway app_compose
+values the gateway may run (32 bytes of hex, not 48). When it is set,
+`gateway_compose_binding` fails unless the compose binds to MRConfigID and its
+hash is in the list. When it is absent, the compose is not pinned.
+
+`gateway_compose_template_allow` and `gateway_launcher_digest_allow` accept a
+private-ai-gateway release by rule instead of by hash, so a redeploy that
+changes only what the rule allows passes with no table change. With
+`gateway_compose_template_allow` set, `gateway_compose_binding` fails unless,
+besides the MRConfigID binding:
+
+- the compose's template is in `gateway_compose_template_allow`. The template
+  hash is the sha256 of the raw app_compose with each of these values replaced
+  by `{name}`: the gateway source commit (`commit`), the
+  `private-ai-gateway.config-rev` label (`config_rev`), and the image digests
+  of the launcher (`launcher`), dstack-verifier (`verifier`, tag and digest)
+  and privatemode-proxy (`privatemode`, and `privatemode_config` in the gateway
+  config, which must name the same digest). Each must occur exactly once.
+  Everything else, including the pre-launch script, `allowed_envs`, the set of
+  services and the dstack-ingress image, is fixed by the template.
+- the launcher digest is in `gateway_launcher_digest_allow` (32 bytes of hex).
+  The two keys must be set together.
+- the commit is on the default branch of the GitHub repository the compose
+  names, by GitHub's compare API (`HEAD...<commit>` is `behind` or
+  `identical`). A confirmed commit is not asked about again in the same
+  process. Offline, or with GitHub unreachable, an unconfirmed commit fails.
+
+RTMR0 depends on the VM's CPU count and memory, so it is left unpinned; the
+OS is checked by `gateway_mrtd_allow`, `gateway_rtmr1_allow` and
+`gateway_rtmr2_allow`, one entry per accepted dstack release.
+
+The three gateway compose keys merge as one: a layer that sets any of them
+replaces all three from the layers below.
+
 ### Merge order
 
 Each allowlist field is resolved independently using:
@@ -206,9 +240,20 @@ gateway), Tinfoil and Chutes.
 | `476a2997c62bccc7...` | 2.0.08 | Granite Rapids | shared list |
 | `685f891ea5c20e8f...` | 2.0.02 | Granite Rapids | shared list |
 | `2d2de102461684f1...` | 2.0.18 | Granite Rapids / Clearwater Forest | shared list |
+| `eddfa0c1750b39ba...` | 2.0.20 | Granite Rapids / Clearwater Forest | shared list (see below) |
 | `5b38e33a6487958b...` | 1.5.06 | Sapphire/Emerald Rapids | Chutes only |
 | `346bc77a1846cac2...` | 1.5.28 | Sapphire/Emerald Rapids | Chutes only |
 | `ab62561a173acbd1...` | 1.5.34 | Sapphire/Emerald Rapids | Chutes only |
+
+For 2.0.20, Intel's hash table and the release notes of `TDX_MODULE_2.0.20`
+give `57a1a66f3704887a...`. The SHA-384 of the signed binary
+`separate_files/2.0/2.0.20/tdx_module_2.0.20.bin` in
+`intel/confidential-computing.tdx.tdx-module.binaries` (commit `73b2a66e`),
+and the MRSEAM in its sigstruct at offset 900, are `eddfa0c1750b39ba...`.
+The same two methods give the table's value for 2.0.08. Phala Cloud's
+`deepseek/deepseek-v4.1-flash-1017` model CVM reported `eddfa0c1...` on
+2026-11-19. The shared list has the value of the binary. Intel's table is
+the source for the other rows.
 
 A reasonable policy is to allow the set of non-deprecated module versions for
 your target platform family. This does not require provider cooperation.
@@ -245,6 +290,12 @@ dstack-mr measure
 | `b24d3b24e9e3c160...` | dstack-nvidia-0.5.4.1 |
 | `f06dfda6dce1cf90...` | dstack-nvidia-0.5.5 |
 | `df4d77c857de652b...` | dstack-nvidia-0.5.11 and 0.5.12 |
+| `83baf004a06c83f6...` | dstack-0.6.3, 0.6.4 and 0.6.5 |
+
+The dstack 0.6 value is the TDX `MRTD` that dstack publishes for each
+image: `image-hashes.txt` of the `mkosi-os-v0.6.3` and `mkosi-os-v0.6.4`
+releases, and the release notes of `mkosi-os-v0.6.5`, at
+`github.com/Dstack-TEE/dstack/releases`.
 
 For dstack-nvidia-0.5.12, RTMR1 and RTMR2 are not allowed until they are
 computed with `mk-image-mr` from meta-dstack on the release files: no
