@@ -196,6 +196,9 @@ Each factor produces PASS, FAIL, or SKIP. Factors marked `[ENFORCED]` cause the 
 | 33 | `sigstore_verification` | Checks whether compose-listed image digests occur in the transparency log, with policy exceptions. Presence alone does not verify a publisher signature. teep's NEAR policy allows this factor to fail for the two DeepSeek models; the exception also covers other models and gateway images. See [affected models and prior GLM evidence](docs/attestation_gaps/near_image_provenance.md#scope-and-evidence). The default policy for Venice dstack models allows the same failure, for the same launcher image. |
 | 34 | `sigstore_code_verified` | Tinfoil-specific: Sigstore DSSE bundle code measurements match live enclave's SEV-SNP MEASUREMENT or TDX RTMRs. Skipped for non-Tinfoil providers. |
 | 35 | `event_log_integrity` | TDX event log replayed: `RTMR_new = SHA384(RTMR_old ‖ digest)` starting from 48 zero bytes. All 4 replayed RTMRs match quote. Proves the log is authentic and complete. |
+| 36 | `compose_manager_quote` | NEAR-specific. The model CVM compose runs compose-manager, which starts the inference proxy and model server after boot, so they are in neither RTMR3 nor MRConfigID. `compose_manager_attestation` is a second TDX quote from compose-manager: its chain, signature and debug bit are checked, MRTD, MRSEAM, MRCONFIGID, MROWNER, MROWNERCONFIG and RTMR0-3 must equal the instance quote, and REPORTDATA must be `sha256(canonical action log) ‖ client nonce`. |
+| 37 | `compose_manager_tcb` | NEAR-specific. Intel PCS collateral of the compose-manager quote; TCB must be UpToDate. |
+| 38 | `compose_manager_actions` | NEAR-specific. Every compose file that a `compose_up` or `compose_stage` in the bound action log names must be published at its commit of nearai/cvm-compose-files (any branch), hash to the logged `file_sha256` there, and run every service from an image pinned by digest (no `build`, `extends`, `include` or interpolated image). Every `compose_manager_started` image must be nearaidev/compose-manager pinned by digest. Unknown actions fail. Allowed to fail by default for NEAR: most recorded logs fail it (see [NEAR compose-manager deployments](docs/attestation_gaps/near_compose_manager.md)). The log is compose-manager's own record, so it is as good as the compose-manager images. |
 
 ### Tier 4: Gateway Attestation
 
@@ -208,21 +211,21 @@ exposes none, and the core `tee_*` factors state that.
 
 | # | Factor | Description |
 |---|--------|-------------|
-| 36 | `gateway_nonce_match` | Gateway nonce matches the client nonce. Prevents replay attacks against the gateway. |
-| 37 | `gateway_tee_quote_present` | Gateway quote or report is present in the attestation response. |
-| 38 | `gateway_tee_quote_structure` | Gateway quote parses as valid QuoteV4 or SEV-SNP report. |
-| 39 | `gateway_tee_cert_chain` | Gateway certificate chain verifies against the Intel or AMD root CA. |
-| 40 | `gateway_tee_quote_signature` | Signature over the gateway quote body is valid. |
-| 41 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave). |
-| 42 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and for the ACI/1 routes of Venice, Phala Cloud and NanoGPT: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
-| 43 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
-| 44 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. Not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot. |
-| 45 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified: nearcloud binds `sha256(signing_address ‖ tls_fingerprint)`; Venice ACI/1 binds `keccak256(signing key)` + nonce; Tinfoil binds the HPKE key and endorsed section hashes. |
-| 46 | `gateway_compose_binding` | Gateway `sha256(app_compose)` matches TDX MRConfigID, with the `app_compose` rules of `compose_binding`. Enforced for Venice ACI/1 — the gateway publishes its manifest with digest-pinned images. |
-| 47 | `gateway_cpu_id_registry` | Gateway CPU PPID verified against the Proof of Cloud registry. |
-| 48 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match the gateway TDX quote. |
-| 49 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP; TDX defers to Intel PCS collateral). |
-| 50 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP; TDX defers to Intel PCS collateral). |
+| 39 | `gateway_nonce_match` | Gateway nonce matches the client nonce. Prevents replay attacks against the gateway. |
+| 40 | `gateway_tee_quote_present` | Gateway quote or report is present in the attestation response. |
+| 41 | `gateway_tee_quote_structure` | Gateway quote parses as valid QuoteV4 or SEV-SNP report. |
+| 42 | `gateway_tee_cert_chain` | Gateway certificate chain verifies against the Intel or AMD root CA. |
+| 43 | `gateway_tee_quote_signature` | Signature over the gateway quote body is valid. |
+| 44 | `gateway_tee_debug_disabled` | Gateway debug bit is 0 (production enclave). |
+| 45 | `gateway_tee_measurement` | Gateway measurements match the gateway policy allowlists. Allowed to fail by default for NEAR Cloud and for the ACI/1 routes of Venice, Phala Cloud and NanoGPT: the allowlist changes only with a teep release, so a gateway release fails this factor, and teep reports the failure. |
+| 46 | `gateway_tee_hardware_config` | Gateway RTMR[0] matches the hardware config allowlist. |
+| 47 | `gateway_tee_boot_config` | Gateway RTMR[1] and RTMR[2] match the boot config allowlists. Not applicable to an SEV-SNP gateway, whose launch measurement (`gateway_tee_measurement`) covers the boot. |
+| 48 | `gateway_tee_reportdata_binding` | Gateway REPORTDATA binding verified: nearcloud binds `sha256(signing_address ‖ tls_fingerprint)`; Venice ACI/1 binds `keccak256(signing key)` + nonce; Tinfoil binds the HPKE key and endorsed section hashes. |
+| 49 | `gateway_compose_binding` | Gateway `sha256(app_compose)` matches TDX MRConfigID, with the `app_compose` rules of `compose_binding`. Enforced for Venice ACI/1 — the gateway publishes its manifest with digest-pinned images. |
+| 50 | `gateway_cpu_id_registry` | Gateway CPU PPID verified against the Proof of Cloud registry. |
+| 51 | `gateway_event_log_integrity` | Gateway event log replayed; all 4 RTMRs match the gateway TDX quote. |
+| 52 | `gateway_tee_tcb_current` | Gateway TCB SVN meets minimum threshold (SEV-SNP; TDX defers to Intel PCS collateral). |
+| 53 | `gateway_tee_tcb_not_revoked` | Gateway TCB SVN is not revoked (SEV-SNP; TDX defers to Intel PCS collateral). |
 
 ## TOML Configuration
 

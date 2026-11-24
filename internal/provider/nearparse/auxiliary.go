@@ -30,3 +30,14 @@ func (o *OHTTP) UnknownFields(parent string) []string {
 	}
 	return Prefix(parent, o.unknown)
 }
+
+// ComposeManager is the compose_manager_attestation member of a NEAR model
+// report, kept as served: attestation.VerifyComposeManager decodes it
+// strictly, so a malformed member fails its factors instead of the report.
+type ComposeManager []byte
+
+// UnmarshalJSON keeps a copy of the member.
+func (c *ComposeManager) UnmarshalJSON(data []byte) error {
+	*c = append(ComposeManager(nil), data...)
+	return nil
+}

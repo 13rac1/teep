@@ -273,6 +273,11 @@ type RawAttestation struct {
 	GatewaySigningAddress string          `json:"-"`
 	GatewayTLSFingerprint string          `json:"-"`
 
+	// ComposeManagerAttestation is the compose_manager_attestation member
+	// of a NEAR model entry as served, empty when absent. VerifyComposeManager
+	// decodes and verifies it.
+	ComposeManagerAttestation []byte `json:"-"`
+
 	// UnknownFields lists unexpected JSON keys found in the attestation
 	// response. Populated by provider parse functions via jsonstrict.UnmarshalWarn.
 	UnknownFields []string `json:"-"`

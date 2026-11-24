@@ -454,6 +454,7 @@ type Server struct {
 	authorizations     *authorizationStore
 	signingKeyCache    *attestation.SigningKeyCache
 	rekorClient        *attestation.RekorClient
+	composeSources     *attestation.ComposeSources
 	nvidiaVerifier     *attestation.NVIDIAVerifier
 	mux                *http.ServeMux
 	attestClient       *http.Client            // for attestation fetches
@@ -526,6 +527,7 @@ func New(cfg *config.Config) (*Server, error) {
 	s.pinnedUpstreams = newPinnedUpstreamPools()
 
 	s.rekorClient = attestation.NewRekorClient(attestClient)
+	s.composeSources = attestation.NewComposeSources(attestClient, cfg.Offline)
 	s.nvidiaVerifier = attestation.DefaultNVIDIAVerifier()
 	s.collateral = attestation.NewCollateralGetter(s.attestClient)
 	// Zero time.Time means "use the real wall clock": passing a zero verifyTime
@@ -1137,6 +1139,7 @@ func (s *Server) verifyAttestation(ctx context.Context, prov *provider.Provider,
 		NvidiaNRAS:             nrasResult,
 		PoC:                    pocResult,
 		Compose:                sc.Compose,
+		ComposeManager:         attestation.VerifyComposeManager(ctx, raw, tdxResult, nonce, s.verifyQuote, s.composeSources),
 		Sigstore:               sc.Sigstore,
 		Rekor:                  sc.Rekor,
 		TinfoilSC:              tinfoilSC,

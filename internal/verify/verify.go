@@ -173,7 +173,7 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 	}
 
 	ev := evidenceVerifier{opts: opts, nonce: nonce, client: client, tdx: verifier, sev: sevVerifier,
-		supplyChain: attestation.NewSupplyChainMemo()}
+		supplyChain: attestation.NewSupplyChainMemo(), composeSources: attestation.NewComposeSources(client, opts.Offline)}
 	report, nrasResult, err := ev.report(ctx, raw, func() *attestation.E2EETestResult {
 		e2eeResult = evidenceE2EEOutcome(ctx, opts, raw)
 		if e2eeResult != nil && e2eeResult.KeyType == "" {
@@ -207,13 +207,14 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 // instances share the gateway evidence and the image digests, so the gateway
 // checks run once and each digest is looked up once.
 type evidenceVerifier struct {
-	opts        *Options
-	nonce       attestation.Nonce
-	client      *http.Client
-	tdx         attestation.TDXVerifier
-	sev         attestation.SEVVerifier
-	gateway     attestation.GatewayMemo
-	supplyChain *attestation.SupplyChainMemo
+	opts           *Options
+	nonce          attestation.Nonce
+	client         *http.Client
+	tdx            attestation.TDXVerifier
+	sev            attestation.SEVVerifier
+	gateway        attestation.GatewayMemo
+	supplyChain    *attestation.SupplyChainMemo
+	composeSources *attestation.ComposeSources
 }
 
 // mergeReplicas verifies every other instance of the model in raw and merges
@@ -323,6 +324,7 @@ func (ev *evidenceVerifier) report(ctx context.Context, raw *attestation.RawAtte
 		NvidiaNRAS:             nrasResult,
 		PoC:                    pocResult,
 		Compose:                composeResult,
+		ComposeManager:         attestation.VerifyComposeManager(ctx, raw, tdxResult, ev.nonce, ev.tdx, ev.composeSources),
 		ImageRepos:             modelCD.Repos,
 		GatewayImageRepos:      gatewayCD.Repos,
 		DigestToRepo:           digestToRepo,

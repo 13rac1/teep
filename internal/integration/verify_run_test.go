@@ -69,6 +69,7 @@ func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
 	assertNoEnforcedFailures(t, report)
 
 	assertMustPass(t, report, []string{"nonce_match", "tee_quote_present"})
+	assertComposeManager(t, report)
 
 	if report.Passed < 5 {
 		t.Errorf("expected at least 5 passing factors, got %d", report.Passed)

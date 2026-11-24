@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/13rac1/teep/internal/attestation"
@@ -35,6 +36,9 @@ type Model struct {
 	// when the member is null or missing. Teep does not verify it; Select
 	// compares it across the instances of one model.
 	ohttpKeyConfig string
+	// composeManager is the entry's compose_manager_attestation as served,
+	// empty when absent. attestation.VerifyComposeManager verifies it.
+	composeManager []byte
 }
 
 // UnmarshalJSON validates the report and its typed nested evidence.
@@ -46,15 +50,17 @@ func (m *Model) UnmarshalJSON(data []byte) error {
 	}
 	var keys struct {
 		OHTTPKeyConfig json.RawMessage `json:"ohttp_key_config,omitempty"`
+		ComposeManager ComposeManager  `json:"compose_manager_attestation,omitempty"`
 	}
-	if _, err := Object(data, &keys, "model", "ohttp_key_config"); err != nil {
+	if _, err := Object(data, &keys, "model", "ohttp_key_config", "compose_manager_attestation"); err != nil {
 		return err
 	}
 	ohttp := string(bytes.TrimSpace(keys.OHTTPKeyConfig))
 	if ohttp == "null" {
 		ohttp = ""
 	}
-	*m = Model{Fields: fields, unknown: unknown, ohttpKeyConfig: ohttp}
+	unknown = slices.DeleteFunc(unknown, func(f string) bool { return f == "model.compose_manager_attestation" })
+	*m = Model{Fields: fields, unknown: unknown, ohttpKeyConfig: ohttp, composeManager: []byte(keys.ComposeManager)}
 	return nil
 }
 
@@ -255,6 +261,7 @@ func (m *Model) Raw(body []byte) *attestation.RawAttestation {
 		AppCompose: info.TCBInfo.AppCompose, AppName: info.AppName, ComposeHash: info.ComposeHash,
 		OSImageHash: info.OSImageHash, DeviceID: info.DeviceID,
 		EventLog: f.EventLog.Values(), EventLogCount: len(f.EventLog), RawBody: body,
+		ComposeManagerAttestation: m.composeManager,
 	}
 }
 

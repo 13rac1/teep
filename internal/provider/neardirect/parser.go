@@ -12,18 +12,18 @@ import (
 
 type attestationResponse struct {
 	nearparse.ModelFields
-	AllAttestations           nearparse.Models           `json:"all_attestations"`
-	ComposeManagerAttestation *composeManagerAttestation `json:"compose_manager_attestation,omitempty"`
-	OHTTPAttestation          *nearparse.OHTTP           `json:"ohttp_attestation,omitempty"`
-	OHTTPKeyConfig            string                     `json:"ohttp_key_config,omitempty"`
-	Verified                  bool                       `json:"verified,omitempty"`
+	AllAttestations           nearparse.Models         `json:"all_attestations"`
+	ComposeManagerAttestation nearparse.ComposeManager `json:"compose_manager_attestation,omitempty"`
+	OHTTPAttestation          *nearparse.OHTTP         `json:"ohttp_attestation,omitempty"`
+	OHTTPKeyConfig            string                   `json:"ohttp_key_config,omitempty"`
+	Verified                  bool                     `json:"verified,omitempty"`
 	unknown                   []string
 }
 
 func (a *attestationResponse) UnmarshalJSON(data []byte) error {
 	type fields attestationResponse
 	var out fields
-	unknown, err := nearparse.Object(data, &out, "neardirect")
+	unknown, err := nearparse.Object(data, &out, "neardirect", "compose_manager_attestation")
 	if err != nil {
 		return err
 	}
@@ -63,72 +63,9 @@ func ParseAttestationResponse(_ context.Context, body []byte, model string) (*at
 	unknown = append(unknown, flat.UnknownFields("neardirect")...)
 	unknown = append(unknown, repeated.UnknownFields("neardirect.all_attestations[0]")...)
 	unknown = append(unknown, envelope.OHTTPAttestation.UnknownFields("neardirect")...)
-	if envelope.ComposeManagerAttestation != nil {
-		unknown = append(unknown, envelope.ComposeManagerAttestation.unknown...)
-	}
 	raw := flat.Raw(body)
+	raw.ComposeManagerAttestation = []byte(envelope.ComposeManagerAttestation)
 	raw.Verified, raw.UnknownFields = envelope.Verified, unknown
 	raw.ModelNameMatch = string(match)
 	return raw, nil
-}
-
-type composeManagerAttestation struct {
-	Actions     []composeAction `json:"actions"`
-	ActionsHash string          `json:"actions_hash"`
-	Nonce       string          `json:"nonce"`
-	NonceSource string          `json:"nonce_source"`
-	Quote       string          `json:"quote"`
-	EventLog    string          `json:"event_log"`
-	ReportData  string          `json:"report_data"`
-	VMConfig    string          `json:"vm_config"`
-	unknown     []string
-}
-
-func (m *composeManagerAttestation) UnmarshalJSON(data []byte) error {
-	type fields composeManagerAttestation
-	var out fields
-	unknown, err := nearparse.Object(data, &out, "neardirect.compose_manager_attestation")
-	if err != nil {
-		return err
-	}
-	if len(out.Actions) > maxComposeManagerActions {
-		return errors.New("compose-manager actions exceed limit")
-	}
-	for i := range out.Actions {
-		action := &out.Actions[i]
-		unknown = append(unknown, nearparse.Prefix(fmt.Sprintf("neardirect.compose_manager_attestation.actions[%d]", i), action.unknown)...)
-	}
-	out.unknown = unknown
-	*m = composeManagerAttestation(out)
-	return nil
-}
-
-type composeAction struct {
-	Timestamp  string    `json:"timestamp"`
-	Action     string    `json:"action"`
-	Container  string    `json:"container,omitempty"`
-	Image      string    `json:"image,omitempty"`
-	Tag        string    `json:"tag,omitempty"`
-	Commit     string    `json:"commit,omitempty"`
-	File       string    `json:"file,omitempty"`
-	FileSHA256 string    `json:"file_sha256,omitempty"`
-	Services   []*string `json:"services,omitempty"`
-	unknown    []string
-}
-
-func (a *composeAction) UnmarshalJSON(data []byte) error {
-	type fields composeAction
-	var out fields
-	unknown, err := nearparse.Object(data, &out, "action")
-	if err != nil {
-		return err
-	}
-	for i, service := range out.Services {
-		if service == nil {
-			return fmt.Errorf("action.services[%d]: null is not permitted", i)
-		}
-	}
-	out.unknown = unknown
-	*a = composeAction(out)
-	return nil
 }

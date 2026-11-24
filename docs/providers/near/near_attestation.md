@@ -64,11 +64,14 @@ verification:
   states whether one name contains the other.
 
 The shared fetch and parser response limit is 1 MiB. Model arrays are limited to 256 entries; each event
-log and compose-manager action array is limited to 10,000 entries. Missing
+log is limited to 10,000 entries. Missing
 required fields, null supported fields, duplicate object members (including
 equivalent escaped names), and invalid field types are errors. These structural
-errors cannot be permitted through `response_schema` allowances. Compose-manager
-service arrays also reject null elements.
+errors cannot be permitted through `response_schema` allowances. The
+`compose_manager_attestation` member is kept as served and decoded by its own
+factors: an action array of more than 10,000 entries, an unknown or duplicate
+member, or a null service fails `compose_manager_quote`,
+`compose_manager_tcb` and `compose_manager_actions`.
 
 The NearCloud `gateway_attestation.vpc` object is optional. When it is
 present, its members are required and its unknown members are returned like
@@ -101,8 +104,9 @@ remains required.
 
 The gateway has its own signing-address scheme and TLS identity. Its evidence
 is validated separately, not compared with a repeated model report. Auxiliary
-OHTTP and compose-manager objects have their own typed schemas; their presence
-does not authorize inference or replace the model and gateway checks.
+OHTTP objects have their own typed schemas; their presence does not authorize
+inference or replace the model and gateway checks. The compose-manager object
+is verified by its own factors, described next.
 
 Exact-name and null-field handling use the shared
 [strict object decoder](../../../internal/jsonstrict/object.go). It re-encodes
@@ -122,6 +126,66 @@ Regression coverage includes the direct and cloud `parser_contract_test.go`
 files, `TestNearSignedModelKeySubstitution`, and the provider signed-evidence
 fixture suites. Transport requirements remain in the
 [shared transport reference](../../transport/README.md).
+
+## Compose-manager attestation
+
+The compose that the model CVM's MRConfigID binds runs compose-manager, its
+launcher, certbot and an OpenTelemetry collector. compose-manager then starts
+the inference proxy (which holds the model key and decrypts E2EE) and the
+model server from files of `nearai/cvm-compose-files`, after boot, so neither
+is in RTMR3 or MRConfigID. Their only record is the
+`compose_manager_attestation` member of each model entry: compose-manager's
+action log and a second TDX quote from the same TD, whose REPORTDATA is
+`sha256(canonical actions) ‖ client nonce` (`canonicalize_actions` and
+`attestation_binding` in nearai/compose-manager `src/main.rs`).
+
+- `compose_manager_quote` verifies that quote (Intel chain, signature, debug
+  off), requires MRTD, MRSEAM, MRCONFIGID, MROWNER, MROWNERCONFIG and RTMR0-3
+  to equal the instance quote, and recomputes REPORTDATA from the served
+  action list (JSON, keys sorted, no whitespace) and teep's nonce. RTMR3
+  carries the instance-id event, so the quote of another instance of the
+  same model fails.
+- `compose_manager_tcb` checks its Intel PCS collateral; TCB must be UpToDate.
+- `compose_manager_actions` reads the bound log and applies a rule to what it
+  runs. Each `compose_up` or `compose_stage` names a file at a commit: the
+  file at that commit of `nearai/cvm-compose-files`
+  (raw.githubusercontent.com), on any branch, must hash to the logged `file_sha256`,
+  and every service in it must run an image pinned by digest, with no
+  `build`, `extends`, `include` or interpolation in `image`. Each
+  `compose_manager_started` image must be `nearaidev/compose-manager` pinned
+  by digest; the measured launcher only swaps to images signed by
+  nearai/compose-manager workflows. `compose_down`, `docker_restart`,
+  `docker_clean`, `docker_evict`, `launcher_restart`, `dstack_agent_*`,
+  `kernel_algif_blacklist_*` and `env_override_set`/`unset` start nothing;
+  any other action fails.
+
+`compose_manager_quote` and `compose_manager_tcb` are enforced.
+`compose_manager_actions` is reported and is in the default `allow_fail` list
+of `neardirect` and `nearcloud`, because most recorded logs fail it; see
+[NEAR compose-manager deployments](../../attestation_gaps/near_compose_manager.md).
+A configured `allow_fail` list without it enforces it. The rule has no list to maintain: a NEAR release at
+any public commit that pins its images passes as soon as it is deployed. An
+accepted file is not fetched again by the same proxy or `teep verify` run;
+offline, or with GitHub unreachable, a file not yet accepted fails, and
+`--offline` allows the factor to fail. The check covers every deployment
+the log reports, not only the one running: compose-manager runs every file
+under one Compose project by default, the log does not record the project,
+and anything it started in the TD had Docker access. Limits:
+
+- The log is compose-manager's own claim. It is as good as the
+  compose-manager images, which have `docker.sock`, `dstack.sock` and
+  `pid: host`.
+- compose-manager prunes entries older than seven days unless they anchor a
+  deployed record, so a log does not show everything the TD ever ran.
+- Env values are not logged: neither a `compose_up` request's `env` nor
+  `/admin/env` overrides (only their key names). They cannot change an image,
+  but they reach `environment` and other interpolated fields.
+- A file that builds its image in the CVM fails, even from main, because no
+  digest names what runs.
+- The rule assumes compose-manager is the only holder of dstack `GetQuote` in
+  the TD. NEAR also exposes it to its privileged inference proxies and,
+  through a GetQuote-only filter, to a third-party container; any of them can
+  produce a log and a quote that bind as above.
 
 ## Supply chain: image index and platform manifest
 

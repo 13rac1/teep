@@ -492,6 +492,44 @@ var factorRegistry = []factorInfo{
 			"complete — no entries were added, removed, or modified. Skipped " +
 			"when no event log entries are present in the attestation response.",
 	},
+	{
+		Name:    attestation.FactorCMQuote,
+		Tier:    3,
+		Summary: "compose-manager quote binds its action log",
+		Description: "NEAR-specific. The model CVM compose runs compose-manager, " +
+			"which starts the inference proxy and the model server after boot, " +
+			"so neither is in RTMR3 or MRConfigID. compose_manager_attestation " +
+			"is a second TDX quote from compose-manager. This factor verifies " +
+			"its Intel certificate chain and signature and the debug bit, " +
+			"requires MRTD, MRSEAM, MRCONFIGID, MROWNER, MROWNERCONFIG and " +
+			"RTMR0-3 to equal the instance quote, and requires REPORTDATA to be " +
+			"sha256(canonical action log) followed by the client nonce. Not " +
+			"applicable to other providers.",
+	},
+	{
+		Name:    attestation.FactorCMTCB,
+		Tier:    3,
+		Summary: "compose-manager quote TCB is UpToDate",
+		Description: "NEAR-specific. Fetches Intel PCS collateral for the " +
+			"compose-manager quote and requires TCB status UpToDate.",
+	},
+	{
+		Name:    attestation.FactorCMActions,
+		Tier:    3,
+		Summary: "compose-manager deployments follow the rule",
+		Description: "NEAR-specific. Reads the action log that " +
+			"compose_manager_quote binds. Every compose file that the log " +
+			"stages or brings up (compose_stage, compose_up) must be published " +
+			"at its commit of nearai/cvm-compose-files (any branch), hash " +
+			"to its logged file_sha256 there, and run every service from an " +
+			"image pinned by digest, with no build, extends, include or " +
+			"interpolated image. Every compose-manager it records starting " +
+			"(compose_manager_started) must be nearaidev/compose-manager " +
+			"pinned by digest. Unknown actions fail. Needs GitHub; offline, " +
+			"a file not yet accepted fails. Allowed to fail by default for " +
+			"neardirect and nearcloud. The log is compose-manager's own " +
+			"record: it is as good as the compose-manager images.",
+	},
 	// Tier 4: Gateway Attestation (nearcloud only)
 	{
 		Name:    attestation.FactorGWNonceMatch,
