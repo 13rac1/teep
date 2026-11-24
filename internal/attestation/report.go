@@ -106,6 +106,9 @@ const (
 	FactorSigstoreVerify       = "sigstore_verification"
 	FactorSigstoreCode         = "sigstore_code_verified"
 	FactorEventLogIntegrity    = "event_log_integrity"
+	FactorCMQuote              = "compose_manager_quote"
+	FactorCMTCB                = "compose_manager_tcb"
+	FactorCMActions            = "compose_manager_actions"
 	FactorGWNonceMatch         = "gateway_nonce_match"
 	FactorGWQuotePresent       = "gateway_tee_quote_present"
 	FactorGWQuoteStructure     = "gateway_tee_quote_structure"
@@ -473,6 +476,12 @@ var NearcloudDefaultAllowFail = []string{
 	// a manifest to its signed index or NEAR pins the index digest.
 	// SEE: docs/providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest
 	FactorSigstoreVerify,
+	// compose_manager_actions fails for 9 of 14 recorded NEAR action logs:
+	// they report deployments whose compose file builds an image in the CVM
+	// or pins an image by tag. The failure is reported until every instance
+	// passes; enforcement is a separate change.
+	// SEE: docs/attestation_gaps/near_compose_manager.md
+	FactorCMActions,
 	// Gateway factors.
 	// The NEAR Cloud gateway runs an MRTD (7fe60787…) that is not in the
 	// gateway measurement allowlist of teep. The allowlist changes only
@@ -523,6 +532,12 @@ var NeardirectDefaultAllowFail = []string{
 	// a manifest to its signed index or NEAR pins the index digest.
 	// SEE: docs/providers/near/near_attestation.md#supply-chain-image-index-and-platform-manifest
 	FactorSigstoreVerify,
+	// compose_manager_actions fails for 9 of 14 recorded NEAR action logs:
+	// they report deployments whose compose file builds an image in the CVM
+	// or pins an image by tag. The failure is reported until every instance
+	// passes; enforcement is a separate change.
+	// SEE: docs/attestation_gaps/near_compose_manager.md
+	FactorCMActions,
 }
 
 // NanoGPTDefaultAllowFail is the nanogpt-specific default allow_fail list.
@@ -825,6 +840,7 @@ var KnownFactors = []string{
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
 	FactorComposeBinding, FactorSigstoreVerify, FactorSigstoreCode, FactorEventLogIntegrity,
+	FactorCMQuote, FactorCMTCB, FactorCMActions,
 	// Gateway factors.
 	FactorGWNonceMatch, FactorGWQuotePresent, FactorGWQuoteStructure,
 	FactorGWCertChain, FactorGWQuoteSignature, FactorGWDebugDisabled,
@@ -859,6 +875,8 @@ var OnlineFactors = []string{
 	FactorSigstoreVerify,
 	FactorSigstoreCode,
 	FactorGWCPUIDRegistry,
+	FactorCMTCB,
+	FactorCMActions,
 
 	// The gateway measurement is compared against Sigstore reference values,
 	// and the gateway certificate chain and signature need the AMD KDS, so all
@@ -1107,6 +1125,10 @@ type ReportInput struct {
 	Compose    *ComposeBindingResult
 	Sigstore   []SigstoreResult
 	Rekor      []RekorProvenance
+
+	// ComposeManager is the verification of the compose-manager quote and
+	// action log of a NEAR model entry. Nil for other formats.
+	ComposeManager *ComposeManagerResult
 
 	// Gateway fields — populated by providers that attest an API gateway in
 	// front of the model endpoint. The gateway is a separate principal: its
@@ -1407,6 +1429,9 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalSigstoreVerification,
 		evalSigstoreCodeVerified,
 		evalEventLogIntegrity,
+		evalComposeManagerQuote,
+		evalComposeManagerTCB,
+		evalComposeManagerActions,
 	}
 	if includeGateway {
 		evals = append(evals,
@@ -4208,4 +4233,95 @@ func evalGatewaySEVReportDataBinding(in *ReportInput) []FactorResult {
 		return factor(TierGateway, FactorGWReportData, Pass, in.GatewaySEV.ReportDataBindingDetail)
 	}
 	return factor(TierGateway, FactorGWReportData, Fail, "no REPORTDATA verifier configured for the gateway")
+}
+
+// composeManagerPending returns the failure of the compose-manager evidence
+// before its own checks: not applicable to a format other than NEAR, Fail
+// when it was not verified, did not parse or its quote did not parse.
+func composeManagerPending(in *ReportInput, name string) []FactorResult {
+	switch r := in.ComposeManager; {
+	case in.Raw == nil || in.Raw.BackendFormat != FormatNear:
+		return factor(TierSupplyChain, name, NotApplicable, "compose-manager attestation is NEAR-specific")
+	case r == nil:
+		return factor(TierSupplyChain, name, Fail, "compose_manager_attestation was not verified")
+	case r.Err != nil:
+		return factor(TierSupplyChain, name, Fail, r.Err.Error())
+	case r.Quote.ParseErr != nil:
+		return factor(TierSupplyChain, name, Fail, fmt.Sprintf("compose-manager quote did not parse: %v", r.Quote.ParseErr))
+	}
+	return nil
+}
+
+// composeManagerQuoteErr returns why the compose-manager quote does not bind
+// its action log to the instance and the client nonce, or nil.
+func composeManagerQuoteErr(r *ComposeManagerResult) error {
+	q := r.Quote
+	switch {
+	case q.CertChainErr != nil:
+		return fmt.Errorf("compose-manager quote certificate chain: %w", q.CertChainErr)
+	case q.SignatureErr != nil:
+		return fmt.Errorf("compose-manager quote signature: %w", q.SignatureErr)
+	case q.DebugEnabled:
+		return errors.New("compose-manager quote has the TD debug bit set")
+	case r.TDErr != nil:
+		return fmt.Errorf("compose-manager quote is not from the instance TD: %w", r.TDErr)
+	case r.BindErr != nil:
+		return r.BindErr
+	}
+	return nil
+}
+
+// evalComposeManagerQuote checks the compose-manager quote of a NEAR model
+// entry: Intel certificate chain and signature, debug off, every TD
+// measurement equal to the instance quote, and REPORTDATA equal to
+// sha256(canonical action log) || client nonce.
+func evalComposeManagerQuote(in *ReportInput) []FactorResult {
+	if f := composeManagerPending(in, FactorCMQuote); f != nil {
+		return f
+	}
+	if err := composeManagerQuoteErr(in.ComposeManager); err != nil {
+		return factor(TierSupplyChain, FactorCMQuote, Fail, err.Error())
+	}
+	return factor(TierSupplyChain, FactorCMQuote, Pass, fmt.Sprintf(
+		"compose-manager quote: Intel chain and signature valid, debug off, same TD as the instance quote (MRTD, MRSEAM, MRCONFIGID, MROWNER, MROWNERCONFIG, RTMR0-3), REPORTDATA = sha256(%d actions) || client nonce",
+		len(in.ComposeManager.Actions)))
+}
+
+// evalComposeManagerTCB checks the Intel PCS collateral and TCB status of
+// the compose-manager quote.
+func evalComposeManagerTCB(in *ReportInput) []FactorResult {
+	if f := composeManagerPending(in, FactorCMTCB); f != nil {
+		return f
+	}
+	q := in.ComposeManager.Quote
+	switch {
+	case q.CollateralErr != nil:
+		return factor(TierSupplyChain, FactorCMTCB, Fail, fmt.Sprintf("Intel PCS collateral: %v", q.CollateralErr))
+	case q.TcbStatus == "":
+		return factor(TierSupplyChain, FactorCMTCB, Skip, "offline; Intel PCS collateral not fetched")
+	case q.TcbStatus != pcs.TcbComponentStatusUpToDate:
+		return factor(TierSupplyChain, FactorCMTCB, Fail, fmt.Sprintf("compose-manager quote TCB status: %s", q.TcbStatus))
+	}
+	return factor(TierSupplyChain, FactorCMTCB, Pass, "compose-manager quote TCB is UpToDate per Intel PCS")
+}
+
+// evalComposeManagerActions checks what the bound action log runs: every
+// compose file it stages or brings up hashes to the file published at its
+// commit of nearai/cvm-compose-files, and pins
+// every service image by digest; every compose-manager it starts is
+// nearaidev/compose-manager pinned by digest.
+func evalComposeManagerActions(in *ReportInput) []FactorResult {
+	if f := composeManagerPending(in, FactorCMActions); f != nil {
+		return f
+	}
+	r := in.ComposeManager
+	if err := composeManagerQuoteErr(r); err != nil {
+		return factor(TierSupplyChain, FactorCMActions, Fail, "action log is not bound to a verified compose-manager quote: "+err.Error())
+	}
+	if r.SourceErr != nil {
+		return factor(TierSupplyChain, FactorCMActions, Fail, r.SourceErr.Error())
+	}
+	return factor(TierSupplyChain, FactorCMActions, Pass, fmt.Sprintf(
+		"%d actions bound by the compose-manager quote; %d compose files, each published at its commit of %s with its bytes and every image pinned by digest; running %s",
+		len(r.Actions), len(r.Deployments), ComposeFilesRepo, r.Images[len(r.Images)-1]))
 }

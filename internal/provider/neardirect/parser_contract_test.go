@@ -1,12 +1,15 @@
 package neardirect_test
 
 import (
+	"context"
 	"encoding/json"
-	"github.com/13rac1/teep/internal/attestation"
+	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/jsonstrict/aliastest"
 	"github.com/13rac1/teep/internal/provider/neardirect"
 )
@@ -204,7 +207,10 @@ func TestDirectSchemaAllowancePreservesDiagnostics(t *testing.T) {
 	t.Fatal("missing response_schema factor")
 }
 
-func TestDirectComposeServicesRejectNullElements(t *testing.T) {
+// TestDirectComposeManagerEvidenceReachesVerification checks that the
+// compose_manager_attestation of a direct report is carried to
+// attestation.VerifyComposeManager, which rejects malformed services.
+func TestDirectComposeManagerEvidenceReachesVerification(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		services any
@@ -221,15 +227,22 @@ func TestDirectComposeServicesRejectNullElements(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			body := directFixture(t)
 			body["compose_manager_attestation"] = map[string]any{
-				"actions":      []any{map[string]any{"timestamp": "2026-09-10", "action": "restart", "services": tc.services}},
+				"actions":      []any{map[string]any{"timestamp": "2026-09-10", "action": "docker_restart", "services": tc.services}},
 				"actions_hash": "", "nonce": "", "nonce_source": "", "quote": "", "event_log": "", "report_data": "", "vm_config": "",
 			}
 			raw, err := neardirect.ParseAttestationResponse(t.Context(), encodeDirectFixture(t, body), "model")
-			if (err == nil) != tc.valid {
-				t.Fatalf("service array validity: %v", err)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
 			}
-			if !tc.valid && raw != nil {
-				t.Fatal("malformed services published evidence")
+			if slices.Contains(raw.UnknownFields, "neardirect.compose_manager_attestation") {
+				t.Fatal("compose_manager_attestation reported as unknown")
+			}
+			noQuote := func(context.Context, string) *attestation.TDXVerifyResult {
+				return &attestation.TDXVerifyResult{ParseErr: errors.New("no quote")}
+			}
+			r := attestation.VerifyComposeManager(t.Context(), raw, nil, attestation.Nonce{}, noQuote, attestation.NewComposeSources(nil, true))
+			if (r.Err == nil) != tc.valid {
+				t.Fatalf("service array validity: %v", r.Err)
 			}
 		})
 	}

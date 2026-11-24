@@ -33,8 +33,6 @@ import (
 const (
 	// attestationPath is the NEAR AI API path for TEE attestation reports.
 	attestationPath = "/v1/attestation/report"
-
-	maxComposeManagerActions = 10_000
 )
 
 // Attester fetches attestation data from NEAR AI's /v1/attestation/report

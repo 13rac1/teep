@@ -1,0 +1,1666 @@
+{
+ "source": "cloud-api.near.ai /v1/attestation/report, model deepseek-ai/DeepSeek-V4.1-Flash-1017, 2026-11-21T05:31Z",
+ "nonce": "64d778d56203ac3a746de5c192656b58567ccdafafb02023dcb7d6acf3175088",
+ "instances": [
+  {
+   "instance_id": "7bb9af0ac5b0e22dde3903218f58e56f743164a1",
+   "intel_quote": "040002008100000000000000939a7233f79c4ca9940a0db3957f060711779ab087bb2a6a5243b01c0171c3e4000000000b0104000000000000000000000000007bf063280e94fb051f5dd7b1fc59ce9aac42bb961df8d44b709c9b0ff87a7b4df648657ba6d1189589feab1d5a3c9a9d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000e702060000000000e107136c99ae1745ab299e9462927890b7b1c984d5ef53fa5830584ad4246db663fdf96563b913e9e2471906b26f7aae01e3902667a26282dd8b4015a901848c521b20243a155a457148f88acf48a45959000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bc122d143ab768565ba5c3774ff5f03a63c89a4df7c1f5ea38d3bd173409d14f8cbdcc36d40e703cccb996a9d9687590786417fa26b5d90d1289025506055e511ff09fd608f4727bb3cf159279a52af23117b6248024d0b186aceabebf6f86ec41800152afda682372d33b484e357002e2b179f64b7882e0f0529ad2373ad93898a3b4d3ffb9a433f406b986d4f4f291f7217bc0d3933d04f4aa8c3ac23b4196f5113211feb95cda9998073e40e0253d34f5765f8c4a065de1c27d6b25cab3a6cd05f95a9121745a96c91f4ce7c9c38838733480433930059496834cd0107bf264d778d56203ac3a746de5c192656b58567ccdafafb02023dcb7d6acf3175088cc100000f9d6fb7312161e96a32d1e4acf153e1e740fd729cb7f53815aa230f65c09d1bc1b643322df4509843d091349cd2d1584af4b66692d23a20d2ddc6546ee80acc294bd934c2b0f896c4feae3632a5bc6f3c5900d48356ea011ba233c46d505ea54619ce6b5c5ab5f9a180eb80d167d9dec4ef20a1e8e1aa5b82bbaaf9c4c3c22ad0600461000000404191b04ff0006000000000000000000000000000000000000000000000000000000000000000000000000000000001500000000000000e700000000000000e5a3a7b5d830c2953b98534c6c59a3a34fdc34e933f7f5898f0a85cf08846bca0000000000000000000000000000000000000000000000000000000000000000dc9e2a7c6f948f17474e34a7fc43ed030f7c1563f1babddf6340c82e0e54a8c500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000d29d0dbb390a2a9e06ee4f7121b67a7fd55219b30b93113bf3ef7fcdc4f77c5400000000000000000000000000000000000000000000000000000000000000001fa664675596bfb81e14e49ef6f6100ba754092bf3818b9b0b6afab1d51210c47f3a0ec368a0504cfd7da01f9a94a4fbac38f67bbdbd44cffb5bb204dab142952000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f05005e0e00002d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d49494538444343424a65674177494241674956414f3978316d572f74316d54465050463470555169386d4e735541564d416f4743437147534d343942414d430a4d484178496a416742674e5642414d4d47556c756447567349464e4857434251513073675547786864475a76636d306751304578476a415942674e5642416f4d0a45556c756447567349454e76636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155450a4341774351304578437a414a42674e5642415954416c56544d423458445449324d5445784e7a41774e4455784d566f5844544d7a4d5445784e7a41774e4455780a4d566f77634445694d434147413155454177775a535735305a5777675530645949464244537942445a584a3061575a70593246305a5445614d426747413155450a43677752535735305a577767513239796347397959585270623234784644415342674e564241634d43314e68626e526849454e7359584a684d517377435159440a5651514944414a445154454c4d416b474131554542684d4356564d775754415442676371686b6a4f5051494242676771686b6a4f50514d4242774e43414154330a5a5073525a6577442b6b6948484d7158703833424246753578445a59694d55437a32517a3248626f3474463573342f5a7657574d363731494a44305a6f7a38490a475637674e41507776736937516a6638575436346f3449444444434341776777487759445652306a42426777466f41556c5739647a62306234656c4153636e550a3944504f4156634c336c5177617759445652306642475177596a42676f46366758495a616148523063484d364c79396863476b7564484a316333526c5a484e6c0a636e5a705932567a4c6d6c75644756734c6d4e766253397a5a3367765932567964476c6d61574e6864476c76626939324e4339775932746a636d772f593245390a6347786864475a76636d306d5a57356a62325270626d63395a4756794d423047413155644467515742425263516e455731494a6b4f436b7762525170434f6c6f0a39392b6b5244414f42674e56485138424166384542414d434273417744415944565230544151482f4241497741444343416a6b4743537147534962345451454e0a4151534341696f776767496d4d42344743697147534962345451454e41514545454a4e466778364631673474566a366f4a65626c373949776767466a42676f710a686b69472b453042445145434d494942557a415142677371686b69472b45304244514543415149424244415142677371686b69472b45304244514543416749420a4244415142677371686b69472b4530424451454341774942416a415142677371686b69472b4530424451454342414942416a415142677371686b69472b4530420a44514543425149424244415142677371686b69472b45304244514543426749424154415142677371686b69472b453042445145434277494241444151426773710a686b69472b45304244514543434149424254415142677371686b69472b45304244514543435149424144415142677371686b69472b45304244514543436749420a4144415142677371686b69472b45304244514543437749424144415142677371686b69472b45304244514543444149424144415142677371686b69472b4530420a44514543445149424144415142677371686b69472b45304244514543446749424144415142677371686b69472b453042445145434477494241444151426773710a686b69472b45304244514543454149424144415142677371686b69472b45304244514543455149424454416642677371686b69472b45304244514543456751510a42415143416751424141554141414141414141414144415142676f71686b69472b45304244514544424149414144415542676f71686b69472b453042445145450a4241615177473841414141774477594b4b6f5a496876684e4151304242516f424154416542676f71686b69472b453042445145474242425135324142427958590a714f4776395250774141767a4d45514743697147534962345451454e415163774e6a415142677371686b69472b45304244514548415145422f7a4151426773710a686b69472b45304244514548416745422f7a415142677371686b69472b45304244514548417745422f7a414b42676771686b6a4f5051514441674e48414442450a4169426a4f4b33677569304d5261675033553576446571746947754c2b656e37374e414f5a7858386a53667a706749674b4847773533495332716d77495962440a7a38734e484e694b4d4d43334f584371643162635048724c64586b3d0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a2d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d4949436c6a4343416a32674177494241674956414a567658633239472b487051456e4a3150517a7a674658433935554d416f4743437147534d343942414d430a4d476778476a415942674e5642414d4d45556c756447567349464e48574342536232393049454e424d526f77474159445651514b4442464a626e526c624342440a62334a7762334a6864476c76626a45554d424947413155454277774c553246756447456751327868636d4578437a414a42674e564241674d416b4e424d5173770a435159445651514745774a56557a4165467730784f4441314d6a45784d4455774d5442614677307a4d7a41314d6a45784d4455774d5442614d484178496a41670a42674e5642414d4d47556c756447567349464e4857434251513073675547786864475a76636d306751304578476a415942674e5642416f4d45556c75644756730a49454e76636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b474131554543417743513045780a437a414a42674e5642415954416c56544d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a304441516344516741454e53422f377432316c58534f0a3243757a7078773734654a423732457944476757357258437478327456544c7136684b6b367a2b5569525a436e71523770734f766771466553786c6d546c4a6c0a65546d693257597a33714f42757a43427544416642674e5648534d4547444157674251695a517a575770303069664f44744a5653763141624f536347724442530a42674e5648523845537a424a4d45656752614244686b466f64485277637a6f764c324e6c636e52705a6d6c6a5958526c63793530636e567a6447566b633256790a646d6c6a5a584d75615735305a577775593239744c306c756447567355306459556d397664454e424c6d526c636a416442674e5648513445466751556c5739640a7a62306234656c4153636e553944504f4156634c336c517744675944565230504151482f42415144416745474d42494741315564457745422f7751494d4159420a4166384341514177436759494b6f5a497a6a30454177494452774177524149675873566b6930772b6936565947573355462f32327561586530594a446a3155650a6e412b546a44316169356343494359623153416d4435786b66545670766f34556f79695359787244574c6d5552344349394e4b7966504e2b0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a2d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d4949436a7a4343416a53674177494241674955496d554d316c71644e496e7a6737535655723951477a6b6e42717777436759494b6f5a497a6a3045417749770a614445614d4267474131554541777752535735305a5777675530645949464a766233516751304578476a415942674e5642416f4d45556c756447567349454e760a636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155454341774351304578437a414a0a42674e5642415954416c56544d423458445445344d4455794d5445774e4455784d466f58445451354d54497a4d54497a4e546b314f566f77614445614d4267470a4131554541777752535735305a5777675530645949464a766233516751304578476a415942674e5642416f4d45556c756447567349454e76636e4276636d46300a615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155454341774351304578437a414a42674e56424159540a416c56544d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a3044415163445167414543366e45774d4449595a4f6a2f69505773437a61454b69370a314f694f534c52466857476a626e42564a66566e6b59347533496a6b4459594c304d784f346d717379596a6c42616c54565978465032734a424b357a6c4b4f420a757a43427544416642674e5648534d4547444157674251695a517a575770303069664f44744a5653763141624f5363477244425342674e5648523845537a424a0a4d45656752614244686b466f64485277637a6f764c324e6c636e52705a6d6c6a5958526c63793530636e567a6447566b63325679646d6c6a5a584d75615735300a5a577775593239744c306c756447567355306459556d397664454e424c6d526c636a416442674e564851344546675155496d554d316c71644e496e7a673753560a55723951477a6b6e4271777744675944565230504151482f42415144416745474d42494741315564457745422f7751494d4159424166384341514577436759490a4b6f5a497a6a3045417749445351417752674968414f572f35516b522b533943695344634e6f6f774c7550524c735747662f59693747535839344267775477670a41694541344a306c72486f4d732b586f356f2f7358364f39515778485241765a55474f6452513763767152586171493d0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "compose_manager_attestation": {
+    "actions": [
+     {
+      "timestamp": "2026-09-05T03:41:29.167952600+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.382",
+      "commit": "3e3fa7cb0a5515bbd4a60ff39e4b440e94b2976e",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "a648cda7147efb69c4f4ec4e62376beb288826a5db81242ab09cb090efa7d99d",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1"
+      ]
+     },
+     {
+      "timestamp": "2026-09-05T03:46:02.287490129+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.380",
+      "commit": "d36548db2486f91cc527792ea0c735068eede5de",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "model-downloader"
+      ]
+     },
+     {
+      "timestamp": "2026-09-05T03:46:44.426349945+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.380",
+      "commit": "d36548db2486f91cc527792ea0c735068eede5de",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "d76413cd231a4e871a515e4fa829c6510a374fe335e77fae3ea5a6dccf783909"
+     },
+     {
+      "timestamp": "2026-09-05T03:47:01.178182708+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.380",
+      "commit": "d36548db2486f91cc527792ea0c735068eede5de",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "d76413cd231a4e871a515e4fa829c6510a374fe335e77fae3ea5a6dccf783909",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1",
+       "model-sg-glm53-fp8-tp4-r2"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T20:12:54.741319839+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.382",
+      "commit": "3e3fa7cb0a5515bbd4a60ff39e4b440e94b2976e",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "dcgm-glm53"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T20:13:06.681069618+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.404",
+      "commit": "0eb5c6d9f0842af579e24e39d661ede0ed79e440",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "a2d3f073aa2f01864bb8eac72ba1f4292ad8391aebdc28e29b84fe8cde48afab",
+      "services": [
+       "model-proxy-registrar",
+       "dcgm-glm53"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T22:31:06.717558287+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.408",
+      "commit": "676532b98f9a01da5d43f98299af297b573d242d",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T22:32:59.624396308+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.408",
+      "commit": "676532b98f9a01da5d43f98299af297b573d242d",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "e5d80ab6e1a1188fdf8cd3e7bc2f74da5d4767da15b0644acf07dad08a3b461b",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T22:44:11.512410311+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.408",
+      "commit": "676532b98f9a01da5d43f98299af297b573d242d",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "e5d80ab6e1a1188fdf8cd3e7bc2f74da5d4767da15b0644acf07dad08a3b461b",
+      "services": [
+       "glm53-perception-check"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T22:55:14.350473769+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.408",
+      "commit": "676532b98f9a01da5d43f98299af297b573d242d",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r2"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T22:56:40.423568951+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.408",
+      "commit": "676532b98f9a01da5d43f98299af297b573d242d",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "e5d80ab6e1a1188fdf8cd3e7bc2f74da5d4767da15b0644acf07dad08a3b461b",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r2"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T23:08:20.613303792+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.408",
+      "commit": "676532b98f9a01da5d43f98299af297b573d242d",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "e5d80ab6e1a1188fdf8cd3e7bc2f74da5d4767da15b0644acf07dad08a3b461b",
+      "services": [
+       "glm53-perception-check"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T23:44:01.140109908+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.409",
+      "commit": "e14107901d202215ab44eb027eb4792047d5ec83",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "2878b9c4c6db512a7538dc4e8981fd5acae72cdaace7794509f48161bcce08e3",
+      "services": [
+       "proxy-glm53"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T23:47:41.079378949+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.408",
+      "commit": "676532b98f9a01da5d43f98299af297b573d242d",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "e5d80ab6e1a1188fdf8cd3e7bc2f74da5d4767da15b0644acf07dad08a3b461b",
+      "services": [
+       "glm53-perception-check"
+      ]
+     },
+     {
+      "timestamp": "2026-09-09T23:50:56.168509009+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.409",
+      "commit": "e14107901d202215ab44eb027eb4792047d5ec83",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "2878b9c4c6db512a7538dc4e8981fd5acae72cdaace7794509f48161bcce08e3",
+      "services": [
+       "proxy-glm53"
+      ]
+     },
+     {
+      "timestamp": "2026-09-15T20:02:01.765276686+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.422",
+      "commit": "8f97e8f22db8a32b915b7b59702fc09635a8ac24",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "dac8e7bd277ba8f6dbf51201a859374f956e92d2546637e17c73608911e65bf4",
+      "services": [
+       "nginx",
+       "proxy-glm53"
+      ]
+     },
+     {
+      "timestamp": "2026-09-16T01:00:39.878329015+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.423",
+      "commit": "065340e05635b885dfb238fe9f3601ad351d68a8",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r2"
+      ]
+     },
+     {
+      "timestamp": "2026-09-16T01:06:20.950370221+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.423",
+      "commit": "065340e05635b885dfb238fe9f3601ad351d68a8",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "367d6c1324eb363e14fc76a7370b5af4019fb58272d8bdfb4de2cd14dc9283ad",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r2"
+      ]
+     },
+     {
+      "timestamp": "2026-09-16T01:23:01.302471499+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.423",
+      "commit": "065340e05635b885dfb238fe9f3601ad351d68a8",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "367d6c1324eb363e14fc76a7370b5af4019fb58272d8bdfb4de2cd14dc9283ad",
+      "services": [
+       "glm53-perception-check"
+      ]
+     },
+     {
+      "timestamp": "2026-09-16T01:25:04.820264887+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.423",
+      "commit": "065340e05635b885dfb238fe9f3601ad351d68a8",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1"
+      ]
+     },
+     {
+      "timestamp": "2026-09-16T01:30:47.137982365+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.423",
+      "commit": "065340e05635b885dfb238fe9f3601ad351d68a8",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "367d6c1324eb363e14fc76a7370b5af4019fb58272d8bdfb4de2cd14dc9283ad",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1"
+      ]
+     },
+     {
+      "timestamp": "2026-09-16T01:42:28.905302129+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.423",
+      "commit": "065340e05635b885dfb238fe9f3601ad351d68a8",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "367d6c1324eb363e14fc76a7370b5af4019fb58272d8bdfb4de2cd14dc9283ad",
+      "services": [
+       "glm53-perception-check"
+      ]
+     },
+     {
+      "timestamp": "2026-09-17T16:35:40.693752799+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.423",
+      "commit": "065340e05635b885dfb238fe9f3601ad351d68a8",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "367d6c1324eb363e14fc76a7370b5af4019fb58272d8bdfb4de2cd14dc9283ad",
+      "services": [
+       "glm53-soak-relay"
+      ]
+     },
+     {
+      "timestamp": "2026-09-17T16:40:31.841218646+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.423",
+      "commit": "065340e05635b885dfb238fe9f3601ad351d68a8",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "glm53-soak-relay"
+      ]
+     },
+     {
+      "timestamp": "2026-09-17T21:12:28.404536187+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.423",
+      "commit": "065340e05635b885dfb238fe9f3601ad351d68a8",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r2"
+      ]
+     },
+     {
+      "timestamp": "2026-09-17T21:15:02.456956455+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.427",
+      "commit": "7e8e1aba17ba2e358c29049925d59a4fe40f2ee5",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "0844864e1ba1b477cd0e57a1f98e01bbfef9f3dd535e3b8bbbacf2cac97a570f",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r2"
+      ]
+     },
+     {
+      "timestamp": "2026-09-17T21:28:21.565292826+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.427",
+      "commit": "7e8e1aba17ba2e358c29049925d59a4fe40f2ee5",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1"
+      ]
+     },
+     {
+      "timestamp": "2026-09-17T21:31:13.682812688+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.427",
+      "commit": "7e8e1aba17ba2e358c29049925d59a4fe40f2ee5",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "0844864e1ba1b477cd0e57a1f98e01bbfef9f3dd535e3b8bbbacf2cac97a570f",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1"
+      ]
+     },
+     {
+      "timestamp": "2026-09-17T21:41:29.017423035+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.427",
+      "commit": "7e8e1aba17ba2e358c29049925d59a4fe40f2ee5",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "0844864e1ba1b477cd0e57a1f98e01bbfef9f3dd535e3b8bbbacf2cac97a570f",
+      "services": [
+       "glm53-perception-check"
+      ]
+     },
+     {
+      "timestamp": "2026-09-18T00:23:57.176489902+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.428",
+      "commit": "5ba5a5bb92b7b1bbbe72fe9b7a8fbaec729627a1",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "afe6a626b91b8c18d9b8addd22fc50aabfcc7824b488f635b72af96c5a324e5a",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-09-23T22:19:53.114026792+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.443",
+      "commit": "0a51138ef3ec104706c40a53dab0c3bcea75d7b3",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "b2d8b87cf185ff809f662ce276c2487da852e9903fe5fe0f0dbc3980af49f4ba",
+      "services": [
+       "model-downloader"
+      ]
+     },
+     {
+      "timestamp": "2026-09-23T22:42:21.540288890+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.443",
+      "commit": "0a51138ef3ec104706c40a53dab0c3bcea75d7b3",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "file_sha256": "b2d8b87cf185ff809f662ce276c2487da852e9903fe5fe0f0dbc3980af49f4ba",
+      "services": [
+       "hf-cleanup"
+      ]
+     },
+     {
+      "timestamp": "2026-09-23T23:47:47.470461960+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.443",
+      "commit": "0a51138ef3ec104706c40a53dab0c3bcea75d7b3",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1",
+       "model-sg-glm53-fp8-tp4-r2"
+      ]
+     },
+     {
+      "timestamp": "2026-09-23T23:53:02.450486862+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.443",
+      "commit": "0a51138ef3ec104706c40a53dab0c3bcea75d7b3",
+      "file": "prod/GLM-5.3-Flash-SGL-TP4.yaml",
+      "services": [
+       "model-sg-glm53-fp8-tp4-r1",
+       "model-sg-glm53-fp8-tp4-r2"
+      ]
+     },
+     {
+      "timestamp": "2026-10-21T16:51:52.301169051+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.500",
+      "commit": "cd94860052fede8d56d8f017c55b241362c75d29",
+      "file": "prod/sage-pull.yaml",
+      "file_sha256": "37a6a029e6f09587d816d5c6f56ba094a4f0393fe40b782ec3215d7501aebb0b"
+     },
+     {
+      "timestamp": "2026-10-21T16:57:56.040576436+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.500",
+      "commit": "cd94860052fede8d56d8f017c55b241362c75d29",
+      "file": "prod/sage-pull.yaml"
+     },
+     {
+      "timestamp": "2026-10-22T21:38:26.279114681+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.503",
+      "commit": "92a67a08fca81e86cb27a5626bfc26df6e8b52c5",
+      "file": "prod/sage.yaml",
+      "file_sha256": "1a8a0aa79ff15ca319b0f6ea9d133adab4d06d531429d94cdc2f259cf873e9d4"
+     },
+     {
+      "timestamp": "2026-10-24T04:13:08.074484008+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.503",
+      "commit": "92a67a08fca81e86cb27a5626bfc26df6e8b52c5",
+      "file": "prod/sage.yaml",
+      "services": [
+       "sage",
+       "sage-dstack"
+      ]
+     },
+     {
+      "timestamp": "2026-10-24T04:13:22.012857952+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.500",
+      "commit": "cd94860052fede8d56d8f017c55b241362c75d29",
+      "file": "prod/sage-pull.yaml"
+     },
+     {
+      "timestamp": "2026-11-12T05:39:26.866943862+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.556",
+      "commit": "eb5fd4bc1d11c719def5e02ee93c9f82d69a971a",
+      "file": "prod/rotate-compose-manager-token.yaml",
+      "file_sha256": "3154095bde664e261c18e034f2c74419014559583e260799f1528fd9bb016371",
+      "services": [
+       "rotate-token"
+      ]
+     },
+     {
+      "timestamp": "2026-11-12T05:39:42.055887219+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.556",
+      "commit": "eb5fd4bc1d11c719def5e02ee93c9f82d69a971a",
+      "file": "prod/rotate-compose-manager-token.yaml"
+     },
+     {
+      "timestamp": "2026-11-17T07:59:06.685268549+00:00",
+      "action": "compose_down",
+      "tag": "20b565ca7c40aec8e876c7b034a319144216f3e4",
+      "commit": "20b565ca7c40aec8e876c7b034a319144216f3e4",
+      "file": "prod/DeepSeek-V4.1-Flash-1017-vLLM-DEP8-Abliterated.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-17T08:03:16.176969838+00:00",
+      "action": "compose_stage",
+      "tag": "ff994fd6cf4847571bb3b58956d020112a071cb1",
+      "commit": "ff994fd6cf4847571bb3b58956d020112a071cb1",
+      "file": "prod/DeepSeek-V4.1-Flash-1017-vLLM-DEP8-Abliterated.yaml",
+      "file_sha256": "d1694166ae0e5c443da61b98fb52c728d1a65d45446b88bbbae0430df6798718",
+      "services": [
+       "model-downloader",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7"
+      ]
+     },
+     {
+      "timestamp": "2026-11-17T08:09:46.961790795+00:00",
+      "action": "compose_up",
+      "tag": "ff994fd6cf4847571bb3b58956d020112a071cb1",
+      "commit": "ff994fd6cf4847571bb3b58956d020112a071cb1",
+      "file": "prod/DeepSeek-V4.1-Flash-1017-vLLM-DEP8-Abliterated.yaml",
+      "file_sha256": "d1694166ae0e5c443da61b98fb52c728d1a65d45446b88bbbae0430df6798718",
+      "services": [
+       "dcgm-dsv41",
+       "model-downloader",
+       "model-proxy-registrar",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "nginx",
+       "otelcol-contrib",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T00:38:06.869981292+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:a0c073085684e12e19f31bb279fc8da663a374199bfecc47b04167ae79eaa766"
+     },
+     {
+      "timestamp": "2026-11-18T00:39:05.432765503+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:a0c073085684e12e19f31bb279fc8da663a374199bfecc47b04167ae79eaa766"
+     },
+     {
+      "timestamp": "2026-11-18T01:09:51.913179848+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:854e2c6bb3d8f8c7ab216d7de5dffcc53bbb62b782336315160145f44c3235fe"
+     },
+     {
+      "timestamp": "2026-11-18T06:45:30.905591341+00:00",
+      "action": "compose_stage",
+      "tag": "ea0a1a0ef14a80d008daedcb04cc76c0a6f2dcca",
+      "commit": "ea0a1a0ef14a80d008daedcb04cc76c0a6f2dcca",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "11928bb62184067aaec222cce18dae034696e29d285d66882258f2efd876e8aa",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T06:48:54.376007239+00:00",
+      "action": "compose_down",
+      "tag": "ff994fd6cf4847571bb3b58956d020112a071cb1",
+      "commit": "ff994fd6cf4847571bb3b58956d020112a071cb1",
+      "file": "prod/DeepSeek-V4.1-Flash-1017-vLLM-DEP8-Abliterated.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T07:01:54.012630162+00:00",
+      "action": "compose_up",
+      "tag": "ea0a1a0ef14a80d008daedcb04cc76c0a6f2dcca",
+      "commit": "ea0a1a0ef14a80d008daedcb04cc76c0a6f2dcca",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "11928bb62184067aaec222cce18dae034696e29d285d66882258f2efd876e8aa",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T10:40:46.797076553+00:00",
+      "action": "compose_stage",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T10:56:37.271938402+00:00",
+      "action": "compose_up",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T11:13:05.072556416+00:00",
+      "action": "docker_restart",
+      "container": "nginx"
+     },
+     {
+      "timestamp": "2026-11-18T17:51:51.414153418+00:00",
+      "action": "compose_stage",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T18:05:05.787102338+00:00",
+      "action": "compose_up",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T18:22:01.172089240+00:00",
+      "action": "compose_down",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T18:33:20.389598648+00:00",
+      "action": "compose_up",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T05:01:53.497489837+00:00",
+      "action": "compose_down",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T05:36:56.810775704+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:ae4332fdb0bfccf6410bc153a58d0b72a596a989cbb98fd5b6461fe32e079814"
+     },
+     {
+      "timestamp": "2026-11-19T05:38:18.410854964+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:ae4332fdb0bfccf6410bc153a58d0b72a596a989cbb98fd5b6461fe32e079814"
+     },
+     {
+      "timestamp": "2026-11-19T07:18:15.366880339+00:00",
+      "action": "compose_up",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T07:36:35.064746505+00:00",
+      "action": "compose_stage",
+      "tag": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "f392013b5e0bf8a2574875df042e6745fe40cbd874793925772a687e61bf72a9",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41",
+       "otelcol-contrib"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T07:39:30.836410934+00:00",
+      "action": "compose_down",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T07:48:19.819469435+00:00",
+      "action": "compose_up",
+      "tag": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "f392013b5e0bf8a2574875df042e6745fe40cbd874793925772a687e61bf72a9",
+      "services": [
+       "dcgm-dsv41",
+       "model-downloader",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "nginx",
+       "otelcol-contrib",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T08:06:24.146358483+00:00",
+      "action": "compose_up",
+      "tag": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "f392013b5e0bf8a2574875df042e6745fe40cbd874793925772a687e61bf72a9",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T22:09:39.759505162+00:00",
+      "action": "compose_stage",
+      "tag": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/pack-small-models.yaml",
+      "file_sha256": "b6eeef7569051d07578968f852d57edeec4ddecbb72e1930e03def3add6dec5e",
+      "services": [
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-qwen36-35b-a3b",
+       "model-sg-qwen36-35b-a3b-fp8-tp1-r1",
+       "proxy-qwen38-27b",
+       "model-sg-qwen38-27b-fp8-tp1-coloc",
+       "nginx-qwen38",
+       "proxy-qwen38-27b-abliterated",
+       "proxy-glm53",
+       "model-sg-glm53-w4afp8-tp2-r1",
+       "model-sg-glm53-w4afp8-tp2-r2",
+       "glm53-ghost-aggregator",
+       "proxy-flux2-klein-4b",
+       "model-sg-flux2-klein-4b-tp1",
+       "proxy-qwen3vl-30b-a3b",
+       "model-vllm-qwen3vl-30b-a3b-fp8-tp1",
+       "proxy-qwen3-embedding-0.6b",
+       "model-vllm-qwen3-embedding-0.6b-tp1",
+       "proxy-qwen3-reranker-0.6b",
+       "model-vllm-qwen3-reranker-0.6b-tp1"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T22:19:38.782883149+00:00",
+      "action": "compose_stage",
+      "tag": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/pack-small-models.yaml",
+      "file_sha256": "b6eeef7569051d07578968f852d57edeec4ddecbb72e1930e03def3add6dec5e",
+      "services": [
+       "proxy-whisper-large-v3",
+       "model-vllm-whisper-large-v3-tp1",
+       "proxy-privacy-filter",
+       "model-privacy-filter",
+       "dcgm-privacy-filter",
+       "dcgm-qwen36-35b-a3b",
+       "dcgm-glm53",
+       "dcgm-shared-gpu3",
+       "otelcol-contrib",
+       "model-downloader",
+       "model-downloader-qwen36",
+       "model-downloader-qwen38",
+       "qwen38-lora-adapter-downloader",
+       "model-downloader-flux2",
+       "model-downloader-qwen3vl",
+       "model-downloader-qwen3-embedding",
+       "model-downloader-qwen3-reranker",
+       "model-downloader-whisper",
+       "model-downloader-privacy-filter",
+       "engine-egress-probe"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T22:26:16.252307797+00:00",
+      "action": "compose_down",
+      "tag": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T23:15:12.705038237+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.614",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/pack-small-models.yaml",
+      "file_sha256": "b6eeef7569051d07578968f852d57edeec4ddecbb72e1930e03def3add6dec5e"
+     },
+     {
+      "timestamp": "2026-11-19T23:42:51.882118051+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.614",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/pack-small-models.yaml",
+      "file_sha256": "b6eeef7569051d07578968f852d57edeec4ddecbb72e1930e03def3add6dec5e",
+      "services": [
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-qwen36-35b-a3b",
+       "model-sg-qwen36-35b-a3b-fp8-tp1-r1",
+       "proxy-qwen38-27b",
+       "model-sg-qwen38-27b-fp8-tp1-coloc",
+       "nginx-qwen38",
+       "proxy-qwen38-27b-abliterated",
+       "proxy-glm53",
+       "model-sg-glm53-w4afp8-tp2-r1",
+       "model-sg-glm53-w4afp8-tp2-r2",
+       "glm53-ghost-aggregator",
+       "proxy-flux2-klein-4b",
+       "model-sg-flux2-klein-4b-tp1",
+       "proxy-qwen3vl-30b-a3b",
+       "model-vllm-qwen3vl-30b-a3b-fp8-tp1",
+       "proxy-qwen3-embedding-0.6b",
+       "model-vllm-qwen3-embedding-0.6b-tp1",
+       "proxy-qwen3-reranker-0.6b",
+       "model-vllm-qwen3-reranker-0.6b-tp1",
+       "proxy-whisper-large-v3",
+       "model-vllm-whisper-large-v3-tp1",
+       "proxy-privacy-filter",
+       "model-privacy-filter",
+       "dcgm-privacy-filter",
+       "dcgm-qwen36-35b-a3b",
+       "dcgm-glm53",
+       "dcgm-shared-gpu3",
+       "otelcol-contrib",
+       "model-downloader",
+       "model-downloader-qwen36",
+       "model-downloader-qwen38",
+       "qwen38-lora-adapter-downloader",
+       "model-downloader-flux2",
+       "model-downloader-qwen3vl",
+       "model-downloader-qwen3-embedding",
+       "model-downloader-qwen3-reranker",
+       "model-downloader-whisper",
+       "model-downloader-privacy-filter",
+       "engine-egress-probe",
+       "qwen38-registrar",
+       "qwen38-abliterated-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T00:30:01.789969155+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.615",
+      "commit": "2a23eb9c0503d730cb87bf65628a08e0ee8f74b0",
+      "file": "prod/pack-small-models.yaml",
+      "file_sha256": "f4916294365d6ee89143de1a4838625b96ccc1b682812a19a8642ff857058cf4",
+      "services": [
+       "model-privacy-filter"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T02:12:15.820292739+00:00",
+      "action": "compose_stage",
+      "tag": "6d9f27b532e6c40673694fdac9fac3c7925d51be",
+      "commit": "6d9f27b532e6c40673694fdac9fac3c7925d51be",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "cf6e5f6eae1ee96d6efebe876740c6d33f1c75da95f0cf9be071d6b615dba5a1",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41",
+       "otelcol-contrib"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T02:13:42.803966369+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.615",
+      "commit": "2a23eb9c0503d730cb87bf65628a08e0ee8f74b0",
+      "file": "prod/pack-small-models.yaml",
+      "services": [
+       "model-proxy-registrar",
+       "qwen38-registrar",
+       "qwen38-abliterated-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T02:24:42.533816177+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.619",
+      "commit": "6d9f27b532e6c40673694fdac9fac3c7925d51be",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "cf6e5f6eae1ee96d6efebe876740c6d33f1c75da95f0cf9be071d6b615dba5a1"
+     },
+     {
+      "timestamp": "2026-11-20T07:52:06.742301900+00:00",
+      "action": "compose_stage",
+      "tag": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "commit": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "ddd3773b7fac6b85c9697b7b54085c6e8e23340d73d41fefa40e94daa9976fce",
+      "services": [
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41",
+       "nginx",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-proxy-registrar",
+       "model-downloader",
+       "otelcol-contrib"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T07:54:54.211225074+00:00",
+      "action": "compose_down",
+      "tag": "6d9f27b532e6c40673694fdac9fac3c7925d51be",
+      "commit": "6d9f27b532e6c40673694fdac9fac3c7925d51be",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T08:04:34.424097430+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.620",
+      "commit": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "ddd3773b7fac6b85c9697b7b54085c6e8e23340d73d41fefa40e94daa9976fce"
+     },
+     {
+      "timestamp": "2026-11-21T00:31:32.078805728+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "sidecar-dsv41-netns-a",
+       "sidecar-dsv41-netns-b",
+       "engine-egress-probe"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T00:49:07.936226345+00:00",
+      "action": "compose_down",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T00:58:31.908072566+00:00",
+      "action": "compose_down",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T00:59:49.853842241+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "sidecar-dsv41-netns-a"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T00:59:50.607705285+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T01:16:26.640645230+00:00",
+      "action": "compose_down",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T01:17:45.316086940+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "sidecar-dsv41-netns-b"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T01:17:46.024987158+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T01:35:50.833355325+00:00",
+      "action": "compose_down",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "nginx"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T01:35:51.271771820+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "otelcol-contrib"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T01:36:08.697604715+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "nginx"
+      ]
+     },
+     {
+      "timestamp": "2026-11-21T01:52:54.847282415+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     }
+    ],
+    "actions_hash": "bbe522945d8d941a42e7ac47f4b257cd89b98a5a35850f89e98f3991aef92fba",
+    "nonce": "64d778d56203ac3a746de5c192656b58567ccdafafb02023dcb7d6acf3175088",
+    "nonce_source": "client",
+    "quote": "040002008100000000000000939a7233f79c4ca9940a0db3957f060711779ab087bb2a6a5243b01c0171c3e4000000000b0104000000000000000000000000007bf063280e94fb051f5dd7b1fc59ce9aac42bb961df8d44b709c9b0ff87a7b4df648657ba6d1189589feab1d5a3c9a9d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000e702060000000000e107136c99ae1745ab299e9462927890b7b1c984d5ef53fa5830584ad4246db663fdf96563b913e9e2471906b26f7aae01e3902667a26282dd8b4015a901848c521b20243a155a457148f88acf48a45959000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bc122d143ab768565ba5c3774ff5f03a63c89a4df7c1f5ea38d3bd173409d14f8cbdcc36d40e703cccb996a9d9687590786417fa26b5d90d1289025506055e511ff09fd608f4727bb3cf159279a52af23117b6248024d0b186aceabebf6f86ec41800152afda682372d33b484e357002e2b179f64b7882e0f0529ad2373ad93898a3b4d3ffb9a433f406b986d4f4f291f7217bc0d3933d04f4aa8c3ac23b4196f5113211feb95cda9998073e40e0253d34f5765f8c4a065de1c27d6b25cab3a6bbe522945d8d941a42e7ac47f4b257cd89b98a5a35850f89e98f3991aef92fba64d778d56203ac3a746de5c192656b58567ccdafafb02023dcb7d6acf3175088cc1000000d4619d01ceefb47746f0a9fbcc2c5fe14ddf59d1a6c69d46ebb6348b4c73ed4c36fdf4a2a424be5da518e5a3acdeed6ff9e06230b26741801c03a124362cc8c94bd934c2b0f896c4feae3632a5bc6f3c5900d48356ea011ba233c46d505ea54619ce6b5c5ab5f9a180eb80d167d9dec4ef20a1e8e1aa5b82bbaaf9c4c3c22ad0600461000000404191b04ff0006000000000000000000000000000000000000000000000000000000000000000000000000000000001500000000000000e700000000000000e5a3a7b5d830c2953b98534c6c59a3a34fdc34e933f7f5898f0a85cf08846bca0000000000000000000000000000000000000000000000000000000000000000dc9e2a7c6f948f17474e34a7fc43ed030f7c1563f1babddf6340c82e0e54a8c500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000d29d0dbb390a2a9e06ee4f7121b67a7fd55219b30b93113bf3ef7fcdc4f77c54000000000000000000000000000000000000000000000000000000000000000093ec76f9750a96542607f2e6ed48d54b243e1f1bd25bc23d781d7ee5a7e24a185451eb9fa152189b6f8c0f9e7eee8d7fc60ac43728f83d3b79b037d6f790edfb2000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f05005e0e00002d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d49494538444343424a65674177494241674956414f3978316d572f74316d54465050463470555169386d4e735541564d416f4743437147534d343942414d430a4d484178496a416742674e5642414d4d47556c756447567349464e4857434251513073675547786864475a76636d306751304578476a415942674e5642416f4d0a45556c756447567349454e76636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155450a4341774351304578437a414a42674e5642415954416c56544d423458445449324d5445784e7a41774e4455784d566f5844544d7a4d5445784e7a41774e4455780a4d566f77634445694d434147413155454177775a535735305a5777675530645949464244537942445a584a3061575a70593246305a5445614d426747413155450a43677752535735305a577767513239796347397959585270623234784644415342674e564241634d43314e68626e526849454e7359584a684d517377435159440a5651514944414a445154454c4d416b474131554542684d4356564d775754415442676371686b6a4f5051494242676771686b6a4f50514d4242774e43414154330a5a5073525a6577442b6b6948484d7158703833424246753578445a59694d55437a32517a3248626f3474463573342f5a7657574d363731494a44305a6f7a38490a475637674e41507776736937516a6638575436346f3449444444434341776777487759445652306a42426777466f41556c5739647a62306234656c4153636e550a3944504f4156634c336c5177617759445652306642475177596a42676f46366758495a616148523063484d364c79396863476b7564484a316333526c5a484e6c0a636e5a705932567a4c6d6c75644756734c6d4e766253397a5a3367765932567964476c6d61574e6864476c76626939324e4339775932746a636d772f593245390a6347786864475a76636d306d5a57356a62325270626d63395a4756794d423047413155644467515742425263516e455731494a6b4f436b7762525170434f6c6f0a39392b6b5244414f42674e56485138424166384542414d434273417744415944565230544151482f4241497741444343416a6b4743537147534962345451454e0a4151534341696f776767496d4d42344743697147534962345451454e41514545454a4e466778364631673474566a366f4a65626c373949776767466a42676f710a686b69472b453042445145434d494942557a415142677371686b69472b45304244514543415149424244415142677371686b69472b45304244514543416749420a4244415142677371686b69472b4530424451454341774942416a415142677371686b69472b4530424451454342414942416a415142677371686b69472b4530420a44514543425149424244415142677371686b69472b45304244514543426749424154415142677371686b69472b453042445145434277494241444151426773710a686b69472b45304244514543434149424254415142677371686b69472b45304244514543435149424144415142677371686b69472b45304244514543436749420a4144415142677371686b69472b45304244514543437749424144415142677371686b69472b45304244514543444149424144415142677371686b69472b4530420a44514543445149424144415142677371686b69472b45304244514543446749424144415142677371686b69472b453042445145434477494241444151426773710a686b69472b45304244514543454149424144415142677371686b69472b45304244514543455149424454416642677371686b69472b45304244514543456751510a42415143416751424141554141414141414141414144415142676f71686b69472b45304244514544424149414144415542676f71686b69472b453042445145450a4241615177473841414141774477594b4b6f5a496876684e4151304242516f424154416542676f71686b69472b453042445145474242425135324142427958590a714f4776395250774141767a4d45514743697147534962345451454e415163774e6a415142677371686b69472b45304244514548415145422f7a4151426773710a686b69472b45304244514548416745422f7a415142677371686b69472b45304244514548417745422f7a414b42676771686b6a4f5051514441674e48414442450a4169426a4f4b33677569304d5261675033553576446571746947754c2b656e37374e414f5a7858386a53667a706749674b4847773533495332716d77495962440a7a38734e484e694b4d4d43334f584371643162635048724c64586b3d0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a2d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d4949436c6a4343416a32674177494241674956414a567658633239472b487051456e4a3150517a7a674658433935554d416f4743437147534d343942414d430a4d476778476a415942674e5642414d4d45556c756447567349464e48574342536232393049454e424d526f77474159445651514b4442464a626e526c624342440a62334a7762334a6864476c76626a45554d424947413155454277774c553246756447456751327868636d4578437a414a42674e564241674d416b4e424d5173770a435159445651514745774a56557a4165467730784f4441314d6a45784d4455774d5442614677307a4d7a41314d6a45784d4455774d5442614d484178496a41670a42674e5642414d4d47556c756447567349464e4857434251513073675547786864475a76636d306751304578476a415942674e5642416f4d45556c75644756730a49454e76636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b474131554543417743513045780a437a414a42674e5642415954416c56544d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a304441516344516741454e53422f377432316c58534f0a3243757a7078773734654a423732457944476757357258437478327456544c7136684b6b367a2b5569525a436e71523770734f766771466553786c6d546c4a6c0a65546d693257597a33714f42757a43427544416642674e5648534d4547444157674251695a517a575770303069664f44744a5653763141624f536347724442530a42674e5648523845537a424a4d45656752614244686b466f64485277637a6f764c324e6c636e52705a6d6c6a5958526c63793530636e567a6447566b633256790a646d6c6a5a584d75615735305a577775593239744c306c756447567355306459556d397664454e424c6d526c636a416442674e5648513445466751556c5739640a7a62306234656c4153636e553944504f4156634c336c517744675944565230504151482f42415144416745474d42494741315564457745422f7751494d4159420a4166384341514177436759494b6f5a497a6a30454177494452774177524149675873566b6930772b6936565947573355462f32327561586530594a446a3155650a6e412b546a44316169356343494359623153416d4435786b66545670766f34556f79695359787244574c6d5552344349394e4b7966504e2b0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a2d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d4949436a7a4343416a53674177494241674955496d554d316c71644e496e7a6737535655723951477a6b6e42717777436759494b6f5a497a6a3045417749770a614445614d4267474131554541777752535735305a5777675530645949464a766233516751304578476a415942674e5642416f4d45556c756447567349454e760a636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155454341774351304578437a414a0a42674e5642415954416c56544d423458445445344d4455794d5445774e4455784d466f58445451354d54497a4d54497a4e546b314f566f77614445614d4267470a4131554541777752535735305a5777675530645949464a766233516751304578476a415942674e5642416f4d45556c756447567349454e76636e4276636d46300a615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155454341774351304578437a414a42674e56424159540a416c56544d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a3044415163445167414543366e45774d4449595a4f6a2f69505773437a61454b69370a314f694f534c52466857476a626e42564a66566e6b59347533496a6b4459594c304d784f346d717379596a6c42616c54565978465032734a424b357a6c4b4f420a757a43427544416642674e5648534d4547444157674251695a517a575770303069664f44744a5653763141624f5363477244425342674e5648523845537a424a0a4d45656752614244686b466f64485277637a6f764c324e6c636e52705a6d6c6a5958526c63793530636e567a6447566b63325679646d6c6a5a584d75615735300a5a577775593239744c306c756447567355306459556d397664454e424c6d526c636a416442674e564851344546675155496d554d316c71644e496e7a673753560a55723951477a6b6e4271777744675944565230504151482f42415144416745474d42494741315564457745422f7751494d4159424166384341514577436759490a4b6f5a497a6a3045417749445351417752674968414f572f35516b522b533943695344634e6f6f774c7550524c735747662f59693747535839344267775477670a41694541344a306c72486f4d732b586f356f2f7358364f39515778485241765a55474f6452513763767152586171493d0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "event_log": "[{\"imr\":0,\"event_type\":2147483659,\"digest\":\"60a36090e82db2aa82a7abb76029b9ace69e9f0811b7029ff25a26a2e8b91c182696df92674ab571c42093383e1fcc71\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483658,\"digest\":\"344bc51c980ba621aaa00da3ed7436f7d6e549197dfe699515dfa2c6583d95e6412af21c097d473155875ffd561d6790\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"9dc3a1f80bcec915391dcda5ffbb15e7419f77eab462bbf72b42166fb70d50325e37b36f93537a863769bcf9bedae6fb\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"6f2e3cbc14f9def86980f5f66fd85e99d63e69a73014ed8a5633ce56eca5b64b692108c56110e22acadcef58c3250f1b\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"d607c0efb41c0d757d69bca0615c3a9ac0b1db06c557d992e906c6b7dee40e0e031640c7bfd7bcd35844ef9edeadc6f9\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"08a74f8963b337acb6c93682f934496373679dd26af1089cb4eaf0c30cf260a12e814856385ab8843e56a9acea19e127\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"18cc6e01f0c6ea99aa23f8a280423e94ad81d96d0aeb5180504fc0f7a40cb3619dd39bd6a95ec1680a86ed6ab0f9828d\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":4,\"digest\":\"394341b7182cd227c5c6b07ef8000cdfd86136c4292b8e576573ad7ed9ae41019f5818b4b971c9effc60e1ad9f1289f0\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":10,\"digest\":\"067dbea869d662401cfc128612472b688899b95fe801cec9e473388f2ce8d00c56b85a4511051a8d3eea3a345aa3d943\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":10,\"digest\":\"e618ef92fa90877695c4be4ce94e99f8cac644f92d40900a6141154f19ee8fefde460f8c75acac5dec3f4b1545259bcf\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":10,\"digest\":\"36ab67305a05ca84327abeb3ac4c3fff28dd40e23c4a2549d8c56914dafc6afac28b4687810e1ad91871a95de224c601\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":2147483651,\"digest\":\"32bf96efbe0a1eb7ce0c9f17619a2e42a24707be3c3a25625b5865f91afcbef19d952dd899d27223bbb998959fffafbc\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483650,\"digest\":\"1dd6f7b457ad880d840d41c961283bab688e94e4b59359ea45686581e90feccea3c624b1226113f824f315eb60ae0a7c\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483650,\"digest\":\"23ada07f5261f12f34a0bd8e46760962d6b4d576a416f1fea1c64bc656b1d28eacf7047ae6e967c58fd2a98bfa74c298\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":2147483655,\"digest\":\"77a0dab2312b4e1e57a84d865a21e5b2ee8d677a21012ada819d0a98988078d3d740f6346bfe0abaa938ca20439a8d71\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":4,\"digest\":\"394341b7182cd227c5c6b07ef8000cdfd86136c4292b8e576573ad7ed9ae41019f5818b4b971c9effc60e1ad9f1289f0\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":2,\"event_type\":6,\"digest\":\"6fc78892fbcf636589d200551068946e518465c909c3dd7423d39c29cb245fc32c0e1a2068d83772e436598b818045d4\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":2,\"event_type\":6,\"digest\":\"2ef6a128d241817951d729e6b69920b78b90d8be9b09805179573141c28aa990e128d5c42586d54fef0fbe80ca171f38\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":2147483655,\"digest\":\"214b0bef1379756011344877743fdc2a5382bac6e70362d624ccf3f654407c1b4badf7d8f9295dd3dabdef65b27677e0\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":2147483655,\"digest\":\"0a2e01c85deae718a530ad8c6d20a84009babe6c8989269e950d8cf440c6e997695e64d455c4174a652cd080f6230b74\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"system-preparing\",\"event_payload\":\"\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"app-id\",\"event_payload\":\"2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"compose-hash\",\"event_payload\":\"e3902667a26282dd8b4015a901848c521b20243a155a457148f88acf48a45959\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"instance-id\",\"event_payload\":\"7bb9af0ac5b0e22dde3903218f58e56f743164a1\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"boot-mr-done\",\"event_payload\":\"\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"mr-kms\",\"event_payload\":\"22a6652c0ce74e50b549c0f9c21d53c5861598ec4d58cf3286d158104923bc56\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"os-image-hash\",\"event_payload\":\"3bb7d262416f47db06855d7b7cf7d380538747206014b3c0adcddfef9b7c4ef2\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"key-provider\",\"event_payload\":\"7b226e616d65223a226b6d73222c226964223a223330353933303133303630373261383634386365336430323031303630383261383634386365336430333031303730333432303030343339346161656432633734356536613435376362383335663766343734323366353766663365616437316239326162666636626463313464393035623331396632653133393631623432633530373430646165343439386439633531646437613265323237363630633965356335303430383363646130366236633131363832227d\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"storage-fs\",\"event_payload\":\"7a6673\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"system-ready\",\"event_payload\":\"\"}]",
+    "report_data": "bbe522945d8d941a42e7ac47f4b257cd89b98a5a35850f89e98f3991aef92fba64d778d56203ac3a746de5c192656b58567ccdafafb02023dcb7d6acf3175088",
+    "vm_config": "{\"os_image_hash\":\"3bb7d262416f47db06855d7b7cf7d380538747206014b3c0adcddfef9b7c4ef2\",\"cpu_count\":64,\"memory_size\":2199023255552,\"qemu_version\":\"9.2.1\",\"pci_hole64_size\":1125899906842624,\"hugepages\":false,\"num_gpus\":8,\"num_nvswitches\":4,\"hotplug_off\":true,\"image\":\"dstack-nvidia-0.5.15\",\"host_share_mode\":\"9p\",\"ovmf_variant\":\"pre202505\",\"spec_version\":1}"
+   }
+  },
+  {
+   "instance_id": "fccd496ae28c19105777793efa98fbbd726219cc",
+   "intel_quote": "040002008100000000000000939a7233f79c4ca9940a0db3957f0607fbabcd45403de16c79e2a2440aa80e34000000000b0104000000000000000000000000007bf063280e94fb051f5dd7b1fc59ce9aac42bb961df8d44b709c9b0ff87a7b4df648657ba6d1189589feab1d5a3c9a9d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000e702060000000000e107136c99ae1745ab299e9462927890b7b1c984d5ef53fa5830584ad4246db663fdf96563b913e9e2471906b26f7aae01edabf8039210336d90fe966dfc4e48216551dfd8b05d54e96d3f3f0e0da850d4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bc122d143ab768565ba5c3774ff5f03a63c89a4df7c1f5ea38d3bd173409d14f8cbdcc36d40e703cccb996a9d9687590786417fa26b5d90d1289025506055e511ff09fd608f4727bb3cf159279a52af23117b6248024d0b186aceabebf6f86ec41800152afda682372d33b484e357002e2b179f64b7882e0f0529ad2373ad93898a3b4d3ffb9a433f406b986d4f4f291470bf52112b0151f0f7e6f3084265268028e736a88d36418e16d7f00b263721b152526957ead58ec2932706bd4757f5dc0bbde4c3778f39d034361623f54b03ac146850d79a7807d513efea1e39c26f364d778d56203ac3a746de5c192656b58567ccdafafb02023dcb7d6acf3175088cc1000009d914d3718b887a3b515b9e4cbccc70efd9d61b8f23c844de242bcdd4191440bd83edc4801974f2d9b6c29ff44d0d0edc8bfd5000f6f6dc9b394c9b5f5b1f3f86a21416e273c47427013106a5e4c64f44ed1c8d43c7604a7402315966ad619095be3de6234300d68444c577cbee6511c1db9cbe404c6674c673ad7f1c5e706c80600461000000404191b04ff0006000000000000000000000000000000000000000000000000000000000000000000000000000000001500000000000000e700000000000000e5a3a7b5d830c2953b98534c6c59a3a34fdc34e933f7f5898f0a85cf08846bca0000000000000000000000000000000000000000000000000000000000000000dc9e2a7c6f948f17474e34a7fc43ed030f7c1563f1babddf6340c82e0e54a8c500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000818f89efb3b13d4b6bdfcd340b6671b8df53f63d611911743204e9806d40c0050000000000000000000000000000000000000000000000000000000000000000f217448e42efb80f6f7f845e2a13628b57b09540939e2cd3892e3ee436ed885d1875c184d6b74124142fb7d7e0b9a87315b3cada0f2665861d8aed4b01a914792000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f05005e0e00002d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d49494538444343424a65674177494241674956414b6b4c6569563075667a70476f474c6754797a4534726747626e314d416f4743437147534d343942414d430a4d484178496a416742674e5642414d4d47556c756447567349464e4857434251513073675547786864475a76636d306751304578476a415942674e5642416f4d0a45556c756447567349454e76636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155450a4341774351304578437a414a42674e5642415954416c56544d423458445449324d5445784f5441774e4455784d6c6f5844544d7a4d5445784f5441774e4455780a4d6c6f77634445694d434147413155454177775a535735305a5777675530645949464244537942445a584a3061575a70593246305a5445614d426747413155450a43677752535735305a577767513239796347397959585270623234784644415342674e564241634d43314e68626e526849454e7359584a684d517377435159440a5651514944414a445154454c4d416b474131554542684d4356564d775754415442676371686b6a4f5051494242676771686b6a4f50514d4242774e43414153410a4a4b3067564e756a704d32616a547478626c464c46427359734a454b30722f2b304c384d792b61544e5065536b746162422b5953736b666344776d78557950490a714e526d712f366a746e4b2b544878372b6f6c416f3449444444434341776777487759445652306a42426777466f41556c5739647a62306234656c4153636e550a3944504f4156634c336c5177617759445652306642475177596a42676f46366758495a616148523063484d364c79396863476b7564484a316333526c5a484e6c0a636e5a705932567a4c6d6c75644756734c6d4e766253397a5a3367765932567964476c6d61574e6864476c76626939324e4339775932746a636d772f593245390a6347786864475a76636d306d5a57356a62325270626d63395a4756794d423047413155644467515742425447357832586a4875696638585a637073384a30636c0a36644558306a414f42674e56485138424166384542414d434273417744415944565230544151482f4241497741444343416a6b4743537147534962345451454e0a4151534341696f776767496d4d42344743697147534962345451454e41514545454d6d434f392f3448444a31716a76762b62745a366f6f776767466a42676f710a686b69472b453042445145434d494942557a415142677371686b69472b45304244514543415149424244415142677371686b69472b45304244514543416749420a4244415142677371686b69472b4530424451454341774942416a415142677371686b69472b4530424451454342414942416a415142677371686b69472b4530420a44514543425149424244415142677371686b69472b45304244514543426749424154415142677371686b69472b453042445145434277494241444151426773710a686b69472b45304244514543434149424254415142677371686b69472b45304244514543435149424144415142677371686b69472b45304244514543436749420a4144415142677371686b69472b45304244514543437749424144415142677371686b69472b45304244514543444149424144415142677371686b69472b4530420a44514543445149424144415142677371686b69472b45304244514543446749424144415142677371686b69472b453042445145434477494241444151426773710a686b69472b45304244514543454149424144415142677371686b69472b45304244514543455149424454416642677371686b69472b45304244514543456751510a42415143416751424141554141414141414141414144415142676f71686b69472b45304244514544424149414144415542676f71686b69472b453042445145450a4241615177473841414141774477594b4b6f5a496876684e4151304242516f424154416542676f71686b69472b453042445145474242442b38455159347441540a634a552b35374d50734f64434d45514743697147534962345451454e415163774e6a415142677371686b69472b45304244514548415145422f7a4151426773710a686b69472b45304244514548416745422f7a415142677371686b69472b45304244514548417745422f7a414b42676771686b6a4f5051514441674e48414442450a4169413448584b442f663963434746584471612b58306d6e5530564c4c35657a4547626b494b6a7264776155797749674d52356b436830572b646479477653750a397974645a7a7872787a537a6a2f324e44713270514a377a6f2f773d0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a2d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d4949436c6a4343416a32674177494241674956414a567658633239472b487051456e4a3150517a7a674658433935554d416f4743437147534d343942414d430a4d476778476a415942674e5642414d4d45556c756447567349464e48574342536232393049454e424d526f77474159445651514b4442464a626e526c624342440a62334a7762334a6864476c76626a45554d424947413155454277774c553246756447456751327868636d4578437a414a42674e564241674d416b4e424d5173770a435159445651514745774a56557a4165467730784f4441314d6a45784d4455774d5442614677307a4d7a41314d6a45784d4455774d5442614d484178496a41670a42674e5642414d4d47556c756447567349464e4857434251513073675547786864475a76636d306751304578476a415942674e5642416f4d45556c75644756730a49454e76636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b474131554543417743513045780a437a414a42674e5642415954416c56544d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a304441516344516741454e53422f377432316c58534f0a3243757a7078773734654a423732457944476757357258437478327456544c7136684b6b367a2b5569525a436e71523770734f766771466553786c6d546c4a6c0a65546d693257597a33714f42757a43427544416642674e5648534d4547444157674251695a517a575770303069664f44744a5653763141624f536347724442530a42674e5648523845537a424a4d45656752614244686b466f64485277637a6f764c324e6c636e52705a6d6c6a5958526c63793530636e567a6447566b633256790a646d6c6a5a584d75615735305a577775593239744c306c756447567355306459556d397664454e424c6d526c636a416442674e5648513445466751556c5739640a7a62306234656c4153636e553944504f4156634c336c517744675944565230504151482f42415144416745474d42494741315564457745422f7751494d4159420a4166384341514177436759494b6f5a497a6a30454177494452774177524149675873566b6930772b6936565947573355462f32327561586530594a446a3155650a6e412b546a44316169356343494359623153416d4435786b66545670766f34556f79695359787244574c6d5552344349394e4b7966504e2b0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a2d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d4949436a7a4343416a53674177494241674955496d554d316c71644e496e7a6737535655723951477a6b6e42717777436759494b6f5a497a6a3045417749770a614445614d4267474131554541777752535735305a5777675530645949464a766233516751304578476a415942674e5642416f4d45556c756447567349454e760a636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155454341774351304578437a414a0a42674e5642415954416c56544d423458445445344d4455794d5445774e4455784d466f58445451354d54497a4d54497a4e546b314f566f77614445614d4267470a4131554541777752535735305a5777675530645949464a766233516751304578476a415942674e5642416f4d45556c756447567349454e76636e4276636d46300a615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155454341774351304578437a414a42674e56424159540a416c56544d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a3044415163445167414543366e45774d4449595a4f6a2f69505773437a61454b69370a314f694f534c52466857476a626e42564a66566e6b59347533496a6b4459594c304d784f346d717379596a6c42616c54565978465032734a424b357a6c4b4f420a757a43427544416642674e5648534d4547444157674251695a517a575770303069664f44744a5653763141624f5363477244425342674e5648523845537a424a0a4d45656752614244686b466f64485277637a6f764c324e6c636e52705a6d6c6a5958526c63793530636e567a6447566b63325679646d6c6a5a584d75615735300a5a577775593239744c306c756447567355306459556d397664454e424c6d526c636a416442674e564851344546675155496d554d316c71644e496e7a673753560a55723951477a6b6e4271777744675944565230504151482f42415144416745474d42494741315564457745422f7751494d4159424166384341514577436759490a4b6f5a497a6a3045417749445351417752674968414f572f35516b522b533943695344634e6f6f774c7550524c735747662f59693747535839344267775477670a41694541344a306c72486f4d732b586f356f2f7358364f39515778485241765a55474f6452513763767152586171493d0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "compose_manager_attestation": {
+    "actions": [
+     {
+      "timestamp": "2026-11-12T05:38:08.621694565+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.556",
+      "commit": "eb5fd4bc1d11c719def5e02ee93c9f82d69a971a",
+      "file": "prod/rotate-compose-manager-token.yaml",
+      "file_sha256": "3154095bde664e261c18e034f2c74419014559583e260799f1528fd9bb016371",
+      "services": [
+       "rotate-token"
+      ]
+     },
+     {
+      "timestamp": "2026-11-12T05:38:52.683797230+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.556",
+      "commit": "eb5fd4bc1d11c719def5e02ee93c9f82d69a971a",
+      "file": "prod/rotate-compose-manager-token.yaml"
+     },
+     {
+      "timestamp": "2026-11-17T00:06:52.497577259+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:a0c073085684e12e19f31bb279fc8da663a374199bfecc47b04167ae79eaa766"
+     },
+     {
+      "timestamp": "2026-11-17T17:56:23.410080874+00:00",
+      "action": "compose_stage",
+      "tag": "ea0a1a0ef14a80d008daedcb04cc76c0a6f2dcca",
+      "commit": "ea0a1a0ef14a80d008daedcb04cc76c0a6f2dcca",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "11928bb62184067aaec222cce18dae034696e29d285d66882258f2efd876e8aa",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-17T18:00:00.860765576+00:00",
+      "action": "compose_down",
+      "tag": "20b565ca7c40aec8e876c7b034a319144216f3e4",
+      "commit": "20b565ca7c40aec8e876c7b034a319144216f3e4",
+      "file": "prod/DeepSeek-V4.1-Flash-1017-vLLM-DEP8-Abliterated.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-17T18:12:53.041937370+00:00",
+      "action": "compose_up",
+      "tag": "ea0a1a0ef14a80d008daedcb04cc76c0a6f2dcca",
+      "commit": "ea0a1a0ef14a80d008daedcb04cc76c0a6f2dcca",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "11928bb62184067aaec222cce18dae034696e29d285d66882258f2efd876e8aa",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T03:09:26.711867985+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:854e2c6bb3d8f8c7ab216d7de5dffcc53bbb62b782336315160145f44c3235fe"
+     },
+     {
+      "timestamp": "2026-11-18T03:09:29.340214571+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:854e2c6bb3d8f8c7ab216d7de5dffcc53bbb62b782336315160145f44c3235fe"
+     },
+     {
+      "timestamp": "2026-11-18T12:27:37.996473690+00:00",
+      "action": "compose_stage",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T12:34:50.307049413+00:00",
+      "action": "compose_down",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "nginx"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T12:35:00.730906846+00:00",
+      "action": "compose_up",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated"
+      ]
+     },
+     {
+      "timestamp": "2026-11-18T12:35:03.080159816+00:00",
+      "action": "compose_up",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "nginx"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T00:07:56.074600883+00:00",
+      "action": "compose_stage",
+      "tag": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "f392013b5e0bf8a2574875df042e6745fe40cbd874793925772a687e61bf72a9",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T01:53:16.150618340+00:00",
+      "action": "compose_stage",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T01:54:43.290499161+00:00",
+      "action": "compose_up",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "d4cbe817f102d7c06eb81da306030197a6ac731b7a05e0e952bc0f8725d121f9",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T02:11:58.352100730+00:00",
+      "action": "compose_down",
+      "tag": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "commit": "a0e92f16bd1c79d0accc5a47d346d509da0573d2",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T02:22:15.633350162+00:00",
+      "action": "compose_stage",
+      "tag": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "f392013b5e0bf8a2574875df042e6745fe40cbd874793925772a687e61bf72a9",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-19T02:25:09.012714640+00:00",
+      "action": "compose_up",
+      "tag": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "commit": "fb9cf6b578a45f4a0993e1b13778d31ef9d838a9",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "f392013b5e0bf8a2574875df042e6745fe40cbd874793925772a687e61bf72a9",
+      "services": [
+       "model-downloader",
+       "nginx",
+       "model-proxy-registrar",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T04:50:50.508460500+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:ae4332fdb0bfccf6410bc153a58d0b72a596a989cbb98fd5b6461fe32e079814"
+     },
+     {
+      "timestamp": "2026-11-20T04:52:01.062837777+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:ae4332fdb0bfccf6410bc153a58d0b72a596a989cbb98fd5b6461fe32e079814"
+     },
+     {
+      "timestamp": "2026-11-20T04:54:48.524113653+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.619",
+      "commit": "6d9f27b532e6c40673694fdac9fac3c7925d51be",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "cf6e5f6eae1ee96d6efebe876740c6d33f1c75da95f0cf9be071d6b615dba5a1"
+     },
+     {
+      "timestamp": "2026-11-20T05:30:53.412146084+00:00",
+      "action": "compose_stage",
+      "tag": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "commit": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "ddd3773b7fac6b85c9697b7b54085c6e8e23340d73d41fefa40e94daa9976fce",
+      "services": [
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3",
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7",
+       "dcgm-dsv41",
+       "nginx",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "model-proxy-registrar",
+       "model-downloader",
+       "otelcol-contrib"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T06:27:38.604871245+00:00",
+      "action": "compose_manager_started",
+      "container": "compose-manager",
+      "image": "nearaidev/compose-manager@sha256:ae4332fdb0bfccf6410bc153a58d0b72a596a989cbb98fd5b6461fe32e079814"
+     },
+     {
+      "timestamp": "2026-11-20T06:33:51.916185453+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.620",
+      "commit": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-vllm-dsv41-dp5"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T06:33:54.714477058+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.620",
+      "commit": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-vllm-dsv41-dp6"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T06:33:57.176029491+00:00",
+      "action": "compose_down",
+      "tag": "v0.0.620",
+      "commit": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-vllm-dsv41-dp7"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T06:37:35.801497332+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.620",
+      "commit": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "ddd3773b7fac6b85c9697b7b54085c6e8e23340d73d41fefa40e94daa9976fce"
+     },
+     {
+      "timestamp": "2026-11-20T06:40:13.175478045+00:00",
+      "action": "docker_clean"
+     },
+     {
+      "timestamp": "2026-11-20T06:44:37.503525498+00:00",
+      "action": "compose_up",
+      "tag": "v0.0.620",
+      "commit": "cdc7ce7d1ec28e93d28aef60b305eb9331261631",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "ddd3773b7fac6b85c9697b7b54085c6e8e23340d73d41fefa40e94daa9976fce"
+     },
+     {
+      "timestamp": "2026-11-20T21:46:46.687295073+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "sidecar-dsv41-netns-a",
+       "sidecar-dsv41-netns-b",
+       "engine-egress-probe"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T22:04:00.528689903+00:00",
+      "action": "compose_down",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T22:15:19.832016140+00:00",
+      "action": "compose_down",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T22:16:39.684512310+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "sidecar-dsv41-netns-a"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T22:16:40.440212358+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "model-vllm-dsv41-dp0",
+       "model-vllm-dsv41-dp1",
+       "model-vllm-dsv41-dp2",
+       "model-vllm-dsv41-dp3"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T22:33:27.487144092+00:00",
+      "action": "compose_down",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T22:34:45.496648112+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "sidecar-dsv41-netns-b"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T22:34:46.214568081+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "model-vllm-dsv41-dp4",
+       "model-vllm-dsv41-dp5",
+       "model-vllm-dsv41-dp6",
+       "model-vllm-dsv41-dp7"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T22:52:26.311322693+00:00",
+      "action": "compose_down",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "services": [
+       "nginx"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T22:52:26.741388288+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "engine-egress-probe",
+       "proxy-dsv41",
+       "proxy-dsv41-abliterated",
+       "otelcol-contrib"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T23:09:29.592358438+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "nginx"
+      ]
+     },
+     {
+      "timestamp": "2026-11-20T23:26:19.562277542+00:00",
+      "action": "compose_up",
+      "tag": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "commit": "30fbba879f83dcd046f1b5e5f47c827e57dfdc1c",
+      "file": "prod/deepseek-v4.1-flash-1017-vllm-dep4x2.yaml",
+      "file_sha256": "0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6",
+      "services": [
+       "model-proxy-registrar"
+      ]
+     }
+    ],
+    "actions_hash": "d1ce163de56a866dc7559bed299372ddf3d2a74fc747ca4eb980589d210bb6ca",
+    "nonce": "64d778d56203ac3a746de5c192656b58567ccdafafb02023dcb7d6acf3175088",
+    "nonce_source": "client",
+    "quote": "040002008100000000000000939a7233f79c4ca9940a0db3957f0607fbabcd45403de16c79e2a2440aa80e34000000000b0104000000000000000000000000007bf063280e94fb051f5dd7b1fc59ce9aac42bb961df8d44b709c9b0ff87a7b4df648657ba6d1189589feab1d5a3c9a9d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000e702060000000000e107136c99ae1745ab299e9462927890b7b1c984d5ef53fa5830584ad4246db663fdf96563b913e9e2471906b26f7aae01edabf8039210336d90fe966dfc4e48216551dfd8b05d54e96d3f3f0e0da850d4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bc122d143ab768565ba5c3774ff5f03a63c89a4df7c1f5ea38d3bd173409d14f8cbdcc36d40e703cccb996a9d9687590786417fa26b5d90d1289025506055e511ff09fd608f4727bb3cf159279a52af23117b6248024d0b186aceabebf6f86ec41800152afda682372d33b484e357002e2b179f64b7882e0f0529ad2373ad93898a3b4d3ffb9a433f406b986d4f4f291470bf52112b0151f0f7e6f3084265268028e736a88d36418e16d7f00b263721b152526957ead58ec2932706bd4757f5dd1ce163de56a866dc7559bed299372ddf3d2a74fc747ca4eb980589d210bb6ca64d778d56203ac3a746de5c192656b58567ccdafafb02023dcb7d6acf3175088cc100000a32286f0afe5aa467b18641385db3c1d6cb68c307f39dbc261701a5a46e71534501650c82d61ede9c832617e56afbff74941b3d6e89f332938dec297d5ac257c6a21416e273c47427013106a5e4c64f44ed1c8d43c7604a7402315966ad619095be3de6234300d68444c577cbee6511c1db9cbe404c6674c673ad7f1c5e706c80600461000000404191b04ff0006000000000000000000000000000000000000000000000000000000000000000000000000000000001500000000000000e700000000000000e5a3a7b5d830c2953b98534c6c59a3a34fdc34e933f7f5898f0a85cf08846bca0000000000000000000000000000000000000000000000000000000000000000dc9e2a7c6f948f17474e34a7fc43ed030f7c1563f1babddf6340c82e0e54a8c500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000818f89efb3b13d4b6bdfcd340b6671b8df53f63d611911743204e9806d40c00500000000000000000000000000000000000000000000000000000000000000004965f55c26ac2642053f53b0552db276aa3830530e2986a4def3b87388ac7f9c7531c61299f19e337b3a6822b0be718253b207cf9bd13bcf92077f1fd567fcca2000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f05005e0e00002d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d49494538444343424a65674177494241674956414b6b4c6569563075667a70476f474c6754797a4534726747626e314d416f4743437147534d343942414d430a4d484178496a416742674e5642414d4d47556c756447567349464e4857434251513073675547786864475a76636d306751304578476a415942674e5642416f4d0a45556c756447567349454e76636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155450a4341774351304578437a414a42674e5642415954416c56544d423458445449324d5445784f5441774e4455784d6c6f5844544d7a4d5445784f5441774e4455780a4d6c6f77634445694d434147413155454177775a535735305a5777675530645949464244537942445a584a3061575a70593246305a5445614d426747413155450a43677752535735305a577767513239796347397959585270623234784644415342674e564241634d43314e68626e526849454e7359584a684d517377435159440a5651514944414a445154454c4d416b474131554542684d4356564d775754415442676371686b6a4f5051494242676771686b6a4f50514d4242774e43414153410a4a4b3067564e756a704d32616a547478626c464c46427359734a454b30722f2b304c384d792b61544e5065536b746162422b5953736b666344776d78557950490a714e526d712f366a746e4b2b544878372b6f6c416f3449444444434341776777487759445652306a42426777466f41556c5739647a62306234656c4153636e550a3944504f4156634c336c5177617759445652306642475177596a42676f46366758495a616148523063484d364c79396863476b7564484a316333526c5a484e6c0a636e5a705932567a4c6d6c75644756734c6d4e766253397a5a3367765932567964476c6d61574e6864476c76626939324e4339775932746a636d772f593245390a6347786864475a76636d306d5a57356a62325270626d63395a4756794d423047413155644467515742425447357832586a4875696638585a637073384a30636c0a36644558306a414f42674e56485138424166384542414d434273417744415944565230544151482f4241497741444343416a6b4743537147534962345451454e0a4151534341696f776767496d4d42344743697147534962345451454e41514545454d6d434f392f3448444a31716a76762b62745a366f6f776767466a42676f710a686b69472b453042445145434d494942557a415142677371686b69472b45304244514543415149424244415142677371686b69472b45304244514543416749420a4244415142677371686b69472b4530424451454341774942416a415142677371686b69472b4530424451454342414942416a415142677371686b69472b4530420a44514543425149424244415142677371686b69472b45304244514543426749424154415142677371686b69472b453042445145434277494241444151426773710a686b69472b45304244514543434149424254415142677371686b69472b45304244514543435149424144415142677371686b69472b45304244514543436749420a4144415142677371686b69472b45304244514543437749424144415142677371686b69472b45304244514543444149424144415142677371686b69472b4530420a44514543445149424144415142677371686b69472b45304244514543446749424144415142677371686b69472b453042445145434477494241444151426773710a686b69472b45304244514543454149424144415142677371686b69472b45304244514543455149424454416642677371686b69472b45304244514543456751510a42415143416751424141554141414141414141414144415142676f71686b69472b45304244514544424149414144415542676f71686b69472b453042445145450a4241615177473841414141774477594b4b6f5a496876684e4151304242516f424154416542676f71686b69472b453042445145474242442b38455159347441540a634a552b35374d50734f64434d45514743697147534962345451454e415163774e6a415142677371686b69472b45304244514548415145422f7a4151426773710a686b69472b45304244514548416745422f7a415142677371686b69472b45304244514548417745422f7a414b42676771686b6a4f5051514441674e48414442450a4169413448584b442f663963434746584471612b58306d6e5530564c4c35657a4547626b494b6a7264776155797749674d52356b436830572b646479477653750a397974645a7a7872787a537a6a2f324e44713270514a377a6f2f773d0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a2d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d4949436c6a4343416a32674177494241674956414a567658633239472b487051456e4a3150517a7a674658433935554d416f4743437147534d343942414d430a4d476778476a415942674e5642414d4d45556c756447567349464e48574342536232393049454e424d526f77474159445651514b4442464a626e526c624342440a62334a7762334a6864476c76626a45554d424947413155454277774c553246756447456751327868636d4578437a414a42674e564241674d416b4e424d5173770a435159445651514745774a56557a4165467730784f4441314d6a45784d4455774d5442614677307a4d7a41314d6a45784d4455774d5442614d484178496a41670a42674e5642414d4d47556c756447567349464e4857434251513073675547786864475a76636d306751304578476a415942674e5642416f4d45556c75644756730a49454e76636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b474131554543417743513045780a437a414a42674e5642415954416c56544d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a304441516344516741454e53422f377432316c58534f0a3243757a7078773734654a423732457944476757357258437478327456544c7136684b6b367a2b5569525a436e71523770734f766771466553786c6d546c4a6c0a65546d693257597a33714f42757a43427544416642674e5648534d4547444157674251695a517a575770303069664f44744a5653763141624f536347724442530a42674e5648523845537a424a4d45656752614244686b466f64485277637a6f764c324e6c636e52705a6d6c6a5958526c63793530636e567a6447566b633256790a646d6c6a5a584d75615735305a577775593239744c306c756447567355306459556d397664454e424c6d526c636a416442674e5648513445466751556c5739640a7a62306234656c4153636e553944504f4156634c336c517744675944565230504151482f42415144416745474d42494741315564457745422f7751494d4159420a4166384341514177436759494b6f5a497a6a30454177494452774177524149675873566b6930772b6936565947573355462f32327561586530594a446a3155650a6e412b546a44316169356343494359623153416d4435786b66545670766f34556f79695359787244574c6d5552344349394e4b7966504e2b0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a2d2d2d2d2d424547494e2043455254494649434154452d2d2d2d2d0a4d4949436a7a4343416a53674177494241674955496d554d316c71644e496e7a6737535655723951477a6b6e42717777436759494b6f5a497a6a3045417749770a614445614d4267474131554541777752535735305a5777675530645949464a766233516751304578476a415942674e5642416f4d45556c756447567349454e760a636e4276636d4630615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155454341774351304578437a414a0a42674e5642415954416c56544d423458445445344d4455794d5445774e4455784d466f58445451354d54497a4d54497a4e546b314f566f77614445614d4267470a4131554541777752535735305a5777675530645949464a766233516751304578476a415942674e5642416f4d45556c756447567349454e76636e4276636d46300a615739754d5251774567594456515148444174545957353059534244624746795954454c4d416b47413155454341774351304578437a414a42674e56424159540a416c56544d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a3044415163445167414543366e45774d4449595a4f6a2f69505773437a61454b69370a314f694f534c52466857476a626e42564a66566e6b59347533496a6b4459594c304d784f346d717379596a6c42616c54565978465032734a424b357a6c4b4f420a757a43427544416642674e5648534d4547444157674251695a517a575770303069664f44744a5653763141624f5363477244425342674e5648523845537a424a0a4d45656752614244686b466f64485277637a6f764c324e6c636e52705a6d6c6a5958526c63793530636e567a6447566b63325679646d6c6a5a584d75615735300a5a577775593239744c306c756447567355306459556d397664454e424c6d526c636a416442674e564851344546675155496d554d316c71644e496e7a673753560a55723951477a6b6e4271777744675944565230504151482f42415144416745474d42494741315564457745422f7751494d4159424166384341514577436759490a4b6f5a497a6a3045417749445351417752674968414f572f35516b522b533943695344634e6f6f774c7550524c735747662f59693747535839344267775477670a41694541344a306c72486f4d732b586f356f2f7358364f39515778485241765a55474f6452513763767152586171493d0a2d2d2d2d2d454e442043455254494649434154452d2d2d2d2d0a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "event_log": "[{\"imr\":0,\"event_type\":2147483659,\"digest\":\"60a36090e82db2aa82a7abb76029b9ace69e9f0811b7029ff25a26a2e8b91c182696df92674ab571c42093383e1fcc71\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483658,\"digest\":\"344bc51c980ba621aaa00da3ed7436f7d6e549197dfe699515dfa2c6583d95e6412af21c097d473155875ffd561d6790\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"9dc3a1f80bcec915391dcda5ffbb15e7419f77eab462bbf72b42166fb70d50325e37b36f93537a863769bcf9bedae6fb\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"6f2e3cbc14f9def86980f5f66fd85e99d63e69a73014ed8a5633ce56eca5b64b692108c56110e22acadcef58c3250f1b\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"d607c0efb41c0d757d69bca0615c3a9ac0b1db06c557d992e906c6b7dee40e0e031640c7bfd7bcd35844ef9edeadc6f9\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"08a74f8963b337acb6c93682f934496373679dd26af1089cb4eaf0c30cf260a12e814856385ab8843e56a9acea19e127\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483649,\"digest\":\"18cc6e01f0c6ea99aa23f8a280423e94ad81d96d0aeb5180504fc0f7a40cb3619dd39bd6a95ec1680a86ed6ab0f9828d\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":4,\"digest\":\"394341b7182cd227c5c6b07ef8000cdfd86136c4292b8e576573ad7ed9ae41019f5818b4b971c9effc60e1ad9f1289f0\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":10,\"digest\":\"067dbea869d662401cfc128612472b688899b95fe801cec9e473388f2ce8d00c56b85a4511051a8d3eea3a345aa3d943\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":10,\"digest\":\"e618ef92fa90877695c4be4ce94e99f8cac644f92d40900a6141154f19ee8fefde460f8c75acac5dec3f4b1545259bcf\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":10,\"digest\":\"36ab67305a05ca84327abeb3ac4c3fff28dd40e23c4a2549d8c56914dafc6afac28b4687810e1ad91871a95de224c601\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":2147483651,\"digest\":\"32bf96efbe0a1eb7ce0c9f17619a2e42a24707be3c3a25625b5865f91afcbef19d952dd899d27223bbb998959fffafbc\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483650,\"digest\":\"1dd6f7b457ad880d840d41c961283bab688e94e4b59359ea45686581e90feccea3c624b1226113f824f315eb60ae0a7c\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":0,\"event_type\":2147483650,\"digest\":\"23ada07f5261f12f34a0bd8e46760962d6b4d576a416f1fea1c64bc656b1d28eacf7047ae6e967c58fd2a98bfa74c298\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":2147483655,\"digest\":\"77a0dab2312b4e1e57a84d865a21e5b2ee8d677a21012ada819d0a98988078d3d740f6346bfe0abaa938ca20439a8d71\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":4,\"digest\":\"394341b7182cd227c5c6b07ef8000cdfd86136c4292b8e576573ad7ed9ae41019f5818b4b971c9effc60e1ad9f1289f0\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":2,\"event_type\":6,\"digest\":\"6fc78892fbcf636589d200551068946e518465c909c3dd7423d39c29cb245fc32c0e1a2068d83772e436598b818045d4\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":2,\"event_type\":6,\"digest\":\"2ef6a128d241817951d729e6b69920b78b90d8be9b09805179573141c28aa990e128d5c42586d54fef0fbe80ca171f38\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":2147483655,\"digest\":\"214b0bef1379756011344877743fdc2a5382bac6e70362d624ccf3f654407c1b4badf7d8f9295dd3dabdef65b27677e0\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":1,\"event_type\":2147483655,\"digest\":\"0a2e01c85deae718a530ad8c6d20a84009babe6c8989269e950d8cf440c6e997695e64d455c4174a652cd080f6230b74\",\"event\":\"\",\"event_payload\":\"\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"system-preparing\",\"event_payload\":\"\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"app-id\",\"event_payload\":\"2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"compose-hash\",\"event_payload\":\"edabf8039210336d90fe966dfc4e48216551dfd8b05d54e96d3f3f0e0da850d4\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"instance-id\",\"event_payload\":\"fccd496ae28c19105777793efa98fbbd726219cc\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"boot-mr-done\",\"event_payload\":\"\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"mr-kms\",\"event_payload\":\"22a6652c0ce74e50b549c0f9c21d53c5861598ec4d58cf3286d158104923bc56\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"os-image-hash\",\"event_payload\":\"3bb7d262416f47db06855d7b7cf7d380538747206014b3c0adcddfef9b7c4ef2\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"key-provider\",\"event_payload\":\"7b226e616d65223a226b6d73222c226964223a223330353933303133303630373261383634386365336430323031303630383261383634386365336430333031303730333432303030343339346161656432633734356536613435376362383335663766343734323366353766663365616437316239326162666636626463313464393035623331396632653133393631623432633530373430646165343439386439633531646437613265323237363630633965356335303430383363646130366236633131363832227d\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"storage-fs\",\"event_payload\":\"7a6673\"},{\"imr\":3,\"event_type\":134217729,\"digest\":\"\",\"event\":\"system-ready\",\"event_payload\":\"\"}]",
+    "report_data": "d1ce163de56a866dc7559bed299372ddf3d2a74fc747ca4eb980589d210bb6ca64d778d56203ac3a746de5c192656b58567ccdafafb02023dcb7d6acf3175088",
+    "vm_config": "{\"os_image_hash\":\"3bb7d262416f47db06855d7b7cf7d380538747206014b3c0adcddfef9b7c4ef2\",\"cpu_count\":64,\"memory_size\":2199023255552,\"qemu_version\":\"9.2.1\",\"pci_hole64_size\":1125899906842624,\"hugepages\":false,\"num_gpus\":8,\"num_nvswitches\":4,\"hotplug_off\":true,\"image\":\"dstack-nvidia-0.5.15\",\"host_share_mode\":\"9p\",\"ovmf_variant\":\"pre202505\",\"spec_version\":1}"
+   }
+  }
+ ]
+}

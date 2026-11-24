@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -291,4 +292,28 @@ func factorNames(r *attestation.VerificationReport) []string {
 		names[i] = f.Name
 	}
 	return names
+}
+
+// verifyComposeManager verifies the compose-manager attestation of raw
+// against the fixture's recorded Intel PCS collateral. The fixtures hold no
+// GitHub responses, so the deployments are checked offline.
+func verifyComposeManager(t *testing.T, env *fixtureEnv, raw *attestation.RawAttestation, tdx *attestation.TDXVerifyResult) *attestation.ComposeManagerResult {
+	t.Helper()
+	verify := func(ctx context.Context, quote string) *attestation.TDXVerifyResult {
+		return attestation.VerifyTDXQuoteOnline(ctx, quote, attestation.NewCollateralGetter(env.client), fixtureVerificationTime(env))
+	}
+	r := attestation.VerifyComposeManager(t.Context(), raw, tdx, env.nonce, verify, attestation.NewComposeSources(env.client, true))
+	if r == nil || r.Err != nil {
+		t.Fatalf("compose-manager attestation: %+v", r)
+	}
+	return r
+}
+
+// assertComposeManager requires the compose-manager quote and TCB to pass.
+// compose_manager_actions needs GitHub, which the fixture does not record,
+// so it fails and is allowed to fail by default.
+func assertComposeManager(t *testing.T, report *attestation.VerificationReport) {
+	t.Helper()
+	assertMustPass(t, report, []string{attestation.FactorCMQuote, attestation.FactorCMTCB})
+	assertAllowedFail(t, report, []string{attestation.FactorCMActions}, "the fixture holds no GitHub responses")
 }
